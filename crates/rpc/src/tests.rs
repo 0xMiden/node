@@ -4,7 +4,15 @@ use std::time::Duration;
 
 use http::header::{ACCEPT, CONTENT_TYPE};
 use http::{HeaderMap, HeaderValue};
-use miden_node_proto::clients::{Builder, GrpcClient, Interceptor, RpcClient};
+use miden_node_proto::clients::{
+    BlockProducerClient,
+    Builder,
+    GrpcClient,
+    Interceptor,
+    RpcClient,
+    StoreRpcClient,
+    ValidatorClient,
+};
 use miden_node_proto::generated::rpc::api_client::ApiClient as ProtoClient;
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::genesis::config::GenesisConfig;
@@ -42,7 +50,7 @@ use tokio::task;
 use tokio::time::sleep;
 use url::Url;
 
-use crate::Rpc;
+use crate::{Rpc, RpcMode};
 
 /// A wrapper around the store runtime and data directory.
 ///
@@ -670,12 +678,32 @@ async fn start_rpc_with_options(
         let block_producer_url = Url::parse(&format!("http://{block_producer_addr}")).unwrap();
         // SAFETY: Using dummy validator URL for test - not actually contacted in this test
         let validator_url = Url::parse("http://127.0.0.1:0").unwrap();
+        let store = Builder::new(store_url)
+            .without_tls()
+            .without_timeout()
+            .without_metadata_version()
+            .without_metadata_genesis()
+            .with_otel_context_injection()
+            .connect_lazy::<StoreRpcClient>();
+        let block_producer = Builder::new(block_producer_url)
+            .without_tls()
+            .without_timeout()
+            .without_metadata_version()
+            .without_metadata_genesis()
+            .with_otel_context_injection()
+            .connect_lazy::<BlockProducerClient>();
+        let validator = Builder::new(validator_url)
+            .without_tls()
+            .without_timeout()
+            .without_metadata_version()
+            .without_metadata_genesis()
+            .with_otel_context_injection()
+            .connect_lazy::<ValidatorClient>();
         Rpc {
             listener: rpc_listener,
-            store_url,
-            block_producer_url: Some(block_producer_url),
-            validator_url,
-            ntx_builder_url: None,
+            store,
+            mode: RpcMode::sequencer(block_producer, validator),
+            ntx_builder: None,
             grpc_options,
         }
         .serve()

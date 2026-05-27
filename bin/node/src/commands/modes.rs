@@ -1,3 +1,4 @@
+use miden_node_proto::clients::{Builder, NtxBuilderClient, RpcClient, ValidatorClient};
 use url::Url;
 
 use super::block_producer::BlockProducerOptions;
@@ -27,11 +28,13 @@ impl SequencerCommand {
     pub fn handle(self) -> anyhow::Result<()> {
         let runtime = self.runtime.runtime_config(&self.store);
         self.block_producer.validate()?;
+        let validator = self.external_services.validator_client();
+        let ntx_builder = self.external_services.ntx_builder_client();
         let _ = (
             runtime.rpc_listen,
             runtime.data_directory,
-            self.external_services.validator_url,
-            self.external_services.ntx_builder_url,
+            validator,
+            ntx_builder,
             self.block_producer.block_prover.url,
             runtime.database_options,
             runtime.internal_grpc_options,
@@ -58,6 +61,28 @@ pub struct SequencerExternalServiceOptions {
     pub ntx_builder_url: Url,
 }
 
+impl SequencerExternalServiceOptions {
+    fn validator_client(&self) -> ValidatorClient {
+        Builder::new(self.validator_url.clone())
+            .without_tls()
+            .without_timeout()
+            .without_metadata_version()
+            .without_metadata_genesis()
+            .with_otel_context_injection()
+            .connect_lazy::<ValidatorClient>()
+    }
+
+    fn ntx_builder_client(&self) -> NtxBuilderClient {
+        Builder::new(self.ntx_builder_url.clone())
+            .without_tls()
+            .without_timeout()
+            .without_metadata_version()
+            .without_metadata_genesis()
+            .with_otel_context_injection()
+            .connect_lazy::<NtxBuilderClient>()
+    }
+}
+
 #[derive(clap::Args, Clone, Debug)]
 pub struct FullNodeCommand {
     #[command(flatten)]
@@ -73,6 +98,7 @@ pub struct FullNodeCommand {
 impl FullNodeCommand {
     pub fn handle(self) -> anyhow::Result<()> {
         let runtime = self.runtime.runtime_config(&self.store);
+        let source_rpc = self.sync.source_rpc_client();
         let _ = (
             runtime.rpc_listen,
             runtime.data_directory,
@@ -80,12 +106,24 @@ impl FullNodeCommand {
             runtime.internal_grpc_options,
             runtime.external_grpc_options,
             runtime.storage_options,
-            self.sync.block_source_url,
+            source_rpc,
         );
 
         anyhow::bail!(
             "full node mode block-stream sync is not implemented yet; this stage only defines the \
              CLI"
         )
+    }
+}
+
+impl SyncOptions {
+    fn source_rpc_client(&self) -> RpcClient {
+        Builder::new(self.block_source_url.clone())
+            .without_tls()
+            .without_timeout()
+            .without_metadata_version()
+            .without_metadata_genesis()
+            .with_otel_context_injection()
+            .connect_lazy::<RpcClient>()
     }
 }
