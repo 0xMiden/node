@@ -15,7 +15,7 @@ use crate::chain_state::SharedChainState;
 use crate::clients::RpcError;
 use crate::committed_block::CommittedBlockEffects;
 use crate::coordinator::Coordinator;
-use crate::db::Db;
+use crate::db::{Db, LoopDb};
 use crate::server::NtxBuilderRpcServer;
 
 /// Discriminator returned by the steady-state `select!` so the dispatch can run on a fully-owned
@@ -121,11 +121,19 @@ impl NetworkTransactionBuilder {
     }
 
     async fn run_event_loop(mut self) -> anyhow::Result<()> {
+        // Pin a dedicated connection for the loop's DB writes so block application is never starved
+        // by the account actors competing for the shared pool.
+        let loop_db = self
+            .db
+            .pin_loop_connection()
+            .await
+            .context("failed to pin a database connection for the ntx-builder event loop")?;
+
         // Phase 1: catch-up.
         loop {
             let (block, committed_tip) = self.next_block().await?;
             let local_tip = block.header().block_num();
-            self.apply_committed_block(block, committed_tip).await?;
+            self.apply_committed_block(&loop_db, block, committed_tip).await?;
 
             if local_tip == committed_tip {
                 self.is_synced = true;
@@ -135,8 +143,7 @@ impl NetworkTransactionBuilder {
         }
 
         // Phase 2: spawn an actor for every account with carry-over pending notes.
-        let pending_accounts = self
-            .db
+        let pending_accounts = loop_db
             .accounts_with_pending_notes(self.config.max_note_attempts)
             .await
             .context("failed to load accounts with pending notes at catch-up")?;
@@ -169,15 +176,16 @@ impl NetworkTransactionBuilder {
                 SteadyStateAction::Block(block) => {
                     let (block, committed_tip) =
                         (*block).context("block stream ended")?.context("block stream failed")?;
-                    let effects =
-                        self.apply_committed_block_with_effects(block, committed_tip).await?;
+                    let effects = self
+                        .apply_committed_block_with_effects(&loop_db, block, committed_tip)
+                        .await?;
                     self.coordinator.handle_committed_block(&effects);
                 },
                 SteadyStateAction::Request(request) => {
                     let Some(request) = request else {
                         anyhow::bail!("actor request channel closed unexpectedly");
                     };
-                    handle_actor_request(&self.db, request).await?;
+                    handle_actor_request(&loop_db, request).await?;
                 },
                 SteadyStateAction::Respawn(respawn) => {
                     if let Some(account_id) = respawn {
@@ -205,10 +213,13 @@ impl NetworkTransactionBuilder {
     /// Applies a committed block without surfacing the computed effects.
     async fn apply_committed_block(
         &mut self,
+        loop_db: &LoopDb,
         block: SignedBlock,
         committed_tip: BlockNumber,
     ) -> anyhow::Result<()> {
-        self.apply_committed_block_with_effects(block, committed_tip).await.map(drop)
+        self.apply_committed_block_with_effects(loop_db, block, committed_tip)
+            .await
+            .map(drop)
     }
 
     /// Applies a committed block and returns the computed `CommittedBlockEffects` so the
@@ -216,11 +227,12 @@ impl NetworkTransactionBuilder {
     /// block.
     #[tracing::instrument(
         name = "ntx.builder.apply_committed_block",
-        skip(self, block),
+        skip(self, loop_db, block),
         fields(block_num = %block.header().block_num(), %committed_tip),
     )]
     async fn apply_committed_block_with_effects(
         &mut self,
+        loop_db: &LoopDb,
         block: SignedBlock,
         committed_tip: BlockNumber,
     ) -> anyhow::Result<CommittedBlockEffects> {
@@ -234,7 +246,7 @@ impl NetworkTransactionBuilder {
         self.chain.update_chain_tip(header, self.config.max_block_count);
         let next_mmr = self.chain.current_mmr();
 
-        self.db
+        loop_db
             .apply_committed_block(effects.clone(), next_mmr)
             .await
             .context("failed to apply committed block to DB")?;
@@ -245,17 +257,20 @@ impl NetworkTransactionBuilder {
     }
 }
 
-/// Handles a single actor request then acknowledges the actor.
-async fn handle_actor_request(db: &Db, request: ActorRequest) -> anyhow::Result<()> {
+/// Handles a single actor request then acknowledges the actor. Runs on the pinned loop connection
+/// so the actors' shared pool cannot starve these writes.
+async fn handle_actor_request(loop_db: &LoopDb, request: ActorRequest) -> anyhow::Result<()> {
     match request {
         ActorRequest::NotesFailed { failed_notes, block_num, ack_tx } => {
-            db.notes_failed(failed_notes, block_num)
+            loop_db
+                .notes_failed(failed_notes, block_num)
                 .await
                 .context("failed to persist note failure")?;
             let _ = ack_tx.send(());
         },
         ActorRequest::CacheNoteScript { script_root, script } => {
-            db.insert_note_script(script_root, &script)
+            loop_db
+                .insert_note_script(script_root, &script)
                 .await
                 .context("failed to cache note script")?;
         },

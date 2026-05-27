@@ -196,6 +196,13 @@ impl Db {
             .await
     }
 
+    /// Pins a dedicated connection for the builder's event loop, returning a [`LoopDb`].
+    pub async fn pin_loop_connection(&self) -> Result<LoopDb> {
+        Ok(LoopDb {
+            conn: self.inner.pinned_connection().await?,
+        })
+    }
+
     /// Creates a file-backed SQLite test connection with migrations applied.
     #[cfg(test)]
     pub fn test_conn() -> (diesel::SqliteConnection, tempfile::TempDir) {
@@ -220,5 +227,65 @@ impl Db {
         let db_path = dir.path().join("test.sqlite3");
         let db = Db::setup(db_path).await.expect("test DB setup should succeed");
         (db, dir)
+    }
+}
+
+/// The subset of write operations the builder's event loop performs, bound to a connection pinned
+/// out of [`Db`]'s pool. Routing the loop's writes here keeps block application off the shared pool
+/// that the account actors hammer, so the loop is never starved of a connection.
+pub struct LoopDb {
+    conn: miden_node_db::PinnedConnection,
+}
+
+impl LoopDb {
+    /// Applies a committed block's effects (see [`Db::apply_committed_block`]) on the pinned
+    /// connection.
+    pub async fn apply_committed_block(
+        &self,
+        effects: CommittedBlockEffects,
+        chain_mmr: PartialMmr,
+    ) -> Result<Vec<NetworkAccountId>> {
+        self.conn
+            .transact("apply_committed_block", move |conn| {
+                queries::apply_committed_block(conn, &effects, &chain_mmr)
+            })
+            .await
+    }
+
+    /// Returns the network accounts with carry-over pending notes (see
+    /// [`Db::accounts_with_pending_notes`]) on the pinned connection.
+    pub async fn accounts_with_pending_notes(
+        &self,
+        max_attempts: usize,
+    ) -> Result<Vec<NetworkAccountId>> {
+        self.conn
+            .query("accounts_with_pending_notes", move |conn| {
+                queries::accounts_with_pending_notes(conn, max_attempts)
+            })
+            .await
+    }
+
+    /// Marks notes as failed (see [`Db::notes_failed`]) on the pinned connection.
+    pub async fn notes_failed(
+        &self,
+        failed_notes: Vec<(Nullifier, NoteError)>,
+        block_num: BlockNumber,
+    ) -> Result<()> {
+        self.conn
+            .transact("notes_failed", move |conn| {
+                queries::notes_failed(conn, &failed_notes, block_num)
+            })
+            .await
+    }
+
+    /// Persists a note script to the local cache (see [`Db::insert_note_script`]) on the pinned
+    /// connection.
+    pub async fn insert_note_script(&self, script_root: Word, script: &NoteScript) -> Result<()> {
+        let script = script.clone();
+        self.conn
+            .transact("insert_note_script", move |conn| {
+                queries::insert_note_script(conn, &script_root, &script)
+            })
+            .await
     }
 }

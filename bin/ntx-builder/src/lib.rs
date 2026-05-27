@@ -291,6 +291,14 @@ impl NtxBuilderConfig {
     /// - The RPC connection fails (after retries)
     /// - The genesis block cannot be read from the subscription on a fresh start
     pub async fn build(self) -> anyhow::Result<NetworkTransactionBuilder> {
+        // The event loop pins one connection for itself (so block application is never starved by
+        // the account actors), leaving the rest of the pool for actors and the gRPC server. That
+        // requires at least two connections.
+        anyhow::ensure!(
+            self.sqlite_connection_pool_size.get() >= 2,
+            "sqlite connection pool size must be at least 2 (the event loop pins one connection)",
+        );
+
         // Set up the database (bootstrap + connection pool).
         let db = Db::setup_with_pool_size(
             self.database_filepath.clone(),
