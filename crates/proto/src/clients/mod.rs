@@ -17,7 +17,7 @@
 //!     .without_timeout()             // or `.with_timeout(Duration::from_secs(10))`
 //!     .without_metadata_version()    // or `.with_metadata_version("1.0".into())`
 //!     .without_metadata_genesis()    // or `.with_metadata_genesis(genesis)`
-//!     .without_metadata_header()     // or `.with_auth_header_value(AsciiMetadataValue::from_static("value"))`
+//!     .without_auth_header()         // or `.with_auth_header_value(AsciiMetadataValue::from_static("value"))`
 //!     .with_otel_context_injection() // or `.without_otel_context_injection()`
 //!     .connect::<StoreRpcClient>()
 //!     .await?;
@@ -324,7 +324,7 @@ impl GrpcClient for NtxBuilderClient {
 ///     .with_timeout(Duration::from_secs(5)) // or `.without_timeout()`
 ///     .with_metadata_version("1.0".into())  // or `.without_metadata_version()`
 ///     .without_metadata_genesis()           // or `.with_metadata_genesis(genesis)`
-///     .without_auth_header()                // or `.with_metadata_header("name".into(), "value".into())`
+///     .without_auth_header()                // or `.with_auth_header_value(AsciiMetadataValue::from_static("value"))`
 ///     .with_otel_context_injection()        // or `.without_otel_context_injection()`
 ///     .connect::<RpcClient>()
 ///     .await?;
