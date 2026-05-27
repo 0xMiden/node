@@ -2,6 +2,13 @@ use std::num::NonZeroUsize;
 
 use accept::AcceptHeaderLayer;
 use anyhow::Context;
+use miden_node_block_producer::BlockProducerApi;
+use miden_node_proto::clients::{
+    NtxBuilderClient,
+    RpcClient as SourceRpcClient,
+    StoreRpcClient,
+    ValidatorClient,
+};
 use miden_node_proto::generated::rpc::api_server;
 use miden_node_proto_build::rpc_api_descriptor;
 use miden_node_utils::clap::GrpcOptionsExternal;
@@ -17,7 +24,6 @@ use tonic_web::GrpcWebLayer;
 use tower_http::classify::{GrpcCode, GrpcErrorsAsFailures, SharedClassifier};
 use tower_http::trace::TraceLayer;
 use tracing::info;
-use url::Url;
 
 use crate::COMPONENT;
 use crate::server::health::HealthCheckLayer;
@@ -29,14 +35,13 @@ mod health;
 /// The RPC server component.
 ///
 /// On startup, binds to the provided listener and starts serving the RPC API.
-/// It connects lazily to the store, validator and block producer components as needed.
-/// Requests will fail if the components are not available.
+/// It uses the supplied clients for store access and mode-specific submission handling.
+/// Requests will fail if the supplied clients cannot reach their components.
 pub struct Rpc {
     pub listener: TcpListener,
-    pub store_url: Url,
-    pub block_producer_url: Option<Url>,
-    pub validator_url: Url,
-    pub ntx_builder_url: Option<Url>,
+    pub store: StoreRpcClient,
+    pub mode: RpcMode,
+    pub ntx_builder: Option<NtxBuilderClient>,
     pub grpc_options: GrpcOptionsExternal,
     pub network_tx_auth: Option<NetworkTxAuth>,
 }
@@ -45,6 +50,34 @@ pub struct Rpc {
 /// Shared secret value expected in the fixed `x-miden-network-tx-auth` metadata header.
 pub struct NetworkTxAuth(pub AsciiMetadataValue);
 
+#[derive(Clone, Debug)]
+pub enum RpcMode {
+    /// Sequencer RPC validates submissions locally, re-executes them through the validator, then
+    /// forwards them to the block producer.
+    Sequencer {
+        block_producer: Box<BlockProducerApi>,
+        validator: Box<ValidatorClient>,
+    },
+    /// Full-node RPC forwards submissions to the source RPC.
+    ///
+    /// The caller is responsible for configuring this client with any request metadata the source
+    /// RPC requires.
+    FullNode { source_rpc: Box<SourceRpcClient> },
+}
+
+impl RpcMode {
+    pub fn sequencer(block_producer: BlockProducerApi, validator: ValidatorClient) -> Self {
+        Self::Sequencer {
+            block_producer: Box::new(block_producer),
+            validator: Box::new(validator),
+        }
+    }
+
+    pub fn full_node(source_rpc: SourceRpcClient) -> Self {
+        Self::FullNode { source_rpc: Box::new(source_rpc) }
+    }
+}
+
 impl Rpc {
     /// Serves the RPC API.
     ///
@@ -52,10 +85,9 @@ impl Rpc {
     ///       a fatal error is encountered.
     pub async fn serve(self) -> anyhow::Result<()> {
         let mut api = api::RpcService::new(
-            self.store_url.clone(),
-            self.block_producer_url.clone(),
-            self.validator_url,
-            self.ntx_builder_url.clone(),
+            self.store.clone(),
+            self.mode.clone(),
+            self.ntx_builder.clone(),
             NonZeroUsize::new(1_000_000).unwrap(),
             self.network_tx_auth,
         );
@@ -73,7 +105,7 @@ impl Rpc {
             .build_v1()
             .context("failed to build reflection service")?;
 
-        info!(target: COMPONENT, endpoint=?self.listener, store=%self.store_url, block_producer=?self.block_producer_url, "Server initialized");
+        info!(target: COMPONENT, endpoint=?self.listener, mode=?self.mode, "Server initialized");
 
         let rpc_version = env!("CARGO_PKG_VERSION");
         let rpc_version =

@@ -36,8 +36,8 @@ definitions of network accounts, notes and transactions mature.
 
 The NTB uses an actor-per-account model managed by a central `Coordinator`. On startup the
 coordinator syncs all known network accounts and their unconsumed notes from the store. It then
-monitors the mempool for events (via a gRPC event stream from the block-producer) which would
-impact network account state.
+follows the committed block stream from the RPC service for updates which would impact network
+account state.
 
 For each network account, the coordinator spawns a dedicated `AccountActor`. Each actor runs in
 its own async task and is responsible for creating transactions that consume network notes targeting
@@ -50,8 +50,8 @@ Actors that have been idle (no available notes to consume) for longer than the *
 will be deactivated. The idle timeout is configurable via the `--ntx-builder.idle-timeout` CLI
 argument (default: 5 minutes).
 
-Deactivated actors are re-spawned when new notes targeting their account are detected by the
-coordinator (via the `send_targeted` path).
+Deactivated actors are re-spawned when committed-chain processing detects new notes targeting their
+account.
 
 Each actors crash count is tracked, and once the count reaches a configurable threshold, the account is 
 **deactivated** and no new actor will be spawned for it. This prevents resource exhaustion from a persistently

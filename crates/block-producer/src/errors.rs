@@ -77,6 +77,9 @@ pub enum MempoolSubmissionError {
     #[error("mempool lock is poisoned")]
     #[grpc(internal)]
     MempoolPoisoned(#[source] MempoolPoisonError),
+
+    #[error("missing proposed batch")]
+    MissingProposedBatch,
 }
 
 // Mempool submission conflicts with current state

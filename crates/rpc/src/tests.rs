@@ -5,7 +5,16 @@ use std::time::Duration;
 
 use http::header::{ACCEPT, CONTENT_TYPE};
 use http::{HeaderMap, HeaderValue};
-use miden_node_proto::clients::{Builder, GrpcClient, Interceptor, RpcClient};
+use miden_node_block_producer::store::StoreClient as BlockProducerStoreClient;
+use miden_node_block_producer::{BlockProducerApi, BlockProducerApiConfig};
+use miden_node_proto::clients::{
+    Builder,
+    GrpcClient,
+    Interceptor,
+    RpcClient,
+    StoreRpcClient,
+    ValidatorClient,
+};
 use miden_node_proto::generated::rpc::api_client::ApiClient as ProtoClient;
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::genesis::config::GenesisConfig;
@@ -53,7 +62,7 @@ use tokio::time::sleep;
 use tonic::metadata::AsciiMetadataValue;
 use url::Url;
 
-use crate::Rpc;
+use crate::{Rpc, RpcMode};
 
 /// A wrapper around the store runtime and data directory.
 ///
@@ -851,13 +860,6 @@ async fn start_rpc_with_options(
 ) -> (RpcClient, std::net::SocketAddr, TcpListener) {
     let store_listener = TcpListener::bind("127.0.0.1:0").await.expect("store should bind a port");
     let store_addr = store_listener.local_addr().expect("store should get a local address");
-    let block_producer_addr = {
-        let block_producer_listener =
-            TcpListener::bind("127.0.0.1:0").await.expect("Failed to bind block-producer");
-        block_producer_listener
-            .local_addr()
-            .expect("Failed to get block-producer address")
-    };
 
     // Start the rpc component.
     let rpc_listener = TcpListener::bind("127.0.0.1:0").await.expect("Failed to bind rpc");
@@ -865,16 +867,32 @@ async fn start_rpc_with_options(
     task::spawn(async move {
         // SAFETY: The store_addr is always valid as it is created from a `SocketAddr`.
         let store_url = Url::parse(&format!("http://{store_addr}")).unwrap();
-        // SAFETY: The block_producer_addr is always valid as it is created from a `SocketAddr`.
-        let block_producer_url = Url::parse(&format!("http://{block_producer_addr}")).unwrap();
         // SAFETY: Using dummy validator URL for test - not actually contacted in this test
         let validator_url = Url::parse("http://127.0.0.1:0").unwrap();
+        let store = Builder::new(store_url.clone())
+            .without_tls()
+            .without_timeout()
+            .without_metadata_version()
+            .without_metadata_genesis()
+            .with_otel_context_injection()
+            .connect_lazy::<StoreRpcClient>();
+        let block_producer = BlockProducerApi::new(
+            BlockProducerStoreClient::new(store_url),
+            0.into(),
+            BlockProducerApiConfig::default(),
+        );
+        let validator = Builder::new(validator_url)
+            .without_tls()
+            .without_timeout()
+            .without_metadata_version()
+            .without_metadata_genesis()
+            .with_otel_context_injection()
+            .connect_lazy::<ValidatorClient>();
         Rpc {
             listener: rpc_listener,
-            store_url,
-            block_producer_url: Some(block_producer_url),
-            validator_url,
-            ntx_builder_url: None,
+            store,
+            mode: RpcMode::sequencer(block_producer, validator),
+            ntx_builder: None,
             grpc_options,
             network_tx_auth: None,
         }
@@ -897,26 +915,39 @@ async fn start_rpc_with_network_tx_auth(
 
     let store_listener = TcpListener::bind("127.0.0.1:0").await.expect("store should bind a port");
     let store_addr = store_listener.local_addr().expect("store should get a local address");
-    let block_producer_addr = {
-        let block_producer_listener =
-            TcpListener::bind("127.0.0.1:0").await.expect("Failed to bind block-producer");
-        block_producer_listener
-            .local_addr()
-            .expect("Failed to get block-producer address")
-    };
 
+    // Start the rpc component.
     let rpc_listener = TcpListener::bind("127.0.0.1:0").await.expect("Failed to bind rpc");
     let rpc_addr = rpc_listener.local_addr().expect("Failed to get rpc address");
     task::spawn(async move {
+        // SAFETY: The store_addr is always valid as it is created from a `SocketAddr`.
         let store_url = Url::parse(&format!("http://{store_addr}")).unwrap();
-        let block_producer_url = Url::parse(&format!("http://{block_producer_addr}")).unwrap();
+        // SAFETY: Using dummy validator URL for test - not actually contacted in this test
         let validator_url = Url::parse("http://127.0.0.1:0").unwrap();
+        let store = Builder::new(store_url.clone())
+            .without_tls()
+            .without_timeout()
+            .without_metadata_version()
+            .without_metadata_genesis()
+            .with_otel_context_injection()
+            .connect_lazy::<StoreRpcClient>();
+        let block_producer = BlockProducerApi::new(
+            BlockProducerStoreClient::new(store_url),
+            0.into(),
+            BlockProducerApiConfig::default(),
+        );
+        let validator = Builder::new(validator_url)
+            .without_tls()
+            .without_timeout()
+            .without_metadata_version()
+            .without_metadata_genesis()
+            .with_otel_context_injection()
+            .connect_lazy::<ValidatorClient>();
         Rpc {
             listener: rpc_listener,
-            store_url,
-            block_producer_url: Some(block_producer_url),
-            validator_url,
-            ntx_builder_url: None,
+            store,
+            mode: RpcMode::sequencer(block_producer, validator),
+            ntx_builder: None,
             grpc_options: GrpcOptionsExternal::test(),
             network_tx_auth,
         }
@@ -924,8 +955,9 @@ async fn start_rpc_with_network_tx_auth(
         .await
         .expect("Failed to start serving store");
     });
-
-    let url = Url::parse(format!("http://{}", &rpc_addr).as_str()).unwrap();
+    let url = rpc_addr.to_string();
+    // SAFETY: The rpc_addr is always valid as it is created from a `SocketAddr`.
+    let url = Url::parse(format!("http://{}", &url).as_str()).unwrap();
     let rpc_client = connect_rpc(url, None).await;
 
     (rpc_client, rpc_addr, store_listener)

@@ -18,7 +18,8 @@ pub mod errors;
 mod errors;
 
 pub mod server;
-pub use server::BlockProducer;
+pub use errors::MempoolSubmissionError;
+pub use server::{BlockProducer, BlockProducerApi, BlockProducerApiConfig, BlockProducerRuntime};
 
 // CONSTANTS
 // =================================================================================================
