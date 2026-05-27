@@ -28,6 +28,7 @@ use miden_node_utils::limiter::{
 };
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
+use miden_protocol::account::AccountId;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::transaction::{
@@ -242,9 +243,11 @@ impl RpcService {
     /// should pre-filter to post-deployment, public-account ids; `Ok(())` on empty.
     async fn reject_if_any_network_accounts(
         &self,
-        candidate_ids: Vec<proto::account::AccountId>,
+        candidate_ids: impl IntoIterator<Item = AccountId>,
     ) -> Result<(), Status> {
-        if candidate_ids.is_empty() {
+        let account_ids: Vec<proto::account::AccountId> =
+            candidate_ids.into_iter().map(Into::into).collect();
+        if account_ids.is_empty() {
             return Ok(());
         }
 
@@ -252,7 +255,7 @@ impl RpcService {
             .store
             .clone()
             .filter_network_accounts(tonic::Request::new(proto::account::AccountIdList {
-                account_ids: candidate_ids,
+                account_ids,
             }))
             .await
             .map_err(|err| {
@@ -550,14 +553,10 @@ impl api_server::Api for RpcService {
         // Block post-deployment network-account transactions from user RPC. First-deployment txs
         // are exempt because the protocol-level allowlist only kicks in once the account exists,
         // and network accounts must be public, so private-account txs are filtered out up front.
-        let candidate_ids = if !tx.account_update().initial_state_commitment().is_empty()
-            && tx.account_id().is_public()
-        {
-            vec![tx.account_id().into()]
-        } else {
-            Vec::new()
-        };
-        self.reject_if_any_network_accounts(candidate_ids).await?;
+        let candidate_id = (!tx.account_update().initial_state_commitment().is_empty()
+            && tx.account_id().is_public())
+        .then(|| tx.account_id());
+        self.reject_if_any_network_accounts(candidate_id).await?;
 
         let tx_verifier = TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL);
         tx_verifier.verify(&tx).map_err(|err| {
@@ -634,15 +633,14 @@ impl api_server::Api for RpcService {
         // Same gate as `submit_proven_transaction`, applied to every post-deployment tx in the
         // batch. One store round-trip classifies all the non-deployment, public-account ids; any
         // match fails the entire batch.
-        let non_deployment_ids: Vec<_> = proposed_batch
+        let non_deployment_ids = proposed_batch
             .transactions()
             .iter()
             .filter(|tx| {
                 !tx.account_update().initial_state_commitment().is_empty()
                     && tx.account_id().is_public()
             })
-            .map(|tx| proto::account::AccountId::from(tx.account_id()))
-            .collect();
+            .map(|tx| tx.account_id());
         self.reject_if_any_network_accounts(non_deployment_ids).await?;
 
         // Verify batch transaction proofs.

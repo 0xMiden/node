@@ -244,13 +244,3 @@ message TransactionInputs {
     // Whether the account ID prefix is unique. Only relevant for account creation requests.
     optional bool new_account_id_prefix_is_unique = 5; // TODO: Replace this with an error. When a general error message exists.
 }
-
-// ARE NETWORK ACCOUNTS
-// ================================================================================================
-
-// Represents the subset of the provided account ids that are currently classified
-// as network accounts. The order of `network_account_ids` is unspecified.
-message NetworkAccountIdSubset {
-    // The network-account subset of the requested ids.
-    repeated account.AccountId network_account_ids = 1;
-}

@@ -6,7 +6,6 @@ use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::account::{Account, AccountCode, AccountFile, AccountType};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
 use miden_protocol::crypto::rand::RandomCoin;
-use miden_protocol::field::PrimeCharacteristicRing;
 use miden_protocol::{Felt, Word};
 use miden_standards::AuthMethod;
 use miden_standards::account::wallets::create_basic_wallet;
@@ -95,7 +94,7 @@ fn generate_agglayer_sample_accounts() {
         usdc_faucet_seed,
         "USDC",
         6,
-        Felt::from_u64(10_000_000_000u64),
+        Felt::new_unchecked(10_000_000_000u64),
         Felt::ZERO,
         bridge_account_id,
     );
