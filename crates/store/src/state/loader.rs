@@ -465,9 +465,8 @@ pub async fn load_mmr(db: &mut Db) -> Result<Blockchain, StateInitializationErro
     let block_commitments = db.select_all_block_header_commitments().await?;
 
     // SAFETY: We assume the loaded MMR is valid and does not have more than u32::MAX entries.
-    let mmr =
-        Mmr::try_from_iter(block_commitments.iter().copied().map(BlockHeaderCommitment::word))
-            .expect("loaded MMR exceeds maximum allowed size");
+    let mmr = Mmr::try_from_iter(block_commitments.into_iter().map(BlockHeaderCommitment::word))
+        .expect("loaded MMR exceeds maximum allowed size");
     let chain_mmr = Blockchain::from_mmr_unchecked(mmr);
 
     Ok(chain_mmr)

@@ -3,8 +3,8 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use miden_node_db::DatabaseError;
-use miden_node_proto::domain::account::NetworkAccountId;
 use miden_protocol::Word;
+use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::merkle::mmr::PartialMmr;
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
@@ -81,7 +81,7 @@ impl Db {
         &self,
         effects: CommittedBlockEffects,
         chain_mmr: PartialMmr,
-    ) -> Result<Vec<NetworkAccountId>> {
+    ) -> Result<Vec<AccountId>> {
         self.inner
             .transact("apply_committed_block", move |conn| {
                 queries::apply_committed_block(conn, &effects, &chain_mmr)
@@ -101,7 +101,7 @@ impl Db {
     /// Returns `true` if there are notes available for consumption by the given account.
     pub async fn has_available_notes(
         &self,
-        account_id: NetworkAccountId,
+        account_id: AccountId,
         block_num: BlockNumber,
         max_attempts: usize,
     ) -> Result<bool> {
@@ -114,7 +114,7 @@ impl Db {
     }
 
     /// Returns `true` if a committed account state exists for the given account.
-    pub async fn has_committed_account(&self, account_id: NetworkAccountId) -> Result<bool> {
+    pub async fn has_committed_account(&self, account_id: AccountId) -> Result<bool> {
         self.inner
             .query("has_committed_account", move |conn| {
                 Ok(queries::get_account(conn, account_id)?.is_some())
@@ -125,7 +125,7 @@ impl Db {
     /// Returns the latest account state and available notes for the given account.
     pub async fn select_candidate(
         &self,
-        account_id: NetworkAccountId,
+        account_id: AccountId,
         block_num: BlockNumber,
         max_note_attempts: usize,
     ) -> Result<(Option<miden_protocol::account::Account>, Vec<AccountTargetNetworkNote>)> {
@@ -215,7 +215,7 @@ impl Db {
         _txs: Vec<miden_protocol::transaction::TransactionId>,
         _block_num: BlockNumber,
         _header: BlockHeader,
-    ) -> Result<Vec<NetworkAccountId>> {
+    ) -> Result<Vec<AccountId>> {
         unimplemented!("handle_block_committed is rewired in PR 2 of the ntx-builder refactor")
     }
 
@@ -223,7 +223,7 @@ impl Db {
     pub async fn handle_transactions_reverted(
         &self,
         _tx_ids: Vec<miden_protocol::transaction::TransactionId>,
-    ) -> Result<Vec<NetworkAccountId>> {
+    ) -> Result<Vec<AccountId>> {
         unimplemented!(
             "handle_transactions_reverted is rewired in PR 2 of the ntx-builder refactor"
         )

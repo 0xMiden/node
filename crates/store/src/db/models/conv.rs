@@ -200,6 +200,10 @@ pub(crate) fn nullifier_prefix_to_raw_sql(prefix: u16) -> i32 {
 #[inline(always)]
 pub(crate) fn raw_sql_to_nonce(raw: i64) -> Felt {
     debug_assert!(raw >= 0);
+    // SAFETY: In the store we write `Felt::as_canonical_u64() as i64`, so `raw` is the bit
+    // reinterpretation of a u64 in the field. Casting back via `raw as u64` recovers that same
+    // canonical value, which is always a valid (already reduced) field element, so
+    // `Felt::new_unchecked` is sound.
     Felt::new_unchecked(raw as u64)
 }
 #[inline(always)]

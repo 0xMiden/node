@@ -1,6 +1,5 @@
 use std::io;
 
-use miden_node_proto::domain::account::NetworkAccountError;
 use miden_node_proto::domain::block::InvalidBlockRange;
 use miden_node_proto::errors::{ConversionError, GrpcError};
 use miden_node_utils::ErrorReport;
@@ -589,7 +588,6 @@ mod compile_tests {
         AccountError,
         DatabaseError,
         DeserializationError,
-        NetworkAccountError,
         NoteError,
         RecvError,
         StateInitializationError,
@@ -609,7 +607,6 @@ mod compile_tests {
         ensure_is_error::<AccountDeltaError>(PhantomData);
         ensure_is_error::<RecvError>(PhantomData);
         ensure_is_error::<DeserializationError>(PhantomData);
-        ensure_is_error::<NetworkAccountError>(PhantomData);
         ensure_is_error::<NoteError>(PhantomData);
         ensure_is_error::<hex::FromHexError>(PhantomData);
         ensure_is_error::<deadpool::managed::PoolError<deadpool_diesel::Error>>(PhantomData);

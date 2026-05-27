@@ -54,7 +54,6 @@ CREATE TABLE notes (
     committed_at                  BIGINT  NOT NULL, -- Block number when the note was committed
     batch_index                   INTEGER NOT NULL, -- Index of batch in block, starting from 0
     note_index                    INTEGER NOT NULL, -- Index of note in batch, starting from 0
-    details_commitment            BLOB    NOT NULL,
     note_id                       BLOB    NOT NULL,
     note_type                     INTEGER NOT NULL, -- 0-Private, 1-Public
     sender                        BLOB    NOT NULL,
@@ -78,7 +77,6 @@ CREATE TABLE notes (
     CONSTRAINT notes_note_index_is_u32 CHECK (note_index BETWEEN 0 AND 0xFFFFFFFF)
 );
 
-CREATE INDEX idx_notes_details_commitment ON notes(details_commitment);
 CREATE INDEX idx_notes_note_id ON notes(note_id);
 CREATE INDEX idx_notes_sender ON notes(sender, committed_at);
 CREATE INDEX idx_notes_tag ON notes(tag, committed_at);

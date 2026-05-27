@@ -19,10 +19,7 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::crypto::merkle::smt::SmtProof;
-use miden_protocol::note::NoteAttachment;
 use miden_protocol::utils::serde::{Deserializable, DeserializationError, Serializable};
-use miden_standards::note::{NetworkAccountTarget, NetworkAccountTargetError};
-use thiserror::Error;
 
 use super::try_convert;
 use crate::decode;
@@ -970,99 +967,4 @@ impl From<Asset> for proto::primitives::Asset {
             value: Some(asset_from.to_value_word().into()),
         }
     }
-}
-
-// NETWORK ACCOUNT PREFIX
-// ================================================================================================
-
-pub type AccountPrefix = u32;
-
-/// Newtype wrapper for network account IDs.
-///
-/// Provides type safety for accounts that are meant for network execution.
-/// This wraps the full `AccountId` of a network account, typically extracted
-/// from a `NetworkAccountTarget` attachment.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct NetworkAccountId(AccountId);
-
-impl std::fmt::Display for NetworkAccountId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl NetworkAccountId {
-    /// Wraps an `AccountId` known by the caller to belong to a network account.
-    ///
-    /// # Preconditions
-    ///
-    /// Callers must ensure that:
-    /// - The account's storage contains a valid `NetworkAccountNoteAllowlist` slot
-    ///   (verified e.g. via `miden_standards::account::auth::network_account::NetworkAccount`
-    ///   or the store's `network_account_type` column).
-    /// - The account ID has public storage mode (network accounts cannot be private).
-    ///
-    /// The public-mode precondition is asserted in debug builds.
-    pub fn new_unchecked(id: AccountId) -> Self {
-        debug_assert!(
-            id.is_public(),
-            "NetworkAccountId requires a public AccountId, got account type {:?}",
-            id.account_type()
-        );
-        Self(id)
-    }
-
-    /// Returns the inner `AccountId`.
-    pub fn inner(&self) -> AccountId {
-        self.0
-    }
-
-    /// Gets the 30-bit prefix of the account ID used for tag matching.
-    pub fn prefix(&self) -> AccountPrefix {
-        get_account_id_tag_prefix(self.0)
-    }
-}
-
-impl TryFrom<&NoteAttachment> for NetworkAccountId {
-    type Error = NetworkAccountError;
-
-    fn try_from(attachment: &NoteAttachment) -> Result<Self, Self::Error> {
-        let target = NetworkAccountTarget::try_from(attachment)
-            .map_err(NetworkAccountError::InvalidAttachment)?;
-        Ok(NetworkAccountId(target.target_id()))
-    }
-}
-
-impl TryFrom<NoteAttachment> for NetworkAccountId {
-    type Error = NetworkAccountError;
-
-    fn try_from(attachment: NoteAttachment) -> Result<Self, Self::Error> {
-        NetworkAccountId::try_from(&attachment)
-    }
-}
-
-impl From<NetworkAccountId> for AccountId {
-    fn from(value: NetworkAccountId) -> Self {
-        value.inner()
-    }
-}
-
-impl From<NetworkAccountId> for u32 {
-    /// Returns the 30-bit prefix of the network account ID. This is used for note tag matching.
-    fn from(value: NetworkAccountId) -> Self {
-        value.prefix()
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum NetworkAccountError {
-    #[error("account ID {0} is not a valid network account ID")]
-    NotNetworkAccount(AccountId),
-    #[error("invalid network account attachment: {0}")]
-    InvalidAttachment(#[source] NetworkAccountTargetError),
-}
-
-/// Gets the 30-bit prefix of the account ID.
-fn get_account_id_tag_prefix(id: AccountId) -> AccountPrefix {
-    (id.prefix().as_u64() >> 34) as AccountPrefix
 }

@@ -1,3 +1,7 @@
+//! Ported from `miden-crypto`'s `merkle::smt::large::storage::rocksdb` so we can expose RocksDB
+//! tuning knobs (per-CF bloom bits, WAL size, shared `WriteBufferManager`) that upstream's
+//! `RocksDbConfig` hardcodes. Keep in sync with upstream.
+
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use std::mem::ManuallyDrop;

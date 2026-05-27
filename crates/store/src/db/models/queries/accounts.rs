@@ -1288,30 +1288,6 @@ fn prepare_partial_account_update(
     Ok((AccountStateForInsert::PartialState(account_state), storage, assets))
 }
 
-/// Reads the network-account classification of the latest row for `account_id_bytes`.
-///
-/// Returns `Ok(None)` if no row exists for this account.
-fn select_latest_network_account_type(
-    conn: &mut SqliteConnection,
-    account_id_bytes: &[u8],
-) -> Result<Option<NetworkAccountType>, DatabaseError> {
-    let raw: Option<i32> = QueryDsl::select(
-        schema::accounts::table.filter(
-            schema::accounts::account_id
-                .eq(account_id_bytes)
-                .and(schema::accounts::is_latest.eq(true)),
-        ),
-        schema::accounts::network_account_type,
-    )
-    .first::<i32>(conn)
-    .optional()
-    .map_err(DatabaseError::Diesel)?;
-
-    raw.map(NetworkAccountType::from_raw_sql)
-        .transpose()
-        .map_err(DatabaseError::from)
-}
-
 /// Returns the subset of `account_ids` whose latest committed state is a network account.
 ///
 /// Unknown ids and non-network accounts are silently omitted.
@@ -1360,22 +1336,25 @@ pub(crate) fn upsert_accounts(
     for update in accounts {
         let account_id = update.account_id();
         let account_id_bytes = account_id.to_bytes();
-        let block_num_raw = block_num.to_raw_sql();
 
-        // Preserve the original creation block when updating existing accounts.
-        let created_at_block_raw = QueryDsl::select(
+        // Pull the latest row (if any) so we can carry forward `created_at_block` and the
+        // `network_account_type` classification, both of which are fixed at account creation.
+        let existing: Option<(i64, i32)> = QueryDsl::select(
             schema::accounts::table.filter(
                 schema::accounts::account_id
                     .eq(&account_id_bytes)
                     .and(schema::accounts::is_latest.eq(true)),
             ),
-            schema::accounts::created_at_block,
+            (schema::accounts::created_at_block, schema::accounts::network_account_type),
         )
-        .first::<i64>(conn)
+        .first(conn)
         .optional()
-        .map_err(DatabaseError::Diesel)?
-        .unwrap_or(block_num_raw);
-        let created_at_block = BlockNumber::from_raw_sql(created_at_block_raw)?;
+        .map_err(DatabaseError::Diesel)?;
+
+        let created_at_block = match existing {
+            Some((raw, _)) => BlockNumber::from_raw_sql(raw)?,
+            None => block_num,
+        };
 
         // NOTE: we collect storage / asset inserts to apply them only after the account row is
         // written. The storage and vault tables have FKs pointing to accounts `(account_id,
@@ -1400,22 +1379,17 @@ pub(crate) fn upsert_accounts(
             },
         };
 
-        // Classify the account as network or not by looking for the standardized
-        // `NetworkAccountNoteAllowlist` slot in storage. Only full account states let us inspect
-        // storage directly; for partial updates we inherit the latest classification from the DB.
-        let network_account_type = match &account_state {
-            AccountStateForInsert::Private => NetworkAccountType::None,
-            AccountStateForInsert::FullAccount(account) => {
-                if NetworkAccount::new(account.clone()).is_ok() {
+        // Inherit the classification when the account already exists; otherwise classify it once at
+        // creation based on the new state.
+        let network_account_type = match existing {
+            Some((_, raw)) => NetworkAccountType::from_raw_sql(raw)?,
+            None => match &account_state {
+                AccountStateForInsert::FullAccount(account)
+                    if NetworkAccount::new(account.clone()).is_ok() =>
+                {
                     NetworkAccountType::Network
-                } else {
-                    NetworkAccountType::None
-                }
-            },
-            AccountStateForInsert::PartialState(_) => {
-                // We do not have full storage here; carry the previous classification forward.
-                select_latest_network_account_type(conn, &account_id_bytes)?
-                    .unwrap_or(NetworkAccountType::None)
+                },
+                _ => NetworkAccountType::None,
             },
         };
 

@@ -170,7 +170,6 @@ impl TransactionRecord {
 pub struct NoteRecord {
     pub block_num: BlockNumber,
     pub note_index: BlockNoteIndex,
-    pub details_commitment: Word,
     pub note_id: Word,
     pub metadata: NoteMetadata,
     pub details: Option<NoteDetails>,
@@ -452,7 +451,7 @@ impl Db {
         .await
     }
 
-    /// Returns the subset of the provided account IDs that currently classify as network accounts.
+    /// Returns the subset of the provided account IDs that classify as network accounts.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
     pub async fn select_network_accounts_subset(
         &self,

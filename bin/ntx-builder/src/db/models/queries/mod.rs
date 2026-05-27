@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use diesel::prelude::*;
 use miden_node_db::DatabaseError;
-use miden_node_proto::domain::account::NetworkAccountId;
+use miden_protocol::account::AccountId;
 use miden_protocol::crypto::merkle::mmr::PartialMmr;
 
 use super::account_effect::NetworkAccountEffect;
@@ -45,36 +45,33 @@ pub fn apply_committed_block(
     conn: &mut SqliteConnection,
     effects: &CommittedBlockEffects,
     chain_mmr: &PartialMmr,
-) -> Result<Vec<NetworkAccountId>, DatabaseError> {
-    let mut affected_accounts: HashSet<NetworkAccountId> = HashSet::new();
+) -> Result<Vec<AccountId>, DatabaseError> {
+    let mut affected_accounts: HashSet<AccountId> = HashSet::new();
 
-    for (network_id, details) in &effects.network_account_updates {
+    for (account_id, details) in &effects.network_account_updates {
         let Some(effect) = NetworkAccountEffect::from_protocol(details) else {
             continue;
         };
         match effect {
             NetworkAccountEffect::Created(account) => {
-                upsert_account(conn, *network_id, &account)?;
+                upsert_account(conn, *account_id, &account)?;
             },
             NetworkAccountEffect::Updated(delta) => {
-                // Partial deltas carry no storage to verify network-ness. If the account is not
-                // already tracked locally, treat the update as a non-network public account that
-                // leaked through the upstream filter and skip it.
-                let Some(mut current) = get_account(conn, *network_id)? else {
+                // If the account is not already tracked locally, skip it.
+                let Some(mut current) = get_account(conn, *account_id)? else {
                     continue;
                 };
                 current
                     .apply_delta(&delta)
                     .expect("network account delta should apply since the block was committed");
-                upsert_account(conn, *network_id, &current)?;
+                upsert_account(conn, *account_id, &current)?;
             },
         }
-        affected_accounts.insert(*network_id);
+        affected_accounts.insert(*account_id);
     }
 
     for note in &effects.network_notes {
-        let target = NetworkAccountId::new_unchecked(note.target_account_id());
-        affected_accounts.insert(target);
+        affected_accounts.insert(note.target_account_id());
     }
     insert_network_notes(conn, &effects.network_notes)?;
 
