@@ -2,8 +2,8 @@ use std::num::NonZeroUsize;
 
 use accept::AcceptHeaderLayer;
 use anyhow::Context;
+use miden_node_block_producer::BlockProducerApi;
 use miden_node_proto::clients::{
-    BlockProducerClient,
     NtxBuilderClient,
     RpcClient as SourceRpcClient,
     StoreRpcClient,
@@ -49,7 +49,7 @@ pub enum RpcMode {
     /// Sequencer RPC validates submissions locally, re-executes them through the validator, then
     /// forwards them to the block producer.
     Sequencer {
-        block_producer: Box<BlockProducerClient>,
+        block_producer: Box<BlockProducerApi>,
         validator: Box<ValidatorClient>,
     },
     /// Full-node RPC forwards submissions to the source RPC.
@@ -60,7 +60,7 @@ pub enum RpcMode {
 }
 
 impl RpcMode {
-    pub fn sequencer(block_producer: BlockProducerClient, validator: ValidatorClient) -> Self {
+    pub fn sequencer(block_producer: BlockProducerApi, validator: ValidatorClient) -> Self {
         Self::Sequencer {
             block_producer: Box::new(block_producer),
             validator: Box::new(validator),

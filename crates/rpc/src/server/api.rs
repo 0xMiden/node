@@ -514,7 +514,11 @@ impl api_server::Api for RpcService {
             return Err(Status::invalid_argument("Transaction inputs must be provided"));
         }
 
-        block_producer.clone().submit_proven_tx(request).await
+        block_producer
+            .submit_proven_tx(request)
+            .await
+            .map(Response::new)
+            .map_err(Into::into)
     }
 
     /// Deserializes the batch, strips MAST decorators from full output note scripts, rebuilds the
@@ -613,7 +617,11 @@ impl api_server::Api for RpcService {
             validator.clone().submit_proven_transaction(request).await?;
         }
 
-        block_producer.clone().submit_proven_tx_batch(request).await
+        block_producer
+            .submit_proven_tx_batch(request)
+            .await
+            .map(Response::new)
+            .map_err(Into::into)
     }
 
     // -- Status & utility endpoints ----------------------------------------------------------
@@ -650,13 +658,7 @@ impl api_server::Api for RpcService {
         let store_status =
             self.store.clone().status(Request::new(())).await.map(Response::into_inner).ok();
         let block_producer_status = match &self.mode {
-            RpcMode::Sequencer { block_producer, .. } => block_producer
-                .as_ref()
-                .clone()
-                .status(Request::new(()))
-                .await
-                .map(Response::into_inner)
-                .ok(),
+            RpcMode::Sequencer { block_producer, .. } => Some(block_producer.status().await),
             RpcMode::FullNode { source_rpc } => source_rpc
                 .as_ref()
                 .clone()
