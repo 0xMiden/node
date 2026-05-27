@@ -8,18 +8,14 @@ use builder::BlockStream;
 use chain_state::SharedChainState;
 use clients::RpcClient;
 use db::Db;
-use futures::StreamExt;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
-use miden_protocol::block::BlockNumber;
-use miden_protocol::crypto::merkle::mmr::PartialMmr;
 use miden_remote_prover_client::RemoteTransactionProver;
 use tokio::sync::mpsc;
 use tonic::metadata::AsciiMetadataValue;
 use url::Url;
 
 use crate::actor::{AccountActorContext, ActorConfig, GrpcClients, State};
-use crate::committed_block::CommittedBlockEffects;
 use crate::coordinator::Coordinator;
 
 pub(crate) type NoteError = Arc<dyn ErrorReport + Send + Sync>;
@@ -40,6 +36,40 @@ pub mod server;
 pub(crate) mod test_utils;
 
 pub use builder::NetworkTransactionBuilder;
+
+// BOOTSTRAP
+// =================================================================================================
+
+/// Bootstraps the ntx-builder database at `database_filepath` with the genesis block.
+///
+/// The genesis block is fetched from the node RPC with a single `GetBlockByNumber` request. After
+/// this completes the singleton chain-state row exists at the genesis block number, so
+/// [`NtxBuilderConfig`] startup can always resume from a persisted chain state instead of
+/// consuming the genesis block from the subscription.
+///
+/// Returns an error if the node is unreachable, does not yet have the genesis block, or the
+/// database has already been bootstrapped.
+pub async fn bootstrap(
+    database_filepath: PathBuf,
+    rpc_url: Url,
+    rpc_auth_header: Option<AsciiMetadataValue>,
+) -> anyhow::Result<()> {
+    let rpc = RpcClient::new_with_auth(
+        rpc_url,
+        rpc_auth_header,
+        DEFAULT_REQUEST_BACKOFF_INITIAL,
+        DEFAULT_REQUEST_BACKOFF_MAX,
+    );
+
+    let genesis = rpc
+        .get_genesis_block()
+        .await
+        .map_err(|err| anyhow::anyhow!(err))
+        .context("failed to fetch the genesis block from the node RPC")?
+        .context("the node RPC returned no genesis block")?;
+
+    db::Db::bootstrap(database_filepath, &genesis).await
+}
 
 // CONSTANTS
 // =================================================================================================
@@ -291,17 +321,17 @@ impl NtxBuilderConfig {
 
     /// Builds and initializes the network transaction builder.
     ///
-    /// Opens a committed-block subscription against the node RPC service. On a fresh DB the
-    /// subscription starts at genesis and the first block is consumed inline to bootstrap the
-    /// in-memory chain state; on resume, the in-memory chain state is loaded from the persisted
-    /// header + chain MMR and the subscription starts at `persisted_tip + 1`.
+    /// Loads the in-memory chain state from the persisted header + chain MMR and opens a
+    /// committed-block subscription against the node RPC service starting at `persisted_tip + 1`.
+    /// The database must have been bootstrapped with the genesis block beforehand (see
+    /// [`crate::bootstrap`]).
     ///
     /// # Errors
     ///
     /// Returns an error if:
     /// - The DB cannot be opened or migrated
+    /// - The DB has not been bootstrapped (no persisted chain state)
     /// - The RPC connection fails (after retries)
-    /// - The genesis block cannot be read from the subscription on a fresh start
     pub async fn build(self) -> anyhow::Result<NetworkTransactionBuilder> {
         // The event loop pins one connection for itself (so block application is never starved by
         // the account actors), leaving the rest of the pool for actors and the gRPC server. That
@@ -332,18 +362,19 @@ impl NtxBuilderConfig {
         )
         .await?;
 
-        // Decide where to start the subscription. On resume we load the persisted chain state; on
-        // fresh start we begin at genesis and bootstrap inline below.
-        let stored_chain_state =
-            db.get_chain_state().await.context("failed to read chain state")?;
+        // The database is bootstrapped with the genesis block before startup (see
+        // `miden-ntx-builder bootstrap`), so a persisted chain state is always present. Load it and
+        // resume the subscription from the block after the last applied one.
+        let (last_applied_block, header, mmr) =
+            db.get_chain_state().await.context("failed to read chain state")?.context(
+                "ntx-builder database has not been bootstrapped; \
+                 run `miden-ntx-builder bootstrap` first",
+            )?;
 
-        let block_from = stored_chain_state
-            .as_ref()
-            .map_or(BlockNumber::GENESIS, |(num, ..)| num.child());
+        let block_from = last_applied_block.child();
 
         tracing::info!(
             %block_from,
-            resume = stored_chain_state.is_some(),
             "ntx-builder opening committed-block subscription"
         );
 
@@ -352,37 +383,9 @@ impl NtxBuilderConfig {
             .await
             .map_err(|err| anyhow::anyhow!(err))
             .context("failed to subscribe to committed blocks")?;
-        let mut block_stream: BlockStream = Box::pin(raw_stream);
+        let block_stream: BlockStream = Box::pin(raw_stream);
 
-        let (chain, last_applied_block) = if let Some((block_num, header, mmr)) = stored_chain_state
-        {
-            (SharedChainState::new(header, mmr), block_num)
-        } else {
-            // Fresh DB: consume the genesis block inline so the in-memory chain state is non- empty
-            // before the steady-state loop runs.
-            let (genesis, _committed_tip) = block_stream
-                .next()
-                .await
-                .context("block stream ended before delivering the genesis block")?
-                .context("block stream failed before delivering the genesis block")?;
-            let genesis_header = genesis.header().clone();
-            anyhow::ensure!(
-                genesis_header.block_num() == BlockNumber::GENESIS,
-                "expected genesis block from subscription but got block {}",
-                genesis_header.block_num()
-            );
-
-            let effects = CommittedBlockEffects::from_signed_block(&genesis);
-            db.apply_committed_block(effects, PartialMmr::default())
-                .await
-                .context("failed to apply genesis block during bootstrap")?;
-
-            (
-                SharedChainState::new(genesis_header, PartialMmr::default()),
-                BlockNumber::GENESIS,
-            )
-        };
-        let chain = Arc::new(chain);
+        let chain = Arc::new(SharedChainState::new(header, mmr));
 
         // Wire the actor context + coordinator. The actor request channel is owned by the builder
         // (receiver) and cloned into every spawned actor (sender) so all DB writes from actors

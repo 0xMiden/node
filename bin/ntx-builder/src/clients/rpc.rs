@@ -138,6 +138,28 @@ impl RpcClient {
 
         Ok(())
     }
+
+    /// Fetches the genesis block from the node RPC, returning `None` if the node does not have it.
+    #[instrument(target = COMPONENT, name = "ntx.rpc.client.get_genesis_block", skip_all, err)]
+    pub async fn get_genesis_block(&self) -> Result<Option<SignedBlock>, RpcError> {
+        let request = proto::blockchain::BlockRequest {
+            block_num: BlockNumber::GENESIS.as_u32(),
+            include_proof: Some(false),
+        };
+
+        let response = self
+            .inner
+            .clone()
+            .get_block_by_number(request)
+            .await
+            .map_err(RpcError::GrpcClientError)?
+            .into_inner();
+
+        response
+            .block
+            .map(|bytes| SignedBlock::read_from_bytes(&bytes).map_err(RpcError::Deserialize))
+            .transpose()
+    }
 }
 
 fn decode_block_subscription_response(
@@ -199,6 +221,6 @@ impl RpcClient {
 pub enum RpcError {
     #[error("RPC gRPC call failed")]
     GrpcClientError(#[source] tonic::Status),
-    #[error("failed to deserialize subscription payload")]
+    #[error("failed to deserialize RPC payload")]
     Deserialize(#[source] miden_protocol::utils::serde::DeserializationError),
 }
