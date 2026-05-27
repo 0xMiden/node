@@ -5,30 +5,33 @@ use std::time::Duration;
 
 use anyhow::Context;
 use builder::BlockStream;
-use chain_state::ChainState;
+use chain_state::SharedChainState;
 use clients::RpcClient;
 use db::Db;
 use futures::StreamExt;
 use miden_node_utils::ErrorReport;
+use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::merkle::mmr::PartialMmr;
+use miden_remote_prover_client::RemoteTransactionProver;
+use tokio::sync::mpsc;
 use tonic::metadata::AsciiMetadataValue;
 use url::Url;
 
+use crate::actor::{AccountActorContext, ActorConfig, GrpcClients, State};
 use crate::committed_block::CommittedBlockEffects;
+use crate::coordinator::Coordinator;
 
 pub(crate) type NoteError = Arc<dyn ErrorReport + Send + Sync>;
 
-// PR 1 of the block-subscription refactor leaves the actor execution path in tree but unwired. It
-// is restored by PR 2
+// PR 2 spawns actors and runs their lifecycle (wait-for-account + notify/idle), but the transaction
+// execution path (candidate selection, proving, submission) stays unwired until PR 3 reconnects it.
 #[expect(dead_code)]
 mod actor;
 mod builder;
-#[expect(dead_code)]
 mod chain_state;
 mod clients;
 mod committed_block;
-#[expect(dead_code)]
 mod coordinator;
 pub(crate) mod db;
 pub mod server;
@@ -300,6 +303,14 @@ impl NtxBuilderConfig {
     /// - The RPC connection fails (after retries)
     /// - The genesis block cannot be read from the subscription on a fresh start
     pub async fn build(self) -> anyhow::Result<NetworkTransactionBuilder> {
+        // The event loop pins one connection for itself (so block application is never starved by
+        // the account actors), leaving the rest of the pool for actors and the gRPC server. That
+        // requires at least two connections.
+        anyhow::ensure!(
+            self.sqlite_connection_pool_size.get() >= 2,
+            "sqlite connection pool size must be at least 2 (the event loop pins one connection)",
+        );
+
         let rpc = match self.rpc_auth_header.clone() {
             Some(rpc_auth_header_value) => RpcClient::new_with_auth(
                 self.rpc_url.clone(),
@@ -345,7 +356,7 @@ impl NtxBuilderConfig {
 
         let (chain, last_applied_block) = if let Some((block_num, header, mmr)) = stored_chain_state
         {
-            (ChainState::new(header, mmr), block_num)
+            (SharedChainState::new(header, mmr), block_num)
         } else {
             // Fresh DB: consume the genesis block inline so the in-memory chain state is non- empty
             // before the steady-state loop runs.
@@ -366,8 +377,42 @@ impl NtxBuilderConfig {
                 .await
                 .context("failed to apply genesis block during bootstrap")?;
 
-            (ChainState::new(genesis_header, PartialMmr::default()), BlockNumber::GENESIS)
+            (
+                SharedChainState::new(genesis_header, PartialMmr::default()),
+                BlockNumber::GENESIS,
+            )
         };
+        let chain = Arc::new(chain);
+
+        // Wire the actor context + coordinator. The actor request channel is owned by the builder
+        // (receiver) and cloned into every spawned actor (sender) so all DB writes from actors
+        // serialize through the builder's event loop.
+        let (request_tx, actor_request_rx) = mpsc::channel(self.account_channel_capacity);
+        let actor_context = AccountActorContext {
+            clients: GrpcClients {
+                rpc: rpc.clone(),
+                prover: self
+                    .tx_prover_url
+                    .clone()
+                    .map(|url| RemoteTransactionProver::new(url.as_str())),
+            },
+            state: State {
+                db: db.clone(),
+                chain: chain.clone(),
+                script_cache: LruCache::new(self.script_cache_size),
+            },
+            config: ActorConfig {
+                max_notes_per_tx: self.max_notes_per_tx,
+                max_note_attempts: self.max_note_attempts,
+                idle_timeout: self.idle_timeout,
+                max_cycles: self.max_cycles,
+                request_backoff_initial: self.request_backoff_initial,
+                request_backoff_max: self.request_backoff_max,
+            },
+            request_tx,
+        };
+        let coordinator =
+            Coordinator::new(self.max_concurrent_txs, self.max_account_crashes, actor_context);
 
         Ok(NetworkTransactionBuilder::new(
             self,
@@ -375,6 +420,8 @@ impl NtxBuilderConfig {
             block_stream,
             last_applied_block,
             chain,
+            coordinator,
+            actor_request_rx,
         ))
     }
 }

@@ -222,6 +222,45 @@ fn note_script_cache_roundtrip() {
 // NOTE STATUS
 // ================================================================================================
 
+// ACCOUNTS WITH PENDING NOTES
+// ================================================================================================
+
+#[test]
+fn accounts_with_pending_notes_distinct_and_filters_consumed_and_capped() {
+    let (conn, _dir) = &mut test_conn();
+    let alice = mock_network_account_id();
+    let bob = mock_network_account_id_seeded(42);
+    let carol = mock_network_account_id_seeded(99);
+
+    let alice_note_1 = mock_single_target_note(alice, 1);
+    let alice_note_2 = mock_single_target_note(alice, 2);
+    let bob_note = mock_single_target_note(bob, 3);
+    let carol_note = mock_single_target_note(carol, 4);
+
+    insert_network_notes(
+        conn,
+        &[alice_note_1.clone(), alice_note_2, bob_note.clone(), carol_note.clone()],
+    )
+    .unwrap();
+
+    // Alice has two notes — must still appear exactly once (DISTINCT). Bob's only note is already
+    // consumed — exclude.
+    mark_notes_consumed(conn, &[bob_note.as_note().nullifier()], BlockNumber::from(7)).unwrap();
+    // Carol's note has hit the attempt cap — exclude.
+    for _ in 0..30 {
+        notes_failed(
+            conn,
+            &[(carol_note.as_note().nullifier(), test_note_error("boom"))],
+            BlockNumber::from(5),
+        )
+        .unwrap();
+    }
+
+    let pending = accounts_with_pending_notes(conn, 30).unwrap();
+    assert_eq!(pending.len(), 1, "only alice should remain pending");
+    assert_eq!(pending[0], alice);
+}
+
 #[test]
 fn notes_failed_increments_attempt_and_records_error() {
     let (conn, _dir) = &mut test_conn();

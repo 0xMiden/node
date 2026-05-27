@@ -17,6 +17,13 @@ pub fn mock_network_account_id() -> AccountId {
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE.try_into().unwrap()
 }
 
+/// Creates a distinct network account ID using a seeded RNG.
+pub fn mock_network_account_id_seeded(seed: u8) -> AccountId {
+    AccountIdBuilder::new()
+        .account_type(AccountType::Public)
+        .build_with_seed([seed; 32])
+}
+
 /// Creates a `AccountTargetNetworkNote` targeting the given network account.
 pub fn mock_single_target_note(
     network_account_id: AccountId,
