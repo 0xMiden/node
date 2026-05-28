@@ -8,6 +8,7 @@ use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::merkle::mmr::PartialMmr;
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
+use miden_protocol::transaction::TransactionId;
 use miden_standards::note::AccountTargetNetworkNote;
 use tracing::{info, instrument};
 
@@ -149,17 +150,12 @@ impl Db {
             .await
     }
 
-    /// Returns `true` when all the supplied nullifiers for `account_id` have been marked consumed
-    /// in a committed block.
-    pub async fn submitted_tx_landed(
-        &self,
-        account_id: AccountId,
-        nullifiers: Vec<Nullifier>,
-    ) -> Result<bool> {
+    /// Returns the latest transaction recorded against `account_id` in a committed block, if any.
+    /// An actor waiting on its submission compares this against its own transaction id to confirm
+    /// landing.
+    pub async fn account_last_tx(&self, account_id: AccountId) -> Result<Option<TransactionId>> {
         self.inner
-            .query("submitted_tx_landed", move |conn| {
-                queries::submitted_tx_landed(conn, account_id, &nullifiers)
-            })
+            .query("account_last_tx", move |conn| queries::account_last_tx(conn, account_id))
             .await
     }
 

@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU16, NonZeroUsize};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -24,7 +24,7 @@ const ENV_SQLITE_CONNECTION_POOL_SIZE: &str = "MIDEN_NODE_NTX_BUILDER_SQLITE_CON
 const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_SCRIPT_CACHE_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
 const DEFAULT_MAX_CYCLES: u32 = 1 << 18;
-const DEFAULT_TX_EXPIRATION_DELTA: u16 = 30;
+const DEFAULT_TX_EXPIRATION_DELTA: NonZeroU16 = NonZeroU16::new(30).unwrap();
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -101,10 +101,10 @@ pub enum NtxBuilderCommand {
             long = "tx-expiration-delta",
             env = ENV_TX_EXPIRATION_DELTA,
             default_value_t = DEFAULT_TX_EXPIRATION_DELTA,
-            value_parser = clap::value_parser!(u16).range(1..),
+            value_parser = clap::value_parser!(NonZeroU16),
             value_name = "NUM",
         )]
-        tx_expiration_delta: u16,
+        tx_expiration_delta: NonZeroU16,
 
         /// Maximum number of SQLite connections in the ntx-builder database connection pool.
         #[arg(

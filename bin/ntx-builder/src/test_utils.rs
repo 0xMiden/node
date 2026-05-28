@@ -7,6 +7,7 @@ use miden_protocol::testing::account_id::{
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE,
     AccountIdBuilder,
 };
+use miden_protocol::transaction::TransactionId;
 use miden_standards::note::{AccountTargetNetworkNote, NetworkAccountTarget, NoteExecutionHint};
 use miden_standards::testing::note::NoteBuilder;
 use rand_chacha::ChaCha20Rng;
@@ -15,6 +16,11 @@ use rand_chacha::rand_core::SeedableRng;
 /// Creates a network account ID from a test constant.
 pub fn mock_network_account_id() -> AccountId {
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE.try_into().unwrap()
+}
+
+/// Creates a distinct [`TransactionId`] from a seed, for landing-detection tests.
+pub fn mock_transaction_id(seed: u32) -> TransactionId {
+    TransactionId::from_raw(Word::from([seed, 0, 0, 0]))
 }
 
 /// Creates a distinct network account ID using a seeded RNG.

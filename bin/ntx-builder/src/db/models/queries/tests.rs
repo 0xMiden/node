@@ -265,32 +265,47 @@ fn accounts_with_pending_notes_distinct_and_filters_consumed_and_capped() {
 // ================================================================================================
 
 #[test]
-fn submitted_tx_landed_detects_full_landing() {
+fn account_last_tx_roundtrips_and_updates() {
     let (conn, _dir) = &mut test_conn();
     let account_id = mock_network_account_id();
-    let note_a = mock_single_target_note(account_id, 7);
-    let note_b = mock_single_target_note(account_id, 8);
-    insert_network_notes(conn, &[note_a.clone(), note_b.clone()]).unwrap();
+    upsert_account(conn, account_id, &mock_account(account_id)).unwrap();
 
-    let nullifiers = vec![note_a.as_note().nullifier(), note_b.as_note().nullifier()];
+    // No transaction recorded yet.
+    assert_eq!(account_last_tx(conn, account_id).unwrap(), None);
 
-    // Nothing consumed yet.
-    assert!(!submitted_tx_landed(conn, account_id, &nullifiers).unwrap());
-
-    // Only one consumed.
-    mark_notes_consumed(conn, &[note_a.as_note().nullifier()], BlockNumber::from(3)).unwrap();
-    assert!(!submitted_tx_landed(conn, account_id, &nullifiers).unwrap());
-
-    // Both consumed.
-    mark_notes_consumed(conn, &[note_b.as_note().nullifier()], BlockNumber::from(4)).unwrap();
-    assert!(submitted_tx_landed(conn, account_id, &nullifiers).unwrap());
+    // Record one, then overwrite it with a later one.
+    let first = mock_transaction_id(1);
+    let second = mock_transaction_id(2);
+    set_account_last_tx(conn, account_id, first).unwrap();
+    assert_eq!(account_last_tx(conn, account_id).unwrap(), Some(first));
+    set_account_last_tx(conn, account_id, second).unwrap();
+    assert_eq!(account_last_tx(conn, account_id).unwrap(), Some(second));
 }
 
 #[test]
-fn submitted_tx_landed_empty_nullifiers_is_trivially_true() {
+fn set_account_last_tx_noops_for_untracked_account() {
     let (conn, _dir) = &mut test_conn();
     let account_id = mock_network_account_id();
-    assert!(submitted_tx_landed(conn, account_id, &[]).unwrap());
+
+    // No row exists for this account; the update must affect nothing and not insert.
+    set_account_last_tx(conn, account_id, mock_transaction_id(1)).unwrap();
+    assert_eq!(count_accounts(conn), 0);
+    assert_eq!(account_last_tx(conn, account_id).unwrap(), None);
+}
+
+#[test]
+fn upsert_account_preserves_last_tx_id() {
+    let (conn, _dir) = &mut test_conn();
+    let account_id = mock_network_account_id();
+    let account = mock_account(account_id);
+
+    upsert_account(conn, account_id, &account).unwrap();
+    let tx_id = mock_transaction_id(7);
+    set_account_last_tx(conn, account_id, tx_id).unwrap();
+
+    // A subsequent account-state upsert must not clobber the recorded transaction id.
+    upsert_account(conn, account_id, &account).unwrap();
+    assert_eq!(account_last_tx(conn, account_id).unwrap(), Some(tx_id));
 }
 
 #[test]

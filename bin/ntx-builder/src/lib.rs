@@ -1,4 +1,4 @@
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU16, NonZeroUsize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -90,7 +90,7 @@ const DEFAULT_MAX_TX_CYCLES: u32 = 1 << 19;
 ///
 /// Used both as the on-chain transaction expiration delta and as the local retry timeout an actor
 /// waits in `WaitForBlock` before resubmitting. Must be within the kernel's `1..=u16::MAX` range.
-const DEFAULT_TX_EXPIRATION_DELTA: u16 = 30;
+const DEFAULT_TX_EXPIRATION_DELTA: NonZeroU16 = NonZeroU16::new(30).unwrap();
 
 // CONFIGURATION
 // =================================================================================================
@@ -150,7 +150,7 @@ pub struct NtxBuilderConfig {
     /// Number of blocks after which a submitted network transaction expires. Set as the on-chain
     /// transaction expiration delta and reused as the local `WaitForBlock` retry timeout. Must be
     /// within `1..=u16::MAX` (enforced by the transaction kernel).
-    pub tx_expiration_delta: u16,
+    pub tx_expiration_delta: NonZeroU16,
 
     /// Initial sleep applied between per-request retries on transient infrastructure failures (e.g.
     /// prover unreachable, RPC crash, transport error, RPC gRPC hiccup). Doubles on each retry up
@@ -285,7 +285,7 @@ impl NtxBuilderConfig {
     /// Sets the transaction expiration delta (in blocks). Also bounds the actor's `WaitForBlock`
     /// retry timeout.
     #[must_use]
-    pub fn with_tx_expiration_delta(mut self, delta: u16) -> Self {
+    pub fn with_tx_expiration_delta(mut self, delta: NonZeroU16) -> Self {
         self.tx_expiration_delta = delta;
         self
     }

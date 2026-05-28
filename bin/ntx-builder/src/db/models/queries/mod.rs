@@ -77,6 +77,12 @@ pub fn apply_committed_block(
 
     mark_notes_consumed(conn, &effects.nullifiers, effects.header.block_num())?;
 
+    // Record the latest landed transaction per account so waiting actors can confirm their own
+    // submission landed. Only updates rows already present.
+    for (account_id, tx_id) in &effects.account_transactions {
+        set_account_last_tx(conn, *account_id, *tx_id)?;
+    }
+
     upsert_chain_state(conn, effects.header.block_num(), &effects.header, chain_mmr)?;
 
     Ok(affected_accounts.into_iter().collect())
