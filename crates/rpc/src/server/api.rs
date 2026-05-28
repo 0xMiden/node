@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::Context;
 use miden_node_proto::clients::{NtxBuilderClient, StoreRpcClient};
 use miden_node_proto::decode::{read_account_id, read_account_ids, read_block_range};
-use miden_node_proto::domain::account::{AccountRequest, SlotData};
+use miden_node_proto::domain::account::{AccountRequest, AccountStorageRequest, SlotData};
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::rpc::MempoolStats;
 use miden_node_proto::generated::rpc::api_server::{self, Api};
@@ -427,14 +427,16 @@ impl api_server::Api for RpcService {
         // Validate total storage map key limit before forwarding to store
         if let Some(details) = &request.details {
             let _span = info_span!(target: COMPONENT, "validate_storage_map_keys").entered();
-            let total_keys: usize = details
-                .storage_requests
-                .iter()
-                .filter_map(|d| match &d.slot_data {
-                    SlotData::All => None,
-                    SlotData::MapKeys(items) => Some(items.len()),
-                })
-                .sum();
+            let total_keys: usize = match &details.storage_request {
+                AccountStorageRequest::None | AccountStorageRequest::AllStorageMaps => 0,
+                AccountStorageRequest::Explicit(requests) => requests
+                    .iter()
+                    .filter_map(|request| match &request.slot_data {
+                        SlotData::All => None,
+                        SlotData::MapKeys(items) => Some(items.len()),
+                    })
+                    .sum(),
+            };
             check::<QueryParamStorageMapKeyTotalLimit>(total_keys)?;
         }
 

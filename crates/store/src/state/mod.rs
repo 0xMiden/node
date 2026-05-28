@@ -17,16 +17,28 @@ use miden_node_proto::domain::account::{
     AccountResponse,
     AccountStorageDetails,
     AccountStorageMapDetails,
+    AccountStorageRequest,
     AccountVaultDetails,
     SlotData,
     StorageMapEntries,
     StorageMapRequest,
 };
 use miden_node_proto::domain::batch::BatchInputs;
+use miden_node_proto::generated as proto;
+use miden_node_proto::prost::Message as _;
 use miden_node_utils::clap::StorageOptions;
 use miden_node_utils::formatting::format_array;
+use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
 use miden_protocol::Word;
-use miden_protocol::account::{AccountId, StorageMapKey, StorageMapWitness, StorageSlotName};
+use miden_protocol::account::{
+    AccountHeader,
+    AccountId,
+    AccountStorageHeader,
+    StorageMapKey,
+    StorageMapWitness,
+    StorageSlotName,
+    StorageSlotType,
+};
 use miden_protocol::asset::{AssetVaultKey, AssetWitness};
 use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::block::nullifier_tree::{NullifierTree, NullifierWitness};
@@ -97,6 +109,250 @@ pub enum Finality {
     Committed,
     /// The latest block that has been proven in an unbroken sequence from genesis.
     Proven,
+}
+
+#[cfg(test)]
+mod account_storage_request_tests {
+    use miden_node_proto::domain::account::{
+        AccountStorageMapDetails,
+        AccountStorageRequest,
+        AccountVaultDetails,
+        SlotData,
+        StorageMapEntries,
+        StorageMapRequest,
+    };
+    use miden_protocol::account::{
+        AccountHeader,
+        AccountId,
+        AccountStorageHeader,
+        StorageMapKey,
+        StorageSlotHeader,
+        StorageSlotName,
+        StorageSlotType,
+    };
+    use miden_protocol::block::BlockNumber;
+    use miden_protocol::block::account_tree::{AccountIdKey, AccountTree, AccountWitness};
+    use miden_protocol::crypto::merkle::smt::{LargeSmt, MemoryStorage};
+    use miden_protocol::testing::account_id::AccountIdBuilder;
+    use miden_protocol::{EMPTY_WORD, Felt, Word};
+
+    use super::{apply_all_storage_maps_response_budget, expand_account_storage_request};
+
+    fn storage_header() -> AccountStorageHeader {
+        AccountStorageHeader::new(vec![
+            StorageSlotHeader::new(StorageSlotName::mock(0), StorageSlotType::Value, EMPTY_WORD),
+            StorageSlotHeader::new(StorageSlotName::mock(1), StorageSlotType::Map, EMPTY_WORD),
+            StorageSlotHeader::new(StorageSlotName::mock(2), StorageSlotType::Map, EMPTY_WORD),
+        ])
+        .unwrap()
+    }
+
+    fn account_id() -> AccountId {
+        AccountIdBuilder::new().build_with_seed([42; 32])
+    }
+
+    fn account_header(account_id: AccountId) -> AccountHeader {
+        AccountHeader::new(account_id, Felt::ZERO, EMPTY_WORD, EMPTY_WORD, EMPTY_WORD)
+    }
+
+    fn account_witness(account_id: AccountId) -> AccountWitness {
+        let smt = LargeSmt::with_entries(
+            MemoryStorage::default(),
+            [(AccountIdKey::from(account_id).as_word(), EMPTY_WORD)],
+        )
+        .unwrap();
+        AccountTree::new(smt).unwrap().open(account_id)
+    }
+
+    fn map_details(slot_name: StorageSlotName, value: Word) -> AccountStorageMapDetails {
+        AccountStorageMapDetails {
+            slot_name,
+            entries: StorageMapEntries::AllEntries(vec![(StorageMapKey::from_index(1), value)]),
+        }
+    }
+
+    #[test]
+    fn all_storage_maps_expands_only_map_slots() {
+        let requests = expand_account_storage_request(
+            AccountStorageRequest::AllStorageMaps,
+            &storage_header(),
+        );
+
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].slot_name, StorageSlotName::mock(1));
+        assert_eq!(requests[1].slot_name, StorageSlotName::mock(2));
+        assert!(requests.iter().all(|request| request.slot_data == SlotData::All));
+    }
+
+    #[test]
+    fn explicit_storage_maps_are_preserved() {
+        let slot_name = StorageSlotName::mock(2);
+        let explicit = vec![StorageMapRequest {
+            slot_name: slot_name.clone(),
+            slot_data: SlotData::All,
+        }];
+
+        let requests = expand_account_storage_request(
+            AccountStorageRequest::Explicit(explicit.clone()),
+            &storage_header(),
+        );
+
+        assert_eq!(requests, explicit);
+        assert_eq!(requests[0].slot_name, slot_name);
+    }
+
+    #[test]
+    fn absent_storage_slot_data_expands_to_no_requests() {
+        let requests =
+            expand_account_storage_request(AccountStorageRequest::None, &storage_header());
+
+        assert!(requests.is_empty());
+    }
+
+    #[test]
+    fn all_storage_maps_budget_marks_current_and_remaining_maps_as_limit_exceeded() {
+        let account_id = account_id();
+        let slot_1 = StorageSlotName::mock(1);
+        let slot_2 = StorageSlotName::mock(2);
+        let details = apply_all_storage_maps_response_budget(
+            BlockNumber::GENESIS,
+            &account_witness(account_id),
+            account_header(account_id),
+            None,
+            AccountVaultDetails::empty(),
+            storage_header(),
+            vec![
+                map_details(slot_1.clone(), Word::from([1u32, 0, 0, 0])),
+                map_details(slot_2.clone(), Word::from([2u32, 0, 0, 0])),
+            ],
+            vec![slot_1.clone(), slot_2.clone()],
+            0,
+        );
+
+        assert_eq!(details.storage_details.map_details.len(), 2);
+        assert_eq!(details.storage_details.map_details[0].slot_name, slot_1);
+        assert_eq!(
+            details.storage_details.map_details[0].entries,
+            StorageMapEntries::LimitExceeded
+        );
+        assert_eq!(details.storage_details.map_details[1].slot_name, slot_2);
+        assert_eq!(
+            details.storage_details.map_details[1].entries,
+            StorageMapEntries::LimitExceeded
+        );
+    }
+
+    #[test]
+    fn all_storage_maps_budget_keeps_entries_that_fit() {
+        let account_id = account_id();
+        let slot_1 = StorageSlotName::mock(1);
+        let details = apply_all_storage_maps_response_budget(
+            BlockNumber::GENESIS,
+            &account_witness(account_id),
+            account_header(account_id),
+            None,
+            AccountVaultDetails::empty(),
+            storage_header(),
+            vec![map_details(slot_1.clone(), Word::from([1u32, 0, 0, 0]))],
+            vec![slot_1.clone()],
+            usize::MAX,
+        );
+
+        assert_eq!(details.storage_details.map_details.len(), 1);
+        assert_eq!(details.storage_details.map_details[0].slot_name, slot_1);
+        assert!(matches!(
+            details.storage_details.map_details[0].entries,
+            StorageMapEntries::AllEntries(_)
+        ));
+    }
+}
+
+fn expand_account_storage_request(
+    storage_request: AccountStorageRequest,
+    storage_header: &AccountStorageHeader,
+) -> Vec<StorageMapRequest> {
+    match storage_request {
+        AccountStorageRequest::None => Vec::new(),
+        AccountStorageRequest::Explicit(requests) => requests,
+        AccountStorageRequest::AllStorageMaps => storage_header
+            .slots()
+            .filter(|slot| slot.slot_type() == StorageSlotType::Map)
+            .map(|slot| StorageMapRequest {
+                slot_name: slot.name().clone(),
+                slot_data: SlotData::All,
+            })
+            .collect(),
+    }
+}
+
+fn get_account_response_encoded_len(
+    block_num: BlockNumber,
+    witness: &AccountWitness,
+    details: AccountDetails,
+) -> usize {
+    proto::rpc::AccountResponse::from(AccountResponse {
+        block_num,
+        witness: witness.clone(),
+        details: Some(details),
+    })
+    .encoded_len()
+}
+
+#[expect(clippy::too_many_arguments)]
+fn apply_all_storage_maps_response_budget(
+    block_num: BlockNumber,
+    witness: &AccountWitness,
+    account_header: AccountHeader,
+    account_code: Option<Vec<u8>>,
+    vault_details: AccountVaultDetails,
+    storage_header: AccountStorageHeader,
+    ordered_map_details: Vec<AccountStorageMapDetails>,
+    ordered_map_slot_names: Vec<StorageSlotName>,
+    max_response_payload_bytes: usize,
+) -> AccountDetails {
+    let mut accepted_map_details = Vec::with_capacity(ordered_map_details.len());
+    let mut budget_exceeded = false;
+
+    for (details, slot_name) in ordered_map_details.into_iter().zip(ordered_map_slot_names) {
+        let candidate_details = if budget_exceeded {
+            AccountStorageMapDetails::limit_exceeded(slot_name.clone())
+        } else {
+            details
+        };
+
+        let mut candidate_map_details = accepted_map_details.clone();
+        candidate_map_details.push(candidate_details.clone());
+
+        let candidate_response_details = AccountDetails {
+            account_header: account_header.clone(),
+            account_code: account_code.clone(),
+            vault_details: vault_details.clone(),
+            storage_details: AccountStorageDetails {
+                header: storage_header.clone(),
+                map_details: candidate_map_details,
+            },
+        };
+
+        if !budget_exceeded
+            && get_account_response_encoded_len(block_num, witness, candidate_response_details)
+                <= max_response_payload_bytes
+        {
+            accepted_map_details.push(candidate_details);
+        } else {
+            budget_exceeded = true;
+            accepted_map_details.push(AccountStorageMapDetails::limit_exceeded(slot_name));
+        }
+    }
+
+    AccountDetails {
+        account_header,
+        account_code,
+        vault_details,
+        storage_details: AccountStorageDetails {
+            header: storage_header,
+            map_details: accepted_map_details,
+        },
+    }
 }
 
 // STRUCTURES
@@ -812,7 +1068,10 @@ impl State {
         let (block_num, witness) = self.get_account_witness(block_num, account_id).await?;
 
         let details = if let Some(request) = details {
-            Some(self.fetch_public_account_details(account_id, block_num, request).await?)
+            Some(
+                self.fetch_public_account_details(account_id, block_num, &witness, request)
+                    .await?,
+            )
         } else {
             None
         };
@@ -929,12 +1188,13 @@ impl State {
         &self,
         account_id: AccountId,
         block_num: BlockNumber,
+        witness: &AccountWitness,
         detail_request: AccountDetailRequest,
     ) -> Result<AccountDetails, GetAccountError> {
         let AccountDetailRequest {
             code_commitment,
             asset_vault_commitment,
-            storage_requests,
+            storage_request,
         } = detail_request;
 
         if !account_id.is_public() {
@@ -957,6 +1217,10 @@ impl State {
             .select_account_header_with_storage_header_at_block(account_id, block_num)
             .await?
             .ok_or(GetAccountError::AccountNotFound(account_id, block_num))?;
+
+        let should_apply_response_budget =
+            matches!(&storage_request, AccountStorageRequest::AllStorageMaps);
+        let storage_requests = expand_account_storage_request(storage_request, &storage_header);
 
         let account_code = match code_commitment {
             Some(commitment) if commitment == account_header.code_commitment() => None,
@@ -1040,7 +1304,7 @@ impl State {
         }
 
         for (details, slot_name) in
-            storage_map_details_by_index.into_iter().zip(storage_request_slots)
+            storage_map_details_by_index.into_iter().zip(storage_request_slots.iter())
         {
             let details = details.ok_or_else(|| DatabaseError::StorageRootNotFound {
                 account_id,
@@ -1048,6 +1312,20 @@ impl State {
                 block_num,
             })?;
             storage_map_details.push(details);
+        }
+
+        if should_apply_response_budget {
+            return Ok(apply_all_storage_maps_response_budget(
+                block_num,
+                witness,
+                account_header,
+                account_code,
+                vault_details,
+                storage_header,
+                storage_map_details,
+                storage_request_slots,
+                MAX_RESPONSE_PAYLOAD_BYTES,
+            ));
         }
 
         Ok(AccountDetails {

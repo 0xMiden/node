@@ -37,6 +37,8 @@ Returns an account witness (Merkle proof of inclusion in the account tree) and o
 
 The witness proves the account's state commitment in the account tree. If details are requested, the response also includes the account's header, code, vault assets, and storage data. Account details are only available for public accounts.
 
+Storage map details can be requested either for explicitly selected maps or for all storage map slots. Full-map responses are bounded by the response payload budget; maps that do not fit are returned with `too_many_entries` so clients can follow up with `SyncAccountStorageMaps`.
+
 If `block_num` is provided, returns the state at that historical block; otherwise, returns the latest state.
 
 ---
