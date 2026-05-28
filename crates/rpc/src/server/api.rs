@@ -57,11 +57,14 @@ use miden_tx::TransactionVerifier;
 use miden_tx_batch_prover::LocalBatchProver;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_stream::{Stream, StreamExt};
+use tonic::metadata::MetadataMap;
 use tonic::{IntoRequest, Request, Response, Status};
 use tracing::{Span, debug, info_span};
 
 use crate::COMPONENT;
-use crate::server::RpcMode;
+use crate::server::{NetworkTxAuth, RpcMode};
+
+const NETWORK_TX_AUTH_HEADER_NAME: &str = "x-miden-network-tx-auth";
 
 /// Maximum number of concurrent block or proof subscriptions served by this RPC instance.
 const MAX_REPLICA_SUBSCRIPTIONS: usize = 10;
@@ -121,6 +124,7 @@ pub struct RpcService {
     store: Arc<State>,
     mode: RpcMode,
     ntx_builder: Option<NtxBuilderClient>,
+    network_tx_auth: Option<NetworkTxAuth>,
     genesis_commitment: Option<Word>,
     block_commitment_cache: LruCache<BlockNumber, Word>,
     block_subscription_semaphore: Arc<Semaphore>,
@@ -133,11 +137,13 @@ impl RpcService {
         mode: RpcMode,
         ntx_builder: Option<NtxBuilderClient>,
         commitment_cache_capacity: NonZeroUsize,
+        network_tx_auth: Option<NetworkTxAuth>,
     ) -> Self {
         Self {
             store,
             mode,
             ntx_builder,
+            network_tx_auth,
             genesis_commitment: None,
             block_commitment_cache: LruCache::new(commitment_cache_capacity),
             block_subscription_semaphore: Arc::new(Semaphore::new(MAX_REPLICA_SUBSCRIPTIONS)),
@@ -268,6 +274,14 @@ impl RpcService {
         }
 
         Ok(())
+    }
+
+    fn is_authorized_network_tx(&self, metadata: &MetadataMap) -> bool {
+        let Some(auth) = &self.network_tx_auth else {
+            return false;
+        };
+
+        metadata.get(NETWORK_TX_AUTH_HEADER_NAME).is_some_and(|value| value == auth.0)
     }
 }
 
@@ -725,6 +739,8 @@ impl api_server::Api for RpcService {
     ) -> Result<Response<proto::blockchain::BlockNumber>, Status> {
         debug!(target: COMPONENT, request = ?request.get_ref());
 
+        let is_authorized_network_tx = self.is_authorized_network_tx(request.metadata());
+
         let request = request.into_inner();
 
         let tx = ProvenTransaction::read_from_bytes(&request.transaction).map_err(|err| {
@@ -770,10 +786,14 @@ impl api_server::Api for RpcService {
         // Block post-deployment network-account transactions from user RPC. First-deployment txs
         // are exempt because the protocol-level allowlist only kicks in once the account exists,
         // and network accounts must be public, so private-account txs are filtered out up front.
-        let candidate_id = (!tx.account_update().initial_state_commitment().is_empty()
-            && tx.account_id().is_public())
-        .then(|| tx.account_id());
-        self.reject_if_any_network_accounts(candidate_id).await?;
+        //
+        // Skip this check if the client is authorized to send network transactions (ntx-builder).
+        if !is_authorized_network_tx {
+            let candidate_id = (!tx.account_update().initial_state_commitment().is_empty()
+                && tx.account_id().is_public())
+            .then(|| tx.account_id());
+            self.reject_if_any_network_accounts(candidate_id).await?;
+        }
 
         let tx_verifier = TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL);
         tx_verifier.verify(&tx).map_err(|err| {
@@ -816,6 +836,7 @@ impl api_server::Api for RpcService {
         &self,
         request: tonic::Request<proto::transaction::TransactionBatch>,
     ) -> Result<tonic::Response<proto::blockchain::BlockNumber>, Status> {
+        let is_authorized_network_tx = self.is_authorized_network_tx(request.metadata());
         let request = request.into_inner();
 
         let proven_batch = ProvenBatch::read_from_bytes(&request.batch_proof).map_err(|err| {
@@ -861,15 +882,19 @@ impl api_server::Api for RpcService {
         // Same gate as `submit_proven_transaction`, applied to every post-deployment tx in the
         // batch. One store round-trip classifies all the non-deployment, public-account ids; any
         // match fails the entire batch.
-        let non_deployment_ids = proposed_batch
-            .transactions()
-            .iter()
-            .filter(|tx| {
-                !tx.account_update().initial_state_commitment().is_empty()
-                    && tx.account_id().is_public()
-            })
-            .map(|tx| tx.account_id());
-        self.reject_if_any_network_accounts(non_deployment_ids).await?;
+        //
+        // Skip this check if the client is authorized to send network transactions (ntx-builder).
+        if !is_authorized_network_tx {
+            let non_deployment_ids = proposed_batch
+                .transactions()
+                .iter()
+                .filter(|tx| {
+                    !tx.account_update().initial_state_commitment().is_empty()
+                        && tx.account_id().is_public()
+                })
+                .map(|tx| tx.account_id());
+            self.reject_if_any_network_accounts(non_deployment_ids).await?;
+        }
 
         // Verify batch transaction proofs.
         //

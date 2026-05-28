@@ -14,6 +14,15 @@ pub struct RpcOptions {
     #[arg(long = "rpc.listen", env = "MIDEN_NODE_RPC_LISTEN", value_name = "LISTEN")]
     pub listen: SocketAddr,
 
+    /// Optional metadata header value for internal network-transaction RPC authentication.
+    #[arg(
+        long = "rpc.network-tx-auth-header-value",
+        env = "MIDEN_NODE_RPC_NETWORK_TX_AUTH_HEADER_VALUE",
+        value_name = "VALUE",
+        help_heading = super::section::RPC_CONFIGURATION_HELP_HEADING
+    )]
+    pub network_tx_auth_header_value: Option<String>,
+
     #[command(flatten)]
     pub grpc: GrpcOptions,
 

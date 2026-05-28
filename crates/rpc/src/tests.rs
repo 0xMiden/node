@@ -437,6 +437,7 @@ async fn rpc_rejects_post_deployment_network_account_tx() {
         RpcMode::full_node(source_rpc_client()),
         None,
         NonZeroUsize::new(1_000_000).unwrap(),
+        None,
     );
 
     let response = service.submit_proven_tx(Request::new(request)).await;
@@ -566,6 +567,7 @@ async fn start_rpc_with_options(
             mode: RpcMode::sequencer(block_producer, validator),
             ntx_builder: None,
             grpc_options,
+            network_tx_auth: None,
         }
         .serve()
         .await

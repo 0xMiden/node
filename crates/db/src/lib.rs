@@ -49,6 +49,21 @@ impl Db {
         Ok(Self { pool })
     }
 
+    /// Checks out a connection from the pool and pins it for the caller's exclusive, long-lived
+    /// use. See [`PinnedConnection`].
+    ///
+    /// This removes one connection from the shared pool for the lifetime of the returned handle,
+    /// so the pool must be sized to leave at least one connection for other users.
+    pub async fn pinned_connection(&self) -> Result<PinnedConnection, DatabaseError> {
+        let conn = self
+            .pool
+            .get()
+            .in_current_span()
+            .await
+            .map_err(|e| DatabaseError::ConnectionPoolObtainError(Box::new(e)))?;
+        Ok(PinnedConnection { conn })
+    }
+
     /// Create and commit a transaction with the queries added in the provided closure
     pub async fn transact<R, E, Q, M>(&self, msg: M, query: Q) -> std::result::Result<R, E>
     where
@@ -61,20 +76,7 @@ impl Db {
         E: From<DatabaseError>,
         E: std::error::Error + Send + Sync + 'static,
     {
-        let conn = self
-            .pool
-            .get()
-            .in_current_span()
-            .await
-            .map_err(|e| DatabaseError::ConnectionPoolObtainError(Box::new(e)))?;
-
-        let span = tracing::Span::current();
-        conn.interact(move |conn| {
-            let _guard = span.enter();
-            <_ as diesel::Connection>::transaction::<R, E, Q>(conn, query)
-        })
-        .await
-        .map_err(|err| E::from(DatabaseError::interact(&msg.to_string(), &err)))?
+        self.pinned_connection().await.map_err(E::from)?.transact(msg, query).await
     }
 
     /// Run the query _without_ a transaction
@@ -86,19 +88,60 @@ impl Db {
         E: From<DatabaseError>,
         E: std::error::Error + Send + Sync + 'static,
     {
-        let conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| DatabaseError::ConnectionPoolObtainError(Box::new(e)))?;
+        self.pinned_connection().await.map_err(E::from)?.query(msg, query).await
+    }
+}
 
+/// A connection checked out of [`Db`]'s pool and held for the caller's exclusive, long-lived use.
+///
+/// A hot event loop can pin a connection so its queries never wait on the shared pool even when
+/// many concurrent tasks are saturating it. `transact`/`query` mirror [`Db`]'s, but run on the
+/// pinned connection rather than acquiring one per call. The connection is returned to the pool
+/// when the `PinnedConnection` is dropped.
+pub struct PinnedConnection {
+    conn: deadpool::managed::Object<ConnectionManager>,
+}
+
+impl PinnedConnection {
+    /// Create and commit a transaction with the queries added in the provided closure, running on
+    /// the pinned connection.
+    pub async fn transact<R, E, Q, M>(&self, msg: M, query: Q) -> std::result::Result<R, E>
+    where
+        Q: Send
+            + for<'a, 't> FnOnce(&'a mut SqliteConnection) -> std::result::Result<R, E>
+            + 'static,
+        R: Send + 'static,
+        M: Send + ToString,
+        E: From<diesel::result::Error>,
+        E: From<DatabaseError>,
+        E: std::error::Error + Send + Sync + 'static,
+    {
         let span = tracing::Span::current();
-        conn.interact(move |conn| {
-            let _guard = span.enter();
-            let r = query(conn)?;
-            Ok(r)
-        })
-        .await
-        .map_err(|err| E::from(DatabaseError::interact(&msg.to_string(), &err)))?
+        self.conn
+            .interact(move |conn| {
+                let _guard = span.enter();
+                <_ as diesel::Connection>::transaction::<R, E, Q>(conn, query)
+            })
+            .await
+            .map_err(|err| E::from(DatabaseError::interact(&msg.to_string(), &err)))?
+    }
+
+    /// Run the query _without_ a transaction on the pinned connection.
+    pub async fn query<R, E, Q, M>(&self, msg: M, query: Q) -> std::result::Result<R, E>
+    where
+        Q: Send + FnOnce(&mut SqliteConnection) -> std::result::Result<R, E> + 'static,
+        R: Send + 'static,
+        M: Send + ToString,
+        E: From<DatabaseError>,
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        let span = tracing::Span::current();
+        self.conn
+            .interact(move |conn| {
+                let _guard = span.enter();
+                query(conn)
+            })
+            .await
+            .map_err(|err| E::from(DatabaseError::interact(&msg.to_string(), &err)))?
     }
 }

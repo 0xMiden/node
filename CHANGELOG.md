@@ -49,6 +49,8 @@
 - [BREAKING] Renamed `ExplorerStatusDetails` fields in the network monitor's `/status` payload from `number_of_*` to `total_*` (`total_transactions`, `total_nullifiers`, `total_notes`, `total_account_updates`). The values now represent network-wide cumulative totals from the explorer's `overviewStats` query instead of last-block counts.
 - [BREAKING] Removed `--wallet-filepath` / `--counter-filepath` flags and the `MIDEN_MONITOR_WALLET_FILEPATH` / `MIDEN_MONITOR_COUNTER_FILEPATH` env vars from the network monitor. The monitor now keeps wallet and counter accounts fully in memory and regenerates them on every startup; the dashboard's counter value resets to zero on restart.
 - Added `--counter-pending-unhealthy-threshold` (env `MIDEN_MONITOR_COUNTER_PENDING_UNHEALTHY_THRESHOLD`, default `5`) to the network monitor: the Network Transactions card now flips unhealthy when the gap between expected and observed counter values stays above the threshold for three consecutive polls.
+- Allowed network transaction submission conditionally via the gRPC `SubmitProvenTx` and `SubmitProvenTxBatch` endpoints: the NTX builder can now send a key in the `x-miden-network-tx-auth` header that enables submitting network transactions ([#2131](https://github.com/0xMiden/node/issues/2131)).
+
 ## v0.14.11 (TBD)
 
 - Replaced blocking-in-async operations in the validator, remote prover, and ntx-builder with `spawn_blocking` to avoid starving the Tokio runtime ([#2041](https://github.com/0xMiden/node/pull/2041)).

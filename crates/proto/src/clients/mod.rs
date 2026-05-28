@@ -17,6 +17,7 @@
 //!     .without_timeout()             // or `.with_timeout(Duration::from_secs(10))`
 //!     .without_metadata_version()    // or `.with_metadata_version("1.0".into())`
 //!     .without_metadata_genesis()    // or `.with_metadata_genesis(genesis)`
+//!     .without_auth_header()         // or `.with_auth_header_value(AsciiMetadataValue::from_static("value"))`
 //!     .with_otel_context_injection() // or `.without_otel_context_injection()`
 //!     .connect::<RpcClient>()
 //!     .await?;
@@ -44,6 +45,7 @@ use crate::generated;
 pub struct Interceptor {
     otel: Option<OtelInterceptor>,
     accept: AsciiMetadataValue,
+    auth_header_value: Option<AsciiMetadataValue>,
 }
 
 impl Default for Interceptor {
@@ -51,6 +53,7 @@ impl Default for Interceptor {
         Self {
             otel: None,
             accept: AsciiMetadataValue::from_static(Self::MEDIA_TYPE),
+            auth_header_value: None,
         }
     }
 }
@@ -59,8 +62,14 @@ impl Interceptor {
     const MEDIA_TYPE: &str = "application/vnd.miden";
     const VERSION: &str = "version";
     const GENESIS: &str = "genesis";
+    const NETWORK_TX_AUTH_HEADER_NAME: &str = "x-miden-network-tx-auth";
 
-    fn new(enable_otel: bool, version: Option<&str>, genesis: Option<&str>) -> Self {
+    fn new(
+        enable_otel: bool,
+        version: Option<&str>,
+        genesis: Option<&str>,
+        auth_header: Option<AsciiMetadataValue>,
+    ) -> Self {
         if let Some(version) = version
             && !version.is_ascii()
         {
@@ -88,6 +97,7 @@ impl Interceptor {
             otel: enable_otel.then_some(OtelInterceptor),
             // SAFETY: we checked that all values are ascii at the top of the function.
             accept: AsciiMetadataValue::from_str(&accept).unwrap(),
+            auth_header_value: auth_header,
         }
     }
 }
@@ -99,6 +109,10 @@ impl tonic::service::Interceptor for Interceptor {
         }
 
         request.metadata_mut().insert(ACCEPT.as_str(), self.accept.clone());
+
+        if let Some(value) = &self.auth_header_value {
+            request.metadata_mut().insert(Self::NETWORK_TX_AUTH_HEADER_NAME, value.clone());
+        }
 
         Ok(request)
     }
@@ -260,6 +274,7 @@ impl GrpcClient for NtxBuilderClient {
 ///     .with_timeout(Duration::from_secs(5)) // or `.without_timeout()`
 ///     .with_metadata_version("1.0".into())  // or `.without_metadata_version()`
 ///     .without_metadata_genesis()           // or `.with_metadata_genesis(genesis)`
+///     .without_auth_header()                // or `.with_auth_header_value(AsciiMetadataValue::from_static("value"))`
 ///     .with_otel_context_injection()        // or `.without_otel_context_injection()`
 ///     .connect::<RpcClient>()
 ///     .await?;
@@ -271,6 +286,7 @@ pub struct Builder<State> {
     endpoint: Endpoint,
     metadata_version: Option<String>,
     metadata_genesis: Option<String>,
+    metadata_auth_header_value: Option<AsciiMetadataValue>,
     enable_otel: bool,
     _state: PhantomData<State>,
 }
@@ -295,6 +311,7 @@ impl<State> Builder<State> {
             endpoint: self.endpoint,
             metadata_version: self.metadata_version,
             metadata_genesis: self.metadata_genesis,
+            metadata_auth_header_value: self.metadata_auth_header_value,
             enable_otel: self.enable_otel,
             _state: PhantomData::<Next>,
         }
@@ -312,6 +329,7 @@ impl Builder<WantsTls> {
             endpoint,
             metadata_version: None,
             metadata_genesis: None,
+            metadata_auth_header_value: None,
             enable_otel: false,
             _state: PhantomData,
         }
@@ -375,6 +393,20 @@ impl Builder<WantsGenesis> {
 }
 
 impl Builder<WantsOTel> {
+    /// Do not include any additional metadata header in request metadata.
+    #[must_use]
+    pub fn without_auth_header(mut self) -> Self {
+        self.metadata_auth_header_value = None;
+        self
+    }
+
+    /// Include an additional ASCII metadata header in request metadata.
+    #[must_use]
+    pub fn with_auth_header_value(mut self, value: AsciiMetadataValue) -> Self {
+        self.metadata_auth_header_value = Some(value);
+        self
+    }
+
     /// Enables OpenTelemetry context propagation via gRPC.
     ///
     /// This is used to by OpenTelemetry to connect traces across network boundaries. The server on
@@ -419,6 +451,7 @@ impl Builder<WantsConnection> {
             self.enable_otel,
             self.metadata_version.as_deref(),
             self.metadata_genesis.as_deref(),
+            self.metadata_auth_header_value,
         );
         T::with_interceptor(channel, interceptor)
     }
