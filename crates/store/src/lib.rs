@@ -11,13 +11,37 @@ pub mod state;
 #[cfg(feature = "rocksdb")]
 pub use accounts::PersistentAccountTree;
 pub use accounts::{AccountTreeWithHistory, HistoricalError, InMemoryAccountTree};
-pub use db::Db;
 pub use db::models::conv::SqlTypeConvert;
-pub use errors::DatabaseError;
+pub use db::models::queries::StorageMapValuesPage;
+pub use db::{
+    AccountVaultValue,
+    Db,
+    NoteRecord,
+    NoteSyncRecord,
+    NoteSyncUpdate,
+    NullifierInfo,
+    TransactionRecord,
+};
+pub use errors::{
+    ApplyBlockError,
+    ApplyBlockWithProvingInputsError,
+    DatabaseError,
+    GetAccountError,
+    GetBatchInputsError,
+    GetBlockHeaderError,
+    GetBlockInputsError,
+    NoteSyncError,
+    StateSyncError,
+};
 pub use genesis::GenesisState;
 pub use server::block_prover_client::BlockProver;
 pub use server::proof_scheduler::DEFAULT_MAX_CONCURRENT_PROOFS;
 pub use server::{DataDirectory, DatabaseOptions, Store, StoreMode};
+
+/// Returns the store crate version.
+pub fn version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
 
 /// Returns the default number of SQLite connections used by store database pools.
 pub fn default_sqlite_connection_pool_size() -> std::num::NonZeroUsize {
