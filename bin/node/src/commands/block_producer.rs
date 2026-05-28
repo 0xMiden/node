@@ -5,9 +5,9 @@ use miden_node_block_producer::{
     DEFAULT_BATCH_INTERVAL,
     DEFAULT_BLOCK_INTERVAL,
     DEFAULT_MAX_BATCHES_PER_BLOCK,
+    DEFAULT_MAX_CONCURRENT_PROOFS,
     DEFAULT_MAX_TXS_PER_BATCH,
 };
-use miden_node_store::DEFAULT_MAX_CONCURRENT_PROOFS;
 use miden_node_utils::clap::duration_to_human_readable_string;
 use url::Url;
 
@@ -74,7 +74,7 @@ mod tests {
             block: BlockOptions {
                 interval: DEFAULT_BLOCK_INTERVAL,
                 max_batches,
-                max_concurrent_proofs: miden_node_store::DEFAULT_MAX_CONCURRENT_PROOFS,
+                max_concurrent_proofs: miden_node_block_producer::DEFAULT_MAX_CONCURRENT_PROOFS,
             },
             block_prover: BlockProverOptions { url: None },
             mempool: MempoolOptions {

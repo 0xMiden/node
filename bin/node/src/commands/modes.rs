@@ -1,9 +1,18 @@
+use std::sync::Arc;
+
+use anyhow::Context;
+use miden_node_block_producer::{RpcSync, Sequencer};
 use miden_node_proto::clients::{Builder, NtxBuilderClient, RpcClient, ValidatorClient};
+use miden_node_rpc::{NetworkTxAuth, Rpc, RpcMode};
+use miden_node_store::{ApplyBlockError, State};
+use tokio::net::TcpListener;
+use tokio::task::JoinError;
+use tonic::metadata::AsciiMetadataValue;
 use url::Url;
 
 use super::block_producer::BlockProducerOptions;
 use super::rpc::SyncOptions;
-use super::runtime::RuntimeOptions;
+use super::runtime::{RuntimeConfig, RuntimeOptions};
 use super::store::StoreOptions;
 
 // RUNTIME MODES
@@ -25,27 +34,51 @@ pub struct SequencerCommand {
 }
 
 impl SequencerCommand {
-    pub fn handle(self) -> anyhow::Result<()> {
+    pub async fn handle(self) -> anyhow::Result<()> {
         let runtime = self.runtime.runtime_config(&self.store);
         self.block_producer.validate()?;
-        let validator = self.external_services.validator_client();
-        let ntx_builder = self.external_services.ntx_builder_client();
-        let _ = (
-            runtime.rpc_listen,
-            runtime.data_directory,
-            validator,
-            ntx_builder,
-            self.block_producer.block_prover.url,
-            runtime.database_options,
-            runtime.external_grpc_options,
-            runtime.storage_options,
-            self.block_producer.block.max_concurrent_proofs,
-        );
+        let network_tx_auth = self.runtime.rpc.network_tx_auth()?;
+        let (state, mut termination_signal) = load_state(&runtime).await?;
+        let _disk_monitor = state.spawn_disk_monitor();
 
-        anyhow::bail!(
-            "sequencer mode runtime composition is not implemented yet; this stage only defines \
-             the CLI"
-        )
+        let sequencer = Sequencer {
+            store: Arc::clone(&state),
+            validator_url: self.external_services.validator_url.clone(),
+            batch_prover_url: self.block_producer.batch.prover_url,
+            block_prover_url: self.block_producer.block_prover.url,
+            batch_interval: self.block_producer.batch.interval,
+            block_interval: self.block_producer.block.interval,
+            max_txs_per_batch: self.block_producer.batch.max_txs,
+            max_batches_per_block: self.block_producer.block.max_batches,
+            max_concurrent_proofs: self.block_producer.block.max_concurrent_proofs,
+            mempool_tx_capacity: self.block_producer.mempool.tx_capacity,
+        }
+        .spawn()
+        .await
+        .context("failed to spawn sequencer")?;
+        let block_producer = sequencer.api();
+
+        let rpc = Rpc {
+            listener: bind_rpc(runtime.rpc_listen).await?,
+            store: state,
+            mode: RpcMode::sequencer(block_producer, self.external_services.validator_client()),
+            ntx_builder: Some(self.external_services.ntx_builder_client()),
+            grpc_options: runtime.external_grpc_options,
+            network_tx_auth,
+        };
+        let rpc_task = tokio::spawn(rpc.serve());
+
+        tokio::select! {
+            Some(err) = termination_signal.recv() => {
+                Err(anyhow::anyhow!("received termination signal").context(err))
+            },
+            result = sequencer.wait() => {
+                result.context("sequencer task stopped")
+            },
+            result = rpc_task => {
+                task_result("RPC server", result)
+            },
+        }
     }
 }
 
@@ -95,22 +128,39 @@ pub struct FullNodeCommand {
 }
 
 impl FullNodeCommand {
-    pub fn handle(self) -> anyhow::Result<()> {
+    pub async fn handle(self) -> anyhow::Result<()> {
         let runtime = self.runtime.runtime_config(&self.store);
         let source_rpc = self.sync.source_rpc_client();
-        let _ = (
-            runtime.rpc_listen,
-            runtime.data_directory,
-            runtime.database_options,
-            runtime.external_grpc_options,
-            runtime.storage_options,
-            source_rpc,
-        );
+        let network_tx_auth = self.runtime.rpc.network_tx_auth()?;
+        let (state, mut termination_signal) = load_state(&runtime).await?;
+        let _disk_monitor = state.spawn_disk_monitor();
 
-        anyhow::bail!(
-            "full node mode block-stream sync is not implemented yet; this stage only defines the \
-             CLI"
-        )
+        let sync_task = RpcSync {
+            state: Arc::clone(&state),
+            source_rpc: source_rpc.clone(),
+        }
+        .spawn();
+        let rpc = Rpc {
+            listener: bind_rpc(runtime.rpc_listen).await?,
+            store: state,
+            mode: RpcMode::full_node(source_rpc),
+            ntx_builder: None,
+            grpc_options: runtime.external_grpc_options,
+            network_tx_auth,
+        };
+        let rpc_task = tokio::spawn(rpc.serve());
+
+        tokio::select! {
+            Some(err) = termination_signal.recv() => {
+                Err(anyhow::anyhow!("received termination signal").context(err))
+            },
+            result = sync_task => {
+                task_result("RPC sync", result)
+            },
+            result = rpc_task => {
+                task_result("RPC server", result)
+            },
+        }
     }
 }
 
@@ -123,5 +173,52 @@ impl SyncOptions {
             .without_metadata_genesis()
             .with_otel_context_injection()
             .connect_lazy::<RpcClient>()
+    }
+}
+
+impl super::rpc::RpcOptions {
+    fn network_tx_auth(&self) -> anyhow::Result<Option<NetworkTxAuth>> {
+        self.network_tx_auth_header_value
+            .as_deref()
+            .map(|value| {
+                value
+                    .parse::<AsciiMetadataValue>()
+                    .map(NetworkTxAuth)
+                    .context("invalid rpc.network-tx-auth-header-value")
+            })
+            .transpose()
+    }
+}
+
+async fn load_state(
+    runtime: &RuntimeConfig,
+) -> anyhow::Result<(Arc<State>, tokio::sync::mpsc::Receiver<ApplyBlockError>)> {
+    let (termination_ask, termination_signal) = tokio::sync::mpsc::channel::<ApplyBlockError>(1);
+    let state = State::load_with_database_options(
+        &runtime.data_directory,
+        runtime.storage_options.clone(),
+        runtime.database_options,
+        termination_ask,
+    )
+    .await
+    .context("failed to load state")?;
+
+    Ok((Arc::new(state), termination_signal))
+}
+
+async fn bind_rpc(listen: std::net::SocketAddr) -> anyhow::Result<TcpListener> {
+    TcpListener::bind(listen)
+        .await
+        .with_context(|| format!("failed to bind RPC listener to {listen}"))
+}
+
+fn task_result(
+    task: &'static str,
+    result: Result<anyhow::Result<()>, JoinError>,
+) -> anyhow::Result<()> {
+    match result {
+        Ok(Ok(())) => Err(anyhow::anyhow!("{task} exited unexpectedly")),
+        Ok(Err(err)) => Err(err).with_context(|| format!("{task} fatal error")),
+        Err(err) => Err(err).with_context(|| format!("{task} panicked")),
     }
 }

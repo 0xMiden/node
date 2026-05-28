@@ -5,8 +5,7 @@ use std::time::Instant;
 
 use metrics::SeedingMetrics;
 use miden_node_proto::domain::batch::BatchInputs;
-use miden_node_store::state::State;
-use miden_node_store::{DataDirectory, GenesisState, Store};
+use miden_node_store::{DataDirectory, GenesisState, State};
 use miden_node_utils::clap::StorageOptions;
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::account::delta::AccountUpdateDetails;
@@ -122,7 +121,7 @@ pub async fn seed_store(
         .clone()
         .into_block(&signer)
         .expect("genesis block should be created");
-    Store::bootstrap(genesis_block, &data_directory).expect("store should bootstrap");
+    State::bootstrap(genesis_block, &data_directory).expect("store should bootstrap");
 
     let store_state = load_state(data_directory.clone()).await;
 
@@ -839,7 +838,7 @@ pub async fn start_store(data_directory: PathBuf) -> Arc<State> {
 
 async fn load_state(data_directory: PathBuf) -> Arc<State> {
     let (termination_ask, _termination_signal) = tokio::sync::mpsc::channel(1);
-    let (state, _) = State::load(&data_directory, StorageOptions::bench(), termination_ask)
+    let state = State::load(&data_directory, StorageOptions::bench(), termination_ask)
         .await
         .expect("store state should load");
     Arc::new(state)

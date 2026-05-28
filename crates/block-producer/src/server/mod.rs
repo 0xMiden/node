@@ -10,17 +10,23 @@ use miden_protocol::batch::ProposedBatch;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::ProvenTransaction;
 use tokio::sync::{Mutex, RwLock};
-use tokio::task::{Id, JoinSet};
+use tokio::task::{Id, JoinHandle, JoinSet};
 use tracing::{debug, info, instrument};
 use url::Url;
 
 use crate::batch_builder::BatchBuilder;
 use crate::block_builder::BlockBuilder;
+use crate::block_prover::BlockProver;
 use crate::domain::transaction::AuthenticatedTransaction;
 use crate::errors::{BlockProducerError, MempoolSubmissionError};
 use crate::mempool::{BatchBudget, BlockBudget, Mempool, MempoolConfig, SharedMempool};
 use crate::validator::BlockProducerValidatorClient;
-use crate::{CACHED_MEMPOOL_STATS_UPDATE_INTERVAL, COMPONENT, SERVER_NUM_BATCH_BUILDERS};
+use crate::{
+    CACHED_MEMPOOL_STATS_UPDATE_INTERVAL,
+    COMPONENT,
+    SERVER_NUM_BATCH_BUILDERS,
+    proof_scheduler,
+};
 
 #[cfg(test)]
 mod tests;
@@ -60,16 +66,18 @@ impl BlockProducerApiConfig {
     }
 }
 
-/// The block producer runtime.
+/// The sequencer runtime configuration.
 ///
 /// Specifies how to connect to the batch prover and block prover components.
-pub struct BlockProducer {
+pub struct Sequencer {
     /// The store state shared with the block producer.
     pub store: Arc<State>,
     /// The address of the validator component.
     pub validator_url: Url,
     /// The address of the batch prover component.
     pub batch_prover_url: Option<Url>,
+    /// The address of the block prover component.
+    pub block_prover_url: Option<Url>,
     /// The interval at which to produce batches.
     pub batch_interval: Duration,
     /// The interval at which to produce blocks.
@@ -78,6 +86,8 @@ pub struct BlockProducer {
     pub max_txs_per_batch: usize,
     /// The maximum number of batches per block.
     pub max_batches_per_block: usize,
+    /// The maximum number of concurrent block proofs to schedule.
+    pub max_concurrent_proofs: NonZeroUsize,
 
     /// The maximum number of inflight transactions allowed in the mempool at once.
     pub mempool_tx_capacity: NonZeroUsize,
@@ -86,18 +96,15 @@ pub struct BlockProducer {
 // BLOCK PRODUCER
 // ================================================================================================
 
-impl BlockProducer {
-    /// Starts the block producer and returns its in-process API.
-    ///
-    /// The returned handle owns the batch and block builder tasks. Dropping the handle stops those
-    /// tasks.
-    pub async fn start(self) -> Result<BlockProducerRuntime> {
-        info!(target: COMPONENT, "Initializing block producer");
+impl Sequencer {
+    /// Spawns the sequencer tasks and returns its in-process API.
+    pub async fn spawn(self) -> Result<SequencerHandle> {
+        info!(target: COMPONENT, "Initializing sequencer");
         let store = self.store;
         let validator = BlockProducerValidatorClient::new(self.validator_url.clone());
         let chain_tip = store.chain_tip(Finality::Committed).await;
 
-        info!(target: COMPONENT, "Block producer initialized");
+        info!(target: COMPONENT, "Sequencer initialized");
 
         let block_builder = BlockBuilder::new(Arc::clone(&store), validator, self.block_interval);
         let batch_builder = BatchBuilder::new(
@@ -113,8 +120,15 @@ impl BlockProducer {
         };
         let mempool = Mempool::shared(chain_tip, api_config.mempool_config());
         let api = BlockProducerApi::from_shared_mempool(mempool.clone(), store);
+        let block_prover = if let Some(url) = self.block_prover_url {
+            Arc::new(BlockProver::remote(url))
+        } else {
+            Arc::new(BlockProver::local())
+        };
+        let chain_tip_rx = api.store.subscribe_committed_tip();
 
-        // Spawn batch and block builders. These communicate indirectly via a shared mempool.
+        // Spawn batch builder, block builder, and proof scheduler. The builders communicate
+        // indirectly via a shared mempool.
         //
         // These should run forever, so we combine them into a joinset so that if
         // any complete or fail, we can shutdown the rest (somewhat) gracefully.
@@ -132,63 +146,81 @@ impl BlockProducer {
                 async { block_builder.run(mempool).await }
             })
             .id();
+        let proof_scheduler_id = tasks
+            .spawn({
+                let store = Arc::clone(&api.store);
+                async move {
+                    proof_scheduler::run(
+                        block_prover,
+                        store,
+                        chain_tip_rx,
+                        self.max_concurrent_proofs,
+                    )
+                    .await
+                }
+            })
+            .id();
 
         let task_ids = HashMap::from([
             (batch_builder_id, "batch-builder"),
             (block_builder_id, "block-builder"),
+            (proof_scheduler_id, "proof-scheduler"),
         ]);
+        let task = tokio::spawn(wait_for_tasks(tasks, task_ids));
 
-        Ok(BlockProducerRuntime { api, tasks, task_ids })
+        Ok(SequencerHandle { api, task })
     }
 
-    /// Serves the block producer's batch-builder and block-builder tasks.
+    /// Serves the sequencer tasks.
     ///
     /// Executes in place (i.e. not spawned) and will run indefinitely until a fatal error is
     /// encountered.
     pub async fn serve(self) -> anyhow::Result<()> {
-        self.start().await?.wait().await
+        self.spawn().await?.wait().await
     }
 }
 
-/// Running block producer tasks plus the API used to submit work to them.
-pub struct BlockProducerRuntime {
+/// Running sequencer tasks plus the API used to submit work to them.
+pub struct SequencerHandle {
     api: BlockProducerApi,
-    tasks: JoinSet<anyhow::Result<()>>,
-    task_ids: HashMap<Id, &'static str>,
+    task: JoinHandle<anyhow::Result<()>>,
 }
 
-impl BlockProducerRuntime {
+impl SequencerHandle {
     /// Returns a cloneable handle to the block producer API.
     pub fn api(&self) -> BlockProducerApi {
         self.api.clone()
     }
 
-    /// Waits for the block producer runtime to end.
-    ///
-    /// The batch and block builder tasks should run indefinitely, so this returns an error when any
-    /// task completes.
-    pub async fn wait(mut self) -> anyhow::Result<()> {
-        // Wait for any task to end. They should run indefinitely, so this is an unexpected result.
-        //
-        // SAFETY: The JoinSet is definitely not empty.
-        let task_result = self.tasks.join_next_with_id().await.unwrap();
-
-        let task_id = match &task_result {
-            Ok((id, _)) => *id,
-            Err(err) => err.id(),
-        };
-        let task = self.task_ids.get(&task_id).copied().unwrap_or("unknown");
-
-        // We could abort the other tasks here, but not much point as we're probably crashing the
-        // node.
-        task_result
-            .map_err(|source| BlockProducerError::JoinError { task, source })
-            .map(|(_, result)| match result {
-                Ok(_) => Err(BlockProducerError::UnexpectedTaskCompletion { task }),
-                Err(source) => Err(BlockProducerError::TaskError { task, source }),
-            })
-            .and_then(|x| x)?
+    /// Waits for the sequencer tasks to end.
+    pub async fn wait(self) -> anyhow::Result<()> {
+        self.task.await?
     }
+}
+
+async fn wait_for_tasks(
+    mut tasks: JoinSet<anyhow::Result<()>>,
+    task_ids: HashMap<Id, &'static str>,
+) -> anyhow::Result<()> {
+    // Wait for any task to end. They should run indefinitely, so this is an unexpected result.
+    //
+    // SAFETY: The JoinSet is definitely not empty.
+    let task_result = tasks.join_next_with_id().await.unwrap();
+
+    let task_id = match &task_result {
+        Ok((id, _)) => *id,
+        Err(err) => err.id(),
+    };
+    let task = task_ids.get(&task_id).copied().unwrap_or("unknown");
+
+    // We could abort the other tasks here, but not much point as we're probably crashing the node.
+    task_result
+        .map_err(|source| BlockProducerError::JoinError { task, source })
+        .map(|(_, result)| match result {
+            Ok(_) => Err(BlockProducerError::UnexpectedTaskCompletion { task }),
+            Err(source) => Err(BlockProducerError::TaskError { task, source }),
+        })
+        .and_then(|x| x)?
 }
 
 // BLOCK PRODUCER API

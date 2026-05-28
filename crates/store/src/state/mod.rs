@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use miden_node_proto::domain::account::{
@@ -93,6 +93,8 @@ pub use subscription::{
 
 mod apply_block;
 mod apply_proof;
+mod bootstrap;
+mod disk_monitor;
 mod sync_state;
 
 // FINALITY
@@ -149,6 +151,9 @@ impl<S: SmtStorage> InnerState<S> {
 
 /// The rollup state.
 pub struct State {
+    /// Root directory containing the store's on-disk data.
+    data_directory: PathBuf,
+
     /// The database which stores block headers, nullifiers, notes, and the latest states of
     /// accounts.
     db: Arc<Db>,
@@ -193,15 +198,14 @@ impl State {
 
     /// Loads the state from the data directory.
     ///
-    /// Returns `(Self, ProvenTipWriter)`. The `ProvenTipWriter` is used by the proof scheduler
-    /// (in sequencer mode) to advance the proven tip; callers can subscribe to tip changes
-    /// via the methods on `Self`.
+    /// The loaded state owns all store data structures and exposes subscription methods for
+    /// sequencer and replica tasks.
     #[instrument(target = COMPONENT, skip_all)]
     pub async fn load(
         data_path: &Path,
         storage_options: StorageOptions,
         termination_ask: tokio::sync::mpsc::Sender<ApplyBlockError>,
-    ) -> Result<(Self, ProvenTipWriter), StateInitializationError> {
+    ) -> Result<Self, StateInitializationError> {
         Self::load_with_database_options(
             data_path,
             storage_options,
@@ -213,16 +217,15 @@ impl State {
 
     /// Loads the state from the data directory using explicit database options.
     ///
-    /// Returns `(Self, ProvenTipWriter)`. The `ProvenTipWriter` is used by the proof scheduler
-    /// (in sequencer mode) to advance the proven tip; callers can subscribe to tip changes
-    /// via the methods on `Self`.
+    /// The loaded state owns all store data structures and exposes subscription methods for
+    /// sequencer and replica tasks.
     #[instrument(target = COMPONENT, skip_all)]
     pub async fn load_with_database_options(
         data_path: &Path,
         storage_options: StorageOptions,
         database_options: DatabaseOptions,
         termination_ask: tokio::sync::mpsc::Sender<ApplyBlockError>,
-    ) -> Result<(Self, ProvenTipWriter), StateInitializationError> {
+    ) -> Result<Self, StateInitializationError> {
         let data_directory = DataDirectory::load(data_path.to_path_buf())
             .map_err(StateInitializationError::DataDirectoryLoadError)?;
 
@@ -291,31 +294,32 @@ impl State {
         // Committed-tip watch: fires after each successful apply_block.
         let (committed_tip_tx, _rx) = watch::channel(latest_block_num);
 
-        Ok((
-            Self {
-                db,
-                block_store,
-                inner,
-                forest,
-                writer,
-                termination_ask,
-                proven_tip: proven_tip.clone(),
-                committed_tip_tx,
-                block_cache: BlockCache::new(BLOCK_CACHE_CAPACITY),
-                proof_cache: ProofCache::new(PROOF_CACHE_CAPACITY),
-            },
+        Ok(Self {
+            data_directory: data_path.to_path_buf(),
+            db,
+            block_store,
+            inner,
+            forest,
+            writer,
+            termination_ask,
             proven_tip,
-        ))
-    }
-
-    /// Returns the block store.
-    pub(crate) fn block_store(&self) -> Arc<BlockStore> {
-        Arc::clone(&self.block_store)
+            committed_tip_tx,
+            block_cache: BlockCache::new(BLOCK_CACHE_CAPACITY),
+            proof_cache: ProofCache::new(PROOF_CACHE_CAPACITY),
+        })
     }
 
     /// Returns a watch receiver that wakes every time a new block is committed.
-    pub(crate) fn subscribe_committed_tip(&self) -> watch::Receiver<BlockNumber> {
+    pub fn subscribe_committed_tip(&self) -> watch::Receiver<BlockNumber> {
         self.committed_tip_tx.subscribe()
+    }
+
+    /// Loads serialized block proving inputs from the block store.
+    pub async fn load_proving_inputs(
+        &self,
+        block_num: BlockNumber,
+    ) -> std::io::Result<Option<Vec<u8>>> {
+        self.block_store.load_proving_inputs(block_num).await
     }
 
     /// Returns a watch receiver that wakes every time the proven-in-sequence tip advances.

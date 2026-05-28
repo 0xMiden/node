@@ -1,6 +1,6 @@
 //! Background task that drives deferred block proving.
 //!
-//! The [`proof_scheduler`] is spawned as an internal Store task. It:
+//! The scheduler:
 //!
 //! 1. Tracks `chain_tip` via a [`watch::Receiver<BlockNumber>`].
 //! 2. Maintains up to `max_concurrent_proofs` in-flight proving jobs via a [`JoinSet`].
@@ -17,22 +17,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use miden_crypto::utils::Serializable;
 use miden_node_proto::BlockProofRequest;
+use miden_node_store::state::{Finality, State};
 use miden_protocol::block::{BlockNumber, BlockProof};
-use miden_protocol::utils::serde::Deserializable;
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_remote_prover_client::RemoteProverClientError;
 use thiserror::Error;
 use tokio::sync::watch;
-use tokio::task::{JoinHandle, JoinSet};
+use tokio::task::JoinSet;
 use tracing::{Instrument, info, instrument};
 
 use crate::COMPONENT;
-use crate::blocks::BlockStore;
+use crate::block_prover::{BlockProver, ProverError};
 use crate::errors::ProofSchedulerError;
-use crate::proven_tip::ProvenTipWriter;
-use crate::server::block_prover_client::{BlockProver, StoreProverError};
-use crate::state::{ProofCache, ProofNotification};
 
 // CONSTANTS
 // ================================================================================================
@@ -65,14 +62,13 @@ impl ProofTaskJoinSet {
     /// Spawns a new task to prove a block.
     fn spawn(
         &mut self,
-        block_store: &Arc<BlockStore>,
+        state: &Arc<State>,
         block_prover: &Arc<BlockProver>,
         block_num: BlockNumber,
     ) {
-        let block_store = Arc::clone(block_store);
+        let state = Arc::clone(state);
         let block_prover = Arc::clone(block_prover);
-        self.0
-            .spawn(async move { prove_block(&block_store, &block_prover, block_num).await });
+        self.0.spawn(async move { prove_block(&state, &block_prover, block_num).await });
     }
 
     /// Returns the result of the next completed task, or pends forever if the set is empty.
@@ -93,33 +89,6 @@ impl ProofTaskJoinSet {
 // PROOF SCHEDULER
 // ================================================================================================
 
-/// Spawns the proof scheduler as a background tokio task.
-///
-/// The scheduler uses `chain_tip_rx` to learn about newly committed blocks and checks the
-/// block store for proving inputs files to determine which blocks need proving. After each proof
-/// is saved, the result is pushed into `proof_cache` and the proven tip watch and file are
-/// updated so replica subscribers are notified.
-///
-/// Returns a [`JoinHandle`] that resolves when the scheduler encounters a fatal error or
-/// completes unexpectedly.
-pub fn spawn(
-    block_prover: Arc<BlockProver>,
-    block_store: Arc<BlockStore>,
-    chain_tip_rx: watch::Receiver<BlockNumber>,
-    proven_tip: ProvenTipWriter,
-    max_concurrent_proofs: NonZeroUsize,
-    proof_cache: ProofCache,
-) -> JoinHandle<anyhow::Result<()>> {
-    tokio::spawn(run(
-        block_prover,
-        block_store,
-        chain_tip_rx,
-        proven_tip,
-        max_concurrent_proofs,
-        proof_cache,
-    ))
-}
-
 /// Main loop of the proof scheduler.
 ///
 /// Maintains a pool of concurrent proving jobs via [`JoinSet`], fills them up to
@@ -130,13 +99,11 @@ pub fn spawn(
 ///
 /// Returns `Err` on irrecoverable errors (missing proving inputs, I/O failures).
 /// Transient errors are retried internally.
-async fn run(
+pub(crate) async fn run(
     block_prover: Arc<BlockProver>,
-    block_store: Arc<BlockStore>,
+    state: Arc<State>,
     mut chain_tip_rx: watch::Receiver<BlockNumber>,
-    proven_tip: ProvenTipWriter,
     max_concurrent_proofs: NonZeroUsize,
-    proof_cache: ProofCache,
 ) -> anyhow::Result<()> {
     info!(target: COMPONENT, "Proof scheduler started");
 
@@ -145,7 +112,7 @@ async fn run(
 
     // Next block number to schedule. Initialized from the proven tip's child so we skip
     // already-proven blocks on restart.
-    let mut next_to_prove = proven_tip.read().child();
+    let mut next_to_prove = state.chain_tip(Finality::Proven).await.child();
 
     // Completed proofs waiting to be committed in order.
     let mut pending: BTreeMap<BlockNumber, Vec<u8>> = BTreeMap::new();
@@ -154,28 +121,26 @@ async fn run(
         // Schedule blocks up to chain_tip that haven't been scheduled yet.
         let chain_tip = *chain_tip_rx.borrow();
         while proving_tasks.len() < max_concurrent_proofs.get() && next_to_prove <= chain_tip {
-            proving_tasks.spawn(&block_store, &block_prover, next_to_prove);
+            proving_tasks.spawn(&state, &block_prover, next_to_prove);
             next_to_prove = next_to_prove.child();
         }
 
         // Wait for either a job to complete or the chain tip to advance.
         tokio::select! {
-            // Proving a block has completed — cache and commit the proof.
+            // Proving a block has completed - cache and commit the proof.
             proving_result = proving_tasks.join_next() => {
                 let (block_num, proof_bytes) = proving_result?;
                 pending.insert(block_num, proof_bytes);
 
                 // Drain completed proofs in ascending order so the proven tip advances without
                 // gaps.
-                let mut next = proven_tip.read().child();
+                let mut next = state.chain_tip(Finality::Proven).await.child();
                 while let Some(proof_bytes) = pending.remove(&next) {
-                    block_store.commit_proof(next, &proof_bytes).await?;
-                    proof_cache.push(next, ProofNotification::new(next, proof_bytes));
-                    proven_tip.advance(next);
+                    state.apply_proof(next, proof_bytes).await?;
                     next = next.child();
                 }
             },
-            // New chain tip received — re-enter the scheduling loop on next iteration.
+            // New chain tip received - re-enter the scheduling loop on next iteration.
             result = chain_tip_rx.changed() => {
                 if result.is_err() {
                     info!(target: COMPONENT, "Chain tip channel closed, proof scheduler exiting");
@@ -193,7 +158,7 @@ async fn run(
 #[instrument(target = COMPONENT, name = "prove_block", skip_all,
     fields(block.number=block_num.as_u32()), err)]
 async fn prove_block(
-    block_store: &BlockStore,
+    state: &State,
     block_prover: &BlockProver,
     block_num: BlockNumber,
 ) -> anyhow::Result<(BlockNumber, Vec<u8>)> {
@@ -211,7 +176,7 @@ async fn prove_block(
 
             let result = tokio::time::timeout(
                 BLOCK_PROVE_ATTEMPT_TIMEOUT,
-                generate_block_proof(block_store, block_prover, block_num),
+                generate_block_proof(state, block_prover, block_num),
             )
             .instrument(attempt_span.clone())
             .await;
@@ -241,11 +206,11 @@ async fn prove_block(
 /// Generates a block proof by loading inputs from the block store and invoking the block prover.
 #[instrument(target = COMPONENT, name = "prove_block.generate", skip_all, fields(block.number=block_num.as_u32()), err)]
 async fn generate_block_proof(
-    block_store: &BlockStore,
+    state: &State,
     block_prover: &BlockProver,
     block_num: BlockNumber,
 ) -> Result<BlockProof, ProveBlockError> {
-    let bytes = block_store
+    let bytes = state
         .load_proving_inputs(block_num)
         .await
         .map_err(|e| ProveBlockError::Transient(e.into()))?
@@ -279,11 +244,11 @@ enum ProveBlockError {
 }
 
 impl ProveBlockError {
-    fn from_prover_error(err: StoreProverError) -> Self {
+    fn from_prover_error(err: ProverError) -> Self {
         match err {
-            StoreProverError::RemoteProvingFailed(RemoteProverClientError::InvalidEndpoint(
-                uri,
-            )) => Self::Fatal(ProofSchedulerError::InvalidProverEndpoint(uri)),
+            ProverError::RemoteProvingFailed(RemoteProverClientError::InvalidEndpoint(uri)) => {
+                Self::Fatal(ProofSchedulerError::InvalidProverEndpoint(uri))
+            },
             _ => Self::Transient(err.into()),
         }
     }

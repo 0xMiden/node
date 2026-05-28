@@ -7,8 +7,11 @@ pub mod test_utils;
 
 mod batch_builder;
 mod block_builder;
+mod block_prover;
 mod domain;
 mod mempool;
+mod proof_scheduler;
+mod rpc_sync;
 pub mod store;
 mod validator;
 
@@ -19,13 +22,15 @@ mod errors;
 
 pub mod server;
 pub use errors::MempoolSubmissionError;
+pub use proof_scheduler::DEFAULT_MAX_CONCURRENT_PROOFS;
+pub use rpc_sync::RpcSync;
 pub use server::{
-    BlockProducer,
     BlockProducerApi,
     BlockProducerApiConfig,
-    BlockProducerRuntime,
     BlockProducerStatus,
     MempoolStats,
+    Sequencer,
+    SequencerHandle,
 };
 
 // CONSTANTS

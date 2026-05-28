@@ -65,6 +65,21 @@ pub(crate) mod schema;
 
 pub type Result<T, E = DatabaseError> = std::result::Result<T, E>;
 
+/// Database options used by the store state.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct DatabaseOptions {
+    /// Maximum number of SQLite connections in the connection pool.
+    pub connection_pool_size: NonZeroUsize,
+}
+
+impl Default for DatabaseOptions {
+    fn default() -> Self {
+        Self {
+            connection_pool_size: miden_node_db::default_connection_pool_size(),
+        }
+    }
+}
+
 /// The Store's database.
 ///
 /// Extends the underlying [`miden_node_db::Db`] type with functionality specific to the Store.

@@ -10,6 +10,7 @@ use miden_node_store::{
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
+use miden_protocol::crypto::utils::DeserializationError;
 use miden_protocol::errors::{ProposedBatchError, ProposedBlockError, ProvenBatchError};
 use miden_protocol::note::Nullifier;
 use miden_remote_prover_client::RemoteProverClientError;
@@ -38,6 +39,19 @@ pub enum BlockProducerError {
         task: &'static str,
         source: anyhow::Error,
     },
+}
+
+// Proof scheduler errors
+// =================================================================================================
+
+#[derive(Debug, Error)]
+pub enum ProofSchedulerError {
+    #[error("no proving inputs found for block {0}")]
+    MissingProvingInputs(BlockNumber),
+    #[error("failed to deserialize proving inputs for block")]
+    DeserializationFailed(#[source] DeserializationError),
+    #[error("invalid remote prover endpoint: {0}")]
+    InvalidProverEndpoint(String),
 }
 
 // Add transaction and add user batch errors
