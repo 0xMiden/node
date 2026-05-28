@@ -137,7 +137,7 @@ pub async fn seed_store(
     let data_directory =
         miden_node_store::DataDirectory::load(data_directory).expect("data directory should exist");
     let genesis_header = genesis_state.into_block(&signer).unwrap().into_inner();
-    let metrics = generate_blocks(
+    let metrics = Box::pin(generate_blocks(
         num_accounts,
         public_accounts_percentage,
         faucet,
@@ -150,7 +150,7 @@ pub async fn seed_store(
         vault_entries,
         account_update_blocks,
         asset_faucet_ids,
-    )
+    ))
     .await;
 
     println!("Total time: {:.3} seconds", start.elapsed().as_secs_f64());

@@ -18,6 +18,7 @@ use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
+use tonic::metadata::AsciiMetadataValue;
 use tonic_reflection::server;
 use tonic_web::GrpcWebLayer;
 use tower_http::classify::{GrpcCode, GrpcErrorsAsFailures, SharedClassifier};
@@ -42,7 +43,12 @@ pub struct Rpc {
     pub mode: RpcMode,
     pub ntx_builder: Option<NtxBuilderClient>,
     pub grpc_options: GrpcOptionsExternal,
+    pub network_tx_auth: Option<NetworkTxAuth>,
 }
+
+#[derive(Clone, Debug)]
+/// Shared secret value expected in the fixed `x-miden-network-tx-auth` metadata header.
+pub struct NetworkTxAuth(pub AsciiMetadataValue);
 
 #[derive(Clone, Debug)]
 pub enum RpcMode {
@@ -83,6 +89,7 @@ impl Rpc {
             self.mode.clone(),
             self.ntx_builder.clone(),
             NonZeroUsize::new(1_000_000).unwrap(),
+            self.network_tx_auth,
         );
 
         let genesis = api
