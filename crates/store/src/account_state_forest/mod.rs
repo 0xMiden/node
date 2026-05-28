@@ -13,6 +13,7 @@ use miden_protocol::account::{
     AccountId,
     NonFungibleDeltaAction,
     StorageMapKey,
+    StorageMapKeyHash,
     StorageMapWitness,
     StorageSlotName,
 };
@@ -93,10 +94,7 @@ pub(crate) struct AccountStateForest<B: Backend = ForestInMemoryBackend> {
     forest: LargeSmtForest<B>,
 
     /// Reverse lookup from hashed SMT storage keys to raw storage map keys.
-    ///
-    /// Ideally this would be a mapping from `StorageMapKeyHash` to `StorageMapKey` but
-    /// unfortunately `StorageMapKeyHash` does not implement `Hash`.
-    storage_map_key_cache: LruCache<Word, StorageMapKey>,
+    storage_map_key_cache: LruCache<StorageMapKeyHash, StorageMapKey>,
 }
 
 #[cfg(test)]
@@ -199,7 +197,7 @@ impl<B: Backend> AccountStateForest<B> {
 
     pub(crate) fn cache_storage_map_keys(&self, raw_keys: impl IntoIterator<Item = StorageMapKey>) {
         self.storage_map_key_cache
-            .put_many(raw_keys.into_iter().map(|raw_key| (raw_key.hash().into(), raw_key)));
+            .put_many(raw_keys.into_iter().map(|raw_key| (raw_key.hash(), raw_key)));
     }
 
     #[cfg(test)]
@@ -401,14 +399,18 @@ impl<B: Backend> AccountStateForest<B> {
         slot_name: &StorageSlotName,
         block_num: BlockNumber,
         limit: usize,
-    ) -> Option<Result<Vec<(Word, Word)>, MerkleError>> {
+    ) -> Option<Result<Vec<(StorageMapKeyHash, Word)>, MerkleError>> {
         let lineage = Self::storage_lineage_id(account_id, slot_name);
         let tree = self.get_tree_id(lineage, block_num)?;
 
         Some(self.forest.entries(tree).map_err(Self::map_forest_error).and_then(|entries| {
             entries
                 .take(limit)
-                .map(|entry| entry.map(|e| (e.key, e.value)).map_err(Self::map_forest_error))
+                .map(|entry| {
+                    entry
+                        .map(|e| (StorageMapKeyHash::from_raw(e.key), e.value))
+                        .map_err(Self::map_forest_error)
+                })
                 .collect()
         }))
     }
