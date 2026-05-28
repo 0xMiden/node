@@ -5,8 +5,8 @@ use miden_node_block_producer::{RpcSync, Sequencer};
 use miden_node_proto::clients::{Builder, NtxBuilderClient, RpcClient, ValidatorClient};
 use miden_node_rpc::{NetworkTxAuth, Rpc, RpcMode};
 use miden_node_store::{ApplyBlockError, State};
+use miden_node_utils::tasks::{TaskResult, Tasks};
 use tokio::net::TcpListener;
-use tokio::task::JoinError;
 use tonic::metadata::AsciiMetadataValue;
 use url::Url;
 
@@ -66,17 +66,18 @@ impl SequencerCommand {
             grpc_options: runtime.external_grpc_options,
             network_tx_auth,
         };
-        let rpc_task = tokio::spawn(rpc.serve());
+        let mut tasks = Tasks::new();
+        tasks.spawn("sequencer", sequencer.wait());
+        tasks.spawn("RPC server", rpc.serve());
 
         tokio::select! {
             Some(err) = termination_signal.recv() => {
+                tasks.abort_all();
                 Err(anyhow::anyhow!("received termination signal").context(err))
             },
-            result = sequencer.wait() => {
-                result.context("sequencer task stopped")
-            },
-            result = rpc_task => {
-                task_result("RPC server", result)
+            result = tasks.join_next() => {
+                tasks.abort_all();
+                task_result(result.expect("node tasks should be running"))
             },
         }
     }
@@ -148,17 +149,18 @@ impl FullNodeCommand {
             grpc_options: runtime.external_grpc_options,
             network_tx_auth,
         };
-        let rpc_task = tokio::spawn(rpc.serve());
+        let mut tasks = Tasks::new();
+        tasks.spawn("RPC sync", async move { sync_task.await? });
+        tasks.spawn("RPC server", rpc.serve());
 
         tokio::select! {
             Some(err) = termination_signal.recv() => {
+                tasks.abort_all();
                 Err(anyhow::anyhow!("received termination signal").context(err))
             },
-            result = sync_task => {
-                task_result("RPC sync", result)
-            },
-            result = rpc_task => {
-                task_result("RPC server", result)
+            result = tasks.join_next() => {
+                tasks.abort_all();
+                task_result(result.expect("node tasks should be running"))
             },
         }
     }
@@ -212,11 +214,9 @@ async fn bind_rpc(listen: std::net::SocketAddr) -> anyhow::Result<TcpListener> {
         .with_context(|| format!("failed to bind RPC listener to {listen}"))
 }
 
-fn task_result(
-    task: &'static str,
-    result: Result<anyhow::Result<()>, JoinError>,
-) -> anyhow::Result<()> {
-    match result {
+fn task_result(task_result: TaskResult<anyhow::Result<()>>) -> anyhow::Result<()> {
+    let task = task_result.name;
+    match task_result.result {
         Ok(Ok(())) => Err(anyhow::anyhow!("{task} exited unexpectedly")),
         Ok(Err(err)) => Err(err).with_context(|| format!("{task} fatal error")),
         Err(err) => Err(err).with_context(|| format!("{task} panicked")),

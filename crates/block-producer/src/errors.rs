@@ -27,18 +27,15 @@ use crate::validator::ValidatorError;
 pub enum BlockProducerError {
     /// A block-producer task completed although it should have ran indefinitely.
     #[error("task {task} completed unexpectedly")]
-    UnexpectedTaskCompletion { task: &'static str },
+    UnexpectedTaskCompletion { task: String },
 
     /// A block-producer task panic'd.
     #[error("task {task} panic'd")]
-    JoinError { task: &'static str, source: JoinError },
+    JoinError { task: String, source: JoinError },
 
     /// A block-producer task reported a transport error.
     #[error("task {task} failed")]
-    TaskError {
-        task: &'static str,
-        source: anyhow::Error,
-    },
+    TaskError { task: String, source: anyhow::Error },
 }
 
 // Proof scheduler errors

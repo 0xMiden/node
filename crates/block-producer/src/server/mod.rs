@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
@@ -6,11 +5,12 @@ use std::time::Duration;
 use anyhow::Result;
 use miden_node_store::state::{Finality, State};
 use miden_node_utils::formatting::{format_input_notes, format_output_notes};
+use miden_node_utils::tasks::{TaskResult, Tasks};
 use miden_protocol::batch::ProposedBatch;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::ProvenTransaction;
 use tokio::sync::{Mutex, RwLock};
-use tokio::task::{Id, JoinHandle, JoinSet};
+use tokio::task::JoinHandle;
 use tracing::{debug, info, instrument};
 use url::Url;
 
@@ -132,41 +132,24 @@ impl Sequencer {
         //
         // These should run forever, so we combine them into a joinset so that if
         // any complete or fail, we can shutdown the rest (somewhat) gracefully.
-        let mut tasks = JoinSet::new();
+        let mut tasks = Tasks::new();
 
-        let batch_builder_id = tasks
-            .spawn({
-                let mempool = mempool.clone();
-                async { batch_builder.run(mempool).await }
-            })
-            .id();
-        let block_builder_id = tasks
-            .spawn({
-                let mempool = mempool.clone();
-                async { block_builder.run(mempool).await }
-            })
-            .id();
-        let proof_scheduler_id = tasks
-            .spawn({
-                let store = Arc::clone(&api.store);
-                async move {
-                    proof_scheduler::run(
-                        block_prover,
-                        store,
-                        chain_tip_rx,
-                        self.max_concurrent_proofs,
-                    )
+        tasks.spawn("batch-builder", {
+            let mempool = mempool.clone();
+            async { batch_builder.run(mempool).await }
+        });
+        tasks.spawn("block-builder", {
+            let mempool = mempool.clone();
+            async { block_builder.run(mempool).await }
+        });
+        tasks.spawn("proof-scheduler", {
+            let store = Arc::clone(&api.store);
+            async move {
+                proof_scheduler::run(block_prover, store, chain_tip_rx, self.max_concurrent_proofs)
                     .await
-                }
-            })
-            .id();
-
-        let task_ids = HashMap::from([
-            (batch_builder_id, "batch-builder"),
-            (block_builder_id, "block-builder"),
-            (proof_scheduler_id, "proof-scheduler"),
-        ]);
-        let task = tokio::spawn(wait_for_tasks(tasks, task_ids));
+            }
+        });
+        let task = tokio::spawn(wait_for_tasks(tasks));
 
         Ok(SequencerHandle { api, task })
     }
@@ -198,29 +181,20 @@ impl SequencerHandle {
     }
 }
 
-async fn wait_for_tasks(
-    mut tasks: JoinSet<anyhow::Result<()>>,
-    task_ids: HashMap<Id, &'static str>,
-) -> anyhow::Result<()> {
+async fn wait_for_tasks(mut tasks: Tasks<anyhow::Result<()>>) -> anyhow::Result<()> {
     // Wait for any task to end. They should run indefinitely, so this is an unexpected result.
-    //
-    // SAFETY: The JoinSet is definitely not empty.
-    let task_result = tasks.join_next_with_id().await.unwrap();
+    let task_result = tasks.join_next().await.expect("join set is not empty");
+    tasks.abort_all();
+    map_task_result(task_result)
+}
 
-    let task_id = match &task_result {
-        Ok((id, _)) => *id,
-        Err(err) => err.id(),
-    };
-    let task = task_ids.get(&task_id).copied().unwrap_or("unknown");
-
-    // We could abort the other tasks here, but not much point as we're probably crashing the node.
-    task_result
-        .map_err(|source| BlockProducerError::JoinError { task, source })
-        .map(|(_, result)| match result {
-            Ok(_) => Err(BlockProducerError::UnexpectedTaskCompletion { task }),
-            Err(source) => Err(BlockProducerError::TaskError { task, source }),
-        })
-        .and_then(|x| x)?
+fn map_task_result(task_result: TaskResult<anyhow::Result<()>>) -> anyhow::Result<()> {
+    let task = task_result.name;
+    match task_result.result {
+        Ok(Ok(())) => Err(BlockProducerError::UnexpectedTaskCompletion { task })?,
+        Ok(Err(source)) => Err(BlockProducerError::TaskError { task, source })?,
+        Err(source) => Err(BlockProducerError::JoinError { task, source })?,
+    }
 }
 
 // BLOCK PRODUCER API

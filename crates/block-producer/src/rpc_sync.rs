@@ -5,6 +5,7 @@ use anyhow::Context;
 use miden_node_proto::clients::RpcClient;
 use miden_node_proto::generated::rpc::{BlockSubscriptionRequest, ProofSubscriptionRequest};
 use miden_node_store::state::{Finality, State};
+use miden_node_utils::tasks::Tasks;
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use miden_protocol::utils::serde::Deserializable;
 use tokio_stream::StreamExt;
@@ -25,6 +26,7 @@ impl RpcSync {
     /// Spawns the block and proof synchronization loops as a supervised Tokio task.
     pub fn spawn(self) -> tokio::task::JoinHandle<anyhow::Result<()>> {
         tokio::spawn(async move {
+            let mut tasks = Tasks::new();
             let block_sync = BlockSync {
                 state: Arc::clone(&self.state),
                 source_rpc: self.source_rpc.clone(),
@@ -34,12 +36,16 @@ impl RpcSync {
                 source_rpc: self.source_rpc,
             };
 
-            let block_handle = block_sync.spawn();
-            let proof_handle = proof_sync.spawn();
+            tasks.spawn("block-sync", block_sync.run());
+            tasks.spawn("proof-sync", proof_sync.run());
 
-            tokio::select! {
-                result = block_handle => result?,
-                result = proof_handle => result?,
+            let task_result = tasks.join_next().await.expect("sync tasks should be running");
+            tasks.abort_all();
+            let task = task_result.name;
+            match task_result.result {
+                Ok(Ok(())) => anyhow::bail!("{task} exited unexpectedly"),
+                Ok(Err(err)) => Err(err).with_context(|| format!("{task} fatal error")),
+                Err(err) => Err(err).with_context(|| format!("{task} panicked")),
             }
         })
     }
@@ -59,10 +65,6 @@ struct ProofSync {
 }
 
 impl BlockSync {
-    fn spawn(self) -> tokio::task::JoinHandle<anyhow::Result<()>> {
-        tokio::spawn(self.run())
-    }
-
     async fn run(self) -> anyhow::Result<()> {
         loop {
             let err = self
@@ -101,10 +103,6 @@ impl BlockSync {
 }
 
 impl ProofSync {
-    fn spawn(self) -> tokio::task::JoinHandle<anyhow::Result<()>> {
-        tokio::spawn(self.run())
-    }
-
     async fn run(self) -> anyhow::Result<()> {
         loop {
             let err = self
