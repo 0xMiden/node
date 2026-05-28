@@ -52,26 +52,18 @@ block_builder.build_block
 │  ┕━ mempool.select_block
 ┝━ block_builder.get_block_inputs
 │  ┝━ block_builder.summarize_batches
-│  ┕━ store.client.get_block_inputs
-│     ┕━ store.rpc/GetBlockInputs
-│        ┕━ store.server.get_block_inputs
-│           ┝━ validate_nullifiers
-│           ┝━ read_account_ids
-│           ┝━ validate_note_commitments
-│           ┝━ select_block_header_by_block_num
-│           ┝━ select_note_inclusion_proofs
-│           ┕━ select_block_headers
+│  ┕━ store.state.get_block_inputs
+│     ┝━ select_note_inclusion_proofs
+│     ┕━ select_block_headers
 ┝━ block_builder.prove_block
 │  ┝━ execute_program
 │  ┕━ block_builder.simulate_proving
 ┝━ block_builder.inject_failure
 ┕━ block_builder.commit_block
-   ┝━ store.client.apply_block
-   │ ┕━ store.rpc/ApplyBlock
-   │    ┕━ store.server.apply_block
-   │       ┕━ apply_block
-   │          ┝━ select_block_header_by_block_num
-   │          ┕━ update_in_memory_structs
+   ┝━ store.state.apply_block_with_proving_inputs
+   │  ┕━ apply_block
+   │     ┝━ select_block_header_by_block_num
+   │     ┕━ update_in_memory_structs
    ┝━ mempool.lock
    ┕━ mempool.commit_block
       ┕━ mempool.revert_expired_transactions
@@ -94,7 +86,7 @@ batch_builder.build_batch
 │  ┝━ mempool.lock
 │  ┕━ mempool.select_batch
 ┝━ batch_builder.get_batch_inputs
-│  ┕━ store.client.get_batch_inputs
+│  ┕━ store.state.get_batch_inputs
 ┝━ batch_builder.propose_batch
 ┝━ batch_builder.prove_batch
 ┝━ batch_builder.inject_failure

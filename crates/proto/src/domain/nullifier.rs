@@ -1,10 +1,8 @@
 use miden_protocol::Word;
-use miden_protocol::crypto::merkle::smt::SmtProof;
 use miden_protocol::note::Nullifier;
 
-use crate::decode::GrpcDecodeExt;
 use crate::errors::ConversionError;
-use crate::{decode, generated as proto};
+use crate::generated as proto;
 
 // FROM NULLIFIER
 // ================================================================================================
@@ -30,37 +28,5 @@ impl TryFrom<proto::primitives::Digest> for Nullifier {
     fn try_from(value: proto::primitives::Digest) -> Result<Self, Self::Error> {
         let digest: Word = value.try_into()?;
         Ok(Nullifier::from_raw(digest))
-    }
-}
-
-// NULLIFIER WITNESS RECORD
-// ================================================================================================
-
-#[derive(Clone, Debug)]
-pub struct NullifierWitnessRecord {
-    pub nullifier: Nullifier,
-    pub proof: SmtProof,
-}
-
-impl TryFrom<proto::store::block_inputs::NullifierWitness> for NullifierWitnessRecord {
-    type Error = ConversionError;
-
-    fn try_from(
-        nullifier_witness_record: proto::store::block_inputs::NullifierWitness,
-    ) -> Result<Self, Self::Error> {
-        let decoder = nullifier_witness_record.decoder();
-        Ok(Self {
-            nullifier: decode!(decoder, nullifier_witness_record.nullifier)?,
-            proof: decode!(decoder, nullifier_witness_record.opening)?,
-        })
-    }
-}
-
-impl From<NullifierWitnessRecord> for proto::store::block_inputs::NullifierWitness {
-    fn from(value: NullifierWitnessRecord) -> Self {
-        Self {
-            nullifier: Some(value.nullifier.into()),
-            opening: Some(value.proof.into()),
-        }
     }
 }

@@ -2,18 +2,17 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use anyhow::Context;
+use miden_node_store::state::State;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::batch::{OrderedBatches, ProvenBatch};
 use miden_protocol::block::{BlockInputs, BlockNumber, ProposedBlock, ProvenBlock, SignedBlock};
-use miden_protocol::note::NoteHeader;
 use miden_protocol::transaction::TransactionHeader;
 use tokio::time::Duration;
 use tracing::{Span, instrument};
 
-use crate::errors::BuildBlockError;
+use crate::errors::{BuildBlockError, StoreError};
 use crate::mempool::SharedMempool;
-use crate::store::StoreClient;
 use crate::validator::BlockProducerValidatorClient;
 use crate::{COMPONENT, TelemetryInjectorExt};
 
@@ -29,19 +28,19 @@ pub struct BlockBuilder {
     /// Note: this _must_ be sign positive and less than 1.0.
     pub failure_rate: f64,
 
-    /// The store RPC client for committing blocks.
-    pub store: StoreClient,
+    /// The store state for committing blocks.
+    pub store: Arc<State>,
 
     /// The validator RPC client for validating blocks.
     pub validator: BlockProducerValidatorClient,
 }
 
 impl BlockBuilder {
-    /// Creates a new [`BlockBuilder`] with the given [`StoreClient`] and optional block prover URL.
+    /// Creates a new [`BlockBuilder`] with the given store state and optional block prover URL.
     ///
     /// If the block prover URL is not set, the block builder will use the local block prover.
     pub fn new(
-        store: StoreClient,
+        store: Arc<State>,
         validator: BlockProducerValidatorClient,
         block_interval: Duration,
     ) -> Self {
@@ -118,10 +117,10 @@ impl BlockBuilder {
             .inspect_ok(BlockBatchesAndInputs::inject_telemetry)
             .and_then(|inputs| self.propose_block(inputs))
             .inspect_ok(|proposed_block| {
-                ProposedBlock::inject_telemetry(proposed_block);
+                ProposedBlock::inject_telemetry(&proposed_block.proposed_block);
             })
             .and_then(|proposed_block| self.build_and_validate_block(proposed_block))
-            .and_then(|(ordered_batches, signed_block)| self.commit_block(mempool, ordered_batches, signed_block))
+            .and_then(|block_commit| self.commit_block(mempool, block_commit))
             // Handle errors by propagating the error to the root span and rolling back the block.
             .inspect_err(|err| Span::current().set_error(err))
             .or_else(|err| async {
@@ -172,7 +171,7 @@ impl BlockBuilder {
                 .input_notes()
                 .iter()
                 .cloned()
-                .filter_map(|note| note.header().map(NoteHeader::id))
+                .filter_map(|note| note.header().map(|header| header.id().as_word()))
         });
         let block_references_iter =
             batch_iter.clone().map(Deref::deref).map(ProvenBatch::reference_block_num);
@@ -184,19 +183,20 @@ impl BlockBuilder {
         let inputs = self
             .store
             .get_block_inputs(
-                account_ids_iter,
-                created_nullifiers_iter,
-                unauthenticated_notes_iter,
-                block_references_iter,
+                account_ids_iter.collect(),
+                created_nullifiers_iter.collect(),
+                unauthenticated_notes_iter.collect(),
+                block_references_iter.collect(),
             )
             .await
+            .map_err(StoreError::GetBlockInputsFailed)
             .map_err(BuildBlockError::GetBlockInputsFailed)?;
 
         // Check that the latest committed block in the store matches our expectations.
         //
-        // Desync can occur since the mempool and store are separate components. One example is if
-        // the block-producer's apply_block gRPC request times out, rolling back the block locally,
-        // but the store still committed the block on its end.
+        // Desync can occur since the mempool and store state are updated separately. For example,
+        // the store may commit a block while the block builder rolls back its local mempool view
+        // after a late failure.
         let store_chain_tip = inputs.prev_block_header().block_num();
         if store_chain_tip.child() != block_number {
             return Err(BuildBlockError::Desync {
@@ -214,21 +214,24 @@ impl BlockBuilder {
     async fn propose_block(
         &self,
         batches_inputs: BlockBatchesAndInputs,
-    ) -> Result<ProposedBlock, BuildBlockError> {
+    ) -> Result<ProposedBlockAndInputs, BuildBlockError> {
         let BlockBatchesAndInputs { batches, inputs } = batches_inputs;
+        let block_inputs = inputs.clone();
         let batches = batches.into_iter().map(Arc::unwrap_or_clone).collect();
 
         let proposed_block =
             ProposedBlock::new(inputs, batches).map_err(BuildBlockError::ProposeBlockFailed)?;
 
-        Ok(proposed_block)
+        Ok(ProposedBlockAndInputs { proposed_block, block_inputs })
     }
 
     #[instrument(target = COMPONENT, name = "block_builder.validate_block", skip_all, err)]
     async fn build_and_validate_block(
         &self,
-        proposed_block: ProposedBlock,
-    ) -> Result<(OrderedBatches, SignedBlock), BuildBlockError> {
+        proposal: ProposedBlockAndInputs,
+    ) -> Result<BlockCommit, BuildBlockError> {
+        let ProposedBlockAndInputs { proposed_block, block_inputs } = proposal;
+
         // Concurrently build the block and validate it via the validator.
         let build_result = spawn_blocking_in_current_span({
             let proposed_block = proposed_block.clone();
@@ -251,26 +254,37 @@ impl BlockBuilder {
         }
 
         let (ordered_batches, ..) = proposed_block.into_parts();
+
         // SAFETY: The header, body, and signature are known to correspond to each other because the
         // header and body are derived from the proposed block and the signature is verified against
         // the corresponding commitment.
         let signed_block = SignedBlock::new_unchecked(header, body, signature);
-        Ok((ordered_batches, signed_block))
+        Ok(BlockCommit {
+            ordered_batches,
+            block_inputs,
+            signed_block,
+        })
     }
 
     #[instrument(target = COMPONENT, name = "block_builder.commit_block", skip_all, err)]
     async fn commit_block(
         &self,
         mempool: &SharedMempool,
-        ordered_batches: OrderedBatches,
-        signed_block: SignedBlock,
+        block_commit: BlockCommit,
     ) -> Result<(), BuildBlockError> {
+        let BlockCommit {
+            ordered_batches,
+            block_inputs,
+            signed_block,
+        } = block_commit;
+        let header = signed_block.header().clone();
+
         self.store
-            .apply_block(&ordered_batches, &signed_block)
+            .apply_block_with_proving_inputs(ordered_batches, block_inputs, signed_block)
             .await
+            .map_err(StoreError::ApplyBlockFailed)
             .map_err(BuildBlockError::StoreApplyBlockFailed)?;
 
-        let (header, ..) = signed_block.into_parts();
         mempool.lock().map_err(BuildBlockError::MempoolPoisoned)?.commit_block(&header);
 
         Ok(())
@@ -317,6 +331,19 @@ impl TelemetryInjectorExt for SelectedBlock {
 struct BlockBatchesAndInputs {
     batches: Vec<Arc<ProvenBatch>>,
     inputs: BlockInputs,
+}
+
+/// A proposed block bundled with the exact inputs used to construct it.
+struct ProposedBlockAndInputs {
+    proposed_block: ProposedBlock,
+    block_inputs: BlockInputs,
+}
+
+/// Data needed to commit a signed block and persist its proving inputs.
+struct BlockCommit {
+    ordered_batches: OrderedBatches,
+    block_inputs: BlockInputs,
+    signed_block: SignedBlock,
 }
 
 impl TelemetryInjectorExt for BlockBatchesAndInputs {

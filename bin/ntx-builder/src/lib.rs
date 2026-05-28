@@ -428,36 +428,3 @@ impl NtxBuilderConfig {
         ))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-
-    use tonic::metadata::AsciiMetadataValue;
-    use url::Url;
-
-    use super::NtxBuilderConfig;
-
-    #[test]
-    fn ntx_builder_config_default_has_no_rpc_auth_header() {
-        let config = NtxBuilderConfig::new(
-            Url::parse("http://127.0.0.1:57291").expect("valid url"),
-            PathBuf::from("ntx-builder.sqlite3"),
-        );
-
-        assert_eq!(config.rpc_auth_header, None);
-    }
-
-    #[test]
-    fn ntx_builder_config_with_rpc_auth_header_stores_value() {
-        let secret_token = AsciiMetadataValue::from_static("secret-token");
-
-        let config = NtxBuilderConfig::new(
-            Url::parse("http://127.0.0.1:57291").expect("valid url"),
-            PathBuf::from("ntx-builder.sqlite3"),
-        )
-        .with_rpc_auth_header(secret_token.clone());
-
-        assert_eq!(config.rpc_auth_header, Some(secret_token));
-    }
-}

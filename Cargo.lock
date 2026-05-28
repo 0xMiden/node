@@ -3352,7 +3352,6 @@ dependencies = [
  "miden-remote-prover-client",
  "miden-standards",
  "miden-tx-batch-prover",
- "miden-validator",
  "pretty_assertions",
  "rand 0.9.4",
  "rand_chacha",
@@ -3489,13 +3488,11 @@ dependencies = [
  "miden-large-smt-backend-rocksdb",
  "miden-node-db",
  "miden-node-proto",
- "miden-node-proto-build",
  "miden-node-test-macro",
  "miden-node-utils",
  "miden-protocol",
  "miden-remote-prover-client",
  "miden-standards",
- "pin-project",
  "pretty_assertions",
  "rand 0.9.4",
  "rand_chacha",
@@ -3506,8 +3503,6 @@ dependencies = [
  "tokio-stream",
  "toml",
  "tonic",
- "tonic-reflection",
- "tower-http",
  "tracing",
  "url",
 ]
@@ -3519,7 +3514,6 @@ dependencies = [
  "clap",
  "fs-err",
  "futures",
- "miden-node-block-producer",
  "miden-node-proto",
  "miden-node-store",
  "miden-node-utils",
@@ -3528,8 +3522,6 @@ dependencies = [
  "rand 0.9.4",
  "rayon",
  "tokio",
- "tonic",
- "url",
 ]
 
 [[package]]
