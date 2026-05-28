@@ -225,6 +225,14 @@ pub enum ApplyBlockError {
     DbUpdateTaskFailed(String),
 }
 
+#[derive(Error, Debug)]
+pub enum ApplyBlockWithProvingInputsError {
+    #[error("failed to save block proving inputs")]
+    SaveProvingInputs(#[source] io::Error),
+    #[error("failed to apply block")]
+    ApplyBlock(#[source] ApplyBlockError),
+}
+
 impl From<ApplyBlockError> for Status {
     fn from(err: ApplyBlockError) -> Self {
         match err {

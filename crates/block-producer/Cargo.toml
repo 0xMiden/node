@@ -26,6 +26,7 @@ anyhow                     = { workspace = true }
 futures                    = { workspace = true }
 itertools                  = { workspace = true }
 miden-node-proto           = { workspace = true }
+miden-node-store           = { workspace = true }
 miden-node-utils           = { features = ["testing"], workspace = true }
 miden-protocol             = { default-features = true, workspace = true }
 miden-remote-prover-client = { features = ["batch-prover", "block-prover"], workspace = true }
@@ -39,11 +40,9 @@ url                        = { workspace = true }
 
 [dev-dependencies]
 assert_matches    = { workspace = true }
-miden-node-store  = { workspace = true }
 miden-node-utils  = { features = ["testing"], workspace = true }
 miden-protocol    = { default-features = true, features = ["testing"], workspace = true }
 miden-standards   = { features = ["testing"], workspace = true }
-miden-validator   = { workspace = true }
 pretty_assertions = { workspace = true }
 rand_chacha       = { default-features = false, workspace = true }
 serial_test       = { workspace = true }

@@ -25,5 +25,6 @@ full fixed configuration. Runtime-tuneable parameters are documented in the
 
 ## Architecture
 
-The store consists mainly of a gRPC server which answers requests from the RPC and block-producer components, as well as
-new block submissions from the block-producer.
+The store consists mainly of state management plus a gRPC server which answers requests from the
+RPC component. In sequencer mode, the block-producer uses the store state in-process for block
+inputs and block application.
