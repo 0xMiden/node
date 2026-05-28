@@ -48,7 +48,6 @@ use crate::blocks::BlockStore;
 use crate::db::models::Page;
 use crate::db::{Db, NoteRecord, NullifierInfo};
 use crate::errors::{
-    ApplyBlockError,
     DatabaseError,
     GetAccountError,
     GetBatchInputsError,
@@ -173,9 +172,6 @@ pub struct State {
     /// TOCTOU issues, there must be no concurrent writers. This locks to serialize the writers.
     writer: Mutex<()>,
 
-    /// Request termination of the process due to a fatal internal state error.
-    termination_ask: tokio::sync::mpsc::Sender<ApplyBlockError>,
-
     /// The latest proven-in-sequence block number, updated by the proof scheduler or `apply_proof`.
     proven_tip: ProvenTipWriter,
 
@@ -204,15 +200,9 @@ impl State {
     pub async fn load(
         data_path: &Path,
         storage_options: StorageOptions,
-        termination_ask: tokio::sync::mpsc::Sender<ApplyBlockError>,
     ) -> Result<Self, StateInitializationError> {
-        Self::load_with_database_options(
-            data_path,
-            storage_options,
-            DatabaseOptions::default(),
-            termination_ask,
-        )
-        .await
+        Self::load_with_database_options(data_path, storage_options, DatabaseOptions::default())
+            .await
     }
 
     /// Loads the state from the data directory using explicit database options.
@@ -224,7 +214,6 @@ impl State {
         data_path: &Path,
         storage_options: StorageOptions,
         database_options: DatabaseOptions,
-        termination_ask: tokio::sync::mpsc::Sender<ApplyBlockError>,
     ) -> Result<Self, StateInitializationError> {
         let data_directory = DataDirectory::load(data_path.to_path_buf())
             .map_err(StateInitializationError::DataDirectoryLoadError)?;
@@ -301,7 +290,6 @@ impl State {
             inner,
             forest,
             writer,
-            termination_ask,
             proven_tip,
             committed_tip_tx,
             block_cache: BlockCache::new(BLOCK_CACHE_CAPACITY),

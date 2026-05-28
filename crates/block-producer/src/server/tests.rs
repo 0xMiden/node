@@ -53,9 +53,6 @@ fn bootstrap_store(path: &std::path::Path) {
 }
 
 async fn load_state(path: &std::path::Path) -> Arc<State> {
-    let (termination_ask, _termination_signal) = tokio::sync::mpsc::channel(1);
-    let state = State::load(path, StorageOptions::default(), termination_ask)
-        .await
-        .expect("state should load");
+    let state = State::load(path, StorageOptions::default()).await.expect("state should load");
     Arc::new(state)
 }

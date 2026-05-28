@@ -4,7 +4,7 @@ use anyhow::Context;
 use miden_node_block_producer::{RpcSync, Sequencer};
 use miden_node_proto::clients::{Builder, NtxBuilderClient, RpcClient, ValidatorClient};
 use miden_node_rpc::{NetworkTxAuth, Rpc, RpcMode};
-use miden_node_store::{ApplyBlockError, State};
+use miden_node_store::State;
 use miden_node_utils::tasks::{TaskResult, Tasks};
 use tokio::net::TcpListener;
 use tonic::metadata::AsciiMetadataValue;
@@ -38,7 +38,7 @@ impl SequencerCommand {
         let runtime = self.runtime.runtime_config(&self.store);
         self.block_producer.validate()?;
         let network_tx_auth = self.runtime.rpc.network_tx_auth()?;
-        let (state, mut termination_signal) = load_state(&runtime).await?;
+        let state = load_state(&runtime).await?;
         let _disk_monitor = state.spawn_disk_monitor();
 
         let sequencer = Sequencer {
@@ -70,16 +70,9 @@ impl SequencerCommand {
         tasks.spawn("sequencer", sequencer.wait());
         tasks.spawn("RPC server", rpc.serve());
 
-        tokio::select! {
-            Some(err) = termination_signal.recv() => {
-                tasks.abort_all();
-                Err(anyhow::anyhow!("received termination signal").context(err))
-            },
-            result = tasks.join_next() => {
-                tasks.abort_all();
-                task_result(result.expect("node tasks should be running"))
-            },
-        }
+        let result = tasks.join_next().await;
+        tasks.abort_all();
+        task_result(result.expect("node tasks should be running"))
     }
 }
 
@@ -133,7 +126,7 @@ impl FullNodeCommand {
         let runtime = self.runtime.runtime_config(&self.store);
         let source_rpc = self.sync.source_rpc_client();
         let network_tx_auth = self.runtime.rpc.network_tx_auth()?;
-        let (state, mut termination_signal) = load_state(&runtime).await?;
+        let state = load_state(&runtime).await?;
         let _disk_monitor = state.spawn_disk_monitor();
 
         let sync_task = RpcSync {
@@ -153,16 +146,9 @@ impl FullNodeCommand {
         tasks.spawn("RPC sync", async move { sync_task.await? });
         tasks.spawn("RPC server", rpc.serve());
 
-        tokio::select! {
-            Some(err) = termination_signal.recv() => {
-                tasks.abort_all();
-                Err(anyhow::anyhow!("received termination signal").context(err))
-            },
-            result = tasks.join_next() => {
-                tasks.abort_all();
-                task_result(result.expect("node tasks should be running"))
-            },
-        }
+        let result = tasks.join_next().await;
+        tasks.abort_all();
+        task_result(result.expect("node tasks should be running"))
     }
 }
 
@@ -192,20 +178,16 @@ impl super::rpc::RpcOptions {
     }
 }
 
-async fn load_state(
-    runtime: &RuntimeConfig,
-) -> anyhow::Result<(Arc<State>, tokio::sync::mpsc::Receiver<ApplyBlockError>)> {
-    let (termination_ask, termination_signal) = tokio::sync::mpsc::channel::<ApplyBlockError>(1);
+async fn load_state(runtime: &RuntimeConfig) -> anyhow::Result<Arc<State>> {
     let state = State::load_with_database_options(
         &runtime.data_directory,
         runtime.storage_options.clone(),
         runtime.database_options,
-        termination_ask,
     )
     .await
     .context("failed to load state")?;
 
-    Ok((Arc::new(state), termination_signal))
+    Ok(Arc::new(state))
 }
 
 async fn bind_rpc(listen: std::net::SocketAddr) -> anyhow::Result<TcpListener> {

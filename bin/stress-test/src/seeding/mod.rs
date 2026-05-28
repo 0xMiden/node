@@ -837,8 +837,7 @@ pub async fn start_store(data_directory: PathBuf) -> Arc<State> {
 }
 
 async fn load_state(data_directory: PathBuf) -> Arc<State> {
-    let (termination_ask, _termination_signal) = tokio::sync::mpsc::channel(1);
-    let state = State::load(&data_directory, StorageOptions::bench(), termination_ask)
+    let state = State::load(&data_directory, StorageOptions::bench())
         .await
         .expect("store state should load");
     Arc::new(state)
