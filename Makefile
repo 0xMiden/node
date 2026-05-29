@@ -143,7 +143,7 @@ compose-up: ## Starts all node components, telemetry, and monitor via docker com
 
 .PHONY: compose-down
 compose-down: ## Stops and removes all containers via docker compose
-	docker compose $(COMPOSE_FILES) down
+	docker compose $(COMPOSE_FILES) down --remove-orphans
 
 .PHONY: compose-logs
 compose-logs: ## Follows logs for all components via docker compose
