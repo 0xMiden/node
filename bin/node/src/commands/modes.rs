@@ -126,12 +126,11 @@ impl FullNodeCommand {
         let network_tx_auth = self.runtime.rpc.network_tx_auth()?;
         let state = load_state(&runtime).await?;
         let _disk_monitor = state.spawn_disk_monitor();
-
-        let sync_task = RpcSync {
+        let sync = RpcSync {
             state: Arc::clone(&state),
             source_rpc: source_rpc.clone(),
-        }
-        .spawn();
+        };
+
         let rpc = Rpc {
             listener: bind_rpc(runtime.rpc_listen).await?,
             store: state,
@@ -141,7 +140,7 @@ impl FullNodeCommand {
             network_tx_auth,
         };
         let mut tasks = Tasks::new();
-        tasks.spawn("RPC sync", async move { sync_task.await? });
+        tasks.spawn("RPC sync", sync.run());
         tasks.spawn("RPC server", rpc.serve());
 
         tasks.join_next_as_error().await

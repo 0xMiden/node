@@ -6,14 +6,13 @@ use tokio::task::{Id, JoinError, JoinSet};
 
 /// A named task set for supervising concurrently-running Tokio tasks.
 ///
-/// Dropping a task set aborts all tasks that are still running. Use [`Self::abort_all`] when the
-/// tasks should be cancelled before the task set itself is dropped.
-pub struct Tasks<T> {
-    handles: JoinSet<T>,
+/// Dropping a task set aborts all tasks that are still running.
+pub struct Tasks {
+    handles: JoinSet<anyhow::Result<()>>,
     names: HashMap<Id, String>,
 }
 
-impl<T> Default for Tasks<T> {
+impl Default for Tasks {
     fn default() -> Self {
         Self {
             handles: JoinSet::new(),
@@ -22,7 +21,7 @@ impl<T> Default for Tasks<T> {
     }
 }
 
-impl<T: Send + 'static> Tasks<T> {
+impl Tasks {
     /// Creates an empty task set.
     pub fn new() -> Self {
         Self::default()
@@ -32,15 +31,27 @@ impl<T: Send + 'static> Tasks<T> {
     pub fn spawn(
         &mut self,
         name: impl Into<String>,
-        task: impl Future<Output = T> + Send + 'static,
+        task: impl Future<Output = anyhow::Result<()>> + Send + 'static,
     ) -> Id {
         let id = self.handles.spawn(task).id();
         self.names.insert(id, name.into());
         id
     }
 
+    /// Spawns a named task that does not return an error.
+    pub fn spawn_infallible(
+        &mut self,
+        name: impl Into<String>,
+        task: impl Future<Output = ()> + Send + 'static,
+    ) -> Id {
+        self.spawn(name, async move {
+            task.await;
+            Ok(())
+        })
+    }
+
     /// Waits for the next task to complete.
-    pub async fn join_next(&mut self) -> Option<(String, Result<T, JoinError>)> {
+    pub async fn join_next(&mut self) -> Option<(String, Result<anyhow::Result<()>, JoinError>)> {
         let result = self.handles.join_next_with_id().await?;
         let id = match &result {
             Ok((id, _)) => *id,
@@ -52,11 +63,6 @@ impl<T: Send + 'static> Tasks<T> {
         Some((name, result))
     }
 
-    /// Aborts all tasks still running in the set.
-    pub fn abort_all(&mut self) {
-        self.handles.abort_all();
-    }
-
     /// Returns `true` if no tasks are currently in the set.
     pub fn is_empty(&self) -> bool {
         self.handles.is_empty()
@@ -66,9 +72,7 @@ impl<T: Send + 'static> Tasks<T> {
     pub fn len(&self) -> usize {
         self.handles.len()
     }
-}
 
-impl Tasks<anyhow::Result<()>> {
     /// Waits for the next task to complete, treating that completion as an error.
     ///
     /// This is intended for supervised task sets where every task is expected to run indefinitely.

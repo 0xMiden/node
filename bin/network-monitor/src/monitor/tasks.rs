@@ -26,7 +26,7 @@ use crate::validator::ValidatorService;
 /// Task management structure that supervises named component tasks.
 #[derive(Default)]
 pub struct Tasks {
-    handles: SupervisedTasks<anyhow::Result<()>>,
+    handles: SupervisedTasks,
 }
 
 impl Tasks {
@@ -173,10 +173,8 @@ impl Tasks {
     pub fn spawn_service<S: Service>(&mut self, svc: S) -> Receiver<ServiceStatus> {
         let (tx, rx) = watch::channel(svc.initial_status());
         let service_name = svc.name().to_string();
-        self.handles.spawn(service_name.clone(), async move {
-            svc.run(tx).await;
-            Ok(())
-        });
+        self.handles
+            .spawn_infallible(service_name.clone(), async move { svc.run(tx).await });
         debug!(target: COMPONENT, service = %service_name, "spawned service");
         rx
     }
@@ -184,20 +182,15 @@ impl Tasks {
     /// Spawn the HTTP frontend server.
     pub fn spawn_http_server(&mut self, server_state: ServerState, config: &MonitorConfig) {
         let config = config.clone();
-        self.handles.spawn("frontend", async move {
-            serve(server_state, config).await;
-            Ok(())
-        });
+        self.handles
+            .spawn_infallible("frontend", async move { serve(server_state, config).await });
     }
 
     /// Handles the failure of a task.
     ///
     /// Waits for any task to complete or fail and returns an error. Since components are
     /// expected to run indefinitely, any task completion is treated as fatal.
-    pub async fn handle_failure(&mut self) -> Result<()> {
-        let result = self.handles.join_next_as_error().await;
-        self.handles.abort_all();
-
-        result
+    pub async fn handle_failure(mut self) -> Result<()> {
+        self.handles.join_next_as_error().await
     }
 }

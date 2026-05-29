@@ -23,24 +23,27 @@ pub struct RpcSync {
 }
 
 impl RpcSync {
+    /// Runs the block and proof synchronization loops until one exits unexpectedly.
+    pub async fn run(self) -> anyhow::Result<()> {
+        let mut tasks = Tasks::new();
+        let block_sync = BlockSync {
+            state: Arc::clone(&self.state),
+            source_rpc: self.source_rpc.clone(),
+        };
+        let proof_sync = ProofSync {
+            state: self.state,
+            source_rpc: self.source_rpc,
+        };
+
+        tasks.spawn("block-sync", block_sync.run());
+        tasks.spawn("proof-sync", proof_sync.run());
+
+        tasks.join_next_as_error().await
+    }
+
     /// Spawns the block and proof synchronization loops as a supervised Tokio task.
     pub fn spawn(self) -> tokio::task::JoinHandle<anyhow::Result<()>> {
-        tokio::spawn(async move {
-            let mut tasks = Tasks::new();
-            let block_sync = BlockSync {
-                state: Arc::clone(&self.state),
-                source_rpc: self.source_rpc.clone(),
-            };
-            let proof_sync = ProofSync {
-                state: self.state,
-                source_rpc: self.source_rpc,
-            };
-
-            tasks.spawn("block-sync", block_sync.run());
-            tasks.spawn("proof-sync", proof_sync.run());
-
-            tasks.join_next_as_error().await
-        })
+        tokio::spawn(self.run())
     }
 }
 

@@ -130,8 +130,8 @@ impl Sequencer {
         // Spawn batch builder, block builder, and proof scheduler. The builders communicate
         // indirectly via a shared mempool.
         //
-        // These should run forever, so we combine them into a joinset so that if
-        // any complete or fail, we can shutdown the rest (somewhat) gracefully.
+        // These should run forever, so if any complete or fail, the sequencer reports the failure
+        // and aborts the rest when the task set is dropped.
         let mut tasks = Tasks::new();
 
         tasks.spawn("batch-builder", {
@@ -149,7 +149,7 @@ impl Sequencer {
                     .await
             }
         });
-        let task = tokio::spawn(wait_for_tasks(tasks));
+        let task = tokio::spawn(async move { tasks.join_next_as_error().await });
 
         Ok(SequencerHandle { api, task })
     }
@@ -179,11 +179,6 @@ impl SequencerHandle {
     pub async fn wait(self) -> anyhow::Result<()> {
         self.task.await?
     }
-}
-
-async fn wait_for_tasks(mut tasks: Tasks<anyhow::Result<()>>) -> anyhow::Result<()> {
-    // Wait for any task to end. They should run indefinitely, so this is an unexpected result.
-    tasks.join_next_as_error().await
 }
 
 // BLOCK PRODUCER API
