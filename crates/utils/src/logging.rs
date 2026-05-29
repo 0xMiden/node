@@ -2,7 +2,10 @@ use std::str::FromStr;
 use std::sync::OnceLock;
 
 use opentelemetry::trace::TracerProvider as _;
+use opentelemetry::{KeyValue, Value};
+use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
+use opentelemetry_sdk::resource::{EnvResourceDetector, TelemetryResourceDetector};
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use tracing::subscriber::Subscriber;
 use tracing_opentelemetry::OpenTelemetryLayer;
@@ -17,16 +20,68 @@ use crate::tracing::OpenTelemetrySpanExt;
 /// pending spans before the program terminates.
 static TRACER_PROVIDER: OnceLock<SdkTracerProvider> = OnceLock::new();
 
+/// Default OpenTelemetry resource attributes for this process.
+#[derive(Clone, Default)]
+pub struct ResourceConfig {
+    service_name: Option<&'static str>,
+    attributes: Vec<(&'static str, &'static str)>,
+}
+
+impl ResourceConfig {
+    #[must_use]
+    pub fn with_name(mut self, service_name: &'static str) -> Self {
+        self.service_name = Some(service_name);
+        self
+    }
+
+    #[must_use]
+    pub fn with_attribute(mut self, key: &'static str, value: &'static str) -> Self {
+        self.attributes.push((key, value));
+        self
+    }
+}
+
 /// Configures [`setup_tracing`] to enable or disable the open-telemetry exporter.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub enum OpenTelemetry {
-    Enabled,
+    Enabled(ResourceConfig),
     Disabled,
 }
 
 impl OpenTelemetry {
-    fn is_enabled(self) -> bool {
-        matches!(self, OpenTelemetry::Enabled)
+    pub fn enabled() -> Self {
+        OpenTelemetry::Enabled(ResourceConfig::default())
+    }
+
+    #[must_use]
+    pub fn with_name(self, service_name: &'static str) -> Self {
+        match self {
+            OpenTelemetry::Enabled(config) => {
+                OpenTelemetry::Enabled(config.with_name(service_name))
+            },
+            OpenTelemetry::Disabled => OpenTelemetry::Disabled,
+        }
+    }
+
+    #[must_use]
+    pub fn with_attribute(self, key: &'static str, value: &'static str) -> Self {
+        match self {
+            OpenTelemetry::Enabled(config) => {
+                OpenTelemetry::Enabled(config.with_attribute(key, value))
+            },
+            OpenTelemetry::Disabled => OpenTelemetry::Disabled,
+        }
+    }
+
+    fn is_enabled(&self) -> bool {
+        matches!(self, OpenTelemetry::Enabled(_))
+    }
+
+    fn resource_config(self) -> Option<ResourceConfig> {
+        match self {
+            OpenTelemetry::Enabled(config) => Some(config),
+            OpenTelemetry::Disabled => None,
+        }
     }
 }
 
@@ -65,7 +120,10 @@ pub fn setup_tracing(otel: OpenTelemetry) -> anyhow::Result<Option<OtelGuard>> {
     // `then_some`) to avoid crashing sync callers (with OpenTelemetry::Disabled set). Examples of
     // such callers are tests with logging enabled.
     let tracer_provider = if otel.is_enabled() {
-        let provider = init_tracer_provider()?;
+        let provider = init_tracer_provider(
+            otel.resource_config()
+                .expect("resource config is set when OpenTelemetry is enabled"),
+        )?;
 
         // Store the provider globally so the panic hook can flush it. SdkTracerProvider is
         // internally reference-counted, so cloning is cheap.
@@ -112,14 +170,66 @@ pub fn setup_tracing(otel: OpenTelemetry) -> anyhow::Result<Option<OtelGuard>> {
     Ok(tracer_provider.map(|tracer_provider| OtelGuard { tracer_provider }))
 }
 
-fn init_tracer_provider() -> anyhow::Result<SdkTracerProvider> {
+fn init_tracer_provider(resource_config: ResourceConfig) -> anyhow::Result<SdkTracerProvider> {
     let builder = opentelemetry_otlp::SpanExporter::builder().with_tonic();
 
     let exporter = builder.build()?;
+    let resource = resource(resource_config);
 
     Ok(opentelemetry_sdk::trace::SdkTracerProvider::builder()
+        .with_resource(resource)
         .with_batch_exporter(exporter)
         .build())
+}
+
+fn resource(config: ResourceConfig) -> Resource {
+    let detected_resource = Resource::builder_empty()
+        .with_detector(Box::new(TelemetryResourceDetector))
+        .with_detector(Box::new(EnvResourceDetector::new()))
+        .build();
+
+    resource_from_detected(config, &detected_resource, otel_service_name_override())
+}
+
+fn resource_from_detected(
+    config: ResourceConfig,
+    detected_resource: &Resource,
+    service_name_override: Option<Value>,
+) -> Resource {
+    const SERVICE_NAME: &str = "service.name";
+    const SERVICE_NAMESPACE: &str = "service.namespace";
+
+    let mut attributes =
+        std::collections::BTreeMap::from([(SERVICE_NAMESPACE.to_string(), Value::from("miden"))]);
+
+    if let Some(service_name) = config.service_name {
+        attributes.insert(SERVICE_NAME.to_string(), Value::from(service_name));
+    }
+
+    for (key, value) in config.attributes {
+        attributes.insert(key.to_string(), Value::from(value));
+    }
+
+    // Environment resource attributes override defaults above, and OTEL_SERVICE_NAME overrides
+    // both.
+    for (key, value) in detected_resource {
+        attributes.insert(key.as_str().to_string(), value.clone());
+    }
+
+    if let Some(service_name) = service_name_override {
+        attributes.insert(SERVICE_NAME.to_string(), service_name);
+    }
+
+    Resource::builder_empty()
+        .with_attributes(attributes.into_iter().map(|(key, value)| KeyValue::new(key, value)))
+        .build()
+}
+
+fn otel_service_name_override() -> Option<Value> {
+    std::env::var("OTEL_SERVICE_NAME")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .map(Value::from)
 }
 
 /// Initializes tracing to a test exporter.
@@ -204,5 +314,80 @@ fn env_or_default_filter<S>() -> Box<dyn Filter<S> + Send + Sync + 'static> {
                     .with_target("axum::rejection", LevelFilter::TRACE),
             )
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use opentelemetry::Key;
+
+    use super::*;
+
+    #[test]
+    fn resource_uses_configured_defaults() {
+        let detected_resource = Resource::builder_empty()
+            .with_attributes([KeyValue::new("telemetry.sdk.language", "rust")])
+            .build();
+
+        let resource = resource_from_detected(
+            ResourceConfig::default()
+                .with_name("node")
+                .with_attribute("miden.node.role", "sequencer"),
+            &detected_resource,
+            None,
+        );
+
+        assert_eq!(resource_value(&resource, "service.name"), Some(Value::from("node")),);
+        assert_eq!(resource_value(&resource, "service.namespace"), Some(Value::from("miden")),);
+        assert_eq!(resource_value(&resource, "miden.node.role"), Some(Value::from("sequencer")),);
+        assert_eq!(resource_value(&resource, "telemetry.sdk.language"), Some(Value::from("rust")),);
+    }
+
+    #[test]
+    fn resource_prefers_detected_attributes_over_configured_defaults() {
+        let detected_resource = Resource::builder_empty()
+            .with_attributes([
+                KeyValue::new("service.name", "custom-node"),
+                KeyValue::new("service.namespace", "custom-namespace"),
+                KeyValue::new("miden.node.role", "custom-role"),
+            ])
+            .build();
+
+        let resource = resource_from_detected(
+            ResourceConfig::default()
+                .with_name("node")
+                .with_attribute("miden.node.role", "sequencer"),
+            &detected_resource,
+            None,
+        );
+
+        assert_eq!(resource_value(&resource, "service.name"), Some(Value::from("custom-node")),);
+        assert_eq!(
+            resource_value(&resource, "service.namespace"),
+            Some(Value::from("custom-namespace")),
+        );
+        assert_eq!(resource_value(&resource, "miden.node.role"), Some(Value::from("custom-role")),);
+    }
+
+    #[test]
+    fn resource_prefers_explicit_service_name_override() {
+        let detected_resource = Resource::builder_empty()
+            .with_attributes([KeyValue::new("service.name", "resource-attribute-node")])
+            .build();
+
+        let resource = resource_from_detected(
+            ResourceConfig::default().with_name("node"),
+            &detected_resource,
+            Some(Value::from("service-env-node")),
+        );
+
+        assert_eq!(
+            resource_value(&resource, "service.name"),
+            Some(Value::from("service-env-node")),
+        );
+    }
+
+    fn resource_value(resource: &Resource, key: &'static str) -> Option<Value> {
+        resource.get(&Key::from_static_str(key))
     }
 }

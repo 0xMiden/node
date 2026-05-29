@@ -29,7 +29,7 @@ pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
     info!("Loaded configuration: {:?}", config);
 
     let _otel_guard = if config.enable_otel {
-        miden_node_utils::logging::setup_tracing(OpenTelemetry::Enabled)?
+        miden_node_utils::logging::setup_tracing(OpenTelemetry::enabled().with_name("monitor"))?
     } else {
         miden_node_utils::logging::setup_tracing(OpenTelemetry::Disabled)?
     };

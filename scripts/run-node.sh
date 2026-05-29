@@ -78,6 +78,16 @@ bootstrap_ntx_builder() {
         --genesis-block "$VALIDATOR_DIR/genesis.dat"
 }
 
+node_resource_attributes() {
+    local instance_id="$1"
+
+    if [[ -n "${OTEL_RESOURCE_ATTRIBUTES:-}" ]]; then
+        printf "service.instance.id=%s,%s" "$instance_id" "$OTEL_RESOURCE_ATTRIBUTES"
+    else
+        printf "service.instance.id=%s" "$instance_id"
+    fi
+}
+
 # --- Kill processes on required ports ---
 
 kill_ports
@@ -123,8 +133,6 @@ if [[ -n "$KMS_KEY_ID" ]]; then
 fi
 
 echo "Starting validator..."
-OTEL_SERVICE_NAME=validator \
-OTEL_RESOURCE_ATTRIBUTES=service.namespace=miden \
 "$VALIDATOR_BINARY" start --listen "0.0.0.0:$VALIDATOR_PORT" \
     --data-directory "$VALIDATOR_DIR" \
     $EXTRA_ARGS \
@@ -135,8 +143,7 @@ PIDS+=($!)
 sleep 2
 
 echo "Starting sequencer..."
-OTEL_SERVICE_NAME=node \
-OTEL_RESOURCE_ATTRIBUTES=service.namespace=miden,service.instance.id=sequencer,miden.node.role=sequencer \
+OTEL_RESOURCE_ATTRIBUTES="$(node_resource_attributes sequencer)" \
 "$NODE_BINARY" sequencer \
     --rpc.listen "0.0.0.0:$RPC_PORT" \
     --data-directory "$NODE_DIR" \
@@ -146,8 +153,6 @@ OTEL_RESOURCE_ATTRIBUTES=service.namespace=miden,service.instance.id=sequencer,m
 PIDS+=($!)
 
 echo "Starting network transaction builder..."
-OTEL_SERVICE_NAME=ntx-builder \
-OTEL_RESOURCE_ATTRIBUTES=service.namespace=miden \
 "$NTX_BUILDER_BINARY" start \
     --listen "0.0.0.0:$NTX_BUILDER_PORT" \
     --rpc.url "http://127.0.0.1:$RPC_PORT" \
@@ -157,8 +162,7 @@ PIDS+=($!)
 
 if [[ "$ENABLE_FULL_NODES" == "true" ]]; then
     echo "Starting full node 1 (upstream: sequencer at 127.0.0.1:$RPC_PORT)..."
-    OTEL_SERVICE_NAME=node \
-    OTEL_RESOURCE_ATTRIBUTES=service.namespace=miden,service.instance.id=full-node-1,miden.node.role=full \
+    OTEL_RESOURCE_ATTRIBUTES="$(node_resource_attributes full-node-1)" \
     "$NODE_BINARY" full \
         --rpc.listen "0.0.0.0:$FULL_NODE_1_RPC_PORT" \
         --sync.block-source.url "http://127.0.0.1:$RPC_PORT" \
@@ -170,8 +174,7 @@ if [[ "$ENABLE_FULL_NODES" == "true" ]]; then
     sleep 2
 
     echo "Starting full node 2 (upstream: full node 1 at 127.0.0.1:$FULL_NODE_1_RPC_PORT)..."
-    OTEL_SERVICE_NAME=node \
-    OTEL_RESOURCE_ATTRIBUTES=service.namespace=miden,service.instance.id=full-node-2,miden.node.role=full \
+    OTEL_RESOURCE_ATTRIBUTES="$(node_resource_attributes full-node-2)" \
     "$NODE_BINARY" full \
         --rpc.listen "0.0.0.0:$FULL_NODE_2_RPC_PORT" \
         --sync.block-source.url "http://127.0.0.1:$FULL_NODE_1_RPC_PORT" \

@@ -12,7 +12,5 @@ services:
       - MIDEN_MONITOR_DISABLE_NTX_SERVICE=true
       - MIDEN_MONITOR_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
-      - OTEL_SERVICE_NAME=monitor
-      - OTEL_RESOURCE_ATTRIBUTES=service.namespace=miden
     ports:
       - "3001:3001"

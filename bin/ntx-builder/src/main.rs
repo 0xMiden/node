@@ -8,7 +8,7 @@ async fn main() -> anyhow::Result<()> {
     let command = commands::NtxBuilderCommand::parse();
 
     let otel = if command.is_open_telemetry_enabled() {
-        OpenTelemetry::Enabled
+        OpenTelemetry::enabled().with_name("ntx-builder")
     } else {
         OpenTelemetry::Disabled
     };

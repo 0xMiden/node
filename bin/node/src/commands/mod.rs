@@ -53,8 +53,16 @@ pub enum Command {
 impl Command {
     pub(crate) fn open_telemetry(&self) -> miden_node_utils::logging::OpenTelemetry {
         match self {
-            Command::Sequencer(command) => command.runtime.open_telemetry(),
-            Command::Full(command) => command.runtime.open_telemetry(),
+            Command::Sequencer(command) => command
+                .runtime
+                .open_telemetry()
+                .with_name("node")
+                .with_attribute("miden.node.role", "sequencer"),
+            Command::Full(command) => command
+                .runtime
+                .open_telemetry()
+                .with_name("node")
+                .with_attribute("miden.node.role", "full"),
             Command::Bootstrap(_) | Command::Migrate(_) => {
                 miden_node_utils::logging::OpenTelemetry::Disabled
             },

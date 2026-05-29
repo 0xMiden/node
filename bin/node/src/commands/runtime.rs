@@ -37,7 +37,7 @@ pub struct RuntimeOptions {
 impl RuntimeOptions {
     pub fn open_telemetry(&self) -> OpenTelemetry {
         if self.enable_otel {
-            OpenTelemetry::Enabled
+            OpenTelemetry::enabled()
         } else {
             OpenTelemetry::Disabled
         }
