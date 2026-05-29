@@ -27,16 +27,19 @@ services:
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
-      - OTEL_SERVICE_NAME=sequencer
+      - OTEL_SERVICE_NAME=node
+      - OTEL_RESOURCE_ATTRIBUTES=service.namespace=miden,service.instance.id=sequencer,miden.node.role=sequencer
 
   validator:
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
       - OTEL_SERVICE_NAME=validator
+      - OTEL_RESOURCE_ATTRIBUTES=service.namespace=miden
 
   ntx-builder:
     environment:
       - MIDEN_NODE_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
       - OTEL_SERVICE_NAME=ntx-builder
+      - OTEL_RESOURCE_ATTRIBUTES=service.namespace=miden

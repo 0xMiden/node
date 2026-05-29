@@ -74,9 +74,12 @@ services:
         rm -rf /data/ntx-builder
         mkdir -p /data/ntx-builder
 
-        # TODO: replace this no-op once miden-ntx-builder supports offline bootstrap.
-        # Do not write /data/ntx-builder/.bootstrapped until real bootstrap work runs.
-        echo "TODO: bootstrap network transaction builder offline."
+        echo "Bootstrapping network transaction builder..."
+        miden-ntx-builder bootstrap \
+          --data-directory /data/ntx-builder \
+          --genesis-block /data/genesis/genesis.dat
+
+        touch /data/ntx-builder/.bootstrapped
 
   sequencer:
     image: miden-node
