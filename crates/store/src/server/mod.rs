@@ -284,7 +284,7 @@ impl Store {
             Arc::new(BlockProver::local())
         };
 
-        let chain_tip = state.chain_tip(crate::state::Finality::Committed).await;
+        let chain_tip = state.chain_tip(crate::state::Finality::Committed);
         let (chain_tip_tx, chain_tip_rx) = watch::channel(chain_tip);
 
         let handle = proof_scheduler::spawn(

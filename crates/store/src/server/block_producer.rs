@@ -229,7 +229,7 @@ impl block_producer_server::BlockProducer for BlockProducerApi {
             .inspect_err(|err| tracing::Span::current().set_error(err))
             .map_err(|err| tonic::Status::internal(err.as_report()))?;
 
-        let block_height = self.inner.state.chain_tip(Finality::Committed).await.as_u32();
+        let block_height = self.inner.state.chain_tip(Finality::Committed).as_u32();
 
         Ok(Response::new(proto::store::TransactionInputs {
             account_state: Some(proto::store::transaction_inputs::AccountTransactionInputRecord {

@@ -15,6 +15,7 @@ use miden_protocol::crypto::merkle::smt::{
     SMT_DEPTH,
     SmtLeaf,
     SmtStorage,
+    SmtStorageReader,
 };
 use miden_protocol::crypto::merkle::{
     EmptySubtreeRoots,
@@ -118,7 +119,7 @@ impl HistoricalOverlay {
 /// reversion data (mutations that undo changes). Historical witnesses are reconstructed
 /// by starting from the latest state and applying reversion overlays backwards in time.
 #[derive(Debug)]
-pub struct AccountTreeWithHistory<S: SmtStorage> {
+pub struct AccountTreeWithHistory<S: SmtStorageReader> {
     /// The current block number (latest state).
     block_number: BlockNumber,
     /// The latest account tree state.
@@ -127,7 +128,7 @@ pub struct AccountTreeWithHistory<S: SmtStorage> {
     overlays: BTreeMap<BlockNumber, HistoricalOverlay>,
 }
 
-impl<S: SmtStorage> AccountTreeWithHistory<S> {
+impl<S: SmtStorageReader> AccountTreeWithHistory<S> {
     /// Maximum number of historical blocks to maintain.
     pub const MAX_HISTORY: usize = 50;
 
@@ -343,7 +344,9 @@ impl<S: SmtStorage> AccountTreeWithHistory<S> {
         let path = SparseMerklePath::try_from(path).ok()?;
         Some((path, leaf))
     }
+}
 
+impl<S: SmtStorage> AccountTreeWithHistory<S> {
     // PUBLIC MUTATORS
     // --------------------------------------------------------------------------------------------
 
@@ -393,5 +396,15 @@ impl<S: SmtStorage> AccountTreeWithHistory<S> {
         Self::drain_excess(&mut self.overlays);
 
         Ok(())
+    }
+
+    /// Returns a read-only snapshot of this tree backed by a reader view of the storage.
+    pub fn reader(&self) -> AccountTreeWithHistory<S::Reader> {
+        let latest = self.latest.reader().expect("snapshot creation should not fail");
+        AccountTreeWithHistory {
+            block_number: self.block_number,
+            latest,
+            overlays: self.overlays.clone(),
+        }
     }
 }

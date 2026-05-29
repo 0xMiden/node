@@ -96,7 +96,7 @@ impl ReplicaSync for BlockReplicaSync {
     }
 
     async fn subscribe(&self, mut client: StoreRpcClient) -> anyhow::Result<()> {
-        let block_from = self.state.chain_tip(Finality::Committed).await.child().as_u32();
+        let block_from = self.state.chain_tip(Finality::Committed).child().as_u32();
         info!(block_from, upstream_url = %self.upstream_url, "Connecting to upstream store for blocks");
 
         let mut stream = client
@@ -139,7 +139,7 @@ impl ReplicaSync for ProofReplicaSync {
     }
 
     async fn subscribe(&self, mut client: StoreRpcClient) -> anyhow::Result<()> {
-        let block_from = self.state.chain_tip(Finality::Proven).await.as_u32().saturating_add(1);
+        let block_from = self.state.chain_tip(Finality::Proven).as_u32().saturating_add(1);
         info!(block_from, upstream_url = %self.upstream_url, "Connecting to upstream store for proofs");
 
         let mut stream = client

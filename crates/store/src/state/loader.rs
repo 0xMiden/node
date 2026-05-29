@@ -71,6 +71,12 @@ pub type TreeStorage = RocksDbStorage;
 #[cfg(not(feature = "rocksdb"))]
 pub type TreeStorage = MemoryStorage;
 
+/// The read-only snapshot storage backend for trees (used in [`InMemoryState`]).
+#[cfg(feature = "rocksdb")]
+pub type SnapshotTreeStorage = miden_large_smt_backend_rocksdb::RocksDbSnapshotStorage;
+#[cfg(not(feature = "rocksdb"))]
+pub type SnapshotTreeStorage = miden_protocol::crypto::merkle::smt::MemoryStorageSnapshot;
+
 // ERROR CONVERSION
 // ================================================================================================
 

@@ -27,7 +27,6 @@ use miden_protocol::note::{
 };
 use miden_protocol::transaction::TransactionHeader;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
-use tokio::sync::oneshot;
 use tracing::{info, instrument};
 
 use crate::COMPONENT;
@@ -564,36 +563,16 @@ impl Db {
     }
 
     /// Inserts the data of a new block into the DB.
-    ///
-    /// `allow_acquire` and `acquire_done` are used to synchronize writes to the DB with writes to
-    /// the in-memory trees. Further details available on [`super::state::State::apply_block`].
     // TODO: This span is logged in a root span, we should connect it to the parent one.
     #[instrument(target = COMPONENT, skip_all, err)]
     pub async fn apply_block(
         &self,
-        allow_acquire: oneshot::Sender<()>,
-        acquire_done: oneshot::Receiver<()>,
         signed_block: SignedBlock,
         notes: Vec<(NoteRecord, Option<Nullifier>)>,
     ) -> Result<()> {
         self.transact("apply block", move |conn| -> Result<()> {
             models::queries::apply_block(conn, &signed_block, &notes)?;
-
-            // XXX FIXME TODO free floating mutex MUST NOT exist it doesn't bind it properly to the
-            // data locked!
-            {
-                let _span = tracing::info_span!(target: COMPONENT, "acquire_write_lock").entered();
-                if allow_acquire.send(()).is_err() {
-                    tracing::warn!(target: COMPONENT, "failed to send notification for successful block application, potential deadlock");
-                }
-            }
-
             models::queries::prune_history(conn, signed_block.header().block_num())?;
-
-            let _span =
-                tracing::info_span!(target: COMPONENT, "acquire_done_lock").entered();
-            acquire_done.blocking_recv()?;
-
             Ok(())
         })
         .await

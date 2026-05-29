@@ -215,10 +215,10 @@ pub enum ApplyBlockError {
 
     // OTHER ERRORS
     // ---------------------------------------------------------------------------------------------
-    #[error("block applying was cancelled because of closed channel on database side")]
-    ClosedChannel(#[from] RecvError),
-    #[error("concurrent write detected")]
-    ConcurrentWrite,
+    #[error("failed to send block to writer task: {0}")]
+    WriterTaskSendFailed(String),
+    #[error("writer task dropped the result channel")]
+    WriterTaskRecvFailed(#[from] RecvError),
     #[error("database doesn't have any block header data")]
     DbBlockHeaderEmpty,
     #[error("database update failed: {0}")]

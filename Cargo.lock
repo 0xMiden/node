@@ -198,6 +198,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "arc-swap"
+version = "1.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a3a1fd6f75306b68087b831f025c712524bcb19aad54e557b1129cfa0a2b207"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2944,9 +2953,8 @@ dependencies = [
 
 [[package]]
 name = "miden-agglayer"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f3e46490926f6084d6216067ef9c0e606e547361ba492b1ca311dcfd780b185"
+version = "0.16.0"
+source = "git+https://github.com/0xmiden/protocol?branch=sergerad-clone#3500acf62cee4eadce748e2d814a79d25c2d79de"
 dependencies = [
  "alloy-sol-types",
  "fs-err",
@@ -3025,9 +3033,8 @@ dependencies = [
 
 [[package]]
 name = "miden-block-prover"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf1829e10ccf220c6052cdcc4181c820307f177612e070623213c8670766de64"
+version = "0.16.0"
+source = "git+https://github.com/0xmiden/protocol?branch=sergerad-clone#3500acf62cee4eadce748e2d814a79d25c2d79de"
 dependencies = [
  "miden-protocol",
  "thiserror 2.0.18",
@@ -3472,6 +3479,7 @@ name = "miden-node-store"
 version = "0.15.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "assert_matches",
  "async-trait",
  "build-rs",
@@ -3659,9 +3667,8 @@ dependencies = [
 
 [[package]]
 name = "miden-protocol"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b70acd2c57f7f9185c5174966dd47080389271410f25f6a3539970a4474fd440"
+version = "0.16.0"
+source = "git+https://github.com/0xmiden/protocol?branch=sergerad-clone#3500acf62cee4eadce748e2d814a79d25c2d79de"
 dependencies = [
  "bech32",
  "fs-err",
@@ -3763,9 +3770,8 @@ dependencies = [
 
 [[package]]
 name = "miden-standards"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc788da5d0dc43f93d6489a302d453cc6c67a12923208c9c8963e43073db0b3b"
+version = "0.16.0"
+source = "git+https://github.com/0xmiden/protocol?branch=sergerad-clone#3500acf62cee4eadce748e2d814a79d25c2d79de"
 dependencies = [
  "bon",
  "fs-err",
@@ -3802,9 +3808,8 @@ dependencies = [
 
 [[package]]
 name = "miden-testing"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10f8cdaa93307907537ae95f3c30efbba94ed9d393bbc75c057c763cceff8599"
+version = "0.16.0"
+source = "git+https://github.com/0xmiden/protocol?branch=sergerad-clone#3500acf62cee4eadce748e2d814a79d25c2d79de"
 dependencies = [
  "anyhow",
  "itertools 0.14.0",
@@ -3823,9 +3828,8 @@ dependencies = [
 
 [[package]]
 name = "miden-tx"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d3cfee228a8b02efa9130bbe6ea086d1c8ffc1b4c93df10f880c9a9a3dfe634"
+version = "0.16.0"
+source = "git+https://github.com/0xmiden/protocol?branch=sergerad-clone#3500acf62cee4eadce748e2d814a79d25c2d79de"
 dependencies = [
  "miden-processor",
  "miden-protocol",
@@ -3837,9 +3841,8 @@ dependencies = [
 
 [[package]]
 name = "miden-tx-batch-prover"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ff829d060dc0cf38816fbe179fe22f0916d2a141974b2518606d58fe0bd1b37"
+version = "0.16.0"
+source = "git+https://github.com/0xmiden/protocol?branch=sergerad-clone#3500acf62cee4eadce748e2d814a79d25c2d79de"
 dependencies = [
  "miden-protocol",
  "miden-tx",

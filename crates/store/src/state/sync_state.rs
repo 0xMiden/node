@@ -67,9 +67,7 @@ impl State {
         let to_forest = block_to.as_usize();
 
         let mmr_delta = self
-            .inner
-            .read()
-            .await
+            .snapshot()
             .blockchain
             .as_mmr()
             .get_delta(
@@ -106,11 +104,12 @@ impl State {
         let mut results = Vec::new();
 
         {
-            let inner = self.inner.read().await;
+            let snapshot = self.snapshot();
 
             for note_sync in note_syncs {
-                let mmr_proof =
-                    inner.blockchain.open_at(note_sync.block_header.block_num(), mmr_checkpoint)?;
+                let mmr_proof = snapshot
+                    .blockchain
+                    .open_at(note_sync.block_header.block_num(), mmr_checkpoint)?;
                 results.push((note_sync, mmr_proof));
             }
         }

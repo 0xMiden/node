@@ -138,7 +138,7 @@ impl rpc_server::Rpc for StoreApi {
             })
             .collect();
 
-        let chain_tip = self.state.chain_tip(Finality::Committed).await;
+        let chain_tip = self.state.chain_tip(Finality::Committed);
 
         Ok(Response::new(proto::rpc::SyncNullifiersResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {
@@ -160,7 +160,7 @@ impl rpc_server::Rpc for StoreApi {
             read_block_range::<NoteSyncError>(request.block_range, "SyncNotesRequest")?
                 .into_inclusive_range::<NoteSyncError>()?;
 
-        let chain_tip = self.state.chain_tip(Finality::Committed).await;
+        let chain_tip = self.state.chain_tip(Finality::Committed);
         if *block_range.end() > chain_tip {
             Err(NoteSyncError::FutureBlock { chain_tip, block_to: *block_range.end() })?;
         }
@@ -201,9 +201,9 @@ impl rpc_server::Rpc for StoreApi {
         // Determine finality level of the tip to sync to or default to the committed tip.
         let sync_target = match request.finality_level() {
             proto::rpc::FinalityLevel::Committed | proto::rpc::FinalityLevel::Unspecified => {
-                self.state.chain_tip(Finality::Committed).await
+                self.state.chain_tip(Finality::Committed)
             },
-            proto::rpc::FinalityLevel::Proven => self.state.chain_tip(Finality::Proven).await,
+            proto::rpc::FinalityLevel::Proven => self.state.chain_tip(Finality::Proven),
         };
 
         if current_client_block_height > sync_target {
@@ -332,7 +332,7 @@ impl rpc_server::Rpc for StoreApi {
             })
             .collect();
 
-        let chain_tip = self.state.chain_tip(Finality::Committed).await;
+        let chain_tip = self.state.chain_tip(Finality::Committed);
 
         Ok(Response::new(proto::rpc::SyncAccountVaultResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {
@@ -384,7 +384,7 @@ impl rpc_server::Rpc for StoreApi {
             })
             .collect();
 
-        let chain_tip = self.state.chain_tip(Finality::Committed).await;
+        let chain_tip = self.state.chain_tip(Finality::Committed);
 
         Ok(Response::new(proto::rpc::SyncAccountStorageMapsResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {
@@ -402,7 +402,7 @@ impl rpc_server::Rpc for StoreApi {
         Ok(Response::new(proto::rpc::StoreStatus {
             version: env!("CARGO_PKG_VERSION").to_string(),
             status: "connected".to_string(),
-            chain_tip: self.state.chain_tip(Finality::Committed).await.as_u32(),
+            chain_tip: self.state.chain_tip(Finality::Committed).as_u32(),
         }))
     }
 
@@ -469,7 +469,7 @@ impl rpc_server::Rpc for StoreApi {
             .map(crate::db::TransactionRecord::into_proto)
             .collect();
 
-        let chain_tip = self.state.chain_tip(Finality::Committed).await;
+        let chain_tip = self.state.chain_tip(Finality::Committed);
 
         Ok(Response::new(proto::rpc::SyncTransactionsResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {
