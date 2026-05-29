@@ -10,6 +10,7 @@ use clients::RpcClient;
 use db::Db;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
+use miden_protocol::block::{BlockNumber, SignedBlock};
 use miden_remote_prover_client::RemoteTransactionProver;
 use tokio::sync::mpsc;
 use tonic::metadata::AsciiMetadataValue;
@@ -42,33 +43,48 @@ pub use builder::NetworkTransactionBuilder;
 
 /// Bootstraps the ntx-builder database at `database_filepath` with the genesis block.
 ///
-/// The genesis block is fetched from the node RPC with a single `GetBlockByNumber` request. After
-/// this completes the singleton chain-state row exists at the genesis block number, so
-/// [`NtxBuilderConfig`] startup can always resume from a persisted chain state instead of
-/// consuming the genesis block from the subscription.
+/// After this completes the singleton chain-state row exists at the genesis block number, so
+/// [`NtxBuilderConfig`] startup can always resume from a persisted chain state instead of consuming
+/// the genesis block from the subscription.
 ///
-/// Returns an error if the node is unreachable, does not yet have the genesis block, or the
-/// database has already been bootstrapped.
-pub async fn bootstrap(
-    database_filepath: PathBuf,
-    rpc_url: Url,
-    rpc_auth_header: Option<AsciiMetadataValue>,
-) -> anyhow::Result<()> {
-    let rpc = RpcClient::new_with_auth(
-        rpc_url,
-        rpc_auth_header,
-        DEFAULT_REQUEST_BACKOFF_INITIAL,
-        DEFAULT_REQUEST_BACKOFF_MAX,
+/// Returns an error if the block is not a valid genesis block or if the database has already been
+/// bootstrapped.
+pub async fn bootstrap(database_filepath: PathBuf, genesis: &SignedBlock) -> anyhow::Result<()> {
+    validate_genesis_block(genesis).context("genesis block validation failed")?;
+    db::Db::bootstrap(database_filepath, genesis).await
+}
+
+fn validate_genesis_block(block: &SignedBlock) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        block.header().block_num() == BlockNumber::GENESIS,
+        "expected genesis block number (0), got {}",
+        block.header().block_num(),
     );
 
-    let genesis = rpc
-        .get_genesis_block()
-        .await
-        .map_err(|err| anyhow::anyhow!(err))
-        .context("failed to fetch the genesis block from the node RPC")?
-        .context("the node RPC returned no genesis block")?;
+    anyhow::ensure!(
+        block
+            .signature()
+            .verify(block.header().commitment(), block.header().validator_key()),
+        "genesis block signature verification failed",
+    );
 
-    db::Db::bootstrap(database_filepath, &genesis).await
+    Ok(())
+}
+
+#[cfg(test)]
+mod bootstrap_tests {
+    use super::*;
+
+    #[test]
+    fn validate_genesis_block_rejects_invalid_signature() {
+        let block = crate::test_utils::mock_genesis_block();
+        let err = validate_genesis_block(&block).expect_err("invalid signature should fail");
+
+        assert!(
+            err.to_string().contains("signature verification failed"),
+            "unexpected error: {err}",
+        );
+    }
 }
 
 // CONSTANTS
