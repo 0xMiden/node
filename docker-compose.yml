@@ -88,10 +88,6 @@ services:
         condition: service_completed_successfully
       validator:
         condition: service_started
-    environment:
-      - MIDEN_NODE_ENABLE_OTEL=true
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
-      - OTEL_SERVICE_NAME=sequencer
     command:
       - miden-node
       - sequencer
@@ -110,10 +106,6 @@ services:
     depends_on:
       bootstrap-validator:
         condition: service_completed_successfully
-    environment:
-      - MIDEN_NODE_ENABLE_OTEL=true
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
-      - OTEL_SERVICE_NAME=validator
     command:
       - miden-validator
       - start
@@ -132,10 +124,6 @@ services:
         condition: service_completed_successfully
       sequencer:
         condition: service_started
-    environment:
-      - MIDEN_NODE_ENABLE_OTEL=true
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
-      - OTEL_SERVICE_NAME=ntx-builder
     command:
       - miden-ntx-builder
       - start
