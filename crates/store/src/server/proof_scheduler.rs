@@ -19,6 +19,7 @@ use std::time::Duration;
 use anyhow::Context;
 use miden_crypto::utils::Serializable;
 use miden_node_proto::BlockProofRequest;
+use miden_node_utils::retry::{self, Retryable};
 use miden_protocol::block::{BlockNumber, BlockProof};
 use miden_protocol::utils::serde::Deserializable;
 use miden_remote_prover_client::RemoteProverClientError;
@@ -199,7 +200,11 @@ async fn prove_block(
 ) -> anyhow::Result<(BlockNumber, Vec<u8>)> {
     tokio::time::timeout(BLOCK_PROVE_OVERALL_TIMEOUT, async {
         let mut attempt: u32 = 0;
-        loop {
+
+        // Retry transient failures and per-attempt timeouts up to `MAX_PROVE_ATTEMPTS` times,
+        // bailing out immediately on fatal errors. A timeout is mapped to a transient error so it
+        // is retried like any other transient failure.
+        let result = (|| {
             attempt += 1;
             let attempt_span = tracing::info_span!(
                 target: COMPONENT,
@@ -209,27 +214,38 @@ async fn prove_block(
                 timed_out = tracing::field::Empty,
             );
 
-            let result = tokio::time::timeout(
-                BLOCK_PROVE_ATTEMPT_TIMEOUT,
-                generate_block_proof(block_store, block_prover, block_num),
-            )
-            .instrument(attempt_span.clone())
-            .await;
+            async move {
+                let outcome = tokio::time::timeout(
+                    BLOCK_PROVE_ATTEMPT_TIMEOUT,
+                    generate_block_proof(block_store, block_prover, block_num),
+                )
+                .await;
 
-            match result {
-                Ok(Ok(proof)) => return Ok((block_num, proof.to_bytes())),
-                Ok(Err(ProveBlockError::Fatal(err))) => Err(err).context("fatal error")?,
-                Ok(Err(ProveBlockError::Transient(err))) => {
-                    attempt_span.record("error", tracing::field::display(&err));
-                },
-                Err(elapsed) => {
-                    attempt_span.record("timed_out", elapsed.to_string());
-                },
+                match outcome {
+                    Ok(Ok(proof)) => Ok((block_num, proof.to_bytes())),
+                    Ok(Err(err @ ProveBlockError::Fatal(_))) => Err(err),
+                    Ok(Err(ProveBlockError::Transient(err))) => {
+                        tracing::Span::current().record("error", tracing::field::display(&err));
+                        Err(ProveBlockError::Transient(err))
+                    },
+                    Err(elapsed) => {
+                        tracing::Span::current().record("timed_out", elapsed.to_string());
+                        Err(ProveBlockError::Transient(Box::new(elapsed)))
+                    },
+                }
             }
+            .instrument(attempt_span)
+        })
+        .retry(retry::constant(Duration::ZERO, Some((MAX_PROVE_ATTEMPTS - 1) as usize)))
+        .when(|err| matches!(err, ProveBlockError::Transient(_)))
+        .await;
 
-            if attempt >= MAX_PROVE_ATTEMPTS {
-                anyhow::bail!("block {} failed after {attempt} attempts", block_num.as_u32());
-            }
+        match result {
+            Ok(proof) => Ok(proof),
+            Err(ProveBlockError::Fatal(err)) => Err(err).context("fatal error"),
+            Err(ProveBlockError::Transient(_)) => {
+                anyhow::bail!("block {} failed after {attempt} attempts", block_num.as_u32())
+            },
         }
     })
     .await

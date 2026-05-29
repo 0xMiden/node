@@ -1,13 +1,14 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use backon::{ExponentialBuilder, Retryable};
+use backon::ExponentialBuilder;
 use futures::Stream;
 use futures::stream::TryStreamExt;
 use miden_node_proto::clients::{Builder, RpcClient as InnerRpcClient};
 use miden_node_proto::generated::rpc::{BlockSubscriptionRequest, BlockSubscriptionResponse};
 use miden_node_proto::generated::{self as proto};
 use miden_node_utils::ErrorReport;
+use miden_node_utils::retry::{self, Retryable};
 use miden_protocol::Word;
 use miden_protocol::account::{AccountId, StorageMapKey, StorageMapWitness, StorageSlotName};
 use miden_protocol::asset::{AssetVaultKey, AssetWitness};
@@ -65,12 +66,7 @@ impl RpcClient {
         };
         let rpc = builder.with_otel_context_injection().connect_lazy::<InnerRpcClient>();
 
-        let backoff = ExponentialBuilder::default()
-            .with_min_delay(backoff_initial)
-            .with_max_delay(backoff_max)
-            .with_factor(2.0)
-            .with_jitter()
-            .without_max_times();
+        let backoff = retry::exponential(backoff_initial, backoff_max);
 
         Self { inner: rpc, backoff }
     }

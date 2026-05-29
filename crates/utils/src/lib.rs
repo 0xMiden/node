@@ -11,6 +11,7 @@ pub mod limiter;
 pub mod logging;
 pub mod lru_cache;
 pub mod panic;
+pub mod retry;
 pub mod spawn;
 pub mod tracing;
 

@@ -3537,6 +3537,7 @@ name = "miden-node-utils"
 version = "0.15.0"
 dependencies = [
  "anyhow",
+ "backon",
  "bytes",
  "clap",
  "fs-err",

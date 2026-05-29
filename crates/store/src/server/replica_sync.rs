@@ -9,6 +9,7 @@ use miden_node_proto::generated::rpc::{
     ProofSubscriptionRequest,
     api_client,
 };
+use miden_node_utils::retry::{self, Retryable};
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use tokio_stream::StreamExt;
 use tracing::{info, warn};
@@ -52,21 +53,24 @@ pub(crate) trait ReplicaSync: Sized + Send + Sync + 'static {
     }
 
     /// Runs [`sync`](Self::sync) in an infinite loop, sleeping [`RECONNECT_DELAY`] on failure.
+    ///
+    /// A successful end-of-stream is treated as a failure so the connection is always re-opened.
     async fn run(self) -> anyhow::Result<()> {
-        loop {
-            let err = self
-                .sync()
+        (|| async {
+            self.sync()
                 .await
-                .and_then(|_| Err::<(), _>(anyhow::anyhow!("unexpected end of stream")))
-                .unwrap_err();
+                .and_then(|()| Err(anyhow::anyhow!("unexpected end of stream")))
+        })
+        .retry(retry::constant(RECONNECT_DELAY, None))
+        .notify(|err, _| {
             warn!(
                 err = %format!("{err:#}"),
                 retry.delay = %RECONNECT_DELAY.as_secs(),
                 "{} sync failed, retrying",
                 Self::SYNC_KIND
             );
-            tokio::time::sleep(RECONNECT_DELAY).await;
-        }
+        })
+        .await
     }
 
     /// Spawns [`run`](Self::run) as a Tokio task.
