@@ -374,7 +374,7 @@ impl AccountActor {
                         %submitted_at,
                         current_tip = %chain_tip,
                         delta = self.config.tx_expiration_delta,
-                        "submitted tx not landed within expiration delta; retrying",
+                        "submitted transaction expired",
                     );
                     return Ok(ActorMode::NotesAvailable);
                 }
