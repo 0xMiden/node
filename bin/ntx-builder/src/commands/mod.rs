@@ -6,11 +6,11 @@ use std::time::Duration;
 use anyhow::Context;
 use clap::Parser;
 use miden_node_utils::clap::duration_to_human_readable_string;
+use miden_node_utils::logging::OpenTelemetry;
 use tokio::net::TcpListener;
 use tonic::metadata::AsciiMetadataValue;
 use url::Url;
 
-const ENV_ENABLE_OTEL: &str = "MIDEN_NODE_ENABLE_OTEL";
 const ENV_DATA_DIRECTORY: &str = "MIDEN_NODE_DATA_DIRECTORY";
 const ENV_LISTEN: &str = "MIDEN_NODE_NTX_BUILDER_LISTEN";
 const ENV_RPC_URL: &str = "MIDEN_NODE_NTX_BUILDER_RPC_URL";
@@ -103,13 +103,6 @@ pub enum NtxBuilderCommand {
         /// Directory for the ntx-builder's persistent database.
         #[arg(long = "data-directory", env = ENV_DATA_DIRECTORY, value_name = "DIR")]
         data_directory: PathBuf,
-
-        /// Enables the exporting of traces for OpenTelemetry.
-        ///
-        /// This can be further configured using environment variables as defined in the official
-        /// OpenTelemetry documentation. See our operator manual for further details.
-        #[arg(long = "enable-otel", default_value_t = false, env = ENV_ENABLE_OTEL, value_name = "BOOL")]
-        enable_otel: bool,
     },
 
     /// Bootstraps the ntx-builder database with the genesis block fetched from the node RPC.
@@ -164,7 +157,6 @@ impl NtxBuilderCommand {
             max_tx_cycles,
             sqlite_connection_pool_size,
             data_directory,
-            enable_otel: _,
         } = self
         else {
             unreachable!("start is only called for the Start variant")
@@ -197,11 +189,11 @@ impl NtxBuilderCommand {
             .context("failed while running ntx builder component")
     }
 
-    pub fn is_open_telemetry_enabled(&self) -> bool {
+    pub fn open_telemetry(&self) -> OpenTelemetry {
         match self {
-            Self::Start { enable_otel, .. } => *enable_otel,
+            Self::Start { .. } => OpenTelemetry::from_env().with_name("ntx-builder"),
             // Bootstrap is a one-shot command and does not set up a tracing pipeline.
-            Self::Bootstrap { .. } => false,
+            Self::Bootstrap { .. } => OpenTelemetry::Disabled,
         }
     }
 }

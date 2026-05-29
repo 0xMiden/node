@@ -10,7 +10,6 @@ services:
       - MIDEN_MONITOR_PORT=3001
       - MIDEN_MONITOR_NETWORK_NAME=Localhost
       - MIDEN_MONITOR_DISABLE_NTX_SERVICE=true
-      - MIDEN_MONITOR_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
     ports:
       - "3001:3001"

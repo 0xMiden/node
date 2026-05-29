@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use miden_node_utils::clap::GrpcOptionsInternal;
+use miden_node_utils::logging::OpenTelemetry;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::utils::serde::Deserializable;
 use miden_validator::ValidatorSigner;
@@ -14,7 +15,6 @@ const ENV_DATA_DIRECTORY: &str = "MIDEN_NODE_DATA_DIRECTORY";
 const ENV_LISTEN: &str = "MIDEN_NODE_VALIDATOR_LISTEN";
 const ENV_KEY: &str = "MIDEN_NODE_VALIDATOR_KEY";
 const ENV_KMS_KEY_ID: &str = "MIDEN_NODE_VALIDATOR_KMS_KEY_ID";
-const ENV_ENABLE_OTEL: &str = "MIDEN_NODE_ENABLE_OTEL";
 const ENV_GENESIS_CONFIG_FILE: &str = "MIDEN_NODE_VALIDATOR_GENESIS_CONFIG_FILE";
 const ENV_SQLITE_CONNECTION_POOL_SIZE: &str = "MIDEN_NODE_VALIDATOR_SQLITE_CONNECTION_POOL_SIZE";
 
@@ -64,13 +64,6 @@ pub enum ValidatorCommand {
         /// Socket address at which to serve the gRPC API.
         #[arg(long = "listen", env = ENV_LISTEN, value_name = "LISTEN")]
         listen: std::net::SocketAddr,
-
-        /// Enables the exporting of traces for OpenTelemetry.
-        ///
-        /// This can be further configured using environment variables as defined in the official
-        /// OpenTelemetry documentation. See our operator manual for further details.
-        #[arg(long = "enable-otel", default_value_t = false, env = ENV_ENABLE_OTEL, value_name = "BOOL")]
-        enable_otel: bool,
 
         #[command(flatten)]
         grpc_options: GrpcOptionsInternal,
@@ -173,10 +166,10 @@ impl ValidatorCommand {
         }
     }
 
-    pub fn is_open_telemetry_enabled(&self) -> bool {
+    pub fn open_telemetry(&self) -> OpenTelemetry {
         match self {
-            Self::Start { enable_otel, .. } => *enable_otel,
-            Self::Bootstrap { .. } => false,
+            Self::Start { .. } => OpenTelemetry::from_env().with_name("validator"),
+            Self::Bootstrap { .. } => OpenTelemetry::Disabled,
         }
     }
 }

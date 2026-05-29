@@ -28,11 +28,8 @@ use crate::monitor::tasks::Tasks;
 pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
     info!("Loaded configuration: {:?}", config);
 
-    let _otel_guard = if config.enable_otel {
-        miden_node_utils::logging::setup_tracing(OpenTelemetry::enabled().with_name("monitor"))?
-    } else {
-        miden_node_utils::logging::setup_tracing(OpenTelemetry::Disabled)?
-    };
+    let _otel_guard =
+        miden_node_utils::logging::setup_tracing(OpenTelemetry::from_env().with_name("monitor"))?;
 
     let mut tasks = Tasks::new();
 

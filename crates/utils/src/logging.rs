@@ -53,6 +53,14 @@ impl OpenTelemetry {
         OpenTelemetry::Enabled(ResourceConfig::default())
     }
 
+    pub fn from_env() -> Self {
+        if otlp_endpoint_configured() {
+            OpenTelemetry::enabled()
+        } else {
+            OpenTelemetry::Disabled
+        }
+    }
+
     #[must_use]
     pub fn with_name(self, service_name: &'static str) -> Self {
         match self {
@@ -230,6 +238,12 @@ fn otel_service_name_override() -> Option<Value> {
         .ok()
         .filter(|value| !value.is_empty())
         .map(Value::from)
+}
+
+fn otlp_endpoint_configured() -> bool {
+    ["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT"]
+        .into_iter()
+        .any(|key| std::env::var(key).is_ok_and(|value| !value.trim().is_empty()))
 }
 
 /// Initializes tracing to a test exporter.

@@ -3,7 +3,6 @@ use std::path::PathBuf;
 
 use miden_node_store::DatabaseOptions;
 use miden_node_utils::clap::{GrpcOptionsExternal, StorageOptions};
-use miden_node_utils::logging::OpenTelemetry;
 
 use super::ENV_DATA_DIRECTORY;
 use super::rpc::RpcOptions;
@@ -18,31 +17,11 @@ pub struct RuntimeOptions {
     #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
     pub data_directory: PathBuf,
 
-    /// Enables the exporting of traces for OpenTelemetry.
-    ///
-    /// This can be further configured using environment variables as defined in the official
-    /// OpenTelemetry documentation. See our operator manual for further details.
-    #[arg(
-        long = "enable-otel",
-        default_value_t = false,
-        env = "MIDEN_NODE_ENABLE_OTEL",
-        value_name = "BOOL"
-    )]
-    pub enable_otel: bool,
-
     #[command(flatten)]
     pub rpc: RpcOptions,
 }
 
 impl RuntimeOptions {
-    pub fn open_telemetry(&self) -> OpenTelemetry {
-        if self.enable_otel {
-            OpenTelemetry::enabled()
-        } else {
-            OpenTelemetry::Disabled
-        }
-    }
-
     pub(super) fn runtime_config(&self, store: &StoreOptions) -> RuntimeConfig {
         RuntimeConfig {
             data_directory: self.data_directory.clone(),

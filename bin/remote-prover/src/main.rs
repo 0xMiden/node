@@ -9,7 +9,7 @@ const COMPONENT: &str = "miden-prover";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let _otel_guard = setup_tracing(OpenTelemetry::enabled().with_name("remote-prover"))?;
+    let _otel_guard = setup_tracing(OpenTelemetry::from_env().with_name("remote-prover"))?;
     info!(target: COMPONENT, "Tracing initialized");
 
     let (handle, _port) =
