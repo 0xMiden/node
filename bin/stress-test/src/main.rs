@@ -122,14 +122,14 @@ async fn main() {
             vault_entries,
             account_update_blocks,
         } => {
-            seed_store(
+            Box::pin(seed_store(
                 data_directory,
                 num_accounts,
                 public_accounts_percentage,
                 storage_map_entries,
                 vault_entries,
                 account_update_blocks,
-            )
+            ))
             .await;
         },
         Command::BenchmarkStore {

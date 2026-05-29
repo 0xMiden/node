@@ -66,6 +66,16 @@ mod replica;
 pub use replica::{BlockCache, BlockNotification, ProofCache, ProofNotification};
 
 mod account;
+
+mod subscription;
+pub use subscription::{
+    BlockSubscriptionEvent,
+    BlockSubscriptionStream,
+    ProofSubscriptionEvent,
+    ProofSubscriptionStream,
+    StateSubscriptionError,
+};
+
 mod apply_block;
 mod apply_proof;
 mod sync_state;
@@ -169,7 +179,7 @@ impl State {
     /// Loads the state from the data directory.
     ///
     /// Returns `(Self, ProvenTipWriter)`. The `ProvenTipWriter` is used by the proof scheduler
-    /// (in block-producer mode) to advance the proven tip; callers can subscribe to tip changes
+    /// (in sequencer mode) to advance the proven tip; callers can subscribe to tip changes
     /// via the methods on `Self`.
     #[instrument(target = COMPONENT, skip_all)]
     pub async fn load(
@@ -189,7 +199,7 @@ impl State {
     /// Loads the state from the data directory using explicit database options.
     ///
     /// Returns `(Self, ProvenTipWriter)`. The `ProvenTipWriter` is used by the proof scheduler
-    /// (in block-producer mode) to advance the proven tip; callers can subscribe to tip changes
+    /// (in sequencer mode) to advance the proven tip; callers can subscribe to tip changes
     /// via the methods on `Self`.
     #[instrument(target = COMPONENT, skip_all)]
     pub async fn load_with_database_options(

@@ -51,6 +51,7 @@
 - Added `--counter-pending-unhealthy-threshold` (env `MIDEN_MONITOR_COUNTER_PENDING_UNHEALTHY_THRESHOLD`, default `5`) to the network monitor: the Network Transactions card now flips unhealthy when the gap between expected and observed counter values stays above the threshold for three consecutive polls.
 - Allowed network transaction submission conditionally via the gRPC `SubmitProvenTx` and `SubmitProvenTxBatch` endpoints: the NTX builder can now send a key in the `x-miden-network-tx-auth` header that enables submitting network transactions ([#2131](https://github.com/0xMiden/node/issues/2131)).
 - [BREAKING] `GetAccount` can now return all storage map entries with a single request ([#2121](https://github.com/0xMiden/node/issues/2121)).
+- Added a `miden-ntx-builder bootstrap` command that initializes the ntx-builder database with the genesis block fetched from the node RPC. The `start` command now requires a bootstrapped database instead of fetching the genesis block from the committed-block subscription on first run ([#2149](https://github.com/0xMiden/node/pull/2149)).
 
 ## v0.14.11 (TBD)
 

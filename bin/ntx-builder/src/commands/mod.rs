@@ -111,10 +111,48 @@ pub enum NtxBuilderCommand {
         #[arg(long = "enable-otel", default_value_t = false, env = ENV_ENABLE_OTEL, value_name = "BOOL")]
         enable_otel: bool,
     },
+
+    /// Bootstraps the ntx-builder database with the genesis block fetched from the node RPC.
+    ///
+    /// This must be run once before `start` so that the database always contains at least the
+    /// genesis block.
+    Bootstrap {
+        /// Directory for the ntx-builder's persistent database.
+        #[arg(long = "data-directory", env = ENV_DATA_DIRECTORY, value_name = "DIR")]
+        data_directory: PathBuf,
+
+        /// The node RPC service gRPC url.
+        #[arg(long = "rpc.url", alias = "store.url", env = ENV_RPC_URL, value_name = "URL")]
+        rpc_url: Url,
+
+        /// Optional value for the fixed `x-miden-network-tx-auth` metadata header.
+        #[arg(
+            long = "rpc.auth-header-value",
+            env = ENV_RPC_AUTH_HEADER_VALUE,
+            value_name = "VALUE"
+        )]
+        rpc_auth_header_value: Option<AsciiMetadataValue>,
+    },
 }
 
 impl NtxBuilderCommand {
     pub async fn handle(self) -> anyhow::Result<()> {
+        match self {
+            Self::Start { .. } => self.start().await,
+            Self::Bootstrap {
+                data_directory,
+                rpc_url,
+                rpc_auth_header_value,
+            } => {
+                let database_filepath = data_directory.join("ntx-builder.sqlite3");
+                miden_ntx_builder::bootstrap(database_filepath, rpc_url, rpc_auth_header_value)
+                    .await
+                    .context("failed to bootstrap ntx-builder database")
+            },
+        }
+    }
+
+    async fn start(self) -> anyhow::Result<()> {
         let Self::Start {
             listen,
             rpc_url,
@@ -127,7 +165,10 @@ impl NtxBuilderCommand {
             sqlite_connection_pool_size,
             data_directory,
             enable_otel: _,
-        } = self;
+        } = self
+        else {
+            unreachable!("start is only called for the Start variant")
+        };
 
         let listener = TcpListener::bind(listen)
             .await
@@ -157,13 +198,18 @@ impl NtxBuilderCommand {
     }
 
     pub fn is_open_telemetry_enabled(&self) -> bool {
-        let Self::Start { enable_otel, .. } = self;
-        *enable_otel
+        match self {
+            Self::Start { enable_otel, .. } => *enable_otel,
+            // Bootstrap is a one-shot command and does not set up a tracing pipeline.
+            Self::Bootstrap { .. } => false,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use clap::Parser;
     use tonic::metadata::AsciiMetadataValue;
 
@@ -185,8 +231,30 @@ mod tests {
         ])
         .expect("command should parse");
 
-        let NtxBuilderCommand::Start { rpc_auth_header_value, .. } = command;
+        let NtxBuilderCommand::Start { rpc_auth_header_value, .. } = command else {
+            panic!("expected the start command");
+        };
 
         assert_eq!(rpc_auth_header_value, Some(AsciiMetadataValue::from_static("secret-token")));
+    }
+
+    #[test]
+    fn bootstrap_command_parses_data_directory_and_rpc_url() {
+        let command = NtxBuilderCommand::try_parse_from([
+            "miden-ntx-builder",
+            "bootstrap",
+            "--data-directory",
+            "/tmp/miden-ntx-builder",
+            "--rpc.url",
+            "http://127.0.0.1:57291",
+        ])
+        .expect("command should parse");
+
+        let NtxBuilderCommand::Bootstrap { data_directory, rpc_url, .. } = command else {
+            panic!("expected the bootstrap command");
+        };
+
+        assert_eq!(data_directory, PathBuf::from("/tmp/miden-ntx-builder"));
+        assert_eq!(rpc_url.as_str(), "http://127.0.0.1:57291/");
     }
 }

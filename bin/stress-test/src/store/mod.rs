@@ -1,22 +1,21 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::{StreamExt, stream};
-use miden_node_proto::generated::store::rpc_client::RpcClient;
+use miden_node_proto::domain::account::AccountRequest;
 use miden_node_proto::generated::{self as proto};
-use miden_node_store::state::State;
+use miden_node_store::state::{Finality, State};
 use miden_node_utils::clap::StorageOptions;
-use miden_node_utils::tracing::grpc::OtelInterceptor;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
-use miden_protocol::note::{NoteDetails, NoteTag};
-use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::asset::Asset;
+use miden_protocol::block::BlockNumber;
+use miden_protocol::note::NoteTag;
+use miden_protocol::utils::serde::Serializable;
 use rand::Rng;
 use rand::seq::SliceRandom;
 use tokio::fs;
-use tokio::time::sleep;
-use tonic::service::interceptor::InterceptedService;
-use tonic::transport::Channel;
 
 use crate::seeding::{ACCOUNTS_FILENAME, start_store};
 use crate::store::metrics::print_summary;
@@ -31,9 +30,6 @@ const ACCOUNTS_PER_SYNC_NOTES: usize = 15;
 
 /// Number of note IDs used in each `sync_nullifiers` call.
 const NOTE_IDS_PER_NULLIFIERS_CHECK: usize = 20;
-
-/// Number of attempts the benchmark will make to reach the store before proceeding.
-const STORE_STATUS_RETRIES: usize = 10;
 
 // GET ACCOUNT
 // ================================================================================================
@@ -68,15 +64,13 @@ pub async fn bench_get_account(
     account_ids.shuffle(&mut rng);
     let mut account_ids = account_ids.into_iter().cycle();
 
-    let (store_client, _) = start_store(data_directory).await;
-
-    wait_for_store(&store_client).await.unwrap();
+    let store_state = start_store(data_directory).await;
 
     let request = |_| {
-        let mut client = store_client.clone();
+        let state = Arc::clone(&store_state);
         let account_id = account_ids.next().expect("cycled public account ids never end");
         let storage_map_slot = storage_map_slot.clone();
-        tokio::spawn(async move { get_account(&mut client, account_id, storage_map_slot).await })
+        tokio::spawn(async move { get_account(&state, account_id, storage_map_slot).await })
     };
 
     let results = stream::iter(0..iterations)
@@ -124,7 +118,7 @@ struct GetAccountRun {
 }
 
 async fn get_account(
-    api_client: &mut RpcClient<InterceptedService<Channel, OtelInterceptor>>,
+    state: &Arc<State>,
     account_id: AccountId,
     storage_map_slot: String,
 ) -> GetAccountRun {
@@ -133,7 +127,8 @@ async fn get_account(
     let request = get_account_request(account_id, storage_map_slot);
 
     let start = Instant::now();
-    let response = api_client.get_account(request).await.unwrap().into_inner();
+    let request = AccountRequest::try_from(request).expect("request should be valid");
+    let response: proto::rpc::AccountResponse = state.get_account(request).await.unwrap().into();
     let duration = start.elapsed();
 
     let details = response.details;
@@ -235,21 +230,18 @@ pub async fn bench_sync_notes(data_directory: PathBuf, iterations: usize, concur
         .unwrap_or_else(|e| panic!("missing file {}: {e:?}", accounts_file.display()));
     let mut account_ids = accounts.lines().map(|a| AccountId::from_hex(a).unwrap()).cycle();
 
-    let (store_client, _) = start_store(data_directory).await;
-
-    wait_for_store(&store_client).await.unwrap();
+    let store_state = start_store(data_directory).await;
 
     // Get the latest block number to determine the range
-    let status = store_client.clone().status(()).await.unwrap().into_inner();
-    let chain_tip = status.chain_tip;
+    let chain_tip = store_state.chain_tip(Finality::Committed).await.as_u32();
 
     // each request will have `ACCOUNTS_PER_SYNC_NOTES` note tags and will be sent with block number
     // 0.
     let request = |_| {
-        let mut client = store_client.clone();
+        let state = Arc::clone(&store_state);
         let account_batch: Vec<AccountId> =
             account_ids.by_ref().take(ACCOUNTS_PER_SYNC_NOTES).collect();
-        tokio::spawn(async move { sync_notes(&mut client, account_batch, chain_tip).await })
+        tokio::spawn(async move { sync_notes(&state, account_batch, chain_tip).await })
     };
 
     // create a stream of tasks to send the requests
@@ -267,7 +259,7 @@ pub async fn bench_sync_notes(data_directory: PathBuf, iterations: usize, concur
 /// generated from the account ids, so the request will contain a note tag for each account id, with
 /// a block number of 0.
 pub async fn sync_notes(
-    api_client: &mut RpcClient<InterceptedService<Channel, OtelInterceptor>>,
+    state: &Arc<State>,
     account_ids: Vec<AccountId>,
     chain_tip: u32,
 ) -> Duration {
@@ -275,13 +267,11 @@ pub async fn sync_notes(
         .iter()
         .map(|id| u32::from(NoteTag::with_account_target(*id)))
         .collect::<Vec<_>>();
-    let sync_request = proto::rpc::SyncNotesRequest {
-        block_range: Some(proto::rpc::BlockRange { block_from: 0, block_to: chain_tip }),
-        note_tags,
-    };
-
     let start = Instant::now();
-    api_client.sync_notes(sync_request).await.unwrap();
+    state
+        .sync_notes(note_tags, BlockNumber::from(0)..=BlockNumber::from(chain_tip))
+        .await
+        .unwrap();
     start.elapsed()
 }
 
@@ -302,9 +292,7 @@ pub async fn bench_sync_nullifiers(
     concurrency: usize,
     prefixes_per_request: usize,
 ) {
-    let (mut store_client, _) = start_store(data_directory.clone()).await;
-
-    wait_for_store(&store_client).await.unwrap();
+    let store_state = start_store(data_directory.clone()).await;
 
     let accounts_file = data_directory.join(ACCOUNTS_FILENAME);
     let accounts = fs::read_to_string(&accounts_file)
@@ -317,8 +305,7 @@ pub async fn bench_sync_nullifiers(
         .collect();
 
     // Get the latest block number to determine the range
-    let status = store_client.clone().status(()).await.unwrap().into_inner();
-    let chain_tip = status.chain_tip;
+    let chain_tip = store_state.chain_tip(Finality::Committed).await.as_u32();
 
     // Get all nullifier prefixes from the store using sync_notes
     let mut nullifier_prefixes: Vec<u32> = vec![];
@@ -329,67 +316,56 @@ pub async fn bench_sync_nullifiers(
             .iter()
             .map(|id| u32::from(NoteTag::with_account_target(*id)))
             .collect();
-        let sync_request = proto::rpc::SyncNotesRequest {
-            block_range: Some(proto::rpc::BlockRange {
-                block_from: current_block_num,
-                block_to: chain_tip,
-            }),
-            note_tags,
-        };
-        let response = store_client.sync_notes(sync_request).await.unwrap().into_inner();
+        let (blocks, last_block_checked) = store_state
+            .sync_notes(
+                note_tags,
+                BlockNumber::from(current_block_num)..=BlockNumber::from(chain_tip),
+            )
+            .await
+            .unwrap();
 
-        let pagination = response.pagination_info.expect("pagination_info should exist");
-        let last_block_checked = pagination.block_num;
-
-        if response.blocks.is_empty() || last_block_checked >= pagination.chain_tip {
+        if blocks.is_empty() || last_block_checked.as_u32() >= chain_tip {
             break;
         }
 
         // Collect note IDs from all blocks in the response.
-        let note_ids: Vec<_> = response
-            .blocks
+        let note_ids: Vec<_> = blocks
             .iter()
-            .flat_map(|b| {
-                b.notes.iter().map(|n| n.inclusion_proof.as_ref().unwrap().note_id.unwrap())
-            })
+            .flat_map(|(block, _)| block.notes.iter().map(|note| note.note_id))
             .collect();
 
         // Get the notes nullifiers, limiting to 20 notes maximum.
         let note_ids_to_fetch: Vec<_> =
             note_ids.iter().take(NOTE_IDS_PER_NULLIFIERS_CHECK).copied().collect();
         if !note_ids_to_fetch.is_empty() {
-            let notes = store_client
-                .get_notes_by_id(proto::note::NoteIdList { ids: note_ids_to_fetch })
+            let notes = store_state
+                .get_notes_by_id(note_ids_to_fetch)
                 .await
                 .unwrap()
-                .into_inner()
-                .notes;
+                .into_iter()
+                .collect::<Vec<_>>();
 
             nullifier_prefixes.extend(notes.iter().filter_map(|n| {
-                let proto_note = n.note.as_ref()?;
-                let details_bytes = proto_note.details.as_ref()?;
-                let details = NoteDetails::read_from_bytes(details_bytes).unwrap();
-                let metadata =
-                    miden_protocol::note::NoteMetadata::try_from(proto_note.metadata.clone()?)
-                        .ok()?;
+                let details = n.details.as_ref()?;
+                let metadata = n.metadata;
                 let nullifier =
-                    miden_protocol::note::Nullifier::from_details_and_metadata(&details, &metadata);
+                    miden_protocol::note::Nullifier::from_details_and_metadata(details, &metadata);
                 Some(u32::from(nullifier.prefix()))
             }));
         }
 
         // Resume from the next block after the last one checked.
-        current_block_num = last_block_checked + 1;
+        current_block_num = last_block_checked.as_u32() + 1;
     }
     let mut nullifiers = nullifier_prefixes.into_iter().cycle();
 
     // Each request will have `prefixes_per_request` prefixes and block number 0
     let request = |_| {
-        let mut client = store_client.clone();
+        let state = Arc::clone(&store_state);
 
         let nullifiers_batch: Vec<u32> = nullifiers.by_ref().take(prefixes_per_request).collect();
 
-        tokio::spawn(async move { sync_nullifiers(&mut client, nullifiers_batch, chain_tip).await })
+        tokio::spawn(async move { sync_nullifiers(&state, nullifiers_batch, chain_tip).await })
     };
 
     // Create a stream of tasks to send the requests
@@ -404,7 +380,7 @@ pub async fn bench_sync_nullifiers(
 
     #[expect(clippy::cast_precision_loss)]
     let average_nullifiers_per_response =
-        responses.iter().map(|r| r.nullifiers.len()).sum::<usize>() as f64 / responses.len() as f64;
+        responses.iter().sum::<usize>() as f64 / responses.len() as f64;
     println!("Average nullifiers per response: {average_nullifiers_per_response}");
 }
 
@@ -412,19 +388,20 @@ pub async fn bench_sync_nullifiers(
 /// - the elapsed time.
 /// - the response.
 async fn sync_nullifiers(
-    api_client: &mut RpcClient<InterceptedService<Channel, OtelInterceptor>>,
+    state: &Arc<State>,
     nullifiers_prefixes: Vec<u32>,
     chain_tip: u32,
-) -> (Duration, proto::rpc::SyncNullifiersResponse) {
-    let sync_request = proto::rpc::SyncNullifiersRequest {
-        block_range: Some(proto::rpc::BlockRange { block_from: 0, block_to: chain_tip }),
-        nullifiers: nullifiers_prefixes,
-        prefix_len: 16,
-    };
-
+) -> (Duration, usize) {
     let start = Instant::now();
-    let response = api_client.sync_nullifiers(sync_request).await.unwrap();
-    (start.elapsed(), response.into_inner())
+    let (nullifiers, _) = state
+        .sync_nullifiers(
+            16,
+            nullifiers_prefixes,
+            BlockNumber::from(0)..=BlockNumber::from(chain_tip),
+        )
+        .await
+        .unwrap();
+    (start.elapsed(), nullifiers.len())
 }
 
 // SYNC TRANSACTIONS
@@ -459,17 +436,14 @@ pub async fn bench_sync_transactions(
     account_ids.shuffle(&mut rng);
     let mut account_ids = account_ids.into_iter().cycle();
 
-    let (store_client, _) = start_store(data_directory).await;
-
-    wait_for_store(&store_client).await.unwrap();
+    let store_state = start_store(data_directory).await;
 
     // Get the latest block number to determine the range
-    let status = store_client.clone().status(()).await.unwrap().into_inner();
-    let chain_tip = status.chain_tip;
+    let chain_tip = store_state.chain_tip(Finality::Committed).await.as_u32();
 
     // each request will have `accounts_per_request` account ids and will query a range of blocks
     let request = |_| {
-        let mut client = store_client.clone();
+        let state = Arc::clone(&store_state);
         let account_batch: Vec<AccountId> =
             account_ids.by_ref().take(accounts_per_request).collect();
 
@@ -479,7 +453,7 @@ pub async fn bench_sync_transactions(
         let end_block = start_block.saturating_add(block_range_size).min(chain_tip);
 
         tokio::spawn(async move {
-            sync_transactions_paginated(&mut client, account_batch, start_block, end_block).await
+            sync_transactions_paginated(&state, account_batch, start_block, end_block).await
         })
     };
 
@@ -533,24 +507,25 @@ pub async fn bench_sync_transactions(
 /// - the elapsed time.
 /// - the response.
 pub async fn sync_transactions(
-    api_client: &mut RpcClient<InterceptedService<Channel, OtelInterceptor>>,
+    state: &Arc<State>,
     account_ids: Vec<AccountId>,
     block_from: u32,
     block_to: u32,
 ) -> (Duration, proto::rpc::SyncTransactionsResponse) {
-    let account_ids = account_ids
-        .iter()
-        .map(|id| proto::account::AccountId { id: id.to_bytes() })
-        .collect::<Vec<_>>();
-
-    let sync_request = proto::rpc::SyncTransactionsRequest {
-        block_range: Some(proto::rpc::BlockRange { block_from, block_to }),
-        account_ids,
-    };
-
     let start = Instant::now();
-    let response = api_client.sync_transactions(sync_request).await.unwrap();
-    (start.elapsed(), response.into_inner())
+    let (last_block_included, records) = state
+        .sync_transactions(account_ids, BlockNumber::from(block_from)..=BlockNumber::from(block_to))
+        .await
+        .unwrap();
+    let chain_tip = state.chain_tip(Finality::Committed).await;
+    let response = proto::rpc::SyncTransactionsResponse {
+        pagination_info: Some(proto::rpc::PaginationInfo {
+            chain_tip: chain_tip.as_u32(),
+            block_num: last_block_included.as_u32(),
+        }),
+        transactions: records.into_iter().map(transaction_record_to_proto).collect(),
+    };
+    (start.elapsed(), response)
 }
 
 #[derive(Clone)]
@@ -561,7 +536,7 @@ struct SyncTransactionsRun {
 }
 
 async fn sync_transactions_paginated(
-    api_client: &mut RpcClient<InterceptedService<Channel, OtelInterceptor>>,
+    state: &Arc<State>,
     account_ids: Vec<AccountId>,
     block_from: u32,
     block_to: u32,
@@ -579,8 +554,7 @@ async fn sync_transactions_paginated(
         }
 
         let (elapsed, response) =
-            sync_transactions(api_client, account_ids.clone(), next_block_from, target_block_to)
-                .await;
+            sync_transactions(state, account_ids.clone(), next_block_from, target_block_to).await;
         total_duration += elapsed;
         pages += 1;
 
@@ -624,15 +598,13 @@ async fn sync_transactions_paginated(
 /// - `iterations`: number of requests to send.
 /// - `concurrency`: number of requests to send in parallel.
 pub async fn bench_sync_chain_mmr(data_directory: PathBuf, iterations: usize, concurrency: usize) {
-    let (store_client, _) = start_store(data_directory).await;
+    let store_state = start_store(data_directory).await;
 
-    wait_for_store(&store_client).await.unwrap();
-
-    let chain_tip = store_client.clone().status(()).await.unwrap().into_inner().chain_tip;
+    let chain_tip = store_state.chain_tip(Finality::Committed).await.as_u32();
 
     let request = |_| {
-        let mut client = store_client.clone();
-        tokio::spawn(async move { sync_chain_mmr(&mut client, chain_tip).await })
+        let state = Arc::clone(&store_state);
+        tokio::spawn(async move { sync_chain_mmr(&state, chain_tip).await })
     };
 
     let results = stream::iter(0..iterations)
@@ -655,26 +627,49 @@ pub async fn bench_sync_chain_mmr(data_directory: PathBuf, iterations: usize, co
 /// Sends a single `sync_chain_mmr` request to the store and returns a tuple with:
 /// - the elapsed time.
 /// - the response.
-async fn sync_chain_mmr(
-    api_client: &mut RpcClient<InterceptedService<Channel, OtelInterceptor>>,
-    current_client_block_height: u32,
-) -> SyncChainMmrRun {
-    let sync_request = proto::rpc::SyncChainMmrRequest {
-        current_client_block_height,
-        finality_level: proto::rpc::FinalityLevel::Committed.into(),
-    };
-
+async fn sync_chain_mmr(state: &Arc<State>, current_client_block_height: u32) -> SyncChainMmrRun {
     let start = Instant::now();
-    let response = api_client.sync_chain_mmr(sync_request).await.unwrap();
+    let chain_tip = state.chain_tip(Finality::Committed).await;
+    state
+        .sync_chain_mmr(BlockNumber::from(current_client_block_height)..=chain_tip)
+        .await
+        .unwrap();
     let elapsed = start.elapsed();
-    let response = response.into_inner();
-    let _mmr_delta = response.mmr_delta.expect("mmr_delta should exist");
     SyncChainMmrRun { duration: elapsed }
 }
 
 #[derive(Clone)]
 struct SyncChainMmrRun {
     duration: Duration,
+}
+
+fn transaction_record_to_proto(
+    record: miden_node_store::TransactionRecord,
+) -> proto::rpc::TransactionRecord {
+    let output_note_proofs = record
+        .output_note_proofs
+        .into_iter()
+        .map(|note| proto::note::NoteInclusionInBlockProof {
+            note_id: Some((&note.note_id).into()),
+            block_num: note.block_num.as_u32(),
+            note_index_in_block: note.note_index.leaf_index_value().into(),
+            inclusion_path: Some(note.inclusion_path.into()),
+        })
+        .collect();
+
+    proto::rpc::TransactionRecord {
+        header: Some(proto::transaction::TransactionHeader {
+            transaction_id: Some(record.header.id().into()),
+            account_id: Some(record.header.account_id().into()),
+            initial_state_commitment: Some(record.header.initial_state_commitment().into()),
+            final_state_commitment: Some(record.header.final_state_commitment().into()),
+            input_notes: record.header.input_notes().iter().cloned().map(Into::into).collect(),
+            output_notes: record.header.output_notes().iter().copied().map(Into::into).collect(),
+            fee: Some(Asset::from(record.header.fee()).into()),
+        }),
+        block_num: record.block_num.as_u32(),
+        output_note_proofs,
+    }
 }
 
 // LOAD STATE
@@ -714,29 +709,4 @@ pub async fn load_state(data_directory: &Path) {
 
     println!("State loaded in {elapsed:?}");
     println!("Database contains {account_count} accounts and {nullifier_count} nullifiers");
-}
-
-// HELPERS
-// ================================================================================================
-
-/// Waits for the store to be ready and accepting requests.
-///
-/// Periodically checks the store’s status endpoint until it reports `"connected"`.
-/// Returns an error if the status does not become `"connected"` after
-/// [`STORE_STATUS_RETRIES`] attempts.
-async fn wait_for_store(
-    store_client: &RpcClient<InterceptedService<Channel, OtelInterceptor>>,
-) -> Result<(), String> {
-    for _ in 0..STORE_STATUS_RETRIES {
-        // Get status from the store component to confirm that it is ready.
-        let status = store_client.clone().status(()).await.unwrap().into_inner();
-
-        if status.status == "connected" {
-            return Ok(());
-        }
-
-        sleep(Duration::from_millis(500)).await;
-    }
-
-    Err("Store component failed to start".to_string())
 }

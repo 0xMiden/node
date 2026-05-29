@@ -13,7 +13,7 @@ use miden_protocol::block::{
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature, SigningKey};
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrPeaks};
-use miden_protocol::crypto::merkle::smt::{LargeSmt, MemoryStorage, Smt};
+use miden_protocol::crypto::merkle::smt::Smt;
 use miden_protocol::errors::AccountError;
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionKernel};
@@ -134,9 +134,8 @@ impl GenesisState {
             )
         });
 
-        // Create LargeSmt with MemoryStorage
-        let smt = LargeSmt::with_entries(MemoryStorage::default(), smt_entries)
-            .expect("Failed to create LargeSmt for genesis accounts");
+        let smt =
+            Smt::with_entries(smt_entries).expect("Failed to create LargeSmt for genesis accounts");
 
         let account_smt = AccountTree::new(smt).expect("Failed to create AccountTree for genesis");
 

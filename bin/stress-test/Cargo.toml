@@ -17,17 +17,14 @@ version.workspace      = true
 workspace = true
 
 [dependencies]
-clap                      = { features = ["derive"], workspace = true }
-fs-err                    = { workspace = true }
-futures                   = { workspace = true }
-miden-node-block-producer = { workspace = true }
-miden-node-proto          = { workspace = true }
-miden-node-store          = { workspace = true }
-miden-node-utils          = { workspace = true }
-miden-protocol            = { workspace = true }
-miden-standards           = { workspace = true }
-rand                      = { workspace = true }
-rayon                     = { workspace = true }
-tokio                     = { workspace = true }
-tonic                     = { default-features = true, workspace = true }
-url                       = { workspace = true }
+clap             = { features = ["derive"], workspace = true }
+fs-err           = { workspace = true }
+futures          = { workspace = true }
+miden-node-proto = { workspace = true }
+miden-node-store = { workspace = true }
+miden-node-utils = { workspace = true }
+miden-protocol   = { workspace = true }
+miden-standards  = { workspace = true }
+rand             = { workspace = true }
+rayon            = { workspace = true }
+tokio            = { workspace = true }

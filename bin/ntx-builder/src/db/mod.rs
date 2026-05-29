@@ -5,7 +5,7 @@ use anyhow::Context;
 use miden_node_db::DatabaseError;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
-use miden_protocol::block::{BlockHeader, BlockNumber};
+use miden_protocol::block::{BlockHeader, BlockNumber, SignedBlock};
 use miden_protocol::crypto::merkle::mmr::PartialMmr;
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
 use miden_standards::note::AccountTargetNetworkNote;
@@ -69,6 +69,40 @@ impl Db {
         );
 
         Ok(Db { inner })
+    }
+
+    /// Creates and initializes the database, then seeds it with the signed genesis block.
+    ///
+    /// Mirrors the store's bootstrap (`Db::bootstrap`): after this completes the singleton
+    /// `chain_state` row exists at [`BlockNumber::GENESIS`], so [`crate::NtxBuilderConfig::build`]
+    /// can assume the genesis block is always present and never has to consume it from the
+    /// committed-block subscription on startup.
+    ///
+    /// Returns an error if the database has already been bootstrapped.
+    #[instrument(
+        target = COMPONENT,
+        name = "ntx_builder.database.bootstrap",
+        skip_all,
+        fields(path=%database_filepath.display()),
+        err,
+    )]
+    pub async fn bootstrap(
+        database_filepath: PathBuf,
+        genesis: &SignedBlock,
+    ) -> anyhow::Result<()> {
+        let db = Self::setup(database_filepath).await?;
+
+        anyhow::ensure!(
+            db.get_chain_state().await.context("failed to read chain state")?.is_none(),
+            "ntx-builder database is already bootstrapped",
+        );
+
+        let effects = CommittedBlockEffects::from_signed_block(genesis);
+        db.apply_committed_block(effects, PartialMmr::default())
+            .await
+            .context("failed to insert genesis block")?;
+
+        Ok(())
     }
 
     // BLOCK APPLICATION
@@ -284,5 +318,45 @@ impl LoopDb {
                 queries::insert_note_script(conn, &script_root, &script)
             })
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::mock_genesis_block;
+
+    #[tokio::test]
+    async fn bootstrap_seeds_genesis_chain_state() {
+        let dir = tempfile::tempdir().expect("failed to create temp directory");
+        let db_path = dir.path().join("ntx-builder.sqlite3");
+
+        Db::bootstrap(db_path.clone(), &mock_genesis_block())
+            .await
+            .expect("bootstrap should succeed on a fresh database");
+
+        let db = Db::setup(db_path).await.expect("setup should open the bootstrapped database");
+        let (block_num, ..) = db
+            .get_chain_state()
+            .await
+            .expect("query should succeed")
+            .expect("chain state should be present after bootstrap");
+
+        assert_eq!(block_num, BlockNumber::GENESIS);
+    }
+
+    #[tokio::test]
+    async fn bootstrap_rejects_already_bootstrapped_database() {
+        let dir = tempfile::tempdir().expect("failed to create temp directory");
+        let db_path = dir.path().join("ntx-builder.sqlite3");
+
+        Db::bootstrap(db_path.clone(), &mock_genesis_block())
+            .await
+            .expect("first bootstrap should succeed");
+
+        let err = Db::bootstrap(db_path, &mock_genesis_block())
+            .await
+            .expect_err("second bootstrap should fail");
+        assert!(err.to_string().contains("already bootstrapped"), "unexpected error: {err}");
     }
 }
