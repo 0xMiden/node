@@ -17,6 +17,7 @@ use crate::db::schema;
 pub struct AccountInsert {
     pub account_id: Vec<u8>,
     pub account_data: Vec<u8>,
+    pub last_tx_id: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Queryable, Selectable)]
@@ -29,55 +30,43 @@ pub struct AccountRow {
 // QUERIES
 // ================================================================================================
 
-/// Inserts the committed account state, or updates `account_data` if the account already exists.
+/// Inserts the committed account state, or updates an existing account's state. In both cases
+/// `last_tx_id` is set to the transaction that produced this update.
 ///
 /// # Raw SQL
 ///
 /// ```sql
-/// INSERT INTO accounts (account_id, account_data)
-/// VALUES (?1, ?2)
-/// ON CONFLICT(account_id) DO UPDATE SET account_data = excluded.account_data
+/// INSERT INTO accounts (account_id, account_data, last_tx_id)
+/// VALUES (?1, ?2, ?3)
+/// ON CONFLICT(account_id) DO UPDATE SET
+///     account_data = excluded.account_data,
+///     last_tx_id = excluded.last_tx_id
 /// ```
 pub fn upsert_account(
     conn: &mut SqliteConnection,
     account_id: AccountId,
     account: &Account,
+    last_tx_id: TransactionId,
 ) -> Result<(), DatabaseError> {
     let row = AccountInsert {
         account_id: conversions::account_id_to_bytes(account_id),
         account_data: conversions::account_to_bytes(account),
+        last_tx_id: conversions::transaction_id_to_bytes(&last_tx_id),
     };
     diesel::insert_into(schema::accounts::table)
         .values(&row)
         .on_conflict(schema::accounts::account_id)
         .do_update()
-        .set(schema::accounts::account_data.eq(&row.account_data))
+        .set((
+            schema::accounts::account_data.eq(&row.account_data),
+            schema::accounts::last_tx_id.eq(&row.last_tx_id),
+        ))
         .execute(conn)?;
     Ok(())
 }
 
-/// Records `tx_id` as the latest transaction that updated `account_id`. No-ops for accounts not
-/// tracked locally (i.e. non-network accounts), which never have a row in this table.
-///
-/// # Raw SQL
-///
-/// ```sql
-/// UPDATE accounts SET last_tx_id = ?2 WHERE account_id = ?1
-/// ```
-pub fn set_account_last_tx(
-    conn: &mut SqliteConnection,
-    account_id: AccountId,
-    tx_id: TransactionId,
-) -> Result<(), DatabaseError> {
-    let account_id_bytes = conversions::account_id_to_bytes(account_id);
-    let tx_id_bytes = conversions::transaction_id_to_bytes(&tx_id);
-    diesel::update(schema::accounts::table.find(&account_id_bytes))
-        .set(schema::accounts::last_tx_id.eq(Some(tx_id_bytes)))
-        .execute(conn)?;
-    Ok(())
-}
-
-/// Returns the latest transaction recorded against `account_id`, if any.
+/// Returns the latest transaction recorded against `account_id`, or `None` if the account is not
+/// tracked locally.
 ///
 /// # Raw SQL
 ///
@@ -90,14 +79,13 @@ pub fn account_last_tx(
 ) -> Result<Option<TransactionId>, DatabaseError> {
     let account_id_bytes = conversions::account_id_to_bytes(account_id);
 
-    let last_tx_id: Option<Option<Vec<u8>>> = schema::accounts::table
+    let last_tx_id: Option<Vec<u8>> = schema::accounts::table
         .find(&account_id_bytes)
         .select(schema::accounts::last_tx_id)
         .first(conn)
         .optional()?;
 
     last_tx_id
-        .flatten()
         .map(|bytes| conversions::transaction_id_from_bytes(&bytes))
         .transpose()
 }

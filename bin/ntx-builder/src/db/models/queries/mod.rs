@@ -1,6 +1,6 @@
 //! Database query functions for the NTX builder.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use diesel::prelude::*;
 use miden_node_db::DatabaseError;
@@ -48,13 +48,21 @@ pub fn apply_committed_block(
 ) -> Result<Vec<AccountId>, DatabaseError> {
     let mut affected_accounts: HashSet<AccountId> = HashSet::new();
 
+    // The latest transaction in this block per account. Every committed account update originates
+    // from a transaction in the same block, so each upserted account has an entry here. Collecting
+    // into a map keeps the last transaction per account (block order is preserved).
+    let last_tx: HashMap<AccountId, _> = effects.account_transactions.iter().copied().collect();
+
     for (account_id, details) in &effects.network_account_updates {
         let Some(effect) = NetworkAccountEffect::from_protocol(details) else {
             continue;
         };
+        let last_tx_id = *last_tx
+            .get(account_id)
+            .expect("a committed account update must originate from a transaction in the block");
         match effect {
             NetworkAccountEffect::Created(account) => {
-                upsert_account(conn, *account_id, &account)?;
+                upsert_account(conn, *account_id, &account, last_tx_id)?;
             },
             NetworkAccountEffect::Updated(delta) => {
                 // If the account is not already tracked locally, skip it.
@@ -64,7 +72,7 @@ pub fn apply_committed_block(
                 current
                     .apply_delta(&delta)
                     .expect("network account delta should apply since the block was committed");
-                upsert_account(conn, *account_id, &current)?;
+                upsert_account(conn, *account_id, &current, last_tx_id)?;
             },
         }
         affected_accounts.insert(*account_id);
@@ -76,12 +84,6 @@ pub fn apply_committed_block(
     insert_network_notes(conn, &effects.network_notes)?;
 
     mark_notes_consumed(conn, &effects.nullifiers, effects.header.block_num())?;
-
-    // Record the latest landed transaction per account so waiting actors can confirm their own
-    // submission landed. Only updates rows already present.
-    for (account_id, tx_id) in &effects.account_transactions {
-        set_account_last_tx(conn, *account_id, *tx_id)?;
-    }
 
     upsert_chain_state(conn, effects.header.block_num(), &effects.header, chain_mmr)?;
 

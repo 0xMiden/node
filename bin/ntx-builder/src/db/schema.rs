@@ -4,7 +4,7 @@ diesel::table! {
     accounts (account_id) {
         account_id -> Binary,
         account_data -> Binary,
-        last_tx_id -> Nullable<Binary>,
+        last_tx_id -> Binary,
     }
 }
 
