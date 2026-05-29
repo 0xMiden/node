@@ -47,12 +47,12 @@ fn account_storage_map_details_from_forest_entries_limit_exceeded() {
 
 #[test]
 fn account_detail_request_converts_all_storage_maps() {
-    use crate::generated::rpc::account_request::account_detail_request::SlotData;
+    use crate::generated::rpc::account_request::account_detail_request::StorageRequest;
 
     let request = crate::generated::rpc::account_request::AccountDetailRequest {
         code_commitment: None,
         asset_vault_commitment: None,
-        slot_data: Some(SlotData::AllStorageMaps(true)),
+        storage_request: Some(StorageRequest::AllStorageMaps(true)),
     };
 
     let request = AccountDetailRequest::try_from(request).unwrap();
@@ -62,12 +62,12 @@ fn account_detail_request_converts_all_storage_maps() {
 
 #[test]
 fn account_detail_request_rejects_false_all_storage_maps() {
-    use crate::generated::rpc::account_request::account_detail_request::SlotData;
+    use crate::generated::rpc::account_request::account_detail_request::StorageRequest;
 
     let request = crate::generated::rpc::account_request::AccountDetailRequest {
         code_commitment: None,
         asset_vault_commitment: None,
-        slot_data: Some(SlotData::AllStorageMaps(false)),
+        storage_request: Some(StorageRequest::AllStorageMaps(false)),
     };
 
     let err = AccountDetailRequest::try_from(request).unwrap_err();
@@ -78,16 +78,16 @@ fn account_detail_request_rejects_false_all_storage_maps() {
 #[test]
 fn account_detail_request_converts_explicit_storage_maps() {
     use crate::generated::rpc::account_request::account_detail_request::{
-        SlotData,
         StorageMapDetailRequest,
         StorageMapDetailRequests,
+        StorageRequest,
         storage_map_detail_request,
     };
 
     let request = crate::generated::rpc::account_request::AccountDetailRequest {
         code_commitment: None,
         asset_vault_commitment: None,
-        slot_data: Some(SlotData::StorageMaps(StorageMapDetailRequests {
+        storage_request: Some(StorageRequest::StorageMaps(StorageMapDetailRequests {
             storage_maps: vec![StorageMapDetailRequest {
                 slot_name: "miden::test::storage::slot".to_string(),
                 slot_data: Some(storage_map_detail_request::SlotData::AllEntries(true)),
@@ -108,7 +108,7 @@ fn account_detail_request_allows_no_storage_slot_data() {
     let request = crate::generated::rpc::account_request::AccountDetailRequest {
         code_commitment: None,
         asset_vault_commitment: None,
-        slot_data: None,
+        storage_request: None,
     };
 
     let request = AccountDetailRequest::try_from(request).unwrap();

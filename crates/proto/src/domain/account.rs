@@ -183,12 +183,12 @@ impl TryFrom<proto::rpc::account_request::AccountDetailRequest> for AccountDetai
     fn try_from(
         value: proto::rpc::account_request::AccountDetailRequest,
     ) -> Result<Self, Self::Error> {
-        use proto::rpc::account_request::account_detail_request::SlotData as ProtoSlotData;
+        use proto::rpc::account_request::account_detail_request::StorageRequest as ProtoStorageRequest;
 
         let proto::rpc::account_request::AccountDetailRequest {
             code_commitment,
             asset_vault_commitment,
-            slot_data,
+            storage_request,
         } = value;
 
         let code_commitment =
@@ -198,13 +198,15 @@ impl TryFrom<proto::rpc::account_request::AccountDetailRequest> for AccountDetai
             .transpose()
             .context("asset_vault_commitment")?;
 
-        let storage_request = match slot_data {
+        let storage_request = match storage_request {
             None => AccountStorageRequest::None,
-            Some(ProtoSlotData::AllStorageMaps(true)) => AccountStorageRequest::AllStorageMaps,
-            Some(ProtoSlotData::AllStorageMaps(false)) => {
+            Some(ProtoStorageRequest::AllStorageMaps(true)) => {
+                AccountStorageRequest::AllStorageMaps
+            },
+            Some(ProtoStorageRequest::AllStorageMaps(false)) => {
                 return Err(ConversionError::message("all_storage_maps must be true when set"));
             },
-            Some(ProtoSlotData::StorageMaps(requests)) => {
+            Some(ProtoStorageRequest::StorageMaps(requests)) => {
                 let requests = try_convert(requests.storage_maps)
                     .collect::<Result<_, _>>()
                     .context("storage_maps")?;

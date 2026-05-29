@@ -298,7 +298,7 @@ message AccountRequest {
             repeated StorageMapDetailRequest storage_maps = 1;
         }
 
-        oneof slot_data {
+        oneof storage_request {
             // Request all entries for all storage map slots in the account.
             //
             // Each map response is still capped independently. If a map exceeds the entry

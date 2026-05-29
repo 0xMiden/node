@@ -836,7 +836,7 @@ fn build_account_request(
         details: Some(miden_node_proto::generated::rpc::account_request::AccountDetailRequest {
             code_commitment,
             asset_vault_commitment,
-            slot_data: None,
+            storage_request: None,
         }),
     }
 }

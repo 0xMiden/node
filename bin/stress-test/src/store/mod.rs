@@ -168,9 +168,9 @@ fn get_account_request(
     use proto::rpc::account_request::AccountDetailRequest;
     use proto::rpc::account_request::account_detail_request::storage_map_detail_request::SlotData;
     use proto::rpc::account_request::account_detail_request::{
-        SlotData as AccountSlotData,
         StorageMapDetailRequest,
         StorageMapDetailRequests,
+        StorageRequest,
     };
 
     proto::rpc::AccountRequest {
@@ -179,7 +179,7 @@ fn get_account_request(
         details: Some(AccountDetailRequest {
             code_commitment: None,
             asset_vault_commitment: Some(proto::primitives::Digest::from(Word::empty())),
-            slot_data: Some(AccountSlotData::StorageMaps(StorageMapDetailRequests {
+            storage_request: Some(StorageRequest::StorageMaps(StorageMapDetailRequests {
                 storage_maps: vec![StorageMapDetailRequest {
                     slot_name: storage_map_slot,
                     slot_data: Some(SlotData::AllEntries(true)),
