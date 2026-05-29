@@ -3,11 +3,10 @@ use std::sync::Arc;
 use anyhow::Context;
 use miden_node_block_producer::{RpcSync, Sequencer};
 use miden_node_proto::clients::{Builder, NtxBuilderClient, RpcClient, ValidatorClient};
-use miden_node_rpc::{NetworkTxAuth, Rpc, RpcMode};
+use miden_node_rpc::{Rpc, RpcMode};
 use miden_node_store::State;
 use miden_node_utils::tasks::Tasks;
 use tokio::net::TcpListener;
-use tonic::metadata::AsciiMetadataValue;
 use url::Url;
 
 use super::block_producer::BlockProducerOptions;
@@ -156,20 +155,6 @@ impl SyncOptions {
             .without_metadata_genesis()
             .with_otel_context_injection()
             .connect_lazy::<RpcClient>()
-    }
-}
-
-impl super::rpc::RpcOptions {
-    fn network_tx_auth(&self) -> anyhow::Result<Option<NetworkTxAuth>> {
-        self.network_tx_auth_header_value
-            .as_deref()
-            .map(|value| {
-                value
-                    .parse::<AsciiMetadataValue>()
-                    .map(NetworkTxAuth)
-                    .context("invalid rpc.network-tx-auth-header-value")
-            })
-            .transpose()
     }
 }
 
