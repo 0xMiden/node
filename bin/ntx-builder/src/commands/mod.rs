@@ -1,11 +1,13 @@
 use std::net::SocketAddr;
 use std::num::{NonZeroU16, NonZeroUsize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Context;
 use clap::Parser;
 use miden_node_utils::clap::duration_to_human_readable_string;
+use miden_protocol::block::SignedBlock;
+use miden_protocol::utils::serde::Deserializable;
 use tokio::net::TcpListener;
 use tonic::metadata::AsciiMetadataValue;
 use url::Url;
@@ -28,6 +30,7 @@ const DEFAULT_TX_EXPIRATION_DELTA: NonZeroU16 = NonZeroU16::new(30).unwrap();
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
+#[expect(clippy::large_enum_variant, reason = "CLI args are a once off")]
 pub enum NtxBuilderCommand {
     /// Starts the network transaction builder component.
     Start {
@@ -126,10 +129,37 @@ pub enum NtxBuilderCommand {
         #[arg(long = "enable-otel", default_value_t = false, env = ENV_ENABLE_OTEL, value_name = "BOOL")]
         enable_otel: bool,
     },
+
+    /// Bootstraps the ntx-builder database from a trusted genesis block.
+    ///
+    /// This must be run once before `start` so that the database always contains at least the
+    /// genesis block.
+    Bootstrap {
+        /// Directory for the ntx-builder's persistent database.
+        #[arg(long = "data-directory", env = ENV_DATA_DIRECTORY, value_name = "DIR")]
+        data_directory: PathBuf,
+
+        /// Path to the trusted, signed genesis block file.
+        #[arg(long, value_name = "FILE")]
+        genesis_block: PathBuf,
+    },
 }
 
 impl NtxBuilderCommand {
     pub async fn handle(self) -> anyhow::Result<()> {
+        match self {
+            Self::Start { .. } => self.start().await,
+            Self::Bootstrap { data_directory, genesis_block } => {
+                let database_filepath = data_directory.join("ntx-builder.sqlite3");
+                let genesis = read_genesis_block(&genesis_block)?;
+                miden_ntx_builder::bootstrap(database_filepath, &genesis)
+                    .await
+                    .context("failed to bootstrap ntx-builder database")
+            },
+        }
+    }
+
+    async fn start(self) -> anyhow::Result<()> {
         let Self::Start {
             listen,
             rpc_url,
@@ -143,7 +173,10 @@ impl NtxBuilderCommand {
             sqlite_connection_pool_size,
             data_directory,
             enable_otel: _,
-        } = self;
+        } = self
+        else {
+            unreachable!("start is only called for the Start variant")
+        };
 
         let listener = TcpListener::bind(listen)
             .await
@@ -174,13 +207,24 @@ impl NtxBuilderCommand {
     }
 
     pub fn is_open_telemetry_enabled(&self) -> bool {
-        let Self::Start { enable_otel, .. } = self;
-        *enable_otel
+        match self {
+            Self::Start { enable_otel, .. } => *enable_otel,
+            // Bootstrap is a one-shot command and does not set up a tracing pipeline.
+            Self::Bootstrap { .. } => false,
+        }
     }
+}
+
+/// Reads a genesis block from disk and returns the signed block.
+fn read_genesis_block(genesis_block_path: &Path) -> anyhow::Result<SignedBlock> {
+    let bytes = fs_err::read(genesis_block_path).context("failed to read genesis block")?;
+    SignedBlock::read_from_bytes(&bytes).context("failed to deserialize genesis block from file")
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use clap::Parser;
     use tonic::metadata::AsciiMetadataValue;
 
@@ -202,8 +246,30 @@ mod tests {
         ])
         .expect("command should parse");
 
-        let NtxBuilderCommand::Start { rpc_auth_header_value, .. } = command;
+        let NtxBuilderCommand::Start { rpc_auth_header_value, .. } = command else {
+            panic!("expected the start command");
+        };
 
         assert_eq!(rpc_auth_header_value, Some(AsciiMetadataValue::from_static("secret-token")));
+    }
+
+    #[test]
+    fn bootstrap_command_parses_data_directory_and_genesis_block() {
+        let command = NtxBuilderCommand::try_parse_from([
+            "miden-ntx-builder",
+            "bootstrap",
+            "--data-directory",
+            "/tmp/miden-ntx-builder",
+            "--genesis-block",
+            "/tmp/genesis.dat",
+        ])
+        .expect("command should parse");
+
+        let NtxBuilderCommand::Bootstrap { data_directory, genesis_block } = command else {
+            panic!("expected the bootstrap command");
+        };
+
+        assert_eq!(data_directory, PathBuf::from("/tmp/miden-ntx-builder"));
+        assert_eq!(genesis_block, PathBuf::from("/tmp/genesis.dat"));
     }
 }

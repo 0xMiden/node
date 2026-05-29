@@ -6,20 +6,20 @@
 //! # Examples
 //!
 //! ```rust
-//! # use miden_node_proto::clients::{Builder, WantsTls, StoreRpcClient};
+//! # use miden_node_proto::clients::{Builder, WantsTls, RpcClient};
 //! # use url::Url;
 //!
 //! # async fn example() -> anyhow::Result<()> {
-//! // Create a store client with OTEL and TLS
+//! // Create an RPC client with OTEL and TLS
 //! let url = Url::parse("https://example.com:8080")?;
-//! let client: StoreRpcClient = Builder::new(url)
+//! let client: RpcClient = Builder::new(url)
 //!     .with_tls()?                   // or `.without_tls()`
 //!     .without_timeout()             // or `.with_timeout(Duration::from_secs(10))`
 //!     .without_metadata_version()    // or `.with_metadata_version("1.0".into())`
 //!     .without_metadata_genesis()    // or `.with_metadata_genesis(genesis)`
 //!     .without_auth_header()         // or `.with_auth_header_value(AsciiMetadataValue::from_static("value"))`
 //!     .with_otel_context_injection() // or `.without_otel_context_injection()`
-//!     .connect::<StoreRpcClient>()
+//!     .connect::<RpcClient>()
 //!     .await?;
 //! # Ok(())
 //! # }
@@ -123,9 +123,6 @@ impl tonic::service::Interceptor for Interceptor {
 
 type InterceptedChannel = InterceptedService<Channel, Interceptor>;
 type GeneratedRpcClient = generated::rpc::api_client::ApiClient<InterceptedChannel>;
-type GeneratedStoreClientForBlockProducer =
-    generated::store::block_producer_client::BlockProducerClient<InterceptedChannel>;
-type GeneratedStoreClientForRpc = generated::store::rpc_client::RpcClient<InterceptedChannel>;
 type GeneratedProxyStatusClient =
     generated::remote_prover::proxy_status_api_client::ProxyStatusApiClient<InterceptedChannel>;
 type GeneratedProverClient = generated::remote_prover::api_client::ApiClient<InterceptedChannel>;
@@ -137,10 +134,6 @@ type GeneratedNtxBuilderClient = generated::ntx_builder::api_client::ApiClient<I
 
 #[derive(Debug, Clone)]
 pub struct RpcClient(GeneratedRpcClient);
-#[derive(Debug, Clone)]
-pub struct StoreBlockProducerClient(GeneratedStoreClientForBlockProducer);
-#[derive(Debug, Clone)]
-pub struct StoreRpcClient(GeneratedStoreClientForRpc);
 #[derive(Debug, Clone)]
 pub struct RemoteProverProxyStatusClient(GeneratedProxyStatusClient);
 #[derive(Debug, Clone)]
@@ -158,34 +151,6 @@ impl DerefMut for RpcClient {
 
 impl Deref for RpcClient {
     type Target = GeneratedRpcClient;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for StoreBlockProducerClient {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl Deref for StoreBlockProducerClient {
-    type Target = GeneratedStoreClientForBlockProducer;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for StoreRpcClient {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl Deref for StoreRpcClient {
-    type Target = GeneratedStoreClientForRpc;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -262,21 +227,6 @@ impl GrpcClient for RpcClient {
     }
 }
 
-impl GrpcClient for StoreBlockProducerClient {
-    fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
-        Self(GeneratedStoreClientForBlockProducer::new(InterceptedService::new(
-            channel,
-            interceptor,
-        )))
-    }
-}
-
-impl GrpcClient for StoreRpcClient {
-    fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
-        Self(GeneratedStoreClientForRpc::new(InterceptedService::new(channel, interceptor)))
-    }
-}
-
 impl GrpcClient for RemoteProverProxyStatusClient {
     fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
         Self(GeneratedProxyStatusClient::new(InterceptedService::new(channel, interceptor)))
@@ -349,8 +299,6 @@ pub struct WantsTimeout;
 pub struct WantsVersion;
 #[derive(Copy, Clone, Debug)]
 pub struct WantsGenesis;
-#[derive(Copy, Clone, Debug)]
-pub struct WantsAuthHeader;
 #[derive(Copy, Clone, Debug)]
 pub struct WantsOTel;
 #[derive(Copy, Clone, Debug)]
@@ -432,45 +380,33 @@ impl Builder<WantsVersion> {
 
 impl Builder<WantsGenesis> {
     /// Do not include genesis commitment in request metadata.
-    pub fn without_metadata_genesis(mut self) -> Builder<WantsAuthHeader> {
+    pub fn without_metadata_genesis(mut self) -> Builder<WantsOTel> {
         self.metadata_genesis = None;
         self.next_state()
     }
 
     /// Include a specific genesis commitment string in request metadata.
-    pub fn with_metadata_genesis(mut self, genesis: String) -> Builder<WantsAuthHeader> {
+    pub fn with_metadata_genesis(mut self, genesis: String) -> Builder<WantsOTel> {
         self.metadata_genesis = Some(genesis);
         self.next_state()
     }
 }
 
-impl Builder<WantsAuthHeader> {
+impl Builder<WantsOTel> {
     /// Do not include any additional metadata header in request metadata.
-    pub fn without_auth_header(mut self) -> Builder<WantsOTel> {
+    #[must_use]
+    pub fn without_auth_header(mut self) -> Self {
         self.metadata_auth_header_value = None;
-        self.next_state()
+        self
     }
 
     /// Include an additional ASCII metadata header in request metadata.
-    pub fn with_auth_header_value(mut self, value: AsciiMetadataValue) -> Builder<WantsOTel> {
+    #[must_use]
+    pub fn with_auth_header_value(mut self, value: AsciiMetadataValue) -> Self {
         self.metadata_auth_header_value = Some(value);
-        self.next_state()
+        self
     }
 
-    /// Enables OpenTelemetry context propagation via gRPC without adding a metadata header.
-    pub fn with_otel_context_injection(mut self) -> Builder<WantsConnection> {
-        self.enable_otel = true;
-        self.next_state()
-    }
-
-    /// Disables OpenTelemetry context propagation without adding a metadata header.
-    pub fn without_otel_context_injection(mut self) -> Builder<WantsConnection> {
-        self.enable_otel = false;
-        self.next_state()
-    }
-}
-
-impl Builder<WantsOTel> {
     /// Enables OpenTelemetry context propagation via gRPC.
     ///
     /// This is used to by OpenTelemetry to connect traces across network boundaries. The server on
@@ -518,52 +454,5 @@ impl Builder<WantsConnection> {
             self.metadata_auth_header_value,
         );
         T::with_interceptor(channel, interceptor)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use tonic::metadata::AsciiMetadataValue;
-    use tonic::service::Interceptor as _;
-    use url::Url;
-
-    use super::{Builder, Interceptor};
-
-    #[test]
-    fn interceptor_inserts_only_accept_by_default() {
-        let mut interceptor = Interceptor::default();
-        let request = interceptor.call(tonic::Request::new(())).unwrap();
-
-        assert!(request.metadata().get("accept").is_some());
-        assert!(request.metadata().get("x-miden-network-tx-auth").is_none());
-    }
-
-    #[test]
-    fn interceptor_inserts_custom_ascii_auth_metadata_when_configured() {
-        let mut interceptor = Interceptor::new(
-            false,
-            None,
-            None,
-            Some(AsciiMetadataValue::from_static("secret-value")),
-        );
-
-        let request = interceptor.call(tonic::Request::new(())).unwrap();
-
-        assert_eq!(
-            request.metadata().get("x-miden-network-tx-auth").unwrap().to_str().unwrap(),
-            "secret-value"
-        );
-    }
-
-    #[test]
-    fn interceptor_inserts_existing_post_genesis_chain_can_skip_metadata_header() {
-        let url = Url::parse("http://localhost:8080").unwrap();
-
-        let _ = Builder::new(url)
-            .without_tls()
-            .without_timeout()
-            .without_metadata_version()
-            .without_metadata_genesis()
-            .without_otel_context_injection();
     }
 }

@@ -199,6 +199,6 @@ impl RpcClient {
 pub enum RpcError {
     #[error("RPC gRPC call failed")]
     GrpcClientError(#[source] tonic::Status),
-    #[error("failed to deserialize subscription payload")]
+    #[error("failed to deserialize RPC payload")]
     Deserialize(#[source] miden_protocol::utils::serde::DeserializationError),
 }

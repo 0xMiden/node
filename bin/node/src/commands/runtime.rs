@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use miden_node_store::DatabaseOptions;
-use miden_node_utils::clap::{GrpcOptionsExternal, GrpcOptionsInternal, StorageOptions};
+use miden_node_utils::clap::{GrpcOptionsExternal, StorageOptions};
 use miden_node_utils::logging::OpenTelemetry;
 
 use super::ENV_DATA_DIRECTORY;
@@ -48,7 +48,6 @@ impl RuntimeOptions {
             data_directory: self.data_directory.clone(),
             rpc_listen: self.rpc.listen,
             database_options: store.sqlite.database_options(),
-            internal_grpc_options: self.rpc.grpc.internal_grpc_options(),
             external_grpc_options: self.rpc.external_grpc_options(),
             storage_options: store.storage.clone().into(),
         }
@@ -60,7 +59,6 @@ pub(super) struct RuntimeConfig {
     pub data_directory: PathBuf,
     pub rpc_listen: SocketAddr,
     pub database_options: DatabaseOptions,
-    pub internal_grpc_options: GrpcOptionsInternal,
     pub external_grpc_options: GrpcOptionsExternal,
     pub storage_options: StorageOptions,
 }

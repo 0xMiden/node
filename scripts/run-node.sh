@@ -21,7 +21,7 @@ VALIDATOR_DIR="/tmp/validator"
 NTX_BUILDER_DIR="/tmp/ntx-builder"
 ACCOUNTS_DIR="/tmp/accounts"
 
-# Primary store (block-producer mode): 2 APIs.
+# Sequencer store.
 STORE_RPC_PORT=50001
 STORE_BLOCK_PRODUCER_PORT=50003
 
@@ -107,7 +107,7 @@ fi
 
 echo "=== Starting components ==="
 
-echo "Starting store (block-producer mode)..."
+echo "Starting sequencer store..."
 OTEL_SERVICE_NAME=miden-store-primary $BINARY store start \
     --rpc.listen "0.0.0.0:$STORE_RPC_PORT" \
     --block-producer.listen "0.0.0.0:$STORE_BLOCK_PRODUCER_PORT" \
