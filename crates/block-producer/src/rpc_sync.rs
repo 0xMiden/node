@@ -39,14 +39,7 @@ impl RpcSync {
             tasks.spawn("block-sync", block_sync.run());
             tasks.spawn("proof-sync", proof_sync.run());
 
-            let task_result = tasks.join_next().await.expect("sync tasks should be running");
-            tasks.abort_all();
-            let task = task_result.name;
-            match task_result.result {
-                Ok(Ok(())) => anyhow::bail!("{task} exited unexpectedly"),
-                Ok(Err(err)) => Err(err).with_context(|| format!("{task} fatal error")),
-                Err(err) => Err(err).with_context(|| format!("{task} panicked")),
-            }
+            tasks.join_next_as_error().await
         })
     }
 }

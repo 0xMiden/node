@@ -113,19 +113,7 @@ impl NetworkTransactionBuilder {
 
         // Wait for either the event loop or the gRPC server to complete. Any completion is treated
         // as fatal.
-        if let Some(task_result) = tasks.join_next().await {
-            tasks.abort_all();
-            let task = task_result.name;
-            match task_result.result {
-                Ok(Ok(())) => anyhow::bail!("ntx-builder task {task} completed unexpectedly"),
-                Ok(Err(err)) => {
-                    Err(err).with_context(|| format!("ntx-builder task {task} failed"))?;
-                },
-                Err(err) => Err(err).context("ntx-builder task panicked")?,
-            }
-        }
-
-        Ok(())
+        tasks.join_next_as_error().await.context("ntx-builder task failed")
     }
 
     async fn run_event_loop(mut self) -> anyhow::Result<()> {

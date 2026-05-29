@@ -5,7 +5,7 @@ use miden_node_block_producer::{RpcSync, Sequencer};
 use miden_node_proto::clients::{Builder, NtxBuilderClient, RpcClient, ValidatorClient};
 use miden_node_rpc::{NetworkTxAuth, Rpc, RpcMode};
 use miden_node_store::State;
-use miden_node_utils::tasks::{TaskResult, Tasks};
+use miden_node_utils::tasks::Tasks;
 use tokio::net::TcpListener;
 use tonic::metadata::AsciiMetadataValue;
 use url::Url;
@@ -70,9 +70,7 @@ impl SequencerCommand {
         tasks.spawn("sequencer", sequencer.wait());
         tasks.spawn("RPC server", rpc.serve());
 
-        let result = tasks.join_next().await;
-        tasks.abort_all();
-        task_result(result.expect("node tasks should be running"))
+        tasks.join_next_as_error().await
     }
 }
 
@@ -146,9 +144,7 @@ impl FullNodeCommand {
         tasks.spawn("RPC sync", async move { sync_task.await? });
         tasks.spawn("RPC server", rpc.serve());
 
-        let result = tasks.join_next().await;
-        tasks.abort_all();
-        task_result(result.expect("node tasks should be running"))
+        tasks.join_next_as_error().await
     }
 }
 
@@ -194,13 +190,4 @@ async fn bind_rpc(listen: std::net::SocketAddr) -> anyhow::Result<TcpListener> {
     TcpListener::bind(listen)
         .await
         .with_context(|| format!("failed to bind RPC listener to {listen}"))
-}
-
-fn task_result(task_result: TaskResult<anyhow::Result<()>>) -> anyhow::Result<()> {
-    let task = task_result.name;
-    match task_result.result {
-        Ok(Ok(())) => Err(anyhow::anyhow!("{task} exited unexpectedly")),
-        Ok(Err(err)) => Err(err).with_context(|| format!("{task} fatal error")),
-        Err(err) => Err(err).with_context(|| format!("{task} panicked")),
-    }
 }

@@ -15,28 +15,9 @@ use miden_protocol::errors::{ProposedBatchError, ProposedBlockError, ProvenBatch
 use miden_protocol::note::Nullifier;
 use miden_remote_prover_client::RemoteProverClientError;
 use thiserror::Error;
-use tokio::task::JoinError;
 
 use crate::mempool::MempoolPoisonError;
 use crate::validator::ValidatorError;
-
-// Block-producer errors
-// =================================================================================================
-
-#[derive(Debug, Error)]
-pub enum BlockProducerError {
-    /// A block-producer task completed although it should have ran indefinitely.
-    #[error("task {task} completed unexpectedly")]
-    UnexpectedTaskCompletion { task: String },
-
-    /// A block-producer task panic'd.
-    #[error("task {task} panic'd")]
-    JoinError { task: String, source: JoinError },
-
-    /// A block-producer task reported a transport error.
-    #[error("task {task} failed")]
-    TaskError { task: String, source: anyhow::Error },
-}
 
 // Proof scheduler errors
 // =================================================================================================

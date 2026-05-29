@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::Result;
 use miden_node_store::state::{Finality, State};
 use miden_node_utils::formatting::{format_input_notes, format_output_notes};
-use miden_node_utils::tasks::{TaskResult, Tasks};
+use miden_node_utils::tasks::Tasks;
 use miden_protocol::batch::ProposedBatch;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::ProvenTransaction;
@@ -18,7 +18,7 @@ use crate::batch_builder::BatchBuilder;
 use crate::block_builder::BlockBuilder;
 use crate::block_prover::BlockProver;
 use crate::domain::transaction::AuthenticatedTransaction;
-use crate::errors::{BlockProducerError, MempoolSubmissionError};
+use crate::errors::MempoolSubmissionError;
 use crate::mempool::{BatchBudget, BlockBudget, Mempool, MempoolConfig, SharedMempool};
 use crate::validator::BlockProducerValidatorClient;
 use crate::{
@@ -183,18 +183,7 @@ impl SequencerHandle {
 
 async fn wait_for_tasks(mut tasks: Tasks<anyhow::Result<()>>) -> anyhow::Result<()> {
     // Wait for any task to end. They should run indefinitely, so this is an unexpected result.
-    let task_result = tasks.join_next().await.expect("join set is not empty");
-    tasks.abort_all();
-    map_task_result(task_result)
-}
-
-fn map_task_result(task_result: TaskResult<anyhow::Result<()>>) -> anyhow::Result<()> {
-    let task = task_result.name;
-    match task_result.result {
-        Ok(Ok(())) => Err(BlockProducerError::UnexpectedTaskCompletion { task })?,
-        Ok(Err(source)) => Err(BlockProducerError::TaskError { task, source })?,
-        Err(source) => Err(BlockProducerError::JoinError { task, source })?,
-    }
+    tasks.join_next_as_error().await
 }
 
 // BLOCK PRODUCER API

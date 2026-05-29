@@ -26,7 +26,7 @@ use crate::validator::ValidatorService;
 /// Task management structure that supervises named component tasks.
 #[derive(Default)]
 pub struct Tasks {
-    handles: SupervisedTasks<()>,
+    handles: SupervisedTasks<anyhow::Result<()>>,
 }
 
 impl Tasks {
@@ -173,7 +173,10 @@ impl Tasks {
     pub fn spawn_service<S: Service>(&mut self, svc: S) -> Receiver<ServiceStatus> {
         let (tx, rx) = watch::channel(svc.initial_status());
         let service_name = svc.name().to_string();
-        self.handles.spawn(service_name.clone(), async move { svc.run(tx).await });
+        self.handles.spawn(service_name.clone(), async move {
+            svc.run(tx).await;
+            Ok(())
+        });
         debug!(target: COMPONENT, service = %service_name, "spawned service");
         rx
     }
@@ -181,7 +184,10 @@ impl Tasks {
     /// Spawn the HTTP frontend server.
     pub fn spawn_http_server(&mut self, server_state: ServerState, config: &MonitorConfig) {
         let config = config.clone();
-        self.handles.spawn("frontend", async move { serve(server_state, config).await });
+        self.handles.spawn("frontend", async move {
+            serve(server_state, config).await;
+            Ok(())
+        });
     }
 
     /// Handles the failure of a task.
@@ -189,15 +195,9 @@ impl Tasks {
     /// Waits for any task to complete or fail and returns an error. Since components are
     /// expected to run indefinitely, any task completion is treated as fatal.
     pub async fn handle_failure(&mut self) -> Result<()> {
-        let component_result = self.handles.join_next().await.expect("join set is not empty");
+        let result = self.handles.join_next_as_error().await;
         self.handles.abort_all();
 
-        let component_name = component_result.name;
-        let err = match component_result.result {
-            Ok(()) => anyhow::anyhow!("component completed unexpectedly"),
-            Err(join_err) => anyhow::Error::from(join_err),
-        };
-
-        Err(err.context(format!("component {component_name} failed")))
+        result
     }
 }
