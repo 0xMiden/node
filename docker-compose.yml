@@ -111,8 +111,6 @@ services:
       - start
       - --listen=0.0.0.0:50101
       - --data-directory=/data/validator
-    ports:
-      - "50101:50101"
 
   ntx-builder:
     image: miden-ntx-builder
@@ -130,7 +128,6 @@ services:
       - --listen=0.0.0.0:50301
       - --rpc.url=http://sequencer:57291
       - --data-directory=/data/ntx-builder
-
 
 volumes:
   node-data:
