@@ -11,6 +11,9 @@ CREATE TABLE chain_state (
     block_header    BLOB    NOT NULL,
     -- Serialized PartialMmr corresponding to `block_header`.
     chain_mmr       BLOB    NOT NULL,
+    -- Serialized genesis block commitment (Word). Set once at bootstrap and retained across tip
+    -- updates; used for the `genesis` Accept-header param required by write RPCs.
+    genesis_commitment BLOB,
 
     CONSTRAINT chain_state_block_num_is_u32 CHECK (block_num BETWEEN 0 AND 0xFFFFFFFF)
 );
