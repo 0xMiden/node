@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use miden_node_store::genesis::GenesisBlock;
-use miden_node_store::{DataDirectory, Db, Store};
+use miden_node_store::{DataDirectory, Db, State};
 use miden_node_utils::fs::ensure_empty_directory;
 use miden_protocol::block::SignedBlock;
 use miden_protocol::utils::serde::Deserializable;
@@ -38,7 +38,7 @@ pub fn bootstrap_store(data_directory: &Path, genesis_block_path: &Path) -> anyh
     let genesis_block =
         GenesisBlock::try_from(signed_block).context("genesis block validation failed")?;
 
-    Store::bootstrap(genesis_block, data_directory)
+    State::bootstrap(genesis_block, data_directory)
 }
 
 // MIGRATE

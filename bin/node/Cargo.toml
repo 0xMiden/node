@@ -29,6 +29,7 @@ miden-node-store          = { workspace = true }
 miden-node-utils          = { workspace = true }
 miden-protocol            = { workspace = true }
 tokio                     = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
+tonic                     = { default-features = false, workspace = true }
 url                       = { workspace = true }
 
 [dev-dependencies]

@@ -2,7 +2,10 @@ use std::net::SocketAddr;
 use std::num::{NonZeroU32, NonZeroU64};
 use std::time::Duration;
 
+use anyhow::Context;
+use miden_node_rpc::NetworkTxAuth;
 use miden_node_utils::clap::{GrpcOptionsExternal, duration_to_human_readable_string};
+use tonic::metadata::AsciiMetadataValue;
 use url::Url;
 
 // RPC OPTIONS
@@ -39,6 +42,18 @@ impl RpcOptions {
             replenish_n_per_second_per_ip: self.rate_limit.replenish_per_second,
             max_concurrent_connections: self.rate_limit.max_concurrent_connections,
         }
+    }
+
+    pub(super) fn network_tx_auth(&self) -> anyhow::Result<Option<NetworkTxAuth>> {
+        self.network_tx_auth_header_value
+            .as_deref()
+            .map(|value| {
+                value
+                    .parse::<AsciiMetadataValue>()
+                    .map(NetworkTxAuth)
+                    .context("invalid rpc.network-tx-auth-header-value")
+            })
+            .transpose()
     }
 }
 

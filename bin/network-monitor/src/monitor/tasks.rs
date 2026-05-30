@@ -1,14 +1,13 @@
 //! Task management for the network monitor.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use anyhow::Result;
 use miden_node_proto::clients::RemoteProverClient;
+use miden_node_utils::tasks::Tasks as SupervisedTasks;
 use tokio::sync::watch::Receiver;
 use tokio::sync::{Mutex, watch};
-use tokio::task::{Id, JoinSet};
 use tracing::debug;
 
 use crate::COMPONENT;
@@ -24,20 +23,16 @@ use crate::service::{Service, build_tls_client};
 use crate::status::{RpcService, ServiceStatus};
 use crate::validator::ValidatorService;
 
-/// Task management structure that encapsulates `JoinSet` and component names.
+/// Task management structure that supervises named component tasks.
 #[derive(Default)]
 pub struct Tasks {
-    handles: JoinSet<()>,
-    names: HashMap<Id, String>,
+    handles: SupervisedTasks,
 }
 
 impl Tasks {
     /// Create a new Tasks instance.
     pub fn new() -> Self {
-        Self {
-            handles: JoinSet::new(),
-            names: HashMap::new(),
-        }
+        Self { handles: SupervisedTasks::new() }
     }
 
     /// Spawn the RPC status checker task.
@@ -178,33 +173,24 @@ impl Tasks {
     pub fn spawn_service<S: Service>(&mut self, svc: S) -> Receiver<ServiceStatus> {
         let (tx, rx) = watch::channel(svc.initial_status());
         let service_name = svc.name().to_string();
-        let id = self.handles.spawn(async move { svc.run(tx).await }).id();
+        self.handles
+            .spawn_infallible(service_name.clone(), async move { svc.run(tx).await });
         debug!(target: COMPONENT, service = %service_name, "spawned service");
-        self.names.insert(id, service_name);
         rx
     }
 
     /// Spawn the HTTP frontend server.
     pub fn spawn_http_server(&mut self, server_state: ServerState, config: &MonitorConfig) {
         let config = config.clone();
-        let id = self.handles.spawn(async move { serve(server_state, config).await }).id();
-        self.names.insert(id, "frontend".to_string());
+        self.handles
+            .spawn_infallible("frontend", async move { serve(server_state, config).await });
     }
 
     /// Handles the failure of a task.
     ///
     /// Waits for any task to complete or fail and returns an error. Since components are
     /// expected to run indefinitely, any task completion is treated as fatal.
-    pub async fn handle_failure(&mut self) -> Result<()> {
-        let component_result =
-            self.handles.join_next_with_id().await.expect("join set is not empty");
-
-        let (id, err) = match component_result {
-            Ok((id, ())) => (id, anyhow::anyhow!("component completed unexpectedly")),
-            Err(join_err) => (join_err.id(), anyhow::Error::from(join_err)),
-        };
-        let component_name = self.names.get(&id).map_or("unknown", String::as_str);
-
-        Err(err.context(format!("component {component_name} failed")))
+    pub async fn handle_failure(mut self) -> Result<()> {
+        self.handles.join_next_as_error().await
     }
 }

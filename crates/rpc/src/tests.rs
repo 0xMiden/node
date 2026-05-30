@@ -10,7 +10,6 @@ use miden_node_proto::clients::{Builder, GrpcClient, Interceptor, RpcClient, Val
 use miden_node_proto::generated::rpc::api_client::ApiClient as ProtoClient;
 use miden_node_proto::generated::rpc::api_server::Api;
 use miden_node_proto::generated::{self as proto};
-use miden_node_store::Store;
 use miden_node_store::genesis::config::GenesisConfig;
 use miden_node_store::state::State;
 use miden_node_utils::clap::{GrpcOptionsExternal, StorageOptions};
@@ -84,17 +83,14 @@ impl TestStore {
             .expect("genesis block should be created");
         let genesis_commitment = genesis_block.inner().header().commitment();
 
-        Store::bootstrap(genesis_block, path).expect("store should bootstrap");
+        State::bootstrap(genesis_block, path).expect("store should bootstrap");
 
         genesis_commitment
     }
 }
 
 async fn load_state(path: &std::path::Path) -> Arc<State> {
-    let (termination_ask, _termination_signal) = tokio::sync::mpsc::channel(1);
-    let (state, _) = State::load(path, StorageOptions::default(), termination_ask)
-        .await
-        .expect("state should load");
+    let state = State::load(path, StorageOptions::default()).await.expect("state should load");
     Arc::new(state)
 }
 
