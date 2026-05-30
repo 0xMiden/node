@@ -24,10 +24,10 @@ miden-validator bootstrap \
   --genesis-block-directory genesis-data \
   --accounts-directory accounts
 
-# Step 2: Store bootstrap — initialize the store database from the genesis block.
-miden-node store bootstrap \
+# Step 2: Node bootstrap — initialize the node database from the genesis block.
+miden-node bootstrap \
   --data-directory store-data \
-  --genesis-block genesis-data/genesis.dat
+  --file genesis-data/genesis.dat
 ```
 
 You can also configure the account and asset data in the genesis block by passing in a toml configuration file.
