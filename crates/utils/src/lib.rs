@@ -6,6 +6,7 @@ pub mod fee;
 pub mod fifo_cache;
 pub mod formatting;
 pub mod fs;
+pub mod genesis;
 pub mod grpc;
 pub mod limiter;
 pub mod logging;
