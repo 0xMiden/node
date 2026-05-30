@@ -23,7 +23,12 @@ CREATE TABLE accounts (
     -- AccountId serialized bytes (8 bytes).
     account_id      BLOB    NOT NULL PRIMARY KEY,
     -- Serialized Account state.
-    account_data    BLOB    NOT NULL
+    account_data    BLOB    NOT NULL,
+    -- TransactionId (32 bytes) of the latest transaction that updated this account in a committed
+    -- block. Always set: an account row is created from the block that created the account, whose
+    -- creation transaction is the first value here. Actors compare their own submitted tx id
+    -- against this to confirm landing without an RPC roundtrip.
+    last_tx_id      BLOB    NOT NULL
 ) WITHOUT ROWID;
 
 -- Network notes targeting network accounts, plus backoff metadata used by the actor execution
