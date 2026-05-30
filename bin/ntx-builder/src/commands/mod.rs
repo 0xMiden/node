@@ -1,12 +1,14 @@
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Context;
 use clap::Parser;
 use miden_node_utils::clap::duration_to_human_readable_string;
 use miden_node_utils::logging::OpenTelemetry;
+use miden_protocol::block::SignedBlock;
+use miden_protocol::utils::serde::Deserializable;
 use tokio::net::TcpListener;
 use tonic::metadata::AsciiMetadataValue;
 use url::Url;
@@ -26,6 +28,7 @@ const DEFAULT_MAX_CYCLES: u32 = 1 << 18;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
+#[expect(clippy::large_enum_variant, reason = "CLI args are a once off")]
 pub enum NtxBuilderCommand {
     /// Starts the network transaction builder component.
     Start {
@@ -105,7 +108,7 @@ pub enum NtxBuilderCommand {
         data_directory: PathBuf,
     },
 
-    /// Bootstraps the ntx-builder database with the genesis block fetched from the node RPC.
+    /// Bootstraps the ntx-builder database from a trusted genesis block.
     ///
     /// This must be run once before `start` so that the database always contains at least the
     /// genesis block.
@@ -114,17 +117,9 @@ pub enum NtxBuilderCommand {
         #[arg(long = "data-directory", env = ENV_DATA_DIRECTORY, value_name = "DIR")]
         data_directory: PathBuf,
 
-        /// The node RPC service gRPC url.
-        #[arg(long = "rpc.url", alias = "store.url", env = ENV_RPC_URL, value_name = "URL")]
-        rpc_url: Url,
-
-        /// Optional value for the fixed `x-miden-network-tx-auth` metadata header.
-        #[arg(
-            long = "rpc.auth-header-value",
-            env = ENV_RPC_AUTH_HEADER_VALUE,
-            value_name = "VALUE"
-        )]
-        rpc_auth_header_value: Option<AsciiMetadataValue>,
+        /// Path to the trusted, signed genesis block file.
+        #[arg(long, value_name = "FILE")]
+        genesis_block: PathBuf,
     },
 }
 
@@ -132,13 +127,10 @@ impl NtxBuilderCommand {
     pub async fn handle(self) -> anyhow::Result<()> {
         match self {
             Self::Start { .. } => self.start().await,
-            Self::Bootstrap {
-                data_directory,
-                rpc_url,
-                rpc_auth_header_value,
-            } => {
+            Self::Bootstrap { data_directory, genesis_block } => {
                 let database_filepath = data_directory.join("ntx-builder.sqlite3");
-                miden_ntx_builder::bootstrap(database_filepath, rpc_url, rpc_auth_header_value)
+                let genesis = read_genesis_block(&genesis_block)?;
+                miden_ntx_builder::bootstrap(database_filepath, &genesis)
                     .await
                     .context("failed to bootstrap ntx-builder database")
             },
@@ -198,6 +190,12 @@ impl NtxBuilderCommand {
     }
 }
 
+/// Reads a genesis block from disk and returns the signed block.
+fn read_genesis_block(genesis_block_path: &Path) -> anyhow::Result<SignedBlock> {
+    let bytes = fs_err::read(genesis_block_path).context("failed to read genesis block")?;
+    SignedBlock::read_from_bytes(&bytes).context("failed to deserialize genesis block from file")
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -231,22 +229,22 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_command_parses_data_directory_and_rpc_url() {
+    fn bootstrap_command_parses_data_directory_and_genesis_block() {
         let command = NtxBuilderCommand::try_parse_from([
             "miden-ntx-builder",
             "bootstrap",
             "--data-directory",
             "/tmp/miden-ntx-builder",
-            "--rpc.url",
-            "http://127.0.0.1:57291",
+            "--genesis-block",
+            "/tmp/genesis.dat",
         ])
         .expect("command should parse");
 
-        let NtxBuilderCommand::Bootstrap { data_directory, rpc_url, .. } = command else {
+        let NtxBuilderCommand::Bootstrap { data_directory, genesis_block } = command else {
             panic!("expected the bootstrap command");
         };
 
         assert_eq!(data_directory, PathBuf::from("/tmp/miden-ntx-builder"));
-        assert_eq!(rpc_url.as_str(), "http://127.0.0.1:57291/");
+        assert_eq!(genesis_block, PathBuf::from("/tmp/genesis.dat"));
     }
 }
