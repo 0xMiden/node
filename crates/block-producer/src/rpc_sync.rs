@@ -40,11 +40,6 @@ impl RpcSync {
 
         tasks.join_next_as_error().await
     }
-
-    /// Spawns the block and proof synchronization loops as a supervised Tokio task.
-    pub fn spawn(self) -> tokio::task::JoinHandle<anyhow::Result<()>> {
-        tokio::spawn(self.run())
-    }
 }
 
 // SYNC LOOP
