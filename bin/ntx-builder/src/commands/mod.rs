@@ -6,6 +6,7 @@ use std::time::Duration;
 use anyhow::Context;
 use clap::Parser;
 use miden_node_utils::clap::duration_to_human_readable_string;
+use miden_node_utils::fs::ensure_empty_directory;
 use miden_node_utils::logging::OpenTelemetry;
 use miden_protocol::block::SignedBlock;
 use miden_protocol::utils::serde::Deserializable;
@@ -143,6 +144,7 @@ impl NtxBuilderCommand {
         match self {
             Self::Start { .. } => self.start().await,
             Self::Bootstrap { data_directory, genesis_block } => {
+                ensure_empty_directory(&data_directory)?;
                 let database_filepath = data_directory.join("ntx-builder.sqlite3");
                 let genesis = read_genesis_block(&genesis_block)?;
                 miden_ntx_builder::bootstrap(database_filepath, &genesis)
