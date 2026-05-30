@@ -89,8 +89,6 @@ impl SharedChainState {
         Self(RwLock::new(ChainState::new(chain_tip_header, chain_mmr)))
     }
 
-    // Read by the actor execution path, which is unwired until PR 3.
-    #[expect(dead_code)]
     pub(crate) fn chain_tip_block_number(&self) -> BlockNumber {
         self.0.read().expect("chain state lock poisoned").chain_tip_header.block_num()
     }
@@ -108,8 +106,6 @@ impl SharedChainState {
             .update_chain_tip(tip, max_block_count);
     }
 
-    // Read by the actor execution path (candidate selection), which is unwired until PR 3.
-    #[expect(dead_code)]
     pub(crate) fn get_cloned(&self) -> ChainState {
         self.0.read().expect("chain state lock poisoned").clone()
     }
