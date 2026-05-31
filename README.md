@@ -2,48 +2,80 @@
 
 [![LICENSE](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/0xMiden/node/blob/main/LICENSE)
 [![CI](https://github.com/0xMiden/node/actions/workflows/ci.yml/badge.svg)](https://github.com/0xMiden/node/actions/workflows/ci.yml)
-[![RUST_VERSION](https://img.shields.io/badge/rustc-1.90+-lightgray.svg)](https://www.rust-lang.org/tools/install)
+[![RUST_VERSION](https://img.shields.io/badge/rustc-1.93+-lightgray.svg)](https://www.rust-lang.org/tools/install)
 [![crates.io](https://img.shields.io/crates/v/miden-node)](https://crates.io/crates/miden-node)
 
-Welcome to the Miden node implementation :) This software is used to operate a Miden ZK-rollup network by
-receiving transactions and sequencing them into blocks.
+This repository contains the core infrastructure components of a Miden network, including the node
+implementation. The workspace includes binaries and component crates for block production,
+validation, state storage, public RPC serving, network transaction building, proving services, and
+monitoring.
 
-Access to the network is provided via a gRPC interface which can be found [here](./proto/README.md).
-
-> [!NOTE]
-> The Miden node is still under heavy development and the project can be considered to be in an _alpha_ stage.
-> Many features are yet to be implemented and there are a number of limitations which we will lift in the near future.
->
-> At this point we are developing the Miden node for a centralized operator. As such, the work does not yet include
-> components such as P2P networking and consensus. These will be added in the future.
+The Miden node is still under active development and should be treated as alpha software. The current
+implementation is designed around a centralized operator; P2P networking and consensus are not part
+of this repository yet.
 
 ## Documentation
 
-Documentation, tutorials and guides for the current Miden version (aka testnet) can be found
-[here](https://0xMiden.github.io/miden-docs/), including an operator manual and gRPC reference guide. This is
-your one-stop-shop for all things Miden.
+Node documentation for current official testnet versions is available in the official Miden docs at
+<https://docs.miden.xyz/core-concepts/node/>. Network operators, full-node runners, and builders
+looking to run a local Miden network should prefer those docs.
 
-For node operators living on the development edge, we also host the latest unreleased documentation
-[here](https://0xMiden.github.io/miden-node/index.html).
+Documentation for the current repository version is published from this repository:
 
-The documentation in the `docs/external` folder is built using Docusaurus and is automatically absorbed into the main [miden-docs](https://github.com/0xMiden/miden-docs) repository for the main documentation website. Changes to the `next` branch trigger an automated deployment workflow. The docs folder requires npm packages to be installed before building.
+- Node and operator documentation: <https://0xMiden.github.io/node/index.html>
+- Developer documentation: <https://0xMiden.github.io/node/developer/index.html>
+
+The formal public RPC protobuf definition for this repository version is
+[`proto/proto/rpc.proto`](./proto/proto/rpc.proto).
+
+The rest of this README is intended for developers working in this repository.
+
+## Workspace Entry Points
+
+The workspace is organized around several binaries:
+
+- [`miden-node`](https://crates.io/crates/miden-node): the main node binary. It runs a sequencer or a
+  full node and embeds the store, RPC, and block-producer components.
+- [`miden-validator`](https://crates.io/crates/miden-validator): validates transactions and proposed
+  blocks, signs valid blocks, and creates the signed genesis block during bootstrap.
+- [`miden-ntx-builder`](https://crates.io/crates/miden-ntx-builder): follows committed blocks and
+  builds network transactions for network accounts.
+- [`miden-remote-prover`](https://crates.io/crates/miden-remote-prover): runs a gRPC proving service
+  for transaction, batch, or block proofs.
+- [`miden-network-monitor`](https://crates.io/crates/miden-network-monitor): monitors node,
+  validator, prover, faucet, explorer, and note-transport infrastructure.
+
+Each binary exposes its supported commands and configuration through its help output. Prefer the
+binary help output over copied command snippets, since configuration changes more often than the
+high-level architecture.
+
+## Core Components
+
+The component crates exist primarily to support the binaries and are not intended
+as libraries for other development.
+
+- `miden-node-store`: persistent chain state and database-backed store logic used by `miden-node`.
+- `miden-node-rpc`: public RPC server frontend of `miden-node`.
+- `miden-node-block-producer`: block production implementation used by `miden-node` in sequencer
+  mode.
+- `miden-node-proto`: generated protobuf bindings and conversion code.
+- `miden-node-proto-build`: protobuf file descriptors for generating gRPC clients.
+- `miden-node-db`, `miden-node-utils`, and related helper crates: shared infrastructure for the
+  workspace.
+
+## Development
+
+Use the developer documentation for architecture notes, component internals, testing workflows, and
+local development setup. Repository READMEs are landing pages for crates and binaries; operational
+instructions should live in the documentation rather than in copied command examples.
 
 ## Contributing
 
-Developer documentation and onboarding guide is available
-[here](https://0xMiden.github.io/miden-node/developer/index.html).
+Please read the [contributing guidelines](https://github.com/0xMiden/.github?tab=contributing-ov-file)
+before opening a pull request. PRs may be closed unless they are associated with an issue assigned by
+a maintainer.
 
-At minimum, please see our [contributing](https://github.com/0xMiden/.github?tab=contributing-ov-file) guidelines and our [makefile](Makefile) for example workflows
-e.g. run the testsuite using
-
-```sh
-make test
-```
-
-In particular, please note that we do _not_ accept [low-effort contributions](https://github.com/0xMiden/.github?tab=contributing-ov-file#contribution-quality) or AI generated code. For typos and documentation errors please open an issue instead. 
-
-> [!IMPORTANT]
-> PRs will be closed unless you have been assigned an issue by a maintainer.
+For typos and documentation errors, please open an issue rather than a drive-by pull request.
 
 ## License
 

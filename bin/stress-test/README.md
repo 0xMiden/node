@@ -1,94 +1,41 @@
-# Miden stress test
+# Miden node stress test
 
-This crate contains a binary for running Miden node stress tests.
+`miden-node-stress-test` is a development binary for generating local store data and running stress
+tests against Miden node store workflows. It is part of the Miden node repository but is not published
+as a crates.io package.
 
-## Seed Store
+## Role
 
-This command seeds a store with newly generated accounts. For each block, it first creates a faucet transaction that sends assets to multiple accounts by emitting notes, then adds transactions that consume these notes for each new account. As a result, the seeded store files are placed in the given data directory, including a dump file with all the newly created accounts ids.
+The binary can seed a local store with generated accounts and then run focused benchmarks against
+store operations such as state loading, account lookup, note sync, nullifier sync, transaction sync,
+and chain MMR sync.
 
-Once it's finished, it prints out several metrics.
+This tool is intended for development and performance investigation. Benchmark numbers are sensitive
+to hardware, database contents, feature flags, and the exact commit under test, so the reference
+results below should be treated as a point-in-time comparison rather than current guarantees.
 
-After building the binary, you can run the following command to generate one million accounts:
+## Operation
 
-`miden-node-stress-test seed-store --data-directory ./data --num-accounts 1000000`
+Use the binary help output for the current command and configuration surface. The help output is the
+source of truth for flags and environment variables.
 
-The store file will then be located at `./data/miden-store.sqlite3`.
+## Benchmark Results
 
-The seed data can be tuned for account-detail benchmarks:
+The following reference results were obtained using a store with 100k accounts, half of which are
+public.
 
-- `--public-accounts-percentage` controls how many generated accounts are public. The default is `0`.
-- `--storage-map-entries` adds a deterministic storage map with the given number of entries to every public account. The default is `0`.
-- `--vault-entries` adds the given number of distinct fungible assets to every public account's vault. The default is `1`, and the value must fit within the protocol note asset limit.
-- `--account-update-blocks` appends the given number of blocks after account initialization. These blocks randomly update existing accounts and rotate updates through the seeded storage-map entries. The default is `0`.
+### Seed Metrics
 
-For example, this creates public accounts with storage maps, multiple vault assets, and additional account-update history:
-
-```bash
-miden-node-stress-test seed-store \
-  --data-directory ./data \
-  --num-accounts 100000 \
-  --public-accounts-percentage 50 \
-  --storage-map-entries 128 \
-  --vault-entries 5 \
-  --account-update-blocks 100
-```
-
-## Benchmark Store
-
-This command allows to run stress tests against the Store component. These tests use the dump file with accounts ids created when seeding the store, so be sure to run the `seed-store` command beforehand.
-
-The endpoints that you can test are:
-- `load-state`
-- `get-account`
-- `sync-notes`
-- `sync-nullifiers`
-- `sync-transactions`
-- `sync-chain-mmr`
-
-Most benchmarks accept options to control the number of iterations and concurrency level. The `load-state` endpoint is different - it simply measures the one-time startup cost of loading the state from disk.
-
-The `get-account` benchmark uses the account id dump created by `seed-store`, selects public accounts, and requests account details from the store. Each request asks for vault details and all entries from a storage map slot. By default, it uses the slot created by `--storage-map-entries`: `miden::mock::stress_test::map`. You can request a different slot with `--storage-map-slot`.
-
-**Note on Concurrency**: For request benchmarks, the concurrency parameter controls how many requests are sent in parallel to the store. Since these benchmarks run against a local store (no network overhead), higher concurrency values can help identify bottlenecks in the store's internal processing. The latency measurements exclude network time and represent pure store processing time.
-
-Example usage:
-
-```bash
-miden-node-stress-test benchmark-store \
-  --data-directory ./data \
-  --iterations 10000 \
-  --concurrency 16 \
-  sync-notes
-```
-
-To benchmark public account detail loading, seed public accounts first and then run:
-
-```bash
-miden-node-stress-test benchmark-store \
-  --data-directory ./data \
-  --iterations 10000 \
-  --concurrency 16 \
-  get-account
-```
-
-### Results
-
-The following results were obtained using a store with 100k accounts, half of which are public.
-
-Using the store seed command:
-```bash
-# Using 100k accounts, half are public
-$ miden-node-stress-test seed-store --data-directory data --num-accounts 100000 --public-accounts-percentage 50
-
+```text
 Total time: 235.452 seconds
 Inserted 393 blocks with avg insertion time 212 ms
 Initial DB size: 120.1 KB
 Average DB growth rate: 325.3 KB per block
 ```
 
-#### Block metrics
+### Block Metrics
 
-> Note: Each block contains 256 transactions (16 batches * 16 transactions).
+Each block contains 256 transactions (16 batches * 16 transactions).
 
 | Block | Insert Time (ms) | Get Block Inputs Time (ms) | Get Batch Inputs Time (ms) | Block Size (KB) | DB Size (MB) |
 | ----- | ---------------- | -------------------------- | -------------------------- | --------------- | ------------ |
@@ -101,9 +48,9 @@ Average DB growth rate: 325.3 KB per block
 | 300   | 228              | 12                         | 1                          | 473.6           | 108.1        |
 | 350   | 232              | 13                         | 1                          | 473.6           | 124.4        |
 
-#### Database stats
+### Database Stats
 
-> Note: Database contains 100215 accounts and 100215 notes across all blocks.
+The database contained 100215 accounts and 100215 notes across all blocks.
 
 | Table                              | Size (MB) | KB/Entry |
 | ---------------------------------- | --------- | -------- |
@@ -119,7 +66,7 @@ Average DB growth rate: 325.3 KB per block
 | nullifiers                         | 4.6       | 0.0      |
 | transactions                       | 6.0       | 0.1      |
 
-#### Index stats
+### Index Stats
 
 | Index                        | Size (MB) |
 | ---------------------------- | --------- |
@@ -134,50 +81,44 @@ Average DB growth rate: 325.3 KB per block
 | idx_transactions_account_id  | 5.6       |
 | idx_transactions_block_num   | 4.2       |
 
+### Store Stress Tests
 
-Current results of the store stress-tests:
+Latency measurements represent pure store processing time without network overhead.
 
-**Performance Note**: The latency measurements below represent pure store processing time (no network overhead).
+#### load-state
 
-*The following results were obtained after seeding the store with the command used previously.*
-
-- load-state
-``` bash
-$ miden-node-stress-test benchmark-store --data-directory ./data load-state
-
+```text
 State loaded in 42.959271667s
 Database contains 99961 accounts and 99960 nullifiers
 ```
 
-**Performance Note**: The load-state benchmark shows that account tree loading (~21.3s) and nullifier tree loading (~21.5s) are the primary bottlenecks, while MMR loading and database connection are negligible (<3ms each).
+Account tree loading (~21.3s) and nullifier tree loading (~21.5s) were the primary bottlenecks;
+MMR loading and database connection were negligible (<3ms each).
 
-- sync-notes
-``` bash
-$ miden-node-stress-test benchmark-store --data-directory ./data --iterations 10000 --concurrency 16 sync-notes
+#### sync-notes
 
-Average request latency: 653.751µs
-P50 request latency: 606.417µs
+```text
+Average request latency: 653.751us
+P50 request latency: 606.417us
 P95 request latency: 1.044666ms
 P99 request latency: 1.528667ms
 P99.9 request latency: 5.247875ms
 ```
 
-- sync-nullifiers
-``` bash
-$ miden-node-stress-test benchmark-store --data-directory ./data --iterations 10000 --concurrency 16 sync-nullifiers --prefixes 10
+#### sync-nullifiers
 
-Average request latency: 519.239µs
-P50 request latency: 503.708µs
-P95 request latency: 747.333µs
-P99 request latency: 873.083µs
+```text
+Average request latency: 519.239us
+P50 request latency: 503.708us
+P95 request latency: 747.333us
+P99 request latency: 873.083us
 P99.9 request latency: 2.289709ms
 Average nullifiers per response: 21.0348
 ```
 
-- sync-transactions
-``` bash
-$ miden-node-stress-test benchmark-store --data-directory ./data --iterations 10000 --concurrency 16 sync-transactions --accounts 5 --block-range 100
+#### sync-transactions
 
+```text
 Average request latency: 1.61454ms
 P50 request latency: 1.439584ms
 P95 request latency: 3.195001ms
@@ -191,10 +132,9 @@ Pagination statistics:
   Average pages per run: 2.00
 ```
 
-- sync-chain-mmr
-``` bash
-$ miden-node-stress-test benchmark-store --data-directory ./data --iterations 10000 --concurrency 16 sync-chain-mmr --block-range 1000
+#### sync-chain-mmr
 
+```text
 Average request latency: 1.021ms
 P50 request latency: 0.981ms
 P95 request latency: 1.412ms
@@ -207,13 +147,12 @@ Pagination statistics:
   Average pages per run: 1.00
 ```
 
-- get-account
-``` bash
-$ miden-node-stress-test benchmark-store --data-directory ./data --iterations 10000 --concurrency 16 get-account
+#### get-account
 
-Average request latency: 937.969µs
-P50 request latency: 688.332µs
-P95 request latency: 932.549µs
+```text
+Average request latency: 937.969us
+P50 request latency: 688.332us
+P95 request latency: 932.549us
 P99 request latency: 1.119977ms
 P99.9 request latency: 42.992839ms
 GetAccount statistics:
@@ -225,4 +164,5 @@ GetAccount statistics:
 ```
 
 ## License
+
 This project is [MIT licensed](../../LICENSE).

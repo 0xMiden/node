@@ -1,7 +1,7 @@
 # Node components
 
 The node is split into five distinct components that communicate via gRPC. See the
-[Operator guide#architecture](https://0xmiden.github.io/miden-docs/miden-node/operator/architecture) chapter for an overview of each component.
+[Operator guide#architecture](https://0xmiden.github.io/miden-docs/node/operator/architecture) chapter for an overview of each component.
 
 The following sections will describe the inner architecture of each component.
 
