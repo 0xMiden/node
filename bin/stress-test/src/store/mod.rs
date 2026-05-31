@@ -677,10 +677,7 @@ fn transaction_record_to_proto(
 
 pub async fn load_state(data_directory: &Path) {
     let start = Instant::now();
-    let (termination_ask, _) = tokio::sync::mpsc::channel(1);
-    let _state = State::load(data_directory, StorageOptions::default(), termination_ask)
-        .await
-        .unwrap();
+    let _state = State::load(data_directory, StorageOptions::default()).await.unwrap();
     let elapsed = start.elapsed();
 
     // Get database path and run SQL commands to count records

@@ -10,34 +10,26 @@ use miden_node_store::{
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
+use miden_protocol::crypto::utils::DeserializationError;
 use miden_protocol::errors::{ProposedBatchError, ProposedBlockError, ProvenBatchError};
 use miden_protocol::note::Nullifier;
 use miden_remote_prover_client::RemoteProverClientError;
 use thiserror::Error;
-use tokio::task::JoinError;
 
 use crate::mempool::MempoolPoisonError;
 use crate::validator::ValidatorError;
 
-// Block-producer errors
+// Proof scheduler errors
 // =================================================================================================
 
 #[derive(Debug, Error)]
-pub enum BlockProducerError {
-    /// A block-producer task completed although it should have ran indefinitely.
-    #[error("task {task} completed unexpectedly")]
-    UnexpectedTaskCompletion { task: &'static str },
-
-    /// A block-producer task panic'd.
-    #[error("task {task} panic'd")]
-    JoinError { task: &'static str, source: JoinError },
-
-    /// A block-producer task reported a transport error.
-    #[error("task {task} failed")]
-    TaskError {
-        task: &'static str,
-        source: anyhow::Error,
-    },
+pub enum ProofSchedulerError {
+    #[error("no proving inputs found for block {0}")]
+    MissingProvingInputs(BlockNumber),
+    #[error("failed to deserialize proving inputs for block")]
+    DeserializationFailed(#[source] DeserializationError),
+    #[error("invalid remote prover endpoint: {0}")]
+    InvalidProverEndpoint(String),
 }
 
 // Add transaction and add user batch errors

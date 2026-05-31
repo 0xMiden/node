@@ -8,6 +8,7 @@ use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockHeader, BlockNumber, SignedBlock};
 use miden_protocol::crypto::merkle::mmr::PartialMmr;
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
+use miden_protocol::transaction::TransactionId;
 use miden_standards::note::AccountTargetNetworkNote;
 use tracing::{info, instrument};
 
@@ -180,6 +181,15 @@ impl Db {
             .query("accounts_with_pending_notes", move |conn| {
                 queries::accounts_with_pending_notes(conn, max_attempts)
             })
+            .await
+    }
+
+    /// Returns the latest transaction recorded against `account_id` in a committed block, if any.
+    /// An actor waiting on its submission compares this against its own transaction id to confirm
+    /// landing.
+    pub async fn account_last_tx(&self, account_id: AccountId) -> Result<Option<TransactionId>> {
+        self.inner
+            .query("account_last_tx", move |conn| queries::account_last_tx(conn, account_id))
             .await
     }
 

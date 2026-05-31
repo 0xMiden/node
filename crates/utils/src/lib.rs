@@ -12,6 +12,7 @@ pub mod logging;
 pub mod lru_cache;
 pub mod panic;
 pub mod spawn;
+pub mod tasks;
 pub mod tracing;
 
 pub trait ErrorReport: std::error::Error {

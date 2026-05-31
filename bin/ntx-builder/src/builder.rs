@@ -3,10 +3,10 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use futures::Stream;
+use miden_node_utils::tasks::Tasks;
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
-use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
 
 use crate::NtxBuilderConfig;
@@ -101,23 +101,19 @@ impl NetworkTransactionBuilder {
 
     /// Runs the network transaction builder event loop until a fatal error occurs.
     pub async fn run(self, listener: TcpListener) -> anyhow::Result<()> {
-        let mut join_set = JoinSet::new();
+        let mut tasks = Tasks::new();
 
         // Start the gRPC server.
         let server = NtxBuilderRpcServer::new(self.db.clone(), self.config.max_note_attempts);
-        join_set.spawn(async move {
+        tasks.spawn("grpc-server", async move {
             server.serve(listener).await.context("ntx-builder gRPC server failed")
         });
 
-        join_set.spawn(self.run_event_loop());
+        tasks.spawn("event-loop", self.run_event_loop());
 
         // Wait for either the event loop or the gRPC server to complete. Any completion is treated
         // as fatal.
-        if let Some(result) = join_set.join_next().await {
-            result.context("ntx-builder task panicked")??;
-        }
-
-        Ok(())
+        tasks.join_next_as_error().await.context("ntx-builder task failed")
     }
 
     async fn run_event_loop(mut self) -> anyhow::Result<()> {

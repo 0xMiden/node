@@ -65,8 +65,8 @@ impl Command {
         match self {
             Command::Bootstrap(bootstrap_command) => bootstrap_command.handle(),
             Command::Migrate(migrate_command) => migrate_command.handle().await,
-            Command::Sequencer(sequencer_command) => sequencer_command.handle(),
-            Command::Full(full_node_command) => full_node_command.handle(),
+            Command::Sequencer(sequencer_command) => sequencer_command.handle().await,
+            Command::Full(full_node_command) => full_node_command.handle().await,
         }
     }
 }

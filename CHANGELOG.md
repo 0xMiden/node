@@ -52,6 +52,8 @@
 - Allowed network transaction submission conditionally via the gRPC `SubmitProvenTx` and `SubmitProvenTxBatch` endpoints: the NTX builder can now send a key in the `x-miden-network-tx-auth` header that enables submitting network transactions ([#2131](https://github.com/0xMiden/node/issues/2131)).
 - [BREAKING] `GetAccount` can now return all storage map entries with a single request ([#2121](https://github.com/0xMiden/node/issues/2121)).
 - Added a `miden-ntx-builder bootstrap` command that initializes the ntx-builder database with the genesis block fetched from the node RPC. The `start` command now requires a bootstrapped database instead of fetching the genesis block from the committed-block subscription on first run ([#2149](https://github.com/0xMiden/node/pull/2149)).
+- Added `--tx-expiration-delta` (env `MIDEN_NODE_NTX_BUILDER_TX_EXPIRATION_DELTA`, default `30`) to the network transaction builder: submitted network transactions now expire on-chain after this many blocks, and the builder reuses the same delta as the local window before resubmitting a transaction that has not landed ([#2148](https://github.com/0xMiden/node/pull/2148)).
+- Added a `miden-ntx-builder bootstrap` command that initializes the ntx-builder database from a trusted genesis block file. The `start` command now requires a bootstrapped database instead of fetching the genesis block from the committed-block subscription on first run ([#2149](https://github.com/0xMiden/node/pull/2149)).
 
 ## v0.14.11 (TBD)
 

@@ -5,6 +5,7 @@ use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountId};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
+use miden_protocol::transaction::TransactionId;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 
 // SERIALIZATION (domain → DB)
@@ -30,6 +31,10 @@ pub fn note_id_to_bytes(note_id: &NoteId) -> Vec<u8> {
     note_id.to_bytes()
 }
 
+pub fn transaction_id_to_bytes(tx_id: &TransactionId) -> Vec<u8> {
+    tx_id.to_bytes()
+}
+
 pub fn block_num_to_i64(block_num: BlockNumber) -> i64 {
     i64::from(block_num.as_u32())
 }
@@ -48,6 +53,11 @@ pub fn account_from_bytes(bytes: &[u8]) -> Result<Account, DatabaseError> {
 
 pub fn account_id_from_bytes(bytes: &[u8]) -> Result<AccountId, DatabaseError> {
     AccountId::read_from_bytes(bytes).map_err(|e| DatabaseError::deserialization("account id", e))
+}
+
+pub fn transaction_id_from_bytes(bytes: &[u8]) -> Result<TransactionId, DatabaseError> {
+    TransactionId::read_from_bytes(bytes)
+        .map_err(|e| DatabaseError::deserialization("transaction id", e))
 }
 
 pub fn word_to_bytes(word: &Word) -> Vec<u8> {

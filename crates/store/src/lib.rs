@@ -1,20 +1,22 @@
 mod account_state_forest;
 mod accounts;
 mod blocks;
+mod data_directory;
 mod db;
 mod errors;
 pub mod genesis;
 mod proven_tip;
-mod server;
 pub mod state;
 
 #[cfg(feature = "rocksdb")]
 pub use accounts::PersistentAccountTree;
 pub use accounts::{AccountTreeWithHistory, HistoricalError, InMemoryAccountTree};
+pub use data_directory::DataDirectory;
 pub use db::models::conv::SqlTypeConvert;
 pub use db::models::queries::StorageMapValuesPage;
 pub use db::{
     AccountVaultValue,
+    DatabaseOptions,
     Db,
     NoteRecord,
     NoteSyncRecord,
@@ -34,9 +36,7 @@ pub use errors::{
     StateSyncError,
 };
 pub use genesis::GenesisState;
-pub use server::block_prover_client::BlockProver;
-pub use server::proof_scheduler::DEFAULT_MAX_CONCURRENT_PROOFS;
-pub use server::{DataDirectory, DatabaseOptions, Store, StoreMode};
+pub use state::State;
 
 /// Returns the store crate version.
 pub fn version() -> &'static str {
