@@ -115,6 +115,14 @@ services:
       - --listen=0.0.0.0:50101
       - --data-directory=/data/validator
 
+  remote-prover:
+    image: miden-remote-prover
+    pull_policy: if_not_present
+    command:
+      - miden-remote-prover
+      - --kind=transaction
+      - --port=50051
+
   ntx-builder:
     image: miden-ntx-builder
     pull_policy: if_not_present
@@ -125,11 +133,14 @@ services:
         condition: service_completed_successfully
       sequencer:
         condition: service_started
+      remote-prover:
+        condition: service_started
     command:
       - miden-ntx-builder
       - start
       - --listen=0.0.0.0:50301
       - --rpc.url=http://sequencer:57291
+      - --tx-prover.url=http://remote-prover:50051
       - --data-directory=/data/ntx-builder
 
 volumes:
