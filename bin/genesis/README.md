@@ -44,11 +44,13 @@ miden-validator bootstrap \
   --genesis-config-file ./genesis/genesis.toml \
   --validator.key.hex <validator_key>
 
-# 3. Bootstrap the store
-miden-node store bootstrap --data-directory ./data
+# 3. Bootstrap the node
+miden-node bootstrap \
+  --data-directory ./node-data \
+  --file ./data/genesis.dat
 
 # 4. Start the node
-miden-node bundled start --data-directory ./data ...
+miden-node sequencer --data-directory ./node-data ...
 ```
 
 ## TODO

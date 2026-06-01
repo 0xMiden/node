@@ -292,8 +292,23 @@ message AccountRequest {
         // separately, which is signaled in the response message with dedicated flag.
         optional primitives.Digest asset_vault_commitment = 2;
 
-        // Additional request per storage map.
-        repeated StorageMapDetailRequest storage_maps = 3;
+        // Wrapper required because protobuf `oneof` fields cannot be `repeated`.
+        message StorageMapDetailRequests {
+            // Additional request per storage map.
+            repeated StorageMapDetailRequest storage_maps = 1;
+        }
+
+        oneof storage_request {
+            // Request all entries for all storage map slots in the account.
+            //
+            // Each map response is still capped independently. If a map exceeds the entry
+            // threshold, the response will set `too_many_entries` for that map and clients
+            // should use `SyncAccountStorageMaps` to fetch it.
+            bool all_storage_maps = 3;
+
+            // Request details for explicitly selected storage map slots.
+            StorageMapDetailRequests storage_maps = 4;
+        }
     }
 
     // ID of the account for which we want to get data

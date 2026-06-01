@@ -8,6 +8,7 @@ mod store;
 
 use clap::Subcommand;
 pub use lifecycle::{BootstrapCommand, MigrateCommand};
+use miden_node_utils::logging::OpenTelemetry;
 pub use modes::{FullNodeCommand, SequencerCommand};
 
 const ENV_DATA_DIRECTORY: &str = "MIDEN_NODE_DATA_DIRECTORY";
@@ -51,19 +52,21 @@ pub enum Command {
 }
 
 impl Command {
-    pub(crate) fn open_telemetry(&self) -> miden_node_utils::logging::OpenTelemetry {
+    pub(crate) fn open_telemetry(&self) -> OpenTelemetry {
         match self {
-            Command::Sequencer(command) => command.runtime.open_telemetry(),
-            Command::Full(command) => command.runtime.open_telemetry(),
-            Command::Bootstrap(_) | Command::Migrate(_) => {
-                miden_node_utils::logging::OpenTelemetry::Disabled
-            },
+            Command::Sequencer(_) => OpenTelemetry::from_env()
+                .with_name("node")
+                .with_attribute("miden.node.role", "sequencer"),
+            Command::Full(_) => OpenTelemetry::from_env()
+                .with_name("node")
+                .with_attribute("miden.node.role", "full"),
+            Command::Bootstrap(_) | Command::Migrate(_) => OpenTelemetry::Disabled,
         }
     }
 
     pub(crate) async fn execute(self) -> anyhow::Result<()> {
         match self {
-            Command::Bootstrap(bootstrap_command) => bootstrap_command.handle(),
+            Command::Bootstrap(bootstrap_command) => bootstrap_command.handle().await,
             Command::Migrate(migrate_command) => migrate_command.handle().await,
             Command::Sequencer(sequencer_command) => sequencer_command.handle().await,
             Command::Full(full_node_command) => full_node_command.handle().await,

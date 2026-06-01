@@ -128,11 +128,7 @@ async fn get_account(
 
     let start = Instant::now();
     let request = AccountRequest::try_from(request).expect("request should be valid");
-    let response: proto::rpc::AccountResponse = state
-        .get_account(request.account_id, request.block_num, request.details)
-        .await
-        .unwrap()
-        .into();
+    let response: proto::rpc::AccountResponse = state.get_account(request).await.unwrap().into();
     let duration = start.elapsed();
 
     let details = response.details;
@@ -170,8 +166,12 @@ fn get_account_request(
     storage_map_slot: String,
 ) -> proto::rpc::AccountRequest {
     use proto::rpc::account_request::AccountDetailRequest;
-    use proto::rpc::account_request::account_detail_request::StorageMapDetailRequest;
     use proto::rpc::account_request::account_detail_request::storage_map_detail_request::SlotData;
+    use proto::rpc::account_request::account_detail_request::{
+        StorageMapDetailRequest,
+        StorageMapDetailRequests,
+        StorageRequest,
+    };
 
     proto::rpc::AccountRequest {
         account_id: Some(proto::account::AccountId { id: account_id.to_bytes() }),
@@ -179,10 +179,12 @@ fn get_account_request(
         details: Some(AccountDetailRequest {
             code_commitment: None,
             asset_vault_commitment: Some(proto::primitives::Digest::from(Word::empty())),
-            storage_maps: vec![StorageMapDetailRequest {
-                slot_name: storage_map_slot,
-                slot_data: Some(SlotData::AllEntries(true)),
-            }],
+            storage_request: Some(StorageRequest::StorageMaps(StorageMapDetailRequests {
+                storage_maps: vec![StorageMapDetailRequest {
+                    slot_name: storage_map_slot,
+                    slot_data: Some(SlotData::AllEntries(true)),
+                }],
+            })),
         }),
     }
 }

@@ -137,20 +137,13 @@ install-network-monitor: ## Installs network monitor binary
 
 # --- docker --------------------------------------------------------------------------------------
 
-.PHONY: compose-genesis
-compose-genesis: ## Wipes node volumes and creates a fresh genesis block
-	docker compose $(COMPOSE_FILES) down --volumes --remove-orphans
-	docker volume rm -f miden-node_node-data
-	docker compose $(COMPOSE_FILES) --profile genesis run --rm genesis-store
-	docker compose $(COMPOSE_FILES) --profile genesis rm -f
-
 .PHONY: compose-up
 compose-up: ## Starts all node components, telemetry, and monitor via docker compose
 	docker compose $(COMPOSE_FILES) up -d
 
 .PHONY: compose-down
 compose-down: ## Stops and removes all containers via docker compose
-	docker compose $(COMPOSE_FILES) down
+	docker compose $(COMPOSE_FILES) down --remove-orphans
 
 .PHONY: compose-logs
 compose-logs: ## Follows logs for all components via docker compose
