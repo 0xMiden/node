@@ -44,3 +44,74 @@ fn account_storage_map_details_from_forest_entries_limit_exceeded() {
     assert_eq!(details.slot_name, slot_name);
     assert_eq!(details.entries, StorageMapEntries::LimitExceeded);
 }
+
+#[test]
+fn account_detail_request_converts_all_storage_maps() {
+    use crate::generated::rpc::account_request::account_detail_request::StorageRequest;
+
+    let request = crate::generated::rpc::account_request::AccountDetailRequest {
+        code_commitment: None,
+        asset_vault_commitment: None,
+        storage_request: Some(StorageRequest::AllStorageMaps(true)),
+    };
+
+    let request = AccountDetailRequest::try_from(request).unwrap();
+
+    assert_eq!(request.storage_request, AccountStorageRequest::AllStorageMaps);
+}
+
+#[test]
+fn account_detail_request_rejects_false_all_storage_maps() {
+    use crate::generated::rpc::account_request::account_detail_request::StorageRequest;
+
+    let request = crate::generated::rpc::account_request::AccountDetailRequest {
+        code_commitment: None,
+        asset_vault_commitment: None,
+        storage_request: Some(StorageRequest::AllStorageMaps(false)),
+    };
+
+    let err = AccountDetailRequest::try_from(request).unwrap_err();
+
+    assert!(err.to_string().contains("all_storage_maps"));
+}
+
+#[test]
+fn account_detail_request_converts_explicit_storage_maps() {
+    use crate::generated::rpc::account_request::account_detail_request::{
+        StorageMapDetailRequest,
+        StorageMapDetailRequests,
+        StorageRequest,
+        storage_map_detail_request,
+    };
+
+    let request = crate::generated::rpc::account_request::AccountDetailRequest {
+        code_commitment: None,
+        asset_vault_commitment: None,
+        storage_request: Some(StorageRequest::StorageMaps(StorageMapDetailRequests {
+            storage_maps: vec![StorageMapDetailRequest {
+                slot_name: "miden::test::storage::slot".to_string(),
+                slot_data: Some(storage_map_detail_request::SlotData::AllEntries(true)),
+            }],
+        })),
+    };
+
+    let request = AccountDetailRequest::try_from(request).unwrap();
+
+    assert!(matches!(
+        request.storage_request,
+        AccountStorageRequest::Explicit(ref requests) if requests.len() == 1
+    ));
+}
+
+#[test]
+fn account_detail_request_allows_no_storage_slot_data() {
+    let request = crate::generated::rpc::account_request::AccountDetailRequest {
+        code_commitment: None,
+        asset_vault_commitment: None,
+        storage_request: None,
+    };
+
+    let request = AccountDetailRequest::try_from(request).unwrap();
+
+    assert_eq!(request.storage_request, AccountStorageRequest::None);
+}

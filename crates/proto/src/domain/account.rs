@@ -163,10 +163,18 @@ impl TryFrom<proto::rpc::AccountRequest> for AccountRequest {
 }
 
 /// Represents a request for account details alongside specific storage data.
+#[derive(Debug)]
 pub struct AccountDetailRequest {
     pub code_commitment: Option<Word>,
     pub asset_vault_commitment: Option<Word>,
-    pub storage_requests: Vec<StorageMapRequest>,
+    pub storage_request: AccountStorageRequest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccountStorageRequest {
+    None,
+    AllStorageMaps,
+    Explicit(Vec<StorageMapRequest>),
 }
 
 impl TryFrom<proto::rpc::account_request::AccountDetailRequest> for AccountDetailRequest {
@@ -175,10 +183,12 @@ impl TryFrom<proto::rpc::account_request::AccountDetailRequest> for AccountDetai
     fn try_from(
         value: proto::rpc::account_request::AccountDetailRequest,
     ) -> Result<Self, Self::Error> {
+        use proto::rpc::account_request::account_detail_request::StorageRequest as ProtoStorageRequest;
+
         let proto::rpc::account_request::AccountDetailRequest {
             code_commitment,
             asset_vault_commitment,
-            storage_maps,
+            storage_request,
         } = value;
 
         let code_commitment =
@@ -187,13 +197,27 @@ impl TryFrom<proto::rpc::account_request::AccountDetailRequest> for AccountDetai
             .map(TryFrom::try_from)
             .transpose()
             .context("asset_vault_commitment")?;
-        let storage_requests =
-            try_convert(storage_maps).collect::<Result<_, _>>().context("storage_maps")?;
+
+        let storage_request = match storage_request {
+            None => AccountStorageRequest::None,
+            Some(ProtoStorageRequest::AllStorageMaps(true)) => {
+                AccountStorageRequest::AllStorageMaps
+            },
+            Some(ProtoStorageRequest::AllStorageMaps(false)) => {
+                return Err(ConversionError::message("all_storage_maps must be true when set"));
+            },
+            Some(ProtoStorageRequest::StorageMaps(requests)) => {
+                let requests = try_convert(requests.storage_maps)
+                    .collect::<Result<_, _>>()
+                    .context("storage_maps")?;
+                AccountStorageRequest::Explicit(requests)
+            },
+        };
 
         Ok(AccountDetailRequest {
             code_commitment,
             asset_vault_commitment,
-            storage_requests,
+            storage_request,
         })
     }
 }
