@@ -51,6 +51,11 @@ pub async fn bootstrap(database_filepath: PathBuf, genesis: &SignedBlock) -> any
     db::Db::bootstrap(database_filepath, genesis).await
 }
 
+/// Applies pending migrations to the ntx-builder database at `database_filepath`.
+pub fn migrate(database_filepath: PathBuf) -> anyhow::Result<()> {
+    db::Db::migrate(database_filepath).context("failed to apply ntx-builder database migrations")
+}
+
 fn validate_genesis_block(block: &SignedBlock) -> anyhow::Result<()> {
     anyhow::ensure!(
         block.header().block_num() == BlockNumber::GENESIS,
@@ -362,7 +367,7 @@ impl NtxBuilderConfig {
     /// # Errors
     ///
     /// Returns an error if:
-    /// - The DB cannot be opened or migrated
+    /// - The DB cannot be opened or the schema verification fails
     /// - The DB has not been bootstrapped (no persisted chain state)
     /// - The RPC connection fails (after retries)
     pub async fn build(self) -> anyhow::Result<NetworkTransactionBuilder> {
@@ -388,8 +393,8 @@ impl NtxBuilderConfig {
             ),
         };
 
-        // Set up the database (bootstrap + connection pool).
-        let db = Db::setup_with_pool_size(
+        // Open the database after verifying the schema version and hash.
+        let db = Db::load_with_pool_size(
             self.database_filepath.clone(),
             self.sqlite_connection_pool_size,
         )

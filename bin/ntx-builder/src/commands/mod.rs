@@ -151,6 +151,15 @@ pub enum NtxBuilderCommand {
         #[arg(long, value_enum, value_name = "NETWORK")]
         network: Option<OfficialNetwork>,
     },
+
+    /// Applies pending ntx-builder database migrations.
+    ///
+    /// Cannot be run on an empty data directory; run `bootstrap` first.
+    Migrate {
+        /// Directory for the ntx-builder's persistent database.
+        #[arg(long = "data-directory", env = ENV_DATA_DIRECTORY, value_name = "DIR")]
+        data_directory: PathBuf,
+    },
 }
 
 impl NtxBuilderCommand {
@@ -169,6 +178,10 @@ impl NtxBuilderCommand {
                 miden_ntx_builder::bootstrap(database_filepath, &genesis)
                     .await
                     .context("failed to bootstrap ntx-builder database")
+            },
+            Self::Migrate { data_directory } => {
+                miden_ntx_builder::migrate(data_directory.join("ntx-builder.sqlite3"))
+                    .context("failed to apply ntx-builder database migrations")
             },
         }
     }
@@ -222,8 +235,8 @@ impl NtxBuilderCommand {
     pub fn open_telemetry(&self) -> OpenTelemetry {
         match self {
             Self::Start { .. } => OpenTelemetry::from_env().with_name("ntx-builder"),
-            // Bootstrap is a one-shot command and does not set up a tracing pipeline.
-            Self::Bootstrap { .. } => OpenTelemetry::Disabled,
+            // Bootstrap and migrate are one-shot commands and do not set up a tracing pipeline.
+            Self::Bootstrap { .. } | Self::Migrate { .. } => OpenTelemetry::Disabled,
         }
     }
 }
@@ -295,5 +308,22 @@ mod tests {
         assert_eq!(data_directory, PathBuf::from("/tmp/miden-ntx-builder"));
         assert_eq!(genesis_block_file, Some(PathBuf::from("/tmp/genesis.dat")));
         assert_eq!(network, None);
+    }
+
+    #[test]
+    fn migrate_command_parses_data_directory() {
+        let command = NtxBuilderCommand::try_parse_from([
+            "miden-ntx-builder",
+            "migrate",
+            "--data-directory",
+            "/tmp/miden-ntx-builder",
+        ])
+        .expect("command should parse");
+
+        let NtxBuilderCommand::Migrate { data_directory } = command else {
+            panic!("expected the migrate command");
+        };
+
+        assert_eq!(data_directory, PathBuf::from("/tmp/miden-ntx-builder"));
     }
 }

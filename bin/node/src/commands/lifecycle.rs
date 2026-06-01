@@ -83,8 +83,7 @@ impl MigrateCommand {
                 format!("failed to load data directory at {}", self.data_directory.display())
             })?;
 
-        Db::load(data_directory.database_path())
-            .await
+        Db::migrate(data_directory.database_path())
             .context("failed to apply store database migrations")?;
 
         Ok(())

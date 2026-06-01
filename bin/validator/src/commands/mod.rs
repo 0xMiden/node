@@ -4,6 +4,7 @@ mod start;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
+use anyhow::Context;
 use clap::Parser;
 use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::logging::OpenTelemetry;
@@ -57,6 +58,15 @@ pub enum ValidatorCommand {
         /// Configuration for the Validator key used to sign the genesis block.
         #[command(flatten)]
         validator_key: ValidatorKey,
+    },
+
+    /// Applies pending validator database migrations.
+    ///
+    /// Cannot be run on an empty data directory; run `bootstrap` first.
+    Migrate {
+        /// Directory in which to store the validator's data.
+        #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
+        data_directory: PathBuf,
     },
 
     /// Starts the validator component.
@@ -129,6 +139,11 @@ impl ValidatorCommand {
                 )
                 .await
             },
+            Self::Migrate { data_directory } => {
+                miden_validator::db::migrate(data_directory.join("validator.sqlite3"))
+                    .context("failed to apply validator database migrations")?;
+                Ok(())
+            },
             Self::Start {
                 listen,
                 grpc_options,
@@ -169,7 +184,7 @@ impl ValidatorCommand {
     pub fn open_telemetry(&self) -> OpenTelemetry {
         match self {
             Self::Start { .. } => OpenTelemetry::from_env().with_name("validator"),
-            Self::Bootstrap { .. } => OpenTelemetry::Disabled,
+            Self::Bootstrap { .. } | Self::Migrate { .. } => OpenTelemetry::Disabled,
         }
     }
 }
@@ -212,5 +227,27 @@ impl ValidatorKey {
             let signer = SigningKey::read_from_bytes(hex::decode(self.validator_key)?.as_ref())?;
             Ok(ValidatorSigner::new_local(signer))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migrate_command_parses_data_directory() {
+        let command = ValidatorCommand::try_parse_from([
+            "miden-validator",
+            "migrate",
+            "--data-directory",
+            "/tmp/miden-validator",
+        ])
+        .expect("command should parse");
+
+        let ValidatorCommand::Migrate { data_directory } = command else {
+            panic!("expected the migrate command");
+        };
+
+        assert_eq!(data_directory, PathBuf::from("/tmp/miden-validator"));
     }
 }

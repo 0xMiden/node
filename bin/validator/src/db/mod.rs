@@ -15,24 +15,56 @@ use miden_protocol::utils::serde::{Deserializable, Serializable};
 use tracing::instrument;
 
 use crate::COMPONENT;
-use crate::db::migrations::apply_migrations;
+use crate::db::migrations::{bootstrap_database, migrate_database, verify_latest_schema};
 use crate::db::models::{BlockHeaderRowInsert, ValidatedTransactionRowInsert};
 use crate::tx_validation::ValidatedTransaction;
 
-/// Open a connection to the DB and apply any pending migrations.
+/// Open a connection to the DB after verifying that it is at the latest schema version.
 #[instrument(target = COMPONENT, skip_all)]
 pub async fn load(database_filepath: PathBuf) -> Result<Db, DatabaseError> {
     load_with_pool_size(database_filepath, miden_node_db::default_connection_pool_size()).await
 }
 
-/// Open a connection to the DB with a specific pool size and apply any pending migrations.
+/// Open a connection to the DB with a specific pool size after verifying that it is at the latest
+/// schema version.
 #[instrument(target = COMPONENT, skip_all)]
 pub async fn load_with_pool_size(
     database_filepath: PathBuf,
     connection_pool_size: NonZeroUsize,
 ) -> Result<Db, DatabaseError> {
-    apply_migrations(&database_filepath)?;
+    verify_latest_schema(&database_filepath)?;
 
+    open_with_pool_size(database_filepath, connection_pool_size)
+}
+
+/// Creates a new database, applies all migrations, and opens a connection pool.
+#[instrument(target = COMPONENT, skip_all)]
+pub async fn setup(database_filepath: PathBuf) -> Result<Db, DatabaseError> {
+    setup_with_pool_size(database_filepath, miden_node_db::default_connection_pool_size()).await
+}
+
+/// Creates a new database with a specific pool size and applies all migrations.
+#[instrument(target = COMPONENT, skip_all)]
+pub async fn setup_with_pool_size(
+    database_filepath: PathBuf,
+    connection_pool_size: NonZeroUsize,
+) -> Result<Db, DatabaseError> {
+    bootstrap_database(&database_filepath)?;
+
+    open_with_pool_size(database_filepath, connection_pool_size)
+}
+
+/// Applies all pending migrations to an existing DB.
+#[instrument(target = COMPONENT, skip_all)]
+pub fn migrate(database_filepath: PathBuf) -> Result<(), DatabaseError> {
+    migrate_database(&database_filepath)?;
+    Ok(())
+}
+
+fn open_with_pool_size(
+    database_filepath: PathBuf,
+    connection_pool_size: NonZeroUsize,
+) -> Result<Db, DatabaseError> {
     let db = Db::new_with_pool_size(&database_filepath, connection_pool_size)?;
     tracing::info!(
         target: COMPONENT,
@@ -159,4 +191,29 @@ pub fn count_validated_transactions(conn: &mut SqliteConnection) -> Result<i64, 
 pub fn count_signed_blocks(conn: &mut SqliteConnection) -> Result<i64, DatabaseError> {
     let count = schema::block_headers::table.select(count_star()).first::<i64>(conn)?;
     Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migrate_rejects_missing_database() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
+        let db_path = temp_dir.path().join("validator.sqlite3");
+
+        let err = migrate(db_path.clone()).expect_err("missing database should fail");
+
+        assert!(matches!(err, DatabaseError::Migration(_)), "unexpected error: {err:?}");
+        assert!(!db_path.exists());
+    }
+
+    #[tokio::test]
+    async fn setup_creates_database_that_load_accepts() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
+        let db_path = temp_dir.path().join("validator.sqlite3");
+
+        setup(db_path.clone()).await.expect("setup should bootstrap the database");
+        load(db_path).await.expect("load should accept a bootstrapped database");
+    }
 }
