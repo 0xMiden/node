@@ -67,7 +67,7 @@ bootstrap_node_data_dir() {
     echo "Bootstrapping $label..."
     "$NODE_BINARY" bootstrap \
         --data-directory "$data_dir" \
-        --genesis-block "$VALIDATOR_DIR/genesis.dat"
+        --file "$VALIDATOR_DIR/genesis.dat"
 }
 
 bootstrap_ntx_builder() {
@@ -75,7 +75,7 @@ bootstrap_ntx_builder() {
 
     "$NTX_BUILDER_BINARY" bootstrap \
         --data-directory "$NTX_BUILDER_DIR" \
-        --genesis-block "$VALIDATOR_DIR/genesis.dat"
+        --file "$VALIDATOR_DIR/genesis.dat"
 }
 
 node_resource_attributes() {

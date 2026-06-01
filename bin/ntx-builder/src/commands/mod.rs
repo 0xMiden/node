@@ -4,12 +4,16 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Context;
-use clap::Parser;
+use clap::{ArgGroup, Parser};
 use miden_node_utils::clap::duration_to_human_readable_string;
 use miden_node_utils::fs::ensure_empty_directory;
+use miden_node_utils::genesis::{
+    OfficialNetwork,
+    fetch_signed_genesis_block,
+    read_signed_genesis_block,
+};
 use miden_node_utils::logging::OpenTelemetry;
 use miden_protocol::block::SignedBlock;
-use miden_protocol::utils::serde::Deserializable;
 use tokio::net::TcpListener;
 use tonic::metadata::AsciiMetadataValue;
 use url::Url;
@@ -128,14 +132,24 @@ pub enum NtxBuilderCommand {
     ///
     /// This must be run once before `start` so that the database always contains at least the
     /// genesis block.
+    #[command(group(
+        ArgGroup::new("genesis_block_source")
+            .required(true)
+            .multiple(false)
+            .args(["genesis_block_file", "network"])
+    ))]
     Bootstrap {
         /// Directory for the ntx-builder's persistent database.
         #[arg(long = "data-directory", env = ENV_DATA_DIRECTORY, value_name = "DIR")]
         data_directory: PathBuf,
 
-        /// Path to the trusted, signed genesis block file.
-        #[arg(long, value_name = "FILE")]
-        genesis_block: PathBuf,
+        /// Bootstrap from a trusted genesis block file.
+        #[arg(long = "file", value_name = "FILE")]
+        genesis_block_file: Option<PathBuf>,
+
+        /// Bootstrap for an official Miden network.
+        #[arg(long, value_enum, value_name = "NETWORK")]
+        network: Option<OfficialNetwork>,
     },
 }
 
@@ -143,10 +157,15 @@ impl NtxBuilderCommand {
     pub async fn handle(self) -> anyhow::Result<()> {
         match self {
             Self::Start { .. } => self.start().await,
-            Self::Bootstrap { data_directory, genesis_block } => {
+            Self::Bootstrap {
+                data_directory,
+                genesis_block_file,
+                network,
+            } => {
                 ensure_empty_directory(&data_directory)?;
                 let database_filepath = data_directory.join("ntx-builder.sqlite3");
-                let genesis = read_genesis_block(&genesis_block)?;
+                let genesis =
+                    read_bootstrap_genesis_block(genesis_block_file.as_deref(), network).await?;
                 miden_ntx_builder::bootstrap(database_filepath, &genesis)
                     .await
                     .context("failed to bootstrap ntx-builder database")
@@ -209,10 +228,15 @@ impl NtxBuilderCommand {
     }
 }
 
-/// Reads a genesis block from disk and returns the signed block.
-fn read_genesis_block(genesis_block_path: &Path) -> anyhow::Result<SignedBlock> {
-    let bytes = fs_err::read(genesis_block_path).context("failed to read genesis block")?;
-    SignedBlock::read_from_bytes(&bytes).context("failed to deserialize genesis block from file")
+async fn read_bootstrap_genesis_block(
+    genesis_block_file: Option<&Path>,
+    network: Option<OfficialNetwork>,
+) -> anyhow::Result<SignedBlock> {
+    match (genesis_block_file, network) {
+        (Some(path), None) => read_signed_genesis_block(path),
+        (None, Some(network)) => fetch_signed_genesis_block(network).await,
+        _ => unreachable!("clap requires exactly one genesis block source"),
+    }
 }
 
 #[cfg(test)]
@@ -254,16 +278,22 @@ mod tests {
             "bootstrap",
             "--data-directory",
             "/tmp/miden-ntx-builder",
-            "--genesis-block",
+            "--file",
             "/tmp/genesis.dat",
         ])
         .expect("command should parse");
 
-        let NtxBuilderCommand::Bootstrap { data_directory, genesis_block } = command else {
+        let NtxBuilderCommand::Bootstrap {
+            data_directory,
+            genesis_block_file,
+            network,
+        } = command
+        else {
             panic!("expected the bootstrap command");
         };
 
         assert_eq!(data_directory, PathBuf::from("/tmp/miden-ntx-builder"));
-        assert_eq!(genesis_block, PathBuf::from("/tmp/genesis.dat"));
+        assert_eq!(genesis_block_file, Some(PathBuf::from("/tmp/genesis.dat")));
+        assert_eq!(network, None);
     }
 }
