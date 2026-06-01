@@ -1,16 +1,17 @@
-use std::collections::BTreeSet;
 use std::time::Duration;
 
 use backon::{ExponentialBuilder, Retryable};
 use futures::Stream;
 use futures::stream::TryStreamExt;
 use miden_node_proto::clients::{Builder, RpcClient as InnerRpcClient};
+use miden_node_proto::domain::account::{AccountDetails, AccountResponse};
+use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::rpc::{BlockSubscriptionRequest, BlockSubscriptionResponse};
 use miden_node_proto::generated::{self as proto};
 use miden_node_utils::ErrorReport;
 use miden_protocol::Word;
-use miden_protocol::account::{AccountId, StorageMapKey, StorageMapWitness, StorageSlotName};
-use miden_protocol::asset::{AssetVaultKey, AssetWitness};
+use miden_protocol::account::{AccountCode, AccountId, PartialAccount, PartialStorage};
+use miden_protocol::asset::PartialVault;
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use miden_protocol::note::NoteScript;
 use miden_protocol::transaction::{AccountInputs, ProvenTransaction, TransactionInputs};
@@ -148,47 +149,118 @@ fn decode_block_subscription_response(
     Ok((block, committed_tip))
 }
 
-// ACTOR-PATH METHODS
+// FOREIGN ACCOUNT INPUTS
 // ================================================================================================
-//
-// The actor module still references these methods. PR 1 keeps the actor code in tree as dead
-// code (it is not spawned), so the methods exist as stubs to preserve compilation. PR 2 wires
-// them through the appropriate RPC gRPC service.
 
-#[expect(clippy::unused_async)]
 impl RpcClient {
+    /// Fetches the inputs of a foreign account referenced during transaction execution.
+    #[instrument(
+        target = COMPONENT,
+        name = "ntx.rpc.client.get_account_inputs",
+        skip_all,
+        err,
+    )]
     pub async fn get_account_inputs(
         &self,
-        _account_id: AccountId,
-        _block_num: BlockNumber,
+        account_id: AccountId,
+        block_num: BlockNumber,
     ) -> Result<AccountInputs, RpcError> {
-        unimplemented!("get_account_inputs is rewired in PR 2 of the ntx-builder refactor")
-    }
+        // Request account code, account header, and storage header in order to build a minimal
+        // partial account.
+        let proto_request = proto::rpc::AccountRequest {
+            account_id: Some(proto::account::AccountId { id: account_id.to_bytes() }),
+            block_num: Some(block_num.into()),
+            details: Some(proto::rpc::account_request::AccountDetailRequest {
+                code_commitment: Some(Word::default().into()),
+                asset_vault_commitment: None,
+                // No storage maps are requested for a minimal foreign account.
+                storage_request: None,
+            }),
+        };
 
-    pub async fn get_vault_asset_witnesses(
-        &self,
-        _account_id: AccountId,
-        _vault_keys: BTreeSet<AssetVaultKey>,
-        _block_num: Option<BlockNumber>,
-    ) -> Result<Vec<AssetWitness>, RpcError> {
-        unimplemented!("get_vault_asset_witnesses is rewired in PR 2 of the ntx-builder refactor")
-    }
+        let proto_response = self
+            .inner
+            .clone()
+            .get_account(proto_request)
+            .await
+            .map_err(RpcError::GrpcClientError)?
+            .into_inner();
 
-    pub async fn get_storage_map_witness(
-        &self,
-        _account_id: AccountId,
-        _slot_name: StorageSlotName,
-        _map_key: StorageMapKey,
-        _block_num: Option<BlockNumber>,
-    ) -> Result<StorageMapWitness, RpcError> {
-        unimplemented!("get_storage_map_witness is rewired in PR 2 of the ntx-builder refactor")
-    }
+        let account_response =
+            AccountResponse::try_from(proto_response).map_err(RpcError::Conversion)?;
 
+        let account_details = account_response.details.ok_or_else(|| {
+            RpcError::Conversion(ConversionError::missing_field::<proto::rpc::AccountResponse>(
+                "details",
+            ))
+        })?;
+        let partial_account =
+            build_minimal_foreign_account(&account_details).map_err(RpcError::Conversion)?;
+
+        Ok(AccountInputs::new(partial_account, account_response.witness))
+    }
+}
+
+/// Builds a minimal partial account from the provided account details.
+///
+/// The partial account is built without storage maps or an asset vault. This is intended to be used
+/// to retrieve foreign account data during transaction execution.
+fn build_minimal_foreign_account(
+    account_details: &AccountDetails,
+) -> Result<PartialAccount, ConversionError> {
+    // Derive account code.
+    let account_code_bytes = account_details.account_code.as_ref().ok_or_else(|| {
+        ConversionError::missing_field::<proto::rpc::account_response::AccountDetails>(
+            "account_code",
+        )
+    })?;
+    let account_code = AccountCode::read_from_bytes(account_code_bytes)?;
+
+    // Derive partial storage. Storage maps are not required for foreign accounts.
+    let partial_storage = PartialStorage::new(account_details.storage_details.header.clone(), [])?;
+
+    // Derive partial vault from vault root only.
+    let partial_vault = PartialVault::new(account_details.account_header.vault_root());
+
+    // Construct partial account.
+    let partial_account = PartialAccount::new(
+        account_details.account_header.id(),
+        account_details.account_header.nonce(),
+        account_code,
+        partial_storage,
+        partial_vault,
+        None,
+    )?;
+    Ok(partial_account)
+}
+
+// NOTE SCRIPT LOOKUP
+// ================================================================================================
+
+impl RpcClient {
+    /// Fetches a note script by its root from the RPC service.
+    #[instrument(
+        target = COMPONENT,
+        name = "ntx.rpc.client.get_note_script_by_root",
+        skip_all,
+        err,
+    )]
     pub async fn get_note_script_by_root(
         &self,
-        _script_root: Word,
+        root: Word,
     ) -> Result<Option<NoteScript>, RpcError> {
-        unimplemented!("get_note_script_by_root is rewired in PR 2 of the ntx-builder refactor")
+        let request = proto::note::NoteScriptRoot { root: Some(root.into()) };
+
+        let script = self
+            .inner
+            .clone()
+            .get_note_script_by_root(request)
+            .await
+            .map_err(RpcError::GrpcClientError)?
+            .into_inner()
+            .script;
+
+        script.map(NoteScript::try_from).transpose().map_err(RpcError::Conversion)
     }
 }
 
@@ -201,4 +273,6 @@ pub enum RpcError {
     GrpcClientError(#[source] tonic::Status),
     #[error("failed to deserialize RPC payload")]
     Deserialize(#[source] miden_protocol::utils::serde::DeserializationError),
+    #[error("failed to convert RPC payload")]
+    Conversion(#[source] ConversionError),
 }

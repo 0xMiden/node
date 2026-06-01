@@ -15,6 +15,7 @@ use miden_protocol::account::{
     PartialAccount,
     StorageMapKey,
     StorageMapWitness,
+    StorageSlotContent,
     StorageSlotName,
     StorageSlotType,
 };
@@ -627,26 +628,14 @@ impl DataStore for NtxDataStore {
         vault_keys: BTreeSet<AssetVaultKey>,
     ) -> impl FutureMaybeSend<Result<Vec<AssetWitness>, DataStoreError>> {
         async move {
-            let ref_block = self.reference_block.block_num();
+            if account_id != self.account.id() {
+                return Err(DataStoreError::other(format!(
+                    "vault asset witnesses requested for non-native account {account_id}"
+                )));
+            }
 
-            // Get vault asset witnesses from RPC, retrying on transient gRPC failures.
-            let witnesses = (|| {
-                let vault_keys = vault_keys.clone();
-                async move {
-                    self.rpc
-                        .get_vault_asset_witnesses(account_id, vault_keys, Some(ref_block))
-                        .await
-                }
-            })
-            .retry(self.rpc_backoff())
-            .when(is_transient_rpc_error)
-            .notify(|err, dur| {
-                log_transient_retry("rpc.get_vault_asset_witnesses", err, dur);
-            })
-            .await
-            .map_err(|err| {
-                DataStoreError::other_with_source("failed to get vault asset witnesses", err)
-            })?;
+            let vault = self.account.vault();
+            let witnesses = vault_keys.into_iter().map(|key| vault.open(key)).collect();
 
             Ok(witnesses)
         }
@@ -671,28 +660,24 @@ impl DataStore for NtxDataStore {
                 slot_name.clone()
             };
 
-            let ref_block = self.reference_block.block_num();
+            // As with vault witnesses, the storage map witness is generated locally by opening the
+            // account's storage-map SMT; the full account state is held in the local DB.
+            if account_id != self.account.id() {
+                return Err(DataStoreError::other(format!(
+                    "storage map witness requested for non-native account {account_id}"
+                )));
+            }
 
-            // Get storage map witness from RPC, retrying on transient gRPC failures.
-            let witness = (|| {
-                let slot_name = slot_name.clone();
-                async move {
-                    self.rpc
-                        .get_storage_map_witness(account_id, slot_name, map_key, Some(ref_block))
-                        .await
-                }
-            })
-            .retry(self.rpc_backoff())
-            .when(is_transient_rpc_error)
-            .notify(|err, dur| {
-                log_transient_retry("rpc.get_storage_map_witness", err, dur);
-            })
-            .await
-            .map_err(|err| {
-                DataStoreError::other_with_source("failed to get storage map witness", err)
+            let slot = self.account.storage().get(&slot_name).ok_or_else(|| {
+                DataStoreError::other(format!("storage slot {slot_name} not found in account"))
             })?;
+            let StorageSlotContent::Map(map) = slot.content() else {
+                return Err(DataStoreError::other(format!(
+                    "storage slot {slot_name} is not a map"
+                )));
+            };
 
-            Ok(witness)
+            Ok(map.open(&map_key))
         }
     }
 
