@@ -1,28 +1,25 @@
 # Miden node stress test
 
-`stress-test` is a development binary for generating local store data and running stress
-tests against Miden node store workflows. It is part of the Miden node repository but is not published
-as a crates.io package.
+`stress-test` is a development binary for generating local store data and running stress tests against Miden node store
+workflows. It is part of the Miden node repository but is not published as a crates.io package.
 
 ## Role
 
-The binary can seed a local store with generated accounts and then run focused benchmarks against
-store operations such as state loading, account lookup, note sync, nullifier sync, transaction sync,
-and chain MMR sync.
+The binary can seed a local store with generated accounts and then run focused benchmarks against store operations such
+as state loading, account lookup, note sync, nullifier sync, transaction sync, and chain MMR sync.
 
-This tool is intended for development and performance investigation. Benchmark numbers are sensitive
-to hardware, database contents, feature flags, and the exact commit under test, so the reference
-results below should be treated as a point-in-time comparison rather than current guarantees.
+This tool is intended for development and performance investigation. Benchmark numbers are sensitive to hardware,
+database contents, feature flags, and the exact commit under test, so the reference results below should be treated as a
+point-in-time comparison rather than current guarantees.
 
 ## Operation
 
-Use the binary help output for the current command and configuration surface. The help output is the
-source of truth for flags and environment variables.
+Use the binary help output for the current command and configuration surface. The help output is the source of truth for
+flags and environment variables.
 
 ## Benchmark Results
 
-The following reference results were obtained using a store with 100k accounts, half of which are
-public.
+The following reference results were obtained using a store with 100k accounts, half of which are public.
 
 ### Seed Metrics
 
@@ -35,7 +32,7 @@ Average DB growth rate: 325.3 KB per block
 
 ### Block Metrics
 
-Each block contains 256 transactions (16 batches * 16 transactions).
+Each block contains 256 transactions (16 batches \* 16 transactions).
 
 | Block | Insert Time (ms) | Get Block Inputs Time (ms) | Get Batch Inputs Time (ms) | Block Size (KB) | DB Size (MB) |
 | ----- | ---------------- | -------------------------- | -------------------------- | --------------- | ------------ |
@@ -92,8 +89,8 @@ State loaded in 42.959271667s
 Database contains 99961 accounts and 99960 nullifiers
 ```
 
-Account tree loading (~21.3s) and nullifier tree loading (~21.5s) were the primary bottlenecks;
-MMR loading and database connection were negligible (<3ms each).
+Account tree loading (~21.3s) and nullifier tree loading (~21.5s) were the primary bottlenecks; MMR loading and database
+connection were negligible (<3ms each).
 
 #### sync-notes
 
