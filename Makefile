@@ -15,6 +15,7 @@ PRETTIER_CONFIG = $(CONFIG_DIR)/prettier.json
 PRETTIER_VERSION ?= 3.8.3
 MARKDOWNLINT_CONFIG = $(CONFIG_DIR)/markdownlint-cli2.yaml
 MARKDOWNLINT_CLI2_VERSION ?= 0.22.1
+RUSTFMT_CONFIG = $(CONFIG_DIR)/rustfmt.toml
 TAPLO_CONFIG = $(CONFIG_DIR)/taplo.toml
 
 # -- linting --------------------------------------------------------------------------------------
@@ -34,14 +35,14 @@ fix: ## Runs Fix with configs
 
 .PHONY: format
 format: markdown-format ## Runs rustfmt, README formatting, and comment reflow
-	cargo xtask fmt-comments --write
-	cargo +nightly fmt --all
+	cargo xtask fmt-comments --write --rustfmt-config $(RUSTFMT_CONFIG)
+	cargo +nightly fmt --all -- --config-path $(RUSTFMT_CONFIG)
 
 
 .PHONY: format-check
 format-check: markdown-format-check ## Checks rustfmt, README formatting, and comment reflow
-	cargo xtask fmt-comments --check
-	cargo +nightly fmt --all --check
+	cargo xtask fmt-comments --check --rustfmt-config $(RUSTFMT_CONFIG)
+	cargo +nightly fmt --all --check -- --config-path $(RUSTFMT_CONFIG)
 
 
 .PHONY: markdown-format
