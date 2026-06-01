@@ -1,6 +1,6 @@
 //! Database query functions for the NTX builder.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use diesel::prelude::*;
 use miden_node_db::DatabaseError;
@@ -36,8 +36,8 @@ mod tests;
 /// - Marks any of our pending notes whose nullifiers appear in this block as `committed_at =
 ///   block_num`, preserving the row so the `GetNetworkNoteStatus` endpoint can report the full
 ///   lifecycle.
-/// - Upserts the singleton `chain_state` row with the new block header and the post-application
-///   chain MMR.
+/// - Updates the singleton `chain_state` row's tip with the new block header and the
+///   post-application chain MMR.
 ///
 /// Returns the set of network accounts that were touched by this block (account-state updates or
 /// notes targeting the account).
@@ -48,13 +48,21 @@ pub fn apply_committed_block(
 ) -> Result<Vec<AccountId>, DatabaseError> {
     let mut affected_accounts: HashSet<AccountId> = HashSet::new();
 
+    // The latest transaction in this block per account. Every committed account update originates
+    // from a transaction in the same block, so each upserted account has an entry here. Collecting
+    // into a map keeps the last transaction per account (block order is preserved).
+    let last_tx: HashMap<AccountId, _> = effects.account_transactions.iter().copied().collect();
+
     for (account_id, details) in &effects.network_account_updates {
         let Some(effect) = NetworkAccountEffect::from_protocol(details) else {
             continue;
         };
+        let last_tx_id = *last_tx
+            .get(account_id)
+            .expect("a committed account update must originate from a transaction in the block");
         match effect {
             NetworkAccountEffect::Created(account) => {
-                upsert_account(conn, *account_id, &account)?;
+                upsert_account(conn, *account_id, &account, last_tx_id)?;
             },
             NetworkAccountEffect::Updated(delta) => {
                 // If the account is not already tracked locally, skip it.
@@ -64,7 +72,7 @@ pub fn apply_committed_block(
                 current
                     .apply_delta(&delta)
                     .expect("network account delta should apply since the block was committed");
-                upsert_account(conn, *account_id, &current)?;
+                upsert_account(conn, *account_id, &current, last_tx_id)?;
             },
         }
         affected_accounts.insert(*account_id);
@@ -77,7 +85,7 @@ pub fn apply_committed_block(
 
     mark_notes_consumed(conn, &effects.nullifiers, effects.header.block_num())?;
 
-    upsert_chain_state(conn, effects.header.block_num(), &effects.header, chain_mmr)?;
+    update_chain_state_tip(conn, effects.header.block_num(), &effects.header, chain_mmr)?;
 
     Ok(affected_accounts.into_iter().collect())
 }

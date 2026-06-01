@@ -2,11 +2,9 @@ use std::net::SocketAddr;
 use std::num::{NonZeroU32, NonZeroU64};
 use std::time::Duration;
 
-use miden_node_utils::clap::{
-    GrpcOptionsExternal,
-    GrpcOptionsInternal,
-    duration_to_human_readable_string,
-};
+use anyhow::Context;
+use miden_node_utils::clap::{GrpcOptionsExternal, duration_to_human_readable_string};
+use tonic::metadata::AsciiMetadataValue;
 use url::Url;
 
 // RPC OPTIONS
@@ -28,7 +26,7 @@ pub struct RpcOptions {
     pub network_tx_auth_header_value: Option<String>,
 
     #[command(flatten)]
-    pub grpc: RpcGrpcOptions,
+    pub grpc: GrpcOptions,
 
     #[command(flatten)]
     pub rate_limit: RpcRateLimitOptions,
@@ -44,10 +42,21 @@ impl RpcOptions {
             max_concurrent_connections: self.rate_limit.max_concurrent_connections,
         }
     }
+
+    pub(super) fn network_tx_auth(&self) -> anyhow::Result<Option<AsciiMetadataValue>> {
+        self.network_tx_auth_header_value
+            .as_deref()
+            .map(|value| {
+                value
+                    .parse::<AsciiMetadataValue>()
+                    .context("invalid rpc.network-tx-auth-header-value")
+            })
+            .transpose()
+    }
 }
 
 #[derive(clap::Args, Clone, Debug)]
-pub struct RpcGrpcOptions {
+pub struct GrpcOptions {
     /// Maximum duration a gRPC request is allocated before being dropped by the server.
     #[arg(
         long = "rpc.grpc.timeout",
@@ -69,12 +78,6 @@ pub struct RpcGrpcOptions {
         help_heading = super::section::RPC_CONFIGURATION_HELP_HEADING
     )]
     pub max_connection_age: Duration,
-}
-
-impl RpcGrpcOptions {
-    pub(super) fn internal_grpc_options(&self) -> GrpcOptionsInternal {
-        GrpcOptionsInternal { request_timeout: self.timeout }
-    }
 }
 
 #[derive(clap::Args, Clone, Debug)]

@@ -9,7 +9,6 @@ use anyhow::Context;
 use diesel::{Connection, SqliteConnection};
 use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_node_proto::domain::account::AccountInfo;
-use miden_node_proto::generated as proto;
 use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountHeader, AccountId, AccountStorageHeader, StorageMapKey};
@@ -26,7 +25,7 @@ use miden_protocol::note::{
     Nullifier,
 };
 use miden_protocol::transaction::TransactionHeader;
-use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::utils::serde::Deserializable;
 use tracing::{info, instrument};
 
 use crate::COMPONENT;
@@ -64,6 +63,21 @@ pub(crate) mod models;
 pub(crate) mod schema;
 
 pub type Result<T, E = DatabaseError> = std::result::Result<T, E>;
+
+/// Database options used by the store state.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct DatabaseOptions {
+    /// Maximum number of SQLite connections in the connection pool.
+    pub connection_pool_size: NonZeroUsize,
+}
+
+impl Default for DatabaseOptions {
+    fn default() -> Self {
+        Self {
+            connection_pool_size: miden_node_db::default_connection_pool_size(),
+        }
+    }
+}
 
 /// The Store's database.
 ///
@@ -130,41 +144,6 @@ pub struct TransactionRecord {
     pub output_note_proofs: Vec<NoteSyncRecord>,
 }
 
-impl TransactionRecord {
-    /// Convert to proto `TransactionRecord`.
-    ///
-    /// The proto `TransactionHeader` contains all output notes as `NoteHeader`. Inclusion
-    /// proofs for committed output notes are placed separately in
-    /// `TransactionRecord.output_note_proofs`. Erased notes can be identified by comparing
-    /// note IDs in the proofs with the header's output notes.
-    pub fn into_proto(self) -> proto::rpc::TransactionRecord {
-        let output_note_proofs = self
-            .output_note_proofs
-            .into_iter()
-            .map(|n| proto::note::NoteInclusionInBlockProof {
-                note_id: Some((&n.note_id).into()),
-                block_num: n.block_num.as_u32(),
-                note_index_in_block: n.note_index.leaf_index_value().into(),
-                inclusion_path: Some(n.inclusion_path.into()),
-            })
-            .collect();
-
-        proto::rpc::TransactionRecord {
-            header: Some(proto::transaction::TransactionHeader {
-                transaction_id: Some(self.header.id().into()),
-                account_id: Some(self.header.account_id().into()),
-                initial_state_commitment: Some(self.header.initial_state_commitment().into()),
-                final_state_commitment: Some(self.header.final_state_commitment().into()),
-                input_notes: self.header.input_notes().iter().cloned().map(Into::into).collect(),
-                output_notes: self.header.output_notes().iter().copied().map(Into::into).collect(),
-                fee: Some(Asset::from(self.header.fee()).into()),
-            }),
-            block_num: self.block_num.as_u32(),
-            output_note_proofs,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct NoteRecord {
     pub block_num: BlockNumber,
@@ -174,23 +153,6 @@ pub struct NoteRecord {
     pub details: Option<NoteDetails>,
     pub attachments: NoteAttachments,
     pub inclusion_path: SparseMerklePath,
-}
-
-impl From<NoteRecord> for proto::note::CommittedNote {
-    fn from(note: NoteRecord) -> Self {
-        let inclusion_proof = Some(proto::note::NoteInclusionInBlockProof {
-            note_id: Some(note.note_id.into()),
-            block_num: note.block_num.as_u32(),
-            note_index_in_block: note.note_index.leaf_index_value().into(),
-            inclusion_path: Some(Into::into(note.inclusion_path)),
-        });
-        let note = Some(proto::note::Note {
-            metadata: Some(note.metadata.into()),
-            details: note.details.map(|details| details.to_bytes()),
-            attachments: note.attachments.to_bytes(),
-        });
-        Self { inclusion_proof, note }
-    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -206,19 +168,6 @@ pub struct NoteSyncRecord {
     pub note_id: NoteId,
     pub metadata: NoteMetadata,
     pub inclusion_path: SparseMerklePath,
-}
-
-impl From<NoteSyncRecord> for proto::note::NoteSyncRecord {
-    fn from(note: NoteSyncRecord) -> Self {
-        let metadata = Some(note.metadata.into());
-        let inclusion_proof = Some(proto::note::NoteInclusionInBlockProof {
-            note_id: Some((&note.note_id).into()),
-            block_num: note.block_num.as_u32(),
-            note_index_in_block: note.note_index.leaf_index_value().into(),
-            inclusion_path: Some(note.inclusion_path.into()),
-        });
-        Self { metadata, inclusion_proof }
-    }
 }
 
 impl From<NoteRecord> for NoteSyncRecord {

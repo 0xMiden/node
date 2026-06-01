@@ -55,7 +55,6 @@ miden-node-store                = { path = "crates/store", version = "0.15" }
 miden-node-test-macro           = { path = "crates/test-macro" }
 miden-node-utils                = { path = "crates/utils", version = "0.15" }
 miden-remote-prover-client      = { path = "crates/remote-prover-client", version = "0.15" }
-miden-validator                 = { path = "bin/validator", version = "0.15" }
 # Temporary workaround until <https://github.com/rust-rocksdb/rust-rocksdb/pull/1029>
 # is part of `rocksdb-rust` release
 miden-node-rocksdb-cxx-linkage-fix = { path = "crates/rocksdb-cxx-linkage-fix", version = "0.15" }
@@ -134,8 +133,7 @@ url                = { features = ["serde"], version = "2.5" }
 # libsqlite3-sys is kept to control the bundled SQLite linkage.
 # tonic-prost is used by generated gRPC code rather than handwritten Rust.
 #
-# TODO(mirko): remove rpc again once we've completed the refactoring.
-ignored = ["libsqlite3-sys", "miden-node-rpc", "tonic-prost"]
+ignored = ["libsqlite3-sys", "tonic-prost"]
 
 # Lints are set to warn for development, which are promoted to errors in CI.
 [workspace.lints.clippy]

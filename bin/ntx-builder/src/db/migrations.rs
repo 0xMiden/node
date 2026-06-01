@@ -30,7 +30,7 @@ mod tests {
     use super::*;
 
     const EXPECTED_SCHEMA_HASHES: [SchemaHash; 1] = [SchemaHash::from_hex(
-        "892f3fb597808a97bdb55762a6ebd4b7941c855d22eb5e0d9b210901720e1125",
+        "c631b773787903a3dd5ea4df5e7374119b3f02b35bacf14d11eacd8d8500e3d9",
     )];
 
     #[test]

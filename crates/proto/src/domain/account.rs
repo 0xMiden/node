@@ -1,6 +1,5 @@
 use std::fmt::{Debug, Display, Formatter};
 
-use miden_node_utils::formatting::format_opt;
 use miden_node_utils::limiter::{QueryParamLimiter, QueryParamStorageMapKeyTotalLimit};
 use miden_protocol::Word;
 use miden_protocol::account::{
@@ -164,10 +163,18 @@ impl TryFrom<proto::rpc::AccountRequest> for AccountRequest {
 }
 
 /// Represents a request for account details alongside specific storage data.
+#[derive(Debug)]
 pub struct AccountDetailRequest {
     pub code_commitment: Option<Word>,
     pub asset_vault_commitment: Option<Word>,
-    pub storage_requests: Vec<StorageMapRequest>,
+    pub storage_request: AccountStorageRequest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccountStorageRequest {
+    None,
+    AllStorageMaps,
+    Explicit(Vec<StorageMapRequest>),
 }
 
 impl TryFrom<proto::rpc::account_request::AccountDetailRequest> for AccountDetailRequest {
@@ -176,10 +183,12 @@ impl TryFrom<proto::rpc::account_request::AccountDetailRequest> for AccountDetai
     fn try_from(
         value: proto::rpc::account_request::AccountDetailRequest,
     ) -> Result<Self, Self::Error> {
+        use proto::rpc::account_request::account_detail_request::StorageRequest as ProtoStorageRequest;
+
         let proto::rpc::account_request::AccountDetailRequest {
             code_commitment,
             asset_vault_commitment,
-            storage_maps,
+            storage_request,
         } = value;
 
         let code_commitment =
@@ -188,13 +197,27 @@ impl TryFrom<proto::rpc::account_request::AccountDetailRequest> for AccountDetai
             .map(TryFrom::try_from)
             .transpose()
             .context("asset_vault_commitment")?;
-        let storage_requests =
-            try_convert(storage_maps).collect::<Result<_, _>>().context("storage_maps")?;
+
+        let storage_request = match storage_request {
+            None => AccountStorageRequest::None,
+            Some(ProtoStorageRequest::AllStorageMaps(true)) => {
+                AccountStorageRequest::AllStorageMaps
+            },
+            Some(ProtoStorageRequest::AllStorageMaps(false)) => {
+                return Err(ConversionError::message("all_storage_maps must be true when set"));
+            },
+            Some(ProtoStorageRequest::StorageMaps(requests)) => {
+                let requests = try_convert(requests.storage_maps)
+                    .collect::<Result<_, _>>()
+                    .context("storage_maps")?;
+                AccountStorageRequest::Explicit(requests)
+            },
+        };
 
         Ok(AccountDetailRequest {
             code_commitment,
             asset_vault_commitment,
-            storage_requests,
+            storage_request,
         })
     }
 }
@@ -886,60 +909,6 @@ impl From<AccountWitnessRecord> for proto::account::AccountWitness {
             witness_id: Some(from.witness.id().into()),
             commitment: Some(from.witness.state_commitment().into()),
             path: Some(from.witness.path().clone().into()),
-        }
-    }
-}
-
-// ACCOUNT STATE
-// ================================================================================================
-
-/// Information needed from the store to verify account in transaction.
-#[derive(Debug)]
-pub struct AccountState {
-    /// Account ID
-    pub account_id: AccountId,
-    /// The account commitment in the store corresponding to tx's account ID
-    pub account_commitment: Option<Word>,
-}
-
-impl Display for AccountState {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!(
-            "{{ account_id: {}, account_commitment: {} }}",
-            self.account_id,
-            format_opt(self.account_commitment.as_ref()),
-        ))
-    }
-}
-
-impl TryFrom<proto::store::transaction_inputs::AccountTransactionInputRecord> for AccountState {
-    type Error = ConversionError;
-
-    fn try_from(
-        from: proto::store::transaction_inputs::AccountTransactionInputRecord,
-    ) -> Result<Self, Self::Error> {
-        let decoder = from.decoder();
-        let account_id = decode!(decoder, from.account_id)?;
-
-        let account_commitment = decode!(decoder, from.account_commitment)?;
-
-        // If the commitment is equal to `Word::empty()`, it signifies that this is a new account
-        // which is not yet present in the Store.
-        let account_commitment = if account_commitment == Word::empty() {
-            None
-        } else {
-            Some(account_commitment)
-        };
-
-        Ok(Self { account_id, account_commitment })
-    }
-}
-
-impl From<AccountState> for proto::store::transaction_inputs::AccountTransactionInputRecord {
-    fn from(from: AccountState) -> Self {
-        Self {
-            account_id: Some(from.account_id.into()),
-            account_commitment: from.account_commitment.map(Into::into),
         }
     }
 }

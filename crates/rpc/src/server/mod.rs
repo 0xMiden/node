@@ -1,16 +1,13 @@
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 
 use accept::AcceptHeaderLayer;
 use anyhow::Context;
 use miden_node_block_producer::BlockProducerApi;
-use miden_node_proto::clients::{
-    NtxBuilderClient,
-    RpcClient as SourceRpcClient,
-    StoreRpcClient,
-    ValidatorClient,
-};
+use miden_node_proto::clients::{NtxBuilderClient, RpcClient as SourceRpcClient, ValidatorClient};
 use miden_node_proto::generated::rpc::api_server;
 use miden_node_proto_build::rpc_api_descriptor;
+use miden_node_store::state::State;
 use miden_node_utils::clap::GrpcOptionsExternal;
 use miden_node_utils::cors::cors_for_grpc_web_layer;
 use miden_node_utils::grpc;
@@ -29,26 +26,25 @@ use crate::COMPONENT;
 use crate::server::health::HealthCheckLayer;
 
 mod accept;
-mod api;
+pub(crate) mod api;
 mod health;
 
 /// The RPC server component.
 ///
 /// On startup, binds to the provided listener and starts serving the RPC API.
-/// It uses the supplied clients for store access and mode-specific submission handling.
-/// Requests will fail if the supplied clients cannot reach their components.
+/// It uses the supplied store state and mode-specific submission handling.
 pub struct Rpc {
     pub listener: TcpListener,
-    pub store: StoreRpcClient,
+    pub store: Arc<State>,
     pub mode: RpcMode,
     pub ntx_builder: Option<NtxBuilderClient>,
     pub grpc_options: GrpcOptionsExternal,
-    pub network_tx_auth: Option<NetworkTxAuth>,
+    pub network_tx_auth: Option<AsciiMetadataValue>,
 }
 
 #[derive(Clone, Debug)]
 /// Shared secret value expected in the fixed `x-miden-network-tx-auth` metadata header.
-pub struct NetworkTxAuth(pub AsciiMetadataValue);
+pub(crate) struct NetworkTxAuth(pub(crate) AsciiMetadataValue);
 
 #[derive(Clone, Debug)]
 pub enum RpcMode {
@@ -89,7 +85,7 @@ impl Rpc {
             self.mode.clone(),
             self.ntx_builder.clone(),
             NonZeroUsize::new(1_000_000).unwrap(),
-            self.network_tx_auth,
+            self.network_tx_auth.map(NetworkTxAuth),
         );
 
         let genesis = api

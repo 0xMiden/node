@@ -4,6 +4,7 @@ diesel::table! {
     accounts (account_id) {
         account_id -> Binary,
         account_data -> Binary,
+        last_tx_id -> Binary,
     }
 }
 
@@ -13,6 +14,7 @@ diesel::table! {
         block_num -> BigInt,
         block_header -> Binary,
         chain_mmr -> Binary,
+        genesis_commitment -> Binary,
     }
 }
 

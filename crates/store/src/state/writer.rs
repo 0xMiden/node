@@ -94,10 +94,7 @@ impl BlockWriter {
     }
 
     #[instrument(target = COMPONENT, skip_all, err)]
-    async fn process_request(
-        &mut self,
-        signed_block: SignedBlock,
-    ) -> Result<(), ApplyBlockError> {
+    async fn process_request(&mut self, signed_block: SignedBlock) -> Result<(), ApplyBlockError> {
         let header = signed_block.header();
         let body = signed_block.body();
 
@@ -111,8 +108,7 @@ impl BlockWriter {
         let cache_bytes = signed_block_bytes.clone();
         let store = Arc::clone(&self.block_store);
         let block_save_task = tokio::spawn(
-            async move { store.save_block(block_num, &signed_block_bytes).await }
-                .in_current_span(),
+            async move { store.save_block(block_num, &signed_block_bytes).await }.in_current_span(),
         );
 
         let (nullifier_tree_update, account_tree_update) =
@@ -327,4 +323,3 @@ impl BlockWriter {
         Ok(notes)
     }
 }
-

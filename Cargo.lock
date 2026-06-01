@@ -3332,7 +3332,6 @@ version = "0.15.0"
 dependencies = [
  "anyhow",
  "clap",
- "fs-err",
  "humantime",
  "miden-node-block-producer",
  "miden-node-proto",
@@ -3341,6 +3340,7 @@ dependencies = [
  "miden-node-utils",
  "miden-protocol",
  "tokio",
+ "tonic",
  "url",
 ]
 
@@ -3352,6 +3352,7 @@ dependencies = [
  "assert_matches",
  "futures",
  "itertools 0.14.0",
+ "miden-block-prover",
  "miden-node-proto",
  "miden-node-store",
  "miden-node-utils",
@@ -3359,7 +3360,6 @@ dependencies = [
  "miden-remote-prover-client",
  "miden-standards",
  "miden-tx-batch-prover",
- "miden-validator",
  "pretty_assertions",
  "rand 0.9.4",
  "rand_chacha",
@@ -3367,6 +3367,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-stream",
  "tonic",
  "tracing",
  "url",
@@ -3481,7 +3482,6 @@ dependencies = [
  "anyhow",
  "arc-swap",
  "assert_matches",
- "async-trait",
  "build-rs",
  "criterion",
  "deadpool",
@@ -3492,18 +3492,14 @@ dependencies = [
  "indexmap",
  "libsqlite3-sys",
  "miden-agglayer",
- "miden-block-prover",
  "miden-crypto",
  "miden-large-smt-backend-rocksdb",
  "miden-node-db",
  "miden-node-proto",
- "miden-node-proto-build",
  "miden-node-test-macro",
  "miden-node-utils",
  "miden-protocol",
- "miden-remote-prover-client",
  "miden-standards",
- "pin-project",
  "pretty_assertions",
  "rand 0.9.4",
  "rand_chacha",
@@ -3513,11 +3509,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "toml",
- "tonic",
- "tonic-reflection",
- "tower-http",
  "tracing",
- "url",
 ]
 
 [[package]]
@@ -3527,7 +3519,6 @@ dependencies = [
  "clap",
  "fs-err",
  "futures",
- "miden-node-block-producer",
  "miden-node-proto",
  "miden-node-store",
  "miden-node-utils",
@@ -3536,8 +3527,6 @@ dependencies = [
  "rand 0.9.4",
  "rayon",
  "tokio",
- "tonic",
- "url",
 ]
 
 [[package]]
@@ -3568,6 +3557,7 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "rand 0.9.4",
+ "reqwest",
  "thiserror 2.0.18",
  "tokio",
  "tonic",

@@ -38,17 +38,13 @@ Without the environment variables above, `librocksdb-sys` compiles RocksDB from 
 
 ## API overview
 
-The full gRPC API can be found [here](../../proto/proto/store.proto).
+Store state access is in-process and is not exposed as a store gRPC API.
 
 <!--toc:start-->
-- [ApplyBlock](#applyblock)
 - [GetAccount](#getaccount)
 - [GetBlockByNumber](#getblockbynumber)
 - [GetBlockHeaderByNumber](#getblockheaderbynumber)
-- [GetBlockInputs](#getblockinputs)
-- [GetNoteAuthenticationInfo](#getnoteauthenticationinfo)
 - [GetNotesById](#getnotesbyid)
-- [GetTransactionInputs](#gettransactioninputs)
 - [GetNoteScriptByRoot](#getnotescriptbyroot)
 - [SyncNullifiers](#syncnullifiers)
 - [SyncAccountVault](#syncaccountvault)
@@ -58,19 +54,13 @@ The full gRPC API can be found [here](../../proto/proto/store.proto).
 - [SyncTransactions](#synctransactions)
 <!--toc:end-->
 
----
-
-### ApplyBlock
-
-Applies changes of a new block to the DB and in-memory data structures. Raw block data is also stored as a flat file.
-
----
-
 ### GetAccount
 
 Returns an account witness (Merkle proof of inclusion in the account tree) and optionally account details.
 
 The witness proves the account's state commitment in the account tree. If details are requested, the response also includes the account's header, code, vault assets, and storage data. Account details are only available for public accounts.
+
+Storage map details can be requested either for explicitly selected maps or for all storage map slots. Full-map responses are bounded by the response payload budget; maps that do not fit are returned with `too_many_entries` so clients can follow up with `SyncAccountStorageMaps`.
 
 If `block_num` is provided, returns the state at that historical block; otherwise, returns the latest state.
 
@@ -87,22 +77,6 @@ Returns raw block data for the specified block number.
 Retrieves block header by given block number. Optionally, it also returns the MMR path and current chain length to
 authenticate the block's inclusion.
 
----
-
-### GetBlockInputs
-
-Used by the `block-producer` to query state required to prove the next block.
-
----
-
-### GetNoteAuthenticationInfo
-
-Returns a list of Note inclusion proofs for the specified Note IDs.
-
-This is used by the `block-producer` as part of the batch proving process.
-
----
-
 ### GetNotesById
 
 Returns a list of notes matching the provided note IDs.
@@ -118,14 +92,6 @@ When note retrieval fails, detailed error information is provided through gRPC s
 | `NOTE_NOT_FOUND`          | 2     | `NOT_FOUND`        | One or more note IDs don't exist     |
 | `TOO_MANY_NOTE_IDS`       | 3     | `INVALID_ARGUMENT` | Too many note IDs in request          |
 | `NOTE_NOT_PUBLIC`         | 4     | `PERMISSION_DENIED`| Note details not publicly accessible  |
-
----
-
-### GetTransactionInputs
-
-Used by the `block-producer` to query state required to verify a submitted transaction.
-
----
 
 ### GetNoteScriptByRoot
 

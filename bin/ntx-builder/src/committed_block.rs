@@ -2,7 +2,7 @@ use miden_protocol::account::AccountId;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::{BlockHeader, SignedBlock};
 use miden_protocol::note::Nullifier;
-use miden_protocol::transaction::OutputNote;
+use miden_protocol::transaction::{OutputNote, TransactionId};
 use miden_standards::note::AccountTargetNetworkNote;
 
 /// Network-relevant state extracted from a committed [`SignedBlock`].
@@ -15,6 +15,10 @@ pub struct CommittedBlockEffects {
     pub network_notes: Vec<AccountTargetNetworkNote>,
     pub nullifiers: Vec<Nullifier>,
     pub network_account_updates: Vec<(AccountId, AccountUpdateDetails)>,
+    /// Transaction id paired with the account it updated, for every transaction in the block.
+    /// `apply_committed_block` uses this to record the latest landed transaction per network
+    /// account so actors can confirm their own submitted transaction landed.
+    pub account_transactions: Vec<(AccountId, TransactionId)>,
 }
 
 impl CommittedBlockEffects {
@@ -56,11 +60,19 @@ impl CommittedBlockEffects {
             })
             .collect();
 
+        let account_transactions = body
+            .transactions()
+            .as_slice()
+            .iter()
+            .map(|tx| (tx.account_id(), tx.id()))
+            .collect();
+
         Self {
             header,
             network_notes,
             nullifiers,
             network_account_updates,
+            account_transactions,
         }
     }
 }

@@ -1,25 +1,18 @@
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::num::{NonZeroU32, NonZeroU64};
+use std::net::{IpAddr, Ipv4Addr};
+use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::sync::Arc;
 use std::time::Duration;
 
 use http::header::{ACCEPT, CONTENT_TYPE};
 use http::{HeaderMap, HeaderValue};
-use miden_node_block_producer::store::StoreClient as BlockProducerStoreClient;
 use miden_node_block_producer::{BlockProducerApi, BlockProducerApiConfig};
-use miden_node_proto::clients::{
-    Builder,
-    GrpcClient,
-    Interceptor,
-    RpcClient,
-    StoreRpcClient,
-    ValidatorClient,
-};
+use miden_node_proto::clients::{Builder, GrpcClient, Interceptor, RpcClient, ValidatorClient};
 use miden_node_proto::generated::rpc::api_client::ApiClient as ProtoClient;
+use miden_node_proto::generated::rpc::api_server::Api;
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::genesis::config::GenesisConfig;
-use miden_node_store::{DEFAULT_MAX_CONCURRENT_PROOFS, Store, StoreMode};
-use miden_node_utils::clap::{GrpcOptionsExternal, GrpcOptionsInternal, StorageOptions};
+use miden_node_store::state::State;
+use miden_node_utils::clap::{GrpcOptionsExternal, StorageOptions};
 use miden_node_utils::fee::test_fee;
 use miden_node_utils::limiter::{
     QueryParamAccountIdLimit,
@@ -28,7 +21,6 @@ use miden_node_utils::limiter::{
     QueryParamNoteTagLimit,
     QueryParamNullifierPrefixLimit,
 };
-use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
@@ -39,39 +31,26 @@ use miden_protocol::account::{
     AccountIdVersion,
     AccountType,
 };
-use miden_protocol::batch::{BatchAccountUpdate, BatchId, ProposedBatch, ProvenBatch};
-use miden_protocol::block::BlockHeader;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::testing::noop_auth_component::NoopAuthComponent;
-use miden_protocol::transaction::{
-    InputNotes,
-    OrderedTransactionHeaders,
-    PartialBlockchain,
-    ProvenTransaction,
-    TransactionHeader,
-    TxAccountUpdate,
-};
+use miden_protocol::transaction::{ProvenTransaction, TxAccountUpdate};
 use miden_protocol::utils::serde::Serializable;
 use miden_protocol::vm::ExecutionProof;
 use miden_standards::account::wallets::BasicWallet;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
-use tokio::runtime::{self, Runtime};
 use tokio::task;
-use tokio::time::sleep;
-use tonic::metadata::AsciiMetadataValue;
+use tonic::Request;
 use url::Url;
 
+use crate::server::api::RpcService;
 use crate::{Rpc, RpcMode};
 
-/// A wrapper around the store runtime and data directory.
-///
-/// Guarantees that the store runtime is shut down _before_ the data directory is dropped and thus removed.
+/// A wrapper around the loaded store state and its backing data directory.
 struct TestStore {
-    runtime: Option<Runtime>,
-    data_directory: Option<TempDir>,
+    state: Arc<State>,
     genesis_commitment: Word,
-    store_addr: SocketAddr,
+    data_directory: TempDir,
 }
 
 impl TestStore {
@@ -79,25 +58,19 @@ impl TestStore {
         self.genesis_commitment
     }
 
-    fn store_addr(&self) -> SocketAddr {
-        self.store_addr
-    }
-
     fn data_directory_path(&self) -> &std::path::Path {
-        self.data_directory.as_ref().expect("data_directory should be set").path()
+        self.data_directory.path()
     }
 
-    async fn shutdown(mut self) -> TempDir {
-        if let Some(runtime) = self.runtime.take() {
-            shutdown_store_runtime(runtime).await;
-        }
-        self.data_directory.take().expect("data_directory should be set")
-    }
-
-    async fn start(store_listener: TcpListener) -> Self {
+    async fn start() -> Self {
         let data_directory = tempfile::tempdir().expect("tempdir should be created");
         let genesis_commitment = Self::bootstrap(data_directory.path());
-        Self::start_without_bootstrap(data_directory, genesis_commitment, store_listener).await
+        let state = load_state(data_directory.path()).await;
+        Self {
+            state,
+            genesis_commitment,
+            data_directory,
+        }
     }
 
     fn bootstrap(path: &std::path::Path) -> Word {
@@ -110,77 +83,15 @@ impl TestStore {
             .expect("genesis block should be created");
         let genesis_commitment = genesis_block.inner().header().commitment();
 
-        Store::bootstrap(genesis_block, path).expect("store should bootstrap");
+        State::bootstrap(genesis_block, path).expect("store should bootstrap");
 
         genesis_commitment
     }
-
-    async fn start_without_bootstrap(
-        data_directory: TempDir,
-        genesis_commitment: Word,
-        store_listener: TcpListener,
-    ) -> Self {
-        let dir = data_directory.path().to_path_buf();
-        let store_addr =
-            store_listener.local_addr().expect("store listener should get a local address");
-        let rpc_listener = store_listener;
-        let block_producer_listener =
-            TcpListener::bind("127.0.0.1:0").await.expect("store should bind a port");
-
-        // In order to later kill the store, we need to spawn a new runtime and run the store on it.
-        // That allows us to kill all the tasks spawned by the store when we kill the runtime.
-        let store_runtime =
-            runtime::Builder::new_multi_thread().enable_time().enable_io().build().unwrap();
-        store_runtime.spawn(async move {
-            Store {
-                rpc_listener,
-                mode: StoreMode::BlockProducer {
-                    block_producer_listener,
-                    block_prover_url: None,
-                    max_concurrent_proofs: DEFAULT_MAX_CONCURRENT_PROOFS,
-                },
-                data_directory: dir,
-                database_options: miden_node_store::DatabaseOptions::default(),
-                grpc_options: GrpcOptionsInternal::test(),
-                storage_options: StorageOptions::default(),
-            }
-            .serve()
-            .await
-            .expect("store should start serving");
-        });
-
-        Self {
-            runtime: Some(store_runtime),
-            data_directory: Some(data_directory),
-            genesis_commitment,
-            store_addr,
-        }
-    }
 }
 
-impl Drop for TestStore {
-    fn drop(&mut self) {
-        if let Some(runtime) = self.runtime.take() {
-            shutdown_store_runtime_blocking(runtime);
-        }
-    }
-}
-
-/// Shuts down the store runtime properly to allow `RocksDB` to flush before the temp directory is
-/// deleted.
-async fn shutdown_store_runtime(store_runtime: Runtime) {
-    spawn_blocking_in_current_span(move || shutdown_store_runtime_blocking(store_runtime))
-        .await
-        .expect("shutdown should complete");
-}
-
-fn shutdown_store_runtime_blocking(store_runtime: Runtime) {
-    std::thread::spawn(move || {
-        store_runtime.shutdown_timeout(Duration::from_secs(3));
-        std::thread::sleep(Duration::from_millis(200));
-    })
-    .join()
-    .expect("store runtime shutdown thread should complete");
+async fn load_state(path: &std::path::Path) -> Arc<State> {
+    let state = State::load(path, StorageOptions::default()).await.expect("state should load");
+    Arc::new(state)
 }
 
 /// Byte offset of the account delta commitment in serialized `ProvenTransaction`. Layout:
@@ -268,8 +179,7 @@ fn build_test_proven_tx_with_id(
 #[tokio::test]
 async fn rpc_server_accepts_requests_without_accept_header() {
     // Start the RPC.
-    let (_, rpc_addr, store_listener) = start_rpc().await;
-    let _store = TestStore::start(store_listener).await;
+    let (_, rpc_addr, _store) = start_rpc().await;
 
     // Override the client so that the ACCEPT header is not set.
     let mut rpc_client = {
@@ -296,8 +206,7 @@ async fn rpc_rate_limits_per_ip() {
         replenish_n_per_second_per_ip: NonZeroU64::new(1).unwrap(),
         ..GrpcOptionsExternal::test()
     };
-    let (_, rpc_addr, store_listener) = start_rpc_with_options(grpc_options).await;
-    let _store = TestStore::start(store_listener).await;
+    let (_, rpc_addr, _store) = start_rpc_with_options(grpc_options).await;
 
     let url = rpc_addr.to_string();
     let url = Url::parse(format!("http://{}", &url).as_str()).unwrap();
@@ -322,7 +231,8 @@ async fn rpc_rate_limits_per_ip() {
 
 #[tokio::test]
 async fn rpc_server_accepts_requests_with_accept_header() {
-    let (mut rpc_client, _, _store) = start_rpc_and_store_ready().await;
+    // Start the RPC.
+    let (mut rpc_client, _, _store) = start_rpc().await;
 
     // Send any request to the RPC.
     let response = send_request(&mut rpc_client).await;
@@ -334,7 +244,8 @@ async fn rpc_server_accepts_requests_with_accept_header() {
 #[tokio::test]
 async fn rpc_server_rejects_requests_with_accept_header_invalid_version() {
     for version in ["1.9.0", "0.8.1", "0.8.0", "0.999.0", "99.0.0"] {
-        let (_, rpc_addr, _store) = start_rpc_and_store_ready().await;
+        // Start the RPC.
+        let (_, rpc_addr, _store) = start_rpc().await;
 
         // Recreate the RPC client with an invalid version.
         let url = rpc_addr.to_string();
@@ -361,45 +272,16 @@ async fn rpc_server_rejects_requests_with_accept_header_invalid_version() {
 }
 
 #[tokio::test]
-async fn rpc_startup_is_robust_to_network_failures() {
-    // This test starts the store and RPC components and verifies that they successfully connect to
-    // each other on startup and that they reconnect after the store is restarted.
-
-    // Start the RPC.
-    let (mut rpc_client, _, store_listener) = start_rpc().await;
-
-    // Test: requests against RPC api should fail immediately
+async fn rpc_uses_in_process_store_state() {
+    let (mut rpc_client, _, _store) = start_rpc().await;
     let response = send_request(&mut rpc_client).await;
-    assert!(response.is_err());
-
-    // Start the store.
-    let store = TestStore::start(store_listener).await;
-
-    // Test: send request against RPC api and should succeed
-    let response = send_request_until_success(&mut rpc_client).await;
     assert!(response.unwrap().into_inner().block_header.is_some());
-
-    // Test: shutdown the store and should fail
-    let store_addr = store.store_addr();
-    let genesis_commitment = store.genesis_commitment();
-    let data_directory = store.shutdown().await;
-    let response = send_request(&mut rpc_client).await;
-    assert!(response.is_err());
-
-    // Test: restart the store and request should succeed
-    let store_listener = TcpListener::bind(store_addr).await.expect("Failed to bind store");
-    let _store =
-        TestStore::start_without_bootstrap(data_directory, genesis_commitment, store_listener)
-            .await;
-    let response = send_request_until_success(&mut rpc_client).await;
-    assert_eq!(response.unwrap().into_inner().block_header.unwrap().block_num, 0);
 }
 
 #[tokio::test]
 async fn rpc_server_has_web_support() {
     // Start server
-    let (_, rpc_addr, store_listener) = start_rpc().await;
-    let _store = TestStore::start(store_listener).await;
+    let (_, rpc_addr, _store) = start_rpc().await;
 
     // Send a status request
     let client = reqwest::Client::new();
@@ -439,7 +321,8 @@ async fn rpc_server_has_web_support() {
 
 #[tokio::test]
 async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
-    let (_, rpc_addr, store) = start_rpc_and_store_ready().await;
+    // Start the RPC.
+    let (_, rpc_addr, store) = start_rpc().await;
     let genesis = store.genesis_commitment();
 
     // Override the client so that the ACCEPT header is not set.
@@ -486,7 +369,8 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
 
 #[tokio::test]
 async fn rpc_server_rejects_proven_transactions_with_invalid_reference_block() {
-    let (_, rpc_addr, store) = start_rpc_and_store_ready().await;
+    // Start the RPC.
+    let (_, rpc_addr, store) = start_rpc().await;
     let genesis = store.genesis_commitment();
 
     // Override the client so that the ACCEPT header is not set.
@@ -524,19 +408,8 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_reference_block() {
 
 #[tokio::test]
 async fn rpc_rejects_post_deployment_network_account_tx() {
-    let (_, rpc_addr, store) = start_rpc_and_store_ready().await;
+    let store = TestStore::start().await;
     let genesis = store.genesis_commitment();
-
-    // Build a client that advertises the right `application/vnd.miden` content type so
-    // tx-submission requests reach the handler.
-    let mut rpc_client =
-        miden_node_proto::clients::Builder::new(Url::parse(&format!("http://{rpc_addr}")).unwrap())
-            .without_tls()
-            .with_timeout(Duration::from_secs(5))
-            .without_metadata_version()
-            .with_metadata_genesis(genesis.to_hex())
-            .without_otel_context_injection()
-            .connect_lazy::<miden_node_proto::clients::RpcClient>();
 
     // Seed a row marking a known AccountId as a network account directly in the store's SQLite DB.
     // The store uses WAL mode so a secondary connection is safe.
@@ -555,7 +428,15 @@ async fn rpc_rejects_post_deployment_network_account_tx() {
         transaction_inputs: None,
     };
 
-    let response = rpc_client.submit_proven_tx(request).await;
+    let service = RpcService::new(
+        Arc::clone(&store.state),
+        RpcMode::full_node(source_rpc_client()),
+        None,
+        NonZeroUsize::new(1_000_000).unwrap(),
+        None,
+    );
+
+    let response = service.submit_proven_tx(Request::new(request)).await;
     assert!(response.is_err());
     let err = response.as_ref().unwrap_err().message();
     assert!(
@@ -564,15 +445,25 @@ async fn rpc_rejects_post_deployment_network_account_tx() {
     );
 }
 
+fn source_rpc_client() -> RpcClient {
+    Builder::new(Url::parse("http://127.0.0.1:0").unwrap())
+        .without_tls()
+        .without_timeout()
+        .without_metadata_version()
+        .without_metadata_genesis()
+        .without_otel_context_injection()
+        .connect_lazy::<RpcClient>()
+}
+
 // Batch-path coverage for the network-account gate is provided manually. Building a valid
 // `ProposedBatch` + `ProvenBatch` in this test harness would require duplicating LocalBatchProver
-// setup. The query layer is covered by the unit test in store::db::tests, and the gRPC wiring is
-// the same as `submit_proven_transaction` (covered by
-// `rpc_rejects_post_deployment_network_account_tx`).
+// setup. The query layer is covered by the unit test in store::db::tests, and the RPC handler gate
+// is covered by `rpc_rejects_post_deployment_network_account_tx`.
 
 #[tokio::test]
 async fn rpc_server_rejects_tx_submissions_without_genesis() {
-    let (_, rpc_addr, store) = start_rpc_and_store_ready().await;
+    // Start the RPC.
+    let (_, rpc_addr, store) = start_rpc().await;
     let genesis = store.genesis_commitment();
 
     // Override the client so that the ACCEPT header is not set.
@@ -608,161 +499,6 @@ async fn rpc_server_rejects_tx_submissions_without_genesis() {
     );
 }
 
-#[tokio::test]
-async fn rpc_server_rejects_network_tx_without_internal_auth_header() {
-    let secret_key = AsciiMetadataValue::from_static("secret-key");
-    let (_, rpc_addr, store_listener) = start_rpc_with_network_tx_auth(Some(secret_key)).await;
-    let store = TestStore::start(store_listener).await;
-    let genesis = store.genesis_commitment();
-
-    let mut rpc_client = connect_rpc_for_tx_submission(
-        Url::parse(&format!("http://{rpc_addr}")).unwrap(),
-        genesis,
-        None,
-    );
-
-    // Seed a row marking a known AccountId as a network account directly in the store's SQLite DB.
-    // The store uses WAL mode so a secondary connection is safe.
-    let network_account_id =
-        AccountId::dummy([7u8; 15], AccountIdVersion::Version1, AccountType::Public);
-    miden_node_store::test_support::seed_network_account(
-        &store.data_directory_path().join("miden-store.sqlite3"),
-        network_account_id,
-    );
-
-    // Build a non-deployment tx for that account.
-    let (account, account_delta) = build_test_account([9; 32]);
-    let tx = build_test_proven_tx_with_id(network_account_id, &account, &account_delta, genesis);
-    let request = proto::transaction::ProvenTransaction {
-        transaction: tx.to_bytes(),
-        transaction_inputs: None,
-    };
-
-    let response = rpc_client.submit_proven_tx(request).await;
-
-    assert!(response.is_err());
-    assert_eq!(
-        response.as_ref().unwrap_err().message(),
-        "Network transactions may not be submitted by users yet"
-    );
-}
-
-#[tokio::test]
-async fn rpc_server_accepts_network_tx_with_internal_auth_header() {
-    let secret_key = AsciiMetadataValue::from_static("secret-key");
-    let (_, rpc_addr, store_listener) =
-        start_rpc_with_network_tx_auth(Some(secret_key.clone())).await;
-    let store = TestStore::start(store_listener).await;
-    let genesis = store.genesis_commitment();
-
-    let mut rpc_client = connect_rpc_for_tx_submission(
-        Url::parse(&format!("http://{rpc_addr}")).unwrap(),
-        genesis,
-        Some(secret_key),
-    );
-
-    // Seed a row marking a known AccountId as a network account directly in the store's SQLite DB.
-    // The store uses WAL mode so a secondary connection is safe.
-    let network_account_id =
-        AccountId::dummy([7u8; 15], AccountIdVersion::Version1, AccountType::Public);
-    miden_node_store::test_support::seed_network_account(
-        &store.data_directory_path().join("miden-store.sqlite3"),
-        network_account_id,
-    );
-
-    // Build a non-deployment tx for that account.
-    let (account, account_delta) = build_test_account([10; 32]);
-    let tx = build_test_proven_tx_with_id(network_account_id, &account, &account_delta, genesis);
-    let request = proto::transaction::ProvenTransaction {
-        transaction: tx.to_bytes(),
-        transaction_inputs: None,
-    };
-
-    let response = rpc_client.submit_proven_tx(request).await;
-
-    assert!(response.is_err());
-    assert_ne!(
-        response.as_ref().unwrap_err().message(),
-        "Network transactions may not be submitted by users yet"
-    );
-}
-
-#[tokio::test]
-async fn rpc_server_rejects_network_tx_batch_without_internal_auth_header() {
-    let secret_key = AsciiMetadataValue::from_static("secret-key");
-    let (_, rpc_addr, store_listener) =
-        start_rpc_with_network_tx_auth(Some(secret_key.clone())).await;
-    let store = TestStore::start(store_listener).await;
-    let genesis = store.genesis_commitment();
-
-    let mut rpc_client = connect_rpc_for_tx_submission(
-        Url::parse(&format!("http://{rpc_addr}")).unwrap(),
-        genesis,
-        None,
-    );
-    let genesis_header = fetch_genesis_header(&mut rpc_client).await;
-
-    // Seed a row marking a known AccountId as a network account directly in the store's SQLite DB.
-    // The store uses WAL mode so a secondary connection is safe.
-    let network_account_id =
-        AccountId::dummy([7u8; 15], AccountIdVersion::Version1, AccountType::Public);
-    miden_node_store::test_support::seed_network_account(
-        &store.data_directory_path().join("miden-store.sqlite3"),
-        network_account_id,
-    );
-
-    // Build a non-deployment tx for that account.
-    let (account, account_delta) = build_test_account([10; 32]);
-    let tx = build_test_proven_tx_with_id(network_account_id, &account, &account_delta, genesis);
-    let request = build_test_network_tx_batch_request(&tx, genesis_header);
-
-    let response = rpc_client.submit_proven_tx_batch(request).await;
-
-    assert!(response.is_err());
-    assert_eq!(
-        response.as_ref().unwrap_err().message(),
-        "Network transactions may not be submitted by users yet"
-    );
-}
-
-#[tokio::test]
-async fn rpc_server_accepts_network_tx_batch_with_internal_auth_header() {
-    let secret_key = AsciiMetadataValue::from_static("secret-key");
-    let (_, rpc_addr, store_listener) =
-        start_rpc_with_network_tx_auth(Some(secret_key.clone())).await;
-    let store = TestStore::start(store_listener).await;
-    let genesis = store.genesis_commitment();
-
-    let mut rpc_client = connect_rpc_for_tx_submission(
-        Url::parse(&format!("http://{rpc_addr}")).unwrap(),
-        genesis,
-        Some(secret_key),
-    );
-    let genesis_header = fetch_genesis_header(&mut rpc_client).await;
-
-    // Seed a row marking a known AccountId as a network account directly in the store's SQLite DB.
-    // The store uses WAL mode so a secondary connection is safe.
-    let network_account_id =
-        AccountId::dummy([7u8; 15], AccountIdVersion::Version1, AccountType::Public);
-    miden_node_store::test_support::seed_network_account(
-        &store.data_directory_path().join("miden-store.sqlite3"),
-        network_account_id,
-    );
-
-    // Build a non-deployment tx for that account.
-    let (account, account_delta) = build_test_account([10; 32]);
-    let tx = build_test_proven_tx_with_id(network_account_id, &account, &account_delta, genesis);
-    let request = build_test_network_tx_batch_request(&tx, genesis_header);
-
-    let response = rpc_client.submit_proven_tx_batch(request).await;
-
-    assert!(response.is_err());
-    assert_ne!(
-        response.as_ref().unwrap_err().message(),
-        "Network transactions may not be submitted by users yet"
-    );
-}
-
 /// Sends an arbitrary / irrelevant request to the RPC.
 async fn send_request(
     rpc_client: &mut RpcClient,
@@ -772,37 +508,6 @@ async fn send_request(
         include_mmr_proof: None,
     };
     rpc_client.get_block_header_by_number(request).await
-}
-
-async fn send_request_until_success(
-    rpc_client: &mut RpcClient,
-) -> std::result::Result<tonic::Response<proto::rpc::BlockHeaderByNumberResponse>, tonic::Status> {
-    let mut attempts = 0;
-    loop {
-        attempts += 1;
-
-        match send_request(rpc_client).await {
-            Ok(response) => return Ok(response),
-            Err(err) if attempts < 30 => {
-                sleep(Duration::from_millis(200)).await;
-                tracing::warn!(%attempts, %err, "RPC request failed, retrying");
-            },
-            Err(err) => return Err(err),
-        }
-    }
-}
-
-async fn fetch_genesis_header(rpc_client: &mut RpcClient) -> BlockHeader {
-    let response = rpc_client
-        .get_block_header_by_number(proto::rpc::BlockHeaderByNumberRequest {
-            block_num: Some(0),
-            include_mmr_proof: None,
-        })
-        .await
-        .expect("genesis header request should succeed");
-    let header = response.into_inner().block_header.expect("genesis header should be present");
-
-    BlockHeader::try_from(header).expect("genesis header should deserialize")
 }
 
 async fn connect_rpc(url: Url, local_address: Option<IpAddr>) -> RpcClient {
@@ -817,67 +522,31 @@ async fn connect_rpc(url: Url, local_address: Option<IpAddr>) -> RpcClient {
     RpcClient::with_interceptor(channel, interceptor)
 }
 
-fn connect_rpc_for_tx_submission(
-    url: Url,
-    genesis: Word,
-    auth: Option<AsciiMetadataValue>,
-) -> RpcClient {
-    let builder = Builder::new(url)
-        .without_tls()
-        .with_timeout(Duration::from_secs(5))
-        .without_metadata_version()
-        .with_metadata_genesis(genesis.to_hex());
-    let builder = match auth {
-        Some(value) => builder.with_auth_header_value(value),
-        None => builder.without_auth_header(),
-    };
-
-    builder
-        .without_otel_context_injection()
-        .connect_lazy::<miden_node_proto::clients::RpcClient>()
-}
-
 /// Binds a socket on an available port, runs the RPC server on it, and returns a client to talk to
 /// the server, along with the socket address.
-async fn start_rpc() -> (RpcClient, std::net::SocketAddr, TcpListener) {
+async fn start_rpc() -> (RpcClient, std::net::SocketAddr, TestStore) {
     start_rpc_with_options(GrpcOptionsExternal::test()).await
-}
-
-/// Starts the RPC + store pair and blocks until the RPC server has finished its genesis-fetch
-/// bootstrap and is accepting requests. Use this in tests that send a single one-shot request and
-/// would otherwise race the RPC component's startup under high test parallelism.
-async fn start_rpc_and_store_ready() -> (RpcClient, std::net::SocketAddr, TestStore) {
-    let (mut rpc_client, rpc_addr, store_listener) = start_rpc().await;
-    let store = TestStore::start(store_listener).await;
-    send_request_until_success(&mut rpc_client)
-        .await
-        .expect("RPC should become ready after store starts");
-    (rpc_client, rpc_addr, store)
 }
 
 async fn start_rpc_with_options(
     grpc_options: GrpcOptionsExternal,
-) -> (RpcClient, std::net::SocketAddr, TcpListener) {
-    let store_listener = TcpListener::bind("127.0.0.1:0").await.expect("store should bind a port");
-    let store_addr = store_listener.local_addr().expect("store should get a local address");
+) -> (RpcClient, std::net::SocketAddr, TestStore) {
+    let store = TestStore::start().await;
+    let block_producer_data_directory =
+        tempfile::tempdir().expect("block producer state tempdir should be created");
+    TestStore::bootstrap(block_producer_data_directory.path());
+    let block_producer_state = load_state(block_producer_data_directory.path()).await;
+    let store_state = Arc::clone(&store.state);
 
     // Start the rpc component.
     let rpc_listener = TcpListener::bind("127.0.0.1:0").await.expect("Failed to bind rpc");
     let rpc_addr = rpc_listener.local_addr().expect("Failed to get rpc address");
     task::spawn(async move {
-        // SAFETY: The store_addr is always valid as it is created from a `SocketAddr`.
-        let store_url = Url::parse(&format!("http://{store_addr}")).unwrap();
+        let _block_producer_data_directory = block_producer_data_directory;
         // SAFETY: Using dummy validator URL for test - not actually contacted in this test
         let validator_url = Url::parse("http://127.0.0.1:0").unwrap();
-        let store = Builder::new(store_url.clone())
-            .without_tls()
-            .without_timeout()
-            .without_metadata_version()
-            .without_metadata_genesis()
-            .with_otel_context_injection()
-            .connect_lazy::<StoreRpcClient>();
         let block_producer = BlockProducerApi::new(
-            BlockProducerStoreClient::new(store_url),
+            block_producer_state,
             0.into(),
             BlockProducerApiConfig::default(),
         );
@@ -890,7 +559,7 @@ async fn start_rpc_with_options(
             .connect_lazy::<ValidatorClient>();
         Rpc {
             listener: rpc_listener,
-            store,
+            store: store_state,
             mode: RpcMode::sequencer(block_producer, validator),
             ntx_builder: None,
             grpc_options,
@@ -905,104 +574,13 @@ async fn start_rpc_with_options(
     let url = Url::parse(format!("http://{}", &url).as_str()).unwrap();
     let rpc_client = connect_rpc(url, None).await;
 
-    (rpc_client, rpc_addr, store_listener)
-}
-
-async fn start_rpc_with_network_tx_auth(
-    expected_auth_header_value: Option<AsciiMetadataValue>,
-) -> (RpcClient, std::net::SocketAddr, TcpListener) {
-    let network_tx_auth = expected_auth_header_value.map(crate::server::NetworkTxAuth);
-
-    let store_listener = TcpListener::bind("127.0.0.1:0").await.expect("store should bind a port");
-    let store_addr = store_listener.local_addr().expect("store should get a local address");
-
-    // Start the rpc component.
-    let rpc_listener = TcpListener::bind("127.0.0.1:0").await.expect("Failed to bind rpc");
-    let rpc_addr = rpc_listener.local_addr().expect("Failed to get rpc address");
-    task::spawn(async move {
-        // SAFETY: The store_addr is always valid as it is created from a `SocketAddr`.
-        let store_url = Url::parse(&format!("http://{store_addr}")).unwrap();
-        // SAFETY: Using dummy validator URL for test - not actually contacted in this test
-        let validator_url = Url::parse("http://127.0.0.1:0").unwrap();
-        let store = Builder::new(store_url.clone())
-            .without_tls()
-            .without_timeout()
-            .without_metadata_version()
-            .without_metadata_genesis()
-            .with_otel_context_injection()
-            .connect_lazy::<StoreRpcClient>();
-        let block_producer = BlockProducerApi::new(
-            BlockProducerStoreClient::new(store_url),
-            0.into(),
-            BlockProducerApiConfig::default(),
-        );
-        let validator = Builder::new(validator_url)
-            .without_tls()
-            .without_timeout()
-            .without_metadata_version()
-            .without_metadata_genesis()
-            .with_otel_context_injection()
-            .connect_lazy::<ValidatorClient>();
-        Rpc {
-            listener: rpc_listener,
-            store,
-            mode: RpcMode::sequencer(block_producer, validator),
-            ntx_builder: None,
-            grpc_options: GrpcOptionsExternal::test(),
-            network_tx_auth,
-        }
-        .serve()
-        .await
-        .expect("Failed to start serving store");
-    });
-    let url = rpc_addr.to_string();
-    // SAFETY: The rpc_addr is always valid as it is created from a `SocketAddr`.
-    let url = Url::parse(format!("http://{}", &url).as_str()).unwrap();
-    let rpc_client = connect_rpc(url, None).await;
-
-    (rpc_client, rpc_addr, store_listener)
-}
-
-fn build_test_network_tx_batch_request(
-    tx: &ProvenTransaction,
-    genesis_header: BlockHeader,
-) -> proto::transaction::TransactionBatch {
-    let proven_batch = build_mock_proven_batch(tx, &genesis_header);
-    let proposed_batch = ProposedBatch::new(
-        vec![Arc::new(tx.clone())],
-        genesis_header,
-        PartialBlockchain::default(),
-        std::collections::BTreeMap::new(),
-    )
-    .expect("test proposed batch should be valid");
-
-    proto::transaction::TransactionBatch {
-        batch_proof: proven_batch.to_bytes(),
-        proposed_batch: Some(proposed_batch.to_bytes()),
-        transaction_inputs: vec![Vec::new()],
-    }
-}
-
-fn build_mock_proven_batch(tx: &ProvenTransaction, genesis_header: &BlockHeader) -> ProvenBatch {
-    let mut account_updates = std::collections::BTreeMap::new();
-    account_updates.insert(tx.account_id(), BatchAccountUpdate::from_transaction(tx));
-
-    ProvenBatch::new_unchecked(
-        BatchId::from_transactions([tx].into_iter()),
-        genesis_header.commitment(),
-        genesis_header.block_num(),
-        account_updates,
-        InputNotes::new_unchecked(tx.input_notes().iter().cloned().collect()),
-        tx.output_notes().iter().cloned().collect(),
-        miden_protocol::block::BlockNumber::MAX,
-        OrderedTransactionHeaders::new_unchecked(vec![TransactionHeader::from(tx)]),
-    )
-    .expect("mock proven batch should be valid")
+    (rpc_client, rpc_addr, store)
 }
 
 #[tokio::test]
 async fn get_limits_endpoint() {
-    let (mut rpc_client, _rpc_addr, _store) = start_rpc_and_store_ready().await;
+    // Start the RPC and store
+    let (mut rpc_client, _rpc_addr, _store) = start_rpc().await;
 
     // Call the get_limits endpoint
     let response = rpc_client.get_limits(()).await.expect("get_limits should succeed");
@@ -1066,8 +644,7 @@ async fn get_limits_endpoint() {
 
 #[tokio::test]
 async fn sync_chain_mmr_returns_delta() {
-    let (mut rpc_client, _rpc_addr, store_listener) = start_rpc().await;
-    let _store = TestStore::start(store_listener).await;
+    let (mut rpc_client, _rpc_addr, _store) = start_rpc().await;
 
     let request = proto::rpc::SyncChainMmrRequest {
         current_client_block_height: 0,

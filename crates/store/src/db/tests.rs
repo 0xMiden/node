@@ -22,8 +22,8 @@ use miden_protocol::account::{
     StorageMapKey,
     StorageSlot,
     StorageSlotContent,
-    StorageSlotPatch,
     StorageSlotName,
+    StorageSlotPatch,
 };
 use miden_protocol::asset::{Asset, FungibleAsset};
 use miden_protocol::block::{
@@ -3578,8 +3578,6 @@ fn account_state_forest_preserves_most_recent_vault_only() {
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn db_roundtrip_transactions() {
-    use miden_node_proto::generated as proto;
-
     let mut conn = create_db();
     let block_num = BlockNumber::from(1);
     create_block(&mut conn, block_num);
@@ -3637,34 +3635,6 @@ fn db_roundtrip_transactions() {
 
     // Verify database roundtrip
     assert_eq!(*record, expected);
-
-    // Proto conversion roundtrip
-    let record = retrieved.1.into_iter().next().unwrap();
-    let proto_record = record.into_proto();
-    let expected_proto = proto::rpc::TransactionRecord {
-        block_num: block_num.as_u32(),
-        header: Some(proto::transaction::TransactionHeader {
-            transaction_id: Some(tx.id().into()),
-            account_id: Some(tx.account_id().into()),
-            initial_state_commitment: Some(tx.initial_state_commitment().into()),
-            final_state_commitment: Some(tx.final_state_commitment().into()),
-            input_notes: tx.input_notes().iter().cloned().map(Into::into).collect(),
-            output_notes: tx.output_notes().iter().copied().map(Into::into).collect(),
-            fee: Some(Asset::from(tx.fee()).into()),
-        }),
-        output_note_proofs: expected_sync_records
-            .into_iter()
-            .map(|n| proto::note::NoteInclusionInBlockProof {
-                note_id: Some((&n.note_id).into()),
-                block_num: n.block_num.as_u32(),
-                note_index_in_block: n.note_index.leaf_index_value().into(),
-                inclusion_path: Some(n.inclusion_path.into()),
-            })
-            .collect(),
-    };
-
-    // Proto conversion roundtrip
-    assert_eq!(proto_record, expected_proto);
 }
 
 #[test]

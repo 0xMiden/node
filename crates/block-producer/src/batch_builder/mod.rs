@@ -5,11 +5,11 @@ use std::time::Duration;
 
 use futures::TryFutureExt;
 use miden_node_proto::domain::batch::BatchInputs;
+use miden_node_store::state::State;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{BatchId, ProposedBatch, ProvenBatch};
-use miden_protocol::note::NoteId;
 use miden_remote_prover_client::RemoteBatchProver;
 use miden_tx_batch_prover::LocalBatchProver;
 use rand::Rng;
@@ -20,9 +20,8 @@ use url::Url;
 
 use crate::domain::batch::SelectedBatch;
 use crate::domain::transaction::AuthenticatedTransaction;
-use crate::errors::BuildBatchError;
+use crate::errors::{BuildBatchError, StoreError};
 use crate::mempool::SharedMempool;
-use crate::store::StoreClient;
 use crate::{COMPONENT, TelemetryInjectorExt};
 
 // BATCH BUILDER
@@ -50,7 +49,7 @@ pub struct BatchBuilder {
     ///
     /// Note: this _must_ be sign positive and less than 1.0.
     failure_rate: f64,
-    store: StoreClient,
+    store: Arc<State>,
 }
 
 impl BatchBuilder {
@@ -59,7 +58,7 @@ impl BatchBuilder {
     ///
     /// If no batch prover URL is provided, a local batch prover is used instead.
     pub fn new(
-        store: StoreClient,
+        store: Arc<State>,
         num_workers: NonZeroUsize,
         batch_prover_url: Option<Url>,
         batch_interval: Duration,
@@ -162,7 +161,7 @@ struct BatchJob {
     ///
     /// Note: this _must_ be sign positive and less than 1.0.
     failure_rate: f64,
-    store: StoreClient,
+    store: Arc<State>,
     batch_prover: BatchProver,
     mempool: SharedMempool,
 }
@@ -222,12 +221,15 @@ impl BatchJob {
             .transactions()
             .iter()
             .map(Deref::deref)
-            .flat_map(AuthenticatedTransaction::unauthenticated_note_ids)
-            .map(NoteId::from_raw);
+            .flat_map(AuthenticatedTransaction::unauthenticated_note_ids);
 
         self.store
-            .get_batch_inputs(block_references, unauthenticated_notes)
+            .get_batch_inputs(
+                block_references.map(|(block_num, _)| block_num).collect(),
+                unauthenticated_notes.collect(),
+            )
             .await
+            .map_err(StoreError::GetBatchInputsFailed)
             .map_err(BuildBatchError::FetchBatchInputsFailed)
             .map(|inputs| (batch, inputs))
     }

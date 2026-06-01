@@ -1,16 +1,34 @@
 use std::num::NonZeroUsize;
-use std::sync::LazyLock;
+use std::pin::Pin;
+use std::sync::{Arc, LazyLock};
+use std::task::{Context as TaskContext, Poll};
 use std::time::Duration;
 
-use anyhow::Context;
-use miden_node_proto::clients::{NtxBuilderClient, StoreRpcClient};
-use miden_node_proto::decode::{read_account_id, read_account_ids, read_block_range};
-use miden_node_proto::domain::account::{AccountRequest, SlotData};
-use miden_node_proto::errors::ConversionError;
-use miden_node_proto::generated::rpc::MempoolStats;
+use anyhow::Context as AnyhowContext;
+use miden_node_block_producer::{BlockProducerStatus, MempoolStats as BlockProducerMempoolStats};
+use miden_node_proto::clients::NtxBuilderClient;
+use miden_node_proto::decode::{
+    convert_digests_to_words,
+    read_account_id,
+    read_account_ids,
+    read_block_range,
+    read_root,
+};
+use miden_node_proto::domain::account::{AccountRequest, AccountStorageRequest, SlotData};
+use miden_node_proto::domain::block::InvalidBlockRange;
+use miden_node_proto::generated::rpc::MempoolStats as ProtoMempoolStats;
 use miden_node_proto::generated::rpc::api_server::{self, Api};
 use miden_node_proto::generated::{self as proto};
-use miden_node_proto::try_convert;
+use miden_node_store::state::{Finality, State, StateSubscriptionError};
+use miden_node_store::{
+    DatabaseError,
+    GetAccountError,
+    GetBlockHeaderError,
+    NoteRecord,
+    NoteSyncError,
+    NoteSyncRecord,
+    TransactionRecord,
+};
 use miden_node_utils::ErrorReport;
 use miden_node_utils::limiter::{
     QueryParamAccountIdLimit,
@@ -23,8 +41,10 @@ use miden_node_utils::limiter::{
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::account::AccountId;
+use miden_protocol::asset::Asset;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockNumber};
+use miden_protocol::note::NoteId;
 use miden_protocol::transaction::{
     OutputNote,
     ProvenTransaction,
@@ -35,31 +55,85 @@ use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{MIN_PROOF_SECURITY_LEVEL, Word};
 use miden_tx::TransactionVerifier;
 use miden_tx_batch_prover::LocalBatchProver;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio_stream::{Stream, StreamExt};
 use tonic::metadata::MetadataMap;
 use tonic::{IntoRequest, Request, Response, Status};
 use tracing::{Span, debug, info_span};
 
 use crate::COMPONENT;
-use crate::server::NetworkTxAuth;
+use crate::server::{NetworkTxAuth, RpcMode};
 
 const NETWORK_TX_AUTH_HEADER_NAME: &str = "x-miden-network-tx-auth";
-use crate::server::RpcMode;
+
+/// Maximum number of concurrent block or proof subscriptions served by this RPC instance.
+const MAX_REPLICA_SUBSCRIPTIONS: usize = 10;
+
+type BlockSubscriptionStream = Pin<
+    Box<
+        dyn tonic::codegen::tokio_stream::Stream<
+                Item = Result<proto::rpc::BlockSubscriptionResponse, Status>,
+            > + Send
+            + 'static,
+    >,
+>;
+
+type ProofSubscriptionStream = Pin<
+    Box<
+        dyn tonic::codegen::tokio_stream::Stream<
+                Item = Result<proto::rpc::ProofSubscriptionResponse, Status>,
+            > + Send
+            + 'static,
+    >,
+>;
+
+struct GuardedStream<S> {
+    inner: S,
+    _permit: OwnedSemaphorePermit,
+}
+
+impl<S> GuardedStream<S> {
+    fn new(inner: S, permit: OwnedSemaphorePermit) -> Self {
+        Self { inner, _permit: permit }
+    }
+}
+
+impl<S> Stream for GuardedStream<S>
+where
+    S: Stream + Unpin,
+{
+    type Item = S::Item;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.inner).poll_next(cx)
+    }
+}
+
+struct RpcInvalidBlockRange(InvalidBlockRange);
+
+impl From<InvalidBlockRange> for RpcInvalidBlockRange {
+    fn from(value: InvalidBlockRange) -> Self {
+        Self(value)
+    }
+}
 
 // RPC SERVICE
 // ================================================================================================
 
 pub struct RpcService {
-    store: StoreRpcClient,
+    store: Arc<State>,
     mode: RpcMode,
     ntx_builder: Option<NtxBuilderClient>,
     network_tx_auth: Option<NetworkTxAuth>,
     genesis_commitment: Option<Word>,
     block_commitment_cache: LruCache<BlockNumber, Word>,
+    block_subscription_semaphore: Arc<Semaphore>,
+    proof_subscription_semaphore: Arc<Semaphore>,
 }
 
 impl RpcService {
-    pub(super) fn new(
-        store: StoreRpcClient,
+    pub(crate) fn new(
+        store: Arc<State>,
         mode: RpcMode,
         ntx_builder: Option<NtxBuilderClient>,
         commitment_cache_capacity: NonZeroUsize,
@@ -72,6 +146,8 @@ impl RpcService {
             network_tx_auth,
             genesis_commitment: None,
             block_commitment_cache: LruCache::new(commitment_cache_capacity),
+            block_subscription_semaphore: Arc::new(Semaphore::new(MAX_REPLICA_SUBSCRIPTIONS)),
+            proof_subscription_semaphore: Arc::new(Semaphore::new(MAX_REPLICA_SUBSCRIPTIONS)),
         }
     }
 
@@ -146,16 +222,10 @@ impl RpcService {
 
         let header = self
             .store
-            .clone()
-            .get_block_header_by_number(Request::new(proto::rpc::BlockHeaderByNumberRequest {
-                block_num: Some(block.as_u32()),
-                include_mmr_proof: false.into(),
-            }))
-            .await?
-            .into_inner()
-            .block_header
-            .map(BlockHeader::try_from)
-            .transpose()?
+            .get_block_header(Some(block), false)
+            .await
+            .map_err(get_block_header_error_to_status)?
+            .0
             .ok_or_else(|| Status::invalid_argument(format!("unknown block {block}")))?;
 
         let commitment = header.commitment();
@@ -187,24 +257,17 @@ impl RpcService {
         &self,
         candidate_ids: impl IntoIterator<Item = AccountId>,
     ) -> Result<(), Status> {
-        let account_ids: Vec<proto::account::AccountId> =
-            candidate_ids.into_iter().map(Into::into).collect();
+        let account_ids: Vec<AccountId> = candidate_ids.into_iter().collect();
         if account_ids.is_empty() {
             return Ok(());
         }
 
-        let response = self
-            .store
-            .clone()
-            .filter_network_accounts(tonic::Request::new(proto::account::AccountIdList {
-                account_ids,
-            }))
-            .await
-            .map_err(|err| {
+        let network_accounts =
+            self.store.filter_network_accounts(&account_ids).await.map_err(|err| {
                 Status::internal(format!("network-account classification failed: {err}"))
             })?;
 
-        if !response.into_inner().account_ids.is_empty() {
+        if !network_accounts.is_empty() {
             return Err(Status::invalid_argument(
                 "Network transactions may not be submitted by users yet",
             ));
@@ -227,8 +290,8 @@ impl RpcService {
 
 #[tonic::async_trait]
 impl api_server::Api for RpcService {
-    type BlockSubscriptionStream = tonic::codec::Streaming<proto::rpc::BlockSubscriptionResponse>;
-    type ProofSubscriptionStream = tonic::codec::Streaming<proto::rpc::ProofSubscriptionResponse>;
+    type BlockSubscriptionStream = BlockSubscriptionStream;
+    type ProofSubscriptionStream = ProofSubscriptionStream;
 
     // -- Nullifier endpoints -----------------------------------------------------------------
 
@@ -247,7 +310,38 @@ impl api_server::Api for RpcService {
 
         check::<QueryParamNullifierPrefixLimit>(request.get_ref().nullifiers.len())?;
 
-        self.store.clone().sync_nullifiers(request).await
+        let request = request.into_inner();
+        if request.prefix_len != 16 {
+            return Err(Status::invalid_argument(format!(
+                "unsupported prefix length: {} (only 16-bit prefixes are supported)",
+                request.prefix_len
+            )));
+        }
+        let block_range = range
+            .into_inclusive_range::<RpcInvalidBlockRange>()
+            .map_err(invalid_block_range_to_status)?;
+
+        let (nullifiers, block_num) = self
+            .store
+            .sync_nullifiers(request.prefix_len, request.nullifiers, block_range)
+            .await
+            .map_err(|err| database_error_to_status(&err))?;
+        let nullifiers = nullifiers
+            .into_iter()
+            .map(|nullifier_info| proto::rpc::sync_nullifiers_response::NullifierUpdate {
+                nullifier: Some(nullifier_info.nullifier.into()),
+                block_num: nullifier_info.block_num.as_u32(),
+            })
+            .collect();
+        let chain_tip = self.store.chain_tip(Finality::Committed);
+
+        Ok(Response::new(proto::rpc::SyncNullifiersResponse {
+            pagination_info: Some(proto::rpc::PaginationInfo {
+                chain_tip: chain_tip.as_u32(),
+                block_num: block_num.as_u32(),
+            }),
+            nullifiers,
+        }))
     }
 
     // -- Block endpoints ---------------------------------------------------------------------
@@ -260,7 +354,19 @@ impl api_server::Api for RpcService {
 
         Span::current().set_attribute("block.number", request.get_ref().block_num());
 
-        self.store.clone().get_block_header_by_number(request).await
+        let request = request.into_inner();
+        let block_num = request.block_num.map(BlockNumber::from);
+        let (block_header, mmr_proof) = self
+            .store
+            .get_block_header(block_num, request.include_mmr_proof.unwrap_or(false))
+            .await
+            .map_err(get_block_header_error_to_status)?;
+
+        Ok(Response::new(proto::rpc::BlockHeaderByNumberResponse {
+            block_header: block_header.map(Into::into),
+            chain_length: mmr_proof.as_ref().map(|p| p.forest().num_leaves() as u32),
+            mmr_path: mmr_proof.map(|p| Into::into(p.merkle_path())),
+        }))
     }
 
     async fn get_block_by_number(
@@ -273,7 +379,22 @@ impl api_server::Api for RpcService {
 
         debug!(target: COMPONENT, ?request);
 
-        self.store.clone().get_block_by_number(request).await
+        let block_num = BlockNumber::from(request.block_num);
+        let block = self
+            .store
+            .load_block(block_num)
+            .await
+            .map_err(|err| database_error_to_status(&err))?;
+        let proof = if request.include_proof.unwrap_or_default() {
+            self.store
+                .load_proof(block_num)
+                .await
+                .map_err(|err| database_error_to_status(&err))?
+        } else {
+            None
+        };
+
+        Ok(Response::new(proto::blockchain::MaybeBlock { block, proof }))
     }
 
     async fn sync_chain_mmr(
@@ -288,7 +409,37 @@ impl api_server::Api for RpcService {
 
         debug!(target: COMPONENT, request = ?request_ref);
 
-        self.store.clone().sync_chain_mmr(request).await
+        let request = request.into_inner();
+        let current_client_block_height = BlockNumber::from(request.current_client_block_height);
+        let sync_target = match request.finality_level() {
+            proto::rpc::FinalityLevel::Committed | proto::rpc::FinalityLevel::Unspecified => {
+                self.store.chain_tip(Finality::Committed)
+            },
+            proto::rpc::FinalityLevel::Proven => self.store.chain_tip(Finality::Proven),
+        };
+
+        if current_client_block_height > sync_target {
+            return Err(Status::invalid_argument(format!(
+                "start block is not known: current client block height {current_client_block_height} is greater than chain tip {sync_target}"
+            )));
+        }
+
+        let block_range = current_client_block_height..=sync_target;
+        let (mmr_delta, block_header, block_signature) = self
+            .store
+            .sync_chain_mmr(block_range.clone())
+            .await
+            .map_err(|err| Status::internal(err.to_string()))?;
+
+        Ok(Response::new(proto::rpc::SyncChainMmrResponse {
+            block_range: Some(proto::rpc::BlockRange {
+                block_from: block_range.start().as_u32(),
+                block_to: block_range.end().as_u32(),
+            }),
+            mmr_delta: Some(mmr_delta.into()),
+            block_header: Some(block_header.into()),
+            block_signature: Some(block_signature.into()),
+        }))
     }
 
     async fn block_subscription(
@@ -300,7 +451,22 @@ impl api_server::Api for RpcService {
 
         debug!(target: COMPONENT, request = ?request_ref);
 
-        self.store.clone().block_subscription(request).await
+        let permit = Arc::clone(&self.block_subscription_semaphore)
+            .try_acquire_owned()
+            .map_err(|_| Status::resource_exhausted("maximum block subscriptions reached"))?;
+
+        let from = BlockNumber::from(request_ref.block_from);
+        let stream = self.store.block_subscription(from).map(|event| {
+            event
+                .map(|event| proto::rpc::BlockSubscriptionResponse {
+                    block: event.block,
+                    committed_chain_tip: event.committed_chain_tip.as_u32(),
+                })
+                .map_err(state_subscription_error_to_status)
+        });
+        let stream: Self::BlockSubscriptionStream =
+            Box::pin(GuardedStream::new(Box::pin(stream), permit));
+        Ok(Response::new(stream))
     }
 
     async fn proof_subscription(
@@ -312,7 +478,23 @@ impl api_server::Api for RpcService {
 
         debug!(target: COMPONENT, request = ?request_ref);
 
-        self.store.clone().proof_subscription(request).await
+        let permit = Arc::clone(&self.proof_subscription_semaphore)
+            .try_acquire_owned()
+            .map_err(|_| Status::resource_exhausted("maximum proof subscriptions reached"))?;
+
+        let from = BlockNumber::from(request_ref.block_from);
+        let stream = self.store.proof_subscription(from).map(|event| {
+            event
+                .map(|event| proto::rpc::ProofSubscriptionResponse {
+                    block_num: event.block_num.as_u32(),
+                    proof: event.proof,
+                    proven_chain_tip: event.proven_chain_tip.as_u32(),
+                })
+                .map_err(state_subscription_error_to_status)
+        });
+        let stream: Self::ProofSubscriptionStream =
+            Box::pin(GuardedStream::new(Box::pin(stream), permit));
+        Ok(Response::new(stream))
     }
 
     // -- Note endpoints ----------------------------------------------------------------------
@@ -330,7 +512,39 @@ impl api_server::Api for RpcService {
 
         check::<QueryParamNoteTagLimit>(request.get_ref().note_tags.len())?;
 
-        self.store.clone().sync_notes(request).await
+        let request = request.into_inner();
+        let block_range = range
+            .into_inclusive_range::<RpcInvalidBlockRange>()
+            .map_err(invalid_block_range_to_status)?;
+        let chain_tip = self.store.chain_tip(Finality::Committed);
+        if *block_range.end() > chain_tip {
+            return Err(Status::invalid_argument(format!(
+                "block_to ({}) is greater than chain tip ({chain_tip})",
+                block_range.end()
+            )));
+        }
+
+        let (results, last_block_checked) = self
+            .store
+            .sync_notes(request.note_tags, block_range)
+            .await
+            .map_err(note_sync_error_to_status)?;
+        let blocks = results
+            .into_iter()
+            .map(|(state, mmr_proof)| proto::rpc::sync_notes_response::NoteSyncBlock {
+                block_header: Some(state.block_header.into()),
+                mmr_path: Some(mmr_proof.merkle_path().clone().into()),
+                notes: state.notes.into_iter().map(note_sync_record_to_proto).collect(),
+            })
+            .collect();
+
+        Ok(Response::new(proto::rpc::SyncNotesResponse {
+            pagination_info: Some(proto::rpc::PaginationInfo {
+                chain_tip: chain_tip.as_u32(),
+                block_num: last_block_checked.as_u32(),
+            }),
+            blocks,
+        }))
     }
 
     async fn get_notes_by_id(
@@ -341,26 +555,35 @@ impl api_server::Api for RpcService {
 
         check::<QueryParamNoteIdLimit>(request.get_ref().ids.len())?;
 
-        // Validation checking for correct NoteId's
-        let note_ids = request.get_ref().ids.clone();
+        let note_ids: Vec<Word> = convert_digests_to_words::<Status, _>(request.into_inner().ids)?;
+        let note_ids: Vec<NoteId> = note_ids.into_iter().map(NoteId::from_raw).collect();
+        let notes = self
+            .store
+            .get_notes_by_id(note_ids)
+            .await
+            .map_err(|err| database_error_to_status(&err))?
+            .into_iter()
+            .map(note_record_to_proto)
+            .collect();
 
-        let _: Vec<Word> =
-            try_convert(note_ids)
-                .collect::<Result<_, _>>()
-                .map_err(|err: ConversionError| {
-                    Status::invalid_argument(err.as_report_context("invalid NoteId"))
-                })?;
-
-        self.store.clone().get_notes_by_id(request).await
+        Ok(Response::new(proto::note::CommittedNoteList { notes }))
     }
 
     async fn get_note_script_by_root(
         &self,
         request: Request<proto::note::NoteScriptRoot>,
     ) -> Result<Response<proto::rpc::MaybeNoteScript>, Status> {
-        debug!(target: COMPONENT, request = ?request);
+        let request = request.into_inner();
+        debug!(target: COMPONENT, ?request);
 
-        self.store.clone().get_note_script_by_root(request).await
+        let root = read_root::<Status>(request.root, "NoteScriptRoot")?;
+        let script = self
+            .store
+            .get_note_script_by_root(root)
+            .await
+            .map_err(|err| database_error_to_status(&err))?;
+
+        Ok(Response::new(proto::rpc::MaybeNoteScript { script: script.map(Into::into) }))
     }
 
     // -- Account endpoints -------------------------------------------------------------------
@@ -384,7 +607,36 @@ impl api_server::Api for RpcService {
 
         debug!(target: COMPONENT, request = ?request.get_ref());
 
-        self.store.clone().sync_account_storage_maps(request).await
+        if !account_id.is_public() {
+            return Err(Status::invalid_argument(format!("account {account_id} is not public")));
+        }
+        let block_range = range
+            .into_inclusive_range::<RpcInvalidBlockRange>()
+            .map_err(invalid_block_range_to_status)?;
+        let storage_maps_page = self
+            .store
+            .sync_account_storage_maps(account_id, block_range)
+            .await
+            .map_err(|err| database_error_to_status(&err))?;
+        let updates = storage_maps_page
+            .values
+            .into_iter()
+            .map(|map_value| proto::rpc::StorageMapUpdate {
+                slot_name: map_value.slot_name.to_string(),
+                key: Some(map_value.key.into()),
+                value: Some(map_value.value.into()),
+                block_num: map_value.block_num.as_u32(),
+            })
+            .collect();
+        let chain_tip = self.store.chain_tip(Finality::Committed);
+
+        Ok(Response::new(proto::rpc::SyncAccountStorageMapsResponse {
+            pagination_info: Some(proto::rpc::PaginationInfo {
+                chain_tip: chain_tip.as_u32(),
+                block_num: storage_maps_page.last_block_included.as_u32(),
+            }),
+            updates,
+        }))
     }
 
     async fn sync_account_vault(
@@ -405,7 +657,37 @@ impl api_server::Api for RpcService {
 
         debug!(target: COMPONENT, request = ?request.get_ref());
 
-        self.store.clone().sync_account_vault(request).await
+        if !account_id.is_public() {
+            return Err(Status::invalid_argument(format!("account {account_id} is not public")));
+        }
+        let block_range = range
+            .into_inclusive_range::<RpcInvalidBlockRange>()
+            .map_err(invalid_block_range_to_status)?;
+        let (last_included_block, updates) = self
+            .store
+            .sync_account_vault(account_id, block_range)
+            .await
+            .map_err(|err| database_error_to_status(&err))?;
+        let updates = updates
+            .into_iter()
+            .map(|update| {
+                let vault_key: Word = update.vault_key.into();
+                proto::rpc::AccountVaultUpdate {
+                    vault_key: Some(vault_key.into()),
+                    asset: update.asset.map(Into::into),
+                    block_num: update.block_num.as_u32(),
+                }
+            })
+            .collect();
+        let chain_tip = self.store.chain_tip(Finality::Committed);
+
+        Ok(Response::new(proto::rpc::SyncAccountVaultResponse {
+            pagination_info: Some(proto::rpc::PaginationInfo {
+                chain_tip: chain_tip.as_u32(),
+                block_num: last_included_block.as_u32(),
+            }),
+            updates,
+        }))
     }
 
     /// Validates storage map key limits before forwarding the account request to the store.
@@ -427,18 +709,22 @@ impl api_server::Api for RpcService {
         // Validate total storage map key limit before forwarding to store
         if let Some(details) = &request.details {
             let _span = info_span!(target: COMPONENT, "validate_storage_map_keys").entered();
-            let total_keys: usize = details
-                .storage_requests
-                .iter()
-                .filter_map(|d| match &d.slot_data {
-                    SlotData::All => None,
-                    SlotData::MapKeys(items) => Some(items.len()),
-                })
-                .sum();
+            let total_keys: usize = match &details.storage_request {
+                AccountStorageRequest::None | AccountStorageRequest::AllStorageMaps => 0,
+                AccountStorageRequest::Explicit(requests) => requests
+                    .iter()
+                    .filter_map(|request| match &request.slot_data {
+                        SlotData::All => None,
+                        SlotData::MapKeys(items) => Some(items.len()),
+                    })
+                    .sum(),
+            };
             check::<QueryParamStorageMapKeyTotalLimit>(total_keys)?;
         }
 
-        self.store.clone().get_account(raw_request).await
+        let account_data =
+            self.store.get_account(request).await.map_err(get_account_error_to_status)?;
+        Ok(Response::new(account_data.into()))
     }
 
     // -- Transaction submission --------------------------------------------------------------
@@ -536,8 +822,9 @@ impl api_server::Api for RpcService {
         }
 
         block_producer
-            .submit_proven_tx(request)
+            .submit_proven_tx(rebuilt_tx)
             .await
+            .map(Into::into)
             .map(Response::new)
             .map_err(Into::into)
     }
@@ -644,8 +931,9 @@ impl api_server::Api for RpcService {
         }
 
         block_producer
-            .submit_proven_tx_batch(request)
+            .submit_proven_tx_batch(proposed_batch)
             .await
+            .map(Into::into)
             .map(Response::new)
             .map_err(Into::into)
     }
@@ -672,7 +960,27 @@ impl api_server::Api for RpcService {
 
         check::<QueryParamAccountIdLimit>(request.get_ref().account_ids.len())?;
 
-        self.store.clone().sync_transactions(request).await
+        let request = request.into_inner();
+        let block_range = range
+            .into_inclusive_range::<RpcInvalidBlockRange>()
+            .map_err(invalid_block_range_to_status)?;
+        let account_ids = read_account_ids::<Status, _>(request.account_ids)?;
+        let (last_block_included, transaction_records_db) = self
+            .store
+            .sync_transactions(account_ids, block_range)
+            .await
+            .map_err(|err| database_error_to_status(&err))?;
+        let transactions =
+            transaction_records_db.into_iter().map(transaction_record_to_proto).collect();
+        let chain_tip = self.store.chain_tip(Finality::Committed);
+
+        Ok(Response::new(proto::rpc::SyncTransactionsResponse {
+            pagination_info: Some(proto::rpc::PaginationInfo {
+                chain_tip: chain_tip.as_u32(),
+                block_num: last_block_included.as_u32(),
+            }),
+            transactions,
+        }))
     }
 
     async fn status(
@@ -681,10 +989,15 @@ impl api_server::Api for RpcService {
     ) -> Result<Response<proto::rpc::RpcStatus>, Status> {
         debug!(target: COMPONENT, request = ?request);
 
-        let store_status =
-            self.store.clone().status(Request::new(())).await.map(Response::into_inner).ok();
+        let store_status = Some(proto::rpc::StoreStatus {
+            version: miden_node_store::version().to_string(),
+            status: "connected".to_string(),
+            chain_tip: self.store.chain_tip(Finality::Committed).as_u32(),
+        });
         let block_producer_status = match &self.mode {
-            RpcMode::Sequencer { block_producer, .. } => Some(block_producer.status().await),
+            RpcMode::Sequencer { block_producer, .. } => {
+                Some(block_producer_status_to_proto(block_producer.status().await))
+            },
             RpcMode::FullNode { source_rpc } => source_rpc
                 .as_ref()
                 .clone()
@@ -705,7 +1018,7 @@ impl api_server::Api for RpcService {
                 status: "unreachable".to_string(),
                 version: "-".to_string(),
                 chain_tip: 0,
-                mempool_stats: Some(MempoolStats::default()),
+                mempool_stats: Some(ProtoMempoolStats::default()),
             })),
             genesis_commitment: self.genesis_commitment.map(Into::into),
         }))
@@ -760,6 +1073,148 @@ fn strip_output_note_decorators<'a>(
         },
         OutputNote::Private(header) => OutputNote::Private(header.clone()),
     })
+}
+
+fn block_producer_status_to_proto(status: BlockProducerStatus) -> proto::rpc::BlockProducerStatus {
+    proto::rpc::BlockProducerStatus {
+        version: status.version,
+        status: status.status,
+        chain_tip: status.chain_tip.as_u32(),
+        mempool_stats: Some(block_producer_mempool_stats_to_proto(status.mempool_stats)),
+    }
+}
+
+fn block_producer_mempool_stats_to_proto(
+    stats: BlockProducerMempoolStats,
+) -> proto::rpc::MempoolStats {
+    proto::rpc::MempoolStats {
+        unbatched_transactions: stats.unbatched_transactions,
+        proposed_batches: stats.proposed_batches,
+        proven_batches: stats.proven_batches,
+    }
+}
+
+fn transaction_record_to_proto(record: TransactionRecord) -> proto::rpc::TransactionRecord {
+    let output_note_proofs = record
+        .output_note_proofs
+        .into_iter()
+        .map(note_sync_record_to_proof_proto)
+        .collect();
+
+    proto::rpc::TransactionRecord {
+        header: Some(proto::transaction::TransactionHeader {
+            transaction_id: Some(record.header.id().into()),
+            account_id: Some(record.header.account_id().into()),
+            initial_state_commitment: Some(record.header.initial_state_commitment().into()),
+            final_state_commitment: Some(record.header.final_state_commitment().into()),
+            input_notes: record.header.input_notes().iter().cloned().map(Into::into).collect(),
+            output_notes: record.header.output_notes().iter().copied().map(Into::into).collect(),
+            fee: Some(Asset::from(record.header.fee()).into()),
+        }),
+        block_num: record.block_num.as_u32(),
+        output_note_proofs,
+    }
+}
+
+fn note_record_to_proto(note: NoteRecord) -> proto::note::CommittedNote {
+    let inclusion_proof = Some(proto::note::NoteInclusionInBlockProof {
+        note_id: Some(note.note_id.into()),
+        block_num: note.block_num.as_u32(),
+        note_index_in_block: note.note_index.leaf_index_value().into(),
+        inclusion_path: Some(note.inclusion_path.into()),
+    });
+    let note = Some(proto::note::Note {
+        metadata: Some(note.metadata.into()),
+        details: note.details.map(|details| details.to_bytes()),
+        attachments: note.attachments.to_bytes(),
+    });
+    proto::note::CommittedNote { inclusion_proof, note }
+}
+
+fn note_sync_record_to_proto(note: NoteSyncRecord) -> proto::note::NoteSyncRecord {
+    let inclusion_proof = Some(proto::note::NoteInclusionInBlockProof {
+        note_id: Some((&note.note_id).into()),
+        block_num: note.block_num.as_u32(),
+        note_index_in_block: note.note_index.leaf_index_value().into(),
+        inclusion_path: Some(note.inclusion_path.into()),
+    });
+    proto::note::NoteSyncRecord {
+        metadata: Some(note.metadata.into()),
+        inclusion_proof,
+    }
+}
+
+fn note_sync_record_to_proof_proto(note: NoteSyncRecord) -> proto::note::NoteInclusionInBlockProof {
+    proto::note::NoteInclusionInBlockProof {
+        note_id: Some((&note.note_id).into()),
+        block_num: note.block_num.as_u32(),
+        note_index_in_block: note.note_index.leaf_index_value().into(),
+        inclusion_path: Some(note.inclusion_path.into()),
+    }
+}
+
+fn database_error_to_status(err: &DatabaseError) -> Status {
+    let message = err.to_string();
+    match err {
+        DatabaseError::AccountNotFoundInDb(_)
+        | DatabaseError::AccountsNotFoundInDb(_)
+        | DatabaseError::AccountNotPublic(_) => Status::not_found(message),
+        _ => Status::internal(message),
+    }
+}
+
+fn get_block_header_error_to_status(err: GetBlockHeaderError) -> Status {
+    match err {
+        GetBlockHeaderError::DatabaseError(err) => database_error_to_status(&err),
+        GetBlockHeaderError::MmrError(err) => Status::internal(err.to_string()),
+    }
+}
+
+fn note_sync_error_to_status(err: NoteSyncError) -> Status {
+    let message = err.to_string();
+    match err {
+        NoteSyncError::DatabaseError(err) => database_error_to_status(&err),
+        NoteSyncError::InvalidBlockRange(_)
+        | NoteSyncError::FutureBlock { .. }
+        | NoteSyncError::DeserializationFailed(_) => Status::invalid_argument(message),
+        NoteSyncError::UnderlyingDatabaseError(_)
+        | NoteSyncError::EmptyBlockHeadersTable
+        | NoteSyncError::MmrError(_) => Status::internal(message),
+    }
+}
+
+fn get_account_error_to_status(err: GetAccountError) -> Status {
+    let message = err.to_string();
+    match err {
+        GetAccountError::DatabaseError(err) => database_error_to_status(&err),
+        GetAccountError::DeserializationFailed(_)
+        | GetAccountError::AccountNotFound(..)
+        | GetAccountError::AccountNotPublic(_)
+        | GetAccountError::UnknownBlock(_)
+        | GetAccountError::BlockPruned(_) => Status::invalid_argument(message),
+    }
+}
+
+fn state_subscription_error_to_status(err: StateSubscriptionError) -> Status {
+    match err {
+        StateSubscriptionError::BlockNotFound(block_num) => {
+            Status::not_found(format!("block {block_num} not found"))
+        },
+        StateSubscriptionError::ProofNotFound(block_num) => {
+            Status::not_found(format!("proof for block {block_num} not found"))
+        },
+        StateSubscriptionError::BlockLoad { block_num, source } => {
+            Status::internal(format!("failed to load block {block_num}: {}", source.as_report()))
+        },
+        StateSubscriptionError::ProofLoad { block_num, source } => Status::internal(format!(
+            "failed to load proof for block {block_num}: {}",
+            source.as_report()
+        )),
+    }
+}
+
+fn invalid_block_range_to_status(RpcInvalidBlockRange(err): RpcInvalidBlockRange) -> Status {
+    Status::invalid_argument(err.to_string())
 }
 
 // LIMIT HELPERS
