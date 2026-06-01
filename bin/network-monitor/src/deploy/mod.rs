@@ -16,7 +16,14 @@ use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
 use miden_protocol::crypto::merkle::mmr::{MmrPeaks, PartialMmr};
 use miden_protocol::note::{NoteScript, NoteScriptRoot};
-use miden_protocol::transaction::{AccountInputs, InputNotes, PartialBlockchain, TransactionArgs};
+use miden_protocol::transaction::{
+    AccountInputs,
+    ExecutedTransaction,
+    InputNotes,
+    PartialBlockchain,
+    TransactionArgs,
+    TransactionInputs,
+};
 use miden_protocol::utils::serde::Serializable;
 use miden_protocol::{MastForest, Word};
 use miden_tx::auth::BasicAuthenticator;
@@ -110,12 +117,14 @@ pub async fn create_and_deploy_accounts(rpc_url: &Url) -> Result<(Account, Secre
     Ok((wallet_account, secret_key, counter_account))
 }
 
-/// Deploy a counter account to the network by submitting its genesis transaction via RPC.
-#[instrument(target = COMPONENT, name = "deploy-counter-account", skip_all, ret(level = "debug"))]
-pub async fn deploy_counter_account(counter_account: &Account, rpc_url: &Url) -> Result<()> {
-    // Deploy counter account to the network using a genesis-aware RPC client.
-    let mut rpc_client = create_genesis_aware_rpc_client(rpc_url, Duration::from_secs(10)).await?;
-
+/// Execute the counter account's genesis (creation) transaction in-memory.
+///
+/// Fetches the genesis block header from RPC, builds a [`MonitorDataStore`] over it, and executes
+/// the creation transaction. Does not prove or submit.
+async fn execute_counter_genesis_tx(
+    counter_account: &Account,
+    rpc_client: &mut RpcClient,
+) -> Result<ExecutedTransaction> {
     let block_header_request = BlockHeaderByNumberRequest {
         block_num: Some(BlockNumber::GENESIS.as_u32()),
         include_mmr_proof: None,
@@ -155,6 +164,33 @@ pub async fn deploy_counter_account(counter_account: &Account, rpc_url: &Url) ->
         )
         .await
         .context("Failed to execute transaction")?;
+
+    Ok(executed_tx)
+}
+
+/// Build a valid set of transaction inputs for a throwaway counter genesis transaction.
+///
+/// Used as the static payload for the remote-prover probe: it produces a real, self-consistent
+/// transaction the remote prover can re-execute and prove, without depending on the network
+/// transaction service or any pre-existing on-chain account. The only network access is a single
+/// RPC read for the genesis block header; nothing is proven or submitted here.
+pub async fn build_probe_transaction_inputs(rpc_url: &Url) -> Result<TransactionInputs> {
+    let (wallet_account, _secret_key) = create_wallet_account()?;
+    let counter_account = create_counter_account(wallet_account.id())?;
+
+    let mut rpc_client = create_genesis_aware_rpc_client(rpc_url, Duration::from_secs(10)).await?;
+    let executed_tx = execute_counter_genesis_tx(&counter_account, &mut rpc_client).await?;
+
+    Ok(executed_tx.tx_inputs().clone())
+}
+
+/// Deploy a counter account to the network by submitting its genesis transaction via RPC.
+#[instrument(target = COMPONENT, name = "deploy-counter-account", skip_all, ret(level = "debug"))]
+pub async fn deploy_counter_account(counter_account: &Account, rpc_url: &Url) -> Result<()> {
+    // Deploy counter account to the network using a genesis-aware RPC client.
+    let mut rpc_client = create_genesis_aware_rpc_client(rpc_url, Duration::from_secs(10)).await?;
+
+    let executed_tx = execute_counter_genesis_tx(counter_account, &mut rpc_client).await?;
 
     let transaction_inputs = executed_tx.tx_inputs().to_bytes();
 
