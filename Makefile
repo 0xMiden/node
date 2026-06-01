@@ -12,6 +12,7 @@ COMPOSE_FILES = -f docker-compose.yml -f compose/telemetry.yml -f compose/monito
 CONFIG_DIR = .config
 README_FILES = $(shell git ls-files '*README.md')
 PRETTIER_CONFIG = $(CONFIG_DIR)/prettier.json
+PRETTIER_LOG_LEVEL = warn
 PRETTIER_VERSION ?= 3.8.3
 MARKDOWNLINT_CONFIG = $(CONFIG_DIR)/markdownlint-cli2.yaml
 MARKDOWNLINT_CLI2_VERSION ?= 0.22.1
@@ -47,12 +48,12 @@ format-check: markdown-format-check ## Checks rustfmt, README formatting, and co
 
 .PHONY: markdown-format
 markdown-format: ## Formats README Markdown files
-	prettier --config $(PRETTIER_CONFIG) --write $(README_FILES)
+	@prettier --config $(PRETTIER_CONFIG) --log-level $(PRETTIER_LOG_LEVEL) --write $(README_FILES)
 
 
 .PHONY: markdown-format-check
 markdown-format-check: ## Checks README Markdown formatting
-	prettier --config $(PRETTIER_CONFIG) --check $(README_FILES)
+	@prettier --config $(PRETTIER_CONFIG) --log-level $(PRETTIER_LOG_LEVEL) --check $(README_FILES)
 
 
 .PHONY: markdown-lint
