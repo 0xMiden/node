@@ -9,7 +9,7 @@ use miden_node_proto::domain::account::{
     AccountDetails, AccountResponse, AccountVaultDetails, StorageMapEntries
 };
 use miden_node_proto::errors::ConversionError;
-use miden_node_proto::generated::rpc::account_request::account_detail_request::{StorageMapDetailRequest, storage_map_detail_request};
+use miden_node_proto::generated::rpc::account_request::account_detail_request::{StorageMapDetailRequest, StorageMapDetailRequests, StorageRequest, storage_map_detail_request};
 use miden_node_proto::generated::rpc::account_request::account_detail_request::storage_map_detail_request::MapKeys;
 use miden_node_proto::generated::rpc::{BlockSubscriptionRequest, BlockSubscriptionResponse};
 use miden_node_proto::generated::{self as proto};
@@ -193,7 +193,7 @@ impl RpcClient {
             details: Some(proto::rpc::account_request::AccountDetailRequest {
                 code_commitment: Some(Word::default().into()),
                 asset_vault_commitment: None, //
-                storage_maps: vec![],
+                storage_request: None,
             }),
         };
 
@@ -223,7 +223,7 @@ impl RpcClient {
             details: Some(proto::rpc::account_request::AccountDetailRequest {
                 code_commitment: None,
                 asset_vault_commitment: Some(Word::default().into()),
-                storage_maps: vec![],
+                storage_request: None,
             }),
         };
 
@@ -261,12 +261,14 @@ impl RpcClient {
             details: Some(proto::rpc::account_request::AccountDetailRequest {
                 code_commitment: None,
                 asset_vault_commitment: None,
-                storage_maps: vec![StorageMapDetailRequest {
-                    slot_name: slot_name.to_string(),
-                    slot_data: Some(storage_map_detail_request::SlotData::MapKeys(MapKeys {
-                        map_keys: vec![map_key.into()],
-                    })),
-                }],
+                storage_request: Some(StorageRequest::StorageMaps(StorageMapDetailRequests {
+                    storage_maps: vec![StorageMapDetailRequest {
+                        slot_name: slot_name.to_string(),
+                        slot_data: Some(storage_map_detail_request::SlotData::MapKeys(MapKeys {
+                            map_keys: vec![map_key.into()],
+                        })),
+                    }],
+                })),
             }),
         };
 
