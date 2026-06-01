@@ -9,9 +9,13 @@ help:
 WARNINGS=RUSTDOCFLAGS="-D warnings"
 STRESS_TEST_DATA_DIR ?= stress-test-store-$(shell date +%Y%m%d-%H%M%S)
 COMPOSE_FILES = -f docker-compose.yml -f compose/telemetry.yml -f compose/monitor.yml
+CONFIG_DIR = .config
 README_FILES = $(shell git ls-files '*README.md')
+PRETTIER_CONFIG = $(CONFIG_DIR)/prettier.json
 PRETTIER_VERSION ?= 3.8.3
+MARKDOWNLINT_CONFIG = $(CONFIG_DIR)/markdownlint-cli2.yaml
 MARKDOWNLINT_CLI2_VERSION ?= 0.22.1
+TAPLO_CONFIG = $(CONFIG_DIR)/taplo.toml
 
 # -- linting --------------------------------------------------------------------------------------
 
@@ -42,17 +46,17 @@ format-check: markdown-format-check ## Checks rustfmt, README formatting, and co
 
 .PHONY: markdown-format
 markdown-format: ## Formats README Markdown files
-	prettier --write $(README_FILES)
+	prettier --config $(PRETTIER_CONFIG) --write $(README_FILES)
 
 
 .PHONY: markdown-format-check
 markdown-format-check: ## Checks README Markdown formatting
-	prettier --check $(README_FILES)
+	prettier --config $(PRETTIER_CONFIG) --check $(README_FILES)
 
 
 .PHONY: markdown-lint
 markdown-lint: ## Lints README Markdown files
-	markdownlint-cli2 $(README_FILES)
+	markdownlint-cli2 --config $(MARKDOWNLINT_CONFIG) $(README_FILES)
 
 
 .PHONY: shear
@@ -62,12 +66,12 @@ shear: ## Runs cargo-shear to find unused or misplaced dependencies
 
 .PHONY: toml
 toml: ## Runs Format for all TOML files
-	taplo fmt
+	taplo fmt --config $(TAPLO_CONFIG)
 
 
 .PHONY: toml-check
 toml-check: ## Runs Format for all TOML files but only in check mode
-	taplo fmt --check --verbose
+	taplo fmt --config $(TAPLO_CONFIG) --check --verbose
 
 .PHONY: typos-check
 typos-check: ## Runs spellchecker
