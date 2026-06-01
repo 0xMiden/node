@@ -9,7 +9,6 @@ services:
       - MIDEN_MONITOR_RPC_URL=http://sequencer:57291
       - MIDEN_MONITOR_PORT=3001
       - MIDEN_MONITOR_NETWORK_NAME=Localhost
-      - MIDEN_MONITOR_DISABLE_NTX_SERVICE=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
     ports:
       - "3001:3001"
