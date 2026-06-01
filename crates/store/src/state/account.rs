@@ -31,118 +31,6 @@ use crate::COMPONENT;
 use crate::account_state_forest::AccountStorageMapResult;
 use crate::errors::{DatabaseError, GetAccountError};
 
-fn expand_account_storage_request(
-    storage_request: AccountStorageRequest,
-    storage_header: &AccountStorageHeader,
-) -> Vec<StorageMapRequest> {
-    match storage_request {
-        AccountStorageRequest::None => Vec::new(),
-        AccountStorageRequest::Explicit(requests) => requests,
-        AccountStorageRequest::AllStorageMaps => storage_header
-            .slots()
-            .filter(|slot| slot.slot_type() == StorageSlotType::Map)
-            .map(|slot| StorageMapRequest {
-                slot_name: slot.name().clone(),
-                slot_data: SlotData::All,
-            })
-            .collect(),
-    }
-}
-
-// This is intentionally conservative. Storage slot names can be up to u8::MAX bytes, and a
-// `limit_exceeded` map detail stores only the slot name plus the `too_many_entries` flag.
-const STORAGE_MAP_LIMIT_EXCEEDED_FIELD_MAX_LEN: usize = 263;
-
-// A conservative limit that makes sure that limit exceeded messages can be appended for all slots
-// in the response.
-const MAX_ALL_STORAGE_MAPS_RESPONSE_PAYLOAD_WITH_BUDGET_RESERVED_FOR_LIMIT_EXCEEDED_SLOTS: usize =
-    MAX_RESPONSE_PAYLOAD_BYTES - 256 * STORAGE_MAP_LIMIT_EXCEEDED_FIELD_MAX_LEN - 8192;
-
-// Conservative max length for storage map entries: key-value pairs, each one is four `fixed64`
-// values plus Protobuf overhead.
-const STORAGE_MAP_ENTRY_MAX_LEN: usize = 78;
-
-fn protobuf_bytes_field_len(field_number: u32, len: usize) -> usize {
-    key_len(field_number) + encoded_len_varint(len as u64) + len
-}
-
-fn estimate_storage_map_details_field_len(details: &AccountStorageMapDetails) -> usize {
-    match &details.entries {
-        StorageMapEntries::LimitExceeded => STORAGE_MAP_LIMIT_EXCEEDED_FIELD_MAX_LEN,
-        StorageMapEntries::AllEntries(entries) => {
-            let slot_name_len = details.slot_name.as_str().len();
-            let slot_name_field_len = protobuf_bytes_field_len(1, slot_name_len);
-            let all_entries_payload_len = entries.len() * STORAGE_MAP_ENTRY_MAX_LEN;
-            let all_entries_field_len = protobuf_bytes_field_len(3, all_entries_payload_len);
-            let details_len = slot_name_field_len + all_entries_field_len;
-
-            protobuf_bytes_field_len(2, details_len)
-        },
-        // `apply_all_storage_maps_response_budget()` is only used for `all_storage_maps` requests,
-        // which never request proofs. Be conservative and force the fallback path if this changes.
-        StorageMapEntries::EntriesWithProofs(_) => usize::MAX,
-    }
-}
-
-#[expect(clippy::too_many_arguments)]
-fn apply_all_storage_maps_response_budget(
-    block_num: BlockNumber,
-    witness: &AccountWitness,
-    account_header: AccountHeader,
-    account_code: Option<Vec<u8>>,
-    vault_details: AccountVaultDetails,
-    storage_header: AccountStorageHeader,
-    ordered_map_details: Vec<AccountStorageMapDetails>,
-    ordered_map_slot_names: Vec<StorageSlotName>,
-    max_response_payload_bytes: usize,
-) -> AccountDetails {
-    let mut accepted_map_details = Vec::with_capacity(ordered_map_details.len());
-    let base_response_size_without_map_details =
-        proto::rpc::AccountResponse::from(AccountResponse {
-            block_num,
-            witness: witness.clone(),
-            details: Some(AccountDetails {
-                account_header: account_header.clone(),
-                account_code: account_code.clone(),
-                vault_details: vault_details.clone(),
-                storage_details: AccountStorageDetails {
-                    header: storage_header.clone(),
-                    map_details: vec![],
-                },
-            }),
-        })
-        .encoded_len();
-    let available_map_details_budget =
-        max_response_payload_bytes.saturating_sub(base_response_size_without_map_details);
-    let reserved_limit_exceeded_budget =
-        ordered_map_slot_names.len() * STORAGE_MAP_LIMIT_EXCEEDED_FIELD_MAX_LEN;
-    let mut extra_budget_for_full_maps =
-        available_map_details_budget.saturating_sub(reserved_limit_exceeded_budget);
-
-    for (details, slot_name) in ordered_map_details.into_iter().zip(ordered_map_slot_names) {
-        let estimated_details_len = estimate_storage_map_details_field_len(&details);
-        let extra_cost_over_limit_exceeded =
-            estimated_details_len.saturating_sub(STORAGE_MAP_LIMIT_EXCEEDED_FIELD_MAX_LEN);
-
-        if extra_cost_over_limit_exceeded <= extra_budget_for_full_maps {
-            extra_budget_for_full_maps -= extra_cost_over_limit_exceeded;
-            accepted_map_details.push(details);
-        } else {
-            accepted_map_details.push(AccountStorageMapDetails::limit_exceeded(slot_name));
-        }
-    }
-
-    AccountDetails {
-        account_header,
-        account_code,
-        vault_details,
-        storage_details: AccountStorageDetails {
-            header: storage_header,
-            map_details: accepted_map_details,
-        },
-    }
-}
-
 impl State {
     /// Returns an account witness and optionally account details at a specific block.
     ///
@@ -331,6 +219,7 @@ impl State {
             None => None,
         };
 
+        // Query account state forest for vault details on commitment mismatch
         let vault_details = match asset_vault_commitment {
             Some(commitment) if commitment == account_header.vault_root() => {
                 AccountVaultDetails::empty()
@@ -345,6 +234,9 @@ impl State {
             None => AccountVaultDetails::empty(),
         };
 
+        // Split storage map requests into two categories:
+        // - slots with explicit keys (including proofs)
+        // - slots with "all entries"
         let mut storage_map_details =
             Vec::<AccountStorageMapDetails>::with_capacity(storage_requests.len());
         let mut map_keys_requests = Vec::new();
@@ -367,6 +259,7 @@ impl State {
 
         let mut storage_map_details_by_index = vec![None; storage_request_slots.len()];
 
+        // Handle slots with explicit key requests
         if !map_keys_requests.is_empty() {
             self.with_forest_read_blocking(|forest| {
                 for (index, slot_name, keys) in map_keys_requests {
@@ -389,6 +282,7 @@ impl State {
             })?;
         }
 
+        // Handle slots with "all entries" requests
         for (index, slot_name) in all_entries_requests {
             let details = match self
                 .get_storage_map_details_from_forest(account_id, &slot_name, block_num)?
@@ -413,6 +307,10 @@ impl State {
             storage_map_details.push(details);
         }
 
+        // In case of an "all storage maps" request we have to be careful: even with the per-slot
+        // limit of [`AccountStorageMapDetails::MAX_RETURN_ENTRIES`] we might go over the response
+        // size limit. Here we make sure that we're within that limit by potentially truncating the
+        // response.
         if should_apply_response_budget {
             return Ok(apply_all_storage_maps_response_budget(
                 block_num,
@@ -438,6 +336,135 @@ impl State {
         })
     }
 }
+
+// HELPERS
+// ================================================================================================
+
+/// Expand [`AccountStorageRequest`] to a vector of slot requests.
+fn expand_account_storage_request(
+    storage_request: AccountStorageRequest,
+    storage_header: &AccountStorageHeader,
+) -> Vec<StorageMapRequest> {
+    match storage_request {
+        AccountStorageRequest::None => Vec::new(),
+        AccountStorageRequest::Explicit(requests) => requests,
+        AccountStorageRequest::AllStorageMaps => storage_header
+            .slots()
+            .filter(|slot| slot.slot_type() == StorageSlotType::Map)
+            .map(|slot| StorageMapRequest {
+                slot_name: slot.name().clone(),
+                slot_data: SlotData::All,
+            })
+            .collect(),
+    }
+}
+
+// This is intentionally conservative. Storage slot names can be up to u8::MAX bytes, and a
+// `limit_exceeded` map detail stores only the slot name plus the `too_many_entries` flag.
+const STORAGE_MAP_LIMIT_EXCEEDED_FIELD_MAX_LEN: usize = 263;
+
+// A conservative limit that makes sure that limit exceeded messages can be appended for all slots
+// in the response.
+const MAX_ALL_STORAGE_MAPS_RESPONSE_PAYLOAD_WITH_BUDGET_RESERVED_FOR_LIMIT_EXCEEDED_SLOTS: usize =
+    MAX_RESPONSE_PAYLOAD_BYTES - 256 * STORAGE_MAP_LIMIT_EXCEEDED_FIELD_MAX_LEN - 8192;
+
+// Conservative max length for storage map entries: key-value pairs, each one is four `fixed64`
+// values plus Protobuf overhead.
+const STORAGE_MAP_ENTRY_MAX_LEN: usize = 78;
+
+fn protobuf_bytes_field_len(field_number: u32, len: usize) -> usize {
+    key_len(field_number) + encoded_len_varint(len as u64) + len
+}
+
+/// Give an upper estimate for the encoded size of a single storage map.
+fn estimate_storage_map_details_field_len(details: &AccountStorageMapDetails) -> usize {
+    match &details.entries {
+        StorageMapEntries::LimitExceeded => STORAGE_MAP_LIMIT_EXCEEDED_FIELD_MAX_LEN,
+        StorageMapEntries::AllEntries(entries) => {
+            let slot_name_len = details.slot_name.as_str().len();
+            let slot_name_field_len = protobuf_bytes_field_len(1, slot_name_len);
+            let all_entries_payload_len = entries.len() * STORAGE_MAP_ENTRY_MAX_LEN;
+            let all_entries_field_len = protobuf_bytes_field_len(3, all_entries_payload_len);
+            let details_len = slot_name_field_len + all_entries_field_len;
+
+            protobuf_bytes_field_len(2, details_len)
+        },
+        // `apply_all_storage_maps_response_budget()` is only used for `all_storage_maps` requests,
+        // which never request proofs. Be conservative and force the fallback path if this changes.
+        StorageMapEntries::EntriesWithProofs(_) => usize::MAX,
+    }
+}
+
+/// Limit response size to a payload budget.
+///
+/// Ensures that the [`AccountDetails`] response fits into `max_response_payload_bytes` when encoded.
+/// We iterate over the individual storage map slots and:
+/// - keep the map contents is we're still within our response size budget
+/// - replace the contents with "limit exceeded" if we're past the response size budget.
+///
+/// We reserve space for the "limit exceeded" responses in advance so we're safe to start appending
+/// "limit exceeded" at any point during iteration.
+#[expect(clippy::too_many_arguments)]
+fn apply_all_storage_maps_response_budget(
+    block_num: BlockNumber,
+    witness: &AccountWitness,
+    account_header: AccountHeader,
+    account_code: Option<Vec<u8>>,
+    vault_details: AccountVaultDetails,
+    storage_header: AccountStorageHeader,
+    ordered_map_details: Vec<AccountStorageMapDetails>,
+    ordered_map_slot_names: Vec<StorageSlotName>,
+    max_response_payload_bytes: usize,
+) -> AccountDetails {
+    let mut accepted_map_details = Vec::with_capacity(ordered_map_details.len());
+    let base_response_size_without_map_details =
+        proto::rpc::AccountResponse::from(AccountResponse {
+            block_num,
+            witness: witness.clone(),
+            details: Some(AccountDetails {
+                account_header: account_header.clone(),
+                account_code: account_code.clone(),
+                vault_details: vault_details.clone(),
+                storage_details: AccountStorageDetails {
+                    header: storage_header.clone(),
+                    map_details: vec![],
+                },
+            }),
+        })
+        .encoded_len();
+    let available_map_details_budget =
+        max_response_payload_bytes.saturating_sub(base_response_size_without_map_details);
+    let reserved_limit_exceeded_budget =
+        ordered_map_slot_names.len() * STORAGE_MAP_LIMIT_EXCEEDED_FIELD_MAX_LEN;
+    let mut extra_budget_for_full_maps =
+        available_map_details_budget.saturating_sub(reserved_limit_exceeded_budget);
+
+    for (details, slot_name) in ordered_map_details.into_iter().zip(ordered_map_slot_names) {
+        let estimated_details_len = estimate_storage_map_details_field_len(&details);
+        let extra_cost_over_limit_exceeded =
+            estimated_details_len.saturating_sub(STORAGE_MAP_LIMIT_EXCEEDED_FIELD_MAX_LEN);
+
+        if extra_cost_over_limit_exceeded <= extra_budget_for_full_maps {
+            extra_budget_for_full_maps -= extra_cost_over_limit_exceeded;
+            accepted_map_details.push(details);
+        } else {
+            accepted_map_details.push(AccountStorageMapDetails::limit_exceeded(slot_name));
+        }
+    }
+
+    AccountDetails {
+        account_header,
+        account_code,
+        vault_details,
+        storage_details: AccountStorageDetails {
+            header: storage_header,
+            map_details: accepted_map_details,
+        },
+    }
+}
+
+// TESTS
+// ================================================================================================
 
 #[cfg(test)]
 mod tests {
