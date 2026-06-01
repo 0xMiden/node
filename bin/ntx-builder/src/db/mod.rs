@@ -99,18 +99,19 @@ impl Db {
         );
 
         let genesis_commitment = genesis.header().commitment();
+        let genesis_header = genesis.header().clone();
+
+        db.inner
+            .transact("insert_genesis_chain_state", move |conn| {
+                queries::insert_genesis_chain_state(conn, &genesis_header, &genesis_commitment)
+            })
+            .await
+            .context("failed to seed genesis chain state")?;
 
         let effects = CommittedBlockEffects::from_signed_block(genesis);
         db.apply_committed_block(effects, PartialMmr::default())
             .await
             .context("failed to insert genesis block")?;
-
-        db.inner
-            .transact("set_genesis_commitment", move |conn| {
-                queries::set_genesis_commitment(conn, &genesis_commitment)
-            })
-            .await
-            .context("failed to persist genesis commitment")?;
 
         Ok(())
     }
