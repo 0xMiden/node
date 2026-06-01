@@ -3325,7 +3325,6 @@ version = "0.15.0"
 dependencies = [
  "anyhow",
  "clap",
- "fs-err",
  "humantime",
  "miden-node-block-producer",
  "miden-node-proto",
@@ -3550,6 +3549,7 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "rand 0.9.4",
+ "reqwest",
  "thiserror 2.0.18",
  "tokio",
  "tonic",
@@ -3572,7 +3572,6 @@ dependencies = [
  "build-rs",
  "clap",
  "diesel",
- "fs-err",
  "futures",
  "humantime",
  "libsqlite3-sys",
