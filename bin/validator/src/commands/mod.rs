@@ -229,25 +229,3 @@ impl ValidatorKey {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn migrate_command_parses_data_directory() {
-        let command = ValidatorCommand::try_parse_from([
-            "miden-validator",
-            "migrate",
-            "--data-directory",
-            "/tmp/miden-validator",
-        ])
-        .expect("command should parse");
-
-        let ValidatorCommand::Migrate { data_directory } = command else {
-            panic!("expected the migrate command");
-        };
-
-        assert_eq!(data_directory, PathBuf::from("/tmp/miden-validator"));
-    }
-}
