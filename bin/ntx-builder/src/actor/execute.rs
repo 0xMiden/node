@@ -624,7 +624,7 @@ impl DataStore for NtxDataStore {
     fn get_vault_asset_witnesses(
         &self,
         account_id: AccountId,
-        _vault_root: Word,
+        vault_root: Word,
         vault_keys: BTreeSet<AssetVaultKey>,
     ) -> impl FutureMaybeSend<Result<Vec<AssetWitness>, DataStoreError>> {
         async move {
@@ -635,6 +635,13 @@ impl DataStore for NtxDataStore {
             }
 
             let vault = self.account.vault();
+            if vault.root() != vault_root {
+                return Err(DataStoreError::other(format!(
+                    "local vault root {} does not match requested root {vault_root}",
+                    vault.root()
+                )));
+            }
+
             let witnesses = vault_keys.into_iter().map(|key| vault.open(key)).collect();
 
             Ok(witnesses)
