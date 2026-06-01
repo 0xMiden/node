@@ -1,73 +1,98 @@
 # Miden node
 
 [![LICENSE](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/0xMiden/node/blob/main/LICENSE)
-[![CI](https://github.com/0xMiden/node/actions/workflows/ci.yml/badge.svg)](https://github.com/0xMiden/node/actions/workflows/ci.yml)
+[![CI][ci-badge]][ci-link]
 [![RUST_VERSION](https://img.shields.io/badge/rustc-1.93+-lightgray.svg)](https://www.rust-lang.org/tools/install)
 [![crates.io](https://img.shields.io/crates/v/miden-node)](https://crates.io/crates/miden-node)
 
-This repository contains the core infrastructure components of a Miden network, including the node
-implementation. The workspace includes binaries and component crates for block production,
-validation, state storage, public RPC serving, network transaction building, proving services, and
-monitoring.
+[ci-badge]: https://github.com/0xMiden/node/actions/workflows/ci.yml/badge.svg
+[ci-link]: https://github.com/0xMiden/node/actions/workflows/ci.yml
+[developer-docs]: https://0xMiden.github.io/node/index.html
 
-The Miden node is still under active development and should be treated as alpha software. The current
-implementation is designed around a centralized operator; P2P networking and consensus are not part
-of this repository yet.
+This repository contains the core infrastructure components of a Miden network, including the sequencer and full node
+implementations. It also defines the public gRPC API for interfacing with the network.
+
+Miden is still under active development. The components in this repository, including the RPC schema,
+should be treated as unstable. The current network design remains centralized while the proving
+system and protocol mature.
 
 ## Documentation
 
-Node documentation for current official testnet versions is available in the official Miden docs at
-<https://docs.miden.xyz/core-concepts/node/>. Network operators, full-node runners, and builders
-looking to run a local Miden network should prefer those docs.
+Node documentation for official testnet versions is available as part of the official Miden docs at
+<https://docs.miden.xyz/core-concepts/node/>. This includes guides for network operators,
+full node runners, and builders looking to run a local Miden network.
 
-Documentation for the current repository version is published from this repository:
+The gRPC schema can be found in the top-level [`proto`](./proto) directory. Note that this will
+reflect the current development state, and one should look to the official docs for network schemas.
 
-- Node and operator documentation: <https://0xMiden.github.io/node/index.html>
-- Developer documentation: <https://0xMiden.github.io/node/developer/index.html>
+The rest of this README is intended for developers in this repository. Advanced users
+and the curious may get some further value from it. If any information is missing from the
+official documentation, please open an issue.
 
-The formal public RPC protobuf definition for this repository version is
-[`proto/proto/rpc.proto`](./proto/proto/rpc.proto).
+## Developer docs
 
-The rest of this README is intended for developers working in this repository.
+Developers can find repository and onboarding documentation in the [developer docs][developer-docs].
+Those docs are more in-depth but the following sections endeavour to provide a short summary.
 
-## Workspace Entry Points
+### Workspace organisation
 
-The workspace is organized around several binaries:
+The workspace is organised around several binaries, with supplementary crates providing
+organisation and shared functionality. These crates are for internal use only; the primary
+outputs are the binaries and gRPC schema. The former are found under the `bin`
+directory, the latter in the `proto` directory.
 
-- [`miden-node`](https://crates.io/crates/miden-node): the main node binary. It runs a sequencer or a
-  full node and embeds the store, RPC, and block-producer components.
-- [`miden-validator`](https://crates.io/crates/miden-validator): validates transactions and proposed
-  blocks, signs valid blocks, and creates the signed genesis block during bootstrap.
-- [`miden-ntx-builder`](https://crates.io/crates/miden-ntx-builder): follows committed blocks and
-  builds network transactions for network accounts.
-- [`miden-remote-prover`](https://crates.io/crates/miden-remote-prover): runs a gRPC proving service
-  for transaction, batch, or block proofs.
-- [`miden-network-monitor`](https://crates.io/crates/miden-network-monitor): monitors node,
-  validator, prover, faucet, explorer, and note-transport infrastructure.
+#### Binaries
 
-Each binary exposes its supported commands and configuration through its help output. Prefer the
-binary help output over copied command snippets, since configuration changes more often than the
-high-level architecture.
+A quick overview of the binaries:
 
-## Core Components
+- [`node`](./bin/node/README.md): the node binary which can operate in either sequencer or full node
+  configuration.
+- [`validator`](./bin/validator/README.md): independent verification of proposed blocks before they
+  may be committed on chain.
+- [`ntx-builder`](./bin/ntx-builder/README.md): monitors blocks for network notes, and creates
+  network transactions consuming these.
+- [`remote-prover`](./bin/remote-prover/README.md): provides a FIFO service for proving
+  transactions, batches, and blocks.
+- [`network-monitor`](./bin/network-monitor/README.md): a tool which monitors a network's
+  infrastructure, e.g. block production, RPC, validator, prover, faucet, explorer, and note
+  transport.
 
-The component crates exist primarily to support the binaries and are not intended
-as libraries for other development.
+There are additional binaries but they're more supplementary; see their READMEs for more information.
 
-- `miden-node-store`: persistent chain state and database-backed store logic used by `miden-node`.
-- `miden-node-rpc`: public RPC server frontend of `miden-node`.
-- `miden-node-block-producer`: block production implementation used by `miden-node` in sequencer
-  mode.
-- `miden-node-proto`: generated protobuf bindings and conversion code.
-- `miden-node-proto-build`: protobuf file descriptors for generating gRPC clients.
-- `miden-node-db`, `miden-node-utils`, and related helper crates: shared infrastructure for the
-  workspace.
+#### gRPC
+
+The [gRPC schema](./proto/README.md) falls into two buckets: the primary public
+[RPC API](./proto/proto/rpc.proto) and [remote prover API](./proto/proto/remote_prover.proto), and
+the [internal schemas](./proto/proto/internal) used to communicate between internal network services.
+
+#### Workspace crates
+
+The crates exist primarily to support the binaries and are not intended
+as libraries for external development.
+
+- `store`: persistent chain state and database-backed store logic used by the `node`.
+- `rpc`: public RPC server frontend of the `node`.
+- `block-producer`: handles block sequencing and block syncing for the node.
+- `proto`: uses gRPC bindings from the schema for both RPC and internal services.
+- `db`: common framework for SQLite migrations and interactions.
+- `utils`: catch-all common utilities.
 
 ## Development
 
-Use the developer documentation for architecture notes, component internals, testing workflows, and
-local development setup. Repository READMEs are landing pages for crates and binaries; operational
-instructions should live in the documentation rather than in copied command examples.
+The [developer documentation][developer-docs] provides the architectural design of the node and other
+binaries.
+
+For testing and other workflows, please see the `Makefile`. The more frequently used commands are:
+
+```sh
+# Note: we use +nightly for formatting, so using general `cargo fmt` will conflict.
+make format
+make lint
+make test
+```
+
+Our CI enforces consistency here so it would be good to familiarize yourself with
+at least our [CI GitHub jobs](./.github/workflows/ci.yml).
 
 ## Contributing
 
