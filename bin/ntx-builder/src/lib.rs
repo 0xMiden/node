@@ -157,8 +157,8 @@ pub struct NtxBuilderConfig {
     /// Optional auth header value injected into internal RPC requests.
     pub rpc_auth_header: Option<AsciiMetadataValue>,
 
-    /// Address of the remote transaction prover. If `None`, transactions will be proven locally.
-    pub tx_prover_url: Option<Url>,
+    /// Address of the remote transaction prover.
+    pub tx_prover_url: Url,
 
     /// Size of the LRU cache for note scripts. Scripts are fetched through RPC and cached to avoid
     /// repeated gRPC calls.
@@ -220,11 +220,11 @@ pub struct NtxBuilderConfig {
 }
 
 impl NtxBuilderConfig {
-    pub fn new(rpc_url: Url, database_filepath: PathBuf) -> Self {
+    pub fn new(rpc_url: Url, tx_prover_url: Url, database_filepath: PathBuf) -> Self {
         Self {
             rpc_url,
             rpc_auth_header: None,
-            tx_prover_url: None,
+            tx_prover_url,
             script_cache_size: DEFAULT_SCRIPT_CACHE_SIZE,
             max_concurrent_txs: DEFAULT_MAX_CONCURRENT_TXS,
             max_notes_per_tx: DEFAULT_MAX_NOTES_PER_TX,
@@ -240,15 +240,6 @@ impl NtxBuilderConfig {
             database_filepath,
             sqlite_connection_pool_size: miden_node_db::default_connection_pool_size(),
         }
-    }
-
-    /// Sets the remote transaction prover URL.
-    ///
-    /// If not set, transactions will be proven locally.
-    #[must_use]
-    pub fn with_tx_prover_url(mut self, url: Option<Url>) -> Self {
-        self.tx_prover_url = url;
-        self
     }
 
     /// Sets the optional auth header value to inject into internal RPC requests.
@@ -385,7 +376,7 @@ impl NtxBuilderConfig {
             self.sqlite_connection_pool_size,
         )
         .await?;
-      
+
         // Get the genesis commitment to send in the accept header
         let genesis_commitment = db.get_genesis_commitment().await.context(
             "failed to read genesis commitment; \
@@ -462,10 +453,7 @@ impl NtxBuilderConfig {
         let actor_context = AccountActorContext {
             clients: GrpcClients {
                 rpc,
-                prover: self
-                    .tx_prover_url
-                    .clone()
-                    .map(|url| RemoteTransactionProver::new(url.as_str())),
+                prover: RemoteTransactionProver::new(self.tx_prover_url.as_str()),
             },
             state: State {
                 db,
