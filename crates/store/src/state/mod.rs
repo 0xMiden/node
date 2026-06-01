@@ -156,11 +156,6 @@ pub struct State {
     /// Forest-related state `(SmtForest, storage_map_roots, vault_roots)` with its own lock.
     forest: Arc<RwLock<AccountStateForest<AccountStateForestBackend>>>,
 
-    /// Request termination of the process due to a fatal internal state error.
-    /// Stored to keep the channel alive alongside the BlockWriter's copy of the sender.
-    #[allow(dead_code)]
-    termination_ask: tokio::sync::mpsc::Sender<ApplyBlockError>,
-
     /// The latest proven-in-sequence block number, updated by the proof scheduler or `apply_proof`.
     proven_tip: ProvenTipWriter,
 
@@ -311,7 +306,6 @@ impl State {
                 in_memory,
                 write_handle,
                 forest,
-                termination_ask,
                 proven_tip: proven_tip.clone(),
                 committed_tip_tx,
                 block_cache,

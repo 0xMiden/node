@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use diesel::query_dsl::methods::SelectDsl;
 use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl, SqliteConnection};
-use miden_protocol::account::delta::AccountStorageDelta;
+use miden_protocol::account::delta::AccountStoragePatch;
 use miden_protocol::account::{
     Account,
     AccountId,
@@ -228,7 +228,7 @@ pub(super) fn select_latest_vault_assets(
 /// For map slots, uses the precomputed roots for updated maps.
 pub(super) fn apply_storage_delta(
     header: &AccountStorageHeader,
-    delta: &AccountStorageDelta,
+    delta: &AccountStoragePatch,
     map_entries: &HashMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>,
 ) -> Result<AccountStorageHeader, DatabaseError> {
     let mut value_updates: HashMap<&StorageSlotName, Word> = HashMap::new();

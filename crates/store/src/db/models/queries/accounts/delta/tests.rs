@@ -9,11 +9,11 @@ use miden_node_utils::fee::test_fee_params;
 use miden_protocol::account::auth::{AuthScheme, PublicKeyCommitment};
 use miden_protocol::account::component::AccountComponentMetadata;
 use miden_protocol::account::delta::{
-    AccountStorageDelta,
+    AccountStoragePatch,
     AccountUpdateDetails,
     AccountVaultDelta,
-    StorageMapDelta,
-    StorageSlotDelta,
+    StorageMapPatch,
+    StorageSlotPatch,
 };
 use miden_protocol::account::{
     AccountBuilder,
@@ -192,9 +192,9 @@ fn optimized_delta_matches_full_account_method() {
     let storage_delta = {
         let deltas = BTreeMap::from_iter([(
             value_slot_name.clone(),
-            StorageSlotDelta::Value(new_slot_value),
+            StorageSlotPatch::Value(new_slot_value),
         )]);
-        AccountStorageDelta::from_raw(deltas)
+        AccountStoragePatch::from_raw(deltas)
     };
 
     // Build the vault delta (add 500 tokens to empty vault)
@@ -379,7 +379,7 @@ fn optimized_delta_updates_non_empty_vault() {
 
     let partial_delta = AccountDelta::new(
         account.id(),
-        AccountStorageDelta::new(),
+        AccountStoragePatch::new(),
         vault_delta,
         Felt::new_unchecked(NONCE_DELTA),
     )
@@ -420,7 +420,7 @@ fn optimized_delta_updates_non_empty_vault() {
 
     let partial_delta_3 = AccountDelta::new(
         account.id(),
-        AccountStorageDelta::new(),
+        AccountStoragePatch::new(),
         vault_delta_3,
         Felt::new_unchecked(NONCE_DELTA),
     )
@@ -530,11 +530,11 @@ fn optimized_delta_updates_storage_map_header() {
     let full_account_before =
         select_full_account(&mut conn, account.id()).expect("Failed to load full account");
 
-    let mut map_delta = StorageMapDelta::default();
+    let mut map_delta = StorageMapPatch::default();
     map_delta.insert(map_key, map_value_updated);
-    let storage_delta = AccountStorageDelta::from_raw(BTreeMap::from_iter([(
+    let storage_delta = AccountStoragePatch::from_raw(BTreeMap::from_iter([(
         StorageSlotName::mock(SLOT_INDEX_MAP),
-        StorageSlotDelta::Map(map_delta),
+        StorageSlotPatch::Map(map_delta),
     )]));
 
     let partial_delta = AccountDelta::new(

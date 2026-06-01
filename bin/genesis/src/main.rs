@@ -5,7 +5,7 @@ use anyhow::Context;
 use clap::Parser;
 use miden_agglayer::create_bridge_account;
 use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
-use miden_protocol::account::delta::{AccountStorageDelta, AccountVaultDelta};
+use miden_protocol::account::delta::{AccountStoragePatch, AccountVaultDelta};
 use miden_protocol::account::{Account, AccountDelta, AccountFile, AccountType};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::{self, SecretKey as FalconSecretKey};
 use miden_protocol::crypto::rand::RandomCoin;
@@ -178,7 +178,7 @@ fn resolve_pubkey(
 fn bump_nonce_to_one(mut account: Account) -> anyhow::Result<Account> {
     let delta = AccountDelta::new(
         account.id(),
-        AccountStorageDelta::default(),
+        AccountStoragePatch::new(),
         AccountVaultDelta::default(),
         ONE,
     )?;

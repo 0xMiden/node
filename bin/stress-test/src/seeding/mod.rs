@@ -19,7 +19,7 @@ use miden_protocol::account::{
     AccountComponentMetadata,
     AccountDelta,
     AccountId,
-    AccountStorageDelta,
+    AccountStoragePatch,
     AccountType,
     AccountVaultDelta,
     StorageMap,
@@ -714,7 +714,7 @@ fn create_existing_account_delta(
         vault_delta.add_asset(*asset).unwrap();
     }
 
-    let mut storage_delta = AccountStorageDelta::new();
+    let mut storage_delta = AccountStoragePatch::new();
     if let Some((storage_update, tx_index)) = storage_update {
         if storage_update.storage_map_entries > 0
             && account.storage().get(&benchmark_storage_map_slot()).is_some()

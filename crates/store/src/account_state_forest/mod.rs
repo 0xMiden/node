@@ -8,7 +8,7 @@ use miden_crypto::merkle::smt::{Backend, ForestInMemoryBackend};
 use miden_node_proto::domain::account::{AccountStorageMapDetails, AccountVaultDetails};
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
-use miden_protocol::account::delta::{AccountDelta, AccountStorageDelta, AccountVaultDelta};
+use miden_protocol::account::delta::{AccountDelta, AccountStoragePatch, AccountVaultDelta};
 use miden_protocol::account::{
     AccountId,
     NonFungibleDeltaAction,
@@ -629,7 +629,7 @@ impl<B: Backend> AccountStateForest<B> {
         &mut self,
         block_num: BlockNumber,
         account_id: AccountId,
-        storage_delta: &AccountStorageDelta,
+        storage_delta: &AccountStoragePatch,
     ) {
         for (slot_name, map_delta) in storage_delta.maps() {
             // get the latest root for this map, and make sure the root is for an empty tree
@@ -784,7 +784,7 @@ impl<B: Backend> AccountStateForest<B> {
         &mut self,
         block_num: BlockNumber,
         account_id: AccountId,
-        storage_delta: &AccountStorageDelta,
+        storage_delta: &AccountStoragePatch,
     ) {
         for (slot_name, map_delta) in storage_delta.maps() {
             // map delta shouldn't be empty, but if it is for some reason, there is nothing to do

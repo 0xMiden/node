@@ -16,16 +16,16 @@ use miden_protocol::account::{
     AccountId,
     AccountIdVersion,
     AccountStorage,
-    AccountStorageDelta,
+    AccountStoragePatch,
     AccountStorageHeader,
     AccountType,
     AccountVaultDelta,
     StorageMap,
-    StorageMapDelta,
+    StorageMapPatch,
     StorageMapKey,
     StorageSlot,
     StorageSlotContent,
-    StorageSlotDelta,
+    StorageSlotPatch,
     StorageSlotName,
     StorageSlotType,
 };
@@ -863,12 +863,12 @@ fn test_select_latest_account_storage_slot_updates() {
 
     upsert_accounts(&mut conn, &[account_update], block_1).expect("upsert_accounts failed");
 
-    let mut map_delta = StorageMapDelta::default();
+    let mut map_delta = StorageMapPatch::default();
     map_delta.insert(key_1, value_2);
     map_delta.insert(key_2, value_3);
-    let storage_delta = AccountStorageDelta::from_raw(BTreeMap::from_iter([(
+    let storage_delta = AccountStoragePatch::from_raw(BTreeMap::from_iter([(
         slot_name.clone(),
-        StorageSlotDelta::Map(map_delta),
+        StorageSlotPatch::Map(map_delta),
     )]));
 
     let partial_delta = AccountDelta::new(

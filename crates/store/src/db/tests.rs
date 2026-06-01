@@ -16,13 +16,13 @@ use miden_protocol::account::{
     AccountDelta,
     AccountId,
     AccountIdVersion,
-    AccountStorageDelta,
+    AccountStoragePatch,
     AccountType,
     AccountVaultDelta,
     StorageMapKey,
     StorageSlot,
     StorageSlotContent,
-    StorageSlotDelta,
+    StorageSlotPatch,
     StorageSlotName,
 };
 use miden_protocol::asset::{Asset, FungibleAsset};
@@ -1112,7 +1112,7 @@ fn insert_account_delta(
 fn sql_account_storage_map_values_insertion() {
     use std::collections::BTreeMap;
 
-    use miden_protocol::account::StorageMapDelta;
+    use miden_protocol::account::StorageMapPatch;
 
     let mut conn = create_db();
     let conn = &mut conn;
@@ -1136,11 +1136,11 @@ fn sql_account_storage_map_values_insertion() {
     let value3 = Word::from([30u32, 31, 32, 33]);
 
     // Insert at block 1
-    let mut map1 = StorageMapDelta::default();
+    let mut map1 = StorageMapPatch::default();
     map1.insert(key1, value1);
     map1.insert(key2, value2);
-    let delta1 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map1))]);
-    let storage1 = AccountStorageDelta::from_raw(delta1);
+    let delta1 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map1))]);
+    let storage1 = AccountStoragePatch::from_raw(delta1);
     let delta1 =
         AccountDelta::new(account_id, storage1, AccountVaultDelta::default(), Felt::ONE).unwrap();
     insert_account_delta(conn, account_id, block1, &delta1);
@@ -1155,10 +1155,10 @@ fn sql_account_storage_map_values_insertion() {
     assert_eq!(storage_map_page.values.len(), 2, "expect 2 initial rows");
 
     // Update key1 at block 2
-    let mut map2 = StorageMapDelta::default();
+    let mut map2 = StorageMapPatch::default();
     map2.insert(key1, value3);
-    let delta2 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map2))]);
-    let storage2 = AccountStorageDelta::from_raw(delta2);
+    let delta2 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map2))]);
+    let storage2 = AccountStoragePatch::from_raw(delta2);
     let delta2 = AccountDelta::new(
         account_id,
         storage2,
@@ -3047,7 +3047,7 @@ fn test_prune_history() {
 fn account_state_forest_matches_db_storage_map_roots_across_updates() {
     use std::collections::BTreeMap;
 
-    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+    use miden_protocol::account::delta::{StorageMapPatch, StorageSlotPatch};
     use miden_protocol::crypto::merkle::smt::Smt;
 
     use crate::account_state_forest::AccountStateForest;
@@ -3135,15 +3135,15 @@ fn account_state_forest_matches_db_storage_map_roots_across_updates() {
     let value3 = num_to_word(3000);
 
     // Block 1: Add storage map entries and a storage value
-    let mut map_delta_1 = StorageMapDelta::default();
+    let mut map_delta_1 = StorageMapPatch::default();
     map_delta_1.insert(key1, value1);
     map_delta_1.insert(key2, value2);
 
     let raw_1 = BTreeMap::from_iter([
-        (slot_map.clone(), StorageSlotDelta::Map(map_delta_1)),
-        (slot_value.clone(), StorageSlotDelta::Value(value1)),
+        (slot_map.clone(), StorageSlotPatch::Map(map_delta_1)),
+        (slot_value.clone(), StorageSlotPatch::Value(value1)),
     ]);
-    let storage_1 = AccountStorageDelta::from_raw(raw_1);
+    let storage_1 = AccountStoragePatch::from_raw(raw_1);
     let delta_1 =
         AccountDelta::new(account_id, storage_1.clone(), AccountVaultDelta::default(), Felt::ONE)
             .unwrap();
@@ -3162,14 +3162,14 @@ fn account_state_forest_matches_db_storage_map_roots_across_updates() {
     );
 
     // Block 2: Delete storage map entry (set to EMPTY_WORD) and delete storage value
-    let mut map_delta_2 = StorageMapDelta::default();
+    let mut map_delta_2 = StorageMapPatch::default();
     map_delta_2.insert(key1, EMPTY_WORD);
 
     let raw_2 = BTreeMap::from_iter([
-        (slot_map.clone(), StorageSlotDelta::Map(map_delta_2)),
-        (slot_value.clone(), StorageSlotDelta::Value(EMPTY_WORD)),
+        (slot_map.clone(), StorageSlotPatch::Map(map_delta_2)),
+        (slot_value.clone(), StorageSlotPatch::Value(EMPTY_WORD)),
     ]);
-    let storage_2 = AccountStorageDelta::from_raw(raw_2);
+    let storage_2 = AccountStoragePatch::from_raw(raw_2);
     let delta_2 = AccountDelta::new(
         account_id,
         storage_2.clone(),
@@ -3192,14 +3192,14 @@ fn account_state_forest_matches_db_storage_map_roots_across_updates() {
     );
 
     // Block 3: Re-add same value as block 1 and add different map entry
-    let mut map_delta_3 = StorageMapDelta::default();
+    let mut map_delta_3 = StorageMapPatch::default();
     map_delta_3.insert(key2, value3); // Update existing key
 
     let raw_3 = BTreeMap::from_iter([
-        (slot_map.clone(), StorageSlotDelta::Map(map_delta_3)),
-        (slot_value.clone(), StorageSlotDelta::Value(value1)), // Same as block 1
+        (slot_map.clone(), StorageSlotPatch::Map(map_delta_3)),
+        (slot_value.clone(), StorageSlotPatch::Value(value1)), // Same as block 1
     ]);
-    let storage_3 = AccountStorageDelta::from_raw(raw_3);
+    let storage_3 = AccountStoragePatch::from_raw(raw_3);
     let delta_3 = AccountDelta::new(
         account_id,
         storage_3.clone(),
@@ -3241,7 +3241,7 @@ fn account_state_forest_matches_db_storage_map_roots_across_updates() {
 fn account_state_forest_shared_roots_not_deleted_prematurely() {
     use std::collections::BTreeMap;
 
-    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+    use miden_protocol::account::delta::{StorageMapPatch, StorageSlotPatch};
     use miden_protocol::testing::account_id::{
         ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE,
         ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2,
@@ -3268,13 +3268,13 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
     let value2 = num_to_word(2000);
 
     // All three accounts add identical storage maps at block 1
-    let mut map_delta = StorageMapDelta::default();
+    let mut map_delta = StorageMapPatch::default();
     map_delta.insert(key1, value1);
     map_delta.insert(key2, value2);
 
     // Setups a single slot with a map and two key-value-pairs
-    let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta.clone()))]);
-    let storage = AccountStorageDelta::from_raw(raw);
+    let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_delta.clone()))]);
+    let storage = AccountStoragePatch::from_raw(raw);
 
     // Account 1
     let delta1 =
@@ -3328,11 +3328,11 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
     assert_eq!(total_roots_removed, 0);
 
     // Update accounts 1,2,3
-    let mut map_delta_update = StorageMapDelta::default();
+    let mut map_delta_update = StorageMapPatch::default();
     map_delta_update.insert(key1, num_to_word(1001)); // Slight change
     let raw_update =
-        BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta_update))]);
-    let storage_update = AccountStorageDelta::from_raw(raw_update);
+        BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_delta_update))]);
+    let storage_update = AccountStoragePatch::from_raw(raw_update);
     let delta2_update = AccountDelta::new(
         account2,
         storage_update.clone(),
@@ -3402,7 +3402,7 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
 fn account_state_forest_retains_latest_after_100_blocks_and_pruning() {
     use std::collections::BTreeMap;
 
-    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+    use miden_protocol::account::delta::{StorageMapPatch, StorageSlotPatch};
 
     use crate::account_state_forest::{AccountStateForest, HISTORICAL_BLOCK_RETENTION};
 
@@ -3421,12 +3421,12 @@ fn account_state_forest_retains_latest_after_100_blocks_and_pruning() {
     let block_1 = BlockNumber::from(1);
 
     // Create storage map with two entries
-    let mut map_delta = StorageMapDelta::default();
+    let mut map_delta = StorageMapPatch::default();
     map_delta.insert(key1, value1);
     map_delta.insert(key2, value2);
 
-    let raw = BTreeMap::from_iter([(slot_map.clone(), StorageSlotDelta::Map(map_delta))]);
-    let storage_delta = AccountStorageDelta::from_raw(raw);
+    let raw = BTreeMap::from_iter([(slot_map.clone(), StorageSlotPatch::Map(map_delta))]);
+    let storage_delta = AccountStoragePatch::from_raw(raw);
 
     // Create vault with one asset
     let asset = FungibleAsset::new(faucet_id, 100).unwrap();
@@ -3474,11 +3474,11 @@ fn account_state_forest_retains_latest_after_100_blocks_and_pruning() {
 
     // Update with new values
     let value1_new = num_to_word(3000);
-    let mut map_delta_51 = StorageMapDelta::default();
+    let mut map_delta_51 = StorageMapPatch::default();
     map_delta_51.insert(key1, value1_new);
 
-    let raw_51 = BTreeMap::from_iter([(slot_map.clone(), StorageSlotDelta::Map(map_delta_51))]);
-    let storage_delta_51 = AccountStorageDelta::from_raw(raw_51);
+    let raw_51 = BTreeMap::from_iter([(slot_map.clone(), StorageSlotPatch::Map(map_delta_51))]);
+    let storage_delta_51 = AccountStoragePatch::from_raw(raw_51);
 
     let asset_51 = FungibleAsset::new(faucet_id, 200).unwrap();
     let mut vault_delta_51 = AccountVaultDelta::default();
@@ -3535,7 +3535,7 @@ fn account_state_forest_preserves_most_recent_vault_only() {
     vault_delta.add_asset(asset.into()).unwrap();
 
     let delta_1 =
-        AccountDelta::new(account_id, AccountStorageDelta::default(), vault_delta, Felt::ONE)
+        AccountDelta::new(account_id, AccountStoragePatch::default(), vault_delta, Felt::ONE)
             .unwrap();
 
     forest.update_account(block_1, &delta_1).unwrap();
@@ -3703,7 +3703,7 @@ fn db_roundtrip_transactions_filters_missing_output_note_sync_records() {
 fn account_state_forest_preserves_most_recent_storage_map_only() {
     use std::collections::BTreeMap;
 
-    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+    use miden_protocol::account::delta::{StorageMapPatch, StorageSlotPatch};
 
     use crate::account_state_forest::AccountStateForest;
 
@@ -3716,11 +3716,11 @@ fn account_state_forest_preserves_most_recent_storage_map_only() {
 
     // Block 1: Create storage map
     let block_1 = BlockNumber::from(1);
-    let mut map_delta = StorageMapDelta::default();
+    let mut map_delta = StorageMapPatch::default();
     map_delta.insert(key1, value1);
 
-    let raw = BTreeMap::from_iter([(slot_map.clone(), StorageSlotDelta::Map(map_delta))]);
-    let storage_delta = AccountStorageDelta::from_raw(raw);
+    let raw = BTreeMap::from_iter([(slot_map.clone(), StorageSlotPatch::Map(map_delta))]);
+    let storage_delta = AccountStoragePatch::from_raw(raw);
 
     let delta_1 =
         AccountDelta::new(account_id, storage_delta, AccountVaultDelta::default(), Felt::ONE)
@@ -3765,7 +3765,7 @@ fn account_state_forest_preserves_most_recent_storage_map_only() {
 fn account_state_forest_preserves_most_recent_storage_value_slot() {
     use std::collections::BTreeMap;
 
-    use miden_protocol::account::delta::StorageSlotDelta;
+    use miden_protocol::account::delta::StorageSlotPatch;
 
     use crate::account_state_forest::AccountStateForest;
 
@@ -3778,8 +3778,8 @@ fn account_state_forest_preserves_most_recent_storage_value_slot() {
     // Block 1: Create storage value slot
     let block_1 = BlockNumber::from(1);
 
-    let raw = BTreeMap::from_iter([(slot_value.clone(), StorageSlotDelta::Value(value1))]);
-    let storage_delta = AccountStorageDelta::from_raw(raw);
+    let raw = BTreeMap::from_iter([(slot_value.clone(), StorageSlotPatch::Value(value1))]);
+    let storage_delta = AccountStoragePatch::from_raw(raw);
 
     let delta_1 =
         AccountDelta::new(account_id, storage_delta, AccountVaultDelta::default(), Felt::ONE)
@@ -3816,7 +3816,7 @@ fn account_state_forest_preserves_most_recent_storage_value_slot() {
 fn account_state_forest_preserves_mixed_slots_independently() {
     use std::collections::BTreeMap;
 
-    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+    use miden_protocol::account::delta::{StorageMapPatch, StorageSlotPatch};
 
     use crate::account_state_forest::AccountStateForest;
 
@@ -3839,18 +3839,18 @@ fn account_state_forest_preserves_mixed_slots_independently() {
     let mut vault_delta = AccountVaultDelta::default();
     vault_delta.add_asset(asset.into()).unwrap();
 
-    let mut map_delta_a = StorageMapDelta::default();
+    let mut map_delta_a = StorageMapPatch::default();
     map_delta_a.insert(key1, value1);
 
-    let mut map_delta_b = StorageMapDelta::default();
+    let mut map_delta_b = StorageMapPatch::default();
     map_delta_b.insert(key1, value1);
 
     let raw = BTreeMap::from_iter([
-        (slot_map_a.clone(), StorageSlotDelta::Map(map_delta_a)),
-        (slot_map_b.clone(), StorageSlotDelta::Map(map_delta_b)),
-        (slot_value.clone(), StorageSlotDelta::Value(value_slot_data)),
+        (slot_map_a.clone(), StorageSlotPatch::Map(map_delta_a)),
+        (slot_map_b.clone(), StorageSlotPatch::Map(map_delta_b)),
+        (slot_value.clone(), StorageSlotPatch::Value(value_slot_data)),
     ]);
-    let storage_delta = AccountStorageDelta::from_raw(raw);
+    let storage_delta = AccountStoragePatch::from_raw(raw);
 
     let delta_1 = AccountDelta::new(account_id, storage_delta, vault_delta, Felt::ONE).unwrap();
 
@@ -3864,12 +3864,12 @@ fn account_state_forest_preserves_mixed_slots_independently() {
     let block_51 = BlockNumber::from(51);
     let value2 = num_to_word(2000);
 
-    let mut map_delta_a_update = StorageMapDelta::default();
+    let mut map_delta_a_update = StorageMapPatch::default();
     map_delta_a_update.insert(key1, value2);
 
     let raw_51 =
-        BTreeMap::from_iter([(slot_map_a.clone(), StorageSlotDelta::Map(map_delta_a_update))]);
-    let storage_delta_51 = AccountStorageDelta::from_raw(raw_51);
+        BTreeMap::from_iter([(slot_map_a.clone(), StorageSlotPatch::Map(map_delta_a_update))]);
+    let storage_delta_51 = AccountStoragePatch::from_raw(raw_51);
 
     let delta_51 = AccountDelta::new(
         account_id,

@@ -35,7 +35,7 @@ fn dummy_fungible_asset(faucet_id: AccountId, amount: u64) -> Asset {
 fn dummy_partial_delta(
     account_id: AccountId,
     vault_delta: AccountVaultDelta,
-    storage_delta: AccountStorageDelta,
+    storage_delta: AccountStoragePatch,
 ) -> AccountDelta {
     let nonce_delta = if vault_delta.is_empty() && storage_delta.is_empty() {
         Felt::ZERO
@@ -86,7 +86,7 @@ fn update_account_with_empty_deltas() {
     let delta = dummy_partial_delta(
         account_id,
         AccountVaultDelta::default(),
-        AccountStorageDelta::default(),
+        AccountStoragePatch::default(),
     );
 
     forest.update_account(block_num, &delta).unwrap();
@@ -110,7 +110,7 @@ fn vault_partial_vs_full_state_produces_same_root() {
     let mut vault_delta = AccountVaultDelta::default();
     vault_delta.add_asset(asset).unwrap();
     let partial_delta =
-        dummy_partial_delta(account_id, vault_delta, AccountStorageDelta::default());
+        dummy_partial_delta(account_id, vault_delta, AccountStoragePatch::default());
     forest_partial.update_account(block_num, &partial_delta).unwrap();
 
     // Full-state delta (DB reconstruction)
@@ -135,7 +135,7 @@ fn vault_incremental_updates_with_add_and_remove() {
     let block_1 = BlockNumber::GENESIS.child();
     let mut vault_delta_1 = AccountVaultDelta::default();
     vault_delta_1.add_asset(dummy_fungible_asset(faucet_id, 100)).unwrap();
-    let delta_1 = dummy_partial_delta(account_id, vault_delta_1, AccountStorageDelta::default());
+    let delta_1 = dummy_partial_delta(account_id, vault_delta_1, AccountStoragePatch::default());
     forest.update_account(block_1, &delta_1).unwrap();
     let root_after_100 = forest.get_vault_root(account_id, block_1).unwrap();
 
@@ -143,7 +143,7 @@ fn vault_incremental_updates_with_add_and_remove() {
     let block_2 = block_1.child();
     let mut vault_delta_2 = AccountVaultDelta::default();
     vault_delta_2.add_asset(dummy_fungible_asset(faucet_id, 50)).unwrap();
-    let delta_2 = dummy_partial_delta(account_id, vault_delta_2, AccountStorageDelta::default());
+    let delta_2 = dummy_partial_delta(account_id, vault_delta_2, AccountStoragePatch::default());
     forest.update_account(block_2, &delta_2).unwrap();
     let root_after_150 = forest.get_vault_root(account_id, block_2).unwrap();
 
@@ -153,7 +153,7 @@ fn vault_incremental_updates_with_add_and_remove() {
     let block_3 = block_2.child();
     let mut vault_delta_3 = AccountVaultDelta::default();
     vault_delta_3.remove_asset(dummy_fungible_asset(faucet_id, 30)).unwrap();
-    let delta_3 = dummy_partial_delta(account_id, vault_delta_3, AccountStorageDelta::default());
+    let delta_3 = dummy_partial_delta(account_id, vault_delta_3, AccountStoragePatch::default());
     forest.update_account(block_3, &delta_3).unwrap();
     let root_after_120 = forest.get_vault_root(account_id, block_3).unwrap();
 
@@ -182,7 +182,7 @@ fn vault_details_returns_latest_and_historical_assets() {
     let block_2 = block_1.child();
     let mut vault_delta_2 = AccountVaultDelta::default();
     vault_delta_2.add_asset(dummy_fungible_asset(faucet_id, 50)).unwrap();
-    let delta_2 = dummy_partial_delta(account_id, vault_delta_2, AccountStorageDelta::default());
+    let delta_2 = dummy_partial_delta(account_id, vault_delta_2, AccountStoragePatch::default());
     forest.update_account(block_2, &delta_2).unwrap();
 
     let historical = forest.get_vault_details(account_id, block_1).unwrap();
@@ -222,7 +222,7 @@ fn forest_versions_are_continuous_for_sequential_updates() {
     use std::collections::BTreeMap;
 
     use assert_matches::assert_matches;
-    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+    use miden_protocol::account::delta::{StorageMapPatch, StorageSlotPatch};
 
     let mut forest = AccountStateForest::new();
     let account_id = dummy_account();
@@ -239,10 +239,10 @@ fn forest_versions_are_continuous_for_sequential_updates() {
             .add_asset(dummy_fungible_asset(faucet_id, u64::from(i) * 10))
             .unwrap();
 
-        let mut map_delta = StorageMapDelta::default();
+        let mut map_delta = StorageMapPatch::default();
         map_delta.insert(raw_key, Word::from([i, 0, 0, 0]));
-        let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta))]);
-        let storage_delta = AccountStorageDelta::from_raw(raw);
+        let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_delta))]);
+        let storage_delta = AccountStoragePatch::from_raw(raw);
 
         let delta = dummy_partial_delta(account_id, vault_delta, storage_delta);
         forest.update_account(block_num, &delta).unwrap();
@@ -264,13 +264,13 @@ fn vault_state_is_not_available_for_block_gaps() {
     let block_1 = BlockNumber::GENESIS.child();
     let mut vault_delta_1 = AccountVaultDelta::default();
     vault_delta_1.add_asset(dummy_fungible_asset(faucet_id, 100)).unwrap();
-    let delta_1 = dummy_partial_delta(account_id, vault_delta_1, AccountStorageDelta::default());
+    let delta_1 = dummy_partial_delta(account_id, vault_delta_1, AccountStoragePatch::default());
     forest.update_account(block_1, &delta_1).unwrap();
 
     let block_6 = BlockNumber::from(6);
     let mut vault_delta_6 = AccountVaultDelta::default();
     vault_delta_6.add_asset(dummy_fungible_asset(faucet_id, 150)).unwrap();
-    let delta_6 = dummy_partial_delta(account_id, vault_delta_6, AccountStorageDelta::default());
+    let delta_6 = dummy_partial_delta(account_id, vault_delta_6, AccountStoragePatch::default());
     forest.update_account(block_6, &delta_6).unwrap();
 
     assert!(forest.get_vault_root(account_id, BlockNumber::from(3)).is_some());
@@ -283,7 +283,7 @@ fn witness_queries_work_with_sparse_lineage_updates() {
     use std::collections::BTreeMap;
 
     use assert_matches::assert_matches;
-    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+    use miden_protocol::account::delta::{StorageMapPatch, StorageSlotPatch};
 
     let mut forest = AccountStateForest::new();
     let account_id = dummy_account();
@@ -295,17 +295,17 @@ fn witness_queries_work_with_sparse_lineage_updates() {
     let block_1 = BlockNumber::GENESIS.child();
     let mut vault_delta_1 = AccountVaultDelta::default();
     vault_delta_1.add_asset(dummy_fungible_asset(faucet_id, 100)).unwrap();
-    let mut map_delta_1 = StorageMapDelta::default();
+    let mut map_delta_1 = StorageMapPatch::default();
     map_delta_1.insert(raw_key, value);
-    let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta_1))]);
-    let storage_delta_1 = AccountStorageDelta::from_raw(raw);
+    let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_delta_1))]);
+    let storage_delta_1 = AccountStoragePatch::from_raw(raw);
     let delta_1 = dummy_partial_delta(account_id, vault_delta_1, storage_delta_1);
     forest.update_account(block_1, &delta_1).unwrap();
 
     let block_3 = block_1.child().child();
     let mut vault_delta_3 = AccountVaultDelta::default();
     vault_delta_3.add_asset(dummy_fungible_asset(faucet_id, 50)).unwrap();
-    let delta_3 = dummy_partial_delta(account_id, vault_delta_3, AccountStorageDelta::default());
+    let delta_3 = dummy_partial_delta(account_id, vault_delta_3, AccountStoragePatch::default());
     forest.update_account(block_3, &delta_3).unwrap();
 
     let block_2 = block_1.child();
@@ -384,12 +384,12 @@ fn vault_shared_root_retained_when_one_entry_pruned() {
 
     let mut vault_delta_1 = AccountVaultDelta::default();
     vault_delta_1.add_asset(asset).unwrap();
-    let delta_1 = dummy_partial_delta(account1, vault_delta_1, AccountStorageDelta::default());
+    let delta_1 = dummy_partial_delta(account1, vault_delta_1, AccountStoragePatch::default());
     forest.update_account(block_1, &delta_1).unwrap();
 
     let mut vault_delta_2 = AccountVaultDelta::default();
     vault_delta_2.add_asset(dummy_fungible_asset(faucet_id, asset_amount)).unwrap();
-    let delta_2 = dummy_partial_delta(account2, vault_delta_2, AccountStorageDelta::default());
+    let delta_2 = dummy_partial_delta(account2, vault_delta_2, AccountStoragePatch::default());
     forest.update_account(block_1, &delta_2).unwrap();
 
     let root1 = forest.get_vault_root(account1, block_1).unwrap();
@@ -402,7 +402,7 @@ fn vault_shared_root_retained_when_one_entry_pruned() {
         .add_asset(dummy_fungible_asset(faucet_id, amount_increment))
         .unwrap();
     let delta_2_update =
-        dummy_partial_delta(account2, vault_delta_2_update, AccountStorageDelta::default());
+        dummy_partial_delta(account2, vault_delta_2_update, AccountStoragePatch::default());
     forest.update_account(block_at_51, &delta_2_update).unwrap();
 
     let block_at_52 = BlockNumber::from(HISTORICAL_BLOCK_RETENTION + 2);
@@ -430,7 +430,7 @@ fn vault_shared_root_retained_when_one_entry_pruned() {
 fn storage_map_incremental_updates() {
     use std::collections::BTreeMap;
 
-    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+    use miden_protocol::account::delta::{StorageMapPatch, StorageSlotPatch};
 
     let mut forest = AccountStateForest::new();
     let account_id = dummy_account();
@@ -444,30 +444,30 @@ fn storage_map_incremental_updates() {
 
     // Block 1: Insert key1 -> value1
     let block_1 = BlockNumber::GENESIS.child();
-    let mut map_delta_1 = StorageMapDelta::default();
+    let mut map_delta_1 = StorageMapPatch::default();
     map_delta_1.insert(key1, value1);
-    let raw_1 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta_1))]);
-    let storage_delta_1 = AccountStorageDelta::from_raw(raw_1);
+    let raw_1 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_delta_1))]);
+    let storage_delta_1 = AccountStoragePatch::from_raw(raw_1);
     let delta_1 = dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta_1);
     forest.update_account(block_1, &delta_1).unwrap();
     let root_1 = forest.get_storage_map_root(account_id, &slot_name, block_1).unwrap();
 
     // Block 2: Insert key2 -> value2
     let block_2 = block_1.child();
-    let mut map_delta_2 = StorageMapDelta::default();
+    let mut map_delta_2 = StorageMapPatch::default();
     map_delta_2.insert(key2, value2);
-    let raw_2 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta_2))]);
-    let storage_delta_2 = AccountStorageDelta::from_raw(raw_2);
+    let raw_2 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_delta_2))]);
+    let storage_delta_2 = AccountStoragePatch::from_raw(raw_2);
     let delta_2 = dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta_2);
     forest.update_account(block_2, &delta_2).unwrap();
     let root_2 = forest.get_storage_map_root(account_id, &slot_name, block_2).unwrap();
 
     // Block 3: Update key1 -> value3
     let block_3 = block_2.child();
-    let mut map_delta_3 = StorageMapDelta::default();
+    let mut map_delta_3 = StorageMapPatch::default();
     map_delta_3.insert(key1, value3);
-    let raw_3 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta_3))]);
-    let storage_delta_3 = AccountStorageDelta::from_raw(raw_3);
+    let raw_3 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_delta_3))]);
+    let storage_delta_3 = AccountStoragePatch::from_raw(raw_3);
     let delta_3 = dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta_3);
     forest.update_account(block_3, &delta_3).unwrap();
     let root_3 = forest.get_storage_map_root(account_id, &slot_name, block_3).unwrap();
@@ -481,7 +481,7 @@ fn storage_map_incremental_updates() {
 fn test_storage_map_removals() {
     use std::collections::BTreeMap;
 
-    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+    use miden_protocol::account::delta::{StorageMapPatch, StorageSlotPatch};
 
     const SLOT_INDEX: usize = 3;
     const VALUE_1: [u32; 4] = [10, 0, 0, 0];
@@ -496,18 +496,18 @@ fn test_storage_map_removals() {
     let value_2 = Word::from(VALUE_2);
 
     let block_1 = BlockNumber::GENESIS.child();
-    let mut map_delta_1 = StorageMapDelta::default();
+    let mut map_delta_1 = StorageMapPatch::default();
     map_delta_1.insert(key_1, value_1);
     map_delta_1.insert(key_2, value_2);
-    let raw_1 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta_1))]);
-    let storage_delta_1 = AccountStorageDelta::from_raw(raw_1);
+    let raw_1 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_delta_1))]);
+    let storage_delta_1 = AccountStoragePatch::from_raw(raw_1);
     let delta_1 = dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta_1);
     forest.update_account(block_1, &delta_1).unwrap();
 
     let block_2 = block_1.child();
-    let map_delta_2 = StorageMapDelta::from_iters([key_1], []);
-    let raw_2 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta_2))]);
-    let storage_delta_2 = AccountStorageDelta::from_raw(raw_2);
+    let map_delta_2 = StorageMapPatch::from_iters([key_1], []);
+    let raw_2 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_delta_2))]);
+    let storage_delta_2 = AccountStoragePatch::from_raw(raw_2);
     let delta_2 = dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta_2);
     forest.update_account(block_2, &delta_2).unwrap();
 
@@ -527,7 +527,7 @@ fn test_storage_map_removals() {
 fn storage_map_state_is_not_available_for_block_gaps() {
     use std::collections::BTreeMap;
 
-    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+    use miden_protocol::account::delta::{StorageMapPatch, StorageSlotPatch};
 
     const BLOCK_FIRST: u32 = 1;
     const BLOCK_SECOND: u32 = 4;
@@ -543,20 +543,20 @@ fn storage_map_state_is_not_available_for_block_gaps() {
     let raw_key = StorageMapKey::from_index(KEY_VALUE);
 
     let block_1 = BlockNumber::from(BLOCK_FIRST);
-    let mut map_delta_1 = StorageMapDelta::default();
+    let mut map_delta_1 = StorageMapPatch::default();
     let value_1 = Word::from([VALUE_FIRST, 0, 0, 0]);
     map_delta_1.insert(raw_key, value_1);
-    let raw_1 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta_1))]);
-    let storage_delta_1 = AccountStorageDelta::from_raw(raw_1);
+    let raw_1 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_delta_1))]);
+    let storage_delta_1 = AccountStoragePatch::from_raw(raw_1);
     let delta_1 = dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta_1);
     forest.update_account(block_1, &delta_1).unwrap();
 
     let block_4 = BlockNumber::from(BLOCK_SECOND);
-    let mut map_delta_4 = StorageMapDelta::default();
+    let mut map_delta_4 = StorageMapPatch::default();
     let value_2 = Word::from([VALUE_SECOND, 0, 0, 0]);
     map_delta_4.insert(raw_key, value_2);
-    let raw_4 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta_4))]);
-    let storage_delta_4 = AccountStorageDelta::from_raw(raw_4);
+    let raw_4 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_delta_4))]);
+    let storage_delta_4 = AccountStoragePatch::from_raw(raw_4);
     let delta_4 = dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta_4);
     forest.update_account(block_4, &delta_4).unwrap();
 
@@ -629,21 +629,21 @@ fn storage_map_open_returns_proofs() {
     use std::collections::BTreeMap;
 
     use assert_matches::assert_matches;
-    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+    use miden_protocol::account::delta::{StorageMapPatch, StorageSlotPatch};
 
     let mut forest = AccountStateForest::new();
     let account_id = dummy_account();
     let slot_name = StorageSlotName::mock(3);
     let block_num = BlockNumber::GENESIS.child();
 
-    let mut map_delta = StorageMapDelta::default();
+    let mut map_delta = StorageMapPatch::default();
     for i in 0..20u32 {
         let key = StorageMapKey::from_index(i);
         let value = Word::from([0, 0, 0, i]);
         map_delta.insert(key, value);
     }
-    let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta))]);
-    let storage_delta = AccountStorageDelta::from_raw(raw);
+    let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_delta))]);
+    let storage_delta = AccountStoragePatch::from_raw(raw);
     let delta = dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta);
     forest.update_account(block_num, &delta).unwrap();
 
@@ -661,7 +661,7 @@ fn storage_map_open_returns_proofs() {
 fn storage_map_all_entries_returns_raw_keys_after_update() {
     use std::collections::BTreeMap;
 
-    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+    use miden_protocol::account::delta::{StorageMapPatch, StorageSlotPatch};
 
     let mut forest = AccountStateForest::new();
     let account_id = dummy_account();
@@ -670,10 +670,10 @@ fn storage_map_all_entries_returns_raw_keys_after_update() {
     let raw_key = StorageMapKey::from_index(42);
     let value = Word::from([42u32, 0, 0, 0]);
 
-    let mut map_delta = StorageMapDelta::default();
+    let mut map_delta = StorageMapPatch::default();
     map_delta.insert(raw_key, value);
-    let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta))]);
-    let storage_delta = AccountStorageDelta::from_raw(raw);
+    let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_delta))]);
+    let storage_delta = AccountStoragePatch::from_raw(raw);
     let delta = dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta);
     forest.update_account(block_num, &delta).unwrap();
 
@@ -694,7 +694,7 @@ fn storage_map_all_entries_returns_raw_keys_after_update() {
 fn storage_map_all_entries_returns_cache_miss_when_raw_key_is_not_cached() {
     use std::collections::BTreeMap;
 
-    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+    use miden_protocol::account::delta::{StorageMapPatch, StorageSlotPatch};
 
     let mut forest = AccountStateForest::new();
     let account_id = dummy_account();
@@ -703,10 +703,10 @@ fn storage_map_all_entries_returns_cache_miss_when_raw_key_is_not_cached() {
     let raw_key = StorageMapKey::from_index(43);
     let value = Word::from([43u32, 0, 0, 0]);
 
-    let mut map_delta = StorageMapDelta::default();
+    let mut map_delta = StorageMapPatch::default();
     map_delta.insert(raw_key, value);
-    let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta))]);
-    let storage_delta = AccountStorageDelta::from_raw(raw);
+    let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_delta))]);
+    let storage_delta = AccountStoragePatch::from_raw(raw);
     let delta = dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta);
     forest.update_account(block_num, &delta).unwrap();
 
@@ -737,7 +737,7 @@ fn storage_map_all_entries_returns_cache_miss_when_raw_key_is_not_cached() {
 fn storage_map_key_hashing_and_raw_entries_are_consistent() {
     use std::collections::BTreeMap;
 
-    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+    use miden_protocol::account::delta::{StorageMapPatch, StorageSlotPatch};
 
     const SLOT_INDEX: usize = 4;
     const KEY_VALUE: u32 = 11;
@@ -750,10 +750,10 @@ fn storage_map_key_hashing_and_raw_entries_are_consistent() {
     let raw_key = StorageMapKey::from_index(KEY_VALUE);
     let value = Word::from([VALUE_VALUE, 0, 0, 0]);
 
-    let mut map_delta = StorageMapDelta::default();
+    let mut map_delta = StorageMapPatch::default();
     map_delta.insert(raw_key, value);
-    let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotDelta::Map(map_delta))]);
-    let storage_delta = AccountStorageDelta::from_raw(raw);
+    let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_delta))]);
+    let storage_delta = AccountStoragePatch::from_raw(raw);
     let delta = dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta);
     forest.update_account(block_num, &delta).unwrap();
 
@@ -789,7 +789,7 @@ fn prune_handles_empty_forest() {
 
 #[test]
 fn prune_removes_smt_roots_from_forest() {
-    use miden_protocol::account::delta::StorageMapDelta;
+    use miden_protocol::account::delta::StorageMapPatch;
 
     let mut forest = AccountStateForest::new();
     let account_id = dummy_account();
@@ -804,15 +804,15 @@ fn prune_removes_smt_roots_from_forest() {
             .add_asset(dummy_fungible_asset(faucet_id, (i * TEST_AMOUNT_MULTIPLIER).into()))
             .unwrap();
         let storage_delta = if i.is_multiple_of(3) {
-            let mut map_delta = StorageMapDelta::default();
+            let mut map_delta = StorageMapPatch::default();
             map_delta.insert(
                 StorageMapKey::new(Word::from([1u32, 0, 0, 0])),
                 Word::from([99u32, i, i * i, i * i * i]),
             );
-            let asd = AccountStorageDelta::new();
+            let asd = AccountStoragePatch::new();
             asd.add_updated_maps([(slot_name.clone(), map_delta)])
         } else {
-            AccountStorageDelta::default()
+            AccountStoragePatch::default()
         };
 
         let delta = dummy_partial_delta(account_id, vault_delta, storage_delta);
@@ -852,7 +852,7 @@ fn prune_respects_retention_boundary() {
         vault_delta
             .add_asset(dummy_fungible_asset(faucet_id, (i * TEST_AMOUNT_MULTIPLIER).into()))
             .unwrap();
-        let delta = dummy_partial_delta(account_id, vault_delta, AccountStorageDelta::default());
+        let delta = dummy_partial_delta(account_id, vault_delta, AccountStoragePatch::default());
         forest.update_account(block_num, &delta).unwrap();
     }
 
@@ -864,7 +864,7 @@ fn prune_respects_retention_boundary() {
 
 #[test]
 fn prune_roots_removes_old_entries() {
-    use miden_protocol::account::delta::StorageMapDelta;
+    use miden_protocol::account::delta::StorageMapPatch;
 
     let mut forest = AccountStateForest::new();
     let account_id = dummy_account();
@@ -880,10 +880,10 @@ fn prune_roots_removes_old_entries() {
 
         let key = StorageMapKey::new(Word::from([i, i * i, 5, 4]));
         let value = Word::from([0, 0, i * i * i, 77]);
-        let mut map_delta = StorageMapDelta::default();
+        let mut map_delta = StorageMapPatch::default();
         map_delta.insert(key, value);
         let storage_delta =
-            AccountStorageDelta::new().add_updated_maps([(slot_name.clone(), map_delta)]);
+            AccountStoragePatch::new().add_updated_maps([(slot_name.clone(), map_delta)]);
 
         let delta = dummy_partial_delta(account_id, vault_delta, storage_delta);
         forest.update_account(block_num, &delta).unwrap();
@@ -911,12 +911,12 @@ fn prune_handles_multiple_accounts() {
 
         let mut vault_delta1 = AccountVaultDelta::default();
         vault_delta1.add_asset(dummy_fungible_asset(faucet_id, amount)).unwrap();
-        let delta1 = dummy_partial_delta(account1, vault_delta1, AccountStorageDelta::default());
+        let delta1 = dummy_partial_delta(account1, vault_delta1, AccountStoragePatch::default());
         forest.update_account(block_num, &delta1).unwrap();
 
         let mut vault_delta2 = AccountVaultDelta::default();
         vault_delta2.add_asset(dummy_fungible_asset(account2, amount * 2)).unwrap();
-        let delta2 = dummy_partial_delta(account2, vault_delta2, AccountStorageDelta::default());
+        let delta2 = dummy_partial_delta(account2, vault_delta2, AccountStoragePatch::default());
         forest.update_account(block_num, &delta2).unwrap();
     }
 
@@ -935,7 +935,7 @@ fn prune_handles_multiple_accounts() {
 fn prune_handles_multiple_slots() {
     use std::collections::BTreeMap;
 
-    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+    use miden_protocol::account::delta::{StorageMapPatch, StorageSlotPatch};
 
     let mut forest = AccountStateForest::new();
     let account_id = dummy_account();
@@ -944,15 +944,15 @@ fn prune_handles_multiple_slots() {
 
     for i in 1..=TEST_CHAIN_LENGTH {
         let block_num = BlockNumber::from(i);
-        let mut map_delta_a = StorageMapDelta::default();
+        let mut map_delta_a = StorageMapPatch::default();
         map_delta_a.insert(StorageMapKey::new(Word::from([i, 0, 0, 0])), Word::from([i, 0, 0, 1]));
-        let mut map_delta_b = StorageMapDelta::default();
+        let mut map_delta_b = StorageMapPatch::default();
         map_delta_b.insert(StorageMapKey::new(Word::from([i, 0, 0, 2])), Word::from([i, 0, 0, 3]));
         let raw = BTreeMap::from_iter([
-            (slot_a.clone(), StorageSlotDelta::Map(map_delta_a)),
-            (slot_b.clone(), StorageSlotDelta::Map(map_delta_b)),
+            (slot_a.clone(), StorageSlotPatch::Map(map_delta_a)),
+            (slot_b.clone(), StorageSlotPatch::Map(map_delta_b)),
         ]);
-        let storage_delta = AccountStorageDelta::from_raw(raw);
+        let storage_delta = AccountStoragePatch::from_raw(raw);
         let delta = dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta);
         forest.update_account(block_num, &delta).unwrap();
     }
@@ -971,7 +971,7 @@ fn prune_handles_multiple_slots() {
 fn prune_preserves_most_recent_state_per_entity() {
     use std::collections::BTreeMap;
 
-    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+    use miden_protocol::account::delta::{StorageMapPatch, StorageSlotPatch};
 
     let mut forest = AccountStateForest::new();
     let account_id = dummy_account();
@@ -984,31 +984,31 @@ fn prune_preserves_most_recent_state_per_entity() {
     let mut vault_delta_1 = AccountVaultDelta::default();
     vault_delta_1.add_asset(dummy_fungible_asset(faucet_id, 1000)).unwrap();
 
-    let mut map_delta_a = StorageMapDelta::default();
+    let mut map_delta_a = StorageMapPatch::default();
     map_delta_a
         .insert(StorageMapKey::new(Word::from([1u32, 0, 0, 0])), Word::from([100u32, 0, 0, 0]));
 
-    let mut map_delta_b = StorageMapDelta::default();
+    let mut map_delta_b = StorageMapPatch::default();
     map_delta_b
         .insert(StorageMapKey::new(Word::from([2u32, 0, 0, 0])), Word::from([200u32, 0, 0, 0]));
 
     let raw = BTreeMap::from_iter([
-        (slot_map_a.clone(), StorageSlotDelta::Map(map_delta_a)),
-        (slot_map_b.clone(), StorageSlotDelta::Map(map_delta_b)),
+        (slot_map_a.clone(), StorageSlotPatch::Map(map_delta_a)),
+        (slot_map_b.clone(), StorageSlotPatch::Map(map_delta_b)),
     ]);
-    let storage_delta_1 = AccountStorageDelta::from_raw(raw);
+    let storage_delta_1 = AccountStoragePatch::from_raw(raw);
     let delta_1 = dummy_partial_delta(account_id, vault_delta_1, storage_delta_1);
     forest.update_account(block_1, &delta_1).unwrap();
 
     // Block 51: Update only map_a
     let block_at_51 = BlockNumber::from(51);
-    let mut map_delta_a_new = StorageMapDelta::default();
+    let mut map_delta_a_new = StorageMapPatch::default();
     map_delta_a_new
         .insert(StorageMapKey::new(Word::from([1u32, 0, 0, 0])), Word::from([999u32, 0, 0, 0]));
 
     let raw_at_51 =
-        BTreeMap::from_iter([(slot_map_a.clone(), StorageSlotDelta::Map(map_delta_a_new))]);
-    let storage_delta_at_51 = AccountStorageDelta::from_raw(raw_at_51);
+        BTreeMap::from_iter([(slot_map_a.clone(), StorageSlotPatch::Map(map_delta_a_new))]);
+    let storage_delta_at_51 = AccountStoragePatch::from_raw(raw_at_51);
     let delta_at_51 =
         dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta_at_51);
     forest.update_account(block_at_51, &delta_at_51).unwrap();
@@ -1028,7 +1028,7 @@ fn prune_preserves_most_recent_state_per_entity() {
 fn prune_preserves_entries_within_retention_window() {
     use std::collections::BTreeMap;
 
-    use miden_protocol::account::delta::{StorageMapDelta, StorageSlotDelta};
+    use miden_protocol::account::delta::{StorageMapPatch, StorageSlotPatch};
 
     let mut forest = AccountStateForest::new();
     let account_id = dummy_account();
@@ -1045,12 +1045,12 @@ fn prune_preserves_entries_within_retention_window() {
             .add_asset(dummy_fungible_asset(faucet_id, u64::from(block_num) * 100))
             .unwrap();
 
-        let mut map_delta = StorageMapDelta::default();
+        let mut map_delta = StorageMapPatch::default();
         map_delta
             .insert(StorageMapKey::from_index(block_num), Word::from([block_num * 10, 0, 0, 0]));
 
-        let raw = BTreeMap::from_iter([(slot_map.clone(), StorageSlotDelta::Map(map_delta))]);
-        let storage_delta = AccountStorageDelta::from_raw(raw);
+        let raw = BTreeMap::from_iter([(slot_map.clone(), StorageSlotPatch::Map(map_delta))]);
+        let storage_delta = AccountStoragePatch::from_raw(raw);
         let delta = dummy_partial_delta(account_id, vault_delta, storage_delta);
         forest.update_account(block, &delta).unwrap();
     }
@@ -1087,14 +1087,14 @@ fn shared_vault_root_retained_when_one_account_changes() {
 
     let mut vault_delta_1 = AccountVaultDelta::default();
     vault_delta_1.add_asset(asset).unwrap();
-    let delta_1 = dummy_partial_delta(account1, vault_delta_1, AccountStorageDelta::default());
+    let delta_1 = dummy_partial_delta(account1, vault_delta_1, AccountStoragePatch::default());
     forest.update_account(block_1, &delta_1).unwrap();
 
     let mut vault_delta_2 = AccountVaultDelta::default();
     vault_delta_2
         .add_asset(dummy_fungible_asset(faucet_id, initial_amount))
         .unwrap();
-    let delta_2 = dummy_partial_delta(account2, vault_delta_2, AccountStorageDelta::default());
+    let delta_2 = dummy_partial_delta(account2, vault_delta_2, AccountStoragePatch::default());
     forest.update_account(block_1, &delta_2).unwrap();
 
     // Both accounts should have the same vault root (structural sharing in SmtForest)
@@ -1107,7 +1107,7 @@ fn shared_vault_root_retained_when_one_account_changes() {
     let mut vault_delta_2_update = AccountVaultDelta::default();
     vault_delta_2_update.add_asset(dummy_fungible_asset(faucet_id, 500)).unwrap();
     let delta_2_update =
-        dummy_partial_delta(account2, vault_delta_2_update, AccountStorageDelta::default());
+        dummy_partial_delta(account2, vault_delta_2_update, AccountStoragePatch::default());
     forest.update_account(block_2, &delta_2_update).unwrap();
 
     // Account2 now has a different root

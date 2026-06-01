@@ -13,7 +13,7 @@ use miden_protocol::account::{
     AccountDelta,
     AccountFile,
     AccountId,
-    AccountStorageDelta,
+    AccountStoragePatch,
     AccountType,
     AccountVaultDelta,
     FungibleAssetDelta,
@@ -246,7 +246,7 @@ impl GenesisConfig {
             // therefore we need bump the nonce manually to uphold this invariant.
             let wallet_delta = AccountDelta::new(
                 wallet_account.id(),
-                AccountStorageDelta::default(),
+                AccountStoragePatch::default(),
                 AccountVaultDelta::new(
                     wallet_fungible_asset_update,
                     NonFungibleAssetDelta::default(),
@@ -275,7 +275,7 @@ impl GenesisConfig {
             // `ONE`.
             let total_issuance = faucet_issuance.get(&faucet_id).copied().unwrap_or_default();
 
-            let mut storage_delta = AccountStorageDelta::default();
+            let mut storage_delta = AccountStoragePatch::default();
 
             if total_issuance != 0 {
                 let current_faucet = FungibleFaucet::try_from(faucet_account.storage())?;
