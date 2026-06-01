@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::mem::size_of;
 use std::num::NonZeroUsize;
 use std::ops::{Deref, DerefMut, RangeInclusive};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -238,8 +238,8 @@ impl Db {
 
     /// Applies all pending migrations to an existing DB.
     #[instrument(target = COMPONENT, skip_all)]
-    pub fn migrate(database_filepath: PathBuf) -> Result<(), DatabaseError> {
-        migrate_database(&database_filepath)?;
+    pub fn migrate(database_filepath: impl AsRef<Path>) -> Result<(), DatabaseError> {
+        migrate_database(database_filepath.as_ref())?;
         Ok(())
     }
 

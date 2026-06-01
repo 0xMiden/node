@@ -1,5 +1,5 @@
 use std::num::{NonZeroU16, NonZeroUsize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -52,7 +52,7 @@ pub async fn bootstrap(database_filepath: PathBuf, genesis: &SignedBlock) -> any
 }
 
 /// Applies pending migrations to the ntx-builder database at `database_filepath`.
-pub fn migrate(database_filepath: PathBuf) -> anyhow::Result<()> {
+pub fn migrate(database_filepath: impl AsRef<Path>) -> anyhow::Result<()> {
     db::Db::migrate(database_filepath).context("failed to apply ntx-builder database migrations")
 }
 

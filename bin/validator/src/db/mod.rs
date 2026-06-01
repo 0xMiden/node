@@ -3,7 +3,7 @@ mod models;
 mod schema;
 
 use std::num::NonZeroUsize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use diesel::SqliteConnection;
 use diesel::dsl::{count_star, exists};
@@ -34,7 +34,7 @@ pub async fn load_with_pool_size(
 ) -> Result<Db, DatabaseError> {
     verify_latest_schema(&database_filepath)?;
 
-    open_with_pool_size(database_filepath, connection_pool_size)
+    open_with_pool_size(&database_filepath, connection_pool_size)
 }
 
 /// Creates a new database, applies all migrations, and opens a connection pool.
@@ -51,21 +51,21 @@ pub async fn setup_with_pool_size(
 ) -> Result<Db, DatabaseError> {
     bootstrap_database(&database_filepath)?;
 
-    open_with_pool_size(database_filepath, connection_pool_size)
+    open_with_pool_size(&database_filepath, connection_pool_size)
 }
 
 /// Applies all pending migrations to an existing DB.
 #[instrument(target = COMPONENT, skip_all)]
-pub fn migrate(database_filepath: PathBuf) -> Result<(), DatabaseError> {
-    migrate_database(&database_filepath)?;
+pub fn migrate(database_filepath: impl AsRef<Path>) -> Result<(), DatabaseError> {
+    migrate_database(database_filepath.as_ref())?;
     Ok(())
 }
 
 fn open_with_pool_size(
-    database_filepath: PathBuf,
+    database_filepath: &Path,
     connection_pool_size: NonZeroUsize,
 ) -> Result<Db, DatabaseError> {
-    let db = Db::new_with_pool_size(&database_filepath, connection_pool_size)?;
+    let db = Db::new_with_pool_size(database_filepath, connection_pool_size)?;
     tracing::info!(
         target: COMPONENT,
         sqlite= %database_filepath.display(),

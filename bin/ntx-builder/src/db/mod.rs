@@ -1,5 +1,5 @@
 use std::num::NonZeroUsize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use miden_node_db::DatabaseError;
@@ -60,21 +60,21 @@ impl Db {
     ) -> anyhow::Result<Self> {
         verify_latest_schema(&database_filepath).context("failed to verify database schema")?;
 
-        Self::open_with_pool_size(database_filepath, connection_pool_size)
+        Self::open_with_pool_size(&database_filepath, connection_pool_size)
     }
 
     /// Applies all pending migrations to an existing DB.
     #[instrument(target = COMPONENT, skip_all)]
-    pub fn migrate(database_filepath: PathBuf) -> Result<()> {
-        migrate_database(&database_filepath)?;
+    pub fn migrate(database_filepath: impl AsRef<Path>) -> Result<()> {
+        migrate_database(database_filepath.as_ref())?;
         Ok(())
     }
 
     fn open_with_pool_size(
-        database_filepath: PathBuf,
+        database_filepath: &Path,
         connection_pool_size: NonZeroUsize,
     ) -> anyhow::Result<Self> {
-        let inner = miden_node_db::Db::new_with_pool_size(&database_filepath, connection_pool_size)
+        let inner = miden_node_db::Db::new_with_pool_size(database_filepath, connection_pool_size)
             .context("failed to build connection pool")?;
 
         info!(
@@ -108,7 +108,7 @@ impl Db {
     ) -> anyhow::Result<()> {
         bootstrap_database(&database_filepath).context("failed to bootstrap database schema")?;
         let db = Self::open_with_pool_size(
-            database_filepath,
+            &database_filepath,
             miden_node_db::default_connection_pool_size(),
         )?;
 
