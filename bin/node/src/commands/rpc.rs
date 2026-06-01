@@ -3,7 +3,6 @@ use std::num::{NonZeroU32, NonZeroU64};
 use std::time::Duration;
 
 use anyhow::Context;
-use miden_node_rpc::NetworkTxAuth;
 use miden_node_utils::clap::{GrpcOptionsExternal, duration_to_human_readable_string};
 use tonic::metadata::AsciiMetadataValue;
 use url::Url;
@@ -44,13 +43,12 @@ impl RpcOptions {
         }
     }
 
-    pub(super) fn network_tx_auth(&self) -> anyhow::Result<Option<NetworkTxAuth>> {
+    pub(super) fn network_tx_auth(&self) -> anyhow::Result<Option<AsciiMetadataValue>> {
         self.network_tx_auth_header_value
             .as_deref()
             .map(|value| {
                 value
                     .parse::<AsciiMetadataValue>()
-                    .map(NetworkTxAuth)
                     .context("invalid rpc.network-tx-auth-header-value")
             })
             .transpose()

@@ -39,12 +39,12 @@ pub struct Rpc {
     pub mode: RpcMode,
     pub ntx_builder: Option<NtxBuilderClient>,
     pub grpc_options: GrpcOptionsExternal,
-    pub network_tx_auth: Option<NetworkTxAuth>,
+    pub network_tx_auth: Option<AsciiMetadataValue>,
 }
 
 #[derive(Clone, Debug)]
 /// Shared secret value expected in the fixed `x-miden-network-tx-auth` metadata header.
-pub struct NetworkTxAuth(pub AsciiMetadataValue);
+pub(crate) struct NetworkTxAuth(pub(crate) AsciiMetadataValue);
 
 #[derive(Clone, Debug)]
 pub enum RpcMode {
@@ -85,7 +85,7 @@ impl Rpc {
             self.mode.clone(),
             self.ntx_builder.clone(),
             NonZeroUsize::new(1_000_000).unwrap(),
-            self.network_tx_auth,
+            self.network_tx_auth.map(NetworkTxAuth),
         );
 
         let genesis = api

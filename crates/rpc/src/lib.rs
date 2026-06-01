@@ -2,7 +2,7 @@ mod server;
 #[cfg(test)]
 mod tests;
 
-pub use server::{NetworkTxAuth, Rpc, RpcMode};
+pub use server::{Rpc, RpcMode};
 
 // CONSTANTS
 // =================================================================================================
