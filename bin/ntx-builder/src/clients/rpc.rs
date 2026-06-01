@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use backon::{ExponentialBuilder, Retryable};
@@ -10,8 +11,16 @@ use miden_node_proto::generated::rpc::{BlockSubscriptionRequest, BlockSubscripti
 use miden_node_proto::generated::{self as proto};
 use miden_node_utils::ErrorReport;
 use miden_protocol::Word;
-use miden_protocol::account::{AccountCode, AccountId, PartialAccount, PartialStorage};
-use miden_protocol::asset::PartialVault;
+use miden_protocol::account::{
+    AccountCode,
+    AccountId,
+    PartialAccount,
+    PartialStorage,
+    StorageMapKey,
+    StorageMapWitness,
+    StorageSlotName,
+};
+use miden_protocol::asset::{AssetVaultKey, AssetWitness, PartialVault};
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use miden_protocol::note::NoteScript;
 use miden_protocol::transaction::{AccountInputs, ProvenTransaction, TransactionInputs};
@@ -232,6 +241,36 @@ fn build_minimal_foreign_account(
         None,
     )?;
     Ok(partial_account)
+}
+
+// ACTOR-PATH WITNESS METHODS
+// ================================================================================================
+//
+// These witness lookups are account-agnostic: the executor invokes them for the native account as
+// well as for foreign accounts pulled in via FPI. They are served over RPC rather than from local
+// state because foreign accounts are not tracked locally. The real RPC implementation lands with
+// the ntx-builder RPC client (#2162); until then they remain stubs.
+
+#[expect(clippy::unused_async)]
+impl RpcClient {
+    pub async fn get_vault_asset_witnesses(
+        &self,
+        _account_id: AccountId,
+        _vault_keys: BTreeSet<AssetVaultKey>,
+        _block_num: Option<BlockNumber>,
+    ) -> Result<Vec<AssetWitness>, RpcError> {
+        unimplemented!("get_vault_asset_witnesses is rewired in PR 2 of the ntx-builder refactor")
+    }
+
+    pub async fn get_storage_map_witness(
+        &self,
+        _account_id: AccountId,
+        _slot_name: StorageSlotName,
+        _map_key: StorageMapKey,
+        _block_num: Option<BlockNumber>,
+    ) -> Result<StorageMapWitness, RpcError> {
+        unimplemented!("get_storage_map_witness is rewired in PR 2 of the ntx-builder refactor")
+    }
 }
 
 // NOTE SCRIPT LOOKUP
