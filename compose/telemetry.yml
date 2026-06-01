@@ -23,32 +23,15 @@ services:
     depends_on:
       - tempo
 
-  store:
+  sequencer:
     environment:
-      - MIDEN_NODE_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
-      - OTEL_SERVICE_NAME=store
+      - OTEL_RESOURCE_ATTRIBUTES=service.instance.id=sequencer
 
   validator:
     environment:
-      - MIDEN_NODE_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
-      - OTEL_SERVICE_NAME=validator
-
-  block-producer:
-    environment:
-      - MIDEN_NODE_ENABLE_OTEL=true
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
-      - OTEL_SERVICE_NAME=block-producer
-
-  rpc:
-    environment:
-      - MIDEN_NODE_ENABLE_OTEL=true
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
-      - OTEL_SERVICE_NAME=rpc
 
   ntx-builder:
     environment:
-      - MIDEN_NODE_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
-      - OTEL_SERVICE_NAME=ntx-builder

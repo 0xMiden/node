@@ -8,6 +8,16 @@ pub enum ProofKind {
     Block,
 }
 
+impl ProofKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ProofKind::Transaction => "transaction",
+            ProofKind::Batch => "batch",
+            ProofKind::Block => "block",
+        }
+    }
+}
+
 impl From<proto::ProofType> for ProofKind {
     fn from(value: proto::ProofType) -> Self {
         match value {
@@ -20,11 +30,7 @@ impl From<proto::ProofType> for ProofKind {
 
 impl std::fmt::Display for ProofKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ProofKind::Transaction => write!(f, "transaction"),
-            ProofKind::Batch => write!(f, "batch"),
-            ProofKind::Block => write!(f, "block"),
-        }
+        f.write_str(self.as_str())
     }
 }
 

@@ -6,13 +6,14 @@ use std::time::Duration;
 use anyhow::Context;
 use clap::Parser;
 use miden_node_utils::clap::duration_to_human_readable_string;
+use miden_node_utils::fs::ensure_empty_directory;
+use miden_node_utils::logging::OpenTelemetry;
 use miden_protocol::block::SignedBlock;
 use miden_protocol::utils::serde::Deserializable;
 use tokio::net::TcpListener;
 use tonic::metadata::AsciiMetadataValue;
 use url::Url;
 
-const ENV_ENABLE_OTEL: &str = "MIDEN_NODE_ENABLE_OTEL";
 const ENV_DATA_DIRECTORY: &str = "MIDEN_NODE_DATA_DIRECTORY";
 const ENV_LISTEN: &str = "MIDEN_NODE_NTX_BUILDER_LISTEN";
 const ENV_RPC_URL: &str = "MIDEN_NODE_NTX_BUILDER_RPC_URL";
@@ -121,13 +122,6 @@ pub enum NtxBuilderCommand {
         /// Directory for the ntx-builder's persistent database.
         #[arg(long = "data-directory", env = ENV_DATA_DIRECTORY, value_name = "DIR")]
         data_directory: PathBuf,
-
-        /// Enables the exporting of traces for OpenTelemetry.
-        ///
-        /// This can be further configured using environment variables as defined in the official
-        /// OpenTelemetry documentation. See our operator manual for further details.
-        #[arg(long = "enable-otel", default_value_t = false, env = ENV_ENABLE_OTEL, value_name = "BOOL")]
-        enable_otel: bool,
     },
 
     /// Bootstraps the ntx-builder database from a trusted genesis block.
@@ -150,6 +144,7 @@ impl NtxBuilderCommand {
         match self {
             Self::Start { .. } => self.start().await,
             Self::Bootstrap { data_directory, genesis_block } => {
+                ensure_empty_directory(&data_directory)?;
                 let database_filepath = data_directory.join("ntx-builder.sqlite3");
                 let genesis = read_genesis_block(&genesis_block)?;
                 miden_ntx_builder::bootstrap(database_filepath, &genesis)
@@ -172,7 +167,6 @@ impl NtxBuilderCommand {
             tx_expiration_delta,
             sqlite_connection_pool_size,
             data_directory,
-            enable_otel: _,
         } = self
         else {
             unreachable!("start is only called for the Start variant")
@@ -206,11 +200,11 @@ impl NtxBuilderCommand {
             .context("failed while running ntx builder component")
     }
 
-    pub fn is_open_telemetry_enabled(&self) -> bool {
+    pub fn open_telemetry(&self) -> OpenTelemetry {
         match self {
-            Self::Start { enable_otel, .. } => *enable_otel,
+            Self::Start { .. } => OpenTelemetry::from_env().with_name("ntx-builder"),
             // Bootstrap is a one-shot command and does not set up a tracing pipeline.
-            Self::Bootstrap { .. } => false,
+            Self::Bootstrap { .. } => OpenTelemetry::Disabled,
         }
     }
 }

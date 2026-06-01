@@ -94,16 +94,6 @@ pub struct MonitorConfig {
     )]
     pub port: u16,
 
-    /// Whether to enable OpenTelemetry.
-    #[arg(
-        long = "enable-otel",
-        env = "MIDEN_MONITOR_ENABLE_OTEL",
-        action = clap::ArgAction::SetTrue,
-        default_value_t = false,
-        help = "Whether to enable OpenTelemetry"
-    )]
-    pub enable_otel: bool,
-
     /// Whether to disable the network transaction service checks (enabled by default). The network
     /// transaction service is a network account with a counter deployed at startup and incremented
     /// by sending a transaction to it.
