@@ -4,6 +4,7 @@ use anyhow::Context;
 use miden_node_proto::generated::remote_prover::api_server::ApiServer;
 use miden_node_proto::generated::remote_prover::worker_status_api_server::WorkerStatusApiServer;
 use miden_node_utils::cors::cors_for_grpc_web_layer;
+use miden_node_utils::logging::OpenTelemetry;
 use miden_node_utils::panic::catch_panic_layer_fn;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use proof_kind::ProofKind;
@@ -47,6 +48,12 @@ pub struct Server {
 }
 
 impl Server {
+    pub fn open_telemetry(&self) -> OpenTelemetry {
+        OpenTelemetry::from_env()
+            .with_name("remote-prover")
+            .with_attribute("miden.prover.kind", self.kind.as_str())
+    }
+
     /// Spawns the prover server, returning its handle and the port it is listening on.
     pub async fn spawn(&self) -> anyhow::Result<(JoinHandle<anyhow::Result<()>>, u16)> {
         let listener = TcpListener::bind(format!("0.0.0.0:{}", self.port))

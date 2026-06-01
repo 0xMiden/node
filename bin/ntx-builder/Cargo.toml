@@ -22,7 +22,6 @@ anyhow                     = { workspace = true }
 backon                     = { workspace = true }
 clap                       = { features = ["env", "string"], workspace = true }
 diesel                     = { features = ["numeric", "sqlite"], workspace = true }
-fs-err                     = { workspace = true }
 futures                    = { workspace = true }
 humantime                  = { workspace = true }
 libsqlite3-sys             = { workspace = true }

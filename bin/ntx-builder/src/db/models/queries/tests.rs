@@ -41,8 +41,8 @@ fn upsert_account_replaces_existing_row() {
     let account_id = mock_network_account_id();
     let account = mock_account(account_id);
 
-    upsert_account(conn, account_id, &account).unwrap();
-    upsert_account(conn, account_id, &account).unwrap();
+    upsert_account(conn, account_id, &account, mock_transaction_id(1)).unwrap();
+    upsert_account(conn, account_id, &account, mock_transaction_id(2)).unwrap();
 
     assert_eq!(count_accounts(conn), 1, "second upsert must overwrite, not insert");
     assert!(get_account(conn, account_id).unwrap().is_some());
@@ -259,6 +259,33 @@ fn accounts_with_pending_notes_distinct_and_filters_consumed_and_capped() {
     let pending = accounts_with_pending_notes(conn, 30).unwrap();
     assert_eq!(pending.len(), 1, "only alice should remain pending");
     assert_eq!(pending[0], alice);
+}
+
+// SUBMITTED-TX LANDING
+// ================================================================================================
+
+#[test]
+fn account_last_tx_roundtrips_and_updates() {
+    let (conn, _dir) = &mut test_conn();
+    let account_id = mock_network_account_id();
+    let account = mock_account(account_id);
+
+    // The first upsert records its transaction id; a later upsert overwrites it.
+    let first = mock_transaction_id(1);
+    let second = mock_transaction_id(2);
+    upsert_account(conn, account_id, &account, first).unwrap();
+    assert_eq!(account_last_tx(conn, account_id).unwrap(), Some(first));
+    upsert_account(conn, account_id, &account, second).unwrap();
+    assert_eq!(account_last_tx(conn, account_id).unwrap(), Some(second));
+}
+
+#[test]
+fn account_last_tx_returns_none_for_untracked_account() {
+    let (conn, _dir) = &mut test_conn();
+    let account_id = mock_network_account_id();
+
+    // No row exists for this account.
+    assert_eq!(account_last_tx(conn, account_id).unwrap(), None);
 }
 
 #[test]

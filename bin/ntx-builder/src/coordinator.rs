@@ -247,6 +247,7 @@ mod tests {
             network_notes: vec![note],
             nullifiers: vec![],
             network_account_updates: vec![],
+            account_transactions: vec![],
         };
 
         coordinator.handle_committed_block(&effects);
@@ -270,6 +271,7 @@ mod tests {
                 updated_id,
                 miden_protocol::account::delta::AccountUpdateDetails::Private,
             )],
+            account_transactions: vec![],
         };
 
         coordinator.handle_committed_block(&effects);
@@ -327,6 +329,7 @@ mod tests {
             network_notes: vec![note],
             nullifiers: vec![],
             network_account_updates: vec![],
+            account_transactions: vec![],
         };
 
         coordinator.handle_committed_block(&effects);

@@ -1,18 +1,23 @@
 use std::net::SocketAddr;
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU16, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Context;
-use clap::Parser;
+use clap::{ArgGroup, Parser};
 use miden_node_utils::clap::duration_to_human_readable_string;
+use miden_node_utils::fs::ensure_empty_directory;
+use miden_node_utils::genesis::{
+    OfficialNetwork,
+    fetch_signed_genesis_block,
+    read_signed_genesis_block,
+};
+use miden_node_utils::logging::OpenTelemetry;
 use miden_protocol::block::SignedBlock;
-use miden_protocol::utils::serde::Deserializable;
 use tokio::net::TcpListener;
 use tonic::metadata::AsciiMetadataValue;
 use url::Url;
 
-const ENV_ENABLE_OTEL: &str = "MIDEN_NODE_ENABLE_OTEL";
 const ENV_DATA_DIRECTORY: &str = "MIDEN_NODE_DATA_DIRECTORY";
 const ENV_LISTEN: &str = "MIDEN_NODE_NTX_BUILDER_LISTEN";
 const ENV_RPC_URL: &str = "MIDEN_NODE_NTX_BUILDER_RPC_URL";
@@ -20,11 +25,13 @@ const ENV_RPC_AUTH_HEADER_VALUE: &str = "MIDEN_NODE_NTX_BUILDER_RPC_AUTH_HEADER_
 const ENV_TX_PROVER_URL: &str = "MIDEN_NODE_NTX_BUILDER_NTX_PROVER_URL";
 const ENV_SCRIPT_CACHE_SIZE: &str = "MIDEN_NODE_NTX_BUILDER_SCRIPT_CACHE_SIZE";
 const ENV_MAX_CYCLES: &str = "MIDEN_NODE_NTX_BUILDER_MAX_CYCLES";
+const ENV_TX_EXPIRATION_DELTA: &str = "MIDEN_NODE_NTX_BUILDER_TX_EXPIRATION_DELTA";
 const ENV_SQLITE_CONNECTION_POOL_SIZE: &str = "MIDEN_NODE_NTX_BUILDER_SQLITE_CONNECTION_POOL_SIZE";
 
 const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_SCRIPT_CACHE_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
 const DEFAULT_MAX_CYCLES: u32 = 1 << 18;
+const DEFAULT_TX_EXPIRATION_DELTA: NonZeroU16 = NonZeroU16::new(30).unwrap();
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -94,6 +101,19 @@ pub enum NtxBuilderCommand {
         )]
         max_tx_cycles: u32,
 
+        /// Number of blocks after which a submitted network transaction expires.
+        ///
+        /// Set as the on-chain transaction expiration delta and reused as the actor's local retry
+        /// timeout. Must be between 1 and 65535.
+        #[arg(
+            long = "tx-expiration-delta",
+            env = ENV_TX_EXPIRATION_DELTA,
+            default_value_t = DEFAULT_TX_EXPIRATION_DELTA,
+            value_parser = clap::value_parser!(NonZeroU16),
+            value_name = "NUM",
+        )]
+        tx_expiration_delta: NonZeroU16,
+
         /// Maximum number of SQLite connections in the ntx-builder database connection pool.
         #[arg(
             long = "sqlite.connection_pool_size",
@@ -106,27 +126,30 @@ pub enum NtxBuilderCommand {
         /// Directory for the ntx-builder's persistent database.
         #[arg(long = "data-directory", env = ENV_DATA_DIRECTORY, value_name = "DIR")]
         data_directory: PathBuf,
-
-        /// Enables the exporting of traces for OpenTelemetry.
-        ///
-        /// This can be further configured using environment variables as defined in the official
-        /// OpenTelemetry documentation. See our operator manual for further details.
-        #[arg(long = "enable-otel", default_value_t = false, env = ENV_ENABLE_OTEL, value_name = "BOOL")]
-        enable_otel: bool,
     },
 
     /// Bootstraps the ntx-builder database from a trusted genesis block.
     ///
     /// This must be run once before `start` so that the database always contains at least the
     /// genesis block.
+    #[command(group(
+        ArgGroup::new("genesis_block_source")
+            .required(true)
+            .multiple(false)
+            .args(["genesis_block_file", "network"])
+    ))]
     Bootstrap {
         /// Directory for the ntx-builder's persistent database.
         #[arg(long = "data-directory", env = ENV_DATA_DIRECTORY, value_name = "DIR")]
         data_directory: PathBuf,
 
-        /// Path to the trusted, signed genesis block file.
-        #[arg(long, value_name = "FILE")]
-        genesis_block: PathBuf,
+        /// Bootstrap from a trusted genesis block file.
+        #[arg(long = "file", value_name = "FILE")]
+        genesis_block_file: Option<PathBuf>,
+
+        /// Bootstrap for an official Miden network.
+        #[arg(long, value_enum, value_name = "NETWORK")]
+        network: Option<OfficialNetwork>,
     },
 }
 
@@ -134,9 +157,15 @@ impl NtxBuilderCommand {
     pub async fn handle(self) -> anyhow::Result<()> {
         match self {
             Self::Start { .. } => self.start().await,
-            Self::Bootstrap { data_directory, genesis_block } => {
+            Self::Bootstrap {
+                data_directory,
+                genesis_block_file,
+                network,
+            } => {
+                ensure_empty_directory(&data_directory)?;
                 let database_filepath = data_directory.join("ntx-builder.sqlite3");
-                let genesis = read_genesis_block(&genesis_block)?;
+                let genesis =
+                    read_bootstrap_genesis_block(genesis_block_file.as_deref(), network).await?;
                 miden_ntx_builder::bootstrap(database_filepath, &genesis)
                     .await
                     .context("failed to bootstrap ntx-builder database")
@@ -154,9 +183,9 @@ impl NtxBuilderCommand {
             idle_timeout,
             max_account_crashes,
             max_tx_cycles,
+            tx_expiration_delta,
             sqlite_connection_pool_size,
             data_directory,
-            enable_otel: _,
         } = self
         else {
             unreachable!("start is only called for the Start variant")
@@ -174,6 +203,7 @@ impl NtxBuilderCommand {
             .with_idle_timeout(idle_timeout)
             .with_max_account_crashes(max_account_crashes)
             .with_max_cycles(max_tx_cycles)
+            .with_tx_expiration_delta(tx_expiration_delta)
             .with_sqlite_connection_pool_size(sqlite_connection_pool_size);
         let config = match rpc_auth_header_value {
             Some(value) => config.with_rpc_auth_header(value),
@@ -189,19 +219,24 @@ impl NtxBuilderCommand {
             .context("failed while running ntx builder component")
     }
 
-    pub fn is_open_telemetry_enabled(&self) -> bool {
+    pub fn open_telemetry(&self) -> OpenTelemetry {
         match self {
-            Self::Start { enable_otel, .. } => *enable_otel,
+            Self::Start { .. } => OpenTelemetry::from_env().with_name("ntx-builder"),
             // Bootstrap is a one-shot command and does not set up a tracing pipeline.
-            Self::Bootstrap { .. } => false,
+            Self::Bootstrap { .. } => OpenTelemetry::Disabled,
         }
     }
 }
 
-/// Reads a genesis block from disk and returns the signed block.
-fn read_genesis_block(genesis_block_path: &Path) -> anyhow::Result<SignedBlock> {
-    let bytes = fs_err::read(genesis_block_path).context("failed to read genesis block")?;
-    SignedBlock::read_from_bytes(&bytes).context("failed to deserialize genesis block from file")
+async fn read_bootstrap_genesis_block(
+    genesis_block_file: Option<&Path>,
+    network: Option<OfficialNetwork>,
+) -> anyhow::Result<SignedBlock> {
+    match (genesis_block_file, network) {
+        (Some(path), None) => read_signed_genesis_block(path),
+        (None, Some(network)) => fetch_signed_genesis_block(network).await,
+        _ => unreachable!("clap requires exactly one genesis block source"),
+    }
 }
 
 #[cfg(test)]
@@ -243,16 +278,22 @@ mod tests {
             "bootstrap",
             "--data-directory",
             "/tmp/miden-ntx-builder",
-            "--genesis-block",
+            "--file",
             "/tmp/genesis.dat",
         ])
         .expect("command should parse");
 
-        let NtxBuilderCommand::Bootstrap { data_directory, genesis_block } = command else {
+        let NtxBuilderCommand::Bootstrap {
+            data_directory,
+            genesis_block_file,
+            network,
+        } = command
+        else {
             panic!("expected the bootstrap command");
         };
 
         assert_eq!(data_directory, PathBuf::from("/tmp/miden-ntx-builder"));
-        assert_eq!(genesis_block, PathBuf::from("/tmp/genesis.dat"));
+        assert_eq!(genesis_block_file, Some(PathBuf::from("/tmp/genesis.dat")));
+        assert_eq!(network, None);
     }
 }

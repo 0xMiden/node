@@ -23,7 +23,7 @@ miden-network-monitor --help
 # Common usage examples
 miden-network-monitor start --port 8080 --rpc.listen http://localhost:50051
 miden-network-monitor start --remote-prover-urls http://prover1.com:50052,http://prover2.com:50053
-miden-network-monitor start --faucet-url http://localhost:8080 --enable-otel
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 miden-network-monitor start --faucet-url http://localhost:8080
 ```
 
 **Available Options:**
@@ -41,7 +41,6 @@ miden-network-monitor start --faucet-url http://localhost:8080 --enable-otel
 - `--request-timeout`: Timeout for outgoing requests (default: `10s`)
 - `--stale-chain-tip-threshold`: Maximum time without a chain tip update before marking RPC as unhealthy (default: `1m`)
 - `--port, -p`: Web server port (default: `3000`)
-- `--enable-otel`: Enable OpenTelemetry tracing
 - `--counter-increment-interval`: Interval at which to send the increment counter transaction (default: `30s`)
 - `--counter-pending-unhealthy-threshold`: Mark the Network Transactions card unhealthy when the gap between expected and observed counter values stays above this for several consecutive polls (default: `5`)
 - `--counter-latency-timeout`: Maximum time to wait for a counter update after submitting a transaction (default: `2m`)
@@ -66,7 +65,6 @@ If command-line arguments are not provided, the application falls back to enviro
 - `MIDEN_MONITOR_REQUEST_TIMEOUT`: Timeout for outgoing requests
 - `MIDEN_MONITOR_STALE_CHAIN_TIP_THRESHOLD`: Maximum time without a chain tip update before marking RPC as unhealthy
 - `MIDEN_MONITOR_PORT`: Web server port
-- `MIDEN_MONITOR_ENABLE_OTEL`: Enable OpenTelemetry tracing
 - `MIDEN_MONITOR_COUNTER_INCREMENT_INTERVAL`: Interval at which to send the increment counter transaction
 - `MIDEN_MONITOR_COUNTER_PENDING_UNHEALTHY_THRESHOLD`: Mark the Network Transactions card unhealthy when the gap between expected and observed counter values stays above this for several consecutive polls
 - `MIDEN_MONITOR_COUNTER_LATENCY_TIMEOUT`: Maximum time to wait for a counter update after submitting a transaction
@@ -122,8 +120,7 @@ miden-network-monitor start \
   --remote-prover-test-interval 2m \
   --faucet-test-interval 2m \
   --status-check-interval 3s \
-  --port 8080 \
-  --enable-otel
+  --port 8080
 
 # Get help
 miden-network-monitor --help
@@ -143,6 +140,9 @@ miden-network-monitor start
 ```
 
 Once running, the monitor will be available at `http://localhost:3000` (or the configured port).
+
+OpenTelemetry tracing is enabled automatically when `OTEL_EXPORTER_OTLP_ENDPOINT` or
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is set.
 
 ## Currently Supported Monitor
 

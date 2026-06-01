@@ -1,4 +1,4 @@
-use miden_block_prover::{BlockProverError, LocalBlockProver};
+use miden_block_prover::{BlockProverError as LocalBlockProverError, LocalBlockProver};
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{BlockHeader, BlockInputs, BlockProof};
@@ -8,9 +8,9 @@ use tracing::instrument;
 use crate::COMPONENT;
 
 #[derive(Debug, thiserror::Error)]
-pub enum StoreProverError {
+pub enum ProverError {
     #[error("local proving failed")]
-    LocalProvingFailed(#[source] BlockProverError),
+    LocalProvingFailed(#[source] LocalBlockProverError),
     #[error("remote proving failed")]
     RemoteProvingFailed(#[source] RemoteProverClientError),
     #[error("local proving task join error")]
@@ -44,7 +44,7 @@ impl BlockProver {
         tx_batches: OrderedBatches,
         block_inputs: BlockInputs,
         block_header: &BlockHeader,
-    ) -> Result<BlockProof, StoreProverError> {
+    ) -> Result<BlockProof, ProverError> {
         match self {
             Self::Local(prover) => {
                 let prover = prover.clone();
@@ -53,15 +53,15 @@ impl BlockProver {
                 spawn_blocking_in_current_span(move || {
                     prover
                         .prove(tx_batches, &block_header, block_inputs)
-                        .map_err(StoreProverError::LocalProvingFailed)
+                        .map_err(ProverError::LocalProvingFailed)
                 })
                 .await
-                .map_err(StoreProverError::LocalProvingTaskJoin)?
+                .map_err(ProverError::LocalProvingTaskJoin)?
             },
             Self::Remote(prover) => Ok(prover
                 .prove(tx_batches, block_header, block_inputs)
                 .await
-                .map_err(StoreProverError::RemoteProvingFailed)?),
+                .map_err(ProverError::RemoteProvingFailed)?),
         }
     }
 }
