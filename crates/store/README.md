@@ -1,8 +1,8 @@
 # Miden node store
 
-`miden-node-store` contains the persistent state-store implementation used by the Miden node. It is
+`store` contains the persistent state-store implementation used by the Miden node. It is
 part of the [Miden node](https://github.com/0xMiden/node#readme) workspace and is embedded by the
-`miden-node` binary rather than operated directly.
+`node` binary rather than operated directly.
 
 ## Role
 
@@ -14,7 +14,7 @@ transactions, account data, and the authenticated data structures needed to answ
 The default `rocksdb` feature enables disk-backed storage for large Sparse Merkle Trees. Building
 with this feature requires a C/C++ toolchain and the system support needed by RocksDB bindings.
 
-For operator-facing storage configuration, use the `miden-node` help output and start from the
+For operator-facing storage configuration, use the `node` help output and start from the
 [primary README](https://github.com/0xMiden/node#readme).
 
 ## License

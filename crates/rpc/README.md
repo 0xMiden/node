@@ -1,8 +1,8 @@
 # Miden node RPC
 
-`miden-node-rpc` contains the public RPC server implementation used by the Miden node. It is part of
+`rpc` contains the public RPC server implementation used by the Miden node. It is part of
 the [Miden node](https://github.com/0xMiden/node#readme) workspace and is embedded by the
-`miden-node` binary rather than operated directly.
+`node` binary rather than operated directly.
 
 ## Role
 
@@ -15,7 +15,7 @@ component intended to be exposed to clients.
 
 ## API Definitions
 
-The protobuf API definition is published through `miden-node-proto-build`. For project navigation
+The protobuf API definition is published through `proto-build`. For project navigation
 and documentation links, see the [primary README](https://github.com/0xMiden/node#readme).
 
 ## License

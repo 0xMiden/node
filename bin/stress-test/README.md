@@ -1,6 +1,6 @@
 # Miden node stress test
 
-`miden-node-stress-test` is a development binary for generating local store data and running stress
+`stress-test` is a development binary for generating local store data and running stress
 tests against Miden node store workflows. It is part of the Miden node repository but is not published
 as a crates.io package.
 

@@ -1,14 +1,14 @@
 # Miden node block producer
 
-`miden-node-block-producer` contains the block sequencing and block syncing implementation used by
+`block-producer` contains the block sequencing and block syncing implementation used by
 the Miden node. It is part of the [Miden node](https://github.com/0xMiden/node#readme) workspace and
-is embedded by the `miden-node` binary rather than operated directly.
+is embedded by the `node` binary rather than operated directly.
 
 ## Operation Modes
 
 ### Sequencer
 
-When `miden-node` runs in sequencer mode, the block producer is active. It accepts transactions that
+When `node` runs in sequencer mode, the block producer is active. It accepts transactions that
 have passed RPC-side validation, keeps them in the mempool, selects transactions into batches, proves
 those batches, assembles proposed blocks, and coordinates validation and commitment.
 
@@ -25,7 +25,7 @@ atomically in the same block.
 
 ### Full Node
 
-When `miden-node` runs in full-node mode, the block producer syncs blocks from an upstream RPC
+When `node` runs in full-node mode, the block producer syncs blocks from an upstream RPC
 source, stores the resulting state locally, and serves a local RPC API. It does not maintain a
 sequencing mempool or produce new blocks.
 

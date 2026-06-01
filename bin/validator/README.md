@@ -6,7 +6,7 @@ It is part of the Miden node repository; see the
 
 ## Role
 
-The validator is separate from `miden-node` so that block construction and block validation can be
+The validator is separate from `node` so that block construction and block validation can be
 operated as distinct services. It verifies submitted transactions, validates proposed blocks, and
 signs blocks that satisfy the validator's checks.
 
@@ -16,7 +16,8 @@ state.
 
 ## Operation
 
-The validator expects to operate as an internal service within a Miden network's infrastructure and exposes a gRPC API for use by trusted internal nodes.
+The validator expects to operate as an internal service within a Miden network's infrastructure and
+exposes a gRPC API for use by trusted internal nodes.
 
 It supports local development keys and KMS-backed signing for deployments that need external key
 management.

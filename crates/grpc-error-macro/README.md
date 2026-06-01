@@ -1,6 +1,6 @@
-# miden-node-grpc-error-macro
+# grpc-error-macro
 
-`miden-node-grpc-error-macro` is a procedural macro used by the Miden node workspace to derive gRPC
+`grpc-error-macro` is a procedural macro used by the Miden node workspace to derive gRPC
 error mapping boilerplate. It is part of the
 [Miden node](https://github.com/0xMiden/node#readme) repository.
 

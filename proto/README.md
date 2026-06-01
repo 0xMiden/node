@@ -1,6 +1,6 @@
 # Miden node proto build
 
-`miden-node-proto-build` exposes protobuf `FileDescriptorSet` values for the public Miden node APIs.
+`proto-build` exposes protobuf `FileDescriptorSet` values for the public Miden node APIs.
 It is part of the [Miden node](https://github.com/0xMiden/node#readme) repository.
 
 ## Role

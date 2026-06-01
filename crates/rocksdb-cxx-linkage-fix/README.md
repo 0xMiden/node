@@ -1,6 +1,6 @@
-# miden-node-rocksdb-cxx-linkage-fix
+# rocksdb-cxx-linkage-fix
 
-`miden-node-rocksdb-cxx-linkage-fix` is a small build helper used by the Miden node workspace. It is
+`rocksdb-cxx-linkage-fix` is a small build helper used by the Miden node workspace. It is
 part of the [Miden node](https://github.com/0xMiden/node#readme) repository.
 
 ## Role

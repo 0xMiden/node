@@ -19,7 +19,7 @@ the node RPC component can use for network-note status queries.
 ## Operation
 
 The builder has its own persistent database and must be initialized from the same trusted genesis
-block as the rest of the network before it starts. In a complete node deployment, `miden-node`
+block as the rest of the network before it starts. In a complete node deployment, `node`
 connects to this service so network-note status can be exposed through the public RPC API.
 
 ## License

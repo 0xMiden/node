@@ -1,6 +1,6 @@
 # Miden node proto
 
-`miden-node-proto` contains generated protobuf bindings, conversion code, and gRPC error helpers used
+`proto` contains generated protobuf bindings, conversion code, and gRPC error helpers used
 inside the Miden node workspace. It is part of the
 [Miden node](https://github.com/0xMiden/node#readme) repository.
 
@@ -10,7 +10,7 @@ This crate is an internal implementation crate for the node binaries and compone
 the recommended crate for external clients that want to generate bindings from the public protobuf
 API.
 
-For external gRPC client generation, use `miden-node-proto-build`.
+For external gRPC client generation, use `proto-build`.
 
 ## Notes
 

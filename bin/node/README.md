@@ -1,6 +1,6 @@
 # Miden node
 
-`miden-node` is the main binary for running node infrastructure for a Miden network. It is the binary
+`node` is the main binary for running node infrastructure for a Miden network. It is the binary
 operators use for sequencer and full-node operation, and it embeds the store, RPC, and block-producer
 component crates.
 

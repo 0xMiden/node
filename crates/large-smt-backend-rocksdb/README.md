@@ -9,7 +9,7 @@ by the Miden node store. It is part of the
 The crate exposes `LargeSmt`-related types together with `RocksDbStorage` and configuration types for
 persisting lower tree levels in RocksDB while keeping the upper tree levels in memory.
 
-This backend is used by `miden-node-store` when disk-backed authenticated state is enabled.
+This backend is used by `store` when disk-backed authenticated state is enabled.
 
 ## Crate-Specific Notes
 
