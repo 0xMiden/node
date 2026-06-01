@@ -189,11 +189,8 @@ impl State {
         }
 
         // Validate block exists in the blockchain before querying the database
-        {
-            let snapshot = self.snapshot();
-            if block_num > snapshot.block_num {
-                return Err(GetAccountError::UnknownBlock(block_num));
-            }
+        if block_num > self.snapshot().block_num {
+            return Err(GetAccountError::UnknownBlock(block_num));
         }
 
         // Query account header and storage header together in a single DB call
