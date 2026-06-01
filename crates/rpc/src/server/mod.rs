@@ -44,7 +44,7 @@ pub struct Rpc {
 
 #[derive(Clone, Debug)]
 /// Shared secret value expected in the fixed `x-miden-network-tx-auth` metadata header.
-pub(crate) struct NetworkTxAuth(pub(crate) AsciiMetadataValue);
+pub struct NetworkTxAuth(pub AsciiMetadataValue);
 
 #[derive(Clone, Debug)]
 pub enum RpcMode {
