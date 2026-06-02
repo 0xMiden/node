@@ -102,6 +102,7 @@ services:
       - --data-directory=/data/node
       - --validator.url=http://validator:50101
       - --ntx-builder.url=http://ntx-builder:50301
+      - --rpc.network-tx-auth-header-value=secret_value
     ports:
       - "57291:57291"
 
@@ -144,6 +145,7 @@ services:
       - start
       - --listen=0.0.0.0:50301
       - --rpc.url=http://sequencer:57291
+      - --rpc.auth-header-value=secret_value
       - --tx-prover.url=${MIDEN_REMOTE_PROVER_URL:-http://remote-prover:50051}
       - --data-directory=/data/ntx-builder
 
