@@ -138,37 +138,25 @@ impl BlockWriter {
         // Save the block to the block store concurrently with computing mutations.
         let signed_block_bytes = signed_block.to_bytes();
         let cache_bytes = signed_block_bytes.clone();
-        let store = Arc::clone(&self.block_store);
-        let block_save_task = tokio::spawn(
-            async move { store.save_block(block_num, &signed_block_bytes).await }.in_current_span(),
-        );
 
-        let (nullifier_tree_update, account_tree_update) =
-            self.compute_tree_mutations(header, body)?;
-
-        let notes = Self::build_note_records(header, body)?;
-
+        // TODO(sergerad): move this when account forest integrated into in-memory state.
         // Extract public account deltas before `signed_block` is moved.
-        let account_deltas =
+        let account_deltas = tokio::task::block_in_place(|| {
             Vec::from_iter(body.updated_accounts().iter().filter_map(
                 |update| match update.details() {
                     AccountUpdateDetails::Delta(delta) => Some(delta.clone()),
                     AccountUpdateDetails::Private => None,
                 },
-            ));
+            ))
+        });
 
-        // Commit to the database.
-        let db = Arc::clone(&self.db);
-        db.apply_block(signed_block, notes)
-            .instrument(info_span!(target: COMPONENT, "db_apply_block"))
-            .await
-            .map_err(|err| ApplyBlockError::DbUpdateTaskFailed(err.as_report()))?;
+        // Apply in-memory mutations.
+        let (snapshot, notes) = tokio::task::block_in_place(|| {
+            let notes = Self::build_note_records(header, body)?;
 
-        // Wait for the block store save to complete.
-        block_save_task.await??;
+            let (nullifier_tree_update, account_tree_update) =
+                self.compute_tree_mutations(header, body)?;
 
-        // Apply mutations to the owned mutable trees.
-        tokio::task::block_in_place(|| {
             self.nullifier_tree
                 .apply_mutations(nullifier_tree_update)
                 .expect("nullifier tree mutation should succeed after validation");
@@ -179,7 +167,6 @@ impl BlockWriter {
 
             self.blockchain.push(block_commitment);
 
-            // Publish a new snapshot via ArcSwap.
             let snapshot = Arc::new(InMemoryState {
                 block_num,
                 nullifier_tree: self
@@ -189,16 +176,34 @@ impl BlockWriter {
                 account_tree: self.account_tree.reader(),
                 blockchain: (*self.blockchain).clone(), // TODO(sergerad): snapshot of blockchain?
             });
-            self.in_memory.store(snapshot);
 
-            Ok::<(), ApplyBlockError>(())
+            Ok::<(Arc<InMemoryState>, Vec<(NoteRecord, Option<Nullifier>)>), ApplyBlockError>((
+                snapshot, notes,
+            ))
         })?;
 
+        // Save the block to the block store.
+        self.block_store.save_block(block_num, &signed_block_bytes).await?;
+
+        // Commit to DB. Readers continue to see the old in-memory state (via their Arc) while
+        // the DB commits. We ensure consistency by scoping all RPC queries that hit DB data by
+        // the block number that is Arc swapped at the end of this function.
+        self.db
+            .apply_block(signed_block, notes)
+            .instrument(info_span!(target: COMPONENT, "db_apply_block"))
+            .await
+            .map_err(|err| ApplyBlockError::DbUpdateTaskFailed(err.as_report()))?;
+
+        // TODO(sergerad): Move this into the same task as above once forest is integrated into in-memory state.
         // Update the forest.
         tokio::task::block_in_place(|| {
             let mut forest = self.forest.blocking_write();
             forest.apply_block_updates(block_num, account_deltas)
         })?;
+
+        // Atomically publish the new state. Readers that call snapshot() after this point
+        // will see the updated state. Readers holding the old Arc continue unaffected.
+        self.in_memory.store(snapshot);
 
         // Notify replica subscribers.
         self.block_cache.push(block_num, BlockNotification::new(block_num, cache_bytes));
