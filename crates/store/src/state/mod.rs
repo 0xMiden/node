@@ -150,7 +150,8 @@ pub struct State {
     /// Handle for sending block-write requests to the [`BlockWriter`] task.
     write_handle: WriteHandle,
 
-    // TODO(sergerad): RM lock and move to in memory state when protocol updated with crypto v0.26.0.
+    // TODO(sergerad): RM lock and move to in memory state when protocol updated with crypto
+    // v0.26.0.
     /// Forest-related state `(SmtForest, storage_map_roots, vault_roots)` with its own lock.
     forest: Arc<RwLock<AccountStateForest<AccountStateForestBackend>>>,
 
@@ -394,8 +395,7 @@ impl State {
         let block_header = self.db.select_block_header_by_block_num(block_num).await?;
         if let Some(header) = block_header {
             let mmr_proof = if include_mmr_proof {
-                let snapshot = self.snapshot();
-                let mmr_proof = snapshot.blockchain.open(header.block_num())?;
+                let mmr_proof = self.snapshot().blockchain.open(header.block_num())?;
                 Some(mmr_proof)
             } else {
                 None
@@ -435,8 +435,8 @@ impl State {
             .map_err(GetCurrentBlockchainDataError::ErrorRetrievingBlockHeader)?
             .unwrap();
 
-        let snapshot = self.snapshot();
-        let peaks = snapshot
+        let peaks = self
+            .snapshot()
             .blockchain
             .peaks_at(block_header.block_num())
             .map_err(GetCurrentBlockchainDataError::InvalidPeaks)?;
@@ -465,8 +465,8 @@ impl State {
         let mut blocks: BTreeSet<BlockNumber> = tx_reference_blocks;
         blocks.extend(note_blocks);
 
-        let snapshot = self.snapshot();
         let (batch_reference_block, partial_mmr) = {
+            let snapshot = self.snapshot();
             let latest_block_num = snapshot.block_num;
 
             let highest_block_num =
@@ -573,10 +573,10 @@ impl State {
         account_ids: &[AccountId],
         nullifiers: &[Nullifier],
     ) -> Result<BlockInputWitnesses, GetBlockInputsError> {
-        let snapshot = self.snapshot();
         let span = Span::current();
         tokio::task::block_in_place(|| {
             span.in_scope(|| {
+                let snapshot = self.snapshot();
                 let latest_block_number = snapshot.block_num;
 
                 let highest_block_number = blocks.last().copied().unwrap_or(latest_block_number);
@@ -621,10 +621,10 @@ impl State {
     ) -> Result<TransactionInputs, DatabaseError> {
         info!(target: COMPONENT, account_id = %account_id.to_string(), nullifiers = %format_array(nullifiers));
 
-        let snapshot = self.snapshot();
         let span = Span::current();
         let tree_inputs = tokio::task::block_in_place(|| {
             span.in_scope(|| {
+                let snapshot = self.snapshot();
                 let account_commitment = snapshot.account_tree.get_latest_commitment(account_id);
 
                 let new_account_id_prefix_is_unique = if account_commitment.is_empty() {

@@ -105,7 +105,6 @@ impl State {
 
         {
             let snapshot = self.snapshot();
-
             for note_sync in note_syncs {
                 let mmr_proof = snapshot
                     .blockchain

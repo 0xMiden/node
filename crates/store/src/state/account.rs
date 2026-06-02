@@ -30,6 +30,7 @@ use super::State;
 use crate::COMPONENT;
 use crate::account_state_forest::AccountStorageMapResult;
 use crate::errors::{DatabaseError, GetAccountError};
+use crate::state::Finality;
 
 impl State {
     /// Returns an account witness and optionally account details at a specific block.
@@ -189,7 +190,7 @@ impl State {
         }
 
         // Validate block exists in the blockchain before querying the database
-        if block_num > self.snapshot().block_num {
+        if block_num > self.chain_tip(Finality::Committed) {
             return Err(GetAccountError::UnknownBlock(block_num));
         }
 
