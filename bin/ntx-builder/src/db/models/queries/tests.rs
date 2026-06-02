@@ -165,12 +165,14 @@ fn available_notes_excludes_attempts_at_cap() {
 // ================================================================================================
 
 #[test]
-fn upsert_chain_state_persists_and_roundtrips_mmr() {
+fn update_chain_state_tip_persists_and_roundtrips_mmr() {
     let (conn, _dir) = &mut test_conn();
+    let genesis = mock_block_header(BlockNumber::GENESIS);
     let header = mock_block_header(BlockNumber::from(7));
     let mmr = PartialMmr::default();
 
-    upsert_chain_state(conn, header.block_num(), &header, &mmr).unwrap();
+    insert_genesis_chain_state(conn, &genesis, &genesis.commitment()).unwrap();
+    update_chain_state_tip(conn, header.block_num(), &header, &mmr).unwrap();
 
     let (loaded_num, loaded_header, _loaded_mmr) = select_chain_state(conn).unwrap().unwrap();
     assert_eq!(loaded_num, header.block_num());
@@ -178,14 +180,16 @@ fn upsert_chain_state_persists_and_roundtrips_mmr() {
 }
 
 #[test]
-fn upsert_chain_state_overwrites_singleton() {
+fn update_chain_state_tip_keeps_singleton() {
     let (conn, _dir) = &mut test_conn();
+    let genesis = mock_block_header(BlockNumber::GENESIS);
     let header_1 = mock_block_header(BlockNumber::from(1));
     let header_2 = mock_block_header(BlockNumber::from(2));
     let mmr = PartialMmr::default();
 
-    upsert_chain_state(conn, header_1.block_num(), &header_1, &mmr).unwrap();
-    upsert_chain_state(conn, header_2.block_num(), &header_2, &mmr).unwrap();
+    insert_genesis_chain_state(conn, &genesis, &genesis.commitment()).unwrap();
+    update_chain_state_tip(conn, header_1.block_num(), &header_1, &mmr).unwrap();
+    update_chain_state_tip(conn, header_2.block_num(), &header_2, &mmr).unwrap();
 
     let (loaded_num, ..) = select_chain_state(conn).unwrap().unwrap();
     assert_eq!(loaded_num, header_2.block_num());

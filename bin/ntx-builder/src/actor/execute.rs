@@ -152,6 +152,9 @@ pub struct NtxContext {
 
     /// Pre-compiled transaction script that sets the network tx's on-chain expiration delta. Cloned
     /// into the [`TransactionArgs`] of the executed transaction.
+    ///
+    /// TEMP: disabled until the resolution of <https://github.com/0xMiden/protocol/issues/3027>
+    #[expect(dead_code)]
     expiration_script: TransactionScript,
 
     /// [`ExponentialBuilder`] used to back off retries on transient request failures.
@@ -378,7 +381,11 @@ impl NtxContext {
 
         // Attach the pre-compiled expiration script so the submitted tx is rejected on-chain if it
         // does not land within the configured block delta.
-        let tx_args = TransactionArgs::default().with_tx_script(self.expiration_script.clone());
+        //
+        // TEMP: disabled until the resolution of https://github.com/0xMiden/protocol/issues/3027
+        // let tx_args = TransactionArgs::default().with_tx_script(self.expiration_script.clone());
+
+        let tx_args = TransactionArgs::default();
 
         Box::pin(executor.execute_transaction(
             data_store.account.id(),

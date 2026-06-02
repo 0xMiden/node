@@ -98,12 +98,29 @@ impl Db {
             "ntx-builder database is already bootstrapped",
         );
 
+        let genesis_commitment = genesis.header().commitment();
+        let genesis_header = genesis.header().clone();
+
+        db.inner
+            .transact("insert_genesis_chain_state", move |conn| {
+                queries::insert_genesis_chain_state(conn, &genesis_header, &genesis_commitment)
+            })
+            .await
+            .context("failed to seed genesis chain state")?;
+
         let effects = CommittedBlockEffects::from_signed_block(genesis);
         db.apply_committed_block(effects, PartialMmr::default())
             .await
             .context("failed to insert genesis block")?;
 
         Ok(())
+    }
+
+    /// Reads the genesis block commitment persisted at bootstrap.
+    pub async fn get_genesis_commitment(&self) -> Result<Word> {
+        self.inner
+            .query("get_genesis_commitment", queries::select_genesis_commitment)
+            .await
     }
 
     // BLOCK APPLICATION

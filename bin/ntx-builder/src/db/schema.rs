@@ -14,6 +14,7 @@ diesel::table! {
         block_num -> BigInt,
         block_header -> Binary,
         chain_mmr -> Binary,
+        genesis_commitment -> Binary,
     }
 }
 

@@ -2,6 +2,7 @@
 
 use diesel::prelude::*;
 use miden_node_db::DatabaseError;
+use miden_protocol::Word;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::merkle::mmr::PartialMmr;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
@@ -21,6 +22,7 @@ pub struct ChainStateInsert {
     pub block_num: i64,
     pub block_header: Vec<u8>,
     pub chain_mmr: Vec<u8>,
+    pub genesis_commitment: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Queryable, Selectable)]
@@ -35,29 +37,84 @@ struct ChainStateRow {
 // QUERIES
 // ================================================================================================
 
-/// Inserts or replaces the singleton chain state row, persisting the chain tip header and the
-/// associated partial chain MMR.
+/// Updates the tip columns (block number, header, and partial chain MMR) of the singleton chain
+/// state row. The row is created once at bootstrap by [`insert_genesis_chain_state`], so this is a
+/// plain update; the `genesis_commitment` column is set at bootstrap and never touched here.
 ///
 /// # Raw SQL
 ///
 /// ```sql
-/// INSERT OR REPLACE INTO chain_state (id, block_num, block_header, chain_mmr)
-/// VALUES (0, ?1, ?2, ?3)
+/// UPDATE chain_state
+/// SET block_num = ?1, block_header = ?2, chain_mmr = ?3
+/// WHERE id = 0
 /// ```
-pub fn upsert_chain_state(
+pub fn update_chain_state_tip(
     conn: &mut SqliteConnection,
     block_num: BlockNumber,
     block_header: &BlockHeader,
     chain_mmr: &PartialMmr,
 ) -> Result<(), DatabaseError> {
+    diesel::update(schema::chain_state::table.find(0i32))
+        .set((
+            schema::chain_state::block_num.eq(conversions::block_num_to_i64(block_num)),
+            schema::chain_state::block_header.eq(conversions::block_header_to_bytes(block_header)),
+            schema::chain_state::chain_mmr.eq(chain_mmr.to_bytes()),
+        ))
+        .execute(conn)?;
+    Ok(())
+}
+
+/// Inserts the singleton chain state row at bootstrap, seeding the tip columns from the genesis
+/// block together with the genesis block commitment. The commitment satisfies the `NOT NULL`
+/// constraint at insert time and is retained across all subsequent tip updates (see
+/// [`update_chain_state_tip`]).
+///
+/// # Raw SQL
+///
+/// ```sql
+/// INSERT INTO chain_state (id, block_num, block_header, chain_mmr, genesis_commitment)
+/// VALUES (0, ?1, ?2, ?3, ?4)
+/// ```
+pub fn insert_genesis_chain_state(
+    conn: &mut SqliteConnection,
+    genesis_block_header: &BlockHeader,
+    genesis_commitment: &Word,
+) -> Result<(), DatabaseError> {
+    assert_eq!(
+        genesis_block_header.block_num(),
+        BlockNumber::GENESIS,
+        "bootstrap block number is not 0"
+    );
     let row = ChainStateInsert {
         id: 0,
-        block_num: conversions::block_num_to_i64(block_num),
-        block_header: conversions::block_header_to_bytes(block_header),
-        chain_mmr: chain_mmr.to_bytes(),
+        block_num: conversions::block_num_to_i64(genesis_block_header.block_num()),
+        block_header: conversions::block_header_to_bytes(genesis_block_header),
+        chain_mmr: PartialMmr::default().to_bytes(),
+        genesis_commitment: conversions::word_to_bytes(genesis_commitment),
     };
-    diesel::replace_into(schema::chain_state::table).values(&row).execute(conn)?;
+    diesel::insert_into(schema::chain_state::table).values(&row).execute(conn)?;
     Ok(())
+}
+
+/// Reads the genesis block commitment from the singleton chain state row.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT genesis_commitment FROM chain_state WHERE id = 0
+/// ```
+///
+/// # Errors
+///
+/// - If the singleton chain state row does not exist (database not bootstrapped)
+pub fn select_genesis_commitment(conn: &mut SqliteConnection) -> Result<Word, DatabaseError> {
+    let commitment: Vec<u8> = schema::chain_state::table
+        .find(0i32)
+        .select(schema::chain_state::genesis_commitment)
+        .first(conn)?;
+
+    Word::read_from_bytes(&commitment)
+        .map_err(|e| DatabaseError::deserialization("genesis commitment", e))
 }
 
 /// Reads the singleton chain state row, returning the persisted block number, header, and chain

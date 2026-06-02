@@ -1,9 +1,9 @@
 [package]
 authors.workspace      = true
-description            = "Miden node's block producer component"
+description            = "Miden node component for sequencing and syncing blocks"
 edition.workspace      = true
 homepage.workspace     = true
-keywords               = ["block-producer", "miden", "node"]
+keywords               = ["block-producer", "miden", "node", "sequencer", "sync"]
 license.workspace      = true
 name                   = "miden-node-block-producer"
 readme                 = "README.md"

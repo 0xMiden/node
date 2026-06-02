@@ -6,7 +6,7 @@ name        = "miden-node-grpc-error-macro"
 
 edition.workspace      = true
 license.workspace      = true
-readme.workspace       = true
+readme                 = "README.md"
 repository.workspace   = true
 rust-version.workspace = true
 version.workspace      = true

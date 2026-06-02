@@ -1,17 +1,20 @@
 # Miden node proto
 
-This crate contains protobuf bindings for the APIs exposed by the components of the Miden node and domain types.
+`proto` contains generated protobuf bindings, conversion code, and gRPC error helpers used inside the Miden node
+workspace. It is part of the [Miden node](https://github.com/0xMiden/node#readme) repository.
 
-> [!WARNING]
-> This crate is intended for internal use only. For gRPC bindings please see the [miden-node-proto-build](../../proto/README.md) crate.\
-> This crate does not support TLS and cannot be used as a client for the official RPC endpoints.
+## Role
 
-## Error handling
+This crate is an internal implementation crate for the node binaries and component crates. It is not the recommended
+crate for external clients that want to generate bindings from the public protobuf API.
 
-The node's gRPC endpoints return rich error information using gRPC status details. Each component exposes its own set of error codes which are included in the response details.
+For external gRPC client generation, use `proto-build`.
 
-Error conversion helpers are defined in `src/errors/mod.rs`. Component-specific gRPC error
-details are derived next to the component errors that need to cross a gRPC boundary.
+## Notes
+
+This crate does not provide a ready-to-use TLS client for official public RPC endpoints. Client applications should
+configure transport security in their generated client stack.
 
 ## License
+
 This project is [MIT licensed](../../LICENSE).

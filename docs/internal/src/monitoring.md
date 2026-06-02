@@ -3,8 +3,9 @@
 Developer level overview of how we aim to use `tracing` and `open-telemetry` to provide monitoring and telemetry for the
 node.
 
-Please begin by reading through the [monitoring operator guide](https://0xmiden.github.io/miden-docs/miden-node/operator/monitoring) as this will
-provide some much needed context.
+Please begin by reading through the
+[monitoring operator guide](https://docs.miden.xyz/core-concepts/node/operator/monitoring/) as this will provide some
+much needed context.
 
 ## Approach and philosophy
 
