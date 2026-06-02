@@ -7,8 +7,6 @@ use std::time::Duration;
 
 use anyhow::Context;
 use hex;
-use miden_protocol::account::AccountId;
-use miden_protocol::testing::account_id::ACCOUNT_ID_SENDER;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -16,6 +14,7 @@ use tracing::{debug, info, instrument, warn};
 use url::Url;
 
 use crate::COMPONENT;
+use crate::deploy::wallet::create_wallet_account;
 use crate::service::Service;
 use crate::status::{ServiceDetails, ServiceStatus};
 
@@ -89,6 +88,9 @@ pub struct FaucetService {
     url: Url,
     client: Client,
     interval: Duration,
+    /// A valid public account ID used as the recipient for faucet token requests. Generated once at
+    /// construction from a throwaway wallet account; the minted tokens are never spent.
+    account_id: String,
     success_count: u64,
     failure_count: u64,
     last_tx_id: Option<String>,
@@ -101,10 +103,13 @@ impl FaucetService {
             .timeout(request_timeout)
             .build()
             .expect("Failed to create HTTP client with timeout");
+        let (wallet_account, _secret_key) =
+            create_wallet_account().expect("failed to create faucet recipient account");
         Self {
             url,
             client,
             interval,
+            account_id: wallet_account.id().to_string(),
             success_count: 0,
             failure_count: 0,
             last_tx_id: None,
@@ -140,7 +145,7 @@ impl Service for FaucetService {
         let start_time = std::time::Instant::now();
         let mut last_error: Option<String> = None;
 
-        match perform_faucet_test(&self.client, &self.url).await {
+        match perform_faucet_test(&self.client, &self.url, &self.account_id).await {
             Ok((minted_tokens, metadata)) => {
                 self.success_count += 1;
                 self.last_tx_id = Some(minted_tokens.tx_id.clone());
@@ -192,19 +197,15 @@ impl Service for FaucetService {
 async fn perform_faucet_test(
     client: &Client,
     faucet_url: &Url,
+    account_id: &str,
 ) -> anyhow::Result<(GetTokensResponse, GetMetadataResponse)> {
-    // Use a test account ID - convert to AccountId and format properly
-    let account_id = AccountId::try_from(ACCOUNT_ID_SENDER)
-        .context("Failed to create AccountId from test constant")?;
-
-    let account_id = account_id.to_string();
-    debug!("Generated account ID: {} (length: {})", account_id, account_id.len());
+    debug!("Using recipient account ID: {} (length: {})", account_id, account_id.len());
 
     // Step 1: Request PoW challenge
     let mut pow_url = faucet_url.join("/pow")?;
     pow_url
         .query_pairs_mut()
-        .append_pair("account_id", &account_id)
+        .append_pair("account_id", account_id)
         .append_pair("amount", &MINT_AMOUNT.to_string());
 
     let response = client.get(pow_url).send().await?;
@@ -231,7 +232,7 @@ async fn perform_faucet_test(
     let mut tokens_url = faucet_url.join("/get_tokens")?;
     tokens_url
         .query_pairs_mut()
-        .append_pair("account_id", account_id.as_str())
+        .append_pair("account_id", account_id)
         .append_pair("is_private_note", "false")
         .append_pair("asset_amount", &MINT_AMOUNT.to_string())
         .append_pair("challenge", &challenge_response.challenge)
