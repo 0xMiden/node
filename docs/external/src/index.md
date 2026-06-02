@@ -1,44 +1,20 @@
 ---
 sidebar_position: 0
-title: "Miden Node"
+title: "Miden Infrastructure Guide"
 ---
 
-# Miden Node
+# Miden Infrastructure Guide
 
-The Miden node repository contains the infrastructure needed to run and follow a Miden network. The public documentation
-is organized by audience:
+This guide covers the infrastructure used to run, sync, and interact with Miden networks.
 
-- Use [Local Node Development](./local-node-development) to run a disposable local network from a repository checkout.
-- Use the [Full Node Runner Guide](./full-node-runner/) to follow an existing network with `miden-node full`.
-- Use the [gRPC API](./rpc/) section when integrating wallets, clients, indexers, explorers, or other services.
+The documentation is roughly organized by audience:
+
+- [gRPC API](./rpc) is the reference for the official Miden RPC API.
+- [Local Node Development](./local-node-development) covers spinning up a local network to develop against.
+- Check out the [Full Node Runner Guide](./full-node-runner/) to sync a local node to an official network, serve RPC
+  locally, and avoid rate limits on official endpoints.
 - Use the [Network Operator Guide](./network-operator/) when operating a Miden network's centralized sequencing
   infrastructure.
-
-## Roles
-
-A Miden network has one sequencer. The sequencer is centralized network infrastructure operated by the network operator.
-It produces blocks, coordinates with internal services, and exposes the public RPC API for the network.
-
-Full node runners do not run a sequencer for an existing network. They run `miden-node full`, sync committed blocks and
-block proofs from an upstream RPC source, keep local state, and serve a local RPC endpoint for applications, indexers,
-explorers, or higher-volume infrastructure.
-
-Network operators also run supporting internal services such as the validator, network transaction builder, remote
-provers, and network monitor.
-
-## Versioned Commands
-
-The node binaries and protobuf schema are still under active development. When using examples from these docs, check out
-the repository tag or branch that matches the binaries or Docker images you intend to run. For exhaustive command-line
-options, use each binary's help output:
-
-```sh
-miden-node --help
-miden-validator --help
-miden-ntx-builder --help
-miden-remote-prover --help
-miden-network-monitor --help
-```
 
 ## Feedback
 
