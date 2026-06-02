@@ -40,6 +40,7 @@ use miden_node_utils::limiter::{
 };
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::retry::{self, Retryable};
+use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::account::AccountId;
 use miden_protocol::asset::Asset;
@@ -777,14 +778,20 @@ impl api_server::Api for RpcService {
             self.reject_if_any_network_accounts(candidate_id).await?;
         }
 
-        let tx_verifier = TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL);
-        tx_verifier.verify(&tx).map_err(|err| {
-            Status::invalid_argument(format!(
-                "Invalid proof for transaction {}: {}",
-                tx.id(),
-                err.as_report()
-            ))
-        })?;
+        let tx_id = tx.id();
+        spawn_blocking_in_current_span(move || {
+            TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL).verify(&tx).map_err(|err| {
+                Status::invalid_argument(format!(
+                    "Invalid proof for transaction {}: {}",
+                    tx_id,
+                    err.as_report()
+                ))
+            })
+        })
+        .await
+        .map_err(|err| {
+            Status::internal(format!("transaction proof verification task failed: {err}"))
+        })??;
 
         // In full node mode we forward the request to the source.
         let (block_producer, validator) = match &self.mode {
@@ -882,11 +889,22 @@ impl api_server::Api for RpcService {
         //
         // Need to do this because ProvenBatch has no real kernel yet, so we can only
         // really check that the calculated proof matches the one given in the request.
-        let expected_proof = LocalBatchProver::new(MIN_PROOF_SECURITY_LEVEL)
-            .prove(proposed_batch.clone())
-            .map_err(|err| {
-                Status::invalid_argument(err.as_report_context("proposed block proof failed"))
-            })?;
+        let expected_proof = spawn_blocking_in_current_span({
+            let proposed_batch = proposed_batch.clone();
+            move || {
+                LocalBatchProver::new(MIN_PROOF_SECURITY_LEVEL).prove(proposed_batch).map_err(
+                    |err| {
+                        Status::invalid_argument(
+                            err.as_report_context("proposed block proof failed"),
+                        )
+                    },
+                )
+            }
+        })
+        .await
+        .map_err(|err| {
+            Status::internal(format!("batch proof verification task failed: {err}"))
+        })??;
 
         if expected_proof != proven_batch {
             return Err(Status::invalid_argument("batch proof did not match proposed batch"));
