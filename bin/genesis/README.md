@@ -1,61 +1,22 @@
-# Miden Genesis
+# Miden genesis
 
-A tool for generating canonical Miden genesis accounts and configuration.
+`miden-genesis` is a development tool for generating canonical Miden genesis accounts and genesis configuration. It is
+part of the Miden node repository but is not published as a crates.io package.
 
-## Usage
+## Role
 
-Generate all genesis accounts with fresh keypairs:
+The tool creates account artifacts used to prepare a network genesis configuration, including AggLayer bridge and GER
+manager accounts. It is useful when preparing genesis inputs for the validator bootstrap workflow.
 
-```bash
-miden-genesis --output-dir ./genesis
-```
+The validator remains responsible for constructing and signing the actual genesis block.
 
-Provide existing Falcon512 public keys (both must be specified together):
+## Operation
 
-```bash
-miden-genesis --output-dir ./genesis \
-  --bridge-admin-public-key <HEX> \
-  --ger-manager-public-key <HEX>
-```
+Use the binary help output for the current command and configuration surface. The help output is the source of truth for
+flags and environment variables.
 
-## Output
-
-The tool generates the following files in the output directory:
-
-- `bridge_admin.mac` - Bridge admin wallet (nonce=0, deployed later via transaction)
-- `ger_manager.mac` - GER manager wallet (nonce=0, deployed later via transaction)
-- `bridge.mac` - AggLayer bridge account (nonce=1, included in genesis block)
-- `genesis.toml` - Genesis configuration referencing only `bridge.mac`
-
-When public keys are omitted, the `.mac` files for bridge admin and GER manager include generated secret keys. When public keys are provided, no secret keys are included.
-
-The bridge account always uses NoAuth and has no secret keys.
-
-## Bootstrapping a node
-
-```bash
-# 1. Generate genesis accounts
-miden-genesis --output-dir ./genesis
-
-# 2. Bootstrap the genesis block
-miden-validator bootstrap \
-  --genesis-block-directory ./data \
-  --accounts-directory ./accounts \
-  --genesis-config-file ./genesis/genesis.toml \
-  --validator.key.hex <validator_key>
-
-# 3. Bootstrap the node
-miden-node bootstrap \
-  --data-directory ./node-data \
-  --file ./data/genesis.dat
-
-# 4. Start the node
-miden-node sequencer --data-directory ./node-data ...
-```
-
-## TODO
-
-- Support ECDSA (secp256k1) public keys in addition to Falcon512 (e.g. `--bridge-admin-public-key ecdsa:<HEX>`)
+For full node bootstrap context and documentation links, see the
+[primary README](https://github.com/0xMiden/node#readme).
 
 ## License
 

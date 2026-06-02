@@ -2,9 +2,10 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use backon::{ExponentialBuilder, Retryable};
+use backon::ExponentialBuilder;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
+use miden_node_utils::retry::{self, Retryable};
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
@@ -105,12 +106,7 @@ const MAX_REQUEST_RETRIES: usize = 20;
 
 /// Builds the [`ExponentialBuilder`] used to back off retries on transient request failures.
 fn request_backoff(initial: Duration, max: Duration) -> ExponentialBuilder {
-    ExponentialBuilder::default()
-        .with_min_delay(initial)
-        .with_max_delay(max)
-        .with_factor(2.0)
-        .with_max_times(MAX_REQUEST_RETRIES)
-        .with_jitter()
+    retry::exponential_bounded(initial, max, MAX_REQUEST_RETRIES)
 }
 
 /// Emits a structured warning for a transient NTX request failure that is about to be retried.
@@ -156,6 +152,9 @@ pub struct NtxContext {
 
     /// Pre-compiled transaction script that sets the network tx's on-chain expiration delta. Cloned
     /// into the [`TransactionArgs`] of the executed transaction.
+    ///
+    /// TEMP: disabled until the resolution of <https://github.com/0xMiden/protocol/issues/3027>
+    #[expect(dead_code)]
     expiration_script: TransactionScript,
 
     /// [`ExponentialBuilder`] used to back off retries on transient request failures.
@@ -382,7 +381,11 @@ impl NtxContext {
 
         // Attach the pre-compiled expiration script so the submitted tx is rejected on-chain if it
         // does not land within the configured block delta.
-        let tx_args = TransactionArgs::default().with_tx_script(self.expiration_script.clone());
+        //
+        // TEMP: disabled until the resolution of https://github.com/0xMiden/protocol/issues/3027
+        // let tx_args = TransactionArgs::default().with_tx_script(self.expiration_script.clone());
+
+        let tx_args = TransactionArgs::default();
 
         Box::pin(executor.execute_transaction(
             data_store.account.id(),

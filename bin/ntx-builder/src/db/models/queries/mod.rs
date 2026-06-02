@@ -36,8 +36,8 @@ mod tests;
 /// - Marks any of our pending notes whose nullifiers appear in this block as `committed_at =
 ///   block_num`, preserving the row so the `GetNetworkNoteStatus` endpoint can report the full
 ///   lifecycle.
-/// - Upserts the singleton `chain_state` row with the new block header and the post-application
-///   chain MMR.
+/// - Updates the singleton `chain_state` row's tip with the new block header and the
+///   post-application chain MMR.
 ///
 /// Returns the set of network accounts that were touched by this block (account-state updates or
 /// notes targeting the account).
@@ -85,7 +85,7 @@ pub fn apply_committed_block(
 
     mark_notes_consumed(conn, &effects.nullifiers, effects.header.block_num())?;
 
-    upsert_chain_state(conn, effects.header.block_num(), &effects.header, chain_mmr)?;
+    update_chain_state_tip(conn, effects.header.block_num(), &effects.header, chain_mmr)?;
 
     Ok(affected_accounts.into_iter().collect())
 }

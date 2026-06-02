@@ -379,26 +379,34 @@ impl NtxBuilderConfig {
             "sqlite connection pool size must be at least 2 (the event loop pins one connection)",
         );
 
-        let rpc = match self.rpc_auth_header.clone() {
-            Some(rpc_auth_header_value) => RpcClient::new_with_auth(
-                self.rpc_url.clone(),
-                Some(rpc_auth_header_value),
-                self.request_backoff_initial,
-                self.request_backoff_max,
-            ),
-            None => RpcClient::new(
-                self.rpc_url.clone(),
-                self.request_backoff_initial,
-                self.request_backoff_max,
-            ),
-        };
-
-        // Open the database after verifying the schema version and hash.
+        // Set up the database (bootstrap + connection pool).
         let db = Db::load_with_pool_size(
             self.database_filepath.clone(),
             self.sqlite_connection_pool_size,
         )
         .await?;
+      
+        // Get the genesis commitment to send in the accept header
+        let genesis_commitment = db.get_genesis_commitment().await.context(
+            "failed to read genesis commitment; \
+             run `miden-ntx-builder bootstrap` first",
+        )?;
+
+        let rpc = match self.rpc_auth_header.clone() {
+            Some(rpc_auth_header_value) => RpcClient::new_with_auth(
+                self.rpc_url.clone(),
+                Some(rpc_auth_header_value),
+                genesis_commitment,
+                self.request_backoff_initial,
+                self.request_backoff_max,
+            ),
+            None => RpcClient::new(
+                self.rpc_url.clone(),
+                genesis_commitment,
+                self.request_backoff_initial,
+                self.request_backoff_max,
+            ),
+        };
 
         // The database is bootstrapped with the genesis block before startup (see
         // `miden-ntx-builder bootstrap`), so a persisted chain state is always present. Load it and
