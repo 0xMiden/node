@@ -10,7 +10,7 @@ internal service and should not be exposed publicly.
 
 ## Start
 
-```sh
+```bash
 miden-validator start \
   --listen 0.0.0.0:50101 \
   --data-directory validator-data

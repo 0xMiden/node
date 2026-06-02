@@ -15,14 +15,14 @@ after stopping the node.
 <Tabs groupId="full-node-runtime" defaultValue="native">
   <TabItem value="native" label="Native binary">
 
-```sh
+```bash
 miden-node migrate --data-directory full-node-data
 ```
 
   </TabItem>
   <TabItem value="docker" label="Docker image">
 
-```sh
+```bash
 docker run --rm \
   -v miden-full-node-data:/data \
   ghcr.io/0xmiden/miden-node:<release-tag> \

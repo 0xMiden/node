@@ -16,7 +16,7 @@ availability, note transport, and end-to-end network transaction flows.
 
 Use the binary help output for the current configuration surface:
 
-```sh
+```bash
 miden-network-monitor start --help
 ```
 

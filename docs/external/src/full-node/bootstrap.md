@@ -17,7 +17,7 @@ block.
 
 For an official network:
 
-```sh
+```bash
 miden-node bootstrap \
   --data-directory full-node-data \
   --network <network>
@@ -25,7 +25,7 @@ miden-node bootstrap \
 
 For a local or custom network:
 
-```sh
+```bash
 miden-node bootstrap \
   --data-directory full-node-data \
   --file genesis.dat
@@ -38,7 +38,7 @@ The data directory must be empty when bootstrapping.
 
 For an official network:
 
-```sh
+```bash
 docker run --rm \
   -v miden-full-node-data:/data \
   ghcr.io/0xmiden/miden-node:<release-tag> \
@@ -49,7 +49,7 @@ docker run --rm \
 
 For a local or custom network:
 
-```sh
+```bash
 docker run --rm \
   -v miden-full-node-data:/data \
   -v "$PWD/genesis.dat:/genesis.dat:ro" \

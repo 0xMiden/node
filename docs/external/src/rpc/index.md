@@ -17,13 +17,13 @@ The official networks are served at `https://rpc.testnet.miden.io` and `https://
 
 The safest way to inspect the schema for a deployed network is through gRPC reflection:
 
-```sh
+```bash
 grpcurl rpc.testnet.miden.io:443 describe rpc.Api
 ```
 
 For a local development network without TLS, use `-plaintext`:
 
-```sh
+```bash
 grpcurl -plaintext localhost:57291 describe rpc.Api
 ```
 

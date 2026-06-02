@@ -10,7 +10,7 @@ produces blocks, serves public RPC, and connects to the validator and network tr
 
 ## Start
 
-```sh
+```bash
 miden-node sequencer \
   --rpc.listen 0.0.0.0:57291 \
   --data-directory node-data \

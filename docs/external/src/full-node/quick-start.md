@@ -16,7 +16,7 @@ Launch a testnet full node after completing [Installation](/full-node/installati
 
 Bootstrap an empty data directory from the official testnet genesis state:
 
-```sh
+```bash
 miden-node bootstrap \
   --data-directory full-node-data \
   --network testnet
@@ -24,7 +24,7 @@ miden-node bootstrap \
 
 Start the full node and sync from the official testnet RPC endpoint:
 
-```sh
+```bash
 miden-node full \
   --data-directory full-node-data \
   --rpc.listen 127.0.0.1:57291 \
@@ -36,7 +36,7 @@ miden-node full \
 
 Bootstrap an empty data volume from the official testnet genesis state:
 
-```sh
+```bash
 docker run --rm \
   -v miden-full-node-data:/data \
   ghcr.io/0xmiden/miden-node:<release-tag> \
@@ -47,7 +47,7 @@ docker run --rm \
 
 Start the full node and sync from the testnet RPC endpoint:
 
-```sh
+```bash
 docker run --rm --name miden-full-node \
   -v miden-full-node-data:/data \
   -p 127.0.0.1:57291:57291 \
@@ -68,7 +68,7 @@ container so Docker can route the mapped port.
 
 Check the local RPC endpoint from another terminal:
 
-```sh
+```bash
 grpcurl -plaintext localhost:57291 rpc.Api/Status
 ```
 

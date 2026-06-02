@@ -9,7 +9,7 @@ This page summarizes the public gRPC `rpc.Api` service.
 
 As a reminder, you can inspect the exact schema on any deployed network using gRPC reflection:
 
-```sh
+```bash
 grpcurl rpc.testnet.miden.io:443 describe rpc.Api
 ```
 

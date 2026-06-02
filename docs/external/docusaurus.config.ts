@@ -2,8 +2,7 @@ import type { Config } from "@docusaurus/types";
 import { themes as prismThemes } from "prism-react-renderer";
 
 // If your content lives in docs/src, set DOCS_PATH='src'; else '.'
-const DOCS_PATH =
-  process.env.DOCS_PATH || (require("fs").existsSync("src") ? "src" : ".");
+const DOCS_PATH = process.env.DOCS_PATH || (require("fs").existsSync("src") ? "src" : ".");
 
 const config: Config = {
   title: "Docs Dev Preview",
@@ -108,7 +107,7 @@ const config: Config = {
       prism: {
         theme: prismThemes.oneLight,
         darkTheme: prismThemes.oneDark,
-        additionalLanguages: ["rust", "solidity", "toml", "yaml"],
+        additionalLanguages: ["bash", "json", "protobuf", "rust", "solidity", "toml", "yaml"],
       },
       navbar: {
         logo: {

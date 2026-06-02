@@ -10,7 +10,7 @@ them locally or through a remote transaction prover, and submits them through th
 
 ## Start
 
-```sh
+```bash
 miden-ntx-builder start \
   --listen 0.0.0.0:50301 \
   --rpc.url http://sequencer:57291 \
@@ -19,7 +19,7 @@ miden-ntx-builder start \
 
 If a remote transaction prover is available, configure it with:
 
-```sh
+```bash
 miden-ntx-builder start \
   --listen 0.0.0.0:50301 \
   --rpc.url http://sequencer:57291 \

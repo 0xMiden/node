@@ -11,7 +11,7 @@ Network upgrades may involve binary upgrades, storage migrations, schema changes
 
 Apply pending node storage migrations before starting a newer sequencer or full-node binary:
 
-```sh
+```bash
 miden-node migrate --data-directory node-data
 ```
 

@@ -14,7 +14,7 @@ Start a full node with an upstream RPC source:
 <Tabs groupId="full-node-runtime" defaultValue="native">
   <TabItem value="native" label="Native binary">
 
-```sh
+```bash
 miden-node full \
   --data-directory full-node-data \
   --rpc.listen 127.0.0.1:57291 \
@@ -26,7 +26,7 @@ Bind `--rpc.listen` to `127.0.0.1` unless the RPC endpoint is intentionally expo
   </TabItem>
   <TabItem value="docker" label="Docker image">
 
-```sh
+```bash
 docker run --rm --name miden-full-node \
   -v miden-full-node-data:/data \
   -p 127.0.0.1:57291:57291 \

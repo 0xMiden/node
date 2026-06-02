@@ -28,7 +28,7 @@ either of these variables is set to a non-empty value:
 
 For example:
 
-```sh
+```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4317 \
 OTEL_RESOURCE_ATTRIBUTES=service.instance.id=full-node-1 \
 miden-node full \

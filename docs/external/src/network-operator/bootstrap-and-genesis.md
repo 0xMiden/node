@@ -12,7 +12,7 @@ then initialized from that signed genesis block.
 
 Create and sign the genesis block:
 
-```sh
+```bash
 miden-validator bootstrap \
   --data-directory validator-data \
   --genesis-block-directory genesis-data \
@@ -21,7 +21,7 @@ miden-validator bootstrap \
 
 Initialize the sequencer's node storage from the signed genesis block:
 
-```sh
+```bash
 miden-node bootstrap \
   --data-directory node-data \
   --file genesis-data/genesis.dat
@@ -29,7 +29,7 @@ miden-node bootstrap \
 
 Initialize the network transaction builder from the same signed genesis block:
 
-```sh
+```bash
 miden-ntx-builder bootstrap \
   --data-directory ntx-builder-data \
   --file genesis-data/genesis.dat

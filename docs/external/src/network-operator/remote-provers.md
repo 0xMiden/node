@@ -12,7 +12,7 @@ Remote provers offload expensive transaction, batch, or block proof generation t
 
 Run one prover instance per proof kind:
 
-```sh
+```bash
 miden-remote-prover --kind transaction --port 50051
 miden-remote-prover --kind batch --port 50052
 miden-remote-prover --kind block --port 50053

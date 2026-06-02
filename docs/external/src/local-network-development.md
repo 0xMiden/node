@@ -27,7 +27,7 @@ network.
 Prefer a release tag when testing against released artifacts. Use a branch when developing against the current
 repository state.
 
-```sh
+```bash
 git clone https://github.com/0xMiden/node.git
 cd node
 git checkout <release-tag-or-branch>
@@ -38,7 +38,7 @@ git checkout <release-tag-or-branch>
 Build the images after checkout or whenever you need fresh local images. The local network stores data in the
 `node-data` Docker volume; `local-network-down` keeps that data, while `local-network-delete` removes it.
 
-```sh
+```bash
 # Build the Docker images used by the local network.
 make local-network-build
 
@@ -90,7 +90,7 @@ The default stack uses the bundled prover endpoint at `http://remote-prover:5005
 
 The RPC server exposes gRPC reflection. With `grpcurl` installed, a basic status check looks like:
 
-```sh
+```bash
 grpcurl -plaintext localhost:57291 rpc.Api/Status
 ```
 
