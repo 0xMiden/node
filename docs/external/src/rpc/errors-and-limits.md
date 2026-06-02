@@ -14,7 +14,7 @@ Some methods encode a method-specific error enum in addition to the conventional
 encoded in the gRPC status `details` field, allowing clients to branch on more detailed error conditions.
 
 When present, the detail payload contains the method-specific error code as a single raw byte. This byte can be
-interpretted as per the per-method tables below.
+interpreted as per the per-method tables below.
 
 ```text
 if status.details is not empty:
