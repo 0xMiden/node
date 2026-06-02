@@ -78,6 +78,7 @@ pub(super) struct BlockWriter {
     pub db: Arc<Db>,
     pub block_store: Arc<BlockStore>,
     pub in_memory: Arc<ArcSwap<InMemoryState>>,
+    // TODO(sergerad): RM lock and move to in memory state when protocol updated with crypto v0.26.0.
     pub forest: Arc<RwLock<AccountStateForest<AccountStateForestBackend>>>,
     pub committed_tip_tx: Arc<watch::Sender<BlockNumber>>,
     pub block_cache: BlockCache,

@@ -150,6 +150,7 @@ pub struct State {
     /// Handle for sending block-write requests to the [`BlockWriter`] task.
     write_handle: WriteHandle,
 
+    // TODO(sergerad): RM lock and move to in memory state when protocol updated with crypto v0.26.0.
     /// Forest-related state `(SmtForest, storage_map_roots, vault_roots)` with its own lock.
     forest: Arc<RwLock<AccountStateForest<AccountStateForestBackend>>>,
 
