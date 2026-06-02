@@ -126,10 +126,7 @@ async fn run_block_stream(
             let block = fetch_block(next, &cache, &state).await?;
             tip = *tip_rx.borrow_and_update();
             if tx
-                .send(Ok(BlockSubscriptionEvent {
-                    block,
-                    committed_chain_tip: tip,
-                }))
+                .send(Ok(BlockSubscriptionEvent { block, committed_chain_tip: tip }))
                 .await
                 .is_err()
             {
