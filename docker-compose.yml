@@ -1,3 +1,7 @@
+# Environment variables:
+# - MIDEN_REMOTE_PROVER_URL: remote transaction prover URL. Defaults to the
+#   bundled remote-prover service at http://remote-prover:50051.
+
 services:
   bootstrap-validator:
     image: miden-validator
@@ -140,7 +144,7 @@ services:
       - start
       - --listen=0.0.0.0:50301
       - --rpc.url=http://sequencer:57291
-      - --tx-prover.url=http://remote-prover:50051
+      - --tx-prover.url=${MIDEN_REMOTE_PROVER_URL:-http://remote-prover:50051}
       - --data-directory=/data/ntx-builder
 
 volumes:
