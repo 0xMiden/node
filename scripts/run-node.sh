@@ -5,6 +5,11 @@ set -euo pipefail
 SKIP_BOOTSTRAP="${SKIP_BOOTSTRAP:-false}"
 ENABLE_FULL_NODES="${ENABLE_FULL_NODES:-true}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
+# Shared secret authorizing the ntx-builder to submit network transactions to the sequencer's RPC.
+# Must match on both the sequencer (--rpc.network-tx-auth-header-value) and the ntx-builder
+# (--rpc.auth-header-value), otherwise network transactions are rejected with
+# "Network transactions may not be submitted by users yet".
+NETWORK_TX_AUTH="${NETWORK_TX_AUTH:-local-dev-ntx-secret}"
 NODE_BINARY="${MIDEN_NODE_BIN:-./target/debug/miden-node}"
 VALIDATOR_BINARY="${MIDEN_VALIDATOR_BIN:-./target/debug/miden-validator}"
 NTX_BUILDER_BINARY="${MIDEN_NTX_BUILDER_BIN:-./target/debug/miden-ntx-builder}"
@@ -146,6 +151,7 @@ echo "Starting sequencer..."
 OTEL_RESOURCE_ATTRIBUTES="$(node_resource_attributes sequencer)" \
 "$NODE_BINARY" sequencer \
     --rpc.listen "0.0.0.0:$RPC_PORT" \
+    --rpc.network-tx-auth-header-value "$NETWORK_TX_AUTH" \
     --data-directory "$NODE_DIR" \
     --validator.url "http://127.0.0.1:$VALIDATOR_PORT" \
     --ntx-builder.url "http://127.0.0.1:$NTX_BUILDER_PORT" \
@@ -156,6 +162,7 @@ echo "Starting network transaction builder..."
 "$NTX_BUILDER_BINARY" start \
     --listen "0.0.0.0:$NTX_BUILDER_PORT" \
     --rpc.url "http://127.0.0.1:$RPC_PORT" \
+    --rpc.auth-header-value "$NETWORK_TX_AUTH" \
     --data-directory "$NTX_BUILDER_DIR" \
     $EXTRA_ARGS &
 PIDS+=($!)
