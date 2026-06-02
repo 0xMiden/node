@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use miden_node_utils::fifo_cache::FifoCache;
+use miden_node_utils::block_cache::BlockOrderedCache;
 use miden_protocol::block::BlockNumber;
 
 // BLOCK NOTIFICATION
@@ -12,7 +12,10 @@ pub struct BlockNotification(Arc<Block>);
 
 impl BlockNotification {
     pub fn new(block_num: BlockNumber, block_bytes: Vec<u8>) -> Self {
-        Self(Arc::new(Block { block_num, block_bytes }))
+        Self(Arc::new(Block {
+            block_num,
+            block_bytes,
+        }))
     }
 
     pub fn block_num(&self) -> BlockNumber {
@@ -39,7 +42,10 @@ pub struct ProofNotification(Arc<Proof>);
 
 impl ProofNotification {
     pub fn new(block_num: BlockNumber, proof_bytes: Vec<u8>) -> Self {
-        Self(Arc::new(Proof { block_num, proof_bytes }))
+        Self(Arc::new(Proof {
+            block_num,
+            proof_bytes,
+        }))
     }
 
     pub fn block_num(&self) -> BlockNumber {
@@ -61,7 +67,7 @@ struct Proof {
 // ================================================================================================
 
 /// FIFO cache of recent committed blocks for replica subscriptions.
-pub type BlockCache = FifoCache<BlockNumber, BlockNotification>;
+pub type BlockCache = BlockOrderedCache<BlockNotification>;
 
 /// FIFO cache of recent block proofs for replica subscriptions.
-pub type ProofCache = FifoCache<BlockNumber, ProofNotification>;
+pub type ProofCache = BlockOrderedCache<ProofNotification>;

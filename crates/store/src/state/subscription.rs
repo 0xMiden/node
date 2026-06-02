@@ -126,7 +126,10 @@ async fn run_block_stream(
             let block = fetch_block(next, &cache, &state).await?;
             tip = *tip_rx.borrow_and_update();
             if tx
-                .send(Ok(BlockSubscriptionEvent { block, committed_chain_tip: tip }))
+                .send(Ok(BlockSubscriptionEvent {
+                    block,
+                    committed_chain_tip: tip,
+                }))
                 .await
                 .is_err()
             {
@@ -177,7 +180,7 @@ async fn fetch_block(
     cache: &BlockCache,
     state: &State,
 ) -> Result<Vec<u8>, StateSubscriptionError> {
-    if let Some(entry) = cache.get(&block_num) {
+    if let Some(entry) = cache.get(block_num) {
         return Ok(entry.block_bytes().to_vec());
     }
     state
@@ -192,7 +195,7 @@ async fn fetch_proof(
     cache: &ProofCache,
     state: &State,
 ) -> Result<Vec<u8>, StateSubscriptionError> {
-    if let Some(entry) = cache.get(&block_num) {
+    if let Some(entry) = cache.get(block_num) {
         return Ok(entry.proof_bytes().to_vec());
     }
     state
