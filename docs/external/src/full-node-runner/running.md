@@ -14,5 +14,5 @@ miden-node full \
   --data-directory full-node-data
 ```
 
-The full node syncs blocks and proofs from the upstream RPC, stores local state, and serves its own
-RPC API. It does not produce blocks.
+The full node syncs blocks and proofs from the upstream RPC, stores local state, and serves its own RPC API. It does not
+produce blocks.

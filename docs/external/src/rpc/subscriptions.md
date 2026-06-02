@@ -9,9 +9,8 @@ The RPC API exposes two server-streaming methods for consumers that need to foll
 
 ## BlockSubscription
 
-`BlockSubscription` streams committed signed blocks starting from `block_from`, inclusive. The
-server first replays matching historical blocks, then continues streaming live blocks as they are
-committed.
+`BlockSubscription` streams committed signed blocks starting from `block_from`, inclusive. The server first replays
+matching historical blocks, then continues streaming live blocks as they are committed.
 
 Each response includes:
 
@@ -20,8 +19,8 @@ Each response includes:
 
 ## ProofSubscription
 
-`ProofSubscription` streams block proofs starting from `block_from`, inclusive. The server first
-replays existing proofs, then continues streaming live proofs as they are generated.
+`ProofSubscription` streams block proofs starting from `block_from`, inclusive. The server first replays existing
+proofs, then continues streaming live proofs as they are generated.
 
 Each response includes:
 
@@ -31,10 +30,9 @@ Each response includes:
 
 ## Consumers
 
-Full nodes use both streams to replicate state from an upstream source. Indexers, explorers, and
-monitoring services can also use the streams to ingest block data without repeatedly polling by
-block number.
+Full nodes use both streams to replicate state from an upstream source. Indexers, explorers, and monitoring services can
+also use the streams to ingest block data without repeatedly polling by block number.
 
-Consumers should persist their local tip before acknowledging work internally. If a stream closes,
-reconnect from the last persisted local tip. If the server reports lag with `DATA_LOSS`, reconnect
-from local state rather than assuming any missed items were delivered.
+Consumers should persist their local tip before acknowledging work internally. If a stream closes, reconnect from the
+last persisted local tip. If the server reports lag with `DATA_LOSS`, reconnect from local state rather than assuming
+any missed items were delivered.

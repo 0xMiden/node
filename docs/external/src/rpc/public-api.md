@@ -5,35 +5,35 @@ sidebar_position: 1
 
 # Public RPC
 
-This page summarizes the public `rpc.Api` service. The protobuf schema in `proto/proto/rpc.proto`
-is the source of truth for request and response types.
+This page summarizes the public `rpc.Api` service. The protobuf schema in `proto/proto/rpc.proto` is the source of truth
+for request and response types.
 
 ## Status and Limits
 
-| Method | Purpose |
-|---|---|
-| `Status` | Returns the node RPC version, genesis commitment, store status, and block producer status when available. |
-| `GetLimits` | Returns configured query parameter limits for methods that accept large repeated parameters. |
+| Method      | Purpose                                                                                                   |
+| ----------- | --------------------------------------------------------------------------------------------------------- |
+| `Status`    | Returns the node RPC version, genesis commitment, store status, and block producer status when available. |
+| `GetLimits` | Returns configured query parameter limits for methods that accept large repeated parameters.              |
 
 ## State Queries
 
-| Method | Purpose |
-|---|---|
-| `GetAccount` | Returns account witness data and optional details for public accounts. |
-| `GetBlockByNumber` | Returns raw block data for a block number, optionally including the block proof. |
-| `GetBlockHeaderByNumber` | Returns a block header and, optionally, MMR authentication data. |
-| `GetNotesById` | Returns committed notes matching the requested note IDs. |
-| `GetNoteScriptByRoot` | Returns a note script by script root when available. |
+| Method                   | Purpose                                                                          |
+| ------------------------ | -------------------------------------------------------------------------------- |
+| `GetAccount`             | Returns account witness data and optional details for public accounts.           |
+| `GetBlockByNumber`       | Returns raw block data for a block number, optionally including the block proof. |
+| `GetBlockHeaderByNumber` | Returns a block header and, optionally, MMR authentication data.                 |
+| `GetNotesById`           | Returns committed notes matching the requested note IDs.                         |
+| `GetNoteScriptByRoot`    | Returns a note script by script root when available.                             |
 
 ## Transaction Submission
 
-| Method | Purpose |
-|---|---|
-| `SubmitProvenTx` | Submits one proven transaction and returns the node's current block height. |
+| Method                | Purpose                                                                                     |
+| --------------------- | ------------------------------------------------------------------------------------------- |
+| `SubmitProvenTx`      | Submits one proven transaction and returns the node's current block height.                 |
 | `SubmitProvenTxBatch` | Submits an atomic batch of proven transactions and returns the node's current block height. |
 
-On a sequencer, accepted submissions are validated and passed into block production. On a full node,
-submissions are forwarded to the configured upstream RPC source.
+On a sequencer, accepted submissions are validated and passed into block production. On a full node, submissions are
+forwarded to the configured upstream RPC source.
 
 Write requests must identify the target network with the `genesis` parameter in the `Accept` header:
 
@@ -49,34 +49,32 @@ application/vnd.miden; version=<semver>; genesis=<genesis-commitment>
 
 ## State Synchronization
 
-| Method | Purpose |
-|---|---|
-| `SyncTransactions` | Returns transaction records for specified accounts within a block range. |
-| `SyncNotes` | Returns note metadata and inclusion proofs for matching note tags within a block range. |
-| `SyncNullifiers` | Returns nullifiers matching specified 16-bit prefixes within a block range. |
-| `SyncAccountVault` | Returns public account vault updates within a block range. |
-| `SyncAccountStorageMaps` | Returns public account storage map updates within a block range. |
-| `SyncChainMmr` | Returns MMR delta information needed to synchronize the chain MMR. |
+| Method                   | Purpose                                                                                 |
+| ------------------------ | --------------------------------------------------------------------------------------- |
+| `SyncTransactions`       | Returns transaction records for specified accounts within a block range.                |
+| `SyncNotes`              | Returns note metadata and inclusion proofs for matching note tags within a block range. |
+| `SyncNullifiers`         | Returns nullifiers matching specified 16-bit prefixes within a block range.             |
+| `SyncAccountVault`       | Returns public account vault updates within a block range.                              |
+| `SyncAccountStorageMaps` | Returns public account storage map updates within a block range.                        |
+| `SyncChainMmr`           | Returns MMR delta information needed to synchronize the chain MMR.                      |
 
-Use `GetLimits` to discover the maximum request sizes accepted by the node before batching large
-sync requests.
+Use `GetLimits` to discover the maximum request sizes accepted by the node before batching large sync requests.
 
 ## Streaming
 
-| Method | Purpose |
-|---|---|
+| Method              | Purpose                                                                                  |
+| ------------------- | ---------------------------------------------------------------------------------------- |
 | `BlockSubscription` | Streams committed signed blocks from `block_from`, replaying history before live blocks. |
-| `ProofSubscription` | Streams block proofs from `block_from`, replaying existing proofs before live proofs. |
+| `ProofSubscription` | Streams block proofs from `block_from`, replaying existing proofs before live proofs.    |
 
-These streams are the primary mechanism full nodes use to replicate chain data from an upstream
-source. They are also useful for indexers, explorers, and other services that need an append-only
-view of network progress.
+These streams are the primary mechanism full nodes use to replicate chain data from an upstream source. They are also
+useful for indexers, explorers, and other services that need an append-only view of network progress.
 
 ## Network Note Debugging
 
-| Method | Purpose |
-|---|---|
+| Method                 | Purpose                                                                                    |
+| ---------------------- | ------------------------------------------------------------------------------------------ |
 | `GetNetworkNoteStatus` | Returns the lifecycle status of a network note tracked by the network transaction builder. |
 
-This method is only available when the serving node is connected to an NTX builder. If the NTX
-builder is not configured or the note is unknown, the RPC returns the corresponding gRPC error.
+This method is only available when the serving node is connected to an NTX builder. If the NTX builder is not configured
+or the note is unknown, the RPC returns the corresponding gRPC error.

@@ -5,9 +5,8 @@ sidebar_position: 5
 
 # NTX Builder
 
-The network transaction builder follows committed blocks, tracks network notes, constructs network
-transactions, proves them locally or through a remote transaction prover, and submits them through
-the sequencer RPC.
+The network transaction builder follows committed blocks, tracks network notes, constructs network transactions, proves
+them locally or through a remote transaction prover, and submits them through the sequencer RPC.
 
 ## Start
 
