@@ -385,7 +385,7 @@ impl NtxBuilderConfig {
             self.sqlite_connection_pool_size,
         )
         .await?;
-      
+
         // Get the genesis commitment to send in the accept header
         let genesis_commitment = db.get_genesis_commitment().await.context(
             "failed to read genesis commitment; \
