@@ -8,7 +8,7 @@ use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::account_tree::AccountMutationSet;
 use miden_protocol::block::nullifier_tree::NullifierMutationSet;
 use miden_protocol::block::{BlockBody, BlockHeader, BlockInputs, BlockNumber, SignedBlock};
-use miden_protocol::note::{NoteAttachments, NoteDetails, Nullifier};
+use miden_protocol::note::{NoteDetails, Nullifier};
 use miden_protocol::transaction::OutputNote;
 use miden_protocol::utils::serde::Serializable;
 use tokio::sync::oneshot;
@@ -331,7 +331,7 @@ impl State {
                         public.as_note().attachments().clone(),
                         Some(public.as_note().nullifier()),
                     ),
-                    OutputNote::Private(_) => (None, NoteAttachments::empty(), None),
+                    OutputNote::Private(private) => (None, private.attachments().clone(), None),
                 };
 
                 let inclusion_path = note_tree.open(note_index);

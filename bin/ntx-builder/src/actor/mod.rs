@@ -153,6 +153,7 @@ impl AccountActorContext {
             clients: GrpcClients {
                 rpc: RpcClient::new(
                     url.clone(),
+                    miden_protocol::Word::default(),
                     Duration::from_millis(100),
                     Duration::from_secs(30),
                 ),
