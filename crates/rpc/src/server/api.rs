@@ -1042,11 +1042,18 @@ impl api_server::Api for RpcService {
     ) -> Result<Response<proto::rpc::GetNetworkNoteStatusResponse>, Status> {
         debug!(target: COMPONENT, request = ?request.get_ref());
 
-        let Some(ntx_builder) = &self.ntx_builder else {
-            return Err(Status::unavailable("Network transaction builder is not enabled"));
-        };
+        let response = match &self.mode {
+            RpcMode::Sequencer { .. } => {
+                let Some(ntx_builder) = &self.ntx_builder else {
+                    return Err(Status::unavailable("Network transaction builder is not enabled"));
+                };
 
-        let response = ntx_builder.clone().get_network_note_status(request).await?.into_inner();
+                ntx_builder.clone().get_network_note_status(request).await?.into_inner()
+            },
+            RpcMode::FullNode { source_rpc } => {
+                source_rpc.as_ref().clone().get_network_note_status(request).await?.into_inner()
+            },
+        };
 
         Ok(Response::new(response))
     }
