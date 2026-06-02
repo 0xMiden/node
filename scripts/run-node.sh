@@ -13,6 +13,7 @@ NETWORK_TX_AUTH="${NETWORK_TX_AUTH:-local-dev-ntx-secret}"
 NODE_BINARY="${MIDEN_NODE_BIN:-./target/debug/miden-node}"
 VALIDATOR_BINARY="${MIDEN_VALIDATOR_BIN:-./target/debug/miden-validator}"
 NTX_BUILDER_BINARY="${MIDEN_NTX_BUILDER_BIN:-./target/debug/miden-ntx-builder}"
+REMOTE_PROVER_BINARY="${MIDEN_REMOTE_PROVER_BIN:-./target/debug/miden-remote-prover}"
 KMS_KEY_ID="${KMS_KEY_ID:-}"
 if [[ -n "$KMS_KEY_ID" ]]; then
     AWS_REGION="${AWS_REGION:?error: AWS_REGION environment variable must be set when KMS_KEY_ID is set}"
@@ -32,6 +33,7 @@ NTX_BUILDER_PORT=50301
 RPC_PORT=57291
 FULL_NODE_1_RPC_PORT=57292
 FULL_NODE_2_RPC_PORT=57293
+REMOTE_PROVER_PORT=50051
 
 PIDS=()
 
@@ -46,7 +48,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 kill_ports() {
-    local ports=("$VALIDATOR_PORT" "$NTX_BUILDER_PORT" "$RPC_PORT")
+    local ports=("$VALIDATOR_PORT" "$NTX_BUILDER_PORT" "$RPC_PORT" "$REMOTE_PROVER_PORT")
 
     if [[ "$ENABLE_FULL_NODES" == "true" ]]; then
         ports+=("$FULL_NODE_1_RPC_PORT" "$FULL_NODE_2_RPC_PORT")
@@ -149,7 +151,7 @@ sleep 2
 
 echo "Starting sequencer..."
 OTEL_RESOURCE_ATTRIBUTES="$(node_resource_attributes sequencer)" \
-"$NODE_BINARY" sequencer \
+    "$NODE_BINARY" sequencer \
     --rpc.listen "0.0.0.0:$RPC_PORT" \
     --rpc.network-tx-auth-header-value "$NETWORK_TX_AUTH" \
     --data-directory "$NODE_DIR" \
@@ -158,19 +160,29 @@ OTEL_RESOURCE_ATTRIBUTES="$(node_resource_attributes sequencer)" \
     $EXTRA_ARGS &
 PIDS+=($!)
 
+echo "Starting remote prover..."
+"$REMOTE_PROVER_BINARY" \
+    --kind=transaction \
+    --port="$REMOTE_PROVER_PORT" &
+PIDS+=($!)
+
+# Give the sequencer a moment to bind before starting the NTX builder
+sleep 2
+
 echo "Starting network transaction builder..."
 "$NTX_BUILDER_BINARY" start \
     --listen "0.0.0.0:$NTX_BUILDER_PORT" \
     --rpc.url "http://127.0.0.1:$RPC_PORT" \
     --rpc.auth-header-value "$NETWORK_TX_AUTH" \
     --data-directory "$NTX_BUILDER_DIR" \
+    --tx-prover.url "http://127.0.0.1:$REMOTE_PROVER_PORT" \
     $EXTRA_ARGS &
 PIDS+=($!)
 
 if [[ "$ENABLE_FULL_NODES" == "true" ]]; then
     echo "Starting full node 1 (upstream: sequencer at 127.0.0.1:$RPC_PORT)..."
     OTEL_RESOURCE_ATTRIBUTES="$(node_resource_attributes full-node-1)" \
-    "$NODE_BINARY" full \
+        "$NODE_BINARY" full \
         --rpc.listen "0.0.0.0:$FULL_NODE_1_RPC_PORT" \
         --sync.block-source.url "http://127.0.0.1:$RPC_PORT" \
         --data-directory "$FULL_NODE_1_DIR" \
@@ -182,7 +194,7 @@ if [[ "$ENABLE_FULL_NODES" == "true" ]]; then
 
     echo "Starting full node 2 (upstream: full node 1 at 127.0.0.1:$FULL_NODE_1_RPC_PORT)..."
     OTEL_RESOURCE_ATTRIBUTES="$(node_resource_attributes full-node-2)" \
-    "$NODE_BINARY" full \
+        "$NODE_BINARY" full \
         --rpc.listen "0.0.0.0:$FULL_NODE_2_RPC_PORT" \
         --sync.block-source.url "http://127.0.0.1:$FULL_NODE_1_RPC_PORT" \
         --data-directory "$FULL_NODE_2_DIR" \
