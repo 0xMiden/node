@@ -5,8 +5,13 @@ sidebar_position: 1
 
 # Public RPC
 
-This page summarizes the public `rpc.Api` service. The protobuf schema in `proto/proto/rpc.proto` is the source of truth
-for request and response types.
+This page summarizes the public gRPC `rpc.Api` service.
+
+As a reminder, you can inspect the exact schema on any deployed network using gRPC reflection:
+
+```sh
+grpcurl rpc.testnet.miden.io:443 describe rpc.Api
+```
 
 ## Status and Limits
 
@@ -31,9 +36,6 @@ for request and response types.
 | --------------------- | ------------------------------------------------------------------------------------------- |
 | `SubmitProvenTx`      | Submits one proven transaction and returns the node's current block height.                 |
 | `SubmitProvenTxBatch` | Submits an atomic batch of proven transactions and returns the node's current block height. |
-
-On a sequencer, accepted submissions are validated and passed into block production. On a full node, submissions are
-forwarded to the configured upstream RPC source.
 
 Write requests must identify the target network with the `genesis` parameter in the `Accept` header:
 
@@ -62,10 +64,10 @@ Use `GetLimits` to discover the maximum request sizes accepted by the node befor
 
 ## Streaming
 
-| Method              | Purpose                                                                                  |
-| ------------------- | ---------------------------------------------------------------------------------------- |
-| `BlockSubscription` | Streams committed signed blocks from `block_from`, replaying history before live blocks. |
-| `ProofSubscription` | Streams block proofs from `block_from`, replaying existing proofs before live proofs.    |
+| Method              | Purpose                                                                               |
+| ------------------- | ------------------------------------------------------------------------------------- |
+| `BlockSubscription` | Streams committed blocks from `block_from`, replaying history before live blocks.     |
+| `ProofSubscription` | Streams block proofs from `block_from`, replaying existing proofs before live proofs. |
 
 These streams are the primary mechanism full nodes use to replicate chain data from an upstream source. They are also
 useful for indexers, explorers, and other services that need an append-only view of network progress.
@@ -75,6 +77,3 @@ useful for indexers, explorers, and other services that need an append-only view
 | Method                 | Purpose                                                                                    |
 | ---------------------- | ------------------------------------------------------------------------------------------ |
 | `GetNetworkNoteStatus` | Returns the lifecycle status of a network note tracked by the network transaction builder. |
-
-This method is only available when the serving node is connected to an NTX builder. If the NTX builder is not configured
-or the note is unknown, the RPC returns the corresponding gRPC error.

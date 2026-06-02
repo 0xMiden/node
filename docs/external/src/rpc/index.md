@@ -18,6 +18,12 @@ The safest way to inspect the schema for a deployed network is through gRPC refl
 grpcurl rpc.testnet.miden.io:443 describe rpc.Api
 ```
 
+For a local development network without TLS, use `-plaintext`:
+
+```sh
+grpcurl -plaintext localhost:57291 describe rpc.Api
+```
+
 For Rust developers, we also ship a Rust crate
 [miden_node_proto_build](https://docs.rs/miden-node-proto-build/latest/miden_node_proto_build/) which exposes the gRPC
 schemas as file descriptor sets, which can be used to generate the gRPC bindings using [tonic](https://docs.rs/tonic).

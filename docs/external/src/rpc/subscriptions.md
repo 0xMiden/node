@@ -9,13 +9,13 @@ The RPC API exposes two server-streaming methods for consumers that need to foll
 
 ## BlockSubscription
 
-`BlockSubscription` streams committed signed blocks starting from `block_from`, inclusive. The server first replays
-matching historical blocks, then continues streaming live blocks as they are committed.
+`BlockSubscription` streams committed blocks starting from `block_from`, inclusive. The server first replays historical
+blocks, then continues streaming live blocks as they are committed.
 
 Each response includes:
 
-- `block`: the serialized signed block.
-- `committed_chain_tip`: the committed chain tip observed when the item was emitted.
+- `block`: the serialized block.
+- `committed_chain_tip`: the current committed chain tip observed when the item was emitted.
 
 ## ProofSubscription
 

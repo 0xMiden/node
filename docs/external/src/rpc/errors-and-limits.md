@@ -27,14 +27,3 @@ require the `genesis` parameter so the client explicitly targets the intended ne
 
 The server accepts compatible major/minor RPC versions. Stable versions allow patch flexibility. Pre-release versions
 must match the pre-release label and patch version expected by the server.
-
-## Common Status Codes
-
-| Status               | Typical meaning                                                                                   |
-| -------------------- | ------------------------------------------------------------------------------------------------- |
-| `INVALID_ARGUMENT`   | The request is malformed, exceeds limits, targets an unknown block, or fails content negotiation. |
-| `NOT_FOUND`          | The requested resource is not known to the node or supporting service.                            |
-| `RESOURCE_EXHAUSTED` | The request exceeded a configured limit or rate limit.                                            |
-| `UNAVAILABLE`        | A required upstream or internal service is unavailable.                                           |
-| `DATA_LOSS`          | A subscription consumer lagged too far behind and should reconnect from local state.              |
-| `INTERNAL`           | The server encountered an unexpected internal failure.                                            |
