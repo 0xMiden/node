@@ -55,10 +55,9 @@ pub enum NtxBuilderCommand {
         )]
         rpc_auth_header_value: Option<AsciiMetadataValue>,
 
-        /// The remote transaction prover's gRPC url. If unset, will default to running a prover
-        /// in-process which is expensive.
+        /// The remote transaction prover's gRPC url.
         #[arg(long = "tx-prover.url", env = ENV_TX_PROVER_URL, value_name = "URL")]
-        tx_prover_url: Option<Url>,
+        tx_prover_url: Url,
 
         /// Number of note scripts to cache locally.
         ///
@@ -210,14 +209,14 @@ impl NtxBuilderCommand {
 
         let database_filepath = data_directory.join("ntx-builder.sqlite3");
 
-        let config = miden_ntx_builder::NtxBuilderConfig::new(rpc_url, database_filepath)
-            .with_tx_prover_url(tx_prover_url)
-            .with_script_cache_size(script_cache_size)
-            .with_idle_timeout(idle_timeout)
-            .with_max_account_crashes(max_account_crashes)
-            .with_max_cycles(max_tx_cycles)
-            .with_tx_expiration_delta(tx_expiration_delta)
-            .with_sqlite_connection_pool_size(sqlite_connection_pool_size);
+        let config =
+            miden_ntx_builder::NtxBuilderConfig::new(rpc_url, tx_prover_url, database_filepath)
+                .with_script_cache_size(script_cache_size)
+                .with_idle_timeout(idle_timeout)
+                .with_max_account_crashes(max_account_crashes)
+                .with_max_cycles(max_tx_cycles)
+                .with_tx_expiration_delta(tx_expiration_delta)
+                .with_sqlite_connection_pool_size(sqlite_connection_pool_size);
         let config = match rpc_auth_header_value {
             Some(value) => config.with_rpc_auth_header(value),
             None => config,

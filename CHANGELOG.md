@@ -57,6 +57,7 @@
 - Added a `miden-ntx-builder bootstrap` command that initializes the ntx-builder database from a trusted genesis block file. The `start` command now requires a bootstrapped database instead of fetching the genesis block from the committed-block subscription on first run ([#2149](https://github.com/0xMiden/node/pull/2149)).
 - Persisted the genesis commitment in the ntx-builder at bootstrap and sent it in the RPC `Accept` header so the node accepts its write transactions, and added RPC client implementations ([#2162](https://github.com/0xMiden/node/pull/2162)).
 - Persisted attachments of private output notes when applying a block, so they are now returned by `GetNotesById` ([#2172](https://github.com/0xMiden/node/pull/2172)).
+- [BREAKING] `miden-ntx-builder` now requires a remote transaction prover to be configured ([#2179](https://github.com/0xMiden/node/pull/2179)).
 
 ## v0.14.11 (TBD)
 
