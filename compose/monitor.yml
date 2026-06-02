@@ -12,4 +12,4 @@ services:
       - MIDEN_MONITOR_DISABLE_NTX_SERVICE=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
     ports:
-      - "3001:3001"
+      - "127.0.0.1:3001:3001"

@@ -99,7 +99,7 @@ services:
       - --validator.url=http://validator:50101
       - --ntx-builder.url=http://ntx-builder:50301
     ports:
-      - "57291:57291"
+      - "127.0.0.1:57291:57291"
 
   validator:
     image: miden-validator

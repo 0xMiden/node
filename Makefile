@@ -163,16 +163,23 @@ install-network-monitor: ## Installs network monitor binary
 
 # --- docker --------------------------------------------------------------------------------------
 
-.PHONY: compose-up
-compose-up: ## Starts all node components, telemetry, and monitor via docker compose
+.PHONY: local-network-build
+local-network-build: docker-build ## Builds Docker images used by the local development network
+
+.PHONY: local-network-up
+local-network-up: ## Starts the local development network
 	docker compose $(COMPOSE_FILES) up -d
 
-.PHONY: compose-down
-compose-down: ## Stops and removes all containers via docker compose
+.PHONY: local-network-down
+local-network-down: ## Stops the local development network, preserving volumes
 	docker compose $(COMPOSE_FILES) down --remove-orphans
 
-.PHONY: compose-logs
-compose-logs: ## Follows logs for all components via docker compose
+.PHONY: local-network-delete
+local-network-delete: ## Stops the local development network and deletes volumes
+	docker compose $(COMPOSE_FILES) down -v --remove-orphans
+
+.PHONY: local-network-logs
+local-network-logs: ## Follows logs for the local development network
 	docker compose $(COMPOSE_FILES) logs -f
 
 .PHONY: docker-build

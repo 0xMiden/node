@@ -10,7 +10,7 @@ This guide covers the infrastructure used to run, sync, and interact with Miden 
 The documentation is roughly organized by audience:
 
 - [gRPC API](./rpc) is the reference for the official Miden RPC API.
-- [Local Node Development](./local-node-development) covers spinning up a local network to develop against.
+- [Local Network Development](./local-network-development) covers spinning up a local network to develop against.
 - Check out the [Full Node Runner Guide](./full-node-runner/) to sync a local node to an official network, serve RPC
   locally, and avoid rate limits on official endpoints.
 - Use the [Network Operator Guide](./network-operator/) when operating a Miden network's centralized sequencing
