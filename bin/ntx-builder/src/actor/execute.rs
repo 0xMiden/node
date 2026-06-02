@@ -44,7 +44,6 @@ use miden_tx::{
     DataStoreError,
     ExecutionOptions,
     FailedNote,
-    LocalTransactionProver,
     MastForestStore,
     NoteCheckerError,
     NoteConsumptionChecker,
@@ -133,10 +132,7 @@ pub type NtxExecutionResult = (TransactionId, Vec<FailedNote>, Vec<(Word, NoteSc
 #[derive(Clone)]
 pub struct NtxContext {
     /// The prover to delegate proofs to.
-    ///
-    /// Defaults to local proving if unset. This should be avoided in production as this is
-    /// computationally intensive.
-    prover: Option<RemoteTransactionProver>,
+    prover: RemoteTransactionProver,
 
     /// The RPC client for retrieving note scripts.
     rpc: RpcClient,
@@ -168,7 +164,7 @@ impl NtxContext {
         reason = "execution context aggregates actor resources"
     )]
     pub fn new(
-        prover: Option<RemoteTransactionProver>,
+        prover: RemoteTransactionProver,
         rpc: RpcClient,
         script_cache: LruCache<Word, NoteScript>,
         db: Db,
@@ -404,31 +400,14 @@ impl NtxContext {
     /// proving errors (witness rejected, malformed inputs) escape on the first attempt.
     #[instrument(target = COMPONENT, name = "ntx.execute_transaction.prove", skip_all, err)]
     async fn prove(&self, tx_inputs: &TransactionInputs) -> NtxResult<ProvenTransaction> {
-        if let Some(remote) = &self.prover {
-            (|| async { remote.prove(tx_inputs).await })
-                .retry(self.request_backoff())
-                .when(|err| matches!(err, TransactionProverError::Other { .. }))
-                .notify(|err, dur| {
-                    log_transient_retry("remote_prover.prove", err, dur);
-                })
-                .await
-                .map_err(NtxError::Proving)
-        } else {
-            // Only perform tx inputs clone for local proving.
-            let tx_inputs = tx_inputs.clone();
-            let span = tracing::Span::current();
-
-            spawn_blocking_in_current_span(move || {
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .expect("failed to build tokio runtime")
-                    .block_on(LocalTransactionProver::default().prove(tx_inputs).instrument(span))
+        (|| async { self.prover.prove(tx_inputs).await })
+            .retry(self.request_backoff())
+            .when(|err| matches!(err, TransactionProverError::Other { .. }))
+            .notify(|err, dur| {
+                log_transient_retry("remote_prover.prove", err, dur);
             })
             .await
-            .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))
             .map_err(NtxError::Proving)
-        }
     }
 
     /// Submits the transaction through the RPC service.
