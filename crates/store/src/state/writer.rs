@@ -5,6 +5,7 @@
 //! [`InMemoryState`] snapshot via an [`ArcSwap`], making the updated trees immediately visible to
 //! wait-free readers.
 
+use std::mem::ManuallyDrop;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
@@ -67,6 +68,12 @@ impl WriteHandle {
 // ================================================================================================
 
 /// Single-task owner of the mutable trees. Processes [`WriteRequest`]s serially.
+///
+/// The RocksDB-backed tree fields are wrapped in [`ManuallyDrop`] so that the [`Drop`] impl can
+/// flush them in an explicit order before `writer_done_tx` is dropped. Dropping `writer_done_tx`
+/// wakes [`State::shutdown`], which then releases on-disk resources; the flush must complete first
+/// or `RocksDB` would write to a deleted directory. Using [`ManuallyDrop`] keeps this invariant
+/// independent of field declaration order.
 pub(super) struct BlockWriter {
     pub db: Arc<Db>,
     pub block_store: Arc<BlockStore>,
@@ -74,14 +81,31 @@ pub(super) struct BlockWriter {
     pub forest: Arc<RwLock<AccountStateForest<AccountStateForestBackend>>>,
     pub committed_tip_tx: Arc<watch::Sender<BlockNumber>>,
     pub block_cache: BlockCache,
-    pub termination_ask: tokio::sync::mpsc::Sender<ApplyBlockError>,
     pub rx: mpsc::Receiver<WriteRequest>,
     /// The mutable nullifier tree owned by this writer.
-    pub nullifier_tree: NullifierTree<LargeSmt<TreeStorage>>,
+    pub nullifier_tree: ManuallyDrop<NullifierTree<LargeSmt<TreeStorage>>>,
     /// The mutable account tree owned by this writer.
-    pub account_tree: AccountTreeWithHistory<TreeStorage>,
+    pub account_tree: ManuallyDrop<AccountTreeWithHistory<TreeStorage>>,
     /// The blockchain MMR owned by this writer.
-    pub blockchain: Blockchain,
+    pub blockchain: ManuallyDrop<Blockchain>,
+    /// Signals [`State::shutdown`] after the trees above have been flushed.
+    pub writer_done_tx: ManuallyDrop<oneshot::Sender<()>>,
+}
+
+impl Drop for BlockWriter {
+    fn drop(&mut self) {
+        // Drop the trees first so their RocksDB destructors flush to disk, then explicitly
+        // signal `State::shutdown` that it is safe to release on-disk resources.
+        //
+        // SAFETY: each field is dropped exactly once here; the compiler's auto-drop pass
+        // afterwards treats ManuallyDrop fields as no-ops.
+        unsafe {
+            ManuallyDrop::drop(&mut self.nullifier_tree);
+            ManuallyDrop::drop(&mut self.account_tree);
+            ManuallyDrop::drop(&mut self.blockchain);
+            let _ = ManuallyDrop::take(&mut self.writer_done_tx).send(());
+        }
+    }
 }
 
 impl BlockWriter {
@@ -155,7 +179,7 @@ impl BlockWriter {
                     .reader()
                     .expect("nullifier tree snapshot creation should not fail"),
                 account_tree: self.account_tree.reader(),
-                blockchain: self.blockchain.clone(),
+                blockchain: (*self.blockchain).clone(), // TODO(sergerad): snapshot of blockchain?
             });
             self.in_memory.store(snapshot);
 
@@ -247,9 +271,6 @@ impl BlockWriter {
             .map_err(InvalidBlockError::NewBlockNullifierAlreadySpent)?;
 
         if nullifier_tree_update.as_mutation_set().root() != header.nullifier_root() {
-            let _ = self.termination_ask.try_send(ApplyBlockError::InvalidBlockError(
-                InvalidBlockError::NewBlockInvalidNullifierRoot,
-            ));
             return Err(InvalidBlockError::NewBlockInvalidNullifierRoot.into());
         }
 
@@ -270,9 +291,6 @@ impl BlockWriter {
             })?;
 
         if account_tree_update.as_mutation_set().root() != header.account_root() {
-            let _ = self.termination_ask.try_send(ApplyBlockError::InvalidBlockError(
-                InvalidBlockError::NewBlockInvalidAccountRoot,
-            ));
             return Err(InvalidBlockError::NewBlockInvalidAccountRoot.into());
         }
 

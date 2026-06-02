@@ -87,11 +87,34 @@ impl TestStore {
 
         genesis_commitment
     }
+
+    /// Shuts down the [`BlockWriter`] task before releasing the temp directory.
+    ///
+    /// Call this at the end of any test that uses RocksDB-backed storage. Without an explicit
+    /// shutdown the task is cancelled by the runtime *after* the temp directory is deleted,
+    /// causing a panic in the `RocksDB` destructor.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `Self::state` has more than one reference.
+    async fn shutdown(self) {
+        let Self {
+            state,
+            genesis_commitment: _,
+            data_directory,
+        } = self;
+
+        Arc::try_unwrap(state)
+            .unwrap_or_else(|_| panic!("State should have a single Arc reference at shutdown"))
+            .shutdown()
+            .await;
+
+        drop(data_directory);
+    }
 }
 
 async fn load_state(path: &std::path::Path) -> Arc<State> {
-    let state = State::load(path, StorageOptions::default()).await.expect("state should load");
-    Arc::new(state)
+    Arc::new(State::load(path, StorageOptions::default()).await.expect("state should load"))
 }
 
 /// Byte offset of the account delta commitment in serialized `ProvenTransaction`. Layout:
@@ -428,21 +451,25 @@ async fn rpc_rejects_post_deployment_network_account_tx() {
         transaction_inputs: None,
     };
 
-    let service = RpcService::new(
-        Arc::clone(&store.state),
-        RpcMode::full_node(source_rpc_client()),
-        None,
-        NonZeroUsize::new(1_000_000).unwrap(),
-        None,
-    );
+    {
+        let service = RpcService::new(
+            Arc::clone(&store.state),
+            RpcMode::full_node(source_rpc_client()),
+            None,
+            NonZeroUsize::new(1_000_000).unwrap(),
+            None,
+        );
 
-    let response = service.submit_proven_tx(Request::new(request)).await;
-    assert!(response.is_err());
-    let err = response.as_ref().unwrap_err().message();
-    assert!(
-        err.contains("Network transactions may not be submitted by users yet"),
-        "expected the network-tx gate error, got: {err}"
-    );
+        let response = service.submit_proven_tx(Request::new(request)).await;
+        assert!(response.is_err());
+        let err = response.as_ref().unwrap_err().message();
+        assert!(
+            err.contains("Network transactions may not be submitted by users yet"),
+            "expected the network-tx gate error, got: {err}"
+        );
+    } // service (and its Arc<State> clone) dropped here, before calling shutdown.
+
+    store.shutdown().await;
 }
 
 fn source_rpc_client() -> RpcClient {

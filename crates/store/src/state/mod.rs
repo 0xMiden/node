@@ -24,7 +24,7 @@ use miden_protocol::crypto::merkle::mmr::{MmrPeaks, MmrProof, PartialMmr};
 use miden_protocol::crypto::merkle::smt::LargeSmt;
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
 use miden_protocol::transaction::PartialBlockchain;
-use tokio::sync::{RwLock, watch};
+use tokio::sync::{RwLock, oneshot, watch};
 use tracing::{Span, info, instrument};
 
 use crate::account_state_forest::{AccountStateForest, AccountStateForestBackend, WitnessError};
@@ -165,6 +165,10 @@ pub struct State {
 
     /// FIFO cache of recent block proofs for replica subscriptions.
     pub(crate) proof_cache: ProofCache,
+
+    /// Resolves after the [`BlockWriter`] task has fully stopped and all on-disk resources
+    /// (including `RocksDB`) have been flushed and released. Consumed by [`Self::shutdown`].
+    writer_done: oneshot::Receiver<()>,
 }
 
 impl State {
@@ -172,9 +176,6 @@ impl State {
     // --------------------------------------------------------------------------------------------
 
     /// Loads the state from the data directory.
-    ///
-    /// The loaded state owns all store data structures and exposes subscription methods for
-    /// sequencer and replica tasks.
     #[instrument(target = COMPONENT, skip_all)]
     pub async fn load(
         data_path: &Path,
@@ -185,9 +186,6 @@ impl State {
     }
 
     /// Loads the state from the data directory using explicit database options.
-    ///
-    /// The loaded state owns all store data structures and exposes subscription methods for
-    /// sequencer and replica tasks.
     #[instrument(target = COMPONENT, skip_all)]
     pub async fn load_with_database_options(
         data_path: &Path,
@@ -273,8 +271,9 @@ impl State {
         let (write_tx, write_rx) = tokio::sync::mpsc::channel(1);
         let write_handle = WriteHandle::new(write_tx);
 
-        // Channel used by BlockWriter to signal critical errors; receiver is held for future use.
-        let (termination_ask, _termination_rx) = tokio::sync::mpsc::channel(1);
+        // writer_done_tx is held by BlockWriter and dropped after its trees are flushed, waking
+        // writer_done on the caller side.
+        let (writer_done_tx, writer_done) = oneshot::channel();
 
         // Spawn the BlockWriter task.
         let block_writer = BlockWriter {
@@ -284,11 +283,11 @@ impl State {
             forest: Arc::clone(&forest),
             committed_tip_tx: Arc::clone(&committed_tip_tx),
             block_cache: block_cache.clone(),
-            termination_ask,
             rx: write_rx,
-            nullifier_tree,
-            account_tree,
-            blockchain,
+            nullifier_tree: std::mem::ManuallyDrop::new(nullifier_tree),
+            account_tree: std::mem::ManuallyDrop::new(account_tree),
+            blockchain: std::mem::ManuallyDrop::new(blockchain),
+            writer_done_tx: std::mem::ManuallyDrop::new(writer_done_tx),
         };
         tokio::spawn(block_writer.run());
 
@@ -303,12 +302,28 @@ impl State {
             committed_tip_tx,
             block_cache,
             proof_cache,
+            writer_done,
         })
     }
 
     /// Returns a watch receiver that wakes every time a new block is committed.
     pub fn subscribe_committed_tip(&self) -> watch::Receiver<BlockNumber> {
         self.committed_tip_tx.subscribe()
+    }
+
+    /// Shuts down the state, waiting for the [`BlockWriter`] task to fully stop.
+    ///
+    /// Dropping `State` closes the write channel, which signals [`BlockWriter`] to stop. This
+    /// method waits for the writer to complete — including any pending `RocksDB` flushes — before
+    /// returning. Call this before releasing on-disk resources (e.g. removing a data directory).
+    pub async fn shutdown(self) {
+        // Drop everything except `writer_done` inside an inner scope so that `write_handle` is
+        // dropped — closing the write channel — before we await the writer's completion.
+        let writer_done = {
+            let Self { writer_done, .. } = self;
+            writer_done
+        };
+        writer_done.await.ok();
     }
 
     /// Loads serialized block proving inputs from the block store.
