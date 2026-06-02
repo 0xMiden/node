@@ -236,14 +236,6 @@ docker-build-remote-prover: ## Builds the remote prover using Docker
                  --build-arg PORT=50051 \
                  -t miden-remote-prover .
 
-.PHONY: docker-run-node
-docker-run-node: ## Runs the Miden node as a Docker container
-	docker volume create miden-db
-	docker run --name miden-node \
-			   -p 57291:57291 \
-               -v miden-db:/db \
-               -d miden-node
-
 ## --- setup --------------------------------------------------------------------------------------
 
 .PHONY: check-tools
