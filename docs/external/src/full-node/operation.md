@@ -5,8 +5,7 @@ sidebar_position: 4
 
 <!-- markdownlint-disable MD033 MD041 -->
 
-import Tabs from "@theme/Tabs";
-import TabItem from "@theme/TabItem";
+import Tabs from "@theme/Tabs"; import TabItem from "@theme/TabItem";
 
 # Operation
 
