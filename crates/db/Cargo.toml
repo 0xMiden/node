@@ -6,6 +6,7 @@ homepage.workspace     = true
 keywords               = ["database", "miden", "node"]
 license.workspace      = true
 name                   = "miden-node-db"
+readme                 = "README.md"
 repository.workspace   = true
 rust-version.workspace = true
 version.workspace      = true

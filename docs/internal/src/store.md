@@ -21,7 +21,7 @@ Compaction parallelism and background jobs are set to `rayon::current_num_thread
 WAL sync per write is disabled for throughput; a 512 MiB WAL cap bounds recovery time. Bloom filter
 bits vary by depth (8.0–12.0) and memtables are 128 MiB per column family. See `RocksDbStorage::open` for the
 full fixed configuration. Runtime-tuneable parameters are documented in the
-[operator usage guide](https://github.com/0xMiden/node/blob/next/docs/external/src/operator/usage.md#rocksdb-tuning).
+[operator usage guide](https://docs.miden.xyz/core-concepts/node/operator/usage/#rocksdb-tuning).
 
 ## Architecture
 

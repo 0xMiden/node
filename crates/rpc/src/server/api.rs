@@ -39,6 +39,7 @@ use miden_node_utils::limiter::{
     QueryParamStorageMapKeyTotalLimit,
 };
 use miden_node_utils::lru_cache::LruCache;
+use miden_node_utils::retry::{self, Retryable};
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::account::AccountId;
 use miden_protocol::asset::Asset;
@@ -167,48 +168,30 @@ impl RpcService {
     ///
     /// Automatically retries until the store connection becomes available.
     pub async fn get_genesis_header_with_retry(&self) -> anyhow::Result<BlockHeader> {
-        let mut retry_counter = 0;
-        loop {
-            let result = self
-                .get_block_header_by_number(
-                    proto::rpc::BlockHeaderByNumberRequest {
-                        block_num: Some(BlockNumber::GENESIS.as_u32()),
-                        include_mmr_proof: None,
-                    }
-                    .into_request(),
-                )
-                .await;
+        // Retry with exponential backoff (base 500ms, max 30s) while the store is unavailable.
+        let header = (|| async {
+            self.get_block_header_by_number(
+                proto::rpc::BlockHeaderByNumberRequest {
+                    block_num: Some(BlockNumber::GENESIS.as_u32()),
+                    include_mmr_proof: None,
+                }
+                .into_request(),
+            )
+            .await
+        })
+        .retry(retry::exponential(Duration::from_millis(500), Duration::from_secs(30)))
+        .when(|err| err.code() == tonic::Code::Unavailable)
+        .notify(|err, backoff| {
+            tracing::warn!(
+                ?backoff,
+                %err,
+                "connection failed while fetching genesis header, retrying"
+            );
+        })
+        .await?;
 
-            match result {
-                Ok(header) => {
-                    let header = header
-                        .into_inner()
-                        .block_header
-                        .context("response is missing the header")?;
-                    let header =
-                        BlockHeader::try_from(header).context("failed to parse response")?;
-
-                    return Ok(header);
-                },
-                Err(err) if err.code() == tonic::Code::Unavailable => {
-                    // Exponential backoff with base 500ms and max 30s.
-                    let backoff = Duration::from_millis(500)
-                        .saturating_mul(1 << retry_counter.min(6))
-                        .min(Duration::from_secs(30));
-
-                    tracing::warn!(
-                        ?backoff,
-                        %retry_counter,
-                        %err,
-                        "connection failed while fetching genesis header, retrying"
-                    );
-
-                    retry_counter += 1;
-                    tokio::time::sleep(backoff).await;
-                },
-                Err(other) => return Err(other.into()),
-            }
-        }
+        let header = header.into_inner().block_header.context("response is missing the header")?;
+        BlockHeader::try_from(header).context("failed to parse response")
     }
 
     /// Returns the given block's onchain commitment.
