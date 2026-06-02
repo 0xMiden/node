@@ -713,7 +713,7 @@ impl State {
     ///   channel, updated by the proof scheduler).
     pub fn chain_tip(&self, finality: Finality) -> BlockNumber {
         match finality {
-            Finality::Committed => self.in_memory.load().block_num,
+            Finality::Committed => self.snapshot().block_num,
             Finality::Proven => self.proven_tip.read(),
         }
     }

@@ -512,7 +512,6 @@ impl Db {
     }
 
     /// Inserts the data of a new block into the DB.
-    // TODO: This span is logged in a root span, we should connect it to the parent one.
     #[instrument(target = COMPONENT, skip_all, err)]
     pub async fn apply_block(
         &self,

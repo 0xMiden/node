@@ -114,13 +114,19 @@ impl BlockWriter {
     /// Runs the writer loop, processing requests until the channel closes.
     pub async fn run(mut self) {
         while let Some(req) = self.rx.recv().await {
-            let result = self.process_request(req.signed_block).await;
+            let result = self.write_block(req.signed_block).await;
             let _ = req.result_tx.send(result);
         }
     }
 
+    /// Validates and commits a signed block to all persistent and in-memory stores.
+    ///
+    /// Validates the block header, concurrently saves the raw block bytes to the block store and
+    /// computes tree mutations, writes the block to the database, applies mutations to the owned
+    /// trees, then atomically publishes a new [`InMemoryState`] snapshot and updates the account
+    /// state forest.
     #[instrument(target = COMPONENT, skip_all, err)]
-    async fn process_request(&mut self, signed_block: SignedBlock) -> Result<(), ApplyBlockError> {
+    async fn write_block(&mut self, signed_block: SignedBlock) -> Result<(), ApplyBlockError> {
         let header = signed_block.header();
         let body = signed_block.body();
 
