@@ -49,6 +49,9 @@ Clients may also include a compatible RPC version:
 application/vnd.miden; version=<semver>; genesis=<genesis-commitment>
 ```
 
+See [Errors and Limits](./errors-and-limits.md#transaction-submission-errors) for the transaction submission detail
+codes returned in gRPC status details.
+
 ## State Synchronization
 
 | Method                   | Purpose                                                                                 |

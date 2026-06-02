@@ -8,6 +8,9 @@ sidebar_position: 0
 Miden nodes expose a public gRPC API for querying chain state, synchronizing local state, submitting proven
 transactions, and subscribing to committed blocks and block proofs.
 
+The API uses standard gRPC status codes. Some methods also include additional Miden-specific error codes in status
+details for stable client-side handling.
+
 The official networks are served at `https://rpc.testnet.miden.io` and `https://rpc.devnet.miden.io`.
 
 ## Schema
@@ -53,4 +56,4 @@ The RPC server supports:
 | Network note debugging | `GetNetworkNoteStatus`                                                                                          |
 
 See [Public RPC](/rpc/public-api) for endpoint summaries, [Subscriptions](/rpc/subscriptions) for stream semantics, and
-[Errors and Limits](/rpc/errors-and-limits) for request limits and content negotiation.
+[Errors and Limits](/rpc/errors-and-limits) for request limits, content negotiation, and method-specific error codes.
