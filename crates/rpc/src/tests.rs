@@ -1,14 +1,23 @@
 use std::net::{IpAddr, Ipv4Addr};
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use http::header::{ACCEPT, CONTENT_TYPE};
 use http::{HeaderMap, HeaderValue};
 use miden_node_block_producer::{BlockProducerApi, BlockProducerApiConfig};
-use miden_node_proto::clients::{Builder, GrpcClient, Interceptor, RpcClient, ValidatorClient};
+use miden_node_proto::clients::{
+    Builder,
+    GrpcClient,
+    Interceptor,
+    NtxBuilderClient,
+    RpcClient,
+    ValidatorClient,
+};
+use miden_node_proto::generated::ntx_builder::api_server::ApiServer as NtxBuilderApiServer;
 use miden_node_proto::generated::rpc::api_client::ApiClient as ProtoClient;
-use miden_node_proto::generated::rpc::api_server::Api;
+use miden_node_proto::generated::rpc::api_server::{Api, ApiServer as RpcApiServer};
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::genesis::config::GenesisConfig;
 use miden_node_store::state::State;
@@ -40,6 +49,7 @@ use miden_standards::account::wallets::BasicWallet;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::task;
+use tokio_stream::wrappers::TcpListenerStream;
 use tonic::Request;
 use url::Url;
 
@@ -480,6 +490,134 @@ fn source_rpc_client() -> RpcClient {
         .without_metadata_genesis()
         .without_otel_context_injection()
         .connect_lazy::<RpcClient>()
+}
+
+#[derive(Clone)]
+struct FixedNtxBuilder {
+    response: proto::rpc::GetNetworkNoteStatusResponse,
+    call_count: Arc<AtomicUsize>,
+}
+
+#[tonic::async_trait]
+impl proto::ntx_builder::api_server::Api for FixedNtxBuilder {
+    async fn get_network_note_status(
+        &self,
+        _request: Request<proto::note::NoteId>,
+    ) -> Result<tonic::Response<proto::rpc::GetNetworkNoteStatusResponse>, tonic::Status> {
+        self.call_count.fetch_add(1, Ordering::SeqCst);
+        Ok(tonic::Response::new(self.response.clone()))
+    }
+}
+
+async fn start_ntx_builder(
+    response: proto::rpc::GetNetworkNoteStatusResponse,
+) -> (NtxBuilderClient, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("Failed to bind ntx-builder");
+    let addr = listener.local_addr().expect("Failed to get ntx-builder address");
+    let call_count = Arc::new(AtomicUsize::new(0));
+    let service = FixedNtxBuilder {
+        response,
+        call_count: Arc::clone(&call_count),
+    };
+
+    task::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(NtxBuilderApiServer::new(service))
+            .serve_with_incoming(TcpListenerStream::new(listener))
+            .await
+            .expect("Failed to serve ntx-builder");
+    });
+
+    let client = Builder::new(Url::parse(&format!("http://{addr}")).unwrap())
+        .without_tls()
+        .without_timeout()
+        .without_metadata_version()
+        .without_metadata_genesis()
+        .without_otel_context_injection()
+        .connect_lazy::<NtxBuilderClient>();
+
+    (client, call_count)
+}
+
+async fn start_source_rpc(ntx_builder: NtxBuilderClient) -> (RpcClient, TestStore) {
+    let store = TestStore::start().await;
+    let block_producer_data_directory =
+        tempfile::tempdir().expect("block producer state tempdir should be created");
+    TestStore::bootstrap(block_producer_data_directory.path());
+    let block_producer_state = load_state(block_producer_data_directory.path()).await;
+    let store_state = Arc::clone(&store.state);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("Failed to bind source RPC");
+    let addr = listener.local_addr().expect("Failed to get source RPC address");
+
+    task::spawn(async move {
+        let _block_producer_data_directory = block_producer_data_directory;
+        let validator_url = Url::parse("http://127.0.0.1:0").unwrap();
+        let block_producer = BlockProducerApi::new(
+            block_producer_state,
+            0.into(),
+            BlockProducerApiConfig::default(),
+        );
+        let validator = Builder::new(validator_url)
+            .without_tls()
+            .without_timeout()
+            .without_metadata_version()
+            .without_metadata_genesis()
+            .with_otel_context_injection()
+            .connect_lazy::<ValidatorClient>();
+        let source_rpc = RpcService::new(
+            store_state,
+            RpcMode::sequencer(block_producer, validator),
+            Some(ntx_builder),
+            NonZeroUsize::new(1_000_000).unwrap(),
+            None,
+        );
+
+        tonic::transport::Server::builder()
+            .add_service(RpcApiServer::new(source_rpc))
+            .serve_with_incoming(TcpListenerStream::new(listener))
+            .await
+            .expect("Failed to serve source RPC");
+    });
+
+    let client = Builder::new(Url::parse(&format!("http://{addr}")).unwrap())
+        .without_tls()
+        .without_timeout()
+        .without_metadata_version()
+        .without_metadata_genesis()
+        .without_otel_context_injection()
+        .connect_lazy::<RpcClient>();
+
+    (client, store)
+}
+
+#[tokio::test]
+async fn full_node_forwards_get_network_note_status_to_source_rpc() {
+    let expected = proto::rpc::GetNetworkNoteStatusResponse {
+        status: proto::rpc::NetworkNoteStatus::Discarded.into(),
+        last_error: Some("execution failed".to_string()),
+        attempt_count: 7,
+        last_attempt_block_num: Some(42),
+    };
+    let (ntx_builder, ntx_builder_call_count) = start_ntx_builder(expected.clone()).await;
+    let (source_rpc, _source_store) = start_source_rpc(ntx_builder).await;
+    let local_store = TestStore::start().await;
+    let full_node = RpcService::new(
+        Arc::clone(&local_store.state),
+        RpcMode::full_node(source_rpc),
+        None,
+        NonZeroUsize::new(1_000).unwrap(),
+        None,
+    );
+
+    let response = full_node
+        .get_network_note_status(Request::new(Word::empty().into()))
+        .await
+        .expect("full-node RPC should forward network note status request")
+        .into_inner();
+
+    assert_eq!(response, expected);
+    assert_eq!(ntx_builder_call_count.load(Ordering::SeqCst), 1);
 }
 
 // Batch-path coverage for the network-account gate is provided manually. Building a valid

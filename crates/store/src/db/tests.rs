@@ -1563,6 +1563,7 @@ async fn reconstruct_storage_map_from_db_pages_until_latest() {
     let block2 = BlockNumber::from(2);
     let block3 = BlockNumber::from(3);
 
+    crate::db::migrations::bootstrap_database(&db_path).unwrap();
     let db = crate::db::Db::load(db_path).await.unwrap();
     let slot_name_for_db = slot_name.clone();
     db.query("insert paged values", move |db_conn| {
@@ -1630,6 +1631,7 @@ async fn reconstruct_storage_map_from_db_returns_limit_exceeded_for_single_block
 
     let block5 = BlockNumber::from(5);
 
+    crate::db::migrations::bootstrap_database(&db_path).unwrap();
     let db = crate::db::Db::load(db_path).await.unwrap();
     let slot_name_for_db = slot_name.clone();
     db.query("insert entries in single block", move |db_conn| {

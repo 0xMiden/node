@@ -67,7 +67,7 @@ impl Command {
     pub(crate) async fn execute(self) -> anyhow::Result<()> {
         match self {
             Command::Bootstrap(bootstrap_command) => bootstrap_command.handle().await,
-            Command::Migrate(migrate_command) => migrate_command.handle().await,
+            Command::Migrate(migrate_command) => migrate_command.handle(),
             Command::Sequencer(sequencer_command) => sequencer_command.handle().await,
             Command::Full(full_node_command) => full_node_command.handle().await,
         }

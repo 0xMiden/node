@@ -5,6 +5,7 @@ use anyhow::Context;
 use miden_node_proto::clients::RpcClient;
 use miden_node_proto::generated::rpc::{BlockSubscriptionRequest, ProofSubscriptionRequest};
 use miden_node_store::state::{Finality, State};
+use miden_node_utils::retry::{self, Retryable};
 use miden_node_utils::tasks::Tasks;
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use miden_protocol::utils::serde::Deserializable;
@@ -57,19 +58,20 @@ struct ProofSync {
 
 impl BlockSync {
     async fn run(self) -> anyhow::Result<()> {
-        loop {
-            let err = self
-                .sync()
+        (|| async {
+            self.sync()
                 .await
-                .and_then(|_| Err::<(), _>(anyhow::anyhow!("unexpected end of stream")))
-                .unwrap_err();
+                .and_then(|()| Err(anyhow::anyhow!("unexpected end of stream")))
+        })
+        .retry(retry::constant(RECONNECT_DELAY, None))
+        .notify(|err, _| {
             warn!(
                 err = %format!("{err:#}"),
                 retry.delay = %RECONNECT_DELAY.as_secs(),
                 "Block sync failed, retrying",
             );
-            tokio::time::sleep(RECONNECT_DELAY).await;
-        }
+        })
+        .await
     }
 
     async fn sync(&self) -> anyhow::Result<()> {
@@ -95,19 +97,20 @@ impl BlockSync {
 
 impl ProofSync {
     async fn run(self) -> anyhow::Result<()> {
-        loop {
-            let err = self
-                .sync()
+        (|| async {
+            self.sync()
                 .await
-                .and_then(|_| Err::<(), _>(anyhow::anyhow!("unexpected end of stream")))
-                .unwrap_err();
+                .and_then(|()| Err(anyhow::anyhow!("unexpected end of stream")))
+        })
+        .retry(retry::constant(RECONNECT_DELAY, None))
+        .notify(|err, _| {
             warn!(
                 err = %format!("{err:#}"),
                 retry.delay = %RECONNECT_DELAY.as_secs(),
                 "Proof sync failed, retrying",
             );
-            tokio::time::sleep(RECONNECT_DELAY).await;
-        }
+        })
+        .await
     }
 
     async fn sync(&self) -> anyhow::Result<()> {

@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::mem::size_of;
 use std::num::NonZeroUsize;
 use std::ops::{Deref, DerefMut, RangeInclusive};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -29,7 +29,7 @@ use miden_protocol::utils::serde::Deserializable;
 use tracing::{info, instrument};
 
 use crate::COMPONENT;
-use crate::db::migrations::apply_migrations;
+use crate::db::migrations::{bootstrap_database, migrate_database, verify_latest_schema};
 use crate::db::models::conv::SqlTypeConvert;
 pub use crate::db::models::queries::{
     AccountCommitmentsPage,
@@ -192,11 +192,8 @@ impl Db {
         err,
     )]
     pub fn bootstrap(database_filepath: PathBuf, genesis: GenesisBlock) -> anyhow::Result<()> {
-        apply_migrations(&database_filepath).context("failed to apply database migrations")?;
+        bootstrap_database(&database_filepath).context("failed to bootstrap database schema")?;
 
-        // Open the database. This will create the file if it does not exist, but will also happily
-        // open it if already exists. In the latter case we will error out when attempting to insert
-        // the genesis block so this isn't such a problem.
         let mut conn: SqliteConnection = diesel::sqlite::SqliteConnection::establish(
             database_filepath.to_str().context("database filepath is invalid")?,
         )
@@ -211,20 +208,21 @@ impl Db {
         Ok(())
     }
 
-    /// Open a connection to the DB and apply any pending migrations.
+    /// Open a connection to the DB after verifying that it is at the latest schema version.
     #[instrument(target = COMPONENT, skip_all)]
     pub async fn load(database_filepath: PathBuf) -> Result<Self, DatabaseError> {
         Self::load_with_pool_size(database_filepath, miden_node_db::default_connection_pool_size())
             .await
     }
 
-    /// Open a connection to the DB with a specific pool size and apply any pending migrations.
+    /// Open a connection to the DB with a specific pool size after verifying that it is at the
+    /// latest schema version.
     #[instrument(target = COMPONENT, skip_all)]
     pub async fn load_with_pool_size(
         database_filepath: PathBuf,
         connection_pool_size: NonZeroUsize,
     ) -> Result<Self, DatabaseError> {
-        apply_migrations(&database_filepath)?;
+        verify_latest_schema(&database_filepath)?;
 
         let db = miden_node_db::Db::new_with_pool_size(&database_filepath, connection_pool_size)?;
         info!(
@@ -235,6 +233,13 @@ impl Db {
         );
 
         Ok(Self { db })
+    }
+
+    /// Applies all pending migrations to an existing DB.
+    #[instrument(target = COMPONENT, skip_all)]
+    pub fn migrate(database_filepath: impl AsRef<Path>) -> Result<(), DatabaseError> {
+        migrate_database(database_filepath.as_ref())?;
+        Ok(())
     }
 
     /// Returns a page of nullifiers for tree rebuilding.

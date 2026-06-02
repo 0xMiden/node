@@ -9,13 +9,14 @@ use std::mem::ManuallyDrop;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
+use miden_crypto::Word;
 use miden_node_utils::ErrorReport;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::account_tree::AccountMutationSet;
 use miden_protocol::block::nullifier_tree::{NullifierMutationSet, NullifierTree};
 use miden_protocol::block::{BlockBody, BlockHeader, BlockNumber, Blockchain, SignedBlock};
 use miden_protocol::crypto::merkle::smt::LargeSmt;
-use miden_protocol::note::{NoteAttachments, NoteDetails, Nullifier};
+use miden_protocol::note::{NoteDetails, Nullifier};
 use miden_protocol::transaction::OutputNote;
 use miden_protocol::utils::serde::Serializable;
 use tokio::sync::{RwLock, mpsc, oneshot, watch};
@@ -57,10 +58,15 @@ impl WriteHandle {
     pub async fn apply_block(&self, signed_block: SignedBlock) -> Result<(), ApplyBlockError> {
         let (result_tx, result_rx) = oneshot::channel();
         self.tx
-            .send(WriteRequest { signed_block, result_tx })
+            .send(WriteRequest {
+                signed_block,
+                result_tx,
+            })
             .await
             .map_err(|e| ApplyBlockError::WriterTaskSendFailed(e.to_string()))?;
-        result_rx.await.map_err(ApplyBlockError::WriterTaskRecvFailed)?
+        result_rx
+            .await
+            .map_err(ApplyBlockError::WriterTaskRecvFailed)?
     }
 }
 
@@ -154,7 +160,7 @@ impl BlockWriter {
         let (snapshot, notes) = tokio::task::block_in_place(|| {
             let notes = Self::build_note_records(header, body)?;
 
-            let (nullifier_tree_update, account_tree_update) =
+            let (_, nullifier_tree_update, _, account_tree_update) =
                 self.compute_tree_mutations(header, body)?;
 
             self.nullifier_tree
@@ -183,7 +189,9 @@ impl BlockWriter {
         })?;
 
         // Save the block to the block store.
-        self.block_store.save_block(block_num, &signed_block_bytes).await?;
+        self.block_store
+            .save_block(block_num, &signed_block_bytes)
+            .await?;
 
         // Commit to DB. Readers continue to see the old in-memory state (via their Arc) while
         // the DB commits. We ensure consistency by scoping all RPC queries that hit DB data by
@@ -206,7 +214,8 @@ impl BlockWriter {
         self.in_memory.store(snapshot);
 
         // Notify replica subscribers.
-        self.block_cache.push(block_num, BlockNotification::new(block_num, cache_bytes));
+        self.block_cache
+            .push(block_num, BlockNotification::new(block_num, cache_bytes));
         let _ = self.committed_tip_tx.send(block_num);
 
         info!(%block_commitment, block_num = block_num.as_u32(), COMPONENT, "apply_block successful");
@@ -221,6 +230,7 @@ impl BlockWriter {
         header: &BlockHeader,
         body: &BlockBody,
     ) -> Result<(), ApplyBlockError> {
+        // Validate that header and body match.
         let tx_commitment = body.transactions().commitment();
         if header.tx_commitment() != tx_commitment {
             return Err(InvalidBlockError::InvalidBlockTxCommitment {
@@ -232,6 +242,7 @@ impl BlockWriter {
 
         let block_num = header.block_num();
 
+        // Validate that the applied block is the next block in sequence.
         let prev_block = self
             .db
             .select_block_header_by_block_num(None)
@@ -252,15 +263,16 @@ impl BlockWriter {
         Ok(())
     }
 
-    /// Computes nullifier and account tree mutations from the owned mutable trees.
+    /// Computes nullifier and account tree mutations, validating roots against the block header.
     #[instrument(target = COMPONENT, skip_all, err)]
     fn compute_tree_mutations(
         &self,
         header: &BlockHeader,
         body: &BlockBody,
-    ) -> Result<(NullifierMutationSet, AccountMutationSet), ApplyBlockError> {
+    ) -> Result<(Word, NullifierMutationSet, Word, AccountMutationSet), ApplyBlockError> {
         let block_num = header.block_num();
 
+        // nullifiers can be produced only once
         let duplicate_nullifiers: Vec<_> = body
             .created_nullifiers()
             .iter()
@@ -271,15 +283,19 @@ impl BlockWriter {
             return Err(InvalidBlockError::DuplicatedNullifiers(duplicate_nullifiers).into());
         }
 
+        // new_block.chain_root must be equal to the chain MMR root prior to the update
         let peaks = self.blockchain.peaks();
         if peaks.hash_peaks() != header.chain_commitment() {
             return Err(InvalidBlockError::NewBlockInvalidChainCommitment.into());
         }
 
+        // compute update for nullifier tree
         let nullifier_tree_update = self
             .nullifier_tree
             .compute_mutations(
-                body.created_nullifiers().iter().map(|nullifier| (*nullifier, block_num)),
+                body.created_nullifiers()
+                    .iter()
+                    .map(|nullifier| (*nullifier, block_num)),
             )
             .map_err(InvalidBlockError::NewBlockNullifierAlreadySpent)?;
 
@@ -287,6 +303,7 @@ impl BlockWriter {
             return Err(InvalidBlockError::NewBlockInvalidNullifierRoot.into());
         }
 
+        // compute update for account tree
         let account_tree_update = self
             .account_tree
             .compute_mutations(
@@ -297,17 +314,22 @@ impl BlockWriter {
             .map_err(|e| match e {
                 HistoricalError::AccountTreeError(err) => {
                     InvalidBlockError::NewBlockDuplicateAccountIdPrefix(err)
-                },
+                }
                 HistoricalError::MerkleError(_) => {
                     panic!("Unexpected MerkleError during account tree mutation computation")
-                },
+                }
             })?;
 
         if account_tree_update.as_mutation_set().root() != header.account_root() {
             return Err(InvalidBlockError::NewBlockInvalidAccountRoot.into());
         }
 
-        Ok((nullifier_tree_update, account_tree_update))
+        Ok((
+            self.nullifier_tree.root(),
+            nullifier_tree_update,
+            self.account_tree.root_latest(),
+            account_tree_update,
+        ))
     }
 
     /// Builds note records with inclusion proofs from the block body.
@@ -332,7 +354,7 @@ impl BlockWriter {
                         public.as_note().attachments().clone(),
                         Some(public.as_note().nullifier()),
                     ),
-                    OutputNote::Private(_) => (None, NoteAttachments::empty(), None),
+                    OutputNote::Private(private) => (None, private.attachments().clone(), None),
                 };
 
                 let inclusion_path = note_tree.open(note_index);

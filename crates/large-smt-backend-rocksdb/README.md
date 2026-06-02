@@ -1,45 +1,20 @@
 # miden-large-smt-backend-rocksdb
 
-Large-scale Sparse Merkle Tree backed by pluggable storage - RocksDB backend implementation.
+`miden-large-smt-backend-rocksdb` provides RocksDB-backed storage for large Sparse Merkle Trees used by the Miden node
+store. It is part of the [Miden node](https://github.com/0xMiden/node#readme) repository.
 
-This crate provides `LargeSmt`, a hybrid SMT implementation that stores the top of the tree
-(depths 0–23) in memory and persists the lower depths (24–64) in storage as fixed-size subtrees.
-This hybrid layout scales beyond RAM while keeping common operations fast.
+## Role
 
-## Migration Status
+The crate exposes `LargeSmt`-related types together with `RocksDbStorage` and configuration types for persisting lower
+tree levels in RocksDB while keeping the upper tree levels in memory.
 
-This crate is the future home for `LargeSmt` and its storage backends. Currently it re-exports
-types from `miden-protocol` (which re-exports from `miden-crypto`).
+This backend is used by `store` when disk-backed authenticated state is enabled.
 
-The migration will be completed in phases:
-1. ✅ Create this crate as a re-export layer (current state)
-2. Copy the full implementation from miden-crypto to this crate
-3. Update miden-crypto to remove the rocksdb feature
-4. Update dependents to use this crate directly
+## Crate-Specific Notes
 
-## Features
+Building this crate requires the native toolchain support needed by RocksDB bindings. The exact system package names
+vary by platform, so use the build error output and the node installation docs for platform-specific setup.
 
-- **concurrent**: Enables parallel processing with rayon (enabled by default)
-- **rocksdb**: (Future) Enables RocksDB storage backend
+## License
 
-## Usage
-
-```rust
-use miden_large_smt::{LargeSmt, MemoryStorage};
-
-// Create an empty tree with in-memory storage
-let storage = MemoryStorage::new();
-let smt = LargeSmt::new(storage).unwrap();
-```
-
-## Re-exported Types
-
-This crate re-exports the following types from `miden-protocol`:
-
-- `LargeSmt` - The large-scale SMT implementation
-- `LargeSmtError` - Error type for LargeSmt operations
-- `MemoryStorage` - In-memory storage backend
-- `SmtStorage` - Storage backend trait
-- `Subtree` - Serializable subtree representation
-- `StorageUpdates` / `StorageUpdateParts` - Batch update types
-- Various SMT types: `Smt`, `SmtLeaf`, `SmtProof`, `LeafIndex`, etc.
+This project is [MIT licensed](../../LICENSE).

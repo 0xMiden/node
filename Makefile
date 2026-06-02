@@ -9,6 +9,15 @@ help:
 WARNINGS=RUSTDOCFLAGS="-D warnings"
 STRESS_TEST_DATA_DIR ?= stress-test-store-$(shell date +%Y%m%d-%H%M%S)
 COMPOSE_FILES = -f docker-compose.yml -f compose/telemetry.yml -f compose/monitor.yml
+CONFIG_DIR = .config
+README_FILES = $(shell git ls-files '*README.md')
+PRETTIER_CONFIG = $(CONFIG_DIR)/prettier.json
+PRETTIER_LOG_LEVEL = warn
+PRETTIER_VERSION ?= 3.8.3
+MARKDOWNLINT_CONFIG = $(CONFIG_DIR)/markdownlint-cli2.yaml
+MARKDOWNLINT_CLI2_VERSION ?= 0.22.1
+RUSTFMT_CONFIG = $(CONFIG_DIR)/rustfmt.toml
+TAPLO_CONFIG = $(CONFIG_DIR)/taplo.toml
 
 # -- linting --------------------------------------------------------------------------------------
 
@@ -26,15 +35,30 @@ fix: ## Runs Fix with configs
 
 
 .PHONY: format
-format: ## Runs rustfmt and comment reflow
-	cargo xtask fmt-comments --write
-	cargo +nightly fmt --all
+format: markdown-format ## Runs rustfmt, README formatting, and comment reflow
+	cargo xtask fmt-comments --write --rustfmt-config $(RUSTFMT_CONFIG)
+	cargo +nightly fmt --all -- --config-path $(RUSTFMT_CONFIG)
 
 
 .PHONY: format-check
-format-check: ## Checks rustfmt and comment reflow
-	cargo xtask fmt-comments --check
-	cargo +nightly fmt --all --check
+format-check: markdown-format-check ## Checks rustfmt, README formatting, and comment reflow
+	cargo xtask fmt-comments --check --rustfmt-config $(RUSTFMT_CONFIG)
+	cargo +nightly fmt --all --check -- --config-path $(RUSTFMT_CONFIG)
+
+
+.PHONY: markdown-format
+markdown-format: ## Formats README Markdown files
+	@prettier --config $(PRETTIER_CONFIG) --log-level $(PRETTIER_LOG_LEVEL) --write $(README_FILES)
+
+
+.PHONY: markdown-format-check
+markdown-format-check: ## Checks README Markdown formatting
+	@prettier --config $(PRETTIER_CONFIG) --log-level $(PRETTIER_LOG_LEVEL) --check $(README_FILES)
+
+
+.PHONY: markdown-lint
+markdown-lint: ## Lints README Markdown files
+	markdownlint-cli2 --config $(MARKDOWNLINT_CONFIG) $(README_FILES)
 
 
 .PHONY: shear
@@ -44,12 +68,12 @@ shear: ## Runs cargo-shear to find unused or misplaced dependencies
 
 .PHONY: toml
 toml: ## Runs Format for all TOML files
-	taplo fmt
+	taplo fmt --config $(TAPLO_CONFIG)
 
 
 .PHONY: toml-check
 toml-check: ## Runs Format for all TOML files but only in check mode
-	taplo fmt --check --verbose
+	taplo fmt --config $(TAPLO_CONFIG) --check --verbose
 
 .PHONY: typos-check
 typos-check: ## Runs spellchecker
@@ -61,7 +85,7 @@ workspace-check: ## Runs a check that all packages have `lints.workspace = true`
 
 
 .PHONY: lint
-lint: typos-check format fix clippy toml shear ## Runs all linting tasks at once (Clippy, fixing, formatting, cargo-shear)
+lint: typos-check format markdown-lint fix clippy toml shear ## Runs all linting tasks at once (Clippy, formatting, Markdown, cargo-shear)
 
 # --- docs ----------------------------------------------------------------------------------------
 
@@ -150,7 +174,7 @@ compose-logs: ## Follows logs for all components via docker compose
 	docker compose $(COMPOSE_FILES) logs -f
 
 .PHONY: docker-build
-docker-build: docker-build-node docker-build-validator docker-build-ntx-builder docker-build-monitor ## Builds all Docker images
+docker-build: docker-build-node docker-build-validator docker-build-ntx-builder docker-build-monitor docker-build-remote-prover ## Builds all Docker images
 
 .PHONY: docker-build-node
 docker-build-node: ## Builds the Miden node using Docker
@@ -200,13 +224,17 @@ docker-build-monitor: ## Builds the network monitor using Docker
                  --build-arg PORT=3000 \
                  -t miden-network-monitor .
 
-.PHONY: docker-run-node
-docker-run-node: ## Runs the Miden node as a Docker container
-	docker volume create miden-db
-	docker run --name miden-node \
-			   -p 57291:57291 \
-               -v miden-db:/db \
-               -d miden-node
+.PHONY: docker-build-remote-prover
+docker-build-remote-prover: ## Builds the remote prover using Docker
+	@CREATED=$$(date) && \
+	VERSION=$$(cat bin/remote-prover/Cargo.toml | grep -m 1 '^version' | cut -d '"' -f 2) && \
+	COMMIT=$$(git rev-parse HEAD) && \
+	docker build --build-arg CREATED="$$CREATED" \
+                 --build-arg VERSION="$$VERSION" \
+                 --build-arg COMMIT="$$COMMIT" \
+                 --build-arg BIN=miden-remote-prover \
+                 --build-arg PORT=50051 \
+                 -t miden-remote-prover .
 
 ## --- setup --------------------------------------------------------------------------------------
 
@@ -219,6 +247,8 @@ check-tools: ## Checks if development tools are installed
 	@command -v taplo         >/dev/null 2>&1 && echo "[OK] taplo is installed"         || echo "[MISSING] taplo        (make install-tools)"
 	@command -v cargo-shear >/dev/null 2>&1 && echo "[OK] cargo-shear is installed" || echo "[MISSING] cargo-shear is not installed (run: make install-tools)"
 	@command -v npm >/dev/null 2>&1 && echo "[OK] npm is installed" || echo "[MISSING] npm is not installed (run: make install-tools)"
+	@command -v prettier >/dev/null 2>&1 && echo "[OK] prettier is installed" || echo "[MISSING] prettier is not installed (run: make install-tools)"
+	@command -v markdownlint-cli2 >/dev/null 2>&1 && echo "[OK] markdownlint-cli2 is installed" || echo "[MISSING] markdownlint-cli2 is not installed (run: make install-tools)"
 
 .PHONY: install-tools
 install-tools: ## Installs tools required by the Makefile
@@ -236,4 +266,5 @@ install-tools: ## Installs tools required by the Makefile
 		echo "On Windows: Download from https://nodejs.org/"; \
 		exit 1; \
 	fi
+	npm install --global prettier@$(PRETTIER_VERSION) markdownlint-cli2@$(MARKDOWNLINT_CLI2_VERSION)
 	@echo "Development tools installation complete!"

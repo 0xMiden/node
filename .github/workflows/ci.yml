@@ -12,12 +12,10 @@ on:
       - main
       - next
     paths-ignore:
-      - "**.md"
       - "**.txt"
       - "docs/**"
   pull_request:
     paths-ignore:
-      - "**.md"
       - "**.txt"
       - "docs/**"
 
@@ -275,7 +273,7 @@ jobs:
       - run: make typos-check
 
   fmt:
-    name: lint - rustfmt
+    name: lint - formatting
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -290,8 +288,12 @@ jobs:
           shared-key: ${{ github.job }}
           prefix-key: ${{ env.CACHE_PREFIX }}
           save-if: ${{ env.SAVE_CACHE }}
+      - name: Install Markdown tools
+        run: npm install --global prettier@3.8.3 markdownlint-cli2@0.22.1
       - name: Fmt
         run: make format-check
+      - name: Markdown lint
+        run: make markdown-lint
 
   toml:
     name: lint - toml fmt
