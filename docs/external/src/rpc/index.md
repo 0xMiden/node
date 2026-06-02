@@ -8,14 +8,24 @@ sidebar_position: 0
 Miden nodes expose a public gRPC API for querying chain state, synchronizing local state, submitting proven
 transactions, and subscribing to committed blocks and block proofs.
 
-The public service definition lives in the node repository at `proto/proto/rpc.proto`. The same service is exposed by
-sequencers and full nodes:
+The official networks are served at `https://rpc.testnet.miden.io` and `https://rpc.devnet.miden.io`.
 
-- A sequencer RPC serves canonical network state and submits accepted transactions into block production.
-- A full-node RPC serves locally replicated state and forwards transaction submissions to its configured upstream RPC
-  source.
+## Schema
 
-Full nodes do not produce blocks.
+The safest way to inspect the schema for a deployed network is through gRPC reflection:
+
+```sh
+grpcurl rpc.testnet.miden.io:443 describe rpc.Api
+```
+
+For Rust developers, we also ship a Rust crate
+[miden_node_proto_build](https://docs.rs/miden-node-proto-build/latest/miden_node_proto_build/) which exposes the gRPC
+schemas as file descriptor sets, which can be used to generate the gRPC bindings using [tonic](https://docs.rs/tonic).
+
+The source schema files are also available in the [Miden node repository](https://github.com/0xMiden/node), in the
+`proto/` directory. If you use the repository source instead of reflection, check out the release tag that matches the
+network or client version you are targeting. Branches such as `next` describe repository state, not necessarily the
+schema deployed on an official network.
 
 ## Protocol Support
 
@@ -25,12 +35,6 @@ The RPC server supports:
 - gRPC-Web.
 - gRPC reflection for discovery tools such as `grpcurl`.
 
-For local development, once the compose stack is running:
-
-```sh
-grpcurl -plaintext localhost:57291 rpc.Api/Status
-```
-
 ## Endpoint Groups
 
 | Group                  | Methods                                                                                                         |
@@ -39,7 +43,7 @@ grpcurl -plaintext localhost:57291 rpc.Api/Status
 | State queries          | `GetAccount`, `GetBlockByNumber`, `GetBlockHeaderByNumber`, `GetNotesById`, `GetNoteScriptByRoot`               |
 | Transaction submission | `SubmitProvenTx`, `SubmitProvenTxBatch`                                                                         |
 | State synchronization  | `SyncTransactions`, `SyncNotes`, `SyncNullifiers`, `SyncAccountVault`, `SyncAccountStorageMaps`, `SyncChainMmr` |
-| Streaming              | `BlockSubscription`, `ProofSubscription`                                                                        |
+| Block streaming        | `BlockSubscription`, `ProofSubscription`                                                                        |
 | Network note debugging | `GetNetworkNoteStatus`                                                                                          |
 
 See [Public RPC](/rpc/public-api) for endpoint summaries, [Subscriptions](/rpc/subscriptions) for stream semantics, and
