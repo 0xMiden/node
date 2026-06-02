@@ -85,7 +85,7 @@ async fn build_and_write_genesis(
     fs_err::write(&genesis_block_path, block_bytes).context("failed to write genesis block")?;
 
     let (genesis_header, ..) = genesis_block.into_inner().into_parts();
-    let db = miden_validator::db::load_with_pool_size(
+    let db = miden_validator::db::setup_with_pool_size(
         data_directory.join("validator.sqlite3"),
         sqlite_connection_pool_size,
     )
