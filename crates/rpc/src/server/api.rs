@@ -1056,14 +1056,14 @@ impl api_server::Api for RpcService {
         };
 
         let upstream_tip = if stale {
-            // Refresh: query upstream then store the result.
+            // Refresh: query upstream for block producer chain tip.
             let tip = source_rpc
                 .status(Request::new(()))
                 .await
                 .map_err(|_| Status::unavailable("unable to reach upstream RPC"))?
                 .into_inner()
-                .store
-                .map_or(0, |s| s.chain_tip);
+                .block_producer
+                .map_or(0, |b| b.chain_tip);
             let mut cached_value =
                 self.upstream_tip_cache.write().expect("upstream tip cache lock poisoned");
             *cached_value = Some((tip, Instant::now()));
