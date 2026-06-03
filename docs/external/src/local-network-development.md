@@ -86,6 +86,25 @@ The network monitor at `http://localhost:3001` provides a compact health view fo
 The default stack spins up an internal prover instance which means proving will happen locally. This can be overridden
 to use an external prover by setting `MIDEN_REMOTE_PROVER_URL` when starting the stack.
 
+## Genesis Config Override
+
+By default, the local network bootstraps from the validator's built-in genesis configuration. To bootstrap from a custom
+genesis configuration file, set `MIDEN_GENESIS_CONFIG_FILE` to the host path of the TOML file:
+
+```bash
+MIDEN_GENESIS_CONFIG_FILE=/absolute/path/to/genesis.toml make local-network-up
+```
+
+The override bind mounts the host file into the bootstrap validator container as `/genesis.toml` and passes that
+in-container path to `miden-validator bootstrap --genesis-config-file`.
+
+This only affects validator bootstrap. If the local network has already been bootstrapped, delete the existing local
+chain data before starting with a different genesis configuration:
+
+```bash
+make local-network-delete
+```
+
 ## Check the RPC API
 
 The RPC server exposes gRPC reflection. With `grpcurl` installed, a basic status check looks like:

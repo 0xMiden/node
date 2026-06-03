@@ -1,0 +1,4 @@
+# Placeholder bind-mount target used when MIDEN_GENESIS_CONFIG_FILE is not set.
+#
+# This file is not passed to `miden-validator bootstrap`; omitting the
+# --genesis-config-file flag preserves the validator's built-in default genesis config.
