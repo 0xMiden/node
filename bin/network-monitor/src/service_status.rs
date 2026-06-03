@@ -326,9 +326,8 @@ impl From<BlockProducerStatus> for BlockProducerStatusDetails {
 
 impl From<proto::remote_prover::ProxyWorkerStatus> for WorkerStatusDetails {
     fn from(value: proto::remote_prover::ProxyWorkerStatus) -> Self {
-        let status = proto::remote_prover::WorkerHealthStatus::try_from(value.status)
-            .unwrap()
-            .into();
+        let status =
+            proto::remote_prover::WorkerHealthStatus::try_from(value.status).unwrap().into();
 
         Self {
             name: value.name,
@@ -344,11 +343,8 @@ impl RemoteProverStatusDetails {
             .unwrap()
             .into();
 
-        let workers: Vec<WorkerStatusDetails> = status
-            .workers
-            .into_iter()
-            .map(WorkerStatusDetails::from)
-            .collect();
+        let workers: Vec<WorkerStatusDetails> =
+            status.workers.into_iter().map(WorkerStatusDetails::from).collect();
 
         Self {
             url,
@@ -365,10 +361,7 @@ impl RpcStatusDetails {
         Self {
             url,
             version: status.version,
-            genesis_commitment: status
-                .genesis_commitment
-                .as_ref()
-                .map(|gc| format!("{gc:?}")),
+            genesis_commitment: status.genesis_commitment.as_ref().map(|gc| format!("{gc:?}")),
             chain_tip: status.chain_tip,
             block_producer_status: status.block_producer.map(BlockProducerStatusDetails::from),
         }

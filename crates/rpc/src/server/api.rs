@@ -8,7 +8,11 @@ use anyhow::Context as AnyhowContext;
 use miden_node_block_producer::{BlockProducerStatus, MempoolStats as BlockProducerMempoolStats};
 use miden_node_proto::clients::NtxBuilderClient;
 use miden_node_proto::decode::{
-    convert_digests_to_words, read_account_id, read_account_ids, read_block_range, read_root,
+    convert_digests_to_words,
+    read_account_id,
+    read_account_ids,
+    read_block_range,
+    read_root,
 };
 use miden_node_proto::domain::account::{AccountRequest, AccountStorageRequest, SlotData};
 use miden_node_proto::domain::block::InvalidBlockRange;
@@ -17,13 +21,22 @@ use miden_node_proto::generated::rpc::api_server::{self, Api};
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::state::{Finality, State, StateSubscriptionError};
 use miden_node_store::{
-    DatabaseError, GetAccountError, GetBlockHeaderError, NoteRecord, NoteSyncError, NoteSyncRecord,
+    DatabaseError,
+    GetAccountError,
+    GetBlockHeaderError,
+    NoteRecord,
+    NoteSyncError,
+    NoteSyncRecord,
     TransactionRecord,
 };
 use miden_node_utils::ErrorReport;
 use miden_node_utils::limiter::{
-    QueryParamAccountIdLimit, QueryParamLimiter, QueryParamNoteIdLimit, QueryParamNoteTagLimit,
-    QueryParamNullifierPrefixLimit, QueryParamStorageMapKeyTotalLimit,
+    QueryParamAccountIdLimit,
+    QueryParamLimiter,
+    QueryParamNoteIdLimit,
+    QueryParamNoteTagLimit,
+    QueryParamNullifierPrefixLimit,
+    QueryParamStorageMapKeyTotalLimit,
 };
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::retry::{self, Retryable};
@@ -35,7 +48,10 @@ use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::note::NoteId;
 use miden_protocol::transaction::{
-    OutputNote, ProvenTransaction, PublicOutputNote, TxAccountUpdate,
+    OutputNote,
+    ProvenTransaction,
+    PublicOutputNote,
+    TxAccountUpdate,
 };
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{MIN_PROOF_SECURITY_LEVEL, Word};
@@ -80,10 +96,7 @@ struct GuardedStream<S> {
 
 impl<S> GuardedStream<S> {
     fn new(inner: S, permit: OwnedSemaphorePermit) -> Self {
-        Self {
-            inner,
-            _permit: permit,
-        }
+        Self { inner, _permit: permit }
     }
 }
 
@@ -167,10 +180,7 @@ impl RpcService {
             )
             .await
         })
-        .retry(retry::exponential(
-            Duration::from_millis(500),
-            Duration::from_secs(30),
-        ))
+        .retry(retry::exponential(Duration::from_millis(500), Duration::from_secs(30)))
         .when(|err| err.code() == tonic::Code::Unavailable)
         .notify(|err, backoff| {
             tracing::warn!(
@@ -181,10 +191,7 @@ impl RpcService {
         })
         .await?;
 
-        let header = header
-            .into_inner()
-            .block_header
-            .context("response is missing the header")?;
+        let header = header.into_inner().block_header.context("response is missing the header")?;
         BlockHeader::try_from(header).context("failed to parse response")
     }
 
@@ -239,11 +246,8 @@ impl RpcService {
             return Ok(());
         }
 
-        let network_accounts = self
-            .store
-            .filter_network_accounts(&account_ids)
-            .await
-            .map_err(|err| {
+        let network_accounts =
+            self.store.filter_network_accounts(&account_ids).await.map_err(|err| {
                 Status::internal(format!("network-account classification failed: {err}"))
             })?;
 
@@ -261,9 +265,7 @@ impl RpcService {
             return false;
         };
 
-        metadata
-            .get(NETWORK_TX_AUTH_HEADER_NAME)
-            .is_some_and(|value| value == auth.0)
+        metadata.get(NETWORK_TX_AUTH_HEADER_NAME).is_some_and(|value| value == auth.0)
     }
 }
 
@@ -310,12 +312,10 @@ impl api_server::Api for RpcService {
             .map_err(|err| database_error_to_status(&err))?;
         let nullifiers = nullifiers
             .into_iter()
-            .map(
-                |nullifier_info| proto::rpc::sync_nullifiers_response::NullifierUpdate {
-                    nullifier: Some(nullifier_info.nullifier.into()),
-                    block_num: nullifier_info.block_num.as_u32(),
-                },
-            )
+            .map(|nullifier_info| proto::rpc::sync_nullifiers_response::NullifierUpdate {
+                nullifier: Some(nullifier_info.nullifier.into()),
+                block_num: nullifier_info.block_num.as_u32(),
+            })
             .collect();
         let chain_tip = self.store.chain_tip(Finality::Committed).await;
 
@@ -378,10 +378,7 @@ impl api_server::Api for RpcService {
             None
         };
 
-        Ok(Response::new(proto::blockchain::MaybeBlock {
-            block,
-            proof,
-        }))
+        Ok(Response::new(proto::blockchain::MaybeBlock { block, proof }))
     }
 
     async fn sync_chain_mmr(
@@ -391,10 +388,7 @@ impl api_server::Api for RpcService {
         let request_ref = request.get_ref();
 
         let span = Span::current();
-        span.set_attribute(
-            "current_client_block_height",
-            request_ref.current_client_block_height,
-        );
+        span.set_attribute("current_client_block_height", request_ref.current_client_block_height);
         span.set_attribute("finality_level", request_ref.finality_level().as_str_name());
 
         debug!(target: COMPONENT, request = ?request_ref);
@@ -404,7 +398,7 @@ impl api_server::Api for RpcService {
         let sync_target = match request.finality_level() {
             proto::rpc::FinalityLevel::Committed | proto::rpc::FinalityLevel::Unspecified => {
                 self.store.chain_tip(Finality::Committed).await
-            }
+            },
             proto::rpc::FinalityLevel::Proven => self.store.chain_tip(Finality::Proven).await,
         };
 
@@ -521,17 +515,11 @@ impl api_server::Api for RpcService {
             .map_err(note_sync_error_to_status)?;
         let blocks = results
             .into_iter()
-            .map(
-                |(state, mmr_proof)| proto::rpc::sync_notes_response::NoteSyncBlock {
-                    block_header: Some(state.block_header.into()),
-                    mmr_path: Some(mmr_proof.merkle_path().clone().into()),
-                    notes: state
-                        .notes
-                        .into_iter()
-                        .map(note_sync_record_to_proto)
-                        .collect(),
-                },
-            )
+            .map(|(state, mmr_proof)| proto::rpc::sync_notes_response::NoteSyncBlock {
+                block_header: Some(state.block_header.into()),
+                mmr_path: Some(mmr_proof.merkle_path().clone().into()),
+                notes: state.notes.into_iter().map(note_sync_record_to_proto).collect(),
+            })
             .collect();
 
         Ok(Response::new(proto::rpc::SyncNotesResponse {
@@ -579,9 +567,7 @@ impl api_server::Api for RpcService {
             .await
             .map_err(|err| database_error_to_status(&err))?;
 
-        Ok(Response::new(proto::rpc::MaybeNoteScript {
-            script: script.map(Into::into),
-        }))
+        Ok(Response::new(proto::rpc::MaybeNoteScript { script: script.map(Into::into) }))
     }
 
     // -- Account endpoints -------------------------------------------------------------------
@@ -606,9 +592,7 @@ impl api_server::Api for RpcService {
         debug!(target: COMPONENT, request = ?request.get_ref());
 
         if !account_id.is_public() {
-            return Err(Status::invalid_argument(format!(
-                "account {account_id} is not public"
-            )));
+            return Err(Status::invalid_argument(format!("account {account_id} is not public")));
         }
         let block_range = range
             .into_inclusive_range::<RpcInvalidBlockRange>()
@@ -658,9 +642,7 @@ impl api_server::Api for RpcService {
         debug!(target: COMPONENT, request = ?request.get_ref());
 
         if !account_id.is_public() {
-            return Err(Status::invalid_argument(format!(
-                "account {account_id} is not public"
-            )));
+            return Err(Status::invalid_argument(format!("account {account_id} is not public")));
         }
         let block_range = range
             .into_inclusive_range::<RpcInvalidBlockRange>()
@@ -724,11 +706,8 @@ impl api_server::Api for RpcService {
             check::<QueryParamStorageMapKeyTotalLimit>(total_keys)?;
         }
 
-        let account_data = self
-            .store
-            .get_account(request)
-            .await
-            .map_err(get_account_error_to_status)?;
+        let account_data =
+            self.store.get_account(request).await.map_err(get_account_error_to_status)?;
         Ok(Response::new(account_data.into()))
     }
 
@@ -756,10 +735,7 @@ impl api_server::Api for RpcService {
         span.set_attribute("account.id", tx.account_id());
         span.set_attribute("transaction.expires_at", tx.expiration_block_num());
         span.set_attribute("transaction.reference_block.number", tx.ref_block_num());
-        span.set_attribute(
-            "transaction.reference_block.commitment",
-            tx.ref_block_commitment(),
-        );
+        span.set_attribute("transaction.reference_block.commitment", tx.ref_block_commitment());
 
         // Verify the reference block is actually part of the chain.
         self.verify_reference_commitment(tx.ref_block_num(), tx.ref_block_commitment())
@@ -804,15 +780,13 @@ impl api_server::Api for RpcService {
 
         let tx_id = tx.id();
         spawn_blocking_in_current_span(move || {
-            TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL)
-                .verify(&tx)
-                .map_err(|err| {
-                    Status::invalid_argument(format!(
-                        "Invalid proof for transaction {}: {}",
-                        tx_id,
-                        err.as_report()
-                    ))
-                })
+            TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL).verify(&tx).map_err(|err| {
+                Status::invalid_argument(format!(
+                    "Invalid proof for transaction {}: {}",
+                    tx_id,
+                    err.as_report()
+                ))
+            })
         })
         .await
         .map_err(|err| {
@@ -821,26 +795,20 @@ impl api_server::Api for RpcService {
 
         // In full node mode we forward the request to the source.
         let (block_producer, validator) = match &self.mode {
-            RpcMode::Sequencer {
-                block_producer,
-                validator,
-            } => (block_producer.as_ref(), validator.as_ref()),
+            RpcMode::Sequencer { block_producer, validator } => {
+                (block_producer.as_ref(), validator.as_ref())
+            },
             RpcMode::FullNode { source_rpc } => {
                 return source_rpc.as_ref().clone().submit_proven_tx(request).await;
-            }
+            },
         };
 
         // Transaction inputs must be provided in order to allow for transaction re-execution via
         // the Validator.
         if request.transaction_inputs.is_some() {
-            validator
-                .clone()
-                .submit_proven_transaction(request.clone())
-                .await?;
+            validator.clone().submit_proven_transaction(request.clone()).await?;
         } else {
-            return Err(Status::invalid_argument(
-                "Transaction inputs must be provided",
-            ));
+            return Err(Status::invalid_argument("Transaction inputs must be provided"));
         }
 
         block_producer
@@ -866,14 +834,8 @@ impl api_server::Api for RpcService {
 
         let span = Span::current();
         span.set_attribute("batch.id", proven_batch.id());
-        span.set_attribute(
-            "batch.expires_at",
-            proven_batch.batch_expiration_block_num(),
-        );
-        span.set_attribute(
-            "batch.reference_block.number",
-            proven_batch.reference_block_num(),
-        );
+        span.set_attribute("batch.expires_at", proven_batch.batch_expiration_block_num());
+        span.set_attribute("batch.reference_block.number", proven_batch.reference_block_num());
         span.set_attribute(
             "batch.reference_block.commitment",
             proven_batch.reference_block_commitment(),
@@ -920,8 +882,7 @@ impl api_server::Api for RpcService {
                         && tx.account_id().is_public()
                 })
                 .map(|tx| tx.account_id());
-            self.reject_if_any_network_accounts(non_deployment_ids)
-                .await?;
+            self.reject_if_any_network_accounts(non_deployment_ids).await?;
         }
 
         // Verify batch transaction proofs.
@@ -931,13 +892,13 @@ impl api_server::Api for RpcService {
         let expected_proof = spawn_blocking_in_current_span({
             let proposed_batch = proposed_batch.clone();
             move || {
-                LocalBatchProver::new(MIN_PROOF_SECURITY_LEVEL)
-                    .prove(proposed_batch)
-                    .map_err(|err| {
+                LocalBatchProver::new(MIN_PROOF_SECURITY_LEVEL).prove(proposed_batch).map_err(
+                    |err| {
                         Status::invalid_argument(
                             err.as_report_context("proposed block proof failed"),
                         )
-                    })
+                    },
+                )
             }
         })
         .await
@@ -946,34 +907,23 @@ impl api_server::Api for RpcService {
         })??;
 
         if expected_proof != proven_batch {
-            return Err(Status::invalid_argument(
-                "batch proof did not match proposed batch",
-            ));
+            return Err(Status::invalid_argument("batch proof did not match proposed batch"));
         }
 
         // In full node mode we forward the request to the source.
         let (block_producer, validator) = match &self.mode {
-            RpcMode::Sequencer {
-                block_producer,
-                validator,
-            } => (block_producer.as_ref(), validator.as_ref()),
+            RpcMode::Sequencer { block_producer, validator } => {
+                (block_producer.as_ref(), validator.as_ref())
+            },
             RpcMode::FullNode { source_rpc } => {
-                return source_rpc
-                    .as_ref()
-                    .clone()
-                    .submit_proven_tx_batch(request)
-                    .await;
-            }
+                return source_rpc.as_ref().clone().submit_proven_tx_batch(request).await;
+            },
         };
 
         // Submit each transaction to the validator.
         //
         // SAFETY: We checked earlier that the two iterators are the same length.
-        for (tx, inputs) in proposed_batch
-            .transactions()
-            .iter()
-            .zip(&request.transaction_inputs)
-        {
+        for (tx, inputs) in proposed_batch.transactions().iter().zip(&request.transaction_inputs) {
             let request = proto::transaction::ProvenTransaction {
                 transaction: tx.to_bytes(),
                 transaction_inputs: inputs.clone().into(),
@@ -1021,10 +971,8 @@ impl api_server::Api for RpcService {
             .sync_transactions(account_ids, block_range)
             .await
             .map_err(|err| database_error_to_status(&err))?;
-        let transactions = transaction_records_db
-            .into_iter()
-            .map(transaction_record_to_proto)
-            .collect();
+        let transactions =
+            transaction_records_db.into_iter().map(transaction_record_to_proto).collect();
         let chain_tip = self.store.chain_tip(Finality::Committed).await;
 
         Ok(Response::new(proto::rpc::SyncTransactionsResponse {
@@ -1042,15 +990,10 @@ impl api_server::Api for RpcService {
     ) -> Result<Response<proto::rpc::RpcStatus>, Status> {
         debug!(target: COMPONENT, request = ?request);
 
-        let store_status = proto::rpc::StoreStatus {
-            version: miden_node_store::version().to_string(),
-            status: "live".to_string(),
-            chain_tip: self.store.chain_tip(Finality::Committed).await.as_u32(),
-        };
         let block_producer_status = match &self.mode {
-            RpcMode::Sequencer { block_producer, .. } => Some(block_producer_status_to_proto(
-                block_producer.status().await,
-            )),
+            RpcMode::Sequencer { block_producer, .. } => {
+                Some(block_producer_status_to_proto(block_producer.status().await))
+            },
             RpcMode::FullNode { source_rpc } => source_rpc
                 .as_ref()
                 .clone()
@@ -1062,7 +1005,7 @@ impl api_server::Api for RpcService {
 
         Ok(Response::new(proto::rpc::RpcStatus {
             version: env!("CARGO_PKG_VERSION").to_string(),
-            store: Some(store_status),
+            chain_tip: self.store.chain_tip(Finality::Committed).await.as_u32(),
             block_producer: block_producer_status.or(Some(proto::rpc::BlockProducerStatus {
                 status: "unreachable".to_string(),
                 version: "-".to_string(),
@@ -1093,23 +1036,14 @@ impl api_server::Api for RpcService {
         let response = match &self.mode {
             RpcMode::Sequencer { .. } => {
                 let Some(ntx_builder) = &self.ntx_builder else {
-                    return Err(Status::unavailable(
-                        "Network transaction builder is not enabled",
-                    ));
+                    return Err(Status::unavailable("Network transaction builder is not enabled"));
                 };
 
-                ntx_builder
-                    .clone()
-                    .get_network_note_status(request)
-                    .await?
-                    .into_inner()
-            }
-            RpcMode::FullNode { source_rpc } => source_rpc
-                .as_ref()
-                .clone()
-                .get_network_note_status(request)
-                .await?
-                .into_inner(),
+                ntx_builder.clone().get_network_note_status(request).await?.into_inner()
+            },
+            RpcMode::FullNode { source_rpc } => {
+                source_rpc.as_ref().clone().get_network_note_status(request).await?.into_inner()
+            },
         };
 
         Ok(Response::new(response))
@@ -1135,7 +1069,7 @@ fn strip_output_note_decorators<'a>(
             let rebuilt = PublicOutputNote::new(public_note.as_note().clone())
                 .expect("rebuilding an already-valid public output note should not fail");
             OutputNote::Public(rebuilt)
-        }
+        },
         OutputNote::Private(header) => OutputNote::Private(header.clone()),
     })
 }
@@ -1172,20 +1106,8 @@ fn transaction_record_to_proto(record: TransactionRecord) -> proto::rpc::Transac
             account_id: Some(record.header.account_id().into()),
             initial_state_commitment: Some(record.header.initial_state_commitment().into()),
             final_state_commitment: Some(record.header.final_state_commitment().into()),
-            input_notes: record
-                .header
-                .input_notes()
-                .iter()
-                .cloned()
-                .map(Into::into)
-                .collect(),
-            output_notes: record
-                .header
-                .output_notes()
-                .iter()
-                .copied()
-                .map(Into::into)
-                .collect(),
+            input_notes: record.header.input_notes().iter().cloned().map(Into::into).collect(),
+            output_notes: record.header.output_notes().iter().copied().map(Into::into).collect(),
             fee: Some(Asset::from(record.header.fee()).into()),
         }),
         block_num: record.block_num.as_u32(),
@@ -1205,10 +1127,7 @@ fn note_record_to_proto(note: NoteRecord) -> proto::note::CommittedNote {
         details: note.details.map(|details| details.to_bytes()),
         attachments: note.attachments.to_bytes(),
     });
-    proto::note::CommittedNote {
-        inclusion_proof,
-        note,
-    }
+    proto::note::CommittedNote { inclusion_proof, note }
 }
 
 fn note_sync_record_to_proto(note: NoteSyncRecord) -> proto::note::NoteSyncRecord {
@@ -1279,14 +1198,13 @@ fn state_subscription_error_to_status(err: StateSubscriptionError) -> Status {
     match err {
         StateSubscriptionError::BlockNotFound(block_num) => {
             Status::not_found(format!("block {block_num} not found"))
-        }
+        },
         StateSubscriptionError::ProofNotFound(block_num) => {
             Status::not_found(format!("proof for block {block_num} not found"))
-        }
-        StateSubscriptionError::BlockLoad { block_num, source } => Status::internal(format!(
-            "failed to load block {block_num}: {}",
-            source.as_report()
-        )),
+        },
+        StateSubscriptionError::BlockLoad { block_num, source } => {
+            Status::internal(format!("failed to load block {block_num}: {}", source.as_report()))
+        },
         StateSubscriptionError::ProofLoad { block_num, source } => Status::internal(format!(
             "failed to load proof for block {block_num}: {}",
             source.as_report()
@@ -1314,10 +1232,7 @@ fn check<Q: QueryParamLimiter>(n: usize) -> Result<(), Status> {
 /// Helper to build an [`EndpointLimits`](proto::rpc::EndpointLimits) from (name, limit) pairs.
 fn endpoint_limits(params: &[(&str, usize)]) -> proto::rpc::EndpointLimits {
     proto::rpc::EndpointLimits {
-        parameters: params
-            .iter()
-            .map(|(k, v)| ((*k).to_string(), *v as u32))
-            .collect(),
+        parameters: params.iter().map(|(k, v)| ((*k).to_string(), *v as u32)).collect(),
     }
 }
 
@@ -1339,14 +1254,8 @@ static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
                 "SyncTransactions".into(),
                 endpoint_limits(&[(AccountId::PARAM_NAME, AccountId::LIMIT)]),
             ),
-            (
-                "SyncNotes".into(),
-                endpoint_limits(&[(NoteTag::PARAM_NAME, NoteTag::LIMIT)]),
-            ),
-            (
-                "GetNotesById".into(),
-                endpoint_limits(&[(NoteId::PARAM_NAME, NoteId::LIMIT)]),
-            ),
+            ("SyncNotes".into(), endpoint_limits(&[(NoteTag::PARAM_NAME, NoteTag::LIMIT)])),
+            ("GetNotesById".into(), endpoint_limits(&[(NoteId::PARAM_NAME, NoteId::LIMIT)])),
             (
                 "GetAccount".into(),
                 endpoint_limits(&[(StorageMapKeyTotal::PARAM_NAME, StorageMapKeyTotal::LIMIT)]),

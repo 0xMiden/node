@@ -11,7 +11,11 @@ use maud::{DOCTYPE, Markup, html};
 
 use crate::frontend::ServerState;
 use crate::status::{
-    NetworkStatus, ServiceDetails, ServiceStatus, Status, current_unix_timestamp_secs,
+    NetworkStatus,
+    ServiceDetails,
+    ServiceStatus,
+    Status,
+    current_unix_timestamp_secs,
 };
 
 // PUBLIC ENTRYPOINTS
@@ -90,11 +94,8 @@ pub fn status_fragment(snapshot: &NetworkStatus) -> Markup {
 /// Snapshots every service receiver into a single `NetworkStatus` value. Same shape that
 /// [`crate::frontend::get_status`] serialises to JSON.
 pub fn snapshot(state: &ServerState) -> NetworkStatus {
-    let services: Vec<ServiceStatus> = state
-        .services
-        .iter()
-        .map(|rx| rx.borrow().clone())
-        .collect();
+    let services: Vec<ServiceStatus> =
+        state.services.iter().map(|rx| rx.borrow().clone()).collect();
     NetworkStatus {
         services,
         last_updated: current_unix_timestamp_secs(),
@@ -165,11 +166,7 @@ fn render_details(service: &ServiceStatus, rpc_chain_tip: Option<u32>) -> Markup
 
 fn footer(snapshot: &NetworkStatus) -> Markup {
     let total = snapshot.services.len();
-    let healthy = snapshot
-        .services
-        .iter()
-        .filter(|s| s.status == Status::Healthy)
-        .count();
+    let healthy = snapshot.services.iter().filter(|s| s.status == Status::Healthy).count();
     let all_healthy = total > 0 && healthy == total;
     let overall = if all_healthy {
         "All Systems Operational".to_string()
@@ -229,9 +226,17 @@ mod tests {
     use crate::faucet::{FaucetTestDetails, GetMetadataResponse};
     use crate::remote_prover::{ProofType, ProverTestDetails};
     use crate::status::{
-        BlockProducerStatusDetails, CounterTrackingDetails, ExplorerStatusDetails,
-        IncrementDetails, MempoolStatusDetails, NoteTransportStatusDetails, ProverTestOutcome,
-        RemoteProverDetails, RemoteProverStatusDetails, RpcStatusDetails, ValidatorStatusDetails,
+        BlockProducerStatusDetails,
+        CounterTrackingDetails,
+        ExplorerStatusDetails,
+        IncrementDetails,
+        MempoolStatusDetails,
+        NoteTransportStatusDetails,
+        ProverTestOutcome,
+        RemoteProverDetails,
+        RemoteProverStatusDetails,
+        RpcStatusDetails,
+        ValidatorStatusDetails,
         WorkerStatusDetails,
     };
 
@@ -323,10 +328,7 @@ mod tests {
 
     #[test]
     fn renders_rpc_status_card() {
-        let html = render(vec![healthy(
-            "rpc",
-            ServiceDetails::RpcStatus(rpc_details()),
-        )]);
+        let html = render(vec![healthy("rpc", ServiceDetails::RpcStatus(rpc_details()))]);
         assert!(html.contains("rpc"));
         assert!(html.contains("Mempool stats"));
         assert!(html.contains("Chain Tip"));
@@ -357,10 +359,7 @@ mod tests {
                 error: None,
             }),
         };
-        let html = render(vec![healthy(
-            "prover",
-            ServiceDetails::RemoteProverStatus(details),
-        )]);
+        let html = render(vec![healthy("prover", ServiceDetails::RemoteProverStatus(details))]);
         assert!(html.contains("Workers"));
         assert!(html.contains("worker-1"));
         assert!(html.contains("Proof Generation Testing"));
@@ -399,10 +398,7 @@ mod tests {
             last_tx_id: Some("abc123".to_string()),
             last_latency_blocks: Some(2),
         };
-        let html = render(vec![healthy(
-            "ntx-inc",
-            ServiceDetails::NtxIncrement(details),
-        )]);
+        let html = render(vec![healthy("ntx-inc", ServiceDetails::NtxIncrement(details))]);
         assert!(html.contains("Local Transactions"));
         assert!(html.contains("Latency"));
     }
@@ -415,10 +411,7 @@ mod tests {
             last_updated: Some(1_609_459_200),
             pending_increments: Some(1),
         };
-        let html = render(vec![healthy(
-            "ntx-track",
-            ServiceDetails::NtxTracking(details),
-        )]);
+        let html = render(vec![healthy("ntx-track", ServiceDetails::NtxTracking(details))]);
         assert!(html.contains("Network Transactions"));
         assert!(html.contains("Pending Notes"));
     }
@@ -436,10 +429,7 @@ mod tests {
             chain_commitment: "0x".repeat(20),
             proof_commitment: "0x".repeat(20),
         };
-        let html = render(vec![healthy(
-            "explorer",
-            ServiceDetails::ExplorerStatus(details),
-        )]);
+        let html = render(vec![healthy("explorer", ServiceDetails::ExplorerStatus(details))]);
         assert!(html.contains("Explorer:"));
         assert!(html.contains("Block Height"));
     }
@@ -450,10 +440,8 @@ mod tests {
             url: "https://nt.example".to_string(),
             serving_status: "SERVING".to_string(),
         };
-        let html = render(vec![healthy(
-            "note-transport",
-            ServiceDetails::NoteTransportStatus(details),
-        )]);
+        let html =
+            render(vec![healthy("note-transport", ServiceDetails::NoteTransportStatus(details))]);
         assert!(html.contains("Note Transport"));
         assert!(html.contains("SERVING"));
     }
@@ -467,10 +455,7 @@ mod tests {
             validated_transactions_count: 10,
             signed_blocks_count: 5,
         };
-        let html = render(vec![healthy(
-            "validator",
-            ServiceDetails::ValidatorStatus(details),
-        )]);
+        let html = render(vec![healthy("validator", ServiceDetails::ValidatorStatus(details))]);
         assert!(html.contains("Validator:"));
         assert!(html.contains("Signed Blocks"));
     }
@@ -491,10 +476,7 @@ mod tests {
 
     #[test]
     fn fragment_includes_refresh_button_and_last_updated() {
-        let html = render(vec![healthy(
-            "rpc",
-            ServiceDetails::RpcStatus(rpc_details()),
-        )]);
+        let html = render(vec![healthy("rpc", ServiceDetails::RpcStatus(rpc_details()))]);
         assert!(html.contains("Refresh Status"));
         assert!(html.contains("Last updated"));
     }

@@ -57,11 +57,11 @@ impl StaleChainTracker {
                         return Some(elapsed);
                     }
                 }
-            }
+            },
             _ => {
                 self.last_chain_tip = Some(chain_tip);
                 self.last_chain_tip_update = Some(current_time);
-            }
+            },
         }
         None
     }
@@ -131,9 +131,8 @@ impl Service for RpcService {
                 let rpc_details =
                     RpcStatusDetails::from_rpc_status(response.into_inner(), self.url.clone());
 
-                if let Some(stale_duration) = self
-                    .stale_tracker
-                    .update(rpc_details.chain_tip, current_unix_timestamp_secs())
+                if let Some(stale_duration) =
+                    self.stale_tracker.update(rpc_details.chain_tip, current_unix_timestamp_secs())
                 {
                     debug!(
                         target: COMPONENT,
@@ -152,11 +151,11 @@ impl Service for RpcService {
                 }
 
                 ServiceStatus::healthy(self.name(), ServiceDetails::RpcStatus(rpc_details))
-            }
+            },
             Err(e) => {
                 debug!(target: COMPONENT, error = %e, "RPC status check failed");
                 ServiceStatus::error(self.name(), e)
-            }
+            },
         }
     }
 }
