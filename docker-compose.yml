@@ -104,7 +104,7 @@ services:
       - --ntx-builder.url=http://ntx-builder:50301
       - --rpc.network-tx-auth-header-value=secret_value
     ports:
-      - "57291:57291"
+      - "127.0.0.1:57291:57291"
 
   validator:
     image: miden-validator
