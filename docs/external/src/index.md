@@ -15,10 +15,3 @@ The documentation is roughly organized by audience:
   avoid rate limits on official endpoints.
 - Use the [Network Operator Guide](./network-operator/) when operating a Miden network's centralized sequencing
   infrastructure.
-
-## Feedback
-
-Please report any issues, ask questions or leave feedback in the
-[Miden node repository](https://github.com/0xMiden/node/issues/new/choose).
-
-This includes outdated, misleading, incorrect or just plain confusing information :)
