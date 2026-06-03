@@ -11,7 +11,7 @@ transactions, and subscribing to committed blocks and block proofs.
 The API uses standard gRPC status codes. Some methods also include additional Miden-specific error codes in status
 details for stable client-side handling.
 
-The official networks are served at `https://rpc.testnet.miden.io` and `https://rpc.devnet.miden.io`.
+See [Official Network URLs](/official-network-urls) for public RPC endpoints on official networks.
 
 ## Schema
 
