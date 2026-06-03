@@ -5,13 +5,14 @@ sidebar_position: 1
 
 # Overview
 
-This guide covers the infrastructure operated by the network operator. These services advance the network, validate and
-sign blocks, build network transactions, produce proofs, expose RPC capacity, and monitor the deployment.
+This guide covers the infrastructure operated by the network operator and the validator dependency it coordinates with.
+These services advance the network, build network transactions, produce proofs, expose RPC capacity, and monitor the
+deployment.
 
 A Miden network is organized around a single sequencer node. The sequencer owns canonical network progression and
-coordinates with trusted internal services. Public traffic should be routed through load balancers in front of full
-nodes and prover workers; internal services such as the validator and network transaction builder should not be exposed
-directly.
+coordinates with the validator and trusted internal services. Public traffic should be routed through load balancers in
+front of full nodes and prover workers; non-public services such as the validator and network transaction builder should
+not be exposed directly.
 
 ## Example Architecture
 

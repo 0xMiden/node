@@ -13,6 +13,6 @@ The documentation is roughly organized by audience:
 - [Local Network Development](./local-network-development) covers spinning up a local network to develop against.
 - Check out the [Full Node Guide](./full-node/) to install a node, sync to an official network, serve RPC locally, and
   avoid rate limits on official endpoints.
-- [Official Network URLs](./official-network-urls) lists the public RPC and genesis endpoints for official networks.
+- [Official Network URLs](./official-network-urls) lists the public service endpoints for official networks.
 - Use the [Network Operator Guide](./network-operator/) when operating a Miden network's centralized sequencing
   infrastructure.

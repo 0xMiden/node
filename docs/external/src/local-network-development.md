@@ -84,7 +84,12 @@ The network monitor at `http://localhost:3001` provides a compact health view fo
 ## Prover Override
 
 The default stack spins up an internal prover instance which means proving will happen locally. This can be overridden
-to use an external prover by setting `MIDEN_REMOTE_PROVER_URL` when starting the stack.
+to use an external prover by setting `MIDEN_REMOTE_PROVER_URL` when starting the stack. The URL must be reachable from
+inside the Compose network.
+
+```bash
+MIDEN_REMOTE_PROVER_URL=http://<prover-host>:50051 make local-network-up
+```
 
 ## Check the RPC API
 
