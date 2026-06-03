@@ -18,6 +18,8 @@ PRETTIER_LOG_LEVEL = warn
 PRETTIER_VERSION ?= 3.8.3
 MARKDOWNLINT_CONFIG = $(CONFIG_DIR)/markdownlint-cli2.yaml
 MARKDOWNLINT_CLI2_VERSION ?= 0.22.1
+CSPELL_CONFIG = $(CONFIG_DIR)/cspell.yaml
+CSPELL_VERSION ?= 10.0.1
 RUSTFMT_CONFIG = $(CONFIG_DIR)/rustfmt.toml
 TAPLO_CONFIG = $(CONFIG_DIR)/taplo.toml
 
@@ -63,6 +65,11 @@ markdown-lint: ## Lints Markdown files
 	markdownlint-cli2 --config $(MARKDOWNLINT_CONFIG) $(MARKDOWN_FILES)
 
 
+.PHONY: markdown-spellcheck
+markdown-spellcheck: ## Spellchecks Markdown files
+	cspell --config $(CSPELL_CONFIG) --no-progress --show-suggestions $(MARKDOWN_FILES)
+
+
 .PHONY: shear
 shear: ## Runs cargo-shear to find unused or misplaced dependencies
 	cargo shear --check-test-targets --deny-warnings
@@ -87,7 +94,7 @@ workspace-check: ## Runs a check that all packages have `lints.workspace = true`
 
 
 .PHONY: lint
-lint: typos-check format markdown-lint fix clippy toml shear ## Runs all linting tasks at once (Clippy, formatting, Markdown, cargo-shear)
+lint: typos-check markdown-spellcheck format markdown-lint fix clippy toml shear ## Runs all linting tasks at once (Clippy, formatting, spelling, Markdown, cargo-shear)
 
 # --- docs ----------------------------------------------------------------------------------------
 
@@ -254,6 +261,7 @@ check-tools: ## Checks if development tools are installed
 	@command -v npm >/dev/null 2>&1 && echo "[OK] npm is installed" || echo "[MISSING] npm is not installed (run: make install-tools)"
 	@command -v prettier >/dev/null 2>&1 && echo "[OK] prettier is installed" || echo "[MISSING] prettier is not installed (run: make install-tools)"
 	@command -v markdownlint-cli2 >/dev/null 2>&1 && echo "[OK] markdownlint-cli2 is installed" || echo "[MISSING] markdownlint-cli2 is not installed (run: make install-tools)"
+	@command -v cspell >/dev/null 2>&1 && echo "[OK] cspell is installed" || echo "[MISSING] cspell is not installed (run: make install-tools)"
 
 .PHONY: install-tools
 install-tools: ## Installs tools required by the Makefile
@@ -271,5 +279,5 @@ install-tools: ## Installs tools required by the Makefile
 		echo "On Windows: Download from https://nodejs.org/"; \
 		exit 1; \
 	fi
-	npm install --global prettier@$(PRETTIER_VERSION) markdownlint-cli2@$(MARKDOWNLINT_CLI2_VERSION)
+	npm install --global prettier@$(PRETTIER_VERSION) markdownlint-cli2@$(MARKDOWNLINT_CLI2_VERSION) cspell@$(CSPELL_VERSION)
 	@echo "Development tools installation complete!"

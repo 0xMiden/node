@@ -9,8 +9,8 @@ import Tabs from "@theme/Tabs"; import TabItem from "@theme/TabItem";
 
 # Migrations
 
-Occasaionally, a new node version requires storage schema changes. These can be applied using the `mgirate` command
-after stopping the node.
+Occasionally, a new node version requires storage schema changes. These can be applied using the `migrate` command after
+stopping the node.
 
 <Tabs groupId="full-node-runtime" defaultValue="native">
   <TabItem value="native" label="Native binary">

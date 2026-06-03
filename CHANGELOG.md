@@ -278,7 +278,7 @@
 - Refactored account table and introduce tracking forest ([#1394](https://github.com/0xMiden/node/pull/1394)).
 - [BREAKING] Re-organized RPC protobuf schema to be independent of internal schema ([#1401](https://github.com/0xMiden/node/pull/1401)).
 - Removed internal errors from the `miden-network-monitor` ([#1424](https://github.com/0xMiden/node/pull/1424)).
-- [BREAKING] Added block signing capabilities to Validator component and updated gensis bootstrap to sign blocks with configured signer ([#1426](https://github.com/0xMiden/node/pull/1426)).
+- [BREAKING] Added block signing capabilities to Validator component and updated genesis bootstrap to sign blocks with configured signer ([#1426](https://github.com/0xMiden/node/pull/1426)).
 - Track network transactions latency in `miden-network-monitor` ([#1430](https://github.com/0xMiden/node/pull/1430)).
 - Reduced default block interval from `5s` to `2s` ([#1438](https://github.com/0xMiden/node/pull/1438)).
 - Increased retained account tree history from 33 to 100 blocks to account for the reduced block interval ([#1438](https://github.com/0xMiden/node/pull/1438)).
