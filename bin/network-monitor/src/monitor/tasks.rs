@@ -8,7 +8,7 @@ use miden_node_proto::clients::RemoteProverClient;
 use miden_node_utils::tasks::Tasks as SupervisedTasks;
 use tokio::sync::watch::Receiver;
 use tokio::sync::{Mutex, watch};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::COMPONENT;
 use crate::config::MonitorConfig;
@@ -92,13 +92,27 @@ impl Tasks {
         &mut self,
         config: &MonitorConfig,
     ) -> Vec<watch::Receiver<ServiceStatus>> {
+        // Build the proof-test payload once and share it across all provers. If it can't be built
+        // (e.g. RPC unreachable at startup), prover status is still monitored without proof
+        // probing.
+        let payload = match generate_prover_test_payload(&config.rpc_url).await {
+            Ok(payload) => Some(payload),
+            Err(e) => {
+                warn!(
+                    target: COMPONENT,
+                    error = %e,
+                    "failed to build remote-prover probe payload"
+                );
+                None
+            },
+        };
+
         let mut prover_rxs = Vec::new();
         for (i, prover_url) in config.remote_prover_urls.iter().enumerate() {
             let name = format!("Remote Prover ({})", i + 1);
             let (probe_tx, probe_rx) = watch::channel(ProbeSnapshot::default());
             let test_client =
                 build_tls_client::<RemoteProverClient>(prover_url.clone(), config.request_timeout);
-            let payload = generate_prover_test_payload().await;
 
             let status_svc = ProverStatusService::new(
                 name,
@@ -109,7 +123,7 @@ impl Tasks {
                 probe_tx,
                 probe_rx,
                 test_client,
-                payload,
+                payload.clone(),
             );
             prover_rxs.push(self.spawn_service(status_svc));
         }

@@ -190,7 +190,7 @@ local-network-logs: ## Follows logs for the local development network
 	docker compose $(COMPOSE_FILES) logs -f
 
 .PHONY: docker-build
-docker-build: docker-build-node docker-build-validator docker-build-ntx-builder docker-build-monitor ## Builds all Docker images
+docker-build: docker-build-node docker-build-validator docker-build-ntx-builder docker-build-monitor docker-build-remote-prover ## Builds all Docker images
 
 .PHONY: docker-build-node
 docker-build-node: ## Builds the Miden node using Docker
@@ -240,13 +240,17 @@ docker-build-monitor: ## Builds the network monitor using Docker
                  --build-arg PORT=3000 \
                  -t miden-network-monitor .
 
-.PHONY: docker-run-node
-docker-run-node: ## Runs the Miden node as a Docker container
-	docker volume create miden-db
-	docker run --name miden-node \
-			   -p 57291:57291 \
-               -v miden-db:/db \
-               -d miden-node
+.PHONY: docker-build-remote-prover
+docker-build-remote-prover: ## Builds the remote prover using Docker
+	@CREATED=$$(date) && \
+	VERSION=$$(cat bin/remote-prover/Cargo.toml | grep -m 1 '^version' | cut -d '"' -f 2) && \
+	COMMIT=$$(git rev-parse HEAD) && \
+	docker build --build-arg CREATED="$$CREATED" \
+                 --build-arg VERSION="$$VERSION" \
+                 --build-arg COMMIT="$$COMMIT" \
+                 --build-arg BIN=miden-remote-prover \
+                 --build-arg PORT=50051 \
+                 -t miden-remote-prover .
 
 ## --- setup --------------------------------------------------------------------------------------
 

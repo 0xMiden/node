@@ -3294,6 +3294,7 @@ version = "0.15.0"
 dependencies = [
  "anyhow",
  "axum",
+ "backon",
  "clap",
  "hex",
  "humantime",
@@ -3302,7 +3303,6 @@ dependencies = [
  "miden-node-utils",
  "miden-protocol",
  "miden-standards",
- "miden-testing",
  "miden-tx",
  "rand 0.9.4",
  "rand_chacha",
@@ -3534,6 +3534,7 @@ name = "miden-node-utils"
 version = "0.15.0"
 dependencies = [
  "anyhow",
+ "backon",
  "bytes",
  "clap",
  "fs-err",

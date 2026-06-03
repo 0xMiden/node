@@ -11,7 +11,7 @@ use miden_tx::utils::serde::Serializable;
 
 use super::ValidatorServer;
 use crate::ValidatorSigner;
-use crate::db::{load, load_chain_tip, upsert_block_header};
+use crate::db::{load_chain_tip, setup, upsert_block_header};
 
 // TEST HELPERS
 // ================================================================================================
@@ -36,7 +36,7 @@ impl TestValidator {
         let genesis_header = genesis_block.inner().header().clone();
 
         let dir = tempfile::tempdir().unwrap();
-        let db = load(dir.path().join("validator.sqlite3")).await.unwrap();
+        let db = setup(dir.path().join("validator.sqlite3")).await.unwrap();
 
         db.transact("upsert_genesis", {
             let h = genesis_header.clone();
