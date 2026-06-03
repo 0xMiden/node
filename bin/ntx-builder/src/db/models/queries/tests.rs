@@ -311,3 +311,63 @@ fn notes_failed_increments_attempt_and_records_error() {
     assert_eq!(row.last_attempt, Some(6));
     assert!(row.last_error.is_some());
 }
+
+// GENESIS NETWORK-ACCOUNT BOOTSTRAP
+// ================================================================================================
+
+/// Regression test for the ntx-builder genesis bootstrap.
+///
+/// A genesis block commits account state but contains no transactions. When that state
+/// includes a network account (e.g. an AggLayer bridge/faucet using `AuthNetworkAccount`),
+/// `apply_committed_block` currently panics because it asserts every committed network-account
+/// update has an originating transaction in the same block. Genesis is the only way to deploy a
+/// network account (a client transaction against an `AuthNetworkAccount` is rejected by its
+/// `assert_no_tx_script` auth check), so this panic blocks seeding AggLayer accounts at genesis.
+///
+/// This test builds genesis-shaped `CommittedBlockEffects` (a full-state network-account update,
+/// no transactions — exactly what `CommittedBlockEffects::from_signed_block(genesis)` produces)
+/// and asserts bootstrap succeeds. It currently FAILS (panics with "a committed account update
+/// must originate from a transaction in the block").
+#[test]
+fn apply_committed_block_seeds_genesis_network_account() {
+    use std::collections::BTreeSet;
+
+    use miden_protocol::account::delta::{AccountDelta, AccountUpdateDetails};
+    use miden_standards::account::auth::AuthNetworkAccount;
+
+    use crate::committed_block::CommittedBlockEffects;
+    use crate::test_utils::{
+        mock_account_with_auth_component,
+        mock_block_header,
+        mock_network_account_id,
+        mock_single_target_note,
+    };
+
+    let (mut conn, _tmp) = test_conn();
+
+    // A network account carries the `NetworkAccountNoteAllowlist` slot via `AuthNetworkAccount`.
+    let allowlisted_root = mock_single_target_note(mock_network_account_id(), 1)
+        .as_note()
+        .script()
+        .root();
+    let auth = AuthNetworkAccount::with_allowlist(BTreeSet::from([allowlisted_root])).unwrap();
+    let account = mock_account_with_auth_component(auth);
+    let account_id = account.id();
+
+    // Full-state creation, as `GenesisState::into_block` emits for genesis accounts.
+    let details = AccountUpdateDetails::Delta(AccountDelta::try_from(account.clone()).unwrap());
+
+    // Genesis commits account state but has no transactions.
+    let effects = CommittedBlockEffects {
+        header: mock_block_header(BlockNumber::GENESIS),
+        network_notes: vec![],
+        nullifiers: vec![],
+        network_account_updates: vec![(account_id, details)],
+        account_transactions: vec![],
+    };
+
+    apply_committed_block(&mut conn, &effects, &PartialMmr::default())
+        .expect("bootstrapping a genesis block with a network account should succeed");
+
+    assert_eq!(count_accounts(&mut conn), 1);
+}
