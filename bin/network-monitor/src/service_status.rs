@@ -7,7 +7,7 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use miden_node_proto::generated as proto;
-use miden_node_proto::generated::rpc::{BlockProducerStatus, RpcStatus, StoreStatus};
+use miden_node_proto::generated::rpc::{BlockProducerStatus, RpcStatus};
 use serde::{Deserialize, Serialize};
 
 use crate::faucet::FaucetTestDetails;
@@ -235,7 +235,7 @@ pub struct RpcStatusDetails {
     pub url: String,
     pub version: String,
     pub genesis_commitment: Option<String>,
-    pub store_status: Option<StoreStatusDetails>,
+    pub chain_tip: u32,
     pub block_producer_status: Option<BlockProducerStatusDetails>,
 }
 
@@ -304,16 +304,6 @@ pub struct NetworkStatus {
 // FROM IMPLEMENTATIONS
 // ================================================================================================
 
-impl From<StoreStatus> for StoreStatusDetails {
-    fn from(value: StoreStatus) -> Self {
-        Self {
-            version: value.version,
-            status: value.status.into(),
-            chain_tip: value.chain_tip,
-        }
-    }
-}
-
 impl From<BlockProducerStatus> for BlockProducerStatusDetails {
     fn from(value: BlockProducerStatus) -> Self {
         // We assume all supported nodes expose mempool statistics.
@@ -336,8 +326,9 @@ impl From<BlockProducerStatus> for BlockProducerStatusDetails {
 
 impl From<proto::remote_prover::ProxyWorkerStatus> for WorkerStatusDetails {
     fn from(value: proto::remote_prover::ProxyWorkerStatus) -> Self {
-        let status =
-            proto::remote_prover::WorkerHealthStatus::try_from(value.status).unwrap().into();
+        let status = proto::remote_prover::WorkerHealthStatus::try_from(value.status)
+            .unwrap()
+            .into();
 
         Self {
             name: value.name,
@@ -353,8 +344,11 @@ impl RemoteProverStatusDetails {
             .unwrap()
             .into();
 
-        let workers: Vec<WorkerStatusDetails> =
-            status.workers.into_iter().map(WorkerStatusDetails::from).collect();
+        let workers: Vec<WorkerStatusDetails> = status
+            .workers
+            .into_iter()
+            .map(WorkerStatusDetails::from)
+            .collect();
 
         Self {
             url,
@@ -371,8 +365,11 @@ impl RpcStatusDetails {
         Self {
             url,
             version: status.version,
-            genesis_commitment: status.genesis_commitment.as_ref().map(|gc| format!("{gc:?}")),
-            store_status: status.store.map(StoreStatusDetails::from),
+            genesis_commitment: status
+                .genesis_commitment
+                .as_ref()
+                .map(|gc| format!("{gc:?}")),
+            chain_tip: status.chain_tip,
             block_producer_status: status.block_producer.map(BlockProducerStatusDetails::from),
         }
     }
