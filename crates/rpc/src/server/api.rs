@@ -990,11 +990,6 @@ impl api_server::Api for RpcService {
     ) -> Result<Response<proto::rpc::RpcStatus>, Status> {
         debug!(target: COMPONENT, request = ?request);
 
-        let store_status = Some(proto::rpc::StoreStatus {
-            version: miden_node_store::version().to_string(),
-            status: "connected".to_string(),
-            chain_tip: self.store.chain_tip(Finality::Committed).await.as_u32(),
-        });
         let block_producer_status = match &self.mode {
             RpcMode::Sequencer { block_producer, .. } => {
                 Some(block_producer_status_to_proto(block_producer.status().await))
@@ -1010,11 +1005,7 @@ impl api_server::Api for RpcService {
 
         Ok(Response::new(proto::rpc::RpcStatus {
             version: env!("CARGO_PKG_VERSION").to_string(),
-            store: store_status.or(Some(proto::rpc::StoreStatus {
-                status: "unreachable".to_string(),
-                chain_tip: 0,
-                version: "-".to_string(),
-            })),
+            chain_tip: self.store.chain_tip(Finality::Committed).await.as_u32(),
             block_producer: block_producer_status.or(Some(proto::rpc::BlockProducerStatus {
                 status: "unreachable".to_string(),
                 version: "-".to_string(),

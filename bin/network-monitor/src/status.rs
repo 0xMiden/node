@@ -111,7 +111,7 @@ impl Service for RpcService {
                 url: self.url.clone(),
                 version: String::new(),
                 genesis_commitment: None,
-                store_status: None,
+                chain_tip: 0,
                 block_producer_status: None,
             }),
         )
@@ -131,26 +131,23 @@ impl Service for RpcService {
                 let rpc_details =
                     RpcStatusDetails::from_rpc_status(response.into_inner(), self.url.clone());
 
-                if let Some(store_status) = &rpc_details.store_status {
-                    if let Some(stale_duration) = self
-                        .stale_tracker
-                        .update(store_status.chain_tip, current_unix_timestamp_secs())
-                    {
-                        debug!(
-                            target: COMPONENT,
-                            chain_tip = store_status.chain_tip,
-                            stale_duration_secs = stale_duration,
-                            "Chain tip is stale"
-                        );
-                        return ServiceStatus::unhealthy(
-                            self.name(),
-                            format!(
-                                "Chain tip {} has not changed for {} seconds",
-                                store_status.chain_tip, stale_duration
-                            ),
-                            ServiceDetails::RpcStatus(rpc_details),
-                        );
-                    }
+                if let Some(stale_duration) =
+                    self.stale_tracker.update(rpc_details.chain_tip, current_unix_timestamp_secs())
+                {
+                    debug!(
+                        target: COMPONENT,
+                        chain_tip = rpc_details.chain_tip,
+                        stale_duration_secs = stale_duration,
+                        "Chain tip is stale"
+                    );
+                    return ServiceStatus::unhealthy(
+                        self.name(),
+                        format!(
+                            "Chain tip {} has not changed for {} seconds",
+                            rpc_details.chain_tip, stale_duration
+                        ),
+                        ServiceDetails::RpcStatus(rpc_details),
+                    );
                 }
 
                 ServiceStatus::healthy(self.name(), ServiceDetails::RpcStatus(rpc_details))
