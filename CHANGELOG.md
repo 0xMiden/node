@@ -1,6 +1,8 @@
 # Changelog
 
-## v0.15.0 (TBD)
+## Unreleased
+
+## v0.15.0-rc.0 (2026-06-03)
 
 - Added `ca-certificates` to the node Docker runtime image so outbound `https` connections work in containerized deployments ([#1661](https://github.com/0xMiden/node/issues/1661)).
 - Reworked `SyncNotes` store queries to fetch multiple matching blocks within one database transaction while preserving the response payload cap ([#2027](https://github.com/0xMiden/node/pull/2027)).
