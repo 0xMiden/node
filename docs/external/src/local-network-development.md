@@ -89,11 +89,10 @@ to use an external prover by setting `MIDEN_REMOTE_PROVER_URL` when starting the
 ## Genesis Config Override
 
 By default, the local network bootstraps from the validator's built-in genesis configuration. To bootstrap from a custom
-genesis configuration file, use `make local-network-up-with-custom-genesis-config` and set `MIDEN_GENESIS_CONFIG_FILE`
-to the host path of the TOML file:
+genesis configuration file, set `MIDEN_GENESIS_CONFIG_FILE` to the host path of the TOML file:
 
 ```bash
-MIDEN_GENESIS_CONFIG_FILE=/absolute/path/to/genesis.toml make local-network-up-with-custom-genesis-config
+MIDEN_GENESIS_CONFIG_FILE=/absolute/path/to/genesis.toml make local-network-up
 ```
 
 The override bind mounts the host file into the bootstrap validator container as `/genesis.toml` and passes that
