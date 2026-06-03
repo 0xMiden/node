@@ -1,6 +1,6 @@
 ---
 title: "Bootstrap and Genesis"
-sidebar_position: 2
+sidebar_position: 3
 ---
 
 <!-- markdownlint-disable MD033 MD041 -->

@@ -15,4 +15,4 @@ If you want to develop against a disposable local network, use [Local Network De
 If you want to run a non-sequencing node for an existing network, use the [Full Node Guide](/full-node/).
 
 Start with [Architecture](/network-operator/architecture) for a short overview of the service roles and a deployment
-example.
+example, then use [Installation](/network-operator/installation) to select the matching binaries or images.
