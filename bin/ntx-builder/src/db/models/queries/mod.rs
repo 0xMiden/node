@@ -4,8 +4,11 @@ use std::collections::{HashMap, HashSet};
 
 use diesel::prelude::*;
 use miden_node_db::DatabaseError;
+use miden_protocol::Word;
 use miden_protocol::account::AccountId;
+use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::merkle::mmr::PartialMmr;
+use miden_protocol::transaction::TransactionId;
 
 use super::account_effect::NetworkAccountEffect;
 use crate::committed_block::CommittedBlockEffects;
@@ -48,18 +51,27 @@ pub fn apply_committed_block(
 ) -> Result<Vec<AccountId>, DatabaseError> {
     let mut affected_accounts: HashSet<AccountId> = HashSet::new();
 
-    // The latest transaction in this block per account. Every committed account update originates
-    // from a transaction in the same block, so each upserted account has an entry here. Collecting
-    // into a map keeps the last transaction per account (block order is preserved).
+    // The latest transaction in this block per account. For block-producer output every committed
+    // account update originates from a transaction in the same block, so each upserted account has
+    // an entry here. Collecting into a map keeps the last transaction per account (block order is
+    // preserved). The genesis block is the sole exception: it commits account state directly with
+    // no transactions, so genesis accounts fall back to the zero sentinel below.
     let last_tx: HashMap<AccountId, _> = effects.account_transactions.iter().copied().collect();
+    let is_genesis = effects.header.block_num() == BlockNumber::GENESIS;
 
     for (account_id, details) in &effects.network_account_updates {
         let Some(effect) = NetworkAccountEffect::from_protocol(details) else {
             continue;
         };
-        let last_tx_id = *last_tx
-            .get(account_id)
-            .expect("a committed account update must originate from a transaction in the block");
+        // Genesis seeds account state with no originating transaction, so it stores a zero
+        // `TransactionId` sentinel.
+        let last_tx_id = last_tx.get(account_id).copied().unwrap_or_else(|| {
+            assert!(
+                is_genesis,
+                "a committed account update must originate from a transaction in the block",
+            );
+            TransactionId::from_raw(Word::empty())
+        });
         match effect {
             NetworkAccountEffect::Created(account) => {
                 upsert_account(conn, *account_id, &account, last_tx_id)?;
