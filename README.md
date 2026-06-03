@@ -30,11 +30,11 @@ further value from it. If any information is missing from the official documenta
 ## Developer docs
 
 Developers can find repository and onboarding documentation in the [developer docs][developer-docs]. Those docs are more
-in-depth but the following sections endeavour to provide a short summary.
+in-depth but the following sections endeavor to provide a short summary.
 
-### Workspace organisation
+### Workspace organization
 
-The workspace is organised around several binaries, with supplementary crates providing organisation and shared
+The workspace is organized around several binaries, with supplementary crates providing organization and shared
 functionality. These crates are for internal use only; the primary outputs are the binaries and gRPC schema. The former
 are found under the `bin` directory, the latter in the `proto` directory.
 
