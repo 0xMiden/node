@@ -17,6 +17,7 @@ workspace = true
 [dependencies]
 anyhow              = { workspace = true }
 axum                = { version = "0.8" }
+backon              = { workspace = true }
 clap                = { features = ["env"], workspace = true }
 hex                 = { workspace = true }
 humantime           = { workspace = true }

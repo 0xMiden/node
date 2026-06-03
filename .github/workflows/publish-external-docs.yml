@@ -1,18 +1,25 @@
-name: Trigger Aggregator Docs Rebuild
+name: Publish External Docs
 
 on:
   push:
     branches: [next]
     paths:
-      - "docs/external**"
+      - "docs/external/**"
+      - ".github/workflows/publish-external-docs.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: "${{ github.workflow }} @ ${{ github.ref }}"
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   notify:
+    name: Trigger aggregator docs rebuild
     runs-on: ubuntu-24.04
     environment: deploy-docs
-
-    permissions:
-      contents: read
 
     steps:
       - name: Send repository_dispatch to aggregator
