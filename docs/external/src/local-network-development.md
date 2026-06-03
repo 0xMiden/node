@@ -83,8 +83,8 @@ The network monitor at `http://localhost:3001` provides a compact health view fo
 
 ## Prover Override
 
-The default stack uses the bundled prover endpoint at `http://remote-prover:50051`. To use another prover endpoint, set
-`MIDEN_REMOTE_PROVER_URL` when starting the stack.
+The default stack spins up an internal prover instance which means proving will happen locally. This can be overridden
+to use an external prover by setting `MIDEN_REMOTE_PROVER_URL` when starting the stack.
 
 ## Check the RPC API
 
