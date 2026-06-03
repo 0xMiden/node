@@ -13,7 +13,7 @@ use futures::FutureExt;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
-use miden_protocol::account::AccountId;
+use miden_protocol::account::{Account, AccountDelta, AccountId};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{NoteScript, Nullifier};
 use miden_protocol::transaction::{TransactionId, TransactionScript};
@@ -193,14 +193,19 @@ enum ActorMode {
     NotesAvailable,
     /// A network transaction has been submitted; the actor waits for it to land in a committed
     /// block. Landing is detected from the local DB: `apply_committed_block` records the
-    /// transaction id that updated each network account as `accounts.last_tx_id`, so the actor only
-    /// has to check whether its own submitted id is the account's latest.
+    /// transaction id that updated each network account as `accounts.last_tx_id`, so the actor
+    /// checks whether its own submitted id is the account's latest. On landing it applies
+    /// `pending_delta` to its in-memory account, avoiding a re-read of the full account from the
+    /// database.
     WaitForBlock {
         /// Id of the network transaction the actor submitted.
         submitted_tx_id: TransactionId,
         /// Chain tip block number at submission. With [`ActorConfig::tx_expiration_delta`] this
         /// bounds how long the actor waits before retrying.
         submitted_at: BlockNumber,
+        /// The account delta the submitted transaction produced, applied to the in-memory account
+        /// once the transaction lands.
+        pending_delta: AccountDelta,
     },
 }
 
@@ -279,11 +284,12 @@ impl AccountActor {
     pub async fn run(self, semaphore: Arc<Semaphore>) -> anyhow::Result<()> {
         let account_id = self.account_id;
 
-        // Wait for the account to be committed to the DB. For newly created accounts, the creation
-        // transaction must be committed before we start processing notes.
-        if !self.wait_for_committed_account(account_id).await? {
+        // Load the account once and keep it in memory for the actor's lifetime, advancing it from
+        // the delta of each transaction the actor itself lands. For newly created accounts this
+        // idles until the creation transaction is committed.
+        let Some(mut account) = self.load_committed_account(account_id).await? else {
             return Ok(());
-        }
+        };
 
         // Determine initial mode by checking the DB for available notes.
         let block_num = self.state.chain.chain_tip_block_number();
@@ -315,16 +321,17 @@ impl AccountActor {
             };
 
             tokio::select! {
-                // A committed block touched this account (or the coordinator woke everyone).
+                // A committed block touched this account (or the coordinator woke everyone): the
+                // submission may have landed (advancing the in-memory account by its own delta),
+                // the submission may have expired, or new notes may be available.
                 _ = self.notify.notified() => {
-                    mode = self.reevaluate_mode(account_id, mode).await?;
+                    mode = self.reevaluate_mode(&mut account, mode).await?;
                 },
                 // Execute a transaction once a permit is available.
                 permit = tx_permit_acquisition => {
                     let _permit = permit.context("semaphore closed")?;
                     let chain_state = self.state.chain.get_cloned();
-                    let tx_candidate =
-                        self.select_candidate_from_db(account_id, chain_state).await?;
+                    let tx_candidate = self.select_candidate(&account, chain_state).await?;
                     mode = match tx_candidate {
                         Some(candidate) => self.execute_transactions(account_id, candidate).await,
                         None => ActorMode::NoViableNotes,
@@ -339,74 +346,103 @@ impl AccountActor {
         }
     }
 
-    /// Decides the actor's next mode after a coordinator notification.
+    /// Decides the actor's next mode after a coordinator notification, advancing the in-memory
+    /// account when the actor's own transaction lands.
     ///
     /// - In `NoViableNotes`/`NotesAvailable`, a wake means the DB may now have new work; advance to
     ///   `NotesAvailable` and let the next `select_candidate` decide whether a real candidate
     ///   exists.
-    /// - In `WaitForBlock`, query the latest transaction recorded against the account. If it equals
-    ///   the actor's submitted transaction id, the tx landed; return to `NotesAvailable`. Else, if
-    ///   `tx_expiration_delta` blocks have passed since submission, give up waiting and resume
-    ///   candidate selection; otherwise stay in `WaitForBlock`.
+    /// - In `WaitForBlock`, query the latest transaction recorded against the account:
+    ///   - If it equals the actor's submitted id, the transaction landed: apply its `pending_delta`
+    ///     to the in-memory account and resume selection.
+    ///   - Else if `tx_expiration_delta` blocks have passed since submission, the submission expired:
+    ///     reload the account from the DB (in case a different transaction changed it while we
+    ///     waited) and resume selection.
+    ///   - Otherwise keep waiting.
     async fn reevaluate_mode(
         &self,
-        account_id: AccountId,
+        account: &mut Account,
         mode: ActorMode,
     ) -> anyhow::Result<ActorMode> {
-        match mode {
-            ActorMode::WaitForBlock { submitted_tx_id, submitted_at } => {
-                let landed = self
-                    .state
-                    .db
-                    .account_last_tx(account_id)
-                    .await
-                    .context("failed to check submitted tx landing")?
-                    == Some(submitted_tx_id);
-                if landed {
-                    return Ok(ActorMode::NotesAvailable);
-                }
+        let ActorMode::WaitForBlock {
+            submitted_tx_id,
+            submitted_at,
+            pending_delta,
+        } = mode
+        else {
+            return Ok(ActorMode::NotesAvailable);
+        };
 
-                let chain_tip = self.state.chain.chain_tip_block_number();
-                let elapsed = chain_tip.checked_sub(submitted_at.as_u32()).unwrap_or_default();
-                if elapsed.as_u32() >= u32::from(self.config.tx_expiration_delta.get()) {
-                    tracing::info!(
-                        %account_id,
-                        %submitted_at,
-                        current_tip = %chain_tip,
-                        delta = self.config.tx_expiration_delta,
-                        "submitted transaction expired",
-                    );
-                    return Ok(ActorMode::NotesAvailable);
-                }
-
-                Ok(ActorMode::WaitForBlock { submitted_tx_id, submitted_at })
-            },
-            _ => Ok(ActorMode::NotesAvailable),
+        let landed = self
+            .state
+            .db
+            .account_last_tx(self.account_id)
+            .await
+            .context("failed to check submitted tx landing")?
+            == Some(submitted_tx_id);
+        if landed {
+            // The landed transaction is the one we executed, so the committed state is exactly our
+            // in-memory account plus the delta it produced.
+            account
+                .apply_delta(&pending_delta)
+                .context("failed to apply landed transaction delta to in-memory account")?;
+            tracing::info!(
+                account_id = %self.account_id,
+                tx_id = %submitted_tx_id,
+                "submitted transaction landed; advanced in-memory account by its delta",
+            );
+            return Ok(ActorMode::NotesAvailable);
         }
+
+        let chain_tip = self.state.chain.chain_tip_block_number();
+        let elapsed = chain_tip.checked_sub(submitted_at.as_u32()).unwrap_or_default();
+        if elapsed.as_u32() >= u32::from(self.config.tx_expiration_delta.get()) {
+            tracing::info!(
+                account_id = %self.account_id,
+                %submitted_at,
+                current_tip = %chain_tip,
+                delta = self.config.tx_expiration_delta,
+                "submitted transaction expired",
+            );
+            // The submission did not land. Reload the authoritative account in case a different
+            // transaction changed it while we waited, then resume selection.
+            if let Some(latest) = self
+                .state
+                .db
+                .get_account(self.account_id)
+                .await
+                .context("failed to reload account after submission expiry")?
+            {
+                *account = latest;
+            }
+            return Ok(ActorMode::NotesAvailable);
+        }
+
+        Ok(ActorMode::WaitForBlock {
+            submitted_tx_id,
+            submitted_at,
+            pending_delta,
+        })
     }
 
-    /// Selects a transaction candidate by querying the DB.
-    async fn select_candidate_from_db(
+    /// Selects a transaction candidate for the in-memory account by querying its available notes.
+    async fn select_candidate(
         &self,
-        account_id: AccountId,
+        account: &Account,
         chain_state: ChainState,
     ) -> anyhow::Result<Option<TransactionCandidate>> {
+        let account_id = self.account_id;
         let block_num = chain_state.chain_tip_header.block_num();
         let max_notes = self.config.max_notes_per_tx.get();
 
-        let (latest_account, notes) = self
+        let notes = self
             .state
             .db
-            .select_candidate(account_id, block_num, self.config.max_note_attempts)
+            .available_notes(account_id, block_num, self.config.max_note_attempts)
             .await
-            .context("failed to query DB for transaction candidate")?;
+            .context("failed to query DB for available notes")?;
 
-        let Some(account) = latest_account else {
-            tracing::info!(account_id = %account_id, "Account no longer exists in DB");
-            return Ok(None);
-        };
-
-        let partitioned_notes = partition_by_allowlist(&account, notes)
+        let partitioned_notes = partition_by_allowlist(account, notes)
             .context("failed to read network account note allowlist")?;
 
         if !partitioned_notes.rejected.is_empty() {
@@ -433,44 +469,46 @@ impl AccountActor {
 
         let (chain_tip_header, chain_mmr) = chain_state.into_parts();
         Ok(Some(TransactionCandidate {
-            account,
+            account: account.clone(),
             notes,
             chain_tip_header,
             chain_mmr,
         }))
     }
 
-    /// Waits until a committed account state exists in the DB.
+    /// Loads the committed account state from the DB, idling until it exists.
     ///
-    /// For accounts that are being created by an inflight transaction, this will idle
-    /// until the transaction is committed. Returns `true` when the account is ready, or
-    /// `false` if no commit arrived within [`ActorConfig::idle_timeout`] — in which case
-    /// the coordinator will respawn a new actor when a later committed block targets the
-    /// account again.
-    async fn wait_for_committed_account(&self, account_id: AccountId) -> anyhow::Result<bool> {
-        // Check if the account is already committed.
-        if self
+    /// For accounts that are being created by an inflight transaction, this idles until the
+    /// creation transaction is committed. Returns the loaded account, or `None` if no commit
+    /// arrived within [`ActorConfig::idle_timeout`], in which case the coordinator will respawn a
+    /// new actor when a later committed block targets the account again.
+    async fn load_committed_account(
+        &self,
+        account_id: AccountId,
+    ) -> anyhow::Result<Option<Account>> {
+        // Return the account if it is already committed.
+        if let Some(account) = self
             .state
             .db
-            .has_committed_account(account_id)
+            .get_account(account_id)
             .await
-            .context("failed to check for committed account")?
+            .context("failed to load committed account")?
         {
-            return Ok(true);
+            return Ok(Some(account));
         }
 
         loop {
             tokio::select! {
                 _ = self.notify.notified() => {
-                    if self
+                    if let Some(account) = self
                         .state
                         .db
-                        .has_committed_account(account_id)
+                        .get_account(account_id)
                         .await
-                        .context("failed to check for committed account")?
+                        .context("failed to load committed account")?
                     {
                         tracing::info!(account.id=%account_id, "Account committed, starting normal operation");
-                        return Ok(true);
+                        return Ok(Some(account));
                     }
                 }
                 _ = tokio::time::sleep(self.config.idle_timeout) => {
@@ -478,7 +516,7 @@ impl AccountActor {
                         %account_id,
                         "Account actor deactivated while waiting for account commit",
                     );
-                    return Ok(false);
+                    return Ok(None);
                 }
             }
         }
@@ -524,7 +562,7 @@ impl AccountActor {
 
         let execution_result = context.execute_transaction(tx_candidate).await;
         match execution_result {
-            Ok((tx_id, failed, scripts_to_cache)) => {
+            Ok((tx_id, account_delta, failed, scripts_to_cache)) => {
                 tracing::info!(
                     %account_id,
                     %tx_id,
@@ -548,6 +586,7 @@ impl AccountActor {
                     ActorMode::WaitForBlock {
                         submitted_tx_id: tx_id,
                         submitted_at: block_num,
+                        pending_delta: account_delta,
                     }
                 }
             },
@@ -649,7 +688,107 @@ fn log_failed_notes(failed: Vec<FailedNote>) -> Vec<(Nullifier, NoteError)> {
 mod tests {
     use std::num::NonZeroU16;
 
-    use super::expiration_tx_script;
+    use miden_protocol::ONE;
+    use miden_protocol::account::{Account, AccountDelta, AccountStorageDelta, AccountVaultDelta};
+    use tokio::sync::Notify;
+
+    use super::*;
+    use crate::db::Db;
+    use crate::test_utils::{mock_account, mock_network_account_id, mock_transaction_id};
+
+    /// Builds a valid nonce-only [`AccountDelta`] for `account_id`.
+    fn nonce_bump_delta(account_id: AccountId) -> AccountDelta {
+        AccountDelta::new(
+            account_id,
+            AccountStorageDelta::default(),
+            AccountVaultDelta::default(),
+            ONE,
+        )
+        .expect("a nonce-only delta is valid")
+    }
+
+    /// Builds an actor wired to `db` for the given account, plus the in-memory account to drive.
+    fn test_actor(db: &Db, account: &Account) -> AccountActor {
+        let ctx = AccountActorContext::test(db);
+        AccountActor::new(account.id(), &ctx, Arc::new(Notify::new()))
+    }
+
+    /// When the submitted transaction lands (its id is the account's latest committed tx), the
+    /// actor advances its in-memory account by exactly the delta the transaction produced.
+    #[tokio::test]
+    async fn landing_advances_in_memory_account_by_its_delta() {
+        let (db, _dir) = Db::test_setup().await;
+        let account = mock_account(mock_network_account_id());
+        let account_id = account.id();
+        let submitted = mock_transaction_id(7);
+
+        // Seed the committed row so the landing check sees our submission as the latest tx.
+        db.upsert_account_for_test(account_id, account.clone(), submitted)
+            .await
+            .unwrap();
+
+        let delta = nonce_bump_delta(account_id);
+        let mut expected = account.clone();
+        expected.apply_delta(&delta).unwrap();
+
+        let actor = test_actor(&db, &account);
+        let mut in_memory = account.clone();
+        let mode = actor
+            .reevaluate_mode(
+                &mut in_memory,
+                ActorMode::WaitForBlock {
+                    submitted_tx_id: submitted,
+                    submitted_at: 0_u32.into(),
+                    pending_delta: delta,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(mode, ActorMode::NotesAvailable), "a landed tx must resume selection");
+        assert_eq!(
+            in_memory.to_commitment(),
+            expected.to_commitment(),
+            "the in-memory account must be advanced by the landed tx's delta",
+        );
+    }
+
+    /// While the submission has neither landed nor expired, the actor keeps waiting and leaves its
+    /// in-memory account untouched.
+    #[tokio::test]
+    async fn pending_submission_keeps_waiting_without_touching_account() {
+        let (db, _dir) = Db::test_setup().await;
+        let account = mock_account(mock_network_account_id());
+
+        // Nothing seeded: `account_last_tx` returns `None`, so the submission has not landed. The
+        // test chain sits at genesis, well within `tx_expiration_delta`, so it has not expired.
+        let actor = test_actor(&db, &account);
+        let mut in_memory = account.clone();
+        let submitted = mock_transaction_id(7);
+        let mode = actor
+            .reevaluate_mode(
+                &mut in_memory,
+                ActorMode::WaitForBlock {
+                    submitted_tx_id: submitted,
+                    submitted_at: 0_u32.into(),
+                    pending_delta: nonce_bump_delta(account.id()),
+                },
+            )
+            .await
+            .unwrap();
+
+        match mode {
+            ActorMode::WaitForBlock { submitted_tx_id, .. } => {
+                assert_eq!(submitted_tx_id, submitted, "the actor must keep waiting on its own tx");
+            },
+            other => panic!("expected to stay in WaitForBlock, got {other:?}"),
+        }
+        assert_eq!(
+            in_memory.to_commitment(),
+            account.to_commitment(),
+            "a still-pending submission must not change the in-memory account",
+        );
+    }
 
     /// The expiration script must compile for the full valid delta range, and the delta must be
     /// baked into the script (distinct deltas → distinct script roots), proving the on-chain

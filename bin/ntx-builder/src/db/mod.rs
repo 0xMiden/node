@@ -141,13 +141,12 @@ impl Db {
     // ============================================================================================
 
     /// Applies the effects of a committed block (account upserts, note inserts, nullifier-driven
-    /// deletes, and chain-state advancement) in a single transaction. Returns the set of network
-    /// accounts touched by this block.
+    /// deletes, and chain-state advancement) in a single transaction.
     pub async fn apply_committed_block(
         &self,
         effects: CommittedBlockEffects,
         chain_mmr: PartialMmr,
-    ) -> Result<Vec<AccountId>> {
+    ) -> Result<()> {
         self.inner
             .transact("apply_committed_block", move |conn| {
                 queries::apply_committed_block(conn, &effects, &chain_mmr)
@@ -179,28 +178,29 @@ impl Db {
             .await
     }
 
-    /// Returns `true` if a committed account state exists for the given account.
-    pub async fn has_committed_account(&self, account_id: AccountId) -> Result<bool> {
+    /// Returns the committed account state for the given network account, if one is tracked locally.
+    ///
+    /// Actors load their account once at startup with this and keep it in memory afterwards,
+    /// advancing it from the committed state the coordinator pushes after each block.
+    pub async fn get_account(
+        &self,
+        account_id: AccountId,
+    ) -> Result<Option<miden_protocol::account::Account>> {
         self.inner
-            .query("has_committed_account", move |conn| {
-                Ok(queries::get_account(conn, account_id)?.is_some())
-            })
+            .query("get_account", move |conn| queries::get_account(conn, account_id))
             .await
     }
 
-    /// Returns the latest account state and available notes for the given account.
-    pub async fn select_candidate(
+    /// Returns the notes currently available for consumption by the given account.
+    pub async fn available_notes(
         &self,
         account_id: AccountId,
         block_num: BlockNumber,
         max_note_attempts: usize,
-    ) -> Result<(Option<miden_protocol::account::Account>, Vec<AccountTargetNetworkNote>)> {
+    ) -> Result<Vec<AccountTargetNetworkNote>> {
         self.inner
-            .query("select_candidate", move |conn| {
-                let account = queries::get_account(conn, account_id)?;
-                let notes =
-                    queries::available_notes(conn, account_id, block_num, max_note_attempts)?;
-                Ok((account, notes))
+            .query("available_notes", move |conn| {
+                queries::available_notes(conn, account_id, block_num, max_note_attempts)
             })
             .await
     }
@@ -304,6 +304,22 @@ impl Db {
         let db = Db::load(db_path).await.expect("test DB load should succeed");
         (db, dir)
     }
+
+    /// Seeds a committed account row (and its `last_tx_id`) for tests that exercise the actor's
+    /// landing detection without driving a full committed block.
+    #[cfg(test)]
+    pub async fn upsert_account_for_test(
+        &self,
+        account_id: AccountId,
+        account: miden_protocol::account::Account,
+        last_tx_id: TransactionId,
+    ) -> Result<()> {
+        self.inner
+            .transact("test_upsert_account", move |conn| {
+                queries::upsert_account(conn, account_id, &account, last_tx_id)
+            })
+            .await
+    }
 }
 
 /// The subset of write operations the builder's event loop performs, bound to a connection pinned
@@ -320,7 +336,7 @@ impl LoopDb {
         &self,
         effects: CommittedBlockEffects,
         chain_mmr: PartialMmr,
-    ) -> Result<Vec<AccountId>> {
+    ) -> Result<()> {
         self.conn
             .transact("apply_committed_block", move |conn| {
                 queries::apply_committed_block(conn, &effects, &chain_mmr)
@@ -380,7 +396,7 @@ mod tests {
 
         let db = Db::load(db_path).await.expect("load should open the bootstrapped database");
         assert!(
-            db.has_committed_account(account_id).await.expect("query should succeed"),
+            db.get_account(account_id).await.expect("query should succeed").is_some(),
             "genesis network account should be committed after bootstrap",
         );
     }

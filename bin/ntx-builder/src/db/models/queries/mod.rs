@@ -1,6 +1,6 @@
 //! Database query functions for the NTX builder.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use diesel::prelude::*;
 use miden_node_db::DatabaseError;
@@ -42,15 +42,13 @@ mod tests;
 /// - Updates the singleton `chain_state` row's tip with the new block header and the
 ///   post-application chain MMR.
 ///
-/// Returns the set of network accounts that were touched by this block (account-state updates or
-/// notes targeting the account).
+/// The account upserts apply each block's network-account effects to the local store so the actor's
+/// `account_last_tx` landing check and post-expiry reload see the authoritative committed state.
 pub fn apply_committed_block(
     conn: &mut SqliteConnection,
     effects: &CommittedBlockEffects,
     chain_mmr: &PartialMmr,
-) -> Result<Vec<AccountId>, DatabaseError> {
-    let mut affected_accounts: HashSet<AccountId> = HashSet::new();
-
+) -> Result<(), DatabaseError> {
     // The latest transaction in this block per account. For block-producer output every committed
     // account update originates from a transaction in the same block, so each upserted account has
     // an entry here. Collecting into a map keeps the last transaction per account (block order is
@@ -87,17 +85,13 @@ pub fn apply_committed_block(
                 upsert_account(conn, *account_id, &current, last_tx_id)?;
             },
         }
-        affected_accounts.insert(*account_id);
     }
 
-    for note in &effects.network_notes {
-        affected_accounts.insert(note.target_account_id());
-    }
     insert_network_notes(conn, &effects.network_notes)?;
 
     mark_notes_consumed(conn, &effects.nullifiers, effects.header.block_num())?;
 
     update_chain_state_tip(conn, effects.header.block_num(), &effects.header, chain_mmr)?;
 
-    Ok(affected_accounts.into_iter().collect())
+    Ok(())
 }
