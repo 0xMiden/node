@@ -48,12 +48,12 @@ systems, and downstream full-node fan out.
 
 ### Validator
 
-The validator runs `miden-validator`. It is a trusted internal service used by the sequencer to validate proposed blocks
-and produce block signatures. Production deployments should configure validator signing explicitly, typically with
-KMS-backed signing.
+The validator runs `miden-validator`. It independently verifies proposed blocks before they can be committed and signs
+the blocks it accepts. On official networks, it is operated by a separate entity from the network operator. For
+unofficial or private networks, this separation matters less and the validator can be run as an internal service.
 
-The validator is not a consensus participant in a decentralized validator set. It is part of the centralized operator
-infrastructure for the current network architecture.
+The validator is not a consensus participant in a decentralized validator set. It is part of the current network
+architecture's block verification and recovery path.
 
 ### Network Transaction Builder
 
