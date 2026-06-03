@@ -1,4 +1,4 @@
-name: Publish Node Docker Image
+name: Publish Docker Images
 
 on:
   release:
@@ -37,6 +37,12 @@ jobs:
           - component: ntx-builder
             bin: miden-ntx-builder
             port: 50301
+          - component: remote-prover
+            bin: miden-remote-prover
+            port: 50051
+          - component: network-monitor
+            bin: miden-network-monitor
+            port: 3000
     name: Publish ${{ matrix.component }} ${{ inputs.version }}
     steps:
       - name: Checkout repo

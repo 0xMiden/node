@@ -13,7 +13,9 @@ ignorePaths:
   - node_modules
   - "**/package-lock.json"
 words:
+  - Devnet
   - grpcurl
   - Merkle
   - Miden
+  - Midenscan
   - RocksDB
