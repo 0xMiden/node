@@ -177,6 +177,10 @@ local-network-build: docker-build ## Builds Docker images used by the local deve
 local-network-up: ## Starts the local development network
 	docker compose $(COMPOSE_FILES) up -d
 
+.PHONY: local-network-up-with-custom-genesis-config
+local-network-up-with-custom-genesis-config: ## Starts the local development network with a custom genesis config file
+	docker compose $(COMPOSE_FILES) -f compose/bootstrap-genesis-config.yml up -d
+
 .PHONY: local-network-down
 local-network-down: ## Stops the local development network, preserving volumes
 	docker compose $(COMPOSE_FILES) down --remove-orphans

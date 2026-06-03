@@ -1,6 +1,8 @@
 # Environment variables:
 # - MIDEN_REMOTE_PROVER_URL: remote transaction prover URL. Defaults to the
 #   bundled miden-remote-prover service at http://tx-prover:50051.
+# - MIDEN_NODE_VALIDATOR_USE_GENESIS_CONFIG: set by compose/bootstrap-genesis-config.yml
+#   to pass /genesis.toml to `miden-validator bootstrap`.
 
 services:
   bootstrap-validator:
@@ -21,11 +23,22 @@ services:
         rm -rf /data/genesis /data/validator /data/accounts
         mkdir -p /data/genesis /data/validator /data/accounts
 
+        GENESIS_CONFIG_ARGS=""
+        if [ -n "$${MIDEN_NODE_VALIDATOR_USE_GENESIS_CONFIG:-}" ]; then
+          if [ ! -f /genesis.toml ]; then
+            echo "Genesis config requested but /genesis.toml is not mounted."
+            exit 1
+          fi
+
+          GENESIS_CONFIG_ARGS="--genesis-config-file /genesis.toml"
+        fi
+
         echo "Bootstrapping validator..."
         miden-validator bootstrap \
           --data-directory /data/validator \
           --genesis-block-directory /data/genesis \
-          --accounts-directory /data/accounts
+          --accounts-directory /data/accounts \
+          $$GENESIS_CONFIG_ARGS
 
         touch /data/validator/.bootstrapped
 
