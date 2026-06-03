@@ -3,7 +3,7 @@
 
 use maud::{Markup, html};
 
-use super::super::helpers::{copy_button, metric_row, probe_section_placeholder, truncate};
+use super::super::helpers::{copy_button, metric_row, truncate};
 use crate::status::RpcStatusDetails;
 
 pub(in crate::view) fn render_rpc_status(details: &RpcStatusDetails) -> Markup {
@@ -18,6 +18,10 @@ pub(in crate::view) fn render_rpc_status(details: &RpcStatusDetails) -> Markup {
                 strong { "Version: " }
                 (details.version)
             }
+            div class="detail-item" {
+                strong { "Chain Tip: " }
+                (details.chain_tip)
+            }
             @if let Some(genesis) = &details.genesis_commitment {
                 div class="detail-item" {
                     strong { "Genesis: " }
@@ -25,15 +29,6 @@ pub(in crate::view) fn render_rpc_status(details: &RpcStatusDetails) -> Markup {
                         "0x" (truncate(genesis, 20)) "..."
                     }
                     (copy_button(genesis, "genesis commitment"))
-                }
-            }
-            (probe_section_placeholder())
-            @if let Some(store) = &details.store_status {
-                div class="nested-status" {
-                    div class="detail-item" { strong { "Store" } }
-                    (metric_row("Version:", &store.version))
-                    (metric_row("Status:", &format!("{:?}", store.status)))
-                    (metric_row("Chain Tip:", &store.chain_tip.to_string()))
                 }
             }
             @if let Some(block_producer) = &details.block_producer_status {
