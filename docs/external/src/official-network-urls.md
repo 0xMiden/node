@@ -14,15 +14,15 @@ Official services generally use the following URL format:
 https://<service>.<network>.miden.io
 ```
 
-| Service     | Testnet                                                                  | Devnet                                                                 | Notes                                                      |
-| ----------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------- | ---------------------------------------------------------- |
-| `rpc`       | [https://rpc.testnet.miden.io](https://rpc.testnet.miden.io)             | [https://rpc.devnet.miden.io](https://rpc.devnet.miden.io)             | Public gRPC and gRPC-Web API endpoint.                     |
-| `genesis`   | [https://genesis.testnet.miden.io](https://genesis.testnet.miden.io)     | [https://genesis.devnet.miden.io](https://genesis.devnet.miden.io)     | Hosted signed genesis block for bootstrapping.             |
-| `tx-prover` | [https://tx-prover.testnet.miden.io](https://tx-prover.testnet.miden.io) | [https://tx-prover.devnet.miden.io](https://tx-prover.devnet.miden.io) | Transaction proving service.                               |
-| `explorer`  | [https://explorer.testnet.miden.io](https://explorer.testnet.miden.io)   | [https://explorer.devnet.miden.io](https://explorer.devnet.miden.io)   | Midenscan block explorer.                                  |
-| `status`    | [https://status.testnet.miden.io](https://status.testnet.miden.io)       | [https://status.devnet.miden.io](https://status.devnet.miden.io)       | Network monitor webpage.                                   |
-| `transport` | [https://transport.testnet.miden.io](https://transport.testnet.miden.io) | [https://transport.devnet.miden.io](https://transport.devnet.miden.io) | Note transport layer.                                      |
-| `faucet`    | [https://faucet.testnet.miden.io](https://faucet.testnet.miden.io)       | [https://faucet.devnet.miden.io](https://faucet.devnet.miden.io)       | Public faucet for obtaining funds on the selected network. |
+| Service     | Type          | Testnet                                                                  | Devnet                                                                 | Notes                                                      |
+| ----------- | ------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------- | ---------------------------------------------------------- |
+| `rpc`       | gRPC/gRPC-Web | [https://rpc.testnet.miden.io](https://rpc.testnet.miden.io)             | [https://rpc.devnet.miden.io](https://rpc.devnet.miden.io)             | Public node RPC API endpoint.                              |
+| `genesis`   | File download | [https://genesis.testnet.miden.io](https://genesis.testnet.miden.io)     | [https://genesis.devnet.miden.io](https://genesis.devnet.miden.io)     | Hosted signed genesis block for bootstrapping.             |
+| `tx-prover` | gRPC          | [https://tx-prover.testnet.miden.io](https://tx-prover.testnet.miden.io) | [https://tx-prover.devnet.miden.io](https://tx-prover.devnet.miden.io) | Transaction proving service.                               |
+| `explorer`  | Web           | [https://explorer.testnet.miden.io](https://explorer.testnet.miden.io)   | [https://explorer.devnet.miden.io](https://explorer.devnet.miden.io)   | Midenscan block explorer.                                  |
+| `status`    | Web           | [https://status.testnet.miden.io](https://status.testnet.miden.io)       | [https://status.devnet.miden.io](https://status.devnet.miden.io)       | Network monitor webpage.                                   |
+| `transport` | HTTP/API      | [https://transport.testnet.miden.io](https://transport.testnet.miden.io) | [https://transport.devnet.miden.io](https://transport.devnet.miden.io) | Note transport layer.                                      |
+| `faucet`    | HTTP/API      | [https://faucet.testnet.miden.io](https://faucet.testnet.miden.io)       | [https://faucet.devnet.miden.io](https://faucet.devnet.miden.io)       | Public faucet for obtaining funds on the selected network. |
 
 ## RPC API
 
