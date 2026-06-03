@@ -4,12 +4,15 @@ use std::sync::{Arc, RwLock};
 
 use miden_protocol::block::BlockNumber;
 
-type BlockOrderedQueue<T> = VecDeque<(BlockNumber, T)>;
-
 /// A cheaply cloneable block-ordered cache.
 #[derive(Clone)]
 pub struct BlockOrderedCache<T> {
-    inner: Arc<RwLock<BlockOrderedQueue<T>>>,
+    inner: Arc<RwLock<Inner<T>>>,
+}
+
+struct Inner<T> {
+    fifo: VecDeque<T>,
+    youngest: Option<BlockNumber>,
     capacity: usize,
 }
 
@@ -17,40 +20,49 @@ impl<T> BlockOrderedCache<T> {
     /// Creates a new cache with the given capacity.
     pub fn new(capacity: NonZeroUsize) -> Self {
         Self {
-            inner: Arc::new(RwLock::new(VecDeque::new())),
-            capacity: capacity.get(),
+            inner: Arc::new(RwLock::new(Inner {
+                fifo: VecDeque::new(),
+                youngest: None,
+                capacity: capacity.get(),
+            })),
         }
     }
 
     /// Pushes a new value into the cache and evicts the oldest value if the cache is full.
     ///
-    /// # Panics
+    /// # Error
     ///
-    /// Panics if the provided block number is not a child of the youngest block in the cache.
-    pub fn push(&self, number: BlockNumber, value: T) {
-        let mut fifo = self.inner.write().expect("fifo cache lock poisoned");
+    /// Returns the value if the provided block number is not the next in sequence.
+    pub fn push(&self, number: BlockNumber, value: T) -> Result<(), T> {
+        let mut inner = self.inner.write().expect("block cache lock poisoned");
 
-        if let Some((youngest, _)) = fifo.back() {
-            assert_eq!(youngest.child(), number);
+        if let Some(youngest) = inner.youngest {
+            if youngest.child() != number {
+                return Err(value);
+            }
         }
 
-        if fifo.len() == self.capacity {
-            fifo.pop_front();
+        if inner.fifo.len() >= inner.capacity {
+            inner.fifo.pop_front();
         }
 
-        fifo.push_back((number, value));
+        inner.fifo.push_back(value);
+        inner.youngest = Some(number);
+
+        Ok(())
     }
 }
 
 impl<T: Clone> BlockOrderedCache<T> {
     /// Retrieves the value associated with the given block number from the cache.
     pub fn get(&self, number: BlockNumber) -> Option<T> {
-        let fifo = self.inner.read().expect("fifo cache lock poisoned");
-        let (oldest, _) = fifo.front()?;
+        let inner = self.inner.read().expect("block cache lock poisoned");
+        let youngest = inner.youngest?;
+        let distance_to_oldest = u32::try_from(inner.fifo.len().checked_sub(1)?).ok()?;
+        let oldest = youngest.checked_sub(distance_to_oldest)?;
 
         let offset = number.checked_sub(oldest.as_u32())?;
-        let (_, value) = fifo.get(offset.as_usize())?;
-        Some(value.clone())
+        inner.fifo.get(offset.as_usize()).cloned()
     }
 }
 
@@ -73,50 +85,50 @@ mod tests {
     #[test]
     fn get_returns_inserted_value() {
         let c = cache(4);
-        c.push(1.into(), "a");
+        assert_eq!(c.push(1.into(), "a"), Ok(()));
         assert_eq!(c.get(1.into()), Some("a"));
     }
 
     #[test]
     fn evicts_oldest_entry_when_full() {
         let c = cache(2);
-        c.push(5.into(), "a");
-        c.push(6.into(), "b");
-        c.push(7.into(), "c"); // evicts 1
+        assert_eq!(c.push(5.into(), "a"), Ok(()));
+        assert_eq!(c.push(6.into(), "b"), Ok(()));
+        assert_eq!(c.push(7.into(), "c"), Ok(())); // evicts 5
         assert_eq!(c.get(5.into()), None);
         assert_eq!(c.get(6.into()), Some("b"));
         assert_eq!(c.get(7.into()), Some("c"));
     }
 
     #[test]
-    #[should_panic]
-    fn overwrite_key_panics() {
+    fn overwrite_key_returns_value() {
         let c = cache(2);
-        c.push(1.into(), "a");
-        c.push(1.into(), "b");
+        assert_eq!(c.push(1.into(), "a"), Ok(()));
+        assert_eq!(c.push(1.into(), "b"), Err("b"));
+        assert_eq!(c.get(1.into()), Some("a"));
     }
 
     #[test]
-    #[should_panic]
-    fn parent_panics() {
+    fn parent_returns_value() {
         let c = cache(2);
-        c.push(3.into(), "a");
-        c.push(2.into(), "b");
+        assert_eq!(c.push(3.into(), "a"), Ok(()));
+        assert_eq!(c.push(2.into(), "b"), Err("b"));
+        assert_eq!(c.get(3.into()), Some("a"));
     }
 
     #[test]
-    #[should_panic]
-    fn wrong_child_panics() {
+    fn wrong_child_returns_value() {
         let c = cache(2);
-        c.push(1.into(), "a");
-        c.push(3.into(), "b");
+        assert_eq!(c.push(1.into(), "a"), Ok(()));
+        assert_eq!(c.push(3.into(), "b"), Err("b"));
+        assert_eq!(c.get(1.into()), Some("a"));
     }
 
     #[test]
     fn clone_shares_state() {
         let c1 = cache(4);
         let c2 = c1.clone();
-        c1.push(1.into(), "a");
+        assert_eq!(c1.push(1.into(), "a"), Ok(()));
         assert_eq!(c2.get(1.into()), Some("a"));
     }
 }
