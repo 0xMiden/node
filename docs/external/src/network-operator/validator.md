@@ -5,8 +5,11 @@ sidebar_position: 5
 
 # Validator
 
-The validator verifies submitted transactions and proposed blocks before signing blocks for the sequencer. It is an
-internal service and should not be exposed publicly.
+The validator verifies submitted transactions and proposed blocks before signing blocks for the sequencer. On official
+networks, it is operated by a separate entity from the network operator. Network operators configure their sequencer to
+use the official validator endpoint rather than running their own validator for that network.
+
+For unofficial or private networks, the validator is an internal service and should not be exposed publicly.
 
 ## Start
 

@@ -10,7 +10,8 @@ import Tabs from "@theme/Tabs"; import TabItem from "@theme/TabItem";
 # Bootstrap and Genesis
 
 A signed genesis block is the trust anchor for every service that joins a network. The network's validator is
-responsible for creating and signing this block.
+responsible for creating and signing this block. On official networks, the validator is operated by a separate entity
+from the network operator.
 
 This signed block is subsequently made available for official networks at
 
@@ -27,7 +28,7 @@ networks, or if the official URLs are not trusted.
 <Tabs groupId="network-operator-genesis-source" defaultValue="official">
   <TabItem value="official" label="Official network">
 
-Create and sign the genesis block with the validator's KMS key:
+The official validator operator creates and signs the genesis block with the validator's KMS key:
 
 ```bash
 miden-validator bootstrap \
@@ -63,7 +64,7 @@ miden-ntx-builder bootstrap \
 For `devnet`, use `--network devnet` instead. The `--network` flag is shorthand for downloading the signed genesis block
 from `https://genesis.<network>.miden.io`.
 
-Use the same KMS key ID when starting the validator for this network.
+The same KMS key ID must be used when the official validator operator starts the validator for this network.
 
   </TabItem>
   <TabItem value="unofficial" label="Unofficial network">
