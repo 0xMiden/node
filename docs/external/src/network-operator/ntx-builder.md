@@ -14,6 +14,7 @@ them locally or through a remote transaction prover, and submits them through th
 miden-ntx-builder start \
   --listen 0.0.0.0:50301 \
   --rpc.url http://sequencer:57291 \
+  --rpc.auth-header-value <network-tx-auth-secret> \
   --data-directory ntx-builder-data
 ```
 
@@ -23,9 +24,14 @@ If a remote transaction prover is available, configure it with:
 miden-ntx-builder start \
   --listen 0.0.0.0:50301 \
   --rpc.url http://sequencer:57291 \
+  --rpc.auth-header-value <network-tx-auth-secret> \
   --tx-prover.url http://tx-prover:50051 \
   --data-directory ntx-builder-data
 ```
+
+The `--rpc.auth-header-value` value is sent as the fixed `x-miden-network-tx-auth` metadata header when the NTX builder
+submits network transactions. It must match the sequencer's `--rpc.network-tx-auth-header-value`; otherwise, those
+network transactions are rejected.
 
 The NTX builder's gRPC API is internal. The sequencer RPC uses it for network-note status queries.
 
