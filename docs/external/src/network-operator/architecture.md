@@ -5,29 +5,29 @@ sidebar_position: 1
 
 # Network Architecture
 
-A Miden network is operated around one sequencer. The sequencer owns network progression, produces blocks, serves public
+A Miden network is operated around one sequencer node. The sequencer owns network progression, produces blocks, serves
 RPC, and coordinates with trusted internal services.
 
 ## Example Architecture
 
-```text
-Clients, wallets, applications
-              |
-        Load balancer
-              |
-      Public RPC full nodes
-              |
-   Block/proof subscriptions
-              |
-          Sequencer
-       /      |      \
-      /       |       \
-Validator  NTX builder  Remote batch/block provers
-              |
-       Remote tx prover
+![Miden network operator architecture](../img/operator_architecture.svg)
 
-Network monitor observes RPC, validator, provers, explorer, faucet, and note transport.
-```
+The public entry points are the gRPC RPC API and the gRPC prover API. Each entry point has its own load balancer: RPC
+requests fan out to full nodes, while prover requests fan out to prover workers.
+
+The diagram shows the service topology. The main data flows are:
+
+| Flow                                | Carries                         |
+| ----------------------------------- | ------------------------------- |
+| Sequencer to full nodes             | Block stream                    |
+| Full nodes to sequencer             | Transaction submissions         |
+| Sequencer to validator              | Transactions and proposed block |
+| Validator to sequencer              | Signed block                    |
+| Sequencer to NTX builder            | Block stream                    |
+| NTX builder to sequencer            | Network transactions            |
+| NTX builder to prover load balancer | Transaction proof jobs          |
+
+Network monitor observes RPC, validator, provers, explorer, faucet, and note transport (an independent service).
 
 ## Components and Roles
 
