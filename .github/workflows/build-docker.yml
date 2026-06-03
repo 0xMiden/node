@@ -25,6 +25,12 @@ jobs:
           - component: ntx-builder
             bin: miden-ntx-builder
             port: 50301
+          - component: remote-prover
+            bin: miden-remote-prover
+            port: 50051
+          - component: network-monitor
+            bin: miden-network-monitor
+            port: 3000
     name: Build ${{ matrix.component }}
     steps:
       - name: Build

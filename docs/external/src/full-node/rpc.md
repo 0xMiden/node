@@ -31,7 +31,7 @@ Full nodes sync from their upstream source using:
 - `BlockSubscription` for committed signed blocks.
 - `ProofSubscription` for block proofs.
 
-You can daisy-chain full nodes to scale read throughput, and fan out.
+You can daisy-chain full nodes and fan out downstream nodes to scale read throughput.
 
 ```text
                              ┌── Full node

@@ -56,21 +56,19 @@ conflict, and use the detail byte when a client needs stable branching between b
 ## Request Limits
 
 Use `GetLimits` to discover method-specific request limits before sending large sync requests. Methods such as
-`SyncNotes`, `SyncNullifiers`, and `GetNotesById` may reject requests that exceed the configured limit. Split larger
-requests into smaller batches.
+`GetAccount`, `SyncNotes`, `SyncNullifiers`, and `GetNotesById` may reject requests that exceed the configured limit.
+Split larger requests into smaller batches.
 
 The limits are returned in `json` format as follows:
 
 ```json
 {
   "endpoints": {
-    "CheckNullifiers": { "parameters": { "nullifier": 1000 } },
-    "SyncNullifiers": { "parameters": { "nullifier": 1000 } },
-    "SyncTransactions": { "parameters": { "account_id": 1000 } },
-    "SyncAccountVault": { "parameters": { "account_id": 1000 } },
-    "SyncAccountStorageMaps": { "parameters": { "account_id": 1000 } },
+    "GetAccount": { "parameters": { "storage_map_key": 64 } },
+    "GetNotesById": { "parameters": { "note_id": 100 } },
     "SyncNotes": { "parameters": { "note_tag": 1000 } },
-    "GetNotesById": { "parameters": { "note_id": 100 } }
+    "SyncNullifiers": { "parameters": { "nullifier_prefix": 1000 } },
+    "SyncTransactions": { "parameters": { "account_id": 1000 } }
   }
 }
 ```

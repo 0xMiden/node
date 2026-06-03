@@ -75,4 +75,4 @@ grpcurl -plaintext localhost:57291 rpc.Api/Status
 The `-plaintext` flag is required for the local full node RPC listener because it does not use TLS.
 
 Replace `testnet`, `<release-tag>`, and `https://rpc.testnet.miden.io` with the network, version, and upstream source
-you intend to follow.
+you intend to follow. See [Official Network URLs](/official-network-urls) for public official network endpoints.
