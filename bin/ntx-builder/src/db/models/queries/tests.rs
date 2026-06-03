@@ -292,6 +292,56 @@ fn account_last_tx_returns_none_for_untracked_account() {
     assert_eq!(account_last_tx(conn, account_id).unwrap(), None);
 }
 
+// GENESIS APPLICATION
+// ================================================================================================
+
+/// Builds genesis-shaped effects: a full-state network-account update with no originating
+/// transactions, at [`BlockNumber::GENESIS`].
+fn genesis_effects() -> CommittedBlockEffects {
+    let (account, details) = mock_network_account_update();
+    CommittedBlockEffects {
+        header: mock_block_header(BlockNumber::GENESIS),
+        network_notes: vec![],
+        nullifiers: vec![],
+        network_account_updates: vec![(account.id(), details)],
+        account_transactions: vec![],
+    }
+}
+
+#[test]
+fn apply_committed_block_seeds_genesis_network_account() {
+    let (conn, _dir) = &mut test_conn();
+    let effects = genesis_effects();
+    let account_id = effects.network_account_updates[0].0;
+
+    // Genesis has no transactions, so this used to panic on the "must originate from a transaction"
+    // invariant. It must now bootstrap the account successfully.
+    apply_committed_block(conn, &effects, &PartialMmr::default()).unwrap();
+
+    assert!(
+        get_account(conn, account_id).unwrap().is_some(),
+        "genesis account should be seeded"
+    );
+    // The seeded account carries the zero sentinel: no transaction produced it. An actor never
+    // submits the zero id, so this can never be mistaken for a landed transaction.
+    assert_eq!(
+        account_last_tx(conn, account_id).unwrap(),
+        Some(TransactionId::from_raw(Word::empty())),
+    );
+}
+
+#[test]
+#[should_panic(expected = "must originate from a transaction")]
+fn apply_committed_block_panics_on_txless_update_after_genesis() {
+    let (conn, _dir) = &mut test_conn();
+    // Same shape as genesis but at a non-genesis height: a committed account update with no
+    // originating transaction is a real block-producer invariant violation and must still panic.
+    let mut effects = genesis_effects();
+    effects.header = mock_block_header(BlockNumber::from(1));
+
+    apply_committed_block(conn, &effects, &PartialMmr::default()).unwrap();
+}
+
 #[test]
 fn notes_failed_increments_attempt_and_records_error() {
     let (conn, _dir) = &mut test_conn();

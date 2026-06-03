@@ -109,7 +109,7 @@ if [[ "$SKIP_BOOTSTRAP" != "true" ]]; then
     echo "Bootstrapping validator..."
     KMS_BOOTSTRAP_ARGS=()
     if [[ -n "$KMS_KEY_ID" ]]; then
-        KMS_BOOTSTRAP_ARGS+=(--validator.key.kms-id "$KMS_KEY_ID")
+        KMS_BOOTSTRAP_ARGS+=(--key.kms-id "$KMS_KEY_ID")
     fi
 
     "$VALIDATOR_BINARY" bootstrap \

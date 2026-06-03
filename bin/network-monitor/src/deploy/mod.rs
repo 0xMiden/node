@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use backon::{ExponentialBuilder, Retryable};
 use miden_node_proto::clients::{Builder, RpcClient};
 use miden_node_proto::generated::rpc::BlockHeaderByNumberRequest;
 use miden_node_proto::generated::transaction::ProvenTransaction;
@@ -45,59 +46,96 @@ use crate::deploy::wallet::create_wallet_account;
 pub mod counter;
 pub mod wallet;
 
+/// Backoff schedule applied to the genesis-discovery RPC handshake.
+///
+/// At startup the monitor may come up before the node's RPC endpoint is accepting connections, so
+/// the eager `connect()` (and the follow-up `get_block_header_by_number` request) is retried with
+/// exponential backoff instead of aborting the binary on the first refused connection. The schedule
+/// is bounded so a genuinely unreachable or misconfigured endpoint still surfaces as a fatal error
+/// rather than hanging forever.
+const GENESIS_DISCOVERY_BACKOFF_INITIAL: Duration = Duration::from_secs(1);
+const GENESIS_DISCOVERY_BACKOFF_MAX: Duration = Duration::from_secs(30);
+const GENESIS_DISCOVERY_MAX_RETRIES: usize = 10;
+
+/// Builds the [`ExponentialBuilder`] used to back off retries on transient genesis-discovery
+/// failures.
+fn genesis_discovery_backoff() -> ExponentialBuilder {
+    ExponentialBuilder::default()
+        .with_min_delay(GENESIS_DISCOVERY_BACKOFF_INITIAL)
+        .with_max_delay(GENESIS_DISCOVERY_BACKOFF_MAX)
+        .with_factor(2.0)
+        .with_max_times(GENESIS_DISCOVERY_MAX_RETRIES)
+        .with_jitter()
+}
+
 /// Create an RPC client configured with the correct genesis metadata in the `Accept` header so that
 /// write RPCs such as `SubmitProvenTx` are accepted by the node.
+///
+/// The full handshake (genesis discovery plus the genesis-aware reconnect) is retried with
+/// [`genesis_discovery_backoff`] so a node that is still starting up does not abort the monitor.
 pub async fn create_genesis_aware_rpc_client(
     rpc_url: &Url,
     timeout: Duration,
 ) -> Result<RpcClient> {
-    // First, create a temporary client without genesis metadata to discover the genesis block
-    // header and its commitment.
-    let mut rpc: RpcClient = Builder::new(rpc_url.clone())
-        .with_tls()
-        .context("Failed to configure TLS for RPC client")?
-        .with_timeout(timeout)
-        .without_metadata_version()
-        .without_metadata_genesis()
-        .without_otel_context_injection()
-        .connect()
-        .await
-        .context("Failed to create RPC client for genesis discovery")?;
+    (|| async {
+        // First, create a temporary client without genesis metadata to discover the genesis block
+        // header and its commitment.
+        let mut rpc: RpcClient = Builder::new(rpc_url.clone())
+            .with_tls()
+            .context("Failed to configure TLS for RPC client")?
+            .with_timeout(timeout)
+            .without_metadata_version()
+            .without_metadata_genesis()
+            .without_otel_context_injection()
+            .connect()
+            .await
+            .context("Failed to create RPC client for genesis discovery")?;
 
-    let block_header_request = BlockHeaderByNumberRequest {
-        block_num: Some(BlockNumber::GENESIS.as_u32()),
-        include_mmr_proof: None,
-    };
+        let block_header_request = BlockHeaderByNumberRequest {
+            block_num: Some(BlockNumber::GENESIS.as_u32()),
+            include_mmr_proof: None,
+        };
 
-    let response = rpc
-        .get_block_header_by_number(block_header_request)
-        .await
-        .context("Failed to get genesis block header from RPC")?
-        .into_inner();
+        let response = rpc
+            .get_block_header_by_number(block_header_request)
+            .await
+            .context("Failed to get genesis block header from RPC")?
+            .into_inner();
 
-    let genesis_block_header = response
-        .block_header
-        .ok_or_else(|| anyhow::anyhow!("No block header in response"))?;
+        let genesis_block_header = response
+            .block_header
+            .ok_or_else(|| anyhow::anyhow!("No block header in response"))?;
 
-    let genesis_header: BlockHeader =
-        genesis_block_header.try_into().context("Failed to convert block header")?;
-    let genesis_commitment = genesis_header.commitment();
-    let genesis = genesis_commitment.to_hex();
+        let genesis_header: BlockHeader =
+            genesis_block_header.try_into().context("Failed to convert block header")?;
+        let genesis_commitment = genesis_header.commitment();
+        let genesis = genesis_commitment.to_hex();
 
-    // Rebuild the client, this time including the required genesis metadata so that write RPCs like
-    // SubmitProvenTx are accepted by the node.
-    let rpc_client = Builder::new(rpc_url.clone())
-        .with_tls()
-        .context("Failed to configure TLS for RPC client")?
-        .with_timeout(timeout)
-        .without_metadata_version()
-        .with_metadata_genesis(genesis)
-        .without_otel_context_injection()
-        .connect()
-        .await
-        .context("Failed to connect to RPC server with genesis metadata")?;
+        // Rebuild the client, this time including the required genesis metadata so that write RPCs
+        // like SubmitProvenTx are accepted by the node.
+        let rpc_client = Builder::new(rpc_url.clone())
+            .with_tls()
+            .context("Failed to configure TLS for RPC client")?
+            .with_timeout(timeout)
+            .without_metadata_version()
+            .with_metadata_genesis(genesis)
+            .without_otel_context_injection()
+            .connect()
+            .await
+            .context("Failed to connect to RPC server with genesis metadata")?;
 
-    Ok(rpc_client)
+        Ok(rpc_client)
+    })
+    .retry(genesis_discovery_backoff())
+    .notify(|err: &anyhow::Error, sleep: Duration| {
+        tracing::warn!(
+            target: COMPONENT,
+            err = ?err,
+            sleep_ms = sleep.as_millis() as u64,
+            "RPC genesis discovery failed; retrying after backoff",
+        );
+    })
+    .await
 }
 
 /// Create a fresh wallet + counter pair in memory and deploy the counter to the network.

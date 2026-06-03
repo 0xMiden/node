@@ -43,10 +43,8 @@
 - [BREAKING] Removed `Network` variant from genesis config `StorageMode`. The implicit default for wallets and fungible faucets is now `Private` (previously `Network`, which mapped to `Public` storage) ([#2095](https://github.com/0xMiden/node/pull/2095)).
 - [BREAKING] Updated `miden-protocol` family of crates to the published `v0.15.0` on crates.io (previously tracked the `next` branch). The published release removes the multi-variant `AccountType` (`RegularAccount*`, `FungibleFaucet`, `NonFungibleFaucet`) and renames the former `AccountStorageMode` to `AccountType` with only `Public`/`Private`. Faucet-vs-wallet distinction is now component-based.
 - [BREAKING] Removed the `has_updatable_code` field from genesis `[[wallet]]` config entries. Updatable/immutable code is no longer modeled by the protocol, so any genesis config that explicitly sets this field will fail to parse — remove the field.
-
 - Fixed block producer mempool panic when selecting transactions that depend on notes created by pruned committed transactions ([#2097](https://github.com/0xMiden/node/pull/2097)).
 - Implemented filtering based on the network account note script root allowlist in ntx-builder ([#2042](https://github.com/0xMiden/node/issues/2042)).
-
 - [BREAKING] Renamed `ExplorerStatusDetails` fields in the network monitor's `/status` payload from `number_of_*` to `total_*` (`total_transactions`, `total_nullifiers`, `total_notes`, `total_account_updates`). The values now represent network-wide cumulative totals from the explorer's `overviewStats` query instead of last-block counts.
 - [BREAKING] Removed `--wallet-filepath` / `--counter-filepath` flags and the `MIDEN_MONITOR_WALLET_FILEPATH` / `MIDEN_MONITOR_COUNTER_FILEPATH` env vars from the network monitor. The monitor now keeps wallet and counter accounts fully in memory and regenerates them on every startup; the dashboard's counter value resets to zero on restart.
 - Added `--counter-pending-unhealthy-threshold` (env `MIDEN_MONITOR_COUNTER_PENDING_UNHEALTHY_THRESHOLD`, default `5`) to the network monitor: the Network Transactions card now flips unhealthy when the gap between expected and observed counter values stays above the threshold for three consecutive polls.
@@ -58,6 +56,7 @@
 - Persisted the genesis commitment in the ntx-builder at bootstrap and sent it in the RPC `Accept` header so the node accepts its write transactions, and added RPC client implementations ([#2162](https://github.com/0xMiden/node/pull/2162)).
 - Persisted attachments of private output notes when applying a block, so they are now returned by `GetNotesById` ([#2172](https://github.com/0xMiden/node/pull/2172)).
 - [BREAKING] `miden-ntx-builder` now requires a remote transaction prover to be configured ([#2179](https://github.com/0xMiden/node/pull/2179)).
+- [BREAKING] Replaced `StoreStatus` with `chain_tip` field in `RpcStatus` ([#2187](https://github.com/0xMiden/node/pull/2187)).
 
 ## v0.14.11 (TBD)
 
@@ -280,7 +279,7 @@
 - Refactored account table and introduce tracking forest ([#1394](https://github.com/0xMiden/node/pull/1394)).
 - [BREAKING] Re-organized RPC protobuf schema to be independent of internal schema ([#1401](https://github.com/0xMiden/node/pull/1401)).
 - Removed internal errors from the `miden-network-monitor` ([#1424](https://github.com/0xMiden/node/pull/1424)).
-- [BREAKING] Added block signing capabilities to Validator component and updated gensis bootstrap to sign blocks with configured signer ([#1426](https://github.com/0xMiden/node/pull/1426)).
+- [BREAKING] Added block signing capabilities to Validator component and updated genesis bootstrap to sign blocks with configured signer ([#1426](https://github.com/0xMiden/node/pull/1426)).
 - Track network transactions latency in `miden-network-monitor` ([#1430](https://github.com/0xMiden/node/pull/1430)).
 - Reduced default block interval from `5s` to `2s` ([#1438](https://github.com/0xMiden/node/pull/1438)).
 - Increased retained account tree history from 33 to 100 blocks to account for the reduced block interval ([#1438](https://github.com/0xMiden/node/pull/1438)).
