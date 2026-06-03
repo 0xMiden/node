@@ -351,7 +351,24 @@ impl LoopDb {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::mock_genesis_block;
+    use crate::test_utils::{mock_genesis_block, mock_genesis_block_with_network_account};
+
+    #[tokio::test]
+    async fn bootstrap_seeds_genesis_network_account() {
+        let dir = tempfile::tempdir().expect("failed to create temp directory");
+        let db_path = dir.path().join("ntx-builder.sqlite3");
+
+        let (genesis, account_id) = mock_genesis_block_with_network_account();
+        Db::bootstrap(db_path.clone(), &genesis)
+            .await
+            .expect("bootstrap should succeed with a network account in genesis");
+
+        let db = Db::load(db_path).await.expect("load should open the bootstrapped database");
+        assert!(
+            db.has_committed_account(account_id).await.expect("query should succeed"),
+            "genesis network account should be committed after bootstrap",
+        );
+    }
 
     #[tokio::test]
     async fn bootstrap_seeds_genesis_chain_state() {
