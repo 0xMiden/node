@@ -188,6 +188,8 @@ pub enum ApplyBlockError {
 
     // OTHER ERRORS
     // ---------------------------------------------------------------------------------------------
+    #[error("supplied block is not in order: {0}")]
+    BlockCacheOutOfOrder(BlockNumber),
     #[error("failed to send block to writer task: {0}")]
     WriterTaskSendFailed(String),
     #[error("writer task dropped the result channel")]

@@ -58,15 +58,10 @@ impl WriteHandle {
     pub async fn apply_block(&self, signed_block: SignedBlock) -> Result<(), ApplyBlockError> {
         let (result_tx, result_rx) = oneshot::channel();
         self.tx
-            .send(WriteRequest {
-                signed_block,
-                result_tx,
-            })
+            .send(WriteRequest { signed_block, result_tx })
             .await
             .map_err(|e| ApplyBlockError::WriterTaskSendFailed(e.to_string()))?;
-        result_rx
-            .await
-            .map_err(ApplyBlockError::WriterTaskRecvFailed)?
+        result_rx.await.map_err(ApplyBlockError::WriterTaskRecvFailed)?
     }
 }
 
@@ -145,8 +140,8 @@ impl BlockWriter {
         let signed_block_bytes = signed_block.to_bytes();
         let cache_bytes = signed_block_bytes.clone();
 
-        // TODO(sergerad): move this when account forest integrated into in-memory state.
-        // Extract public account deltas before `signed_block` is moved.
+        // TODO(sergerad): move this when account forest integrated into in-memory state. Extract
+        // public account deltas before `signed_block` is moved.
         let account_deltas = tokio::task::block_in_place(|| {
             Vec::from_iter(body.updated_accounts().iter().filter_map(
                 |update| match update.details() {
@@ -189,33 +184,32 @@ impl BlockWriter {
         })?;
 
         // Save the block to the block store.
-        self.block_store
-            .save_block(block_num, &signed_block_bytes)
-            .await?;
+        self.block_store.save_block(block_num, &signed_block_bytes).await?;
 
-        // Commit to DB. Readers continue to see the old in-memory state (via their Arc) while
-        // the DB commits. We ensure consistency by scoping all RPC queries that hit DB data by
-        // the block number that is Arc swapped at the end of this function.
+        // Commit to DB. Readers continue to see the old in-memory state (via their Arc) while the
+        // DB commits. We ensure consistency by scoping all RPC queries that hit DB data by the
+        // block number that is Arc swapped at the end of this function.
         self.db
             .apply_block(signed_block, notes)
             .instrument(info_span!(target: COMPONENT, "db_apply_block"))
             .await
             .map_err(|err| ApplyBlockError::DbUpdateTaskFailed(err.as_report()))?;
 
-        // TODO(sergerad): Move this into the same task as above once forest is integrated into in-memory state.
-        // Update the forest.
+        // TODO(sergerad): Move this into the same task as above once forest is integrated into
+        // in-memory state. Update the forest.
         tokio::task::block_in_place(|| {
             let mut forest = self.forest.blocking_write();
             forest.apply_block_updates(block_num, account_deltas)
         })?;
 
-        // Atomically publish the new state. Readers that call snapshot() after this point
-        // will see the updated state. Readers holding the old Arc continue unaffected.
+        // Atomically publish the new state. Readers that call snapshot() after this point will see
+        // the updated state. Readers holding the old Arc continue unaffected.
         self.in_memory.store(snapshot);
 
         // Notify replica subscribers.
         self.block_cache
-            .push(block_num, BlockNotification::new(block_num, cache_bytes));
+            .push(block_num, BlockNotification::new(block_num, cache_bytes))
+            .map_err(|n| ApplyBlockError::BlockCacheOutOfOrder(n.block_num()))?;
         let _ = self.committed_tip_tx.send(block_num);
 
         info!(%block_commitment, block_num = block_num.as_u32(), COMPONENT, "apply_block successful");
@@ -293,9 +287,7 @@ impl BlockWriter {
         let nullifier_tree_update = self
             .nullifier_tree
             .compute_mutations(
-                body.created_nullifiers()
-                    .iter()
-                    .map(|nullifier| (*nullifier, block_num)),
+                body.created_nullifiers().iter().map(|nullifier| (*nullifier, block_num)),
             )
             .map_err(InvalidBlockError::NewBlockNullifierAlreadySpent)?;
 
@@ -314,10 +306,10 @@ impl BlockWriter {
             .map_err(|e| match e {
                 HistoricalError::AccountTreeError(err) => {
                     InvalidBlockError::NewBlockDuplicateAccountIdPrefix(err)
-                }
+                },
                 HistoricalError::MerkleError(_) => {
                     panic!("Unexpected MerkleError during account tree mutation computation")
-                }
+                },
             })?;
 
         if account_tree_update.as_mutation_set().root() != header.account_root() {

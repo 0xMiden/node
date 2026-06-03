@@ -1005,7 +1005,7 @@ impl api_server::Api for RpcService {
 
         Ok(Response::new(proto::rpc::RpcStatus {
             version: env!("CARGO_PKG_VERSION").to_string(),
-            chain_tip: self.store.chain_tip(Finality::Committed).await.as_u32(),
+            chain_tip: self.store.chain_tip(Finality::Committed).as_u32(),
             block_producer: block_producer_status.or(Some(proto::rpc::BlockProducerStatus {
                 status: "unreachable".to_string(),
                 version: "-".to_string(),
