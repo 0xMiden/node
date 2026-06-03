@@ -181,7 +181,9 @@ impl State {
         })?;
 
         // Push to cache and notify replica subscribers.
-        self.block_cache.push(block_num, BlockNotification::new(block_num, cache_bytes));
+        self.block_cache
+            .push(block_num, BlockNotification::new(block_num, cache_bytes))
+            .expect("block cache receives sequential block numbers");
         let _ = self.committed_tip_tx.send(block_num);
 
         info!(%block_commitment, block_num = block_num.as_u32(), COMPONENT, "apply_block successful");
