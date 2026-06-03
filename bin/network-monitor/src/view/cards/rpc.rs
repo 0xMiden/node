@@ -18,6 +18,10 @@ pub(in crate::view) fn render_rpc_status(details: &RpcStatusDetails) -> Markup {
                 strong { "Version: " }
                 (details.version)
             }
+            div class="detail-item" {
+                strong { "Chain Tip: " }
+                (details.chain_tip)
+            }
             @if let Some(genesis) = &details.genesis_commitment {
                 div class="detail-item" {
                     strong { "Genesis: " }
