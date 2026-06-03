@@ -58,11 +58,10 @@ architecture's block verification and recovery path.
 ### Network Transaction Builder
 
 The network transaction builder runs `miden-ntx-builder`. It follows committed blocks, tracks network notes, constructs
-network transactions, proves them locally or through a transaction prover, and submits them back through the sequencer
-RPC.
+network transactions, proves them through a remote transaction prover, and submits them through an RPC node.
 
-This service is internal. The sequencer uses it to answer network-note status queries, and it uses the same upstream RPC
-path as other transaction submitters when sending proven transactions.
+This service is internal. RPC nodes use it to answer network-note status queries, and it uses the same upstream RPC path
+as other transaction submitters when sending proven transactions.
 
 ### Remote Provers
 
