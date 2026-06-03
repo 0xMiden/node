@@ -314,8 +314,8 @@ fn apply_committed_block_seeds_genesis_network_account() {
     let effects = genesis_effects();
     let account_id = effects.network_account_updates[0].0;
 
-    // Genesis has no transactions, so this used to panic on the "must originate from a
-    // transaction" invariant. It must now bootstrap the account successfully.
+    // Genesis has no transactions, so this used to panic on the "must originate from a transaction"
+    // invariant. It must now bootstrap the account successfully.
     apply_committed_block(conn, &effects, &PartialMmr::default()).unwrap();
 
     assert!(
