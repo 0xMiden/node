@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Fixed trace exports not supporting TLS [#2199](#https://github.com/0xMiden/node/pull/2199).
+- The validator's `SignBlock` response now includes the commitment of the block it signed, and the block producer rejects a block with `BlockCommitmentMismatch` if it differs from the locally built commitment [#2204](https://github.com/0xMiden/node/pull/2204).
 
 ## v0.15.0-rc.0 (2026-06-03)
 
