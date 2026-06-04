@@ -54,11 +54,14 @@ validator
 ntx-builder
 remote-prover
 network-monitor
-rust-crates
 packaging
 docs
 internal
 ```
+
+Crate-only implementation changes should use `internal`. If a crate change affects a public boundary, use the affected
+public component instead. Not all PRs require an entry; be minimal - every entry adds noise. Be frugal especially with
+`internal` changes - only those that have a meaningful impact on your colleagues.
 
 Allowed categories:
 
@@ -79,6 +82,11 @@ Useful commands:
 
 ```sh
 cargo xtask changelog check
+cargo xtask changelog ci-check --base origin/main --pr 2149 --report target/changelog-check.md
 cargo xtask changelog render --version v0.15.0
 cargo xtask changelog release --version v0.15.0 --date 2026-06-03
 ```
+
+The CI check uses simple heuristics to decide whether a changelog entry is likely required. When it triggers, any
+`changelog.d/**` change satisfies the gate, including updates to an existing entry for stacked pull requests. Use the
+`no changelog` label for changes that are intentionally not release-notable.

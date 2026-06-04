@@ -15,21 +15,19 @@ pub(super) enum Component {
     NtxBuilder,
     RemoteProver,
     NetworkMonitor,
-    RustCrates,
     Packaging,
     Docs,
     Internal,
 }
 
 impl Component {
-    pub(super) const ALL: [Self; 10] = [
+    pub(super) const ALL: [Self; 9] = [
         Self::RpcApi,
         Self::Node,
         Self::Validator,
         Self::NtxBuilder,
         Self::RemoteProver,
         Self::NetworkMonitor,
-        Self::RustCrates,
         Self::Packaging,
         Self::Docs,
         Self::Internal,
@@ -45,7 +43,6 @@ impl fmt::Display for Component {
             Self::NtxBuilder => "Network Transaction Builder",
             Self::RemoteProver => "Remote Prover",
             Self::NetworkMonitor => "Network Monitor",
-            Self::RustCrates => "Rust Crates",
             Self::Packaging => "Packaging",
             Self::Docs => "Docs",
             Self::Internal => "Internal",

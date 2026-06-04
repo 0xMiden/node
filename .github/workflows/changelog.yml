@@ -1,5 +1,8 @@
-# Runs changelog related jobs.
-# CI job heavily inspired by: https://github.com/tarides/changelog-check-action
+# Runs the pull request changelog policy.
+#
+# The policy itself lives in `cargo xtask changelog ci-check`; this workflow is
+# intentionally only responsible for collecting PR metadata, publishing the
+# generated report, and turning the xtask exit code into the final CI result.
 
 name: changelog
 
@@ -9,6 +12,11 @@ on:
 
 permissions:
   contents: read
+  # GitHub models pull request comments as issue comments, so creating or
+  # updating the sticky report comment requires `issues: write`.
+  issues: write
+  # Read access is enough for PR metadata such as labels and the PR number.
+  pull-requests: read
 
 jobs:
   changelog:
@@ -17,11 +25,105 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
+          # The xtask compares the PR branch with `origin/<base>`, so it needs
+          # the base branch history rather than the default shallow checkout.
           fetch-depth: 0
           persist-credentials: false
-      - name: Check for changes in changelog
+
+      - name: Check changelog policy
+        id: changelog_policy
+        # Keep later report/comment steps running even when the policy fails.
+        # The final step below re-fails the job after the report is published.
+        continue-on-error: true
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           NO_CHANGELOG_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'no changelog') }}
-        run: ./scripts/check-changelog.sh
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # `ci-check` applies the path heuristics, validates changed
+          # changelog.d TOML files, and writes the human-readable Markdown
+          # report consumed by both the Actions summary and sticky PR comment.
+          if [ "${NO_CHANGELOG_LABEL}" = "true" ]; then
+            # The label only skips the missing-entry gate. Changed changelog
+            # TOML files are still validated by the xtask.
+            cargo xtask changelog ci-check \
+              --base "origin/${BASE_REF}" \
+              --pr "${PR_NUMBER}" \
+              --report target/changelog-check.md \
+              --no-changelog-label
+          else
+            cargo xtask changelog ci-check \
+              --base "origin/${BASE_REF}" \
+              --pr "${PR_NUMBER}" \
+              --report target/changelog-check.md
+          fi
+        shell: bash
+
+      - name: Add changelog report to job summary
+        if: always()
+        run: |
+          # The job summary is always available, including for forks where the
+          # token may not be allowed to write PR comments.
+          if [ -f target/changelog-check.md ]; then
+            cat target/changelog-check.md >> "${GITHUB_STEP_SUMMARY}"
+          fi
+        shell: bash
+
+      - name: Update changelog report comment
+        if: always()
+        # Commenting is best-effort. The policy result should not be hidden just
+        # because comment permissions are unavailable or the GitHub API is down.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if [ ! -f target/changelog-check.md ]; then
+            exit 0
+          fi
+
+          marker="<!-- changelog-check -->"
+          body_file="${RUNNER_TEMP}/changelog-check-comment.md"
+          json_file="${RUNNER_TEMP}/changelog-check-comment.json"
+
+          # The hidden marker makes the comment "sticky": each run updates the
+          # previous github-actions[bot] comment instead of creating a new one.
+          {
+            echo "${marker}"
+            echo
+            cat target/changelog-check.md
+          } > "${body_file}"
+
+          jq -Rs '{body: .}' "${body_file}" > "${json_file}"
+
+          # PR comments are issue comments in the GitHub API. Limit the lookup
+          # to comments from github-actions[bot] that contain our marker so we
+          # do not edit a human-authored comment by accident.
+          comment_id="$(
+            gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              --paginate \
+              --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- changelog-check -->"))) | .id' \
+              | head -n 1
+          )"
+
+          if [ -n "${comment_id}" ]; then
+            gh api \
+              --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" \
+              --input "${json_file}" \
+              >/dev/null
+          else
+            gh api \
+              --method POST \
+              "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              --input "${json_file}" \
+              >/dev/null
+          fi
+        shell: bash
+
+      - name: Fail when changelog policy fails
+        # This separate failure step preserves the original policy result while
+        # still allowing the summary and sticky comment steps to run first.
+        if: steps.changelog_policy.outcome == 'failure'
+        run: exit 1
         shell: bash

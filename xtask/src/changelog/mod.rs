@@ -1,3 +1,4 @@
+mod ci;
 mod entry;
 mod render;
 
@@ -29,6 +30,9 @@ pub struct Changelog {
 enum Command {
     /// Validate structured changelog files.
     Check(Check),
+
+    /// Check whether a pull request likely needs a changelog entry.
+    CiCheck(ci::CiCheck),
 
     /// Render a version's changelog section to stdout.
     Render(Render),
@@ -93,6 +97,7 @@ impl Changelog {
     pub fn run(&self) -> Result<()> {
         match &self.command {
             Command::Check(command) => command.run(),
+            Command::CiCheck(command) => command.run(),
             Command::Render(command) => command.run(),
             Command::Release(command) => command.run(),
         }
