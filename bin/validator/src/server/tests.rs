@@ -4,6 +4,7 @@ use miden_node_proto::generated::validator::api_server;
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::GenesisState;
 use miden_node_utils::fee::test_fee_params;
+use miden_protocol::Word;
 use miden_protocol::block::{BlockHeader, BlockInputs, ProposedBlock};
 use miden_protocol::testing::random_secret_key::random_secret_key;
 use miden_protocol::transaction::PartialBlockchain;
@@ -61,7 +62,7 @@ impl TestValidator {
     async fn call_sign_block(
         &self,
         proposed_block: &ProposedBlock,
-    ) -> Result<tonic::Response<proto::blockchain::BlockSignature>, tonic::Status> {
+    ) -> Result<tonic::Response<proto::blockchain::SignBlockResponse>, tonic::Status> {
         let request = tonic::Request::new(proto::blockchain::ProposedBlock {
             proposed_block: proposed_block.to_bytes(),
         });
@@ -116,6 +117,33 @@ fn empty_block(parent_header: &BlockHeader, chain: &PartialBlockchain) -> Propos
 
 // TESTS
 // ================================================================================================
+
+/// The `SignBlock` response reports the commitment of the block the validator signed, and it
+/// matches the commitment the caller derives from the same proposed block. This lets the block
+/// producer detect a block-hash mismatch between itself and the validator.
+#[tokio::test]
+async fn sign_block_returns_signed_commitment() {
+    let tv = TestValidator::new().await;
+
+    let proposed = tv.propose_empty_block();
+    let response = tv
+        .call_sign_block(&proposed)
+        .await
+        .expect("block should be signed")
+        .into_inner();
+
+    let (header, _) = proposed.into_header_and_body().unwrap();
+    let returned: Word = response
+        .block_commitment
+        .expect("response should carry the signed commitment")
+        .try_into()
+        .unwrap();
+    assert_eq!(
+        returned,
+        header.commitment(),
+        "returned commitment must match the proposed block's commitment",
+    );
+}
 
 /// An empty block at chain tip + 1 with the correct previous block commitment should be accepted.
 #[tokio::test]
