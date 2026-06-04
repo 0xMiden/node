@@ -96,6 +96,12 @@ impl BlockSync {
 }
 
 impl ProofSync {
+    /// Synchronizes block proofs from an upstream RPC service.
+    ///
+    /// Proof sync is intentionally coupled to block sync via the committed tip: a proof is only applied
+    /// once its block has been committed locally. This means proof sync can stall if block sync falls
+    /// behind, but that is acceptable — there is no value in streaming proofs for blocks that have not
+    /// yet been applied.
     async fn run(self) -> anyhow::Result<()> {
         (|| async {
             self.sync()
