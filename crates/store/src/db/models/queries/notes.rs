@@ -6,8 +6,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ops::RangeInclusive;
 
+#[cfg(test)]
+use diesel::prelude::BoolExpressionMethods;
 use diesel::prelude::{
-    BoolExpressionMethods,
     ExpressionMethods,
     Insertable,
     QueryDsl,
@@ -53,6 +54,8 @@ use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_standards::note::NetworkAccountTarget;
 
 use crate::COMPONENT;
+#[cfg(test)]
+use crate::db::models::Page;
 use crate::db::models::conv::{
     SqlTypeConvert,
     idx_to_raw_sql,
@@ -61,7 +64,7 @@ use crate::db::models::conv::{
 };
 use crate::db::models::queries::select_block_header_by_block_num;
 use crate::db::models::{serialize_vec, vec_raw_try_into};
-use crate::db::{DatabaseError, NoteRecord, NoteSyncRecord, NoteSyncUpdate, Page, schema};
+use crate::db::{DatabaseError, NoteRecord, NoteSyncRecord, NoteSyncUpdate, schema};
 use crate::errors::NoteSyncError;
 
 /// Estimated byte size of a [`NoteSyncUpdate`] excluding its notes.
@@ -484,6 +487,7 @@ pub(crate) fn select_note_script_by_root(
 /// LIMIT ?4
 /// ```
 #[expect(clippy::cast_sign_loss, reason = "row_id is a positive integer")]
+#[cfg(test)]
 pub(crate) fn select_unconsumed_network_notes_by_account_id(
     conn: &mut SqliteConnection,
     account_id: AccountId,
