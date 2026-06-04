@@ -1,11 +1,14 @@
 use std::fmt::{self, Write as _};
 use std::path::Path;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 
 use super::entry::{Category, Component, Entry};
 
 const REPOSITORY_PULL_URL: &str = "https://github.com/0xMiden/node/pull";
+const CHANGELOG_HEADING: &str = "# Changelog";
+const ARCHIVED_CHANGELOG_NOTICE: &str =
+    "Historical changelog entries are archived in [CHANGELOG.archived.md](CHANGELOG.archived.md).";
 
 pub(super) fn render_section(version: &str, date: &str, entries: &[Entry]) -> String {
     let mut output = String::new();
@@ -47,25 +50,15 @@ pub(super) fn render_section(version: &str, date: &str, entries: &[Entry]) -> St
     output
 }
 
-pub(super) fn prepend_to_changelog(path: &Path, version: &str, section: &str) -> Result<()> {
-    let source =
-        fs_err::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    ensure!(
-        !source.contains(&format!("## {version} (")),
-        "{} already contains a section for {version}",
-        path.display()
-    );
-
-    let heading = "# Changelog";
-    ensure!(source.starts_with(heading), "{} must start with {heading:?}", path.display());
-
-    let rest = source.strip_prefix(heading).expect("source starts with heading");
-    let rest = rest.trim_start_matches('\n');
-    let updated = format!("{heading}\n\n{}\n\n{}", section.trim_end(), rest);
-
-    fs_err::write(path, updated).with_context(|| format!("writing {}", path.display()))?;
+pub(super) fn write_changelog(path: &Path, section: &str) -> Result<()> {
+    fs_err::write(path, render_changelog(section))
+        .with_context(|| format!("writing {}", path.display()))?;
 
     Ok(())
+}
+
+fn render_changelog(section: &str) -> String {
+    format!("{CHANGELOG_HEADING}\n\n{ARCHIVED_CHANGELOG_NOTICE}\n\n{}\n", section.trim_end())
 }
 
 fn render_entries(title: impl fmt::Display, entries: &[&Entry], output: &mut String) {
@@ -147,16 +140,12 @@ mod tests {
     }
 
     #[test]
-    fn release_prepends_after_changelog_heading() {
-        let source = "# Changelog\n\n## v0.14.0 (2026-04-01)\n\n- Existing.\n";
-        let heading = "# Changelog";
-        let rest = source.strip_prefix(heading).unwrap().trim_start_matches('\n');
+    fn release_renders_full_changelog() {
         let section = "## v0.15.0 (2026-06-03)\n\n- New.";
-        let updated = format!("{heading}\n\n{}\n\n{}", section.trim_end(), rest);
 
         assert_eq!(
-            updated,
-            "# Changelog\n\n## v0.15.0 (2026-06-03)\n\n- New.\n\n## v0.14.0 (2026-04-01)\n\n- Existing.\n"
+            render_changelog(section),
+            "# Changelog\n\nHistorical changelog entries are archived in [CHANGELOG.archived.md](CHANGELOG.archived.md).\n\n## v0.15.0 (2026-06-03)\n\n- New.\n"
         );
     }
 }

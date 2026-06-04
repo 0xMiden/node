@@ -15,7 +15,7 @@ use self::entry::{
     validate_file_layout,
     validate_version,
 };
-use self::render::{prepend_to_changelog, render_section};
+use self::render::{render_section, write_changelog};
 
 const CHANGELOG_DIR: &str = "changelog.d";
 const CHANGELOG_FILE: &str = "CHANGELOG.md";
@@ -37,7 +37,7 @@ enum Command {
     /// Render a version's changelog section to stdout.
     Render(Render),
 
-    /// Prepend a finalized version section to CHANGELOG.md.
+    /// Regenerate CHANGELOG.md.
     Release(Release),
 }
 
@@ -162,7 +162,7 @@ impl Release {
         );
 
         let section = render_section(&self.version, &self.date, &entries);
-        prepend_to_changelog(&self.changelog, &self.version, &section)?;
+        write_changelog(&self.changelog, &section)?;
 
         if !self.keep_entries {
             let version_dir = self.dir.join(&self.version);
