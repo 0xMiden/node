@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Fixed trace exports not supporting TLS [#2199](#https://github.com/0xMiden/node/pull/2199).
+- Fixed validator silently signing blocks with a key that does not match the genesis validator key, which caused the block producer to reject block 1 with `InvalidSignature` [#2203](https://github.com/0xMiden/node/pull/2203).
 
 ## v0.15.0-rc.0 (2026-06-03)
 
