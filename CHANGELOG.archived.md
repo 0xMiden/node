@@ -1,5 +1,65 @@
 # Changelog
 
+## v0.15.0-rc.0 (2026-06-03)
+
+This release is a major step in distributing the node and changes how node components are packaged, bootstrapped, and
+operated.
+
+### RPC API
+
+- [BREAKING] Changed `GetBlockByNumber` to accept a `BlockRequest` with an optional `include_proof` flag and return a response containing the block and optional block proof ([#1864](https://github.com/0xMiden/node/pull/1864)).
+- [BREAKING] Renamed `GetNoteError` to `GetNetworkNoteStatus` and extended it to return the full lifecycle status of a network note (`Pending`, `Processed`, `Discarded`, `Committed`). Consumed notes are now retained in the database after block commit instead of being deleted ([#1892](https://github.com/0xMiden/node/pull/1892)).
+- Extended `ValidatorStatus` with `chain_tip`, `validated_transactions_count`, and `signed_blocks_count` ([#1900](https://github.com/0xMiden/node/pull/1900)).
+- Aligned `SyncNullifiers` list-limit validation in RPC and store with `nullifier_prefix` parameter semantics, and documented query parameter limits ([#1986](https://github.com/0xMiden/node/pull/1986)).
+- Added public and store `Rpc` streaming endpoints for replica block/proof synchronization ([#1987](https://github.com/0xMiden/node/pull/1987)).
+- [BREAKING] Removed `CheckNullifiers` endpoint ([#2049](https://github.com/0xMiden/node/pull/2049)).
+- [BREAKING] `BlockRange.block_to` is now required for all RPC endpoints ([#2056](https://github.com/0xMiden/node/pull/2056)).
+- [BREAKING] Reworked note proto types for multi-attachment support: `NoteMetadata` now carries `attachment_schemes` and `attachments_commitment` instead of a single `attachment`; `Note` and `NetworkNote` gained an `attachments` field; `NoteSyncRecord` now embeds full `NoteMetadata` instead of `NoteMetadataHeader`; and `NoteAttachmentKind` and `NoteMetadataHeader` were removed ([#2078](https://github.com/0xMiden/node/pull/2078)).
+- [BREAKING] Changed `SyncChainMmr`: the upper end of the requested block range is now the chain tip with the requested finality level, and the response also returns the validator signature ([#2075](https://github.com/0xMiden/node/pull/2075)).
+- [BREAKING] Renamed `SubmitProvenTransaction` to `SubmitProvenTx` and `SubmitProvenBatch` to `SubmitProvenTxBatch` ([#2094](https://github.com/0xMiden/node/pull/2094)).
+- [BREAKING] Fixed `proto::note::NoteHeader` so it round-trips losslessly; the wire field is now `details_commitment` instead of `note_id` ([#2132](https://github.com/0xMiden/node/pull/2132)).
+- Allowed network transaction submission conditionally via `SubmitProvenTx` and `SubmitProvenTxBatch`: the NTX builder can now send a key in the `x-miden-network-tx-auth` header that enables submitting network transactions ([#2131](https://github.com/0xMiden/node/issues/2131)).
+- [BREAKING] `GetAccount` can now return all storage map entries with a single request ([#2121](https://github.com/0xMiden/node/issues/2121)).
+- Persisted attachments of private output notes when applying a block, so they are now returned by `GetNotesById` ([#2172](https://github.com/0xMiden/node/pull/2172)).
+- [BREAKING] Replaced `StoreStatus` with `chain_tip` field in `RpcStatus` ([#2187](https://github.com/0xMiden/node/pull/2187)).
+
+### Docker
+
+- Added `ca-certificates` to the node Docker runtime image so outbound `https` connections work in containerized deployments ([#1661](https://github.com/0xMiden/node/issues/1661)).
+- Added a Docker Compose setup for running a disposable local development network via `make local-network-*` targets, with support for custom genesis config bootstrap ([#2159](https://github.com/0xMiden/node/pull/2159), [#2185](https://github.com/0xMiden/node/pull/2185), [#2189](https://github.com/0xMiden/node/pull/2189)).
+
+### Protocol
+
+- [BREAKING] Updated the `miden-protocol` family of crates to the published `v0.15.0` release and bumped `miden-crypto` to `v0.25` ([#2095](https://github.com/0xMiden/node/pull/2095), [#2132](https://github.com/0xMiden/node/pull/2132)).
+- [BREAKING] Renamed genesis config `storage_mode` to `account_type`, removed the `Network` storage variant, and changed the implicit default for wallets and fungible faucets to `Private` ([#2095](https://github.com/0xMiden/node/pull/2095)).
+- [BREAKING] Removed the `has_updatable_code` field from genesis `[[wallet]]` config entries. Updatable/immutable code is no longer modeled by the protocol, so any genesis config that explicitly sets this field will fail to parse; remove the field.
+
+### Node, Store, and Block Producer
+
+- [BREAKING] Replaced binding URL env vars and CLI flags with listen socket addresses, and renamed `--url` flags and `*_URL` env vars to `--listen` and `*_LISTEN` across all components ([#2054](https://github.com/0xMiden/node/pull/2054)).
+- [BREAKING] Unified node components into the `miden-node` binary ([#2119](https://github.com/0xMiden/node/pull/2119)).
+    - Removed `miden-node store`.
+    - Removed `miden-node rpc start`.
+    - Removed `miden-node block-producer`.
+    - Added `miden-node sequencer` for running the canonical block-producing node.
+    - Added `miden-node full` for running a full node that streams blocks from an upstream sequencer and serves local RPC data.
+    - Added top-level `miden-node bootstrap` and `miden-node migrate` lifecycle commands for node initialization and migrations.
+- Made SQLite connection pool sizes configurable for store, validator, and ntx-builder components, defaulting each to twice the available CPU core count ([#2098](https://github.com/0xMiden/node/pull/2098)).
+- Fixed block producer mempool panic when selecting transactions that depend on notes created by pruned committed transactions ([#2097](https://github.com/0xMiden/node/pull/2097)).
+
+### Validator
+
+- [BREAKING] Removed `miden-node validator` subcommand and created a separate `miden-validator` binary ([#2053](https://github.com/0xMiden/node/pull/2053)).
+
+### Network Transaction Builder
+
+- [BREAKING] Removed `miden-node ntx-builder` subcommand and created a separate `miden-ntx-builder` binary ([#2067](https://github.com/0xMiden/node/pull/2067)).
+- Implemented filtering based on the network account note script root allowlist in ntx-builder ([#2042](https://github.com/0xMiden/node/issues/2042)).
+- Added `miden-ntx-builder bootstrap` commands for initializing the ntx-builder database from either node RPC or a trusted genesis block file. The `start` command now requires a bootstrapped database ([#2149](https://github.com/0xMiden/node/pull/2149)).
+- Added `--tx-expiration-delta` (env `MIDEN_NODE_NTX_BUILDER_TX_EXPIRATION_DELTA`, default `30`) to the network transaction builder. Submitted network transactions now expire on-chain after this many blocks, and the builder reuses the same delta as the local window before resubmitting a transaction that has not landed ([#2148](https://github.com/0xMiden/node/pull/2148)).
+- The ntx-builder now persists the genesis commitment at bootstrap and sends it in the RPC `Accept` header so the node accepts its write transactions ([#2162](https://github.com/0xMiden/node/pull/2162)).
+- [BREAKING] `miden-ntx-builder` now requires a remote transaction prover to be configured ([#2179](https://github.com/0xMiden/node/pull/2179)).
+
 ## v0.15.0 (TBD)
 
 - Added `ca-certificates` to the node Docker runtime image so outbound `https` connections work in containerized deployments ([#1661](https://github.com/0xMiden/node/issues/1661)).

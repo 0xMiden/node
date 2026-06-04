@@ -97,7 +97,8 @@ struct Changeset {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ChangesetEntry {
-    component: Component,
+    component: Option<Component>,
+    components: Option<Vec<Component>>,
     category: Category,
     #[serde(default)]
     breaking: bool,
@@ -183,11 +184,12 @@ pub(super) fn load_file(path: &Path) -> Result<Vec<Entry>> {
         path.display()
     );
 
-    changeset
-        .entries
-        .into_iter()
-        .map(|entry| validate_entry(path, pr, entry))
-        .collect()
+    let mut entries = Vec::new();
+    for entry in changeset.entries {
+        entries.extend(validate_entry(path, pr, entry)?);
+    }
+
+    Ok(entries)
 }
 
 pub(super) fn validate_file_layout(path: &Path, dir: &Path) -> Result<()> {
@@ -237,15 +239,29 @@ pub(super) fn validate_version(version: &str) -> Result<()> {
     let version = version
         .strip_prefix('v')
         .context("changelog version must start with 'v', for example v0.15.0")?;
+    let (version, prerelease) = match version.split_once('-') {
+        Some((version, prerelease)) => {
+            ensure!(!prerelease.is_empty(), "changelog version prerelease cannot be empty");
+            (version, Some(prerelease))
+        },
+        None => (version, None),
+    };
     let parts = version.split('.').collect::<Vec<_>>();
     ensure!(
         parts.len() == 3 && parts.iter().all(|part| !part.is_empty()),
-        "changelog version must use vMAJOR.MINOR.PATCH format"
+        "changelog version must use vMAJOR.MINOR.PATCH[-PRERELEASE] format"
     );
     ensure!(
         parts.iter().all(|part| part.chars().all(|char| char.is_ascii_digit())),
         "changelog version must use numeric MAJOR.MINOR.PATCH parts"
     );
+    if let Some(prerelease) = prerelease {
+        ensure!(
+            prerelease.split('.').all(|part| !part.is_empty()
+                && part.chars().all(|char| char.is_ascii_alphanumeric() || char == '-')),
+            "changelog version prerelease must use dot-separated ASCII identifiers"
+        );
+    }
     Ok(())
 }
 
@@ -289,34 +305,69 @@ fn collect_version_files(version_dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-fn validate_entry(path: &Path, pr: u64, entry: ChangesetEntry) -> Result<Entry> {
+fn validate_entry(path: &Path, pr: u64, entry: ChangesetEntry) -> Result<Vec<Entry>> {
     let ChangesetEntry {
         component,
+        components,
         category,
         breaking,
         related_prs,
         summary,
     } = entry;
+    let components = entry_components(path, component, components)?;
     let summary = summary.trim();
 
     ensure!(!summary.is_empty(), "{} has an empty changelog summary", path.display());
     ensure!(!summary.contains('\n'), "{} summary must be a single line", path.display());
-    ensure!(
-        component != Component::Internal || !breaking,
-        "{} uses breaking = true for an internal entry",
-        path.display()
-    );
+    for component in &components {
+        ensure!(
+            *component != Component::Internal || !breaking,
+            "{} uses breaking = true for an internal entry",
+            path.display()
+        );
+    }
     validate_related_prs(path, pr, &related_prs)?;
 
-    Ok(Entry {
-        source: path.to_path_buf(),
-        pr,
-        related_prs,
-        component,
-        category,
-        breaking,
-        summary: summary.to_owned(),
-    })
+    Ok(components
+        .into_iter()
+        .map(|component| Entry {
+            source: path.to_path_buf(),
+            pr,
+            related_prs: related_prs.clone(),
+            component,
+            category,
+            breaking,
+            summary: summary.to_owned(),
+        })
+        .collect())
+}
+
+fn entry_components(
+    path: &Path,
+    component: Option<Component>,
+    components: Option<Vec<Component>>,
+) -> Result<Vec<Component>> {
+    match (component, components) {
+        (Some(component), None) => Ok(vec![component]),
+        (None, Some(components)) => {
+            ensure!(!components.is_empty(), "{} has an empty `components` list", path.display());
+
+            let mut sorted = components.clone();
+            sorted.sort_unstable();
+            sorted.dedup();
+            ensure!(
+                sorted.len() == components.len(),
+                "{} has duplicate values in `components`",
+                path.display()
+            );
+
+            Ok(components)
+        },
+        (Some(_), Some(_)) => {
+            bail!("{} must use either `component` or `components`, not both", path.display())
+        },
+        (None, None) => bail!("{} must define `component` or `components`", path.display()),
+    }
 }
 
 fn validate_related_prs(path: &Path, pr: u64, related_prs: &[u64]) -> Result<()> {
@@ -410,6 +461,14 @@ mod tests {
     }
 
     #[test]
+    fn validates_release_candidate_version() {
+        assert!(validate_version("v0.15.0-rc.0").is_ok());
+        assert!(validate_version("v0.15.0-rc").is_ok());
+        assert!(validate_version("v0.15.0-").is_err());
+        assert!(validate_version("v0.15.0-rc.").is_err());
+    }
+
+    #[test]
     fn rejects_unknown_component() {
         let source = r#"
 [[entries]]
@@ -439,7 +498,8 @@ summary = "Added a response field."
     #[test]
     fn rejects_breaking_internal_entry() {
         let entry = ChangesetEntry {
-            component: Component::Internal,
+            component: Some(Component::Internal),
+            components: None,
             category: Category::Changed,
             breaking: true,
             related_prs: Vec::new(),
@@ -452,7 +512,8 @@ summary = "Added a response field."
     #[test]
     fn rejects_empty_summary() {
         let entry = ChangesetEntry {
-            component: Component::RpcApi,
+            component: Some(Component::RpcApi),
+            components: None,
             category: Category::Added,
             breaking: false,
             related_prs: Vec::new(),
@@ -465,7 +526,8 @@ summary = "Added a response field."
     #[test]
     fn rejects_related_pr_matching_filename_pr() {
         let entry = ChangesetEntry {
-            component: Component::RpcApi,
+            component: Some(Component::RpcApi),
+            components: None,
             category: Category::Changed,
             breaking: false,
             related_prs: vec![1],
@@ -478,11 +540,88 @@ summary = "Added a response field."
     #[test]
     fn rejects_duplicate_related_prs() {
         let entry = ChangesetEntry {
-            component: Component::RpcApi,
+            component: Some(Component::RpcApi),
+            components: None,
             category: Category::Changed,
             breaking: false,
             related_prs: vec![2, 2],
             summary: "Changed a response field.".to_owned(),
+        };
+
+        assert!(validate_entry(Path::new("changelog.d/v0.15.0/1.toml"), 1, entry).is_err());
+    }
+
+    #[test]
+    fn expands_component_list() {
+        let entry = ChangesetEntry {
+            component: None,
+            components: Some(vec![Component::Node, Component::Validator]),
+            category: Category::Fixed,
+            breaking: false,
+            related_prs: Vec::new(),
+            summary: "Fixed trace exporting.".to_owned(),
+        };
+
+        let entries = validate_entry(Path::new("changelog.d/v0.15.0/1.toml"), 1, entry).unwrap();
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].component, Component::Node);
+        assert_eq!(entries[1].component, Component::Validator);
+        assert_eq!(entries[0].summary, "Fixed trace exporting.");
+        assert_eq!(entries[1].summary, "Fixed trace exporting.");
+    }
+
+    #[test]
+    fn rejects_component_and_components_together() {
+        let entry = ChangesetEntry {
+            component: Some(Component::Node),
+            components: Some(vec![Component::Validator]),
+            category: Category::Fixed,
+            breaking: false,
+            related_prs: Vec::new(),
+            summary: "Fixed trace exporting.".to_owned(),
+        };
+
+        assert!(validate_entry(Path::new("changelog.d/v0.15.0/1.toml"), 1, entry).is_err());
+    }
+
+    #[test]
+    fn rejects_missing_component() {
+        let entry = ChangesetEntry {
+            component: None,
+            components: None,
+            category: Category::Fixed,
+            breaking: false,
+            related_prs: Vec::new(),
+            summary: "Fixed trace exporting.".to_owned(),
+        };
+
+        assert!(validate_entry(Path::new("changelog.d/v0.15.0/1.toml"), 1, entry).is_err());
+    }
+
+    #[test]
+    fn rejects_empty_component_list() {
+        let entry = ChangesetEntry {
+            component: None,
+            components: Some(Vec::new()),
+            category: Category::Fixed,
+            breaking: false,
+            related_prs: Vec::new(),
+            summary: "Fixed trace exporting.".to_owned(),
+        };
+
+        assert!(validate_entry(Path::new("changelog.d/v0.15.0/1.toml"), 1, entry).is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_components() {
+        let entry = ChangesetEntry {
+            component: None,
+            components: Some(vec![Component::Node, Component::Node]),
+            category: Category::Fixed,
+            breaking: false,
+            related_prs: Vec::new(),
+            summary: "Fixed trace exporting.".to_owned(),
         };
 
         assert!(validate_entry(Path::new("changelog.d/v0.15.0/1.toml"), 1, entry).is_err());

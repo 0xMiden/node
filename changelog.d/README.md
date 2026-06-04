@@ -5,6 +5,7 @@ Usually add one TOML file per pull request under the next release version:
 ```text
 changelog.d/v0.15.0/2149.toml
 changelog.d/v0.15.0/2149-bootstrap-command.toml
+changelog.d/v0.15.0-rc.0/2199.toml
 ```
 
 The filename must start with the pull request number. A short slug is optional.
@@ -18,19 +19,18 @@ category = "added"
 summary = "Added `miden-ntx-builder bootstrap` to initialize the builder database before `start`."
 ```
 
-If a pull request affects multiple public surfaces, add multiple entries to the same file:
+Each entry must set either `component` or `components`, not both.
+
+If one release-note item affects multiple public surfaces, use `components`:
 
 ```toml
 [[entries]]
-component = "ntx-builder"
-category = "added"
-summary = "Added `miden-ntx-builder bootstrap` to initialize the builder database before `start`."
-
-[[entries]]
-component = "docs"
-category = "changed"
-summary = "Updated network transaction builder bootstrap instructions."
+components = ["node", "validator", "ntx-builder"]
+category = "fixed"
+summary = "Fixed OpenTelemetry trace exports when the OTLP endpoint uses TLS."
 ```
+
+Use multiple `[[entries]]` tables only when the release-note items are different.
 
 For stacked pull requests that refine the same release-note item, update the existing entry and add the stacked PRs to
 `related_prs`:
@@ -89,6 +89,10 @@ cargo xtask changelog release --version v0.15.0 --date 2026-06-03
 
 `release` overwrites `CHANGELOG.md` with a freshly rendered section for the requested version. Historical changelog
 entries from before structured automation live in `CHANGELOG.archived.md`.
+
+For release candidates, use the exact pre-release version directory, such as `changelog.d/v0.15.0-rc.0/`, and release
+that version when publishing the RC. After an RC is published, put follow-up entries under the next planned RC version
+or the final release version; do not keep published RC notes in a manual `Unreleased` section.
 
 The CI check uses simple heuristics to decide whether a changelog entry is likely required. When it triggers, any
 `changelog.d/**` change satisfies the gate, including updates to an existing entry for stacked pull requests. Use the
