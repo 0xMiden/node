@@ -1,7 +1,7 @@
 mod comment_reflow;
 
 use std::io::ErrorKind;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Args, Parser, Subcommand};
@@ -33,9 +33,13 @@ struct FmtCommentsArgs {
     #[arg(long)]
     doc_comments_only: bool,
 
-    /// Target total line width. Defaults to rustfmt.toml's `comment_width`, or 100.
+    /// Target total line width. Defaults to rustfmt's `comment_width`, or 100.
     #[arg(long)]
     width: Option<usize>,
+
+    /// Path to the rustfmt config used to source `comment_width`.
+    #[arg(long, default_value = ".config/rustfmt.toml")]
+    rustfmt_config: PathBuf,
 
     /// Files or directories to process. Defaults to the repository tree.
     paths: Vec<PathBuf>,
@@ -50,7 +54,7 @@ fn main() -> Result<()> {
 }
 
 fn run_fmt_comments(args: &FmtCommentsArgs) -> Result<()> {
-    let width = comment_width(args.width)?;
+    let width = comment_width(args.width, &args.rustfmt_config)?;
     let paths = comment_reflow::rust_files(&args.paths).context("collecting Rust files")?;
     let config = comment_reflow::Config {
         width,
@@ -94,19 +98,21 @@ fn run_fmt_comments(args: &FmtCommentsArgs) -> Result<()> {
     );
 }
 
-fn comment_width(explicit: Option<usize>) -> Result<usize> {
+fn comment_width(explicit: Option<usize>, rustfmt_config: &Path) -> Result<usize> {
     if let Some(width) = explicit {
         return validate_width(width);
     }
 
-    let source = match fs_err::read_to_string("rustfmt.toml") {
+    let source = match fs_err::read_to_string(rustfmt_config) {
         Ok(source) => source,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(100),
-        Err(err) => return Err(err).context("reading rustfmt.toml"),
+        Err(err) => {
+            return Err(err).with_context(|| format!("reading {}", rustfmt_config.display()));
+        },
     };
 
-    let config =
-        toml::from_str::<toml::Value>(&source).context("parsing rustfmt.toml for comment_width")?;
+    let config = toml::from_str::<toml::Value>(&source)
+        .context("parsing rustfmt config for comment_width")?;
     let width = config
         .get("comment_width")
         .and_then(toml::Value::as_integer)

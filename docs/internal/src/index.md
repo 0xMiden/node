@@ -7,7 +7,8 @@ architectural decisions.
 
 This is _not_ intended for dApp developers or users of the node, but for development of the node itself.
 
-It is also a good idea to familiarise yourself with the [operator manual](https://0xmiden.github.io/miden-docs/miden-node/operator/).
+It is also a good idea to familiarise yourself with the
+[operator manual](https://docs.miden.xyz/core-concepts/node/operator/).
 
 <div class="warning">
 

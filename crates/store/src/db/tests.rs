@@ -36,7 +36,6 @@ use miden_protocol::block::{
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::crypto::merkle::mmr::{Forest, Mmr};
-use miden_protocol::crypto::merkle::smt::SmtProof;
 use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::note::{
     Note,
@@ -79,7 +78,7 @@ use rand::Rng;
 use tempfile::tempdir;
 
 use super::{AccountInfo, NoteRecord, NoteSyncRecord, NullifierInfo, TransactionRecord};
-use crate::account_state_forest::HISTORICAL_BLOCK_RETENTION;
+use crate::account_state_forest::{AccountStorageMapResult, HISTORICAL_BLOCK_RETENTION};
 use crate::db::models::queries::{StorageMapValue, insert_account_storage_map_value};
 use crate::db::models::{Page, queries, utils};
 use crate::errors::DatabaseError;
@@ -722,9 +721,6 @@ fn db_block_header() {
     let res = queries::select_block_header_by_block_num(conn, None).unwrap();
     assert!(res.is_none());
 
-    let res = queries::select_all_block_headers(conn).unwrap();
-    assert!(res.is_empty());
-
     let block_header = BlockHeader::new(
         1_u8.into(),
         num_to_word(2),
@@ -779,7 +775,11 @@ fn db_block_header() {
     let res = queries::select_block_header_by_block_num(conn, None).unwrap();
     assert_eq!(res.unwrap(), block_header2);
 
-    let res = queries::select_all_block_headers(conn).unwrap();
+    let res = queries::select_block_headers(
+        conn,
+        [block_header.block_num(), block_header2.block_num()].into_iter(),
+    )
+    .unwrap();
     assert_eq!(res, [block_header, block_header2]);
 }
 
@@ -1563,6 +1563,7 @@ async fn reconstruct_storage_map_from_db_pages_until_latest() {
     let block2 = BlockNumber::from(2);
     let block3 = BlockNumber::from(3);
 
+    crate::db::migrations::bootstrap_database(&db_path).unwrap();
     let db = crate::db::Db::load(db_path).await.unwrap();
     let slot_name_for_db = slot_name.clone();
     db.query("insert paged values", move |db_conn| {
@@ -1630,6 +1631,7 @@ async fn reconstruct_storage_map_from_db_returns_limit_exceeded_for_single_block
 
     let block5 = BlockNumber::from(5);
 
+    crate::db::migrations::bootstrap_database(&db_path).unwrap();
     let db = crate::db::Db::load(db_path).await.unwrap();
     let slot_name_for_db = slot_name.clone();
     db.query("insert entries in single block", move |db_conn| {
@@ -3303,27 +3305,6 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
     assert_eq!(root1, root2);
     assert_eq!(root2, root3);
 
-    // Verify we can get witnesses for all three accounts and verify them against roots
-    let witness1 = forest
-        .get_storage_map_witness(account1, &slot_name, block01, key1)
-        .expect("Account1 should have accessible storage map");
-    let witness2 = forest
-        .get_storage_map_witness(account2, &slot_name, block02, key1)
-        .expect("Account2 should have accessible storage map");
-    let witness3 = forest
-        .get_storage_map_witness(account3, &slot_name, block02, key1)
-        .expect("Account3 should have accessible storage map");
-
-    // Verify witnesses against storage map roots using SmtProof::compute_root
-    let proof1: SmtProof = witness1.into();
-    assert_eq!(proof1.compute_root(), root1, "Witness1 must verify against root1");
-
-    let proof2: SmtProof = witness2.into();
-    assert_eq!(proof2.compute_root(), root2, "Witness2 must verify against root2");
-
-    let proof3: SmtProof = witness3.into();
-    assert_eq!(proof3.compute_root(), root3, "Witness3 must verify against root3");
-
     let total_roots_removed = forest.prune(block50);
     assert_eq!(total_roots_removed, 0);
 
@@ -3373,28 +3354,9 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
     assert_eq!(total_roots_removed, 0);
 
     // Account2 and Account3 should still be accessible at their recent blocks
-    let account1_root = forest.get_storage_map_root(account1, &slot_name, block53).unwrap();
-    let account2_root = forest.get_storage_map_root(account2, &slot_name, block51).unwrap();
-    let account3_root = forest.get_storage_map_root(account3, &slot_name, block52).unwrap();
-
-    // Verify we can still get witnesses for account2 and account3 and verify against roots
-    let witness1_after = forest
-        .get_storage_map_witness(account2, &slot_name, block51, key1)
-        .expect("Account2 should still have accessible storage map after pruning account1");
-    let witness2_after = forest
-        .get_storage_map_witness(account3, &slot_name, block52, key1)
-        .expect("Account3 should still have accessible storage map after pruning account1");
-
-    // Verify witnesses against storage map roots
-    let proof1: SmtProof = witness1_after.into();
-    assert_eq!(proof1.compute_root(), account2_root,);
-    let proof2: SmtProof = witness2_after.into();
-    assert_eq!(proof2.compute_root(), account3_root,);
-    let account1_witness = forest
-        .get_storage_map_witness(account1, &slot_name, block53, key1)
-        .expect("Account1 should still have accessible storage map after pruning");
-    let account1_proof: SmtProof = account1_witness.into();
-    assert_eq!(account1_proof.compute_root(), account1_root,);
+    forest.get_storage_map_root(account1, &slot_name, block53).unwrap();
+    forest.get_storage_map_root(account2, &slot_name, block51).unwrap();
+    forest.get_storage_map_root(account3, &slot_name, block52).unwrap();
 }
 
 #[test]
@@ -3465,9 +3427,6 @@ fn account_state_forest_retains_latest_after_100_blocks_and_pruning() {
         Some(root) if root == initial_storage_map_root
     );
 
-    let witness = forest.get_storage_map_witness(account_id, &slot_map, block_100, key1);
-    assert!(witness.is_ok());
-
     // Now add an update at block 51 (within retention window) to test that old entries get pruned
     // when newer entries exist
     let block_51 = BlockNumber::from(51);
@@ -3498,22 +3457,11 @@ fn account_state_forest_retains_latest_after_100_blocks_and_pruning() {
     let vault_root_at_51 = forest
         .get_vault_root(account_id, block_51)
         .expect("Should have vault root at block 51");
-    let storage_root_at_51 = forest
+    forest
         .get_storage_map_root(account_id, &slot_map, block_51)
         .expect("Should have storage root at block 51");
 
     assert_ne!(vault_root_at_51, initial_vault_root);
-
-    let witness = forest
-        .get_storage_map_witness(account_id, &slot_map, block_51, key1)
-        .expect("Should be able to get witness for key1");
-
-    let proof: SmtProof = witness.into();
-    assert_eq!(
-        proof.compute_root(),
-        storage_root_at_51,
-        "Witness must verify against storage root"
-    );
 
     let vault_root_at_1 = forest.get_vault_root(account_id, block_1);
     assert!(vault_root_at_1.is_some());
@@ -3559,20 +3507,6 @@ fn account_state_forest_preserves_most_recent_vault_only() {
         .get_vault_root(account_id, block_1)
         .expect("Should still have vault root at block 1");
     assert_eq!(vault_root_at_1, initial_vault_root, "Vault root should be preserved");
-
-    // Verify we can get witnesses for the vault and verify against vault root
-    let witnesses = forest
-        .get_vault_asset_witnesses(account_id, block_1, [asset.vault_key()].into())
-        .expect("Should be able to get vault witness after pruning");
-
-    assert_eq!(witnesses.len(), 1, "Should have one witness");
-    let witness = &witnesses[0];
-    let proof: SmtProof = witness.clone().into();
-    assert_eq!(
-        proof.compute_root(),
-        vault_root_at_1,
-        "Vault witness must verify against vault root"
-    );
 }
 
 #[test]
@@ -3715,19 +3649,11 @@ fn account_state_forest_preserves_most_recent_storage_map_only() {
         .expect("Should still have storage root at block 1");
     assert_eq!(storage_root_at_1, initial_storage_root, "Storage root should be preserved");
 
-    // Verify we can get witnesses for the storage map and verify against storage root
-    let witness = forest
-        .get_storage_map_witness(account_id, &slot_map, block_1, key1)
-        .expect("Should be able to get storage witness after pruning");
-
-    let proof: SmtProof = witness.into();
-    assert_eq!(
-        proof.compute_root(),
-        storage_root_at_1,
-        "Storage witness must verify against storage root"
-    );
-
     // Verify we can get all entries
+    let result = forest
+        .get_storage_map_details_for_all_entries(account_id, slot_map, block_100)
+        .expect("should have storage map details");
+    assert_matches!(result, AccountStorageMapResult::Details(details) if details.entries == StorageMapEntries::AllEntries(vec![(key1, value1)]));
 }
 
 #[test]

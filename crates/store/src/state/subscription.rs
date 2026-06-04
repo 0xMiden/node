@@ -177,7 +177,7 @@ async fn fetch_block(
     cache: &BlockCache,
     state: &State,
 ) -> Result<Vec<u8>, StateSubscriptionError> {
-    if let Some(entry) = cache.get(&block_num) {
+    if let Some(entry) = cache.get(block_num) {
         return Ok(entry.block_bytes().to_vec());
     }
     state
@@ -192,7 +192,7 @@ async fn fetch_proof(
     cache: &ProofCache,
     state: &State,
 ) -> Result<Vec<u8>, StateSubscriptionError> {
-    if let Some(entry) = cache.get(&block_num) {
+    if let Some(entry) = cache.get(block_num) {
         return Ok(entry.proof_bytes().to_vec());
     }
     state

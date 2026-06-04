@@ -5,8 +5,8 @@ services:
       - ./compose/tempo/tempo.yml:/etc/tempo.yaml
     command: ["-config.file=/etc/tempo.yaml"]
     ports:
-      - "3200:3200"
-      - "4317:4317"
+      - "127.0.0.1:3200:3200"
+      - "127.0.0.1:4317:4317"
 
   grafana:
     image: grafana/grafana:12.4
@@ -19,7 +19,7 @@ services:
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
       - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/miden-node.json
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       - tempo
 
@@ -29,6 +29,10 @@ services:
       - OTEL_RESOURCE_ATTRIBUTES=service.instance.id=sequencer
 
   validator:
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+
+  tx-prover:
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
 

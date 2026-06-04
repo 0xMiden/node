@@ -136,29 +136,6 @@ pub fn select_block_headers(
 /// # Raw SQL
 ///
 /// ```sql
-/// SELECT block_num, block_header
-/// FROM block_headers
-/// ORDER BY block_num ASC
-/// ```
-pub fn select_all_block_headers(
-    conn: &mut SqliteConnection,
-) -> Result<Vec<BlockHeader>, DatabaseError> {
-    let raw_block_headers =
-        QueryDsl::select(schema::block_headers::table, BlockHeaderRawRow::as_select())
-            .order(schema::block_headers::block_num.asc())
-            .load::<BlockHeaderRawRow>(conn)?;
-    vec_raw_try_into(raw_block_headers)
-}
-
-/// Select all block headers from the DB using the given [`SqliteConnection`].
-///
-/// # Returns
-///
-/// A vector of [`BlockHeader`] or an error.
-///
-/// # Raw SQL
-///
-/// ```sql
 /// SELECT commitment
 /// FROM block_headers
 /// ORDER BY block_num ASC

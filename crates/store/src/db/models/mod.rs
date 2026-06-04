@@ -13,6 +13,7 @@
 //! The first step in debugging should always be using the fully qualified
 //! calling syntext when dealing with diesel.
 
+#[cfg(test)]
 use std::num::NonZeroUsize;
 
 use crate::errors::DatabaseError;
@@ -25,6 +26,7 @@ pub(crate) mod utils;
 pub(crate) use utils::*;
 
 /// The page token and size to query from the DB.
+#[cfg(test)]
 #[derive(Debug, Copy, Clone)]
 pub struct Page {
     pub token: Option<u64>,

@@ -39,6 +39,8 @@ use miden_node_utils::limiter::{
     QueryParamStorageMapKeyTotalLimit,
 };
 use miden_node_utils::lru_cache::LruCache;
+use miden_node_utils::retry::{self, Retryable};
+use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::account::AccountId;
 use miden_protocol::asset::Asset;
@@ -167,48 +169,30 @@ impl RpcService {
     ///
     /// Automatically retries until the store connection becomes available.
     pub async fn get_genesis_header_with_retry(&self) -> anyhow::Result<BlockHeader> {
-        let mut retry_counter = 0;
-        loop {
-            let result = self
-                .get_block_header_by_number(
-                    proto::rpc::BlockHeaderByNumberRequest {
-                        block_num: Some(BlockNumber::GENESIS.as_u32()),
-                        include_mmr_proof: None,
-                    }
-                    .into_request(),
-                )
-                .await;
+        // Retry with exponential backoff (base 500ms, max 30s) while the store is unavailable.
+        let header = (|| async {
+            self.get_block_header_by_number(
+                proto::rpc::BlockHeaderByNumberRequest {
+                    block_num: Some(BlockNumber::GENESIS.as_u32()),
+                    include_mmr_proof: None,
+                }
+                .into_request(),
+            )
+            .await
+        })
+        .retry(retry::exponential(Duration::from_millis(500), Duration::from_secs(30)))
+        .when(|err| err.code() == tonic::Code::Unavailable)
+        .notify(|err, backoff| {
+            tracing::warn!(
+                ?backoff,
+                %err,
+                "connection failed while fetching genesis header, retrying"
+            );
+        })
+        .await?;
 
-            match result {
-                Ok(header) => {
-                    let header = header
-                        .into_inner()
-                        .block_header
-                        .context("response is missing the header")?;
-                    let header =
-                        BlockHeader::try_from(header).context("failed to parse response")?;
-
-                    return Ok(header);
-                },
-                Err(err) if err.code() == tonic::Code::Unavailable => {
-                    // Exponential backoff with base 500ms and max 30s.
-                    let backoff = Duration::from_millis(500)
-                        .saturating_mul(1 << retry_counter.min(6))
-                        .min(Duration::from_secs(30));
-
-                    tracing::warn!(
-                        ?backoff,
-                        %retry_counter,
-                        %err,
-                        "connection failed while fetching genesis header, retrying"
-                    );
-
-                    retry_counter += 1;
-                    tokio::time::sleep(backoff).await;
-                },
-                Err(other) => return Err(other.into()),
-            }
-        }
+        let header = header.into_inner().block_header.context("response is missing the header")?;
+        BlockHeader::try_from(header).context("failed to parse response")
     }
 
     /// Returns the given block's onchain commitment.
@@ -794,14 +778,20 @@ impl api_server::Api for RpcService {
             self.reject_if_any_network_accounts(candidate_id).await?;
         }
 
-        let tx_verifier = TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL);
-        tx_verifier.verify(&tx).map_err(|err| {
-            Status::invalid_argument(format!(
-                "Invalid proof for transaction {}: {}",
-                tx.id(),
-                err.as_report()
-            ))
-        })?;
+        let tx_id = tx.id();
+        spawn_blocking_in_current_span(move || {
+            TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL).verify(&tx).map_err(|err| {
+                Status::invalid_argument(format!(
+                    "Invalid proof for transaction {}: {}",
+                    tx_id,
+                    err.as_report()
+                ))
+            })
+        })
+        .await
+        .map_err(|err| {
+            Status::internal(format!("transaction proof verification task failed: {err}"))
+        })??;
 
         // In full node mode we forward the request to the source.
         let (block_producer, validator) = match &self.mode {
@@ -899,11 +889,22 @@ impl api_server::Api for RpcService {
         //
         // Need to do this because ProvenBatch has no real kernel yet, so we can only
         // really check that the calculated proof matches the one given in the request.
-        let expected_proof = LocalBatchProver::new(MIN_PROOF_SECURITY_LEVEL)
-            .prove(proposed_batch.clone())
-            .map_err(|err| {
-                Status::invalid_argument(err.as_report_context("proposed block proof failed"))
-            })?;
+        let expected_proof = spawn_blocking_in_current_span({
+            let proposed_batch = proposed_batch.clone();
+            move || {
+                LocalBatchProver::new(MIN_PROOF_SECURITY_LEVEL).prove(proposed_batch).map_err(
+                    |err| {
+                        Status::invalid_argument(
+                            err.as_report_context("proposed block proof failed"),
+                        )
+                    },
+                )
+            }
+        })
+        .await
+        .map_err(|err| {
+            Status::internal(format!("batch proof verification task failed: {err}"))
+        })??;
 
         if expected_proof != proven_batch {
             return Err(Status::invalid_argument("batch proof did not match proposed batch"));
@@ -989,11 +990,6 @@ impl api_server::Api for RpcService {
     ) -> Result<Response<proto::rpc::RpcStatus>, Status> {
         debug!(target: COMPONENT, request = ?request);
 
-        let store_status = Some(proto::rpc::StoreStatus {
-            version: miden_node_store::version().to_string(),
-            status: "connected".to_string(),
-            chain_tip: self.store.chain_tip(Finality::Committed).await.as_u32(),
-        });
         let block_producer_status = match &self.mode {
             RpcMode::Sequencer { block_producer, .. } => {
                 Some(block_producer_status_to_proto(block_producer.status().await))
@@ -1009,11 +1005,7 @@ impl api_server::Api for RpcService {
 
         Ok(Response::new(proto::rpc::RpcStatus {
             version: env!("CARGO_PKG_VERSION").to_string(),
-            store: store_status.or(Some(proto::rpc::StoreStatus {
-                status: "unreachable".to_string(),
-                chain_tip: 0,
-                version: "-".to_string(),
-            })),
+            chain_tip: self.store.chain_tip(Finality::Committed).await.as_u32(),
             block_producer: block_producer_status.or(Some(proto::rpc::BlockProducerStatus {
                 status: "unreachable".to_string(),
                 version: "-".to_string(),
@@ -1041,11 +1033,18 @@ impl api_server::Api for RpcService {
     ) -> Result<Response<proto::rpc::GetNetworkNoteStatusResponse>, Status> {
         debug!(target: COMPONENT, request = ?request.get_ref());
 
-        let Some(ntx_builder) = &self.ntx_builder else {
-            return Err(Status::unavailable("Network transaction builder is not enabled"));
-        };
+        let response = match &self.mode {
+            RpcMode::Sequencer { .. } => {
+                let Some(ntx_builder) = &self.ntx_builder else {
+                    return Err(Status::unavailable("Network transaction builder is not enabled"));
+                };
 
-        let response = ntx_builder.clone().get_network_note_status(request).await?.into_inner();
+                ntx_builder.clone().get_network_note_status(request).await?.into_inner()
+            },
+            RpcMode::FullNode { source_rpc } => {
+                source_rpc.as_ref().clone().get_network_note_status(request).await?.into_inner()
+            },
+        };
 
         Ok(Response::new(response))
     }

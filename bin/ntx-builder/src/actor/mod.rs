@@ -73,9 +73,8 @@ pub enum ActorRequest {
 pub struct GrpcClients {
     /// Client for interacting with the RPC service in order to load account state.
     pub rpc: RpcClient,
-    /// Client for remote transaction proving. If `None`, transactions will be proven locally, which
-    /// is undesirable due to the performance impact.
-    pub prover: Option<RemoteTransactionProver>,
+    /// Client for remote transaction proving.
+    pub prover: RemoteTransactionProver,
 }
 
 /// Shared state read (and written, in the case of `db`) by all account actors.
@@ -157,7 +156,7 @@ impl AccountActorContext {
                     Duration::from_millis(100),
                     Duration::from_secs(30),
                 ),
-                prover: None,
+                prover: RemoteTransactionProver::new(url.as_str()),
             },
             state: State {
                 db: db.clone(),

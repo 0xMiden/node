@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
 
 use miden_crypto::hash::rpo::Rpo256;
@@ -14,10 +13,9 @@ use miden_protocol::account::{
     NonFungibleDeltaAction,
     StorageMapKey,
     StorageMapKeyHash,
-    StorageMapWitness,
     StorageSlotName,
 };
-use miden_protocol::asset::{Asset, AssetVaultKey, AssetWitness, FungibleAsset};
+use miden_protocol::asset::{Asset, FungibleAsset};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::merkle::smt::{
     ForestOperation,
@@ -293,51 +291,8 @@ impl<B: Backend> AccountStateForest<B> {
         self.get_tree_root(lineage, block_num)
     }
 
-    // WITNESSES and PROOFS
+    // DETAILS
     // --------------------------------------------------------------------------------------------
-
-    /// Retrieves a storage map witness for the specified account and storage slot.
-    ///
-    /// Note that the `raw_key` is the raw, user-provided key that needs to be hashed in order to
-    /// get the actual key into the storage map.
-    #[instrument(target = COMPONENT, skip_all)]
-    pub(crate) fn get_storage_map_witness(
-        &self,
-        account_id: AccountId,
-        slot_name: &StorageSlotName,
-        block_num: BlockNumber,
-        raw_key: StorageMapKey,
-    ) -> Result<StorageMapWitness, WitnessError> {
-        let lineage = Self::storage_lineage_id(account_id, slot_name);
-        let tree = self.get_tree_id(lineage, block_num).ok_or(WitnessError::RootNotFound)?;
-        let key = raw_key.hash().into();
-        let proof = self.forest.open(tree, key).map_err(Self::map_forest_error_to_witness)?;
-
-        Ok(StorageMapWitness::new(proof, vec![raw_key])?)
-    }
-
-    /// Retrieves a vault asset witnesses for the specified account and asset keys at the specified
-    /// block number.
-    #[instrument(target = COMPONENT, skip_all)]
-    pub fn get_vault_asset_witnesses(
-        &self,
-        account_id: AccountId,
-        block_num: BlockNumber,
-        asset_keys: BTreeSet<AssetVaultKey>,
-    ) -> Result<Vec<AssetWitness>, WitnessError> {
-        let lineage = Self::vault_lineage_id(account_id);
-        let tree = self.get_tree_id(lineage, block_num).ok_or(WitnessError::RootNotFound)?;
-        let witnessees: Result<Vec<_>, WitnessError> =
-            Result::from_iter(asset_keys.into_iter().map(|key| {
-                let proof = self
-                    .forest
-                    .open(tree, key.into())
-                    .map_err(Self::map_forest_error_to_witness)?;
-                let asset = AssetWitness::new(proof)?;
-                Ok(asset)
-            }));
-        witnessees
-    }
 
     /// Enumerates vault contents for the specified account at the requested block.
     #[instrument(target = COMPONENT, skip_all)]

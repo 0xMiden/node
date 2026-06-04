@@ -1,25 +1,18 @@
 ---
 sidebar_position: 0
+title: "Miden Infrastructure Guide"
 ---
 
-# Introduction
+# Miden Infrastructure Guide
 
-Welcome to the Miden node documentation.
+This guide covers the infrastructure used to run, sync, and interact with Miden networks.
 
-This book provides two separate guides aimed at node operators and developers looking to contribute to the node
-respectively. Each guide is standalone, but developers should also read through the operator guide as it provides some
-additional context.
+The documentation is roughly organized by audience:
 
-At present, the Miden node is the central hub responsible for receiving user transactions and forming them into new
-blocks for a Miden network. As Miden decentralizes, the node will morph into the official reference implementation(s) of
-the various components required by a fully p2p network.
-
-Each Miden network therefore has exactly one node receiving transactions and creating blocks. The node provides a gRPC
-interface for users, dApps, wallets and other clients to submit transactions and query the state.
-
-## Feedback
-
-Please report any issues, ask questions or leave feedback in the node repository
-[here](https://github.com/0xMiden/node/issues/new/choose).
-
-This includes outdated, misleading, incorrect or just plain confusing information :)
+- [gRPC API](./rpc) is the reference for the official Miden RPC API.
+- [Local Network Development](./local-network-development) covers spinning up a local network to develop against.
+- Check out the [Full Node Guide](./full-node/) to install a node, sync to an official network, serve RPC locally, and
+  avoid rate limits on official endpoints.
+- [Official Network URLs](./official-network-urls) lists the public service endpoints for official networks.
+- Use the [Network Operator Guide](./network-operator/) when operating a Miden network's centralized sequencing
+  infrastructure.

@@ -24,6 +24,7 @@ testing = ["miden-protocol/testing"]
 
 [dependencies]
 anyhow                = { workspace = true }
+backon                = { workspace = true }
 bytes                 = { version = "1.10" }
 clap                  = { workspace = true }
 fs-err                = { workspace = true }

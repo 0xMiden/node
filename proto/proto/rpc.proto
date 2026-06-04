@@ -162,8 +162,8 @@ message RpcStatus {
     // The genesis commitment.
     primitives.Digest genesis_commitment = 2;
 
-    // The store status.
-    StoreStatus store = 3;
+    // Number of the latest block in the chain.
+    fixed32 chain_tip = 3;
 
     // The block producer status.
     BlockProducerStatus block_producer = 4;
@@ -200,21 +200,6 @@ message MempoolStats {
 
     // Number of proven batches waiting for block inclusion.
     uint64 proven_batches = 3;
-}
-
-// STORE STATUS
-// ================================================================================================
-
-// Represents the status of the store.
-message StoreStatus {
-    // The store's running version.
-    string version = 1;
-
-    // The store's status.
-    string status = 2;
-
-    // Number of the latest block in the chain.
-    fixed32 chain_tip = 3;
 }
 
 // GET BLOCK HEADER BY NUMBER

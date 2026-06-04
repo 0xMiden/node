@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::mem::size_of;
 use std::num::NonZeroUsize;
 use std::ops::{Deref, DerefMut, RangeInclusive};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -30,8 +30,9 @@ use tokio::sync::oneshot;
 use tracing::{info, instrument};
 
 use crate::COMPONENT;
-use crate::db::migrations::apply_migrations;
+use crate::db::migrations::{bootstrap_database, migrate_database, verify_latest_schema};
 use crate::db::models::conv::SqlTypeConvert;
+use crate::db::models::queries;
 pub use crate::db::models::queries::{
     AccountCommitmentsPage,
     NullifiersPage,
@@ -39,7 +40,6 @@ pub use crate::db::models::queries::{
     PublicAccountStateRootsPage,
 };
 use crate::db::models::queries::{BlockHeaderCommitment, StorageMapValuesPage};
-use crate::db::models::{Page, queries};
 use crate::errors::{DatabaseError, NoteSyncError};
 use crate::genesis::GenesisBlock;
 
@@ -193,11 +193,8 @@ impl Db {
         err,
     )]
     pub fn bootstrap(database_filepath: PathBuf, genesis: GenesisBlock) -> anyhow::Result<()> {
-        apply_migrations(&database_filepath).context("failed to apply database migrations")?;
+        bootstrap_database(&database_filepath).context("failed to bootstrap database schema")?;
 
-        // Open the database. This will create the file if it does not exist, but will also happily
-        // open it if already exists. In the latter case we will error out when attempting to insert
-        // the genesis block so this isn't such a problem.
         let mut conn: SqliteConnection = diesel::sqlite::SqliteConnection::establish(
             database_filepath.to_str().context("database filepath is invalid")?,
         )
@@ -212,20 +209,21 @@ impl Db {
         Ok(())
     }
 
-    /// Open a connection to the DB and apply any pending migrations.
+    /// Open a connection to the DB after verifying that it is at the latest schema version.
     #[instrument(target = COMPONENT, skip_all)]
     pub async fn load(database_filepath: PathBuf) -> Result<Self, DatabaseError> {
         Self::load_with_pool_size(database_filepath, miden_node_db::default_connection_pool_size())
             .await
     }
 
-    /// Open a connection to the DB with a specific pool size and apply any pending migrations.
+    /// Open a connection to the DB with a specific pool size after verifying that it is at the
+    /// latest schema version.
     #[instrument(target = COMPONENT, skip_all)]
     pub async fn load_with_pool_size(
         database_filepath: PathBuf,
         connection_pool_size: NonZeroUsize,
     ) -> Result<Self, DatabaseError> {
-        apply_migrations(&database_filepath)?;
+        verify_latest_schema(&database_filepath)?;
 
         let db = miden_node_db::Db::new_with_pool_size(&database_filepath, connection_pool_size)?;
         info!(
@@ -236,6 +234,13 @@ impl Db {
         );
 
         Ok(Self { db })
+    }
+
+    /// Applies all pending migrations to an existing DB.
+    #[instrument(target = COMPONENT, skip_all)]
+    pub fn migrate(database_filepath: impl AsRef<Path>) -> Result<(), DatabaseError> {
+        migrate_database(database_filepath.as_ref())?;
+        Ok(())
     }
 
     /// Returns a page of nullifiers for tree rebuilding.
@@ -324,16 +329,6 @@ impl Db {
 
     /// Loads all the block headers from the DB.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn select_all_block_headers(&self) -> Result<Vec<BlockHeader>> {
-        self.transact("all block headers", |conn| {
-            let raw = queries::select_all_block_headers(conn)?;
-            Ok(raw)
-        })
-        .await
-    }
-
-    /// Loads all the block headers from the DB.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
     pub async fn select_all_block_header_commitments(&self) -> Result<Vec<BlockHeaderCommitment>> {
         self.transact("all block headers", |conn| {
             let raw = queries::select_all_block_header_commitments(conn)?;
@@ -388,18 +383,6 @@ impl Db {
             .await
     }
 
-    /// Loads public account details for a network account by its full account ID.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn select_network_account_by_id(
-        &self,
-        account_id: AccountId,
-    ) -> Result<Option<AccountInfo>> {
-        self.transact("Get network account by id", move |conn| {
-            queries::select_network_account_by_id(conn, account_id)
-        })
-        .await
-    }
-
     /// Returns the subset of the provided account IDs that classify as network accounts.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
     pub async fn select_network_accounts_subset(
@@ -408,30 +391,6 @@ impl Db {
     ) -> Result<HashSet<AccountId>> {
         self.transact("Filter network accounts subset", move |conn| {
             queries::select_network_accounts_subset(conn, &account_ids)
-        })
-        .await
-    }
-
-    /// Returns network account IDs within the specified block range (based on account creation
-    /// block).
-    ///
-    /// The function may return fewer accounts than exist in the range if the result would exceed
-    /// `MAX_RESPONSE_PAYLOAD_BYTES / AccountId::SERIALIZED_SIZE` rows. In this case, the result is
-    /// truncated at a block boundary to ensure all accounts from included blocks are returned.
-    ///
-    /// # Returns
-    ///
-    /// A tuple containing:
-    /// - A vector of network account IDs.
-    /// - The last block number that was fully included in the result. When truncated, this will be
-    ///   less than the requested range end.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn select_all_network_account_ids(
-        &self,
-        block_range: RangeInclusive<BlockNumber>,
-    ) -> Result<(Vec<AccountId>, BlockNumber)> {
-        self.transact("Get all network account IDs", move |conn| {
-            queries::select_all_network_account_ids(conn, block_range)
         })
         .await
     }
@@ -661,22 +620,6 @@ impl Db {
             slot_name,
             entries: StorageMapEntries::AllEntries(entries),
         })
-    }
-
-    /// Loads the network notes for an account that are unconsumed by a specified block number.
-    /// Pagination is used to limit the number of notes returned.
-    pub(crate) async fn select_unconsumed_network_notes(
-        &self,
-        account_id: AccountId,
-        block_num: BlockNumber,
-        page: Page,
-    ) -> Result<(Vec<NoteRecord>, Page)> {
-        self.transact("unconsumed network notes for account", move |conn| {
-            models::queries::select_unconsumed_network_notes_by_account_id(
-                conn, account_id, block_num, page,
-            )
-        })
-        .await
     }
 
     pub async fn get_account_vault_sync(
