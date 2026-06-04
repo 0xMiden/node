@@ -1,6 +1,9 @@
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
+use miden_node_utils::DEFAULT_BLOCK_INTERVAL;
 use miden_protocol::block::BlockNumber;
 use thiserror::Error;
 use tokio::sync::{mpsc, watch};
@@ -9,6 +12,11 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use super::{BlockCache, ProofCache, State};
 use crate::errors::DatabaseError;
+
+/// How long to wait for a subscriber to accept a message before counting a strike.
+const SEND_TIMEOUT: Duration = DEFAULT_BLOCK_INTERVAL;
+/// Number of consecutive send timeouts before a subscriber is considered too slow and disconnected.
+const MAX_SLOW_STRIKES: u32 = 5;
 
 // SUBSCRIPTION EVENTS
 // ================================================================================================
@@ -44,6 +52,8 @@ pub enum StateSubscriptionError {
     },
     #[error("proof for block {0} not found")]
     ProofNotFound(BlockNumber),
+    #[error("subscriber is too slow to keep up with the chain")]
+    TooSlow,
 }
 
 pub type BlockSubscriptionStream =
@@ -115,55 +125,92 @@ fn build_proof_stream(
 async fn run_block_stream(
     from: BlockNumber,
     cache: BlockCache,
-    mut tip_rx: watch::Receiver<BlockNumber>,
+    tip_rx: watch::Receiver<BlockNumber>,
     state: Arc<State>,
     tx: &mpsc::Sender<Result<BlockSubscriptionEvent, StateSubscriptionError>>,
 ) -> Result<(), StateSubscriptionError> {
-    let mut next = from;
-    loop {
-        let mut tip = *tip_rx.borrow_and_update();
-        while next <= tip {
-            let block = fetch_block(next, &cache, &state).await?;
-            tip = *tip_rx.borrow_and_update();
-            if tx
-                .send(Ok(BlockSubscriptionEvent { block, committed_chain_tip: tip }))
-                .await
-                .is_err()
-            {
-                return Ok(());
-            }
-            next = next.child();
-        }
-        if tip_rx.changed().await.is_err() {
-            return Ok(());
-        }
-    }
+    run_stream(
+        from,
+        tip_rx,
+        tx,
+        |block_num| {
+            let cache = cache.clone();
+            let state = Arc::clone(&state);
+            async move { fetch_block(block_num, &cache, &state).await }
+        },
+        |_, block, committed_chain_tip| BlockSubscriptionEvent {
+            block,
+            committed_chain_tip,
+        },
+    )
+    .await
 }
 
 async fn run_proof_stream(
     from: BlockNumber,
     cache: ProofCache,
-    mut tip_rx: watch::Receiver<BlockNumber>,
+    tip_rx: watch::Receiver<BlockNumber>,
     state: Arc<State>,
     tx: &mpsc::Sender<Result<ProofSubscriptionEvent, StateSubscriptionError>>,
 ) -> Result<(), StateSubscriptionError> {
+    run_stream(
+        from,
+        tip_rx,
+        tx,
+        |block_num| {
+            let cache = cache.clone();
+            let state = Arc::clone(&state);
+            async move { fetch_proof(block_num, &cache, &state).await }
+        },
+        |block_num, proof, proven_chain_tip| ProofSubscriptionEvent {
+            block_num,
+            proof,
+            proven_chain_tip,
+        },
+    )
+    .await
+}
+
+/// Drives a generic subscription stream, replaying history then following live tip advances.
+///
+/// Calls `fetch` for each block in sequence starting from `from`, builds an event with
+/// `build_event(block_num, data, tip)`, and sends it to `tx`. Disconnects the subscriber
+/// with [`StateSubscriptionError::TooSlow`] if sending blocks for [`MAX_SLOW_STRIKES`]
+/// consecutive [`SEND_TIMEOUT`] intervals.
+async fn run_stream<E, F, Fut>(
+    from: BlockNumber,
+    mut tip_rx: watch::Receiver<BlockNumber>,
+    tx: &mpsc::Sender<Result<E, StateSubscriptionError>>,
+    fetch: F,
+    build_event: impl Fn(BlockNumber, Vec<u8>, BlockNumber) -> E,
+) -> Result<(), StateSubscriptionError>
+where
+    F: Fn(BlockNumber) -> Fut,
+    Fut: Future<Output = Result<Vec<u8>, StateSubscriptionError>>,
+{
     let mut next = from;
+    let mut slow_strikes = 0u32;
     loop {
         let mut tip = *tip_rx.borrow_and_update();
         while next <= tip {
-            let proof = fetch_proof(next, &cache, &state).await?;
+            let data = fetch(next).await?;
             tip = *tip_rx.borrow_and_update();
-            if tx
-                .send(Ok(ProofSubscriptionEvent {
-                    block_num: next,
-                    proof,
-                    proven_chain_tip: tip,
-                }))
-                .await
-                .is_err()
-            {
-                return Ok(());
-            }
+            let permit = loop {
+                match tokio::time::timeout(SEND_TIMEOUT, tx.reserve()).await {
+                    Ok(Ok(permit)) => {
+                        slow_strikes = 0;
+                        break permit;
+                    }
+                    Ok(Err(_)) => return Ok(()),
+                    Err(_) => {
+                        slow_strikes += 1;
+                        if slow_strikes >= MAX_SLOW_STRIKES {
+                            return Err(StateSubscriptionError::TooSlow);
+                        }
+                    }
+                }
+            };
+            permit.send(Ok(build_event(next, data, tip)));
             next = next.child();
         }
         if tip_rx.changed().await.is_err() {
