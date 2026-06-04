@@ -68,131 +68,131 @@ impl State {
     /// Streams committed blocks starting from `from`, replaying historical blocks first and then
     /// following live commits.
     pub fn block_subscription(self: &Arc<Self>, from: BlockNumber) -> BlockSubscriptionStream {
-        Box::pin(build_block_stream(
+        Box::pin(build_stream(
             from,
-            self.block_cache.clone(),
             self.subscribe_committed_tip(),
-            Arc::clone(self),
+            BlockSource { cache: self.block_cache.clone(), state: Arc::clone(self) },
         ))
     }
 
     /// Streams block proofs starting from `from`, replaying historical proofs first and then
     /// following newly proven blocks.
     pub fn proof_subscription(self: &Arc<Self>, from: BlockNumber) -> ProofSubscriptionStream {
-        Box::pin(build_proof_stream(
+        Box::pin(build_stream(
             from,
-            self.proof_cache.clone(),
             self.subscribe_proven_tip(),
-            Arc::clone(self),
+            ProofSource { cache: self.proof_cache.clone(), state: Arc::clone(self) },
         ))
     }
 }
 
-// STREAM BUILDERS
+// SUBSCRIPTION SOURCE
 // ================================================================================================
 
-fn build_block_stream(
-    from: BlockNumber,
+trait SubscriptionSource: Send + Sync + 'static {
+    type Event: Send + 'static;
+
+    fn fetch(
+        &self,
+        block_num: BlockNumber,
+    ) -> impl Future<Output = Result<Vec<u8>, StateSubscriptionError>> + Send + '_;
+
+    fn build_event(&self, block_num: BlockNumber, data: Vec<u8>, tip: BlockNumber) -> Self::Event;
+}
+
+struct BlockSource {
     cache: BlockCache,
-    tip_rx: watch::Receiver<BlockNumber>,
     state: Arc<State>,
-) -> impl Stream<Item = Result<BlockSubscriptionEvent, StateSubscriptionError>> + Send + 'static {
+}
+
+impl SubscriptionSource for BlockSource {
+    type Event = BlockSubscriptionEvent;
+
+    async fn fetch(&self, block_num: BlockNumber) -> Result<Vec<u8>, StateSubscriptionError> {
+        if let Some(entry) = self.cache.get(block_num) {
+            return Ok(entry.block_bytes().to_vec());
+        }
+        self.state
+            .load_block(block_num)
+            .await
+            .map_err(|source| StateSubscriptionError::BlockLoad { block_num, source })?
+            .ok_or(StateSubscriptionError::BlockNotFound(block_num))
+    }
+
+    fn build_event(
+        &self,
+        _block_num: BlockNumber,
+        block: Vec<u8>,
+        committed_chain_tip: BlockNumber,
+    ) -> BlockSubscriptionEvent {
+        BlockSubscriptionEvent { block, committed_chain_tip }
+    }
+}
+
+struct ProofSource {
+    cache: ProofCache,
+    state: Arc<State>,
+}
+
+impl SubscriptionSource for ProofSource {
+    type Event = ProofSubscriptionEvent;
+
+    async fn fetch(&self, block_num: BlockNumber) -> Result<Vec<u8>, StateSubscriptionError> {
+        if let Some(entry) = self.cache.get(block_num) {
+            return Ok(entry.proof_bytes().to_vec());
+        }
+        self.state
+            .load_proof(block_num)
+            .await
+            .map_err(|source| StateSubscriptionError::ProofLoad { block_num, source })?
+            .ok_or(StateSubscriptionError::ProofNotFound(block_num))
+    }
+
+    fn build_event(
+        &self,
+        block_num: BlockNumber,
+        proof: Vec<u8>,
+        proven_chain_tip: BlockNumber,
+    ) -> ProofSubscriptionEvent {
+        ProofSubscriptionEvent { block_num, proof, proven_chain_tip }
+    }
+}
+
+// STREAM
+// ================================================================================================
+
+fn build_stream<S: SubscriptionSource>(
+    from: BlockNumber,
+    tip_rx: watch::Receiver<BlockNumber>,
+    source: S,
+) -> impl Stream<Item = Result<S::Event, StateSubscriptionError>> + Send + 'static {
     let (tx, rx) = mpsc::channel(SUBSCRIBER_CHANNEL_CAPACITY);
     tokio::spawn(async move {
-        if let Err(err) = run_block_stream(from, cache, tip_rx, state, &tx).await {
+        if let Err(err) = run_stream(from, tip_rx, &tx, source).await {
             let _ = tx.send(Err(err)).await;
         }
     });
     ReceiverStream::new(rx)
-}
-
-fn build_proof_stream(
-    from: BlockNumber,
-    cache: ProofCache,
-    tip_rx: watch::Receiver<BlockNumber>,
-    state: Arc<State>,
-) -> impl Stream<Item = Result<ProofSubscriptionEvent, StateSubscriptionError>> + Send + 'static {
-    let (tx, rx) = mpsc::channel(SUBSCRIBER_CHANNEL_CAPACITY);
-    tokio::spawn(async move {
-        if let Err(err) = run_proof_stream(from, cache, tip_rx, state, &tx).await {
-            let _ = tx.send(Err(err)).await;
-        }
-    });
-    ReceiverStream::new(rx)
-}
-
-// STREAM TASKS
-// ================================================================================================
-
-async fn run_block_stream(
-    from: BlockNumber,
-    cache: BlockCache,
-    tip_rx: watch::Receiver<BlockNumber>,
-    state: Arc<State>,
-    tx: &mpsc::Sender<Result<BlockSubscriptionEvent, StateSubscriptionError>>,
-) -> Result<(), StateSubscriptionError> {
-    run_stream(
-        from,
-        tip_rx,
-        tx,
-        |block_num| {
-            let cache = cache.clone();
-            let state = Arc::clone(&state);
-            async move { fetch_block(block_num, &cache, &state).await }
-        },
-        |_, block, committed_chain_tip| BlockSubscriptionEvent { block, committed_chain_tip },
-    )
-    .await
-}
-
-async fn run_proof_stream(
-    from: BlockNumber,
-    cache: ProofCache,
-    tip_rx: watch::Receiver<BlockNumber>,
-    state: Arc<State>,
-    tx: &mpsc::Sender<Result<ProofSubscriptionEvent, StateSubscriptionError>>,
-) -> Result<(), StateSubscriptionError> {
-    run_stream(
-        from,
-        tip_rx,
-        tx,
-        |block_num| {
-            let cache = cache.clone();
-            let state = Arc::clone(&state);
-            async move { fetch_proof(block_num, &cache, &state).await }
-        },
-        |block_num, proof, proven_chain_tip| ProofSubscriptionEvent {
-            block_num,
-            proof,
-            proven_chain_tip,
-        },
-    )
-    .await
 }
 
 /// Drives a generic subscription stream, replaying history then following live tip advances.
 ///
-/// Calls `fetch` for each block in sequence starting from `from`, builds an event with
-/// `build_event(block_num, data, tip)`, and sends it to `tx`. Disconnects the subscriber
-/// with [`StateSubscriptionError::TooSlow`] if sending blocks for [`MAX_SLOW_STRIKES`]
-/// consecutive [`SEND_TIMEOUT`] intervals.
-async fn run_stream<E, F, Fut>(
+/// Calls [`SubscriptionSource::fetch`] for each block in sequence starting from `from`, builds an
+/// event with [`SubscriptionSource::build_event`], and sends it to `tx`. Disconnects the
+/// subscriber with [`StateSubscriptionError::TooSlow`] if sending blocks for
+/// [`MAX_SLOW_STRIKES`] consecutive [`SEND_TIMEOUT`] intervals.
+async fn run_stream<S: SubscriptionSource>(
     from: BlockNumber,
     mut tip_rx: watch::Receiver<BlockNumber>,
-    tx: &mpsc::Sender<Result<E, StateSubscriptionError>>,
-    fetch: F,
-    build_event: impl Fn(BlockNumber, Vec<u8>, BlockNumber) -> E,
-) -> Result<(), StateSubscriptionError>
-where
-    F: Fn(BlockNumber) -> Fut,
-    Fut: Future<Output = Result<Vec<u8>, StateSubscriptionError>>,
-{
+    tx: &mpsc::Sender<Result<S::Event, StateSubscriptionError>>,
+    source: S,
+) -> Result<(), StateSubscriptionError> {
     let mut next = from;
     let mut slow_strikes = 0u32;
     loop {
         let mut tip = *tip_rx.borrow_and_update();
         while next <= tip {
-            let data = fetch(next).await?;
+            let data = source.fetch(next).await?;
             tip = *tip_rx.borrow_and_update();
             let permit = loop {
                 match tokio::time::timeout(SEND_TIMEOUT, tx.reserve()).await {
@@ -209,41 +209,11 @@ where
                     },
                 }
             };
-            permit.send(Ok(build_event(next, data, tip)));
+            permit.send(Ok(source.build_event(next, data, tip)));
             next = next.child();
         }
         if tip_rx.changed().await.is_err() {
             return Ok(());
         }
     }
-}
-
-async fn fetch_block(
-    block_num: BlockNumber,
-    cache: &BlockCache,
-    state: &State,
-) -> Result<Vec<u8>, StateSubscriptionError> {
-    if let Some(entry) = cache.get(block_num) {
-        return Ok(entry.block_bytes().to_vec());
-    }
-    state
-        .load_block(block_num)
-        .await
-        .map_err(|source| StateSubscriptionError::BlockLoad { block_num, source })?
-        .ok_or(StateSubscriptionError::BlockNotFound(block_num))
-}
-
-async fn fetch_proof(
-    block_num: BlockNumber,
-    cache: &ProofCache,
-    state: &State,
-) -> Result<Vec<u8>, StateSubscriptionError> {
-    if let Some(entry) = cache.get(block_num) {
-        return Ok(entry.proof_bytes().to_vec());
-    }
-    state
-        .load_proof(block_num)
-        .await
-        .map_err(|source| StateSubscriptionError::ProofLoad { block_num, source })?
-        .ok_or(StateSubscriptionError::ProofNotFound(block_num))
 }
