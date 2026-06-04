@@ -2,14 +2,13 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::mem::size_of;
 use std::num::NonZeroUsize;
 use std::ops::{Deref, DerefMut, RangeInclusive};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context;
 use diesel::{Connection, SqliteConnection};
 use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_node_proto::domain::account::AccountInfo;
-use miden_node_proto::generated as proto;
 use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountHeader, AccountId, AccountStorageHeader, StorageMapKey};
@@ -26,12 +25,12 @@ use miden_protocol::note::{
     Nullifier,
 };
 use miden_protocol::transaction::TransactionHeader;
-use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::utils::serde::Deserializable;
 use tokio::sync::oneshot;
 use tracing::{info, instrument};
 
 use crate::COMPONENT;
-use crate::db::migrations::apply_migrations;
+use crate::db::migrations::{bootstrap_database, migrate_database, verify_latest_schema};
 use crate::db::models::conv::SqlTypeConvert;
 pub use crate::db::models::queries::{
     AccountCommitmentsPage,
@@ -65,6 +64,21 @@ pub(crate) mod models;
 pub(crate) mod schema;
 
 pub type Result<T, E = DatabaseError> = std::result::Result<T, E>;
+
+/// Database options used by the store state.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct DatabaseOptions {
+    /// Maximum number of SQLite connections in the connection pool.
+    pub connection_pool_size: NonZeroUsize,
+}
+
+impl Default for DatabaseOptions {
+    fn default() -> Self {
+        Self {
+            connection_pool_size: miden_node_db::default_connection_pool_size(),
+        }
+    }
+}
 
 /// The Store's database.
 ///
@@ -131,68 +145,15 @@ pub struct TransactionRecord {
     pub output_note_proofs: Vec<NoteSyncRecord>,
 }
 
-impl TransactionRecord {
-    /// Convert to proto `TransactionRecord`.
-    ///
-    /// The proto `TransactionHeader` contains all output notes as `NoteHeader`. Inclusion
-    /// proofs for committed output notes are placed separately in
-    /// `TransactionRecord.output_note_proofs`. Erased notes can be identified by comparing
-    /// note IDs in the proofs with the header's output notes.
-    pub fn into_proto(self) -> proto::rpc::TransactionRecord {
-        let output_note_proofs = self
-            .output_note_proofs
-            .into_iter()
-            .map(|n| proto::note::NoteInclusionInBlockProof {
-                note_id: Some(n.note_id.into()),
-                block_num: n.block_num.as_u32(),
-                note_index_in_block: n.note_index.leaf_index_value().into(),
-                inclusion_path: Some(n.inclusion_path.into()),
-            })
-            .collect();
-
-        proto::rpc::TransactionRecord {
-            header: Some(proto::transaction::TransactionHeader {
-                transaction_id: Some(self.header.id().into()),
-                account_id: Some(self.header.account_id().into()),
-                initial_state_commitment: Some(self.header.initial_state_commitment().into()),
-                final_state_commitment: Some(self.header.final_state_commitment().into()),
-                input_notes: self.header.input_notes().iter().cloned().map(Into::into).collect(),
-                output_notes: self.header.output_notes().iter().copied().map(Into::into).collect(),
-                fee: Some(Asset::from(self.header.fee()).into()),
-            }),
-            block_num: self.block_num.as_u32(),
-            output_note_proofs,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct NoteRecord {
     pub block_num: BlockNumber,
     pub note_index: BlockNoteIndex,
     pub note_id: Word,
-    pub note_commitment: Word,
     pub metadata: NoteMetadata,
     pub details: Option<NoteDetails>,
     pub attachments: NoteAttachments,
     pub inclusion_path: SparseMerklePath,
-}
-
-impl From<NoteRecord> for proto::note::CommittedNote {
-    fn from(note: NoteRecord) -> Self {
-        let inclusion_proof = Some(proto::note::NoteInclusionInBlockProof {
-            note_id: Some(note.note_id.into()),
-            block_num: note.block_num.as_u32(),
-            note_index_in_block: note.note_index.leaf_index_value().into(),
-            inclusion_path: Some(Into::into(note.inclusion_path)),
-        });
-        let note = Some(proto::note::Note {
-            metadata: Some(note.metadata.into()),
-            details: note.details.map(|details| details.to_bytes()),
-            attachments: note.attachments.to_bytes(),
-        });
-        Self { inclusion_proof, note }
-    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -205,22 +166,9 @@ pub struct NoteSyncUpdate {
 pub struct NoteSyncRecord {
     pub block_num: BlockNumber,
     pub note_index: BlockNoteIndex,
-    pub note_id: Word,
+    pub note_id: NoteId,
     pub metadata: NoteMetadata,
     pub inclusion_path: SparseMerklePath,
-}
-
-impl From<NoteSyncRecord> for proto::note::NoteSyncRecord {
-    fn from(note: NoteSyncRecord) -> Self {
-        let metadata = Some(note.metadata.into());
-        let inclusion_proof = Some(proto::note::NoteInclusionInBlockProof {
-            note_id: Some(note.note_id.into()),
-            block_num: note.block_num.as_u32(),
-            note_index_in_block: note.note_index.leaf_index_value().into(),
-            inclusion_path: Some(note.inclusion_path.into()),
-        });
-        Self { metadata, inclusion_proof }
-    }
 }
 
 impl From<NoteRecord> for NoteSyncRecord {
@@ -228,7 +176,7 @@ impl From<NoteRecord> for NoteSyncRecord {
         Self {
             block_num: note.block_num,
             note_index: note.note_index,
-            note_id: note.note_id,
+            note_id: NoteId::from_raw(note.note_id),
             metadata: note.metadata,
             inclusion_path: note.inclusion_path,
         }
@@ -245,11 +193,8 @@ impl Db {
         err,
     )]
     pub fn bootstrap(database_filepath: PathBuf, genesis: GenesisBlock) -> anyhow::Result<()> {
-        apply_migrations(&database_filepath).context("failed to apply database migrations")?;
+        bootstrap_database(&database_filepath).context("failed to bootstrap database schema")?;
 
-        // Open the database. This will create the file if it does not exist, but will also happily
-        // open it if already exists. In the latter case we will error out when attempting to insert
-        // the genesis block so this isn't such a problem.
         let mut conn: SqliteConnection = diesel::sqlite::SqliteConnection::establish(
             database_filepath.to_str().context("database filepath is invalid")?,
         )
@@ -264,20 +209,21 @@ impl Db {
         Ok(())
     }
 
-    /// Open a connection to the DB and apply any pending migrations.
+    /// Open a connection to the DB after verifying that it is at the latest schema version.
     #[instrument(target = COMPONENT, skip_all)]
     pub async fn load(database_filepath: PathBuf) -> Result<Self, DatabaseError> {
         Self::load_with_pool_size(database_filepath, miden_node_db::default_connection_pool_size())
             .await
     }
 
-    /// Open a connection to the DB with a specific pool size and apply any pending migrations.
+    /// Open a connection to the DB with a specific pool size after verifying that it is at the
+    /// latest schema version.
     #[instrument(target = COMPONENT, skip_all)]
     pub async fn load_with_pool_size(
         database_filepath: PathBuf,
         connection_pool_size: NonZeroUsize,
     ) -> Result<Self, DatabaseError> {
-        apply_migrations(&database_filepath)?;
+        verify_latest_schema(&database_filepath)?;
 
         let db = miden_node_db::Db::new_with_pool_size(&database_filepath, connection_pool_size)?;
         info!(
@@ -288,6 +234,13 @@ impl Db {
         );
 
         Ok(Self { db })
+    }
+
+    /// Applies all pending migrations to an existing DB.
+    #[instrument(target = COMPONENT, skip_all)]
+    pub fn migrate(database_filepath: impl AsRef<Path>) -> Result<(), DatabaseError> {
+        migrate_database(database_filepath.as_ref())?;
+        Ok(())
     }
 
     /// Returns a page of nullifiers for tree rebuilding.
@@ -448,6 +401,18 @@ impl Db {
     ) -> Result<Option<AccountInfo>> {
         self.transact("Get network account by id", move |conn| {
             queries::select_network_account_by_id(conn, account_id)
+        })
+        .await
+    }
+
+    /// Returns the subset of the provided account IDs that classify as network accounts.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    pub async fn select_network_accounts_subset(
+        &self,
+        account_ids: Vec<AccountId>,
+    ) -> Result<HashSet<AccountId>> {
+        self.transact("Filter network accounts subset", move |conn| {
+            queries::select_network_accounts_subset(conn, &account_ids)
         })
         .await
     }

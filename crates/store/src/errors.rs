@@ -1,9 +1,7 @@
 use std::io;
 
-use miden_node_proto::domain::account::NetworkAccountError;
 use miden_node_proto::domain::block::InvalidBlockRange;
-use miden_node_proto::errors::{ConversionError, GrpcError};
-use miden_node_utils::ErrorReport;
+use miden_node_proto::errors::ConversionError;
 use miden_node_utils::limiter::QueryLimitError;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
@@ -21,27 +19,13 @@ use miden_protocol::errors::{
     NullifierTreeError,
     StorageMapError,
 };
-use miden_protocol::note::{NoteId, Nullifier};
+use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::OutputNote;
 use thiserror::Error;
 use tokio::sync::oneshot::error::RecvError;
-use tonic::Status;
 
-use crate::account_state_forest::{AccountStateForestError, WitnessError};
+use crate::account_state_forest::AccountStateForestError;
 use crate::db::models::conv::DatabaseTypeConversionError;
-
-// PROOF SCHEDULER ERRORS
-// =================================================================================================
-
-#[derive(Debug, Error)]
-pub enum ProofSchedulerError {
-    #[error("no proving inputs found for block {0}")]
-    MissingProvingInputs(BlockNumber),
-    #[error("failed to deserialize proving inputs for block")]
-    DeserializationFailed(#[source] DeserializationError),
-    #[error("invalid remote prover endpoint: {0}")]
-    InvalidProverEndpoint(String),
-}
 
 // DATABASE ERRORS
 // =================================================================================================
@@ -97,18 +81,6 @@ pub enum DatabaseError {
         slot_name: String,
         block_num: BlockNumber,
     },
-}
-
-impl From<DatabaseError> for Status {
-    fn from(err: DatabaseError) -> Self {
-        match err {
-            DatabaseError::AccountNotFoundInDb(_)
-            | DatabaseError::AccountsNotFoundInDb(_)
-            | DatabaseError::AccountNotPublic(_) => Status::not_found(err.to_string()),
-
-            _ => Status::internal(err.to_string()),
-        }
-    }
 }
 
 // INITIALIZATION ERRORS
@@ -226,23 +198,19 @@ pub enum ApplyBlockError {
     DbUpdateTaskFailed(String),
 }
 
-impl From<ApplyBlockError> for Status {
-    fn from(err: ApplyBlockError) -> Self {
-        match err {
-            ApplyBlockError::InvalidBlockError(_) => Status::invalid_argument(err.as_report()),
-
-            _ => Status::internal(err.as_report()),
-        }
-    }
+#[derive(Error, Debug)]
+pub enum ApplyBlockWithProvingInputsError {
+    #[error("failed to save block proving inputs")]
+    SaveProvingInputs(#[source] io::Error),
+    #[error("failed to apply block")]
+    ApplyBlock(#[source] ApplyBlockError),
 }
 
-#[derive(Error, Debug, GrpcError)]
+#[derive(Error, Debug)]
 pub enum GetBlockHeaderError {
     #[error("database error")]
-    #[grpc(internal)]
     DatabaseError(#[from] DatabaseError),
     #[error("error retrieving the merkle proof for the block")]
-    #[grpc(internal)]
     MmrError(#[from] MmrError),
 }
 
@@ -271,41 +239,21 @@ pub enum StateSyncError {
     FailedToBuildMmrDelta(#[from] MmrError),
 }
 
-#[derive(Error, Debug, GrpcError)]
-pub enum SyncChainMmrError {
-    #[error("invalid block range")]
-    InvalidBlockRange(#[source] InvalidBlockRange),
-    #[error("start block is not known")]
-    FutureBlock {
-        chain_tip: BlockNumber,
-        current_client_block_height: BlockNumber,
-    },
-    #[error("malformed block number")]
-    DeserializationFailed(#[source] ConversionError),
-    #[error("database error")]
-    #[grpc(internal)]
-    DatabaseError(#[source] DatabaseError),
-}
-
 impl From<diesel::result::Error> for StateSyncError {
     fn from(value: diesel::result::Error) -> Self {
         Self::DatabaseError(DatabaseError::from(value))
     }
 }
 
-#[derive(Error, Debug, GrpcError)]
+#[derive(Error, Debug)]
 pub enum NoteSyncError {
     #[error("database error")]
-    #[grpc(internal)]
     DatabaseError(#[from] DatabaseError),
     #[error("database error")]
-    #[grpc(internal)]
     UnderlyingDatabaseError(#[from] miden_node_db::DatabaseError),
     #[error("block headers table is empty")]
-    #[grpc(internal)]
     EmptyBlockHeadersTable,
     #[error("error retrieving the merkle proof for the block")]
-    #[grpc(internal)]
     MmrError(#[from] MmrError),
     #[error("invalid block range")]
     InvalidBlockRange(#[from] InvalidBlockRange),
@@ -349,89 +297,12 @@ pub enum GetBatchInputsError {
     },
 }
 
-// SYNC NULLIFIERS ERRORS
-// ================================================================================================
-
-#[derive(Debug, Error, GrpcError)]
-pub enum SyncNullifiersError {
-    #[error("database error")]
-    #[grpc(internal)]
-    DatabaseError(#[from] DatabaseError),
-    #[error("invalid block range")]
-    InvalidBlockRange(#[from] InvalidBlockRange),
-    #[error("unsupported prefix length: {0} (only 16-bit prefixes are supported)")]
-    InvalidPrefixLength(u32),
-    #[error("malformed nullifier prefix")]
-    DeserializationFailed(#[from] ConversionError),
-}
-
-// SYNC ACCOUNT VAULT ERRORS
-// ================================================================================================
-
-#[derive(Debug, Error, GrpcError)]
-pub enum SyncAccountVaultError {
-    #[error("database error")]
-    #[grpc(internal)]
-    DatabaseError(#[from] DatabaseError),
-    #[error("invalid block range")]
-    InvalidBlockRange(#[from] InvalidBlockRange),
-    #[error("malformed account ID")]
-    DeserializationFailed(#[from] ConversionError),
-    #[error("account {0} is not public")]
-    AccountNotPublic(AccountId),
-}
-
-// SYNC STORAGE MAPS ERRORS
-// ================================================================================================
-
-#[derive(Debug, Error, GrpcError)]
-pub enum SyncAccountStorageMapsError {
-    #[error("database error")]
-    #[grpc(internal)]
-    DatabaseError(#[from] DatabaseError),
-    #[error("invalid block range")]
-    InvalidBlockRange(#[from] InvalidBlockRange),
-    #[error("malformed account ID")]
-    DeserializationFailed(#[from] ConversionError),
-    #[error("account {0} not found")]
-    AccountNotFound(AccountId),
-    #[error("account {0} is not public")]
-    AccountNotPublic(AccountId),
-}
-
-// GET NETWORK ACCOUNT IDS
-// ================================================================================================
-
-#[derive(Debug, Error, GrpcError)]
-pub enum GetNetworkAccountIdsError {
-    #[error("database error")]
-    #[grpc(internal)]
-    DatabaseError(#[from] DatabaseError),
-    #[error("invalid block range")]
-    InvalidBlockRange(#[from] InvalidBlockRange),
-    #[error("malformed nullifier prefix")]
-    DeserializationFailed(#[from] ConversionError),
-}
-
-// GET BLOCK BY NUMBER ERRORS
-// ================================================================================================
-
-#[derive(Debug, Error, GrpcError)]
-pub enum GetBlockByNumberError {
-    #[error("database error")]
-    #[grpc(internal)]
-    DatabaseError(#[from] DatabaseError),
-    #[error("malformed block number")]
-    DeserializationFailed(#[from] DeserializationError),
-}
-
 // GET ACCOUNT ERRORS
 // ================================================================================================
 
-#[derive(Debug, Error, GrpcError)]
+#[derive(Debug, Error)]
 pub enum GetAccountError {
     #[error("database error")]
-    #[grpc(internal)]
     DatabaseError(#[from] DatabaseError),
     #[error("malformed request")]
     DeserializationFailed(#[from] ConversionError),
@@ -445,139 +316,6 @@ pub enum GetAccountError {
     BlockPruned(BlockNumber),
 }
 
-// GET NOTES BY ID ERRORS
-// ================================================================================================
-
-#[derive(Debug, Error, GrpcError)]
-pub enum GetNotesByIdError {
-    #[error("database error")]
-    #[grpc(internal)]
-    DatabaseError(#[from] DatabaseError),
-    #[error("malformed note ID")]
-    DeserializationFailed(#[from] ConversionError),
-    #[error("note {0} not found")]
-    NoteNotFound(NoteId),
-    #[error("note {0} is not public")]
-    NoteNotPublic(NoteId),
-}
-
-// GET NOTE SCRIPT BY ROOT ERRORS
-// ================================================================================================
-
-#[derive(Debug, Error, GrpcError)]
-pub enum GetNoteScriptByRootError {
-    #[error("database error")]
-    #[grpc(internal)]
-    DatabaseError(#[from] DatabaseError),
-    #[error("malformed script root")]
-    DeserializationFailed(#[from] ConversionError),
-    #[error("script with given root not found")]
-    ScriptNotFound,
-}
-
-// SYNC TRANSACTIONS ERRORS
-// ================================================================================================
-
-#[derive(Debug, Error, GrpcError)]
-pub enum SyncTransactionsError {
-    #[error("database error")]
-    #[grpc(internal)]
-    DatabaseError(#[from] DatabaseError),
-    #[error("invalid block range")]
-    InvalidBlockRange(#[from] InvalidBlockRange),
-    #[error("malformed account ID")]
-    DeserializationFailed(#[from] ConversionError),
-    #[error("account {0} not found")]
-    AccountNotFound(AccountId),
-    #[error("failed to retrieve witness")]
-    WitnessError(#[from] WitnessError),
-}
-
-#[derive(Debug, Error, GrpcError)]
-pub enum GetWitnessesError {
-    #[error("malformed request")]
-    DeserializationFailed(#[from] ConversionError),
-    #[error("failed to retrieve witness")]
-    WitnessError(#[from] WitnessError),
-}
-
-#[cfg(test)]
-mod get_account_error_tests {
-    use miden_protocol::account::AccountId;
-    use miden_protocol::block::BlockNumber;
-    use miden_protocol::testing::account_id::AccountIdBuilder;
-    use tonic::Status;
-
-    use super::GetAccountError;
-
-    fn test_account_id() -> AccountId {
-        AccountIdBuilder::new().build_with_seed([1; 32])
-    }
-
-    #[test]
-    fn unknown_block_returns_invalid_argument() {
-        let block = BlockNumber::from(999);
-        let err = GetAccountError::UnknownBlock(block);
-        let status: Status = err.into();
-        assert_eq!(status.code(), tonic::Code::InvalidArgument);
-        assert!(!status.metadata().is_empty() || !status.details().is_empty());
-    }
-
-    #[test]
-    fn block_pruned_returns_invalid_argument() {
-        let block = BlockNumber::from(1);
-        let err = GetAccountError::BlockPruned(block);
-        let status: Status = err.into();
-        assert_eq!(status.code(), tonic::Code::InvalidArgument);
-    }
-
-    #[test]
-    fn account_not_public_returns_invalid_argument() {
-        let err = GetAccountError::AccountNotPublic(test_account_id());
-        let status: Status = err.into();
-        assert_eq!(status.code(), tonic::Code::InvalidArgument);
-    }
-
-    #[test]
-    fn account_not_found_returns_invalid_argument_with_block_context() {
-        let account_id = test_account_id();
-        let block = BlockNumber::from(5);
-        let err = GetAccountError::AccountNotFound(account_id, block);
-        let msg = err.to_string();
-        assert!(msg.contains("not found"), "error message should mention 'not found'");
-        assert!(msg.contains("block"), "error message should include block context");
-
-        let status: Status = err.into();
-        assert_eq!(status.code(), tonic::Code::InvalidArgument);
-    }
-
-    #[test]
-    fn each_variant_has_unique_discriminant() {
-        let account_id = test_account_id();
-        let block = BlockNumber::from(1);
-
-        let errors = [
-            GetAccountError::AccountNotFound(account_id, block),
-            GetAccountError::AccountNotPublic(account_id),
-            GetAccountError::UnknownBlock(block),
-            GetAccountError::BlockPruned(block),
-        ];
-
-        let codes: Vec<u8> = errors.iter().map(|e| e.api_error().api_code()).collect();
-
-        // All non-internal variants should have unique, non-zero discriminants
-        for &code in &codes {
-            assert_ne!(code, 0, "non-internal variants should not map to Internal (0)");
-        }
-
-        // Check uniqueness
-        let mut sorted = codes.clone();
-        sorted.sort_unstable();
-        sorted.dedup();
-        assert_eq!(sorted.len(), codes.len(), "all error variants should have unique codes");
-    }
-}
-
 // Do not scope for `cfg(test)` - if it the traitbounds don't suffice the issue will already appear
 // in the compilation of the library or binary, which would prevent getting to compiling the
 // following code.
@@ -589,7 +327,6 @@ mod compile_tests {
         AccountError,
         DatabaseError,
         DeserializationError,
-        NetworkAccountError,
         NoteError,
         RecvError,
         StateInitializationError,
@@ -609,7 +346,6 @@ mod compile_tests {
         ensure_is_error::<AccountDeltaError>(PhantomData);
         ensure_is_error::<RecvError>(PhantomData);
         ensure_is_error::<DeserializationError>(PhantomData);
-        ensure_is_error::<NetworkAccountError>(PhantomData);
         ensure_is_error::<NoteError>(PhantomData);
         ensure_is_error::<hex::FromHexError>(PhantomData);
         ensure_is_error::<deadpool::managed::PoolError<deadpool_diesel::Error>>(PhantomData);

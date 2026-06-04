@@ -206,18 +206,10 @@ fn footer(snapshot: &NetworkStatus) -> Markup {
 // CROSS-SERVICE LOOKUP
 // ================================================================================================
 
-/// Returns the chain tip reported by the first RPC service in the snapshot, preferring the store
-/// over the block-producer. Used by the explorer card to flag when the explorer's tip drifts past
-/// its tolerance vs. the RPC's view.
 fn find_rpc_chain_tip(services: &[ServiceStatus]) -> Option<u32> {
     for service in services {
         if let ServiceDetails::RpcStatus(rpc) = &service.details {
-            if let Some(store) = &rpc.store_status {
-                return Some(store.chain_tip);
-            }
-            if let Some(bp) = &rpc.block_producer_status {
-                return Some(bp.chain_tip);
-            }
+            return Some(rpc.chain_tip);
         }
     }
     None
@@ -244,7 +236,6 @@ mod tests {
         RemoteProverDetails,
         RemoteProverStatusDetails,
         RpcStatusDetails,
-        StoreStatusDetails,
         ValidatorStatusDetails,
         WorkerStatusDetails,
     };
@@ -317,11 +308,7 @@ mod tests {
             url: "https://rpc.example".to_string(),
             version: "1.2.3".to_string(),
             genesis_commitment: Some("0xabcdef".to_string()),
-            store_status: Some(StoreStatusDetails {
-                version: "1.2.3".to_string(),
-                status: Status::Healthy,
-                chain_tip: 42,
-            }),
+            chain_tip: 42,
             block_producer_status: Some(BlockProducerStatusDetails {
                 version: "1.2.3".to_string(),
                 status: Status::Healthy,
@@ -394,6 +381,7 @@ mod tests {
                 explorer_url: Some("https://explorer.example".to_string()),
                 pow_load_difficulty: 4,
                 base_amount: 100,
+                note_transport_url: Some("https://note-transport.example".to_string()),
             }),
         };
         let html = render(vec![healthy("faucet", ServiceDetails::FaucetTest(details))]);
@@ -433,10 +421,10 @@ mod tests {
         let details = ExplorerStatusDetails {
             block_number: 100,
             timestamp: 1_609_459_200,
-            number_of_transactions: 1,
-            number_of_nullifiers: 1,
-            number_of_notes: 1,
-            number_of_account_updates: 1,
+            total_transactions: 1,
+            total_nullifiers: 1,
+            total_notes: 1,
+            total_account_updates: 1,
             block_commitment: "0x".repeat(20),
             chain_commitment: "0x".repeat(20),
             proof_commitment: "0x".repeat(20),

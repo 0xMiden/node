@@ -1,25 +1,14 @@
-use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
 
 use miden_protocol::account::AccountId;
-use miden_protocol::block::nullifier_tree::NullifierWitness;
-use miden_protocol::block::{
-    BlockBody,
-    BlockHeader,
-    BlockInputs,
-    BlockNumber,
-    FeeParameters,
-    SignedBlock,
-};
+use miden_protocol::block::{BlockBody, BlockHeader, BlockNumber, FeeParameters, SignedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
-use miden_protocol::note::{NoteId, NoteInclusionProof};
-use miden_protocol::transaction::PartialBlockchain;
 use miden_protocol::utils::serde::Serializable;
 use thiserror::Error;
 
 use crate::decode::{ConversionResultExt, DecodeBytesExt, GrpcDecodeExt};
 use crate::errors::ConversionError;
-use crate::{AccountWitnessRecord, NullifierWitnessRecord, decode, generated as proto};
+use crate::{decode, generated as proto};
 
 // BLOCK NUMBER
 // ================================================================================================
@@ -173,88 +162,6 @@ impl TryFrom<proto::blockchain::SignedBlock> for SignedBlock {
     }
 }
 
-// BLOCK INPUTS
-// ================================================================================================
-
-impl From<BlockInputs> for proto::store::BlockInputs {
-    fn from(inputs: BlockInputs) -> Self {
-        let (
-            prev_block_header,
-            partial_block_chain,
-            account_witnesses,
-            nullifier_witnesses,
-            unauthenticated_note_proofs,
-        ) = inputs.into_parts();
-
-        proto::store::BlockInputs {
-            latest_block_header: Some(prev_block_header.into()),
-            account_witnesses: account_witnesses
-                .into_iter()
-                .map(|(id, witness)| AccountWitnessRecord { account_id: id, witness }.into())
-                .collect(),
-            nullifier_witnesses: nullifier_witnesses
-                .into_iter()
-                .map(|(nullifier, witness)| {
-                    let proof = witness.into_proof();
-                    NullifierWitnessRecord { nullifier, proof }.into()
-                })
-                .collect(),
-            partial_block_chain: partial_block_chain.to_bytes(),
-            unauthenticated_note_proofs: unauthenticated_note_proofs
-                .iter()
-                .map(proto::note::NoteInclusionInBlockProof::from)
-                .collect(),
-        }
-    }
-}
-
-impl TryFrom<proto::store::BlockInputs> for BlockInputs {
-    type Error = ConversionError;
-
-    fn try_from(response: proto::store::BlockInputs) -> Result<Self, Self::Error> {
-        let decoder = response.decoder();
-        let latest_block_header: BlockHeader = decode!(decoder, response.latest_block_header)?;
-
-        let account_witnesses = response
-            .account_witnesses
-            .into_iter()
-            .map(|entry| {
-                let witness_record: AccountWitnessRecord = entry.try_into()?;
-                Ok((witness_record.account_id, witness_record.witness))
-            })
-            .collect::<Result<BTreeMap<_, _>, ConversionError>>()
-            .context("account_witnesses")?;
-
-        let nullifier_witnesses = response
-            .nullifier_witnesses
-            .into_iter()
-            .map(|entry| {
-                let witness: NullifierWitnessRecord = entry.try_into()?;
-                Ok((witness.nullifier, NullifierWitness::new(witness.proof)))
-            })
-            .collect::<Result<BTreeMap<_, _>, ConversionError>>()
-            .context("nullifier_witnesses")?;
-
-        let unauthenticated_note_proofs = response
-            .unauthenticated_note_proofs
-            .iter()
-            .map(<(NoteId, NoteInclusionProof)>::try_from)
-            .collect::<Result<_, ConversionError>>()
-            .context("unauthenticated_note_proofs")?;
-
-        let partial_block_chain =
-            PartialBlockchain::decode_bytes(&response.partial_block_chain, "PartialBlockchain")?;
-
-        Ok(BlockInputs::new(
-            latest_block_header,
-            partial_block_chain,
-            account_witnesses,
-            nullifier_witnesses,
-            unauthenticated_note_proofs,
-        ))
-    }
-}
-
 // PUBLIC KEY
 // ================================================================================================
 
@@ -312,7 +219,7 @@ impl TryFrom<proto::blockchain::FeeParameters> for FeeParameters {
                 "native_asset_id",
             ))?
             .context("native_asset_id")?;
-        let fee_params = FeeParameters::new(native_asset_id, fee_params.verification_base_fee)?;
+        let fee_params = FeeParameters::new(native_asset_id, fee_params.verification_base_fee);
         Ok(fee_params)
     }
 }

@@ -4,21 +4,50 @@ use miden_node_proto::domain::proof_request::BlockProofRequest;
 use miden_node_utils::ErrorReport;
 use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
+use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::account_tree::AccountMutationSet;
 use miden_protocol::block::nullifier_tree::NullifierMutationSet;
-use miden_protocol::block::{BlockBody, BlockHeader, BlockNumber, SignedBlock};
-use miden_protocol::note::{NoteAttachments, NoteDetails, Nullifier};
+use miden_protocol::block::{BlockBody, BlockHeader, BlockInputs, BlockNumber, SignedBlock};
+use miden_protocol::note::{NoteDetails, Nullifier};
 use miden_protocol::transaction::OutputNote;
 use miden_protocol::utils::serde::Serializable;
 use tokio::sync::oneshot;
 use tracing::{Instrument, info, info_span, instrument};
 
 use crate::db::NoteRecord;
-use crate::errors::{ApplyBlockError, InvalidBlockError};
+use crate::errors::{ApplyBlockError, ApplyBlockWithProvingInputsError, InvalidBlockError};
 use crate::state::{BlockNotification, State};
 use crate::{COMPONENT, HistoricalError};
 
 impl State {
+    /// Saves proving inputs for a signed block and applies it to the state.
+    ///
+    /// Used by the in-process block producer after it has built and signed a block.
+    #[instrument(target = COMPONENT, skip_all, err)]
+    pub async fn apply_block_with_proving_inputs(
+        &self,
+        ordered_batches: OrderedBatches,
+        block_inputs: BlockInputs,
+        signed_block: SignedBlock,
+    ) -> Result<(), ApplyBlockWithProvingInputsError> {
+        let block_header = signed_block.header().clone();
+        let block_num = block_header.block_num();
+
+        let proving_inputs = BlockProofRequest {
+            tx_batches: ordered_batches,
+            block_header,
+            block_inputs,
+        };
+
+        self.save_proving_inputs(block_num, &proving_inputs)
+            .await
+            .map_err(ApplyBlockWithProvingInputsError::SaveProvingInputs)?;
+
+        self.apply_block(signed_block)
+            .await
+            .map_err(ApplyBlockWithProvingInputsError::ApplyBlock)
+    }
+
     /// Apply changes of a new block to the DB and in-memory data structures.
     ///
     /// ## Note on state consistency
@@ -152,7 +181,9 @@ impl State {
         })?;
 
         // Push to cache and notify replica subscribers.
-        self.block_cache.push(block_num, BlockNotification::new(block_num, cache_bytes));
+        self.block_cache
+            .push(block_num, BlockNotification::new(block_num, cache_bytes))
+            .expect("block cache receives sequential block numbers");
         let _ = self.committed_tip_tx.send(block_num);
 
         info!(%block_commitment, block_num = block_num.as_u32(), COMPONENT, "apply_block successful");
@@ -247,11 +278,6 @@ impl State {
                 .map_err(InvalidBlockError::NewBlockNullifierAlreadySpent)?;
 
             if nullifier_tree_update.as_mutation_set().root() != header.nullifier_root() {
-                // We do our best here to notify the serve routine, if it doesn't care (dropped the
-                // receiver) we can't do much.
-                let _ = self.termination_ask.try_send(ApplyBlockError::InvalidBlockError(
-                    InvalidBlockError::NewBlockInvalidNullifierRoot,
-                ));
                 return Err(InvalidBlockError::NewBlockInvalidNullifierRoot.into());
             }
 
@@ -273,9 +299,6 @@ impl State {
                 })?;
 
             if account_tree_update.as_mutation_set().root() != header.account_root() {
-                let _ = self.termination_ask.try_send(ApplyBlockError::InvalidBlockError(
-                    InvalidBlockError::NewBlockInvalidAccountRoot,
-                ));
                 return Err(InvalidBlockError::NewBlockInvalidAccountRoot.into());
             }
 
@@ -310,7 +333,7 @@ impl State {
                         public.as_note().attachments().clone(),
                         Some(public.as_note().nullifier()),
                     ),
-                    OutputNote::Private(_) => (None, NoteAttachments::empty(), None),
+                    OutputNote::Private(private) => (None, private.attachments().clone(), None),
                 };
 
                 let inclusion_path = note_tree.open(note_index);
@@ -319,7 +342,6 @@ impl State {
                     block_num,
                     note_index,
                     note_id: note.id().as_word(),
-                    note_commitment: note.to_commitment(),
                     metadata: *note.metadata(),
                     details,
                     attachments,

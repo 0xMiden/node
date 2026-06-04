@@ -2,18 +2,16 @@ services:
   monitor:
     image: miden-network-monitor
     pull_policy: if_not_present
+    depends_on:
+      sequencer:
+        condition: service_started
     command:
       - miden-network-monitor
       - start
     environment:
-      - MIDEN_MONITOR_RPC_URL=http://localhost:57291
+      - MIDEN_MONITOR_RPC_URL=http://sequencer:57291
       - MIDEN_MONITOR_PORT=3001
       - MIDEN_MONITOR_NETWORK_NAME=Localhost
-      - MIDEN_MONITOR_DISABLE_NTX_SERVICE=true
-      - MIDEN_MONITOR_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
-      - OTEL_SERVICE_NAME=monitor
-    extra_hosts:
-      - "localhost:host-gateway"
     ports:
-      - "3001:3001"
+      - "127.0.0.1:3001:3001"

@@ -8,7 +8,20 @@ use crate::COMPONENT;
 include!(concat!(env!("OUT_DIR"), "/db_migrator.rs"));
 
 #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
-pub fn apply_migrations(database_filepath: &Path) -> Result<(), DatabaseError> {
+pub fn bootstrap_database(database_filepath: &Path) -> Result<(), DatabaseError> {
+    let migrator = migrator().map_err(DatabaseError::migration)?;
+    tracing::info!(
+        target: COMPONENT,
+        migration_count = migrator.schema_hashes().len(),
+        "Bootstrapping database schema"
+    );
+
+    migrator.bootstrap(database_filepath).map_err(DatabaseError::migration)?;
+    Ok(())
+}
+
+#[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+pub fn migrate_database(database_filepath: &Path) -> Result<(), DatabaseError> {
     let migrator = migrator().map_err(DatabaseError::migration)?;
     tracing::info!(
         target: COMPONENT,
@@ -20,24 +33,39 @@ pub fn apply_migrations(database_filepath: &Path) -> Result<(), DatabaseError> {
     Ok(())
 }
 
+#[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+pub fn verify_latest_schema(database_filepath: &Path) -> Result<(), DatabaseError> {
+    let migrator = migrator().map_err(DatabaseError::migration)?;
+    tracing::info!(
+        target: COMPONENT,
+        migration_count = migrator.schema_hashes().len(),
+        "Verifying database schema"
+    );
+
+    migrator
+        .verify_latest_schema(database_filepath)
+        .map_err(DatabaseError::migration)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::process::Command;
 
     use anyhow::{Context, Result, ensure};
-    use miden_node_db::migration::SchemaHash;
+    use miden_node_db::migration::{SchemaHash, SchemaHashes};
 
     use super::*;
 
     const EXPECTED_SCHEMA_HASHES: [SchemaHash; 1] = [SchemaHash::from_hex(
-        "c6434bc6a142cd96dd4072bea641546d99788b1495cb0e52c2d98b9138f9c30d",
+        "c631b773787903a3dd5ea4df5e7374119b3f02b35bacf14d11eacd8d8500e3d9",
     )];
 
     #[test]
     fn migration_schema_hashes_are_stable() -> Result<()> {
         let migrator = migrator()?;
 
-        assert_eq!(migrator.schema_hashes(), &EXPECTED_SCHEMA_HASHES);
+        assert_eq!(migrator.schema_hashes(), SchemaHashes(&EXPECTED_SCHEMA_HASHES));
         Ok(())
     }
 
@@ -46,7 +74,7 @@ mod tests {
     fn diesel_schema_is_in_sync_with_migrations() -> Result<()> {
         let temp_dir = tempfile::tempdir()?;
         let database_filepath = temp_dir.path().join("ntx-builder.sqlite3");
-        apply_migrations(&database_filepath)?;
+        bootstrap_database(&database_filepath)?;
 
         let output = Command::new("diesel")
             .arg("print-schema")

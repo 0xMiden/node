@@ -1,6 +1,6 @@
-use miden_node_proto::domain::account::NetworkAccountId;
 use miden_protocol::account::delta::AccountUpdateDetails;
-use miden_protocol::account::{Account, AccountDelta, AccountId};
+use miden_protocol::account::{Account, AccountDelta};
+use miden_standards::account::auth::NetworkAccount;
 
 // NETWORK ACCOUNT EFFECT
 // ================================================================================================
@@ -14,29 +14,22 @@ pub enum NetworkAccountEffect {
 
 impl NetworkAccountEffect {
     pub fn from_protocol(update: &AccountUpdateDetails) -> Option<Self> {
-        let update = match update {
-            AccountUpdateDetails::Private => return None,
+        match update {
+            AccountUpdateDetails::Private => None,
             AccountUpdateDetails::Delta(update) if update.is_full_state() => {
-                NetworkAccountEffect::Created(
-                    Account::try_from(update)
-                        .expect("Account should be derivable by full state AccountDelta"),
-                )
+                // Only treat full-state creations as network if the storage carries the
+                // standardized `NetworkAccountNoteAllowlist` slot.
+                let account = Account::try_from(update)
+                    .expect("Account should be derivable by full state AccountDelta");
+                NetworkAccount::new(account)
+                    .ok()
+                    .map(|na| NetworkAccountEffect::Created(na.into_account()))
             },
-            AccountUpdateDetails::Delta(update) => NetworkAccountEffect::Updated(update.clone()),
-        };
-
-        update.protocol_account_id().is_network().then_some(update)
-    }
-
-    pub fn network_account_id(&self) -> NetworkAccountId {
-        // SAFETY: This is a network account by construction.
-        self.protocol_account_id().try_into().unwrap()
-    }
-
-    fn protocol_account_id(&self) -> AccountId {
-        match self {
-            NetworkAccountEffect::Created(acc) => acc.id(),
-            NetworkAccountEffect::Updated(delta) => delta.id(),
+            AccountUpdateDetails::Delta(update) => {
+                // Partial updates carry no storage we can inspect here. Forward them as updates and
+                // let the coordinator's actor registry filter to known network accounts.
+                Some(NetworkAccountEffect::Updated(update.clone()))
+            },
         }
     }
 }

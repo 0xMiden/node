@@ -7,8 +7,8 @@ use serial_test::serial;
 
 use super::*;
 use crate::mempool::graph::TransactionGraph;
-use crate::test_utils::MockProvenTxBuilder;
 use crate::test_utils::batch::TransactionBatchConstructor;
+use crate::test_utils::{MockProvenTxBuilder, mock_account_id};
 
 mod add_transaction;
 mod add_user_batch;
@@ -167,7 +167,7 @@ fn block_commit_reverts_expired_txns() {
     // Create and commit the block which should revert the above tx.
     let block = uut.select_block();
     let arb_header = BlockHeader::mock(block.block_number, None, None, &[], Word::empty());
-    uut.commit_block(arb_header.clone());
+    uut.commit_block(&arb_header);
 
     // A reverted transaction behaves as if it never existed.
     reference.add_transaction(tx_to_commit.clone()).unwrap();
@@ -176,7 +176,7 @@ fn block_commit_reverts_expired_txns() {
         tx_to_commit.raw_proven_transaction()
     ])));
     reference.select_block();
-    reference.commit_block(arb_header);
+    reference.commit_block(&arb_header);
 
     assert_eq!(uut, reference);
 }
@@ -188,15 +188,70 @@ fn empty_block_commitment() {
     for _ in 0..3 {
         let block = uut.select_block();
         let arb_header = BlockHeader::mock(block.block_number, None, None, &[], Word::empty());
-        uut.commit_block(arb_header);
+        uut.commit_block(&arb_header);
     }
+}
+
+/// Regression test for a child transaction that consumes an unauthenticated note produced by a
+/// parent transaction which has already been committed and later pruned from retained mempool
+/// history.
+///
+/// The child remains in the transaction graph after the parent block is committed. Once retention
+/// pruning removes the parent, the note is no longer represented by an inflight transaction, so the
+/// child must stop reporting it as unauthenticated before it is selected into its own batch.
+#[test]
+fn pruned_committed_notes_are_authenticated_for_inflight_descendants() {
+    let (mut uut, _) = Mempool::for_tests();
+    uut.config.state_retention = NonZeroUsize::new(1).unwrap();
+
+    let parent = MockProvenTxBuilder::with_account(
+        mock_account_id(1),
+        Word::empty(),
+        Word::new([1u32.into(), 1u32.into(), 2u32.into(), 3u32.into()]),
+    )
+    .private_notes_created_range(3..4)
+    .build();
+    let parent = Arc::new(AuthenticatedTransaction::from_inner(parent));
+
+    let child = MockProvenTxBuilder::with_account(
+        mock_account_id(2),
+        Word::empty(),
+        Word::new([2u32.into(), 1u32.into(), 2u32.into(), 3u32.into()]),
+    )
+    .unauthenticated_notes_range(3..4)
+    .build();
+    let child = Arc::new(AuthenticatedTransaction::from_inner(child));
+
+    uut.add_transaction(parent.clone()).unwrap();
+    let parent_batch = uut.select_batch().unwrap();
+    assert_eq!(parent_batch.transactions(), std::slice::from_ref(&parent));
+
+    uut.add_transaction(child.clone()).unwrap();
+    uut.commit_batch(Arc::new(ProvenBatch::mocked_from_transactions([
+        parent.raw_proven_transaction()
+    ])));
+
+    let block = uut.select_block();
+    let header = BlockHeader::mock(block.block_number, None, None, &[], Word::empty());
+    uut.commit_block(&header);
+
+    let block = uut.select_block();
+    let header = BlockHeader::mock(block.block_number, None, None, &[], Word::empty());
+    uut.commit_block(&header);
+
+    let child_batch = uut.select_batch().unwrap();
+
+    assert_eq!(child_batch.transactions().len(), 1);
+    assert_eq!(child_batch.transactions()[0].id(), child.id());
+    assert_eq!(child_batch.transactions()[0].unauthenticated_note_ids().count(), 0);
+    assert_eq!(child_batch.unauthenticated_note_commitments().count(), 0);
 }
 
 #[test]
 #[should_panic]
 fn block_commitment_is_rejected_if_no_block_is_in_flight() {
     let arb_header = BlockHeader::mock(0, None, None, &[], Word::empty());
-    Mempool::for_tests().0.commit_block(arb_header);
+    Mempool::for_tests().0.commit_block(&arb_header);
 }
 
 #[test]

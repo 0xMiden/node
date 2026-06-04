@@ -11,9 +11,9 @@ use miden_protocol::block::{
     FeeParameters,
     SignedBlock,
 };
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, SecretKey, Signature};
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature, SigningKey};
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrPeaks};
-use miden_protocol::crypto::merkle::smt::{LargeSmt, MemoryStorage, Smt};
+use miden_protocol::crypto::merkle::smt::Smt;
 use miden_protocol::errors::AccountError;
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionKernel};
@@ -134,9 +134,8 @@ impl GenesisState {
             )
         });
 
-        // Create LargeSmt with MemoryStorage
-        let smt = LargeSmt::with_entries(MemoryStorage::default(), smt_entries)
-            .expect("Failed to create LargeSmt for genesis accounts");
+        let smt =
+            Smt::with_entries(smt_entries).expect("Failed to create LargeSmt for genesis accounts");
 
         let account_smt = AccountTree::new(smt).expect("Failed to create AccountTree for genesis");
 
@@ -174,7 +173,7 @@ impl GenesisState {
     }
 
     /// Builds and signs the genesis block with a local secret key.
-    pub fn into_block(self, signer: &SecretKey) -> anyhow::Result<GenesisBlock> {
+    pub fn into_block(self, signer: &SigningKey) -> anyhow::Result<GenesisBlock> {
         let unsigned_block = self.into_unsigned_block()?;
         let signature = signer.sign(unsigned_block.header().commitment());
         unsigned_block.into_block(signature)

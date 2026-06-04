@@ -9,6 +9,19 @@ help:
 WARNINGS=RUSTDOCFLAGS="-D warnings"
 STRESS_TEST_DATA_DIR ?= stress-test-store-$(shell date +%Y%m%d-%H%M%S)
 COMPOSE_FILES = -f docker-compose.yml -f compose/telemetry.yml -f compose/monitor.yml
+CONFIG_DIR = .config
+README_FILES = $(shell git ls-files '*README.md')
+EXTERNAL_DOCS_MARKDOWN_FILES = $(shell git ls-files 'docs/external/**/*.md')
+MARKDOWN_FILES = $(README_FILES) $(EXTERNAL_DOCS_MARKDOWN_FILES)
+PRETTIER_CONFIG = $(CONFIG_DIR)/prettier.json
+PRETTIER_LOG_LEVEL = warn
+PRETTIER_VERSION ?= 3.8.3
+MARKDOWNLINT_CONFIG = $(CONFIG_DIR)/markdownlint-cli2.yaml
+MARKDOWNLINT_CLI2_VERSION ?= 0.22.1
+CSPELL_CONFIG = $(CONFIG_DIR)/cspell.yaml
+CSPELL_VERSION ?= 10.0.1
+RUSTFMT_CONFIG = $(CONFIG_DIR)/rustfmt.toml
+TAPLO_CONFIG = $(CONFIG_DIR)/taplo.toml
 
 # -- linting --------------------------------------------------------------------------------------
 
@@ -26,30 +39,50 @@ fix: ## Runs Fix with configs
 
 
 .PHONY: format
-format: ## Runs rustfmt and comment reflow
-	cargo xtask fmt-comments --write
-	cargo +nightly fmt --all
+format: markdown-format ## Runs rustfmt, README formatting, and comment reflow
+	cargo xtask fmt-comments --write --rustfmt-config $(RUSTFMT_CONFIG)
+	cargo +nightly fmt --all -- --config-path $(RUSTFMT_CONFIG)
 
 
 .PHONY: format-check
-format-check: ## Checks rustfmt and comment reflow
-	cargo xtask fmt-comments --check
-	cargo +nightly fmt --all --check
+format-check: markdown-format-check ## Checks rustfmt, README formatting, and comment reflow
+	cargo xtask fmt-comments --check --rustfmt-config $(RUSTFMT_CONFIG)
+	cargo +nightly fmt --all --check -- --config-path $(RUSTFMT_CONFIG)
+
+
+.PHONY: markdown-format
+markdown-format: ## Formats Markdown files
+	@prettier --config $(PRETTIER_CONFIG) --log-level $(PRETTIER_LOG_LEVEL) --write $(MARKDOWN_FILES)
+
+
+.PHONY: markdown-format-check
+markdown-format-check: ## Checks Markdown formatting
+	@prettier --config $(PRETTIER_CONFIG) --log-level $(PRETTIER_LOG_LEVEL) --check $(MARKDOWN_FILES)
+
+
+.PHONY: markdown-lint
+markdown-lint: ## Lints Markdown files
+	markdownlint-cli2 --config $(MARKDOWNLINT_CONFIG) $(MARKDOWN_FILES)
+
+
+.PHONY: markdown-spellcheck
+markdown-spellcheck: ## Spellchecks Markdown files
+	cspell --config $(CSPELL_CONFIG) --no-progress --show-suggestions $(MARKDOWN_FILES)
 
 
 .PHONY: shear
 shear: ## Runs cargo-shear to find unused or misplaced dependencies
-	cargo shear
+	cargo shear --check-test-targets --deny-warnings
 
 
 .PHONY: toml
 toml: ## Runs Format for all TOML files
-	taplo fmt
+	taplo fmt --config $(TAPLO_CONFIG)
 
 
 .PHONY: toml-check
 toml-check: ## Runs Format for all TOML files but only in check mode
-	taplo fmt --check --verbose
+	taplo fmt --config $(TAPLO_CONFIG) --check --verbose
 
 .PHONY: typos-check
 typos-check: ## Runs spellchecker
@@ -61,7 +94,7 @@ workspace-check: ## Runs a check that all packages have `lints.workspace = true`
 
 
 .PHONY: lint
-lint: typos-check format fix clippy toml shear ## Runs all linting tasks at once (Clippy, fixing, formatting, cargo-shear)
+lint: typos-check markdown-spellcheck format markdown-lint fix clippy toml shear ## Runs all linting tasks at once (Clippy, formatting, spelling, Markdown, cargo-shear)
 
 # --- docs ----------------------------------------------------------------------------------------
 
@@ -110,6 +143,10 @@ install-node: ## Installs node
 install-validator: ## Installs validator
 	cargo install --path bin/validator --locked
 
+.PHONY: install-ntx-builder
+install-ntx-builder: ## Installs ntx-builder
+	cargo install --path bin/ntx-builder --locked
+
 .PHONY: install-remote-prover
 install-remote-prover: ## Install remote prover's CLI
 	cargo install --path bin/remote-prover --bin miden-remote-prover --locked
@@ -137,27 +174,27 @@ install-benchmark: ## Installs the benchmark binary
 
 # --- docker --------------------------------------------------------------------------------------
 
-.PHONY: compose-genesis
-compose-genesis: ## Wipes node volumes and creates a fresh genesis block
-	docker compose $(COMPOSE_FILES) down --volumes --remove-orphans
-	docker volume rm -f miden-node_node-data
-	docker compose $(COMPOSE_FILES) --profile genesis run --rm genesis-store
-	docker compose $(COMPOSE_FILES) --profile genesis rm -f
+.PHONY: local-network-build
+local-network-build: docker-build ## Builds Docker images used by the local development network
 
-.PHONY: compose-up
-compose-up: ## Starts all node components, telemetry, and monitor via docker compose
+.PHONY: local-network-up
+local-network-up: ## Starts the local development network
 	docker compose $(COMPOSE_FILES) up -d
 
-.PHONY: compose-down
-compose-down: ## Stops and removes all containers via docker compose
-	docker compose $(COMPOSE_FILES) down
+.PHONY: local-network-down
+local-network-down: ## Stops the local development network, preserving volumes
+	docker compose $(COMPOSE_FILES) down --remove-orphans
 
-.PHONY: compose-logs
-compose-logs: ## Follows logs for all components via docker compose
+.PHONY: local-network-delete
+local-network-delete: ## Stops the local development network and deletes volumes
+	docker compose $(COMPOSE_FILES) down -v --remove-orphans
+
+.PHONY: local-network-logs
+local-network-logs: ## Follows logs for the local development network
 	docker compose $(COMPOSE_FILES) logs -f
 
 .PHONY: docker-build
-docker-build: docker-build-node docker-build-validator docker-build-ntx-builder docker-build-monitor ## Builds all Docker images
+docker-build: docker-build-node docker-build-validator docker-build-ntx-builder docker-build-monitor docker-build-remote-prover ## Builds all Docker images
 
 .PHONY: docker-build-node
 docker-build-node: ## Builds the Miden node using Docker
@@ -207,13 +244,17 @@ docker-build-monitor: ## Builds the network monitor using Docker
                  --build-arg PORT=3000 \
                  -t miden-network-monitor .
 
-.PHONY: docker-run-node
-docker-run-node: ## Runs the Miden node as a Docker container
-	docker volume create miden-db
-	docker run --name miden-node \
-			   -p 57291:57291 \
-               -v miden-db:/db \
-               -d miden-node
+.PHONY: docker-build-remote-prover
+docker-build-remote-prover: ## Builds the remote prover using Docker
+	@CREATED=$$(date) && \
+	VERSION=$$(cat bin/remote-prover/Cargo.toml | grep -m 1 '^version' | cut -d '"' -f 2) && \
+	COMMIT=$$(git rev-parse HEAD) && \
+	docker build --build-arg CREATED="$$CREATED" \
+                 --build-arg VERSION="$$VERSION" \
+                 --build-arg COMMIT="$$COMMIT" \
+                 --build-arg BIN=miden-remote-prover \
+                 --build-arg PORT=50051 \
+                 -t miden-remote-prover .
 
 ## --- setup --------------------------------------------------------------------------------------
 
@@ -226,6 +267,9 @@ check-tools: ## Checks if development tools are installed
 	@command -v taplo         >/dev/null 2>&1 && echo "[OK] taplo is installed"         || echo "[MISSING] taplo        (make install-tools)"
 	@command -v cargo-shear >/dev/null 2>&1 && echo "[OK] cargo-shear is installed" || echo "[MISSING] cargo-shear is not installed (run: make install-tools)"
 	@command -v npm >/dev/null 2>&1 && echo "[OK] npm is installed" || echo "[MISSING] npm is not installed (run: make install-tools)"
+	@command -v prettier >/dev/null 2>&1 && echo "[OK] prettier is installed" || echo "[MISSING] prettier is not installed (run: make install-tools)"
+	@command -v markdownlint-cli2 >/dev/null 2>&1 && echo "[OK] markdownlint-cli2 is installed" || echo "[MISSING] markdownlint-cli2 is not installed (run: make install-tools)"
+	@command -v cspell >/dev/null 2>&1 && echo "[OK] cspell is installed" || echo "[MISSING] cspell is not installed (run: make install-tools)"
 
 .PHONY: install-tools
 install-tools: ## Installs tools required by the Makefile
@@ -235,7 +279,7 @@ install-tools: ## Installs tools required by the Makefile
 	cargo install typos-cli --locked
 	cargo install cargo-nextest --locked
 	cargo install taplo-cli --locked
-	cargo install cargo-shear --version 1.11.2 --locked
+	cargo install cargo-shear --version 1.12.4 --locked
 	@if ! command -v node >/dev/null 2>&1; then \
 		echo "Node.js not found. Please install Node.js from https://nodejs.org/ or using your package manager"; \
 		echo "On macOS: brew install node"; \
@@ -243,4 +287,5 @@ install-tools: ## Installs tools required by the Makefile
 		echo "On Windows: Download from https://nodejs.org/"; \
 		exit 1; \
 	fi
+	npm install --global prettier@$(PRETTIER_VERSION) markdownlint-cli2@$(MARKDOWNLINT_CLI2_VERSION) cspell@$(CSPELL_VERSION)
 	@echo "Development tools installation complete!"

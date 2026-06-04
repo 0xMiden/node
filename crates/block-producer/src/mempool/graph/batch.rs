@@ -25,7 +25,7 @@ impl GraphNode for SelectedBatch {
     }
 
     fn output_notes(&self) -> Box<dyn Iterator<Item = Word> + '_> {
-        Box::new(self.transactions().iter().flat_map(|tx| tx.output_note_commitments()))
+        Box::new(self.transactions().iter().flat_map(|tx| tx.output_note_ids()))
     }
 
     fn unauthenticated_notes(&self) -> Box<dyn Iterator<Item = Word> + '_> {

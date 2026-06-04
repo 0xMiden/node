@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
 
@@ -20,7 +20,11 @@ use diesel::{
     SqliteConnection,
 };
 use miden_node_proto::domain::account::{AccountInfo, AccountSummary};
-use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
+use miden_node_utils::limiter::{
+    MAX_RESPONSE_PAYLOAD_BYTES,
+    QueryParamAccountIdLimit,
+    QueryParamLimiter,
+};
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
     Account,
@@ -40,6 +44,7 @@ use miden_protocol::asset::{Asset, AssetVault, AssetVaultKey, FungibleAsset};
 use miden_protocol::block::{BlockAccountUpdate, BlockNumber};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{Felt, Word};
+use miden_standards::account::auth::NetworkAccount;
 
 use crate::COMPONENT;
 use crate::db::models::conv::{SqlTypeConvert, nonce_to_raw_sql, raw_sql_to_nonce};
@@ -149,7 +154,7 @@ pub(crate) fn select_account(
 
     // Backfill account details from database For private accounts, we don't store full details in
     // the database
-    let details = if account_id.has_public_state() {
+    let details = if account_id.is_public() {
         Some(select_full_account(conn, account_id)?)
     } else {
         None
@@ -366,9 +371,9 @@ pub struct PublicAccountStateRootsPage {
 /// Returns up to `page_size` public account IDs, starting after `after_account_id` if provided.
 /// Results are ordered by `account_id` for stable pagination.
 ///
-/// Public accounts are those with `AccountStorageMode::Public` or `AccountStorageMode::Network`.
-/// We identify them by checking `code_commitment IS NOT NULL` - public accounts store their full
-/// state (including `code_commitment`), while private accounts only store the `account_commitment`.
+/// Public accounts are those with `AccountType::Public`. We identify them by checking
+/// against the store. Public accounts store their `code_commitment`, while private accounts only
+/// store the `account_commitment`.
 ///
 /// # Raw SQL
 ///
@@ -426,9 +431,9 @@ pub(crate) fn select_public_account_ids_paged(
 /// Returns up to `page_size` public account states, starting after `after_account_id` if provided.
 /// Results are ordered by `account_id` for stable pagination.
 ///
-/// Public accounts are those with `AccountStorageMode::Public` or `AccountStorageMode::Network`.
-/// We identify them by checking `code_commitment IS NOT NULL` - public accounts store their full
-/// state (including `code_commitment`), while private accounts only store the `account_commitment`.
+/// Public accounts are those with `AccountType::Public`. We identify them by checking
+/// against the store. Public accounts store their `code_commitment`, while private accounts only
+/// store the `account_commitment`.
 ///
 /// # Raw SQL
 ///
@@ -547,7 +552,7 @@ pub(crate) fn select_account_vault_assets(
     const ROW_OVERHEAD_BYTES: usize = 2 * size_of::<Word>() + size_of::<u32>(); // key + asset + block_num
     const MAX_ROWS: usize = MAX_RESPONSE_PAYLOAD_BYTES / ROW_OVERHEAD_BYTES;
 
-    if !account_id.has_public_state() {
+    if !account_id.is_public() {
         return Err(DatabaseError::AccountNotPublic(account_id));
     }
 
@@ -794,7 +799,7 @@ pub(crate) fn select_account_storage_map_values_paged(
 ) -> Result<StorageMapValuesPage, DatabaseError> {
     use schema::account_storage_map_values as t;
 
-    if !account_id.has_public_state() {
+    if !account_id.is_public() {
         return Err(DatabaseError::AccountNotPublic(account_id));
     }
 
@@ -1154,7 +1159,7 @@ fn prepare_full_account_update(
     for asset in account.vault().assets() {
         // Only insert assets with non-zero values for fungible assets
         let should_insert = match asset {
-            Asset::Fungible(fungible) => fungible.amount() > 0,
+            Asset::Fungible(fungible) => fungible.amount().as_u64() > 0,
             Asset::NonFungible(_) => true,
         };
         if should_insert {
@@ -1198,7 +1203,7 @@ fn prepare_partial_account_update(
         } else {
             prev_asset.add(delta)?
         };
-        let update_or_remove = if new_balance.amount() == 0 {
+        let update_or_remove = if new_balance.amount().as_u64() == 0 {
             None
         } else {
             Some(Asset::from(new_balance))
@@ -1255,7 +1260,7 @@ fn prepare_partial_account_update(
         .ok_or_else(|| {
             DatabaseError::DataCorrupted(format!("Nonce overflow for account {account_id}"))
         })?;
-    let new_nonce = Felt::new(new_nonce_value);
+    let new_nonce = Felt::new_unchecked(new_nonce_value);
 
     // Create minimal account state data for the row insert.
     let account_state = PartialAccountState {
@@ -1283,12 +1288,45 @@ fn prepare_partial_account_update(
     Ok((AccountStateForInsert::PartialState(account_state), storage, assets))
 }
 
+/// Returns the subset of `account_ids` whose latest committed state is a network account.
+///
+/// Unknown ids and non-network accounts are silently omitted.
+pub(crate) fn select_network_accounts_subset(
+    conn: &mut SqliteConnection,
+    account_ids: &[AccountId],
+) -> Result<HashSet<AccountId>, DatabaseError> {
+    QueryParamAccountIdLimit::check(account_ids.len())?;
+    let id_bytes: Vec<Vec<u8>> =
+        account_ids.iter().map(miden_crypto::utils::Serializable::to_bytes).collect();
+
+    let rows: Vec<Vec<u8>> =
+        SelectDsl::select(schema::accounts::table, schema::accounts::account_id)
+            .filter(
+                schema::accounts::account_id
+                    .eq_any(&id_bytes)
+                    .and(
+                        schema::accounts::network_account_type
+                            .eq(NetworkAccountType::Network.to_raw_sql()),
+                    )
+                    .and(schema::accounts::is_latest.eq(true)),
+            )
+            .load::<Vec<u8>>(conn)
+            .map_err(DatabaseError::Diesel)?;
+
+    rows.into_iter()
+        .map(|bytes| {
+            AccountId::read_from_bytes(&bytes).map_err(DatabaseError::DeserializationError)
+        })
+        .collect()
+}
+
 /// Attention: Assumes the account details are NOT null! The schema explicitly allows this though!
 #[tracing::instrument(
     target = COMPONENT,
     skip_all,
     err,
 )]
+#[expect(clippy::too_many_lines)]
 pub(crate) fn upsert_accounts(
     conn: &mut SqliteConnection,
     accounts: &[BlockAccountUpdate],
@@ -1298,28 +1336,25 @@ pub(crate) fn upsert_accounts(
     for update in accounts {
         let account_id = update.account_id();
         let account_id_bytes = account_id.to_bytes();
-        let block_num_raw = block_num.to_raw_sql();
 
-        let network_account_type = if account_id.is_network() {
-            NetworkAccountType::Network
-        } else {
-            NetworkAccountType::None
-        };
-
-        // Preserve the original creation block when updating existing accounts.
-        let created_at_block_raw = QueryDsl::select(
+        // Pull the latest row (if any) so we can carry forward `created_at_block` and the
+        // `network_account_type` classification, both of which are fixed at account creation.
+        let existing: Option<(i64, i32)> = QueryDsl::select(
             schema::accounts::table.filter(
                 schema::accounts::account_id
                     .eq(&account_id_bytes)
                     .and(schema::accounts::is_latest.eq(true)),
             ),
-            schema::accounts::created_at_block,
+            (schema::accounts::created_at_block, schema::accounts::network_account_type),
         )
-        .first::<i64>(conn)
+        .first(conn)
         .optional()
-        .map_err(DatabaseError::Diesel)?
-        .unwrap_or(block_num_raw);
-        let created_at_block = BlockNumber::from_raw_sql(created_at_block_raw)?;
+        .map_err(DatabaseError::Diesel)?;
+
+        let created_at_block = match existing {
+            Some((raw, _)) => BlockNumber::from_raw_sql(raw)?,
+            None => block_num,
+        };
 
         // NOTE: we collect storage / asset inserts to apply them only after the account row is
         // written. The storage and vault tables have FKs pointing to accounts `(account_id,
@@ -1341,6 +1376,20 @@ pub(crate) fn upsert_accounts(
             // Update of an existing account
             AccountUpdateDetails::Delta(delta) => {
                 prepare_partial_account_update(conn, update, account_id, delta)?
+            },
+        };
+
+        // Inherit the classification when the account already exists; otherwise classify it once at
+        // creation based on the new state.
+        let network_account_type = match existing {
+            Some((_, raw)) => NetworkAccountType::from_raw_sql(raw)?,
+            None => match &account_state {
+                AccountStateForInsert::FullAccount(account)
+                    if NetworkAccount::new(account.clone()).is_ok() =>
+                {
+                    NetworkAccountType::Network
+                },
+                _ => NetworkAccountType::None,
             },
         };
 
@@ -1440,7 +1489,7 @@ pub(crate) struct AccountRowInsert {
 
 impl AccountRowInsert {
     /// Creates an insert row for a private account (no public state).
-    fn new_private(
+    pub(crate) fn new_private(
         account_id: AccountId,
         network_account_type: NetworkAccountType,
         account_commitment: Word,

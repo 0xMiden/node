@@ -56,22 +56,21 @@ miden-node-store                = { path = "crates/store", version = "0.15" }
 miden-node-test-macro           = { path = "crates/test-macro" }
 miden-node-utils                = { path = "crates/utils", version = "0.15" }
 miden-remote-prover-client      = { path = "crates/remote-prover-client", version = "0.15" }
-miden-validator                 = { path = "bin/validator", version = "0.15" }
 # Temporary workaround until <https://github.com/rust-rocksdb/rust-rocksdb/pull/1029>
 # is part of `rocksdb-rust` release
 miden-node-rocksdb-cxx-linkage-fix = { path = "crates/rocksdb-cxx-linkage-fix", version = "0.15" }
 
 # miden-protocol dependencies. These should be updated in sync.
-miden-agglayer        = { branch = "next", git = "https://github.com/0xMiden/protocol" }
-miden-block-prover    = { branch = "next", git = "https://github.com/0xMiden/protocol" }
-miden-protocol        = { branch = "next", default-features = false, git = "https://github.com/0xMiden/protocol" }
-miden-standards       = { branch = "next", git = "https://github.com/0xMiden/protocol" }
-miden-testing         = { branch = "next", git = "https://github.com/0xMiden/protocol" }
-miden-tx              = { branch = "next", default-features = false, git = "https://github.com/0xMiden/protocol" }
-miden-tx-batch-prover = { branch = "next", git = "https://github.com/0xMiden/protocol" }
+miden-agglayer        = { version = "0.15" }
+miden-block-prover    = { version = "0.15" }
+miden-protocol        = { default-features = false, version = "0.15" }
+miden-standards       = { version = "0.15" }
+miden-testing         = { version = "0.15" }
+miden-tx              = { default-features = false, version = "0.15" }
+miden-tx-batch-prover = { version = "0.15" }
 
 # Other miden dependencies. These should align with those expected by miden-protocol.
-miden-crypto = { version = "0.23" }
+miden-crypto = { version = "0.25" }
 
 # External dependencies
 anyhow            = { version = "1.0" }
@@ -134,6 +133,7 @@ url                = { features = ["serde"], version = "2.5" }
 [workspace.metadata.cargo-shear]
 # libsqlite3-sys is kept to control the bundled SQLite linkage.
 # tonic-prost is used by generated gRPC code rather than handwritten Rust.
+#
 ignored = ["libsqlite3-sys", "tonic-prost"]
 
 # Lints are set to warn for development, which are promoted to errors in CI.

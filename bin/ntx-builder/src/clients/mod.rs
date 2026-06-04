@@ -1,7 +1,3 @@
-mod block_producer;
-mod store;
-mod validator;
+mod rpc;
 
-pub use block_producer::BlockProducerClient;
-pub use store::{StoreClient, StoreError};
-pub use validator::ValidatorClient;
+pub use rpc::{RpcClient, RpcError};

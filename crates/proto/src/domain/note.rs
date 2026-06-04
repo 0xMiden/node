@@ -7,6 +7,7 @@ use miden_protocol::note::{
     NoteAttachmentScheme,
     NoteAttachments,
     NoteDetails,
+    NoteDetailsCommitment,
     NoteHeader,
     NoteId,
     NoteInclusionProof,
@@ -258,7 +259,7 @@ impl TryFrom<&proto::note::NoteInclusionInBlockProof> for (NoteId, NoteInclusion
 impl From<NoteHeader> for proto::note::NoteHeader {
     fn from(header: NoteHeader) -> Self {
         Self {
-            note_id: Some((&header.id()).into()),
+            details_commitment: Some(header.details_commitment().as_word().into()),
             metadata: Some(header.into_metadata().into()),
         }
     }
@@ -269,10 +270,13 @@ impl TryFrom<proto::note::NoteHeader> for NoteHeader {
 
     fn try_from(value: proto::note::NoteHeader) -> Result<Self, Self::Error> {
         let decoder = value.decoder();
-        let note_id_word: Word = decode!(decoder, value.note_id)?;
+        let details_commitment_word: Word = decode!(decoder, value.details_commitment)?;
         let metadata: NoteMetadata = decode!(decoder, value.metadata)?;
 
-        Ok(NoteHeader::new(NoteId::from_raw(note_id_word), metadata))
+        Ok(NoteHeader::new(
+            NoteDetailsCommitment::from_raw(details_commitment_word),
+            metadata,
+        ))
     }
 }
 
@@ -329,5 +333,37 @@ fn decode_attachments(bytes: &[u8]) -> Result<NoteAttachments, ConversionError> 
         Ok(NoteAttachments::empty())
     } else {
         NoteAttachments::decode_bytes(bytes, "NoteAttachments")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use miden_protocol::account::{AccountId, AccountIdVersion, AccountType};
+
+    use super::*;
+
+    #[test]
+    fn note_header_roundtrip_preserves_id() {
+        // Build a NoteHeader with a known details_commitment and metadata.
+        let details_commitment =
+            NoteDetailsCommitment::from_raw(Word::try_from([1u64, 2, 3, 4]).unwrap());
+        let sender = AccountId::dummy([1; 15], AccountIdVersion::Version1, AccountType::Public);
+        let metadata = NoteMetadata::new(
+            PartialNoteMetadata::new(sender, NoteType::Public).with_tag(NoteTag::from(7u32)),
+            &NoteAttachments::default(),
+        );
+
+        let original = NoteHeader::new(details_commitment, metadata);
+
+        // Round-trip through proto.
+        let proto_header: proto::note::NoteHeader = original.into();
+        let decoded = NoteHeader::try_from(proto_header).expect("proto NoteHeader should decode");
+
+        // Both the derived id and the details_commitment must match — guards against the historical
+        // bug where the encoder wrote `id` into the same wire field the decoder interpreted as
+        // `details_commitment`.
+        assert_eq!(decoded.id(), original.id());
+        assert_eq!(decoded.details_commitment(), original.details_commitment());
+        assert_eq!(decoded.metadata(), original.metadata());
     }
 }

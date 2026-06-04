@@ -8,8 +8,9 @@
 //!
 //! The database version is stored in SQLite's `PRAGMA user_version`. Each migration also has an
 //! expected [`SchemaHash`] computed by applying migrations to an in-memory reference database
-//! during builder construction. Runtime migration commits only after the resulting schema hash
-//! matches the expected hash.
+//! during builder construction. Bootstrap and runtime migration commit only after the resulting
+//! schema hash matches the expected hash. Normal load paths should use
+//! [`Migrator::verify_latest_schema`] before opening their connection pools.
 //!
 //! Build migrators manually with [`Migrator::builder`], or generate one from a migration directory
 //! with [`Migrator::generate`] in a `build.rs`. Callers should snapshot [`Migrator::schema_hashes`]
@@ -25,4 +26,4 @@ mod schema;
 pub use builder::MigratorBuilder;
 pub use entry::CodeMigrationFn;
 pub use migrator::Migrator;
-pub use schema::SchemaHash;
+pub use schema::{SchemaHash, SchemaHashes};

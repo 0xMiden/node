@@ -79,6 +79,14 @@ fn render_faucet_metadata(metadata: &GetMetadataResponse, healthy: bool) -> Mark
                         }
                     }
                 }
+                @if let Some(url) = &metadata.note_transport_url {
+                    div class="metric-row" {
+                        span class="metric-label" { "Note Transport URL:" }
+                        span class="metric-value" {
+                            a href=(url) target="_blank" rel="noopener noreferrer" { (url) }
+                        }
+                    }
+                }
             }
         }
     }

@@ -18,19 +18,11 @@ use miden_protocol::account::{
     AccountBuilder,
     AccountComponent,
     AccountId,
-    AccountStorageMode,
     AccountType,
     PartialAccount,
     StorageMapKey,
 };
-use miden_protocol::asset::{
-    Asset,
-    AssetAmount,
-    AssetVaultKey,
-    AssetWitness,
-    FungibleAsset,
-    TokenSymbol,
-};
+use miden_protocol::asset::{Asset, AssetVaultKey, AssetWitness, FungibleAsset, TokenSymbol};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
 use miden_protocol::crypto::rand::RandomCoin;
@@ -51,7 +43,7 @@ use miden_standards::account::interface::{AccountInterface, AccountInterfaceExt}
 use miden_standards::account::policies::{
     BurnPolicyConfig,
     MintPolicyConfig,
-    PolicyAuthority,
+    PolicyRegistration,
     TokenPolicyManager,
 };
 use miden_standards::account::wallets::BasicWallet;
@@ -148,7 +140,7 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
     let (mut faucet, faucet_secret_key) = create_faucet();
 
     let coin_seed: [u64; 4] = rand::rng().random();
-    let mut seed_rng = RandomCoin::new(coin_seed.map(Felt::new).into());
+    let mut seed_rng = RandomCoin::new(coin_seed.map(Felt::new_unchecked).into());
     let wallet_secret_key = SecretKey::with_rng(&mut seed_rng);
     let wallet_public_key = wallet_secret_key.public_key();
 
@@ -334,7 +326,7 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
 /// Creates a new faucet account and returns it alongside its secret key.
 fn create_faucet() -> (Account, SecretKey) {
     let coin_seed: [u64; 4] = rand::rng().random();
-    let mut rng = RandomCoin::new(coin_seed.map(Felt::new).into());
+    let mut rng = RandomCoin::new(coin_seed.map(Felt::new_unchecked).into());
     let key_pair = SecretKey::with_rng(&mut rng);
     let init_seed = [0_u8; 32];
 
@@ -342,20 +334,21 @@ fn create_faucet() -> (Account, SecretKey) {
         .name(TokenName::new("BENCHMARK").unwrap())
         .symbol(TokenSymbol::new("BCM").unwrap())
         .decimals(2)
-        .max_supply(AssetAmount::new(FungibleAsset::MAX_AMOUNT).unwrap())
+        .max_supply(FungibleAsset::MAX_AMOUNT)
         .build()
         .unwrap()
         .into();
 
     let faucet = AccountBuilder::new(init_seed)
-        .account_type(AccountType::FungibleFaucet)
-        .storage_mode(AccountStorageMode::Private)
+        .account_type(AccountType::Private)
         .with_component(fungible_faucet)
-        .with_components(TokenPolicyManager::new(
-            PolicyAuthority::AuthControlled,
-            MintPolicyConfig::AllowAll,
-            BurnPolicyConfig::AllowAll,
-        ))
+        .with_components(
+            TokenPolicyManager::new()
+                .with_mint_policy(MintPolicyConfig::AllowAll, PolicyRegistration::Active)
+                .unwrap()
+                .with_burn_policy(BurnPolicyConfig::AllowAll, PolicyRegistration::Active)
+                .unwrap(),
+        )
         .with_auth_component(AuthSingleSig::new(
             key_pair.public_key().into(),
             AuthScheme::Falcon512Poseidon2,
@@ -373,8 +366,7 @@ fn create_wallet(
 ) -> Account {
     let init_seed: Vec<_> = index.to_be_bytes().into_iter().chain([0u8; 24]).collect();
     AccountBuilder::new(init_seed.try_into().unwrap())
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Private)
+        .account_type(AccountType::Private)
         .with_auth_component(AuthSingleSig::new(
             public_key.clone().into(),
             AuthScheme::Falcon512Poseidon2,

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use indexmap::IndexMap;
-use miden_node_utils::crypto::get_rpo_random_coin;
+use miden_node_utils::crypto::get_random_coin;
 use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
 use miden_protocol::account::{
     Account,
@@ -14,7 +14,6 @@ use miden_protocol::account::{
     AccountFile,
     AccountId,
     AccountStorageDelta,
-    AccountStorageMode,
     AccountType,
     AccountVaultDelta,
     FungibleAssetDelta,
@@ -25,14 +24,14 @@ use miden_protocol::block::FeeParameters;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey as RpoSecretKey;
 use miden_protocol::errors::TokenSymbolError;
-use miden_protocol::{Felt, ONE, Word};
+use miden_protocol::{Felt, ONE};
 use miden_standards::AuthMethod;
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::account::faucets::{FungibleFaucet, TokenName};
 use miden_standards::account::policies::{
     BurnPolicyConfig,
     MintPolicyConfig,
-    PolicyAuthority,
+    PolicyRegistration,
     TokenPolicyManager,
 };
 use miden_standards::account::wallets::create_basic_wallet;
@@ -212,7 +211,7 @@ impl GenesisConfig {
         }
 
         let fee_parameters =
-            FeeParameters::new(native_faucet_account_id, fee_parameters.verification_base_fee)?;
+            FeeParameters::new(native_faucet_account_id, fee_parameters.verification_base_fee);
 
         // Track all adjustments, one per faucet account id
         let mut faucet_issuance = IndexMap::<AccountId, u64>::new();
@@ -220,26 +219,18 @@ impl GenesisConfig {
         let zero_padding_width = usize::ilog10(std::cmp::max(10, wallet_configs.len())) as usize;
 
         // Setup all wallet accounts, which reference the faucet's for their provided assets.
-        for (index, WalletConfig { has_updatable_code, storage_mode, assets }) in
-            wallet_configs.into_iter().enumerate()
+        for (index, WalletConfig { account_type, assets }) in wallet_configs.into_iter().enumerate()
         {
             tracing::debug!(index, assets = ?assets, "Adding wallet account");
 
             let mut rng = ChaCha20Rng::from_seed(rand::random());
-            let secret_key = RpoSecretKey::with_rng(&mut get_rpo_random_coin(&mut rng));
+            let secret_key = RpoSecretKey::with_rng(&mut get_random_coin(&mut rng));
             let auth = AuthMethod::SingleSig {
                 approver: (secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2),
             };
             let init_seed: [u8; 32] = rng.random();
 
-            let account_type = if has_updatable_code {
-                AccountType::RegularAccountUpdatableCode
-            } else {
-                AccountType::RegularAccountImmutableCode
-            };
-            let account_storage_mode = storage_mode.into();
-            let mut wallet_account =
-                create_basic_wallet(init_seed, auth, account_type, account_storage_mode)?;
+            let mut wallet_account = create_basic_wallet(init_seed, auth, account_type.into())?;
 
             // Add fungible assets and track the faucet adjustments per faucet/asset.
             let wallet_fungible_asset_update =
@@ -289,7 +280,7 @@ impl GenesisConfig {
             if total_issuance != 0 {
                 let current_faucet = FungibleFaucet::try_from(faucet_account.storage())?;
                 let new_token_supply = AssetAmount::new(total_issuance)?;
-                let max_supply = current_faucet.max_supply().as_canonical_u64();
+                let max_supply = current_faucet.max_supply().as_u64();
                 if max_supply < total_issuance {
                     return Err(GenesisConfigError::MaxIssuanceExceeded {
                         max_supply,
@@ -297,14 +288,9 @@ impl GenesisConfig {
                         total_issuance,
                     });
                 }
-                let new_token_config = Word::new([
-                    Felt::from(new_token_supply),
-                    current_faucet.max_supply(),
-                    Felt::from(current_faucet.decimals()),
-                    Felt::from(current_faucet.symbol()),
-                ]);
-                storage_delta
-                    .set_item(FungibleFaucet::token_config_slot().clone(), new_token_config)?;
+                let updated_faucet = current_faucet.with_token_supply(new_token_supply)?;
+                let slot = updated_faucet.token_config_slot_value();
+                storage_delta.set_item(slot.name().clone(), slot.value())?;
                 tracing::debug!(
                     "Reducing faucet account {faucet} for {symbol} by {amount}",
                     faucet = faucet_id.to_hex(),
@@ -330,7 +316,7 @@ impl GenesisConfig {
 
             // sanity check the total issuance against
             let faucet = FungibleFaucet::try_from(faucet_account.storage())?;
-            let max_supply = faucet.max_supply().as_canonical_u64();
+            let max_supply = faucet.max_supply().as_u64();
             if max_supply < total_issuance {
                 return Err(GenesisConfigError::MaxIssuanceExceeded {
                     max_supply,
@@ -397,7 +383,7 @@ impl NativeFaucetConfig {
                     symbol: symbol.clone(),
                     decimals: DEFAULT_NATIVE_FAUCET_DECIMALS,
                     max_supply: DEFAULT_NATIVE_FAUCET_MAX_SUPPLY,
-                    storage_mode: StorageMode::Public,
+                    account_type: AccountTypeConfig::Public,
                 };
                 let (account, secret_key) = faucet_config.build_account()?;
                 Ok((account, symbol, Some(secret_key)))
@@ -408,12 +394,9 @@ impl NativeFaucetConfig {
                     .map_err(|e| GenesisConfigError::AccountFileRead(e, full_path.clone()))?;
                 let account = account_file.account;
 
-                if account.id().account_type() != AccountType::FungibleFaucet {
-                    return Err(GenesisConfigError::NativeFaucetNotFungible { path: full_path });
-                }
-
-                let faucet = FungibleFaucet::try_from(account.storage())
-                    .expect("validated as fungible faucet above");
+                let faucet = FungibleFaucet::try_from(&account).map_err(|_| {
+                    GenesisConfigError::NativeFaucetNotFungible { path: full_path.clone() }
+                })?;
                 let symbol = TokenSymbolStr::from(faucet.symbol().clone());
                 Ok((account, symbol, None))
             },
@@ -436,7 +419,7 @@ pub struct FungibleFaucetConfig {
     /// using based `10.powi(decimals)` as a multiplier.
     max_supply: u64,
     #[serde(default)]
-    storage_mode: StorageMode,
+    account_type: AccountTypeConfig,
 }
 
 impl FungibleFaucetConfig {
@@ -446,10 +429,10 @@ impl FungibleFaucetConfig {
             symbol,
             decimals,
             max_supply,
-            storage_mode,
+            account_type,
         } = self;
         let mut rng = ChaCha20Rng::from_seed(rand::random());
-        let secret_key = RpoSecretKey::with_rng(&mut get_rpo_random_coin(&mut rng));
+        let secret_key = RpoSecretKey::with_rng(&mut get_random_coin(&mut rng));
         let auth =
             AuthSingleSig::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
         let init_seed: [u8; 32] = rng.random();
@@ -466,15 +449,14 @@ impl FungibleFaucetConfig {
 
         // It's similar to `fn create_basic_fungible_faucet`, but we need to cover more cases.
         let faucet_account = AccountBuilder::new(init_seed)
-            .account_type(AccountType::FungibleFaucet)
-            .storage_mode(storage_mode.into())
+            .account_type(account_type.into())
             .with_auth_component(auth)
             .with_component(faucet)
-            .with_components(TokenPolicyManager::new(
-                PolicyAuthority::AuthControlled,
-                MintPolicyConfig::AllowAll,
-                BurnPolicyConfig::AllowAll,
-            ))
+            .with_components(
+                TokenPolicyManager::new()
+                    .with_mint_policy(MintPolicyConfig::AllowAll, PolicyRegistration::Active)?
+                    .with_burn_policy(BurnPolicyConfig::AllowAll, PolicyRegistration::Active)?,
+            )
             .build()?;
 
         debug_assert_eq!(faucet_account.nonce(), Felt::ZERO);
@@ -491,9 +473,7 @@ impl FungibleFaucetConfig {
 #[serde(deny_unknown_fields)]
 pub struct WalletConfig {
     #[serde(default)]
-    has_updatable_code: bool,
-    #[serde(default)]
-    storage_mode: StorageMode,
+    account_type: AccountTypeConfig,
     assets: Vec<AssetEntry>,
 }
 
@@ -504,31 +484,27 @@ struct AssetEntry {
     amount: u64,
 }
 
-// STORAGE MODE
+// ACCOUNT TYPE CONFIG
 // ================================================================================================
 
 /// See the [full description](https://0xmiden.github.io/miden-protocol/account.html?highlight=Accoun#account-storage-mode)
 /// for details
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, Default)]
-pub enum StorageMode {
-    /// Monitor for `Notes` related to the account, in addition to being `Public`.
-    #[serde(alias = "network")]
-    #[default]
-    Network,
+pub enum AccountTypeConfig {
     /// A publicly stored account, lives on-chain.
     #[serde(alias = "public")]
     Public,
     /// A private account, which must be known by interactors.
     #[serde(alias = "private")]
+    #[default]
     Private,
 }
 
-impl From<StorageMode> for AccountStorageMode {
-    fn from(mode: StorageMode) -> AccountStorageMode {
-        match mode {
-            StorageMode::Network => AccountStorageMode::Network,
-            StorageMode::Private => AccountStorageMode::Private,
-            StorageMode::Public => AccountStorageMode::Public,
+impl From<AccountTypeConfig> for AccountType {
+    fn from(value: AccountTypeConfig) -> AccountType {
+        match value {
+            AccountTypeConfig::Public => AccountType::Public,
+            AccountTypeConfig::Private => AccountType::Private,
         }
     }
 }

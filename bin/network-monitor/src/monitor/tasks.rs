@@ -1,20 +1,19 @@
 //! Task management for the network monitor.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use anyhow::Result;
 use miden_node_proto::clients::RemoteProverClient;
+use miden_node_utils::tasks::Tasks as SupervisedTasks;
 use tokio::sync::watch::Receiver;
 use tokio::sync::{Mutex, watch};
-use tokio::task::{Id, JoinSet};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::COMPONENT;
 use crate::config::MonitorConfig;
 use crate::counter::{CounterTrackingService, IncrementService, LatencyState};
-use crate::deploy::ensure_accounts_exist;
+use crate::deploy::create_and_deploy_accounts;
 use crate::explorer::ExplorerService;
 use crate::faucet::FaucetService;
 use crate::frontend::{ServerState, serve};
@@ -24,20 +23,16 @@ use crate::service::{Service, build_tls_client};
 use crate::status::{RpcService, ServiceStatus};
 use crate::validator::ValidatorService;
 
-/// Task management structure that encapsulates `JoinSet` and component names.
+/// Task management structure that supervises named component tasks.
 #[derive(Default)]
 pub struct Tasks {
-    handles: JoinSet<()>,
-    names: HashMap<Id, String>,
+    handles: SupervisedTasks,
 }
 
 impl Tasks {
     /// Create a new Tasks instance.
     pub fn new() -> Self {
-        Self {
-            handles: JoinSet::new(),
-            names: HashMap::new(),
-        }
+        Self { handles: SupervisedTasks::new() }
     }
 
     /// Spawn the RPC status checker task.
@@ -97,13 +92,27 @@ impl Tasks {
         &mut self,
         config: &MonitorConfig,
     ) -> Vec<watch::Receiver<ServiceStatus>> {
+        // Build the proof-test payload once and share it across all provers. If it can't be built
+        // (e.g. RPC unreachable at startup), prover status is still monitored without proof
+        // probing.
+        let payload = match generate_prover_test_payload(&config.rpc_url).await {
+            Ok(payload) => Some(payload),
+            Err(e) => {
+                warn!(
+                    target: COMPONENT,
+                    error = %e,
+                    "failed to build remote-prover probe payload"
+                );
+                None
+            },
+        };
+
         let mut prover_rxs = Vec::new();
         for (i, prover_url) in config.remote_prover_urls.iter().enumerate() {
             let name = format!("Remote Prover ({})", i + 1);
             let (probe_tx, probe_rx) = watch::channel(ProbeSnapshot::default());
             let test_client =
                 build_tls_client::<RemoteProverClient>(prover_url.clone(), config.request_timeout);
-            let payload = generate_prover_test_payload().await;
 
             let status_svc = ProverStatusService::new(
                 name,
@@ -114,7 +123,7 @@ impl Tasks {
                 probe_tx,
                 probe_rx,
                 test_client,
-                payload,
+                payload.clone(),
             );
             prover_rxs.push(self.spawn_service(status_svc));
         }
@@ -130,26 +139,36 @@ impl Tasks {
     }
 
     /// Spawn the network transaction service checker task.
+    ///
+    /// Creates a fresh wallet/counter pair in memory, deploys the counter to the network, and
+    /// hands the same counter account to both services via a [`watch::channel`]. The increment
+    /// service publishes new counters on the channel when it regenerates accounts after
+    /// persistent failures; the tracking service observes the channel to switch over.
     pub async fn spawn_ntx_service(
         &mut self,
         config: &MonitorConfig,
     ) -> Result<(Receiver<ServiceStatus>, Receiver<ServiceStatus>)> {
-        // Ensure accounts exist before starting monitoring tasks
-        ensure_accounts_exist(&config.wallet_filepath, &config.counter_filepath, &config.rpc_url)
-            .await?;
+        let (wallet_account, secret_key, counter_account) =
+            create_and_deploy_accounts(&config.rpc_url).await?;
 
-        // Create shared atomic counter for tracking expected counter value
+        let (counter_tx, counter_rx) = watch::channel(counter_account.clone());
+
         let expected_counter_value = Arc::new(AtomicU64::new(0));
         let latency_state = Arc::new(Mutex::new(LatencyState::default()));
 
         let increment_svc = IncrementService::new(
             config.clone(),
+            wallet_account,
+            secret_key,
+            counter_account,
+            counter_tx,
             Arc::clone(&expected_counter_value),
             latency_state.clone(),
         )
         .await?;
         let tracking_svc = CounterTrackingService::new(
             config.clone(),
+            counter_rx,
             Arc::clone(&expected_counter_value),
             latency_state,
         )
@@ -168,33 +187,24 @@ impl Tasks {
     pub fn spawn_service<S: Service>(&mut self, svc: S) -> Receiver<ServiceStatus> {
         let (tx, rx) = watch::channel(svc.initial_status());
         let service_name = svc.name().to_string();
-        let id = self.handles.spawn(async move { svc.run(tx).await }).id();
+        self.handles
+            .spawn_infallible(service_name.clone(), async move { svc.run(tx).await });
         debug!(target: COMPONENT, service = %service_name, "spawned service");
-        self.names.insert(id, service_name);
         rx
     }
 
     /// Spawn the HTTP frontend server.
     pub fn spawn_http_server(&mut self, server_state: ServerState, config: &MonitorConfig) {
         let config = config.clone();
-        let id = self.handles.spawn(async move { serve(server_state, config).await }).id();
-        self.names.insert(id, "frontend".to_string());
+        self.handles
+            .spawn_infallible("frontend", async move { serve(server_state, config).await });
     }
 
     /// Handles the failure of a task.
     ///
     /// Waits for any task to complete or fail and returns an error. Since components are
     /// expected to run indefinitely, any task completion is treated as fatal.
-    pub async fn handle_failure(&mut self) -> Result<()> {
-        let component_result =
-            self.handles.join_next_with_id().await.expect("join set is not empty");
-
-        let (id, err) = match component_result {
-            Ok((id, ())) => (id, anyhow::anyhow!("component completed unexpectedly")),
-            Err(join_err) => (join_err.id(), anyhow::Error::from(join_err)),
-        };
-        let component_name = self.names.get(&id).map_or("unknown", String::as_str);
-
-        Err(err.context(format!("component {component_name} failed")))
+    pub async fn handle_failure(mut self) -> Result<()> {
+        self.handles.join_next_as_error().await
     }
 }

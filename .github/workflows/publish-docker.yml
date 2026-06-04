@@ -1,4 +1,4 @@
-name: Publish Node Docker Image
+name: Publish Docker Images
 
 on:
   release:
@@ -23,8 +23,7 @@ permissions:
 
 jobs:
   publish:
-    runs-on:
-      labels: "ubuntu-24.04"
+    runs-on: warp-ubuntu-latest-x64-8x
     environment: publish-docker
     strategy:
       matrix:
@@ -38,6 +37,12 @@ jobs:
           - component: ntx-builder
             bin: miden-ntx-builder
             port: 50301
+          - component: remote-prover
+            bin: miden-remote-prover
+            port: 50051
+          - component: network-monitor
+            bin: miden-network-monitor
+            port: 3000
     name: Publish ${{ matrix.component }} ${{ inputs.version }}
     steps:
       - name: Checkout repo
@@ -54,27 +59,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
-        with:
-          aws-region: ${{ secrets.AWS_REGION }}
-          role-to-assume: ${{ secrets.AWS_ROLE }}
-          role-session-name: GithubActionsSession
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-        with:
-          cache-binary: true
-
       - name: Build and push Docker image
         id: push
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
+        uses: WarpBuilds/build-push-action@8c1f3b8bd22c68607865d99ff650d37a564229a5 # v6.0.7
         with:
+          context: .
           push: true
           file: ./Dockerfile
+          platforms: linux/amd64
+          profile-name: ${{ vars.WARPBUILD_DOCKER_BUILDER_PROFILE }}
           build-args: |
             BIN=${{ matrix.bin }}
             PORT=${{ matrix.port }}
           tags: ${{ env.registry }}/0xmiden/miden-${{ matrix.component }}:${{ env.version }}
-          cache-from: type=s3,region=${{ secrets.AWS_REGION }},bucket=${{ secrets.AWS_CACHE_BUCKET }},name=miden-${{ matrix.component }}
-          cache-to: type=s3,region=${{ secrets.AWS_REGION }},bucket=${{ secrets.AWS_CACHE_BUCKET }},name=miden-${{ matrix.component }},mode=max

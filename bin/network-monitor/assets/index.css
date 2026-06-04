@@ -427,6 +427,16 @@ body {
     font-weight: 500;
 }
 
+/* When the value carries an inline action (currently only the copy button), keep them on the
+   same line. Without this `.metric-value` is inline, and the whitespace between the value text
+   and the button is a wrap opportunity — so long values (URLs in particular) push the button
+   onto its own row below. */
+.metric-value:has(.copy-button) {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
 .metric-value.warning-delta,
 .warning-text {
     color: var(--color-warning);

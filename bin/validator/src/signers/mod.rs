@@ -2,7 +2,7 @@ mod kms;
 pub use kms::KmsSigner;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_protocol::block::BlockHeader;
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, SecretKey, Signature};
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature, SigningKey};
 
 // VALIDATOR SIGNER
 // =================================================================================================
@@ -10,7 +10,7 @@ use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, SecretKey, Signa
 /// Signer that the Validator uses to sign blocks.
 pub enum ValidatorSigner {
     Kms(KmsSigner),
-    Local(SecretKey),
+    Local(SigningKey),
 }
 
 impl ValidatorSigner {
@@ -24,7 +24,7 @@ impl ValidatorSigner {
     }
 
     /// Constructs a signer which uses a local secret key for signing.
-    pub fn new_local(secret_key: SecretKey) -> Self {
+    pub fn new_local(secret_key: SigningKey) -> Self {
         Self::Local(secret_key)
     }
 

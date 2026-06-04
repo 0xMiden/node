@@ -1,5 +1,4 @@
 # Continuous integration jobs.
-#
 # These get run on every pull-request, with Warp caches updated on push into `main` or `next`.
 name: CI
 
@@ -13,14 +12,10 @@ on:
       - main
       - next
     paths-ignore:
-      - "**.md"
       - "**.txt"
-      - "docs/**"
   pull_request:
     paths-ignore:
-      - "**.md"
       - "**.txt"
-      - "docs/**"
 
 env:
   # Shared prefix key for the Rust caches.
@@ -46,7 +41,7 @@ jobs:
   build:
     runs-on: warp-ubuntu-latest-x64-8x
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
       - uses: ./.github/actions/install-rocksdb
@@ -102,7 +97,7 @@ jobs:
     name: lint - clippy
     runs-on: warp-ubuntu-latest-x64-8x
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
       - name: Rustup
@@ -119,7 +114,7 @@ jobs:
     runs-on: warp-ubuntu-latest-x64-8x
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
       - name: Rustup
@@ -145,7 +140,7 @@ jobs:
     runs-on: warp-ubuntu-latest-x64-8x
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
       - name: Rustup
@@ -166,7 +161,7 @@ jobs:
   doc:
     runs-on: warp-ubuntu-latest-x64-8x
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
       - name: Rustup
@@ -179,6 +174,30 @@ jobs:
       - name: Build docs
         run: cargo doc --no-deps --workspace --all-features --locked
 
+  external-docs:
+    name: docs - external
+    runs-on: ubuntu-24.04
+    env:
+      # Docusaurus checks for package updates during builds and may try to write to a user config
+      # directory. Disable that notifier in CI so docs output is limited to build/link failures.
+      NO_UPDATE_NOTIFIER: "1"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22.18.0"
+          cache: "npm"
+          cache-dependency-path: docs/external/package-lock.json
+      - name: Install dependencies
+        working-directory: ./docs/external
+        run: npm ci
+      - name: Build documentation and check links
+        working-directory: ./docs/external
+        run: npm run build:dev
+
   # Ensure the stress-test still functions by running some cheap benchmarks.
   stress-test:
     name: stress test
@@ -187,7 +206,7 @@ jobs:
     env:
       DATA_DIR: /tmp/store
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
       - name: Rustup
@@ -280,7 +299,7 @@ jobs:
     name: wasm targets
     runs-on: warp-ubuntu-latest-x64-8x
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
       - name: Rustup
@@ -310,19 +329,26 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22.18.0"
       - uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
         with:
           tool: typos@1.42.0
+      - name: Install CSpell
+        run: npm install --global cspell@10.0.1
       - run: make typos-check
+      - run: make markdown-spellcheck
 
   fmt:
-    name: lint - rustfmt
+    name: lint - formatting
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
       - name: Rustup
@@ -334,15 +360,19 @@ jobs:
           shared-key: ${{ github.job }}
           prefix-key: ${{ env.CACHE_PREFIX }}
           save-if: ${{ env.SAVE_CACHE }}
+      - name: Install Markdown tools
+        run: npm install --global prettier@3.8.3 markdownlint-cli2@0.22.1
       - name: Fmt
         run: make format-check
+      - name: Markdown lint
+        run: make markdown-lint
 
   toml:
     name: lint - toml fmt
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
       - uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
@@ -355,7 +385,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
       - uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
@@ -368,7 +398,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
       - name: Install cargo-binstall
@@ -384,12 +414,12 @@ jobs:
     name: lint - unused deps
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
       - name: Install cargo-shear
         uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
         with:
-          tool: cargo-shear@1.11.2
+          tool: cargo-shear@1.12.4
       - name: Check for unused dependencies
         run: make shear

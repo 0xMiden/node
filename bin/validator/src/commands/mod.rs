@@ -4,19 +4,20 @@ mod start;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
+use anyhow::Context;
 use clap::Parser;
 use miden_node_utils::clap::GrpcOptionsInternal;
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
+use miden_node_utils::logging::OpenTelemetry;
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::utils::serde::Deserializable;
 use miden_validator::ValidatorSigner;
 
-const ENV_DATA_DIRECTORY: &str = "MIDEN_NODE_DATA_DIRECTORY";
-const ENV_LISTEN: &str = "MIDEN_NODE_VALIDATOR_LISTEN";
-const ENV_KEY: &str = "MIDEN_NODE_VALIDATOR_KEY";
-const ENV_KMS_KEY_ID: &str = "MIDEN_NODE_VALIDATOR_KMS_KEY_ID";
-const ENV_ENABLE_OTEL: &str = "MIDEN_NODE_ENABLE_OTEL";
-const ENV_GENESIS_CONFIG_FILE: &str = "MIDEN_NODE_VALIDATOR_GENESIS_CONFIG_FILE";
-const ENV_SQLITE_CONNECTION_POOL_SIZE: &str = "MIDEN_NODE_VALIDATOR_SQLITE_CONNECTION_POOL_SIZE";
+const ENV_DATA_DIRECTORY: &str = "MIDEN_VALIDATOR_DATA_DIRECTORY";
+const ENV_LISTEN: &str = "MIDEN_VALIDATOR_LISTEN";
+const ENV_KEY: &str = "MIDEN_VALIDATOR_KEY";
+const ENV_KMS_KEY_ID: &str = "MIDEN_VALIDATOR_KMS_KEY_ID";
+const ENV_GENESIS_CONFIG_FILE: &str = "MIDEN_VALIDATOR_GENESIS_CONFIG_FILE";
+const ENV_SQLITE_CONNECTION_POOL_SIZE: &str = "MIDEN_VALIDATOR_SQLITE_CONNECTION_POOL_SIZE";
 
 /// A predefined, insecure validator key for development purposes.
 pub(crate) const INSECURE_KEY_HEX: &str =
@@ -59,18 +60,20 @@ pub enum ValidatorCommand {
         validator_key: ValidatorKey,
     },
 
+    /// Applies pending validator database migrations.
+    ///
+    /// Cannot be run on an empty data directory; run `bootstrap` first.
+    Migrate {
+        /// Directory in which to store the validator's data.
+        #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
+        data_directory: PathBuf,
+    },
+
     /// Starts the validator component.
     Start {
         /// Socket address at which to serve the gRPC API.
         #[arg(long = "listen", env = ENV_LISTEN, value_name = "LISTEN")]
         listen: std::net::SocketAddr,
-
-        /// Enables the exporting of traces for OpenTelemetry.
-        ///
-        /// This can be further configured using environment variables as defined in the official
-        /// OpenTelemetry documentation. See our operator manual for further details.
-        #[arg(long = "enable-otel", default_value_t = false, env = ENV_ENABLE_OTEL, value_name = "BOOL")]
-        enable_otel: bool,
 
         #[command(flatten)]
         grpc_options: GrpcOptionsInternal,
@@ -136,6 +139,11 @@ impl ValidatorCommand {
                 )
                 .await
             },
+            Self::Migrate { data_directory } => {
+                miden_validator::db::migrate(data_directory.join("validator.sqlite3"))
+                    .context("failed to apply validator database migrations")?;
+                Ok(())
+            },
             Self::Start {
                 listen,
                 grpc_options,
@@ -158,7 +166,7 @@ impl ValidatorCommand {
                     )
                     .await
                 } else {
-                    let signer = SecretKey::read_from_bytes(hex::decode(validator_key)?.as_ref())?;
+                    let signer = SigningKey::read_from_bytes(hex::decode(validator_key)?.as_ref())?;
                     let signer = ValidatorSigner::new_local(signer);
                     start::start(
                         address,
@@ -173,10 +181,10 @@ impl ValidatorCommand {
         }
     }
 
-    pub fn is_open_telemetry_enabled(&self) -> bool {
+    pub fn open_telemetry(&self) -> OpenTelemetry {
         match self {
-            Self::Start { enable_otel, .. } => *enable_otel,
-            Self::Bootstrap { .. } => false,
+            Self::Start { .. } => OpenTelemetry::from_env().with_name("validator"),
+            Self::Bootstrap { .. } | Self::Migrate { .. } => OpenTelemetry::Disabled,
         }
     }
 }
@@ -192,9 +200,9 @@ pub struct ValidatorKey {
     ///
     /// If not provided, a predefined key is used.
     ///
-    /// Cannot be used with `validator.key.kms-id`.
+    /// Cannot be used with `key.kms-id`.
     #[arg(
-        long = "validator.key.hex",
+        long = "key.hex",
         env = ENV_KEY,
         value_name = "VALIDATOR_KEY",
         default_value = INSECURE_KEY_HEX,
@@ -202,9 +210,9 @@ pub struct ValidatorKey {
     pub validator_key: String,
     /// Key ID for the KMS key used by validator to sign blocks.
     ///
-    /// Cannot be used with `validator.key.hex`.
+    /// Cannot be used with `key.hex`.
     #[arg(
-        long = "validator.key.kms-id",
+        long = "key.kms-id",
         env = ENV_KMS_KEY_ID,
         value_name = "VALIDATOR_KMS_KEY_ID",
     )]
@@ -216,7 +224,7 @@ impl ValidatorKey {
         if let Some(kms_key_id) = self.validator_kms_key_id {
             Ok(ValidatorSigner::new_kms(kms_key_id).await?)
         } else {
-            let signer = SecretKey::read_from_bytes(hex::decode(self.validator_key)?.as_ref())?;
+            let signer = SigningKey::read_from_bytes(hex::decode(self.validator_key)?.as_ref())?;
             Ok(ValidatorSigner::new_local(signer))
         }
     }

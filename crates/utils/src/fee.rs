@@ -12,5 +12,5 @@ pub fn test_fee() -> FungibleAsset {
 /// Derive the default fee parameters, compatible with [`fn test_fee`].
 pub fn test_fee_params() -> FeeParameters {
     let faucet = ACCOUNT_ID_FEE_FAUCET.try_into().unwrap();
-    FeeParameters::new(faucet, 0).unwrap()
+    FeeParameters::new(faucet, 0)
 }

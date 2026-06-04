@@ -1,6 +1,4 @@
 use clap::Parser;
-use miden_node_utils::logging::OpenTelemetry;
-
 mod commands;
 
 // MAIN
@@ -10,13 +8,7 @@ mod commands;
 async fn main() -> anyhow::Result<()> {
     let command = commands::ValidatorCommand::parse();
 
-    let otel = if command.is_open_telemetry_enabled() {
-        OpenTelemetry::Enabled
-    } else {
-        OpenTelemetry::Disabled
-    };
-
-    let _otel_guard = miden_node_utils::logging::setup_tracing(otel)?;
+    let _otel_guard = miden_node_utils::logging::setup_tracing(command.open_telemetry())?;
 
     command.handle().await
 }

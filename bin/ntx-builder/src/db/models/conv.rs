@@ -1,7 +1,6 @@
 //! Conversions between Miden domain types and database column types.
 
 use miden_node_db::DatabaseError;
-use miden_node_proto::domain::account::NetworkAccountId;
 use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountId};
 use miden_protocol::block::{BlockHeader, BlockNumber};
@@ -20,11 +19,7 @@ pub fn block_header_to_bytes(header: &BlockHeader) -> Vec<u8> {
     header.to_bytes()
 }
 
-pub fn network_account_id_to_bytes(id: NetworkAccountId) -> Vec<u8> {
-    id.inner().to_bytes()
-}
-
-pub fn transaction_id_to_bytes(id: &TransactionId) -> Vec<u8> {
+pub fn account_id_to_bytes(id: AccountId) -> Vec<u8> {
     id.to_bytes()
 }
 
@@ -34,6 +29,10 @@ pub fn nullifier_to_bytes(nullifier: &Nullifier) -> Vec<u8> {
 
 pub fn note_id_to_bytes(note_id: &NoteId) -> Vec<u8> {
     note_id.to_bytes()
+}
+
+pub fn transaction_id_to_bytes(tx_id: &TransactionId) -> Vec<u8> {
+    tx_id.to_bytes()
 }
 
 pub fn block_num_to_i64(block_num: BlockNumber) -> i64 {
@@ -56,10 +55,9 @@ pub fn account_id_from_bytes(bytes: &[u8]) -> Result<AccountId, DatabaseError> {
     AccountId::read_from_bytes(bytes).map_err(|e| DatabaseError::deserialization("account id", e))
 }
 
-pub fn network_account_id_from_bytes(bytes: &[u8]) -> Result<NetworkAccountId, DatabaseError> {
-    let account_id = account_id_from_bytes(bytes)?;
-    NetworkAccountId::try_from(account_id)
-        .map_err(|e| DatabaseError::deserialization("network account id", e))
+pub fn transaction_id_from_bytes(bytes: &[u8]) -> Result<TransactionId, DatabaseError> {
+    TransactionId::read_from_bytes(bytes)
+        .map_err(|e| DatabaseError::deserialization("transaction id", e))
 }
 
 pub fn word_to_bytes(word: &Word) -> Vec<u8> {

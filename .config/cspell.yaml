@@ -1,0 +1,21 @@
+version: "0.2"
+language: en-US
+ignoreRegExpList:
+  - Urls
+  - markdownCodeBlock
+patterns:
+  - name: markdownCodeBlock
+    pattern: "/^(?:```|~~~)[\\s\\S]*?^(?:```|~~~)/gm"
+ignorePaths:
+  - target
+  - docs/external/build
+  - docs/external/node_modules
+  - node_modules
+  - "**/package-lock.json"
+words:
+  - Devnet
+  - grpcurl
+  - Merkle
+  - Miden
+  - Midenscan
+  - RocksDB

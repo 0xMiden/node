@@ -67,7 +67,9 @@ pub(crate) async fn fetch_partial_blockchain(
     }
 
     // Genesis is always leaf 0; this brings forest from 0 to 1.
-    partial_mmr.add(genesis_header.commitment(), false);
+    partial_mmr
+        .add(genesis_header.commitment(), false)
+        .expect("failed to add genesis commitment to partial MMR");
 
     if tip_block_num >= 2 {
         let request = SyncChainMmrRequest {

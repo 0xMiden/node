@@ -5,8 +5,8 @@ services:
       - ./compose/tempo/tempo.yml:/etc/tempo.yaml
     command: ["-config.file=/etc/tempo.yaml"]
     ports:
-      - "3200:3200"
-      - "4317:4317"
+      - "127.0.0.1:3200:3200"
+      - "127.0.0.1:4317:4317"
 
   grafana:
     image: grafana/grafana:12.4
@@ -19,36 +19,23 @@ services:
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
       - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/miden-node.json
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       - tempo
 
-  store:
+  sequencer:
     environment:
-      - MIDEN_NODE_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
-      - OTEL_SERVICE_NAME=store
+      - OTEL_RESOURCE_ATTRIBUTES=service.instance.id=sequencer
 
   validator:
     environment:
-      - MIDEN_NODE_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
-      - OTEL_SERVICE_NAME=validator
 
-  block-producer:
+  tx-prover:
     environment:
-      - MIDEN_NODE_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
-      - OTEL_SERVICE_NAME=block-producer
-
-  rpc:
-    environment:
-      - MIDEN_NODE_ENABLE_OTEL=true
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
-      - OTEL_SERVICE_NAME=rpc
 
   ntx-builder:
     environment:
-      - MIDEN_NODE_ENABLE_OTEL=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
-      - OTEL_SERVICE_NAME=ntx-builder

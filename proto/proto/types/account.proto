@@ -16,6 +16,12 @@ message AccountId {
     bytes id = 1;
 }
 
+// A list of account IDs.
+message AccountIdList {
+    // The list of account IDs.
+    repeated AccountId account_ids = 1;
+}
+
 // The state of an account at a specific block height.
 message AccountSummary {
     // The account ID.

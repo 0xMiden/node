@@ -9,16 +9,9 @@
 
 use std::time::{Duration, Instant};
 
-use anyhow::Context;
 use miden_node_proto::clients::{RemoteProverClient, RemoteProverProxyStatusClient};
 use miden_node_proto::generated as proto;
-use miden_protocol::account::auth::AuthScheme;
-use miden_protocol::asset::{Asset, FungibleAsset};
-use miden_protocol::note::NoteType;
-use miden_protocol::testing::account_id::{ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET, ACCOUNT_ID_SENDER};
-use miden_protocol::transaction::TransactionInputs;
 use miden_protocol::utils::serde::Serializable;
-use miden_testing::{Auth, MockChainBuilder};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
@@ -131,11 +124,13 @@ impl ProverStatusService {
         probe_tx: watch::Sender<ProbeSnapshot>,
         probe_rx: watch::Receiver<ProbeSnapshot>,
         test_client: RemoteProverClient,
-        payload: proto::remote_prover::ProofRequest,
+        payload: Option<proto::remote_prover::ProofRequest>,
     ) -> Self {
         let url = prover_url.to_string();
         let client = build_tls_client::<RemoteProverProxyStatusClient>(prover_url, request_timeout);
-        let probe_spawner = Some(ProbeSpawner {
+        // Without a probe payload (e.g. RPC was unreachable at startup) the prover status is still
+        // polled, but no proof-test probe is armed.
+        let probe_spawner = payload.map(|payload| ProbeSpawner {
             client: test_client,
             payload,
             interval: probe_interval,
@@ -361,73 +356,30 @@ fn tonic_status_to_json(status: &tonic::Status) -> String {
     error_json.to_string()
 }
 
-// TRANSACTION WITNESS GENERATOR
-// ================================================================================================
-
-/// Generates a mock transaction for testing remote prover functionality.
-#[instrument(
-    parent = None,
-    target = COMPONENT,
-    name = "network_monitor.remote_prover.generate_mock_transaction",
-    skip_all,
-    level = "info",
-    ret(level = "debug"),
-    err
-)]
-async fn generate_mock_transaction() -> anyhow::Result<TransactionInputs> {
-    let mut mock_chain_builder = MockChainBuilder::new();
-
-    let account = mock_chain_builder
-        .add_existing_wallet(Auth::BasicAuth {
-            auth_scheme: AuthScheme::Falcon512Poseidon2,
-        })
-        .context("Failed to add wallet to mock chain")?;
-
-    let fungible_asset: Asset = FungibleAsset::new(
-        ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET
-            .try_into()
-            .context("Failed to convert account ID")?,
-        100,
-    )
-    .context("Failed to create fungible asset")?
-    .into();
-
-    let note = mock_chain_builder
-        .add_p2id_note(
-            ACCOUNT_ID_SENDER.try_into().context("Failed to convert sender account ID")?,
-            account.id(),
-            &[fungible_asset],
-            NoteType::Private,
-        )
-        .context("Failed to add P2ID note")?;
-
-    let mock_chain = mock_chain_builder.build().context("Failed to build mock chain")?;
-
-    let tx_context = mock_chain
-        .build_tx_context(account.id(), &[note.id()], &[])
-        .context("Failed to build transaction context")?
-        .build()
-        .context("Failed to build transaction")?;
-
-    let executed_transaction =
-        tx_context.execute().await.context("Failed to execute transaction")?;
-    Ok(executed_transaction.into())
-}
-
 // GENERATE TEST REQUEST PAYLOAD
 // ================================================================================================
 
+/// Builds the proof request used to probe a remote transaction prover.
+///
+/// The payload is a real, self-consistent counter genesis transaction built in-memory (see
+/// [`crate::deploy::build_probe_transaction_inputs`]); the remote prover re-executes and proves it.
+/// This requires a single RPC read for the genesis block header and is independent of the network
+/// transaction service.
 #[instrument(
     parent = None,
     target = COMPONENT,
     name = "network_monitor.remote_prover.generate_prover_test_payload",
     skip_all,
     level = "info",
-    ret(level = "debug")
+    ret(level = "debug"),
+    err
 )]
-pub(crate) async fn generate_prover_test_payload() -> proto::remote_prover::ProofRequest {
-    proto::remote_prover::ProofRequest {
+pub(crate) async fn generate_prover_test_payload(
+    rpc_url: &Url,
+) -> anyhow::Result<proto::remote_prover::ProofRequest> {
+    let tx_inputs = crate::deploy::build_probe_transaction_inputs(rpc_url).await?;
+    Ok(proto::remote_prover::ProofRequest {
         proof_type: proto::remote_prover::ProofType::Transaction.into(),
-        payload: generate_mock_transaction().await.unwrap().to_bytes(),
-    }
+        payload: tx_inputs.to_bytes(),
+    })
 }

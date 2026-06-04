@@ -4,12 +4,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use metrics::SeedingMetrics;
-use miden_node_block_producer::store::StoreClient;
 use miden_node_proto::domain::batch::BatchInputs;
-use miden_node_proto::generated::store::rpc_client::RpcClient;
-use miden_node_store::{DataDirectory, GenesisState, Store, StoreMode};
-use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
-use miden_node_utils::tracing::grpc::OtelInterceptor;
+use miden_node_store::{DataDirectory, GenesisState, State};
+use miden_node_utils::clap::StorageOptions;
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
@@ -20,7 +17,6 @@ use miden_protocol::account::{
     AccountDelta,
     AccountId,
     AccountStorageDelta,
-    AccountStorageMode,
     AccountType,
     AccountVaultDelta,
     StorageMap,
@@ -28,7 +24,7 @@ use miden_protocol::account::{
     StorageSlot,
     StorageSlotName,
 };
-use miden_protocol::asset::{Asset, AssetAmount, FungibleAsset, TokenSymbol};
+use miden_protocol::asset::{Asset, FungibleAsset, TokenSymbol};
 use miden_protocol::batch::{BatchAccountUpdate, BatchId, ProvenBatch};
 use miden_protocol::block::{
     BlockHeader,
@@ -38,11 +34,11 @@ use miden_protocol::block::{
     ProposedBlock,
     SignedBlock,
 };
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey as EcdsaSecretKey;
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey as EcdsaSecretKey;
 use miden_protocol::crypto::dsa::falcon512_poseidon2::{PublicKey, SecretKey};
 use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::errors::AssetError;
-use miden_protocol::note::{Note, NoteAssets, NoteHeader, NoteId, NoteInclusionProof};
+use miden_protocol::note::{Note, NoteAssets, NoteId, NoteInclusionProof};
 use miden_protocol::transaction::{
     InputNote,
     InputNoteCommitment,
@@ -62,7 +58,7 @@ use miden_standards::account::faucets::{FungibleFaucet, TokenName};
 use miden_standards::account::policies::{
     BurnPolicyConfig,
     MintPolicyConfig,
-    PolicyAuthority,
+    PolicyRegistration,
     TokenPolicyManager,
 };
 use miden_standards::account::wallets::BasicWallet;
@@ -72,12 +68,8 @@ use rand::Rng;
 use rand::seq::SliceRandom;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use rayon::prelude::ParallelSlice;
+use tokio::fs;
 use tokio::io::AsyncWriteExt;
-use tokio::net::TcpListener;
-use tokio::{fs, task};
-use tonic::service::interceptor::InterceptedService;
-use tonic::transport::Channel;
-use url::Url;
 
 mod metrics;
 #[cfg(test)]
@@ -122,30 +114,28 @@ pub async fn seed_store(
     let benchmark_faucets = create_benchmark_faucets(vault_entries);
     let faucet = benchmark_faucets[0].clone();
     let asset_faucet_ids = benchmark_faucets.iter().map(Account::id).collect::<Vec<_>>();
-    let fee_params = FeeParameters::new(faucet.id(), 0).unwrap();
+    let fee_params = FeeParameters::new(faucet.id(), 0);
     let signer = EcdsaSecretKey::new();
     let genesis_state = GenesisState::new(benchmark_faucets, fee_params, 1, 1, signer.public_key());
     let genesis_block = genesis_state
         .clone()
         .into_block(&signer)
         .expect("genesis block should be created");
-    Store::bootstrap(genesis_block, &data_directory).expect("store should bootstrap");
+    State::bootstrap(genesis_block, &data_directory).expect("store should bootstrap");
 
-    // start the store
-    let (_, store_url) = start_store(data_directory.clone()).await;
-    let store_client = StoreClient::new(store_url);
+    let store_state = load_state(data_directory.clone()).await;
 
     // start generating blocks
     let accounts_filepath = data_directory.join(ACCOUNTS_FILENAME);
     let data_directory =
         miden_node_store::DataDirectory::load(data_directory).expect("data directory should exist");
     let genesis_header = genesis_state.into_block(&signer).unwrap().into_inner();
-    let metrics = generate_blocks(
+    let metrics = Box::pin(generate_blocks(
         num_accounts,
         public_accounts_percentage,
         faucet,
         genesis_header,
-        &store_client,
+        &store_state,
         data_directory,
         accounts_filepath,
         &signer,
@@ -153,7 +143,7 @@ pub async fn seed_store(
         vault_entries,
         account_update_blocks,
         asset_faucet_ids,
-    )
+    ))
     .await;
 
     println!("Total time: {:.3} seconds", start.elapsed().as_secs_f64());
@@ -171,7 +161,7 @@ async fn generate_blocks(
     public_accounts_percentage: u8,
     mut faucet: Account,
     genesis_block: SignedBlock,
-    store_client: &StoreClient,
+    store_state: &Arc<State>,
     data_directory: DataDirectory,
     accounts_filepath: PathBuf,
     signer: &EcdsaSecretKey,
@@ -205,7 +195,7 @@ async fn generate_blocks(
 
     // share random coin seed and key pair for all accounts to avoid key generation overhead
     let coin_seed: [u64; 4] = rand::rng().random();
-    let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.map(Felt::new).into())));
+    let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.map(Felt::new_unchecked).into())));
     let key_pair = {
         let mut rng = rng.lock().unwrap();
         SecretKey::with_rng(&mut *rng)
@@ -220,7 +210,7 @@ async fn generate_blocks(
         // create public accounts and notes that mint assets for these accounts
         let (pub_accounts, pub_notes) = create_accounts_and_notes(
             num_public_accounts,
-            AccountStorageMode::Public,
+            AccountType::Public,
             &key_pair,
             &rng,
             &asset_faucet_ids,
@@ -232,7 +222,7 @@ async fn generate_blocks(
         // create private accounts and notes that mint assets for these accounts
         let (priv_accounts, priv_notes) = create_accounts_and_notes(
             num_private_accounts,
-            AccountStorageMode::Private,
+            AccountType::Private,
             &key_pair,
             &rng,
             &asset_faucet_ids,
@@ -260,11 +250,11 @@ async fn generate_blocks(
             .collect();
 
         // create the block and send it to the store
-        let block_inputs = get_block_inputs(store_client, &batches, &mut metrics).await;
+        let block_inputs = get_block_inputs(store_state, &batches, &mut metrics).await;
 
         // update blocks
         prev_block_header =
-            apply_block(batches, block_inputs, store_client, &mut metrics, signer).await;
+            apply_block(batches, block_inputs, store_state, &mut metrics, signer).await;
         account_states
             .extend(pending_consumed_accounts.into_iter().map(|account| (account.id(), account)));
         if current_anchor_header.block_epoch() != prev_block_header.block_epoch() {
@@ -273,7 +263,7 @@ async fn generate_blocks(
 
         // create the consume notes txs to be used in the next block
         let batch_inputs =
-            get_batch_inputs(store_client, &prev_block_header, &notes, &mut metrics).await;
+            get_batch_inputs(store_state, &prev_block_header, &notes, &mut metrics).await;
         (pending_consumed_accounts, consume_notes_txs) = create_consume_note_txs(
             &prev_block_header,
             accounts,
@@ -317,10 +307,10 @@ async fn generate_blocks(
             .map(|txs| create_batch(txs, &prev_block_header))
             .collect();
 
-        let block_inputs = get_block_inputs(store_client, &batches, &mut metrics).await;
+        let block_inputs = get_block_inputs(store_state, &batches, &mut metrics).await;
 
         prev_block_header =
-            apply_block(batches, block_inputs, store_client, &mut metrics, signer).await;
+            apply_block(batches, block_inputs, store_state, &mut metrics, signer).await;
         account_states
             .extend(pending_consumed_accounts.into_iter().map(|account| (account.id(), account)));
         if current_anchor_header.block_epoch() != prev_block_header.block_epoch() {
@@ -328,7 +318,7 @@ async fn generate_blocks(
         }
 
         let batch_inputs =
-            get_batch_inputs(store_client, &prev_block_header, &notes, &mut metrics).await;
+            get_batch_inputs(store_state, &prev_block_header, &notes, &mut metrics).await;
         let accounts = selected_account_ids
             .iter()
             .filter_map(|account_id| account_states.get(account_id).cloned())
@@ -358,30 +348,33 @@ async fn generate_blocks(
     metrics
 }
 
-/// Given a list of batches and block inputs, creates a `ProvenBlock` and sends it to the store.
+/// Given a list of batches and block inputs, creates a `ProvenBlock` and applies it to the store.
 /// Tracks the insertion time on the metrics.
 ///
 /// Returns the the inserted block.
 async fn apply_block(
     batches: Vec<ProvenBatch>,
     block_inputs: BlockInputs,
-    store_client: &StoreClient,
+    store_state: &Arc<State>,
     metrics: &mut SeedingMetrics,
     signer: &EcdsaSecretKey,
 ) -> BlockHeader {
-    let proposed_block = ProposedBlock::new(block_inputs, batches).unwrap();
+    let proposed_block = ProposedBlock::new(block_inputs.clone(), batches).unwrap();
     let (header, body) = proposed_block.clone().into_header_and_body().unwrap();
     let block_size: usize = header.to_bytes().len() + body.to_bytes().len();
     let signature = signer.sign(header.commitment());
     // SAFETY: The header, body, and signature are known to correspond to each other.
     let signed_block = SignedBlock::new_unchecked(header, body, signature);
+    let header = signed_block.header().clone();
     let ordered_batches = proposed_block.batches().clone();
 
     let start = Instant::now();
-    store_client.apply_block(&ordered_batches, &signed_block).await.unwrap();
+    store_state
+        .apply_block_with_proving_inputs(ordered_batches, block_inputs, signed_block)
+        .await
+        .unwrap();
     metrics.track_block_insertion(start.elapsed(), block_size);
 
-    let (header, ..) = signed_block.into_parts();
     header
 }
 
@@ -404,7 +397,7 @@ fn fee_from_block(block_ref: &BlockHeader) -> Result<FungibleAsset, AssetError> 
 #[expect(clippy::too_many_arguments)]
 fn create_accounts_and_notes(
     num_accounts: usize,
-    storage_mode: AccountStorageMode,
+    account_type: AccountType,
     key_pair: &SecretKey,
     rng: &Arc<Mutex<RandomCoin>>,
     asset_faucet_ids: &[AccountId],
@@ -416,11 +409,9 @@ fn create_accounts_and_notes(
         !asset_faucet_ids.is_empty(),
         "at least one faucet id is required to create benchmark notes"
     );
-    let note_faucet_ids = match storage_mode {
-        AccountStorageMode::Public => {
-            asset_faucet_ids.iter().take(vault_entries).copied().collect()
-        },
-        AccountStorageMode::Private | AccountStorageMode::Network => vec![asset_faucet_ids[0]],
+    let note_faucet_ids = match account_type {
+        AccountType::Public => asset_faucet_ids.iter().take(vault_entries).copied().collect(),
+        AccountType::Private => vec![asset_faucet_ids[0]],
     };
 
     (0..num_accounts)
@@ -429,7 +420,7 @@ fn create_accounts_and_notes(
             let account = create_account(
                 key_pair.public_key(),
                 ((block_num * num_accounts) + account_index) as u64,
-                storage_mode,
+                account_type,
                 storage_map_entries,
             );
             let note = {
@@ -524,17 +515,16 @@ pub fn benchmark_storage_map_slot() -> StorageSlotName {
 fn create_account(
     public_key: PublicKey,
     index: u64,
-    storage_mode: AccountStorageMode,
+    account_type: AccountType,
     storage_map_entries: usize,
 ) -> Account {
     let init_seed: Vec<_> = index.to_be_bytes().into_iter().chain([0u8; 24]).collect();
     let mut builder = AccountBuilder::new(init_seed.try_into().unwrap())
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(storage_mode)
+        .account_type(account_type)
         .with_auth_component(AuthSingleSig::new(public_key.into(), AuthScheme::Falcon512Poseidon2))
         .with_component(BasicWallet);
 
-    if storage_mode == AccountStorageMode::Public && storage_map_entries > 0 {
+    if account_type == AccountType::Public && storage_map_entries > 0 {
         let entries = (1..=storage_map_entries)
             .map(|i| {
                 let i = u32::try_from(i).expect("storage map entry index fits into u32");
@@ -553,10 +543,7 @@ fn create_account(
         let component = AccountComponent::new(
             component_code,
             component_storage,
-            AccountComponentMetadata::new(
-                "benchmark_storage_map",
-                [AccountType::RegularAccountImmutableCode],
-            ),
+            AccountComponentMetadata::new("benchmark_storage_map"),
         )
         .unwrap();
         builder = builder.with_component(component);
@@ -573,7 +560,7 @@ fn create_benchmark_faucets(vault_entries: usize) -> Vec<Account> {
 
 fn create_faucet_with_seed(index: u64) -> Account {
     let coin_seed: [u64; 4] = rand::rng().random();
-    let mut rng = RandomCoin::new(coin_seed.map(Felt::new).into());
+    let mut rng = RandomCoin::new(coin_seed.map(Felt::new_unchecked).into());
     let key_pair = SecretKey::with_rng(&mut rng);
     let init_seed: Vec<_> = index.to_be_bytes().into_iter().chain([0u8; 24]).collect();
 
@@ -582,19 +569,20 @@ fn create_faucet_with_seed(index: u64) -> Account {
         .name(TokenName::new("TEST").unwrap())
         .symbol(token_symbol)
         .decimals(2)
-        .max_supply(AssetAmount::new(FungibleAsset::MAX_AMOUNT).unwrap())
+        .max_supply(FungibleAsset::MAX_AMOUNT)
         .build()
         .unwrap();
 
     AccountBuilder::new(init_seed.try_into().unwrap())
-        .account_type(AccountType::FungibleFaucet)
-        .storage_mode(AccountStorageMode::Private)
+        .account_type(AccountType::Private)
         .with_component(faucet)
-        .with_components(TokenPolicyManager::new(
-            PolicyAuthority::AuthControlled,
-            MintPolicyConfig::AllowAll,
-            BurnPolicyConfig::AllowAll,
-        ))
+        .with_components(
+            TokenPolicyManager::new()
+                .with_mint_policy(MintPolicyConfig::AllowAll, PolicyRegistration::Active)
+                .unwrap()
+                .with_burn_policy(BurnPolicyConfig::AllowAll, PolicyRegistration::Active)
+                .unwrap(),
+        )
         .with_auth_component(AuthSingleSig::new(
             key_pair.public_key().into(),
             AuthScheme::Falcon512Poseidon2,
@@ -757,7 +745,10 @@ fn create_emit_note_tx(
     let slot = faucet.storage().get_item(token_config_slot).unwrap();
     faucet
         .storage_mut()
-        .set_item(token_config_slot, [slot[0] + Felt::new(10), slot[1], slot[2], slot[3]].into())
+        .set_item(
+            token_config_slot,
+            [slot[0] + Felt::new_unchecked(10), slot[1], slot[2], slot[3]].into(),
+        )
         .unwrap();
 
     faucet.increment_nonce(ONE).unwrap();
@@ -792,7 +783,7 @@ fn create_emit_note_tx(
 
 /// Gets the batch inputs from the store and tracks the query time on the metrics.
 async fn get_batch_inputs(
-    store_client: &StoreClient,
+    store_state: &Arc<State>,
     block_ref: &BlockHeader,
     notes: &[Note],
     metrics: &mut SeedingMetrics,
@@ -800,10 +791,10 @@ async fn get_batch_inputs(
     let start = Instant::now();
     // Mark every note as unauthenticated, so that the store returns the inclusion proofs for all of
     // them
-    let batch_inputs = store_client
+    let batch_inputs = store_state
         .get_batch_inputs(
-            vec![(block_ref.block_num(), block_ref.commitment())].into_iter(),
-            notes.iter().map(Note::commitment),
+            [block_ref.block_num()].into_iter().collect(),
+            notes.iter().map(|note| note.id().as_word()).collect(),
         )
         .await
         .unwrap();
@@ -813,22 +804,25 @@ async fn get_batch_inputs(
 
 /// Gets the block inputs from the store and tracks the query time on the metrics.
 async fn get_block_inputs(
-    store_client: &StoreClient,
+    store_state: &Arc<State>,
     batches: &[ProvenBatch],
     metrics: &mut SeedingMetrics,
 ) -> BlockInputs {
     let start = Instant::now();
-    let inputs = store_client
+    let inputs = store_state
         .get_block_inputs(
-            batches.iter().flat_map(ProvenBatch::updated_accounts),
-            batches.iter().flat_map(ProvenBatch::created_nullifiers),
-            batches.iter().flat_map(|batch| {
-                batch
-                    .input_notes()
-                    .into_iter()
-                    .filter_map(|note| note.header().map(NoteHeader::to_commitment))
-            }),
-            batches.iter().map(ProvenBatch::reference_block_num),
+            batches.iter().flat_map(ProvenBatch::updated_accounts).collect(),
+            batches.iter().flat_map(ProvenBatch::created_nullifiers).collect(),
+            batches
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .input_notes()
+                        .into_iter()
+                        .filter_map(|note| note.header().map(|header| header.id().as_word()))
+                })
+                .collect(),
+            batches.iter().map(ProvenBatch::reference_block_num).collect(),
         )
         .await
         .unwrap();
@@ -837,55 +831,14 @@ async fn get_block_inputs(
     inputs
 }
 
-/// Runs the store with the given data directory. Returns a tuple with:
-/// - a gRPC client to access the store
-/// - the URL of the store
-///
-/// The store uses a local prover.
-pub async fn start_store(
-    data_directory: PathBuf,
-) -> (RpcClient<InterceptedService<Channel, OtelInterceptor>>, Url) {
-    let rpc_listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("Failed to bind store RPC gRPC endpoint");
-    let block_producer_listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("Failed to bind store block-producer gRPC endpoint");
-    let store_addr = rpc_listener.local_addr().expect("Failed to get store RPC address");
-    let ntx_builder_listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("Failed to bind store ntx-builder gRPC endpoint");
-    let store_block_producer_addr = block_producer_listener
-        .local_addr()
-        .expect("Failed to get store block-producer address");
-    let dir = data_directory.clone();
+/// Loads the store state from the given data directory.
+pub async fn start_store(data_directory: PathBuf) -> Arc<State> {
+    load_state(data_directory).await
+}
 
-    task::spawn(async move {
-        Store {
-            rpc_listener,
-            mode: StoreMode::BlockProducer {
-                block_producer_listener,
-                ntx_builder_listener,
-                block_prover_url: None,
-                max_concurrent_proofs: miden_node_store::DEFAULT_MAX_CONCURRENT_PROOFS,
-            },
-            data_directory: dir,
-            database_options: miden_node_store::DatabaseOptions::default(),
-            grpc_options: GrpcOptionsInternal::bench(),
-            storage_options: StorageOptions::bench(),
-        }
-        .serve()
+async fn load_state(data_directory: PathBuf) -> Arc<State> {
+    let state = State::load(&data_directory, StorageOptions::bench())
         .await
-        .expect("Failed to start serving store");
-    });
-
-    let channel = tonic::transport::Endpoint::try_from(format!("http://{store_addr}",))
-        .unwrap()
-        .connect()
-        .await
-        .expect("Failed to connect to store");
-
-    // SAFETY: The store_block_producer_addr is always valid as it is created from a `SocketAddr`.
-    let store_url = Url::parse(&format!("http://{store_block_producer_addr}")).unwrap();
-    (RpcClient::with_interceptor(channel, OtelInterceptor), store_url)
+        .expect("store state should load");
+    Arc::new(state)
 }

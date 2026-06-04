@@ -7,7 +7,7 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use miden_node_proto::generated as proto;
-use miden_node_proto::generated::rpc::{BlockProducerStatus, RpcStatus, StoreStatus};
+use miden_node_proto::generated::rpc::{BlockProducerStatus, RpcStatus};
 use serde::{Deserialize, Serialize};
 
 use crate::faucet::FaucetTestDetails;
@@ -191,14 +191,18 @@ pub struct CounterTrackingDetails {
 }
 
 /// Details of the explorer service.
+///
+/// The `total_*` counters are network-wide totals sourced from the explorer's `overviewStats`
+/// query, not per-block counts. `block_number`, `timestamp` and the commitments are still
+/// taken from the latest block so that tip-drift against the RPC can be detected.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ExplorerStatusDetails {
     pub block_number: u64,
     pub timestamp: u64,
-    pub number_of_transactions: u64,
-    pub number_of_nullifiers: u64,
-    pub number_of_notes: u64,
-    pub number_of_account_updates: u64,
+    pub total_transactions: u64,
+    pub total_nullifiers: u64,
+    pub total_notes: u64,
+    pub total_account_updates: u64,
     pub block_commitment: String,
     pub chain_commitment: String,
     pub proof_commitment: String,
@@ -231,7 +235,7 @@ pub struct RpcStatusDetails {
     pub url: String,
     pub version: String,
     pub genesis_commitment: Option<String>,
-    pub store_status: Option<StoreStatusDetails>,
+    pub chain_tip: u32,
     pub block_producer_status: Option<BlockProducerStatusDetails>,
 }
 
@@ -300,16 +304,6 @@ pub struct NetworkStatus {
 // FROM IMPLEMENTATIONS
 // ================================================================================================
 
-impl From<StoreStatus> for StoreStatusDetails {
-    fn from(value: StoreStatus) -> Self {
-        Self {
-            version: value.version,
-            status: value.status.into(),
-            chain_tip: value.chain_tip,
-        }
-    }
-}
-
 impl From<BlockProducerStatus> for BlockProducerStatusDetails {
     fn from(value: BlockProducerStatus) -> Self {
         // We assume all supported nodes expose mempool statistics.
@@ -368,7 +362,7 @@ impl RpcStatusDetails {
             url,
             version: status.version,
             genesis_commitment: status.genesis_commitment.as_ref().map(|gc| format!("{gc:?}")),
-            store_status: status.store.map(StoreStatusDetails::from),
+            chain_tip: status.chain_tip,
             block_producer_status: status.block_producer.map(BlockProducerStatusDetails::from),
         }
     }
