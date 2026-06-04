@@ -1,3 +1,4 @@
+#[cfg(test)]
 use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
 
@@ -8,16 +9,19 @@ use miden_crypto::merkle::smt::{Backend, ForestInMemoryBackend};
 use miden_node_proto::domain::account::{AccountStorageMapDetails, AccountVaultDetails};
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
+#[cfg(test)]
+use miden_protocol::account::StorageMapWitness;
 use miden_protocol::account::delta::{AccountDelta, AccountStorageDelta, AccountVaultDelta};
 use miden_protocol::account::{
     AccountId,
     NonFungibleDeltaAction,
     StorageMapKey,
     StorageMapKeyHash,
-    StorageMapWitness,
     StorageSlotName,
 };
-use miden_protocol::asset::{Asset, AssetVaultKey, AssetWitness, FungibleAsset};
+use miden_protocol::asset::{Asset, FungibleAsset};
+#[cfg(test)]
+use miden_protocol::asset::{AssetVaultKey, AssetWitness};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::merkle::smt::{
     ForestOperation,
@@ -300,6 +304,7 @@ impl<B: Backend> AccountStateForest<B> {
     ///
     /// Note that the `raw_key` is the raw, user-provided key that needs to be hashed in order to
     /// get the actual key into the storage map.
+    #[cfg(test)]
     #[instrument(target = COMPONENT, skip_all)]
     pub(crate) fn get_storage_map_witness(
         &self,
@@ -318,6 +323,7 @@ impl<B: Backend> AccountStateForest<B> {
 
     /// Retrieves a vault asset witnesses for the specified account and asset keys at the specified
     /// block number.
+    #[cfg(test)]
     #[instrument(target = COMPONENT, skip_all)]
     pub fn get_vault_asset_witnesses(
         &self,

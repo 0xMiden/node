@@ -722,9 +722,6 @@ fn db_block_header() {
     let res = queries::select_block_header_by_block_num(conn, None).unwrap();
     assert!(res.is_none());
 
-    let res = queries::select_all_block_headers(conn).unwrap();
-    assert!(res.is_empty());
-
     let block_header = BlockHeader::new(
         1_u8.into(),
         num_to_word(2),
@@ -779,7 +776,11 @@ fn db_block_header() {
     let res = queries::select_block_header_by_block_num(conn, None).unwrap();
     assert_eq!(res.unwrap(), block_header2);
 
-    let res = queries::select_all_block_headers(conn).unwrap();
+    let res = queries::select_block_headers(
+        conn,
+        [block_header.block_num(), block_header2.block_num()].into_iter(),
+    )
+    .unwrap();
     assert_eq!(res, [block_header, block_header2]);
 }
 
