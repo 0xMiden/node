@@ -1,7 +1,7 @@
 use miden_node_db::{DatabaseError, Db};
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::block::{BlockHeader, BlockNumber, ProposedBlock};
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
 use miden_protocol::errors::ProposedBlockError;
 use miden_protocol::transaction::{TransactionHeader, TransactionId};
 use tracing::{Span, instrument};
@@ -31,6 +31,10 @@ pub enum BlockValidationError {
     PrevBlockCommitmentMismatch,
     #[error("no previous block header available for chain tip overwrite")]
     NoPrevBlockHeader,
+    #[error(
+        "validator signing key {actual:?} does not match the block's validator key {expected:?}"
+    )]
+    ValidatorKeyMismatch { expected: PublicKey, actual: PublicKey },
 }
 
 // BLOCK VALIDATION
@@ -102,6 +106,16 @@ pub async fn validate_block(
     // parent (either chain tip or parent of chain tip).
     if proposed_header.prev_block_commitment() != prev.commitment() {
         return Err(BlockValidationError::PrevBlockCommitmentMismatch);
+    }
+
+    // The signer's key must be the `validator_key` carried in the header (inherited from genesis);
+    // a mismatched key yields a signature the block producer cannot verify.
+    let signing_key = signer.public_key();
+    if &signing_key != proposed_header.validator_key() {
+        return Err(BlockValidationError::ValidatorKeyMismatch {
+            expected: proposed_header.validator_key().clone(),
+            actual: signing_key,
+        });
     }
 
     let signature = sign_header(signer, &proposed_header).await?;
