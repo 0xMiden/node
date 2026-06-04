@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed trace exports not supporting TLS
+
 ## v0.15.0-rc.0 (2026-06-03)
 
 This release is a major step in distributing the node and changes how node components are packaged, bootstrapped, and
