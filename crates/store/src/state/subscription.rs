@@ -140,10 +140,7 @@ async fn run_block_stream(
             let state = Arc::clone(&state);
             async move { fetch_block(block_num, &cache, &state).await }
         },
-        |_, block, committed_chain_tip| BlockSubscriptionEvent {
-            block,
-            committed_chain_tip,
-        },
+        |_, block, committed_chain_tip| BlockSubscriptionEvent { block, committed_chain_tip },
     )
     .await
 }
@@ -202,14 +199,14 @@ where
                     Ok(Ok(permit)) => {
                         slow_strikes = 0;
                         break permit;
-                    }
+                    },
                     Ok(Err(_)) => return Ok(()),
                     Err(_) => {
                         slow_strikes += 1;
                         if slow_strikes >= MAX_SLOW_STRIKES {
                             return Err(StateSubscriptionError::TooSlow);
                         }
-                    }
+                    },
                 }
             };
             permit.send(Ok(build_event(next, data, tip)));
