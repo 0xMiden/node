@@ -13,6 +13,8 @@ use tokio_stream::wrappers::ReceiverStream;
 use super::{BlockCache, ProofCache, State};
 use crate::errors::DatabaseError;
 
+/// Buffered messages per subscriber before back-pressure begins and slow-strike timeouts apply.
+const SUBSCRIBER_CHANNEL_CAPACITY: usize = 32;
 /// How long to wait for a subscriber to accept a message before counting a strike.
 const SEND_TIMEOUT: Duration = DEFAULT_BLOCK_INTERVAL;
 /// Number of consecutive send timeouts before a subscriber is considered too slow and disconnected.
@@ -95,7 +97,7 @@ fn build_block_stream(
     tip_rx: watch::Receiver<BlockNumber>,
     state: Arc<State>,
 ) -> impl Stream<Item = Result<BlockSubscriptionEvent, StateSubscriptionError>> + Send + 'static {
-    let (tx, rx) = mpsc::channel(32);
+    let (tx, rx) = mpsc::channel(SUBSCRIBER_CHANNEL_CAPACITY);
     tokio::spawn(async move {
         if let Err(err) = run_block_stream(from, cache, tip_rx, state, &tx).await {
             let _ = tx.send(Err(err)).await;
@@ -110,7 +112,7 @@ fn build_proof_stream(
     tip_rx: watch::Receiver<BlockNumber>,
     state: Arc<State>,
 ) -> impl Stream<Item = Result<ProofSubscriptionEvent, StateSubscriptionError>> + Send + 'static {
-    let (tx, rx) = mpsc::channel(32);
+    let (tx, rx) = mpsc::channel(SUBSCRIBER_CHANNEL_CAPACITY);
     tokio::spawn(async move {
         if let Err(err) = run_proof_stream(from, cache, tip_rx, state, &tx).await {
             let _ = tx.send(Err(err)).await;
