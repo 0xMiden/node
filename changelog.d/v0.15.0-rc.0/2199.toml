@@ -1,10 +1,4 @@
 [[entries]]
-components = [
-  "node",
-  "validator",
-  "ntx-builder",
-  "network-monitor",
-  "remote-prover",
-]
-category = "fixed"
-summary = "Fixed OpenTelemetry trace exports when the OTLP endpoint uses TLS."
+category   = "fixed"
+components = ["network-monitor", "node", "ntx-builder", "remote-prover", "validator"]
+summary    = "Fixed OpenTelemetry trace exports when the OTLP endpoint uses TLS."
