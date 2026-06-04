@@ -1,3 +1,4 @@
+mod changelog;
 mod comment_reflow;
 
 use std::io::ErrorKind;
@@ -5,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Args, Parser, Subcommand};
+use serde::Deserialize;
 
 #[derive(Debug, Parser)]
 #[command(about = "Repository maintenance tasks", name = "xtask")]
@@ -15,12 +17,15 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Validate, render, or release structured changelog entries.
+    Changelog(changelog::Changelog),
+
     /// Reflow safe Rust line-comment blocks.
-    FmtComments(FmtCommentsArgs),
+    FmtComments(FmtComments),
 }
 
 #[derive(Debug, Args)]
-struct FmtCommentsArgs {
+struct FmtComments {
     /// Rewrite files in place.
     #[arg(long, conflicts_with = "check")]
     write: bool,
@@ -45,57 +50,65 @@ struct FmtCommentsArgs {
     paths: Vec<PathBuf>,
 }
 
+#[derive(Debug, Deserialize)]
+struct RustfmtConfig {
+    comment_width: Option<usize>,
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::FmtComments(args) => run_fmt_comments(&args),
+        Command::Changelog(command) => command.run(),
+        Command::FmtComments(command) => command.run(),
     }
 }
 
-fn run_fmt_comments(args: &FmtCommentsArgs) -> Result<()> {
-    let width = comment_width(args.width, &args.rustfmt_config)?;
-    let paths = comment_reflow::rust_files(&args.paths).context("collecting Rust files")?;
-    let config = comment_reflow::Config {
-        width,
-        include_normal_comments: !args.doc_comments_only,
-    };
+impl FmtComments {
+    fn run(&self) -> Result<()> {
+        let width = comment_width(self.width, &self.rustfmt_config)?;
+        let paths = comment_reflow::rust_files(&self.paths).context("collecting Rust files")?;
+        let config = comment_reflow::Config {
+            width,
+            include_normal_comments: !self.doc_comments_only,
+        };
 
-    let mut changed = Vec::new();
+        let mut changed = Vec::new();
 
-    for path in paths {
-        let source =
-            fs_err::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-        let reflowed = comment_reflow::reflow_source(&source, config)
-            .with_context(|| format!("reflowing {}", path.display()))?;
+        for path in paths {
+            let source = fs_err::read_to_string(&path)
+                .with_context(|| format!("reading {}", path.display()))?;
+            let reflowed = comment_reflow::reflow_source(&source, config)
+                .with_context(|| format!("reflowing {}", path.display()))?;
 
-        if reflowed != source {
-            if args.write {
-                fs_err::write(&path, reflowed)
-                    .with_context(|| format!("writing {}", path.display()))?;
+            if reflowed != source {
+                if self.write {
+                    fs_err::write(&path, reflowed)
+                        .with_context(|| format!("writing {}", path.display()))?;
+                }
+                changed.push(path);
             }
-            changed.push(path);
         }
-    }
 
-    if changed.is_empty() {
-        return Ok(());
-    }
+        if changed.is_empty() {
+            return Ok(());
+        }
 
-    if args.write {
-        eprintln!("reflowed comments in {} file(s)", changed.len());
-        return Ok(());
-    }
+        if self.write {
+            eprintln!("reflowed comments in {} file(s)", changed.len());
+            return Ok(());
+        }
 
-    for path in &changed {
-        eprintln!("comments need reflow: {}", path.display());
-    }
+        for path in &changed {
+            eprintln!("comments need reflow: {}", path.display());
+        }
 
-    let mode = if args.check { "--check" } else { "default check" };
-    bail!(
-        "{} file(s) need comment reflow ({mode}); run `cargo xtask fmt-comments --write`",
-        changed.len()
-    );
+        let mode = if self.check { "--check" } else { "default check" };
+        bail!(
+            "{} file(s) need comment reflow ({mode}); run `cargo xtask fmt-comments --write`",
+            changed.len()
+        );
+    }
 }
 
 fn comment_width(explicit: Option<usize>, rustfmt_config: &Path) -> Result<usize> {
@@ -111,13 +124,9 @@ fn comment_width(explicit: Option<usize>, rustfmt_config: &Path) -> Result<usize
         },
     };
 
-    let config = toml::from_str::<toml::Value>(&source)
+    let config = toml::from_str::<RustfmtConfig>(&source)
         .context("parsing rustfmt config for comment_width")?;
-    let width = config
-        .get("comment_width")
-        .and_then(toml::Value::as_integer)
-        .and_then(|width| usize::try_from(width).ok())
-        .unwrap_or(100);
+    let width = config.comment_width.unwrap_or(100);
 
     validate_width(width)
 }
