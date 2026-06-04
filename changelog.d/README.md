@@ -1,6 +1,6 @@
 # Changelog Entries
 
-Add one TOML file per pull request under the next release version:
+Usually add one TOML file per pull request under the next release version:
 
 ```text
 changelog.d/v0.15.0/2149.toml
@@ -31,6 +31,19 @@ component = "docs"
 category = "changed"
 summary = "Updated network transaction builder bootstrap instructions."
 ```
+
+For stacked pull requests that refine the same release-note item, update the existing entry and add the stacked PRs to
+`related_prs`:
+
+```toml
+[[entries]]
+component = "ntx-builder"
+category = "added"
+summary = "Added `miden-ntx-builder bootstrap` to initialize the builder database before `start`."
+related_prs = [2150, 2151]
+```
+
+The filename PR is always linked first, followed by `related_prs`.
 
 Allowed components:
 

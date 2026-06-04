@@ -104,6 +104,8 @@ struct ChangesetEntry {
     category: Category,
     #[serde(default)]
     breaking: bool,
+    #[serde(default)]
+    related_prs: Vec<u64>,
     summary: String,
 }
 
@@ -111,6 +113,7 @@ struct ChangesetEntry {
 pub(super) struct Entry {
     pub(super) source: PathBuf,
     pub(super) pr: u64,
+    pub(super) related_prs: Vec<u64>,
     pub(super) component: Component,
     pub(super) category: Category,
     pub(super) breaking: bool,
@@ -290,7 +293,13 @@ fn collect_version_files(version_dir: &Path) -> Result<Vec<PathBuf>> {
 }
 
 fn validate_entry(path: &Path, pr: u64, entry: ChangesetEntry) -> Result<Entry> {
-    let ChangesetEntry { component, category, breaking, summary } = entry;
+    let ChangesetEntry {
+        component,
+        category,
+        breaking,
+        related_prs,
+        summary,
+    } = entry;
     let summary = summary.trim();
 
     ensure!(!summary.is_empty(), "{} has an empty changelog summary", path.display());
@@ -300,15 +309,43 @@ fn validate_entry(path: &Path, pr: u64, entry: ChangesetEntry) -> Result<Entry> 
         "{} uses breaking = true for an internal entry",
         path.display()
     );
+    validate_related_prs(path, pr, &related_prs)?;
 
     Ok(Entry {
         source: path.to_path_buf(),
         pr,
+        related_prs,
         component,
         category,
         breaking,
         summary: summary.to_owned(),
     })
+}
+
+fn validate_related_prs(path: &Path, pr: u64, related_prs: &[u64]) -> Result<()> {
+    for related_pr in related_prs {
+        ensure!(
+            *related_pr > 0,
+            "{} has a related PR number that is not greater than zero",
+            path.display()
+        );
+        ensure!(
+            *related_pr != pr,
+            "{} lists its filename PR number in `related_prs`",
+            path.display()
+        );
+    }
+
+    let mut sorted = related_prs.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    ensure!(
+        sorted.len() == related_prs.len(),
+        "{} has duplicate PR numbers in `related_prs`",
+        path.display()
+    );
+
+    Ok(())
 }
 
 fn pr_number(path: &Path) -> Result<u64> {
@@ -408,6 +445,7 @@ summary = "Added a response field."
             component: Component::Internal,
             category: Category::Changed,
             breaking: true,
+            related_prs: Vec::new(),
             summary: "Changed an internal workflow.".to_owned(),
         };
 
@@ -420,7 +458,34 @@ summary = "Added a response field."
             component: Component::RpcApi,
             category: Category::Added,
             breaking: false,
+            related_prs: Vec::new(),
             summary: "   ".to_owned(),
+        };
+
+        assert!(validate_entry(Path::new("changelog.d/v0.15.0/1.toml"), 1, entry).is_err());
+    }
+
+    #[test]
+    fn rejects_related_pr_matching_filename_pr() {
+        let entry = ChangesetEntry {
+            component: Component::RpcApi,
+            category: Category::Changed,
+            breaking: false,
+            related_prs: vec![1],
+            summary: "Changed a response field.".to_owned(),
+        };
+
+        assert!(validate_entry(Path::new("changelog.d/v0.15.0/1.toml"), 1, entry).is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_related_prs() {
+        let entry = ChangesetEntry {
+            component: Component::RpcApi,
+            category: Category::Changed,
+            breaking: false,
+            related_prs: vec![2, 2],
+            summary: "Changed a response field.".to_owned(),
         };
 
         assert!(validate_entry(Path::new("changelog.d/v0.15.0/1.toml"), 1, entry).is_err());

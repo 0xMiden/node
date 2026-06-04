@@ -74,13 +74,17 @@ fn render_entries(title: impl fmt::Display, entries: &[&Entry], output: &mut Str
     writeln!(output).expect("writing to String cannot fail");
 
     for entry in entries {
-        writeln!(
-            output,
-            "- {} ([#{}]({}/{}))",
-            entry.summary, entry.pr, REPOSITORY_PULL_URL, entry.pr
-        )
-        .expect("writing to String cannot fail");
+        writeln!(output, "- {} ({})", entry.summary, pr_links(entry))
+            .expect("writing to String cannot fail");
     }
+}
+
+fn pr_links(entry: &Entry) -> String {
+    std::iter::once(entry.pr)
+        .chain(entry.related_prs.iter().copied())
+        .map(|pr| format!("[#{pr}]({REPOSITORY_PULL_URL}/{pr})"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]
@@ -95,6 +99,7 @@ mod tests {
             Entry {
                 source: PathBuf::from("changelog.d/v0.15.0/2.toml"),
                 pr: 2,
+                related_prs: Vec::new(),
                 component: Component::RpcApi,
                 category: Category::Fixed,
                 breaking: false,
@@ -103,6 +108,7 @@ mod tests {
             Entry {
                 source: PathBuf::from("changelog.d/v0.15.0/1.toml"),
                 pr: 1,
+                related_prs: Vec::new(),
                 component: Component::RpcApi,
                 category: Category::Changed,
                 breaking: true,
@@ -119,6 +125,25 @@ mod tests {
             section.find("#### Breaking").unwrap() < section.find("#### Fixed").unwrap(),
             "breaking entries should render before fixed entries:\n{section}"
         );
+    }
+
+    #[test]
+    fn renders_related_pr_links_on_same_entry() {
+        let entries = vec![Entry {
+            source: PathBuf::from("changelog.d/v0.15.0/2149.toml"),
+            pr: 2149,
+            related_prs: vec![2150, 2151],
+            component: Component::NtxBuilder,
+            category: Category::Added,
+            breaking: false,
+            summary: "Added builder bootstrap support.".to_owned(),
+        }];
+
+        let section = render_section("v0.15.0", "Unreleased", &entries);
+
+        assert!(section.contains(
+            "Added builder bootstrap support. ([#2149](https://github.com/0xMiden/node/pull/2149), [#2150](https://github.com/0xMiden/node/pull/2150), [#2151](https://github.com/0xMiden/node/pull/2151))"
+        ));
     }
 
     #[test]
