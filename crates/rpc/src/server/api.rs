@@ -1,15 +1,11 @@
 use std::num::NonZeroUsize;
 use std::pin::Pin;
-use std::sync::{Arc, LazyLock, RwLock};
+use std::sync::{Arc, LazyLock};
 use std::task::{Context as TaskContext, Poll};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::Context as AnyhowContext;
-use miden_node_block_producer::{
-    BlockProducerStatus,
-    DEFAULT_BLOCK_INTERVAL,
-    MempoolStats as BlockProducerMempoolStats,
-};
+use miden_node_block_producer::{BlockProducerStatus, MempoolStats as BlockProducerMempoolStats};
 use miden_node_proto::clients::NtxBuilderClient;
 use miden_node_proto::decode::{
     convert_digests_to_words,
@@ -135,9 +131,6 @@ pub struct RpcService {
     block_commitment_cache: LruCache<BlockNumber, Word>,
     block_subscription_semaphore: Arc<Semaphore>,
     proof_subscription_semaphore: Arc<Semaphore>,
-    /// Cached upstream committed tip for `CheckReadiness` (full-node mode only). `None` means no
-    /// query has been made yet.
-    upstream_tip_cache: RwLock<Option<(u32, Instant)>>,
 }
 
 impl RpcService {
@@ -157,7 +150,6 @@ impl RpcService {
             block_commitment_cache: LruCache::new(commitment_cache_capacity),
             block_subscription_semaphore: Arc::new(Semaphore::new(MAX_REPLICA_SUBSCRIPTIONS)),
             proof_subscription_semaphore: Arc::new(Semaphore::new(MAX_REPLICA_SUBSCRIPTIONS)),
-            upstream_tip_cache: RwLock::new(None),
         }
     }
 
@@ -1022,64 +1014,6 @@ impl api_server::Api for RpcService {
             })),
             genesis_commitment: self.genesis_commitment.map(Into::into),
         }))
-    }
-
-    async fn check_readiness(&self, _request: Request<()>) -> Result<Response<()>, Status> {
-        // How close the local tip must be to the (estimated) upstream tip to be considered ready.
-        const SYNC_THRESHOLD: u32 = 10;
-        // How long the cached upstream tip is considered fresh before a new query is made.
-        const CACHE_TTL: Duration = Duration::from_secs(60);
-        // Block time used to extrapolate how many blocks the upstream has produced since the last
-        // query.
-        let block_time_secs = DEFAULT_BLOCK_INTERVAL.as_secs() as u32;
-
-        let mut source_rpc = match &self.mode {
-            RpcMode::Sequencer { .. } => return Ok(Response::new(())),
-            RpcMode::FullNode { source_rpc } => source_rpc.as_ref().clone(),
-        };
-
-        // Check whether the cache is still fresh without holding the lock across an await.
-        let stale = {
-            let cache = self.upstream_tip_cache.read().expect("upstream tip cache lock poisoned");
-            cache
-                .as_ref()
-                .is_none_or(|(_, fetched_at): &(u32, Instant)| fetched_at.elapsed() >= CACHE_TTL)
-        };
-
-        let upstream_tip = if stale {
-            // Refresh: query upstream for block producer chain tip.
-            let tip = source_rpc
-                .status(Request::new(()))
-                .await
-                .map_err(|_| Status::unavailable("unable to reach upstream RPC"))?
-                .into_inner()
-                .block_producer
-                .map_or(0, |b| b.chain_tip);
-            let mut cached_value =
-                self.upstream_tip_cache.write().expect("upstream tip cache lock poisoned");
-            *cached_value = Some((tip, Instant::now()));
-            tip
-        } else {
-            // Cache is fresh: extrapolate how many new blocks the upstream has likely produced
-            // since the query, based on approximate block time.
-            let (tip, fetched_at) = self
-                .upstream_tip_cache
-                .read()
-                .expect("upstream tip cache lock poisoned")
-                .expect("cache must be populated when not stale");
-            let elapsed_blocks = fetched_at.elapsed().as_secs() as u32 / block_time_secs;
-            tip + elapsed_blocks
-        };
-
-        let local_tip = self.store.chain_tip(Finality::Committed).await.as_u32();
-        if upstream_tip.saturating_sub(local_tip) <= SYNC_THRESHOLD {
-            Ok(Response::new(()))
-        } else {
-            Err(Status::unavailable(format!(
-                "node is syncing: local tip {local_tip} is {} blocks behind upstream tip {upstream_tip}",
-                upstream_tip - local_tip,
-            )))
-        }
     }
 
     async fn get_limits(

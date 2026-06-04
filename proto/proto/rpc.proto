@@ -17,12 +17,6 @@ service Api {
     // Returns the status info of the node.
     rpc Status(google.protobuf.Empty) returns (RpcStatus) {}
 
-    // Checks whether the node is fully synced with the chain.
-    //
-    // Returns OK (code 0) when the node has caught up to the current chain tip.
-    // Returns UNAVAILABLE (code 14) while the node is still syncing.
-    rpc CheckReadiness(google.protobuf.Empty) returns (google.protobuf.Empty) {}
-
     // Returns the query parameter limits configured for RPC methods.
     //
     // These define the maximum number of each parameter a method will accept.

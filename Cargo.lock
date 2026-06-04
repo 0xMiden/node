@@ -3460,6 +3460,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tonic",
+ "tonic-health",
  "tonic-reflection",
  "tonic-web",
  "tower",

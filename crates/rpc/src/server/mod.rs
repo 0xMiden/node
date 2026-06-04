@@ -1,5 +1,6 @@
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::time::Duration;
 
 use accept::AcceptHeaderLayer;
 use anyhow::Context;
@@ -7,7 +8,7 @@ use miden_node_block_producer::BlockProducerApi;
 use miden_node_proto::clients::{NtxBuilderClient, RpcClient as SourceRpcClient, ValidatorClient};
 use miden_node_proto::generated::rpc::api_server;
 use miden_node_proto_build::rpc_api_descriptor;
-use miden_node_store::state::State;
+use miden_node_store::state::{Finality, State};
 use miden_node_utils::clap::GrpcOptionsExternal;
 use miden_node_utils::cors::cors_for_grpc_web_layer;
 use miden_node_utils::grpc;
@@ -15,6 +16,7 @@ use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
+use tonic::Request;
 use tonic::metadata::AsciiMetadataValue;
 use tonic_reflection::server;
 use tonic_web::GrpcWebLayer;
@@ -96,12 +98,30 @@ impl Rpc {
         api.set_genesis_commitment(genesis.commitment())?;
 
         let api_service = api_server::ApiServer::new(api);
-        let reflection_service = server::Builder::configure()
-            .register_file_descriptor_set(rpc_api_descriptor())
-            .build_v1()
-            .context("failed to build reflection service")?;
 
         info!(target: COMPONENT, endpoint=?self.listener, mode=?self.mode, "Server initialized");
+
+        let (health_reporter, health_service) = tonic_health::server::health_reporter();
+        match self.mode {
+            RpcMode::Sequencer { .. } => {
+                health_reporter.set_serving::<api_server::ApiServer<api::RpcService>>().await;
+            },
+            RpcMode::FullNode { source_rpc } => {
+                health_reporter
+                    .set_not_serving::<api_server::ApiServer<api::RpcService>>()
+                    .await;
+                let store = self.store.clone();
+                tokio::spawn(async move {
+                    run_readiness_monitor(health_reporter, *source_rpc, store).await;
+                });
+            },
+        }
+
+        let reflection_service = server::Builder::configure()
+            .register_file_descriptor_set(rpc_api_descriptor())
+            .register_encoded_file_descriptor_set(tonic_health::pb::FILE_DESCRIPTOR_SET)
+            .build_v1()
+            .context("failed to build reflection service")?;
 
         let rpc_version = env!("CARGO_PKG_VERSION");
         let rpc_version =
@@ -139,10 +159,43 @@ impl Rpc {
                     .with_genesis_enforced_method("SubmitProvenTxBatch"),
             )
             .add_service(api_service)
+            .add_service(health_service)
             // Enables gRPC reflection service.
             .add_service(reflection_service)
             .serve_with_incoming(TcpListenerStream::new(self.listener))
             .await
             .context("failed to serve RPC API")
+    }
+}
+
+/// Polls the upstream RPC's status and updates the gRPC health service for the `rpc.Api` service.
+///
+/// Used in full-node mode where readiness depends on how close the local chain tip is to the
+/// upstream sequencer's tip. Runs until the task is cancelled.
+async fn run_readiness_monitor(
+    reporter: tonic_health::server::HealthReporter,
+    mut source_rpc: SourceRpcClient,
+    store: Arc<State>,
+) {
+    const SYNC_THRESHOLD: u32 = 10;
+    const POLL_INTERVAL: Duration = Duration::from_secs(30);
+
+    loop {
+        let is_ready = match source_rpc.status(Request::new(())).await {
+            Ok(response) => {
+                let upstream_tip = response.into_inner().block_producer.map_or(0, |b| b.chain_tip);
+                let local_tip = store.chain_tip(Finality::Committed).await.as_u32();
+                upstream_tip.saturating_sub(local_tip) <= SYNC_THRESHOLD
+            },
+            Err(_) => false,
+        };
+
+        if is_ready {
+            reporter.set_serving::<api_server::ApiServer<api::RpcService>>().await;
+        } else {
+            reporter.set_not_serving::<api_server::ApiServer<api::RpcService>>().await;
+        }
+
+        tokio::time::sleep(POLL_INTERVAL).await;
     }
 }
