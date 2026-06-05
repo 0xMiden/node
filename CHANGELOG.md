@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.15.0-rc.1 (2026-06-05)
+
 - Fixed trace exports not supporting TLS [#2199](#https://github.com/0xMiden/node/pull/2199).
 - Validator `SignBlock` response now includes the block commitment it signed ([#2204](#https://github.com/0xMiden/node/pull/2204)).
 - Sequencer now rejects blocks if the commitment signed by the validator does not match the block it proposed ([#2204](#https://github.com/0xMiden/node/pull/2204)).
