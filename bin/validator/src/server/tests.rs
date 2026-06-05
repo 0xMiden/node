@@ -26,14 +26,14 @@ struct TestValidator {
 }
 
 impl TestValidator {
-    /// Creates a [`ValidatorServer`] bootstrapped with a random genesis block.
+    /// Creates a correctly configured [`ValidatorServer`]: the validator signs blocks with the same
+    /// key that is designated as the `validator_key` in the genesis block.
     async fn new() -> Self {
-        let signer = ValidatorSigner::new_local(random_secret_key());
+        let key = random_secret_key();
+        let signer = ValidatorSigner::new_local(key.clone());
 
-        let genesis_signer = random_secret_key();
-        let genesis_state =
-            GenesisState::new(vec![], test_fee_params(), 1, 0, genesis_signer.public_key());
-        let genesis_block = genesis_state.into_block(&genesis_signer).unwrap();
+        let genesis_state = GenesisState::new(vec![], test_fee_params(), 1, 0, key.public_key());
+        let genesis_block = genesis_state.into_block(&key).unwrap();
         let genesis_header = genesis_block.inner().header().clone();
 
         let dir = tempfile::tempdir().unwrap();
@@ -117,6 +117,36 @@ fn empty_block(parent_header: &BlockHeader, chain: &PartialBlockchain) -> Propos
 
 // TESTS
 // ================================================================================================
+
+/// A validator whose signing key does not match the `validator_key` designated by the chain
+/// (carried forward from genesis) must reject block signing with a clear error, rather than
+/// silently handing back a signature that the block producer cannot verify.
+#[tokio::test]
+async fn signing_key_mismatch_rejected() {
+    use crate::block_validation::{BlockValidationError, validate_block};
+
+    let tv = TestValidator::new().await;
+
+    // A valid block 1 built on the real genesis. Its `validator_key` is carried forward from
+    // genesis.
+    let proposed = tv.propose_empty_block();
+    let chain_tip = tv.chain_tip.clone();
+
+    // Validate with a different signer than the one designated in genesis, modelling a validator
+    // started with the wrong key.
+    let rogue_signer = ValidatorSigner::new_local(random_secret_key());
+    assert_ne!(
+        rogue_signer.public_key(),
+        *chain_tip.validator_key(),
+        "test requires a signing key that differs from the genesis validator key",
+    );
+
+    let err = validate_block(proposed, &rogue_signer, tv.db(), chain_tip).await.unwrap_err();
+    assert!(
+        matches!(err, BlockValidationError::ValidatorKeyMismatch { .. }),
+        "expected ValidatorKeyMismatch, got: {err}",
+    );
+}
 
 /// The `SignBlock` response reports the commitment of the block the validator signed, and it
 /// matches the commitment the caller derives from the same proposed block. This lets the block
