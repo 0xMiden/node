@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- Fixed trace exports not supporting TLS [#2199](#https://github.com/0xMiden/node/pull/2199).
+- Fixed trace exports not supporting TLS ([#2199](#https://github.com/0xMiden/node/pull/2199)).
+- Updated to protocol v0.15.2 (v0.15.0 and v0.15.1 are yanked) ([#2205](#https://github.com/0xMiden/node/pull/2205)).
 
 ## v0.15.0-rc.0 (2026-06-03)
 

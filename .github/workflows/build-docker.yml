@@ -33,9 +33,15 @@ jobs:
             port: 3000
     name: Build ${{ matrix.component }}
     steps:
+      - name: Checkout repo
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
       - name: Build
         uses: WarpBuilds/build-push-action@8c1f3b8bd22c68607865d99ff650d37a564229a5 # v6.0.7
         with:
+          context: .
           push: false
           file: ./Dockerfile
           platforms: linux/amd64
