@@ -1,8 +1,10 @@
 use miden_node_proto::clients::{Builder, ValidatorClient};
+use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated as proto;
+use miden_protocol::Word;
 use miden_protocol::block::ProposedBlock;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
-use miden_protocol::utils::serde::{Deserializable, DeserializationError, Serializable};
+use miden_protocol::utils::serde::Serializable;
 use thiserror::Error;
 use tracing::{info, instrument};
 use url::Url;
@@ -16,8 +18,8 @@ use crate::COMPONENT;
 pub enum ValidatorError {
     #[error("gRPC transport error: {0}")]
     Transport(#[from] tonic::Status),
-    #[error("signature deserialization failed: {0}")]
-    Deserialization(#[from] DeserializationError),
+    #[error("failed to convert block signature response: {0}")]
+    Conversion(#[from] ConversionError),
 }
 
 // VALIDATOR CLIENT
@@ -47,20 +49,36 @@ impl BlockProducerValidatorClient {
         Self { client: validator }
     }
 
+    /// Signs the proposed block via the validator, returning the signature and the block commitment
+    /// that the validator reports it signed (for cross-checking against the locally built block).
     #[instrument(target = COMPONENT, name = "validator.client.validate_block", skip_all, err)]
     pub async fn sign_block(
         &self,
         proposed_block: ProposedBlock,
-    ) -> Result<Signature, ValidatorError> {
+    ) -> Result<(Signature, Word), ValidatorError> {
         // Send request and receive response.
         let message = proto::blockchain::ProposedBlock {
             proposed_block: proposed_block.to_bytes(),
         };
         let request = tonic::Request::new(message);
-        let response = self.client.clone().sign_block(request).await?;
+        let response = self.client.clone().sign_block(request).await?.into_inner();
 
-        // Deserialize the signature.
-        let signature = response.into_inner();
-        Signature::read_from_bytes(&signature.signature).map_err(ValidatorError::Deserialization)
+        // Deserialize the signature and the signed block commitment.
+        let signature: Signature = response
+            .signature
+            .ok_or_else(|| {
+                ConversionError::missing_field::<proto::blockchain::SignBlockResponse>("signature")
+            })?
+            .try_into()?;
+        let block_commitment = response
+            .block_commitment
+            .ok_or_else(|| {
+                ConversionError::missing_field::<proto::blockchain::SignBlockResponse>(
+                    "block_commitment",
+                )
+            })?
+            .try_into()?;
+
+        Ok((signature, block_commitment))
     }
 }
