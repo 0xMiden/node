@@ -108,8 +108,10 @@ pub async fn validate_block(
         return Err(BlockValidationError::PrevBlockCommitmentMismatch);
     }
 
-    // The signer's key must be the `validator_key` carried in the header (inherited from genesis);
-    // a mismatched key yields a signature the block producer cannot verify.
+    // Check that the block's validator key is set to our own.
+    //
+    // Otherwise we could be signing a block for a different key, making the
+    // signature invalid.
     let signing_key = signer.public_key();
     if &signing_key != proposed_header.validator_key() {
         return Err(BlockValidationError::ValidatorKeyMismatch {

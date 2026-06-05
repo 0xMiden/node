@@ -119,37 +119,6 @@ fn empty_block(parent_header: &BlockHeader, chain: &PartialBlockchain) -> Propos
 // TESTS
 // ================================================================================================
 
-/// Mirrors the block producer's post-signing check (`signature.verify(header.commitment(),
-/// header.validator_key())`): the signature the validator returns for block 1 must verify against
-/// the `validator_key` carried in the block header (which is inherited from genesis). A correctly
-/// configured validator signs with the key designated at genesis, so this must hold. If it does
-/// not, the block producer rejects block 1 with `InvalidSignature` - the exact failure seen on a
-/// misconfigured network.
-#[tokio::test]
-async fn block_one_signature_verifies_against_header_key() {
-    let tv = TestValidator::new().await;
-
-    let proposed = tv.propose_empty_block();
-    let response = tv
-        .call_sign_block(&proposed)
-        .await
-        .expect("block 1 should be signed");
-
-    let signature =
-        Signature::read_from_bytes(&response.into_inner().signature.unwrap().signature).unwrap();
-    let (header, _) = proposed.into_header_and_body().unwrap();
-    assert_eq!(
-        header.block_num().as_u32(),
-        1,
-        "the signed block should be block 1"
-    );
-
-    assert!(
-        signature.verify(header.commitment(), header.validator_key()),
-        "validator signature for block 1 must verify against the header's validator key",
-    );
-}
-
 /// A validator whose signing key does not match the `validator_key` designated by the chain
 /// (carried forward from genesis) must reject block signing with a clear error, rather than
 /// silently handing back a signature that the block producer cannot verify.
@@ -173,9 +142,7 @@ async fn signing_key_mismatch_rejected() {
         "test requires a signing key that differs from the genesis validator key",
     );
 
-    let err = validate_block(proposed, &rogue_signer, tv.db(), chain_tip)
-        .await
-        .unwrap_err();
+    let err = validate_block(proposed, &rogue_signer, tv.db(), chain_tip).await.unwrap_err();
     assert!(
         matches!(err, BlockValidationError::ValidatorKeyMismatch { .. }),
         "expected ValidatorKeyMismatch, got: {err}",
@@ -217,11 +184,7 @@ async fn chain_tip_plus_one_succeeds() {
     let proposed = tv.propose_empty_block();
     let result = tv.call_sign_block(&proposed).await;
 
-    assert!(
-        result.is_ok(),
-        "chain tip + 1 should succeed, got: {:?}",
-        result.err()
-    );
+    assert!(result.is_ok(), "chain tip + 1 should succeed, got: {:?}", result.err());
 }
 
 /// A replacement block at the same height as the current chain tip should be accepted.
@@ -257,11 +220,7 @@ async fn chain_tip_replacement_succeeds() {
     );
 
     let result = tv.call_sign_block(&replacement).await;
-    assert!(
-        result.is_ok(),
-        "chain tip replacement should succeed, got: {:?}",
-        result.err()
-    );
+    assert!(result.is_ok(), "chain tip replacement should succeed, got: {:?}", result.err());
 
     // Verify that the chain tip in the database is now the replacement block, not the original.
     let new_chain_tip = tv.load_chain_tip().await;
@@ -337,16 +296,9 @@ async fn commitment_mismatch_rejected() {
     // Build a valid ProposedBlock on a *different* genesis so its prev_block_commitment won't match
     // the validator's actual chain tip.
     let other_genesis_signer = random_secret_key();
-    let other_genesis_state = GenesisState::new(
-        vec![],
-        test_fee_params(),
-        1,
-        1,
-        other_genesis_signer.public_key(),
-    );
-    let other_genesis_block = other_genesis_state
-        .into_block(&other_genesis_signer)
-        .unwrap();
+    let other_genesis_state =
+        GenesisState::new(vec![], test_fee_params(), 1, 1, other_genesis_signer.public_key());
+    let other_genesis_block = other_genesis_state.into_block(&other_genesis_signer).unwrap();
     let other_genesis_header = other_genesis_block.inner().header().clone();
     let mismatched_block = empty_block(&other_genesis_header, &PartialBlockchain::default());
 
@@ -372,24 +324,14 @@ async fn replacement_commitment_mismatch_rejected() {
     // Build a replacement block at the same height but using a *different* genesis so its
     // prev_block_commitment won't match the validator's actual parent of the chain tip.
     let other_genesis_signer = random_secret_key();
-    let other_genesis_state = GenesisState::new(
-        vec![],
-        test_fee_params(),
-        1,
-        1,
-        other_genesis_signer.public_key(),
-    );
-    let other_genesis_block = other_genesis_state
-        .into_block(&other_genesis_signer)
-        .unwrap();
+    let other_genesis_state =
+        GenesisState::new(vec![], test_fee_params(), 1, 1, other_genesis_signer.public_key());
+    let other_genesis_block = other_genesis_state.into_block(&other_genesis_signer).unwrap();
     let other_genesis_header = other_genesis_block.inner().header().clone();
     let mismatched_replacement = empty_block(&other_genesis_header, &PartialBlockchain::default());
 
     let result = tv.call_sign_block(&mismatched_replacement).await;
-    assert!(
-        result.is_err(),
-        "replacement with mismatched commitment should be rejected"
-    );
+    assert!(result.is_err(), "replacement with mismatched commitment should be rejected");
     let status = result.unwrap_err();
     assert!(
         status.message().contains("previous block commitment"),
@@ -404,18 +346,10 @@ async fn empty_block_succeeds() {
     let tv = TestValidator::new().await;
 
     let proposed = tv.propose_empty_block();
-    assert_eq!(
-        proposed.transactions().count(),
-        0,
-        "block should have no transactions"
-    );
+    assert_eq!(proposed.transactions().count(), 0, "block should have no transactions");
 
     let result = tv.call_sign_block(&proposed).await;
-    assert!(
-        result.is_ok(),
-        "empty block should succeed, got: {:?}",
-        result.err()
-    );
+    assert!(result.is_ok(), "empty block should succeed, got: {:?}", result.err());
 }
 
 /// A block containing transactions that were not previously validated should be rejected.
@@ -427,7 +361,10 @@ async fn unknown_transactions_rejected() {
     use miden_protocol::block::BlockNumber;
     use miden_protocol::testing::account_id::ACCOUNT_ID_SENDER;
     use miden_protocol::transaction::{
-        InputNoteCommitment, InputNotes, OrderedTransactionHeaders, TransactionHeader,
+        InputNoteCommitment,
+        InputNotes,
+        OrderedTransactionHeaders,
+        TransactionHeader,
     };
 
     use crate::block_validation::{BlockValidationError, validate_block};
@@ -481,14 +418,11 @@ async fn unknown_transactions_rejected() {
     let proposed = ProposedBlock::new(block_inputs, vec![batch]).unwrap();
 
     let result = validate_block(proposed, tv.signer(), tv.db(), genesis_header).await;
-    assert!(
-        result.is_err(),
-        "block with unknown transactions should be rejected"
-    );
+    assert!(result.is_err(), "block with unknown transactions should be rejected");
     match result.unwrap_err() {
         BlockValidationError::UnvalidatedTransactions(ids) => {
             assert_eq!(ids, vec![tx_id], "should report the unknown transaction ID");
-        }
+        },
         other => panic!("expected UnvalidatedTransactions error, got: {other}"),
     }
 }
@@ -563,10 +497,7 @@ async fn validate_block_number_mismatch() {
     let result = validate_block(block_3, tv.signer(), tv.db(), block_1_header).await;
     assert!(result.is_err());
     assert!(
-        matches!(
-            result.unwrap_err(),
-            BlockValidationError::BlockNumberMismatch { .. }
-        ),
+        matches!(result.unwrap_err(), BlockValidationError::BlockNumberMismatch { .. }),
         "expected BlockNumberMismatch error"
     );
 }

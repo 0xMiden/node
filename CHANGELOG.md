@@ -3,11 +3,11 @@
 ## Unreleased
 
 - Fixed trace exports not supporting TLS [#2199](#https://github.com/0xMiden/node/pull/2199).
-- Fixed validator silently signing blocks with a key that does not match the genesis validator key, which caused the block producer to reject block 1 with `InvalidSignature` [#2203](https://github.com/0xMiden/node/pull/2203).
 - Validator `SignBlock` response now includes the block commitment it signed ([#2204](#https://github.com/0xMiden/node/pull/2204)).
 - Sequencer now rejects blocks if the commitment signed by the validator does not match the block it proposed ([#2204](#https://github.com/0xMiden/node/pull/2204)).
 - Fixed trace exports not supporting TLS ([#2199](#https://github.com/0xMiden/node/pull/2199)).
 - Updated to protocol v0.15.2 (v0.15.0 and v0.15.1 are yanked) ([#2205](#https://github.com/0xMiden/node/pull/2205)).
+- Ensure that the proposed block's validator key matches our own before signing [#2203](https://github.com/0xMiden/node/pull/2203).
 
 ## v0.15.0-rc.0 (2026-06-03)
 
