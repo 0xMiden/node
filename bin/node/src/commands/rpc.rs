@@ -131,7 +131,7 @@ pub struct SyncOptions {
 
     // Number of blocks that this RPC server must be within to be considered ready.
     #[arg(
-        long = "sync.ready_threshold",
+        long = "sync.ready-threshold",
         env = "MIDEN_NODE_SYNC_READY_THRESHOLD",
         value_name = "NUM",
         default_value_t = 10
