@@ -62,7 +62,6 @@ pub enum RpcMode {
     /// RPC requires.
     FullNode {
         source_rpc: Box<SourceRpcClient>,
-        // Number of blocks that this RPC server must be within to be considered ready.
         readiness_threshold: u32,
     },
 }
