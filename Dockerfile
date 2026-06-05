@@ -1,13 +1,15 @@
 # syntax=docker/dockerfile:1
 
+ARG RUST_VERSION=1.93
+ARG DEBIAN_RELEASE=trixie
 ARG BIN
 ARG PORT
 
-FROM rust:1.93-slim-bookworm AS chef
+FROM rust:${RUST_VERSION}-slim-${DEBIAN_RELEASE} AS chef
 # Install build dependencies. RocksDB is compiled from source by librocksdb-sys.
 RUN apt-get update && \
     apt-get -y upgrade && \
-    apt-get install -y \
+    apt-get install -y --no-install-recommends \
         llvm \
         clang \
         libclang-dev \
@@ -44,8 +46,8 @@ RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
     mkdir -p /app/bin && \
     cp /app/target/release/${BIN} /app/bin/${BIN}
 
-# Base line runtime image with runtime dependencies installed.
-FROM debian:bookworm-slim AS runtime-base
+# Baseline runtime image with runtime dependencies installed.
+FROM debian:${DEBIAN_RELEASE}-slim AS runtime-base
 RUN apt-get update && \
     apt-get -y upgrade && \
     apt-get install -y --no-install-recommends sqlite3 ca-certificates \

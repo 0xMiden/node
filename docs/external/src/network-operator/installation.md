@@ -67,4 +67,6 @@ You can also build images locally from a repository checkout:
 make docker-build
 ```
 
+Use `DOCKER_PLATFORM=linux/amd64` or `DOCKER_PLATFORM=linux/arm64` to build a specific local image platform.
+
 <!-- markdownlint-enable MD033 MD041 -->
