@@ -156,7 +156,10 @@ pub struct NtxContext {
     /// services - including the AggLayer bridge and faucets - must allowlist this script's root, so
     /// it has to be a single shared root all account creators can pin. Until then, attaching it
     /// would get those txs rejected by the new tx-script allowlist.
-    #[expect(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "Disabled until https://github.com/0xMiden/protocol/issues/3050 lands"
+    )]
     expiration_script: TransactionScript,
 
     /// [`ExponentialBuilder`] used to back off retries on transient request failures.
