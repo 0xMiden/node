@@ -44,20 +44,20 @@ debug = true
 
 [workspace.dependencies]
 # Workspace crates.
-miden-large-smt-backend-rocksdb = { path = "crates/large-smt-backend-rocksdb", version = "0.15.0-rc.0" }
-miden-node-block-producer       = { path = "crates/block-producer", version = "0.15.0-rc.0" }
-miden-node-db                   = { path = "crates/db", version = "0.15.0-rc.0" }
-miden-node-grpc-error-macro     = { path = "crates/grpc-error-macro", version = "0.15.0-rc.0" }
-miden-node-proto                = { path = "crates/proto", version = "0.15.0-rc.0" }
-miden-node-proto-build          = { path = "proto", version = "0.15.0-rc.0" }
-miden-node-rpc                  = { path = "crates/rpc", version = "0.15.0-rc.0" }
-miden-node-store                = { path = "crates/store", version = "0.15.0-rc.0" }
+miden-large-smt-backend-rocksdb = { path = "crates/large-smt-backend-rocksdb", version = "0.15.0-rc.1" }
+miden-node-block-producer       = { path = "crates/block-producer", version = "0.15.0-rc.1" }
+miden-node-db                   = { path = "crates/db", version = "0.15.0-rc.1" }
+miden-node-grpc-error-macro     = { path = "crates/grpc-error-macro", version = "0.15.0-rc.1" }
+miden-node-proto                = { path = "crates/proto", version = "0.15.0-rc.1" }
+miden-node-proto-build          = { path = "proto", version = "0.15.0-rc.1" }
+miden-node-rpc                  = { path = "crates/rpc", version = "0.15.0-rc.1" }
+miden-node-store                = { path = "crates/store", version = "0.15.0-rc.1" }
 miden-node-test-macro           = { path = "crates/test-macro" }
-miden-node-utils                = { path = "crates/utils", version = "0.15.0-rc.0" }
-miden-remote-prover-client      = { path = "crates/remote-prover-client", version = "0.15.0-rc.0" }
+miden-node-utils                = { path = "crates/utils", version = "0.15.0-rc.1" }
+miden-remote-prover-client      = { path = "crates/remote-prover-client", version = "0.15.0-rc.1" }
 # Temporary workaround until <https://github.com/rust-rocksdb/rust-rocksdb/pull/1029>
 # is part of `rocksdb-rust` release
-miden-node-rocksdb-cxx-linkage-fix = { path = "crates/rocksdb-cxx-linkage-fix", version = "0.15.0-rc.0" }
+miden-node-rocksdb-cxx-linkage-fix = { path = "crates/rocksdb-cxx-linkage-fix", version = "0.15.0-rc.1" }
 
 # miden-protocol dependencies. These should be updated in sync.
 # Requires the v0.15.2 patch release, which carries the network-account tx-script
