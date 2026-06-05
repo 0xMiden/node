@@ -146,9 +146,9 @@ pub enum BuildBlockError {
     #[error("block signature is invalid")]
     InvalidSignature,
     #[error(
-        "validator signed commitment {validator} does not match block producer commitment {block_producer}"
+        "block commitment signed by the validator {validator} does not match the block proposed by the sequencer {sequencer}"
     )]
-    BlockCommitmentMismatch { validator: Word, block_producer: Word },
+    BlockCommitmentMismatch { validator: Word, sequencer: Word },
 
     #[error("mempool lock is poisoned")]
     MempoolPoisoned(#[source] MempoolPoisonError),

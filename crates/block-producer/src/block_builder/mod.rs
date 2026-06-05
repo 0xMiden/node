@@ -253,7 +253,7 @@ impl BlockBuilder {
         if signed_commitment != header.commitment() {
             return Err(BuildBlockError::BlockCommitmentMismatch {
                 validator: signed_commitment,
-                block_producer: header.commitment(),
+                sequencer: header.commitment(),
             });
         }
 
