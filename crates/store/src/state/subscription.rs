@@ -3,7 +3,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use miden_node_utils::DEFAULT_BLOCK_INTERVAL;
 use miden_protocol::block::BlockNumber;
 use thiserror::Error;
 use tokio::sync::{mpsc, watch};
@@ -13,12 +12,12 @@ use tokio_stream::wrappers::ReceiverStream;
 use super::{BlockCache, ProofCache, State};
 use crate::errors::DatabaseError;
 
-/// Buffered messages per subscriber before back-pressure begins and slow-strike timeouts apply.
+/// Buffered messages per subscriber before back-pressure begins.
 const SUBSCRIBER_CHANNEL_CAPACITY: usize = 32;
-/// How long to wait for a subscriber to accept a message before counting a strike.
-const SEND_TIMEOUT: Duration = DEFAULT_BLOCK_INTERVAL;
-/// Number of consecutive send timeouts before a subscriber is considered too slow and disconnected.
-const MAX_SLOW_STRIKES: u32 = 5;
+/// Number of blocks beyond the smallest gap observed so far before a subscriber is disconnected.
+const MAX_SLOW_GAP: u32 = 100;
+/// Safety-net timeout for a single send when the client has stalled.
+const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 
 // SUBSCRIPTION EVENTS
 // ================================================================================================
@@ -71,7 +70,10 @@ impl State {
         Box::pin(build_stream(
             from,
             self.subscribe_committed_tip(),
-            BlockSource { cache: self.block_cache.clone(), state: Arc::clone(self) },
+            BlockSource {
+                cache: self.block_cache.clone(),
+                state: Arc::clone(self),
+            },
         ))
     }
 
@@ -81,7 +83,10 @@ impl State {
         Box::pin(build_stream(
             from,
             self.subscribe_proven_tip(),
-            ProofSource { cache: self.proof_cache.clone(), state: Arc::clone(self) },
+            ProofSource {
+                cache: self.proof_cache.clone(),
+                state: Arc::clone(self),
+            },
         ))
     }
 }
@@ -179,8 +184,9 @@ fn build_stream<S: SubscriptionSource>(
 ///
 /// Calls [`SubscriptionSource::fetch`] for each block in sequence starting from `from`, builds an
 /// event with [`SubscriptionSource::build_event`], and sends it to `tx`. Disconnects the
-/// subscriber with [`StateSubscriptionError::TooSlow`] if sending blocks for
-/// [`MAX_SLOW_STRIKES`] consecutive [`SEND_TIMEOUT`] intervals.
+/// subscriber with [`StateSubscriptionError::TooSlow`] if the gap between the tip and the next
+/// block to send exceeds the minimum gap ever observed plus [`MAX_SLOW_GAP`], or if a single send
+/// blocks for longer than [`SEND_TIMEOUT`] (safety net for a stalled client).
 async fn run_stream<S: SubscriptionSource>(
     from: BlockNumber,
     mut tip_rx: watch::Receiver<BlockNumber>,
@@ -188,26 +194,21 @@ async fn run_stream<S: SubscriptionSource>(
     source: S,
 ) -> Result<(), StateSubscriptionError> {
     let mut next = from;
-    let mut slow_strikes = 0u32;
+    let mut min_gap = u32::MAX;
     loop {
         let mut tip = *tip_rx.borrow_and_update();
         while next <= tip {
+            let gap = tip.as_u32() - next.as_u32();
+            min_gap = min_gap.min(gap);
+            if gap > min_gap + MAX_SLOW_GAP {
+                return Err(StateSubscriptionError::TooSlow);
+            }
             let data = source.fetch(next).await?;
             tip = *tip_rx.borrow_and_update();
-            let permit = loop {
-                match tokio::time::timeout(SEND_TIMEOUT, tx.reserve()).await {
-                    Ok(Ok(permit)) => {
-                        slow_strikes = 0;
-                        break permit;
-                    },
-                    Ok(Err(_)) => return Ok(()),
-                    Err(_) => {
-                        slow_strikes += 1;
-                        if slow_strikes >= MAX_SLOW_STRIKES {
-                            return Err(StateSubscriptionError::TooSlow);
-                        }
-                    },
-                }
+            let permit = match tokio::time::timeout(SEND_TIMEOUT, tx.reserve()).await {
+                Ok(Ok(permit)) => permit,
+                Ok(Err(_)) => return Ok(()),
+                Err(_) => return Err(StateSubscriptionError::TooSlow),
             };
             permit.send(Ok(source.build_event(next, data, tip)));
             next = next.child();

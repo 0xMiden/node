@@ -1,9 +1,5 @@
 pub mod block_cache;
 
-/// The default block production interval.
-///
-/// Used as a timing reference across crates (e.g. subscription send timeouts).
-pub const DEFAULT_BLOCK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
 pub mod clap;
 pub mod cors;
 pub mod crypto;
