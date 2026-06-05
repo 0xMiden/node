@@ -149,7 +149,13 @@ pub struct NtxContext {
     /// Pre-compiled transaction script that sets the network tx's on-chain expiration delta. Cloned
     /// into the [`TransactionArgs`] of the executed transaction.
     ///
-    /// TEMP: disabled until the resolution of <https://github.com/0xMiden/protocol/issues/3027>
+    /// TEMP: still disabled. The mechanism that allows network accounts to run allowlisted tx
+    /// scripts has landed (<https://github.com/0xMiden/protocol/pull/3028>, resolving #3027), but
+    /// re-enabling here is gated on a canonical, frozen expiration script in `miden-standards`
+    /// (<https://github.com/0xMiden/protocol/issues/3050>). Every network account the ntx-builder
+    /// services - including the AggLayer bridge and faucets - must allowlist this script's root, so
+    /// it has to be a single shared root all account creators can pin. Until then, attaching it
+    /// would get those txs rejected by the new tx-script allowlist.
     #[expect(dead_code)]
     expiration_script: TransactionScript,
 
@@ -378,7 +384,9 @@ impl NtxContext {
         // Attach the pre-compiled expiration script so the submitted tx is rejected on-chain if it
         // does not land within the configured block delta.
         //
-        // TEMP: disabled until the resolution of https://github.com/0xMiden/protocol/issues/3027
+        // TEMP: still disabled. Re-enabling is gated on a canonical, frozen expiration script
+        // (https://github.com/0xMiden/protocol/issues/3050) whose root every serviced network
+        // account allowlists; see the `expiration_script` field docs for the full rationale.
         // let tx_args = TransactionArgs::default().with_tx_script(self.expiration_script.clone());
 
         let tx_args = TransactionArgs::default();
