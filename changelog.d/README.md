@@ -81,11 +81,20 @@ or deployments. It defaults to `false`; internal entries cannot be breaking.
 Useful commands:
 
 ```sh
+cargo xtask changelog stub
+cargo xtask changelog stub --slug bootstrap-command
+cargo xtask changelog stub -p 2149 -s bootstrap-command -m ntx-builder -c added
+cargo xtask changelog stub --version v0.15.0 --pr 2149 --slug bootstrap-command
 cargo xtask changelog check
 cargo xtask changelog ci-check --base origin/main --pr 2149 --report target/changelog-check.md
 cargo xtask changelog render --version v0.15.0
 cargo xtask changelog release --version v0.15.0 --date 2026-06-03
 ```
+
+`stub` creates `changelog.d/<version>/<pr>[-slug].toml` with placeholder values. If `--version` is omitted, it uses the
+latest existing version directory. If `--pr` is omitted, it uses `stub` as the filename prefix, for example `stub.toml`
+or `stub-bootstrap-command.toml`. Replace the placeholders and rename the file to use the pull request number before
+running `check`. Use `-m/--component` and `-c/--category` to fill those fields while creating the file.
 
 `release` overwrites `CHANGELOG.md` with a freshly rendered section for the requested version. Historical changelog
 entries from before structured automation live in `CHANGELOG.archived.md`.

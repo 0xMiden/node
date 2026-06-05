@@ -1,6 +1,7 @@
 mod ci;
 mod entry;
 mod render;
+mod stub;
 
 use std::path::PathBuf;
 
@@ -28,6 +29,9 @@ pub struct Changelog {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Create a stub changelog entry file.
+    Stub(stub::Stub),
+
     /// Validate structured changelog files.
     Check(Check),
 
@@ -96,6 +100,7 @@ struct Release {
 impl Changelog {
     pub fn run(&self) -> Result<()> {
         match &self.command {
+            Command::Stub(command) => command.run(),
             Command::Check(command) => command.run(),
             Command::CiCheck(command) => command.run(),
             Command::Render(command) => command.run(),
