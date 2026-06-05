@@ -4,6 +4,7 @@ use miden_node_proto::generated::validator::api_server;
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::GenesisState;
 use miden_node_utils::fee::test_fee_params;
+use miden_protocol::Word;
 use miden_protocol::block::{BlockHeader, BlockInputs, ProposedBlock};
 use miden_protocol::testing::random_secret_key::random_secret_key;
 use miden_protocol::transaction::PartialBlockchain;
@@ -25,14 +26,14 @@ struct TestValidator {
 }
 
 impl TestValidator {
-    /// Creates a [`ValidatorServer`] bootstrapped with a random genesis block.
+    /// Creates a correctly configured [`ValidatorServer`]: the validator signs blocks with the same
+    /// key that is designated as the `validator_key` in the genesis block.
     async fn new() -> Self {
-        let signer = ValidatorSigner::new_local(random_secret_key());
+        let key = random_secret_key();
+        let signer = ValidatorSigner::new_local(key.clone());
 
-        let genesis_signer = random_secret_key();
-        let genesis_state =
-            GenesisState::new(vec![], test_fee_params(), 1, 0, genesis_signer.public_key());
-        let genesis_block = genesis_state.into_block(&genesis_signer).unwrap();
+        let genesis_state = GenesisState::new(vec![], test_fee_params(), 1, 0, key.public_key());
+        let genesis_block = genesis_state.into_block(&key).unwrap();
         let genesis_header = genesis_block.inner().header().clone();
 
         let dir = tempfile::tempdir().unwrap();
@@ -61,7 +62,7 @@ impl TestValidator {
     async fn call_sign_block(
         &self,
         proposed_block: &ProposedBlock,
-    ) -> Result<tonic::Response<proto::blockchain::BlockSignature>, tonic::Status> {
+    ) -> Result<tonic::Response<proto::blockchain::SignBlockResponse>, tonic::Status> {
         let request = tonic::Request::new(proto::blockchain::ProposedBlock {
             proposed_block: proposed_block.to_bytes(),
         });
@@ -116,6 +117,63 @@ fn empty_block(parent_header: &BlockHeader, chain: &PartialBlockchain) -> Propos
 
 // TESTS
 // ================================================================================================
+
+/// A validator whose signing key does not match the `validator_key` designated by the chain
+/// (carried forward from genesis) must reject block signing with a clear error, rather than
+/// silently handing back a signature that the block producer cannot verify.
+#[tokio::test]
+async fn signing_key_mismatch_rejected() {
+    use crate::block_validation::{BlockValidationError, validate_block};
+
+    let tv = TestValidator::new().await;
+
+    // A valid block 1 built on the real genesis. Its `validator_key` is carried forward from
+    // genesis.
+    let proposed = tv.propose_empty_block();
+    let chain_tip = tv.chain_tip.clone();
+
+    // Validate with a different signer than the one designated in genesis, modelling a validator
+    // started with the wrong key.
+    let rogue_signer = ValidatorSigner::new_local(random_secret_key());
+    assert_ne!(
+        rogue_signer.public_key(),
+        *chain_tip.validator_key(),
+        "test requires a signing key that differs from the genesis validator key",
+    );
+
+    let err = validate_block(proposed, &rogue_signer, tv.db(), chain_tip).await.unwrap_err();
+    assert!(
+        matches!(err, BlockValidationError::ValidatorKeyMismatch { .. }),
+        "expected ValidatorKeyMismatch, got: {err}",
+    );
+}
+
+/// The `SignBlock` response reports the commitment of the block the validator signed, and it
+/// matches the commitment the caller derives from the same proposed block. This lets the block
+/// producer detect a block-hash mismatch between itself and the validator.
+#[tokio::test]
+async fn sign_block_returns_signed_commitment() {
+    let tv = TestValidator::new().await;
+
+    let proposed = tv.propose_empty_block();
+    let response = tv
+        .call_sign_block(&proposed)
+        .await
+        .expect("block should be signed")
+        .into_inner();
+
+    let (header, _) = proposed.into_header_and_body().unwrap();
+    let returned: Word = response
+        .block_commitment
+        .expect("response should carry the signed commitment")
+        .try_into()
+        .unwrap();
+    assert_eq!(
+        returned,
+        header.commitment(),
+        "returned commitment must match the proposed block's commitment",
+    );
+}
 
 /// An empty block at chain tip + 1 with the correct previous block commitment should be accepted.
 #[tokio::test]

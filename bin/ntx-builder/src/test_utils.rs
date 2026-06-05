@@ -131,7 +131,7 @@ pub fn mock_network_account_update()
     // The allowlist content is irrelevant here; any non-empty set yields a valid network account.
     let root = mock_single_target_note(mock_network_account_id(), 1).as_note().script().root();
     let account = mock_account_with_auth_component(
-        AuthNetworkAccount::with_allowlist(BTreeSet::from_iter([root]))
+        AuthNetworkAccount::with_allowed_notes(BTreeSet::from_iter([root]))
             .expect("non-empty allowlist should construct"),
     );
     let details = AccountUpdateDetails::Delta(

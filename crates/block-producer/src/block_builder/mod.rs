@@ -237,7 +237,7 @@ impl BlockBuilder {
             let proposed_block = proposed_block.clone();
             move || proposed_block.into_header_and_body()
         });
-        let signature = self
+        let (signature, signed_commitment) = self
             .validator
             .sign_block(proposed_block.clone())
             .await
@@ -246,6 +246,16 @@ impl BlockBuilder {
             .await
             .map_err(|err| BuildBlockError::other(format!("task join error: {err}")))?
             .map_err(BuildBlockError::ProposeBlockFailed)?;
+
+        // The validator and the block producer must derive the same block from the same proposed
+        // block. Comparing the commitment the validator signed against the locally built one
+        // isolates a block-hash mismatch from a key/algorithm problem in the signature check below.
+        if signed_commitment != header.commitment() {
+            return Err(BuildBlockError::BlockCommitmentMismatch {
+                validator: signed_commitment,
+                sequencer: header.commitment(),
+            });
+        }
 
         // Verify the signature against the built block to ensure that the validator has provided a
         // valid signature for the relevant block.

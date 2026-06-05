@@ -90,7 +90,7 @@ end";
         let note = mock_single_target_note(account_id, 10);
         let root = note.as_note().script().root();
         let account = mock_account_with_auth_component(
-            AuthNetworkAccount::with_allowlist(BTreeSet::from_iter([root]))
+            AuthNetworkAccount::with_allowed_notes(BTreeSet::from_iter([root]))
                 .expect("non-empty allowlist should construct"),
         );
 
@@ -113,7 +113,7 @@ end";
         assert_ne!(allowed_root, rejected_root);
 
         let account = mock_account_with_auth_component(
-            AuthNetworkAccount::with_allowlist(BTreeSet::from_iter([allowed_root]))
+            AuthNetworkAccount::with_allowed_notes(BTreeSet::from_iter([allowed_root]))
                 .expect("non-empty allowlist should construct"),
         );
 
@@ -138,7 +138,7 @@ end";
         assert_ne!(allowed_root, rejected_root);
 
         let account = mock_account_with_auth_component(
-            AuthNetworkAccount::with_allowlist(BTreeSet::from_iter([allowed_root]))
+            AuthNetworkAccount::with_allowed_notes(BTreeSet::from_iter([allowed_root]))
                 .expect("non-empty allowlist should construct"),
         );
 
