@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 ARG RUST_VERSION=1.93
-ARG DEBIAN_RELEASE=trixie
+ARG DEBIAN_RELEASE=bookworm
 ARG BIN
 ARG PORT
 
@@ -16,7 +16,6 @@ RUN apt-get update && \
         cmake \
         pkg-config \
         libssl-dev \
-        libsqlite3-dev \
         ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 RUN cargo install cargo-chef
@@ -50,7 +49,6 @@ RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
 FROM debian:${DEBIAN_RELEASE}-slim AS runtime-base
 RUN apt-get update && \
     apt-get -y upgrade && \
-    apt-get install -y --no-install-recommends sqlite3 ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 FROM runtime-base AS runtime
