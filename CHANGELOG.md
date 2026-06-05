@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.16
+
+### RPC API
+
+- Validated that `block_to` does not exceed the chain tip on all paginated sync endpoints ([#1866](https://github.com/0xMiden/node/issues/1866)).
+
 ## Unreleased
 
 ## v0.15.0-rc.1 (2026-06-05)

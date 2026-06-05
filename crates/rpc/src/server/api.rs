@@ -1,4 +1,5 @@
 use std::num::NonZeroUsize;
+use std::ops::RangeInclusive;
 use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
 use std::task::{Context as TaskContext, Poll};
@@ -235,6 +236,25 @@ impl RpcService {
         Ok(())
     }
 
+    /// Fetches the committed chain tip and ensures the requested range does not extend beyond it.
+    ///
+    /// Returns the chain tip so callers can reuse it (e.g. in the response's pagination info)
+    /// without issuing a second query.
+    async fn chain_tip_for_range(
+        &self,
+        range: &RangeInclusive<BlockNumber>,
+    ) -> Result<BlockNumber, Status> {
+        let chain_tip = self.store.chain_tip(Finality::Committed).await;
+        if *range.end() > chain_tip {
+            return Err(Status::invalid_argument(format!(
+                "block_to ({}) is greater than chain tip ({chain_tip})",
+                range.end()
+            )));
+        }
+
+        Ok(chain_tip)
+    }
+
     /// Errors if any of `candidate_ids` is classified as a network account by the store. Callers
     /// should pre-filter to post-deployment, public-account ids; `Ok(())` on empty.
     async fn reject_if_any_network_accounts(
@@ -304,6 +324,7 @@ impl api_server::Api for RpcService {
         let block_range = range
             .into_inclusive_range::<RpcInvalidBlockRange>()
             .map_err(invalid_block_range_to_status)?;
+        let chain_tip = self.chain_tip_for_range(&block_range).await?;
 
         let (nullifiers, block_num) = self
             .store
@@ -317,7 +338,6 @@ impl api_server::Api for RpcService {
                 block_num: nullifier_info.block_num.as_u32(),
             })
             .collect();
-        let chain_tip = self.store.chain_tip(Finality::Committed).await;
 
         Ok(Response::new(proto::rpc::SyncNullifiersResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {
@@ -500,13 +520,7 @@ impl api_server::Api for RpcService {
         let block_range = range
             .into_inclusive_range::<RpcInvalidBlockRange>()
             .map_err(invalid_block_range_to_status)?;
-        let chain_tip = self.store.chain_tip(Finality::Committed).await;
-        if *block_range.end() > chain_tip {
-            return Err(Status::invalid_argument(format!(
-                "block_to ({}) is greater than chain tip ({chain_tip})",
-                block_range.end()
-            )));
-        }
+        let chain_tip = self.chain_tip_for_range(&block_range).await?;
 
         let (results, last_block_checked) = self
             .store
@@ -597,6 +611,7 @@ impl api_server::Api for RpcService {
         let block_range = range
             .into_inclusive_range::<RpcInvalidBlockRange>()
             .map_err(invalid_block_range_to_status)?;
+        let chain_tip = self.chain_tip_for_range(&block_range).await?;
         let storage_maps_page = self
             .store
             .sync_account_storage_maps(account_id, block_range)
@@ -612,7 +627,6 @@ impl api_server::Api for RpcService {
                 block_num: map_value.block_num.as_u32(),
             })
             .collect();
-        let chain_tip = self.store.chain_tip(Finality::Committed).await;
 
         Ok(Response::new(proto::rpc::SyncAccountStorageMapsResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {
@@ -647,6 +661,7 @@ impl api_server::Api for RpcService {
         let block_range = range
             .into_inclusive_range::<RpcInvalidBlockRange>()
             .map_err(invalid_block_range_to_status)?;
+        let chain_tip = self.chain_tip_for_range(&block_range).await?;
         let (last_included_block, updates) = self
             .store
             .sync_account_vault(account_id, block_range)
@@ -663,7 +678,6 @@ impl api_server::Api for RpcService {
                 }
             })
             .collect();
-        let chain_tip = self.store.chain_tip(Finality::Committed).await;
 
         Ok(Response::new(proto::rpc::SyncAccountVaultResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {
@@ -965,6 +979,7 @@ impl api_server::Api for RpcService {
         let block_range = range
             .into_inclusive_range::<RpcInvalidBlockRange>()
             .map_err(invalid_block_range_to_status)?;
+        let chain_tip = self.chain_tip_for_range(&block_range).await?;
         let account_ids = read_account_ids::<Status, _>(request.account_ids)?;
         let (last_block_included, transaction_records_db) = self
             .store
@@ -973,7 +988,6 @@ impl api_server::Api for RpcService {
             .map_err(|err| database_error_to_status(&err))?;
         let transactions =
             transaction_records_db.into_iter().map(transaction_record_to_proto).collect();
-        let chain_tip = self.store.chain_tip(Finality::Committed).await;
 
         Ok(Response::new(proto::rpc::SyncTransactionsResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {
