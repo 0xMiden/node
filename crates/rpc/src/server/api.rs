@@ -798,7 +798,7 @@ impl api_server::Api for RpcService {
             RpcMode::Sequencer { block_producer, validator } => {
                 (block_producer.as_ref(), validator.as_ref())
             },
-            RpcMode::FullNode { source_rpc } => {
+            RpcMode::FullNode { source_rpc, .. } => {
                 return source_rpc.as_ref().clone().submit_proven_tx(request).await;
             },
         };
@@ -915,7 +915,7 @@ impl api_server::Api for RpcService {
             RpcMode::Sequencer { block_producer, validator } => {
                 (block_producer.as_ref(), validator.as_ref())
             },
-            RpcMode::FullNode { source_rpc } => {
+            RpcMode::FullNode { source_rpc, .. } => {
                 return source_rpc.as_ref().clone().submit_proven_tx_batch(request).await;
             },
         };
@@ -994,7 +994,7 @@ impl api_server::Api for RpcService {
             RpcMode::Sequencer { block_producer, .. } => {
                 Some(block_producer_status_to_proto(block_producer.status().await))
             },
-            RpcMode::FullNode { source_rpc } => source_rpc
+            RpcMode::FullNode { source_rpc, .. } => source_rpc
                 .as_ref()
                 .clone()
                 .status(Request::new(()))
@@ -1041,7 +1041,7 @@ impl api_server::Api for RpcService {
 
                 ntx_builder.clone().get_network_note_status(request).await?.into_inner()
             },
-            RpcMode::FullNode { source_rpc } => {
+            RpcMode::FullNode { source_rpc, .. } => {
                 source_rpc.as_ref().clone().get_network_note_status(request).await?.into_inner()
             },
         };

@@ -57,6 +57,7 @@
 - Persisted attachments of private output notes when applying a block, so they are now returned by `GetNotesById` ([#2172](https://github.com/0xMiden/node/pull/2172)).
 - [BREAKING] `miden-ntx-builder` now requires a remote transaction prover to be configured ([#2179](https://github.com/0xMiden/node/pull/2179)).
 - [BREAKING] Replaced `StoreStatus` with `chain_tip` field in `RpcStatus` ([#2187](https://github.com/0xMiden/node/pull/2187)).
+- Added gRPC health check endpoint to RPC service ([#2188](https://github.com/0xMiden/node/pull/2188)).
 
 ## v0.14.11 (TBD)
 

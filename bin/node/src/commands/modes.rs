@@ -133,7 +133,7 @@ impl FullNodeCommand {
         let rpc = Rpc {
             listener: bind_rpc(runtime.rpc_listen).await?,
             store: state,
-            mode: RpcMode::full_node(source_rpc),
+            mode: RpcMode::full_node(source_rpc, self.sync.readiness_threshold),
             ntx_builder: None,
             grpc_options: runtime.external_grpc_options,
             network_tx_auth,

@@ -13,7 +13,11 @@ use url::Url;
 #[derive(clap::Args, Clone, Debug)]
 pub struct RpcOptions {
     /// Socket address at which to serve the public RPC API.
-    #[arg(long = "rpc.listen", env = "MIDEN_NODE_RPC_LISTEN", value_name = "LISTEN")]
+    #[arg(
+        long = "rpc.listen",
+        env = "MIDEN_NODE_RPC_LISTEN",
+        value_name = "LISTEN"
+    )]
     pub listen: SocketAddr,
 
     /// Optional metadata header value for internal network-transaction RPC authentication.
@@ -124,4 +128,13 @@ pub struct SyncOptions {
         value_name = "URL"
     )]
     pub block_source_url: Url,
+
+    // Number of blocks that this RPC server must be within to be considered ready.
+    #[arg(
+        long = "sync.ready_threshold",
+        env = "MIDEN_NODE_SYNC_READY_THRESHOLD",
+        value_name = "NUM",
+        default_value_t = 10
+    )]
+    pub readiness_threshold: u32,
 }

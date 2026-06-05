@@ -60,7 +60,11 @@ pub enum RpcMode {
     ///
     /// The caller is responsible for configuring this client with any request metadata the source
     /// RPC requires.
-    FullNode { source_rpc: Box<SourceRpcClient> },
+    FullNode {
+        source_rpc: Box<SourceRpcClient>,
+        // Number of blocks that this RPC server must be within to be considered ready.
+        readiness_threshold: u32,
+    },
 }
 
 impl RpcMode {
@@ -71,9 +75,10 @@ impl RpcMode {
         }
     }
 
-    pub fn full_node(source_rpc: SourceRpcClient) -> Self {
+    pub fn full_node(source_rpc: SourceRpcClient, readiness_threshold: u32) -> Self {
         Self::FullNode {
             source_rpc: Box::new(source_rpc),
+            readiness_threshold,
         }
     }
 }
@@ -106,19 +111,18 @@ impl Rpc {
         let (health_reporter, health_service) = tonic_health::server::health_reporter();
         match self.mode {
             RpcMode::Sequencer { .. } => {
-                health_reporter
-                    .set_serving::<api_server::ApiServer<api::RpcService>>()
-                    .await;
-            }
-            RpcMode::FullNode { source_rpc } => {
+                health_reporter.set_serving::<api_server::ApiServer<api::RpcService>>().await;
+            },
+            RpcMode::FullNode { source_rpc, readiness_threshold } => {
                 health_reporter
                     .set_not_serving::<api_server::ApiServer<api::RpcService>>()
                     .await;
                 let store = self.store.clone();
                 tokio::spawn(async move {
-                    run_readiness_monitor(health_reporter, *source_rpc, store).await;
+                    run_readiness_monitor(health_reporter, *source_rpc, store, readiness_threshold)
+                        .await;
                 });
-            }
+            },
         }
 
         let reflection_service = server::Builder::configure()
@@ -180,31 +184,25 @@ async fn run_readiness_monitor(
     reporter: tonic_health::server::HealthReporter,
     mut source_rpc: SourceRpcClient,
     store: Arc<State>,
+    readiness_threshold: u32,
 ) {
-    const SYNC_THRESHOLD: u32 = 10;
     const POLL_INTERVAL: Duration = Duration::from_secs(30);
 
     loop {
         let is_ready = match source_rpc.status(Request::new(())).await {
             Ok(response) => {
-                let upstream_tip = response
-                    .into_inner()
-                    .block_producer
-                    .map_or(u32::MAX, |b| b.chain_tip);
+                let upstream_tip =
+                    response.into_inner().block_producer.map_or(u32::MAX, |b| b.chain_tip);
                 let local_tip = store.chain_tip(Finality::Committed).await.as_u32();
-                upstream_tip.saturating_sub(local_tip) <= SYNC_THRESHOLD
-            }
+                upstream_tip.saturating_sub(local_tip) <= readiness_threshold
+            },
             Err(_) => false,
         };
 
         if is_ready {
-            reporter
-                .set_serving::<api_server::ApiServer<api::RpcService>>()
-                .await;
+            reporter.set_serving::<api_server::ApiServer<api::RpcService>>().await;
         } else {
-            reporter
-                .set_not_serving::<api_server::ApiServer<api::RpcService>>()
-                .await;
+            reporter.set_not_serving::<api_server::ApiServer<api::RpcService>>().await;
         }
 
         tokio::time::sleep(POLL_INTERVAL).await;
