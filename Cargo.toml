@@ -33,7 +33,7 @@ license      = "MIT"
 readme       = "README.md"
 repository   = "https://github.com/0xMiden/node"
 rust-version = "1.93"
-version      = "0.15.0-rc.2"
+version      = "0.15.0-rc.3"
 
 # Optimize the cryptography for faster tests involving account creation.
 [profile.test.package.miden-crypto]
@@ -44,20 +44,20 @@ debug = true
 
 [workspace.dependencies]
 # Workspace crates.
-miden-large-smt-backend-rocksdb = { path = "crates/large-smt-backend-rocksdb", version = "0.15.0-rc.2" }
-miden-node-block-producer       = { path = "crates/block-producer", version = "0.15.0-rc.2" }
-miden-node-db                   = { path = "crates/db", version = "0.15.0-rc.2" }
-miden-node-grpc-error-macro     = { path = "crates/grpc-error-macro", version = "0.15.0-rc.2" }
-miden-node-proto                = { path = "crates/proto", version = "0.15.0-rc.2" }
-miden-node-proto-build          = { path = "proto", version = "0.15.0-rc.2" }
-miden-node-rpc                  = { path = "crates/rpc", version = "0.15.0-rc.2" }
-miden-node-store                = { path = "crates/store", version = "0.15.0-rc.2" }
+miden-large-smt-backend-rocksdb = { path = "crates/large-smt-backend-rocksdb", version = "0.15.0-rc.3" }
+miden-node-block-producer       = { path = "crates/block-producer", version = "0.15.0-rc.3" }
+miden-node-db                   = { path = "crates/db", version = "0.15.0-rc.3" }
+miden-node-grpc-error-macro     = { path = "crates/grpc-error-macro", version = "0.15.0-rc.3" }
+miden-node-proto                = { path = "crates/proto", version = "0.15.0-rc.3" }
+miden-node-proto-build          = { path = "proto", version = "0.15.0-rc.3" }
+miden-node-rpc                  = { path = "crates/rpc", version = "0.15.0-rc.3" }
+miden-node-store                = { path = "crates/store", version = "0.15.0-rc.3" }
 miden-node-test-macro           = { path = "crates/test-macro" }
-miden-node-utils                = { path = "crates/utils", version = "0.15.0-rc.2" }
-miden-remote-prover-client      = { path = "crates/remote-prover-client", version = "0.15.0-rc.2" }
+miden-node-utils                = { path = "crates/utils", version = "0.15.0-rc.3" }
+miden-remote-prover-client      = { path = "crates/remote-prover-client", version = "0.15.0-rc.3" }
 # Temporary workaround until <https://github.com/rust-rocksdb/rust-rocksdb/pull/1029>
 # is part of `rocksdb-rust` release
-miden-node-rocksdb-cxx-linkage-fix = { path = "crates/rocksdb-cxx-linkage-fix", version = "0.15.0-rc.2" }
+miden-node-rocksdb-cxx-linkage-fix = { path = "crates/rocksdb-cxx-linkage-fix", version = "0.15.0-rc.3" }
 
 # miden-protocol dependencies. These should be updated in sync.
 # Requires the v0.15.2 patch release, which carries the network-account tx-script
@@ -69,10 +69,6 @@ miden-standards       = { version = "0.15.2" }
 miden-testing         = { version = "0.15.2" }
 miden-tx              = { default-features = false, version = "0.15.2" }
 miden-tx-batch-prover = { version = "0.15.2" }
-
-# v0.5.3 includes a bugfix for ARM which caused AMD and ARM to disagree.
-# Can be removed once downstream adds this restriction.
-p3-goldilocks = { version = ">= 0.5.3" }
 
 # Other miden dependencies. These should align with those expected by miden-protocol.
 miden-crypto = { version = "0.25" }
@@ -137,9 +133,8 @@ url                = { features = ["serde"], version = "2.5" }
 
 [workspace.metadata.cargo-shear]
 # libsqlite3-sys is kept to control the bundled SQLite linkage.
-# p3-goldilocks is a transient dependency which contains a bugfix in v0.5.3.
 # tonic-prost is used by generated gRPC code rather than handwritten Rust.
-ignored = ["libsqlite3-sys", "p3-goldilocks", "tonic-prost"]
+ignored = ["libsqlite3-sys",  "tonic-prost"]
 
 # Lints are set to warn for development, which are promoted to errors in CI.
 [workspace.lints.clippy]
