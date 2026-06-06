@@ -134,7 +134,7 @@ url                = { features = ["serde"], version = "2.5" }
 [workspace.metadata.cargo-shear]
 # libsqlite3-sys is kept to control the bundled SQLite linkage.
 # tonic-prost is used by generated gRPC code rather than handwritten Rust.
-ignored = ["libsqlite3-sys",  "tonic-prost"]
+ignored = ["libsqlite3-sys", "tonic-prost"]
 
 # Lints are set to warn for development, which are promoted to errors in CI.
 [workspace.lints.clippy]
