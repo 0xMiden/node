@@ -14,6 +14,7 @@ on:
 env:
   version: ${{ inputs.version || github.ref_name }}
   registry: ghcr.io
+  DOCKER_PLATFORMS: linux/amd64,linux/arm64
 
 permissions:
   id-token: write
@@ -46,14 +47,20 @@ jobs:
     name: Publish ${{ matrix.component }} ${{ inputs.version }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ env.version }}
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Prepare image metadata
+        id: metadata
+        run: |
+          echo "created=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Log in to the Container registry
-        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
         with:
           registry: ${{ env.registry }}
           username: ${{ github.actor }}
@@ -61,14 +68,18 @@ jobs:
 
       - name: Build and push Docker image
         id: push
-        uses: WarpBuilds/build-push-action@8c1f3b8bd22c68607865d99ff650d37a564229a5 # v6.0.7
+        uses: WarpBuilds/build-push-action@ec038a9f4b87a7c7ccb50ac7a26a90d46a610a81 # v6.0.9
         with:
           context: .
           push: true
           file: ./Dockerfile
-          platforms: linux/amd64
+          platforms: ${{ env.DOCKER_PLATFORMS }}
           profile-name: ${{ vars.WARPBUILD_DOCKER_BUILDER_PROFILE }}
+          pull: true
           build-args: |
             BIN=${{ matrix.bin }}
             PORT=${{ matrix.port }}
+            CREATED=${{ steps.metadata.outputs.created }}
+            VERSION=${{ env.version }}
+            COMMIT=${{ steps.metadata.outputs.commit }}
           tags: ${{ env.registry }}/0xmiden/miden-${{ matrix.component }}:${{ env.version }}
