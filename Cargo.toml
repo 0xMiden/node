@@ -25,15 +25,15 @@ members = [
 resolver = "2"
 
 [workspace.package]
-authors = ["Miden contributors"]
-edition = "2024"
-exclude = [".github/"]
-homepage = "https://miden.xyz"
-license = "MIT"
-readme = "README.md"
-repository = "https://github.com/0xMiden/node"
+authors      = ["Miden contributors"]
+edition      = "2024"
+exclude      = [".github/"]
+homepage     = "https://miden.xyz"
+license      = "MIT"
+readme       = "README.md"
+repository   = "https://github.com/0xMiden/node"
 rust-version = "1.93"
-version = "0.15.0-rc.2"
+version      = "0.15.0-rc.2"
 
 # Optimize the cryptography for faster tests involving account creation.
 [profile.test.package.miden-crypto]
@@ -45,16 +45,16 @@ debug = true
 [workspace.dependencies]
 # Workspace crates.
 miden-large-smt-backend-rocksdb = { path = "crates/large-smt-backend-rocksdb", version = "0.15.0-rc.2" }
-miden-node-block-producer = { path = "crates/block-producer", version = "0.15.0-rc.2" }
-miden-node-db = { path = "crates/db", version = "0.15.0-rc.2" }
-miden-node-grpc-error-macro = { path = "crates/grpc-error-macro", version = "0.15.0-rc.2" }
-miden-node-proto = { path = "crates/proto", version = "0.15.0-rc.2" }
-miden-node-proto-build = { path = "proto", version = "0.15.0-rc.2" }
-miden-node-rpc = { path = "crates/rpc", version = "0.15.0-rc.2" }
-miden-node-store = { path = "crates/store", version = "0.15.0-rc.2" }
-miden-node-test-macro = { path = "crates/test-macro" }
-miden-node-utils = { path = "crates/utils", version = "0.15.0-rc.2" }
-miden-remote-prover-client = { path = "crates/remote-prover-client", version = "0.15.0-rc.2" }
+miden-node-block-producer       = { path = "crates/block-producer", version = "0.15.0-rc.2" }
+miden-node-db                   = { path = "crates/db", version = "0.15.0-rc.2" }
+miden-node-grpc-error-macro     = { path = "crates/grpc-error-macro", version = "0.15.0-rc.2" }
+miden-node-proto                = { path = "crates/proto", version = "0.15.0-rc.2" }
+miden-node-proto-build          = { path = "proto", version = "0.15.0-rc.2" }
+miden-node-rpc                  = { path = "crates/rpc", version = "0.15.0-rc.2" }
+miden-node-store                = { path = "crates/store", version = "0.15.0-rc.2" }
+miden-node-test-macro           = { path = "crates/test-macro" }
+miden-node-utils                = { path = "crates/utils", version = "0.15.0-rc.2" }
+miden-remote-prover-client      = { path = "crates/remote-prover-client", version = "0.15.0-rc.2" }
 # Temporary workaround until <https://github.com/rust-rocksdb/rust-rocksdb/pull/1029>
 # is part of `rocksdb-rust` release
 miden-node-rocksdb-cxx-linkage-fix = { path = "crates/rocksdb-cxx-linkage-fix", version = "0.15.0-rc.2" }
@@ -62,12 +62,12 @@ miden-node-rocksdb-cxx-linkage-fix = { path = "crates/rocksdb-cxx-linkage-fix", 
 # miden-protocol dependencies. These should be updated in sync.
 # Requires the v0.15.2 patch release, which carries the network-account tx-script
 # allowlist (0xMiden/protocol#3028) and the `with_allowed_notes` rename (#3049).
-miden-agglayer = { version = "0.15.2" }
-miden-block-prover = { version = "0.15.2" }
-miden-protocol = { default-features = false, version = "0.15.2" }
-miden-standards = { version = "0.15.2" }
-miden-testing = { version = "0.15.2" }
-miden-tx = { default-features = false, version = "0.15.2" }
+miden-agglayer        = { version = "0.15.2" }
+miden-block-prover    = { version = "0.15.2" }
+miden-protocol        = { default-features = false, version = "0.15.2" }
+miden-standards       = { version = "0.15.2" }
+miden-testing         = { version = "0.15.2" }
+miden-tx              = { default-features = false, version = "0.15.2" }
 miden-tx-batch-prover = { version = "0.15.2" }
 
 # v0.5.3 includes a bugfix for ARM which caused AMD and ARM to disagree.
@@ -78,66 +78,62 @@ p3-goldilocks = { version = ">= 0.5.3" }
 miden-crypto = { version = "0.25" }
 
 # External dependencies
-anyhow = { version = "1.0" }
-assert_matches = { version = "1.5" }
-async-trait = { version = "0.1" }
-backon = { version = "1.6" }
-build-rs = { version = "0.3" }
-clap = { features = ["derive"], version = "4.5" }
-codegen = { version = "0.3" }
-deadpool = { default-features = false, version = "0.12" }
-deadpool-diesel = { version = "0.6" }
-deadpool-sync = { default-features = false, version = "0.1" }
-diesel = { version = "2.3" }
-fs-err = { version = "3" }
-futures = { version = "0.3" }
-hex = { version = "0.4" }
-http = { version = "1.3" }
-humantime = { version = "2.2" }
-indexmap = { version = "2.12" }
-itertools = { version = "0.14" }
-libsqlite3-sys = { features = ["bundled"], version = "0.35" }
-lru = { default-features = false, version = "0.16" }
-miette = { version = "7.6" }
-opentelemetry = { version = "0.31" }
+anyhow            = { version = "1.0" }
+assert_matches    = { version = "1.5" }
+async-trait       = { version = "0.1" }
+backon            = { version = "1.6" }
+build-rs          = { version = "0.3" }
+clap              = { features = ["derive"], version = "4.5" }
+codegen           = { version = "0.3" }
+deadpool          = { default-features = false, version = "0.12" }
+deadpool-diesel   = { version = "0.6" }
+deadpool-sync     = { default-features = false, version = "0.1" }
+diesel            = { version = "2.3" }
+fs-err            = { version = "3" }
+futures           = { version = "0.3" }
+hex               = { version = "0.4" }
+http              = { version = "1.3" }
+humantime         = { version = "2.2" }
+indexmap          = { version = "2.12" }
+itertools         = { version = "0.14" }
+libsqlite3-sys    = { features = ["bundled"], version = "0.35" }
+lru               = { default-features = false, version = "0.16" }
+miette            = { version = "7.6" }
+opentelemetry     = { version = "0.31" }
 pretty_assertions = { version = "1.4" }
 # prost and protox are from different authors and are _not_ released in
 # lockstep, nor are they adhering to semver semantics. We keep this
 # to avoid future breakage.
-prost = { default-features = false, version = "=0.14.3" }
-prost-types = { default-features = false, version = "=0.14.3" }
-protox = { version = "=0.9.1" }
-quote = { version = "1.0" }
-rand = { version = "0.9" }
-rand_chacha = { default-features = false, version = "0.9" }
-rayon = { version = "1.10" }
-reqwest = { version = "0.13" }
-rstest = { version = "0.26" }
-rusqlite = { features = ["bundled"], version = "0.37" }
-serde = { features = ["derive"], version = "1" }
-serial_test = { version = "3.2" }
-sha2 = { version = "0.10" }
-syn = { version = "2.0" }
-tempfile = { version = "3.12" }
-thiserror = { default-features = false, version = "2.0" }
-tokio = { default-features = false, version = "1.46" }
-tokio-stream = { version = "0.1" }
-toml = { version = "1.0" }
-tonic = { default-features = false, version = "0.14" }
-tonic-health = { version = "0.14" }
-tonic-prost = { version = "0.14" }
-tonic-prost-build = { version = "0.14" }
-tonic-reflection = { version = "0.14" }
-tonic-web = { version = "0.14" }
-tower = { version = "0.5" }
-tower-http = { features = ["cors", "trace"], version = "0.6" }
-tracing = { version = "0.1" }
-tracing-subscriber = { features = [
-  "env-filter",
-  "fmt",
-  "json",
-], version = "0.3" }
-url = { features = ["serde"], version = "2.5" }
+prost              = { default-features = false, version = "=0.14.3" }
+prost-types        = { default-features = false, version = "=0.14.3" }
+protox             = { version = "=0.9.1" }
+quote              = { version = "1.0" }
+rand               = { version = "0.9" }
+rand_chacha        = { default-features = false, version = "0.9" }
+rayon              = { version = "1.10" }
+reqwest            = { version = "0.13" }
+rstest             = { version = "0.26" }
+rusqlite           = { features = ["bundled"], version = "0.37" }
+serde              = { features = ["derive"], version = "1" }
+serial_test        = { version = "3.2" }
+sha2               = { version = "0.10" }
+syn                = { version = "2.0" }
+tempfile           = { version = "3.12" }
+thiserror          = { default-features = false, version = "2.0" }
+tokio              = { default-features = false, version = "1.46" }
+tokio-stream       = { version = "0.1" }
+toml               = { version = "1.0" }
+tonic              = { default-features = false, version = "0.14" }
+tonic-health       = { version = "0.14" }
+tonic-prost        = { version = "0.14" }
+tonic-prost-build  = { version = "0.14" }
+tonic-reflection   = { version = "0.14" }
+tonic-web          = { version = "0.14" }
+tower              = { version = "0.5" }
+tower-http         = { features = ["cors", "trace"], version = "0.6" }
+tracing            = { version = "0.1" }
+tracing-subscriber = { features = ["env-filter", "fmt", "json"], version = "0.3" }
+url                = { features = ["serde"], version = "2.5" }
 
 [workspace.metadata.cargo-shear]
 # libsqlite3-sys is kept to control the bundled SQLite linkage.
@@ -150,18 +146,18 @@ ignored = ["libsqlite3-sys", "p3-goldilocks", "tonic-prost"]
 # Pedantic lints are set to a lower priority which allows lints in the group to be selectively enabled.
 pedantic = { level = "warn", priority = -1 }
 
-allow_attributes = "deny"
-cast_possible_truncation = "allow"     # Overly many instances especially regarding indices.
-collapsible-if = "allow"               # Too new to enforce.
+allow_attributes             = "deny"
+cast_possible_truncation     = "allow" # Overly many instances especially regarding indices.
+collapsible-if               = "allow" # Too new to enforce.
 from_iter_instead_of_collect = "allow" # at times `FromIter` is much more readable
-ignored_unit_patterns = "allow"        # Stylistic choice.
-large_types_passed_by_value = "allow"  # Triggered by BlockHeader being Copy + 334 bytes.
-missing_errors_doc = "allow"           # TODO: fixup and enable this.
-missing_panics_doc = "allow"           # TODO: fixup and enable this.
-module_name_repetitions = "allow"      # Many triggers, and is a stylistic choice.
-must_use_candidate = "allow"           # This marks many fn's which isn't helpful.
-needless_for_each = "allow"            # Context dependent if that's useful.
-should_panic_without_expect = "allow"  # We don't care about the specific panic message.
+ignored_unit_patterns        = "allow" # Stylistic choice.
+large_types_passed_by_value  = "allow" # Triggered by BlockHeader being Copy + 334 bytes.
+missing_errors_doc           = "allow" # TODO: fixup and enable this.
+missing_panics_doc           = "allow" # TODO: fixup and enable this.
+module_name_repetitions      = "allow" # Many triggers, and is a stylistic choice.
+must_use_candidate           = "allow" # This marks many fn's which isn't helpful.
+needless_for_each            = "allow" # Context dependent if that's useful.
+should_panic_without_expect  = "allow" # We don't care about the specific panic message.
 # End of pedantic lints.
 
 # Configure `cargo-typos`
