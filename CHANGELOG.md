@@ -4,8 +4,8 @@
 
 ## v0.15.0-rc.2 (2026-06-05)
 
-- Added `arm64/linux` support to Docker images ((#2209)[https://github.com/0xMiden/node/pull/2209]).
-- Force upgrade `p3-goldilocks` to `> 0.5.2` to include a bugfix causing signature verification to fail [#]().
+- Added `arm64/linux` support to Docker images ([#2209](https://github.com/0xMiden/node/pull/2209)).
+- Force upgrade `p3-goldilocks` to `> 0.5.2` to include a bugfix causing signature verification to fail [#2211](https://github.com/0xMiden/node/pull/2211)).
 
 ## v0.15.0-rc.1 (2026-06-05)
 
