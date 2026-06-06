@@ -49,7 +49,7 @@ RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
 FROM debian:${DEBIAN_RELEASE}-slim AS runtime-base
 RUN apt-get update && \
     apt-get -y upgrade && \
-    && rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/*
 
 FROM runtime-base AS runtime
 ARG BIN
