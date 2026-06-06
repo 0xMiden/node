@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.15.0-rc.2 (2026-06-05)
+
+- Upgrade `p3-goldilocks` to `> 0.5.2` to include a bugfix causing signature verification to fail [#]().
+
 ## v0.15.0-rc.1 (2026-06-05)
 
 - Fixed trace exports not supporting TLS [#2199](#https://github.com/0xMiden/node/pull/2199).
