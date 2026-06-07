@@ -13,7 +13,9 @@ impl State {
         proof_bytes: Vec<u8>,
     ) -> anyhow::Result<()> {
         self.block_store.commit_proof(block_num, &proof_bytes).await?;
-        self.proof_cache.push(block_num, ProofNotification::new(block_num, proof_bytes));
+        self.proof_cache
+            .push(block_num, ProofNotification::new(block_num, proof_bytes))
+            .expect("proof cache receives sequential block numbers");
         self.proven_tip.advance(block_num);
         Ok(())
     }

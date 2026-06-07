@@ -1,2 +1,7 @@
 config:
   line-length: false
+  # Docusaurus pages use frontmatter `title` for sidebar/browser metadata and an explicit H1 for
+  # page content. Do not count the frontmatter title as a page title, otherwise every page with both
+  # fields trips MD025/single-title.
+  single-title:
+    front_matter_title: ""

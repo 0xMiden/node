@@ -77,14 +77,13 @@ pub struct MigrateCommand {
 }
 
 impl MigrateCommand {
-    pub async fn handle(self) -> anyhow::Result<()> {
+    pub fn handle(self) -> anyhow::Result<()> {
         let data_directory =
             DataDirectory::load(self.data_directory.clone()).with_context(|| {
                 format!("failed to load data directory at {}", self.data_directory.display())
             })?;
 
-        Db::load(data_directory.database_path())
-            .await
+        Db::migrate(data_directory.database_path())
             .context("failed to apply store database migrations")?;
 
         Ok(())

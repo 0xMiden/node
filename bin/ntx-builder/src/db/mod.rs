@@ -1,5 +1,5 @@
 use std::num::NonZeroUsize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use miden_node_db::DatabaseError;
@@ -13,7 +13,7 @@ use miden_standards::note::AccountTargetNetworkNote;
 use tracing::{info, instrument};
 
 use crate::committed_block::CommittedBlockEffects;
-use crate::db::migrations::apply_migrations;
+use crate::db::migrations::{bootstrap_database, migrate_database, verify_latest_schema};
 use crate::db::models::queries;
 use crate::{COMPONENT, NoteError};
 
@@ -32,34 +32,49 @@ pub struct Db {
 }
 
 impl Db {
-    /// Creates and initializes the database, then opens an async connection pool.
+    /// Opens an async connection pool after verifying the database is at the latest schema version.
     #[instrument(
         target = COMPONENT,
-        name = "ntx_builder.database.setup",
+        name = "ntx_builder.database.load",
         skip_all,
         fields(path=%database_filepath.display()),
         err,
     )]
-    pub async fn setup(database_filepath: PathBuf) -> anyhow::Result<Self> {
-        Self::setup_with_pool_size(database_filepath, miden_node_db::default_connection_pool_size())
+    pub async fn load(database_filepath: PathBuf) -> anyhow::Result<Self> {
+        Self::load_with_pool_size(database_filepath, miden_node_db::default_connection_pool_size())
             .await
     }
 
-    /// Creates and initializes the database with a specific pool size.
+    /// Opens an async connection pool with a specific pool size after verifying the database is at
+    /// the latest schema version.
     #[instrument(
         target = COMPONENT,
-        name = "ntx_builder.database.setup",
+        name = "ntx_builder.database.load",
         skip_all,
         fields(path=%database_filepath.display()),
         err,
     )]
-    pub async fn setup_with_pool_size(
+    pub async fn load_with_pool_size(
         database_filepath: PathBuf,
         connection_pool_size: NonZeroUsize,
     ) -> anyhow::Result<Self> {
-        apply_migrations(&database_filepath).context("failed to apply migrations")?;
+        verify_latest_schema(&database_filepath).context("failed to verify database schema")?;
 
-        let inner = miden_node_db::Db::new_with_pool_size(&database_filepath, connection_pool_size)
+        Self::open_with_pool_size(&database_filepath, connection_pool_size)
+    }
+
+    /// Applies all pending migrations to an existing DB.
+    #[instrument(target = COMPONENT, skip_all)]
+    pub fn migrate(database_filepath: impl AsRef<Path>) -> Result<()> {
+        migrate_database(database_filepath.as_ref())?;
+        Ok(())
+    }
+
+    fn open_with_pool_size(
+        database_filepath: &Path,
+        connection_pool_size: NonZeroUsize,
+    ) -> anyhow::Result<Self> {
+        let inner = miden_node_db::Db::new_with_pool_size(database_filepath, connection_pool_size)
             .context("failed to build connection pool")?;
 
         info!(
@@ -91,12 +106,11 @@ impl Db {
         database_filepath: PathBuf,
         genesis: &SignedBlock,
     ) -> anyhow::Result<()> {
-        let db = Self::setup(database_filepath).await?;
-
-        anyhow::ensure!(
-            db.get_chain_state().await.context("failed to read chain state")?.is_none(),
-            "ntx-builder database is already bootstrapped",
-        );
+        bootstrap_database(&database_filepath).context("failed to bootstrap database schema")?;
+        let db = Self::open_with_pool_size(
+            &database_filepath,
+            miden_node_db::default_connection_pool_size(),
+        )?;
 
         let genesis_commitment = genesis.header().commitment();
         let genesis_header = genesis.header().clone();
@@ -272,7 +286,7 @@ impl Db {
 
         let dir = tempfile::tempdir().expect("failed to create temp directory");
         let db_path = dir.path().join("test.sqlite3");
-        apply_migrations(&db_path).expect("migrations should apply on empty database");
+        bootstrap_database(&db_path).expect("database should bootstrap");
         let mut conn = SqliteConnection::establish(db_path.to_str().unwrap())
             .expect("temp file sqlite should always work");
         configure_connection_on_creation(&mut conn).expect("connection configuration should work");
@@ -286,7 +300,8 @@ impl Db {
     pub async fn test_setup() -> (Db, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("failed to create temp directory");
         let db_path = dir.path().join("test.sqlite3");
-        let db = Db::setup(db_path).await.expect("test DB setup should succeed");
+        bootstrap_database(&db_path).expect("database should bootstrap");
+        let db = Db::load(db_path).await.expect("test DB load should succeed");
         (db, dir)
     }
 }
@@ -351,7 +366,24 @@ impl LoopDb {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::mock_genesis_block;
+    use crate::test_utils::{mock_genesis_block, mock_genesis_block_with_network_account};
+
+    #[tokio::test]
+    async fn bootstrap_seeds_genesis_network_account() {
+        let dir = tempfile::tempdir().expect("failed to create temp directory");
+        let db_path = dir.path().join("ntx-builder.sqlite3");
+
+        let (genesis, account_id) = mock_genesis_block_with_network_account();
+        Db::bootstrap(db_path.clone(), &genesis)
+            .await
+            .expect("bootstrap should succeed with a network account in genesis");
+
+        let db = Db::load(db_path).await.expect("load should open the bootstrapped database");
+        assert!(
+            db.has_committed_account(account_id).await.expect("query should succeed"),
+            "genesis network account should be committed after bootstrap",
+        );
+    }
 
     #[tokio::test]
     async fn bootstrap_seeds_genesis_chain_state() {
@@ -362,7 +394,7 @@ mod tests {
             .await
             .expect("bootstrap should succeed on a fresh database");
 
-        let db = Db::setup(db_path).await.expect("setup should open the bootstrapped database");
+        let db = Db::load(db_path).await.expect("load should open the bootstrapped database");
         let (block_num, ..) = db
             .get_chain_state()
             .await
@@ -384,6 +416,9 @@ mod tests {
         let err = Db::bootstrap(db_path, &mock_genesis_block())
             .await
             .expect_err("second bootstrap should fail");
-        assert!(err.to_string().contains("already bootstrapped"), "unexpected error: {err}");
+        assert!(
+            err.chain().any(|source| source.to_string().contains("database already exists")),
+            "unexpected error: {err}"
+        );
     }
 }

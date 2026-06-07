@@ -116,3 +116,52 @@ pub fn mock_genesis_block() -> miden_protocol::block::SignedBlock {
     let signature = SigningKey::new().sign(header.commitment());
     SignedBlock::new_unchecked(header, body, signature)
 }
+
+/// Builds a full-state [`AccountUpdateDetails`] for a network account, as the genesis block carries
+/// for accounts like the `AggLayer` bridge and faucets. The returned account passes
+/// `NetworkAccount::new`, so the ntx-builder treats the update as a network-account creation.
+pub fn mock_network_account_update()
+-> (Account, miden_protocol::account::delta::AccountUpdateDetails) {
+    use std::collections::BTreeSet;
+
+    use miden_protocol::account::AccountDelta;
+    use miden_protocol::account::delta::AccountUpdateDetails;
+    use miden_standards::account::auth::AuthNetworkAccount;
+
+    // The allowlist content is irrelevant here; any non-empty set yields a valid network account.
+    let root = mock_single_target_note(mock_network_account_id(), 1).as_note().script().root();
+    let account = mock_account_with_auth_component(
+        AuthNetworkAccount::with_allowed_notes(BTreeSet::from_iter([root]))
+            .expect("non-empty allowlist should construct"),
+    );
+    let details = AccountUpdateDetails::Delta(
+        AccountDelta::try_from(account.clone()).expect("full-state delta should build"),
+    );
+    (account, details)
+}
+
+/// Creates a mock genesis [`SignedBlock`] that seeds a single network account and contains no
+/// transactions, mirroring an `AggLayer`-style genesis. Returns the block and the seeded account
+/// id.
+///
+/// See [`mock_genesis_block`] for the signature caveat.
+pub fn mock_genesis_block_with_network_account() -> (miden_protocol::block::SignedBlock, AccountId)
+{
+    use miden_protocol::block::{BlockAccountUpdate, BlockBody, SignedBlock};
+    use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
+    use miden_protocol::transaction::OrderedTransactionHeaders;
+
+    let (account, details) = mock_network_account_update();
+    let account_id = account.id();
+    let update = BlockAccountUpdate::new(account_id, account.to_commitment(), details);
+
+    let header = mock_block_header(BlockNumber::GENESIS);
+    let body = BlockBody::new_unchecked(
+        vec![update],
+        Vec::new(),
+        Vec::new(),
+        OrderedTransactionHeaders::new_unchecked(Vec::new()),
+    );
+    let signature = SigningKey::new().sign(header.commitment());
+    (SignedBlock::new_unchecked(header, body, signature), account_id)
+}

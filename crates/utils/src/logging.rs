@@ -3,6 +3,7 @@ use std::sync::OnceLock;
 
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry::{KeyValue, Value};
+use opentelemetry_otlp::WithTonicConfig as _;
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::resource::{EnvResourceDetector, TelemetryResourceDetector};
@@ -179,9 +180,10 @@ pub fn setup_tracing(otel: OpenTelemetry) -> anyhow::Result<Option<OtelGuard>> {
 }
 
 fn init_tracer_provider(resource_config: ResourceConfig) -> anyhow::Result<SdkTracerProvider> {
-    let builder = opentelemetry_otlp::SpanExporter::builder().with_tonic();
-
-    let exporter = builder.build()?;
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
+        .with_tonic()
+        .with_tls_config(tonic::transport::ClientTlsConfig::new().with_enabled_roots())
+        .build()?;
     let resource = resource(resource_config);
 
     Ok(opentelemetry_sdk::trace::SdkTracerProvider::builder()

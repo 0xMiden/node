@@ -17,15 +17,15 @@ workspace = true
 [dependencies]
 anyhow              = { workspace = true }
 axum                = { version = "0.8" }
+backon              = { workspace = true }
 clap                = { features = ["env"], workspace = true }
 hex                 = { workspace = true }
 humantime           = { workspace = true }
 maud                = { features = ["axum"], version = "0.27" }
 miden-node-proto    = { workspace = true }
 miden-node-utils    = { workspace = true }
-miden-protocol      = { features = ["std", "testing"], workspace = true }
+miden-protocol      = { features = ["std"], workspace = true }
 miden-standards     = { workspace = true }
-miden-testing       = { workspace = true }
 miden-tx            = { features = ["concurrent", "std"], workspace = true }
 rand                = { workspace = true }
 rand_chacha         = { workspace = true }

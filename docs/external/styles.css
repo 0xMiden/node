@@ -775,6 +775,9 @@ code {
   font-size: 1.2rem;
   font-family: var(--font-mono);
   color: color-mix(in oklab, #292929bf 75%, #000);
+  overflow-wrap: normal !important;
+  word-break: normal !important;
+  hyphens: none;
 }
 
 /* Arrow text characters (>> and <<) */

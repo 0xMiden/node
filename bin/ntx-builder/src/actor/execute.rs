@@ -44,7 +44,6 @@ use miden_tx::{
     DataStoreError,
     ExecutionOptions,
     FailedNote,
-    LocalTransactionProver,
     MastForestStore,
     NoteCheckerError,
     NoteConsumptionChecker,
@@ -133,10 +132,7 @@ pub type NtxExecutionResult = (TransactionId, Vec<FailedNote>, Vec<(Word, NoteSc
 #[derive(Clone)]
 pub struct NtxContext {
     /// The prover to delegate proofs to.
-    ///
-    /// Defaults to local proving if unset. This should be avoided in production as this is
-    /// computationally intensive.
-    prover: Option<RemoteTransactionProver>,
+    prover: RemoteTransactionProver,
 
     /// The RPC client for retrieving note scripts.
     rpc: RpcClient,
@@ -153,8 +149,17 @@ pub struct NtxContext {
     /// Pre-compiled transaction script that sets the network tx's on-chain expiration delta. Cloned
     /// into the [`TransactionArgs`] of the executed transaction.
     ///
-    /// TEMP: disabled until the resolution of <https://github.com/0xMiden/protocol/issues/3027>
-    #[expect(dead_code)]
+    /// TEMP: still disabled. The mechanism that allows network accounts to run allowlisted tx
+    /// scripts has landed (<https://github.com/0xMiden/protocol/pull/3028>, resolving #3027), but
+    /// re-enabling here is gated on a canonical, frozen expiration script in `miden-standards`
+    /// (<https://github.com/0xMiden/protocol/issues/3050>). Every network account the ntx-builder
+    /// services - including the `AggLayer` bridge and faucets - must allowlist this script's root, so
+    /// it has to be a single shared root all account creators can pin. Until then, attaching it
+    /// would get those txs rejected by the new tx-script allowlist.
+    #[expect(
+        dead_code,
+        reason = "Disabled until https://github.com/0xMiden/protocol/issues/3050 lands"
+    )]
     expiration_script: TransactionScript,
 
     /// [`ExponentialBuilder`] used to back off retries on transient request failures.
@@ -168,7 +173,7 @@ impl NtxContext {
         reason = "execution context aggregates actor resources"
     )]
     pub fn new(
-        prover: Option<RemoteTransactionProver>,
+        prover: RemoteTransactionProver,
         rpc: RpcClient,
         script_cache: LruCache<Word, NoteScript>,
         db: Db,
@@ -382,7 +387,9 @@ impl NtxContext {
         // Attach the pre-compiled expiration script so the submitted tx is rejected on-chain if it
         // does not land within the configured block delta.
         //
-        // TEMP: disabled until the resolution of https://github.com/0xMiden/protocol/issues/3027
+        // TEMP: still disabled. Re-enabling is gated on a canonical, frozen expiration script
+        // (https://github.com/0xMiden/protocol/issues/3050) whose root every serviced network
+        // account allowlists; see the `expiration_script` field docs for the full rationale.
         // let tx_args = TransactionArgs::default().with_tx_script(self.expiration_script.clone());
 
         let tx_args = TransactionArgs::default();
@@ -404,31 +411,14 @@ impl NtxContext {
     /// proving errors (witness rejected, malformed inputs) escape on the first attempt.
     #[instrument(target = COMPONENT, name = "ntx.execute_transaction.prove", skip_all, err)]
     async fn prove(&self, tx_inputs: &TransactionInputs) -> NtxResult<ProvenTransaction> {
-        if let Some(remote) = &self.prover {
-            (|| async { remote.prove(tx_inputs).await })
-                .retry(self.request_backoff())
-                .when(|err| matches!(err, TransactionProverError::Other { .. }))
-                .notify(|err, dur| {
-                    log_transient_retry("remote_prover.prove", err, dur);
-                })
-                .await
-                .map_err(NtxError::Proving)
-        } else {
-            // Only perform tx inputs clone for local proving.
-            let tx_inputs = tx_inputs.clone();
-            let span = tracing::Span::current();
-
-            spawn_blocking_in_current_span(move || {
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .expect("failed to build tokio runtime")
-                    .block_on(LocalTransactionProver::default().prove(tx_inputs).instrument(span))
+        (|| async { self.prover.prove(tx_inputs).await })
+            .retry(self.request_backoff())
+            .when(|err| matches!(err, TransactionProverError::Other { .. }))
+            .notify(|err, dur| {
+                log_transient_retry("remote_prover.prove", err, dur);
             })
             .await
-            .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))
             .map_err(NtxError::Proving)
-        }
     }
 
     /// Submits the transaction through the RPC service.

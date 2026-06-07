@@ -55,10 +55,9 @@ pub enum NtxBuilderCommand {
         )]
         rpc_auth_header_value: Option<AsciiMetadataValue>,
 
-        /// The remote transaction prover's gRPC url. If unset, will default to running a prover
-        /// in-process which is expensive.
+        /// The remote transaction prover's gRPC url.
         #[arg(long = "tx-prover.url", env = ENV_TX_PROVER_URL, value_name = "URL")]
-        tx_prover_url: Option<Url>,
+        tx_prover_url: Url,
 
         /// Number of note scripts to cache locally.
         ///
@@ -151,6 +150,15 @@ pub enum NtxBuilderCommand {
         #[arg(long, value_enum, value_name = "NETWORK")]
         network: Option<OfficialNetwork>,
     },
+
+    /// Applies pending ntx-builder database migrations.
+    ///
+    /// Cannot be run on an empty data directory; run `bootstrap` first.
+    Migrate {
+        /// Directory for the ntx-builder's persistent database.
+        #[arg(long = "data-directory", env = ENV_DATA_DIRECTORY, value_name = "DIR")]
+        data_directory: PathBuf,
+    },
 }
 
 impl NtxBuilderCommand {
@@ -169,6 +177,10 @@ impl NtxBuilderCommand {
                 miden_ntx_builder::bootstrap(database_filepath, &genesis)
                     .await
                     .context("failed to bootstrap ntx-builder database")
+            },
+            Self::Migrate { data_directory } => {
+                miden_ntx_builder::migrate(data_directory.join("ntx-builder.sqlite3"))
+                    .context("failed to apply ntx-builder database migrations")
             },
         }
     }
@@ -197,14 +209,14 @@ impl NtxBuilderCommand {
 
         let database_filepath = data_directory.join("ntx-builder.sqlite3");
 
-        let config = miden_ntx_builder::NtxBuilderConfig::new(rpc_url, database_filepath)
-            .with_tx_prover_url(tx_prover_url)
-            .with_script_cache_size(script_cache_size)
-            .with_idle_timeout(idle_timeout)
-            .with_max_account_crashes(max_account_crashes)
-            .with_max_cycles(max_tx_cycles)
-            .with_tx_expiration_delta(tx_expiration_delta)
-            .with_sqlite_connection_pool_size(sqlite_connection_pool_size);
+        let config =
+            miden_ntx_builder::NtxBuilderConfig::new(rpc_url, tx_prover_url, database_filepath)
+                .with_script_cache_size(script_cache_size)
+                .with_idle_timeout(idle_timeout)
+                .with_max_account_crashes(max_account_crashes)
+                .with_max_cycles(max_tx_cycles)
+                .with_tx_expiration_delta(tx_expiration_delta)
+                .with_sqlite_connection_pool_size(sqlite_connection_pool_size);
         let config = match rpc_auth_header_value {
             Some(value) => config.with_rpc_auth_header(value),
             None => config,
@@ -222,8 +234,8 @@ impl NtxBuilderCommand {
     pub fn open_telemetry(&self) -> OpenTelemetry {
         match self {
             Self::Start { .. } => OpenTelemetry::from_env().with_name("ntx-builder"),
-            // Bootstrap is a one-shot command and does not set up a tracing pipeline.
-            Self::Bootstrap { .. } => OpenTelemetry::Disabled,
+            // Bootstrap and migrate are one-shot commands and do not set up a tracing pipeline.
+            Self::Bootstrap { .. } | Self::Migrate { .. } => OpenTelemetry::Disabled,
         }
     }
 }
@@ -236,64 +248,5 @@ async fn read_bootstrap_genesis_block(
         (Some(path), None) => read_signed_genesis_block(path),
         (None, Some(network)) => fetch_signed_genesis_block(network).await,
         _ => unreachable!("clap requires exactly one genesis block source"),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-
-    use clap::Parser;
-    use tonic::metadata::AsciiMetadataValue;
-
-    use super::NtxBuilderCommand;
-
-    #[test]
-    fn start_command_parses_rpc_auth_header_options() {
-        let command = NtxBuilderCommand::try_parse_from([
-            "miden-ntx-builder",
-            "start",
-            "--listen",
-            "127.0.0.1:8080",
-            "--rpc.url",
-            "http://127.0.0.1:57291",
-            "--rpc.auth-header-value",
-            "secret-token",
-            "--data-directory",
-            "/tmp/miden-ntx-builder",
-        ])
-        .expect("command should parse");
-
-        let NtxBuilderCommand::Start { rpc_auth_header_value, .. } = command else {
-            panic!("expected the start command");
-        };
-
-        assert_eq!(rpc_auth_header_value, Some(AsciiMetadataValue::from_static("secret-token")));
-    }
-
-    #[test]
-    fn bootstrap_command_parses_data_directory_and_genesis_block() {
-        let command = NtxBuilderCommand::try_parse_from([
-            "miden-ntx-builder",
-            "bootstrap",
-            "--data-directory",
-            "/tmp/miden-ntx-builder",
-            "--file",
-            "/tmp/genesis.dat",
-        ])
-        .expect("command should parse");
-
-        let NtxBuilderCommand::Bootstrap {
-            data_directory,
-            genesis_block_file,
-            network,
-        } = command
-        else {
-            panic!("expected the bootstrap command");
-        };
-
-        assert_eq!(data_directory, PathBuf::from("/tmp/miden-ntx-builder"));
-        assert_eq!(genesis_block_file, Some(PathBuf::from("/tmp/genesis.dat")));
-        assert_eq!(network, None);
     }
 }

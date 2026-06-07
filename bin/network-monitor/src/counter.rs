@@ -1040,10 +1040,8 @@ async fn fetch_chain_tip(rpc_client: &mut RpcClient) -> Result<u32> {
 
     if let Some(block_producer_status) = status.block_producer {
         Ok(block_producer_status.chain_tip)
-    } else if let Some(store_status) = status.store {
-        Ok(store_status.chain_tip)
     } else {
-        anyhow::bail!("RPC status response did not include a chain tip")
+        Ok(status.chain_tip)
     }
 }
 

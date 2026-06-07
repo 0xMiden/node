@@ -7,7 +7,6 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ops::RangeInclusive;
 
 use diesel::prelude::{
-    BoolExpressionMethods,
     ExpressionMethods,
     Insertable,
     QueryDsl,
@@ -61,7 +60,7 @@ use crate::db::models::conv::{
 };
 use crate::db::models::queries::select_block_header_by_block_num;
 use crate::db::models::{serialize_vec, vec_raw_try_into};
-use crate::db::{DatabaseError, NoteRecord, NoteSyncRecord, NoteSyncUpdate, Page, schema};
+use crate::db::{DatabaseError, NoteRecord, NoteSyncRecord, NoteSyncUpdate, schema};
 use crate::errors::NoteSyncError;
 
 /// Estimated byte size of a [`NoteSyncUpdate`] excluding its notes.
@@ -251,54 +250,6 @@ pub(crate) fn select_existing_note_commitments(
     Ok(commitments)
 }
 
-/// Select all notes from the DB using the given [`SqliteConnection`].
-///
-///
-/// # Returns
-///
-/// A vector with notes, or an error.
-///
-/// # Raw SQL
-///
-/// ```sql
-/// SELECT
-///     notes.committed_at,
-///     notes.batch_index,
-///     notes.note_index,
-///     notes.note_id,
-///     notes.note_type,
-///     notes.sender,
-///     notes.tag,
-///     notes.attachment,
-///     notes.assets,
-///     notes.storage,
-///     notes.serial_num,
-///     notes.inclusion_path,
-///     note_scripts.script
-/// FROM notes
-/// LEFT JOIN note_scripts ON notes.script_root = note_scripts.script_root
-/// ORDER BY committed_at ASC
-/// ```
-#[cfg(test)]
-pub(crate) fn select_all_notes(
-    conn: &mut SqliteConnection,
-) -> Result<Vec<NoteRecord>, DatabaseError> {
-    let q = schema::notes::table.left_join(
-        schema::note_scripts::table
-            .on(schema::notes::script_root.eq(schema::note_scripts::script_root.nullable())),
-    );
-    let raw: Vec<_> = SelectDsl::select(
-        q,
-        (NoteRecordRawRow::as_select(), schema::note_scripts::script.nullable()),
-    )
-    .order(schema::notes::committed_at.asc())
-    .load::<(NoteRecordRawRow, Option<Vec<u8>>)>(conn)?;
-    let records = vec_raw_try_into::<NoteRecord, NoteRecordWithScriptRawJoined>(
-        raw.into_iter().map(NoteRecordWithScriptRawJoined::from),
-    )?;
-    Ok(records)
-}
-
 /// Select note inclusion proofs matching the note commitments.
 ///
 /// # Parameters
@@ -441,118 +392,6 @@ pub(crate) fn select_note_script_by_root(
         .map(|bytes| NoteScript::from_bytes(bytes))
         .transpose()
         .map_err(Into::into)
-}
-
-/// Returns a paginated batch of network notes for an account that are unconsumed by a specified
-/// block number.
-///
-///  Notes that are created or consumed after the specified block are excluded from the result.
-///
-/// # Returns
-///
-/// A set of unconsumed network notes with maximum length of `size` and the page to get
-/// the next set.
-///
-/// # Raw SQL
-///
-/// Attention: uses the _implicit_ column `rowid`, which requires to use a few raw SQL nugget
-/// statements.
-///
-/// ```sql
-/// SELECT
-///     notes.committed_at,
-///     notes.batch_index,
-///     notes.note_index,
-///     notes.note_id,
-///     notes.note_type,
-///     notes.sender,
-///     notes.tag,
-///     notes.attachment,
-///     notes.assets,
-///     notes.storage,
-///     notes.serial_num,
-///     notes.inclusion_path,
-///     note_scripts.script,
-///     notes.rowid
-/// FROM notes
-/// LEFT JOIN note_scripts ON notes.script_root = note_scripts.script_root
-/// WHERE
-///     network_note_type = 1 AND target_account_id = ?1 AND
-///     committed_at <= ?2 AND
-///     (consumed_at IS NULL OR consumed_at > ?2) AND notes.rowid >= ?3
-/// ORDER BY notes.rowid ASC
-/// LIMIT ?4
-/// ```
-#[expect(clippy::cast_sign_loss, reason = "row_id is a positive integer")]
-pub(crate) fn select_unconsumed_network_notes_by_account_id(
-    conn: &mut SqliteConnection,
-    account_id: AccountId,
-    block_num: BlockNumber,
-    mut page: Page,
-) -> Result<(Vec<NoteRecord>, Page), DatabaseError> {
-    let rowid_sel = diesel::dsl::sql::<diesel::sql_types::BigInt>("notes.rowid");
-    let rowid_sel_ge =
-        diesel::dsl::sql::<diesel::sql_types::Bool>("notes.rowid >= ")
-            .bind::<diesel::sql_types::BigInt, i64>(page.token.unwrap_or_default() as i64);
-
-    #[expect(
-        clippy::items_after_statements,
-        reason = "It's only relevant for a single call function"
-    )]
-    type RawLoadedTuple = (
-        NoteRecordRawRow,
-        Option<Vec<u8>>, // script
-        i64,             // rowid (from sql::<BigInt>("notes.rowid"))
-    );
-
-    #[expect(
-        clippy::items_after_statements,
-        reason = "It's only relevant for a single call function"
-    )]
-    fn split_into_raw_note_record_and_implicit_row_id(
-        tuple: RawLoadedTuple,
-    ) -> (NoteRecordWithScriptRawJoined, i64) {
-        let (note, script, row) = tuple;
-        let combined = NoteRecordWithScriptRawJoined::from((note, script));
-        (combined, row)
-    }
-
-    let raw = SelectDsl::select(
-        schema::notes::table.left_join(
-            schema::note_scripts::table
-                .on(schema::notes::script_root.eq(schema::note_scripts::script_root.nullable())),
-        ),
-        (
-            NoteRecordRawRow::as_select(),
-            schema::note_scripts::script.nullable(),
-            rowid_sel.clone(),
-        ),
-    )
-    .filter(schema::notes::network_note_type.eq(i32::from(NetworkNoteType::SingleTarget)))
-    .filter(schema::notes::target_account_id.eq(Some(account_id.to_bytes())))
-    .filter(schema::notes::committed_at.le(block_num.to_raw_sql()))
-    .filter(
-        schema::notes::consumed_at
-            .is_null()
-            .or(schema::notes::consumed_at.gt(block_num.to_raw_sql())),
-    )
-    .filter(rowid_sel_ge)
-    .order(rowid_sel.asc())
-    .limit(page.size.get() as i64 + 1)
-    .load::<RawLoadedTuple>(conn)?;
-
-    let mut notes = Vec::with_capacity(page.size.into());
-    for raw_item in raw {
-        let (raw_item, row_id) = split_into_raw_note_record_and_implicit_row_id(raw_item);
-        page.token = None;
-        if notes.len() == page.size.get() {
-            page.token = Some(row_id as u64);
-            break;
-        }
-        notes.push(TryInto::<NoteRecord>::try_into(raw_item)?);
-    }
-
-    Ok((notes, page))
 }
 
 /// Loads the data necessary for a note sync across all matching blocks in the given range.
