@@ -14,8 +14,6 @@ use crate::errors::DatabaseError;
 
 /// Buffered messages per subscriber before back-pressure begins.
 const SUBSCRIBER_CHANNEL_CAPACITY: usize = 32;
-/// Number of blocks beyond the smallest gap observed so far before a subscriber is disconnected.
-const MAX_SLOW_GAP: u32 = 100;
 /// Safety-net timeout for a single send when the client has stalled.
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -184,9 +182,8 @@ fn build_stream<S: SubscriptionSource>(
 ///
 /// Calls [`SubscriptionSource::fetch`] for each block in sequence starting from `from`, builds an
 /// event with [`SubscriptionSource::build_event`], and sends it to `tx`. Disconnects the
-/// subscriber with [`StateSubscriptionError::TooSlow`] if the gap between the tip and the next
-/// block to send exceeds the minimum gap ever observed plus [`MAX_SLOW_GAP`], or if a single send
-/// blocks for longer than [`SEND_TIMEOUT`] (safety net for a stalled client).
+/// subscriber with [`StateSubscriptionError::TooSlow`] if a single send blocks for longer than [`SEND_TIMEOUT`]
+/// which may occur only after the buffer has [`SUBSCRIBER_CHANNEL_CAPACITY`] blocks queued.
 async fn run_stream<S: SubscriptionSource>(
     from: BlockNumber,
     mut tip_rx: watch::Receiver<BlockNumber>,
@@ -194,15 +191,9 @@ async fn run_stream<S: SubscriptionSource>(
     source: S,
 ) -> Result<(), StateSubscriptionError> {
     let mut next = from;
-    let mut min_gap = u32::MAX;
     loop {
         let mut tip = *tip_rx.borrow_and_update();
         while next <= tip {
-            let gap = tip.as_u32() - next.as_u32();
-            min_gap = min_gap.min(gap);
-            if gap > min_gap + MAX_SLOW_GAP {
-                return Err(StateSubscriptionError::TooSlow);
-            }
             let data = source.fetch(next).await?;
             tip = *tip_rx.borrow_and_update();
             let permit = match tokio::time::timeout(SEND_TIMEOUT, tx.reserve()).await {
