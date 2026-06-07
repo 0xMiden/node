@@ -110,14 +110,9 @@ impl Rpc {
         let (health_reporter, health_service) = tonic_health::server::health_reporter();
         match self.mode {
             RpcMode::Sequencer { .. } => {
-                health_reporter
-                    .set_serving::<api_server::ApiServer<api::RpcService>>()
-                    .await;
-            }
-            RpcMode::FullNode {
-                source_rpc,
-                readiness_threshold,
-            } => {
+                health_reporter.set_serving::<api_server::ApiServer<api::RpcService>>().await;
+            },
+            RpcMode::FullNode { source_rpc, readiness_threshold } => {
                 health_reporter
                     .set_not_serving::<api_server::ApiServer<api::RpcService>>()
                     .await;
@@ -126,7 +121,7 @@ impl Rpc {
                     run_readiness_monitor(health_reporter, *source_rpc, store, readiness_threshold)
                         .await;
                 });
-            }
+            },
         }
 
         let reflection_service = server::Builder::configure()
@@ -190,29 +185,30 @@ async fn run_readiness_monitor(
     store: Arc<State>,
     readiness_threshold: u32,
 ) {
+    // Poll interval for checking the upstream RPC status.
     const POLL_INTERVAL: Duration = Duration::from_secs(5);
+    // Number of consecutive failures required to mark the RPC as not ready.
+    const FAIL_THRESHOLD: u32 = 3;
 
+    let mut fail_count = 0;
     loop {
-        let is_ready = match source_rpc.status(Request::new(())).await {
-            Ok(response) => {
-                let upstream_tip = response
-                    .into_inner()
-                    .block_producer
-                    .map_or(u32::MAX, |b| b.chain_tip);
-                let local_tip = store.chain_tip(Finality::Committed).await.as_u32();
-                upstream_tip.saturating_sub(local_tip) <= readiness_threshold
-            }
-            Err(_) => false,
+        // Check source RPC status to determine readiness.
+        let is_ready = if let Ok(response) = source_rpc.status(Request::new(())).await {
+            fail_count = 0;
+            let upstream_tip =
+                response.into_inner().block_producer.map_or(u32::MAX, |b| b.chain_tip);
+            let local_tip = store.chain_tip(Finality::Committed).await.as_u32();
+            upstream_tip.saturating_sub(local_tip) <= readiness_threshold
+        } else {
+            fail_count += 1;
+            fail_count < FAIL_THRESHOLD
         };
 
+        // Set this RPC as serving or not based on readiness.
         if is_ready {
-            reporter
-                .set_serving::<api_server::ApiServer<api::RpcService>>()
-                .await;
+            reporter.set_serving::<api_server::ApiServer<api::RpcService>>().await;
         } else {
-            reporter
-                .set_not_serving::<api_server::ApiServer<api::RpcService>>()
-                .await;
+            reporter.set_not_serving::<api_server::ApiServer<api::RpcService>>().await;
         }
 
         tokio::time::sleep(POLL_INTERVAL).await;
