@@ -110,9 +110,14 @@ impl Rpc {
         let (health_reporter, health_service) = tonic_health::server::health_reporter();
         match self.mode {
             RpcMode::Sequencer { .. } => {
-                health_reporter.set_serving::<api_server::ApiServer<api::RpcService>>().await;
-            },
-            RpcMode::FullNode { source_rpc, readiness_threshold } => {
+                health_reporter
+                    .set_serving::<api_server::ApiServer<api::RpcService>>()
+                    .await;
+            }
+            RpcMode::FullNode {
+                source_rpc,
+                readiness_threshold,
+            } => {
                 health_reporter
                     .set_not_serving::<api_server::ApiServer<api::RpcService>>()
                     .await;
@@ -121,7 +126,7 @@ impl Rpc {
                     run_readiness_monitor(health_reporter, *source_rpc, store, readiness_threshold)
                         .await;
                 });
-            },
+            }
         }
 
         let reflection_service = server::Builder::configure()
@@ -185,23 +190,29 @@ async fn run_readiness_monitor(
     store: Arc<State>,
     readiness_threshold: u32,
 ) {
-    const POLL_INTERVAL: Duration = Duration::from_secs(30);
+    const POLL_INTERVAL: Duration = Duration::from_secs(5);
 
     loop {
         let is_ready = match source_rpc.status(Request::new(())).await {
             Ok(response) => {
-                let upstream_tip =
-                    response.into_inner().block_producer.map_or(u32::MAX, |b| b.chain_tip);
+                let upstream_tip = response
+                    .into_inner()
+                    .block_producer
+                    .map_or(u32::MAX, |b| b.chain_tip);
                 let local_tip = store.chain_tip(Finality::Committed).await.as_u32();
                 upstream_tip.saturating_sub(local_tip) <= readiness_threshold
-            },
+            }
             Err(_) => false,
         };
 
         if is_ready {
-            reporter.set_serving::<api_server::ApiServer<api::RpcService>>().await;
+            reporter
+                .set_serving::<api_server::ApiServer<api::RpcService>>()
+                .await;
         } else {
-            reporter.set_not_serving::<api_server::ApiServer<api::RpcService>>().await;
+            reporter
+                .set_not_serving::<api_server::ApiServer<api::RpcService>>()
+                .await;
         }
 
         tokio::time::sleep(POLL_INTERVAL).await;
