@@ -26,7 +26,7 @@ operated.
 - [BREAKING] `GetAccount` can now return all storage map entries with a single request ([#2121](https://github.com/0xMiden/node/issues/2121)).
 - Persisted attachments of private output notes when applying a block, so they are now returned by `GetNotesById` ([#2172](https://github.com/0xMiden/node/pull/2172)).
 - [BREAKING] Replaced `StoreStatus` with `chain_tip` field in `RpcStatus` ([#2187](https://github.com/0xMiden/node/pull/2187)).
-- Added gRPC health check endpoint to RPC service ([#2188](https://github.com/0xMiden/node/pull/2188)).
+- Added gRPC health check endpoint to node's RPC service ([#2188](https://github.com/0xMiden/node/pull/2188)).
 
 ### Docker
 
