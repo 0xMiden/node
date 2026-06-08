@@ -78,7 +78,7 @@ jobs:
           remaining_crates=()
 
           for crate in "${publishable_crates[@]}"; do
-            if cargo info --quiet "${crate}@${version}" >/dev/null 2>&1; then
+            if cargo info --quiet --registry crates-io "${crate}@${version}" >/dev/null 2>&1; then
               echo "${crate} ${version} already exists on crates.io; excluding it."
               exclude_args+=(--exclude "${crate}")
             else
