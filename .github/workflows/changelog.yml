@@ -5,7 +5,7 @@ name: changelog
 
 on:
   pull_request:
-    types: [opened, reopened, synchronize, labeled, unlabeled]
+    types: [opened, edited, reopened, synchronize]
 
 permissions:
   contents: read
@@ -19,9 +19,10 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Check for changes in changelog
-        env:
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-          NO_CHANGELOG_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'no changelog') }}
-        run: ./scripts/check-changelog.sh
+      - name: Verify changelog metadata
+        run: |
+          set -euo pipefail
+
+          jq -r '.pull_request.body // ""' "${GITHUB_EVENT_PATH}" > "${RUNNER_TEMP}/pr-body.md"
+          cargo xtask changelog verify --pr-body-file "${RUNNER_TEMP}/pr-body.md"
         shell: bash
