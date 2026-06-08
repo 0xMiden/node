@@ -382,3 +382,139 @@ async fn parsing_agglayer_sample_with_account_files() -> TestResult {
 
     Ok(())
 }
+
+/// Builds a bridge account (and its admin) and writes the bridge `.mac` to `dir`, returning the
+/// file name and the admin account id. Mirrors the deterministic setup in the crate's build script.
+fn write_bridge_account(dir: &Path) -> (String, AccountId) {
+    use miden_agglayer::create_existing_bridge_account;
+    use miden_protocol::Word;
+    use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
+    use miden_protocol::crypto::rand::RandomCoin;
+
+    let make_wallet = |seed: u32, init: u8| {
+        let key = SecretKey::with_rng(&mut RandomCoin::new(Word::new([Felt::from_u32(seed); 4])));
+        create_basic_wallet(
+            [init; 32],
+            AuthMethod::SingleSig {
+                approver: (key.public_key().into(), AuthScheme::Falcon512Poseidon2),
+            },
+            AccountType::Public,
+        )
+        .expect("wallet account should be valid")
+    };
+
+    let admin = make_wallet(4, 4);
+    let ger_manager = make_wallet(5, 5);
+    let bridge = create_existing_bridge_account(
+        Word::new([Felt::from_u32(1u32); 4]),
+        admin.id(),
+        ger_manager.id(),
+    );
+
+    let file_name = "bridge.mac".to_string();
+    AccountFile::new(bridge, vec![])
+        .write(dir.join(&file_name))
+        .expect("writing bridge account file should succeed");
+
+    (file_name, admin.id())
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn bridge_config_registers_native_faucet() -> TestResult {
+    use miden_standards::note::AccountTargetNetworkNote;
+
+    let temp_dir = tempfile::tempdir()?;
+    let (bridge_file, admin_id) = write_bridge_account(temp_dir.path());
+
+    let toml_content = format!(
+        r#"timestamp = 1717344256
+version   = 1
+
+[fee_parameters]
+verification_base_fee = 0
+
+[bridge]
+path     = "{bridge_file}"
+admin_id = "{admin_id}"
+"#,
+        admin_id = admin_id.to_hex(),
+    );
+    let config_path = write_toml_file(temp_dir.path(), &toml_content);
+
+    let signer = SigningKey::new();
+    let gcfg = GenesisConfig::read_toml_file(&config_path)?;
+    let (state, _secrets) = gcfg.into_state(signer.public_key())?;
+
+    // The native faucet and the bridge account are both part of the genesis state.
+    let native_faucet = state
+        .accounts
+        .iter()
+        .find(|account| FungibleFaucet::try_from(*account).is_ok())
+        .expect("native faucet should be present");
+    let native_faucet_id = native_faucet.id();
+    let bridge_id = state
+        .accounts
+        .iter()
+        .find(|account| FungibleFaucet::try_from(*account).is_err())
+        .expect("bridge account should be present")
+        .id();
+
+    // Exactly one genesis output note: the CONFIG_AGG_BRIDGE registration note.
+    assert_eq!(state.output_notes.len(), 1, "expected exactly one genesis output note");
+    let note = match &state.output_notes[0] {
+        OutputNote::Public(public) => public.as_note(),
+        OutputNote::Private(_) => panic!("registration note must be public"),
+    };
+
+    // It is the CONFIG_AGG_BRIDGE script, sent by the bridge admin, targeting the bridge.
+    assert_eq!(note.script().root(), ConfigAggBridgeNote::script_root());
+    assert_eq!(note.metadata().sender(), admin_id, "note sender must be the bridge admin");
+    let network_note = AccountTargetNetworkNote::try_from(note.clone())
+        .expect("registration note must be a single-target network note");
+    assert_eq!(network_note.target_account_id(), bridge_id, "note must target the bridge");
+
+    // The 18-felt payload registers the native faucet as a native faucet.
+    let items = note.storage().items();
+    assert_eq!(items.len(), 18, "CONFIG_AGG_BRIDGE payload must have 18 felts");
+    assert_eq!(items[5], native_faucet_id.suffix(), "faucet id suffix");
+    assert_eq!(items[6], native_faucet_id.prefix().as_felt(), "faucet id prefix");
+    assert_eq!(items[7], Felt::from(0u8), "native token has no decimal scaling");
+    assert_eq!(
+        items[8],
+        Felt::from(AggLayerBridge::MIDEN_NETWORK_ID),
+        "origin network must be the Miden network id"
+    );
+    assert_eq!(items[9], Felt::from(1u8), "is_native must be set");
+
+    // The genesis block builds and carries the note in its body.
+    let block = state.into_block(&signer)?;
+    let note_count: usize = block.inner().body().output_note_batches().iter().map(Vec::len).sum();
+    assert_eq!(note_count, 1, "genesis block body must carry the registration note");
+
+    Ok(())
+}
+
+#[test]
+fn bridge_config_with_invalid_admin_id_errors() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let (bridge_file, _admin_id) = write_bridge_account(temp_dir.path());
+
+    let toml_content = format!(
+        r#"timestamp = 1717344256
+version   = 1
+
+[fee_parameters]
+verification_base_fee = 0
+
+[bridge]
+path     = "{bridge_file}"
+admin_id = "not-a-valid-account-id"
+"#,
+    );
+    let config_path = write_toml_file(temp_dir.path(), &toml_content);
+
+    let gcfg = GenesisConfig::read_toml_file(&config_path).unwrap();
+    let result = gcfg.into_state(SigningKey::new().public_key());
+    assert_matches!(result, Err(GenesisConfigError::InvalidBridgeAdminId(_)));
+}

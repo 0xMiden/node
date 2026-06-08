@@ -1,7 +1,15 @@
 use std::path::PathBuf;
 
 use miden_protocol::account::AccountId;
-use miden_protocol::errors::{AccountDeltaError, AccountError, AssetError, TokenSymbolError};
+use miden_protocol::errors::{
+    AccountDeltaError,
+    AccountError,
+    AccountIdError,
+    AssetError,
+    NoteError,
+    OutputNoteError,
+    TokenSymbolError,
+};
 use miden_protocol::utils::serde::DeserializationError;
 use miden_standards::account::faucets::FungibleFaucetError;
 use miden_standards::account::policies::TokenPolicyManagerError;
@@ -69,4 +77,10 @@ pub enum GenesisConfigError {
     UnsupportedSignerConfig,
     #[error("token policy manager error")]
     TokenPolicyManager(#[from] TokenPolicyManagerError),
+    #[error("invalid bridge admin account id")]
+    InvalidBridgeAdminId(#[source] AccountIdError),
+    #[error("failed to create the CONFIG_AGG_BRIDGE note registering the native faucet")]
+    ConfigNoteCreation(#[source] NoteError),
+    #[error("failed to build the genesis output note")]
+    GenesisOutputNote(#[source] OutputNoteError),
 }

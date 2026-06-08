@@ -129,9 +129,11 @@ timestamp = {timestamp}
 [fee_parameters]
 verification_base_fee = 0
 
-[[account]]
+[bridge]
 path = "bridge.mac"
+admin_id = "{bridge_admin}"
 "#,
+        bridge_admin = bridge_admin_id.to_hex(),
     );
 
     fs_err::write(output_dir.join("genesis.toml"), genesis_toml)
@@ -197,7 +199,12 @@ mod tests {
     /// Parses the generated genesis.toml, builds a genesis block, and asserts the bridge account is
     /// included with nonce=1.
     fn assert_valid_genesis_block(dir: &Path) {
+        use miden_agglayer::ConfigAggBridgeNote;
+        use miden_protocol::transaction::OutputNote;
+        use miden_standards::note::AccountTargetNetworkNote;
+
         let bridge_id = AccountFile::read(dir.join("bridge.mac")).unwrap().account.id();
+        let admin_id = AccountFile::read(dir.join("bridge_admin.mac")).unwrap().account.id();
 
         let config = GenesisConfig::read_toml_file(&dir.join("genesis.toml")).unwrap();
         let signer = SigningKey::read_from_bytes(&[0x01; 32]).unwrap();
@@ -206,7 +213,22 @@ mod tests {
         let bridge = state.accounts.iter().find(|a| a.id() == bridge_id).unwrap();
         assert_eq!(bridge.nonce(), ONE);
 
-        state.into_block(&signer).expect("genesis block should build");
+        // Genesis emits a single CONFIG_AGG_BRIDGE note registering the native faucet, sent by the
+        // bridge admin and targeting the bridge.
+        assert_eq!(state.output_notes.len(), 1);
+        let OutputNote::Public(public) = &state.output_notes[0] else {
+            panic!("registration note must be public");
+        };
+        let note = public.as_note();
+        assert_eq!(note.script().root(), ConfigAggBridgeNote::script_root());
+        assert_eq!(note.metadata().sender(), admin_id);
+        let network_note = AccountTargetNetworkNote::try_from(note.clone()).unwrap();
+        assert_eq!(network_note.target_account_id(), bridge_id);
+
+        let block = state.into_block(&signer).expect("genesis block should build");
+        let note_count: usize =
+            block.inner().body().output_note_batches().iter().map(Vec::len).sum();
+        assert_eq!(note_count, 1);
     }
 
     #[tokio::test]

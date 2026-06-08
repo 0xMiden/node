@@ -5,6 +5,13 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use indexmap::IndexMap;
+use miden_agglayer::{
+    AggLayerBridge,
+    ConfigAggBridgeNote,
+    ConversionMetadata,
+    EthEmbeddedAccountId,
+    MetadataHash,
+};
 use miden_node_utils::crypto::get_random_coin;
 use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
 use miden_protocol::account::{
@@ -24,6 +31,7 @@ use miden_protocol::block::FeeParameters;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey as RpoSecretKey;
 use miden_protocol::errors::TokenSymbolError;
+use miden_protocol::transaction::{OutputNote, PublicOutputNote};
 use miden_protocol::{Felt, ONE};
 use miden_standards::AuthMethod;
 use miden_standards::account::auth::AuthSingleSig;
@@ -65,6 +73,76 @@ struct GenericAccountConfig {
     path: PathBuf,
 }
 
+/// `AggLayer` bridge account configuration.
+///
+/// When present, the bridge account is loaded from `path` and included in the genesis accounts,
+/// and a `CONFIG_AGG_BRIDGE` note is emitted in the genesis block registering the native faucet as
+/// a native (lock/unlock) faucet. The note's sender is the bridge admin (`admin_id`): the bridge's
+/// `register_faucet` guard only accepts notes whose sender equals the stored admin id. At genesis
+/// the note sender is unauthenticated metadata we set directly, so no deployed admin account is
+/// required.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BridgeConfig {
+    /// Path to the bridge account `.mac` file, relative to the genesis config directory.
+    path: PathBuf,
+    /// Hex-encoded account id of the bridge admin (the `CONFIG_AGG_BRIDGE` note sender).
+    admin_id: String,
+}
+
+impl BridgeConfig {
+    /// Loads the bridge account and builds the `CONFIG_AGG_BRIDGE` output note that registers
+    /// `native_faucet_account` as a native faucet.
+    ///
+    /// Returns the loaded bridge account (to be included in the genesis accounts) and the output
+    /// note (to be included in the genesis block).
+    fn load_and_build_registration_note(
+        self,
+        config_dir: &Path,
+        native_faucet_account: &Account,
+    ) -> Result<(Account, OutputNote), GenesisConfigError> {
+        let full_path = config_dir.join(&self.path);
+        let bridge_account = AccountFile::read(&full_path)
+            .map_err(|e| GenesisConfigError::AccountFileRead(e, full_path.clone()))?
+            .account;
+        let bridge_id = bridge_account.id();
+
+        let admin_id = AccountId::from_hex(&self.admin_id)
+            .map_err(GenesisConfigError::InvalidBridgeAdminId)?;
+
+        let native_faucet_id = native_faucet_account.id();
+        let faucet = FungibleFaucet::try_from(native_faucet_account)?;
+        let metadata_hash = MetadataHash::from_token_info(
+            faucet.token_name().as_str(),
+            &faucet.symbol().to_string(),
+            faucet.decimals(),
+        );
+
+        let metadata = ConversionMetadata {
+            faucet_account_id: native_faucet_id,
+            // A native token has no L1 origin contract; encode the faucet's own account id as the
+            // origin token address.
+            origin_token_address: EthEmbeddedAccountId::from_account_id(native_faucet_id)
+                .to_eth_address(),
+            // The native token originates on Miden, so there is no decimal scaling.
+            scale: 0,
+            origin_network: AggLayerBridge::MIDEN_NETWORK_ID,
+            is_native: true,
+            metadata_hash,
+        };
+
+        let mut rng = ChaCha20Rng::from_seed(rand::random());
+        let mut coin = get_random_coin(&mut rng);
+        let note = ConfigAggBridgeNote::create(metadata, admin_id, bridge_id, &mut coin)
+            .map_err(GenesisConfigError::ConfigNoteCreation)?;
+        let output_note = OutputNote::Public(
+            PublicOutputNote::new(note).map_err(GenesisConfigError::GenesisOutputNote)?,
+        );
+
+        Ok((bridge_account, output_note))
+    }
+}
+
 /// Specify a set of faucets and wallets with assets for easier test deployments.
 ///
 /// Notice: Any faucet must be declared _before_ it's use in a wallet/regular account.
@@ -91,6 +169,10 @@ pub struct GenesisConfig {
     fungible_faucet: Vec<FungibleFaucetConfig>,
     #[serde(default)]
     account: Vec<GenericAccountConfig>,
+    /// Optional `AggLayer` bridge account. When present, genesis loads the bridge account and emits
+    /// a `CONFIG_AGG_BRIDGE` note registering the native faucet as a native (lock/unlock) faucet.
+    #[serde(default)]
+    bridge: Option<BridgeConfig>,
     #[serde(skip)]
     config_dir: PathBuf,
 }
@@ -111,6 +193,7 @@ impl Default for GenesisConfig {
             fee_parameters: FeeParameterConfig { verification_base_fee: 0 },
             fungible_faucet: vec![],
             account: vec![],
+            bridge: None,
             config_dir: PathBuf::from("."),
         }
     }
@@ -157,6 +240,7 @@ impl GenesisConfig {
             fungible_faucet: fungible_faucet_configs,
             wallet: wallet_configs,
             account: account_entries,
+            bridge: bridge_config,
             config_dir,
         } = self;
 
@@ -333,10 +417,28 @@ impl GenesisConfig {
         // Append file-loaded accounts as-is
         all_accounts.extend(file_loaded_accounts);
 
+        // If a bridge is configured, load it and emit a CONFIG_AGG_BRIDGE note that registers the
+        // native faucet as a native (lock/unlock) faucet. The note is consumed by the bridge after
+        // genesis (via the network-transaction builder), mirroring how non-native faucets are
+        // registered.
+        let output_notes = if let Some(bridge_config) = bridge_config {
+            let native_faucet_account = all_accounts
+                .iter()
+                .find(|account| account.id() == native_faucet_account_id)
+                .expect("native faucet account is always part of the genesis accounts");
+            let (bridge_account, note) = bridge_config
+                .load_and_build_registration_note(&config_dir, native_faucet_account)?;
+            all_accounts.push(bridge_account);
+            vec![note]
+        } else {
+            Vec::new()
+        };
+
         Ok((
             GenesisState {
                 fee_parameters,
                 accounts: all_accounts,
+                output_notes,
                 version,
                 timestamp,
                 validator_key,

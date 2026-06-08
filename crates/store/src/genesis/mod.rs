@@ -6,9 +6,9 @@ use miden_protocol::block::{
     BlockAccountUpdate,
     BlockBody,
     BlockHeader,
-    BlockNoteTree,
     BlockNumber,
     FeeParameters,
+    OutputNoteBatch,
     SignedBlock,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature, SigningKey};
@@ -16,7 +16,7 @@ use miden_protocol::crypto::merkle::mmr::{Forest, MmrPeaks};
 use miden_protocol::crypto::merkle::smt::Smt;
 use miden_protocol::errors::AccountError;
 use miden_protocol::note::Nullifier;
-use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionKernel};
+use miden_protocol::transaction::{OrderedTransactionHeaders, OutputNote, TransactionKernel};
 
 pub mod config;
 
@@ -27,6 +27,9 @@ pub mod config;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GenesisState {
     pub accounts: Vec<Account>,
+    /// Notes created in the genesis block (e.g. the `CONFIG_AGG_BRIDGE` note that registers the
+    /// native faucet with the bridge). Empty unless explicitly populated.
+    pub output_notes: Vec<OutputNote>,
     pub fee_parameters: FeeParameters,
     pub version: u32,
     pub timestamp: u32,
@@ -99,6 +102,7 @@ impl GenesisState {
     ) -> Self {
         Self {
             accounts,
+            output_notes: Vec::new(),
             fee_parameters,
             version,
             timestamp,
@@ -142,10 +146,23 @@ impl GenesisState {
         let empty_nullifiers: Vec<Nullifier> = Vec::new();
         let empty_nullifier_tree = Smt::new();
 
-        let empty_output_notes = Vec::new();
-        let empty_block_note_tree = BlockNoteTree::empty();
+        // Wrap any genesis output notes into a single batch (batch index 0). The block note tree is
+        // derived from the body below so the note index mapping stays consistent.
+        let output_note_batches: Vec<OutputNoteBatch> = if self.output_notes.is_empty() {
+            Vec::new()
+        } else {
+            vec![self.output_notes.iter().cloned().enumerate().collect()]
+        };
 
         let empty_transactions = OrderedTransactionHeaders::new_unchecked(Vec::new());
+
+        // Build the body first so the block note tree root can be derived from it.
+        let body = BlockBody::new_unchecked(
+            accounts,
+            output_note_batches,
+            empty_nullifiers,
+            empty_transactions,
+        );
 
         let header = BlockHeader::new(
             self.version,
@@ -154,19 +171,12 @@ impl GenesisState {
             MmrPeaks::new(Forest::empty(), Vec::new()).unwrap().hash_peaks(),
             account_smt.root(),
             empty_nullifier_tree.root(),
-            empty_block_note_tree.root(),
+            body.compute_block_note_tree().root(),
             Word::empty(),
             TransactionKernel.to_commitment(),
             self.validator_key,
             self.fee_parameters,
             self.timestamp,
-        );
-
-        let body = BlockBody::new_unchecked(
-            accounts,
-            empty_output_notes,
-            empty_nullifiers,
-            empty_transactions,
         );
 
         Ok(UnsignedGenesisBlock { header, body })

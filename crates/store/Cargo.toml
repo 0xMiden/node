@@ -26,6 +26,7 @@ fs-err                          = { workspace = true }
 hex                             = { workspace = true }
 indexmap                        = { workspace = true }
 libsqlite3-sys                  = { workspace = true }
+miden-agglayer                  = { workspace = true }
 miden-crypto                    = { features = ["concurrent"], workspace = true }
 miden-large-smt-backend-rocksdb = { optional = true, workspace = true }
 miden-node-db                   = { workspace = true }
