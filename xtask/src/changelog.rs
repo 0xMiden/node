@@ -95,10 +95,13 @@ fn preserve_newlines(output: &mut String, source: &str) {
 
 fn changelog_section(source: &str) -> Result<String> {
     let mut found = false;
+    let mut in_fence = false;
     let mut section = String::new();
 
     for line in source.lines() {
-        if let Some((level, title)) = markdown_heading(line) {
+        let trimmed = line.trim_start();
+
+        if !in_fence && let Some((level, title)) = markdown_heading(line) {
             if level == 2 && title.eq_ignore_ascii_case("changelog") {
                 found = true;
                 continue;
@@ -112,6 +115,10 @@ fn changelog_section(source: &str) -> Result<String> {
         if found {
             section.push_str(line);
             section.push('\n');
+        }
+
+        if trimmed.starts_with("```") {
+            in_fence = !in_fence;
         }
     }
 

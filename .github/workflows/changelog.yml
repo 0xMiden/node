@@ -10,6 +10,9 @@ on:
 permissions:
   contents: read
 
+env:
+  SAVE_CACHE: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+
 jobs:
   changelog:
     runs-on: ubuntu-24.04
@@ -19,6 +22,12 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Rustup
+        run: rustup toolchain install --no-self-update
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: changelog
+          save-if: ${{ env.SAVE_CACHE }}
       - name: Verify changelog metadata
         run: |
           set -euo pipefail
