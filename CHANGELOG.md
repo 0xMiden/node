@@ -2,9 +2,9 @@
 
 ## Unreleased
 
-## v0.15.0-rc.2 (2026-06-05)
+## v0.15.0-rc.3 (2026-06-08)
 
-- Actually upgrade the `p3-goldilocks` transient dependency to `0.5.3` ([#2213](https://github.com/0xMiden/node/pull/2213)).
+- Actually upgrade the `p3-*` transient dependency to `0.5.3` ([#2213](https://github.com/0xMiden/node/pull/2213)).
 
 ## v0.15.0-rc.2 (2026-06-05)
 
