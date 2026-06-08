@@ -111,9 +111,9 @@ impl Rpc {
                 health_reporter
                     .set_not_serving::<api_server::ApiServer<api::RpcService>>()
                     .await;
-                if let Some(readiness) = self.readiness {
-                    readiness.set(health_reporter);
-                }
+                let readiness =
+                    self.readiness.ok_or(anyhow::anyhow!("readiness not set for full node"))?;
+                readiness.set(health_reporter);
             },
         }
 

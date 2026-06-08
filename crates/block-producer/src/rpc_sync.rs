@@ -48,17 +48,22 @@ impl RpcReadiness {
 
     /// Updates the RPC service health status based on the upstream/local tip gap.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the health reporter is not set.
-    pub async fn update(&self, upstream_tip: BlockNumber, local_tip: BlockNumber) {
-        let reporter = self.cell.get().expect("health reporter must be set");
+    /// Returns an error if the health reporter is not set.
+    pub async fn update(
+        &self,
+        upstream_tip: BlockNumber,
+        local_tip: BlockNumber,
+    ) -> anyhow::Result<()> {
+        let reporter = self.cell.get().ok_or(anyhow::anyhow!("health reporter not set"))?;
         let status = if upstream_tip.as_u32().saturating_sub(local_tip.as_u32()) <= self.threshold {
             ServingStatus::Serving
         } else {
             ServingStatus::NotServing
         };
         reporter.set_service_status(Self::SERVICE_NAME, status).await;
+        Ok(())
     }
 }
 
@@ -143,7 +148,7 @@ impl BlockSync {
             self.state.apply_block(block).await?;
 
             let local_tip = self.state.chain_tip(Finality::Committed).await;
-            self.readiness.update(upstream_tip, local_tip).await;
+            self.readiness.update(upstream_tip, local_tip).await?;
         }
 
         Ok(())
