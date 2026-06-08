@@ -303,12 +303,16 @@ impl<B: Backend> AccountStateForest<B> {
     ) -> Result<AccountVaultDetails, WitnessError> {
         let lineage = Self::vault_lineage_id(account_id);
         let tree = self.get_tree_id(lineage, block_num).ok_or(WitnessError::RootNotFound)?;
-        // TODO: we should be checking `.entry_count()` instead of pulling entries from the tree
-        // once the optimization making `.entry_count()` cheap once `miden-crypto` is upgraded to
-        // > 0.23.
+
+        // Return "limit exceeded" if the number of vault entries is above the limit.
+        let num_input_notes =
+            self.forest.entry_count(tree).map_err(Self::map_forest_error_to_witness)?;
+        if num_input_notes > AccountVaultDetails::MAX_RETURN_ENTRIES {
+            return Ok(AccountVaultDetails::LimitExceeded);
+        }
+
         let entries = self.forest.entries(tree).map_err(Self::map_forest_error_to_witness)?;
         let assets = entries
-            .take(AccountVaultDetails::MAX_RETURN_ENTRIES + 1)
             .map(|entry| {
                 let entry = entry.map_err(Self::map_forest_error_to_witness)?;
                 Asset::from_key_value_words(entry.key, entry.value).map_err(WitnessError::from)
