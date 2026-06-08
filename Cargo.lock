@@ -7555,6 +7555,7 @@ dependencies = [
  "anyhow",
  "clap",
  "fs-err",
+ "serde",
  "toml",
  "tree-sitter",
  "tree-sitter-rust",

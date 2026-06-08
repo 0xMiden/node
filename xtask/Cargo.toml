@@ -13,6 +13,7 @@ workspace = true
 anyhow           = { workspace = true }
 clap             = { features = ["derive"], workspace = true }
 fs-err           = { workspace = true }
+serde            = { workspace = true }
 toml             = { workspace = true }
 tree-sitter      = "0.26"
 tree-sitter-rust = "0.24"

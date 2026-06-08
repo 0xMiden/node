@@ -1,3 +1,4 @@
+mod changelog;
 mod comment_reflow;
 
 use std::io::ErrorKind;
@@ -15,8 +16,35 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Validate changelog metadata in pull request descriptions.
+    #[command(subcommand)]
+    Changelog(Changelog),
+
     /// Reflow safe Rust line-comment blocks.
     FmtComments(FmtCommentsArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum Changelog {
+    /// Verify changelog metadata in a pull request body.
+    Verify {
+        /// Markdown file containing the pull request body.
+        #[arg(long)]
+        pr_body_file: PathBuf,
+    },
+}
+
+impl Changelog {
+    fn run(self) -> Result<()> {
+        match self {
+            Self::Verify { pr_body_file } => {
+                let source = fs_err::read_to_string(&pr_body_file)
+                    .with_context(|| format!("reading {}", pr_body_file.display()))?;
+
+                changelog::verify_pr_body(&source)
+            },
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -49,6 +77,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Command::Changelog(command) => command.run(),
         Command::FmtComments(args) => run_fmt_comments(&args),
     }
 }
