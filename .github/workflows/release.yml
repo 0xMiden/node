@@ -28,6 +28,8 @@ jobs:
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
       prerelease: ${{ steps.release.outputs.prerelease }}
+      workspace_packages: ${{ steps.release.outputs.workspace_packages }}
+      publishable_crates: ${{ steps.release.outputs.publishable_crates }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -54,6 +56,18 @@ jobs:
           version="${TAG#v}"
           metadata="$(cargo metadata --no-deps --format-version 1)"
           mapfile -t versions < <(jq -r '[.packages[] | select(.publish != []) | .version] | unique | .[]' <<< "${metadata}")
+          workspace_packages="$(
+            jq -c '
+              . as $m
+              | ($m.workspace_root + "/") as $root
+              | $m.workspace_members as $members
+              | $m.packages
+              | map(select(.id as $id | $members | index($id)))
+              | map({ name, manifest_path: (.manifest_path | ltrimstr($root)) })
+              | sort_by(.name)
+            ' <<< "${metadata}"
+          )"
+          publishable_crates="$(jq -r '[.packages[] | select(.publish != []) | .name] | sort | join(" ")' <<< "${metadata}")"
 
           if [[ "${#versions[@]}" -ne 1 ]]; then
             printf '%s\n' "${versions[@]}"
@@ -80,22 +94,25 @@ jobs:
             echo "tag=${TAG}"
             echo "version=${version}"
             echo "prerelease=${prerelease}"
+            echo "workspace_packages=${workspace_packages}"
+            echo "publishable_crates=${publishable_crates}"
           } >> "${GITHUB_OUTPUT}"
 
       - name: Ensure GitHub release does not exist
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
           TAG: ${{ steps.release.outputs.tag }}
         run: |
           set -euo pipefail
 
-          if gh release view "${TAG}" >/dev/null 2>&1; then
+          if gh release view "${TAG}" --repo "${REPO}" >/dev/null 2>&1; then
             echo "::error::GitHub release ${TAG} already exists. Leaving the existing release and tag untouched."
             exit 1
           fi
 
-  dry-run-crates:
-    name: Dry-run crates.io publish
+  check-crate-builds:
+    name: Check crate builds
     runs-on: warp-ubuntu-latest-x64-8x
     needs: preflight
     if: ${{ github.repository_owner == '0xMiden' }}
@@ -121,14 +138,51 @@ jobs:
           shared-key: release-dry-run-crates
           save-if: false
 
-      - name: Dry-run cargo publish
-        run: cargo publish --workspace --dry-run --locked
+      - name: Check package builds
+        env:
+          PUBLISHABLE_CRATES: ${{ needs.preflight.outputs.publishable_crates }}
+        run: |
+          set -euo pipefail
 
-  check-msrv:
-    name: Check MSRV
+          for crate in ${PUBLISHABLE_CRATES}; do
+            echo "::group::cargo check -p ${crate}"
+            cargo check -p "${crate}" --locked
+            echo "::endgroup::"
+          done
+
+  dry-run-crates:
+    name: Dry-run crates.io publish
     runs-on: warp-ubuntu-latest-x64-8x
     needs: preflight
     if: ${{ github.repository_owner == '0xMiden' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ needs.preflight.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Rustup
+        run: rustup toolchain install --no-self-update
+
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          shared-key: release-dry-run-crates
+          save-if: false
+
+      - name: Dry-run cargo publish without verification
+        run: cargo publish --workspace --dry-run --no-verify --locked
+
+  check-msrv:
+    name: Check MSRV ${{ matrix.name }}
+    runs-on: warp-ubuntu-latest-x64-8x
+    needs: preflight
+    if: ${{ github.repository_owner == '0xMiden' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.preflight.outputs.workspace_packages) }}
     # Deliberately use stable Rust instead of rust-toolchain.toml because
     # cargo-msrv itself may require a newer compiler than the repo MSRV.
     env:
@@ -147,9 +201,6 @@ jobs:
       - name: Cleanup large tools for build space
         uses: ./.github/actions/cleanup-runner
 
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y jq
-
       - name: Rustup
         run: rustup toolchain install --no-self-update stable
 
@@ -166,8 +217,19 @@ jobs:
       - name: Install cargo-msrv
         run: cargo binstall --no-confirm cargo-msrv
 
+      - name: Show package info
+        env:
+          MANIFEST_PATH: ${{ matrix.manifest_path }}
+          PACKAGE: ${{ matrix.name }}
+        run: |
+          echo "Package: ${PACKAGE}"
+          echo "Manifest path: ${MANIFEST_PATH}"
+          cargo msrv show --manifest-path "${MANIFEST_PATH}"
+
       - name: Check MSRV
-        run: ./scripts/check-msrv.sh
+        env:
+          MANIFEST_PATH: ${{ matrix.manifest_path }}
+        run: cargo msrv verify --manifest-path "${MANIFEST_PATH}"
 
   dry-run-docker:
     name: Dry-run Docker ${{ matrix.component }}
@@ -223,7 +285,7 @@ jobs:
   publish-docker:
     name: Publish Docker ${{ matrix.component }}
     runs-on: warp-ubuntu-latest-x64-8x
-    needs: [preflight, dry-run-crates, check-msrv, dry-run-docker]
+    needs: [preflight, check-crate-builds, dry-run-crates, check-msrv, dry-run-docker]
     if: ${{ github.repository_owner == '0xMiden' }}
     environment: publish-docker
     permissions:
@@ -261,11 +323,12 @@ jobs:
       - name: Ensure GitHub release still does not exist
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
           TAG: ${{ needs.preflight.outputs.tag }}
         run: |
           set -euo pipefail
 
-          if gh release view "${TAG}" >/dev/null 2>&1; then
+          if gh release view "${TAG}" --repo "${REPO}" >/dev/null 2>&1; then
             echo "::error::GitHub release ${TAG} already exists. Refusing to publish Docker images."
             exit 1
           fi
@@ -305,11 +368,12 @@ jobs:
       - name: Re-check GitHub release absence
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
           TAG: ${{ needs.preflight.outputs.tag }}
         run: |
           set -euo pipefail
 
-          if gh release view "${TAG}" >/dev/null 2>&1; then
+          if gh release view "${TAG}" --repo "${REPO}" >/dev/null 2>&1; then
             echo "::error::GitHub release ${TAG} already exists. Leaving it untouched."
             exit 1
           fi
@@ -318,6 +382,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
+          REPO: ${{ github.repository }}
           TAG: ${{ needs.preflight.outputs.tag }}
         run: |
           set -euo pipefail
@@ -328,6 +393,7 @@ jobs:
           fi
 
           gh release create "${TAG}" \
+            --repo "${REPO}" \
             --verify-tag \
             --title "${TAG}" \
             --notes "Release ${TAG}" \
