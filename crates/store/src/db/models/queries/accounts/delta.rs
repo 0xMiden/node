@@ -22,7 +22,7 @@ use miden_protocol::account::{
     StorageSlotHeader,
     StorageSlotName,
 };
-use miden_protocol::asset::{Asset, FungibleAsset};
+use miden_protocol::asset::{Asset, AssetVaultKey};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{EMPTY_WORD, Felt, Word};
 
@@ -133,12 +133,16 @@ pub(super) fn select_minimal_account_state_headers(
     Ok(AccountStateHeadersForDelta { nonce, code_commitment, storage_header })
 }
 
-/// Selects vault balances for specific faucet IDs.
+/// Selects vault balances for specific vault keys.
 ///
-/// Optimized query that only fetches balances for the faucet IDs
+/// Optimized query that only fetches balances for the vault keys
 /// that are being updated by a delta, rather than loading all vault assets.
 ///
-/// Returns a map from `faucet_id` to the current balance (0 if not found).
+/// The vault key includes the asset's callback flag, so balances are keyed by the full vault key
+/// word rather than by faucet id: the same faucet can back both a callback-enabled and a
+/// callback-disabled asset, which live under distinct vault keys.
+///
+/// Returns a map from the vault key word to the current balance (absent if not found).
 ///
 /// # Raw SQL
 ///
@@ -147,41 +151,36 @@ pub(super) fn select_minimal_account_state_headers(
 /// FROM account_vault_assets
 /// WHERE account_id = ?1 AND is_latest = 1 AND vault_key IN (?2, ?3, ...)
 /// ```
-pub(super) fn select_vault_balances_by_faucet_ids(
+pub(super) fn select_vault_balances_by_vault_keys(
     conn: &mut SqliteConnection,
     account_id: AccountId,
-    faucet_ids: &[AccountId],
-) -> Result<HashMap<AccountId, u64>, DatabaseError> {
+    vault_keys: &[AssetVaultKey],
+) -> Result<HashMap<Word, u64>, DatabaseError> {
     use schema::account_vault_assets as vault;
 
-    if faucet_ids.is_empty() {
+    if vault_keys.is_empty() {
         return Ok(HashMap::new());
     }
 
     let account_id_bytes = account_id.to_bytes();
 
-    // Compute vault keys for each faucet ID
-    let vault_keys: Vec<Vec<u8>> = Result::from_iter(faucet_ids.iter().map(|faucet_id| {
-        let asset = FungibleAsset::new(*faucet_id, 0)
-            .map_err(|_| DatabaseError::DataCorrupted(format!("Invalid faucet id {faucet_id}")))?;
-        let key: Word = asset.vault_key().into();
-        Ok::<_, DatabaseError>(key.to_bytes())
-    }))?;
+    let vault_key_bytes: Vec<Vec<u8>> =
+        vault_keys.iter().map(|vault_key| vault_key.to_word().to_bytes()).collect();
 
     let entries: Vec<(Vec<u8>, Option<Vec<u8>>)> =
         SelectDsl::select(vault::table, (vault::vault_key, vault::asset))
             .filter(vault::account_id.eq(&account_id_bytes))
             .filter(vault::is_latest.eq(true))
-            .filter(vault::vault_key.eq_any(&vault_keys))
+            .filter(vault::vault_key.eq_any(&vault_key_bytes))
             .load(conn)?;
 
-    let mut balances = HashMap::from_iter(faucet_ids.iter().map(|faucet_id| (*faucet_id, 0)));
+    let mut balances = HashMap::new();
 
     for (_vault_key_bytes, maybe_asset_bytes) in entries {
         if let Some(asset_bytes) = maybe_asset_bytes {
             let asset = Asset::read_from_bytes(&asset_bytes)?;
             if let Asset::Fungible(fungible) = asset {
-                balances.insert(fungible.faucet_id(), fungible.amount().as_u64());
+                balances.insert(fungible.vault_key().to_word(), fungible.amount().as_u64());
             }
         }
     }

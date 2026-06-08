@@ -1,6 +1,52 @@
 # Changelog
 
 ## v0.15.0 (TBD)
+## Unreleased
+
+- Fixed the store dropping a fungible asset's callback flag when applying partial account deltas, which caused an account commitment mismatch (and stalled network-transaction processing) for callback-bearing assets ([#2222](https://github.com/0xMiden/node/pull/2222)).
+
+## v0.15.0-rc.3 (2026-06-08)
+
+- Actually upgrade the `p3-*` transient dependency to `0.5.3` ([#2213](https://github.com/0xMiden/node/pull/2213)).
+
+## v0.15.0-rc.2 (2026-06-05)
+
+- Added `arm64/linux` support to Docker images ([#2209](https://github.com/0xMiden/node/pull/2209)).
+- Force upgrade `p3-goldilocks` to `> 0.5.2` to include a bugfix causing signature verification to fail [#2211](https://github.com/0xMiden/node/pull/2211)).
+
+## v0.15.0-rc.1 (2026-06-05)
+
+- Fixed trace exports not supporting TLS [#2199](#https://github.com/0xMiden/node/pull/2199).
+- Validator `SignBlock` response now includes the block commitment it signed ([#2204](#https://github.com/0xMiden/node/pull/2204)).
+- Sequencer now rejects blocks if the commitment signed by the validator does not match the block it proposed ([#2204](#https://github.com/0xMiden/node/pull/2204)).
+- Fixed trace exports not supporting TLS ([#2199](#https://github.com/0xMiden/node/pull/2199)).
+- Updated to protocol v0.15.2 (v0.15.0 and v0.15.1 are yanked) ([#2205](#https://github.com/0xMiden/node/pull/2205)).
+- Ensure that the proposed block's validator key matches our own before signing [#2203](https://github.com/0xMiden/node/pull/2203).
+
+## v0.15.0-rc.0 (2026-06-03)
+
+This release is a major step in distributing the node and changes how node components are packaged, bootstrapped, and
+operated. 
+
+### RPC API
+
+- [BREAKING] Changed `GetBlockByNumber` to accept a `BlockRequest` with an optional `include_proof` flag and return a response containing the block and optional block proof ([#1864](https://github.com/0xMiden/node/pull/1864)).
+- [BREAKING] Renamed `GetNoteError` to `GetNetworkNoteStatus` and extended it to return the full lifecycle status of a network note (`Pending`, `Processed`, `Discarded`, `Committed`). Consumed notes are now retained in the database after block commit instead of being deleted ([#1892](https://github.com/0xMiden/node/pull/1892)).
+- Extended `ValidatorStatus` with `chain_tip`, `validated_transactions_count`, and `signed_blocks_count` ([#1900](https://github.com/0xMiden/node/pull/1900)).
+- Aligned `SyncNullifiers` list-limit validation in RPC and store with `nullifier_prefix` parameter semantics, and documented query parameter limits ([#1986](https://github.com/0xMiden/node/pull/1986)).
+- Added public and store `Rpc` streaming endpoints for replica block/proof synchronization ([#1987](https://github.com/0xMiden/node/pull/1987)).
+- [BREAKING] Removed `CheckNullifiers` endpoint ([#2049](https://github.com/0xMiden/node/pull/2049)).
+- [BREAKING] `BlockRange.block_to` is now required for all RPC endpoints ([#2056](https://github.com/0xMiden/node/pull/2056)).
+- [BREAKING] Reworked note proto types for multi-attachment support: `NoteMetadata` now carries `attachment_schemes` and `attachments_commitment` instead of a single `attachment`; `Note` and `NetworkNote` gained an `attachments` field; `NoteSyncRecord` now embeds full `NoteMetadata` instead of `NoteMetadataHeader`; and `NoteAttachmentKind` and `NoteMetadataHeader` were removed ([#2078](https://github.com/0xMiden/node/pull/2078)).
+- [BREAKING] Changed `SyncChainMmr`: the upper end of the requested block range is now the chain tip with the requested finality level, and the response also returns the validator signature ([#2075](https://github.com/0xMiden/node/pull/2075)).
+- [BREAKING] Renamed `SubmitProvenTransaction` to `SubmitProvenTx` and `SubmitProvenBatch` to `SubmitProvenTxBatch` ([#2094](https://github.com/0xMiden/node/pull/2094)).
+- [BREAKING] Fixed `proto::note::NoteHeader` so it round-trips losslessly; the wire field is now `details_commitment` instead of `note_id` ([#2132](https://github.com/0xMiden/node/pull/2132)).
+- Allowed network transaction submission conditionally via `SubmitProvenTx` and `SubmitProvenTxBatch`: the NTX builder can now send a key in the `x-miden-network-tx-auth` header that enables submitting network transactions ([#2131](https://github.com/0xMiden/node/issues/2131)).
+- [BREAKING] `GetAccount` can now return all storage map entries with a single request ([#2121](https://github.com/0xMiden/node/issues/2121)).
+- Persisted attachments of private output notes when applying a block, so they are now returned by `GetNotesById` ([#2172](https://github.com/0xMiden/node/pull/2172)).
+- [BREAKING] Replaced `StoreStatus` with `chain_tip` field in `RpcStatus` ([#2187](https://github.com/0xMiden/node/pull/2187)).
+
+### Docker
 
 - Added `ca-certificates` to the node Docker runtime image so outbound `https` connections work in containerized deployments ([#1661](https://github.com/0xMiden/node/issues/1661)).
 - Reworked `SyncNotes` store queries to fetch multiple matching blocks within one database transaction while preserving the response payload cap ([#2027](https://github.com/0xMiden/node/pull/2027)).
