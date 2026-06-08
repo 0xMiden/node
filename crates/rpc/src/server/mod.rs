@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use accept::AcceptHeaderLayer;
 use anyhow::Context;
-use miden_node_block_producer::{BlockProducerApi, RpcReadiness};
+use miden_node_block_producer::{BlockProducerApi, RpcReadiness, RpcSync};
 use miden_node_proto::clients::{NtxBuilderClient, RpcClient as SourceRpcClient, ValidatorClient};
 use miden_node_proto::generated::rpc::api_server;
 use miden_node_proto_build::rpc_api_descriptor;
@@ -40,9 +40,6 @@ pub struct Rpc {
     pub ntx_builder: Option<NtxBuilderClient>,
     pub grpc_options: GrpcOptionsExternal,
     pub network_tx_auth: Option<AsciiMetadataValue>,
-    /// In full-node mode, `serve` passes the health reporter to this so that `BlockSync` can update
-    /// readiness status after each block is applied.
-    pub readiness: Option<RpcReadiness>,
 }
 
 #[derive(Clone, Debug)]
@@ -61,7 +58,10 @@ pub enum RpcMode {
     ///
     /// The caller is responsible for configuring this client with any request metadata the source
     /// RPC requires.
-    FullNode { source_rpc: Box<SourceRpcClient> },
+    FullNode {
+        source_rpc: Box<SourceRpcClient>,
+        readiness_threshold: u32,
+    },
 }
 
 impl RpcMode {
@@ -72,13 +72,19 @@ impl RpcMode {
         }
     }
 
-    pub fn full_node(source_rpc: SourceRpcClient) -> Self {
-        Self::FullNode { source_rpc: Box::new(source_rpc) }
+    pub fn full_node(source_rpc: SourceRpcClient, readiness_threshold: u32) -> Self {
+        Self::FullNode {
+            source_rpc: Box::new(source_rpc),
+            readiness_threshold,
+        }
     }
 }
 
 impl Rpc {
     /// Serves the RPC API.
+    ///
+    /// In full-node mode, also runs the block/proof sync loop concurrently. Either component
+    /// failing causes both to stop.
     ///
     /// Note: Executes in place (i.e. not spawned) and will run indefinitely until
     ///       a fatal error is encountered.
@@ -103,19 +109,24 @@ impl Rpc {
         info!(target: COMPONENT, endpoint=?self.listener, mode=?self.mode, "Server initialized");
 
         let (health_reporter, health_service) = tonic_health::server::health_reporter();
-        match &self.mode {
+
+        let maybe_sync = match self.mode {
             RpcMode::Sequencer { .. } => {
                 health_reporter.set_serving::<api_server::ApiServer<api::RpcService>>().await;
+                None
             },
-            RpcMode::FullNode { .. } => {
+            RpcMode::FullNode { source_rpc, readiness_threshold } => {
                 health_reporter
                     .set_not_serving::<api_server::ApiServer<api::RpcService>>()
                     .await;
-                let readiness =
-                    self.readiness.ok_or(anyhow::anyhow!("readiness not set for full node"))?;
-                readiness.set(health_reporter);
+                let readiness = RpcReadiness::new(health_reporter, readiness_threshold);
+                Some(RpcSync {
+                    state: Arc::clone(&self.store),
+                    source_rpc: *source_rpc,
+                    readiness,
+                })
             },
-        }
+        };
 
         let reflection_service = server::Builder::configure()
             .register_file_descriptor_set(rpc_api_descriptor())
@@ -127,7 +138,7 @@ impl Rpc {
         let rpc_version =
             semver::Version::parse(rpc_version).context("failed to parse crate version")?;
 
-        tonic::transport::Server::builder()
+        let serve = tonic::transport::Server::builder()
             .accept_http1(true)
             .max_connection_age(self.grpc_options.max_connection_age)
             .timeout(self.grpc_options.request_timeout)
@@ -162,8 +173,15 @@ impl Rpc {
             .add_service(health_service)
             // Enables gRPC reflection service.
             .add_service(reflection_service)
-            .serve_with_incoming(TcpListenerStream::new(self.listener))
-            .await
-            .context("failed to serve RPC API")
+            .serve_with_incoming(TcpListenerStream::new(self.listener));
+
+        if let Some(sync) = maybe_sync {
+            tokio::select! {
+                result = serve => result.context("failed to serve RPC API"),
+                result = sync.run() => result,
+            }
+        } else {
+            serve.await.context("failed to serve RPC API")
+        }
     }
 }

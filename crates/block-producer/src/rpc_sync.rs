@@ -9,7 +9,6 @@ use miden_node_utils::retry::{self, Retryable};
 use miden_node_utils::tasks::Tasks;
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use miden_protocol::utils::serde::Deserializable;
-use tokio::sync::OnceCell;
 use tokio_stream::StreamExt;
 use tonic_health::ServingStatus;
 use tonic_health::server::HealthReporter;
@@ -22,48 +21,29 @@ pub(crate) const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 
 /// Tracks readiness of the RPC API service for a full-node.
 ///
-/// Wraps a shared [`HealthReporter`] cell and the readiness threshold. [`Rpc::serve`] populates
-/// the cell once the gRPC health pair is created; [`BlockSync`] calls [`RpcReadiness::update`]
-/// after each block to set the service status based on the gap to the upstream tip.
+/// Holds the gRPC [`HealthReporter`] and the readiness threshold. Created by [`Rpc::serve`]
+/// once the health pair is available and passed directly into [`BlockSync`].
 #[derive(Clone)]
 pub struct RpcReadiness {
-    cell: Arc<OnceCell<HealthReporter>>,
+    reporter: HealthReporter,
     threshold: u32,
 }
 
 impl RpcReadiness {
     const SERVICE_NAME: &'static str = "rpc.Api";
 
-    pub fn new(threshold: u32) -> Self {
-        Self {
-            cell: Arc::new(OnceCell::new()),
-            threshold,
-        }
-    }
-
-    /// Sets the health reporter. Called once by [`Rpc::serve`] after creating the health pair.
-    pub fn set(&self, reporter: HealthReporter) {
-        let _ = self.cell.set(reporter);
+    pub fn new(reporter: HealthReporter, threshold: u32) -> Self {
+        Self { reporter, threshold }
     }
 
     /// Updates the RPC service health status based on the upstream/local tip gap.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the health reporter is not set.
-    pub async fn update(
-        &self,
-        upstream_tip: BlockNumber,
-        local_tip: BlockNumber,
-    ) -> anyhow::Result<()> {
-        let reporter = self.cell.get().ok_or(anyhow::anyhow!("health reporter not set"))?;
+    pub async fn update(&self, upstream_tip: BlockNumber, local_tip: BlockNumber) {
         let status = if upstream_tip.as_u32().saturating_sub(local_tip.as_u32()) <= self.threshold {
             ServingStatus::Serving
         } else {
             ServingStatus::NotServing
         };
-        reporter.set_service_status(Self::SERVICE_NAME, status).await;
-        Ok(())
+        self.reporter.set_service_status(Self::SERVICE_NAME, status).await;
     }
 }
 
@@ -148,7 +128,7 @@ impl BlockSync {
             self.state.apply_block(block).await?;
 
             let local_tip = self.state.chain_tip(Finality::Committed).await;
-            self.readiness.update(upstream_tip, local_tip).await?;
+            self.readiness.update(upstream_tip, local_tip).await;
         }
 
         Ok(())
