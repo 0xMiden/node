@@ -12,6 +12,7 @@ use miden_node_utils::clap::GrpcOptionsExternal;
 use miden_node_utils::cors::cors_for_grpc_web_layer;
 use miden_node_utils::grpc;
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
+use miden_node_utils::tasks::Tasks;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
@@ -108,25 +109,30 @@ impl Rpc {
 
         info!(target: COMPONENT, endpoint=?self.listener, mode=?self.mode, "Server initialized");
 
+        let mut tasks = Tasks::new();
+
         // Initialize health reporter and sync service based on the RPC mode.
         let (health_reporter, health_service) = tonic_health::server::health_reporter();
-        let maybe_sync = match self.mode {
+        match self.mode {
             RpcMode::Sequencer { .. } => {
                 health_reporter.set_serving::<api_server::ApiServer<api::RpcService>>().await;
-                None
             },
             RpcMode::FullNode { source_rpc, readiness_threshold } => {
                 health_reporter
                     .set_not_serving::<api_server::ApiServer<api::RpcService>>()
                     .await;
                 let readiness = RpcReadiness::new(health_reporter, readiness_threshold);
-                Some(RpcSync {
-                    state: Arc::clone(&self.store),
-                    source_rpc: *source_rpc,
-                    readiness,
-                })
+                tasks.spawn(
+                    "RPC sync",
+                    RpcSync {
+                        state: Arc::clone(&self.store),
+                        source_rpc: *source_rpc,
+                        readiness,
+                    }
+                    .run(),
+                );
             },
-        };
+        }
 
         let reflection_service = server::Builder::configure()
             .register_file_descriptor_set(rpc_api_descriptor())
@@ -174,15 +180,8 @@ impl Rpc {
             // Enables gRPC reflection service.
             .add_service(reflection_service)
             .serve_with_incoming(TcpListenerStream::new(self.listener));
+        tasks.spawn("RPC server", async move { serve.await.map_err(|e| anyhow::anyhow!(e)) });
 
-        // Run RPC and (optional) sync service.
-        if let Some(sync) = maybe_sync {
-            tokio::select! {
-                result = serve => result.context("failed to serve RPC API"),
-                result = sync.run() => result,
-            }
-        } else {
-            serve.await.context("failed to serve RPC API")
-        }
+        tasks.join_next_as_error().await
     }
 }
