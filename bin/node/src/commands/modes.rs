@@ -1,14 +1,12 @@
 use std::sync::Arc;
 
 use anyhow::Context;
-use miden_node_block_producer::{RpcSync, Sequencer};
+use miden_node_block_producer::{RpcReadiness, RpcSync, Sequencer};
 use miden_node_proto::clients::{Builder, NtxBuilderClient, RpcClient, ValidatorClient};
 use miden_node_rpc::{Rpc, RpcMode};
 use miden_node_store::State;
 use miden_node_utils::tasks::Tasks;
-use miden_protocol::block::BlockNumber;
 use tokio::net::TcpListener;
-use tokio::sync::watch;
 use url::Url;
 
 use super::block_producer::BlockProducerOptions;
@@ -66,6 +64,7 @@ impl SequencerCommand {
             ntx_builder: Some(self.external_services.ntx_builder_client()),
             grpc_options: runtime.external_grpc_options,
             network_tx_auth,
+            readiness: None,
         };
         let mut tasks = Tasks::new();
         tasks.spawn("sequencer", sequencer.wait());
@@ -127,20 +126,23 @@ impl FullNodeCommand {
         let network_tx_auth = self.runtime.rpc.network_tx_auth()?;
         let state = load_state(&runtime).await?;
         let _disk_monitor = state.spawn_disk_monitor();
-        let (upstream_tip_tx, upstream_tip_rx) = watch::channel(None::<BlockNumber>);
+
+        let readiness = RpcReadiness::new(self.sync.readiness_threshold);
+
         let sync = RpcSync {
             state: Arc::clone(&state),
             source_rpc: source_rpc.clone(),
-            upstream_tip_tx,
+            readiness: readiness.clone(),
         };
 
         let rpc = Rpc {
             listener: bind_rpc(runtime.rpc_listen).await?,
             store: state,
-            mode: RpcMode::full_node(source_rpc, upstream_tip_rx, self.sync.readiness_threshold),
+            mode: RpcMode::full_node(source_rpc),
             ntx_builder: None,
             grpc_options: runtime.external_grpc_options,
             network_tx_auth,
+            readiness: Some(readiness),
         };
         let mut tasks = Tasks::new();
         tasks.spawn("RPC sync", sync.run());
