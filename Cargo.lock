@@ -3025,7 +3025,7 @@ dependencies = [
 
 [[package]]
 name = "miden-benchmark"
-version = "0.15.0"
+version = "0.15.0-rc.3"
 dependencies = [
  "anyhow",
  "clap",
