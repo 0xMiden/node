@@ -9,6 +9,9 @@ help:
 WARNINGS=RUSTDOCFLAGS="-D warnings"
 STRESS_TEST_DATA_DIR ?= stress-test-store-$(shell date +%Y%m%d-%H%M%S)
 COMPOSE_FILES = -f docker-compose.yml -f compose/telemetry.yml -f compose/monitor.yml
+DOCKER_PLATFORM ?=
+DOCKER_PLATFORM_ARG = $(if $(DOCKER_PLATFORM),--platform $(DOCKER_PLATFORM),)
+DOCKER_VERSION ?= $(shell awk -F '"' '/^version[[:space:]]*=/ { print $$2; exit }' Cargo.toml)
 CONFIG_DIR = .config
 README_FILES = $(shell git ls-files '*README.md')
 EXTERNAL_DOCS_MARKDOWN_FILES = $(shell git ls-files 'docs/external/**/*.md')
@@ -198,10 +201,11 @@ docker-build: docker-build-node docker-build-validator docker-build-ntx-builder 
 
 .PHONY: docker-build-node
 docker-build-node: ## Builds the Miden node using Docker
-	@CREATED=$$(date) && \
-	VERSION=$$(cat bin/node/Cargo.toml | grep -m 1 '^version' | cut -d '"' -f 2) && \
+	@CREATED=$$(date -u +'%Y-%m-%dT%H:%M:%SZ') && \
+	VERSION="$(DOCKER_VERSION)" && \
 	COMMIT=$$(git rev-parse HEAD) && \
-	docker build --build-arg CREATED="$$CREATED" \
+	docker build --pull $(DOCKER_PLATFORM_ARG) \
+                 --build-arg CREATED="$$CREATED" \
                  --build-arg VERSION="$$VERSION" \
                  --build-arg COMMIT="$$COMMIT" \
                  --build-arg BIN=miden-node \
@@ -210,10 +214,11 @@ docker-build-node: ## Builds the Miden node using Docker
 
 .PHONY: docker-build-validator
 docker-build-validator: ## Builds the Miden validator using Docker
-	@CREATED=$$(date) && \
-	VERSION=$$(cat bin/validator/Cargo.toml | grep -m 1 '^version' | cut -d '"' -f 2) && \
+	@CREATED=$$(date -u +'%Y-%m-%dT%H:%M:%SZ') && \
+	VERSION="$(DOCKER_VERSION)" && \
 	COMMIT=$$(git rev-parse HEAD) && \
-	docker build --build-arg CREATED="$$CREATED" \
+	docker build --pull $(DOCKER_PLATFORM_ARG) \
+                 --build-arg CREATED="$$CREATED" \
                  --build-arg VERSION="$$VERSION" \
                  --build-arg COMMIT="$$COMMIT" \
                  --build-arg BIN=miden-validator \
@@ -222,10 +227,11 @@ docker-build-validator: ## Builds the Miden validator using Docker
 
 .PHONY: docker-build-ntx-builder
 docker-build-ntx-builder: ## Builds the Miden network transaction builder using Docker
-	@CREATED=$$(date) && \
-	VERSION=$$(cat bin/ntx-builder/Cargo.toml | grep -m 1 '^version' | cut -d '"' -f 2) && \
+	@CREATED=$$(date -u +'%Y-%m-%dT%H:%M:%SZ') && \
+	VERSION="$(DOCKER_VERSION)" && \
 	COMMIT=$$(git rev-parse HEAD) && \
-	docker build --build-arg CREATED="$$CREATED" \
+	docker build --pull $(DOCKER_PLATFORM_ARG) \
+                 --build-arg CREATED="$$CREATED" \
                  --build-arg VERSION="$$VERSION" \
                  --build-arg COMMIT="$$COMMIT" \
                  --build-arg BIN=miden-ntx-builder \
@@ -234,10 +240,11 @@ docker-build-ntx-builder: ## Builds the Miden network transaction builder using 
 
 .PHONY: docker-build-monitor
 docker-build-monitor: ## Builds the network monitor using Docker
-	@CREATED=$$(date) && \
-	VERSION=$$(cat bin/network-monitor/Cargo.toml | grep -m 1 '^version' | cut -d '"' -f 2) && \
+	@CREATED=$$(date -u +'%Y-%m-%dT%H:%M:%SZ') && \
+	VERSION="$(DOCKER_VERSION)" && \
 	COMMIT=$$(git rev-parse HEAD) && \
-	docker build --build-arg CREATED="$$CREATED" \
+	docker build --pull $(DOCKER_PLATFORM_ARG) \
+                 --build-arg CREATED="$$CREATED" \
                  --build-arg VERSION="$$VERSION" \
                  --build-arg COMMIT="$$COMMIT" \
                  --build-arg BIN=miden-network-monitor \
@@ -246,10 +253,11 @@ docker-build-monitor: ## Builds the network monitor using Docker
 
 .PHONY: docker-build-remote-prover
 docker-build-remote-prover: ## Builds the remote prover using Docker
-	@CREATED=$$(date) && \
-	VERSION=$$(cat bin/remote-prover/Cargo.toml | grep -m 1 '^version' | cut -d '"' -f 2) && \
+	@CREATED=$$(date -u +'%Y-%m-%dT%H:%M:%SZ') && \
+	VERSION="$(DOCKER_VERSION)" && \
 	COMMIT=$$(git rev-parse HEAD) && \
-	docker build --build-arg CREATED="$$CREATED" \
+	docker build --pull $(DOCKER_PLATFORM_ARG) \
+                 --build-arg CREATED="$$CREATED" \
                  --build-arg VERSION="$$VERSION" \
                  --build-arg COMMIT="$$COMMIT" \
                  --build-arg BIN=miden-remote-prover \

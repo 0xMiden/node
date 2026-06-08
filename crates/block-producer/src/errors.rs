@@ -145,6 +145,10 @@ pub enum BuildBlockError {
     ValidateBlockFailed(#[source] Box<ValidatorError>),
     #[error("block signature is invalid")]
     InvalidSignature,
+    #[error(
+        "block commitment signed by the validator {validator} does not match the block proposed by the sequencer {sequencer}"
+    )]
+    BlockCommitmentMismatch { validator: Word, sequencer: Word },
 
     #[error("mempool lock is poisoned")]
     MempoolPoisoned(#[source] MempoolPoisonError),
