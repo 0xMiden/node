@@ -1,6 +1,5 @@
 use std::num::NonZeroUsize;
 use std::sync::Arc;
-use std::time::Duration;
 
 use accept::AcceptHeaderLayer;
 use anyhow::Context;
@@ -8,15 +7,16 @@ use miden_node_block_producer::BlockProducerApi;
 use miden_node_proto::clients::{NtxBuilderClient, RpcClient as SourceRpcClient, ValidatorClient};
 use miden_node_proto::generated::rpc::api_server;
 use miden_node_proto_build::rpc_api_descriptor;
-use miden_node_store::state::{Finality, State};
+use miden_node_store::state::State;
 use miden_node_utils::clap::GrpcOptionsExternal;
 use miden_node_utils::cors::cors_for_grpc_web_layer;
 use miden_node_utils::grpc;
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
+use miden_protocol::block::BlockNumber;
 use tokio::net::TcpListener;
+use tokio::sync::watch;
 use tokio_stream::wrappers::TcpListenerStream;
-use tonic::Request;
 use tonic::metadata::AsciiMetadataValue;
 use tonic_reflection::server;
 use tonic_web::GrpcWebLayer;
@@ -62,6 +62,8 @@ pub enum RpcMode {
     /// RPC requires.
     FullNode {
         source_rpc: Box<SourceRpcClient>,
+        /// Upstream committed chain tip, fed by the block stream rather than polled via status.
+        upstream_tip_rx: watch::Receiver<Option<BlockNumber>>,
         readiness_threshold: u32,
     },
 }
@@ -74,9 +76,14 @@ impl RpcMode {
         }
     }
 
-    pub fn full_node(source_rpc: SourceRpcClient, readiness_threshold: u32) -> Self {
+    pub fn full_node(
+        source_rpc: SourceRpcClient,
+        upstream_tip_rx: watch::Receiver<Option<BlockNumber>>,
+        readiness_threshold: u32,
+    ) -> Self {
         Self::FullNode {
             source_rpc: Box::new(source_rpc),
+            upstream_tip_rx,
             readiness_threshold,
         }
     }
@@ -110,18 +117,29 @@ impl Rpc {
         let (health_reporter, health_service) = tonic_health::server::health_reporter();
         match self.mode {
             RpcMode::Sequencer { .. } => {
-                health_reporter.set_serving::<api_server::ApiServer<api::RpcService>>().await;
-            },
-            RpcMode::FullNode { source_rpc, readiness_threshold } => {
+                health_reporter
+                    .set_serving::<api_server::ApiServer<api::RpcService>>()
+                    .await;
+            }
+            RpcMode::FullNode {
+                upstream_tip_rx,
+                readiness_threshold,
+                ..
+            } => {
                 health_reporter
                     .set_not_serving::<api_server::ApiServer<api::RpcService>>()
                     .await;
-                let store = self.store.clone();
+                let local_tip_rx = self.store.subscribe_committed_tip();
                 tokio::spawn(async move {
-                    run_readiness_monitor(health_reporter, *source_rpc, store, readiness_threshold)
-                        .await;
+                    run_readiness_monitor(
+                        health_reporter,
+                        upstream_tip_rx,
+                        local_tip_rx,
+                        readiness_threshold,
+                    )
+                    .await;
                 });
-            },
+            }
         }
 
         let reflection_service = server::Builder::configure()
@@ -175,42 +193,43 @@ impl Rpc {
     }
 }
 
-/// Polls the upstream RPC's status and updates the gRPC health service for the `rpc.Api` service.
+/// Watches the upstream and local committed chain tips, updating the gRPC health service for the
+/// `rpc.Api` service whenever either tip changes.
 ///
 /// Used in full-node mode where readiness depends on how close the local chain tip is to the
-/// upstream sequencer's tip. Runs until the task is cancelled.
+/// upstream sequencer's tip. The upstream tip is fed through the block stream rather than polled.
+/// Runs until both watch channels are closed.
 async fn run_readiness_monitor(
     reporter: tonic_health::server::HealthReporter,
-    mut source_rpc: SourceRpcClient,
-    store: Arc<State>,
+    mut upstream_tip_rx: watch::Receiver<Option<BlockNumber>>,
+    mut local_tip_rx: watch::Receiver<BlockNumber>,
     readiness_threshold: u32,
 ) {
-    // Poll interval for checking the upstream RPC status.
-    const POLL_INTERVAL: Duration = Duration::from_secs(5);
-    // Number of consecutive failures required to mark the RPC as not ready.
-    const FAIL_THRESHOLD: u32 = 3;
-
-    let mut fail_count = 0;
     loop {
-        // Check source RPC status to determine readiness.
-        let is_ready = if let Ok(response) = source_rpc.status(Request::new(())).await {
-            fail_count = 0;
-            let upstream_tip =
-                response.into_inner().block_producer.map_or(u32::MAX, |b| b.chain_tip);
-            let local_tip = store.chain_tip(Finality::Committed).await.as_u32();
-            upstream_tip.saturating_sub(local_tip) <= readiness_threshold
-        } else {
-            fail_count += 1;
-            fail_count < FAIL_THRESHOLD
-        };
-
-        // Set this RPC as serving or not based on readiness.
-        if is_ready {
-            reporter.set_serving::<api_server::ApiServer<api::RpcService>>().await;
-        } else {
-            reporter.set_not_serving::<api_server::ApiServer<api::RpcService>>().await;
+        tokio::select! {
+            result = upstream_tip_rx.changed() => {
+                if result.is_err() { return; }
+            },
+            result = local_tip_rx.changed() => {
+                if result.is_err() { return; }
+            },
         }
 
-        tokio::time::sleep(POLL_INTERVAL).await;
+        let upstream_tip = *upstream_tip_rx.borrow_and_update();
+        let local_tip = *local_tip_rx.borrow_and_update();
+
+        let is_ready = upstream_tip.is_some_and(|upstream| {
+            upstream.as_u32().saturating_sub(local_tip.as_u32()) <= readiness_threshold
+        });
+
+        if is_ready {
+            reporter
+                .set_serving::<api_server::ApiServer<api::RpcService>>()
+                .await;
+        } else {
+            reporter
+                .set_not_serving::<api_server::ApiServer<api::RpcService>>()
+                .await;
+        }
     }
 }

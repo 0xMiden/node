@@ -9,6 +9,7 @@ use miden_node_utils::retry::{self, Retryable};
 use miden_node_utils::tasks::Tasks;
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use miden_protocol::utils::serde::Deserializable;
+use tokio::sync::watch;
 use tokio_stream::StreamExt;
 use tracing::{info, warn};
 
@@ -21,6 +22,9 @@ pub(crate) const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 pub struct RpcSync {
     pub state: Arc<State>,
     pub source_rpc: RpcClient,
+    /// Receives the upstream committed chain tip as reported by each block stream event. Used by
+    /// the readiness monitor to determine how far behind the local node is.
+    pub upstream_tip_tx: watch::Sender<Option<BlockNumber>>,
 }
 
 impl RpcSync {
@@ -30,6 +34,7 @@ impl RpcSync {
         let block_sync = BlockSync {
             state: Arc::clone(&self.state),
             source_rpc: self.source_rpc.clone(),
+            upstream_tip_tx: self.upstream_tip_tx,
         };
         let proof_sync = ProofSync {
             state: self.state,
@@ -49,6 +54,7 @@ impl RpcSync {
 struct BlockSync {
     state: Arc<State>,
     source_rpc: RpcClient,
+    upstream_tip_tx: watch::Sender<Option<BlockNumber>>,
 }
 
 struct ProofSync {
@@ -75,7 +81,12 @@ impl BlockSync {
     }
 
     async fn sync(&self) -> anyhow::Result<()> {
-        let block_from = self.state.chain_tip(Finality::Committed).await.child().as_u32();
+        let block_from = self
+            .state
+            .chain_tip(Finality::Committed)
+            .await
+            .child()
+            .as_u32();
         info!(block_from, "Connecting to upstream RPC for blocks");
 
         let mut client = self.source_rpc.clone();
@@ -86,9 +97,15 @@ impl BlockSync {
 
         while let Some(result) = stream.next().await {
             let event = result?;
+
             let block = SignedBlock::read_from_bytes(&event.block)
                 .context("failed to deserialize block from upstream")?;
             self.state.apply_block(block).await?;
+
+            let upstream_tip = BlockNumber::from(event.committed_chain_tip);
+            if let Err(err) = self.upstream_tip_tx.send(Some(upstream_tip)) {
+                warn!("failed to send upstream tip: {}", err);
+            }
         }
 
         Ok(())
@@ -121,11 +138,18 @@ impl ProofSync {
 
     async fn sync(&self) -> anyhow::Result<()> {
         // Subscribe from next proven tip.
-        let starting_block = self.state.chain_tip(Finality::Proven).await.child().as_u32();
+        let starting_block = self
+            .state
+            .chain_tip(Finality::Proven)
+            .await
+            .child()
+            .as_u32();
         info!(starting_block, "Connecting to upstream RPC for proofs");
         let mut client = self.source_rpc.clone();
         let mut stream = client
-            .proof_subscription(ProofSubscriptionRequest { block_from: starting_block })
+            .proof_subscription(ProofSubscriptionRequest {
+                block_from: starting_block,
+            })
             .await?
             .into_inner();
 

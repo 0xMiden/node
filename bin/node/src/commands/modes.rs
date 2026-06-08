@@ -6,7 +6,9 @@ use miden_node_proto::clients::{Builder, NtxBuilderClient, RpcClient, ValidatorC
 use miden_node_rpc::{Rpc, RpcMode};
 use miden_node_store::State;
 use miden_node_utils::tasks::Tasks;
+use miden_protocol::block::BlockNumber;
 use tokio::net::TcpListener;
+use tokio::sync::watch;
 use url::Url;
 
 use super::block_producer::BlockProducerOptions;
@@ -125,15 +127,17 @@ impl FullNodeCommand {
         let network_tx_auth = self.runtime.rpc.network_tx_auth()?;
         let state = load_state(&runtime).await?;
         let _disk_monitor = state.spawn_disk_monitor();
+        let (upstream_tip_tx, upstream_tip_rx) = watch::channel(None::<BlockNumber>);
         let sync = RpcSync {
             state: Arc::clone(&state),
             source_rpc: source_rpc.clone(),
+            upstream_tip_tx,
         };
 
         let rpc = Rpc {
             listener: bind_rpc(runtime.rpc_listen).await?,
             store: state,
-            mode: RpcMode::full_node(source_rpc, self.sync.readiness_threshold),
+            mode: RpcMode::full_node(source_rpc, upstream_tip_rx, self.sync.readiness_threshold),
             ntx_builder: None,
             grpc_options: runtime.external_grpc_options,
             network_tx_auth,
