@@ -137,7 +137,6 @@ fn markdown_heading(line: &str) -> Option<(usize, &str)> {
 }
 
 fn changelog_toml_block(section: &str) -> Result<String> {
-    let mut blocks = Vec::new();
     let mut current_block = String::new();
     let mut in_fence = false;
     let mut capture_toml = false;
@@ -148,7 +147,7 @@ fn changelog_toml_block(section: &str) -> Result<String> {
         if in_fence {
             if trimmed.starts_with("```") {
                 if capture_toml {
-                    blocks.push(std::mem::take(&mut current_block));
+                    return Ok(current_block);
                 }
 
                 in_fence = false;
@@ -173,15 +172,11 @@ fn changelog_toml_block(section: &str) -> Result<String> {
         capture_toml = language.eq_ignore_ascii_case("toml");
     }
 
-    ensure!(!in_fence, "unterminated fenced code block in `## Changelog` section");
-    ensure!(!blocks.is_empty(), "missing fenced `toml` block in `## Changelog` section");
-    ensure!(
-        blocks.len() == 1,
-        "expected one fenced `toml` block in `## Changelog` section, found {}",
-        blocks.len()
-    );
+    if capture_toml {
+        bail!("unterminated fenced `toml` block in `## Changelog` section");
+    }
 
-    Ok(blocks.remove(0))
+    bail!("missing fenced `toml` block in `## Changelog` section");
 }
 
 fn validate_document(source: &str) -> Result<()> {
@@ -322,6 +317,41 @@ scope       = "docs"
 impact      = "fixed"
 description = "Fixed the operator migration instructions."
 ```
+"#;
+
+        verify_pr_body(body).unwrap();
+    }
+
+    #[test]
+    fn accepts_examples_after_changelog_entry() {
+        let body = r#"This PR tries out another new changelog system.
+
+## Changelog
+
+```toml
+[[entry]]
+scope       = "general"
+impact      = "added"
+description = "changelog is now derived from PR bodies"
+
+# Supports multiple.
+# [[entry]]
+# scope       = "general"
+# impact      = "added"
+# description = "changelog is now derived from PR bodies again"
+```
+
+or opt out:
+
+```toml
+#changelog = "none"
+#reason    = "Internal change only."
+```
+
+This later code fence is intentionally incomplete and should not affect the
+already-parsed changelog block.
+
+```text
 "#;
 
         verify_pr_body(body).unwrap();
