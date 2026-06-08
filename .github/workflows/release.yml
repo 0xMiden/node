@@ -363,6 +363,7 @@ jobs:
     needs: [preflight, publish-docker]
     if: ${{ github.repository_owner == '0xMiden' }}
     permissions:
+      actions: write
       contents: write
     steps:
       - name: Re-check GitHub release absence
@@ -398,3 +399,24 @@ jobs:
             --title "${TAG}" \
             --notes "Release ${TAG}" \
             "${prerelease_flag[@]}"
+
+      - name: Trigger post-release publishing workflows
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          # The GitHub release is created with GITHUB_TOKEN, so its release
+          # event does not start follow-up workflows. workflow_dispatch events
+          # are allowed for GITHUB_TOKEN, so trigger those workflows directly.
+          gh workflow run publish-crates.yml \
+            --repo "${REPO}" \
+            --ref "${TAG}" \
+            --field "version=${TAG}"
+
+          gh workflow run publish-debian-all.yml \
+            --repo "${REPO}" \
+            --ref "${TAG}" \
+            --field "version=${TAG}"
