@@ -131,7 +131,7 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
                     .clone()
                     .submit_proven_tx_batch(request)
                     .await
-                    .map(|response| response.into_inner());
+                    .map(tonic::Response::into_inner);
             },
         };
 

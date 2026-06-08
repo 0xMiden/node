@@ -1,12 +1,14 @@
 use miden_node_proto::decode::convert_digests_to_words;
 use miden_node_proto::generated as proto;
+use miden_node_store::NoteRecord;
 use miden_node_utils::limiter::QueryParamNoteIdLimit;
 use miden_protocol::Word;
 use miden_protocol::note::NoteId;
+use miden_protocol::utils::serde::Serializable;
 use tonic::Status;
 use tracing::debug;
 
-use super::{COMPONENT, RpcService, check, database_error_to_status, note_record_to_proto};
+use super::{COMPONENT, RpcService, check, database_error_to_status};
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::GetNotesById for RpcService {
@@ -39,4 +41,22 @@ impl proto::server::rpc_api::GetNotesById for RpcService {
 
         Ok(proto::note::CommittedNoteList { notes })
     }
+}
+
+// HELPERS
+// ================================================================================================
+
+fn note_record_to_proto(note: NoteRecord) -> proto::note::CommittedNote {
+    let inclusion_proof = Some(proto::note::NoteInclusionInBlockProof {
+        note_id: Some(note.note_id.into()),
+        block_num: note.block_num.as_u32(),
+        note_index_in_block: note.note_index.leaf_index_value().into(),
+        inclusion_path: Some(note.inclusion_path.into()),
+    });
+    let note = Some(proto::note::Note {
+        metadata: Some(note.metadata.into()),
+        details: note.details.map(|details| details.to_bytes()),
+        attachments: note.attachments.to_bytes(),
+    });
+    proto::note::CommittedNote { inclusion_proof, note }
 }

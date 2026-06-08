@@ -1,7 +1,9 @@
 use miden_node_proto::decode::{read_account_ids, read_block_range};
 use miden_node_proto::generated as proto;
+use miden_node_store::{NoteSyncRecord, TransactionRecord};
 use miden_node_utils::limiter::QueryParamAccountIdLimit;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
+use miden_protocol::asset::Asset;
 use tonic::Status;
 use tracing::{Span, debug};
 
@@ -13,7 +15,6 @@ use super::{
     check,
     database_error_to_status,
     invalid_block_range_to_status,
-    transaction_record_to_proto,
 };
 
 #[tonic::async_trait]
@@ -65,5 +66,39 @@ impl proto::server::rpc_api::SyncTransactions for RpcService {
             }),
             transactions,
         })
+    }
+}
+
+// HELPERS
+// ================================================================================================
+
+fn transaction_record_to_proto(record: TransactionRecord) -> proto::rpc::TransactionRecord {
+    let output_note_proofs = record
+        .output_note_proofs
+        .into_iter()
+        .map(note_sync_record_to_proof_proto)
+        .collect();
+
+    proto::rpc::TransactionRecord {
+        header: Some(proto::transaction::TransactionHeader {
+            transaction_id: Some(record.header.id().into()),
+            account_id: Some(record.header.account_id().into()),
+            initial_state_commitment: Some(record.header.initial_state_commitment().into()),
+            final_state_commitment: Some(record.header.final_state_commitment().into()),
+            input_notes: record.header.input_notes().iter().cloned().map(Into::into).collect(),
+            output_notes: record.header.output_notes().iter().copied().map(Into::into).collect(),
+            fee: Some(Asset::from(record.header.fee()).into()),
+        }),
+        block_num: record.block_num.as_u32(),
+        output_note_proofs,
+    }
+}
+
+fn note_sync_record_to_proof_proto(note: NoteSyncRecord) -> proto::note::NoteInclusionInBlockProof {
+    proto::note::NoteInclusionInBlockProof {
+        note_id: Some((&note.note_id).into()),
+        block_num: note.block_num.as_u32(),
+        note_index_in_block: note.note_index.leaf_index_value().into(),
+        inclusion_path: Some(note.inclusion_path.into()),
     }
 }

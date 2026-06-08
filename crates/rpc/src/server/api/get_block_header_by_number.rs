@@ -3,7 +3,7 @@ use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::block::BlockNumber;
 use tracing::{Span, debug};
 
-use super::{COMPONENT, RpcService, get_block_header_error_to_status};
+use super::{COMPONENT, RpcService};
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::GetBlockHeaderByNumber for RpcService {
@@ -28,7 +28,7 @@ impl proto::server::rpc_api::GetBlockHeaderByNumber for RpcService {
             .store
             .get_block_header(block_num, request.include_mmr_proof.unwrap_or(false))
             .await
-            .map_err(get_block_header_error_to_status)?;
+            .map_err(super::get_block_header_error_to_status)?;
 
         Ok(proto::rpc::BlockHeaderByNumberResponse {
             block_header: block_header.map(Into::into),

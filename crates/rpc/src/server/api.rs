@@ -5,22 +5,13 @@ use std::task::{Context as TaskContext, Poll};
 use std::time::Duration;
 
 use anyhow::Context as AnyhowContext;
-use miden_node_block_producer::{BlockProducerStatus, MempoolStats as BlockProducerMempoolStats};
 use miden_node_proto::clients::NtxBuilderClient;
 use miden_node_proto::domain::block::InvalidBlockRange;
 use miden_node_proto::generated::rpc::MempoolStats as ProtoMempoolStats;
 use miden_node_proto::generated::rpc::api_server::Api;
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::state::{Finality, State, StateSubscriptionError};
-use miden_node_store::{
-    DatabaseError,
-    GetAccountError,
-    GetBlockHeaderError,
-    NoteRecord,
-    NoteSyncError,
-    NoteSyncRecord,
-    TransactionRecord,
-};
+use miden_node_store::{DatabaseError, GetBlockHeaderError};
 use miden_node_utils::ErrorReport;
 use miden_node_utils::limiter::{
     QueryParamAccountIdLimit,
@@ -34,10 +25,7 @@ use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::retry::{self, Retryable};
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
-use miden_protocol::asset::Asset;
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::transaction::{OutputNote, PublicOutputNote};
-use miden_protocol::utils::serde::Serializable;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_stream::Stream;
 use tonic::metadata::MetadataMap;
@@ -284,102 +272,10 @@ pub struct SubmitProvenTxBatchInput {
 // HELPERS
 // ================================================================================================
 
-/// Strips decorators from public output notes' scripts.
-///
-/// This removes MAST decorators from note scripts before forwarding to the block producer,
-/// as decorators are not needed for transaction processing.
-///
-/// Note: `PublicOutputNote::new()` already calls `note.minify_script()` internally, so
-/// reconstructing the public note through it handles decorator stripping automatically.
-fn strip_output_note_decorators<'a>(
-    notes: impl Iterator<Item = &'a OutputNote> + 'a,
-) -> impl Iterator<Item = OutputNote> + 'a {
-    notes.map(|note| match note {
-        OutputNote::Public(public_note) => {
-            // Reconstruct via PublicOutputNote::new which calls minify_script() internally.
-            let rebuilt = PublicOutputNote::new(public_note.as_note().clone())
-                .expect("rebuilding an already-valid public output note should not fail");
-            OutputNote::Public(rebuilt)
-        },
-        OutputNote::Private(header) => OutputNote::Private(header.clone()),
-    })
-}
-
-fn block_producer_status_to_proto(status: BlockProducerStatus) -> proto::rpc::BlockProducerStatus {
-    proto::rpc::BlockProducerStatus {
-        version: status.version,
-        status: status.status,
-        chain_tip: status.chain_tip.as_u32(),
-        mempool_stats: Some(block_producer_mempool_stats_to_proto(status.mempool_stats)),
-    }
-}
-
-fn block_producer_mempool_stats_to_proto(
-    stats: BlockProducerMempoolStats,
-) -> proto::rpc::MempoolStats {
-    proto::rpc::MempoolStats {
-        unbatched_transactions: stats.unbatched_transactions,
-        proposed_batches: stats.proposed_batches,
-        proven_batches: stats.proven_batches,
-    }
-}
-
-fn transaction_record_to_proto(record: TransactionRecord) -> proto::rpc::TransactionRecord {
-    let output_note_proofs = record
-        .output_note_proofs
-        .into_iter()
-        .map(note_sync_record_to_proof_proto)
-        .collect();
-
-    proto::rpc::TransactionRecord {
-        header: Some(proto::transaction::TransactionHeader {
-            transaction_id: Some(record.header.id().into()),
-            account_id: Some(record.header.account_id().into()),
-            initial_state_commitment: Some(record.header.initial_state_commitment().into()),
-            final_state_commitment: Some(record.header.final_state_commitment().into()),
-            input_notes: record.header.input_notes().iter().cloned().map(Into::into).collect(),
-            output_notes: record.header.output_notes().iter().copied().map(Into::into).collect(),
-            fee: Some(Asset::from(record.header.fee()).into()),
-        }),
-        block_num: record.block_num.as_u32(),
-        output_note_proofs,
-    }
-}
-
-fn note_record_to_proto(note: NoteRecord) -> proto::note::CommittedNote {
-    let inclusion_proof = Some(proto::note::NoteInclusionInBlockProof {
-        note_id: Some(note.note_id.into()),
-        block_num: note.block_num.as_u32(),
-        note_index_in_block: note.note_index.leaf_index_value().into(),
-        inclusion_path: Some(note.inclusion_path.into()),
-    });
-    let note = Some(proto::note::Note {
-        metadata: Some(note.metadata.into()),
-        details: note.details.map(|details| details.to_bytes()),
-        attachments: note.attachments.to_bytes(),
-    });
-    proto::note::CommittedNote { inclusion_proof, note }
-}
-
-fn note_sync_record_to_proto(note: NoteSyncRecord) -> proto::note::NoteSyncRecord {
-    let inclusion_proof = Some(proto::note::NoteInclusionInBlockProof {
-        note_id: Some((&note.note_id).into()),
-        block_num: note.block_num.as_u32(),
-        note_index_in_block: note.note_index.leaf_index_value().into(),
-        inclusion_path: Some(note.inclusion_path.into()),
-    });
-    proto::note::NoteSyncRecord {
-        metadata: Some(note.metadata.into()),
-        inclusion_proof,
-    }
-}
-
-fn note_sync_record_to_proof_proto(note: NoteSyncRecord) -> proto::note::NoteInclusionInBlockProof {
-    proto::note::NoteInclusionInBlockProof {
-        note_id: Some((&note.note_id).into()),
-        block_num: note.block_num.as_u32(),
-        note_index_in_block: note.note_index.leaf_index_value().into(),
-        inclusion_path: Some(note.inclusion_path.into()),
+fn get_block_header_error_to_status(err: GetBlockHeaderError) -> Status {
+    match err {
+        GetBlockHeaderError::DatabaseError(err) => database_error_to_status(&err),
+        GetBlockHeaderError::MmrError(err) => Status::internal(err.to_string()),
     }
 }
 
@@ -390,38 +286,6 @@ fn database_error_to_status(err: &DatabaseError) -> Status {
         | DatabaseError::AccountsNotFoundInDb(_)
         | DatabaseError::AccountNotPublic(_) => Status::not_found(message),
         _ => Status::internal(message),
-    }
-}
-
-fn get_block_header_error_to_status(err: GetBlockHeaderError) -> Status {
-    match err {
-        GetBlockHeaderError::DatabaseError(err) => database_error_to_status(&err),
-        GetBlockHeaderError::MmrError(err) => Status::internal(err.to_string()),
-    }
-}
-
-fn note_sync_error_to_status(err: NoteSyncError) -> Status {
-    let message = err.to_string();
-    match err {
-        NoteSyncError::DatabaseError(err) => database_error_to_status(&err),
-        NoteSyncError::InvalidBlockRange(_)
-        | NoteSyncError::FutureBlock { .. }
-        | NoteSyncError::DeserializationFailed(_) => Status::invalid_argument(message),
-        NoteSyncError::UnderlyingDatabaseError(_)
-        | NoteSyncError::EmptyBlockHeadersTable
-        | NoteSyncError::MmrError(_) => Status::internal(message),
-    }
-}
-
-fn get_account_error_to_status(err: GetAccountError) -> Status {
-    let message = err.to_string();
-    match err {
-        GetAccountError::DatabaseError(err) => database_error_to_status(&err),
-        GetAccountError::DeserializationFailed(_)
-        | GetAccountError::AccountNotFound(..)
-        | GetAccountError::AccountNotPublic(_)
-        | GetAccountError::UnknownBlock(_)
-        | GetAccountError::BlockPruned(_) => Status::invalid_argument(message),
     }
 }
 

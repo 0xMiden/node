@@ -3,13 +3,18 @@ use miden_node_utils::ErrorReport;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
-use miden_protocol::transaction::{ProvenTransaction, TxAccountUpdate};
+use miden_protocol::transaction::{
+    OutputNote,
+    ProvenTransaction,
+    PublicOutputNote,
+    TxAccountUpdate,
+};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_tx::TransactionVerifier;
 use tonic::{Request, Status};
 use tracing::{Span, debug};
 
-use super::{COMPONENT, RpcMode, RpcService, SubmitProvenTxInput, strip_output_note_decorators};
+use super::{COMPONENT, RpcMode, RpcService, SubmitProvenTxInput};
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::SubmitProvenTx for RpcService {
@@ -116,7 +121,7 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
                     .clone()
                     .submit_proven_tx(request)
                     .await
-                    .map(|response| response.into_inner());
+                    .map(tonic::Response::into_inner);
             },
         };
 
@@ -134,4 +139,28 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
             .map(Into::into)
             .map_err(Into::into)
     }
+}
+
+// HELPERS
+// ================================================================================================
+
+/// Strips decorators from public output notes' scripts.
+///
+/// This removes MAST decorators from note scripts before forwarding to the block producer,
+/// as decorators are not needed for transaction processing.
+///
+/// Note: `PublicOutputNote::new()` already calls `note.minify_script()` internally, so
+/// reconstructing the public note through it handles decorator stripping automatically.
+fn strip_output_note_decorators<'a>(
+    notes: impl Iterator<Item = &'a OutputNote> + 'a,
+) -> impl Iterator<Item = OutputNote> + 'a {
+    notes.map(|note| match note {
+        OutputNote::Public(public_note) => {
+            // Reconstruct via PublicOutputNote::new which calls minify_script() internally.
+            let rebuilt = PublicOutputNote::new(public_note.as_note().clone())
+                .expect("rebuilding an already-valid public output note should not fail");
+            OutputNote::Public(rebuilt)
+        },
+        OutputNote::Private(header) => OutputNote::Private(header.clone()),
+    })
 }

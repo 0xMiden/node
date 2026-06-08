@@ -1,5 +1,6 @@
 use miden_node_proto::decode::read_block_range;
 use miden_node_proto::generated as proto;
+use miden_node_store::{NoteSyncError, NoteSyncRecord};
 use miden_node_utils::limiter::QueryParamNoteTagLimit;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use tonic::Status;
@@ -12,8 +13,6 @@ use super::{
     RpcService,
     check,
     invalid_block_range_to_status,
-    note_sync_error_to_status,
-    note_sync_record_to_proto,
 };
 
 #[tonic::async_trait]
@@ -71,5 +70,34 @@ impl proto::server::rpc_api::SyncNotes for RpcService {
             }),
             blocks,
         })
+    }
+}
+
+// HELPERS
+// ================================================================================================
+
+fn note_sync_record_to_proto(note: NoteSyncRecord) -> proto::note::NoteSyncRecord {
+    let inclusion_proof = Some(proto::note::NoteInclusionInBlockProof {
+        note_id: Some((&note.note_id).into()),
+        block_num: note.block_num.as_u32(),
+        note_index_in_block: note.note_index.leaf_index_value().into(),
+        inclusion_path: Some(note.inclusion_path.into()),
+    });
+    proto::note::NoteSyncRecord {
+        metadata: Some(note.metadata.into()),
+        inclusion_proof,
+    }
+}
+
+fn note_sync_error_to_status(err: NoteSyncError) -> Status {
+    let message = err.to_string();
+    match err {
+        NoteSyncError::DatabaseError(err) => super::database_error_to_status(&err),
+        NoteSyncError::InvalidBlockRange(_)
+        | NoteSyncError::FutureBlock { .. }
+        | NoteSyncError::DeserializationFailed(_) => Status::invalid_argument(message),
+        NoteSyncError::UnderlyingDatabaseError(_)
+        | NoteSyncError::EmptyBlockHeadersTable
+        | NoteSyncError::MmrError(_) => Status::internal(message),
     }
 }
