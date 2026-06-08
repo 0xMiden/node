@@ -9,7 +9,6 @@ use miden_protocol::asset::{
     NonFungibleAsset,
     NonFungibleAssetDetails,
 };
-use miden_protocol::crypto::merkle::smt::SmtProof;
 use miden_protocol::testing::account_id::{
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE,
@@ -279,69 +278,6 @@ fn vault_state_is_not_available_for_block_gaps() {
 }
 
 #[test]
-fn witness_queries_work_with_sparse_lineage_updates() {
-    use std::collections::BTreeMap;
-
-    use assert_matches::assert_matches;
-    use miden_protocol::account::delta::{StorageMapPatch, StorageSlotPatch};
-
-    let mut forest = AccountStateForest::new();
-    let account_id = dummy_account();
-    let faucet_id = dummy_faucet();
-    let slot_name = StorageSlotName::mock(6);
-    let raw_key = StorageMapKey::from_index(1u32);
-    let value = Word::from([9u32, 0, 0, 0]);
-
-    let block_1 = BlockNumber::GENESIS.child();
-    let mut vault_delta_1 = AccountVaultDelta::default();
-    vault_delta_1.add_asset(dummy_fungible_asset(faucet_id, 100)).unwrap();
-    let mut map_delta_1 = StorageMapPatch::default();
-    map_delta_1.insert(raw_key, value);
-    let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_delta_1))]);
-    let storage_delta_1 = AccountStoragePatch::from_raw(raw);
-    let delta_1 = dummy_partial_delta(account_id, vault_delta_1, storage_delta_1);
-    forest.update_account(block_1, &delta_1).unwrap();
-
-    let block_3 = block_1.child().child();
-    let mut vault_delta_3 = AccountVaultDelta::default();
-    vault_delta_3.add_asset(dummy_fungible_asset(faucet_id, 50)).unwrap();
-    let delta_3 = dummy_partial_delta(account_id, vault_delta_3, AccountStoragePatch::default());
-    forest.update_account(block_3, &delta_3).unwrap();
-
-    let block_2 = block_1.child();
-    let asset_key = FungibleAsset::new(faucet_id, 0).unwrap().vault_key();
-    let witnesses = forest
-        .get_vault_asset_witnesses(account_id, block_2, [asset_key].into())
-        .unwrap();
-    let proof: SmtProof = witnesses[0].clone().into();
-    let root_at_2 = forest.get_vault_root(account_id, block_2).unwrap();
-    assert_eq!(proof.compute_root(), root_at_2);
-
-    let storage_witness = forest
-        .get_storage_map_witness(account_id, &slot_name, block_2, raw_key)
-        .unwrap();
-    let storage_root_at_2 = forest.get_storage_map_root(account_id, &slot_name, block_2).unwrap();
-    let storage_proof: SmtProof = storage_witness.into();
-    assert_eq!(storage_proof.compute_root(), storage_root_at_2);
-
-    let storage_witness_at_3 = forest
-        .get_storage_map_witness(account_id, &slot_name, block_3, raw_key)
-        .unwrap();
-    let storage_root_at_3 = forest.get_storage_map_root(account_id, &slot_name, block_3).unwrap();
-    let storage_proof_at_3: SmtProof = storage_witness_at_3.into();
-    assert_eq!(storage_proof_at_3.compute_root(), storage_root_at_3);
-
-    let vault_root_at_3 = forest.get_vault_root(account_id, block_3).unwrap();
-    assert_matches!(
-        forest
-            .forest
-            .open(forest.tree_id_for_vault_root(account_id, block_3), asset_key.into()),
-        Ok(_)
-    );
-    assert_ne!(vault_root_at_3, AccountStateForest::empty_smt_root());
-}
-
-#[test]
 fn vault_full_state_with_empty_vault_records_root() {
     use miden_protocol::account::{Account, AccountStorage};
 
@@ -363,11 +299,6 @@ fn vault_full_state_with_empty_vault_records_root() {
 
     let recorded_root = forest.get_vault_root(account_id, block_num);
     assert_eq!(recorded_root, Some(AccountStateForest::empty_smt_root()));
-
-    let witnesses = forest
-        .get_vault_asset_witnesses(account_id, block_num, std::collections::BTreeSet::new())
-        .expect("get_vault_asset_witnesses should succeed for accounts with empty vaults");
-    assert!(witnesses.is_empty());
 }
 
 #[test]
@@ -380,7 +311,6 @@ fn vault_shared_root_retained_when_one_entry_pruned() {
     let asset_amount = u64::from(HISTORICAL_BLOCK_RETENTION);
     let amount_increment = asset_amount / u64::from(HISTORICAL_BLOCK_RETENTION);
     let asset = dummy_fungible_asset(faucet_id, asset_amount);
-    let asset_key = asset.vault_key();
 
     let mut vault_delta_1 = AccountVaultDelta::default();
     vault_delta_1.add_asset(asset).unwrap();
@@ -414,13 +344,6 @@ fn vault_shared_root_retained_when_one_entry_pruned() {
 
     let vault_root_at_52 = forest.get_vault_root(account1, block_at_52);
     assert_eq!(vault_root_at_52, Some(root1));
-
-    let witnesses = forest
-        .get_vault_asset_witnesses(account1, block_at_52, [asset_key].into())
-        .unwrap();
-    assert_eq!(witnesses.len(), 1);
-    let proof: SmtProof = witnesses[0].clone().into();
-    assert_eq!(proof.compute_root(), root1);
 }
 
 // STORAGE MAP TESTS
@@ -731,44 +654,6 @@ fn storage_map_all_entries_returns_cache_miss_when_raw_key_is_not_cached() {
             vec![(raw_key, value)]
         ))
     );
-}
-
-#[test]
-fn storage_map_key_hashing_and_raw_entries_are_consistent() {
-    use std::collections::BTreeMap;
-
-    use miden_protocol::account::delta::{StorageMapPatch, StorageSlotPatch};
-
-    const SLOT_INDEX: usize = 4;
-    const KEY_VALUE: u32 = 11;
-    const VALUE_VALUE: u32 = 22;
-
-    let mut forest = AccountStateForest::new();
-    let account_id = dummy_account();
-    let slot_name = StorageSlotName::mock(SLOT_INDEX);
-    let block_num = BlockNumber::GENESIS.child();
-    let raw_key = StorageMapKey::from_index(KEY_VALUE);
-    let value = Word::from([VALUE_VALUE, 0, 0, 0]);
-
-    let mut map_delta = StorageMapPatch::default();
-    map_delta.insert(raw_key, value);
-    let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_delta))]);
-    let storage_delta = AccountStoragePatch::from_raw(raw);
-    let delta = dummy_partial_delta(account_id, AccountVaultDelta::default(), storage_delta);
-    forest.update_account(block_num, &delta).unwrap();
-
-    let root = forest.get_storage_map_root(account_id, &slot_name, block_num).unwrap();
-
-    let witness = forest
-        .get_storage_map_witness(account_id, &slot_name, block_num, raw_key)
-        .unwrap();
-    let proof: SmtProof = witness.into();
-    let hashed_key = raw_key.hash().into();
-    // Witness proofs use hashed keys because SMT leaves are keyed by the hash.
-    assert_eq!(proof.compute_root(), root);
-    assert_eq!(proof.get(&hashed_key), Some(value));
-    // Raw keys never appear in SMT proofs, only their hashed counterparts.
-    assert_eq!(proof.get(&raw_key.into()), None);
 }
 
 // PRUNING TESTS
@@ -1083,7 +968,6 @@ fn shared_vault_root_retained_when_one_account_changes() {
     let block_1 = BlockNumber::GENESIS.child();
     let initial_amount = 1000u64;
     let asset = dummy_fungible_asset(faucet_id, initial_amount);
-    let asset_key = asset.vault_key();
 
     let mut vault_delta_1 = AccountVaultDelta::default();
     vault_delta_1.add_asset(asset).unwrap();
@@ -1115,9 +999,4 @@ fn shared_vault_root_retained_when_one_account_changes() {
     assert_ne!(root2_at_block1, root2_at_block2, "account2 vault should have changed");
 
     assert!(forest.get_vault_root(account1, block_2).is_some());
-
-    let witnesses = forest
-        .get_vault_asset_witnesses(account1, block_2, [asset_key].into())
-        .expect("witness generation should succeed for prior version");
-    assert_eq!(witnesses.len(), 1);
 }

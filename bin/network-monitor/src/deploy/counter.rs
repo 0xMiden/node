@@ -63,6 +63,11 @@ pub fn create_counter_account(owner_account_id: AccountId) -> Result<Account> {
 
     allowed_scripts.insert(increment_script.root());
 
+    // TODO(https://github.com/0xMiden/protocol/issues/3050): once the ntx-builder re-enables the
+    // expiration tx script, this account must also allowlist that script's root via
+    // `.with_allowed_tx_scripts([..])`, or its network transactions will be rejected by the
+    // tx-script allowlist. This waits on the canonical, frozen expiration script (#3050) so the
+    // root can be pinned here without duplicating the ntx-builder's script/delta.
     let network_account_auth: AccountComponent =
         AuthNetworkAccount::with_allowlist(allowed_scripts)
             .expect("list is not empty")

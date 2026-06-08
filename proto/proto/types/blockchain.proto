@@ -113,6 +113,15 @@ message BlockSignature {
     bytes signature = 1;
 }
 
+// Response to a `SignBlock` request: the block signature together with the commitment of the block
+// header that the validator actually signed, so the block producer can detect a block-hash mismatch.
+message SignBlockResponse {
+    // The validator's signature over the block.
+    BlockSignature signature = 1;
+    // Commitment of the block header that the validator signed.
+    primitives.Digest block_commitment = 2;
+}
+
 
 // FEE PARAMETERS
 // ================================================================================================

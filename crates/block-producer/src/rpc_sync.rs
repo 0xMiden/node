@@ -96,6 +96,12 @@ impl BlockSync {
 }
 
 impl ProofSync {
+    /// Synchronizes block proofs from an upstream RPC service.
+    ///
+    /// Proof sync is intentionally coupled to block sync via the committed tip: a proof is only applied
+    /// once its block has been committed locally. This means proof sync can stall if block sync falls
+    /// behind, but that is acceptable — there is no value in streaming proofs for blocks that have not
+    /// yet been applied.
     async fn run(self) -> anyhow::Result<()> {
         (|| async {
             self.sync()
@@ -114,19 +120,28 @@ impl ProofSync {
     }
 
     async fn sync(&self) -> anyhow::Result<()> {
-        let block_from = self.state.chain_tip(Finality::Proven).as_u32().saturating_add(1);
-        info!(block_from, "Connecting to upstream RPC for proofs");
-
+        // Subscribe from next proven tip.
+        let starting_block = self.state.chain_tip(Finality::Proven).child().as_u32();
+        info!(starting_block, "Connecting to upstream RPC for proofs");
         let mut client = self.source_rpc.clone();
         let mut stream = client
-            .proof_subscription(ProofSubscriptionRequest { block_from })
+            .proof_subscription(ProofSubscriptionRequest { block_from: starting_block })
             .await?
             .into_inner();
 
+        let mut committed_tip_rx = self.state.subscribe_committed_tip();
         while let Some(result) = stream.next().await {
             let event = result?;
-            let block_num = BlockNumber::from(event.block_num);
-            self.state.apply_proof(block_num, event.proof).await?;
+            let proven_tip = BlockNumber::from(event.block_num);
+
+            // Ensure the block is committed before applying its proof so that proven tip never
+            // exceeds committed tip.
+            committed_tip_rx
+                .wait_for(|committed_tip| *committed_tip >= proven_tip)
+                .await
+                .context("committed tip channel closed")?;
+
+            self.state.apply_proof(proven_tip, event.proof).await?;
         }
 
         Ok(())
