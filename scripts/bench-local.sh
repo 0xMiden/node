@@ -1,21 +1,29 @@
 #!/usr/bin/env bash
 # Local end-to-end benchmark runner.
 #
-# Bootstraps a fresh validator + store, starts every node component plus a
+# Bootstraps a fresh validator + node + ntx-builder, starts the stack plus a
 # local transaction remote-prover, runs `miden-benchmark create-proofs` then
 # `miden-benchmark run-benchmark`, and tears the stack down on exit.
 #
+# The node is a single process run in `sequencer` mode (store + block-producer
+# + public RPC combined). The ntx-builder and validator remain separate
+# processes. The ntx-builder requires a transaction prover, so a local
+# `miden-remote-prover --kind transaction` is always started; `USE_REMOTE_PROVER`
+# additionally offloads the benchmark's `create-proofs` proving to that prover.
+#
 # Assumes these binaries are on $PATH (install with `make install-node`,
-# `make install-validator`, `make install-remote-prover`, `make install-benchmark`):
+# `make install-validator`, `make install-ntx-builder`,
+# `make install-remote-prover`, `make install-benchmark`):
 #   - miden-node
 #   - miden-validator
+#   - miden-ntx-builder
 #   - miden-remote-prover
 #   - miden-benchmark
 #
 # Usage:
 #   scripts/bench-local.sh                       # 5 tx pairs, local prover
 #   N_TXS=20 scripts/bench-local.sh              # 20 tx pairs
-#   USE_REMOTE_PROVER=1 scripts/bench-local.sh   # offload proving to local remote-prover
+#   USE_REMOTE_PROVER=1 scripts/bench-local.sh   # offload create-proofs to the remote-prover
 #
 # Logs land in ./bench-local-run/logs/. Data lives in ./bench-local-run/data/.
 
@@ -30,10 +38,6 @@ RUN_DIR="${RUN_DIR:-./bench-local-run}"
 
 # --- ports --------------------------------------------------------------------
 VALIDATOR_PORT=50101
-STORE_RPC_PORT=50001
-STORE_NTX_PORT=50002
-STORE_BP_PORT=50003
-BP_PORT=50201
 RPC_PORT=57291
 NTX_PORT=50301
 REMOTE_PROVER_PORT=50051
@@ -89,78 +93,83 @@ wait_for_port() {
 }
 
 # --- preflight ----------------------------------------------------------------
-required_bins=(miden-node miden-validator miden-ntx-builder miden-benchmark)
-if [ "$USE_REMOTE_PROVER" = "1" ]; then
-    required_bins+=(miden-remote-prover)
-fi
+required_bins=(miden-node miden-validator miden-ntx-builder miden-remote-prover miden-benchmark)
 for bin in "${required_bins[@]}"; do
     command -v "$bin" >/dev/null || die "$bin not on PATH"
 done
 
-if [ -e "$DATA/store" ] || [ -e "$DATA/validator" ] || [ -e "$DATA/genesis" ]; then
+if [ -e "$DATA/node" ] || [ -e "$DATA/validator" ] || [ -e "$DATA/genesis" ] \
+    || [ -e "$DATA/ntx-builder" ]; then
     say "wiping previous data dir $DATA"
     rm -rf "$DATA"
     mkdir -p "$DATA"
 fi
 rm -f "$LOGS"/*.log "$PIDS"/*.pid
 
+GENESIS_FILE="$DATA/genesis/genesis.dat"
+
 # --- bootstrap ----------------------------------------------------------------
-say "bootstrapping validator + store"
+say "bootstrapping validator (creates genesis block)"
 miden-validator bootstrap \
     --data-directory          "$DATA/validator" \
     --genesis-block-directory "$DATA/genesis" \
     --accounts-directory      "$DATA/accounts" \
     > "$LOGS/bootstrap-validator.log" 2>&1
 
-miden-node store bootstrap \
-    --data-directory "$DATA/store" \
-    --genesis-block  "$DATA/genesis/genesis.dat" \
-    > "$LOGS/bootstrap-store.log" 2>&1
+say "bootstrapping node storage from genesis"
+miden-node bootstrap \
+    --data-directory "$DATA/node" \
+    --file           "$GENESIS_FILE" \
+    > "$LOGS/bootstrap-node.log" 2>&1
+
+say "bootstrapping ntx-builder storage from genesis"
+miden-ntx-builder bootstrap \
+    --data-directory "$DATA/ntx-builder" \
+    --file           "$GENESIS_FILE" \
+    > "$LOGS/bootstrap-ntx-builder.log" 2>&1
 
 # --- start stack --------------------------------------------------------------
+# Topology: validator + transaction prover come up first, then the node
+# (sequencer = store + block-producer + RPC), then the ntx-builder which talks
+# back to the node's RPC. The sequencer references the ntx-builder URL up front
+# but tolerates it not being up yet (gRPC clients connect lazily).
 start_bg validator miden-validator start \
     --listen         "127.0.0.1:$VALIDATOR_PORT" \
     --data-directory "$DATA/validator"
 wait_for_port "$VALIDATOR_PORT" validator
 
-start_bg store miden-node store start \
-    --rpc.listen            "127.0.0.1:$STORE_RPC_PORT" \
-    --ntx-builder.listen    "127.0.0.1:$STORE_NTX_PORT" \
-    --block-producer.listen "127.0.0.1:$STORE_BP_PORT" \
-    --data-directory        "$DATA/store"
-wait_for_port "$STORE_RPC_PORT" store
+# The ntx-builder always needs a transaction prover, so start one regardless of
+# USE_REMOTE_PROVER (which only governs whether create-proofs offloads here too).
+start_bg remote-prover miden-remote-prover \
+    --port     "$REMOTE_PROVER_PORT" \
+    --kind     transaction \
+    --capacity 32 \
+    --timeout  300s
+wait_for_port "$REMOTE_PROVER_PORT" remote-prover
 
-start_bg block-producer miden-node block-producer start \
-    --listen                "127.0.0.1:$BP_PORT" \
-    --store.url             "http://127.0.0.1:$STORE_BP_PORT" \
-    --validator.url         "http://127.0.0.1:$VALIDATOR_PORT" \
-    --max-txs-per-batch     64 \
-    --max-batches-per-block 16 \
-    --block.interval        2s \
-    --batch.interval        500ms \
-    --batch.workers         4 \
-    --mempool.tx-capacity   100000
-wait_for_port "$BP_PORT" block-producer
+start_bg node miden-node sequencer \
+    --data-directory                            "$DATA/node" \
+    --rpc.listen                                "127.0.0.1:$RPC_PORT" \
+    --validator.url                             "http://127.0.0.1:$VALIDATOR_PORT" \
+    --ntx-builder.url                           "http://127.0.0.1:$NTX_PORT" \
+    --batch.max-txs                             64 \
+    --block.max-batches                         16 \
+    --block.interval                            2s \
+    --batch.interval                            500ms \
+    --batch.workers                             4 \
+    --mempool.tx-capacity                       100000 \
+    --rpc.grpc.timeout                          24h \
+    --rpc.grpc.max-connection-age               24h \
+    --rpc.rate-limit.burst-size                 100000 \
+    --rpc.rate-limit.replenish-per-second       100000 \
+    --rpc.rate-limit.max-concurrent-connections 1000000
+wait_for_port "$RPC_PORT" node
 
-start_bg rpc miden-node rpc start \
-    --listen                          "127.0.0.1:$RPC_PORT" \
-    --store.url                       "http://127.0.0.1:$STORE_RPC_PORT" \
-    --block-producer.url              "http://127.0.0.1:$BP_PORT" \
-    --validator.url                   "http://127.0.0.1:$VALIDATOR_PORT" \
-    --grpc.timeout                    24h \
-    --grpc.max_connection_age         24h \
-    --grpc.burst_size                 100000 \
-    --grpc.replenish_n_per_second     100000 \
-    --grpc.max_concurrent_connections 1000000
-wait_for_port "$RPC_PORT" rpc
-
-mkdir -p "$DATA/ntx-builder"
 start_bg ntx-builder miden-ntx-builder start \
-    --listen             "127.0.0.1:$NTX_PORT" \
-    --store.url          "http://127.0.0.1:$STORE_NTX_PORT" \
-    --block-producer.url "http://127.0.0.1:$BP_PORT" \
-    --validator.url      "http://127.0.0.1:$VALIDATOR_PORT" \
-    --data-directory     "$DATA/ntx-builder"
+    --listen         "127.0.0.1:$NTX_PORT" \
+    --rpc.url        "http://127.0.0.1:$RPC_PORT" \
+    --tx-prover.url  "http://127.0.0.1:$REMOTE_PROVER_PORT" \
+    --data-directory "$DATA/ntx-builder"
 wait_for_port "$NTX_PORT" ntx-builder
 
 # Using a plain string (not an array) so an empty value expands to nothing
@@ -168,12 +177,6 @@ wait_for_port "$NTX_PORT" ntx-builder
 # so word-splitting on `$REMOTE_PROVER_ARG` is safe.
 REMOTE_PROVER_ARG=""
 if [ "$USE_REMOTE_PROVER" = "1" ]; then
-    start_bg remote-prover miden-remote-prover \
-        --port     "$REMOTE_PROVER_PORT" \
-        --kind     transaction \
-        --capacity 32 \
-        --timeout  300s
-    wait_for_port "$REMOTE_PROVER_PORT" remote-prover
     REMOTE_PROVER_ARG="--remote-prover-url http://127.0.0.1:$REMOTE_PROVER_PORT"
 fi
 
