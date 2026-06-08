@@ -1071,7 +1071,6 @@ fn prepare_partial_account_update(
     // Update fungible assets.
     for (vault_key, amount_delta) in delta.vault().fungible().iter() {
         let faucet_id = vault_key.faucet_id();
-        // The callback flag is part of the vault key, so it must survive the round-trip.
         let callback_flag = vault_key.callback_flag();
         let prev_amount = prev_balances.get(&vault_key.to_word()).copied().unwrap_or(0);
         let prev_asset = FungibleAsset::new(faucet_id, prev_amount)?.with_callbacks(callback_flag);
