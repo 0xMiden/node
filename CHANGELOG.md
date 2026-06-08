@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Register the Miden native faucet in the AggLayer bridge at genesis ([#2220](https://github.com/0xMiden/node/pull/2220)).
+
 ## v0.15.0-rc.3 (2026-06-08)
 
 - Actually upgrade the `p3-*` transient dependency to `0.5.3` ([#2213](https://github.com/0xMiden/node/pull/2213)).
