@@ -26,6 +26,11 @@ struct Cli {
     #[arg(long, default_value = "./genesis")]
     output_dir: PathBuf,
 
+    /// AggLayer network ID assigned to this Miden chain. Stored in the bridge account at creation
+    /// and read at runtime by the bridge; it differs between deployments (e.g. testnet vs mainnet).
+    #[arg(long, value_name = "ID")]
+    network_id: u32,
+
     /// Hex-encoded Falcon512 public key for the bridge admin account. If omitted, a new keypair is
     /// generated and the secret key is included in the .mac file.
     #[arg(long, value_name = "HEX", requires = "ger_manager_public_key")]
@@ -41,6 +46,7 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     run(
         &cli.output_dir,
+        cli.network_id,
         cli.bridge_admin_public_key.as_deref(),
         cli.ger_manager_public_key.as_deref(),
     )
@@ -48,6 +54,7 @@ fn main() -> anyhow::Result<()> {
 
 fn run(
     output_dir: &Path,
+    network_id: u32,
     bridge_admin_public_key: Option<&str>,
     ger_manager_public_key: Option<&str>,
 ) -> anyhow::Result<()> {
@@ -87,7 +94,7 @@ fn run(
     let mut rng = ChaCha20Rng::from_seed(rand::random());
     let bridge_seed: [u64; 4] = rng.random();
     let bridge_seed = Word::from(bridge_seed.map(Felt::new_unchecked));
-    let bridge = create_bridge_account(bridge_seed, bridge_admin_id, ger_manager_id);
+    let bridge = create_bridge_account(bridge_seed, bridge_admin_id, ger_manager_id, network_id);
 
     // Bump bridge nonce to 1 (required for genesis accounts). File-loaded accounts via [[account]]
     // in genesis.toml are included as-is, so we must set nonce=1 before writing the .mac file.
@@ -194,6 +201,9 @@ mod tests {
 
     use super::*;
 
+    /// AggLayer network ID used in tests.
+    const TEST_NETWORK_ID: u32 = 77;
+
     /// Parses the generated genesis.toml, builds a genesis block, and asserts the bridge account is
     /// included with nonce=1.
     fn assert_valid_genesis_block(dir: &Path) {
@@ -212,7 +222,7 @@ mod tests {
     #[tokio::test]
     async fn default_mode_includes_secret_keys() {
         let dir = tempfile::tempdir().unwrap();
-        run(dir.path(), None, None).unwrap();
+        run(dir.path(), TEST_NETWORK_ID, None, None).unwrap();
 
         let admin = AccountFile::read(dir.path().join("bridge_admin.mac")).unwrap();
         assert_eq!(admin.auth_secret_keys.len(), 1);
@@ -232,7 +242,7 @@ mod tests {
         let admin_hex = hex::encode((&admin_pub).to_bytes());
         let ger_hex = hex::encode((&ger_pub).to_bytes());
 
-        run(dir.path(), Some(&admin_hex), Some(&ger_hex)).unwrap();
+        run(dir.path(), TEST_NETWORK_ID, Some(&admin_hex), Some(&ger_hex)).unwrap();
 
         let admin = AccountFile::read(dir.path().join("bridge_admin.mac")).unwrap();
         assert!(admin.auth_secret_keys.is_empty());

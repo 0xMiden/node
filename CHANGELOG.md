@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added a required `--network-id` flag to the genesis tool, passed through to the AggLayer bridge account ([#2223](https://github.com/0xMiden/node/pull/2223)).
 - Fixed missing certificates in the Docker runtime image ([#2221](https://github.com/0xMiden/node/pull/2221)).
 
 ## v0.15.0-rc.3 (2026-06-08)
