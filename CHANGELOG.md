@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed the store dropping a fungible asset's callback flag when applying partial account deltas, which caused an account commitment mismatch (and stalled network-transaction processing) for callback-bearing assets ([#2222](https://github.com/0xMiden/node/pull/2222)).
+
 ## v0.15.0-rc.3 (2026-06-08)
 
 - Actually upgrade the `p3-*` transient dependency to `0.5.3` ([#2213](https://github.com/0xMiden/node/pull/2213)).

@@ -547,7 +547,9 @@ impl<B: Backend> AccountStateForest<B> {
         for (vault_key, amount_delta) in vault_delta.fungible().iter() {
             let amount =
                 (*amount_delta).try_into().expect("full-state amount should be non-negative");
-            let asset = FungibleAsset::new(vault_key.faucet_id(), amount)?;
+            // The callback flag is part of the vault key, so it must survive the round-trip.
+            let asset = FungibleAsset::new(vault_key.faucet_id(), amount)?
+                .with_callbacks(vault_key.callback_flag());
             entries.push((asset.to_key_word(), asset.to_value_word()));
         }
 
@@ -664,11 +666,13 @@ impl<B: Backend> AccountStateForest<B> {
         // Process fungible assets
         for (vault_key, amount_delta) in vault_delta.fungible().iter() {
             let faucet_id = vault_key.faucet_id();
+            // The callback flag is part of the vault key, so it must survive the round-trip.
+            let callback_flag = vault_key.callback_flag();
             let delta_abs = amount_delta.unsigned_abs();
-            let delta = FungibleAsset::new(faucet_id, delta_abs)?;
+            let delta = FungibleAsset::new(faucet_id, delta_abs)?.with_callbacks(callback_flag);
             let key = Word::from(delta.vault_key());
 
-            let empty = FungibleAsset::new(faucet_id, 0)?;
+            let empty = FungibleAsset::new(faucet_id, 0)?.with_callbacks(callback_flag);
             let asset = if let Some(tree) = prev_tree {
                 self.forest
                     .get(tree, key)?
