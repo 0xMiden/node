@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Fixed missing certificates in the Docker runtime image ([#0000](https://github.com/0xMiden/node/pull/0000)).
+- Fixed missing certificates in the Docker runtime image ([#2221](https://github.com/0xMiden/node/pull/2221)).
 
 ## v0.15.0-rc.3 (2026-06-08)
 
