@@ -108,8 +108,8 @@ impl Rpc {
 
         info!(target: COMPONENT, endpoint=?self.listener, mode=?self.mode, "Server initialized");
 
+        // Initialize health reporter and sync service based on the RPC mode.
         let (health_reporter, health_service) = tonic_health::server::health_reporter();
-
         let maybe_sync = match self.mode {
             RpcMode::Sequencer { .. } => {
                 health_reporter.set_serving::<api_server::ApiServer<api::RpcService>>().await;
@@ -175,6 +175,7 @@ impl Rpc {
             .add_service(reflection_service)
             .serve_with_incoming(TcpListenerStream::new(self.listener));
 
+        // Run RPC and (optional) sync service.
         if let Some(sync) = maybe_sync {
             tokio::select! {
                 result = serve => result.context("failed to serve RPC API"),
