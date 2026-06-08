@@ -67,7 +67,7 @@ jobs:
               | sort_by(.name)
             ' <<< "${metadata}"
           )"
-          publishable_crates="$(jq -c '[.packages[] | select(.publish != []) | .name] | sort' <<< "${metadata}")"
+          publishable_crates="$(jq -r '[.packages[] | select(.publish != []) | .name] | sort | join(" ")' <<< "${metadata}")"
 
           if [[ "${#versions[@]}" -ne 1 ]]; then
             printf '%s\n' "${versions[@]}"
@@ -112,14 +112,10 @@ jobs:
           fi
 
   check-crate-builds:
-    name: Check crate build ${{ matrix.crate }}
+    name: Check crate builds
     runs-on: warp-ubuntu-latest-x64-8x
     needs: preflight
     if: ${{ github.repository_owner == '0xMiden' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        crate: ${{ fromJson(needs.preflight.outputs.publishable_crates) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -142,10 +138,17 @@ jobs:
           shared-key: release-dry-run-crates
           save-if: false
 
-      - name: Check package build
+      - name: Check package builds
         env:
-          CRATE: ${{ matrix.crate }}
-        run: cargo check -p "${CRATE}" --locked
+          PUBLISHABLE_CRATES: ${{ needs.preflight.outputs.publishable_crates }}
+        run: |
+          set -euo pipefail
+
+          for crate in ${PUBLISHABLE_CRATES}; do
+            echo "::group::cargo check -p ${crate}"
+            cargo check -p "${crate}" --locked
+            echo "::endgroup::"
+          done
 
   dry-run-crates:
     name: Dry-run crates.io publish
