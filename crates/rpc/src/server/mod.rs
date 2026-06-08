@@ -115,9 +115,14 @@ impl Rpc {
         let (health_reporter, health_service) = tonic_health::server::health_reporter();
         match self.mode {
             RpcMode::Sequencer { .. } => {
-                health_reporter.set_serving::<api_server::ApiServer<api::RpcService>>().await;
-            },
-            RpcMode::FullNode { source_rpc, readiness_threshold } => {
+                health_reporter
+                    .set_serving::<api_server::ApiServer<api::RpcService>>()
+                    .await;
+            }
+            RpcMode::FullNode {
+                source_rpc,
+                readiness_threshold,
+            } => {
                 health_reporter
                     .set_not_serving::<api_server::ApiServer<api::RpcService>>()
                     .await;
@@ -131,7 +136,7 @@ impl Rpc {
                     }
                     .run(),
                 );
-            },
+            }
         }
 
         let reflection_service = server::Builder::configure()
@@ -144,7 +149,7 @@ impl Rpc {
         let rpc_version =
             semver::Version::parse(rpc_version).context("failed to parse crate version")?;
 
-        let serve = tonic::transport::Server::builder()
+        let rpc = tonic::transport::Server::builder()
             .accept_http1(true)
             .max_connection_age(self.grpc_options.max_connection_age)
             .timeout(self.grpc_options.request_timeout)
@@ -180,7 +185,9 @@ impl Rpc {
             // Enables gRPC reflection service.
             .add_service(reflection_service)
             .serve_with_incoming(TcpListenerStream::new(self.listener));
-        tasks.spawn("RPC server", async move { serve.await.map_err(|e| anyhow::anyhow!(e)) });
+        tasks.spawn("RPC server", async move {
+            rpc.await.map_err(|e| anyhow::anyhow!(e))
+        });
 
         tasks.join_next_as_error().await
     }
