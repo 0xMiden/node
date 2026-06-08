@@ -38,10 +38,16 @@ impl Changelog {
     fn run(self) -> Result<()> {
         match self {
             Self::Verify { pr_body_file } => {
-                let source = fs_err::read_to_string(&pr_body_file)
-                    .with_context(|| format!("reading {}", pr_body_file.display()))?;
+                let result = (|| {
+                    let source = fs_err::read_to_string(&pr_body_file)
+                        .with_context(|| format!("reading {}", pr_body_file.display()))?;
 
-                changelog::verify_pr_body(&source)
+                    changelog::verify_pr_body(&source)
+                })();
+
+                result.inspect_err(|err| {
+                    emit_github_error_annotation("Invalid changelog metadata", err);
+                })
             },
         }
     }
@@ -80,6 +86,24 @@ fn main() -> Result<()> {
         Command::Changelog(command) => command.run(),
         Command::FmtComments(args) => run_fmt_comments(&args),
     }
+}
+
+fn emit_github_error_annotation(title: &str, err: &anyhow::Error) {
+    if !std::env::var("GITHUB_ACTIONS").is_ok_and(|value| value == "true") {
+        return;
+    }
+
+    let title = github_escape_property(title);
+    let message = github_escape_data(&format!("{err:#}"));
+    eprintln!("::error title={title}::{message}");
+}
+
+fn github_escape_property(value: &str) -> String {
+    github_escape_data(value).replace(':', "%3A").replace(',', "%2C")
+}
+
+fn github_escape_data(value: &str) -> String {
+    value.replace('%', "%25").replace('\r', "%0D").replace('\n', "%0A")
 }
 
 fn run_fmt_comments(args: &FmtCommentsArgs) -> Result<()> {
