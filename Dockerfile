@@ -27,6 +27,10 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
 ARG BIN
+# Disable incremental compilation: Docker normalises COPY timestamps, which
+# breaks Rust's mtime-based fingerprinting and causes stale .rlib reuse.
+# The /app/target cache still accelerates builds via pre-compiled dep .rlibs.
+ENV CARGO_INCREMENTAL=0
 COPY --from=planner /app/recipe.json recipe.json
 # Build dependencies while preserving Cargo artifacts across layer invalidations.
 #
@@ -34,13 +38,13 @@ COPY --from=planner /app/recipe.json recipe.json
 # caches are fragile when concurrent CI builds race or a build is interrupted.
 RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
     --mount=type=cache,sharing=locked,target=/usr/local/cargo/git/db \
-    --mount=type=cache,id=cargo-target-v2,sharing=locked,target=/app/target \
+    --mount=type=cache,sharing=locked,target=/app/target \
     cargo chef cook --release --recipe-path recipe.json
 # Build application
 COPY . .
 RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
     --mount=type=cache,sharing=locked,target=/usr/local/cargo/git/db \
-    --mount=type=cache,id=cargo-target-v2,sharing=locked,target=/app/target \
+    --mount=type=cache,sharing=locked,target=/app/target \
     cargo build --release --locked --bin ${BIN} && \
     mkdir -p /app/bin && \
     cp /app/target/release/${BIN} /app/bin/${BIN}
