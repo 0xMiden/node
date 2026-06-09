@@ -313,11 +313,11 @@ mod tests {
                 version: "1.2.3".to_string(),
                 status: Status::Healthy,
                 chain_tip: 42,
-                mempool: MempoolStatusDetails {
+                mempool: Some(MempoolStatusDetails {
                     unbatched_transactions: 1,
                     proposed_batches: 2,
                     proven_batches: 3,
-                },
+                }),
             }),
         }
     }

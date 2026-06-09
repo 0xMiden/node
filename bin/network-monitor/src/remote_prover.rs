@@ -39,16 +39,8 @@ pub enum ProofType {
     Transaction,
     Block,
     Batch,
-}
-
-impl From<ProofType> for proto::remote_prover::ProofType {
-    fn from(value: ProofType) -> Self {
-        match value {
-            ProofType::Transaction => proto::remote_prover::ProofType::Transaction,
-            ProofType::Block => proto::remote_prover::ProofType::Block,
-            ProofType::Batch => proto::remote_prover::ProofType::Batch,
-        }
-    }
+    /// The prover reported a proof type this monitor version does not know about.
+    Unknown,
 }
 
 impl From<proto::remote_prover::ProofType> for ProofType {
