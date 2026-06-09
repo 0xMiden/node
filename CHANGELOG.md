@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.15.0-rc.4 (2026-06-09)
+
 - Fixed missing certificates in the Docker runtime image ([#2221](https://github.com/0xMiden/node/pull/2221)).
 - Accept header is now forwarded to the upstream on full nodes ([#2225](https://github.com/0xMiden/node/pull/2225)).
 
