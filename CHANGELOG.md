@@ -4,7 +4,7 @@
 
 ### RPC API
 
-- Validated that `block_to` does not exceed the chain tip on all paginated sync endpoints ([#1866](https://github.com/0xMiden/node/issues/1866)).
+- RPC requests whose range exceed the chain tip are now rejected ([#1866](https://github.com/0xMiden/node/issues/1866)).
 
 ## Unreleased
 
