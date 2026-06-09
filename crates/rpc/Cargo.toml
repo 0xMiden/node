@@ -32,9 +32,10 @@ miden-tx                  = { features = ["concurrent"], workspace = true }
 miden-tx-batch-prover     = { workspace = true }
 semver                    = { version = "1.0" }
 thiserror                 = { workspace = true }
-tokio                     = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
+tokio                     = { features = ["macros", "net", "rt-multi-thread", "time"], workspace = true }
 tokio-stream              = { features = ["net"], workspace = true }
 tonic                     = { default-features = true, features = ["tls-native-roots", "tls-ring"], workspace = true }
+tonic-health              = { workspace = true }
 tonic-reflection          = { workspace = true }
 tonic-web                 = { workspace = true }
 tower                     = { workspace = true }

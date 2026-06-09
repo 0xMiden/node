@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use accept::AcceptHeaderLayer;
 use anyhow::Context;
-use miden_node_block_producer::BlockProducerApi;
+use miden_node_block_producer::{BlockProducerApi, RpcReadiness, RpcSync};
 use miden_node_proto::clients::{NtxBuilderClient, RpcClient as SourceRpcClient, ValidatorClient};
 use miden_node_proto::generated::rpc::api_server;
 use miden_node_proto_build::rpc_api_descriptor;
@@ -12,6 +12,7 @@ use miden_node_utils::clap::GrpcOptionsExternal;
 use miden_node_utils::cors::cors_for_grpc_web_layer;
 use miden_node_utils::grpc;
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
+use miden_node_utils::tasks::Tasks;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
@@ -58,7 +59,10 @@ pub enum RpcMode {
     ///
     /// The caller is responsible for configuring this client with any request metadata the source
     /// RPC requires.
-    FullNode { source_rpc: Box<SourceRpcClient> },
+    FullNode {
+        source_rpc: Box<SourceRpcClient>,
+        readiness_threshold: u32,
+    },
 }
 
 impl RpcMode {
@@ -69,13 +73,19 @@ impl RpcMode {
         }
     }
 
-    pub fn full_node(source_rpc: SourceRpcClient) -> Self {
-        Self::FullNode { source_rpc: Box::new(source_rpc) }
+    pub fn full_node(source_rpc: SourceRpcClient, readiness_threshold: u32) -> Self {
+        Self::FullNode {
+            source_rpc: Box::new(source_rpc),
+            readiness_threshold,
+        }
     }
 }
 
 impl Rpc {
     /// Serves the RPC API.
+    ///
+    /// In full-node mode, also runs the block/proof sync loop concurrently. Either component
+    /// failing causes both to stop.
     ///
     /// Note: Executes in place (i.e. not spawned) and will run indefinitely until
     ///       a fatal error is encountered.
@@ -96,18 +106,45 @@ impl Rpc {
         api.set_genesis_commitment(genesis.commitment())?;
 
         let api_service = api_server::ApiServer::new(api);
-        let reflection_service = server::Builder::configure()
-            .register_file_descriptor_set(rpc_api_descriptor())
-            .build_v1()
-            .context("failed to build reflection service")?;
 
         info!(target: COMPONENT, endpoint=?self.listener, mode=?self.mode, "Server initialized");
+
+        let mut tasks = Tasks::new();
+
+        // Initialize health reporter and sync service based on the RPC mode.
+        let (health_reporter, health_service) = tonic_health::server::health_reporter();
+        match self.mode {
+            RpcMode::Sequencer { .. } => {
+                health_reporter.set_serving::<api_server::ApiServer<api::RpcService>>().await;
+            },
+            RpcMode::FullNode { source_rpc, readiness_threshold } => {
+                health_reporter
+                    .set_not_serving::<api_server::ApiServer<api::RpcService>>()
+                    .await;
+                let readiness = RpcReadiness::new(health_reporter, readiness_threshold);
+                tasks.spawn(
+                    "RPC sync",
+                    RpcSync {
+                        state: Arc::clone(&self.store),
+                        source_rpc: *source_rpc,
+                        readiness,
+                    }
+                    .run(),
+                );
+            },
+        }
+
+        let reflection_service = server::Builder::configure()
+            .register_file_descriptor_set(rpc_api_descriptor())
+            .register_encoded_file_descriptor_set(tonic_health::pb::FILE_DESCRIPTOR_SET)
+            .build_v1()
+            .context("failed to build reflection service")?;
 
         let rpc_version = env!("CARGO_PKG_VERSION");
         let rpc_version =
             semver::Version::parse(rpc_version).context("failed to parse crate version")?;
 
-        tonic::transport::Server::builder()
+        let rpc = tonic::transport::Server::builder()
             .accept_http1(true)
             .max_connection_age(self.grpc_options.max_connection_age)
             .timeout(self.grpc_options.request_timeout)
@@ -139,10 +176,12 @@ impl Rpc {
                     .with_genesis_enforced_method("SubmitProvenTxBatch"),
             )
             .add_service(api_service)
+            .add_service(health_service)
             // Enables gRPC reflection service.
             .add_service(reflection_service)
-            .serve_with_incoming(TcpListenerStream::new(self.listener))
-            .await
-            .context("failed to serve RPC API")
+            .serve_with_incoming(TcpListenerStream::new(self.listener));
+        tasks.spawn("RPC server", async move { rpc.await.map_err(|e| anyhow::anyhow!(e)) });
+
+        tasks.join_next_as_error().await
     }
 }
