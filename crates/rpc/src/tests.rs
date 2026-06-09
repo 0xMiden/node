@@ -59,22 +59,18 @@ use crate::{Rpc, RpcMode};
 
 /// A wrapper around the loaded store state and its backing data directory.
 struct TestStore {
-    state: Arc<State>,
+    state: ManuallyDrop<Arc<State>>,
     genesis_commitment: Word,
     data_directory: ManuallyDrop<TempDir>,
 }
 
 impl Drop for TestStore {
     fn drop(&mut self) {
-        // Drop the data directory only if the state is not being used elsewhere. Otherwise we would
-        // panic when RocksDB tries to flush.
-        let mut can_drop = false;
-        if let Some(_state) = Arc::get_mut(&mut self.state) {
-            can_drop = true;
-            // _state drops now.
-        }
-        if can_drop {
-            unsafe {
+        let is_last = Arc::strong_count(&self.state) == 1;
+        unsafe {
+            // State must flush before the backing directory is removed.
+            ManuallyDrop::drop(&mut self.state);
+            if is_last {
                 ManuallyDrop::drop(&mut self.data_directory);
             }
         }
@@ -95,7 +91,7 @@ impl TestStore {
         let genesis_commitment = Self::bootstrap(data_directory.path());
         let state = load_state(data_directory.path()).await;
         Self {
-            state,
+            state: ManuallyDrop::new(state),
             genesis_commitment,
             data_directory: ManuallyDrop::new(data_directory),
         }
