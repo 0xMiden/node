@@ -4,7 +4,11 @@ use miden_crypto::hash::rpo::Rpo256;
 #[cfg(feature = "rocksdb")]
 use miden_crypto::merkle::smt::ForestPersistentBackend;
 use miden_crypto::merkle::smt::{Backend, ForestInMemoryBackend};
-use miden_node_proto::domain::account::{AccountStorageMapDetails, AccountVaultDetails};
+use miden_node_proto::domain::account::{
+    AccountStorageMapDetails,
+    AccountVaultDetails,
+    StorageMapEntries,
+};
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::account::delta::{AccountDelta, AccountStorageDelta, AccountVaultDelta};
@@ -357,14 +361,12 @@ impl<B: Backend> AccountStateForest<B> {
         account_id: AccountId,
         slot_name: &StorageSlotName,
         block_num: BlockNumber,
-        limit: usize,
     ) -> Option<Result<Vec<(StorageMapKeyHash, Word)>, MerkleError>> {
         let lineage = Self::storage_lineage_id(account_id, slot_name);
         let tree = self.get_tree_id(lineage, block_num)?;
 
         Some(self.forest.entries(tree).map_err(Self::map_forest_error).and_then(|entries| {
             entries
-                .take(limit)
                 .map(|entry| {
                     entry
                         .map(|e| (StorageMapKeyHash::from_raw(e.key), e.value))
@@ -372,6 +374,18 @@ impl<B: Backend> AccountStateForest<B> {
                 })
                 .collect()
         }))
+    }
+
+    /// Returns the number of storage map entries.
+    fn num_storage_map_entries(
+        &self,
+        account_id: AccountId,
+        slot_name: &StorageSlotName,
+        block_num: BlockNumber,
+    ) -> Option<Result<usize, MerkleError>> {
+        let lineage = Self::storage_lineage_id(account_id, slot_name);
+        let tree = self.get_tree_id(lineage, block_num)?;
+        Some(self.forest.entry_count(tree).map_err(Self::map_forest_error))
     }
 
     /// Returns all storage map entries when the forest and reverse-key cache contain enough data.
@@ -388,24 +402,25 @@ impl<B: Backend> AccountStateForest<B> {
         slot_name: StorageSlotName,
         block_num: BlockNumber,
     ) -> Result<AccountStorageMapResult, MerkleError> {
-        let Some(hashed_entries) = self
-            .get_storage_map_entries(
-                account_id,
-                &slot_name,
-                block_num,
-                AccountStorageMapDetails::MAX_RETURN_ENTRIES + 1,
-            )
-            .transpose()?
+        // Check if number of entries is not larger than the limit.
+        let Some(num_entries) =
+            self.num_storage_map_entries(account_id, &slot_name, block_num).transpose()?
         else {
             return Ok(AccountStorageMapResult::NotFound);
         };
-
-        if hashed_entries.len() > AccountStorageMapDetails::MAX_RETURN_ENTRIES {
+        if num_entries > AccountStorageMapDetails::MAX_RETURN_ENTRIES {
             return Ok(AccountStorageMapResult::Details(AccountStorageMapDetails {
                 slot_name,
-                entries: miden_node_proto::domain::account::StorageMapEntries::LimitExceeded,
+                entries: StorageMapEntries::LimitExceeded,
             }));
         }
+
+        // Fetch (hashed_key, value) pairs.
+        let Some(hashed_entries) =
+            self.get_storage_map_entries(account_id, &slot_name, block_num).transpose()?
+        else {
+            return Ok(AccountStorageMapResult::NotFound);
+        };
 
         let raw_keys = self
             .storage_map_key_cache
