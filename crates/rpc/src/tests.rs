@@ -631,7 +631,7 @@ async fn full_node_preserves_original_accept_metadata_when_forwarding() {
     let local_store = TestStore::start().await;
     let full_node = RpcService::new(
         Arc::clone(&local_store.state),
-        RpcMode::full_node(source_rpc),
+        RpcMode::full_node(source_rpc, 100),
         None,
         NonZeroUsize::new(1_000).unwrap(),
         None,
