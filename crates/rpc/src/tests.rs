@@ -469,28 +469,37 @@ fn source_rpc_client() -> RpcClient {
 struct FixedNtxBuilder {
     response: proto::rpc::GetNetworkNoteStatusResponse,
     call_count: Arc<AtomicUsize>,
+    last_accept: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 #[tonic::async_trait]
 impl proto::ntx_builder::api_server::Api for FixedNtxBuilder {
     async fn get_network_note_status(
         &self,
-        _request: Request<proto::note::NoteId>,
+        request: Request<proto::note::NoteId>,
     ) -> Result<tonic::Response<proto::rpc::GetNetworkNoteStatusResponse>, tonic::Status> {
         self.call_count.fetch_add(1, Ordering::SeqCst);
+        let accept = request
+            .metadata()
+            .get(ACCEPT.as_str())
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        *self.last_accept.lock().expect("last_accept mutex should not be poisoned") = accept;
         Ok(tonic::Response::new(self.response.clone()))
     }
 }
 
 async fn start_ntx_builder(
     response: proto::rpc::GetNetworkNoteStatusResponse,
-) -> (NtxBuilderClient, Arc<AtomicUsize>) {
+) -> (NtxBuilderClient, Arc<AtomicUsize>, Arc<std::sync::Mutex<Option<String>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("Failed to bind ntx-builder");
     let addr = listener.local_addr().expect("Failed to get ntx-builder address");
     let call_count = Arc::new(AtomicUsize::new(0));
+    let last_accept = Arc::new(std::sync::Mutex::new(None));
     let service = FixedNtxBuilder {
         response,
         call_count: Arc::clone(&call_count),
+        last_accept: Arc::clone(&last_accept),
     };
 
     task::spawn(async move {
@@ -509,7 +518,7 @@ async fn start_ntx_builder(
         .without_otel_context_injection()
         .connect_lazy::<NtxBuilderClient>();
 
-    (client, call_count)
+    (client, call_count, last_accept)
 }
 
 async fn start_source_rpc(ntx_builder: NtxBuilderClient) -> (RpcClient, TestStore) {
@@ -572,7 +581,8 @@ async fn full_node_forwards_get_network_note_status_to_source_rpc() {
         attempt_count: 7,
         last_attempt_block_num: Some(42),
     };
-    let (ntx_builder, ntx_builder_call_count) = start_ntx_builder(expected.clone()).await;
+    let (ntx_builder, ntx_builder_call_count, _last_accept) =
+        start_ntx_builder(expected.clone()).await;
     let (source_rpc, _source_store) = start_source_rpc(ntx_builder).await;
     let local_store = TestStore::start().await;
     let full_node = RpcService::new(
@@ -591,6 +601,47 @@ async fn full_node_forwards_get_network_note_status_to_source_rpc() {
 
     assert_eq!(response, expected);
     assert_eq!(ntx_builder_call_count.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn full_node_preserves_original_accept_metadata_when_forwarding() {
+    let expected = proto::rpc::GetNetworkNoteStatusResponse {
+        status: proto::rpc::NetworkNoteStatus::Discarded.into(),
+        last_error: Some("execution failed".to_string()),
+        attempt_count: 7,
+        last_attempt_block_num: Some(42),
+    };
+    let (ntx_builder, _ntx_builder_call_count, last_accept) =
+        start_ntx_builder(expected.clone()).await;
+    let (source_rpc, source_store) = start_source_rpc(ntx_builder).await;
+    let local_store = TestStore::start().await;
+    let full_node = RpcService::new(
+        Arc::clone(&local_store.state),
+        RpcMode::full_node(source_rpc),
+        None,
+        NonZeroUsize::new(1_000).unwrap(),
+        None,
+    );
+
+    let original_accept = format!(
+        "application/vnd.miden; version={}; genesis={}",
+        env!("CARGO_PKG_VERSION"),
+        source_store.genesis_commitment().to_hex(),
+    );
+    let mut request = Request::new(Word::empty().into());
+    request.metadata_mut().insert(ACCEPT.as_str(), original_accept.parse().unwrap());
+
+    let response = full_node
+        .get_network_note_status(request)
+        .await
+        .expect("full-node RPC should forward network note status request")
+        .into_inner();
+
+    assert_eq!(response, expected);
+    assert_eq!(
+        *last_accept.lock().expect("last_accept mutex should not be poisoned"),
+        Some(original_accept),
+    );
 }
 
 // Batch-path coverage for the network-account gate is provided manually. Building a valid
