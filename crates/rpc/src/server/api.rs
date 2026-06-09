@@ -325,7 +325,7 @@ impl api_server::Api for RpcService {
         let block_range = range
             .into_inclusive_range::<RpcInvalidBlockRange>()
             .map_err(invalid_block_range_to_status)?;
-        let chain_tip = self.chain_tip_for_range(&block_range).await?;
+        let chain_tip = self.range_bounds_check(&block_range).await?;
 
         let (nullifiers, block_num) = self
             .store
@@ -521,7 +521,7 @@ impl api_server::Api for RpcService {
         let block_range = range
             .into_inclusive_range::<RpcInvalidBlockRange>()
             .map_err(invalid_block_range_to_status)?;
-        let chain_tip = self.chain_tip_for_range(&block_range).await?;
+        let chain_tip = self.range_bounds_check(&block_range).await?;
 
         let (results, last_block_checked) = self
             .store
@@ -612,7 +612,7 @@ impl api_server::Api for RpcService {
         let block_range = range
             .into_inclusive_range::<RpcInvalidBlockRange>()
             .map_err(invalid_block_range_to_status)?;
-        let chain_tip = self.chain_tip_for_range(&block_range).await?;
+        let chain_tip = self.range_bounds_check(&block_range).await?;
         let storage_maps_page = self
             .store
             .sync_account_storage_maps(account_id, block_range)
@@ -662,7 +662,7 @@ impl api_server::Api for RpcService {
         let block_range = range
             .into_inclusive_range::<RpcInvalidBlockRange>()
             .map_err(invalid_block_range_to_status)?;
-        let chain_tip = self.chain_tip_for_range(&block_range).await?;
+        let chain_tip = self.range_bounds_check(&block_range).await?;
         let (last_included_block, updates) = self
             .store
             .sync_account_vault(account_id, block_range)
@@ -990,7 +990,7 @@ impl api_server::Api for RpcService {
         let block_range = range
             .into_inclusive_range::<RpcInvalidBlockRange>()
             .map_err(invalid_block_range_to_status)?;
-        let chain_tip = self.chain_tip_for_range(&block_range).await?;
+        let chain_tip = self.range_bounds_check(&block_range).await?;
         let account_ids = read_account_ids::<Status, _>(request.account_ids)?;
         let (last_block_included, transaction_records_db) = self
             .store
