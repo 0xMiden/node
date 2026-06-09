@@ -48,7 +48,7 @@ pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
     let (ntx_increment_rx, ntx_tracking_rx) = if config.disable_ntx_service {
         (None, None)
     } else {
-        let (increment_rx, tracking_rx) = tasks.spawn_ntx_service(&config).await?;
+        let (increment_rx, tracking_rx) = tasks.spawn_ntx_service(&config);
         (Some(increment_rx), Some(tracking_rx))
     };
 
