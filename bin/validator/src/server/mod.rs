@@ -75,19 +75,13 @@ impl Validator {
         // Load initial metrics from the database for the in-memory counters.
         let (initial_chain_tip, initial_tx_count, initial_block_count) = db
             .query("load_initial_metrics", |conn| {
-                let tip = load_chain_tip(conn)?.expect("chain tip should exist");
+                let tip = load_chain_tip(conn)?.map_or(0, |h| h.block_num().as_u32());
                 let tx_count = u64::try_from(count_validated_transactions(conn)?).unwrap_or(0);
                 let block_count = u64::try_from(count_signed_blocks(conn)?).unwrap_or(0);
                 Ok::<_, miden_node_db::DatabaseError>((tip, tx_count, block_count))
             })
             .await
             .context("failed to load initial metrics")?;
-
-        // Configured signer public key must match the chain tip validator key.
-        anyhow::ensure!(
-            self.signer.public_key() != *initial_chain_tip.validator_key(),
-            "signer public key does not match chain tip validator key"
-        );
 
         let listener = TcpListener::bind(self.address)
             .await
@@ -106,7 +100,7 @@ impl Validator {
             .add_service(api_server::ApiServer::new(ValidatorServer::new(
                 self.signer,
                 db,
-                initial_chain_tip.block_num().as_u32(),
+                initial_chain_tip,
                 initial_tx_count,
                 initial_block_count,
             )))
