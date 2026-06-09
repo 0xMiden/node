@@ -2,7 +2,25 @@
 
 ## Unreleased
 
+- Fixed missing certificates in the Docker runtime image ([#2221](https://github.com/0xMiden/node/pull/2221)).
+
+## v0.15.0-rc.3 (2026-06-08)
+
+- Actually upgrade the `p3-*` transient dependency to `0.5.3` ([#2213](https://github.com/0xMiden/node/pull/2213)).
+
+## v0.15.0-rc.2 (2026-06-05)
+
+- Added `arm64/linux` support to Docker images ([#2209](https://github.com/0xMiden/node/pull/2209)).
+- Force upgrade `p3-goldilocks` to `> 0.5.2` to include a bugfix causing signature verification to fail [#2211](https://github.com/0xMiden/node/pull/2211)).
+
+## v0.15.0-rc.1 (2026-06-05)
+
 - Fixed trace exports not supporting TLS [#2199](#https://github.com/0xMiden/node/pull/2199).
+- Validator `SignBlock` response now includes the block commitment it signed ([#2204](#https://github.com/0xMiden/node/pull/2204)).
+- Sequencer now rejects blocks if the commitment signed by the validator does not match the block it proposed ([#2204](#https://github.com/0xMiden/node/pull/2204)).
+- Fixed trace exports not supporting TLS ([#2199](#https://github.com/0xMiden/node/pull/2199)).
+- Updated to protocol v0.15.2 (v0.15.0 and v0.15.1 are yanked) ([#2205](#https://github.com/0xMiden/node/pull/2205)).
+- Ensure that the proposed block's validator key matches our own before signing [#2203](https://github.com/0xMiden/node/pull/2203).
 
 ## v0.15.0-rc.0 (2026-06-03)
 

@@ -10,6 +10,9 @@ permissions:
   contents: read
   id-token: write
 
+env:
+  DOCKER_PLATFORMS: linux/amd64,linux/arm64
+
 jobs:
   docker-build:
     runs-on: warp-ubuntu-latest-x64-8x
@@ -33,13 +36,30 @@ jobs:
             port: 3000
     name: Build ${{ matrix.component }}
     steps:
-      - name: Build
-        uses: WarpBuilds/build-push-action@8c1f3b8bd22c68607865d99ff650d37a564229a5 # v6.0.7
+      - name: Checkout repo
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
+
+      - name: Prepare image metadata
+        id: metadata
+        run: |
+          echo "created=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "version=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        uses: WarpBuilds/build-push-action@ec038a9f4b87a7c7ccb50ac7a26a90d46a610a81 # v6.0.9
+        with:
+          context: .
           push: false
           file: ./Dockerfile
-          platforms: linux/amd64
+          platforms: ${{ env.DOCKER_PLATFORMS }}
           profile-name: ${{ vars.WARPBUILD_DOCKER_BUILDER_PROFILE }}
+          pull: true
           build-args: |
             BIN=${{ matrix.bin }}
             PORT=${{ matrix.port }}
+            CREATED=${{ steps.metadata.outputs.created }}
+            VERSION=${{ steps.metadata.outputs.version }}
+            COMMIT=${{ steps.metadata.outputs.commit }}

@@ -42,6 +42,9 @@ Build the images after checkout or whenever you need fresh local images. The loc
 # Build the Docker images used by the local network.
 make local-network-build
 
+# Optionally build for a specific Docker platform.
+make local-network-build DOCKER_PLATFORM=linux/arm64
+
 # Start the local network.
 make local-network-up
 
