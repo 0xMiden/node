@@ -20,7 +20,7 @@ use crate::explorer::ExplorerService;
 use crate::faucet::FaucetService;
 use crate::frontend::{ServerState, serve};
 use crate::note_transport::NoteTransportService;
-use crate::remote_prover::{ProbeSnapshot, ProverStatusService, generate_prover_test_payload};
+use crate::remote_prover::ProverStatusService;
 use crate::service::{Service, build_tls_client};
 use crate::status::{
     CounterTrackingDetails,
@@ -94,44 +94,24 @@ impl Tasks {
     /// Spawn prover status tasks for all configured provers.
     ///
     /// Each prover is monitored by a [`ProverStatusService`] that polls on the status cadence.
-    /// The first time it observes the prover reporting `ProofType::Transaction`, the status
-    /// service spawns a detached probe task that runs proof-test probes on the test cadence.
-    pub async fn spawn_prover_tasks(
-        &mut self,
-        config: &MonitorConfig,
-    ) -> Vec<watch::Receiver<ServiceStatus>> {
-        // Build the proof-test payload once and share it across all provers. If it can't be built
-        // (e.g. RPC unreachable at startup), prover status is still monitored without proof
-        // probing.
-        let payload = match generate_prover_test_payload(&config.rpc_url).await {
-            Ok(payload) => Some(payload),
-            Err(e) => {
-                warn!(
-                    target: COMPONENT,
-                    error = %e,
-                    "failed to build remote-prover probe payload"
-                );
-                None
-            },
-        };
-
+    /// Once it observes the prover reporting `ProofType::Transaction`, the status service spawns
+    /// (and keeps alive) a probe task that acquires its test payload from the RPC and runs
+    /// proof-test probes on the test cadence.
+    pub fn spawn_prover_tasks(&mut self, config: &MonitorConfig) -> Vec<Receiver<ServiceStatus>> {
         let mut prover_rxs = Vec::new();
         for (i, prover_url) in config.remote_prover_urls.iter().enumerate() {
             let name = format!("Remote Prover ({})", i + 1);
-            let (probe_tx, probe_rx) = watch::channel(ProbeSnapshot::default());
             let test_client =
                 build_tls_client::<RemoteProverClient>(prover_url.clone(), config.request_timeout);
 
             let status_svc = ProverStatusService::new(
                 name,
                 prover_url.clone(),
+                config.rpc_url.clone(),
                 config.status_check_interval,
                 config.request_timeout,
                 config.remote_prover_test_interval,
-                probe_tx,
-                probe_rx,
                 test_client,
-                payload.clone(),
             );
             prover_rxs.push(self.spawn_service(status_svc));
         }

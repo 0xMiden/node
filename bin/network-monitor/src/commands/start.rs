@@ -35,11 +35,7 @@ pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
 
     let rpc_rx = tasks.spawn_rpc_checker(&config);
 
-    let prover_rxs = if config.remote_prover_urls.is_empty() {
-        Vec::new()
-    } else {
-        tasks.spawn_prover_tasks(&config).await
-    };
+    let prover_rxs = tasks.spawn_prover_tasks(&config);
 
     let faucet_rx = config.faucet_url.is_some().then(|| tasks.spawn_faucet(&config));
 
