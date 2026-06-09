@@ -10,9 +10,42 @@ use miden_node_utils::tasks::Tasks;
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use miden_protocol::utils::serde::Deserializable;
 use tokio_stream::StreamExt;
+use tonic_health::ServingStatus;
+use tonic_health::server::HealthReporter;
 use tracing::{info, warn};
 
 pub(crate) const RECONNECT_DELAY: Duration = Duration::from_secs(5);
+
+// RPC READINESS
+// ================================================================================================
+
+/// Tracks readiness of the RPC API service for a full-node.
+///
+/// Holds the gRPC [`HealthReporter`] and the readiness threshold. Created by [`Rpc::serve`]
+/// once the health pair is available and passed directly into [`BlockSync`].
+#[derive(Clone)]
+pub struct RpcReadiness {
+    reporter: HealthReporter,
+    threshold: u32,
+}
+
+impl RpcReadiness {
+    const SERVICE_NAME: &'static str = "rpc.Api";
+
+    pub fn new(reporter: HealthReporter, threshold: u32) -> Self {
+        Self { reporter, threshold }
+    }
+
+    /// Updates the RPC service health status based on the upstream/local tip gap.
+    pub async fn update(&self, upstream_tip: BlockNumber, local_tip: BlockNumber) {
+        let status = if upstream_tip.as_u32().saturating_sub(local_tip.as_u32()) <= self.threshold {
+            ServingStatus::Serving
+        } else {
+            ServingStatus::NotServing
+        };
+        self.reporter.set_service_status(Self::SERVICE_NAME, status).await;
+    }
+}
 
 // RPC SYNC
 // ================================================================================================
@@ -21,6 +54,7 @@ pub(crate) const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 pub struct RpcSync {
     pub state: Arc<State>,
     pub source_rpc: RpcClient,
+    pub readiness: RpcReadiness,
 }
 
 impl RpcSync {
@@ -30,6 +64,7 @@ impl RpcSync {
         let block_sync = BlockSync {
             state: Arc::clone(&self.state),
             source_rpc: self.source_rpc.clone(),
+            readiness: self.readiness,
         };
         let proof_sync = ProofSync {
             state: self.state,
@@ -49,6 +84,7 @@ impl RpcSync {
 struct BlockSync {
     state: Arc<State>,
     source_rpc: RpcClient,
+    readiness: RpcReadiness,
 }
 
 struct ProofSync {
@@ -86,9 +122,13 @@ impl BlockSync {
 
         while let Some(result) = stream.next().await {
             let event = result?;
+            let upstream_tip = BlockNumber::from(event.committed_chain_tip);
             let block = SignedBlock::read_from_bytes(&event.block)
                 .context("failed to deserialize block from upstream")?;
             self.state.apply_block(block).await?;
+
+            let local_tip = self.state.chain_tip(Finality::Committed).await;
+            self.readiness.update(upstream_tip, local_tip).await;
         }
 
         Ok(())

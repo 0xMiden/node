@@ -4,7 +4,11 @@ use miden_crypto::hash::rpo::Rpo256;
 #[cfg(feature = "rocksdb")]
 use miden_crypto::merkle::smt::ForestPersistentBackend;
 use miden_crypto::merkle::smt::{Backend, ForestInMemoryBackend};
-use miden_node_proto::domain::account::{AccountStorageMapDetails, AccountVaultDetails};
+use miden_node_proto::domain::account::{
+    AccountStorageMapDetails,
+    AccountVaultDetails,
+    StorageMapEntries,
+};
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::account::delta::{AccountDelta, AccountStorageDelta, AccountVaultDelta};
@@ -303,12 +307,16 @@ impl<B: Backend> AccountStateForest<B> {
     ) -> Result<AccountVaultDetails, WitnessError> {
         let lineage = Self::vault_lineage_id(account_id);
         let tree = self.get_tree_id(lineage, block_num).ok_or(WitnessError::RootNotFound)?;
-        // TODO: we should be checking `.entry_count()` instead of pulling entries from the tree
-        // once the optimization making `.entry_count()` cheap once `miden-crypto` is upgraded to
-        // > 0.23.
+
+        // Return "limit exceeded" if the number of vault entries is above the limit.
+        let num_input_notes =
+            self.forest.entry_count(tree).map_err(Self::map_forest_error_to_witness)?;
+        if num_input_notes > AccountVaultDetails::MAX_RETURN_ENTRIES {
+            return Ok(AccountVaultDetails::LimitExceeded);
+        }
+
         let entries = self.forest.entries(tree).map_err(Self::map_forest_error_to_witness)?;
         let assets = entries
-            .take(AccountVaultDetails::MAX_RETURN_ENTRIES + 1)
             .map(|entry| {
                 let entry = entry.map_err(Self::map_forest_error_to_witness)?;
                 Asset::from_key_value_words(entry.key, entry.value).map_err(WitnessError::from)
@@ -353,14 +361,12 @@ impl<B: Backend> AccountStateForest<B> {
         account_id: AccountId,
         slot_name: &StorageSlotName,
         block_num: BlockNumber,
-        limit: usize,
     ) -> Option<Result<Vec<(StorageMapKeyHash, Word)>, MerkleError>> {
         let lineage = Self::storage_lineage_id(account_id, slot_name);
         let tree = self.get_tree_id(lineage, block_num)?;
 
         Some(self.forest.entries(tree).map_err(Self::map_forest_error).and_then(|entries| {
             entries
-                .take(limit)
                 .map(|entry| {
                     entry
                         .map(|e| (StorageMapKeyHash::from_raw(e.key), e.value))
@@ -368,6 +374,18 @@ impl<B: Backend> AccountStateForest<B> {
                 })
                 .collect()
         }))
+    }
+
+    /// Returns the number of storage map entries.
+    fn num_storage_map_entries(
+        &self,
+        account_id: AccountId,
+        slot_name: &StorageSlotName,
+        block_num: BlockNumber,
+    ) -> Option<Result<usize, MerkleError>> {
+        let lineage = Self::storage_lineage_id(account_id, slot_name);
+        let tree = self.get_tree_id(lineage, block_num)?;
+        Some(self.forest.entry_count(tree).map_err(Self::map_forest_error))
     }
 
     /// Returns all storage map entries when the forest and reverse-key cache contain enough data.
@@ -384,24 +402,25 @@ impl<B: Backend> AccountStateForest<B> {
         slot_name: StorageSlotName,
         block_num: BlockNumber,
     ) -> Result<AccountStorageMapResult, MerkleError> {
-        let Some(hashed_entries) = self
-            .get_storage_map_entries(
-                account_id,
-                &slot_name,
-                block_num,
-                AccountStorageMapDetails::MAX_RETURN_ENTRIES + 1,
-            )
-            .transpose()?
+        // Check if number of entries is not larger than the limit.
+        let Some(num_entries) =
+            self.num_storage_map_entries(account_id, &slot_name, block_num).transpose()?
         else {
             return Ok(AccountStorageMapResult::NotFound);
         };
-
-        if hashed_entries.len() > AccountStorageMapDetails::MAX_RETURN_ENTRIES {
+        if num_entries > AccountStorageMapDetails::MAX_RETURN_ENTRIES {
             return Ok(AccountStorageMapResult::Details(AccountStorageMapDetails {
                 slot_name,
-                entries: miden_node_proto::domain::account::StorageMapEntries::LimitExceeded,
+                entries: StorageMapEntries::LimitExceeded,
             }));
         }
+
+        // Fetch (hashed_key, value) pairs.
+        let Some(hashed_entries) =
+            self.get_storage_map_entries(account_id, &slot_name, block_num).transpose()?
+        else {
+            return Ok(AccountStorageMapResult::NotFound);
+        };
 
         let raw_keys = self
             .storage_map_key_cache
@@ -547,7 +566,8 @@ impl<B: Backend> AccountStateForest<B> {
         for (vault_key, amount_delta) in vault_delta.fungible().iter() {
             let amount =
                 (*amount_delta).try_into().expect("full-state amount should be non-negative");
-            let asset = FungibleAsset::new(vault_key.faucet_id(), amount)?;
+            let asset = FungibleAsset::new(vault_key.faucet_id(), amount)?
+                .with_callbacks(vault_key.callback_flag());
             entries.push((asset.to_key_word(), asset.to_value_word()));
         }
 
@@ -664,11 +684,12 @@ impl<B: Backend> AccountStateForest<B> {
         // Process fungible assets
         for (vault_key, amount_delta) in vault_delta.fungible().iter() {
             let faucet_id = vault_key.faucet_id();
+            let callback_flag = vault_key.callback_flag();
             let delta_abs = amount_delta.unsigned_abs();
-            let delta = FungibleAsset::new(faucet_id, delta_abs)?;
+            let delta = FungibleAsset::new(faucet_id, delta_abs)?.with_callbacks(callback_flag);
             let key = Word::from(delta.vault_key());
 
-            let empty = FungibleAsset::new(faucet_id, 0)?;
+            let empty = FungibleAsset::new(faucet_id, 0)?.with_callbacks(callback_flag);
             let asset = if let Some(tree) = prev_tree {
                 self.forest
                     .get(tree, key)?
