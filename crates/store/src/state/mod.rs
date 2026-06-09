@@ -21,7 +21,7 @@ use miden_protocol::crypto::merkle::mmr::{MmrProof, PartialMmr};
 use miden_protocol::crypto::merkle::smt::LargeSmt;
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
 use miden_protocol::transaction::PartialBlockchain;
-use tokio::sync::{RwLock, oneshot, watch};
+use tokio::sync::{RwLock, watch};
 use tracing::{Span, info, instrument};
 
 use crate::account_state_forest::{AccountStateForest, AccountStateForestBackend};
@@ -29,10 +29,7 @@ use crate::accounts::AccountTreeWithHistory;
 use crate::blocks::BlockStore;
 use crate::db::{Db, NoteRecord, NullifierInfo};
 use crate::errors::{
-    DatabaseError,
-    GetBatchInputsError,
-    GetBlockHeaderError,
-    GetBlockInputsError,
+    DatabaseError, GetBatchInputsError, GetBlockHeaderError, GetBlockInputsError,
     StateInitializationError,
 };
 use crate::proven_tip::ProvenTipWriter;
@@ -46,16 +43,9 @@ const PROOF_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(512).unwrap();
 
 mod loader;
 use loader::{
-    ACCOUNT_STATE_FOREST_STORAGE_DIR,
-    ACCOUNT_TREE_STORAGE_DIR,
-    AccountForestLoader,
-    NULLIFIER_TREE_STORAGE_DIR,
-    SnapshotTreeStorage,
-    TreeStorage,
-    TreeStorageLoader,
-    load_mmr,
-    verify_account_state_forest_consistency,
-    verify_tree_consistency,
+    ACCOUNT_STATE_FOREST_STORAGE_DIR, ACCOUNT_TREE_STORAGE_DIR, AccountForestLoader,
+    NULLIFIER_TREE_STORAGE_DIR, SnapshotTreeStorage, TreeStorage, TreeStorageLoader, load_mmr,
+    verify_account_state_forest_consistency, verify_tree_consistency,
 };
 
 mod replica;
@@ -65,11 +55,8 @@ mod account;
 
 mod subscription;
 pub use subscription::{
-    BlockSubscriptionEvent,
-    BlockSubscriptionStream,
-    ProofSubscriptionEvent,
-    ProofSubscriptionStream,
-    StateSubscriptionError,
+    BlockSubscriptionEvent, BlockSubscriptionStream, ProofSubscriptionEvent,
+    ProofSubscriptionStream, StateSubscriptionError,
 };
 
 mod apply_block;
@@ -162,10 +149,6 @@ pub struct State {
 
     /// FIFO cache of recent block proofs for replica subscriptions.
     pub(crate) proof_cache: ProofCache,
-
-    /// Resolves after the [`BlockWriter`] task has fully stopped and all on-disk resources
-    /// (including `RocksDB`) have been flushed and released. Consumed by [`Self::shutdown`].
-    writer_done: oneshot::Receiver<()>,
 }
 
 impl State {
@@ -223,8 +206,11 @@ impl State {
             TreeStorage::create(data_path, &account_storage_config, ACCOUNT_TREE_STORAGE_DIR)?;
         let account_tree = account_storage.load_account_tree(&mut db).await?;
 
-        let nullifier_storage =
-            TreeStorage::create(data_path, &nullifier_storage_config, NULLIFIER_TREE_STORAGE_DIR)?;
+        let nullifier_storage = TreeStorage::create(
+            data_path,
+            &nullifier_storage_config,
+            NULLIFIER_TREE_STORAGE_DIR,
+        )?;
         let nullifier_tree = nullifier_storage.load_nullifier_tree(&mut db).await?;
 
         verify_tree_consistency(account_tree.root(), nullifier_tree.root(), &mut db).await?;
@@ -236,7 +222,9 @@ impl State {
             &forest_storage_config,
             ACCOUNT_STATE_FOREST_STORAGE_DIR,
         )?;
-        let forest = forest_backend.load_account_state_forest(&mut db, latest_block_num).await?;
+        let forest = forest_backend
+            .load_account_state_forest(&mut db, latest_block_num)
+            .await?;
         verify_account_state_forest_consistency(&forest, &mut db).await?;
 
         let db = Arc::new(db);
@@ -268,10 +256,6 @@ impl State {
         let (write_tx, write_rx) = tokio::sync::mpsc::channel(1);
         let write_handle = WriteHandle::new(write_tx);
 
-        // writer_done_tx is held by BlockWriter and dropped after its trees are flushed, waking
-        // writer_done on the caller side.
-        let (writer_done_tx, writer_done) = oneshot::channel();
-
         // Spawn the BlockWriter task.
         let block_writer = BlockWriter {
             db: Arc::clone(&db),
@@ -281,10 +265,9 @@ impl State {
             committed_tip_tx: Arc::clone(&committed_tip_tx),
             block_cache: block_cache.clone(),
             rx: write_rx,
-            nullifier_tree: std::mem::ManuallyDrop::new(nullifier_tree),
-            account_tree: std::mem::ManuallyDrop::new(account_tree),
-            blockchain: std::mem::ManuallyDrop::new(blockchain),
-            writer_done_tx: std::mem::ManuallyDrop::new(writer_done_tx),
+            nullifier_tree,
+            account_tree,
+            blockchain,
         };
         tokio::spawn(block_writer.run());
 
@@ -299,28 +282,12 @@ impl State {
             committed_tip_tx,
             block_cache,
             proof_cache,
-            writer_done,
         })
     }
 
     /// Returns a watch receiver that wakes every time a new block is committed.
     pub fn subscribe_committed_tip(&self) -> watch::Receiver<BlockNumber> {
         self.committed_tip_tx.subscribe()
-    }
-
-    /// Shuts down the state, waiting for the [`BlockWriter`] task to fully stop.
-    ///
-    /// Dropping `State` closes the write channel, which signals [`BlockWriter`] to stop. This
-    /// method waits for the writer to complete — including any pending `RocksDB` flushes — before
-    /// returning. Call this before releasing on-disk resources (e.g. removing a data directory).
-    pub async fn shutdown(self) {
-        // Drop everything except `writer_done` inside an inner scope so that `write_handle` is
-        // dropped — closing the write channel — before we await the writer's completion.
-        let writer_done = {
-            let Self { writer_done, .. } = self;
-            writer_done
-        };
-        writer_done.await.ok();
     }
 
     /// Loads serialized block proving inputs from the block store.
@@ -425,7 +392,9 @@ impl State {
             .await
             .map_err(GetBatchInputsError::SelectNoteInclusionProofError)?;
 
-        let note_blocks = note_proofs.values().map(|proof| proof.location().block_num());
+        let note_blocks = note_proofs
+            .values()
+            .map(|proof| proof.location().block_num());
 
         let mut blocks: BTreeSet<BlockNumber> = tx_reference_blocks;
         blocks.extend(note_blocks);
@@ -434,8 +403,9 @@ impl State {
             let snapshot = self.snapshot();
             let latest_block_num = snapshot.block_num;
 
-            let highest_block_num =
-                *blocks.last().expect("we should have checked for empty block references");
+            let highest_block_num = *blocks
+                .last()
+                .expect("we should have checked for empty block references");
             if highest_block_num > latest_block_num {
                 return Err(GetBatchInputsError::UnknownTransactionBlockReference {
                     highest_block_num,
@@ -456,7 +426,11 @@ impl State {
 
         let mut headers = self
             .db
-            .select_block_headers(blocks.into_iter().chain(std::iter::once(batch_reference_block)))
+            .select_block_headers(
+                blocks
+                    .into_iter()
+                    .chain(std::iter::once(batch_reference_block)),
+            )
             .await
             .map_err(GetBatchInputsError::SelectBlockHeaderError)?;
 
@@ -494,8 +468,9 @@ impl State {
             .await
             .map_err(GetBlockInputsError::SelectNoteInclusionProofError)?;
 
-        let note_proof_reference_blocks =
-            unauthenticated_note_proofs.values().map(|proof| proof.location().block_num());
+        let note_proof_reference_blocks = unauthenticated_note_proofs
+            .values()
+            .map(|proof| proof.location().block_num());
 
         let mut blocks = reference_blocks;
         blocks.extend(note_proof_reference_blocks);
@@ -505,7 +480,11 @@ impl State {
 
         let mut headers = self
             .db
-            .select_block_headers(blocks.into_iter().chain(std::iter::once(latest_block_number)))
+            .select_block_headers(
+                blocks
+                    .into_iter()
+                    .chain(std::iter::once(latest_block_number)),
+            )
             .await
             .map_err(GetBlockInputsError::SelectBlockHeaderError)?;
 
@@ -620,7 +599,11 @@ impl State {
                     })
                     .collect();
 
-                Ok((account_commitment, nullifiers, new_account_id_prefix_is_unique))
+                Ok((
+                    account_commitment,
+                    nullifiers,
+                    new_account_id_prefix_is_unique,
+                ))
             })
         });
         let (account_commitment, nullifiers, new_account_id_prefix_is_unique) = match tree_inputs {
@@ -646,7 +629,9 @@ impl State {
         &self,
         account_ids: &[AccountId],
     ) -> Result<HashSet<AccountId>, DatabaseError> {
-        self.db.select_network_accounts_subset(account_ids.to_vec()).await
+        self.db
+            .select_network_accounts_subset(account_ids.to_vec())
+            .await
     }
 
     /// Returns the effective chain tip for the given finality level.
@@ -670,7 +655,10 @@ impl State {
         if block_num > self.chain_tip(Finality::Committed) {
             return Ok(None);
         }
-        self.block_store.load_block(block_num).await.map_err(Into::into)
+        self.block_store
+            .load_block(block_num)
+            .await
+            .map_err(Into::into)
     }
 
     /// Loads a block proof from the block store. Returns `Ok(None)` if the proof is not found.
@@ -681,7 +669,10 @@ impl State {
         if block_num > self.chain_tip(Finality::Proven) {
             return Ok(None);
         }
-        self.block_store.load_proof(block_num).await.map_err(Into::into)
+        self.block_store
+            .load_proof(block_num)
+            .await
+            .map_err(Into::into)
     }
 
     /// Returns the script for a note by its root.

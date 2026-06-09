@@ -8,12 +8,7 @@ use http::header::{ACCEPT, CONTENT_TYPE};
 use http::{HeaderMap, HeaderValue};
 use miden_node_block_producer::{BlockProducerApi, BlockProducerApiConfig};
 use miden_node_proto::clients::{
-    Builder,
-    GrpcClient,
-    Interceptor,
-    NtxBuilderClient,
-    RpcClient,
-    ValidatorClient,
+    Builder, GrpcClient, Interceptor, NtxBuilderClient, RpcClient, ValidatorClient,
 };
 use miden_node_proto::generated::ntx_builder::api_server::ApiServer as NtxBuilderApiServer;
 use miden_node_proto::generated::rpc::api_client::ApiClient as ProtoClient;
@@ -24,21 +19,13 @@ use miden_node_store::state::State;
 use miden_node_utils::clap::{GrpcOptionsExternal, StorageOptions};
 use miden_node_utils::fee::test_fee;
 use miden_node_utils::limiter::{
-    QueryParamAccountIdLimit,
-    QueryParamLimiter,
-    QueryParamNoteIdLimit,
-    QueryParamNoteTagLimit,
+    QueryParamAccountIdLimit, QueryParamLimiter, QueryParamNoteIdLimit, QueryParamNoteTagLimit,
     QueryParamNullifierPrefixLimit,
 };
 use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
-    Account,
-    AccountBuilder,
-    AccountDelta,
-    AccountId,
-    AccountIdVersion,
-    AccountType,
+    Account, AccountBuilder, AccountDelta, AccountId, AccountIdVersion, AccountType,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::testing::noop_auth_component::NoopAuthComponent;
@@ -97,34 +84,14 @@ impl TestStore {
 
         genesis_commitment
     }
-
-    /// Shuts down the [`BlockWriter`] task before releasing the temp directory.
-    ///
-    /// Call this at the end of any test that uses RocksDB-backed storage. Without an explicit
-    /// shutdown the task is cancelled by the runtime *after* the temp directory is deleted,
-    /// causing a panic in the `RocksDB` destructor.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `Self::state` has more than one reference.
-    async fn shutdown(self) {
-        let Self {
-            state,
-            genesis_commitment: _,
-            data_directory,
-        } = self;
-
-        Arc::try_unwrap(state)
-            .unwrap_or_else(|_| panic!("State should have a single Arc reference at shutdown"))
-            .shutdown()
-            .await;
-
-        drop(data_directory);
-    }
 }
 
 async fn load_state(path: &std::path::Path) -> Arc<State> {
-    Arc::new(State::load(path, StorageOptions::default()).await.expect("state should load"))
+    Arc::new(
+        State::load(path, StorageOptions::default())
+            .await
+            .expect("state should load"),
+    )
 }
 
 /// Byte offset of the account delta commitment in serialized `ProvenTransaction`. Layout:
@@ -299,8 +266,18 @@ async fn rpc_server_rejects_requests_with_accept_header_invalid_version() {
 
         // Assert the server does not reject our request on the basis of missing accept header.
         assert!(response.is_err());
-        assert_eq!(response.as_ref().err().unwrap().code(), tonic::Code::InvalidArgument);
-        assert!(response.as_ref().err().unwrap().message().contains("server does not support"),);
+        assert_eq!(
+            response.as_ref().err().unwrap().code(),
+            tonic::Code::InvalidArgument
+        );
+        assert!(
+            response
+                .as_ref()
+                .err()
+                .unwrap()
+                .message()
+                .contains("server does not support"),
+        );
     }
 }
 
@@ -321,7 +298,10 @@ async fn rpc_server_has_web_support() {
 
     let mut headers = HeaderMap::new();
     let accept_header = concat!("application/vnd.miden; version=", env!("CARGO_PKG_VERSION"));
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/grpc-web+proto"));
+    headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/grpc-web+proto"),
+    );
     headers.insert(ACCEPT, HeaderValue::from_static(accept_header));
 
     // An empty message with header format:
@@ -461,25 +441,21 @@ async fn rpc_rejects_post_deployment_network_account_tx() {
         transaction_inputs: None,
     };
 
-    {
-        let service = RpcService::new(
-            Arc::clone(&store.state),
-            RpcMode::full_node(source_rpc_client()),
-            None,
-            NonZeroUsize::new(1_000_000).unwrap(),
-            None,
-        );
+    let service = RpcService::new(
+        Arc::clone(&store.state),
+        RpcMode::full_node(source_rpc_client()),
+        None,
+        NonZeroUsize::new(1_000_000).unwrap(),
+        None,
+    );
 
-        let response = service.submit_proven_tx(Request::new(request)).await;
-        assert!(response.is_err());
-        let err = response.as_ref().unwrap_err().message();
-        assert!(
-            err.contains("Network transactions may not be submitted by users yet"),
-            "expected the network-tx gate error, got: {err}"
-        );
-    } // service (and its Arc<State> clone) dropped here, before calling shutdown.
-
-    store.shutdown().await;
+    let response = service.submit_proven_tx(Request::new(request)).await;
+    assert!(response.is_err());
+    let err = response.as_ref().unwrap_err().message();
+    assert!(
+        err.contains("Network transactions may not be submitted by users yet"),
+        "expected the network-tx gate error, got: {err}"
+    );
 }
 
 fn source_rpc_client() -> RpcClient {
@@ -512,8 +488,12 @@ impl proto::ntx_builder::api_server::Api for FixedNtxBuilder {
 async fn start_ntx_builder(
     response: proto::rpc::GetNetworkNoteStatusResponse,
 ) -> (NtxBuilderClient, Arc<AtomicUsize>) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("Failed to bind ntx-builder");
-    let addr = listener.local_addr().expect("Failed to get ntx-builder address");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("Failed to bind ntx-builder");
+    let addr = listener
+        .local_addr()
+        .expect("Failed to get ntx-builder address");
     let call_count = Arc::new(AtomicUsize::new(0));
     let service = FixedNtxBuilder {
         response,
@@ -547,8 +527,12 @@ async fn start_source_rpc(ntx_builder: NtxBuilderClient) -> (RpcClient, TestStor
     let block_producer_state = load_state(block_producer_data_directory.path()).await;
     let store_state = Arc::clone(&store.state);
 
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("Failed to bind source RPC");
-    let addr = listener.local_addr().expect("Failed to get source RPC address");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("Failed to bind source RPC");
+    let addr = listener
+        .local_addr()
+        .expect("Failed to get source RPC address");
 
     task::spawn(async move {
         let _block_producer_data_directory = block_producer_data_directory;
@@ -704,8 +688,12 @@ async fn start_rpc_with_options(
     let store_state = Arc::clone(&store.state);
 
     // Start the rpc component.
-    let rpc_listener = TcpListener::bind("127.0.0.1:0").await.expect("Failed to bind rpc");
-    let rpc_addr = rpc_listener.local_addr().expect("Failed to get rpc address");
+    let rpc_listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("Failed to bind rpc");
+    let rpc_addr = rpc_listener
+        .local_addr()
+        .expect("Failed to get rpc address");
     task::spawn(async move {
         let _block_producer_data_directory = block_producer_data_directory;
         // SAFETY: Using dummy validator URL for test - not actually contacted in this test
@@ -748,16 +736,26 @@ async fn get_limits_endpoint() {
     let (mut rpc_client, _rpc_addr, _store) = start_rpc().await;
 
     // Call the get_limits endpoint
-    let response = rpc_client.get_limits(()).await.expect("get_limits should succeed");
+    let response = rpc_client
+        .get_limits(())
+        .await
+        .expect("get_limits should succeed");
     let limits = response.into_inner();
 
     // Verify the response contains expected endpoints and limits
-    assert!(!limits.endpoints.is_empty(), "endpoints should not be empty");
+    assert!(
+        !limits.endpoints.is_empty(),
+        "endpoints should not be empty"
+    );
 
-    let sync_transactions =
-        limits.endpoints.get("SyncTransactions").expect("SyncTransactions should exist");
+    let sync_transactions = limits
+        .endpoints
+        .get("SyncTransactions")
+        .expect("SyncTransactions should exist");
     assert_eq!(
-        sync_transactions.parameters.get(QueryParamAccountIdLimit::PARAM_NAME),
+        sync_transactions
+            .parameters
+            .get(QueryParamAccountIdLimit::PARAM_NAME),
         Some(&(QueryParamAccountIdLimit::LIMIT as u32)),
         "SyncTransactions {} limit should be {}",
         QueryParamAccountIdLimit::PARAM_NAME,
@@ -765,10 +763,14 @@ async fn get_limits_endpoint() {
     );
 
     // Verify SyncNullifiers endpoint
-    let sync_nullifiers =
-        limits.endpoints.get("SyncNullifiers").expect("SyncNullifiers should exist");
+    let sync_nullifiers = limits
+        .endpoints
+        .get("SyncNullifiers")
+        .expect("SyncNullifiers should exist");
     assert_eq!(
-        sync_nullifiers.parameters.get(QueryParamNullifierPrefixLimit::PARAM_NAME),
+        sync_nullifiers
+            .parameters
+            .get(QueryParamNullifierPrefixLimit::PARAM_NAME),
         Some(&(QueryParamNullifierPrefixLimit::LIMIT as u32)),
         "SyncNullifiers {} limit should be {}",
         QueryParamNullifierPrefixLimit::PARAM_NAME,
@@ -776,9 +778,14 @@ async fn get_limits_endpoint() {
     );
 
     // Verify SyncNotes endpoint
-    let sync_notes = limits.endpoints.get("SyncNotes").expect("SyncNotes should exist");
+    let sync_notes = limits
+        .endpoints
+        .get("SyncNotes")
+        .expect("SyncNotes should exist");
     assert_eq!(
-        sync_notes.parameters.get(QueryParamNoteTagLimit::PARAM_NAME),
+        sync_notes
+            .parameters
+            .get(QueryParamNoteTagLimit::PARAM_NAME),
         Some(&(QueryParamNoteTagLimit::LIMIT as u32)),
         "SyncNotes {} limit should be {}",
         QueryParamNoteTagLimit::PARAM_NAME,
@@ -797,9 +804,14 @@ async fn get_limits_endpoint() {
     );
 
     // Verify GetNotesById endpoint
-    let get_notes_by_id = limits.endpoints.get("GetNotesById").expect("GetNotesById should exist");
+    let get_notes_by_id = limits
+        .endpoints
+        .get("GetNotesById")
+        .expect("GetNotesById should exist");
     assert_eq!(
-        get_notes_by_id.parameters.get(QueryParamNoteIdLimit::PARAM_NAME),
+        get_notes_by_id
+            .parameters
+            .get(QueryParamNoteIdLimit::PARAM_NAME),
         Some(&(QueryParamNoteIdLimit::LIMIT as u32)),
         "GetNotesById {} limit should be {}",
         QueryParamNoteIdLimit::PARAM_NAME,
@@ -815,7 +827,10 @@ async fn sync_chain_mmr_returns_delta() {
         current_client_block_height: 0,
         finality_level: proto::rpc::FinalityLevel::Committed.into(),
     };
-    let response = rpc_client.sync_chain_mmr(request).await.expect("sync_chain_mmr should succeed");
+    let response = rpc_client
+        .sync_chain_mmr(request)
+        .await
+        .expect("sync_chain_mmr should succeed");
     let response = response.into_inner();
 
     let mmr_delta = response.mmr_delta.expect("mmr_delta should exist");
@@ -844,16 +859,29 @@ fn sync_chain_mmr_block_header_matches_chain_commitment() {
     client_mmr.add(headers[0].commitment(), false).unwrap();
 
     // First delta: block_from=0, block_to=2, so from_forest=1, to_forest=2.
-    let delta = server_mmr.get_delta(Forest::new(1).unwrap(), Forest::new(2).unwrap()).unwrap();
+    let delta = server_mmr
+        .get_delta(Forest::new(1).unwrap(), Forest::new(2).unwrap())
+        .unwrap();
     client_mmr.apply(delta).unwrap();
-    assert_eq!(client_mmr.peaks().hash_peaks(), headers[2].chain_commitment());
+    assert_eq!(
+        client_mmr.peaks().hash_peaks(),
+        headers[2].chain_commitment()
+    );
     client_mmr.add(headers[2].commitment(), false).unwrap();
 
     // Second delta: block_from=2, block_to=4, so from_forest=3, to_forest=4.
-    let delta = server_mmr.get_delta(Forest::new(3).unwrap(), Forest::new(4).unwrap()).unwrap();
+    let delta = server_mmr
+        .get_delta(Forest::new(3).unwrap(), Forest::new(4).unwrap())
+        .unwrap();
     client_mmr.apply(delta).unwrap();
-    assert_eq!(client_mmr.peaks().hash_peaks(), headers[4].chain_commitment());
+    assert_eq!(
+        client_mmr.peaks().hash_peaks(),
+        headers[4].chain_commitment()
+    );
     client_mmr.add(headers[4].commitment(), false).unwrap();
 
-    assert_eq!(client_mmr.peaks().hash_peaks(), server_mmr.peaks().hash_peaks());
+    assert_eq!(
+        client_mmr.peaks().hash_peaks(),
+        server_mmr.peaks().hash_peaks()
+    );
 }

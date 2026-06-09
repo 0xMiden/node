@@ -5,7 +5,6 @@
 //! [`InMemoryState`] snapshot via an [`ArcSwap`], making the updated trees immediately visible to
 //! wait-free readers.
 
-use std::mem::ManuallyDrop;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
@@ -58,10 +57,15 @@ impl WriteHandle {
     pub async fn apply_block(&self, signed_block: SignedBlock) -> Result<(), ApplyBlockError> {
         let (result_tx, result_rx) = oneshot::channel();
         self.tx
-            .send(WriteRequest { signed_block, result_tx })
+            .send(WriteRequest {
+                signed_block,
+                result_tx,
+            })
             .await
             .map_err(|e| ApplyBlockError::WriterTaskSendFailed(e.to_string()))?;
-        result_rx.await.map_err(ApplyBlockError::WriterTaskRecvFailed)?
+        result_rx
+            .await
+            .map_err(ApplyBlockError::WriterTaskRecvFailed)?
     }
 }
 
@@ -86,29 +90,11 @@ pub(super) struct BlockWriter {
     pub block_cache: BlockCache,
     pub rx: mpsc::Receiver<WriteRequest>,
     /// The mutable nullifier tree owned by this writer.
-    pub nullifier_tree: ManuallyDrop<NullifierTree<LargeSmt<TreeStorage>>>,
+    pub nullifier_tree: NullifierTree<LargeSmt<TreeStorage>>,
     /// The mutable account tree owned by this writer.
-    pub account_tree: ManuallyDrop<AccountTreeWithHistory<TreeStorage>>,
+    pub account_tree: AccountTreeWithHistory<TreeStorage>,
     /// The blockchain MMR owned by this writer.
-    pub blockchain: ManuallyDrop<Blockchain>,
-    /// Signals [`State::shutdown`] after the trees above have been flushed.
-    pub writer_done_tx: ManuallyDrop<oneshot::Sender<()>>,
-}
-
-impl Drop for BlockWriter {
-    fn drop(&mut self) {
-        // Drop the trees first so their RocksDB destructors flush to disk, then explicitly
-        // signal `State::shutdown` that it is safe to release on-disk resources.
-        //
-        // SAFETY: each field is dropped exactly once here; the compiler's auto-drop pass
-        // afterwards treats ManuallyDrop fields as no-ops.
-        unsafe {
-            ManuallyDrop::drop(&mut self.nullifier_tree);
-            ManuallyDrop::drop(&mut self.account_tree);
-            ManuallyDrop::drop(&mut self.blockchain);
-            let _ = ManuallyDrop::take(&mut self.writer_done_tx).send(());
-        }
-    }
+    pub blockchain: Blockchain,
 }
 
 impl BlockWriter {
@@ -175,7 +161,7 @@ impl BlockWriter {
                     .reader()
                     .expect("nullifier tree snapshot creation should not fail"),
                 account_tree: self.account_tree.reader(),
-                blockchain: (*self.blockchain).clone(), // TODO(sergerad): snapshot of blockchain?
+                blockchain: self.blockchain.clone(), // TODO(sergerad): snapshot of blockchain?
             });
 
             Ok::<(Arc<InMemoryState>, Vec<(NoteRecord, Option<Nullifier>)>), ApplyBlockError>((
@@ -184,7 +170,9 @@ impl BlockWriter {
         })?;
 
         // Save the block to the block store.
-        self.block_store.save_block(block_num, &signed_block_bytes).await?;
+        self.block_store
+            .save_block(block_num, &signed_block_bytes)
+            .await?;
 
         // Commit to DB. Readers continue to see the old in-memory state (via their Arc) while the
         // DB commits. We ensure consistency by scoping all RPC queries that hit DB data by the
@@ -287,7 +275,9 @@ impl BlockWriter {
         let nullifier_tree_update = self
             .nullifier_tree
             .compute_mutations(
-                body.created_nullifiers().iter().map(|nullifier| (*nullifier, block_num)),
+                body.created_nullifiers()
+                    .iter()
+                    .map(|nullifier| (*nullifier, block_num)),
             )
             .map_err(InvalidBlockError::NewBlockNullifierAlreadySpent)?;
 
@@ -306,10 +296,10 @@ impl BlockWriter {
             .map_err(|e| match e {
                 HistoricalError::AccountTreeError(err) => {
                     InvalidBlockError::NewBlockDuplicateAccountIdPrefix(err)
-                },
+                }
                 HistoricalError::MerkleError(_) => {
                     panic!("Unexpected MerkleError during account tree mutation computation")
-                },
+                }
             })?;
 
         if account_tree_update.as_mutation_set().root() != header.account_root() {
