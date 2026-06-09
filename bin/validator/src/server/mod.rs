@@ -18,7 +18,10 @@ use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::db::{
-    count_signed_blocks, count_validated_transactions, load_chain_tip, load_with_pool_size,
+    count_signed_blocks,
+    count_validated_transactions,
+    load_chain_tip,
+    load_with_pool_size,
 };
 use crate::{COMPONENT, ValidatorSigner};
 
