@@ -202,6 +202,19 @@ fn build_test_proven_tx_with_id(
     .unwrap()
 }
 
+fn assert_beyond_tip(status: &tonic::Status, endpoint: &str) {
+    assert_eq!(
+        status.code(),
+        tonic::Code::InvalidArgument,
+        "{endpoint} should reject block_to beyond chain tip with InvalidArgument, got: {status:?}"
+    );
+    assert!(
+        status.message().contains("greater than chain tip"),
+        "{endpoint} error message should mention the chain tip, got: {}",
+        status.message()
+    );
+}
+
 #[tokio::test]
 async fn rpc_server_accepts_requests_without_accept_header() {
     // Start the RPC.
@@ -892,4 +905,66 @@ fn sync_chain_mmr_block_header_matches_chain_commitment() {
     client_mmr.add(headers[4].commitment(), false).unwrap();
 
     assert_eq!(client_mmr.peaks().hash_peaks(), server_mmr.peaks().hash_peaks());
+}
+
+/// All paginated sync endpoints must reject a `block_to` that is greater than the chain tip.
+///
+/// After bootstrapping, the chain tip is the genesis block (0), so a range ending at block 1 is
+/// beyond the tip. The range `0..=1` is otherwise valid (non-empty, start <= end), which isolates
+/// the chain-tip check from the range-validity check.
+#[tokio::test]
+async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
+    let (mut rpc_client, _rpc_addr, _store) = start_rpc().await;
+
+    // A range ending one block past the genesis tip; otherwise valid (non-empty, start <= end).
+    let block_range = || Some(proto::rpc::BlockRange { block_from: 0, block_to: 1 });
+    // Any public account id works: the chain-tip check happens before the account is queried.
+    let account_id =
+        || Some(AccountId::dummy([0; 15], AccountIdVersion::Version1, AccountType::Public).into());
+
+    let status = rpc_client
+        .sync_nullifiers(proto::rpc::SyncNullifiersRequest {
+            block_range: block_range(),
+            prefix_len: 16,
+            nullifiers: vec![],
+        })
+        .await
+        .expect_err("sync_nullifiers should reject block_to beyond chain tip");
+    assert_beyond_tip(&status, "sync_nullifiers");
+
+    let status = rpc_client
+        .sync_notes(proto::rpc::SyncNotesRequest {
+            block_range: block_range(),
+            note_tags: vec![],
+        })
+        .await
+        .expect_err("sync_notes should reject block_to beyond chain tip");
+    assert_beyond_tip(&status, "sync_notes");
+
+    let status = rpc_client
+        .sync_account_storage_maps(proto::rpc::SyncAccountStorageMapsRequest {
+            block_range: block_range(),
+            account_id: account_id(),
+        })
+        .await
+        .expect_err("sync_account_storage_maps should reject block_to beyond chain tip");
+    assert_beyond_tip(&status, "sync_account_storage_maps");
+
+    let status = rpc_client
+        .sync_account_vault(proto::rpc::SyncAccountVaultRequest {
+            block_range: block_range(),
+            account_id: account_id(),
+        })
+        .await
+        .expect_err("sync_account_vault should reject block_to beyond chain tip");
+    assert_beyond_tip(&status, "sync_account_vault");
+
+    let status = rpc_client
+        .sync_transactions(proto::rpc::SyncTransactionsRequest {
+            block_range: block_range(),
+            account_ids: vec![],
+        })
+        .await
+        .expect_err("sync_transactions should reject block_to beyond chain tip");
+    assert_beyond_tip(&status, "sync_transactions");
 }
