@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Context;
-use miden_node_block_producer::{RpcSync, Sequencer};
+use miden_node_block_producer::Sequencer;
 use miden_node_proto::clients::{Builder, NtxBuilderClient, RpcClient, ValidatorClient};
 use miden_node_rpc::{Rpc, RpcMode};
 use miden_node_store::State;
@@ -125,21 +125,16 @@ impl FullNodeCommand {
         let network_tx_auth = self.runtime.rpc.network_tx_auth()?;
         let state = load_state(&runtime).await?;
         let _disk_monitor = state.spawn_disk_monitor();
-        let sync = RpcSync {
-            state: Arc::clone(&state),
-            source_rpc: source_rpc.clone(),
-        };
 
         let rpc = Rpc {
             listener: bind_rpc(runtime.rpc_listen).await?,
             store: state,
-            mode: RpcMode::full_node(source_rpc),
+            mode: RpcMode::full_node(source_rpc, self.sync.readiness_threshold),
             ntx_builder: None,
             grpc_options: runtime.external_grpc_options,
             network_tx_auth,
         };
         let mut tasks = Tasks::new();
-        tasks.spawn("RPC sync", sync.run());
         tasks.spawn("RPC server", rpc.serve());
 
         tasks.join_next_as_error().await

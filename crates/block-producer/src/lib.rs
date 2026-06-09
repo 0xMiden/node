@@ -23,7 +23,7 @@ mod errors;
 pub mod server;
 pub use errors::MempoolSubmissionError;
 pub use proof_scheduler::DEFAULT_MAX_CONCURRENT_PROOFS;
-pub use rpc_sync::RpcSync;
+pub use rpc_sync::{RpcReadiness, RpcSync};
 pub use server::{
     BlockProducerApi,
     BlockProducerApiConfig,
