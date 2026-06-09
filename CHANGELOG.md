@@ -1,14 +1,9 @@
 # Changelog
 
-## v0.16
-
-### RPC API
-
-- RPC requests whose range exceed the chain tip are now rejected ([#1866](https://github.com/0xMiden/node/issues/1866)).
-
 ## Unreleased
 
 - Fixed missing certificates in the Docker runtime image ([#2221](https://github.com/0xMiden/node/pull/2221)).
+- RPC requests whose range exceed the chain tip are now rejected ([#2210](https://github.com/0xMiden/node/pull/2210)).
 
 ## v0.15.0-rc.3 (2026-06-08)
 
