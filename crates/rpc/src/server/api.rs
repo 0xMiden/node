@@ -240,7 +240,7 @@ impl RpcService {
     ///
     /// Returns the chain tip so callers can reuse it (e.g. in the response's pagination info)
     /// without issuing a second query.
-    async fn chain_tip_for_range(
+    async fn range_bounds_check(
         &self,
         range: &RangeInclusive<BlockNumber>,
     ) -> Result<BlockNumber, Status> {
