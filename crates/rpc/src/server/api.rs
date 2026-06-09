@@ -5,6 +5,7 @@ use std::task::{Context as TaskContext, Poll};
 use std::time::Duration;
 
 use anyhow::Context as AnyhowContext;
+use http::header::ACCEPT;
 use miden_node_block_producer::{BlockProducerStatus, MempoolStats as BlockProducerMempoolStats};
 use miden_node_proto::clients::NtxBuilderClient;
 use miden_node_proto::decode::{
@@ -723,6 +724,7 @@ impl api_server::Api for RpcService {
         debug!(target: COMPONENT, request = ?request.get_ref());
 
         let is_authorized_network_tx = self.is_authorized_network_tx(request.metadata());
+        let original_accept = request.metadata().get(ACCEPT.as_str()).cloned();
 
         let request = request.into_inner();
 
@@ -799,7 +801,11 @@ impl api_server::Api for RpcService {
                 (block_producer.as_ref(), validator.as_ref())
             },
             RpcMode::FullNode { source_rpc, .. } => {
-                return source_rpc.as_ref().clone().submit_proven_tx(request).await;
+                let mut forwarded_request = Request::new(request);
+                if let Some(accept) = original_accept {
+                    forwarded_request.metadata_mut().insert(ACCEPT.as_str(), accept);
+                }
+                return source_rpc.as_ref().clone().submit_proven_tx(forwarded_request).await;
             },
         };
 
@@ -826,6 +832,7 @@ impl api_server::Api for RpcService {
         request: tonic::Request<proto::transaction::TransactionBatch>,
     ) -> Result<tonic::Response<proto::blockchain::BlockNumber>, Status> {
         let is_authorized_network_tx = self.is_authorized_network_tx(request.metadata());
+        let original_accept = request.metadata().get(ACCEPT.as_str()).cloned();
         let request = request.into_inner();
 
         let proven_batch = ProvenBatch::read_from_bytes(&request.batch_proof).map_err(|err| {
@@ -916,7 +923,11 @@ impl api_server::Api for RpcService {
                 (block_producer.as_ref(), validator.as_ref())
             },
             RpcMode::FullNode { source_rpc, .. } => {
-                return source_rpc.as_ref().clone().submit_proven_tx_batch(request).await;
+                let mut forwarded_request = Request::new(request);
+                if let Some(accept) = original_accept {
+                    forwarded_request.metadata_mut().insert(ACCEPT.as_str(), accept);
+                }
+                return source_rpc.as_ref().clone().submit_proven_tx_batch(forwarded_request).await;
             },
         };
 
