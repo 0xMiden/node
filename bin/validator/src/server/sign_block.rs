@@ -7,7 +7,6 @@ use miden_protocol::block::ProposedBlock;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_tx::utils::serde::{Deserializable, Serializable};
 
-use crate::block_validation::validate_block;
 use crate::db::{load_chain_tip, upsert_block_header};
 use crate::server::ValidatorServer;
 
@@ -27,7 +26,9 @@ impl grpc::server::validator_api::SignBlock for ValidatorServer {
     fn encode(output: Self::Output) -> tonic::Result<grpc::blockchain::SignBlockResponse> {
         let (signature, block_commitment) = output;
         Ok(grpc::blockchain::SignBlockResponse {
-            signature: Some(grpc::blockchain::BlockSignature { signature: signature.to_bytes() }),
+            signature: Some(grpc::blockchain::BlockSignature {
+                signature: signature.to_bytes(),
+            }),
             block_commitment: Some(block_commitment.into()),
         })
     }
@@ -50,7 +51,8 @@ impl grpc::server::validator_api::SignBlock for ValidatorServer {
             .ok_or_else(|| tonic::Status::internal("Chain tip not found in database"))?;
 
         // Validate the block against the current chain tip.
-        let (signature, header) = validate_block(proposed_block, &self.signer, &self.db, chain_tip)
+        let (signature, header) = self
+            .validate_block(proposed_block, chain_tip)
             .await
             .map_err(|err| {
                 tonic::Status::invalid_argument(format!(
@@ -66,7 +68,9 @@ impl grpc::server::validator_api::SignBlock for ValidatorServer {
         // Persist the validated block header.
         let new_block_num = header.block_num().as_u32();
         self.db
-            .transact("upsert_block_header", move |conn| upsert_block_header(conn, &header))
+            .transact("upsert_block_header", move |conn| {
+                upsert_block_header(conn, &header)
+            })
             .await
             .map_err(|err| {
                 tonic::Status::internal(format!(

@@ -1,4 +1,3 @@
-mod block_validation;
 pub mod db;
 mod server;
 mod signers;
