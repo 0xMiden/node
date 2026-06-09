@@ -1,10 +1,12 @@
 use std::num::NonZeroUsize;
+use std::ops::RangeInclusive;
 use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
 use std::task::{Context as TaskContext, Poll};
 use std::time::Duration;
 
 use anyhow::Context as AnyhowContext;
+use http::header::ACCEPT;
 use miden_node_block_producer::{BlockProducerStatus, MempoolStats as BlockProducerMempoolStats};
 use miden_node_proto::clients::NtxBuilderClient;
 use miden_node_proto::decode::{
@@ -235,6 +237,25 @@ impl RpcService {
         Ok(())
     }
 
+    /// Fetches the committed chain tip and ensures the requested range does not extend beyond it.
+    ///
+    /// Returns the chain tip so callers can reuse it (e.g. in the response's pagination info)
+    /// without issuing a second query.
+    async fn range_bounds_check(
+        &self,
+        range: &RangeInclusive<BlockNumber>,
+    ) -> Result<BlockNumber, Status> {
+        let chain_tip = self.store.chain_tip(Finality::Committed).await;
+        if *range.end() > chain_tip {
+            return Err(Status::invalid_argument(format!(
+                "block_to ({}) is greater than chain tip ({chain_tip})",
+                range.end()
+            )));
+        }
+
+        Ok(chain_tip)
+    }
+
     /// Errors if any of `candidate_ids` is classified as a network account by the store. Callers
     /// should pre-filter to post-deployment, public-account ids; `Ok(())` on empty.
     async fn reject_if_any_network_accounts(
@@ -304,6 +325,7 @@ impl api_server::Api for RpcService {
         let block_range = range
             .into_inclusive_range::<RpcInvalidBlockRange>()
             .map_err(invalid_block_range_to_status)?;
+        let chain_tip = self.range_bounds_check(&block_range).await?;
 
         let (nullifiers, block_num) = self
             .store
@@ -317,7 +339,6 @@ impl api_server::Api for RpcService {
                 block_num: nullifier_info.block_num.as_u32(),
             })
             .collect();
-        let chain_tip = self.store.chain_tip(Finality::Committed).await;
 
         Ok(Response::new(proto::rpc::SyncNullifiersResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {
@@ -500,13 +521,7 @@ impl api_server::Api for RpcService {
         let block_range = range
             .into_inclusive_range::<RpcInvalidBlockRange>()
             .map_err(invalid_block_range_to_status)?;
-        let chain_tip = self.store.chain_tip(Finality::Committed).await;
-        if *block_range.end() > chain_tip {
-            return Err(Status::invalid_argument(format!(
-                "block_to ({}) is greater than chain tip ({chain_tip})",
-                block_range.end()
-            )));
-        }
+        let chain_tip = self.range_bounds_check(&block_range).await?;
 
         let (results, last_block_checked) = self
             .store
@@ -597,6 +612,7 @@ impl api_server::Api for RpcService {
         let block_range = range
             .into_inclusive_range::<RpcInvalidBlockRange>()
             .map_err(invalid_block_range_to_status)?;
+        let chain_tip = self.range_bounds_check(&block_range).await?;
         let storage_maps_page = self
             .store
             .sync_account_storage_maps(account_id, block_range)
@@ -612,7 +628,6 @@ impl api_server::Api for RpcService {
                 block_num: map_value.block_num.as_u32(),
             })
             .collect();
-        let chain_tip = self.store.chain_tip(Finality::Committed).await;
 
         Ok(Response::new(proto::rpc::SyncAccountStorageMapsResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {
@@ -647,6 +662,7 @@ impl api_server::Api for RpcService {
         let block_range = range
             .into_inclusive_range::<RpcInvalidBlockRange>()
             .map_err(invalid_block_range_to_status)?;
+        let chain_tip = self.range_bounds_check(&block_range).await?;
         let (last_included_block, updates) = self
             .store
             .sync_account_vault(account_id, block_range)
@@ -663,7 +679,6 @@ impl api_server::Api for RpcService {
                 }
             })
             .collect();
-        let chain_tip = self.store.chain_tip(Finality::Committed).await;
 
         Ok(Response::new(proto::rpc::SyncAccountVaultResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {
@@ -723,6 +738,7 @@ impl api_server::Api for RpcService {
         debug!(target: COMPONENT, request = ?request.get_ref());
 
         let is_authorized_network_tx = self.is_authorized_network_tx(request.metadata());
+        let original_accept = request.metadata().get(ACCEPT.as_str()).cloned();
 
         let request = request.into_inner();
 
@@ -798,8 +814,12 @@ impl api_server::Api for RpcService {
             RpcMode::Sequencer { block_producer, validator } => {
                 (block_producer.as_ref(), validator.as_ref())
             },
-            RpcMode::FullNode { source_rpc } => {
-                return source_rpc.as_ref().clone().submit_proven_tx(request).await;
+            RpcMode::FullNode { source_rpc, .. } => {
+                let mut forwarded_request = Request::new(request);
+                if let Some(accept) = original_accept {
+                    forwarded_request.metadata_mut().insert(ACCEPT.as_str(), accept);
+                }
+                return source_rpc.as_ref().clone().submit_proven_tx(forwarded_request).await;
             },
         };
 
@@ -826,6 +846,7 @@ impl api_server::Api for RpcService {
         request: tonic::Request<proto::transaction::TransactionBatch>,
     ) -> Result<tonic::Response<proto::blockchain::BlockNumber>, Status> {
         let is_authorized_network_tx = self.is_authorized_network_tx(request.metadata());
+        let original_accept = request.metadata().get(ACCEPT.as_str()).cloned();
         let request = request.into_inner();
 
         let proven_batch = ProvenBatch::read_from_bytes(&request.batch_proof).map_err(|err| {
@@ -915,8 +936,12 @@ impl api_server::Api for RpcService {
             RpcMode::Sequencer { block_producer, validator } => {
                 (block_producer.as_ref(), validator.as_ref())
             },
-            RpcMode::FullNode { source_rpc } => {
-                return source_rpc.as_ref().clone().submit_proven_tx_batch(request).await;
+            RpcMode::FullNode { source_rpc, .. } => {
+                let mut forwarded_request = Request::new(request);
+                if let Some(accept) = original_accept {
+                    forwarded_request.metadata_mut().insert(ACCEPT.as_str(), accept);
+                }
+                return source_rpc.as_ref().clone().submit_proven_tx_batch(forwarded_request).await;
             },
         };
 
@@ -965,6 +990,7 @@ impl api_server::Api for RpcService {
         let block_range = range
             .into_inclusive_range::<RpcInvalidBlockRange>()
             .map_err(invalid_block_range_to_status)?;
+        let chain_tip = self.range_bounds_check(&block_range).await?;
         let account_ids = read_account_ids::<Status, _>(request.account_ids)?;
         let (last_block_included, transaction_records_db) = self
             .store
@@ -973,7 +999,6 @@ impl api_server::Api for RpcService {
             .map_err(|err| database_error_to_status(&err))?;
         let transactions =
             transaction_records_db.into_iter().map(transaction_record_to_proto).collect();
-        let chain_tip = self.store.chain_tip(Finality::Committed).await;
 
         Ok(Response::new(proto::rpc::SyncTransactionsResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {
@@ -994,7 +1019,7 @@ impl api_server::Api for RpcService {
             RpcMode::Sequencer { block_producer, .. } => {
                 Some(block_producer_status_to_proto(block_producer.status().await))
             },
-            RpcMode::FullNode { source_rpc } => source_rpc
+            RpcMode::FullNode { source_rpc, .. } => source_rpc
                 .as_ref()
                 .clone()
                 .status(Request::new(()))
@@ -1041,7 +1066,7 @@ impl api_server::Api for RpcService {
 
                 ntx_builder.clone().get_network_note_status(request).await?.into_inner()
             },
-            RpcMode::FullNode { source_rpc } => {
+            RpcMode::FullNode { source_rpc, .. } => {
                 source_rpc.as_ref().clone().get_network_note_status(request).await?.into_inner()
             },
         };

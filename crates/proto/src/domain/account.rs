@@ -13,7 +13,7 @@ use miden_protocol::account::{
     StorageSlotName,
     StorageSlotType,
 };
-use miden_protocol::asset::{Asset, AssetVault};
+use miden_protocol::asset::Asset;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::crypto::merkle::SparseMerklePath;
@@ -367,14 +367,6 @@ impl AccountVaultDetails {
     /// more assets will have `LimitExceeded` variant.
     pub const MAX_RETURN_ENTRIES: usize = 1000;
 
-    pub fn new(vault: &AssetVault) -> Self {
-        if vault.assets().nth(Self::MAX_RETURN_ENTRIES).is_some() {
-            Self::LimitExceeded
-        } else {
-            Self::Assets(Vec::from_iter(vault.assets()))
-        }
-    }
-
     pub fn empty() -> Self {
         Self::Assets(Vec::new())
     }
@@ -706,7 +698,9 @@ fn storage_slot_type_from_raw(slot_type: u32) -> Result<StorageSlotType, Convers
     Ok(match slot_type {
         0 => StorageSlotType::Value,
         1 => StorageSlotType::Map,
-        _ => return Err(ConversionError::message("enum variant discriminant out of range")),
+        _ => {
+            return Err(ConversionError::message("enum variant discriminant out of range"));
+        },
     })
 }
 
