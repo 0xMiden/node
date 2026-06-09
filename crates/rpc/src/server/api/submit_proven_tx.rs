@@ -11,10 +11,17 @@ use miden_protocol::transaction::{
 };
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_tx::TransactionVerifier;
+use tonic::metadata::{Ascii, MetadataValue};
 use tonic::{Request, Status};
 use tracing::{Span, debug};
 
-use super::{COMPONENT, RpcMode, RpcService, SubmitProvenTxInput};
+use super::{COMPONENT, RpcMode, RpcService};
+
+pub struct SubmitProvenTxInput {
+    request: proto::transaction::ProvenTransaction,
+    is_authorized_network_tx: bool,
+    original_accept_header: Option<MetadataValue<Ascii>>,
+}
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::SubmitProvenTx for RpcService {
@@ -22,7 +29,11 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
     type Output = proto::blockchain::BlockNumber;
 
     fn decode(request: proto::transaction::ProvenTransaction) -> tonic::Result<Self::Input> {
-        Ok(SubmitProvenTxInput { request, is_authorized_network_tx: false })
+        Ok(SubmitProvenTxInput {
+            request,
+            is_authorized_network_tx: false,
+            original_accept_header: None,
+        })
     }
 
     fn encode(output: Self::Output) -> tonic::Result<proto::blockchain::BlockNumber> {
@@ -34,14 +45,23 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
         request: Request<proto::transaction::ProvenTransaction>,
     ) -> tonic::Result<proto::blockchain::BlockNumber> {
         let is_authorized_network_tx = self.is_authorized_network_tx(request.metadata());
+        let original_accept_header = request.metadata().get(http::header::ACCEPT.as_str()).cloned();
+
         let mut input = Self::decode(request.into_inner())?;
+
         input.is_authorized_network_tx = is_authorized_network_tx;
+        input.original_accept_header = original_accept_header;
+
         let output = self.handle(input).await?;
         Self::encode(output)
     }
 
     async fn handle(&self, input: Self::Input) -> tonic::Result<Self::Output> {
-        let SubmitProvenTxInput { mut request, is_authorized_network_tx } = input;
+        let SubmitProvenTxInput {
+            mut request,
+            is_authorized_network_tx,
+            original_accept_header,
+        } = input;
         debug!(target: COMPONENT, ?request);
 
         let tx = ProvenTransaction::read_from_bytes(&request.transaction).map_err(|err| {
@@ -115,11 +135,15 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
             RpcMode::Sequencer { block_producer, validator } => {
                 (block_producer.as_ref(), validator.as_ref())
             },
-            RpcMode::FullNode { source_rpc } => {
+            RpcMode::FullNode { source_rpc, .. } => {
+                let mut forwarded_request = Request::new(request);
+                if let Some(accept) = original_accept_header {
+                    forwarded_request.metadata_mut().insert(http::header::ACCEPT.as_str(), accept);
+                }
                 return source_rpc
                     .as_ref()
                     .clone()
-                    .submit_proven_tx(request)
+                    .submit_proven_tx(forwarded_request)
                     .await
                     .map(tonic::Response::into_inner);
             },

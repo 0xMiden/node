@@ -24,7 +24,7 @@ impl proto::server::rpc_api::Status for RpcService {
             RpcMode::Sequencer { block_producer, .. } => {
                 Some(block_producer_status_to_proto(block_producer.status().await))
             },
-            RpcMode::FullNode { source_rpc } => source_rpc
+            RpcMode::FullNode { source_rpc, .. } => source_rpc
                 .as_ref()
                 .clone()
                 .status(Request::new(()))

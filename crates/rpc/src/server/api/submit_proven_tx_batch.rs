@@ -6,10 +6,17 @@ use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_tx_batch_prover::LocalBatchProver;
+use tonic::metadata::{Ascii, MetadataValue};
 use tonic::{Request, Status};
 use tracing::Span;
 
-use super::{RpcMode, RpcService, SubmitProvenTxBatchInput};
+use super::{RpcMode, RpcService};
+
+pub struct SubmitProvenTxBatchInput {
+    request: proto::transaction::TransactionBatch,
+    is_authorized_network_tx: bool,
+    original_accept_header: Option<MetadataValue<Ascii>>,
+}
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
@@ -17,7 +24,11 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
     type Output = proto::blockchain::BlockNumber;
 
     fn decode(request: proto::transaction::TransactionBatch) -> tonic::Result<Self::Input> {
-        Ok(SubmitProvenTxBatchInput { request, is_authorized_network_tx: false })
+        Ok(SubmitProvenTxBatchInput {
+            request,
+            is_authorized_network_tx: false,
+            original_accept_header: None,
+        })
     }
 
     fn encode(output: Self::Output) -> tonic::Result<proto::blockchain::BlockNumber> {
@@ -29,14 +40,22 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
         request: Request<proto::transaction::TransactionBatch>,
     ) -> tonic::Result<proto::blockchain::BlockNumber> {
         let is_authorized_network_tx = self.is_authorized_network_tx(request.metadata());
+        let original_accept_header = request.metadata().get(http::header::ACCEPT.as_str()).cloned();
+
         let mut input = Self::decode(request.into_inner())?;
         input.is_authorized_network_tx = is_authorized_network_tx;
+        input.original_accept_header = original_accept_header;
+
         let output = self.handle(input).await?;
         Self::encode(output)
     }
 
     async fn handle(&self, input: Self::Input) -> tonic::Result<Self::Output> {
-        let SubmitProvenTxBatchInput { request, is_authorized_network_tx } = input;
+        let SubmitProvenTxBatchInput {
+            request,
+            is_authorized_network_tx,
+            original_accept_header,
+        } = input;
 
         let proven_batch = ProvenBatch::read_from_bytes(&request.batch_proof).map_err(|err| {
             Status::invalid_argument(err.as_report_context("invalid proven_batch"))
@@ -125,11 +144,15 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
             RpcMode::Sequencer { block_producer, validator } => {
                 (block_producer.as_ref(), validator.as_ref())
             },
-            RpcMode::FullNode { source_rpc } => {
+            RpcMode::FullNode { source_rpc, .. } => {
+                let mut forwarded_request = Request::new(request);
+                if let Some(accept) = original_accept_header {
+                    forwarded_request.metadata_mut().insert(http::header::ACCEPT.as_str(), accept);
+                }
                 return source_rpc
                     .as_ref()
                     .clone()
-                    .submit_proven_tx_batch(request)
+                    .submit_proven_tx_batch(forwarded_request)
                     .await
                     .map(tonic::Response::into_inner);
             },
