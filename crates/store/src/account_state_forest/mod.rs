@@ -305,9 +305,9 @@ impl<B: Backend> AccountStateForest<B> {
         let tree = self.get_tree_id(lineage, block_num).ok_or(WitnessError::RootNotFound)?;
 
         // Return "limit exceeded" if the number of vault entries is above the limit.
-        let num_input_notes =
+        let num_entries =
             self.forest.entry_count(tree).map_err(Self::map_forest_error_to_witness)?;
-        if num_input_notes > AccountVaultDetails::MAX_RETURN_ENTRIES {
+        if num_entries > AccountVaultDetails::MAX_RETURN_ENTRIES {
             return Ok(AccountVaultDetails::LimitExceeded);
         }
 
