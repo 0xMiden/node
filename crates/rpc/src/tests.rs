@@ -1,3 +1,4 @@
+use std::mem::ManuallyDrop;
 use std::net::{IpAddr, Ipv4Addr};
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::sync::Arc;
@@ -60,7 +61,24 @@ use crate::{Rpc, RpcMode};
 struct TestStore {
     state: Arc<State>,
     genesis_commitment: Word,
-    data_directory: TempDir,
+    data_directory: ManuallyDrop<TempDir>,
+}
+
+impl Drop for TestStore {
+    fn drop(&mut self) {
+        // Drop the data directory only if the state is not being used elsewhere. Otherwise we would
+        // panic when RocksDB tries to flush.
+        let mut can_drop = false;
+        if let Some(_state) = Arc::get_mut(&mut self.state) {
+            can_drop = true;
+            // _state drops now.
+        }
+        if can_drop {
+            unsafe {
+                ManuallyDrop::drop(&mut self.data_directory);
+            }
+        }
+    }
 }
 
 impl TestStore {
@@ -79,7 +97,7 @@ impl TestStore {
         Self {
             state,
             genesis_commitment,
-            data_directory,
+            data_directory: ManuallyDrop::new(data_directory),
         }
     }
 
