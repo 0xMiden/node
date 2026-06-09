@@ -800,7 +800,7 @@ impl api_server::Api for RpcService {
             RpcMode::Sequencer { block_producer, validator } => {
                 (block_producer.as_ref(), validator.as_ref())
             },
-            RpcMode::FullNode { source_rpc } => {
+            RpcMode::FullNode { source_rpc, .. } => {
                 let mut forwarded_request = Request::new(request);
                 if let Some(accept) = original_accept {
                     forwarded_request.metadata_mut().insert(ACCEPT.as_str(), accept);
@@ -922,7 +922,7 @@ impl api_server::Api for RpcService {
             RpcMode::Sequencer { block_producer, validator } => {
                 (block_producer.as_ref(), validator.as_ref())
             },
-            RpcMode::FullNode { source_rpc } => {
+            RpcMode::FullNode { source_rpc, .. } => {
                 let mut forwarded_request = Request::new(request);
                 if let Some(accept) = original_accept {
                     forwarded_request.metadata_mut().insert(ACCEPT.as_str(), accept);
@@ -1005,7 +1005,7 @@ impl api_server::Api for RpcService {
             RpcMode::Sequencer { block_producer, .. } => {
                 Some(block_producer_status_to_proto(block_producer.status().await))
             },
-            RpcMode::FullNode { source_rpc } => source_rpc
+            RpcMode::FullNode { source_rpc, .. } => source_rpc
                 .as_ref()
                 .clone()
                 .status(Request::new(()))
@@ -1052,7 +1052,7 @@ impl api_server::Api for RpcService {
 
                 ntx_builder.clone().get_network_note_status(request).await?.into_inner()
             },
-            RpcMode::FullNode { source_rpc } => {
+            RpcMode::FullNode { source_rpc, .. } => {
                 source_rpc.as_ref().clone().get_network_note_status(request).await?.into_inner()
             },
         };

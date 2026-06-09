@@ -56,11 +56,27 @@ use url::Url;
 use crate::server::api::RpcService;
 use crate::{Rpc, RpcMode};
 
+/// Global registry of temp directories. Held for the lifetime of the test binary so that `RocksDB`
+/// can always flush on drop regardless of test outcome or drop ordering.
+static TEMP_DIRS: std::sync::OnceLock<std::sync::Mutex<Vec<TempDir>>> = std::sync::OnceLock::new();
+
+/// Creates a temp directory, registers it in the global registry, and returns its path.
+fn new_tempdir() -> std::path::PathBuf {
+    let dir = tempfile::tempdir().expect("tempdir should be created");
+    let path = dir.path().to_path_buf();
+    TEMP_DIRS
+        .get_or_init(|| std::sync::Mutex::new(Vec::new()))
+        .lock()
+        .unwrap()
+        .push(dir);
+    path
+}
+
 /// A wrapper around the loaded store state and its backing data directory.
 struct TestStore {
     state: Arc<State>,
     genesis_commitment: Word,
-    data_directory: TempDir,
+    data_directory: std::path::PathBuf,
 }
 
 impl TestStore {
@@ -69,13 +85,13 @@ impl TestStore {
     }
 
     fn data_directory_path(&self) -> &std::path::Path {
-        self.data_directory.path()
+        &self.data_directory
     }
 
     async fn start() -> Self {
-        let data_directory = tempfile::tempdir().expect("tempdir should be created");
-        let genesis_commitment = Self::bootstrap(data_directory.path());
-        let state = load_state(data_directory.path()).await;
+        let data_directory = new_tempdir();
+        let genesis_commitment = Self::bootstrap(&data_directory);
+        let state = load_state(&data_directory).await;
         Self {
             state,
             genesis_commitment,
@@ -440,7 +456,7 @@ async fn rpc_rejects_post_deployment_network_account_tx() {
 
     let service = RpcService::new(
         Arc::clone(&store.state),
-        RpcMode::full_node(source_rpc_client()),
+        RpcMode::full_node(source_rpc_client(), 100),
         None,
         NonZeroUsize::new(1_000_000).unwrap(),
         None,
@@ -523,17 +539,15 @@ async fn start_ntx_builder(
 
 async fn start_source_rpc(ntx_builder: NtxBuilderClient) -> (RpcClient, TestStore) {
     let store = TestStore::start().await;
-    let block_producer_data_directory =
-        tempfile::tempdir().expect("block producer state tempdir should be created");
-    TestStore::bootstrap(block_producer_data_directory.path());
-    let block_producer_state = load_state(block_producer_data_directory.path()).await;
+    let block_producer_dir = new_tempdir();
+    TestStore::bootstrap(&block_producer_dir);
+    let block_producer_state = load_state(&block_producer_dir).await;
     let store_state = Arc::clone(&store.state);
 
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("Failed to bind source RPC");
     let addr = listener.local_addr().expect("Failed to get source RPC address");
 
     task::spawn(async move {
-        let _block_producer_data_directory = block_producer_data_directory;
         let validator_url = Url::parse("http://127.0.0.1:0").unwrap();
         let block_producer = BlockProducerApi::new(
             block_producer_state,
@@ -587,7 +601,7 @@ async fn full_node_forwards_get_network_note_status_to_source_rpc() {
     let local_store = TestStore::start().await;
     let full_node = RpcService::new(
         Arc::clone(&local_store.state),
-        RpcMode::full_node(source_rpc),
+        RpcMode::full_node(source_rpc, 100),
         None,
         NonZeroUsize::new(1_000).unwrap(),
         None,
@@ -617,7 +631,7 @@ async fn full_node_preserves_original_accept_metadata_when_forwarding() {
     let local_store = TestStore::start().await;
     let full_node = RpcService::new(
         Arc::clone(&local_store.state),
-        RpcMode::full_node(source_rpc),
+        RpcMode::full_node(source_rpc, 100),
         None,
         NonZeroUsize::new(1_000).unwrap(),
         None,
@@ -721,17 +735,15 @@ async fn start_rpc_with_options(
     grpc_options: GrpcOptionsExternal,
 ) -> (RpcClient, std::net::SocketAddr, TestStore) {
     let store = TestStore::start().await;
-    let block_producer_data_directory =
-        tempfile::tempdir().expect("block producer state tempdir should be created");
-    TestStore::bootstrap(block_producer_data_directory.path());
-    let block_producer_state = load_state(block_producer_data_directory.path()).await;
+    let block_producer_dir = new_tempdir();
+    TestStore::bootstrap(&block_producer_dir);
+    let block_producer_state = load_state(&block_producer_dir).await;
     let store_state = Arc::clone(&store.state);
 
     // Start the rpc component.
     let rpc_listener = TcpListener::bind("127.0.0.1:0").await.expect("Failed to bind rpc");
     let rpc_addr = rpc_listener.local_addr().expect("Failed to get rpc address");
     task::spawn(async move {
-        let _block_producer_data_directory = block_producer_data_directory;
         // SAFETY: Using dummy validator URL for test - not actually contacted in this test
         let validator_url = Url::parse("http://127.0.0.1:0").unwrap();
         let block_producer = BlockProducerApi::new(

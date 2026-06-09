@@ -124,4 +124,14 @@ pub struct SyncOptions {
         value_name = "URL"
     )]
     pub block_source_url: Url,
+
+    // Number of blocks that this RPC server must be within that of the sync source to be considered
+    // ready.
+    #[arg(
+        long = "sync.ready-threshold",
+        env = "MIDEN_NODE_SYNC_READY_THRESHOLD",
+        value_name = "NUM",
+        default_value_t = 10
+    )]
+    pub readiness_threshold: u32,
 }

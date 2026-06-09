@@ -3362,6 +3362,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tonic",
+ "tonic-health",
  "tracing",
  "url",
 ]
@@ -3460,6 +3461,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tonic",
+ "tonic-health",
  "tonic-reflection",
  "tonic-web",
  "tower",
