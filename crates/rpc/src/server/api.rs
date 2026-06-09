@@ -259,16 +259,6 @@ mod sync_notes;
 mod sync_nullifiers;
 mod sync_transactions;
 
-pub struct SubmitProvenTxInput {
-    request: proto::transaction::ProvenTransaction,
-    is_authorized_network_tx: bool,
-}
-
-pub struct SubmitProvenTxBatchInput {
-    request: proto::transaction::TransactionBatch,
-    is_authorized_network_tx: bool,
-}
-
 // HELPERS
 // ================================================================================================
 
