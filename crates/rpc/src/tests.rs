@@ -1,4 +1,4 @@
-use std::mem::ManuallyDrop;
+use std::mem;
 use std::net::{IpAddr, Ipv4Addr};
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::sync::Arc;
@@ -59,21 +59,21 @@ use crate::{Rpc, RpcMode};
 
 /// A wrapper around the loaded store state and its backing data directory.
 struct TestStore {
-    state: ManuallyDrop<Arc<State>>,
+    state: Arc<State>,
     genesis_commitment: Word,
-    data_directory: ManuallyDrop<TempDir>,
+    data_directory: Option<TempDir>,
 }
 
 impl Drop for TestStore {
     fn drop(&mut self) {
-        let is_last = Arc::strong_count(&self.state) == 1;
-        unsafe {
-            // State must flush before the backing directory is removed.
-            ManuallyDrop::drop(&mut self.state);
-            if is_last {
-                ManuallyDrop::drop(&mut self.data_directory);
-            }
+        if Arc::get_mut(&mut self.state).is_none() {
+            // Another Arc owner still uses this state (e.g. a spawned task). We must not delete the
+            // backing directory yet or RocksDB will panic on its flush-on-drop. Leak it instead;
+            // the OS will clean it up.
+            mem::forget(self.data_directory.take());
         }
+        // When we are the sole owner, fields drop in declaration order: `state` first (triggering
+        // the RocksDB flush), then `data_directory` (deleting the dir).
     }
 }
 
@@ -83,7 +83,7 @@ impl TestStore {
     }
 
     fn data_directory_path(&self) -> &std::path::Path {
-        self.data_directory.path()
+        self.data_directory.as_ref().unwrap().path()
     }
 
     async fn start() -> Self {
@@ -91,9 +91,9 @@ impl TestStore {
         let genesis_commitment = Self::bootstrap(data_directory.path());
         let state = load_state(data_directory.path()).await;
         Self {
-            state: ManuallyDrop::new(state),
+            state,
             genesis_commitment,
-            data_directory: ManuallyDrop::new(data_directory),
+            data_directory: Some(data_directory),
         }
     }
 
