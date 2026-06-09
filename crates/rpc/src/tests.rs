@@ -56,11 +56,27 @@ use url::Url;
 use crate::server::api::RpcService;
 use crate::{Rpc, RpcMode};
 
+/// Global registry of temp directories. Held for the lifetime of the test binary so that `RocksDB`
+/// can always flush on drop regardless of test outcome or drop ordering.
+static TEMP_DIRS: std::sync::OnceLock<std::sync::Mutex<Vec<TempDir>>> = std::sync::OnceLock::new();
+
+/// Creates a temp directory, registers it in the global registry, and returns its path.
+fn new_tempdir() -> std::path::PathBuf {
+    let dir = tempfile::tempdir().expect("tempdir should be created");
+    let path = dir.path().to_path_buf();
+    TEMP_DIRS
+        .get_or_init(|| std::sync::Mutex::new(Vec::new()))
+        .lock()
+        .unwrap()
+        .push(dir);
+    path
+}
+
 /// A wrapper around the loaded store state and its backing data directory.
 struct TestStore {
     state: Arc<State>,
     genesis_commitment: Word,
-    data_directory: TempDir,
+    data_directory: std::path::PathBuf,
 }
 
 impl TestStore {
@@ -69,13 +85,13 @@ impl TestStore {
     }
 
     fn data_directory_path(&self) -> &std::path::Path {
-        self.data_directory.path()
+        &self.data_directory
     }
 
     async fn start() -> Self {
-        let data_directory = tempfile::tempdir().expect("tempdir should be created");
-        let genesis_commitment = Self::bootstrap(data_directory.path());
-        let state = load_state(data_directory.path()).await;
+        let data_directory = new_tempdir();
+        let genesis_commitment = Self::bootstrap(&data_directory);
+        let state = load_state(&data_directory).await;
         Self {
             state,
             genesis_commitment,
@@ -184,6 +200,19 @@ fn build_test_proven_tx_with_id(
         ExecutionProof::new_dummy(),
     )
     .unwrap()
+}
+
+fn assert_beyond_tip(status: &tonic::Status, endpoint: &str) {
+    assert_eq!(
+        status.code(),
+        tonic::Code::InvalidArgument,
+        "{endpoint} should reject block_to beyond chain tip with InvalidArgument, got: {status:?}"
+    );
+    assert!(
+        status.message().contains("greater than chain tip"),
+        "{endpoint} error message should mention the chain tip, got: {}",
+        status.message()
+    );
 }
 
 #[tokio::test]
@@ -440,7 +469,7 @@ async fn rpc_rejects_post_deployment_network_account_tx() {
 
     let service = RpcService::new(
         Arc::clone(&store.state),
-        RpcMode::full_node(source_rpc_client()),
+        RpcMode::full_node(source_rpc_client(), 100),
         None,
         NonZeroUsize::new(1_000_000).unwrap(),
         None,
@@ -469,28 +498,37 @@ fn source_rpc_client() -> RpcClient {
 struct FixedNtxBuilder {
     response: proto::rpc::GetNetworkNoteStatusResponse,
     call_count: Arc<AtomicUsize>,
+    last_accept: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 #[tonic::async_trait]
 impl proto::ntx_builder::api_server::Api for FixedNtxBuilder {
     async fn get_network_note_status(
         &self,
-        _request: Request<proto::note::NoteId>,
+        request: Request<proto::note::NoteId>,
     ) -> Result<tonic::Response<proto::rpc::GetNetworkNoteStatusResponse>, tonic::Status> {
         self.call_count.fetch_add(1, Ordering::SeqCst);
+        let accept = request
+            .metadata()
+            .get(ACCEPT.as_str())
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        *self.last_accept.lock().expect("last_accept mutex should not be poisoned") = accept;
         Ok(tonic::Response::new(self.response.clone()))
     }
 }
 
 async fn start_ntx_builder(
     response: proto::rpc::GetNetworkNoteStatusResponse,
-) -> (NtxBuilderClient, Arc<AtomicUsize>) {
+) -> (NtxBuilderClient, Arc<AtomicUsize>, Arc<std::sync::Mutex<Option<String>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("Failed to bind ntx-builder");
     let addr = listener.local_addr().expect("Failed to get ntx-builder address");
     let call_count = Arc::new(AtomicUsize::new(0));
+    let last_accept = Arc::new(std::sync::Mutex::new(None));
     let service = FixedNtxBuilder {
         response,
         call_count: Arc::clone(&call_count),
+        last_accept: Arc::clone(&last_accept),
     };
 
     task::spawn(async move {
@@ -509,22 +547,20 @@ async fn start_ntx_builder(
         .without_otel_context_injection()
         .connect_lazy::<NtxBuilderClient>();
 
-    (client, call_count)
+    (client, call_count, last_accept)
 }
 
 async fn start_source_rpc(ntx_builder: NtxBuilderClient) -> (RpcClient, TestStore) {
     let store = TestStore::start().await;
-    let block_producer_data_directory =
-        tempfile::tempdir().expect("block producer state tempdir should be created");
-    TestStore::bootstrap(block_producer_data_directory.path());
-    let block_producer_state = load_state(block_producer_data_directory.path()).await;
+    let block_producer_dir = new_tempdir();
+    TestStore::bootstrap(&block_producer_dir);
+    let block_producer_state = load_state(&block_producer_dir).await;
     let store_state = Arc::clone(&store.state);
 
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("Failed to bind source RPC");
     let addr = listener.local_addr().expect("Failed to get source RPC address");
 
     task::spawn(async move {
-        let _block_producer_data_directory = block_producer_data_directory;
         let validator_url = Url::parse("http://127.0.0.1:0").unwrap();
         let block_producer = BlockProducerApi::new(
             block_producer_state,
@@ -572,12 +608,13 @@ async fn full_node_forwards_get_network_note_status_to_source_rpc() {
         attempt_count: 7,
         last_attempt_block_num: Some(42),
     };
-    let (ntx_builder, ntx_builder_call_count) = start_ntx_builder(expected.clone()).await;
+    let (ntx_builder, ntx_builder_call_count, _last_accept) =
+        start_ntx_builder(expected.clone()).await;
     let (source_rpc, _source_store) = start_source_rpc(ntx_builder).await;
     let local_store = TestStore::start().await;
     let full_node = RpcService::new(
         Arc::clone(&local_store.state),
-        RpcMode::full_node(source_rpc),
+        RpcMode::full_node(source_rpc, 100),
         None,
         NonZeroUsize::new(1_000).unwrap(),
         None,
@@ -591,6 +628,47 @@ async fn full_node_forwards_get_network_note_status_to_source_rpc() {
 
     assert_eq!(response, expected);
     assert_eq!(ntx_builder_call_count.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn full_node_preserves_original_accept_metadata_when_forwarding() {
+    let expected = proto::rpc::GetNetworkNoteStatusResponse {
+        status: proto::rpc::NetworkNoteStatus::Discarded.into(),
+        last_error: Some("execution failed".to_string()),
+        attempt_count: 7,
+        last_attempt_block_num: Some(42),
+    };
+    let (ntx_builder, _ntx_builder_call_count, last_accept) =
+        start_ntx_builder(expected.clone()).await;
+    let (source_rpc, source_store) = start_source_rpc(ntx_builder).await;
+    let local_store = TestStore::start().await;
+    let full_node = RpcService::new(
+        Arc::clone(&local_store.state),
+        RpcMode::full_node(source_rpc, 100),
+        None,
+        NonZeroUsize::new(1_000).unwrap(),
+        None,
+    );
+
+    let original_accept = format!(
+        "application/vnd.miden; version={}; genesis={}",
+        env!("CARGO_PKG_VERSION"),
+        source_store.genesis_commitment().to_hex(),
+    );
+    let mut request = Request::new(Word::empty().into());
+    request.metadata_mut().insert(ACCEPT.as_str(), original_accept.parse().unwrap());
+
+    let response = full_node
+        .get_network_note_status(request)
+        .await
+        .expect("full-node RPC should forward network note status request")
+        .into_inner();
+
+    assert_eq!(response, expected);
+    assert_eq!(
+        *last_accept.lock().expect("last_accept mutex should not be poisoned"),
+        Some(original_accept),
+    );
 }
 
 // Batch-path coverage for the network-account gate is provided manually. Building a valid
@@ -670,17 +748,15 @@ async fn start_rpc_with_options(
     grpc_options: GrpcOptionsExternal,
 ) -> (RpcClient, std::net::SocketAddr, TestStore) {
     let store = TestStore::start().await;
-    let block_producer_data_directory =
-        tempfile::tempdir().expect("block producer state tempdir should be created");
-    TestStore::bootstrap(block_producer_data_directory.path());
-    let block_producer_state = load_state(block_producer_data_directory.path()).await;
+    let block_producer_dir = new_tempdir();
+    TestStore::bootstrap(&block_producer_dir);
+    let block_producer_state = load_state(&block_producer_dir).await;
     let store_state = Arc::clone(&store.state);
 
     // Start the rpc component.
     let rpc_listener = TcpListener::bind("127.0.0.1:0").await.expect("Failed to bind rpc");
     let rpc_addr = rpc_listener.local_addr().expect("Failed to get rpc address");
     task::spawn(async move {
-        let _block_producer_data_directory = block_producer_data_directory;
         // SAFETY: Using dummy validator URL for test - not actually contacted in this test
         let validator_url = Url::parse("http://127.0.0.1:0").unwrap();
         let block_producer = BlockProducerApi::new(
@@ -829,4 +905,66 @@ fn sync_chain_mmr_block_header_matches_chain_commitment() {
     client_mmr.add(headers[4].commitment(), false).unwrap();
 
     assert_eq!(client_mmr.peaks().hash_peaks(), server_mmr.peaks().hash_peaks());
+}
+
+/// All paginated sync endpoints must reject a `block_to` that is greater than the chain tip.
+///
+/// After bootstrapping, the chain tip is the genesis block (0), so a range ending at block 1 is
+/// beyond the tip. The range `0..=1` is otherwise valid (non-empty, start <= end), which isolates
+/// the chain-tip check from the range-validity check.
+#[tokio::test]
+async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
+    let (mut rpc_client, _rpc_addr, _store) = start_rpc().await;
+
+    // A range ending one block past the genesis tip; otherwise valid (non-empty, start <= end).
+    let block_range = || Some(proto::rpc::BlockRange { block_from: 0, block_to: 1 });
+    // Any public account id works: the chain-tip check happens before the account is queried.
+    let account_id =
+        || Some(AccountId::dummy([0; 15], AccountIdVersion::Version1, AccountType::Public).into());
+
+    let status = rpc_client
+        .sync_nullifiers(proto::rpc::SyncNullifiersRequest {
+            block_range: block_range(),
+            prefix_len: 16,
+            nullifiers: vec![],
+        })
+        .await
+        .expect_err("sync_nullifiers should reject block_to beyond chain tip");
+    assert_beyond_tip(&status, "sync_nullifiers");
+
+    let status = rpc_client
+        .sync_notes(proto::rpc::SyncNotesRequest {
+            block_range: block_range(),
+            note_tags: vec![],
+        })
+        .await
+        .expect_err("sync_notes should reject block_to beyond chain tip");
+    assert_beyond_tip(&status, "sync_notes");
+
+    let status = rpc_client
+        .sync_account_storage_maps(proto::rpc::SyncAccountStorageMapsRequest {
+            block_range: block_range(),
+            account_id: account_id(),
+        })
+        .await
+        .expect_err("sync_account_storage_maps should reject block_to beyond chain tip");
+    assert_beyond_tip(&status, "sync_account_storage_maps");
+
+    let status = rpc_client
+        .sync_account_vault(proto::rpc::SyncAccountVaultRequest {
+            block_range: block_range(),
+            account_id: account_id(),
+        })
+        .await
+        .expect_err("sync_account_vault should reject block_to beyond chain tip");
+    assert_beyond_tip(&status, "sync_account_vault");
+
+    let status = rpc_client
+        .sync_transactions(proto::rpc::SyncTransactionsRequest {
+            block_range: block_range(),
+            account_ids: vec![],
+        })
+        .await
+        .expect_err("sync_transactions should reject block_to beyond chain tip");
+    assert_beyond_tip(&status, "sync_transactions");
 }

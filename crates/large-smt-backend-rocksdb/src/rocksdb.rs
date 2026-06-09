@@ -1581,7 +1581,9 @@ fn subtree_root_from_key_bytes(key_bytes: &[u8], depth: u8) -> Result<NodeIndex,
         40 => 5,
         48 => 6,
         56 => 7,
-        d => return Err(StorageError::Unsupported(format!("unsupported subtree depth {d}"))),
+        d => {
+            return Err(StorageError::Unsupported(format!("unsupported subtree depth {d}")));
+        },
     };
 
     if key_bytes.len() != expected {
