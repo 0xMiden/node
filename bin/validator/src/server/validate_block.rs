@@ -1,4 +1,4 @@
-use miden_node_db::{DatabaseError, Db};
+use miden_node_db::DatabaseError;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::block::{BlockHeader, BlockNumber, ProposedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
@@ -35,10 +35,9 @@ pub enum BlockValidationError {
     #[error(
         "validator signing key {actual:?} does not match the block's validator key {expected:?}"
     )]
-    ValidatorKeyMismatch {
-        expected: PublicKey,
-        actual: PublicKey,
-    },
+    ValidatorKeyMismatch { expected: PublicKey, actual: PublicKey },
+    #[error("no chain tip exists")]
+    NoChainTip,
 }
 
 // BLOCK VALIDATION
@@ -60,10 +59,8 @@ impl ValidatorServer {
         chain_tip: BlockHeader,
     ) -> Result<(Signature, BlockHeader), BlockValidationError> {
         // Search for any proposed transactions that have not previously been validated.
-        let proposed_tx_ids = proposed_block
-            .transactions()
-            .map(TransactionHeader::id)
-            .collect::<Vec<_>>();
+        let proposed_tx_ids =
+            proposed_block.transactions().map(TransactionHeader::id).collect::<Vec<_>>();
         let unvalidated_txs = self
             .db
             .transact("find_unvalidated_transactions", move |conn| {
@@ -74,9 +71,7 @@ impl ValidatorServer {
 
         // All proposed transactions must have been validated.
         if !unvalidated_txs.is_empty() {
-            return Err(BlockValidationError::UnvalidatedTransactions(
-                unvalidated_txs,
-            ));
+            return Err(BlockValidationError::UnvalidatedTransactions(unvalidated_txs));
         }
 
         // Build the block header.
@@ -92,14 +87,10 @@ impl ValidatorServer {
         // replacement block. Validate it against the previous block header.
         let prev = if proposed_header.block_num() == chain_tip.block_num() {
             // The genesis block cannot be replaced (genesis block has no parent).
-            let prev_block_num = chain_tip
-                .block_num()
-                .parent()
-                .ok_or(BlockValidationError::NoPrevBlockHeader)?;
+            let prev_block_num =
+                chain_tip.block_num().parent().ok_or(BlockValidationError::NoPrevBlockHeader)?;
             self.db
-                .query("load_block_header", move |conn| {
-                    load_block_header(conn, prev_block_num)
-                })
+                .query("load_block_header", move |conn| load_block_header(conn, prev_block_num))
                 .await
                 .map_err(BlockValidationError::DatabaseError)?
                 .ok_or(BlockValidationError::NoPrevBlockHeader)?

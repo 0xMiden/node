@@ -18,8 +18,12 @@ use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::db::{
-    count_signed_blocks, count_validated_transactions, load_chain_tip, load_with_pool_size,
+    count_signed_blocks,
+    count_validated_transactions,
+    load_chain_tip,
+    load_with_pool_size,
 };
+use crate::server::validate_block::BlockValidationError;
 use crate::{COMPONENT, ValidatorSigner};
 
 #[cfg(test)]
@@ -95,13 +99,17 @@ impl Validator {
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .timeout(self.grpc_options.request_timeout)
-            .add_service(api_server::ApiServer::new(ValidatorServer::new(
-                self.signer,
-                db,
-                initial_chain_tip,
-                initial_tx_count,
-                initial_block_count,
-            )))
+            .add_service(api_server::ApiServer::new(
+                ValidatorServer::new(
+                    self.signer,
+                    db,
+                    initial_chain_tip,
+                    initial_tx_count,
+                    initial_block_count,
+                )
+                .await
+                .context("failed to initialize validator server")?,
+            ))
             .add_service(reflection_service)
             .serve_with_incoming(TcpListenerStream::new(listener))
             .await
@@ -130,20 +138,36 @@ struct ValidatorServer {
 }
 
 impl ValidatorServer {
-    fn new(
+    async fn new(
         signer: ValidatorSigner,
         db: Db,
         initial_chain_tip: u32,
         initial_tx_count: u64,
         initial_block_count: u64,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, BlockValidationError> {
+        // The validator key is fixed at genesis and carried forward unchanged by every block, so
+        // the signing key must match the chain's validator key for this validator's lifetime.
+        // Reject a misconfigured key here.
+        let chain_tip = db
+            .query("load_chain_tip", load_chain_tip)
+            .await
+            .map_err(BlockValidationError::DatabaseError)?
+            .ok_or(BlockValidationError::NoChainTip)?;
+        let signing_key = signer.public_key();
+        if &signing_key != chain_tip.validator_key() {
+            return Err(BlockValidationError::ValidatorKeyMismatch {
+                expected: chain_tip.validator_key().clone(),
+                actual: signing_key,
+            });
+        }
+
+        Ok(Self {
             signer,
             db: db.into(),
             sign_block_semaphore: Semaphore::new(1),
             chain_tip: AtomicU32::new(initial_chain_tip),
             validated_transactions_count: AtomicU64::new(initial_tx_count),
             signed_blocks_count: AtomicU64::new(initial_block_count),
-        }
+        })
     }
 }
