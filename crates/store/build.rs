@@ -43,6 +43,9 @@ fn generate_agglayer_sample_accounts() {
     let bridge_seed: Word = Word::new([Felt::from_u32(1u32); 4]);
     let eth_faucet_seed: Word = Word::new([Felt::from_u32(2u32); 4]);
     let usdc_faucet_seed: Word = Word::new([Felt::from_u32(3u32); 4]);
+    // Deterministic placeholder AggLayer network ID for the sample bridge, matching the
+    // `TEST_NETWORK_ID` fixture used in the genesis tests. WARNING: DO NOT USE THIS IN PRODUCTION
+    let network_id: u32 = 77;
 
     // Create bridge admin and GER manager as proper wallet accounts. WARNING: DO NOT USE THESE IN
     // PRODUCTION
@@ -75,7 +78,7 @@ fn generate_agglayer_sample_accounts() {
     // Create the bridge account first (faucets need to reference it) Use "existing" variant so
     // accounts have nonce > 0 (required for genesis)
     let bridge_account =
-        create_existing_bridge_account(bridge_seed, bridge_admin_id, ger_manager_id);
+        create_existing_bridge_account(bridge_seed, bridge_admin_id, ger_manager_id, network_id);
     let bridge_account_id = bridge_account.id();
 
     // Create AggLayer faucets using "existing" variant ETH: 8 decimals (protocol max is 12), max
