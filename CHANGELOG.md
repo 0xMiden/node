@@ -6,6 +6,7 @@
 - Improved `GetAccount` performance if number of vault assets exceeds the limit. ([#2227](https://github.com/0xMiden/node/pull/2227)).
 - Improved `GetAccount` performance if number of storage map entries exceeds the limit. ([#2228](https://github.com/0xMiden/node/pull/2228)).
 - Enabled TLS support for gRPC clients ([#2233](https://github.com/0xMiden/node/pull/2233)).
+- Upgraded `miden-protocol` to v0.15.3 (#[]()).
 
 ## v0.15.0-rc.4 (2026-06-09)
 
