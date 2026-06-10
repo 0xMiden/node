@@ -9,6 +9,7 @@
 - Improved `GetAccount` performance if number of storage map entries exceeds the limit. ([#2228](https://github.com/0xMiden/node/pull/2228)).
 - Enabled TLS support for gRPC clients ([#2233](https://github.com/0xMiden/node/pull/2233)).
 - Upgraded `miden-protocol` to v0.15.3 (#[]()).
+- Added a required `--network-id` flag to the genesis tool, passed through to the AggLayer bridge account ([#2223](https://github.com/0xMiden/node/pull/2223)).
 
 ## v0.15.0-rc.4 (2026-06-09)
 
