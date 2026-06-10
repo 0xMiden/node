@@ -347,7 +347,7 @@ impl UnaryMethod {
     /// async fn <Method::name::snake_case>(
     ///     request: tonic::Request<<Method::request>>,
     /// ) -> tonic::Result<tonic::Response<<Method::response>>> {
-    ///     <T as <<Method::name>>::full(self, request.into_inner()).await.map(tonic::Response::new)
+    ///     <T as <<Method::name>>::full(self, request).await.map(tonic::Response::new)
     /// }
     /// ```
     fn tonic_impl(&self) -> Function {
@@ -358,7 +358,7 @@ impl UnaryMethod {
             .ret(format!("tonic::Result<tonic::Response<{}>>", self.response))
             .line("#[allow(clippy::unit_arg)]")
             .line(format!(
-                "<T as {}>::full(self, request.into_inner()).await.map(tonic::Response::new)",
+                "<T as {}>::full(self, request).await.map(tonic::Response::new)",
                 self.name
             ));
 
@@ -378,9 +378,9 @@ impl UnaryMethod {
     ///
     ///     async fn full(
     ///         &self,
-    ///         request: <Method::Request>,
+    ///         request: tonic::Request<<Method::Request>>,
     ///     ) -> tonic::Result<<Method::response>> {
-    ///         let input = Self::decode(request)?;
+    ///         let input = Self::decode(request.into_inner())?;
     ///         let output = self.handle(input).await?;
     ///         Self::encode(output)
     ///     }
@@ -410,9 +410,9 @@ impl UnaryMethod {
         ret.new_fn("full")
             .set_async(true)
             .arg_ref_self()
-            .arg("request", &self.request)
+            .arg("request", format!("tonic::Request<{}>", &self.request))
             .ret(format!("tonic::Result<{}>", &self.response))
-            .line("let input = Self::decode(request)?;")
+            .line("let input = Self::decode(request.into_inner())?;")
             .line("let output = self.handle(input).await?;")
             .line("Self::encode(output)");
 
@@ -442,9 +442,9 @@ impl ServerStream {
     ///     fn encode(item: Self::Item) -> tonic::Result<Method::response>;
     ///     async fn handle(&self, input: Self::Input) -> tonic::Result<Self::ItemStream>;
     ///
-    ///     async fn full(&self, request: <Method::request>) -> tonic::Result<Pin<Box<dyn Stream<...>>>> {
+    ///     async fn full(&self, request: tonic::Request<<Method::request>>) -> tonic::Result<Pin<Box<dyn Stream<...>>>> {
     ///         use tokio_stream::StreamExt as _;
-    ///         let input = Self::decode(request)?;
+    ///         let input = Self::decode(request.into_inner())?;
     ///         let stream = self.handle(input).await?;
     ///         Ok(Box::pin(stream.map(|item| item.and_then(|i| Self::encode(i)))))
     ///     }
@@ -485,10 +485,10 @@ impl ServerStream {
         ret.new_fn("full")
             .set_async(true)
             .arg_ref_self()
-            .arg("request", &self.request)
+            .arg("request", format!("tonic::Request<{}>", &self.request))
             .ret(format!("tonic::Result<{boxed_stream}>"))
             .line("use tonic::codegen::tokio_stream::StreamExt as _;")
-            .line("let input = Self::decode(request)?;")
+            .line("let input = Self::decode(request.into_inner())?;")
             .line("let stream = self.handle(input).await?;")
             .line("Ok(Box::pin(stream.map(|item| item.and_then(|i| Self::encode(i)))))");
 
@@ -503,7 +503,7 @@ impl ServerStream {
             .ret(format!("tonic::Result<tonic::Response<Self::{}>>", self.associated_type().0))
             .line("#[allow(clippy::unit_arg)]")
             .line(format!(
-                "<T as {}>::full(self, request.into_inner()).await.map(tonic::Response::new)",
+                "<T as {}>::full(self, request).await.map(tonic::Response::new)",
                 self.name
             ));
 
