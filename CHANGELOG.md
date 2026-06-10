@@ -2,10 +2,14 @@
 
 ## Unreleased
 
+## v0.15.0 (2026-06-10)
+
 - Fixed the store dropping a fungible asset's callback flag when applying partial account deltas ([#2222](https://github.com/0xMiden/node/pull/2222)).
 - Improved `GetAccount` performance if number of vault assets exceeds the limit. ([#2227](https://github.com/0xMiden/node/pull/2227)).
 - Improved `GetAccount` performance if number of storage map entries exceeds the limit. ([#2228](https://github.com/0xMiden/node/pull/2228)).
 - Enabled TLS support for gRPC clients ([#2233](https://github.com/0xMiden/node/pull/2233)).
+- Upgraded `miden-protocol` to v0.15.3 ([#2235](https://github.com/0xMiden/node/pull/2235)).
+- Removed `miden-genesis` binary, AggLayer now deploys its accounts post-genesis ([#2235](https://github.com/0xMiden/node/pull/2235)).
 
 ## v0.15.0-rc.4 (2026-06-09)
 
