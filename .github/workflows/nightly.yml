@@ -103,7 +103,7 @@ jobs:
       - name: Install binstall
         uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
         with:
-          tool: cargo-binstall@1.16.6
+          tool: cargo-binstall
       - name: Install cargo-msrv
         run: cargo binstall --no-confirm cargo-msrv
       - name: Get manifest path for package
