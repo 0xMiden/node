@@ -60,8 +60,8 @@ impl SequencerCommand {
         let rpc = Rpc {
             listener: bind_rpc(runtime.rpc_listen).await?,
             store: state,
-            mode: RpcMode::sequencer(block_producer, self.external_services.validator_client()),
-            ntx_builder: Some(self.external_services.ntx_builder_client()),
+            mode: RpcMode::sequencer(block_producer, self.external_services.validator_client()?),
+            ntx_builder: Some(self.external_services.ntx_builder_client()?),
             grpc_options: runtime.external_grpc_options,
             network_tx_auth,
         };
@@ -85,24 +85,24 @@ pub struct SequencerExternalServiceOptions {
 }
 
 impl SequencerExternalServiceOptions {
-    fn validator_client(&self) -> ValidatorClient {
-        Builder::new(self.validator_url.clone())
-            .without_tls()
+    fn validator_client(&self) -> anyhow::Result<ValidatorClient> {
+        Ok(Builder::new(self.validator_url.clone())
+            .with_tls()?
             .without_timeout()
             .without_metadata_version()
             .without_metadata_genesis()
             .with_otel_context_injection()
-            .connect_lazy::<ValidatorClient>()
+            .connect_lazy::<ValidatorClient>())
     }
 
-    fn ntx_builder_client(&self) -> NtxBuilderClient {
-        Builder::new(self.ntx_builder_url.clone())
-            .without_tls()
+    fn ntx_builder_client(&self) -> anyhow::Result<NtxBuilderClient> {
+        Ok(Builder::new(self.ntx_builder_url.clone())
+            .with_tls()?
             .without_timeout()
             .without_metadata_version()
             .without_metadata_genesis()
             .with_otel_context_injection()
-            .connect_lazy::<NtxBuilderClient>()
+            .connect_lazy::<NtxBuilderClient>())
     }
 }
 
@@ -121,7 +121,7 @@ pub struct FullNodeCommand {
 impl FullNodeCommand {
     pub async fn handle(self) -> anyhow::Result<()> {
         let runtime = self.runtime.runtime_config(&self.store);
-        let source_rpc = self.sync.source_rpc_client();
+        let source_rpc = self.sync.source_rpc_client()?;
         let network_tx_auth = self.runtime.rpc.network_tx_auth()?;
         let state = load_state(&runtime).await?;
         let _disk_monitor = state.spawn_disk_monitor();
@@ -142,14 +142,14 @@ impl FullNodeCommand {
 }
 
 impl SyncOptions {
-    fn source_rpc_client(&self) -> RpcClient {
-        Builder::new(self.block_source_url.clone())
-            .without_tls()
+    fn source_rpc_client(&self) -> anyhow::Result<RpcClient> {
+        Ok(Builder::new(self.block_source_url.clone())
+            .with_tls()?
             .without_timeout()
             .without_metadata_version()
             .without_metadata_genesis()
             .with_otel_context_injection()
-            .connect_lazy::<RpcClient>()
+            .connect_lazy::<RpcClient>())
     }
 }
 

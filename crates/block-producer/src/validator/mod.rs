@@ -35,18 +35,18 @@ pub struct BlockProducerValidatorClient {
 
 impl BlockProducerValidatorClient {
     /// Creates a new validator client with a lazy connection.
-    pub fn new(validator_url: Url) -> Self {
+    pub fn new(validator_url: Url) -> anyhow::Result<Self> {
         info!(target: COMPONENT, validator_endpoint = %validator_url, "Initializing validator client");
 
         let validator = Builder::new(validator_url)
-            .without_tls()
+            .with_tls()?
             .without_timeout()
             .without_metadata_version()
             .without_metadata_genesis()
             .with_otel_context_injection()
             .connect_lazy::<ValidatorClient>();
 
-        Self { client: validator }
+        Ok(Self { client: validator })
     }
 
     /// Signs the proposed block via the validator, returning the signature and the block commitment
