@@ -46,6 +46,8 @@ enum Scope {
     NetworkMonitor,
     NtxBuilder,
     Prover,
+    Validator,
+    Internal,
     General,
 }
 
@@ -288,6 +290,24 @@ description = "Changed the RPC response shape."
 scope       = "node"
 impact      = "added"
 description = "Added a bootstrap command."
+"#,
+        );
+
+        verify_pr_body(&body).unwrap();
+    }
+
+    #[test]
+    fn accepts_validator_and_internal_scopes() {
+        let body = valid_body(
+            r#"[[entry]]
+scope       = "validator"
+impact      = "changed"
+description = "Changed validator startup behavior."
+
+[[entry]]
+scope       = "internal"
+impact      = "fixed"
+description = "Fixed release automation metadata."
 "#,
         );
 

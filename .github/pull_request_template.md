@@ -16,7 +16,7 @@ How:
 ## Changelog
 
 <!--
-Use one [[entry]] per public impact. If this PR does not change the public gRPC
+Use one [[entry]] per release-note-worthy impact. If this PR does not change the public gRPC
 interface or released binaries, replace the entry block with:
 
 ```toml
@@ -24,7 +24,7 @@ changelog = "none"
 reason    = "Internal change only."
 ```
 
-Allowed scopes: rpc, protocol, docs, node, network-monitor, ntx-builder, prover, general
+Allowed scopes: rpc, protocol, docs, node, network-monitor, ntx-builder, prover, validator, internal, general
 Allowed impacts: breaking, added, changed, fixed, removed, deprecated
 -->
 
