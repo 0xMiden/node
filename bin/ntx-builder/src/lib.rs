@@ -397,7 +397,7 @@ impl NtxBuilderConfig {
                 self.request_backoff_initial,
                 self.request_backoff_max,
             ),
-        };
+        }?;
 
         // The database is bootstrapped with the genesis block before startup (see
         // `miden-ntx-builder bootstrap`), so a persisted chain state is always present. Load it and

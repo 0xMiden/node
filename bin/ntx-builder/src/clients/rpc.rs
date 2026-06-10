@@ -61,7 +61,7 @@ impl RpcClient {
         genesis_commitment: Word,
         backoff_initial: Duration,
         backoff_max: Duration,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         Self::new_with_auth(rpc_url, None, genesis_commitment, backoff_initial, backoff_max)
     }
 
@@ -75,11 +75,11 @@ impl RpcClient {
         genesis_commitment: Word,
         backoff_initial: Duration,
         backoff_max: Duration,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         info!(target: COMPONENT, rpc_endpoint = %rpc_url, "Initializing RPC client");
 
         let builder = Builder::new(rpc_url)
-            .without_tls()
+            .with_tls()?
             .without_timeout()
             .without_metadata_version()
             .with_metadata_genesis(genesis_commitment.to_hex());
@@ -91,7 +91,7 @@ impl RpcClient {
 
         let backoff = retry::exponential(backoff_initial, backoff_max);
 
-        Self { inner: rpc, backoff }
+        Ok(Self { inner: rpc, backoff })
     }
 
     /// Opens a committed-block subscription starting at `block_from`, retrying indefinitely with

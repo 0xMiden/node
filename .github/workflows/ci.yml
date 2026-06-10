@@ -52,6 +52,7 @@ jobs:
         with:
           shared-key: ${{ github.job }}
           prefix-key: ${{ env.CACHE_PREFIX }}
+          cache-provider: warpbuild
           save-if: ${{ env.SAVE_CACHE }}
       - name: cargo build
         run: cargo build --workspace --all-targets --locked
@@ -106,6 +107,7 @@ jobs:
         with:
           shared-key: ${{ github.job }}
           prefix-key: ${{ env.CACHE_PREFIX }}
+          cache-provider: warpbuild
           save-if: ${{ env.SAVE_CACHE }}
       - name: clippy
         run: cargo clippy --locked --all-targets --all-features --workspace -- -D warnings
@@ -126,6 +128,7 @@ jobs:
         with:
           shared-key: ${{ github.job }}
           prefix-key: ${{ env.CACHE_PREFIX }}
+          cache-provider: warpbuild
           save-if: ${{ env.SAVE_CACHE }}
       - name: Build tests
         run: cargo nextest run --all-features --workspace --no-run
@@ -149,6 +152,7 @@ jobs:
         with:
           shared-key: ${{ github.job }}
           prefix-key: ${{ env.CACHE_PREFIX }}
+          cache-provider: warpbuild
           save-if: ${{ env.SAVE_CACHE }}
       - uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
         with:
@@ -170,6 +174,7 @@ jobs:
         with:
           shared-key: ${{ github.job }}
           prefix-key: ${{ env.CACHE_PREFIX }}
+          cache-provider: warpbuild
           save-if: ${{ env.SAVE_CACHE }}
       - name: Build docs
         run: cargo doc --no-deps --workspace --all-features --locked
@@ -186,7 +191,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
         with:
           node-version: "22.18.0"
           cache: "npm"
@@ -215,6 +220,7 @@ jobs:
         with:
           shared-key: ${{ github.job }}
           prefix-key: ${{ env.CACHE_PREFIX }}
+          cache-provider: warpbuild
           save-if: ${{ env.SAVE_CACHE }}
       - uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
         with:
@@ -308,6 +314,7 @@ jobs:
         with:
           shared-key: ${{ github.job }}
           prefix-key: ${{ env.CACHE_PREFIX }}
+          cache-provider: warpbuild
           save-if: ${{ env.SAVE_CACHE }}
       - name: cargo build
         run: |
@@ -333,9 +340,10 @@ jobs:
         with:
           persist-credentials: false
       - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
         with:
           node-version: "22.18.0"
+          package-manager-cache: false
       - uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
         with:
           tool: typos@1.42.0
@@ -359,6 +367,7 @@ jobs:
         with:
           shared-key: ${{ github.job }}
           prefix-key: ${{ env.CACHE_PREFIX }}
+          cache-provider: github
           save-if: ${{ env.SAVE_CACHE }}
       - name: Install Markdown tools
         run: npm install --global prettier@3.8.3 markdownlint-cli2@0.22.1

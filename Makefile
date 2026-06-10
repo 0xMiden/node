@@ -13,8 +13,9 @@ DOCKER_PLATFORM ?=
 DOCKER_PLATFORM_ARG = $(if $(DOCKER_PLATFORM),--platform $(DOCKER_PLATFORM),)
 DOCKER_VERSION ?= $(shell awk -F '"' '/^version[[:space:]]*=/ { print $$2; exit }' Cargo.toml)
 CONFIG_DIR = .config
-README_FILES = $(shell git ls-files '*README.md')
-EXTERNAL_DOCS_MARKDOWN_FILES = $(shell git ls-files 'docs/external/**/*.md')
+EXISTING_TRACKED_FILES = while IFS= read -r file; do [ -f "$$file" ] && printf '%s\n' "$$file"; done
+README_FILES = $(shell git ls-files '*README.md' | $(EXISTING_TRACKED_FILES))
+EXTERNAL_DOCS_MARKDOWN_FILES = $(shell git ls-files 'docs/external/**/*.md' | $(EXISTING_TRACKED_FILES))
 MARKDOWN_FILES = $(README_FILES) $(EXTERNAL_DOCS_MARKDOWN_FILES)
 PRETTIER_CONFIG = $(CONFIG_DIR)/prettier.json
 PRETTIER_LOG_LEVEL = warn

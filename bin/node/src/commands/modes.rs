@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Context;
-use miden_node_block_producer::{RpcSync, Sequencer};
+use miden_node_block_producer::Sequencer;
 use miden_node_proto::clients::{Builder, NtxBuilderClient, RpcClient, ValidatorClient};
 use miden_node_rpc::{Rpc, RpcMode};
 use miden_node_store::State;
@@ -61,8 +61,8 @@ impl SequencerCommand {
         let rpc = Rpc {
             listener: bind_rpc(runtime.rpc_listen).await?,
             store: state,
-            mode: RpcMode::sequencer(block_producer, self.external_services.validator_client()),
-            ntx_builder: Some(self.external_services.ntx_builder_client()),
+            mode: RpcMode::sequencer(block_producer, self.external_services.validator_client()?),
+            ntx_builder: Some(self.external_services.ntx_builder_client()?),
             grpc_options: runtime.external_grpc_options,
             network_tx_auth,
         };
@@ -86,24 +86,24 @@ pub struct SequencerExternalServiceOptions {
 }
 
 impl SequencerExternalServiceOptions {
-    fn validator_client(&self) -> ValidatorClient {
-        Builder::new(self.validator_url.clone())
-            .without_tls()
+    fn validator_client(&self) -> anyhow::Result<ValidatorClient> {
+        Ok(Builder::new(self.validator_url.clone())
+            .with_tls()?
             .without_timeout()
             .without_metadata_version()
             .without_metadata_genesis()
             .with_otel_context_injection()
-            .connect_lazy::<ValidatorClient>()
+            .connect_lazy::<ValidatorClient>())
     }
 
-    fn ntx_builder_client(&self) -> NtxBuilderClient {
-        Builder::new(self.ntx_builder_url.clone())
-            .without_tls()
+    fn ntx_builder_client(&self) -> anyhow::Result<NtxBuilderClient> {
+        Ok(Builder::new(self.ntx_builder_url.clone())
+            .with_tls()?
             .without_timeout()
             .without_metadata_version()
             .without_metadata_genesis()
             .with_otel_context_injection()
-            .connect_lazy::<NtxBuilderClient>()
+            .connect_lazy::<NtxBuilderClient>())
     }
 }
 
@@ -122,25 +122,20 @@ pub struct FullNodeCommand {
 impl FullNodeCommand {
     pub async fn handle(self) -> anyhow::Result<()> {
         let runtime = self.runtime.runtime_config(&self.store);
-        let source_rpc = self.sync.source_rpc_client();
+        let source_rpc = self.sync.source_rpc_client()?;
         let network_tx_auth = self.runtime.rpc.network_tx_auth()?;
         let state = load_state(&runtime).await?;
         let _disk_monitor = state.spawn_disk_monitor();
-        let sync = RpcSync {
-            state: Arc::clone(&state),
-            source_rpc: source_rpc.clone(),
-        };
 
         let rpc = Rpc {
             listener: bind_rpc(runtime.rpc_listen).await?,
             store: state,
-            mode: RpcMode::full_node(source_rpc),
+            mode: RpcMode::full_node(source_rpc, self.sync.readiness_threshold),
             ntx_builder: None,
             grpc_options: runtime.external_grpc_options,
             network_tx_auth,
         };
         let mut tasks = Tasks::new();
-        tasks.spawn("RPC sync", sync.run());
         tasks.spawn("RPC server", rpc.serve());
 
         tasks.join_next_as_error().await
@@ -148,14 +143,14 @@ impl FullNodeCommand {
 }
 
 impl SyncOptions {
-    fn source_rpc_client(&self) -> RpcClient {
-        Builder::new(self.block_source_url.clone())
-            .without_tls()
+    fn source_rpc_client(&self) -> anyhow::Result<RpcClient> {
+        Ok(Builder::new(self.block_source_url.clone())
+            .with_tls()?
             .without_timeout()
             .without_metadata_version()
             .without_metadata_genesis()
             .with_otel_context_injection()
-            .connect_lazy::<RpcClient>()
+            .connect_lazy::<RpcClient>())
     }
 }
 

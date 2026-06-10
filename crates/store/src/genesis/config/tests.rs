@@ -3,7 +3,6 @@ use std::path::Path;
 
 use assert_matches::assert_matches;
 use miden_protocol::ONE;
-use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 
 use super::*;
@@ -304,81 +303,4 @@ path = "does_not_exist.mac"
         matches!(err, GenesisConfigError::AccountFileRead(..)),
         "Expected AccountFileRead error, got: {err:?}"
     );
-}
-
-#[tokio::test]
-#[miden_node_test_macro::enable_logging]
-async fn parsing_agglayer_sample_with_account_files() -> TestResult {
-    // Use the actual sample file path since it references relative .mac files
-    let sample_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("src/genesis/config/samples/02-with-account-files.toml");
-
-    let gcfg = GenesisConfig::read_toml_file(&sample_path)?;
-    let signer = SigningKey::new();
-    let (state, secrets) = gcfg.into_state(signer.public_key())?;
-
-    // Should have 4 accounts:
-    // 1. Native faucet (MIDEN) - built from parameters
-    // 2. Bridge account (bridge.mac) - loaded from file
-    // 3. ETH faucet (agglayer_faucet_eth.mac) - loaded from file
-    // 4. USDC faucet (agglayer_faucet_usdc.mac) - loaded from file
-    assert_eq!(state.accounts.len(), 4, "Expected 4 accounts in genesis state");
-
-    // Verify account types
-    let native_faucet = &state.accounts[0];
-    let bridge_account = &state.accounts[1];
-    let eth_faucet = &state.accounts[2];
-    let usdc_faucet = &state.accounts[3];
-
-    // Native faucet should be a fungible faucet (built from parameters)
-    let native_faucet_handle =
-        FungibleFaucet::try_from(native_faucet).expect("Native faucet should be a FungibleFaucet");
-    assert_eq!(*native_faucet_handle.symbol(), TokenSymbol::new("MIDEN").unwrap());
-
-    // Bridge account is not a fungible faucet
-    assert!(
-        FungibleFaucet::try_from(bridge_account).is_err(),
-        "Bridge account should not be a fungible faucet"
-    );
-
-    // ETH faucet should be an AggLayer faucet loaded from file
-    assert!(
-        miden_agglayer::AggLayerFaucet::try_faucet_from_account(eth_faucet).is_ok(),
-        "ETH faucet should be an AggLayer faucet"
-    );
-
-    // USDC faucet should be an AggLayer faucet loaded from file
-    assert!(
-        miden_agglayer::AggLayerFaucet::try_faucet_from_account(usdc_faucet).is_ok(),
-        "USDC faucet should be an AggLayer faucet"
-    );
-
-    // Only the native faucet generates a secret (built from parameters)
-    assert_eq!(secrets.secrets.len(), 1, "Only native faucet should generate a secret");
-
-    // Verify the genesis state can be converted to a block
-    let block = state.into_block(&signer)?;
-
-    // Verify that non-private (Public) accounts get full Delta details.
-    for update in block.inner().body().updated_accounts() {
-        let is_private = update.account_id().is_private();
-        match update.details() {
-            AccountUpdateDetails::Delta(_) => {
-                assert!(
-                    !is_private,
-                    "Private account {:?} should not have Delta details",
-                    update.account_id()
-                );
-            },
-            AccountUpdateDetails::Private => {
-                assert!(
-                    is_private,
-                    "Non-private account {:?} should have Delta details, not Private",
-                    update.account_id()
-                );
-            },
-        }
-    }
-
-    Ok(())
 }

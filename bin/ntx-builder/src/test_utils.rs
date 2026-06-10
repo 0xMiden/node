@@ -117,8 +117,7 @@ pub fn mock_genesis_block() -> miden_protocol::block::SignedBlock {
     SignedBlock::new_unchecked(header, body, signature)
 }
 
-/// Builds a full-state [`AccountUpdateDetails`] for a network account, as the genesis block carries
-/// for accounts like the `AggLayer` bridge and faucets. The returned account passes
+/// Builds a full-state [`AccountUpdateDetails`] for a network account. The returned account passes
 /// `NetworkAccount::new`, so the ntx-builder treats the update as a network-account creation.
 pub fn mock_network_account_update()
 -> (Account, miden_protocol::account::delta::AccountUpdateDetails) {
@@ -141,8 +140,7 @@ pub fn mock_network_account_update()
 }
 
 /// Creates a mock genesis [`SignedBlock`] that seeds a single network account and contains no
-/// transactions, mirroring an `AggLayer`-style genesis. Returns the block and the seeded account
-/// id.
+/// transactions. Returns the block and the seeded account id.
 ///
 /// See [`mock_genesis_block`] for the signature caveat.
 pub fn mock_genesis_block_with_network_account() -> (miden_protocol::block::SignedBlock, AccountId)

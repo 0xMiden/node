@@ -26,7 +26,7 @@ use miden_protocol::account::{
     StorageSlot,
     StorageSlotName,
 };
-use miden_protocol::asset::{Asset, FungibleAsset};
+use miden_protocol::asset::{Asset, AssetCallbackFlag, FungibleAsset};
 use miden_protocol::block::{BlockAccountUpdate, BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::testing::account_id::{
@@ -450,6 +450,118 @@ fn optimized_delta_updates_non_empty_vault() {
 
     assert_eq!(full_account_final.vault().root(), expected_vault_root_3);
     assert_eq!(full_account_final.to_commitment(), commitment_3);
+}
+
+/// The partial delta path must preserve a fungible asset's callback flag (part of its vault key)
+/// across blocks, so the recomputed vault root and account commitment match the kernel's. Applies a
+/// callback-enabled asset over two partial-delta blocks and checks the second one still matches.
+#[test]
+fn optimized_delta_updates_preserve_callback_flag() {
+    const ACCOUNT_SEED: [u8; 32] = [41u8; 32];
+    const NONCE_DELTA: u64 = 1;
+    const ADDED_AMOUNT_BLOCK_2: u64 = 250;
+    const ADDED_AMOUNT_BLOCK_3: u64 = 150;
+    const SLOT_INDEX: usize = 0;
+
+    let mut conn = setup_test_db();
+
+    let faucet_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap();
+
+    let component_storage =
+        vec![StorageSlot::with_value(StorageSlotName::mock(SLOT_INDEX), EMPTY_WORD)];
+    let account_component_code = CodeBuilder::default()
+        .compile_component_code("test::interface", "pub proc vault push.1 end")
+        .unwrap();
+    let component = AccountComponent::new(
+        account_component_code,
+        component_storage,
+        AccountComponentMetadata::new("test"),
+    )
+    .unwrap();
+    let account = AccountBuilder::new(ACCOUNT_SEED)
+        .account_type(AccountType::Public)
+        .with_component(component)
+        .with_auth_component(AuthSingleSig::new(
+            PublicKeyCommitment::from(EMPTY_WORD),
+            AuthScheme::Falcon512Poseidon2,
+        ))
+        .build_existing()
+        .unwrap();
+
+    let block_1 = BlockNumber::from(1u32);
+    let block_2 = BlockNumber::from(2u32);
+    let block_3 = BlockNumber::from(3u32);
+    insert_block_header(&mut conn, block_1);
+    insert_block_header(&mut conn, block_2);
+    insert_block_header(&mut conn, block_3);
+
+    // Block 1: full-state insert of the (asset-less) account.
+    let delta_initial = AccountDelta::try_from(account.clone()).unwrap();
+    upsert_accounts(
+        &mut conn,
+        &[BlockAccountUpdate::new(
+            account.id(),
+            account.to_commitment(),
+            AccountUpdateDetails::Delta(delta_initial),
+        )],
+        block_1,
+    )
+    .expect("Initial upsert failed");
+
+    // Applies a partial vault delta that adds `amount` of a callback-enabled asset, then asserts
+    // the store's recomputed state matches the protocol's reference application.
+    let apply_callback_delta = |conn: &mut SqliteConnection, block, amount| {
+        let prev = select_full_account(conn, account.id()).expect("load account");
+
+        let asset = Asset::Fungible(
+            FungibleAsset::new(faucet_id, amount)
+                .unwrap()
+                .with_callbacks(AssetCallbackFlag::Enabled),
+        );
+        let mut vault_delta = AccountVaultDelta::default();
+        vault_delta.add_asset(asset).unwrap();
+        let delta = AccountDelta::new(
+            account.id(),
+            AccountStorageDelta::new(),
+            vault_delta,
+            Felt::new_unchecked(NONCE_DELTA),
+        )
+        .unwrap();
+
+        let mut expected = prev.clone();
+        expected.apply_delta(&delta).unwrap();
+
+        upsert_accounts(
+            conn,
+            &[BlockAccountUpdate::new(
+                account.id(),
+                expected.to_commitment(),
+                AccountUpdateDetails::Delta(delta),
+            )],
+            block,
+        )
+        .expect("partial delta upsert failed");
+
+        let after = select_full_account(conn, account.id()).expect("load account after");
+        assert_eq!(after.vault().root(), expected.vault().root(), "vault root mismatch");
+        assert_eq!(after.to_commitment(), expected.to_commitment(), "commitment mismatch");
+        after
+    };
+
+    apply_callback_delta(&mut conn, block_2, ADDED_AMOUNT_BLOCK_2);
+    let final_account = apply_callback_delta(&mut conn, block_3, ADDED_AMOUNT_BLOCK_3);
+
+    let final_assets: Vec<Asset> = final_account.vault().assets().collect();
+    assert_eq!(final_assets.len(), 1, "Should have exactly 1 vault asset");
+    assert_matches!(&final_assets[0], Asset::Fungible(f) => {
+        assert_eq!(f.faucet_id(), faucet_id);
+        assert_eq!(
+            f.callbacks(),
+            AssetCallbackFlag::Enabled,
+            "callback flag must be preserved through delta application"
+        );
+        assert_eq!(f.amount().as_u64(), ADDED_AMOUNT_BLOCK_2 + ADDED_AMOUNT_BLOCK_3);
+    });
 }
 
 #[test]
