@@ -1,18 +1,14 @@
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, AtomicU64};
 
 use anyhow::Context;
-use miden_node_db::Db;
 use miden_node_proto::generated::validator::api_server;
 use miden_node_proto_build::validator_api_descriptor;
 use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::panic::catch_panic_layer_fn;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use tokio::net::TcpListener;
-use tokio::sync::Semaphore;
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::trace::TraceLayer;
@@ -23,24 +19,19 @@ use crate::db::{
     load_chain_tip,
     load_with_pool_size,
 };
-use crate::server::validate_block::BlockValidationError;
 use crate::{COMPONENT, ValidatorSigner};
 
-#[cfg(test)]
-mod tests;
+mod validator;
 
-mod sign_block;
-mod status;
-mod submit_proven_transaction;
-mod validate_block;
+use validator::Validator;
 
-// VALIDATOR
+// VALIDATOR SERVER
 // ================================================================================
 
 /// The handle into running the gRPC validator server.
 ///
 /// Facilitates the running of the gRPC server which implements the validator API.
-pub struct Validator {
+pub struct ValidatorServer {
     /// The address of the validator component.
     pub address: SocketAddr,
     /// gRPC server options for internal services (timeouts, connection caps).
@@ -58,7 +49,7 @@ pub struct Validator {
     pub sqlite_connection_pool_size: NonZeroUsize,
 }
 
-impl Validator {
+impl ValidatorServer {
     /// Serves the validator RPC API.
     ///
     /// Executes in place (i.e. not spawned) and will run indefinitely until a fatal error is
@@ -100,7 +91,7 @@ impl Validator {
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .timeout(self.grpc_options.request_timeout)
             .add_service(api_server::ApiServer::new(
-                ValidatorServer::new(
+                Validator::new(
                     self.signer,
                     db,
                     initial_chain_tip,
@@ -114,60 +105,5 @@ impl Validator {
             .serve_with_incoming(TcpListenerStream::new(listener))
             .await
             .context("failed to serve validator API")
-    }
-}
-
-// VALIDATOR SERVER
-// ================================================================================
-
-/// The underlying implementation of the gRPC validator server.
-///
-/// Implements the gRPC API for the validator.
-struct ValidatorServer {
-    signer: ValidatorSigner,
-    db: Arc<Db>,
-    /// Serializes `sign_block` requests so that concurrent calls are processed sequentially,
-    /// ensuring consistent chain tip reads and preventing race conditions.
-    sign_block_semaphore: Semaphore,
-    /// In-memory chain tip, updated atomically after each signed block.
-    chain_tip: AtomicU32,
-    /// In-memory count of validated transactions, incremented after each new insert.
-    validated_transactions_count: AtomicU64,
-    /// In-memory count of signed blocks, incremented after each signed block.
-    signed_blocks_count: AtomicU64,
-}
-
-impl ValidatorServer {
-    async fn new(
-        signer: ValidatorSigner,
-        db: Db,
-        initial_chain_tip: u32,
-        initial_tx_count: u64,
-        initial_block_count: u64,
-    ) -> Result<Self, BlockValidationError> {
-        // The validator key is fixed at genesis and carried forward unchanged by every block, so
-        // the signing key must match the chain's validator key for this validator's lifetime.
-        // Reject a misconfigured key here.
-        let chain_tip = db
-            .query("load_chain_tip", load_chain_tip)
-            .await
-            .map_err(BlockValidationError::DatabaseError)?
-            .ok_or(BlockValidationError::NoChainTip)?;
-        let signing_key = signer.public_key();
-        if &signing_key != chain_tip.validator_key() {
-            return Err(BlockValidationError::ValidatorKeyMismatch {
-                expected: chain_tip.validator_key().clone(),
-                actual: signing_key,
-            });
-        }
-
-        Ok(Self {
-            signer,
-            db: db.into(),
-            sign_block_semaphore: Semaphore::new(1),
-            chain_tip: AtomicU32::new(initial_chain_tip),
-            validated_transactions_count: AtomicU64::new(initial_tx_count),
-            signed_blocks_count: AtomicU64::new(initial_block_count),
-        })
     }
 }

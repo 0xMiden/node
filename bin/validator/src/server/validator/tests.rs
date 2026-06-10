@@ -11,32 +11,31 @@ use miden_protocol::testing::random_secret_key::random_secret_key;
 use miden_protocol::transaction::PartialBlockchain;
 use miden_tx::utils::serde::Serializable;
 
-use super::ValidatorServer;
+use super::{Validator, ValidatorError};
 use crate::ValidatorSigner;
 use crate::db::{load_chain_tip, setup, upsert_block_header};
-use crate::server::validate_block::BlockValidationError;
 
 // TEST HELPERS
 // ================================================================================================
 
-/// Test harness that wraps a [`ValidatorServer`] and tracks the chain MMR state needed to construct
-/// valid [`ProposedBlock`]s.
+/// Test harness that wraps a [`Validator`] and tracks the chain MMR state needed to construct valid
+/// [`ProposedBlock`]s.
 struct TestValidator {
-    server: ValidatorServer,
+    server: Validator,
     chain: PartialBlockchain,
     chain_tip: BlockHeader,
 }
 
 impl TestValidator {
-    /// Creates a correctly configured [`ValidatorServer`]: the validator signs blocks with the same
-    /// key that is designated as the `validator_key` in the genesis block.
+    /// Creates a correctly configured [`Validator`]: the validator signs blocks with the same key
+    /// that is designated as the `validator_key` in the genesis block.
     async fn new() -> Self {
         let key = random_secret_key();
         let signer = ValidatorSigner::new_local(key.clone());
         let (db, genesis_header) = setup_db_with_genesis(&key).await;
 
         Self {
-            server: ValidatorServer::new(signer, db, 0, 0, 0).await.unwrap(),
+            server: Validator::new(signer, db, 0, 0, 0).await.unwrap(),
             chain: PartialBlockchain::default(),
             chain_tip: genesis_header,
         }
@@ -134,9 +133,9 @@ async fn signing_key_mismatch_rejected() {
         "test requires a signing key that differs from the genesis validator key",
     );
 
-    let result = ValidatorServer::new(rogue_signer, db, 0, 0, 0).await;
+    let result = Validator::new(rogue_signer, db, 0, 0, 0).await;
     assert!(
-        matches!(result, Err(BlockValidationError::ValidatorKeyMismatch { .. })),
+        matches!(result, Err(ValidatorError::ValidatorKeyMismatch { .. })),
         "expected ValidatorKeyMismatch error",
     );
 }
@@ -410,7 +409,7 @@ async fn unknown_transactions_rejected() {
     let result = tv.server.validate_block(proposed, genesis_header).await;
     assert!(result.is_err(), "block with unknown transactions should be rejected");
     match result.unwrap_err() {
-        BlockValidationError::UnvalidatedTransactions(ids) => {
+        ValidatorError::UnvalidatedTransactions(ids) => {
             assert_eq!(ids, vec![tx_id], "should report the unknown transaction ID");
         },
         other => panic!("expected UnvalidatedTransactions error, got: {other}"),
@@ -485,7 +484,7 @@ async fn validate_block_number_mismatch() {
     let result = tv.server.validate_block(block_3, block_1_header).await;
     assert!(result.is_err());
     assert!(
-        matches!(result.unwrap_err(), BlockValidationError::BlockNumberMismatch { .. }),
+        matches!(result.unwrap_err(), ValidatorError::BlockNumberMismatch { .. }),
         "expected BlockNumberMismatch error"
     );
 }
