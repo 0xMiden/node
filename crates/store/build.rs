@@ -43,8 +43,8 @@ fn generate_agglayer_sample_accounts() {
     let bridge_seed: Word = Word::new([Felt::from_u32(1u32); 4]);
     let eth_faucet_seed: Word = Word::new([Felt::from_u32(2u32); 4]);
     let usdc_faucet_seed: Word = Word::new([Felt::from_u32(3u32); 4]);
-    // Deterministic placeholder AggLayer network ID for the sample bridge, matching the
-    // `TEST_NETWORK_ID` fixture used in the genesis tests. WARNING: DO NOT USE THIS IN PRODUCTION
+    // Placeholder AggLayer network ID for the sample bridge
+    // WARNING: DO NOT USE THIS IN PRODUCTION
     let network_id: u32 = 77;
 
     // Create bridge admin and GER manager as proper wallet accounts. WARNING: DO NOT USE THESE IN

@@ -60,8 +60,6 @@ miden-remote-prover-client      = { path = "crates/remote-prover-client", versio
 miden-node-rocksdb-cxx-linkage-fix = { path = "crates/rocksdb-cxx-linkage-fix", version = "0.15.0-rc.4" }
 
 # miden-protocol dependencies. These should be updated in sync.
-# Requires the v0.15.3 patch release, which carries the network-account tx-script
-# allowlist (0xMiden/protocol#3028) and the `with_allowed_notes` rename (#3049).
 miden-agglayer        = { version = "0.15.3" }
 miden-block-prover    = { version = "0.15.3" }
 miden-protocol        = { default-features = false, version = "0.15.3" }
