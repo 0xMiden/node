@@ -6,14 +6,7 @@ use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use tonic::Status;
 use tracing::{Span, debug};
 
-use super::{
-    COMPONENT,
-    Finality,
-    RpcInvalidBlockRange,
-    RpcService,
-    check,
-    invalid_block_range_to_status,
-};
+use super::{COMPONENT, RpcInvalidBlockRange, RpcService, check, invalid_block_range_to_status};
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::SyncNotes for RpcService {
@@ -41,13 +34,7 @@ impl proto::server::rpc_api::SyncNotes for RpcService {
         let block_range = range
             .into_inclusive_range::<RpcInvalidBlockRange>()
             .map_err(invalid_block_range_to_status)?;
-        let chain_tip = self.store.chain_tip(Finality::Committed).await;
-        if *block_range.end() > chain_tip {
-            return Err(Status::invalid_argument(format!(
-                "block_to ({}) is greater than chain tip ({chain_tip})",
-                block_range.end()
-            )));
-        }
+        let chain_tip = self.range_bounds_check(&block_range).await?;
 
         let (results, last_block_checked) = self
             .store

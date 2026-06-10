@@ -6,7 +6,6 @@ use tracing::{Span, debug};
 
 use super::{
     COMPONENT,
-    Finality,
     RpcInvalidBlockRange,
     RpcService,
     database_error_to_status,
@@ -46,6 +45,7 @@ impl proto::server::rpc_api::SyncAccountStorageMaps for RpcService {
         let block_range = range
             .into_inclusive_range::<RpcInvalidBlockRange>()
             .map_err(invalid_block_range_to_status)?;
+        let chain_tip = self.range_bounds_check(&block_range).await?;
         let storage_maps_page = self
             .store
             .sync_account_storage_maps(account_id, block_range)
@@ -61,7 +61,6 @@ impl proto::server::rpc_api::SyncAccountStorageMaps for RpcService {
                 block_num: map_value.block_num.as_u32(),
             })
             .collect();
-        let chain_tip = self.store.chain_tip(Finality::Committed).await;
 
         Ok(proto::rpc::SyncAccountStorageMapsResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {

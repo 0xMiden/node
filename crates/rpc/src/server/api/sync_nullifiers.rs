@@ -7,7 +7,6 @@ use tracing::{Span, debug};
 
 use super::{
     COMPONENT,
-    Finality,
     RpcInvalidBlockRange,
     RpcService,
     check,
@@ -48,6 +47,7 @@ impl proto::server::rpc_api::SyncNullifiers for RpcService {
         let block_range = range
             .into_inclusive_range::<RpcInvalidBlockRange>()
             .map_err(invalid_block_range_to_status)?;
+        let chain_tip = self.range_bounds_check(&block_range).await?;
 
         let (nullifiers, block_num) = self
             .store
@@ -61,7 +61,6 @@ impl proto::server::rpc_api::SyncNullifiers for RpcService {
                 block_num: nullifier_info.block_num.as_u32(),
             })
             .collect();
-        let chain_tip = self.store.chain_tip(Finality::Committed).await;
 
         Ok(proto::rpc::SyncNullifiersResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {

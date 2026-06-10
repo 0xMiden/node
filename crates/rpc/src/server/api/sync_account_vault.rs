@@ -7,7 +7,6 @@ use tracing::{Span, debug};
 
 use super::{
     COMPONENT,
-    Finality,
     RpcInvalidBlockRange,
     RpcService,
     database_error_to_status,
@@ -46,6 +45,7 @@ impl proto::server::rpc_api::SyncAccountVault for RpcService {
         let block_range = range
             .into_inclusive_range::<RpcInvalidBlockRange>()
             .map_err(invalid_block_range_to_status)?;
+        let chain_tip = self.range_bounds_check(&block_range).await?;
         let (last_included_block, updates) = self
             .store
             .sync_account_vault(account_id, block_range)
@@ -62,7 +62,6 @@ impl proto::server::rpc_api::SyncAccountVault for RpcService {
                 }
             })
             .collect();
-        let chain_tip = self.store.chain_tip(Finality::Committed).await;
 
         Ok(proto::rpc::SyncAccountVaultResponse {
             pagination_info: Some(proto::rpc::PaginationInfo {

@@ -1,4 +1,5 @@
 use std::num::NonZeroUsize;
+use std::ops::RangeInclusive;
 use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
 use std::task::{Context as TaskContext, Poll};
@@ -201,6 +202,25 @@ impl RpcService {
         }
 
         Ok(())
+    }
+
+    /// Fetches the committed chain tip and ensures the requested range does not extend beyond it.
+    ///
+    /// Returns the chain tip so callers can reuse it (e.g. in the response's pagination info)
+    /// without issuing a second query.
+    async fn range_bounds_check(
+        &self,
+        range: &RangeInclusive<BlockNumber>,
+    ) -> Result<BlockNumber, Status> {
+        let chain_tip = self.store.chain_tip(Finality::Committed).await;
+        if *range.end() > chain_tip {
+            return Err(Status::invalid_argument(format!(
+                "block_to ({}) is greater than chain tip ({chain_tip})",
+                range.end()
+            )));
+        }
+
+        Ok(chain_tip)
     }
 
     /// Errors if any of `candidate_ids` is classified as a network account by the store. Callers
