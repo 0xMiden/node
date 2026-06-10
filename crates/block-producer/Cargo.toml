@@ -37,6 +37,7 @@ thiserror                  = { workspace = true }
 tokio                      = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
 tokio-stream               = { workspace = true }
 tonic                      = { default-features = true, features = ["transport"], workspace = true }
+tonic-health               = { workspace = true }
 tracing                    = { workspace = true }
 url                        = { workspace = true }
 

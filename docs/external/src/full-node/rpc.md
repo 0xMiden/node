@@ -24,6 +24,14 @@ sequencer.
 
 This lets clients submit through a nearby full node while preserving the sequencer as the only block-producing node.
 
+## Health Check
+
+The full node exposes the standard gRPC health protocol at `grpc.health.v1.Health/Check`. Use this endpoint to probe
+readiness from load balancers, orchestrators, or monitoring infrastructure.
+
+The endpoint reports `NOT_SERVING` while the node is syncing and its local state is too far behind the chain tip. It
+transitions to `SERVING` once it has caught up sufficiently to serve accurate read queries.
+
 ## Scaling Throughput
 
 Full nodes sync from their upstream source using:

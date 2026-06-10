@@ -63,7 +63,7 @@ use delta::{
     apply_storage_delta,
     select_latest_vault_assets,
     select_minimal_account_state_headers,
-    select_vault_balances_by_faucet_ids,
+    select_vault_balances_by_vault_keys,
 };
 
 #[cfg(test)]
@@ -1059,11 +1059,11 @@ fn prepare_partial_account_update(
     // which will always change unless the delta is empty.
     let state_headers = select_minimal_account_state_headers(conn, account_id)?;
 
-    // --- Process asset updates. --------------------------------- Only query balances for
-    // faucet_ids that are being updated.
-    let faucet_ids =
-        Vec::from_iter(delta.vault().fungible().iter().map(|(vault_key, _)| vault_key.faucet_id()));
-    let prev_balances = select_vault_balances_by_faucet_ids(conn, account_id, &faucet_ids)?;
+    // --- Process asset updates. --------------------------------- Look up balances by vault key
+    // (which includes the callback flag), not by faucet id.
+    let vault_keys =
+        Vec::from_iter(delta.vault().fungible().iter().map(|(vault_key, _)| *vault_key));
+    let prev_balances = select_vault_balances_by_vault_keys(conn, account_id, &vault_keys)?;
 
     // Encode `Some` as update and `None` as removal.
     let mut assets = Vec::new();
@@ -1071,10 +1071,11 @@ fn prepare_partial_account_update(
     // Update fungible assets.
     for (vault_key, amount_delta) in delta.vault().fungible().iter() {
         let faucet_id = vault_key.faucet_id();
-        let prev_amount = prev_balances.get(&faucet_id).copied().unwrap_or(0);
-        let prev_asset = FungibleAsset::new(faucet_id, prev_amount)?;
+        let callback_flag = vault_key.callback_flag();
+        let prev_amount = prev_balances.get(&vault_key.to_word()).copied().unwrap_or(0);
+        let prev_asset = FungibleAsset::new(faucet_id, prev_amount)?.with_callbacks(callback_flag);
         let amount_abs = amount_delta.unsigned_abs();
-        let delta = FungibleAsset::new(faucet_id, amount_abs)?;
+        let delta = FungibleAsset::new(faucet_id, amount_abs)?.with_callbacks(callback_flag);
         let new_balance = if *amount_delta < 0 {
             prev_asset.sub(delta)?
         } else {
