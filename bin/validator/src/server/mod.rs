@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use miden_node_proto::generated::validator::api_server;
 use miden_node_proto_build::validator_api_descriptor;
+use miden_node_store::BlockStore;
 use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::panic::catch_panic_layer_fn;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
@@ -65,6 +66,10 @@ impl ValidatorServer {
         .await
         .context("failed to initialize validator database")?;
 
+        // Initialize block store.
+        let block_store =
+            BlockStore::load(self.data_directory.clone()).context("failed to load block store")?;
+
         // Load initial metrics from the database for the in-memory counters.
         let (initial_chain_tip, initial_tx_count, initial_block_count) = db
             .query("load_initial_metrics", |conn| {
@@ -94,6 +99,7 @@ impl ValidatorServer {
                 Validator::new(
                     self.signer,
                     db,
+                    block_store,
                     initial_chain_tip,
                     initial_tx_count,
                     initial_block_count,

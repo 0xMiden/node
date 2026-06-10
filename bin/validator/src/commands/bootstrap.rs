@@ -2,6 +2,7 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
+use miden_node_store::BlockStore;
 use miden_node_store::genesis::config::{AccountFileWithName, GenesisConfig};
 use miden_node_utils::fs::ensure_empty_directory;
 use miden_protocol::utils::serde::Serializable;
@@ -83,6 +84,8 @@ async fn build_and_write_genesis(
     let block_bytes = genesis_block.inner().to_bytes();
     let genesis_block_path = genesis_block_directory.join(GENESIS_BLOCK_FILENAME);
     fs_err::write(&genesis_block_path, block_bytes).context("failed to write genesis block")?;
+
+    let _ = BlockStore::bootstrap(data_directory.to_path_buf(), &genesis_block)?;
 
     let (genesis_header, ..) = genesis_block.into_inner().into_parts();
     let db = miden_validator::db::setup_with_pool_size(
