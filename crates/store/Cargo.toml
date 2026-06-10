@@ -45,11 +45,9 @@ toml              = { workspace = true }
 tracing           = { workspace = true }
 
 [build-dependencies]
-build-rs      = { workspace = true }
-fs-err        = { workspace = true }
-miden-node-db = { workspace = true }
-# TODO: consider removing the `testing` from relevant functions in miden-agglayer
-miden-agglayer  = { features = ["testing"], workspace = true }
+build-rs        = { workspace = true }
+fs-err          = { workspace = true }
+miden-node-db   = { workspace = true }
 miden-protocol  = { features = ["std"], workspace = true }
 miden-standards = { workspace = true }
 
@@ -57,7 +55,6 @@ miden-standards = { workspace = true }
 assert_matches        = { workspace = true }
 criterion             = "0.8"
 fs-err                = { workspace = true }
-miden-agglayer        = { features = ["testing"], workspace = true }
 miden-node-test-macro = { workspace = true }
 miden-node-utils      = { features = ["testing", "tracing-forest"], workspace = true }
 miden-protocol        = { default-features = true, features = ["testing"], workspace = true }

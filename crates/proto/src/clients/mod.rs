@@ -30,12 +30,11 @@ use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use http::header::ACCEPT;
 use miden_node_utils::tracing::grpc::OtelInterceptor;
 use tonic::metadata::AsciiMetadataValue;
 use tonic::service::interceptor::InterceptedService;
-use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
+use tonic::transport::{Channel, ClientTlsConfig, Endpoint, Error as TransportError};
 use tonic::{Request, Status};
 use url::Url;
 
@@ -108,13 +107,47 @@ impl tonic::service::Interceptor for Interceptor {
             request = otel.call(request)?;
         }
 
-        request.metadata_mut().insert(ACCEPT.as_str(), self.accept.clone());
+        if request.metadata().get(ACCEPT.as_str()).is_none() {
+            request.metadata_mut().insert(ACCEPT.as_str(), self.accept.clone());
+        }
 
         if let Some(value) = &self.auth_header_value {
             request.metadata_mut().insert(Self::NETWORK_TX_AUTH_HEADER_NAME, value.clone());
         }
 
         Ok(request)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn interceptor_preserves_existing_accept_metadata() {
+        let original_accept =
+            AsciiMetadataValue::from_static("application/vnd.miden; version=1.2; genesis=0x1234");
+        let mut request = Request::new(());
+        request.metadata_mut().insert(ACCEPT.as_str(), original_accept.clone());
+
+        let mut interceptor = Interceptor::new(false, Some("9.9"), Some("0xabcd"), None);
+        let request = tonic::service::Interceptor::call(&mut interceptor, request)
+            .expect("interceptor should succeed");
+
+        assert_eq!(request.metadata().get(ACCEPT.as_str()), Some(&original_accept));
+    }
+
+    #[test]
+    fn interceptor_inserts_accept_metadata_when_missing() {
+        let mut interceptor = Interceptor::new(false, Some("9.9"), Some("0xabcd"), None);
+
+        let request = tonic::service::Interceptor::call(&mut interceptor, Request::new(()))
+            .expect("interceptor should succeed");
+
+        assert_eq!(
+            request.metadata().get(ACCEPT.as_str()).and_then(|value| value.to_str().ok()),
+            Some("application/vnd.miden; version=9.9, genesis=0xabcd"),
+        );
     }
 }
 
@@ -341,11 +374,8 @@ impl Builder<WantsTls> {
     }
 
     /// Explicitly enable TLS.
-    pub fn with_tls(mut self) -> Result<Builder<WantsTimeout>> {
-        self.endpoint = self
-            .endpoint
-            .tls_config(ClientTlsConfig::new().with_native_roots())
-            .context("Failed to configure TLS")?;
+    pub fn with_tls(mut self) -> Result<Builder<WantsTimeout>, TransportError> {
+        self.endpoint = self.endpoint.tls_config(ClientTlsConfig::new().with_native_roots())?;
 
         Ok(self.next_state())
     }
@@ -426,7 +456,7 @@ impl Builder<WantsOTel> {
 
 impl Builder<WantsConnection> {
     /// Establish an eager connection and return a fully configured client.
-    pub async fn connect<T>(self) -> Result<T>
+    pub async fn connect<T>(self) -> Result<T, TransportError>
     where
         T: GrpcClient,
     {

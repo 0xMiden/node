@@ -6,6 +6,10 @@ ARG BIN
 ARG PORT
 
 FROM rust:${RUST_VERSION}-slim-${DEBIAN_RELEASE} AS chef
+# Disable incremental compilation: Docker normalises COPY timestamps, which
+# breaks Rust's mtime-based fingerprinting and causes stale .rlib reuse.
+# The /app/target cache still accelerates builds via pre-compiled dep .rlibs.
+ENV CARGO_INCREMENTAL=0
 # Install build dependencies. RocksDB is compiled from source by librocksdb-sys.
 RUN apt-get update && \
     apt-get -y upgrade && \
@@ -20,6 +24,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 RUN cargo install cargo-chef
 WORKDIR /app
+
 
 FROM chef AS planner
 COPY . .
@@ -49,6 +54,8 @@ RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
 FROM debian:${DEBIAN_RELEASE}-slim AS runtime-base
 RUN apt-get update && \
     apt-get -y upgrade && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
 FROM runtime-base AS runtime
