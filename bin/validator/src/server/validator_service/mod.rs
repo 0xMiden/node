@@ -2,9 +2,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64};
 
 use miden_node_db::{DatabaseError, Db};
+use miden_node_store::BlockStore;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
-use miden_protocol::block::{BlockHeader, BlockNumber, ProposedBlock};
+use miden_protocol::block::{BlockHeader, BlockNumber, ProposedBlock, SignedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
+use miden_protocol::crypto::utils::Serializable;
 use miden_protocol::errors::ProposedBlockError;
 use miden_protocol::transaction::{TransactionHeader, TransactionId};
 use tokio::sync::Semaphore;
@@ -48,6 +50,8 @@ pub enum ValidatorError {
     ValidatorKeyMismatch { expected: PublicKey, actual: PublicKey },
     #[error("no chain tip exists")]
     NoChainTip,
+    #[error("failed to backup block")]
+    BlockBackupFailed(#[source] std::io::Error),
 }
 
 // VALIDATOR SERVICE
@@ -59,6 +63,7 @@ pub enum ValidatorError {
 pub(crate) struct ValidatorService {
     signer: ValidatorSigner,
     db: Arc<Db>,
+    block_store: BlockStore,
     /// Serializes `sign_block` requests so that concurrent calls are processed sequentially,
     /// ensuring consistent chain tip reads and preventing race conditions.
     sign_block_semaphore: Semaphore,
@@ -74,6 +79,7 @@ impl ValidatorService {
     pub(crate) async fn new(
         signer: ValidatorSigner,
         db: Db,
+        block_store: BlockStore,
         initial_chain_tip: u32,
         initial_tx_count: u64,
         initial_block_count: u64,
@@ -97,6 +103,7 @@ impl ValidatorService {
         Ok(Self {
             signer,
             db: db.into(),
+            block_store,
             sign_block_semaphore: Semaphore::new(1),
             chain_tip: AtomicU32::new(initial_chain_tip),
             validated_transactions_count: AtomicU64::new(initial_tx_count),
@@ -135,7 +142,7 @@ impl ValidatorService {
         }
 
         // Build the block header.
-        let (proposed_header, _) = proposed_block
+        let (proposed_header, proposed_body) = proposed_block
             .into_header_and_body()
             .map_err(ValidatorError::BlockBuildingFailed)?;
 
@@ -186,7 +193,16 @@ impl ValidatorService {
         }
 
         let signature = self.sign_header(&proposed_header).await?;
-        Ok((signature, proposed_header))
+
+        // Back up the signed block to disk.
+        let signed_block = SignedBlock::new_unchecked(proposed_header, proposed_body, signature);
+        self.block_store
+            .save_block(signed_block.header().block_num(), &signed_block.to_bytes())
+            .await
+            .map_err(ValidatorError::BlockBackupFailed)?;
+
+        let (header, _, signature) = signed_block.into_parts();
+        Ok((signature, header))
     }
 
     /// Signs a block header using the validator's signer.
