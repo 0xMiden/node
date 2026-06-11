@@ -22,9 +22,9 @@ use crate::db::{
 };
 use crate::{COMPONENT, ValidatorSigner};
 
-mod validator;
+mod validator_service;
 
-use validator::Validator;
+use validator_service::ValidatorService;
 
 // VALIDATOR SERVER
 // ================================================================================
@@ -96,7 +96,7 @@ impl ValidatorServer {
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .timeout(self.grpc_options.request_timeout)
             .add_service(api_server::ApiServer::new(
-                Validator::new(
+                ValidatorService::new(
                     self.signer,
                     db,
                     block_store,

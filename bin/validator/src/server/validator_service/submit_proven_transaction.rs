@@ -7,12 +7,12 @@ use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
 use miden_tx::utils::serde::Deserializable;
 use tonic::Status;
 
-use super::Validator;
+use super::ValidatorService;
 use crate::db::insert_transaction;
 use crate::tx_validation::validate_transaction;
 
 #[tonic::async_trait]
-impl grpc::server::validator_api::SubmitProvenTransaction for Validator {
+impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
     type Input = Input;
     type Output = ();
 

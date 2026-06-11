@@ -54,13 +54,13 @@ pub enum ValidatorError {
     BlockBackupFailed(#[source] std::io::Error),
 }
 
-// VALIDATOR
+// VALIDATOR SERVICE
 // ================================================================================
 
 /// The underlying implementation of the gRPC validator server.
 ///
 /// Implements the gRPC API for the validator.
-pub(crate) struct Validator {
+pub(crate) struct ValidatorService {
     signer: ValidatorSigner,
     db: Arc<Db>,
     block_store: BlockStore,
@@ -75,7 +75,7 @@ pub(crate) struct Validator {
     signed_blocks_count: AtomicU64,
 }
 
-impl Validator {
+impl ValidatorService {
     pub(crate) async fn new(
         signer: ValidatorSigner,
         db: Db,

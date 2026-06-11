@@ -11,7 +11,7 @@ use miden_protocol::testing::random_secret_key::random_secret_key;
 use miden_protocol::transaction::PartialBlockchain;
 use miden_tx::utils::serde::Serializable;
 
-use super::{Validator, ValidatorError};
+use super::{ValidatorError, ValidatorService};
 use crate::ValidatorSigner;
 use crate::db::{load_chain_tip, setup, upsert_block_header};
 
@@ -21,7 +21,7 @@ use crate::db::{load_chain_tip, setup, upsert_block_header};
 /// Test harness that wraps a [`Validator`] and tracks the chain MMR state needed to construct valid
 /// [`ProposedBlock`]s.
 struct TestValidator {
-    server: Validator,
+    server: ValidatorService,
     chain: PartialBlockchain,
     chain_tip: BlockHeader,
 }
@@ -35,7 +35,7 @@ impl TestValidator {
         let (db, block_store, genesis_header) = setup_db_with_genesis(&key).await;
 
         Self {
-            server: Validator::new(signer, db, block_store, 0, 0, 0).await.unwrap(),
+            server: ValidatorService::new(signer, db, block_store, 0, 0, 0).await.unwrap(),
             chain: PartialBlockchain::default(),
             chain_tip: genesis_header,
         }
@@ -135,7 +135,7 @@ async fn signing_key_mismatch_rejected() {
         "test requires a signing key that differs from the genesis validator key",
     );
 
-    let result = Validator::new(rogue_signer, db, block_store, 0, 0, 0).await;
+    let result = ValidatorService::new(rogue_signer, db, block_store, 0, 0, 0).await;
     assert!(
         matches!(result, Err(ValidatorError::ValidatorKeyMismatch { .. })),
         "expected ValidatorKeyMismatch error",

@@ -7,11 +7,11 @@ use miden_protocol::block::ProposedBlock;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_tx::utils::serde::{Deserializable, Serializable};
 
-use super::Validator;
+use super::ValidatorService;
 use crate::db::{load_chain_tip, upsert_block_header};
 
 #[tonic::async_trait]
-impl grpc::server::validator_api::SignBlock for Validator {
+impl grpc::server::validator_api::SignBlock for ValidatorService {
     type Input = ProposedBlock;
     type Output = (Signature, Word);
 

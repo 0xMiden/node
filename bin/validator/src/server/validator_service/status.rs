@@ -2,10 +2,10 @@ use std::sync::atomic::Ordering;
 
 use miden_node_proto::generated as grpc;
 
-use super::Validator;
+use super::ValidatorService;
 
 #[tonic::async_trait]
-impl grpc::server::validator_api::Status for Validator {
+impl grpc::server::validator_api::Status for ValidatorService {
     type Input = ();
     type Output = ();
 
