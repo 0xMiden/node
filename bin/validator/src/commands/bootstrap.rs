@@ -85,7 +85,7 @@ async fn build_and_write_genesis(
     let genesis_block_path = genesis_block_directory.join(GENESIS_BLOCK_FILENAME);
     fs_err::write(&genesis_block_path, block_bytes).context("failed to write genesis block")?;
 
-    let _ = BlockStore::bootstrap(data_directory.to_path_buf(), &genesis_block)?;
+    let _ = BlockStore::bootstrap(data_directory.to_path_buf().join("blocks"), &genesis_block)?;
 
     let (genesis_header, ..) = genesis_block.into_inner().into_parts();
     let db = miden_validator::db::setup_with_pool_size(
