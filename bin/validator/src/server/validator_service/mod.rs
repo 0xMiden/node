@@ -196,21 +196,13 @@ impl ValidatorService {
 
         // Back up the signed block to disk.
         let signed_block = SignedBlock::new_unchecked(proposed_header, proposed_body, signature);
-        // Ignore errors; we don't want to fail the block validation if the block cannot be backed
-        // up. The span of the function will record any errors that occur during backup.
-        let _ = self.save_block(&signed_block).await;
+        self.block_store
+            .save_block(signed_block.header().block_num(), &signed_block.to_bytes())
+            .await
+            .map_err(ValidatorError::BlockBackupFailed)?;
 
         let (header, _, signature) = signed_block.into_parts();
         Ok((signature, header))
-    }
-
-    /// Saves a signed block to disk.
-    #[instrument(target = COMPONENT, name = "save_block", skip_all, err, fields(block.number = block.header().block_num().as_u32()))]
-    async fn save_block(&self, block: &SignedBlock) -> Result<(), ValidatorError> {
-        self.block_store
-            .save_block(block.header().block_num(), &block.to_bytes())
-            .await
-            .map_err(ValidatorError::BlockBackupFailed)
     }
 
     /// Signs a block header using the validator's signer.
