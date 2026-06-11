@@ -153,9 +153,9 @@ pub struct NtxContext {
     /// scripts has landed (<https://github.com/0xMiden/protocol/pull/3028>, resolving #3027), but
     /// re-enabling here is gated on a canonical, frozen expiration script in `miden-standards`
     /// (<https://github.com/0xMiden/protocol/issues/3050>). Every network account the ntx-builder
-    /// services - including the `AggLayer` bridge and faucets - must allowlist this script's root, so
-    /// it has to be a single shared root all account creators can pin. Until then, attaching it
-    /// would get those txs rejected by the new tx-script allowlist.
+    /// services must allowlist this script's root, so it has to be a single shared root all account
+    /// creators can pin. Until then, attaching it would get those txs rejected by the new tx-script
+    /// allowlist.
     #[expect(
         dead_code,
         reason = "Disabled until https://github.com/0xMiden/protocol/issues/3050 lands"

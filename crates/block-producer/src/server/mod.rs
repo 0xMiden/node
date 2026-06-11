@@ -101,7 +101,7 @@ impl Sequencer {
     pub async fn spawn(self) -> Result<SequencerHandle> {
         info!(target: COMPONENT, "Initializing sequencer");
         let store = self.store;
-        let validator = BlockProducerValidatorClient::new(self.validator_url.clone());
+        let validator = BlockProducerValidatorClient::new(self.validator_url.clone())?;
         let chain_tip = store.chain_tip(Finality::Committed).await;
 
         info!(target: COMPONENT, "Sequencer initialized");

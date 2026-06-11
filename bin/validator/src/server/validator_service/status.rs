@@ -9,7 +9,10 @@ impl grpc::server::validator_api::Status for ValidatorService {
     type Input = ();
     type Output = ();
 
-    async fn full(&self, _request: ()) -> tonic::Result<grpc::validator::ValidatorStatus> {
+    async fn full(
+        &self,
+        _request: tonic::Request<()>,
+    ) -> tonic::Result<grpc::validator::ValidatorStatus> {
         Ok(grpc::validator::ValidatorStatus {
             version: env!("CARGO_PKG_VERSION").to_string(),
             status: "OK".to_string(),
