@@ -27,8 +27,8 @@ struct TestValidator {
 }
 
 impl TestValidator {
-    /// Creates a correctly configured [`Validator`]: the validator signs blocks with the same key
-    /// that is designated as the `validator_key` in the genesis block.
+    /// Creates a correctly configured [`ValidatorService`]: the validator signs blocks with the
+    /// same key that is designated as the `validator_key` in the genesis block.
     async fn new() -> Self {
         let key = random_secret_key();
         let signer = ValidatorSigner::new_local(key.clone());
