@@ -1,5 +1,6 @@
 use miden_node_proto::decode::convert_digests_to_words;
 use miden_node_proto::generated as proto;
+use miden_node_proto::generated::note::CommittedNote;
 use miden_node_store::NoteRecord;
 use miden_node_utils::limiter::QueryParamNoteIdLimit;
 use miden_protocol::Word;
@@ -13,14 +14,14 @@ use super::{COMPONENT, RpcService, check, database_error_to_status};
 #[tonic::async_trait]
 impl proto::server::rpc_api::GetNotesById for RpcService {
     type Input = proto::note::NoteIdList;
-    type Output = proto::note::CommittedNoteList;
+    type Output = Vec<CommittedNote>;
 
     fn decode(request: proto::note::NoteIdList) -> tonic::Result<Self::Input> {
         Ok(request)
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::note::CommittedNoteList> {
-        Ok(output)
+    fn encode(notes: Self::Output) -> tonic::Result<proto::note::CommittedNoteList> {
+        Ok(proto::note::CommittedNoteList { notes })
     }
 
     async fn handle(&self, request: Self::Input) -> tonic::Result<Self::Output> {
@@ -39,7 +40,7 @@ impl proto::server::rpc_api::GetNotesById for RpcService {
             .map(note_record_to_proto)
             .collect();
 
-        Ok(proto::note::CommittedNoteList { notes })
+        Ok(notes)
     }
 }
 
