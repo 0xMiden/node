@@ -16,6 +16,8 @@ use crate::errors::DatabaseError;
 const SUBSCRIBER_CHANNEL_CAPACITY: usize = 32;
 /// Safety-net timeout for a single send when the client has stalled.
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
+/// Maximum running block-gap allowed before a subscriber is disconnected.
+const MAX_RUNNING_GAP: u32 = 100u32;
 
 // SUBSCRIPTION EVENTS
 // ================================================================================================
@@ -191,8 +193,14 @@ async fn run_stream<S: SubscriptionSource>(
     source: S,
 ) -> Result<(), StateSubscriptionError> {
     let mut next = from;
+    let mut previous_gap = 0u32;
+    let mut running_gap = 0u32;
     loop {
         let mut tip = *tip_rx.borrow_and_update();
+
+        let current_gap = tip.saturating_sub(next.as_u32()).as_u32();
+        (previous_gap, running_gap) = check_growing_gap(current_gap, previous_gap, running_gap)?;
+
         while next <= tip {
             let data = source.fetch(next).await?;
             tip = *tip_rx.borrow_and_update();
@@ -207,5 +215,99 @@ async fn run_stream<S: SubscriptionSource>(
         if tip_rx.changed().await.is_err() {
             return Ok(());
         }
+    }
+}
+
+/// Tracks how many blocks a subscriber's gap to the tip has grown across consecutive checks.
+///
+/// Tracks a running total of how far a subscriber's gap to the tip has grown.
+///
+/// The total increases by the block-count delta each time the gap grows, and decreases by the
+/// delta each time it shrinks (saturating at zero). Returns updated `(previous_gap, running_gap)`
+/// on success, or [`StateSubscriptionError::TooSlow`] once the running total exceeds
+/// [`MAX_RUNNING_GAP`].
+fn check_growing_gap(
+    current_gap: u32,
+    previous_gap: u32,
+    running_gap: u32,
+) -> Result<(u32, u32), StateSubscriptionError> {
+    let running_gap = if current_gap > previous_gap {
+        running_gap + (current_gap - previous_gap)
+    } else {
+        running_gap.saturating_sub(previous_gap - current_gap)
+    };
+    if running_gap > MAX_RUNNING_GAP {
+        return Err(StateSubscriptionError::TooSlow);
+    }
+    Ok((current_gap, running_gap))
+}
+
+// TESTS
+// ================================================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(gaps: &[u32]) -> Result<(), StateSubscriptionError> {
+        let mut previous_gap = 0u32;
+        let mut growth_run = 0u32;
+        for &gap in gaps {
+            (previous_gap, growth_run) = check_growing_gap(gap, previous_gap, growth_run)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn stable_gap_does_not_accumulate() {
+        // Gap stays constant — delta is always 0, growth_run never increments.
+        assert!(run(&[5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]).is_ok());
+    }
+
+    #[test]
+    fn zero_gap_throughout_is_ok() {
+        assert!(run(&[0, 0, 0, 0, 0]).is_ok());
+    }
+
+    #[test]
+    fn shrinking_gap_reduces_accumulation() {
+        // Accumulate close to the limit, then shrink — running total decreases, no error.
+        assert!(run(&[10, 20, MAX_RUNNING_GAP - 1, 5]).is_ok());
+    }
+
+    #[test]
+    fn exactly_max_growth_run_is_ok() {
+        // A single jump of exactly MAX_RUNNING_GAP is the boundary — still ok.
+        assert!(run(&[MAX_RUNNING_GAP]).is_ok());
+    }
+
+    #[test]
+    fn exceeding_max_growth_run_returns_too_slow() {
+        // One block past the limit triggers TooSlow, even in a single jump.
+        assert!(matches!(run(&[MAX_RUNNING_GAP + 1]), Err(StateSubscriptionError::TooSlow)));
+    }
+
+    #[test]
+    fn growth_spread_across_windows_accumulates() {
+        // Many small growths that each stay below the limit still trigger TooSlow once they sum
+        // past MAX_RUNNING_GAP.
+        let step = MAX_RUNNING_GAP / 4;
+        let gaps: Vec<u32> = (1..=6).map(|i| i * step).collect(); // total growth = 5 * step
+        assert!(matches!(run(&gaps), Err(StateSubscriptionError::TooSlow)));
+    }
+
+    #[test]
+    fn recovery_reduces_and_allows_fresh_accumula30tion() {
+        // Grow close to the limit, recover most of the way, then grow again — still ok.
+        let near_limit = MAX_RUNNING_GAP - 1;
+        assert!(run(&[near_limit, 1, near_limit]).is_ok());
+    }
+
+    #[test]
+    fn token_improvement_does_not_prevent_disconnection() {
+        // A client that grows by a large amount then shrinks by just one block on each cycle
+        // accumulates net growth and is eventually disconnected.
+        let gaps: Vec<u32> = (0u32..60).flat_map(|i| [50 + i, 49 + i]).collect();
+        assert!(matches!(run(&gaps), Err(StateSubscriptionError::TooSlow)));
     }
 }
