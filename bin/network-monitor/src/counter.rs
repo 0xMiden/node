@@ -93,7 +93,6 @@ struct TxBuilder {
     counter_account: Account,
     secret_key: SecretKey,
     increment_script: NoteScript,
-    data_store: MonitorDataStore,
     block_header: BlockHeader,
     rng: ChaCha20Rng,
 }
@@ -189,7 +188,6 @@ impl IncrementService {
         )
         .expect("nonce-only update of an already-valid account cannot fail");
         self.tx.wallet_account = updated_wallet;
-        self.tx.data_store.update_account(self.tx.wallet_account.clone());
 
         self.details.success_count += 1;
         self.details.last_tx_id = Some(tx_id);
@@ -220,7 +218,6 @@ impl IncrementService {
 
         info!(account.id = %self.tx.wallet_account.id(), "wallet account re-synced from RPC");
         self.tx.wallet_account = fresh_account;
-        self.tx.data_store.update_account(self.tx.wallet_account.clone());
         Ok(())
     }
 
@@ -285,12 +282,18 @@ impl IncrementService {
         let mut tx_args = TransactionArgs::default().with_tx_script(script);
         tx_args.add_output_note_recipient(Box::new(note_recipient));
 
-        let data_store = self.tx.data_store.clone();
+        let wallet_account = self.tx.wallet_account.clone();
+        let counter_account = self.tx.counter_account.clone();
+        let block_header = self.tx.block_header.clone();
         let secret_key = self.tx.secret_key.clone();
-        let account_id = self.tx.wallet_account.id();
-        let block_num = self.tx.block_header.block_num();
         let handle = tokio::runtime::Handle::current();
         let (proven_tx, tx_inputs, final_account) = spawn_blocking_in_current_span(move || {
+            let account_id = wallet_account.id();
+            let block_num = block_header.block_num();
+            let mut data_store = MonitorDataStore::new(block_header, PartialBlockchain::default());
+            data_store.add_account(wallet_account);
+            data_store.add_account(counter_account);
+
             let authenticator =
                 BasicAuthenticator::new(&[AuthSecretKey::Falcon512Poseidon2(secret_key)]);
             let executor = TransactionExecutor::new(&data_store).with_authenticator(&authenticator);
@@ -622,16 +625,11 @@ async fn setup_increment_task(
 
     let increment_script = create_increment_script()?;
 
-    let mut data_store = MonitorDataStore::new(block_header.clone(), PartialBlockchain::default());
-    data_store.add_account(wallet_account.clone());
-    data_store.add_account(counter_account.clone());
-
     let tx = TxBuilder {
         wallet_account,
         counter_account,
         secret_key,
         increment_script,
-        data_store,
         block_header,
         rng: ChaCha20Rng::from_os_rng(),
     };
