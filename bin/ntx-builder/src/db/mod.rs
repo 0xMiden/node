@@ -178,6 +178,16 @@ impl Db {
             .await
     }
 
+    /// Returns `true` if a committed state for the given account is tracked locally.
+    ///
+    /// The coordinator uses this to defer actor spawning until the account's creation transaction
+    /// has been committed.
+    pub async fn account_exists(&self, account_id: AccountId) -> Result<bool> {
+        self.inner
+            .query("account_exists", move |conn| queries::account_exists(conn, account_id))
+            .await
+    }
+
     /// Returns the committed account state for the given network account, if one is tracked locally.
     ///
     /// Actors load their account once at startup with this and keep it in memory afterwards,

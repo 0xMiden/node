@@ -230,7 +230,8 @@ enum ActorMode {
 ///
 /// ## Lifecycle
 ///
-/// 1. **Initialization**: Waits for committed account state, then checks DB for available notes.
+/// 1. **Initialization**: Loads the committed account state (guaranteed to exist, since the
+///    coordinator only spawns actors for committed accounts), then checks DB for available notes.
 /// 2. **Event Loop**: Re-evaluates database state on notification and executes transactions.
 /// 3. **Transaction Processing**: Selects, executes, proves, and submits transactions through RPC.
 /// 4. **State Updates**: Committed-chain updates are persisted to DB before actors are
@@ -280,17 +281,21 @@ impl AccountActor {
     ///
     /// The return value signals the shutdown category to the coordinator:
     ///
-    /// - `Ok(())`: intentional shutdown (idle timeout or account not committed in time).
+    /// - `Ok(())`: intentional shutdown (idle timeout).
     /// - `Err(_)`: crash (database error, semaphore failure, or any other bug).
     pub async fn run(self, semaphore: Arc<Semaphore>) -> anyhow::Result<()> {
         let account_id = self.account_id;
 
         // Load the account once and keep it in memory for the actor's lifetime, advancing it from
-        // the delta of each transaction the actor itself lands. For newly created accounts this
-        // idles until the creation transaction is committed.
-        let Some(mut account) = self.load_committed_account(account_id).await? else {
-            return Ok(());
-        };
+        // the delta of each transaction the actor itself lands. The coordinator only spawns actors
+        // for accounts whose creation has been committed, so the account must exist.
+        let mut account = self
+            .state
+            .db
+            .get_account(account_id)
+            .await
+            .context("failed to load committed account")?
+            .context("no committed state for the account; the coordinator must only spawn actors for committed accounts")?;
 
         // Determine initial mode by checking the DB for available notes.
         let block_num = self.state.chain.chain_tip_block_number();
@@ -475,52 +480,6 @@ impl AccountActor {
             chain_tip_header,
             chain_mmr,
         }))
-    }
-
-    /// Loads the committed account state from the DB, idling until it exists.
-    ///
-    /// For accounts that are being created by an inflight transaction, this idles until the
-    /// creation transaction is committed. Returns the loaded account, or `None` if no commit
-    /// arrived within [`ActorConfig::idle_timeout`], in which case the coordinator will respawn a
-    /// new actor when a later committed block targets the account again.
-    async fn load_committed_account(
-        &self,
-        account_id: AccountId,
-    ) -> anyhow::Result<Option<Account>> {
-        // Return the account if it is already committed.
-        if let Some(account) = self
-            .state
-            .db
-            .get_account(account_id)
-            .await
-            .context("failed to load committed account")?
-        {
-            return Ok(Some(account));
-        }
-
-        loop {
-            tokio::select! {
-                _ = self.notify.notified() => {
-                    if let Some(account) = self
-                        .state
-                        .db
-                        .get_account(account_id)
-                        .await
-                        .context("failed to load committed account")?
-                    {
-                        tracing::info!(account.id=%account_id, "Account committed, starting normal operation");
-                        return Ok(Some(account));
-                    }
-                }
-                _ = tokio::time::sleep(self.config.idle_timeout) => {
-                    tracing::info!(
-                        %account_id,
-                        "Account actor deactivated while waiting for account commit",
-                    );
-                    return Ok(None);
-                }
-            }
-        }
     }
 
     /// Execute a transaction candidate and mark notes as failed as required.

@@ -90,6 +90,26 @@ pub fn account_last_tx(
         .transpose()
 }
 
+/// Returns `true` if a committed state for the given account is tracked locally.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT EXISTS (SELECT 1 FROM accounts WHERE account_id = ?1)
+/// ```
+pub fn account_exists(
+    conn: &mut SqliteConnection,
+    account_id: AccountId,
+) -> Result<bool, DatabaseError> {
+    let account_id_bytes = conversions::account_id_to_bytes(account_id);
+
+    let exists =
+        diesel::select(diesel::dsl::exists(schema::accounts::table.find(&account_id_bytes)))
+            .get_result(conn)?;
+
+    Ok(exists)
+}
+
 /// Returns the committed account state for the given network account.
 ///
 /// # Raw SQL

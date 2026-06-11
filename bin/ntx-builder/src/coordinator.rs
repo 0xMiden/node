@@ -1,7 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use anyhow::Context;
 use miden_protocol::account::AccountId;
+use miden_standards::note::AccountTargetNetworkNote;
 use tokio::sync::{Notify, Semaphore};
 use tokio::task::JoinSet;
 
@@ -62,6 +64,10 @@ impl ActorHandle {
 ///    spawns missing actors for accounts that just received new network notes and wakes every
 ///    active actor so it can re-evaluate its state from the DB.
 ///
+/// Actors only operate on committed account state, so spawning is restricted to accounts whose
+/// creation has been committed: a spawn requested for a not-yet-committed account is deferred
+/// until the block carrying the account's creation arrives.
+///
 /// Notifications are coalesced through [`Notify`]: multiple wakes while an actor is busy
 /// collapse into one. Actors that crash repeatedly are deactivated after `max_account_crashes`
 /// failures.
@@ -88,6 +94,12 @@ pub struct Coordinator {
 
     /// Maximum number of crashes an account actor is allowed before being deactivated.
     max_account_crashes: usize,
+
+    /// Accounts targeted by network notes whose creation transaction has not been committed yet.
+    ///
+    /// Their actor spawn is deferred until a committed block carries the account's creation, at
+    /// which point [`Coordinator::handle_committed_block`] promotes them to a real actor.
+    pending_spawns: HashSet<AccountId>,
 }
 
 impl Coordinator {
@@ -105,6 +117,7 @@ impl Coordinator {
             actor_context,
             crash_counts: HashMap::new(),
             max_account_crashes,
+            pending_spawns: HashSet::new(),
         }
     }
 
@@ -146,23 +159,67 @@ impl Coordinator {
         tracing::info!(account.id = %account_id, "Created actor for account");
     }
 
-    /// Reacts to a committed block: spawns actors for any newly-targeted network accounts and wakes
-    /// every active actor so it can re-evaluate its state.
-    pub fn handle_committed_block(&mut self, effects: &CommittedBlockEffects) {
-        let mut targeted: HashSet<AccountId> = HashSet::new();
-        for note in &effects.network_notes {
-            targeted.insert(note.target_account_id());
+    /// Spawns an actor for the given account if its committed state exists in the DB; otherwise
+    /// defers the spawn until the block carrying the account's creation arrives.
+    ///
+    /// Actors only operate on committed account state, so spawning earlier would only produce an
+    /// actor idling for the creation transaction to commit.
+    pub async fn spawn_actor_when_committed(
+        &mut self,
+        account_id: AccountId,
+    ) -> anyhow::Result<()> {
+        if self.actor_registry.contains_key(&account_id) {
+            return Ok(());
         }
 
-        for account_id in &targeted {
-            if !self.actor_registry.contains_key(account_id) {
-                self.spawn_actor(*account_id);
+        let committed = self
+            .actor_context
+            .state
+            .db
+            .account_exists(account_id)
+            .await
+            .context("failed to check for committed account state")?;
+
+        if committed {
+            self.spawn_actor(account_id);
+        } else {
+            tracing::info!(
+                account.id = %account_id,
+                "deferring actor spawn until the account's creation is committed",
+            );
+            self.pending_spawns.insert(account_id);
+        }
+        Ok(())
+    }
+
+    /// Reacts to a committed block: spawns actors for any newly-targeted network accounts whose
+    /// committed state exists (deferring the rest until their creation commits), releases deferred
+    /// spawns for accounts created by this block, and wakes every active actor so it can
+    /// re-evaluate its state.
+    pub async fn handle_committed_block(
+        &mut self,
+        effects: &CommittedBlockEffects,
+    ) -> anyhow::Result<()> {
+        // Accounts created by this block release any spawn deferred on their creation.
+        for account_id in effects.created_network_accounts() {
+            if self.pending_spawns.remove(&account_id) {
+                self.spawn_actor(account_id);
             }
+        }
+
+        let targeted: HashSet<AccountId> = effects
+            .network_notes
+            .iter()
+            .map(AccountTargetNetworkNote::target_account_id)
+            .collect();
+        for account_id in targeted {
+            self.spawn_actor_when_committed(account_id).await?;
         }
 
         for handle in self.actor_registry.values() {
             handle.notify();
         }
+        Ok(())
     }
 
     /// Waits for the next actor to complete and handles the outcome.
@@ -236,12 +293,22 @@ mod tests {
         coordinator.actor_registry.insert(account_id, ActorHandle::new(notify));
     }
 
+    /// Seeds a committed row for `account_id` so the coordinator's spawn check sees the account.
+    async fn seed_committed_account(coordinator: &Coordinator, account_id: AccountId) {
+        let db = coordinator.actor_context.state.db.clone();
+        db.upsert_account_for_test(account_id, mock_account(account_id), mock_transaction_id(0))
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
-    async fn handle_committed_block_spawns_for_unknown_note_target() {
+    async fn handle_committed_block_spawns_for_committed_note_target() {
         let (mut coordinator, _dir, _rx) = Coordinator::test().await;
 
-        let unknown_id = mock_network_account_id();
-        let note = mock_single_target_note(unknown_id, 10);
+        let target_id = mock_network_account_id();
+        seed_committed_account(&coordinator, target_id).await;
+
+        let note = mock_single_target_note(target_id, 10);
         let effects = CommittedBlockEffects {
             header: mock_block_header(1_u32.into()),
             network_notes: vec![note],
@@ -250,11 +317,63 @@ mod tests {
             account_transactions: vec![],
         };
 
-        coordinator.handle_committed_block(&effects);
+        coordinator.handle_committed_block(&effects).await.unwrap();
 
         assert!(
-            coordinator.actor_registry.contains_key(&unknown_id),
-            "previously-untouched account targeted by a note should get a fresh actor",
+            coordinator.actor_registry.contains_key(&target_id),
+            "a committed account targeted by a note should get a fresh actor",
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_committed_block_defers_spawn_until_account_creation_commits() {
+        let (mut coordinator, _dir, _rx) = Coordinator::test().await;
+
+        let (account, details) = mock_network_account_update();
+        let account_id = account.id();
+
+        // A note targets the account before its creation transaction has been committed.
+        let note = mock_single_target_note(account_id, 10);
+        let effects = CommittedBlockEffects {
+            header: mock_block_header(1_u32.into()),
+            network_notes: vec![note],
+            nullifiers: vec![],
+            network_account_updates: vec![],
+            account_transactions: vec![],
+        };
+        coordinator.handle_committed_block(&effects).await.unwrap();
+
+        assert!(
+            !coordinator.actor_registry.contains_key(&account_id),
+            "an account without committed state must not get an actor",
+        );
+        assert!(
+            coordinator.pending_spawns.contains(&account_id),
+            "the spawn must be deferred until the account's creation commits",
+        );
+
+        // The creation commits in a later block; the builder persists the block's effects to the DB
+        // before handing them to the coordinator.
+        let db = coordinator.actor_context.state.db.clone();
+        db.upsert_account_for_test(account_id, account, mock_transaction_id(0))
+            .await
+            .unwrap();
+        let effects = CommittedBlockEffects {
+            header: mock_block_header(2_u32.into()),
+            network_notes: vec![],
+            nullifiers: vec![],
+            network_account_updates: vec![(account_id, details)],
+            account_transactions: vec![],
+        };
+        coordinator.handle_committed_block(&effects).await.unwrap();
+
+        assert!(
+            coordinator.actor_registry.contains_key(&account_id),
+            "the block committing the account's creation must release the deferred spawn",
+        );
+        assert!(
+            coordinator.pending_spawns.is_empty(),
+            "a released spawn must leave the pending set",
         );
     }
 
@@ -274,7 +393,7 @@ mod tests {
             account_transactions: vec![],
         };
 
-        coordinator.handle_committed_block(&effects);
+        coordinator.handle_committed_block(&effects).await.unwrap();
 
         assert!(
             !coordinator.actor_registry.contains_key(&updated_id),
@@ -323,6 +442,7 @@ mod tests {
         let bystander_notify = coordinator.actor_registry.get(&bystander).unwrap().notify.clone();
 
         let target = mock_network_account_id_seeded(42);
+        seed_committed_account(&coordinator, target).await;
         let note = mock_single_target_note(target, 10);
         let effects = CommittedBlockEffects {
             header: mock_block_header(1_u32.into()),
@@ -332,7 +452,7 @@ mod tests {
             account_transactions: vec![],
         };
 
-        coordinator.handle_committed_block(&effects);
+        coordinator.handle_committed_block(&effects).await.unwrap();
 
         assert!(
             bystander_notify.notified().now_or_never().is_some(),
