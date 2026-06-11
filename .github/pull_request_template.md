@@ -25,7 +25,7 @@ reason    = "Internal change only."
 ```
 
 Allowed scopes: rpc, protocol, docs, node, network-monitor, ntx-builder, prover, validator, internal, general
-Allowed impacts: breaking, added, changed, fixed, removed, deprecated
+Allowed impacts: breaking, migration, added, changed, fixed, removed, deprecated
 -->
 
 ```toml
