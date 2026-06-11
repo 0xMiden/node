@@ -7,11 +7,11 @@ use miden_protocol::block::ProposedBlock;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_tx::utils::serde::{Deserializable, Serializable};
 
-use super::Validator;
+use super::ValidatorService;
 use crate::db::{load_chain_tip, upsert_block_header};
 
 #[tonic::async_trait]
-impl grpc::server::validator_api::SignBlock for Validator {
+impl grpc::server::validator_api::SignBlock for ValidatorService {
     type Input = ProposedBlock;
     type Output = (Signature, Word);
 
@@ -26,7 +26,9 @@ impl grpc::server::validator_api::SignBlock for Validator {
     fn encode(output: Self::Output) -> tonic::Result<grpc::blockchain::SignBlockResponse> {
         let (signature, block_commitment) = output;
         Ok(grpc::blockchain::SignBlockResponse {
-            signature: Some(grpc::blockchain::BlockSignature { signature: signature.to_bytes() }),
+            signature: Some(grpc::blockchain::BlockSignature {
+                signature: signature.to_bytes(),
+            }),
             block_commitment: Some(block_commitment.into()),
         })
     }
@@ -49,8 +51,10 @@ impl grpc::server::validator_api::SignBlock for Validator {
             .ok_or_else(|| tonic::Status::internal("Chain tip not found in database"))?;
 
         // Validate the block against the current chain tip.
-        let (signature, header) =
-            self.validate_block(proposed_block, chain_tip).await.map_err(|err| {
+        let (signature, header) = self
+            .validate_block(proposed_block, chain_tip)
+            .await
+            .map_err(|err| {
                 tonic::Status::invalid_argument(format!(
                     "Failed to validate block: {}",
                     err.as_report()
@@ -64,7 +68,9 @@ impl grpc::server::validator_api::SignBlock for Validator {
         // Persist the validated block header.
         let new_block_num = header.block_num().as_u32();
         self.db
-            .transact("upsert_block_header", move |conn| upsert_block_header(conn, &header))
+            .transact("upsert_block_header", move |conn| {
+                upsert_block_header(conn, &header)
+            })
             .await
             .map_err(|err| {
                 tonic::Status::internal(format!(

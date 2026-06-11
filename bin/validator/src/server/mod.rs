@@ -14,16 +14,13 @@ use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::db::{
-    count_signed_blocks,
-    count_validated_transactions,
-    load_chain_tip,
-    load_with_pool_size,
+    count_signed_blocks, count_validated_transactions, load_chain_tip, load_with_pool_size,
 };
 use crate::{COMPONENT, ValidatorSigner};
 
-mod validator;
+mod validator_service;
 
-use validator::Validator;
+use validator_service::ValidatorService;
 
 // VALIDATOR SERVER
 // ================================================================================
@@ -91,7 +88,7 @@ impl ValidatorServer {
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .timeout(self.grpc_options.request_timeout)
             .add_service(api_server::ApiServer::new(
-                Validator::new(
+                ValidatorService::new(
                     self.signer,
                     db,
                     initial_chain_tip,
