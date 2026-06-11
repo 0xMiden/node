@@ -30,12 +30,11 @@ use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use http::header::ACCEPT;
 use miden_node_utils::tracing::grpc::OtelInterceptor;
 use tonic::metadata::AsciiMetadataValue;
 use tonic::service::interceptor::InterceptedService;
-use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
+use tonic::transport::{Channel, ClientTlsConfig, Endpoint, Error as TransportError};
 use tonic::{Request, Status};
 use url::Url;
 
@@ -375,11 +374,8 @@ impl Builder<WantsTls> {
     }
 
     /// Explicitly enable TLS.
-    pub fn with_tls(mut self) -> Result<Builder<WantsTimeout>> {
-        self.endpoint = self
-            .endpoint
-            .tls_config(ClientTlsConfig::new().with_native_roots())
-            .context("Failed to configure TLS")?;
+    pub fn with_tls(mut self) -> Result<Builder<WantsTimeout>, TransportError> {
+        self.endpoint = self.endpoint.tls_config(ClientTlsConfig::new().with_native_roots())?;
 
         Ok(self.next_state())
     }
@@ -460,7 +456,7 @@ impl Builder<WantsOTel> {
 
 impl Builder<WantsConnection> {
     /// Establish an eager connection and return a fully configured client.
-    pub async fn connect<T>(self) -> Result<T>
+    pub async fn connect<T>(self) -> Result<T, TransportError>
     where
         T: GrpcClient,
     {

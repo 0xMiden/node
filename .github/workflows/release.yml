@@ -67,7 +67,12 @@ jobs:
               | sort_by(.name)
             ' <<< "${metadata}"
           )"
-          publishable_crates="$(jq -r '[.packages[] | select(.publish != []) | .name] | sort | join(" ")' <<< "${metadata}")"
+          publishable_crates="$(
+            jq -c '
+              [.packages[] | select(.publish != []) | { name }]
+              | sort_by(.name)
+            ' <<< "${metadata}"
+          )"
 
           if [[ "${#versions[@]}" -ne 1 ]]; then
             printf '%s\n' "${versions[@]}"
@@ -112,13 +117,17 @@ jobs:
           fi
 
   check-crate-builds:
-    name: Check crate builds
+    name: cargo check ${{ matrix.name }}
     runs-on: warp-ubuntu-latest-x64-8x
     needs: preflight
     if: ${{ github.repository_owner == '0xMiden' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.preflight.outputs.publishable_crates) }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ needs.preflight.outputs.tag }}
           fetch-depth: 0
@@ -136,19 +145,13 @@ jobs:
       - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
           shared-key: release-dry-run-crates
+          cache-provider: warpbuild
           save-if: false
 
       - name: Check package builds
         env:
-          PUBLISHABLE_CRATES: ${{ needs.preflight.outputs.publishable_crates }}
-        run: |
-          set -euo pipefail
-
-          for crate in ${PUBLISHABLE_CRATES}; do
-            echo "::group::cargo check -p ${crate}"
-            cargo check -p "${crate}" --locked
-            echo "::endgroup::"
-          done
+          PACKAGE: ${{ matrix.name }}
+        run: cargo check -p "${PACKAGE}" --locked
 
   dry-run-crates:
     name: Dry-run crates.io publish
@@ -157,7 +160,7 @@ jobs:
     if: ${{ github.repository_owner == '0xMiden' }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ needs.preflight.outputs.tag }}
           fetch-depth: 0
@@ -169,6 +172,7 @@ jobs:
       - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
           shared-key: release-dry-run-crates
+          cache-provider: warpbuild
           save-if: false
 
       - name: Dry-run cargo publish without verification
@@ -189,7 +193,7 @@ jobs:
       RUSTUP_TOOLCHAIN: stable
     steps:
       - name: Checkout repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ needs.preflight.outputs.tag }}
           fetch-depth: 0
@@ -207,12 +211,13 @@ jobs:
       - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
           shared-key: release-msrv
+          cache-provider: warpbuild
           save-if: false
 
       - name: Install cargo-binstall
         uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
         with:
-          tool: cargo-binstall@1.16.6
+          tool: cargo-binstall
 
       - name: Install cargo-msrv
         run: cargo binstall --no-confirm cargo-msrv

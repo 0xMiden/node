@@ -155,7 +155,8 @@ impl AccountActorContext {
                     miden_protocol::Word::default(),
                     Duration::from_millis(100),
                     Duration::from_secs(30),
-                ),
+                )
+                .expect("rpc client should be constructed"),
                 prover: RemoteTransactionProver::new(url.as_str()),
             },
             state: State {
