@@ -67,8 +67,8 @@ impl ValidatorServer {
         .context("failed to initialize validator database")?;
 
         // Initialize block store.
-        let block_store =
-            BlockStore::load(self.data_directory.clone()).context("failed to load block store")?;
+        let block_store = BlockStore::load(self.data_directory.join("blocks").clone())
+            .context("failed to load block store")?;
 
         // Load initial metrics from the database for the in-memory counters.
         let (initial_chain_tip, initial_tx_count, initial_block_count) = db

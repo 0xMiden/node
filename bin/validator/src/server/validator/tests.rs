@@ -89,7 +89,8 @@ async fn setup_db_with_genesis(key: &SigningKey) -> (miden_node_db::Db, BlockSto
 
     let dir = tempfile::tempdir().unwrap();
     let db = setup(dir.path().join("validator.sqlite3")).await.unwrap();
-    let block_store = BlockStore::bootstrap(dir.path().to_path_buf(), &genesis_block).unwrap();
+    let block_store =
+        BlockStore::bootstrap(dir.path().join("blocks").clone(), &genesis_block).unwrap();
 
     db.transact("upsert_genesis", {
         let h = genesis_header.clone();
