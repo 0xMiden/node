@@ -273,6 +273,7 @@ jobs:
             --bin miden-node \
             --bin miden-validator \
             --bin miden-ntx-builder \
+            --bin miden-remote-prover \
             --bin miden-benchmark
       - name: Run benchmark with N=1
         env:
