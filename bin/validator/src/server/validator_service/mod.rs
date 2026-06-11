@@ -45,10 +45,7 @@ pub enum ValidatorError {
     #[error(
         "validator signing key {actual:?} does not match the block's validator key {expected:?}"
     )]
-    ValidatorKeyMismatch {
-        expected: PublicKey,
-        actual: PublicKey,
-    },
+    ValidatorKeyMismatch { expected: PublicKey, actual: PublicKey },
     #[error("no chain tip exists")]
     NoChainTip,
 }
@@ -122,10 +119,8 @@ impl ValidatorService {
         chain_tip: BlockHeader,
     ) -> Result<(Signature, BlockHeader), ValidatorError> {
         // Search for any proposed transactions that have not previously been validated.
-        let proposed_tx_ids = proposed_block
-            .transactions()
-            .map(TransactionHeader::id)
-            .collect::<Vec<_>>();
+        let proposed_tx_ids =
+            proposed_block.transactions().map(TransactionHeader::id).collect::<Vec<_>>();
         let unvalidated_txs = self
             .db
             .transact("find_unvalidated_transactions", move |conn| {
@@ -152,14 +147,10 @@ impl ValidatorService {
         // replacement block. Validate it against the previous block header.
         let prev = if proposed_header.block_num() == chain_tip.block_num() {
             // The genesis block cannot be replaced (genesis block has no parent).
-            let prev_block_num = chain_tip
-                .block_num()
-                .parent()
-                .ok_or(ValidatorError::NoPrevBlockHeader)?;
+            let prev_block_num =
+                chain_tip.block_num().parent().ok_or(ValidatorError::NoPrevBlockHeader)?;
             self.db
-                .query("load_block_header", move |conn| {
-                    load_block_header(conn, prev_block_num)
-                })
+                .query("load_block_header", move |conn| load_block_header(conn, prev_block_num))
                 .await
                 .map_err(ValidatorError::DatabaseError)?
                 .ok_or(ValidatorError::NoPrevBlockHeader)?

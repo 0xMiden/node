@@ -20,25 +20,20 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
         tracing::Span::current().set_attribute("transaction.id", input.tx.id());
 
         // Validate the transaction.
-        let tx_info = validate_transaction(input.tx, input.inputs)
-            .await
-            .map_err(|err| {
-                Status::invalid_argument(err.as_report_context("Invalid transaction"))
-            })?;
+        let tx_info = validate_transaction(input.tx, input.inputs).await.map_err(|err| {
+            Status::invalid_argument(err.as_report_context("Invalid transaction"))
+        })?;
 
         // Store the validated transaction.
         let count = self
             .db
-            .transact("insert_transaction", move |conn| {
-                insert_transaction(conn, &tx_info)
-            })
+            .transact("insert_transaction", move |conn| insert_transaction(conn, &tx_info))
             .await
             .map_err(|err| {
                 Status::internal(err.as_report_context("Failed to insert transaction"))
             })?;
 
-        self.validated_transactions_count
-            .fetch_add(count as u64, Ordering::Relaxed);
+        self.validated_transactions_count.fetch_add(count as u64, Ordering::Relaxed);
         Ok(())
     }
 
