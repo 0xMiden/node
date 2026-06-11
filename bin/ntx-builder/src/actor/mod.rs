@@ -563,14 +563,19 @@ impl AccountActor {
 
         let execution_result = context.execute_transaction(tx_candidate).await;
         match execution_result {
-            Ok((tx_id, account_delta, failed, scripts_to_cache)) => {
+            Ok(execute::NtxExecutionResult {
+                tx_id,
+                account_delta,
+                failed_notes: failed,
+                fetched_scripts,
+            }) => {
                 tracing::info!(
                     %account_id,
                     %tx_id,
                     num_failed = failed.len(),
                     "network transaction executed with some failed notes",
                 );
-                self.cache_note_scripts(scripts_to_cache).await;
+                self.cache_note_scripts(fetched_scripts).await;
 
                 // A tx carries work only if at least one candidate note survived consumability
                 // filtering; if every note failed there is nothing on-chain to wait for.
