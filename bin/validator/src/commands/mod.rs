@@ -10,7 +10,7 @@ use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::logging::OpenTelemetry;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::utils::serde::Deserializable;
-use miden_validator::ValidatorSigner;
+use miden_validator::{DataDirectory, ValidatorSigner};
 
 const ENV_DATA_DIRECTORY: &str = "MIDEN_VALIDATOR_DATA_DIRECTORY";
 const ENV_LISTEN: &str = "MIDEN_VALIDATOR_LISTEN";
@@ -140,7 +140,9 @@ impl ValidatorCommand {
                 .await
             },
             Self::Migrate { data_directory } => {
-                miden_validator::db::migrate(data_directory.join("validator.sqlite3"))
+                let data_dir = DataDirectory::load_server(data_directory)
+                    .context("failed to load validator data directory")?;
+                miden_validator::db::migrate(data_dir.database_path())
                     .context("failed to apply validator database migrations")?;
                 Ok(())
             },

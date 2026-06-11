@@ -1,6 +1,5 @@
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
-use std::path::PathBuf;
 
 use anyhow::Context;
 use miden_node_proto::generated::validator::api_server;
@@ -20,7 +19,7 @@ use crate::db::{
     load_chain_tip,
     load_with_pool_size,
 };
-use crate::{COMPONENT, ValidatorSigner};
+use crate::{COMPONENT, DataDirectory, ValidatorSigner};
 
 mod validator_service;
 
@@ -44,7 +43,7 @@ pub struct ValidatorServer {
     pub signer: ValidatorSigner,
 
     /// The data directory for the validator component's database files.
-    pub data_directory: PathBuf,
+    pub data_directory: DataDirectory,
 
     /// Maximum number of SQLite connections in the validator database connection pool.
     pub sqlite_connection_pool_size: NonZeroUsize,
@@ -60,14 +59,14 @@ impl ValidatorServer {
 
         // Initialize database connection.
         let db = load_with_pool_size(
-            self.data_directory.join("validator.sqlite3"),
+            self.data_directory.database_path(),
             self.sqlite_connection_pool_size,
         )
         .await
         .context("failed to initialize validator database")?;
 
         // Initialize block store.
-        let block_store = BlockStore::load(self.data_directory.join("blocks").clone())
+        let block_store = BlockStore::load(self.data_directory.block_store_dir())
             .context("failed to load block store")?;
 
         // Load initial metrics from the database for the in-memory counters.
