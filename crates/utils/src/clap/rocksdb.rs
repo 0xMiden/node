@@ -2,26 +2,11 @@
 
 use std::path::Path;
 
-use miden_large_smt_backend_rocksdb::{RocksDbConfig, RocksDbDurabilityMode};
+use miden_crypto::merkle::smt::RocksDbConfig;
 
 pub(crate) const DEFAULT_ROCKSDB_MAX_OPEN_FDS: i32 = 64;
 pub(crate) const DEFAULT_ROCKSDB_CACHE_SIZE: usize = 2 << 30;
 pub(crate) const BENCH_ROCKSDB_MAX_OPEN_FDS: i32 = 512;
-
-#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CliRocksDbDurabilityMode {
-    Relaxed,
-    Sync,
-}
-
-impl From<CliRocksDbDurabilityMode> for RocksDbDurabilityMode {
-    fn from(value: CliRocksDbDurabilityMode) -> Self {
-        match value {
-            CliRocksDbDurabilityMode::Relaxed => Self::Relaxed,
-            CliRocksDbDurabilityMode::Sync => Self::Sync,
-        }
-    }
-}
 
 /// Per usage options for rocksdb configuration
 #[derive(clap::Args, Clone, Debug, PartialEq, Eq)]
@@ -40,13 +25,6 @@ pub struct NullifierTreeRocksDbOptions {
         value_name = "NULLIFIER_TREE__ROCKSDB__CACHE_SIZE"
     )]
     pub cache_size_in_bytes: usize,
-    #[arg(
-        id = "nullifier_tree_rocksdb_durability_mode",
-        long = "nullifier_tree.rocksdb.durability_mode",
-        value_enum,
-        value_name = "NULLIFIER_TREE__ROCKSDB__DURABILITY_MODE"
-    )]
-    pub durability_mode: Option<CliRocksDbDurabilityMode>,
 }
 
 impl Default for NullifierTreeRocksDbOptions {
@@ -72,13 +50,6 @@ pub struct AccountTreeRocksDbOptions {
         value_name = "ACCOUNT_TREE__ROCKSDB__CACHE_SIZE"
     )]
     pub cache_size_in_bytes: usize,
-    #[arg(
-        id = "account_tree_rocksdb_durability_mode",
-        long = "account_tree.rocksdb.durability_mode",
-        value_enum,
-        value_name = "ACCOUNT_TREE__ROCKSDB__DURABILITY_MODE"
-    )]
-    pub durability_mode: Option<CliRocksDbDurabilityMode>,
 }
 
 impl Default for AccountTreeRocksDbOptions {
@@ -104,13 +75,6 @@ pub struct AccountStateForestRocksDbOptions {
         value_name = "ACCOUNT_STATE_FOREST__ROCKSDB__CACHE_SIZE"
     )]
     pub cache_size_in_bytes: usize,
-    #[arg(
-        id = "account_state_forest_rocksdb_durability_mode",
-        long = "account_state_forest.rocksdb.durability_mode",
-        value_enum,
-        value_name = "ACCOUNT_STATE_FOREST__ROCKSDB__DURABILITY_MODE"
-    )]
-    pub durability_mode: Option<CliRocksDbDurabilityMode>,
 }
 
 impl Default for AccountStateForestRocksDbOptions {
@@ -124,7 +88,6 @@ impl Default for AccountStateForestRocksDbOptions {
 pub struct RocksDbOptions {
     pub max_open_fds: i32,
     pub cache_size_in_bytes: usize,
-    pub durability_mode: Option<CliRocksDbDurabilityMode>,
 }
 
 impl Default for RocksDbOptions {
@@ -132,112 +95,57 @@ impl Default for RocksDbOptions {
         Self {
             max_open_fds: DEFAULT_ROCKSDB_MAX_OPEN_FDS,
             cache_size_in_bytes: DEFAULT_ROCKSDB_CACHE_SIZE,
-            durability_mode: None,
         }
     }
 }
 
 impl From<AccountTreeRocksDbOptions> for RocksDbOptions {
     fn from(value: AccountTreeRocksDbOptions) -> Self {
-        let AccountTreeRocksDbOptions {
-            max_open_fds,
-            cache_size_in_bytes,
-            durability_mode,
-        } = value;
-        Self {
-            max_open_fds,
-            cache_size_in_bytes,
-            durability_mode,
-        }
+        let AccountTreeRocksDbOptions { max_open_fds, cache_size_in_bytes } = value;
+        Self { max_open_fds, cache_size_in_bytes }
     }
 }
 
 impl From<NullifierTreeRocksDbOptions> for RocksDbOptions {
     fn from(value: NullifierTreeRocksDbOptions) -> Self {
-        let NullifierTreeRocksDbOptions {
-            max_open_fds,
-            cache_size_in_bytes,
-            durability_mode,
-        } = value;
-        Self {
-            max_open_fds,
-            cache_size_in_bytes,
-            durability_mode,
-        }
+        let NullifierTreeRocksDbOptions { max_open_fds, cache_size_in_bytes } = value;
+        Self { max_open_fds, cache_size_in_bytes }
     }
 }
 
 impl From<AccountStateForestRocksDbOptions> for RocksDbOptions {
     fn from(value: AccountStateForestRocksDbOptions) -> Self {
-        let AccountStateForestRocksDbOptions {
-            max_open_fds,
-            cache_size_in_bytes,
-            durability_mode,
-        } = value;
-        Self {
-            max_open_fds,
-            cache_size_in_bytes,
-            durability_mode,
-        }
+        let AccountStateForestRocksDbOptions { max_open_fds, cache_size_in_bytes } = value;
+        Self { max_open_fds, cache_size_in_bytes }
     }
 }
 
 impl From<RocksDbOptions> for AccountTreeRocksDbOptions {
     fn from(value: RocksDbOptions) -> Self {
-        let RocksDbOptions {
-            max_open_fds,
-            cache_size_in_bytes,
-            durability_mode,
-        } = value;
-        Self {
-            max_open_fds,
-            cache_size_in_bytes,
-            durability_mode,
-        }
+        let RocksDbOptions { max_open_fds, cache_size_in_bytes } = value;
+        Self { max_open_fds, cache_size_in_bytes }
     }
 }
 
 impl From<RocksDbOptions> for NullifierTreeRocksDbOptions {
     fn from(value: RocksDbOptions) -> Self {
-        let RocksDbOptions {
-            max_open_fds,
-            cache_size_in_bytes,
-            durability_mode,
-        } = value;
-        Self {
-            max_open_fds,
-            cache_size_in_bytes,
-            durability_mode,
-        }
+        let RocksDbOptions { max_open_fds, cache_size_in_bytes } = value;
+        Self { max_open_fds, cache_size_in_bytes }
     }
 }
 
 impl From<RocksDbOptions> for AccountStateForestRocksDbOptions {
     fn from(value: RocksDbOptions) -> Self {
-        let RocksDbOptions {
-            max_open_fds,
-            cache_size_in_bytes,
-            durability_mode,
-        } = value;
-        Self {
-            max_open_fds,
-            cache_size_in_bytes,
-            durability_mode,
-        }
+        let RocksDbOptions { max_open_fds, cache_size_in_bytes } = value;
+        Self { max_open_fds, cache_size_in_bytes }
     }
 }
 
 impl RocksDbOptions {
     pub fn with_path(self, path: &Path) -> RocksDbConfig {
-        let mut config = RocksDbConfig::new(path)
+        RocksDbConfig::new(path)
             .with_cache_size(self.cache_size_in_bytes)
-            .with_max_open_files(self.max_open_fds);
-
-        if let Some(durability_mode) = self.durability_mode {
-            config = config.with_durability_mode(durability_mode.into());
-        }
-
-        config
+            .with_max_open_files(self.max_open_fds)
     }
 }
 
@@ -250,13 +158,11 @@ mod tests {
         let options = AccountStateForestRocksDbOptions {
             max_open_fds: 123,
             cache_size_in_bytes: 456,
-            durability_mode: Some(CliRocksDbDurabilityMode::Sync),
         };
 
         let general = RocksDbOptions::from(options.clone());
         assert_eq!(general.max_open_fds, options.max_open_fds);
         assert_eq!(general.cache_size_in_bytes, options.cache_size_in_bytes);
-        assert_eq!(general.durability_mode, options.durability_mode);
 
         let roundtrip = AccountStateForestRocksDbOptions::from(general);
         assert_eq!(roundtrip, options);

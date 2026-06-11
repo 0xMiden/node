@@ -11,6 +11,13 @@ use miden_standards::AuthMethod;
 use miden_standards::account::wallets::create_basic_wallet;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Ensure the C++ stdlib is linked when RocksDB is statically linked. RocksDB is pulled in via
+    // `miden-crypto`'s `persistent-forest`/`rocksdb` feature when our `rocksdb` feature is enabled.
+    // This is a no-op unless `ROCKSDB_STATIC` is set. See `miden-node-rocksdb-cxx-linkage-fix`.
+    if std::env::var_os("CARGO_FEATURE_ROCKSDB").is_some() {
+        miden_node_rocksdb_cxx_linkage_fix::configure();
+    }
+
     miden_node_db::migration::Migrator::generate("src/db/migrations")?;
 
     // If we do one re-write, the default rules are disabled,

@@ -18,20 +18,19 @@ workspace = true
 doctest = false
 
 [dependencies]
-anyhow                          = { workspace = true }
-deadpool                        = { features = ["managed", "rt_tokio_1"], workspace = true }
-deadpool-diesel                 = { features = ["sqlite"], workspace = true }
-diesel                          = { features = ["numeric", "sqlite"], workspace = true }
-fs-err                          = { workspace = true }
-hex                             = { workspace = true }
-indexmap                        = { workspace = true }
-libsqlite3-sys                  = { workspace = true }
-miden-crypto                    = { features = ["concurrent"], workspace = true }
-miden-large-smt-backend-rocksdb = { optional = true, workspace = true }
-miden-node-db                   = { workspace = true }
-miden-node-proto                = { workspace = true }
-miden-node-utils                = { workspace = true }
-miden-standards                 = { workspace = true }
+anyhow           = { workspace = true }
+deadpool         = { features = ["managed", "rt_tokio_1"], workspace = true }
+deadpool-diesel  = { features = ["sqlite"], workspace = true }
+diesel           = { features = ["numeric", "sqlite"], workspace = true }
+fs-err           = { workspace = true }
+hex              = { workspace = true }
+indexmap         = { workspace = true }
+libsqlite3-sys   = { workspace = true }
+miden-crypto     = { features = ["concurrent"], workspace = true }
+miden-node-db    = { workspace = true }
+miden-node-proto = { workspace = true }
+miden-node-utils = { workspace = true }
+miden-standards  = { workspace = true }
 # TODO remove `testing` from `miden-protocol`, required for `BlockProof::new_dummy`
 miden-protocol    = { features = ["std", "testing"], workspace = true }
 pretty_assertions = { workspace = true }
@@ -45,9 +44,10 @@ toml              = { workspace = true }
 tracing           = { workspace = true }
 
 [build-dependencies]
-build-rs      = { workspace = true }
-fs-err        = { workspace = true }
-miden-node-db = { workspace = true }
+build-rs                           = { workspace = true }
+fs-err                             = { workspace = true }
+miden-node-db                      = { workspace = true }
+miden-node-rocksdb-cxx-linkage-fix = { workspace = true }
 # TODO: consider removing the `testing` from relevant functions in miden-agglayer
 miden-agglayer  = { features = ["testing"], workspace = true }
 miden-protocol  = { features = ["std"], workspace = true }
@@ -67,7 +67,7 @@ tempfile              = { workspace = true }
 
 [features]
 default = ["rocksdb"]
-rocksdb = ["dep:miden-large-smt-backend-rocksdb", "miden-crypto/persistent-forest", "miden-node-utils/rocksdb"]
+rocksdb = ["miden-crypto/persistent-forest", "miden-node-utils/rocksdb"]
 
 [[bench]]
 harness           = false

@@ -19,4 +19,5 @@ the block header (and therefore hash) still includes the previous block's hash.
 This crate is used to ensure that statically linking the `rocksdb` library works as intended.
 
 More information can be found in the crate's doc comments, but this crate is required for now to be included
-as part of the `build.rs` in the large SMT crate which depends on `rocksdb`.
+as part of the store crate's `build.rs`, since the store pulls in `rocksdb` (via `miden-crypto`'s
+`persistent-forest` feature) when its `rocksdb` feature is enabled.

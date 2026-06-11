@@ -13,14 +13,13 @@ chain state (aka nuke the existing database) on each release.
 ## RocksDB tree storage
 
 The account and nullifier trees are persisted in separate RocksDB instances under
-`<data-directory>/accounttree` and `<data-directory>/nullifiertree`, managed by
-`crates/large-smt-backend-rocksdb`. Column families: `leaves`, `st24`–`st56` (subtrees at each
-depth), `metadata` (root/counts), `depth24` (cached depth-24 hashes for fast startup).
+`<data-directory>/accounttree` and `<data-directory>/nullifiertree`, backed by `miden-crypto`'s
+`RocksDbStorage` (`miden_crypto::merkle::smt`). Column families: `leaves`, `st24`–`st56` (subtrees at
+each depth), `metadata` (root/counts), `depth24` (cached depth-24 hashes for fast startup).
 
 Compaction parallelism and background jobs are set to `rayon::current_num_threads()` automatically.
-WAL sync per write is disabled for throughput; a 512 MiB WAL cap bounds recovery time. Bloom filter
-bits vary by depth (8.0–12.0) and memtables are 128 MiB per column family. See `RocksDbStorage::open` for the
-full fixed configuration. Runtime-tuneable parameters are documented in the
+See `RocksDbStorage::open` for the full fixed configuration. The runtime-tuneable parameters (cache
+size and max open file descriptors) are documented in the
 [operator usage guide](https://docs.miden.xyz/core-concepts/node/operator/usage/#rocksdb-tuning).
 
 ## Architecture

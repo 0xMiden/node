@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Replaced the in-tree `miden-large-smt-backend-rocksdb` crate with `miden-crypto`'s `RocksDbStorage`. **Breaking:** the `*.rocksdb.durability-mode` store options (and their `MIDEN_NODE_STORE_*_ROCKSDB_DURABILITY_MODE` env vars) were removed, since upstream does not expose write-durability selection.
 - Fixed the store dropping a fungible asset's callback flag when applying partial account deltas ([#2222](https://github.com/0xMiden/node/pull/2222)).
 - Improved `GetAccount` performance if number of vault assets exceeds the limit. ([#2227](https://github.com/0xMiden/node/pull/2227)).
 - Improved `GetAccount` performance if number of storage map entries exceeds the limit. ([#2228](https://github.com/0xMiden/node/pull/2228)).

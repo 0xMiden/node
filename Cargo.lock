@@ -2748,7 +2748,6 @@ dependencies = [
  "libc",
  "libz-sys",
  "lz4-sys",
- "zstd-sys",
 ]
 
 [[package]]
@@ -3193,17 +3192,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "miden-large-smt-backend-rocksdb"
-version = "0.15.0-rc.4"
-dependencies = [
- "miden-crypto",
- "miden-node-rocksdb-cxx-linkage-fix",
- "miden-protocol",
- "rayon",
- "rocksdb",
-]
-
-[[package]]
 name = "miden-lifted-air"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3487,9 +3475,9 @@ dependencies = [
  "libsqlite3-sys",
  "miden-agglayer",
  "miden-crypto",
- "miden-large-smt-backend-rocksdb",
  "miden-node-db",
  "miden-node-proto",
+ "miden-node-rocksdb-cxx-linkage-fix",
  "miden-node-test-macro",
  "miden-node-utils",
  "miden-protocol",
@@ -3546,7 +3534,7 @@ dependencies = [
  "humantime",
  "itertools 0.14.0",
  "lru",
- "miden-large-smt-backend-rocksdb",
+ "miden-crypto",
  "miden-protocol",
  "opentelemetry",
  "opentelemetry-otlp",
@@ -7676,13 +7664,3 @@ name = "zmij"
 version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
-
-[[package]]
-name = "zstd-sys"
-version = "2.0.16+zstd.1.5.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91e19ebc2adc8f83e43039e79776e3fda8ca919132d68a1fed6a5faca2683748"
-dependencies = [
- "cc",
- "pkg-config",
-]

@@ -15,9 +15,12 @@ use std::path::Path;
 use miden_crypto::merkle::mmr::Mmr;
 use miden_crypto::merkle::smt::{Backend, ForestInMemoryBackend};
 #[cfg(feature = "rocksdb")]
-use miden_crypto::merkle::smt::{ForestPersistentBackend, PersistentBackendConfig};
-#[cfg(feature = "rocksdb")]
-use miden_large_smt_backend_rocksdb::{RocksDbStorage, SmtStorageReader};
+use miden_crypto::merkle::smt::{
+    ForestPersistentBackend,
+    PersistentBackendConfig,
+    RocksDbStorage,
+    SmtStorageReader,
+};
 #[cfg(feature = "rocksdb")]
 use miden_node_utils::clap::RocksDbOptions;
 use miden_protocol::account::{AccountId, AccountStorageHeader, StorageSlotType};

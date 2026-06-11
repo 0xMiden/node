@@ -19,7 +19,7 @@ doctest = false
 
 [features]
 # Enables utility functions for testing traces created by some other crate's stack.
-rocksdb = ["dep:miden-large-smt-backend-rocksdb"]
+rocksdb = ["dep:miden-crypto", "miden-crypto/rocksdb"]
 testing = ["miden-protocol/testing"]
 
 [dependencies]
@@ -52,8 +52,8 @@ tracing-opentelemetry = { version = "0.32" }
 tracing-subscriber    = { workspace = true }
 url                   = { workspace = true }
 
-# RocksDbConfig is needed due to orphan rules
-miden-large-smt-backend-rocksdb = { optional = true, workspace = true }
+# Provides `RocksDbConfig`, used to build per-tree RocksDB configuration from CLI args.
+miden-crypto = { optional = true, workspace = true }
 
 [dev-dependencies]
 thiserror = { workspace = true }
