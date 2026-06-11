@@ -55,6 +55,7 @@ enum Scope {
 #[serde(rename_all = "kebab-case")]
 enum Impact {
     Breaking,
+    Migration,
     Added,
     Changed,
     Fixed,
@@ -290,6 +291,19 @@ description = "Changed the RPC response shape."
 scope       = "node"
 impact      = "added"
 description = "Added a bootstrap command."
+"#,
+        );
+
+        verify_pr_body(&body).unwrap();
+    }
+
+    #[test]
+    fn accepts_migration_impact() {
+        let body = valid_body(
+            r#"[[entry]]
+scope       = "node"
+impact      = "migration"
+description = "Added a storage migration for node databases."
 "#,
         );
 
