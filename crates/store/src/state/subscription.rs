@@ -193,14 +193,14 @@ async fn run_stream<S: SubscriptionSource>(
     source: S,
 ) -> Result<(), StateSubscriptionError> {
     let mut next = from;
-    let mut previous_gap: Option<u32> = None;
+    let mut previous_gap = tip_rx.borrow().as_u32();
     let mut running_gap = 0u32;
     loop {
         let mut tip = *tip_rx.borrow_and_update();
 
         let current_gap = tip.saturating_sub(next.as_u32()).as_u32();
         (previous_gap, running_gap) =
-            check_growing_gap(current_gap, previous_gap.unwrap_or(current_gap), running_gap)?;
+            check_growing_gap(current_gap, previous_gap, running_gap)?;
 
         while next <= tip {
             let data = source.fetch(next).await?;
@@ -231,7 +231,7 @@ fn check_growing_gap(
     current_gap: u32,
     previous_gap: u32,
     running_gap: u32,
-) -> Result<(Option<u32>, u32), StateSubscriptionError> {
+) -> Result<(u32, u32), StateSubscriptionError> {
     let running_gap = if current_gap > previous_gap {
         running_gap + (current_gap - previous_gap)
     } else {
@@ -240,7 +240,7 @@ fn check_growing_gap(
     if running_gap > MAX_RUNNING_GAP {
         return Err(StateSubscriptionError::TooSlow);
     }
-    Ok((Some(current_gap), running_gap))
+    Ok((current_gap, running_gap))
 }
 
 // TESTS
@@ -251,11 +251,11 @@ mod tests {
     use super::*;
 
     fn run(gaps: &[u32]) -> Result<(), StateSubscriptionError> {
-        let mut previous_gap: Option<u32> = None;
+        let mut previous_gap = gaps.first().copied().unwrap_or(u32::MAX);
         let mut growth_run = 0u32;
         for &gap in gaps {
             (previous_gap, growth_run) =
-                check_growing_gap(gap, previous_gap.unwrap_or(gap), growth_run)?;
+                check_growing_gap(gap, previous_gap, growth_run)?;
         }
         Ok(())
     }
