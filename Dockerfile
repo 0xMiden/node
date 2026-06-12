@@ -32,6 +32,10 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
 ARG BIN
+# Disable incremental compilation: Docker normalises COPY timestamps, which
+# breaks Rust's mtime-based fingerprinting and causes stale .rlib reuse.
+# The /app/target cache still accelerates builds via pre-compiled dep .rlibs.
+ENV CARGO_INCREMENTAL=0
 COPY --from=planner /app/recipe.json recipe.json
 # Build dependencies while preserving Cargo artifacts across layer invalidations.
 #
