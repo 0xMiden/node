@@ -2,8 +2,10 @@
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::time::Duration;
 
 use anyhow::Result;
+use backon::{ExponentialBuilder, Retryable};
 use miden_node_proto::clients::RemoteProverClient;
 use miden_node_utils::tasks::Tasks as SupervisedTasks;
 use tokio::sync::watch::Receiver;
@@ -18,9 +20,15 @@ use crate::explorer::ExplorerService;
 use crate::faucet::FaucetService;
 use crate::frontend::{ServerState, serve};
 use crate::note_transport::NoteTransportService;
-use crate::remote_prover::{ProbeSnapshot, ProverStatusService, generate_prover_test_payload};
+use crate::remote_prover::ProverStatusService;
 use crate::service::{Service, build_tls_client};
-use crate::status::{RpcService, ServiceStatus};
+use crate::status::{
+    CounterTrackingDetails,
+    IncrementDetails,
+    RpcService,
+    ServiceDetails,
+    ServiceStatus,
+};
 use crate::validator::ValidatorService;
 
 /// Task management structure that supervises named component tasks.
@@ -86,44 +94,24 @@ impl Tasks {
     /// Spawn prover status tasks for all configured provers.
     ///
     /// Each prover is monitored by a [`ProverStatusService`] that polls on the status cadence.
-    /// The first time it observes the prover reporting `ProofType::Transaction`, the status
-    /// service spawns a detached probe task that runs proof-test probes on the test cadence.
-    pub async fn spawn_prover_tasks(
-        &mut self,
-        config: &MonitorConfig,
-    ) -> Vec<watch::Receiver<ServiceStatus>> {
-        // Build the proof-test payload once and share it across all provers. If it can't be built
-        // (e.g. RPC unreachable at startup), prover status is still monitored without proof
-        // probing.
-        let payload = match generate_prover_test_payload(&config.rpc_url).await {
-            Ok(payload) => Some(payload),
-            Err(e) => {
-                warn!(
-                    target: COMPONENT,
-                    error = %e,
-                    "failed to build remote-prover probe payload"
-                );
-                None
-            },
-        };
-
+    /// Once it observes the prover reporting `ProofType::Transaction`, the status service spawns
+    /// (and keeps alive) a probe task that acquires its test payload from the RPC and runs
+    /// proof-test probes on the test cadence.
+    pub fn spawn_prover_tasks(&mut self, config: &MonitorConfig) -> Vec<Receiver<ServiceStatus>> {
         let mut prover_rxs = Vec::new();
         for (i, prover_url) in config.remote_prover_urls.iter().enumerate() {
             let name = format!("Remote Prover ({})", i + 1);
-            let (probe_tx, probe_rx) = watch::channel(ProbeSnapshot::default());
             let test_client =
                 build_tls_client::<RemoteProverClient>(prover_url.clone(), config.request_timeout);
 
             let status_svc = ProverStatusService::new(
                 name,
                 prover_url.clone(),
+                config.rpc_url.clone(),
                 config.status_check_interval,
                 config.request_timeout,
                 config.remote_prover_test_interval,
-                probe_tx,
-                probe_rx,
                 test_client,
-                payload.clone(),
             );
             prover_rxs.push(self.spawn_service(status_svc));
         }
@@ -140,44 +128,28 @@ impl Tasks {
 
     /// Spawn the network transaction service checker task.
     ///
-    /// Creates a fresh wallet/counter pair in memory, deploys the counter to the network, and
-    /// hands the same counter account to both services via a [`watch::channel`]. The increment
-    /// service publishes new counters on the channel when it regenerates accounts after
-    /// persistent failures; the tracking service observes the channel to switch over.
-    pub async fn spawn_ntx_service(
+    /// Returns the two status receivers immediately, seeded with an unknown "deploying monitor
+    /// accounts" status, and bootstraps the services in a supervised background task so that a
+    /// slow or unreachable RPC neither delays the dashboard nor aborts the monitor (see
+    /// [`run_ntx`]).
+    pub fn spawn_ntx_service(
         &mut self,
         config: &MonitorConfig,
-    ) -> Result<(Receiver<ServiceStatus>, Receiver<ServiceStatus>)> {
-        let (wallet_account, secret_key, counter_account) =
-            create_and_deploy_accounts(&config.rpc_url).await?;
+    ) -> (Receiver<ServiceStatus>, Receiver<ServiceStatus>) {
+        let (increment_tx, increment_rx) = watch::channel(ntx_seed_status(
+            IncrementService::NAME,
+            ServiceDetails::NtxIncrement(IncrementDetails::default()),
+        ));
+        let (tracking_tx, tracking_rx) = watch::channel(ntx_seed_status(
+            CounterTrackingService::NAME,
+            ServiceDetails::NtxTracking(CounterTrackingDetails::default()),
+        ));
 
-        let (counter_tx, counter_rx) = watch::channel(counter_account.clone());
+        let config = config.clone();
+        self.handles.spawn_infallible("ntx", run_ntx(config, increment_tx, tracking_tx));
+        debug!(target: COMPONENT, service = "ntx", "spawned service");
 
-        let expected_counter_value = Arc::new(AtomicU64::new(0));
-        let latency_state = Arc::new(Mutex::new(LatencyState::default()));
-
-        let increment_svc = IncrementService::new(
-            config.clone(),
-            wallet_account,
-            secret_key,
-            counter_account,
-            counter_tx,
-            Arc::clone(&expected_counter_value),
-            latency_state.clone(),
-        )
-        .await?;
-        let tracking_svc = CounterTrackingService::new(
-            config.clone(),
-            counter_rx,
-            Arc::clone(&expected_counter_value),
-            latency_state,
-        )
-        .await?;
-
-        let increment_rx = self.spawn_service(increment_svc);
-        let tracking_rx = self.spawn_service(tracking_svc);
-
-        Ok((increment_rx, tracking_rx))
+        (increment_rx, tracking_rx)
     }
 
     /// Spawns a [`Service`] and returns its `ServiceStatus` receiver.
@@ -207,4 +179,104 @@ impl Tasks {
     pub async fn handle_failure(mut self) -> Result<()> {
         self.handles.join_next_as_error().await
     }
+}
+
+// NTX BOOTSTRAP
+// ================================================================================================
+
+/// Seed status published on the NTX channels until the accounts are deployed.
+fn ntx_seed_status(name: &str, details: ServiceDetails) -> ServiceStatus {
+    let mut status = ServiceStatus::unknown(name, details);
+    status.error = Some("deploying monitor accounts".to_string());
+    status
+}
+
+/// Bootstraps the network transaction services and runs them.
+///
+/// Deployment is retried forever with exponential backoff, publishing an unhealthy status on both
+/// channels after each failed attempt, so a network that is down at startup degrades the cards
+/// instead of aborting the monitor. Once bootstrapped, both services run on separate tasks; if
+/// either exits or panics, this supervised task ends and [`Tasks::handle_failure`] treats it as
+/// fatal, the same semantics they had when spawned directly.
+async fn run_ntx(
+    config: MonitorConfig,
+    increment_tx: watch::Sender<ServiceStatus>,
+    tracking_tx: watch::Sender<ServiceStatus>,
+) {
+    let backoff = ExponentialBuilder::default()
+        .with_min_delay(Duration::from_secs(1))
+        .with_max_delay(Duration::from_secs(30))
+        .with_factor(2.0)
+        .with_jitter()
+        .without_max_times();
+
+    let (increment_svc, tracking_svc) = (|| async { bootstrap_ntx(&config).await })
+        .retry(backoff)
+        .notify(|err: &anyhow::Error, sleep: Duration| {
+            warn!(
+                target: COMPONENT,
+                err = ?err,
+                sleep_ms = sleep.as_millis() as u64,
+                "NTX bootstrap failed; retrying after backoff",
+            );
+            let msg = format!("deploying monitor accounts failed: {err:#}");
+            increment_tx.send_replace(ServiceStatus::unhealthy(
+                IncrementService::NAME,
+                &msg,
+                ServiceDetails::NtxIncrement(IncrementDetails::default()),
+            ));
+            tracking_tx.send_replace(ServiceStatus::unhealthy(
+                CounterTrackingService::NAME,
+                &msg,
+                ServiceDetails::NtxTracking(CounterTrackingDetails::default()),
+            ));
+        })
+        .await
+        .expect("unbounded retry only resolves on success");
+
+    // Run the services on their own tasks (a shared task would serialize the increment service's
+    // local proving with the tracking polls). The first one to finish ends this supervised task;
+    // the JoinSet aborts the other on drop.
+    let mut services = tokio::task::JoinSet::new();
+    services.spawn(increment_svc.run(increment_tx));
+    services.spawn(tracking_svc.run(tracking_tx));
+    services.join_next().await;
+}
+
+/// One bootstrap attempt: create and deploy fresh accounts, then build both services.
+///
+/// Creates a fresh wallet/counter pair in memory, deploys the counter to the network, and hands
+/// the same counter account to both services via a [`watch::channel`]. The increment service
+/// publishes new counters on the channel when it regenerates accounts after persistent failures;
+/// the tracking service observes the channel to switch over.
+async fn bootstrap_ntx(
+    config: &MonitorConfig,
+) -> Result<(IncrementService, CounterTrackingService)> {
+    let (wallet_account, secret_key, counter_account) =
+        create_and_deploy_accounts(&config.rpc_url).await?;
+
+    let (counter_tx, counter_rx) = watch::channel(counter_account.clone());
+
+    let expected_counter_value = Arc::new(AtomicU64::new(0));
+    let latency_state = Arc::new(Mutex::new(LatencyState::default()));
+
+    let increment_svc = IncrementService::new(
+        config.clone(),
+        wallet_account,
+        secret_key,
+        counter_account,
+        counter_tx,
+        Arc::clone(&expected_counter_value),
+        latency_state.clone(),
+    )
+    .await?;
+    let tracking_svc = CounterTrackingService::new(
+        config.clone(),
+        counter_rx,
+        Arc::clone(&expected_counter_value),
+        latency_state,
+    )
+    .await?;
+
+    Ok((increment_svc, tracking_svc))
 }

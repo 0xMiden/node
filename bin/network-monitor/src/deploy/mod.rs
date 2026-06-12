@@ -50,9 +50,10 @@ pub mod wallet;
 ///
 /// At startup the monitor may come up before the node's RPC endpoint is accepting connections, so
 /// the eager `connect()` (and the follow-up `get_block_header_by_number` request) is retried with
-/// exponential backoff instead of aborting the binary on the first refused connection. The schedule
-/// is bounded so a genuinely unreachable or misconfigured endpoint still surfaces as a fatal error
-/// rather than hanging forever.
+/// exponential backoff instead of failing on the first refused connection. The schedule is bounded
+/// so a single handshake attempt returns within a few minutes; callers that must survive a
+/// genuinely unreachable endpoint (e.g. the NTX bootstrap in `monitor::tasks`) wrap it in their
+/// own unbounded retry loop.
 const GENESIS_DISCOVERY_BACKOFF_INITIAL: Duration = Duration::from_secs(1);
 const GENESIS_DISCOVERY_BACKOFF_MAX: Duration = Duration::from_secs(30);
 const GENESIS_DISCOVERY_MAX_RETRIES: usize = 10;

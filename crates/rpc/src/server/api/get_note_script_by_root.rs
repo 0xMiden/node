@@ -1,5 +1,6 @@
 use miden_node_proto::decode::read_root;
 use miden_node_proto::generated as proto;
+use miden_protocol::note::NoteScript;
 use tonic::Status;
 use tracing::debug;
 
@@ -8,14 +9,14 @@ use super::{COMPONENT, RpcService, database_error_to_status};
 #[tonic::async_trait]
 impl proto::server::rpc_api::GetNoteScriptByRoot for RpcService {
     type Input = proto::note::NoteScriptRoot;
-    type Output = proto::rpc::MaybeNoteScript;
+    type Output = Option<NoteScript>;
 
     fn decode(request: proto::note::NoteScriptRoot) -> tonic::Result<Self::Input> {
         Ok(request)
     }
 
     fn encode(output: Self::Output) -> tonic::Result<proto::rpc::MaybeNoteScript> {
-        Ok(output)
+        Ok(proto::rpc::MaybeNoteScript { script: output.map(Into::into) })
     }
 
     async fn handle(&self, request: Self::Input) -> tonic::Result<Self::Output> {
@@ -28,6 +29,6 @@ impl proto::server::rpc_api::GetNoteScriptByRoot for RpcService {
             .await
             .map_err(|err| database_error_to_status(&err))?;
 
-        Ok(proto::rpc::MaybeNoteScript { script: script.map(Into::into) })
+        Ok(script)
     }
 }

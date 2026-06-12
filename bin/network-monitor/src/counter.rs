@@ -149,6 +149,10 @@ pub struct IncrementService {
 }
 
 impl IncrementService {
+    /// Display name of the service, shared with the bootstrap seeding code in
+    /// [`crate::monitor::tasks`].
+    pub const NAME: &'static str = "Local Transactions";
+
     pub async fn new(
         config: MonitorConfig,
         wallet_account: Account,
@@ -342,7 +346,7 @@ impl IncrementService {
 
 impl Service for IncrementService {
     fn name(&self) -> &'static str {
-        "Local Transactions"
+        Self::NAME
     }
 
     fn interval(&self) -> Duration {
@@ -425,6 +429,10 @@ pub struct CounterTrackingService {
 }
 
 impl CounterTrackingService {
+    /// Display name of the service, shared with the bootstrap seeding code in
+    /// [`crate::monitor::tasks`].
+    pub const NAME: &'static str = "Network Transactions";
+
     pub async fn new(
         config: MonitorConfig,
         counter_receiver: watch::Receiver<Account>,
@@ -564,7 +572,7 @@ impl CounterTrackingService {
 
 impl Service for CounterTrackingService {
     fn name(&self) -> &'static str {
-        "Network Transactions"
+        Self::NAME
     }
 
     fn interval(&self) -> Duration {
@@ -671,15 +679,15 @@ fn build_increment_status(details: &IncrementDetails, last_error: Option<String>
     let service_details = ServiceDetails::NtxIncrement(details.clone());
 
     if let Some(err) = last_error {
-        ServiceStatus::unhealthy("Local Transactions", err, service_details)
+        ServiceStatus::unhealthy(IncrementService::NAME, err, service_details)
     } else if details.success_count == 0 && details.failure_count > 0 {
         ServiceStatus::unhealthy(
-            "Local Transactions",
+            IncrementService::NAME,
             format!("no successful increments ({} failures)", details.failure_count),
             service_details,
         )
     } else {
-        ServiceStatus::healthy("Local Transactions", service_details)
+        ServiceStatus::healthy(IncrementService::NAME, service_details)
     }
 }
 
@@ -701,7 +709,7 @@ fn build_tracking_status(
     let service_details = ServiceDetails::NtxTracking(details.clone());
 
     if let Some(err) = last_error {
-        return ServiceStatus::unhealthy("Network Transactions", err, service_details);
+        return ServiceStatus::unhealthy(CounterTrackingService::NAME, err, service_details);
     }
 
     if over_threshold_streak >= PENDING_UNHEALTHY_CONFIRMATION_POLLS {
@@ -710,13 +718,13 @@ fn build_tracking_status(
             "counter trailing expected by {pending} (> {threshold}) for {over_threshold_streak} \
              consecutive polls",
         );
-        return ServiceStatus::unhealthy("Network Transactions", err, service_details);
+        return ServiceStatus::unhealthy(CounterTrackingService::NAME, err, service_details);
     }
 
     if details.current_value.is_some() {
-        ServiceStatus::healthy("Network Transactions", service_details)
+        ServiceStatus::healthy(CounterTrackingService::NAME, service_details)
     } else {
-        ServiceStatus::unknown("Network Transactions", service_details)
+        ServiceStatus::unknown(CounterTrackingService::NAME, service_details)
     }
 }
 

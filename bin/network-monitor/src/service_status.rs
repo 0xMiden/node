@@ -9,7 +9,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use miden_node_proto::generated as proto;
 use miden_node_proto::generated::rpc::{BlockProducerStatus, RpcStatus};
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
+use crate::COMPONENT;
 use crate::faucet::FaucetTestDetails;
 use crate::remote_prover::{ProofType, ProverTestDetails};
 
@@ -254,8 +256,8 @@ pub struct BlockProducerStatusDetails {
     pub status: Status,
     /// The block producer's current view of the chain tip height.
     pub chain_tip: u32,
-    /// Mempool statistics for this block producer.
-    pub mempool: MempoolStatusDetails,
+    /// Mempool statistics for this block producer; `None` when the node did not report them.
+    pub mempool: Option<MempoolStatusDetails>,
 }
 
 /// Details about the block producer's mempool.
@@ -306,28 +308,39 @@ pub struct NetworkStatus {
 
 impl From<BlockProducerStatus> for BlockProducerStatusDetails {
     fn from(value: BlockProducerStatus) -> Self {
-        // We assume all supported nodes expose mempool statistics.
-        let mempool_stats = value
-            .mempool_stats
-            .expect("block producer status must include mempool statistics");
+        // Mempool statistics are a message field, hence optional on the wire; a node version that
+        // omits them must not bring the checker down.
+        let mempool = value.mempool_stats.map(|stats| MempoolStatusDetails {
+            unbatched_transactions: stats.unbatched_transactions,
+            proposed_batches: stats.proposed_batches,
+            proven_batches: stats.proven_batches,
+        });
 
         Self {
             version: value.version,
             status: value.status.into(),
             chain_tip: value.chain_tip,
-            mempool: MempoolStatusDetails {
-                unbatched_transactions: mempool_stats.unbatched_transactions,
-                proposed_batches: mempool_stats.proposed_batches,
-                proven_batches: mempool_stats.proven_batches,
-            },
+            mempool,
         }
     }
 }
 
 impl From<proto::remote_prover::ProxyWorkerStatus> for WorkerStatusDetails {
     fn from(value: proto::remote_prover::ProxyWorkerStatus) -> Self {
-        let status =
-            proto::remote_prover::WorkerHealthStatus::try_from(value.status).unwrap().into();
+        // An out-of-range discriminant (e.g. from a newer prover version) degrades to Unknown
+        // instead of panicking the checker task.
+        let status = proto::remote_prover::WorkerHealthStatus::try_from(value.status).map_or_else(
+            |_| {
+                warn!(
+                    target: COMPONENT,
+                    raw = value.status,
+                    worker = %value.name,
+                    "unknown worker health status discriminant"
+                );
+                Status::Unknown
+            },
+            Status::from,
+        );
 
         Self {
             name: value.name,
@@ -339,9 +352,20 @@ impl From<proto::remote_prover::ProxyWorkerStatus> for WorkerStatusDetails {
 
 impl RemoteProverStatusDetails {
     pub fn from_proxy_status(status: proto::remote_prover::ProxyStatus, url: String) -> Self {
+        // An out-of-range discriminant (e.g. from a newer prover version) degrades to Unknown
+        // instead of panicking the checker task.
         let proof_type = proto::remote_prover::ProofType::try_from(status.supported_proof_type)
-            .unwrap()
-            .into();
+            .map_or_else(
+                |_| {
+                    warn!(
+                        target: COMPONENT,
+                        raw = status.supported_proof_type,
+                        "unknown supported proof type discriminant"
+                    );
+                    ProofType::Unknown
+                },
+                ProofType::from,
+            );
 
         let workers: Vec<WorkerStatusDetails> =
             status.workers.into_iter().map(WorkerStatusDetails::from).collect();
@@ -380,4 +404,55 @@ pub fn current_unix_timestamp_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_else(|_| Duration::from_secs(0))
         .as_secs()
+}
+
+// TESTS
+// ================================================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn block_producer_status_without_mempool_stats_does_not_panic() {
+        let proto_status = BlockProducerStatus {
+            version: "1.0.0".to_string(),
+            status: "HEALTHY".to_string(),
+            chain_tip: 7,
+            mempool_stats: None,
+        };
+        let details = BlockProducerStatusDetails::from(proto_status);
+        assert!(details.mempool.is_none());
+        assert_eq!(details.status, Status::Healthy);
+        assert_eq!(details.chain_tip, 7);
+    }
+
+    #[test]
+    fn worker_status_with_unknown_discriminant_degrades_to_unknown() {
+        let proto_status = proto::remote_prover::ProxyWorkerStatus {
+            name: "worker-1".to_string(),
+            version: "1.0".to_string(),
+            status: 99,
+        };
+        let details = WorkerStatusDetails::from(proto_status);
+        assert_eq!(details.status, Status::Unknown);
+        assert_eq!(details.name, "worker-1");
+    }
+
+    #[test]
+    fn proxy_status_with_unknown_proof_type_degrades_to_unknown() {
+        let proto_status = proto::remote_prover::ProxyStatus {
+            version: "1.0".to_string(),
+            supported_proof_type: 99,
+            workers: vec![proto::remote_prover::ProxyWorkerStatus {
+                name: "worker-1".to_string(),
+                version: "1.0".to_string(),
+                status: proto::remote_prover::WorkerHealthStatus::Healthy.into(),
+            }],
+        };
+        let details = RemoteProverStatusDetails::from_proxy_status(proto_status, "url".to_string());
+        assert!(matches!(details.supported_proof_type, ProofType::Unknown));
+        assert_eq!(details.workers.len(), 1);
+        assert_eq!(details.workers[0].status, Status::Healthy);
+    }
 }
