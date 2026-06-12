@@ -199,8 +199,7 @@ async fn run_stream<S: SubscriptionSource>(
         let mut tip = *tip_rx.borrow_and_update();
 
         let current_gap = tip.saturating_sub(next.as_u32()).as_u32();
-        (previous_gap, running_gap) =
-            check_growing_gap(current_gap, previous_gap, running_gap)?;
+        (previous_gap, running_gap) = check_growing_gap(current_gap, previous_gap, running_gap)?;
 
         while next <= tip {
             let data = source.fetch(next).await?;
@@ -254,8 +253,7 @@ mod tests {
         let mut previous_gap = gaps.first().copied().unwrap_or(u32::MAX);
         let mut growth_run = 0u32;
         for &gap in gaps {
-            (previous_gap, growth_run) =
-                check_growing_gap(gap, previous_gap, growth_run)?;
+            (previous_gap, growth_run) = check_growing_gap(gap, previous_gap, growth_run)?;
         }
         Ok(())
     }
