@@ -151,6 +151,8 @@ pub enum StateInitializationError {
     PublicAccountMissingDetails(AccountId),
     #[error("failed to convert account to delta: {0}")]
     AccountToDeltaConversionFailed(String),
+    #[error("genesis block missing. The database should be bootstrapped first.")]
+    GenesisBlockMissing,
 }
 
 // ENDPOINT ERRORS

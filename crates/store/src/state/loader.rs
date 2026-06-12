@@ -480,7 +480,7 @@ fn verify_chain_mmr_consistency(
     latest_header: Option<&BlockHeader>,
 ) -> Result<(), StateInitializationError> {
     let Some(latest_header) = latest_header else {
-        return Ok(());
+        return Err(StateInitializationError::GenesisBlockMissing);
     };
 
     let block_num = latest_header.block_num();
