@@ -32,7 +32,6 @@ pub(in crate::view) fn render_rpc_status(details: &RpcStatusDetails) -> Markup {
                 }
             }
             @if let Some(block_producer) = &details.block_producer_status {
-                @let mempool = &block_producer.mempool;
                 div class="nested-status" {
                     div class="detail-item" { strong { "Block Producer" } }
                     (metric_row("Version:", &block_producer.version))
@@ -40,9 +39,15 @@ pub(in crate::view) fn render_rpc_status(details: &RpcStatusDetails) -> Markup {
                     (metric_row("Chain Tip:", &block_producer.chain_tip.to_string()))
                     div class="nested-status mempool-stats" {
                         strong { "Mempool stats:" }
-                        (metric_row("Unbatched TXs:", &mempool.unbatched_transactions.to_string()))
-                        (metric_row("Proposed Batches:", &mempool.proposed_batches.to_string()))
-                        (metric_row("Proven Batches:", &mempool.proven_batches.to_string()))
+                        @if let Some(mempool) = &block_producer.mempool {
+                            (metric_row("Unbatched TXs:", &mempool.unbatched_transactions.to_string()))
+                            (metric_row("Proposed Batches:", &mempool.proposed_batches.to_string()))
+                            (metric_row("Proven Batches:", &mempool.proven_batches.to_string()))
+                        } @else {
+                            (metric_row("Unbatched TXs:", "-"))
+                            (metric_row("Proposed Batches:", "-"))
+                            (metric_row("Proven Batches:", "-"))
+                        }
                     }
                 }
             }

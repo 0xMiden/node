@@ -139,6 +139,7 @@ impl TryFrom<proto::account::AccountStorageHeader> for AccountStorageHeader {
 // ================================================================================================
 
 /// Represents a request for an account proof.
+#[derive(Debug)]
 pub struct AccountRequest {
     pub account_id: AccountId,
     // If not present, the latest account proof references the latest available

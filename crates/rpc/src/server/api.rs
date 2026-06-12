@@ -314,6 +314,9 @@ fn state_subscription_error_to_status(err: StateSubscriptionError) -> Status {
             "failed to load proof for block {block_num}: {}",
             source.as_report()
         )),
+        StateSubscriptionError::TooSlow => {
+            Status::resource_exhausted("subscriber is too slow to keep up with the chain")
+        },
     }
 }
 
