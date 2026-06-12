@@ -130,10 +130,7 @@ impl SubscriptionSource for BlockSource {
         block: Vec<u8>,
         committed_chain_tip: BlockNumber,
     ) -> BlockSubscriptionEvent {
-        BlockSubscriptionEvent {
-            block,
-            committed_chain_tip,
-        }
+        BlockSubscriptionEvent { block, committed_chain_tip }
     }
 }
 
@@ -162,11 +159,7 @@ impl SubscriptionSource for ProofSource {
         proof: Vec<u8>,
         proven_chain_tip: BlockNumber,
     ) -> ProofSubscriptionEvent {
-        ProofSubscriptionEvent {
-            block_num,
-            proof,
-            proven_chain_tip,
-        }
+        ProofSubscriptionEvent { block_num, proof, proven_chain_tip }
     }
 }
 
@@ -206,11 +199,8 @@ async fn run_stream<S: SubscriptionSource>(
         let mut tip = *tip_rx.borrow_and_update();
 
         let current_gap = tip.saturating_sub(next.as_u32()).as_u32();
-        (previous_gap, running_gap) = check_growing_gap(
-            current_gap,
-            previous_gap.unwrap_or(current_gap),
-            running_gap,
-        )?;
+        (previous_gap, running_gap) =
+            check_growing_gap(current_gap, previous_gap.unwrap_or(current_gap), running_gap)?;
 
         while next <= tip {
             let data = source.fetch(next).await?;
@@ -301,10 +291,7 @@ mod tests {
     #[test]
     fn exceeding_max_growth_run_returns_too_slow() {
         // One block past the limit triggers TooSlow, even in a single jump.
-        assert!(matches!(
-            run(&[0, MAX_RUNNING_GAP + 1]),
-            Err(StateSubscriptionError::TooSlow)
-        ));
+        assert!(matches!(run(&[0, MAX_RUNNING_GAP + 1]), Err(StateSubscriptionError::TooSlow)));
     }
 
     #[test]
@@ -327,9 +314,7 @@ mod tests {
     fn token_improvement_does_not_prevent_disconnection() {
         // A client that grows by a large amount then shrinks by just one block on each cycle
         // accumulates net growth and is eventually disconnected.
-        let gaps: Vec<u32> = (0u32..MAX_RUNNING_GAP + 10)
-            .flat_map(|i| [50 + i, 49 + i])
-            .collect();
+        let gaps: Vec<u32> = (0u32..MAX_RUNNING_GAP + 10).flat_map(|i| [50 + i, 49 + i]).collect();
         assert!(matches!(run(&gaps), Err(StateSubscriptionError::TooSlow)));
     }
 }
