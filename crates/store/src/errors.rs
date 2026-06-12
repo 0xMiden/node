@@ -121,6 +121,21 @@ pub enum StateInitializationError {
         tree_root: Word,
         block_root: Word,
     },
+    #[error("loaded chain MMR cannot produce peaks for block {block_num}")]
+    ChainMmrLoadError {
+        block_num: BlockNumber,
+        #[source]
+        source: MmrError,
+    },
+    #[error(
+        "chain MMR commitment ({chain_mmr_commitment:?}) does not match expected chain commitment \
+         from block {block_num} ({block_header_commitment:?})"
+    )]
+    ChainMmrStorageDiverged {
+        block_num: BlockNumber,
+        chain_mmr_commitment: Word,
+        block_header_commitment: Word,
+    },
     #[error(
         "account state forest root ({forest_root}) does not match SQLite root \
          ({database_root}) for account {account_id}, slot {slot_name:?}. Delete the account \
