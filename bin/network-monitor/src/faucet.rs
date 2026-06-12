@@ -3,10 +3,11 @@
 //! This module contains the logic for periodically testing faucet functionality
 //! by requesting proof-of-work challenges, solving them, and submitting token requests.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use hex;
+use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -88,6 +89,8 @@ pub struct FaucetService {
     url: Url,
     client: Client,
     interval: Duration,
+    /// Wall-clock cap on solving a single `PoW` challenge.
+    solve_timeout: Duration,
     /// A valid public account ID used as the recipient for faucet token requests. Generated once at
     /// construction from a throwaway wallet account; the minted tokens are never spent.
     account_id: String,
@@ -109,6 +112,7 @@ impl FaucetService {
             url,
             client,
             interval,
+            solve_timeout: request_timeout,
             account_id: wallet_account.id().to_string(),
             success_count: 0,
             failure_count: 0,
@@ -145,7 +149,9 @@ impl Service for FaucetService {
         let start_time = std::time::Instant::now();
         let mut last_error: Option<String> = None;
 
-        match perform_faucet_test(&self.client, &self.url, &self.account_id).await {
+        match perform_faucet_test(&self.client, &self.url, &self.account_id, self.solve_timeout)
+            .await
+        {
             Ok((minted_tokens, metadata)) => {
                 self.success_count += 1;
                 self.last_tx_id = Some(minted_tokens.tx_id.clone());
@@ -198,6 +204,7 @@ async fn perform_faucet_test(
     client: &Client,
     faucet_url: &Url,
     account_id: &str,
+    solve_timeout: Duration,
 ) -> anyhow::Result<(GetTokensResponse, GetMetadataResponse)> {
     debug!("Using recipient account ID: {} (length: {})", account_id, account_id.len());
 
@@ -210,7 +217,7 @@ async fn perform_faucet_test(
 
     let response = client.get(pow_url).send().await?;
 
-    let response_text: String = response.text().await?;
+    let response_text = read_success_body(response).await.context("/pow request failed")?;
     debug!("Faucet PoW response: {}", response_text);
 
     let challenge_response: PowChallengeResponse =
@@ -222,9 +229,16 @@ async fn perform_faucet_test(
         &challenge_response.challenge[..16.min(challenge_response.challenge.len())]
     );
 
-    // Step 2: Solve the PoW challenge
-    let nonce = solve_pow_challenge(&challenge_response.challenge, challenge_response.target)
-        .context("Failed to solve PoW challenge")?;
+    // Step 2: Solve the PoW challenge off the async runtime; hashing is CPU-bound and would
+    // otherwise stall every other checker task scheduled on this worker thread.
+    let challenge = challenge_response.challenge.clone();
+    let target = challenge_response.target;
+    let nonce = spawn_blocking_in_current_span(move || {
+        solve_pow_challenge(&challenge, target, solve_timeout)
+    })
+    .await
+    .context("PoW solver task panicked")?
+    .context("Failed to solve PoW challenge")?;
 
     debug!("Solved PoW challenge with nonce: {}", nonce);
 
@@ -240,7 +254,7 @@ async fn perform_faucet_test(
 
     let response = client.get(tokens_url).send().await?;
 
-    let response_text: String = response.text().await?;
+    let response_text = read_success_body(response).await.context("/get_tokens request failed")?;
     debug!("Faucet /get_tokens response: {}", response_text);
 
     let tokens_response: GetTokensResponse =
@@ -251,13 +265,24 @@ async fn perform_faucet_test(
 
     let response = client.get(metadata_url).send().await?;
 
-    let response_text = response.text().await?;
+    let response_text =
+        read_success_body(response).await.context("/get_metadata request failed")?;
     debug!("Faucet /get_metadata response: {}", response_text);
 
     let metadata: GetMetadataResponse =
         parse_faucet_response(&response_text).context("unexpected response from /get_metadata")?;
 
     Ok((tokens_response, metadata))
+}
+
+/// Reads the response body, failing with the HTTP status code and body when the request was not
+/// successful, so server-side errors (e.g. 429 or 500) surface directly on the card instead of as a
+/// deserialization failure.
+async fn read_success_body(response: reqwest::Response) -> anyhow::Result<String> {
+    let status = response.status();
+    let body = response.text().await?;
+    anyhow::ensure!(status.is_success(), "HTTP {status}: {body}");
+    Ok(body)
 }
 
 /// Deserialize a faucet response using [`serde_path_to_error`] so that the failing JSON path (e.g.
@@ -274,15 +299,19 @@ where
 
 /// Solves a proof-of-work challenge using SHA-256 hashing.
 ///
+/// This is CPU-bound and must run on a blocking thread (see the `spawn_blocking` call site).
+///
 /// # Arguments
 ///
 /// * `challenge` - The challenge string in hexadecimal format.
 /// * `target` - The target value. A solution is valid if H(challenge, nonce) < target.
+/// * `timeout` - Wall-clock cap; checked every 100k attempts so a pathological difficulty cannot
+///   pin the blocking thread indefinitely.
 ///
 /// # Returns
 ///
-/// The nonce that solves the challenge, or an error if no solution is found within reasonable
-/// bounds.
+/// The nonce that solves the challenge, or an error if no solution is found within the attempt
+/// and time bounds.
 #[instrument(
     parent = None,
     target = COMPONENT,
@@ -292,8 +321,9 @@ where
     ret(level = "debug"),
     err
 )]
-fn solve_pow_challenge(challenge: &str, target: u64) -> anyhow::Result<u64> {
+fn solve_pow_challenge(challenge: &str, target: u64, timeout: Duration) -> anyhow::Result<u64> {
     let challenge_bytes = hex::decode(challenge).context("Failed to decode challenge from hex")?;
+    let started = Instant::now();
 
     // Try up to 100 million nonces.
     for nonce in 0..MAX_CHALLENGE_ATTEMPTS {
@@ -316,8 +346,15 @@ fn solve_pow_challenge(challenge: &str, target: u64) -> anyhow::Result<u64> {
             return Ok(nonce);
         }
 
-        // Log progress every 100k attempts
+        // Check the deadline and log progress every 100k attempts
         if nonce % 100_000 == 0 && nonce > 0 {
+            let elapsed = started.elapsed();
+            if elapsed >= timeout {
+                anyhow::bail!(
+                    "Failed to solve PoW challenge within {timeout:?} ({nonce} attempts, target \
+                     {target})"
+                );
+            }
             debug!(
                 "PoW attempt {}: current_hash={}, target={} (~{} bits)",
                 nonce,

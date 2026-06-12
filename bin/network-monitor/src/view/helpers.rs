@@ -90,6 +90,7 @@ pub(super) fn proof_type_label(proof_type: &ProofType) -> &'static str {
         ProofType::Transaction => "Transaction",
         ProofType::Block => "Block",
         ProofType::Batch => "Batch",
+        ProofType::Unknown => "Unknown",
     }
 }
 
