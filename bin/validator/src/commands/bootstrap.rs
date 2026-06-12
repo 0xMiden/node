@@ -2,14 +2,13 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
+use miden_node_store::BlockStore;
 use miden_node_store::genesis::config::{AccountFileWithName, GenesisConfig};
 use miden_node_utils::fs::ensure_empty_directory;
 use miden_protocol::utils::serde::Serializable;
-use miden_validator::ValidatorSigner;
+use miden_validator::{DataDirectory, ValidatorSigner};
 
 use super::ValidatorKey;
-
-const GENESIS_BLOCK_FILENAME: &str = "genesis.dat";
 
 // Bootstraps the validator component.
 pub async fn bootstrap(
@@ -34,15 +33,13 @@ pub async fn bootstrap(
     }
 
     let signer = validator_key.into_signer().await?;
-    build_and_write_genesis(
-        config,
-        signer,
-        accounts_directory,
-        genesis_block_directory,
-        data_directory,
-        sqlite_connection_pool_size,
+    let dirs = DataDirectory::load_bootstrap(
+        genesis_block_directory.to_path_buf(),
+        accounts_directory.to_path_buf(),
+        data_directory.to_path_buf(),
     )
-    .await
+    .context("failed to load bootstrap directories")?;
+    build_and_write_genesis(config, signer, dirs, sqlite_connection_pool_size).await
 }
 
 /// Builds the genesis state, writes account secret files, signs the genesis block, writes it to
@@ -50,16 +47,14 @@ pub async fn bootstrap(
 async fn build_and_write_genesis(
     config: GenesisConfig,
     signer: ValidatorSigner,
-    accounts_directory: &Path,
-    genesis_block_directory: &Path,
-    data_directory: &Path,
+    dirs: DataDirectory,
     sqlite_connection_pool_size: NonZeroUsize,
 ) -> anyhow::Result<()> {
     let (genesis_state, secrets) = config.into_state(signer.public_key())?;
 
     for item in secrets.as_account_files(&genesis_state) {
         let AccountFileWithName { account_file, name } = item?;
-        let account_path = accounts_directory.join(name);
+        let account_path = dirs.accounts_dir().expect("bootstrap directories").join(name);
         // Do not override existing keys.
         fs_err::OpenOptions::new()
             .create_new(true)
@@ -81,12 +76,14 @@ async fn build_and_write_genesis(
         .context("failed to build the genesis block")?;
 
     let block_bytes = genesis_block.inner().to_bytes();
-    let genesis_block_path = genesis_block_directory.join(GENESIS_BLOCK_FILENAME);
-    fs_err::write(&genesis_block_path, block_bytes).context("failed to write genesis block")?;
+    fs_err::write(dirs.genesis_block_path().expect("bootstrap directories"), block_bytes)
+        .context("failed to write genesis block")?;
+
+    let _ = BlockStore::bootstrap(dirs.block_store_dir(), &genesis_block)?;
 
     let (genesis_header, ..) = genesis_block.into_inner().into_parts();
     let db = miden_validator::db::setup_with_pool_size(
-        data_directory.join("validator.sqlite3"),
+        dirs.database_path(),
         sqlite_connection_pool_size,
     )
     .await
