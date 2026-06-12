@@ -130,7 +130,10 @@ impl SubscriptionSource for BlockSource {
         block: Vec<u8>,
         committed_chain_tip: BlockNumber,
     ) -> BlockSubscriptionEvent {
-        BlockSubscriptionEvent { block, committed_chain_tip }
+        BlockSubscriptionEvent {
+            block,
+            committed_chain_tip,
+        }
     }
 }
 
@@ -159,7 +162,11 @@ impl SubscriptionSource for ProofSource {
         proof: Vec<u8>,
         proven_chain_tip: BlockNumber,
     ) -> ProofSubscriptionEvent {
-        ProofSubscriptionEvent { block_num, proof, proven_chain_tip }
+        ProofSubscriptionEvent {
+            block_num,
+            proof,
+            proven_chain_tip,
+        }
     }
 }
 
@@ -193,13 +200,17 @@ async fn run_stream<S: SubscriptionSource>(
     source: S,
 ) -> Result<(), StateSubscriptionError> {
     let mut next = from;
-    let mut previous_gap = 0u32;
+    let mut previous_gap: Option<u32> = None;
     let mut running_gap = 0u32;
     loop {
         let mut tip = *tip_rx.borrow_and_update();
 
         let current_gap = tip.saturating_sub(next.as_u32()).as_u32();
-        (previous_gap, running_gap) = check_growing_gap(current_gap, previous_gap, running_gap)?;
+        (previous_gap, running_gap) = check_growing_gap(
+            current_gap,
+            previous_gap.unwrap_or(current_gap),
+            running_gap,
+        )?;
 
         while next <= tip {
             let data = source.fetch(next).await?;
@@ -230,7 +241,7 @@ fn check_growing_gap(
     current_gap: u32,
     previous_gap: u32,
     running_gap: u32,
-) -> Result<(u32, u32), StateSubscriptionError> {
+) -> Result<(Option<u32>, u32), StateSubscriptionError> {
     let running_gap = if current_gap > previous_gap {
         running_gap + (current_gap - previous_gap)
     } else {
@@ -239,7 +250,7 @@ fn check_growing_gap(
     if running_gap > MAX_RUNNING_GAP {
         return Err(StateSubscriptionError::TooSlow);
     }
-    Ok((current_gap, running_gap))
+    Ok((Some(current_gap), running_gap))
 }
 
 // TESTS
@@ -250,10 +261,11 @@ mod tests {
     use super::*;
 
     fn run(gaps: &[u32]) -> Result<(), StateSubscriptionError> {
-        let mut previous_gap = 0u32;
+        let mut previous_gap: Option<u32> = None;
         let mut growth_run = 0u32;
         for &gap in gaps {
-            (previous_gap, growth_run) = check_growing_gap(gap, previous_gap, growth_run)?;
+            (previous_gap, growth_run) =
+                check_growing_gap(gap, previous_gap.unwrap_or(gap), growth_run)?;
         }
         Ok(())
     }
@@ -276,15 +288,23 @@ mod tests {
     }
 
     #[test]
+    fn starting_above_max_growth_is_ok() {
+        assert!(run(&[MAX_RUNNING_GAP * 2]).is_ok());
+    }
+
+    #[test]
     fn exactly_max_growth_run_is_ok() {
         // A single jump of exactly MAX_RUNNING_GAP is the boundary — still ok.
-        assert!(run(&[MAX_RUNNING_GAP]).is_ok());
+        assert!(run(&[0, MAX_RUNNING_GAP]).is_ok());
     }
 
     #[test]
     fn exceeding_max_growth_run_returns_too_slow() {
         // One block past the limit triggers TooSlow, even in a single jump.
-        assert!(matches!(run(&[MAX_RUNNING_GAP + 1]), Err(StateSubscriptionError::TooSlow)));
+        assert!(matches!(
+            run(&[0, MAX_RUNNING_GAP + 1]),
+            Err(StateSubscriptionError::TooSlow)
+        ));
     }
 
     #[test]
@@ -297,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn recovery_reduces_and_allows_fresh_accumula30tion() {
+    fn recovery_reduces_and_allows_fresh_accumulation() {
         // Grow close to the limit, recover most of the way, then grow again — still ok.
         let near_limit = MAX_RUNNING_GAP - 1;
         assert!(run(&[near_limit, 1, near_limit]).is_ok());
@@ -307,7 +327,9 @@ mod tests {
     fn token_improvement_does_not_prevent_disconnection() {
         // A client that grows by a large amount then shrinks by just one block on each cycle
         // accumulates net growth and is eventually disconnected.
-        let gaps: Vec<u32> = (0u32..60).flat_map(|i| [50 + i, 49 + i]).collect();
+        let gaps: Vec<u32> = (0u32..MAX_RUNNING_GAP + 10)
+            .flat_map(|i| [50 + i, 49 + i])
+            .collect();
         assert!(matches!(run(&gaps), Err(StateSubscriptionError::TooSlow)));
     }
 }
