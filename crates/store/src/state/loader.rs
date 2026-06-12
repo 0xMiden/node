@@ -140,7 +140,7 @@ pub trait TreeStorageLoader: SmtStorage + Sized {
 /// For `ForestInMemoryBackend`, the forest is rebuilt from database entries on each startup. For
 /// `ForestPersistentBackend`, the forest is loaded directly from disk if data exists, otherwise it
 /// is rebuilt from the database and persisted.
-pub trait AccountForestLoader: Backend + Sized {
+pub(crate) trait AccountForestLoader: Backend + Sized {
     /// A configuration type for the implementation.
     type Config: std::fmt::Debug + std::default::Default;
 
