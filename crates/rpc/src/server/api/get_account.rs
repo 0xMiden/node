@@ -1,4 +1,9 @@
-use miden_node_proto::domain::account::{AccountRequest, AccountStorageRequest, SlotData};
+use miden_node_proto::domain::account::{
+    AccountRequest,
+    AccountResponse,
+    AccountStorageRequest,
+    SlotData,
+};
 use miden_node_proto::generated as proto;
 use miden_node_store::GetAccountError;
 use miden_node_utils::limiter::QueryParamStorageMapKeyTotalLimit;
@@ -10,21 +15,19 @@ use super::{COMPONENT, RpcService, check};
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::GetAccount for RpcService {
-    type Input = proto::rpc::AccountRequest;
-    type Output = proto::rpc::AccountResponse;
+    type Input = AccountRequest;
+    type Output = AccountResponse;
 
     fn decode(request: proto::rpc::AccountRequest) -> tonic::Result<Self::Input> {
-        Ok(request)
+        AccountRequest::try_from(request).map_err(Into::into)
     }
 
     fn encode(output: Self::Output) -> tonic::Result<proto::rpc::AccountResponse> {
-        Ok(output)
+        Ok(output.into())
     }
 
-    async fn handle(&self, raw_request: Self::Input) -> tonic::Result<Self::Output> {
-        debug!(target: COMPONENT, ?raw_request);
-
-        let request = AccountRequest::try_from(raw_request.clone())?;
+    async fn handle(&self, request: Self::Input) -> tonic::Result<Self::Output> {
+        debug!(target: COMPONENT, ?request);
 
         let span = Span::current();
         span.set_attribute("account.id", request.account_id);
@@ -50,7 +53,7 @@ impl proto::server::rpc_api::GetAccount for RpcService {
 
         let account_data =
             self.store.get_account(request).await.map_err(get_account_error_to_status)?;
-        Ok(account_data.into())
+        Ok(account_data)
     }
 }
 
