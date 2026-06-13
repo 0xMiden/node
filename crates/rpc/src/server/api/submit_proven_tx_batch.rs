@@ -10,7 +10,7 @@ use tonic::metadata::{Ascii, MetadataValue};
 use tonic::{Request, Status};
 use tracing::Span;
 
-use super::{RpcMode, RpcService};
+use super::{RpcMode, RpcService, reject_existing_non_network_account_becoming_network};
 
 pub struct SubmitProvenTxBatchInput {
     request: proto::transaction::TransactionBatch,
@@ -103,6 +103,10 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
         //
         // Skip this check if the client is authorized to send network transactions (ntx-builder).
         if !is_authorized_network_tx {
+            for tx in proposed_batch.transactions() {
+                reject_existing_non_network_account_becoming_network(tx)?;
+            }
+
             let non_deployment_ids = proposed_batch
                 .transactions()
                 .iter()

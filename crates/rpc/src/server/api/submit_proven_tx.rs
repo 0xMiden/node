@@ -15,7 +15,7 @@ use tonic::metadata::{Ascii, MetadataValue};
 use tonic::{Request, Status};
 use tracing::{Span, debug};
 
-use super::{COMPONENT, RpcMode, RpcService};
+use super::{COMPONENT, RpcMode, RpcService, reject_existing_non_network_account_becoming_network};
 
 pub struct SubmitProvenTxInput {
     request: proto::transaction::ProvenTransaction,
@@ -109,6 +109,8 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
         //
         // Skip this check if the client is authorized to send network transactions (ntx-builder).
         if !is_authorized_network_tx {
+            reject_existing_non_network_account_becoming_network(&tx)?;
+
             let candidate_id = (!tx.account_update().initial_state_commitment().is_empty()
                 && tx.account_id().is_public())
             .then(|| tx.account_id());

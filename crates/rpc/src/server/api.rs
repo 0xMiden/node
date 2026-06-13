@@ -25,8 +25,11 @@ use miden_node_utils::limiter::{
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::retry::{self, Retryable};
 use miden_protocol::Word;
+use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockHeader, BlockNumber};
+use miden_protocol::transaction::ProvenTransaction;
+use miden_standards::account::auth::NetworkAccountNoteAllowlist;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_stream::Stream;
 use tonic::metadata::MetadataMap;
@@ -324,6 +327,29 @@ fn invalid_block_range_to_status(RpcInvalidBlockRange(err): RpcInvalidBlockRange
     Status::invalid_argument(err.to_string())
 }
 
+fn reject_existing_non_network_account_becoming_network(
+    tx: &ProvenTransaction,
+) -> Result<(), Status> {
+    let is_existing_account = !tx.account_update().initial_state_commitment().is_empty();
+    if !is_existing_account || tx.account_id().is_network() {
+        return Ok(());
+    }
+
+    let AccountUpdateDetails::Delta(delta) = tx.account_update().details() else {
+        return Ok(());
+    };
+
+    if delta.storage().get(NetworkAccountNoteAllowlist::slot_name()).is_some() {
+        return Err(Status::invalid_argument(format!(
+            "Existing non-network account {} cannot add the network account allowlist storage slot {}",
+            tx.account_id(),
+            NetworkAccountNoteAllowlist::slot_name()
+        )));
+    }
+
+    Ok(())
+}
+
 // LIMIT HELPERS
 // ================================================================================================
 
@@ -375,11 +401,94 @@ static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
 #[cfg(test)]
 mod tests {
     use miden_node_proto::generated::server::rpc_api::GetLimits;
+    use miden_node_utils::fee::test_fee;
+    use miden_protocol::account::delta::AccountStorageDelta;
+    use miden_protocol::account::{
+        AccountDelta, AccountId, AccountIdVersion, AccountStorageMode, AccountType,
+        AccountVaultDelta, StorageMapKey,
+    };
+    use miden_protocol::transaction::{InputNoteCommitment, OutputNote, TxAccountUpdate};
+    use miden_protocol::vm::ExecutionProof;
+    use miden_protocol::{Felt, Word};
 
     use super::*;
+
+    fn proven_tx_with_delta(
+        account_id: AccountId,
+        initial_state_commitment: Word,
+        delta: AccountDelta,
+    ) -> ProvenTransaction {
+        let account_update = TxAccountUpdate::new(
+            account_id,
+            initial_state_commitment,
+            Word::from([2, 0, 0, 0u32]),
+            delta.to_commitment(),
+            AccountUpdateDetails::Delta(delta),
+        )
+        .expect("account update should be valid");
+
+        ProvenTransaction::new(
+            account_update,
+            Vec::<InputNoteCommitment>::new(),
+            Vec::<OutputNote>::new(),
+            0.into(),
+            Word::default(),
+            test_fee(),
+            u32::MAX.into(),
+            ExecutionProof::new_dummy(),
+        )
+        .expect("proven transaction should be valid")
+    }
+
+    fn account_id(storage_mode: AccountStorageMode) -> AccountId {
+        AccountId::dummy(
+            [0; 15],
+            AccountIdVersion::Version0,
+            AccountType::RegularAccountImmutableCode,
+            storage_mode,
+        )
+    }
+
+    fn delta_with_network_account_allowlist_slot(account_id: AccountId) -> AccountDelta {
+        let mut storage_delta = AccountStorageDelta::new();
+        storage_delta
+            .set_map_item(
+                NetworkAccountNoteAllowlist::slot_name().clone(),
+                StorageMapKey::empty(),
+                Word::from([1, 0, 0, 0u32]),
+            )
+            .expect("network account allowlist slot should accept map updates");
+
+        AccountDelta::new(account_id, storage_delta, AccountVaultDelta::default(), Felt::ONE)
+            .expect("account delta should be valid")
+    }
 
     #[test]
     fn get_limits_decodes_unit_request() {
         assert_eq!(RpcService::decode(()).unwrap(), ());
+    }
+
+    #[test]
+    fn rejects_existing_non_network_account_adding_network_allowlist_slot() {
+        let account_id = account_id(AccountStorageMode::Public);
+        let delta = delta_with_network_account_allowlist_slot(account_id);
+        let tx = proven_tx_with_delta(account_id, Word::from([1, 0, 0, 0u32]), delta);
+
+        let err = reject_existing_non_network_account_becoming_network(&tx).unwrap_err();
+
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(
+            err.message().contains("cannot add the network account allowlist storage slot"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn permits_existing_network_account_with_network_allowlist_slot() {
+        let account_id = account_id(AccountStorageMode::Network);
+        let delta = delta_with_network_account_allowlist_slot(account_id);
+        let tx = proven_tx_with_delta(account_id, Word::from([1, 0, 0, 0u32]), delta);
+
+        reject_existing_non_network_account_becoming_network(&tx).unwrap();
     }
 }
