@@ -11,6 +11,7 @@ use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
 use miden_protocol::account::{
     Account,
+    AccountDelta,
     AccountId,
     AccountStorageHeader,
     PartialAccount,
@@ -120,10 +121,18 @@ fn log_transient_retry<E: std::error::Error>(operation: &'static str, err: &E, s
 }
 
 /// The result of a successful transaction execution.
-///
-/// Contains the transaction ID, any notes that failed during filtering, and note scripts fetched
-/// from the remote RPC service that should be persisted to the local DB cache.
-pub type NtxExecutionResult = (TransactionId, Vec<FailedNote>, Vec<(Word, NoteScript)>);
+pub struct NtxExecutionResult {
+    /// ID of the submitted transaction.
+    pub tx_id: TransactionId,
+    /// The account delta the transaction produced, applied to the actor's in-memory account once
+    /// the transaction lands.
+    pub account_delta: AccountDelta,
+    /// Notes that failed during consumability filtering.
+    pub failed_notes: Vec<FailedNote>,
+    /// Note scripts fetched from the remote RPC service that should be persisted to the local DB
+    /// cache.
+    pub fetched_scripts: Vec<(Word, NoteScript)>,
+}
 
 // NETWORK TRANSACTION CONTEXT
 // ================================================================================================
@@ -230,9 +239,9 @@ impl NtxContext {
     ///
     /// # Returns
     ///
-    /// On success, returns an [`NtxExecutionResult`] containing the transaction ID, any notes
-    /// that failed during filtering, and note scripts fetched from the remote RPC service that
-    /// should be persisted to the local DB cache.
+    /// On success, returns an [`NtxExecutionResult`] containing the transaction ID, the account
+    /// delta the transaction produced, any notes that failed during filtering, and note scripts
+    /// fetched from the remote RPC service that should be persisted to the local DB cache.
     ///
     /// # Errors
     ///
@@ -297,6 +306,10 @@ impl NtxContext {
                     .await
                     .unwrap_or_else(|err| std::panic::resume_unwind(err.into_panic()))?;
 
+                // Capture the account delta before the executed tx is consumed; the actor applies
+                // it to its in-memory account once this transaction lands in a committed block.
+                let account_delta = executed_tx.account_delta().clone();
+
                 // Prove transaction.
                 let tx_inputs: TransactionInputs = executed_tx.into();
                 let proven_tx = Box::pin(self.prove(&tx_inputs)).await?;
@@ -304,7 +317,12 @@ impl NtxContext {
                 // Submit transaction through the RPC service.
                 self.submit(&proven_tx, &tx_inputs).await?;
 
-                Ok((proven_tx.id(), failed_notes, scripts_to_cache))
+                Ok(NtxExecutionResult {
+                    tx_id: proven_tx.id(),
+                    account_delta,
+                    failed_notes,
+                    fetched_scripts: scripts_to_cache,
+                })
             })
             .in_current_span()
             .await

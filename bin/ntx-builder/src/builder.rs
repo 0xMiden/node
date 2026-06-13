@@ -138,7 +138,8 @@ impl NetworkTransactionBuilder {
             }
         }
 
-        // Phase 2: spawn an actor for every account with carry-over pending notes.
+        // Phase 2: spawn an actor for every account with carry-over pending notes. Accounts whose
+        // creation has not been committed yet have their spawn deferred by the coordinator.
         let pending_accounts = loop_db
             .accounts_with_pending_notes(self.config.max_note_attempts)
             .await
@@ -148,7 +149,7 @@ impl NetworkTransactionBuilder {
             "spawning actors for accounts with carry-over pending notes",
         );
         for account_id in pending_accounts {
-            self.coordinator.spawn_actor(account_id);
+            self.coordinator.spawn_actor_when_committed(account_id).await?;
         }
 
         // Phase 3: drive actors per committed block, plus serialize their DB writes.
@@ -175,7 +176,7 @@ impl NetworkTransactionBuilder {
                     let effects = self
                         .apply_committed_block_with_effects(&loop_db, block, committed_tip)
                         .await?;
-                    self.coordinator.handle_committed_block(&effects);
+                    self.coordinator.handle_committed_block(&effects).await?;
                 },
                 SteadyStateAction::Request(request) => {
                     let Some(request) = request else {
