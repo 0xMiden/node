@@ -277,11 +277,6 @@ impl MonitorDataStore {
         self.accounts.insert(account.id(), account);
     }
 
-    /// Update an account after a transaction (loads latest code too).
-    pub fn update_account(&mut self, account: Account) {
-        self.add_account(account);
-    }
-
     /// Returns a reference to the account or a standardized "unknown account" error.
     fn get_account(&self, account_id: AccountId) -> Result<&Account, DataStoreError> {
         self.accounts.get(&account_id).ok_or_else(|| DataStoreError::Other {
