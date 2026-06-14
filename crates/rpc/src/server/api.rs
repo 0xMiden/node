@@ -33,6 +33,7 @@ use tonic::metadata::MetadataMap;
 use tonic::{IntoRequest, Request, Status};
 
 use crate::COMPONENT;
+use crate::server::api::subscription_ban::SubscriptionBan;
 use crate::server::{NetworkTxAuth, RpcMode};
 
 const NETWORK_TX_AUTH_HEADER_NAME: &str = "x-miden-network-tx-auth";
@@ -100,6 +101,7 @@ pub struct RpcService {
     block_commitment_cache: LruCache<BlockNumber, Word>,
     block_subscription_semaphore: Arc<Semaphore>,
     proof_subscription_semaphore: Arc<Semaphore>,
+    subscription_ban: Arc<SubscriptionBan>,
 }
 
 impl RpcService {
@@ -119,6 +121,7 @@ impl RpcService {
             block_commitment_cache: LruCache::new(commitment_cache_capacity),
             block_subscription_semaphore: Arc::new(Semaphore::new(MAX_REPLICA_SUBSCRIPTIONS)),
             proof_subscription_semaphore: Arc::new(Semaphore::new(MAX_REPLICA_SUBSCRIPTIONS)),
+            subscription_ban: Arc::new(SubscriptionBan::default()),
         }
     }
 
@@ -272,6 +275,7 @@ mod proof_subscription;
 mod status;
 mod submit_proven_tx;
 mod submit_proven_tx_batch;
+mod subscription_ban;
 mod sync_account_storage_maps;
 mod sync_account_vault;
 mod sync_chain_mmr;
@@ -318,6 +322,16 @@ fn state_subscription_error_to_status(err: StateSubscriptionError) -> Status {
             Status::resource_exhausted("subscriber is too slow to keep up with the chain")
         },
     }
+}
+
+/// Builds the status returned to a client that is temporarily banned from subscribing for having
+/// previously been disconnected as too slow.
+fn subscription_ban_status(remaining: Duration) -> Status {
+    Status::resource_exhausted(format!(
+        "temporarily banned from subscribing for being too slow; retry in {} seconds",
+        // Round up so the reported wait never undershoots the actual remaining ban.
+        remaining.as_secs() + 1,
+    ))
 }
 
 fn invalid_block_range_to_status(RpcInvalidBlockRange(err): RpcInvalidBlockRange) -> Status {
