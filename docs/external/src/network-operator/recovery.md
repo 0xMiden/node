@@ -51,14 +51,14 @@ must be imported or re-proven separately as part of recovery before the node res
 ## Data Loss
 
 There is always some risk of data loss during failover because full nodes follow the sequencer asynchronously. Recovery
-narrows this gap by replaying any committed blocks the validator signed but the promotion target never replicated. Blocks
-that were never sent to the validator cannot be recovered.
+narrows this gap by replaying any committed blocks the validator signed but the promotion target never replicated.
+Blocks that were never sent to the validator cannot be recovered.
 
 ## Common Configuration
 
-| Option             | Purpose                                                  |
-| ------------------ | -------------------------------------------------------- |
-| `--data-directory` | Local data storage of the node being recovered.         |
-| `--validator.url`  | Internal validator service URL to stream blocks from.   |
+| Option             | Purpose                                               |
+| ------------------ | ----------------------------------------------------- |
+| `--data-directory` | Local data storage of the node being recovered.       |
+| `--validator.url`  | Internal validator service URL to stream blocks from. |
 
 Use `miden-node recover --help` for the complete current option list.
