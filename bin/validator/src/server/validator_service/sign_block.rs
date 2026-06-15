@@ -7,12 +7,11 @@ use miden_protocol::block::ProposedBlock;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_tx::utils::serde::{Deserializable, Serializable};
 
-use crate::block_validation::validate_block;
+use super::ValidatorService;
 use crate::db::{load_chain_tip, upsert_block_header};
-use crate::server::ValidatorServer;
 
 #[tonic::async_trait]
-impl grpc::server::validator_api::SignBlock for ValidatorServer {
+impl grpc::server::validator_api::SignBlock for ValidatorService {
     type Input = ProposedBlock;
     type Output = (Signature, Word);
 
@@ -50,9 +49,8 @@ impl grpc::server::validator_api::SignBlock for ValidatorServer {
             .ok_or_else(|| tonic::Status::internal("Chain tip not found in database"))?;
 
         // Validate the block against the current chain tip.
-        let (signature, header) = validate_block(proposed_block, &self.signer, &self.db, chain_tip)
-            .await
-            .map_err(|err| {
+        let (signature, header) =
+            self.validate_block(proposed_block, chain_tip).await.map_err(|err| {
                 tonic::Status::invalid_argument(format!(
                     "Failed to validate block: {}",
                     err.as_report()

@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use miden_node_proto::clients::RpcClient;
 use miden_node_proto::generated::rpc::BlockHeaderByNumberRequest;
 use miden_node_proto::generated::transaction::ProvenTransaction;
+use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{Account, AccountCode, AccountHeader, AccountId};
 use miden_protocol::asset::AssetVault;
@@ -92,7 +93,6 @@ struct TxBuilder {
     counter_account: Account,
     secret_key: SecretKey,
     increment_script: NoteScript,
-    data_store: MonitorDataStore,
     block_header: BlockHeader,
     rng: ChaCha20Rng,
 }
@@ -149,6 +149,10 @@ pub struct IncrementService {
 }
 
 impl IncrementService {
+    /// Display name of the service, shared with the bootstrap seeding code in
+    /// [`crate::monitor::tasks`].
+    pub const NAME: &'static str = "Local Transactions";
+
     pub async fn new(
         config: MonitorConfig,
         wallet_account: Account,
@@ -188,7 +192,6 @@ impl IncrementService {
         )
         .expect("nonce-only update of an already-valid account cannot fail");
         self.tx.wallet_account = updated_wallet;
-        self.tx.data_store.update_account(self.tx.wallet_account.clone());
 
         self.details.success_count += 1;
         self.details.last_tx_id = Some(tx_id);
@@ -219,7 +222,6 @@ impl IncrementService {
 
         info!(account.id = %self.tx.wallet_account.id(), "wallet account re-synced from RPC");
         self.tx.wallet_account = fresh_account;
-        self.tx.data_store.update_account(self.tx.wallet_account.clone());
         Ok(())
     }
 
@@ -271,10 +273,6 @@ impl IncrementService {
         err
     )]
     async fn submit_increment(&mut self) -> Result<(String, AccountHeader, BlockNumber)> {
-        let authenticator = BasicAuthenticator::new(&[AuthSecretKey::Falcon512Poseidon2(
-            self.tx.secret_key.clone(),
-        )]);
-
         let account_interface = AccountInterface::from_account(&self.tx.wallet_account);
 
         let (network_note, note_recipient) = create_network_note(
@@ -285,26 +283,44 @@ impl IncrementService {
         )?;
         let script = account_interface.build_send_notes_script(&[network_note.into()], None)?;
 
-        let executor =
-            TransactionExecutor::new(&self.tx.data_store).with_authenticator(&authenticator);
-
         let mut tx_args = TransactionArgs::default().with_tx_script(script);
         tx_args.add_output_note_recipient(Box::new(note_recipient));
 
-        let executed_tx = Box::pin(executor.execute_transaction(
-            self.tx.wallet_account.id(),
-            self.tx.block_header.block_num(),
-            InputNotes::default(),
-            tx_args,
-        ))
+        let wallet_account = self.tx.wallet_account.clone();
+        let counter_account = self.tx.counter_account.clone();
+        let block_header = self.tx.block_header.clone();
+        let secret_key = self.tx.secret_key.clone();
+        let handle = tokio::runtime::Handle::current();
+        let (proven_tx, tx_inputs, final_account) = spawn_blocking_in_current_span(move || {
+            let account_id = wallet_account.id();
+            let block_num = block_header.block_num();
+            let mut data_store = MonitorDataStore::new(block_header, PartialBlockchain::default());
+            data_store.add_account(wallet_account);
+            data_store.add_account(counter_account);
+
+            let authenticator =
+                BasicAuthenticator::new(&[AuthSecretKey::Falcon512Poseidon2(secret_key)]);
+            let executor = TransactionExecutor::new(&data_store).with_authenticator(&authenticator);
+
+            let executed_tx = handle
+                .block_on(executor.execute_transaction(
+                    account_id,
+                    block_num,
+                    InputNotes::default(),
+                    tx_args,
+                ))
+                .context("Failed to execute transaction")?;
+
+            let tx_inputs = executed_tx.tx_inputs().to_bytes();
+            let final_account = executed_tx.final_account().clone();
+            let proven_tx = handle
+                .block_on(LocalTransactionProver::default().prove(executed_tx))
+                .context("Failed to prove transaction")?;
+
+            Ok::<_, anyhow::Error>((proven_tx, tx_inputs, final_account))
+        })
         .await
-        .context("Failed to execute transaction")?;
-
-        let tx_inputs = executed_tx.tx_inputs().to_bytes();
-        let final_account = executed_tx.final_account().clone();
-
-        let prover = LocalTransactionProver::default();
-        let proven_tx = prover.prove(executed_tx).await.context("Failed to prove transaction")?;
+        .context("counter increment task failed")??;
 
         let request = ProvenTransaction {
             transaction: proven_tx.to_bytes(),
@@ -330,7 +346,7 @@ impl IncrementService {
 
 impl Service for IncrementService {
     fn name(&self) -> &'static str {
-        "Local Transactions"
+        Self::NAME
     }
 
     fn interval(&self) -> Duration {
@@ -413,6 +429,10 @@ pub struct CounterTrackingService {
 }
 
 impl CounterTrackingService {
+    /// Display name of the service, shared with the bootstrap seeding code in
+    /// [`crate::monitor::tasks`].
+    pub const NAME: &'static str = "Network Transactions";
+
     pub async fn new(
         config: MonitorConfig,
         counter_receiver: watch::Receiver<Account>,
@@ -552,7 +572,7 @@ impl CounterTrackingService {
 
 impl Service for CounterTrackingService {
     fn name(&self) -> &'static str {
-        "Network Transactions"
+        Self::NAME
     }
 
     fn interval(&self) -> Duration {
@@ -613,16 +633,11 @@ async fn setup_increment_task(
 
     let increment_script = create_increment_script()?;
 
-    let mut data_store = MonitorDataStore::new(block_header.clone(), PartialBlockchain::default());
-    data_store.add_account(wallet_account.clone());
-    data_store.add_account(counter_account.clone());
-
     let tx = TxBuilder {
         wallet_account,
         counter_account,
         secret_key,
         increment_script,
-        data_store,
         block_header,
         rng: ChaCha20Rng::from_os_rng(),
     };
@@ -664,15 +679,15 @@ fn build_increment_status(details: &IncrementDetails, last_error: Option<String>
     let service_details = ServiceDetails::NtxIncrement(details.clone());
 
     if let Some(err) = last_error {
-        ServiceStatus::unhealthy("Local Transactions", err, service_details)
+        ServiceStatus::unhealthy(IncrementService::NAME, err, service_details)
     } else if details.success_count == 0 && details.failure_count > 0 {
         ServiceStatus::unhealthy(
-            "Local Transactions",
+            IncrementService::NAME,
             format!("no successful increments ({} failures)", details.failure_count),
             service_details,
         )
     } else {
-        ServiceStatus::healthy("Local Transactions", service_details)
+        ServiceStatus::healthy(IncrementService::NAME, service_details)
     }
 }
 
@@ -694,7 +709,7 @@ fn build_tracking_status(
     let service_details = ServiceDetails::NtxTracking(details.clone());
 
     if let Some(err) = last_error {
-        return ServiceStatus::unhealthy("Network Transactions", err, service_details);
+        return ServiceStatus::unhealthy(CounterTrackingService::NAME, err, service_details);
     }
 
     if over_threshold_streak >= PENDING_UNHEALTHY_CONFIRMATION_POLLS {
@@ -703,13 +718,13 @@ fn build_tracking_status(
             "counter trailing expected by {pending} (> {threshold}) for {over_threshold_streak} \
              consecutive polls",
         );
-        return ServiceStatus::unhealthy("Network Transactions", err, service_details);
+        return ServiceStatus::unhealthy(CounterTrackingService::NAME, err, service_details);
     }
 
     if details.current_value.is_some() {
-        ServiceStatus::healthy("Network Transactions", service_details)
+        ServiceStatus::healthy(CounterTrackingService::NAME, service_details)
     } else {
-        ServiceStatus::unknown("Network Transactions", service_details)
+        ServiceStatus::unknown(CounterTrackingService::NAME, service_details)
     }
 }
 

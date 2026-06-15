@@ -297,6 +297,7 @@ body {
     justify-content: center;
     transition: all 0.2s;
     color: var(--color-text-faint);
+    flex-shrink: 0;
 }
 
 .copy-button:hover {
@@ -429,12 +430,16 @@ body {
 
 /* When the value carries an inline action (currently only the copy button), keep them on the
    same line. Without this `.metric-value` is inline, and the whitespace between the value text
-   and the button is a wrap opportunity — so long values (URLs in particular) push the button
-   onto its own row below. */
+   and the button is a wrap opportunity, so long values (URLs in particular) push the button
+   onto its own row below. `min-width: 0` plus `overflow-wrap: anywhere` let values with no
+   natural break points (e.g. URLs without hyphens) wrap inside the card instead of overflowing
+   it and dragging the button outside the box. */
 .metric-value:has(.copy-button) {
     display: inline-flex;
     align-items: center;
     gap: 4px;
+    min-width: 0;
+    overflow-wrap: anywhere;
 }
 
 .metric-value.warning-delta,

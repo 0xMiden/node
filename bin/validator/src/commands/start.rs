@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use miden_node_utils::clap::GrpcOptionsInternal;
-use miden_validator::{Validator, ValidatorSigner};
+use miden_validator::{DataDirectory, ValidatorServer, ValidatorSigner};
 
 // Starts the validator component.
 pub async fn start(
@@ -14,7 +14,9 @@ pub async fn start(
     data_directory: PathBuf,
     sqlite_connection_pool_size: NonZeroUsize,
 ) -> anyhow::Result<()> {
-    Validator {
+    let data_directory = DataDirectory::load_server(data_directory)
+        .context("failed to load validator data directory")?;
+    ValidatorServer {
         address,
         grpc_options,
         signer,
