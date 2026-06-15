@@ -19,18 +19,6 @@ use super::store::StoreOptions;
 // RECOVER
 // ================================================================================================
 
-/// Recovers a full node's chain state from a validator's block backup.
-///
-/// Streams the validator's signed blocks into the local store until the chain tip is reached, then
-/// exits. This is the first step in promoting a full node to sequencer after the original sequencer
-/// is lost:
-///
-/// 1. Shut down the sequencer (if it is not down already) and the designated full node.
-/// 2. Run this command, pointing it at the validator.
-/// 3. Restart the full node as a sequencer.
-///
-/// Recovered blocks carry no proofs (the validator only backs up signed blocks), so these must be
-/// commissioned separately as part of recovery.
 #[derive(clap::Args, Clone, Debug)]
 pub struct RecoverCommand {
     /// Directory containing the node's local data storage.
