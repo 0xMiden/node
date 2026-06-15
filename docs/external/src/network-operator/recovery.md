@@ -8,10 +8,8 @@ sidebar_position: 10
 Recovery restores missing committed block data to a node from the validator's block backup. It is used when promoting a
 full node to sequencer after the active sequencer is lost, and the promotion target is missing committed blocks.
 
-This complements the [Sequencer Failover](/network-operator/sequencer) flow. Full nodes replicate the sequencer
-asynchronously, so a node promoted to sequencer can be behind the committed chain tip. The
-[Validator](/network-operator/validator) retains the raw block data for every block it signed, which lets it serve those
-missing blocks back to the promotion target.
+This complements the [Sequencer Failover](/network-operator/sequencer) flow. Full nodes replicate the sequencer state
+asynchronously, so there is no guarantee that the node is fully up to date if the sequencer fails. These missing data can always be recovered from the validator because it has to a sign every block before it can be committed.
 
 ## When to recover
 
@@ -19,8 +17,6 @@ Recover when both of the following hold:
 
 - The active sequencer is lost or being replaced, and a full node is being promoted to take its place.
 - The promotion target is behind the committed chain tip and cannot catch up from another in-sync source.
-
-If the promotion target is already in sync with the committed chain tip, recovery is unnecessary; promote it directly.
 
 ## What recovery does
 
@@ -47,12 +43,3 @@ must be imported or re-proven separately as part of recovery before the node res
 
 4. Commission proofs for the recovered blocks.
 5. Restart the node as a sequencer. See [Sequencer](/network-operator/sequencer).
-
-## Common Configuration
-
-| Option             | Purpose                                               |
-| ------------------ | ----------------------------------------------------- |
-| `--data-directory` | Local data storage of the node being recovered.       |
-| `--validator.url`  | Internal validator service URL to stream blocks from. |
-
-Use `miden-node recover --help` for the complete current option list.

@@ -52,15 +52,17 @@ pub enum Command {
     /// Cannot be run on an empty data directory; use `bootstrap` first.
     Migrate(MigrateCommand),
 
-    /// Recover a full node's chain state from a validator's block backup.
+    /// Recover missing chain data from the validator.
     ///
-    /// Streams the validator's signed blocks into the local store until the chain tip is reached,
-    /// then exits. This is used to promote a full node to sequencer after the original sequencer is
-    /// lost: shut down the sequencer and the full node, run this command pointed at the validator,
-    /// then restart the full node as a sequencer.
+    /// Use this during emergency recovery, or before promoting a full node to sequencer,
+    /// to fill any committed blocks that the node did not receive from the sequencer.
     ///
-    /// Recovered blocks carry no proofs, so these must be commissioned separately as part of
-    /// recovery.
+    /// Full nodes receive sequencer data asynchronously, so if the sequencer fails they
+    /// may be missing the most recent committed blocks. The validator can be used as the
+    /// recovery source because every committed block must have been signed by the validator.
+    ///
+    /// This command synchronizes the node with the validator's committed chain state,
+    /// ensuring the node has a complete view of the chain before it is promoted.
     Recover(RecoverCommand),
 }
 
