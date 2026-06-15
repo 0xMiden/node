@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_proto::clients::{Builder, ValidatorClient};
@@ -66,7 +67,7 @@ impl RecoverCommand {
     fn validator_client(&self) -> anyhow::Result<ValidatorClient> {
         Ok(Builder::new(self.validator_url.clone())
             .with_tls()?
-            .without_timeout()
+            .with_timeout(Duration::from_secs(20))
             .without_metadata_version()
             .without_metadata_genesis()
             .with_otel_context_injection()
