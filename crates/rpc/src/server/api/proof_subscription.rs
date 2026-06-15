@@ -12,7 +12,7 @@ use super::{
     GuardedStream,
     ProofSubscriptionStream,
     RpcService,
-    state_subscription_error_to_status,
+    proof_subscription_error_to_status,
 };
 
 #[tonic::async_trait]
@@ -46,7 +46,7 @@ impl proto::server::rpc_api::ProofSubscription for RpcService {
                     proof: event.proof,
                     proven_chain_tip: event.proven_chain_tip.as_u32(),
                 })
-                .map_err(state_subscription_error_to_status)
+                .map_err(proof_subscription_error_to_status)
         });
         let stream: Self::ItemStream = Box::pin(GuardedStream::new(Box::pin(stream), permit));
         Ok(stream)

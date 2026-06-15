@@ -23,9 +23,6 @@ mod sign_block;
 mod status;
 mod submit_proven_transaction;
 
-/// Maximum number of concurrent block subscriptions served by this validator.
-const MAX_BLOCK_SUBSCRIPTIONS: usize = 10;
-
 // VALIDATOR ERROR
 // ================================================================================================
 
@@ -74,8 +71,6 @@ pub(crate) struct ValidatorService {
     /// In-memory chain tip, updated after each signed block. Block subscriptions follow this to
     /// stream live blocks as they are signed.
     committed_tip: watch::Sender<BlockNumber>,
-    /// Caps the number of concurrent block subscriptions to protect validator resources.
-    block_subscription_semaphore: Arc<Semaphore>,
     /// In-memory count of validated transactions, incremented after each new insert.
     validated_transactions_count: AtomicU64,
     /// In-memory count of signed blocks, incremented after each signed block.
@@ -113,7 +108,6 @@ impl ValidatorService {
             block_store,
             sign_block_semaphore: Semaphore::new(1),
             committed_tip: watch::Sender::new(BlockNumber::from(initial_chain_tip)),
-            block_subscription_semaphore: Arc::new(Semaphore::new(MAX_BLOCK_SUBSCRIPTIONS)),
             validated_transactions_count: AtomicU64::new(initial_tx_count),
             signed_blocks_count: AtomicU64::new(initial_block_count),
         })
