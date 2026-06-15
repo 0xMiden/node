@@ -236,8 +236,9 @@ async fn run_stream_inner<S: SubscriptionSource>(
         let mut tip = *tip_rx.borrow_and_update();
 
         let current_gap = tip.saturating_sub(next.as_u32()).as_u32();
-        (previous_gap, running_gap) = check_growing_gap(current_gap, previous_gap, running_gap, MAX_RUNNING_GAP)
-            .map_err(|()| SubscriptionStreamError::TooSlow)?;
+        (previous_gap, running_gap) =
+            check_growing_gap(current_gap, previous_gap, running_gap, MAX_RUNNING_GAP)
+                .map_err(|()| SubscriptionStreamError::TooSlow)?;
 
         while next <= tip {
             let data = source.fetch(next).await?;
@@ -267,7 +268,7 @@ fn check_growing_gap(
     current_gap: u32,
     previous_gap: u32,
     running_gap: u32,
-    max_gap: u32
+    max_gap: u32,
 ) -> Result<(u32, u32), ()> {
     let running_gap = if current_gap > previous_gap {
         running_gap + (current_gap - previous_gap)
@@ -291,7 +292,8 @@ mod tests {
         let mut previous_gap = gaps.first().copied().unwrap_or(u32::MAX);
         let mut growth_run = 0u32;
         for &gap in gaps {
-            (previous_gap, growth_run) = check_growing_gap(gap, previous_gap, growth_run, MAX_RUNNING_GAP)?;
+            (previous_gap, growth_run) =
+                check_growing_gap(gap, previous_gap, growth_run, MAX_RUNNING_GAP)?;
         }
         Ok(())
     }

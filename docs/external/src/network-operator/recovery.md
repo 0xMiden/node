@@ -9,7 +9,8 @@ Recovery restores missing committed block data to a node from the validator's bl
 full node to sequencer after the active sequencer is lost, and the promotion target is missing committed blocks.
 
 This complements the [Sequencer Failover](/network-operator/sequencer) flow. Full nodes replicate the sequencer state
-asynchronously, so there is no guarantee that the node is fully up to date if the sequencer fails. These missing data can always be recovered from the validator because it has to a sign every block before it can be committed.
+asynchronously, so there is no guarantee that the node is fully up to date if the sequencer fails. These missing data
+can always be recovered from the validator because it has to a sign every block before it can be committed.
 
 ## When to recover
 
