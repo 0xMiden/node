@@ -1,6 +1,7 @@
 mod block_producer;
 mod lifecycle;
 mod modes;
+mod recover;
 mod rpc;
 mod runtime;
 pub(crate) mod section;
@@ -10,6 +11,7 @@ use clap::Subcommand;
 pub use lifecycle::{BootstrapCommand, MigrateCommand};
 use miden_node_utils::logging::OpenTelemetry;
 pub use modes::{FullNodeCommand, SequencerCommand};
+pub use recover::RecoverCommand;
 
 const ENV_DATA_DIRECTORY: &str = "MIDEN_NODE_DATA_DIRECTORY";
 
@@ -49,6 +51,17 @@ pub enum Command {
     ///
     /// Cannot be run on an empty data directory; use `bootstrap` first.
     Migrate(MigrateCommand),
+
+    /// Recover a full node's chain state from a validator's block backup.
+    ///
+    /// Streams the validator's signed blocks into the local store until the chain tip is reached,
+    /// then exits. This is used to promote a full node to sequencer after the original sequencer is
+    /// lost: shut down the sequencer and the full node, run this command pointed at the validator,
+    /// then restart the full node as a sequencer.
+    ///
+    /// Recovered blocks carry no proofs, so these must be commissioned separately as part of
+    /// recovery.
+    Recover(RecoverCommand),
 }
 
 impl Command {
@@ -60,7 +73,9 @@ impl Command {
             Command::Full(_) => OpenTelemetry::from_env()
                 .with_name("node")
                 .with_attribute("miden.node.role", "full"),
-            Command::Bootstrap(_) | Command::Migrate(_) => OpenTelemetry::Disabled,
+            Command::Bootstrap(_) | Command::Migrate(_) | Command::Recover(_) => {
+                OpenTelemetry::Disabled
+            },
         }
     }
 
@@ -70,6 +85,7 @@ impl Command {
             Command::Migrate(migrate_command) => migrate_command.handle(),
             Command::Sequencer(sequencer_command) => sequencer_command.handle().await,
             Command::Full(full_node_command) => full_node_command.handle().await,
+            Command::Recover(recover_command) => recover_command.handle().await,
         }
     }
 }
