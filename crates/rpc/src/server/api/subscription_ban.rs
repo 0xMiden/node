@@ -43,10 +43,7 @@ impl SubscriptionBan {
     /// If the list is at capacity, the oldest entry is evicted first.
     pub fn ban(&self, ip: IpAddr) {
         let expiry = Instant::now() + self.duration;
-        let mut banned = self
-            .banned
-            .lock()
-            .expect("ban mutex should not be poisoned");
+        let mut banned = self.banned.lock().expect("ban mutex should not be poisoned");
         if banned.len() == self.capacity {
             banned.pop_front();
         }
@@ -56,10 +53,7 @@ impl SubscriptionBan {
     /// Returns the remaining ban duration for `ip`, or `None` if it is not currently banned.
     pub fn remaining(&self, ip: IpAddr) -> Option<Duration> {
         let now = Instant::now();
-        let banned = self
-            .banned
-            .lock()
-            .expect("ban mutex should not be poisoned");
+        let banned = self.banned.lock().expect("ban mutex should not be poisoned");
         // Entries are ordered by expiry, so the last match is the most recent (longest-lived) ban.
         banned
             .iter()
