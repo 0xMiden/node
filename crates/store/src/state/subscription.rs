@@ -13,7 +13,7 @@ use super::{BlockCache, ProofCache, State};
 use crate::errors::DatabaseError;
 
 /// Buffered messages per subscriber before back-pressure begins.
-const SUBSCRIBER_CHANNEL_CAPACITY: usize = 32;
+pub const SUBSCRIBER_CHANNEL_CAPACITY: usize = 32;
 /// Safety-net timeout for a single send when the client has stalled.
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 /// Maximum running block-gap allowed before a subscriber is disconnected.
@@ -94,7 +94,7 @@ impl State {
 // SUBSCRIPTION SOURCE
 // ================================================================================================
 
-trait SubscriptionSource: Send + Sync + 'static {
+pub trait SubscriptionSource: Send + Sync + 'static {
     type Event: Send + 'static;
 
     fn fetch(
@@ -186,7 +186,7 @@ fn build_stream<S: SubscriptionSource>(
 /// event with [`SubscriptionSource::build_event`], and sends it to `tx`. Disconnects the
 /// subscriber with [`StateSubscriptionError::TooSlow`] if a single send blocks for longer than [`SEND_TIMEOUT`]
 /// which may occur only after the buffer has [`SUBSCRIBER_CHANNEL_CAPACITY`] blocks queued.
-async fn run_stream<S: SubscriptionSource>(
+pub async fn run_stream<S: SubscriptionSource>(
     from: BlockNumber,
     mut tip_rx: watch::Receiver<BlockNumber>,
     tx: &mpsc::Sender<Result<S::Event, StateSubscriptionError>>,

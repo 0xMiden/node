@@ -67,7 +67,10 @@ pub use subscription::{
     BlockSubscriptionStream,
     ProofSubscriptionEvent,
     ProofSubscriptionStream,
+    SUBSCRIBER_CHANNEL_CAPACITY,
     StateSubscriptionError,
+    SubscriptionSource,
+    run_stream,
 };
 
 mod apply_block;
