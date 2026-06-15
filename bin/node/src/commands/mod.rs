@@ -1,6 +1,7 @@
 mod block_producer;
 mod lifecycle;
 mod modes;
+mod recover;
 mod rpc;
 mod runtime;
 pub(crate) mod section;
@@ -10,6 +11,7 @@ use clap::Subcommand;
 pub use lifecycle::{BootstrapCommand, MigrateCommand};
 use miden_node_utils::logging::OpenTelemetry;
 pub use modes::{FullNodeCommand, SequencerCommand};
+pub use recover::RecoverCommand;
 
 const ENV_DATA_DIRECTORY: &str = "MIDEN_NODE_DATA_DIRECTORY";
 
@@ -49,6 +51,19 @@ pub enum Command {
     ///
     /// Cannot be run on an empty data directory; use `bootstrap` first.
     Migrate(MigrateCommand),
+
+    /// Recover missing chain data from the validator.
+    ///
+    /// Use this during emergency recovery, or before promoting a full node to sequencer,
+    /// to fill any committed blocks that the node did not receive from the sequencer.
+    ///
+    /// Full nodes receive sequencer data asynchronously, so if the sequencer fails they
+    /// may be missing the most recent committed blocks. The validator can be used as the
+    /// recovery source because every committed block must have been signed by the validator.
+    ///
+    /// This command synchronizes the node with the validator's committed chain state,
+    /// ensuring the node has a complete view of the chain before it is promoted.
+    Recover(RecoverCommand),
 }
 
 impl Command {
@@ -60,7 +75,9 @@ impl Command {
             Command::Full(_) => OpenTelemetry::from_env()
                 .with_name("node")
                 .with_attribute("miden.node.role", "full"),
-            Command::Bootstrap(_) | Command::Migrate(_) => OpenTelemetry::Disabled,
+            Command::Bootstrap(_) | Command::Migrate(_) | Command::Recover(_) => {
+                OpenTelemetry::Disabled
+            },
         }
     }
 
@@ -70,6 +87,7 @@ impl Command {
             Command::Migrate(migrate_command) => migrate_command.handle(),
             Command::Sequencer(sequencer_command) => sequencer_command.handle().await,
             Command::Full(full_node_command) => full_node_command.handle().await,
+            Command::Recover(recover_command) => recover_command.handle().await,
         }
     }
 }

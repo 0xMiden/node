@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, AtomicU64};
+use std::sync::atomic::AtomicU64;
 
 use miden_node_db::{DatabaseError, Db};
 use miden_node_store::BlockStore;
@@ -9,7 +9,7 @@ use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
 use miden_protocol::crypto::utils::Serializable;
 use miden_protocol::errors::ProposedBlockError;
 use miden_protocol::transaction::{TransactionHeader, TransactionId};
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, watch};
 use tracing::{Span, instrument};
 
 use crate::db::{find_unvalidated_transactions, load_block_header, load_chain_tip};
@@ -18,6 +18,7 @@ use crate::{COMPONENT, ValidatorSigner};
 #[cfg(test)]
 mod tests;
 
+mod block_subscription;
 mod sign_block;
 mod status;
 mod submit_proven_transaction;
@@ -67,8 +68,9 @@ pub(crate) struct ValidatorService {
     /// Serializes `sign_block` requests so that concurrent calls are processed sequentially,
     /// ensuring consistent chain tip reads and preventing race conditions.
     sign_block_semaphore: Semaphore,
-    /// In-memory chain tip, updated atomically after each signed block.
-    chain_tip: AtomicU32,
+    /// In-memory chain tip, updated after each signed block. Block subscriptions follow this to
+    /// stream live blocks as they are signed.
+    committed_tip: watch::Sender<BlockNumber>,
     /// In-memory count of validated transactions, incremented after each new insert.
     validated_transactions_count: AtomicU64,
     /// In-memory count of signed blocks, incremented after each signed block.
@@ -105,7 +107,7 @@ impl ValidatorService {
             db: db.into(),
             block_store,
             sign_block_semaphore: Semaphore::new(1),
-            chain_tip: AtomicU32::new(initial_chain_tip),
+            committed_tip: watch::Sender::new(BlockNumber::from(initial_chain_tip)),
             validated_transactions_count: AtomicU64::new(initial_tx_count),
             signed_blocks_count: AtomicU64::new(initial_block_count),
         })
