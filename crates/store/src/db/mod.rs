@@ -30,7 +30,7 @@ use tokio::sync::oneshot;
 use tracing::{info, instrument};
 
 use crate::COMPONENT;
-use crate::db::migrations::{bootstrap_database, migrate_database, verify_latest_schema};
+use crate::db::migrations::{migrate_database, verify_latest_schema};
 use crate::db::models::conv::SqlTypeConvert;
 use crate::db::models::queries;
 pub use crate::db::models::queries::{
@@ -51,6 +51,8 @@ fn default_storage_map_entries_limit() -> usize {
 }
 
 mod migrations;
+#[cfg(test)]
+pub(crate) use migrations::bootstrap_database;
 
 #[cfg(test)]
 mod tests;
@@ -193,7 +195,8 @@ impl Db {
         err,
     )]
     pub fn bootstrap(database_filepath: PathBuf, genesis: GenesisBlock) -> anyhow::Result<()> {
-        bootstrap_database(&database_filepath).context("failed to bootstrap database schema")?;
+        migrations::bootstrap_database(&database_filepath)
+            .context("failed to bootstrap database schema")?;
 
         let mut conn: SqliteConnection = diesel::sqlite::SqliteConnection::establish(
             database_filepath.to_str().context("database filepath is invalid")?,
