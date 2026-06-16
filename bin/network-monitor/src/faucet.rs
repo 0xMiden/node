@@ -147,23 +147,32 @@ impl Service for FaucetService {
 
     async fn check(&mut self) -> ServiceStatus {
         let start_time = std::time::Instant::now();
-        let mut last_error: Option<String> = None;
 
-        match perform_faucet_test(&self.client, &self.url, &self.account_id, self.solve_timeout)
-            .await
-        {
-            Ok((minted_tokens, metadata)) => {
-                self.success_count += 1;
-                self.last_tx_id = Some(minted_tokens.tx_id.clone());
-                self.faucet_metadata = Some(metadata);
-                info!("Faucet test successful: tx_id={}", minted_tokens.tx_id);
-            },
-            Err(e) => {
-                self.failure_count += 1;
-                last_error = Some(format!("{e:#}"));
-                warn!("Faucet test failed: {}", e);
-            },
+        // Fetch metadata independently of the mint test so that token info (account id, version, …)
+        // is shown on the card even when minting is failing. We only overwrite the stored metadata
+        // on a successful fetch, so a transient metadata errors doesn't wipe the last-known values
+        // from the card.
+        match fetch_faucet_metadata(&self.client, &self.url).await {
+            Ok(metadata) => self.faucet_metadata = Some(metadata),
+            Err(e) => warn!("Failed to fetch faucet metadata: {e:#}"),
         }
+
+        let last_error =
+            match perform_mint_test(&self.client, &self.url, &self.account_id, self.solve_timeout)
+                .await
+            {
+                Ok(minted_tokens) => {
+                    self.success_count += 1;
+                    self.last_tx_id = Some(minted_tokens.tx_id.clone());
+                    info!("Faucet test successful: tx_id={}", minted_tokens.tx_id);
+                    None
+                },
+                Err(e) => {
+                    self.failure_count += 1;
+                    warn!("Faucet test failed: {}", e);
+                    Some(format!("{e:#}"))
+                },
+            };
 
         let details = ServiceDetails::FaucetTest(FaucetTestDetails {
             url: self.url.to_string(),
@@ -181,7 +190,32 @@ impl Service for FaucetService {
     }
 }
 
-/// Performs a complete faucet test by requesting a `PoW` challenge and submitting the solution.
+/// Fetches the faucet's metadata from the `/get_metadata` endpoint.
+#[instrument(
+    parent = None,
+    target = COMPONENT,
+    name = "network_monitor.faucet.fetch_faucet_metadata",
+    skip_all,
+    level = "info",
+    ret(level = "debug"),
+    err
+)]
+async fn fetch_faucet_metadata(
+    client: &Client,
+    faucet_url: &Url,
+) -> anyhow::Result<GetMetadataResponse> {
+    let metadata_url = faucet_url.join("/get_metadata")?;
+
+    let response = client.get(metadata_url).send().await?;
+
+    let response_text =
+        read_success_body(response).await.context("/get_metadata request failed")?;
+
+    parse_faucet_response(&response_text).context("unexpected response from /get_metadata")
+}
+
+/// Performs a complete faucet mint test by requesting a `PoW` challenge and submitting the
+/// solution.
 ///
 /// # Arguments
 ///
@@ -194,18 +228,18 @@ impl Service for FaucetService {
 #[instrument(
     parent = None,
     target = COMPONENT,
-    name = "network_monitor.faucet.perform_faucet_test",
+    name = "network_monitor.faucet.perform_mint_test",
     skip_all,
     level = "info",
     ret(level = "debug"),
     err
 )]
-async fn perform_faucet_test(
+async fn perform_mint_test(
     client: &Client,
     faucet_url: &Url,
     account_id: &str,
     solve_timeout: Duration,
-) -> anyhow::Result<(GetTokensResponse, GetMetadataResponse)> {
+) -> anyhow::Result<GetTokensResponse> {
     debug!("Using recipient account ID: {} (length: {})", account_id, account_id.len());
 
     // Step 1: Request PoW challenge
@@ -260,19 +294,7 @@ async fn perform_faucet_test(
     let tokens_response: GetTokensResponse =
         parse_faucet_response(&response_text).context("unexpected response from /get_tokens")?;
 
-    // Step 4: Get faucet metadata
-    let metadata_url = faucet_url.join("/get_metadata")?;
-
-    let response = client.get(metadata_url).send().await?;
-
-    let response_text =
-        read_success_body(response).await.context("/get_metadata request failed")?;
-    debug!("Faucet /get_metadata response: {}", response_text);
-
-    let metadata: GetMetadataResponse =
-        parse_faucet_response(&response_text).context("unexpected response from /get_metadata")?;
-
-    Ok((tokens_response, metadata))
+    Ok(tokens_response)
 }
 
 /// Reads the response body, failing with the HTTP status code and body when the request was not
