@@ -17,19 +17,19 @@ const BAN_CAPACITY: usize = 100;
 /// the last matching entry. Expired entries are not actively pruned; they are simply ignored on
 /// lookup and eventually evicted once the queue reaches capacity.
 #[derive(Debug)]
-pub struct SubscriptionBan {
+pub struct IpBanList {
     banned: Mutex<VecDeque<(IpAddr, Instant)>>,
     duration: Duration,
     capacity: usize,
 }
 
-impl Default for SubscriptionBan {
+impl Default for IpBanList {
     fn default() -> Self {
         Self::new(BAN_DURATION, BAN_CAPACITY)
     }
 }
 
-impl SubscriptionBan {
+impl IpBanList {
     fn new(duration: Duration, capacity: usize) -> Self {
         Self {
             banned: Mutex::new(VecDeque::new()),
@@ -79,13 +79,13 @@ mod tests {
 
     #[test]
     fn unknown_ip_is_not_banned() {
-        let ban = SubscriptionBan::default();
+        let ban = IpBanList::default();
         assert!(ban.remaining(ip(1)).is_none());
     }
 
     #[test]
     fn banned_ip_reports_remaining_time() {
-        let ban = SubscriptionBan::new(Duration::from_secs(600), 16);
+        let ban = IpBanList::new(Duration::from_secs(600), 16);
         ban.ban(ip(1));
 
         let remaining = ban.remaining(ip(1)).expect("ip should be banned");
@@ -96,14 +96,14 @@ mod tests {
     #[test]
     fn expired_ban_is_ignored() {
         // A zero-length ban is already expired by the time it is queried.
-        let ban = SubscriptionBan::new(Duration::ZERO, 16);
+        let ban = IpBanList::new(Duration::ZERO, 16);
         ban.ban(ip(1));
         assert!(ban.remaining(ip(1)).is_none());
     }
 
     #[test]
     fn most_recent_ban_wins_over_stale_entry() {
-        let ban = SubscriptionBan::new(Duration::from_secs(600), 16);
+        let ban = IpBanList::new(Duration::from_secs(600), 16);
         let now = Instant::now();
         {
             let mut banned = ban.banned.lock().unwrap();
@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn oldest_entry_is_evicted_at_capacity() {
-        let ban = SubscriptionBan::new(Duration::from_secs(600), 2);
+        let ban = IpBanList::new(Duration::from_secs(600), 2);
         ban.ban(ip(1));
         ban.ban(ip(2));
         ban.ban(ip(3));

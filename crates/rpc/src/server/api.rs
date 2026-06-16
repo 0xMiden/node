@@ -33,7 +33,7 @@ use tonic::metadata::MetadataMap;
 use tonic::{IntoRequest, Request, Status};
 
 use crate::COMPONENT;
-use crate::server::api::subscription_ban::SubscriptionBan;
+use crate::server::api::subscription_ban::IpBanList;
 use crate::server::{NetworkTxAuth, RpcMode};
 
 const NETWORK_TX_AUTH_HEADER_NAME: &str = "x-miden-network-tx-auth";
@@ -101,7 +101,7 @@ pub struct RpcService {
     block_commitment_cache: LruCache<BlockNumber, Word>,
     block_subscription_semaphore: Arc<Semaphore>,
     proof_subscription_semaphore: Arc<Semaphore>,
-    subscription_ban: Arc<SubscriptionBan>,
+    subscription_ban: Arc<IpBanList>,
 }
 
 impl RpcService {
@@ -121,7 +121,7 @@ impl RpcService {
             block_commitment_cache: LruCache::new(commitment_cache_capacity),
             block_subscription_semaphore: Arc::new(Semaphore::new(MAX_REPLICA_SUBSCRIPTIONS)),
             proof_subscription_semaphore: Arc::new(Semaphore::new(MAX_REPLICA_SUBSCRIPTIONS)),
-            subscription_ban: Arc::new(SubscriptionBan::default()),
+            subscription_ban: Arc::new(IpBanList::default()),
         }
     }
 
