@@ -388,7 +388,7 @@ mod tests {
             nullifiers: vec![],
             network_account_updates: vec![(
                 updated_id,
-                miden_protocol::account::delta::AccountUpdateDetails::Private,
+                miden_protocol::account::AccountUpdateDetails::Private,
             )],
             account_transactions: vec![],
         };

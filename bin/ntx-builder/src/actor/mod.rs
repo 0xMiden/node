@@ -654,7 +654,7 @@ mod tests {
     use std::num::NonZeroU16;
 
     use miden_protocol::ONE;
-    use miden_protocol::account::{Account, AccountDelta, AccountStorageDelta, AccountVaultDelta};
+    use miden_protocol::account::{Account, AccountDelta, AccountStoragePatch, AccountVaultDelta};
     use tokio::sync::Notify;
 
     use super::*;
@@ -665,7 +665,7 @@ mod tests {
     fn nonce_bump_delta(account_id: AccountId) -> AccountDelta {
         AccountDelta::new(
             account_id,
-            AccountStorageDelta::default(),
+            AccountStoragePatch::default(),
             AccountVaultDelta::default(),
             ONE,
         )

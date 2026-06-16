@@ -31,9 +31,9 @@ use miden_protocol::note::{
 use miden_protocol::transaction::{InputNotes, PartialBlockchain, TransactionArgs};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{Felt, Word};
-use miden_standards::account::interface::{AccountInterface, AccountInterfaceExt};
 use miden_standards::code_builder::CodeBuilder;
 use miden_standards::note::{NetworkAccountTarget, NoteExecutionHint};
+use miden_standards::tx_script::SendNotesTransactionScript;
 use miden_tx::auth::BasicAuthenticator;
 use miden_tx::{LocalTransactionProver, TransactionExecutor};
 use rand::{Rng, SeedableRng};
@@ -273,17 +273,16 @@ impl IncrementService {
         err
     )]
     async fn submit_increment(&mut self) -> Result<(String, AccountHeader, BlockNumber)> {
-        let account_interface = AccountInterface::from_account(&self.tx.wallet_account);
-
         let (network_note, note_recipient) = create_network_note(
             &self.tx.wallet_account,
             &self.tx.counter_account,
             self.tx.increment_script.clone(),
             &mut self.tx.rng,
         )?;
-        let script = account_interface.build_send_notes_script(&[network_note.into()], None)?;
+        let interface = self.tx.wallet_account.code().interface(self.tx.wallet_account.id());
+        let script = SendNotesTransactionScript::new(&interface, &[network_note.into()])?;
 
-        let mut tx_args = TransactionArgs::default().with_tx_script(script);
+        let mut tx_args = TransactionArgs::default().with_tx_script(script.into());
         tx_args.add_output_note_recipient(Box::new(note_recipient));
 
         let wallet_account = self.tx.wallet_account.clone();

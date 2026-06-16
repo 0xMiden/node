@@ -90,7 +90,7 @@ async fn genesis_accounts_have_nonce_one() -> TestResult {
 fn parsing_account_from_file() -> TestResult {
     use miden_protocol::account::auth::AuthScheme;
     use miden_protocol::account::{AccountFile, AccountType};
-    use miden_standards::AuthMethod;
+    use miden_standards::account::auth::AuthSingleSig;
     use miden_standards::account::wallets::create_basic_wallet;
     use tempfile::tempdir;
 
@@ -104,9 +104,7 @@ fn parsing_account_from_file() -> TestResult {
     let secret_key = miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey::with_rng(
         &mut miden_node_utils::crypto::get_random_coin(&mut rng),
     );
-    let auth = AuthMethod::SingleSig {
-        approver: (secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2),
-    };
+    let auth = AuthSingleSig::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
 
     let test_account = create_basic_wallet(init_seed, auth, AccountType::Public)?;
 
@@ -147,12 +145,7 @@ fn parsing_native_faucet_from_file() -> TestResult {
     use miden_protocol::account::{AccountBuilder, AccountFile, AccountType};
     use miden_protocol::asset::AssetAmount;
     use miden_standards::account::auth::AuthSingleSig;
-    use miden_standards::account::policies::{
-        BurnPolicyConfig,
-        MintPolicyConfig,
-        PolicyRegistration,
-        TokenPolicyManager,
-    };
+    use miden_standards::account::policies::{BurnPolicy, MintPolicy, TokenPolicyManager};
     use tempfile::tempdir;
 
     // Create a temporary directory for our test files
@@ -179,9 +172,10 @@ fn parsing_native_faucet_from_file() -> TestResult {
         .with_auth_component(auth)
         .with_component(faucet)
         .with_components(
-            TokenPolicyManager::new()
-                .with_mint_policy(MintPolicyConfig::AllowAll, PolicyRegistration::Active)?
-                .with_burn_policy(BurnPolicyConfig::AllowAll, PolicyRegistration::Active)?,
+            TokenPolicyManager::builder()
+                .active_mint_policy(MintPolicy::allow_all())
+                .active_burn_policy(BurnPolicy::allow_all())
+                .build(),
         )
         .build()?;
 
@@ -222,7 +216,7 @@ verification_base_fee = 0
 fn native_faucet_from_file_must_be_faucet_type() -> TestResult {
     use miden_protocol::account::auth::AuthScheme;
     use miden_protocol::account::{AccountFile, AccountType};
-    use miden_standards::AuthMethod;
+    use miden_standards::account::auth::AuthSingleSig;
     use miden_standards::account::wallets::create_basic_wallet;
     use tempfile::tempdir;
 
@@ -236,9 +230,7 @@ fn native_faucet_from_file_must_be_faucet_type() -> TestResult {
     let secret_key = miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey::with_rng(
         &mut miden_node_utils::crypto::get_random_coin(&mut rng),
     );
-    let auth = AuthMethod::SingleSig {
-        approver: (secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2),
-    };
+    let auth = AuthSingleSig::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
 
     let regular_account = create_basic_wallet(init_seed, auth, AccountType::Public)?;
 

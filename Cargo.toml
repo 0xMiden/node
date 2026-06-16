@@ -59,14 +59,12 @@ miden-remote-prover-client      = { path = "crates/remote-prover-client", versio
 miden-node-rocksdb-cxx-linkage-fix = { path = "crates/rocksdb-cxx-linkage-fix", version = "0.15.0" }
 
 # miden-protocol dependencies. These should be updated in sync.
-# Requires the v0.15.2 patch release, which carries the network-account tx-script
-# allowlist (0xMiden/protocol#3028) and the `with_allowed_notes` rename (#3049).
-miden-block-prover    = { version = "0.15.3" }
-miden-protocol        = { default-features = false, version = "0.15.3" }
-miden-standards       = { version = "0.15.3" }
-miden-testing         = { version = "0.15.3" }
-miden-tx              = { default-features = false, version = "0.15.3" }
-miden-tx-batch-prover = { version = "0.15.3" }
+miden-block-prover = { branch = "next", git = "https://github.com/0xMiden/protocol.git" }
+miden-protocol     = { branch = "next", default-features = false, git = "https://github.com/0xMiden/protocol.git" }
+miden-standards    = { branch = "next", git = "https://github.com/0xMiden/protocol.git" }
+miden-testing      = { branch = "next", git = "https://github.com/0xMiden/protocol.git" }
+miden-tx           = { branch = "next", default-features = false, git = "https://github.com/0xMiden/protocol.git" }
+miden-tx-batch     = { branch = "next", git = "https://github.com/0xMiden/protocol.git" }
 
 # Other miden dependencies. These should align with those expected by miden-protocol.
 miden-crypto = { version = "0.25" }

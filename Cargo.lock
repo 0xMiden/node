@@ -2885,9 +2885,8 @@ dependencies = [
 
 [[package]]
 name = "miden-block-prover"
-version = "0.15.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "292ded918a0ddd056dc34db471f0bef6ac7991467d513ba505a4fcc0b1ecfac4"
+version = "0.16.0"
+source = "git+https://github.com/0xMiden/protocol.git?branch=next#91d1e88be50a3fa18cfb3b0c99b3cbdd31a68606"
 dependencies = [
  "miden-protocol",
  "thiserror 2.0.18",
@@ -3196,7 +3195,7 @@ dependencies = [
  "miden-protocol",
  "miden-remote-prover-client",
  "miden-standards",
- "miden-tx-batch-prover",
+ "miden-tx-batch",
  "pretty_assertions",
  "rand 0.9.4",
  "rand_chacha",
@@ -3295,8 +3294,7 @@ dependencies = [
  "miden-node-utils",
  "miden-protocol",
  "miden-standards",
- "miden-tx",
- "miden-tx-batch-prover",
+ "miden-tx-batch",
  "reqwest",
  "rstest",
  "semver 1.0.28",
@@ -3495,9 +3493,8 @@ dependencies = [
 
 [[package]]
 name = "miden-protocol"
-version = "0.15.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66340243e37da5936cb278a8dd11037813f1dc6731c2fc866703b76ed465ebc3"
+version = "0.16.0"
+source = "git+https://github.com/0xMiden/protocol.git?branch=next#91d1e88be50a3fa18cfb3b0c99b3cbdd31a68606"
 dependencies = [
  "bech32",
  "fs-err",
@@ -3554,7 +3551,7 @@ dependencies = [
  "miden-protocol",
  "miden-testing",
  "miden-tx",
- "miden-tx-batch-prover",
+ "miden-tx-batch",
  "opentelemetry",
  "serial_test",
  "tokio",
@@ -3599,9 +3596,8 @@ dependencies = [
 
 [[package]]
 name = "miden-standards"
-version = "0.15.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7c7146b028e637f4079b5bdefeefc54d7d6e47a805451fa0a18859d19efa2ff"
+version = "0.16.0"
+source = "git+https://github.com/0xMiden/protocol.git?branch=next#91d1e88be50a3fa18cfb3b0c99b3cbdd31a68606"
 dependencies = [
  "bon",
  "fs-err",
@@ -3638,9 +3634,8 @@ dependencies = [
 
 [[package]]
 name = "miden-testing"
-version = "0.15.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4096fc44a4c88f37405be284e25efdce194d6051e9472ae136ab9249659433c"
+version = "0.16.0"
+source = "git+https://github.com/0xMiden/protocol.git?branch=next#91d1e88be50a3fa18cfb3b0c99b3cbdd31a68606"
 dependencies = [
  "anyhow",
  "itertools 0.14.0",
@@ -3651,7 +3646,7 @@ dependencies = [
  "miden-protocol",
  "miden-standards",
  "miden-tx",
- "miden-tx-batch-prover",
+ "miden-tx-batch",
  "rand 0.9.4",
  "rand_chacha",
  "thiserror 2.0.18",
@@ -3659,26 +3654,26 @@ dependencies = [
 
 [[package]]
 name = "miden-tx"
-version = "0.15.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94092b45bc0abc656af25473c9807d1e6cee8e682c58d3b1186f0bd0fb6471fb"
+version = "0.16.0"
+source = "git+https://github.com/0xMiden/protocol.git?branch=next#91d1e88be50a3fa18cfb3b0c99b3cbdd31a68606"
 dependencies = [
  "miden-processor",
  "miden-protocol",
  "miden-prover",
  "miden-standards",
- "miden-verifier",
  "thiserror 2.0.18",
 ]
 
 [[package]]
-name = "miden-tx-batch-prover"
-version = "0.15.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f60add2b40559352661bc86970541f88ffcf98c528f301295f9dc3bf15481b46"
+name = "miden-tx-batch"
+version = "0.16.0"
+source = "git+https://github.com/0xMiden/protocol.git?branch=next#91d1e88be50a3fa18cfb3b0c99b3cbdd31a68606"
 dependencies = [
+ "miden-processor",
  "miden-protocol",
- "miden-tx",
+ "miden-prover",
+ "miden-verifier",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

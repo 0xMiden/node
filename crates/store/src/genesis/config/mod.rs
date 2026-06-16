@@ -13,7 +13,7 @@ use miden_protocol::account::{
     AccountDelta,
     AccountFile,
     AccountId,
-    AccountStorageDelta,
+    AccountStoragePatch,
     AccountType,
     AccountVaultDelta,
     FungibleAssetDelta,
@@ -25,15 +25,9 @@ use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey as RpoSecretKey;
 use miden_protocol::errors::TokenSymbolError;
 use miden_protocol::{Felt, ONE};
-use miden_standards::AuthMethod;
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::account::faucets::{FungibleFaucet, TokenName};
-use miden_standards::account::policies::{
-    BurnPolicyConfig,
-    MintPolicyConfig,
-    PolicyRegistration,
-    TokenPolicyManager,
-};
+use miden_standards::account::policies::{BurnPolicy, MintPolicy, TokenPolicyManager};
 use miden_standards::account::wallets::create_basic_wallet;
 use rand::distr::weighted::Weight;
 use rand::{Rng, SeedableRng};
@@ -225,9 +219,8 @@ impl GenesisConfig {
 
             let mut rng = ChaCha20Rng::from_seed(rand::random());
             let secret_key = RpoSecretKey::with_rng(&mut get_random_coin(&mut rng));
-            let auth = AuthMethod::SingleSig {
-                approver: (secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2),
-            };
+            let auth =
+                AuthSingleSig::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
             let init_seed: [u8; 32] = rng.random();
 
             let mut wallet_account = create_basic_wallet(init_seed, auth, account_type.into())?;
@@ -246,7 +239,7 @@ impl GenesisConfig {
             // therefore we need bump the nonce manually to uphold this invariant.
             let wallet_delta = AccountDelta::new(
                 wallet_account.id(),
-                AccountStorageDelta::default(),
+                AccountStoragePatch::default(),
                 AccountVaultDelta::new(
                     wallet_fungible_asset_update,
                     NonFungibleAssetDelta::default(),
@@ -275,7 +268,7 @@ impl GenesisConfig {
             // `ONE`.
             let total_issuance = faucet_issuance.get(&faucet_id).copied().unwrap_or_default();
 
-            let mut storage_delta = AccountStorageDelta::default();
+            let mut storage_delta = AccountStoragePatch::default();
 
             if total_issuance != 0 {
                 let current_faucet = FungibleFaucet::try_from(faucet_account.storage())?;
@@ -453,9 +446,10 @@ impl FungibleFaucetConfig {
             .with_auth_component(auth)
             .with_component(faucet)
             .with_components(
-                TokenPolicyManager::new()
-                    .with_mint_policy(MintPolicyConfig::AllowAll, PolicyRegistration::Active)?
-                    .with_burn_policy(BurnPolicyConfig::AllowAll, PolicyRegistration::Active)?,
+                TokenPolicyManager::builder()
+                    .active_mint_policy(MintPolicy::allow_all())
+                    .active_burn_policy(BurnPolicy::allow_all())
+                    .build(),
             )
             .build()?;
 

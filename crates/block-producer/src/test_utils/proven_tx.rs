@@ -3,8 +3,7 @@ use std::sync::Arc;
 
 use itertools::Itertools;
 use miden_node_utils::fee::test_fee;
-use miden_protocol::account::AccountId;
-use miden_protocol::account::delta::AccountUpdateDetails;
+use miden_protocol::account::{AccountId, AccountUpdateDetails};
 use miden_protocol::asset::FungibleAsset;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{Note, NoteAttachments, Nullifier};

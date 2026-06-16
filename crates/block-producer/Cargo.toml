@@ -31,7 +31,7 @@ miden-node-store           = { workspace = true }
 miden-node-utils           = { features = ["testing"], workspace = true }
 miden-protocol             = { default-features = true, workspace = true }
 miden-remote-prover-client = { features = ["batch-prover", "block-prover"], workspace = true }
-miden-tx-batch-prover      = { workspace = true }
+miden-tx-batch             = { workspace = true }
 rand                       = { workspace = true }
 thiserror                  = { workspace = true }
 tokio                      = { features = ["macros", "net", "rt-multi-thread"], workspace = true }

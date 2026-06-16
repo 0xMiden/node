@@ -11,15 +11,16 @@ use miden_node_proto::domain::account::{
 };
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
-use miden_protocol::account::delta::{AccountDelta, AccountStorageDelta, AccountVaultDelta};
 use miden_protocol::account::{
     AccountId,
-    NonFungibleDeltaAction,
+    AccountPatch,
+    AccountStoragePatch,
+    AccountVaultPatch,
     StorageMapKey,
     StorageMapKeyHash,
     StorageSlotName,
 };
-use miden_protocol::asset::{Asset, FungibleAsset};
+use miden_protocol::asset::Asset;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::merkle::smt::{
     ForestOperation,
@@ -189,11 +190,11 @@ impl<B: Backend> AccountStateForest<B> {
             .collect()
     }
 
-    fn cache_storage_map_keys_from_delta(&mut self, delta: &AccountDelta) {
-        let raw_keys = delta
+    fn cache_storage_map_keys_from_patch(&mut self, patch: &AccountPatch) {
+        let raw_keys = patch
             .storage()
             .maps()
-            .flat_map(|(_slot_name, map_delta)| map_delta.entries().keys().copied());
+            .flat_map(|(_slot_name, map_patch)| map_patch.entries().keys().copied());
         self.cache_storage_map_keys(raw_keys);
     }
 
@@ -445,34 +446,30 @@ impl<B: Backend> AccountStateForest<B> {
     // PUBLIC INTERFACE
     // --------------------------------------------------------------------------------------------
 
-    /// Updates the forest with account vault and storage changes from a delta.
+    /// Updates the forest with account vault and storage changes from a patch.
     ///
-    /// Iterates through account updates and applies each delta to the forest.
+    /// Iterates through account updates and applies each patch to the forest.
     /// Private accounts should be filtered out before calling this method.
     ///
     /// # Arguments
     ///
     /// * `block_num` - Block number for which these updates apply
-    /// * `account_updates` - Iterator of `AccountDelta` for public accounts
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if applying a vault delta results in a negative balance.
+    /// * `account_updates` - Iterator of `AccountPatch` for public accounts
     #[instrument(target = COMPONENT, skip_all, fields(block.number = %block_num))]
     pub(crate) fn apply_block_updates(
         &mut self,
         block_num: BlockNumber,
-        account_updates: impl IntoIterator<Item = AccountDelta>,
+        account_updates: impl IntoIterator<Item = AccountPatch>,
     ) -> Result<(), AccountStateForestError> {
-        for delta in account_updates {
-            self.update_account(block_num, &delta)?;
+        for patch in account_updates {
+            self.update_account(block_num, &patch)?;
 
             tracing::debug!(
                 target: crate::COMPONENT,
-                account_id = %delta.id(),
+                account_id = %patch.id(),
                 %block_num,
-                is_full_state = delta.is_full_state(),
-                "Updated forest with account delta"
+                is_full_state = patch.is_full_state(),
+                "Updated forest with account patch"
             );
         }
 
@@ -481,41 +478,37 @@ impl<B: Backend> AccountStateForest<B> {
         Ok(())
     }
 
-    /// Updates the forest with account vault and storage changes from a delta.
+    /// Updates the forest with account vault and storage changes from a patch.
     ///
     /// Unified interface for updating all account state in the forest, handling both full-state
-    /// deltas (new accounts or reconstruction from DB) and partial deltas (incremental updates
+    /// patches (new accounts or reconstruction from DB) and partial patches (incremental updates
     /// during block application).
     ///
-    /// Full-state deltas (`delta.is_full_state() == true`) populate the forest from scratch using
-    /// an empty SMT root. Partial deltas apply changes on top of the previous block's state.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if applying a vault delta results in a negative balance.
+    /// Full-state patches (`patch.is_full_state() == true`) populate the forest from scratch using
+    /// an empty SMT root. Partial patches apply changes on top of the previous block's state.
     pub(crate) fn update_account(
         &mut self,
         block_num: BlockNumber,
-        delta: &AccountDelta,
+        patch: &AccountPatch,
     ) -> Result<(), AccountStateForestError> {
-        let account_id = delta.id();
-        let is_full_state = delta.is_full_state();
+        let account_id = patch.id();
+        let is_full_state = patch.is_full_state();
 
         // Apply vault changes.
         if is_full_state {
-            self.insert_account_vault(block_num, account_id, delta.vault())?;
-        } else if !delta.vault().is_empty() {
-            self.update_account_vault(block_num, account_id, delta.vault())?;
+            self.insert_account_vault(block_num, account_id, patch.vault())?;
+        } else if !patch.vault().is_empty() {
+            self.update_account_vault(block_num, account_id, patch.vault())?;
         }
 
         // Apply storage map changes.
         if is_full_state {
-            self.insert_account_storage(block_num, account_id, delta.storage());
-        } else if !delta.storage().is_empty() {
-            self.update_account_storage(block_num, account_id, delta.storage());
+            self.insert_account_storage(block_num, account_id, patch.storage());
+        } else if !patch.storage().is_empty() {
+            self.update_account_storage(block_num, account_id, patch.storage());
         }
 
-        self.cache_storage_map_keys_from_delta(delta);
+        self.cache_storage_map_keys_from_patch(patch);
 
         Ok(())
     }
@@ -532,11 +525,12 @@ impl<B: Backend> AccountStateForest<B> {
 
     /// Inserts asset vault data into the forest for the specified account. Assumes that asset vault
     /// for this account does not yet exist in the forest.
+    #[expect(clippy::unnecessary_wraps)]
     fn insert_account_vault(
         &mut self,
         block_num: BlockNumber,
         account_id: AccountId,
-        vault_delta: &AccountVaultDelta,
+        vault_patch: &AccountVaultPatch,
     ) -> Result<(), AccountStateForestError> {
         let prev_root = self.get_latest_vault_root(account_id);
         let lineage = Self::vault_lineage_id(account_id);
@@ -546,7 +540,7 @@ impl<B: Backend> AccountStateForest<B> {
             "account should not be in the forest"
         );
 
-        if vault_delta.is_empty() {
+        if vault_patch.is_empty() {
             let lineage = Self::vault_lineage_id(account_id);
             let new_root = self.apply_forest_updates(lineage, block_num, Vec::new());
 
@@ -563,23 +557,8 @@ impl<B: Backend> AccountStateForest<B> {
 
         let mut entries: Vec<(Word, Word)> = Vec::new();
 
-        for (vault_key, amount_delta) in vault_delta.fungible().iter() {
-            let amount =
-                (*amount_delta).try_into().expect("full-state amount should be non-negative");
-            let asset = FungibleAsset::new(vault_key.faucet_id(), amount)?
-                .with_callbacks(vault_key.callback_flag());
-            entries.push((asset.to_key_word(), asset.to_value_word()));
-        }
-
-        // process non-fungible assets
-        for (&asset, action) in vault_delta.non_fungible().iter() {
-            let asset_vault_key: Word = asset.vault_key().into();
-            match action {
-                NonFungibleDeltaAction::Add => {
-                    entries.push((asset_vault_key, asset.to_value_word()));
-                },
-                NonFungibleDeltaAction::Remove => entries.push((asset_vault_key, EMPTY_WORD)),
-            }
+        for (vault_key, value) in vault_patch.iter() {
+            entries.push((Word::from(*vault_key), *value));
         }
 
         let num_entries = entries.len();
@@ -599,22 +578,22 @@ impl<B: Backend> AccountStateForest<B> {
         Ok(())
     }
 
-    /// Updates the forest with storage map changes from a delta and returns updated roots.
+    /// Updates the forest with storage map changes from a patch.
     ///
     /// Assumes that storage maps for the provided account are not in the forest already.
     fn insert_account_storage(
         &mut self,
         block_num: BlockNumber,
         account_id: AccountId,
-        storage_delta: &AccountStorageDelta,
+        storage_patch: &AccountStoragePatch,
     ) {
-        for (slot_name, map_delta) in storage_delta.maps() {
+        for (slot_name, map_patch) in storage_patch.maps() {
             // get the latest root for this map, and make sure the root is for an empty tree
             let prev_root = self.get_latest_storage_map_root(account_id, slot_name);
             assert_eq!(prev_root, empty_smt_root(), "account should not be in the forest");
 
             let raw_map_entries: Vec<(StorageMapKey, Word)> =
-                Vec::from_iter(map_delta.entries().iter().filter_map(|(&key, &value)| {
+                Vec::from_iter(map_patch.entries().iter().filter_map(|(&key, &value)| {
                     if value == EMPTY_WORD { None } else { Some((key, value)) }
                 }));
 
@@ -645,82 +624,32 @@ impl<B: Backend> AccountStateForest<B> {
                 %block_num,
                 ?slot_name,
                 %new_root,
-                delta_entries = num_entries,
+                patch_entries = num_entries,
                 "Inserted storage map into forest"
             );
         }
     }
 
-    // ASSET VAULT DELTA PROCESSING
+    // ASSET VAULT PATCH PROCESSING
     // --------------------------------------------------------------------------------------------
 
-    /// Updates the forest with vault changes from a delta and returns the new root.
+    /// Updates the forest with the account's vault changes from the patch.
     ///
-    /// Processes both fungible and non-fungible asset changes, building entries for the vault SMT
-    /// and tracking the new root.
-    ///
-    /// # Returns
-    ///
-    /// The new vault root after applying the delta.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if applying a delta results in a negative balance.
+    /// Writes the patch's absolute vault entries to the vault SMT, where an empty value removes the
+    /// corresponding asset.
+    #[expect(clippy::unnecessary_wraps)]
     fn update_account_vault(
         &mut self,
         block_num: BlockNumber,
         account_id: AccountId,
-        vault_delta: &AccountVaultDelta,
+        vault_patch: &AccountVaultPatch,
     ) -> Result<(), AccountStateForestError> {
-        assert!(!vault_delta.is_empty(), "expected the delta not to be empty");
-
-        // get the previous vault root; the root could be for an empty or non-empty SMT
-        let lineage = Self::vault_lineage_id(account_id);
-        let prev_tree =
-            self.forest.latest_version(lineage).map(|version| TreeId::new(lineage, version));
+        assert!(!vault_patch.is_empty(), "expected the patch not to be empty");
 
         let mut entries: Vec<(Word, Word)> = Vec::new();
 
-        // Process fungible assets
-        for (vault_key, amount_delta) in vault_delta.fungible().iter() {
-            let faucet_id = vault_key.faucet_id();
-            let callback_flag = vault_key.callback_flag();
-            let delta_abs = amount_delta.unsigned_abs();
-            let delta = FungibleAsset::new(faucet_id, delta_abs)?.with_callbacks(callback_flag);
-            let key = Word::from(delta.vault_key());
-
-            let empty = FungibleAsset::new(faucet_id, 0)?.with_callbacks(callback_flag);
-            let asset = if let Some(tree) = prev_tree {
-                self.forest
-                    .get(tree, key)?
-                    .map(|value| FungibleAsset::from_key_value(*vault_key, value))
-                    .transpose()?
-                    .unwrap_or(empty)
-            } else {
-                empty
-            };
-
-            let updated = if *amount_delta < 0 {
-                asset.sub(delta)?
-            } else {
-                asset.add(delta)?
-            };
-
-            let value = if updated.amount().as_u64() == 0 {
-                EMPTY_WORD
-            } else {
-                updated.to_value_word()
-            };
-            entries.push((key, value));
-        }
-
-        // Process non-fungible assets
-        for (asset, action) in vault_delta.non_fungible().iter() {
-            let value = match action {
-                NonFungibleDeltaAction::Add => asset.to_value_word(),
-                NonFungibleDeltaAction::Remove => EMPTY_WORD,
-            };
-            entries.push((asset.vault_key().into(), value));
+        for (vault_key, value) in vault_patch.iter() {
+            entries.push((Word::from(*vault_key), *value));
         }
 
         let vault_entries = entries.len();
@@ -753,7 +682,7 @@ impl<B: Backend> AccountStateForest<B> {
         self.forest.latest_root(lineage).unwrap_or_else(empty_smt_root)
     }
 
-    /// Updates the forest with storage map changes from a delta.
+    /// Updates the forest with storage map changes from a patch.
     ///
     /// # Returns
     ///
@@ -762,21 +691,21 @@ impl<B: Backend> AccountStateForest<B> {
         &mut self,
         block_num: BlockNumber,
         account_id: AccountId,
-        storage_delta: &AccountStorageDelta,
+        storage_patch: &AccountStoragePatch,
     ) {
-        for (slot_name, map_delta) in storage_delta.maps() {
-            // map delta shouldn't be empty, but if it is for some reason, there is nothing to do
-            if map_delta.is_empty() {
+        for (slot_name, map_patch) in storage_patch.maps() {
+            // map patch shouldn't be empty, but if it is for some reason, there is nothing to do
+            if map_patch.is_empty() {
                 continue;
             }
 
             // update the storage map tree in the forest and add an entry to the storage map roots
             let lineage = Self::storage_lineage_id(account_id, slot_name);
-            let delta_entries: Vec<(StorageMapKey, Word)> =
-                Vec::from_iter(map_delta.entries().iter().map(|(key, value)| (*key, *value)));
+            let patch_entries: Vec<(StorageMapKey, Word)> =
+                Vec::from_iter(map_patch.entries().iter().map(|(key, value)| (*key, *value)));
 
             let hashed_entries = Vec::from_iter(
-                delta_entries.iter().map(|(raw_key, value)| (raw_key.hash().into(), *value)),
+                patch_entries.iter().map(|(raw_key, value)| (raw_key.hash().into(), *value)),
             );
 
             let operations = Self::build_forest_operations(hashed_entries);
@@ -788,7 +717,7 @@ impl<B: Backend> AccountStateForest<B> {
                 %block_num,
                 ?slot_name,
                 %new_root,
-                delta_entries = delta_entries.len(),
+                patch_entries = patch_entries.len(),
                 "Updated storage map in forest"
             );
         }

@@ -331,7 +331,7 @@ impl DataStore for MonitorDataStore {
         }
 
         Result::<Vec<_>, _>::from_iter(vault_keys.into_iter().map(|vault_key| {
-            AssetWitness::new(account.vault().open(vault_key).into()).map_err(|err| {
+            AssetWitness::new(account.vault().open(vault_key).into(), [vault_key]).map_err(|err| {
                 DataStoreError::Other {
                     error_msg: "failed to open vault asset tree".into(),
                     source: Some(Box::new(err)),

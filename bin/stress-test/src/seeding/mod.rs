@@ -8,17 +8,17 @@ use miden_node_proto::domain::batch::BatchInputs;
 use miden_node_store::{DataDirectory, GenesisState, State};
 use miden_node_utils::clap::StorageOptions;
 use miden_protocol::account::auth::AuthScheme;
-use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
     Account,
     AccountBuilder,
     AccountComponent,
     AccountComponentMetadata,
-    AccountDelta,
     AccountId,
-    AccountStorageDelta,
+    AccountPatch,
+    AccountStoragePatch,
     AccountType,
-    AccountVaultDelta,
+    AccountUpdateDetails,
+    AccountVaultPatch,
     StorageMap,
     StorageMapKey,
     StorageSlot,
@@ -55,12 +55,7 @@ use miden_protocol::vm::ExecutionProof;
 use miden_protocol::{Felt, ONE, Word};
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::account::faucets::{FungibleFaucet, TokenName};
-use miden_standards::account::policies::{
-    BurnPolicyConfig,
-    MintPolicyConfig,
-    PolicyRegistration,
-    TokenPolicyManager,
-};
+use miden_standards::account::policies::{BurnPolicy, MintPolicy, TokenPolicyManager};
 use miden_standards::account::wallets::BasicWallet;
 use miden_standards::code_builder::CodeBuilder;
 use miden_standards::note::P2idNote;
@@ -577,11 +572,10 @@ fn create_faucet_with_seed(index: u64) -> Account {
         .account_type(AccountType::Private)
         .with_component(faucet)
         .with_components(
-            TokenPolicyManager::new()
-                .with_mint_policy(MintPolicyConfig::AllowAll, PolicyRegistration::Active)
-                .unwrap()
-                .with_burn_policy(BurnPolicyConfig::AllowAll, PolicyRegistration::Active)
-                .unwrap(),
+            TokenPolicyManager::builder()
+                .active_mint_policy(MintPolicy::allow_all())
+                .active_burn_policy(BurnPolicy::allow_all())
+                .build(),
         )
         .with_auth_component(AuthSingleSig::new(
             key_pair.public_key().into(),
@@ -608,6 +602,7 @@ fn create_batch(txs: &[ProvenTransaction], block_ref: &BlockHeader) -> ProvenBat
         output_notes,
         BlockNumber::MAX,
         OrderedTransactionHeaders::new_unchecked(txs.iter().map(TransactionHeader::from).collect()),
+        ExecutionProof::new_dummy(),
     )
     .unwrap()
 }
@@ -663,14 +658,14 @@ fn create_consume_note_tx(
 
     account.increment_nonce(ONE).unwrap();
 
-    let (details, account_delta_commitment) = if account.is_public() {
-        let account_delta = if is_new_account {
-            AccountDelta::try_from(account.clone()).unwrap()
+    let (details, account_patch_commitment) = if account.is_public() {
+        let account_patch = if is_new_account {
+            AccountPatch::try_from(account.clone()).unwrap()
         } else {
-            create_existing_account_delta(&account, input_note.note().assets(), storage_update)
+            create_existing_account_patch(&account, input_note.note().assets(), storage_update)
         };
-        let commitment = account_delta.clone().to_commitment();
-        (AccountUpdateDetails::Delta(account_delta), commitment)
+        let commitment = account_patch.to_commitment();
+        (AccountUpdateDetails::Public(account_patch), commitment)
     } else {
         (AccountUpdateDetails::Private, Word::empty())
     };
@@ -679,7 +674,7 @@ fn create_consume_note_tx(
         account.id(),
         init_hash,
         account.to_commitment(),
-        account_delta_commitment,
+        account_patch_commitment,
         details,
     )
     .unwrap();
@@ -698,24 +693,28 @@ fn create_consume_note_tx(
     (account, transaction)
 }
 
-fn create_existing_account_delta(
+fn create_existing_account_patch(
     account: &Account,
     note_assets: &NoteAssets,
     storage_update: Option<(BenchmarkStorageUpdate, usize)>,
-) -> AccountDelta {
-    let mut vault_delta = AccountVaultDelta::default();
+) -> AccountPatch {
+    let mut vault_patch = AccountVaultPatch::default();
     for asset in note_assets.iter() {
-        vault_delta.add_asset(*asset).unwrap();
+        let updated_asset = account
+            .vault()
+            .get(asset.vault_key())
+            .expect("note asset should be present in the account vault");
+        vault_patch.insert_asset(updated_asset);
     }
 
-    let mut storage_delta = AccountStorageDelta::new();
+    let mut storage_patch = AccountStoragePatch::new();
     if let Some((storage_update, tx_index)) = storage_update {
         if storage_update.storage_map_entries > 0
             && account.storage().get(&benchmark_storage_map_slot()).is_some()
         {
             let key_index = u32::try_from((tx_index % storage_update.storage_map_entries) + 1)
                 .expect("storage map key fits into u32");
-            storage_delta
+            storage_patch
                 .set_map_item(
                     benchmark_storage_map_slot(),
                     StorageMapKey::from_index(key_index),
@@ -729,7 +728,8 @@ fn create_existing_account_delta(
         }
     }
 
-    AccountDelta::new(account.id(), storage_delta, vault_delta, ONE).unwrap()
+    AccountPatch::new(account.id(), storage_patch, vault_patch, None, Some(account.nonce()))
+        .unwrap()
 }
 
 /// Creates a transaction from the faucet that creates the given output notes. Updates the faucet

@@ -8,23 +8,21 @@ use diesel::{ExpressionMethods, QueryDsl, RunQueryDsl, SqliteConnection};
 use miden_node_utils::fee::test_fee_params;
 use miden_protocol::account::auth::{AuthScheme, PublicKeyCommitment};
 use miden_protocol::account::component::AccountComponentMetadata;
-use miden_protocol::account::delta::{
-    AccountStorageDelta,
-    AccountUpdateDetails,
-    AccountVaultDelta,
-    StorageMapDelta,
-    StorageSlotDelta,
-};
 use miden_protocol::account::{
     AccountBuilder,
     AccountComponent,
-    AccountDelta,
     AccountId,
+    AccountPatch,
+    AccountStoragePatch,
     AccountType,
+    AccountUpdateDetails,
+    AccountVaultPatch,
     StorageMap,
     StorageMapKey,
+    StorageMapPatch,
     StorageSlot,
     StorageSlotName,
+    StorageSlotPatch,
 };
 use miden_protocol::asset::{Asset, AssetCallbackFlag, FungibleAsset};
 use miden_protocol::block::{BlockAccountUpdate, BlockHeader, BlockNumber};
@@ -154,11 +152,11 @@ fn optimized_delta_matches_full_account_method() {
     insert_block_header(&mut conn, block_2);
 
     // Insert the initial account at block 1 (full state) - no vault assets
-    let delta_initial = AccountDelta::try_from(account.clone()).unwrap();
+    let patch_initial = AccountPatch::try_from(account.clone()).unwrap();
     let account_update_initial = BlockAccountUpdate::new(
         account.id(),
         account.to_commitment(),
-        AccountUpdateDetails::Delta(delta_initial),
+        AccountUpdateDetails::Public(patch_initial),
     );
     upsert_accounts(&mut conn, &[account_update_initial], block_1).expect("Initial upsert failed");
 
@@ -189,52 +187,51 @@ fn optimized_delta_matches_full_account_method() {
         full_account_before.storage().slots().iter().next().unwrap().name().clone();
 
     // Build the storage delta (value slot update only)
-    let storage_delta = {
+    let storage_patch = {
         let deltas = BTreeMap::from_iter([(
             value_slot_name.clone(),
-            StorageSlotDelta::Value(new_slot_value),
+            StorageSlotPatch::Value(new_slot_value),
         )]);
-        AccountStorageDelta::from_raw(deltas)
+        AccountStoragePatch::from_raw(deltas)
     };
 
-    // Build the vault delta (add 500 tokens to empty vault)
-    let vault_delta = {
-        let mut delta = AccountVaultDelta::default();
+    // Build the vault patch (the absolute end-state is 500 tokens, starting from an empty vault)
+    let vault_patch = {
         let asset = Asset::Fungible(FungibleAsset::new(faucet_id, VAULT_AMOUNT).unwrap());
-        delta.add_asset(asset).unwrap();
-        delta
+        AccountVaultPatch::with_assets([asset])
     };
 
-    // Create a partial delta
+    // Create a partial patch
     let nonce_delta = Felt::new_unchecked(NONCE_DELTA);
-    let partial_delta = AccountDelta::new(
-        full_account_before.id(),
-        storage_delta.clone(),
-        vault_delta.clone(),
-        nonce_delta,
-    )
-    .unwrap();
-    assert!(!partial_delta.is_full_state(), "Delta should be partial, not full state");
-
-    // Construct the expected final account by applying the delta
     let expected_nonce = Felt::new_unchecked(
         full_account_before.nonce().as_canonical_u64() + nonce_delta.as_canonical_u64(),
     );
+    let partial_patch = AccountPatch::new(
+        full_account_before.id(),
+        storage_patch,
+        vault_patch,
+        None,
+        Some(expected_nonce),
+    )
+    .unwrap();
+    assert!(!partial_patch.is_full_state(), "Patch should be partial, not full state");
+
+    // Construct the expected final account by applying the patch
     let expected_code_commitment = full_account_before.code().commitment();
 
     let mut expected_account = full_account_before.clone();
-    expected_account.apply_delta(&partial_delta).unwrap();
+    expected_account.apply_patch(&partial_patch).unwrap();
     let final_account_for_commitment = expected_account;
 
     let final_commitment = final_account_for_commitment.to_commitment();
     let expected_storage_commitment = final_account_for_commitment.storage().to_commitment();
     let expected_vault_root = final_account_for_commitment.vault().root();
 
-    // ----- Apply the partial delta via upsert_accounts (optimized path) -----
+    // ----- Apply the partial patch via upsert_accounts (optimized path) -----
     let account_update = BlockAccountUpdate::new(
         account.id(),
         final_commitment,
-        AccountUpdateDetails::Delta(partial_delta),
+        AccountUpdateDetails::Public(partial_patch),
     );
     upsert_accounts(&mut conn, &[account_update], block_2).expect("Partial delta upsert failed");
 
@@ -356,44 +353,46 @@ fn optimized_delta_updates_non_empty_vault() {
     insert_block_header(&mut conn, block_2);
     insert_block_header(&mut conn, block_3);
 
-    // Block 1: insert full-state delta (initial account with 700 tokens of faucet_id)
-    let delta_initial = AccountDelta::try_from(account.clone()).unwrap();
+    // Block 1: insert full-state patch (initial account with 700 tokens of faucet_id)
+    let patch_initial = AccountPatch::try_from(account.clone()).unwrap();
     let account_update_initial = BlockAccountUpdate::new(
         account.id(),
         account.to_commitment(),
-        AccountUpdateDetails::Delta(delta_initial),
+        AccountUpdateDetails::Public(patch_initial),
     );
     upsert_accounts(&mut conn, &[account_update_initial], block_1).expect("Initial upsert failed");
 
     let full_account_before =
         select_full_account(&mut conn, account.id()).expect("Failed to load full account");
 
-    // Block 2: partial delta — remove faucet_id (700), add faucet_id_1 (250)
-    let mut vault_delta = AccountVaultDelta::default();
-    vault_delta
-        .add_asset(Asset::Fungible(FungibleAsset::new(faucet_id_1, ADDED_AMOUNT_BLOCK_2).unwrap()))
-        .unwrap();
-    vault_delta
-        .remove_asset(Asset::Fungible(FungibleAsset::new(faucet_id, INITIAL_AMOUNT).unwrap()))
-        .unwrap();
+    // Block 2: partial patch — remove faucet_id (700), add faucet_id_1 (250)
+    let removed_asset = Asset::Fungible(FungibleAsset::new(faucet_id, INITIAL_AMOUNT).unwrap());
+    let added_asset =
+        Asset::Fungible(FungibleAsset::new(faucet_id_1, ADDED_AMOUNT_BLOCK_2).unwrap());
+    let mut vault_patch = AccountVaultPatch::default();
+    vault_patch.insert_asset(added_asset);
+    vault_patch.remove_asset(removed_asset.vault_key());
 
-    let partial_delta = AccountDelta::new(
+    let final_nonce =
+        Felt::new_unchecked(full_account_before.nonce().as_canonical_u64() + NONCE_DELTA);
+    let partial_patch = AccountPatch::new(
         account.id(),
-        AccountStorageDelta::new(),
-        vault_delta,
-        Felt::new_unchecked(NONCE_DELTA),
+        AccountStoragePatch::new(),
+        vault_patch,
+        None,
+        Some(final_nonce),
     )
     .unwrap();
 
     let mut expected_account = full_account_before.clone();
-    expected_account.apply_delta(&partial_delta).unwrap();
+    expected_account.apply_patch(&partial_patch).unwrap();
     let expected_commitment = expected_account.to_commitment();
     let expected_vault_root = expected_account.vault().root();
 
     let account_update = BlockAccountUpdate::new(
         account.id(),
         expected_commitment,
-        AccountUpdateDetails::Delta(partial_delta),
+        AccountUpdateDetails::Public(partial_patch),
     );
     upsert_accounts(&mut conn, &[account_update], block_2).expect("Partial delta upsert failed");
 
@@ -412,29 +411,32 @@ fn optimized_delta_updates_non_empty_vault() {
     assert_eq!(full_account_after.vault().root(), expected_vault_root);
     assert_eq!(full_account_after.to_commitment(), expected_commitment);
 
-    // Block 3: partial delta — add more of faucet_id_1 (150 more, total = 400)
-    let mut vault_delta_3 = AccountVaultDelta::default();
-    vault_delta_3
-        .add_asset(Asset::Fungible(FungibleAsset::new(faucet_id_1, ADDED_AMOUNT_BLOCK_3).unwrap()))
-        .unwrap();
+    // Block 3: partial patch — add more of faucet_id_1 (150 more, total = 400)
+    let mut vault_patch_3 = AccountVaultPatch::default();
+    vault_patch_3.insert_asset(Asset::Fungible(
+        FungibleAsset::new(faucet_id_1, ADDED_AMOUNT_BLOCK_2 + ADDED_AMOUNT_BLOCK_3).unwrap(),
+    ));
 
-    let partial_delta_3 = AccountDelta::new(
+    let final_nonce_3 =
+        Felt::new_unchecked(full_account_after.nonce().as_canonical_u64() + NONCE_DELTA);
+    let partial_patch_3 = AccountPatch::new(
         account.id(),
-        AccountStorageDelta::new(),
-        vault_delta_3,
-        Felt::new_unchecked(NONCE_DELTA),
+        AccountStoragePatch::new(),
+        vault_patch_3,
+        None,
+        Some(final_nonce_3),
     )
     .unwrap();
 
     let mut expected_after_3 = full_account_after.clone();
-    expected_after_3.apply_delta(&partial_delta_3).unwrap();
+    expected_after_3.apply_patch(&partial_patch_3).unwrap();
     let commitment_3 = expected_after_3.to_commitment();
     let expected_vault_root_3 = expected_after_3.vault().root();
 
     let account_update_3 = BlockAccountUpdate::new(
         account.id(),
         commitment_3,
-        AccountUpdateDetails::Delta(partial_delta_3),
+        AccountUpdateDetails::Public(partial_patch_3),
     );
     upsert_accounts(&mut conn, &[account_update_3], block_3).expect("Block 3 upsert failed");
 
@@ -496,13 +498,13 @@ fn optimized_delta_updates_preserve_callback_flag() {
     insert_block_header(&mut conn, block_3);
 
     // Block 1: full-state insert of the (asset-less) account.
-    let delta_initial = AccountDelta::try_from(account.clone()).unwrap();
+    let patch_initial = AccountPatch::try_from(account.clone()).unwrap();
     upsert_accounts(
         &mut conn,
         &[BlockAccountUpdate::new(
             account.id(),
             account.to_commitment(),
-            AccountUpdateDetails::Delta(delta_initial),
+            AccountUpdateDetails::Public(patch_initial),
         )],
         block_1,
     )
@@ -513,30 +515,43 @@ fn optimized_delta_updates_preserve_callback_flag() {
     let apply_callback_delta = |conn: &mut SqliteConnection, block, amount| {
         let prev = select_full_account(conn, account.id()).expect("load account");
 
-        let asset = Asset::Fungible(
-            FungibleAsset::new(faucet_id, amount)
+        let callback_template = FungibleAsset::new(faucet_id, amount)
+            .unwrap()
+            .with_callbacks(AssetCallbackFlag::Enabled);
+        let vault_key = callback_template.vault_key();
+
+        // The patch carries the absolute end-state, so accumulate the previous balance for this
+        // asset and add the new amount on top.
+        let prev_amount = match prev.vault().get(vault_key) {
+            Some(Asset::Fungible(f)) => f.amount().as_u64(),
+            _ => 0,
+        };
+        let absolute_asset = Asset::Fungible(
+            FungibleAsset::new(faucet_id, prev_amount + amount)
                 .unwrap()
                 .with_callbacks(AssetCallbackFlag::Enabled),
         );
-        let mut vault_delta = AccountVaultDelta::default();
-        vault_delta.add_asset(asset).unwrap();
-        let delta = AccountDelta::new(
+        let mut vault_patch = AccountVaultPatch::default();
+        vault_patch.insert_asset(absolute_asset);
+        let final_nonce = Felt::new_unchecked(prev.nonce().as_canonical_u64() + NONCE_DELTA);
+        let patch = AccountPatch::new(
             account.id(),
-            AccountStorageDelta::new(),
-            vault_delta,
-            Felt::new_unchecked(NONCE_DELTA),
+            AccountStoragePatch::new(),
+            vault_patch,
+            None,
+            Some(final_nonce),
         )
         .unwrap();
 
         let mut expected = prev.clone();
-        expected.apply_delta(&delta).unwrap();
+        expected.apply_patch(&patch).unwrap();
 
         upsert_accounts(
             conn,
             &[BlockAccountUpdate::new(
                 account.id(),
                 expected.to_commitment(),
-                AccountUpdateDetails::Delta(delta),
+                AccountUpdateDetails::Public(patch),
             )],
             block,
         )
@@ -565,6 +580,7 @@ fn optimized_delta_updates_preserve_callback_flag() {
 }
 
 #[test]
+#[expect(clippy::too_many_lines)]
 fn optimized_delta_updates_storage_map_header() {
     // Use deterministic account seed to keep account IDs stable.
     const ACCOUNT_SEED: [u8; 32] = [30u8; 32];
@@ -631,41 +647,44 @@ fn optimized_delta_updates_storage_map_header() {
     insert_block_header(&mut conn, block_1);
     insert_block_header(&mut conn, block_2);
 
-    let delta_initial = AccountDelta::try_from(account.clone()).unwrap();
+    let patch_initial = AccountPatch::try_from(account.clone()).unwrap();
     let account_update_initial = BlockAccountUpdate::new(
         account.id(),
         account.to_commitment(),
-        AccountUpdateDetails::Delta(delta_initial),
+        AccountUpdateDetails::Public(patch_initial),
     );
     upsert_accounts(&mut conn, &[account_update_initial], block_1).expect("Initial upsert failed");
 
     let full_account_before =
         select_full_account(&mut conn, account.id()).expect("Failed to load full account");
 
-    let mut map_delta = StorageMapDelta::default();
-    map_delta.insert(map_key, map_value_updated);
-    let storage_delta = AccountStorageDelta::from_raw(BTreeMap::from_iter([(
+    let mut map_patch = StorageMapPatch::default();
+    map_patch.insert(map_key, map_value_updated);
+    let storage_patch = AccountStoragePatch::from_raw(BTreeMap::from_iter([(
         StorageSlotName::mock(SLOT_INDEX_MAP),
-        StorageSlotDelta::Map(map_delta),
+        StorageSlotPatch::Map(map_patch),
     )]));
 
-    let partial_delta = AccountDelta::new(
+    let final_nonce =
+        Felt::new_unchecked(full_account_before.nonce().as_canonical_u64() + NONCE_DELTA);
+    let partial_patch = AccountPatch::new(
         account.id(),
-        storage_delta,
-        AccountVaultDelta::default(),
-        Felt::new_unchecked(NONCE_DELTA),
+        storage_patch,
+        AccountVaultPatch::default(),
+        None,
+        Some(final_nonce),
     )
     .unwrap();
 
     let mut expected_account = full_account_before.clone();
-    expected_account.apply_delta(&partial_delta).unwrap();
+    expected_account.apply_patch(&partial_patch).unwrap();
     let expected_commitment = expected_account.to_commitment();
     let expected_storage_commitment = expected_account.storage().to_commitment();
 
     let account_update = BlockAccountUpdate::new(
         account.id(),
         expected_commitment,
-        AccountUpdateDetails::Delta(partial_delta),
+        AccountUpdateDetails::Public(partial_patch),
     );
     upsert_accounts(&mut conn, &[account_update], block_2).expect("Partial delta upsert failed");
 
@@ -794,14 +813,14 @@ fn upsert_full_state_delta() {
         .build_existing()
         .unwrap();
 
-    // Create a full-state delta from the account
-    let delta = AccountDelta::try_from(account.clone()).unwrap();
-    assert!(delta.is_full_state(), "Delta should be full state");
+    // Create a full-state patch from the account
+    let patch = AccountPatch::try_from(account.clone()).unwrap();
+    assert!(patch.is_full_state(), "Patch should be full state");
 
     let account_update = BlockAccountUpdate::new(
         account.id(),
         account.to_commitment(),
-        AccountUpdateDetails::Delta(delta),
+        AccountUpdateDetails::Public(patch),
     );
 
     upsert_accounts(&mut conn, &[account_update], block_num)

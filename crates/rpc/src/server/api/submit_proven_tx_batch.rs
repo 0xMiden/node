@@ -2,10 +2,9 @@ use miden_node_proto::generated as proto;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
-use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
-use miden_tx_batch_prover::LocalBatchProver;
+use miden_tx_batch::{BatchExecutor, LocalBatchProver};
 use tonic::metadata::{Ascii, MetadataValue};
 use tonic::{Request, Status};
 use tracing::Span;
@@ -121,13 +120,15 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
         let expected_proof = spawn_blocking_in_current_span({
             let proposed_batch = proposed_batch.clone();
             move || {
-                LocalBatchProver::new(MIN_PROOF_SECURITY_LEVEL).prove(proposed_batch).map_err(
-                    |err| {
+                let executed_batch =
+                    BatchExecutor::new().execute(proposed_batch).map_err(|err| {
                         Status::invalid_argument(
                             err.as_report_context("proposed block proof failed"),
                         )
-                    },
-                )
+                    })?;
+                LocalBatchProver::new().prove(executed_batch).map_err(|err| {
+                    Status::invalid_argument(err.as_report_context("proposed block proof failed"))
+                })
             }
         })
         .await

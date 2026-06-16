@@ -4,8 +4,6 @@ use miden_protocol::account::AccountId;
 use miden_protocol::errors::{AccountDeltaError, AccountError, AssetError, TokenSymbolError};
 use miden_protocol::utils::serde::DeserializationError;
 use miden_standards::account::faucets::FungibleFaucetError;
-use miden_standards::account::policies::TokenPolicyManagerError;
-use miden_standards::account::wallets::BasicWalletError;
 
 use crate::genesis::config::TokenSymbolStr;
 
@@ -41,8 +39,6 @@ pub enum GenesisConfigError {
     },
     #[error("failed to create fungible faucet account")]
     FungibleFaucet(#[from] FungibleFaucetError),
-    #[error("failed to create basic wallet account")]
-    BasicWallet(#[from] BasicWalletError),
     #[error(r#"incompatible combination of `max_supply` ({max_supply})" and `decimals` ({decimals}) exceeding the allowed value range of an `u64`"#)]
     OutOfRange { max_supply: u64, decimals: u8 },
     #[error("Found duplicate faucet definition for token symbol '{symbol}'")]
@@ -67,6 +63,4 @@ pub enum GenesisConfigError {
     InvalidSecretKey(#[from] DeserializationError),
     #[error("provided signer config is not supported")]
     UnsupportedSignerConfig,
-    #[error("token policy manager error")]
-    TokenPolicyManager(#[from] TokenPolicyManagerError),
 }

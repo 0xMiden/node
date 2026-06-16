@@ -372,6 +372,7 @@ async fn unknown_transactions_rejected() {
         OrderedTransactionHeaders,
         TransactionHeader,
     };
+    use miden_protocol::vm::ExecutionProof;
 
     let tv = TestValidator::new().await;
     let genesis_header = tv.chain_tip.clone();
@@ -401,13 +402,14 @@ async fn unknown_transactions_rejected() {
                 account_id,
                 Word::default(),
                 Word::default(),
-                miden_protocol::account::delta::AccountUpdateDetails::Private,
+                miden_protocol::account::AccountUpdateDetails::Private,
             ),
         )]),
         InputNotes::default(),
         vec![],
         BlockNumber::MAX,
         OrderedTransactionHeaders::new_unchecked(vec![tx_header]),
+        ExecutionProof::new_dummy(),
     )
     .unwrap();
 
