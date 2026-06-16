@@ -3194,7 +3194,9 @@ dependencies = [
  "miden-node-utils",
  "miden-protocol",
  "tokio",
+ "tokio-stream",
  "tonic",
+ "tracing",
  "url",
 ]
 

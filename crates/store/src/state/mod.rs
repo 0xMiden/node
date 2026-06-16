@@ -63,11 +63,16 @@ mod account;
 
 mod subscription;
 pub use subscription::{
+    BlockSubscriptionError,
     BlockSubscriptionEvent,
     BlockSubscriptionStream,
+    ProofSubscriptionError,
     ProofSubscriptionEvent,
     ProofSubscriptionStream,
-    StateSubscriptionError,
+    SUBSCRIBER_CHANNEL_CAPACITY,
+    SubscriptionSource,
+    SubscriptionStreamError,
+    run_stream,
 };
 
 mod apply_block;

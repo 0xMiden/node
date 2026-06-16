@@ -5,6 +5,8 @@ use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::{OutputNote, TransactionId};
 use miden_standards::note::AccountTargetNetworkNote;
 
+use crate::db::models::account_effect::NetworkAccountEffect;
+
 /// Network-relevant state extracted from a committed [`SignedBlock`].
 ///
 /// Produced once per committed block on the ntx-builder side. Downstream code (DB layer,
@@ -74,5 +76,19 @@ impl CommittedBlockEffects {
             network_account_updates,
             account_transactions,
         }
+    }
+
+    /// Returns the ids of the network accounts created by this block.
+    ///
+    /// The coordinator uses this to release actor spawns that were deferred until the account's
+    /// creation transaction committed.
+    pub fn created_network_accounts(&self) -> impl Iterator<Item = AccountId> + '_ {
+        self.network_account_updates.iter().filter_map(|(account_id, details)| {
+            matches!(
+                NetworkAccountEffect::from_protocol(details),
+                Some(NetworkAccountEffect::Created(_))
+            )
+            .then_some(*account_id)
+        })
     }
 }

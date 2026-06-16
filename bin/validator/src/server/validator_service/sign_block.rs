@@ -3,16 +3,15 @@ use std::sync::atomic::Ordering;
 use miden_node_proto::generated as grpc;
 use miden_node_utils::ErrorReport;
 use miden_protocol::Word;
-use miden_protocol::block::ProposedBlock;
+use miden_protocol::block::{BlockNumber, ProposedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_tx::utils::serde::{Deserializable, Serializable};
 
-use crate::block_validation::validate_block;
+use super::ValidatorService;
 use crate::db::{load_chain_tip, upsert_block_header};
-use crate::server::ValidatorServer;
 
 #[tonic::async_trait]
-impl grpc::server::validator_api::SignBlock for ValidatorServer {
+impl grpc::server::validator_api::SignBlock for ValidatorService {
     type Input = ProposedBlock;
     type Output = (Signature, Word);
 
@@ -50,9 +49,8 @@ impl grpc::server::validator_api::SignBlock for ValidatorServer {
             .ok_or_else(|| tonic::Status::internal("Chain tip not found in database"))?;
 
         // Validate the block against the current chain tip.
-        let (signature, header) = validate_block(proposed_block, &self.signer, &self.db, chain_tip)
-            .await
-            .map_err(|err| {
+        let (signature, header) =
+            self.validate_block(proposed_block, chain_tip).await.map_err(|err| {
                 tonic::Status::invalid_argument(format!(
                     "Failed to validate block: {}",
                     err.as_report()
@@ -75,8 +73,10 @@ impl grpc::server::validator_api::SignBlock for ValidatorServer {
                 ))
             })?;
 
-        // Update the in-memory counters after successful persistence.
-        self.chain_tip.store(new_block_num, Ordering::Relaxed);
+        // Update the in-memory counters after successful persistence. The block has already been
+        // backed up to the block store by `validate_block`, so it is available to subscribers by
+        // the time they observe this new tip.
+        self.committed_tip.send_replace(BlockNumber::from(new_block_num));
         self.signed_blocks_count.fetch_add(1, Ordering::Relaxed);
 
         Ok((signature, block_commitment))

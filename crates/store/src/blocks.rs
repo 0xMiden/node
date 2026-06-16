@@ -18,7 +18,7 @@ use tracing::instrument;
 use crate::COMPONENT;
 use crate::genesis::GenesisBlock;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct BlockStore {
     store_dir: PathBuf,
 }

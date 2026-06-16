@@ -3,7 +3,7 @@ use std::ops::RangeInclusive;
 use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
 use std::task::{Context as TaskContext, Poll};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Context as AnyhowContext;
 use miden_node_proto::clients::NtxBuilderClient;
@@ -11,7 +11,13 @@ use miden_node_proto::domain::block::InvalidBlockRange;
 use miden_node_proto::generated::rpc::MempoolStats as ProtoMempoolStats;
 use miden_node_proto::generated::rpc::api_server::Api;
 use miden_node_proto::generated::{self as proto};
-use miden_node_store::state::{Finality, State, StateSubscriptionError};
+use miden_node_store::state::{
+    BlockSubscriptionError,
+    Finality,
+    ProofSubscriptionError,
+    State,
+    SubscriptionStreamError,
+};
 use miden_node_store::{DatabaseError, GetBlockHeaderError};
 use miden_node_utils::ErrorReport;
 use miden_node_utils::limiter::{
@@ -33,6 +39,7 @@ use tonic::metadata::MetadataMap;
 use tonic::{IntoRequest, Request, Status};
 
 use crate::COMPONENT;
+use crate::server::api::subscription_ban::IpBanList;
 use crate::server::{NetworkTxAuth, RpcMode};
 
 const NETWORK_TX_AUTH_HEADER_NAME: &str = "x-miden-network-tx-auth";
@@ -100,6 +107,7 @@ pub struct RpcService {
     block_commitment_cache: LruCache<BlockNumber, Word>,
     block_subscription_semaphore: Arc<Semaphore>,
     proof_subscription_semaphore: Arc<Semaphore>,
+    subscription_ban: Arc<IpBanList>,
 }
 
 impl RpcService {
@@ -119,6 +127,7 @@ impl RpcService {
             block_commitment_cache: LruCache::new(commitment_cache_capacity),
             block_subscription_semaphore: Arc::new(Semaphore::new(MAX_REPLICA_SUBSCRIPTIONS)),
             proof_subscription_semaphore: Arc::new(Semaphore::new(MAX_REPLICA_SUBSCRIPTIONS)),
+            subscription_ban: Arc::new(IpBanList::default()),
         }
     }
 
@@ -272,6 +281,7 @@ mod proof_subscription;
 mod status;
 mod submit_proven_tx;
 mod submit_proven_tx_batch;
+mod subscription_ban;
 mod sync_account_storage_maps;
 mod sync_account_vault;
 mod sync_chain_mmr;
@@ -299,22 +309,50 @@ fn database_error_to_status(err: &DatabaseError) -> Status {
     }
 }
 
-fn state_subscription_error_to_status(err: StateSubscriptionError) -> Status {
+fn block_subscription_error_to_status(
+    err: SubscriptionStreamError<BlockSubscriptionError>,
+) -> Status {
     match err {
-        StateSubscriptionError::BlockNotFound(block_num) => {
+        SubscriptionStreamError::TooSlow => {
+            Status::resource_exhausted("subscriber is too slow to keep up with the chain")
+        },
+        SubscriptionStreamError::Source(BlockSubscriptionError::NotFound(block_num)) => {
             Status::not_found(format!("block {block_num} not found"))
         },
-        StateSubscriptionError::ProofNotFound(block_num) => {
-            Status::not_found(format!("proof for block {block_num} not found"))
-        },
-        StateSubscriptionError::BlockLoad { block_num, source } => {
+        SubscriptionStreamError::Source(BlockSubscriptionError::Load { block_num, source }) => {
             Status::internal(format!("failed to load block {block_num}: {}", source.as_report()))
         },
-        StateSubscriptionError::ProofLoad { block_num, source } => Status::internal(format!(
-            "failed to load proof for block {block_num}: {}",
-            source.as_report()
-        )),
     }
+}
+
+fn proof_subscription_error_to_status(
+    err: SubscriptionStreamError<ProofSubscriptionError>,
+) -> Status {
+    match err {
+        SubscriptionStreamError::TooSlow => {
+            Status::resource_exhausted("subscriber is too slow to keep up with the chain")
+        },
+        SubscriptionStreamError::Source(ProofSubscriptionError::NotFound(block_num)) => {
+            Status::not_found(format!("proof for block {block_num} not found"))
+        },
+        SubscriptionStreamError::Source(ProofSubscriptionError::Load { block_num, source }) => {
+            Status::internal(format!(
+                "failed to load proof for block {block_num}: {}",
+                source.as_report()
+            ))
+        },
+    }
+}
+
+/// Builds the status returned to a client that is temporarily banned from subscribing for having
+/// previously been disconnected as too slow.
+fn subscription_ban_status(until: Instant) -> Status {
+    let remaining = until.saturating_duration_since(Instant::now());
+    Status::resource_exhausted(format!(
+        "temporarily banned from subscribing for being too slow; retry in {} seconds",
+        // Round up so the reported wait never undershoots the actual remaining ban.
+        remaining.as_secs() + 1,
+    ))
 }
 
 fn invalid_block_range_to_status(RpcInvalidBlockRange(err): RpcInvalidBlockRange) -> Status {

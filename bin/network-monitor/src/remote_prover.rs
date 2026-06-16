@@ -3,9 +3,11 @@
 //! A prover is monitored by up to two tasks:
 //! - [`ProverStatusService`] (impl [`Service`]): polls the proxy status endpoint on the status
 //!   cadence and publishes the public [`ServiceStatus`] by merging in the latest probe outcome.
-//! - [`run_prover_test`] (spawned lazily by the status service): runs proof-test probes on the
-//!   longer test cadence and publishes a private [`ProbeSnapshot`]. Only spawned the first time the
-//!   status service observes the prover reporting [`ProofType::Transaction`].
+//! - [`run_prover_test`] (spawned by the status service): acquires the proof-test payload from the
+//!   RPC, retrying until it succeeds, then runs proof-test probes on the longer test cadence and
+//!   publishes a private [`ProbeSnapshot`]. First spawned when the status service observes the
+//!   prover reporting [`ProofType::Transaction`]; respawned if it ever terminates, and its
+//!   snapshot is reported as stale once it stops updating.
 
 use std::time::{Duration, Instant};
 
@@ -14,9 +16,10 @@ use miden_node_proto::generated as proto;
 use miden_protocol::utils::serde::Serializable;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
+use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 use tonic::Request;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 use url::Url;
 
 use crate::COMPONENT;
@@ -39,16 +42,8 @@ pub enum ProofType {
     Transaction,
     Block,
     Batch,
-}
-
-impl From<ProofType> for proto::remote_prover::ProofType {
-    fn from(value: ProofType) -> Self {
-        match value {
-            ProofType::Transaction => proto::remote_prover::ProofType::Transaction,
-            ProofType::Block => proto::remote_prover::ProofType::Block,
-            ProofType::Batch => proto::remote_prover::ProofType::Batch,
-        }
-    }
+    /// The prover reported a proof type this monitor version does not know about.
+    Unknown,
 }
 
 impl From<proto::remote_prover::ProofType> for ProofType {
@@ -89,84 +84,121 @@ pub struct ProbeSnapshot {
 // PROVER STATUS SERVICE
 // ================================================================================================
 
-/// Parameters captured at construction time for spawning the probe task lazily, the first time the
+/// Parameters captured at construction time for spawning (and respawning) the probe task once the
 /// status service observes the prover reporting [`ProofType::Transaction`].
 struct ProbeSpawner {
     client: RemoteProverClient,
-    payload: proto::remote_prover::ProofRequest,
+    rpc_url: Url,
     interval: Duration,
     probe_tx: watch::Sender<ProbeSnapshot>,
     name: String,
 }
 
+impl ProbeSpawner {
+    /// Spawns a probe task and returns its handle.
+    fn spawn(&self) -> JoinHandle<()> {
+        tokio::spawn(run_prover_test(
+            self.client.clone(),
+            self.rpc_url.clone(),
+            self.interval,
+            self.probe_tx.clone(),
+            self.name.clone(),
+        ))
+    }
+}
+
 /// Polls the remote prover's proxy status endpoint and publishes the combined [`ServiceStatus`]
-/// (status + latest probe outcome). Spawns the probe task the first time the prover reports
-/// Transaction type.
+/// (status + latest probe outcome). Spawns the probe task once the prover reports Transaction type
+/// and keeps it alive from then on.
 pub struct ProverStatusService {
     name: String,
     url: String,
     client: RemoteProverProxyStatusClient,
     interval: Duration,
+    request_timeout: Duration,
     last_status: Option<RemoteProverStatusDetails>,
     last_status_err: Option<String>,
     probe_rx: watch::Receiver<ProbeSnapshot>,
-    probe_spawner: Option<ProbeSpawner>,
+    probe_spawner: ProbeSpawner,
+    probe_handle: Option<JoinHandle<()>>,
+    /// When the most recent [`ProbeSnapshot`] change was observed; used to flag stale probe data.
+    last_probe_change: Option<Instant>,
 }
 
 impl ProverStatusService {
-    #[expect(clippy::too_many_arguments)]
     pub fn new(
         name: String,
         prover_url: Url,
+        rpc_url: Url,
         interval: Duration,
         request_timeout: Duration,
         probe_interval: Duration,
-        probe_tx: watch::Sender<ProbeSnapshot>,
-        probe_rx: watch::Receiver<ProbeSnapshot>,
         test_client: RemoteProverClient,
-        payload: Option<proto::remote_prover::ProofRequest>,
     ) -> Self {
         let url = prover_url.to_string();
         let client = build_tls_client::<RemoteProverProxyStatusClient>(prover_url, request_timeout);
-        // Without a probe payload (e.g. RPC was unreachable at startup) the prover status is still
-        // polled, but no proof-test probe is armed.
-        let probe_spawner = payload.map(|payload| ProbeSpawner {
+        let (probe_tx, probe_rx) = watch::channel(ProbeSnapshot::default());
+        let probe_spawner = ProbeSpawner {
             client: test_client,
-            payload,
+            rpc_url,
             interval: probe_interval,
             probe_tx,
             name: name.clone(),
-        });
+        };
         Self {
             name,
             url,
             client,
             interval,
+            request_timeout,
             last_status: None,
             last_status_err: None,
             probe_rx,
             probe_spawner,
+            probe_handle: None,
+            last_probe_change: None,
         }
     }
 
-    /// Spawns the probe task if the prover has just been observed to support Transaction proofs and
-    /// we haven't spawned it yet. No-op in all other cases.
-    fn maybe_spawn_probe(&mut self) {
+    /// Keeps the probe task alive once the prover has been observed to support Transaction proofs.
+    ///
+    /// Spawns the task on the first Transaction-type observation and respawns it if it ever
+    /// terminates. The task only ends by panicking (its snapshot channel outlives it), so a
+    /// finished handle is surfaced as an unhealthy outcome before respawning.
+    fn ensure_probe_running(&mut self) {
         let Some(status) = &self.last_status else { return };
         if !matches!(status.supported_proof_type, ProofType::Transaction) {
             return;
         }
-        let Some(spawner) = self.probe_spawner.take() else {
-            return;
-        };
-        debug!(target: COMPONENT, prover = %self.name, "spawning probe task");
-        tokio::spawn(run_prover_test(
-            spawner.client,
-            spawner.payload,
-            spawner.interval,
-            spawner.probe_tx,
-            spawner.name,
-        ));
+        match &self.probe_handle {
+            None => {
+                debug!(target: COMPONENT, prover = %self.name, "spawning probe task");
+                self.probe_handle = Some(self.probe_spawner.spawn());
+            },
+            Some(handle) if handle.is_finished() => {
+                warn!(
+                    target: COMPONENT,
+                    prover = %self.name,
+                    "probe task terminated unexpectedly; respawning"
+                );
+                self.probe_spawner.probe_tx.send_modify(|snapshot| {
+                    snapshot.failure_count += 1;
+                    snapshot.latest = Some(ProverTestOutcome {
+                        details: ProverTestDetails {
+                            test_duration_ms: 0,
+                            proof_size_bytes: 0,
+                            success_count: snapshot.success_count,
+                            failure_count: snapshot.failure_count,
+                            proof_type: ProofType::Transaction,
+                        },
+                        status: Status::Unhealthy,
+                        error: Some("probe task terminated unexpectedly; respawning".to_string()),
+                    });
+                });
+                self.probe_handle = Some(self.probe_spawner.spawn());
+            },
+            Some(_) => {},
+        }
     }
 
     /// Classifies the current status + probe state into a [`ServiceStatus`].
@@ -178,17 +210,23 @@ impl ProverStatusService {
             return status;
         };
 
+        let test_outcome = classify_probe_outcome(
+            probe.latest.clone(),
+            self.last_probe_change.map(|changed| changed.elapsed()),
+            probe_staleness_window(self.probe_spawner.interval, self.request_timeout),
+        );
+
         let details = ServiceDetails::RemoteProverStatus(RemoteProverDetails {
             status: status_details.clone(),
-            test: probe.latest.clone(),
+            test: test_outcome.clone(),
         });
 
-        // Most recent status poll failed — report unhealthy but keep last known status details.
+        // Most recent status poll failed; report unhealthy but keep last known status details.
         if let Some(err) = &self.last_status_err {
             return ServiceStatus::unhealthy(&self.name, err.clone(), details);
         }
 
-        if let Some(outcome) = &probe.latest {
+        if let Some(outcome) = &test_outcome {
             if outcome.status == Status::Unhealthy {
                 let msg = outcome.error.clone().unwrap_or_else(|| "prover test failed".to_string());
                 return ServiceStatus::unhealthy(&self.name, msg, details);
@@ -252,18 +290,63 @@ impl Service for ProverStatusService {
                 self.last_status_err = Some(e.to_string());
             },
         }
-        self.maybe_spawn_probe();
-        let probe = self.probe_rx.borrow().clone();
+        self.ensure_probe_running();
+        if self.probe_rx.has_changed().unwrap_or(false) {
+            self.last_probe_change = Some(Instant::now());
+        }
+        let probe = self.probe_rx.borrow_and_update().clone();
         self.build_status(&probe)
+    }
+}
+
+// PROBE OUTCOME CLASSIFICATION
+// ================================================================================================
+
+/// Window after which a probe outcome with no fresh updates is considered stale.
+///
+/// Two full probe intervals plus the request timeout: a healthy probe task publishes at least
+/// once per interval, and a single in-flight `prove()` call cannot outlive the request timeout.
+fn probe_staleness_window(probe_interval: Duration, request_timeout: Duration) -> Duration {
+    probe_interval * 2 + request_timeout
+}
+
+/// Re-classifies a probe outcome as stale when no snapshot update has been observed within the
+/// staleness window.
+///
+/// Staleness is an observability gap, not a prover failure, so the outcome is degraded to
+/// [`Status::Unknown`] (which does not flip the prover card to unhealthy) instead of
+/// [`Status::Unhealthy`].
+fn classify_probe_outcome(
+    outcome: Option<ProverTestOutcome>,
+    elapsed_since_change: Option<Duration>,
+    staleness_window: Duration,
+) -> Option<ProverTestOutcome> {
+    let outcome = outcome?;
+    match elapsed_since_change {
+        Some(elapsed) if elapsed > staleness_window => Some(ProverTestOutcome {
+            status: Status::Unknown,
+            error: Some(format!("stale: no probe update for {}s", elapsed.as_secs())),
+            details: outcome.details,
+        }),
+        _ => Some(outcome),
     }
 }
 
 // PROBE TASK
 // ================================================================================================
 
-/// Runs proof-test probes on the configured interval. The task is spawned by
-/// [`ProverStatusService::maybe_spawn_probe`] only after the prover has been observed to support
-/// Transaction proofs.
+/// Delay between payload-acquisition attempts. Each attempt is already bounded internally by the
+/// genesis-discovery backoff, so this only paces consecutive failed attempts.
+const PAYLOAD_RETRY_DELAY: Duration = Duration::from_secs(30);
+
+/// Runs proof-test probes on the configured interval. The task is spawned (and respawned) by
+/// [`ProverStatusService::ensure_probe_running`] only after the prover has been observed to
+/// support Transaction proofs.
+///
+/// The probe payload is acquired from the RPC first, retrying until it succeeds, so an RPC that
+/// is unreachable at spawn time delays probing instead of permanently disarming it. Acquisition
+/// failures are published as [`Status::Unknown`] outcomes: they are an RPC problem, not a prover
+/// failure.
 #[instrument(
     parent = None,
     target = COMPONENT,
@@ -274,14 +357,47 @@ impl Service for ProverStatusService {
 )]
 async fn run_prover_test(
     mut client: RemoteProverClient,
-    payload: proto::remote_prover::ProofRequest,
+    rpc_url: Url,
     interval: Duration,
     probe_tx: watch::Sender<ProbeSnapshot>,
     name: String,
 ) {
+    let payload = loop {
+        if probe_tx.is_closed() {
+            debug!(target: COMPONENT, prover = %name, "probe channel closed, exiting probe task");
+            return;
+        }
+        match generate_prover_test_payload(&rpc_url).await {
+            Ok(payload) => break payload,
+            Err(e) => {
+                warn!(
+                    target: COMPONENT,
+                    prover = %name,
+                    error = ?e,
+                    "failed to build remote-prover probe payload; retrying"
+                );
+                probe_tx.send_modify(|snapshot| {
+                    snapshot.latest = Some(ProverTestOutcome {
+                        details: ProverTestDetails {
+                            test_duration_ms: 0,
+                            proof_size_bytes: 0,
+                            success_count: snapshot.success_count,
+                            failure_count: snapshot.failure_count,
+                            proof_type: ProofType::Transaction,
+                        },
+                        status: Status::Unknown,
+                        error: Some(format!("building probe payload failed: {e:#}")),
+                    });
+                });
+                tokio::time::sleep(PAYLOAD_RETRY_DELAY).await;
+            },
+        }
+    };
+
     let mut timer = tokio::time::interval(interval);
     timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
-    let mut state = ProbeSnapshot::default();
+    // Start from the last published snapshot so a respawned task keeps the running counters.
+    let mut state = probe_tx.borrow().clone();
 
     loop {
         timer.tick().await;
@@ -374,7 +490,7 @@ fn tonic_status_to_json(status: &tonic::Status) -> String {
     ret(level = "debug"),
     err
 )]
-pub(crate) async fn generate_prover_test_payload(
+async fn generate_prover_test_payload(
     rpc_url: &Url,
 ) -> anyhow::Result<proto::remote_prover::ProofRequest> {
     let tx_inputs = crate::deploy::build_probe_transaction_inputs(rpc_url).await?;
@@ -382,4 +498,85 @@ pub(crate) async fn generate_prover_test_payload(
         proof_type: proto::remote_prover::ProofType::Transaction.into(),
         payload: tx_inputs.to_bytes(),
     })
+}
+
+// TESTS
+// ================================================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn outcome(status: Status, error: Option<&str>) -> ProverTestOutcome {
+        ProverTestOutcome {
+            details: ProverTestDetails {
+                test_duration_ms: 50,
+                proof_size_bytes: 1024,
+                success_count: 3,
+                failure_count: 1,
+                proof_type: ProofType::Transaction,
+            },
+            status,
+            error: error.map(str::to_string),
+        }
+    }
+
+    const WINDOW: Duration = Duration::from_secs(100);
+
+    #[test]
+    fn fresh_outcome_passes_through() {
+        let classified = classify_probe_outcome(
+            Some(outcome(Status::Healthy, None)),
+            Some(Duration::from_secs(10)),
+            WINDOW,
+        )
+        .unwrap();
+        assert_eq!(classified.status, Status::Healthy);
+        assert!(classified.error.is_none());
+    }
+
+    #[test]
+    fn stale_outcome_degrades_to_unknown() {
+        let classified = classify_probe_outcome(
+            Some(outcome(Status::Healthy, None)),
+            Some(Duration::from_secs(101)),
+            WINDOW,
+        )
+        .unwrap();
+        assert_eq!(classified.status, Status::Unknown);
+        let err = classified.error.expect("stale outcome should carry an error note");
+        assert!(err.contains("stale"), "got: {err}");
+        // Numeric details from the last real probe are preserved.
+        assert_eq!(classified.details.success_count, 3);
+    }
+
+    #[test]
+    fn stale_unhealthy_outcome_degrades_to_unknown() {
+        // A stale failure must not keep the card unhealthy forever; staleness wins.
+        let classified = classify_probe_outcome(
+            Some(outcome(Status::Unhealthy, Some("prove failed"))),
+            Some(Duration::from_secs(500)),
+            WINDOW,
+        )
+        .unwrap();
+        assert_eq!(classified.status, Status::Unknown);
+    }
+
+    #[test]
+    fn missing_outcome_stays_missing() {
+        assert!(classify_probe_outcome(None, Some(Duration::from_secs(500)), WINDOW).is_none());
+    }
+
+    #[test]
+    fn outcome_without_observed_change_passes_through() {
+        let classified =
+            classify_probe_outcome(Some(outcome(Status::Healthy, None)), None, WINDOW).unwrap();
+        assert_eq!(classified.status, Status::Healthy);
+    }
+
+    #[test]
+    fn staleness_window_scales_with_interval_and_timeout() {
+        let window = probe_staleness_window(Duration::from_secs(120), Duration::from_secs(10));
+        assert_eq!(window, Duration::from_secs(250));
+    }
 }

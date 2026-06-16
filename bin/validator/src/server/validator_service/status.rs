@@ -2,10 +2,10 @@ use std::sync::atomic::Ordering;
 
 use miden_node_proto::generated as grpc;
 
-use crate::server::ValidatorServer;
+use super::ValidatorService;
 
 #[tonic::async_trait]
-impl grpc::server::validator_api::Status for ValidatorServer {
+impl grpc::server::validator_api::Status for ValidatorService {
     type Input = ();
     type Output = ();
 
@@ -16,7 +16,7 @@ impl grpc::server::validator_api::Status for ValidatorServer {
         Ok(grpc::validator::ValidatorStatus {
             version: env!("CARGO_PKG_VERSION").to_string(),
             status: "OK".to_string(),
-            chain_tip: self.chain_tip.load(Ordering::Relaxed),
+            chain_tip: self.committed_tip.borrow().as_u32(),
             validated_transactions_count: self.validated_transactions_count.load(Ordering::Relaxed),
             signed_blocks_count: self.signed_blocks_count.load(Ordering::Relaxed),
         })
