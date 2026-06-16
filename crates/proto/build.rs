@@ -216,6 +216,8 @@ impl Service {
     fn generate(&self) -> Module {
         let mut module = Module::new(&self.name);
 
+        module.push_fn(self.server_constructor());
+        module.push_fn(self.service_name());
         module.push_trait(self.service_trait());
         module.push_impl(self.blanket_impl());
         module.push_impl(self.tonic_impl());
@@ -302,12 +304,7 @@ impl Service {
     /// }
     /// ```
     fn tonic_impl(&self) -> Impl {
-        let tonic_path = format!(
-            "crate::generated::{}::{}_server::{}",
-            self.package,
-            to_snake_case(&self.name),
-            self.name
-        );
+        let tonic_path = self.tonic_trait_path();
 
         let mut ret = Impl::new("T");
         ret.generic("T")
@@ -328,6 +325,59 @@ impl Service {
         }
 
         ret
+    }
+
+    /// Constructs the underlying tonic server for this service behind an opaque tower service type.
+    fn server_constructor(&self) -> Function {
+        let mut ret = Function::new("server");
+        ret.vis("pub")
+            .generic("T")
+            .arg("service", "T")
+            .ret(
+                "impl tower::Service<
+    http::Request<tonic::body::Body>,
+    Response = http::Response<tonic::body::Body>,
+    Error = std::convert::Infallible,
+    Future: Send + 'static,
+> + tonic::server::NamedService
+  + Clone
+  + Send
+  + Sync
+  + 'static",
+            )
+            .bound("T", self.service_trait().ty())
+            .bound("T", "Send")
+            .bound("T", "Sync")
+            .bound("T", "'static")
+            .line(format!("{}::new(service)", self.tonic_server_path()));
+
+        ret
+    }
+
+    /// Returns the gRPC service name used by tonic routing and health reporting.
+    fn service_name(&self) -> Function {
+        let mut ret = Function::new("service_name");
+        ret.vis("pub").ret("&'static str").line(format!(
+            "<{}::<()> as tonic::server::NamedService>::NAME",
+            self.tonic_server_path()
+        ));
+
+        ret
+    }
+
+    /// Returns the full path to the service's trait.
+    fn tonic_trait_path(&self) -> String {
+        format!(
+            "crate::generated::{}::{}_server::{}",
+            self.package,
+            to_snake_case(&self.name),
+            self.name
+        )
+    }
+
+    /// Returns the full path to the generated server struct.
+    fn tonic_server_path(&self) -> String {
+        format!("{}Server", self.tonic_trait_path())
     }
 }
 

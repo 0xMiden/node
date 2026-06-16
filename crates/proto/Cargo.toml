@@ -26,6 +26,7 @@ prost                       = { workspace = true }
 thiserror                   = { workspace = true }
 tonic                       = { default-features = true, workspace = true }
 tonic-prost                 = { workspace = true }
+tower                       = { workspace = true }
 url                         = { workspace = true }
 
 [dev-dependencies]
@@ -44,4 +45,10 @@ tonic-prost-build      = { workspace = true }
 [package.metadata.cargo-machete]
 ignored = [
   "tonic-prost", # used in generated OUT_DIR code
+  "tower",       # used in generated OUT_DIR code
+]
+
+[package.metadata.cargo-shear]
+ignored = [
+  "tower", # used in generated OUT_DIR code
 ]

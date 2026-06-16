@@ -12,4 +12,5 @@ pub mod generated;
 pub use domain::account::AccountWitnessRecord;
 pub use domain::proof_request::BlockProofRequest;
 pub use domain::{convert, try_convert};
+pub use generated::server;
 pub use prost;

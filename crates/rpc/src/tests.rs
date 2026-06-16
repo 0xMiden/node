@@ -15,10 +15,10 @@ use miden_node_proto::clients::{
     RpcClient,
     ValidatorClient,
 };
-use miden_node_proto::generated::ntx_builder::api_server::ApiServer as NtxBuilderApiServer;
 use miden_node_proto::generated::rpc::api_client::ApiClient as ProtoClient;
-use miden_node_proto::generated::rpc::api_server::{Api, ApiServer as RpcApiServer};
+use miden_node_proto::generated::rpc::api_server::Api;
 use miden_node_proto::generated::{self as proto};
+use miden_node_proto::server::{ntx_builder_api, rpc_api};
 use miden_node_store::genesis::config::GenesisConfig;
 use miden_node_store::state::State;
 use miden_node_utils::clap::{GrpcOptionsExternal, StorageOptions};
@@ -502,11 +502,26 @@ struct FixedNtxBuilder {
 }
 
 #[tonic::async_trait]
-impl proto::ntx_builder::api_server::Api for FixedNtxBuilder {
-    async fn get_network_note_status(
+impl ntx_builder_api::GetNetworkNoteStatus for FixedNtxBuilder {
+    type Input = proto::note::NoteId;
+    type Output = proto::rpc::GetNetworkNoteStatusResponse;
+
+    fn decode(request: proto::note::NoteId) -> tonic::Result<Self::Input> {
+        Ok(request)
+    }
+
+    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::GetNetworkNoteStatusResponse> {
+        Ok(output)
+    }
+
+    async fn handle(&self, _input: Self::Input) -> tonic::Result<Self::Output> {
+        Ok(self.response.clone())
+    }
+
+    async fn full(
         &self,
         request: Request<proto::note::NoteId>,
-    ) -> Result<tonic::Response<proto::rpc::GetNetworkNoteStatusResponse>, tonic::Status> {
+    ) -> tonic::Result<proto::rpc::GetNetworkNoteStatusResponse> {
         self.call_count.fetch_add(1, Ordering::SeqCst);
         let accept = request
             .metadata()
@@ -514,7 +529,7 @@ impl proto::ntx_builder::api_server::Api for FixedNtxBuilder {
             .and_then(|value| value.to_str().ok())
             .map(str::to_string);
         *self.last_accept.lock().expect("last_accept mutex should not be poisoned") = accept;
-        Ok(tonic::Response::new(self.response.clone()))
+        self.handle(request.into_inner()).await.and_then(Self::encode)
     }
 }
 
@@ -533,7 +548,7 @@ async fn start_ntx_builder(
 
     task::spawn(async move {
         tonic::transport::Server::builder()
-            .add_service(NtxBuilderApiServer::new(service))
+            .add_service(ntx_builder_api::server(service))
             .serve_with_incoming(TcpListenerStream::new(listener))
             .await
             .expect("Failed to serve ntx-builder");
@@ -583,7 +598,7 @@ async fn start_source_rpc(ntx_builder: NtxBuilderClient) -> (RpcClient, TestStor
         );
 
         tonic::transport::Server::builder()
-            .add_service(RpcApiServer::new(source_rpc))
+            .add_service(rpc_api::server(source_rpc))
             .serve_with_incoming(TcpListenerStream::new(listener))
             .await
             .expect("Failed to serve source RPC");
