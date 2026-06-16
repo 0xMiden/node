@@ -5,6 +5,7 @@ use miden_node_proto::generated::block_producer::api_client as block_producer_cl
 use miden_node_store::{DEFAULT_MAX_CONCURRENT_PROOFS, GenesisState, Store};
 use miden_node_utils::clap::{GrpcOptionsInternal, StorageOptions};
 use miden_node_utils::fee::test_fee_params;
+use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_validator::{Validator, ValidatorSigner};
 use miden_protocol::testing::random_secret_key::random_secret_key;
 use tokio::net::TcpListener;
@@ -130,11 +131,11 @@ async fn start_store(
     store_addr: std::net::SocketAddr,
     data_directory: &std::path::Path,
 ) -> runtime::Runtime {
-    let genesis_state = GenesisState::new(vec![], test_fee_params(), 1, 1, random_secret_key());
+    let signer = random_secret_key();
+    let genesis_state = GenesisState::new(vec![], test_fee_params(), 1, 1, signer.public_key());
     let genesis_block = genesis_state
         .clone()
-        .into_block()
-        .await
+        .into_block(&signer)
         .expect("genesis block should be created");
     Store::bootstrap(genesis_block, data_directory).expect("store should bootstrap");
 
@@ -172,9 +173,11 @@ async fn start_store(
 /// Shuts down the store runtime properly to allow the database to flush before the temp directory
 /// is deleted.
 async fn shutdown_store(store_runtime: runtime::Runtime) {
-    task::spawn_blocking(move || store_runtime.shutdown_timeout(Duration::from_millis(500)))
-        .await
-        .expect("shutdown should complete");
+    spawn_blocking_in_current_span(move || {
+        store_runtime.shutdown_timeout(Duration::from_millis(500));
+    })
+    .await
+    .expect("shutdown should complete");
 }
 
 /// Sends a status request to the block producer to verify connectivity.

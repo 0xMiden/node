@@ -347,7 +347,7 @@ impl BlockProducerRpcServer {
      )]
     async fn submit_proven_batch(
         &self,
-        request: proto::transaction::TransactionBatch,
+        request: proto::transaction::ProvenTransactionBatch,
     ) -> Result<proto::blockchain::BlockNumber, MempoolSubmissionError> {
         let proposed = request
             .proposed_batch
@@ -395,7 +395,7 @@ impl api_server::Api for BlockProducerRpcServer {
 
     async fn submit_proven_batch(
         &self,
-        request: tonic::Request<proto::transaction::TransactionBatch>,
+        request: tonic::Request<proto::transaction::ProvenTransactionBatch>,
     ) -> Result<tonic::Response<proto::blockchain::BlockNumber>, Status> {
         self.submit_proven_batch(request.into_inner())
              .await

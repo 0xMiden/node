@@ -10,7 +10,7 @@ pub mod limiter;
 pub mod logging;
 pub mod lru_cache;
 pub mod panic;
-pub mod signer;
+pub mod spawn;
 pub mod tracing;
 
 pub trait ErrorReport: std::error::Error {

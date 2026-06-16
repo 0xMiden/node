@@ -11,4 +11,5 @@
   - [Store](./store.md)
   - [Block producer](./block-producer.md)
   - [Network transaction builder](./ntx-builder.md)
+  - [Validator](./validator.md)
 - [Common issues other oddities](./oddities.md)

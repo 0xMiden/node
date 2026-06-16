@@ -8,19 +8,40 @@ import "types/primitives.proto";
 // TRANSACTION
 // ================================================================================================
 
-// Submits proven transaction to the Miden network.
+// A proven transaction.
+//
+// Note that we currently require full transaction transparency for the network operator.
+// This is a temporary measure while Miden stabilizes its protocol and proof systems. To
+// this end, a transaction submission includes its **private** inputs which the operator
+// can use to verify the transaction execution and proofs are correct.
+//
+// This means the transaction is _not_ private wrt the network operator (but it is still
+// private onchain). This requirement will be lifted as Miden matures.
 message ProvenTransaction {
   // The transaction proof.
   //
   // Encoded using [miden_protocol::transaction::ProvenTransaction::to_bytes].
   bytes transaction = 1;
-  // The inputs used for the transaction proof.
+  // The private inputs used for the transaction proof.
   //
   // Encoded using [miden_protocol::transaction::TransactionInputs::to_bytes].
+  //
+  // Transactions missing this field will be rejected as per the message description.
   optional bytes transaction_inputs = 2;
 }
 
-message TransactionBatch {
+// A proven batch of transactions.
+//
+// Note that we currently require full transaction transparency for the network operator.
+// This is a temporary measure while Miden stabilizes its protocol and proof systems. To
+// this end, each transaction includes its **private** inputs which the operator can use
+// to verify the transaction execution and proofs are correct.
+//
+// This means the transaction is _not_ private wrt the network operator (but it is still
+// private onchain). This requirement will be lifted as Miden matures.
+//
+// In addition, in order to verify the batch itself, we also require the proposed batch.
+message ProvenTransactionBatch {
   // The batch proof.
   //
   // Encoded using [miden_protocol::batch::ProvenBatch::to_bytes].
@@ -28,12 +49,16 @@ message TransactionBatch {
   // The batch contents of the given proof.
   //
   // Encoded using [miden_protocol::batch::ProposedBatch::to_bytes].
+  //
+  // Batches missing this field will be rejected as per the message description.
   optional bytes proposed_batch = 2;
   // The transaction inputs for each transaction in the batch.
   //
   // Must match the transaction ordering in the batch.
   //
   // Encoded using [miden_protocol::transaction::TransactionInputs::to_bytes].
+  //
+  // Batch will be rejected if any transaction's input is missing as per the method description.
   repeated bytes transaction_inputs = 3;
 }
 

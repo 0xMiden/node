@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use futures::FutureExt;
+use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::batch::{OrderedBatches, ProvenBatch};
 use miden_protocol::block::{BlockInputs, BlockNumber, ProposedBlock, ProvenBlock, SignedBlock};
@@ -225,7 +226,7 @@ impl BlockBuilder {
         proposed_block: ProposedBlock,
     ) -> Result<(OrderedBatches, SignedBlock), BuildBlockError> {
         // Concurrently build the block and validate it via the validator.
-        let build_result = tokio::task::spawn_blocking({
+        let build_result = spawn_blocking_in_current_span({
             let proposed_block = proposed_block.clone();
             move || proposed_block.into_header_and_body()
         });

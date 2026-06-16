@@ -6,6 +6,7 @@ use std::time::Duration;
 use futures::never::Never;
 use futures::{FutureExt, TryFutureExt};
 use miden_node_proto::domain::batch::BatchInputs;
+use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{BatchId, ProposedBatch, ProvenBatch};
@@ -249,12 +250,14 @@ impl BatchJob {
                 .prove(proposed_batch)
                 .await
                 .map_err(BuildBatchError::RemoteProverClientError),
-            BatchProver::Local(prover) => tokio::task::spawn_blocking({
+            BatchProver::Local(prover) => {
                 let prover = prover.clone();
-                move || prover.prove(proposed_batch).map_err(BuildBatchError::ProveBatchError)
-            })
-            .await
-            .map_err(BuildBatchError::JoinError)?,
+                spawn_blocking_in_current_span(move || {
+                    prover.prove(proposed_batch).map_err(BuildBatchError::ProveBatchError)
+                })
+                .await
+                .map_err(BuildBatchError::JoinError)?
+            },
         }?;
 
         if proven_batch.proof_security_level() < MIN_PROOF_SECURITY_LEVEL {

@@ -6,7 +6,6 @@ use std::str::FromStr;
 
 use indexmap::IndexMap;
 use miden_node_utils::crypto::get_rpo_random_coin;
-use miden_node_utils::signer::BlockSigner;
 use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
 use miden_protocol::account::{
     Account,
@@ -23,6 +22,7 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::{FungibleAsset, TokenSymbol};
 use miden_protocol::block::FeeParameters;
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey as RpoSecretKey;
 use miden_protocol::errors::TokenSymbolError;
 use miden_protocol::{Felt, ONE};
@@ -141,10 +141,10 @@ impl GenesisConfig {
     ///
     /// Also returns the set of secrets for the generated accounts.
     #[expect(clippy::too_many_lines)]
-    pub fn into_state<S>(
+    pub fn into_state(
         self,
-        signer: S,
-    ) -> Result<(GenesisState<S>, AccountSecrets), GenesisConfigError> {
+        validator_key: PublicKey,
+    ) -> Result<(GenesisState, AccountSecrets), GenesisConfigError> {
         let GenesisConfig {
             version,
             timestamp,
@@ -335,7 +335,7 @@ impl GenesisConfig {
                 accounts: all_accounts,
                 version,
                 timestamp,
-                block_signer: signer,
+                validator_key,
             },
             AccountSecrets { secrets },
         ))
@@ -529,7 +529,7 @@ impl AccountSecrets {
     /// and the index in
     pub fn as_account_files(
         &self,
-        genesis_state: &GenesisState<impl BlockSigner>,
+        genesis_state: &GenesisState,
     ) -> impl Iterator<Item = Result<AccountFileWithName, GenesisConfigError>> + '_ {
         let account_lut = IndexMap::<AccountId, Account>::from_iter(
             genesis_state.accounts.iter().map(|account| (account.id(), account.clone())),

@@ -18,16 +18,17 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: "next"
+          persist-credentials: false
       - name: Cleanup large tools for build space
         uses: ./.github/actions/cleanup-runner
       - uses: ./.github/actions/install-rocksdb
       - uses: ./.github/actions/install-protobuf-compiler
       - name: Rustup
         run: rustup install beta && rustup default beta
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
         with:
           tool: nextest@0.9.122
       - name: Run tests
@@ -40,17 +41,20 @@ jobs:
     name: feature combinations
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: "next"
+          persist-credentials: false
       - name: Cleanup large tools for build space
         uses: ./.github/actions/cleanup-runner
       - uses: ./.github/actions/install-rocksdb
       - uses: ./.github/actions/install-protobuf-compiler
       - name: Install rust
-        run: rustup update --no-self-update
+        run: rustup toolchain install --no-self-update
       - name: Install cargo-hack
-        uses: taiki-e/install-action@cargo-hack
+        uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
+        with:
+          tool: cargo-hack
       - name: Check all feature combinations
         run: make check-features
 
@@ -64,9 +68,10 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: stable
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: "next"
+          persist-credentials: false
       - name: Extract workspace packages
         id: package-matrix
         run: |
@@ -91,28 +96,38 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: stable
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: "next"
+          persist-credentials: false
       - name: Install binstall
-        uses: cargo-bins/cargo-binstall@main
+        uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
+        with:
+          tool: cargo-binstall@1.16.6
       - name: Install cargo-msrv
         run: cargo binstall --no-confirm cargo-msrv
       - name: Get manifest path for package
         id: pkg
+        env:
+          PACKAGE: ${{ matrix.package }}
         run: |
           MANIFEST_PATH=$(cargo metadata --format-version 1 --no-deps \
-            | jq -r '
+            | jq -r --arg package "$PACKAGE" '
               .packages[]
-              | select(.name == "${{ matrix.package }}")
+              | select(.name == $package)
               | .manifest_path
             ')
           echo "manifest_path=$MANIFEST_PATH" >> "$GITHUB_OUTPUT"
       - name: Show package info
+        env:
+          MANIFEST_PATH: ${{ steps.pkg.outputs.manifest_path }}
+          PACKAGE: ${{ matrix.package }}
         run: |
-          echo "Package: ${{ matrix.package }}"
-          echo "Manifest path: ${{ steps.pkg.outputs.manifest_path }}"
-          cargo msrv show --manifest-path "${{ steps.pkg.outputs.manifest_path }}"
+          echo "Package: ${PACKAGE}"
+          echo "Manifest path: ${MANIFEST_PATH}"
+          cargo msrv show --manifest-path "${MANIFEST_PATH}"
       - name: Check MSRV
+        env:
+          MANIFEST_PATH: ${{ steps.pkg.outputs.manifest_path }}
         run: |
-          cargo msrv verify --manifest-path "${{ steps.pkg.outputs.manifest_path }}"
+          cargo msrv verify --manifest-path "${MANIFEST_PATH}"

@@ -13,8 +13,12 @@ version.workspace      = true
 [lints]
 workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 anyhow                     = { workspace = true }
+backon                     = { workspace = true }
 diesel                     = { features = ["numeric", "sqlite"], workspace = true }
 diesel_migrations          = { features = ["sqlite"], workspace = true }
 futures                    = { workspace = true }
@@ -41,13 +45,9 @@ url                        = { workspace = true }
 build-rs = { workspace = true }
 
 [dev-dependencies]
-miden-node-test-macro = { path = "../test-macro" }
-miden-node-utils      = { features = ["testing"], workspace = true }
-miden-protocol        = { default-features = true, features = ["testing"], workspace = true }
-miden-standards       = { features = ["testing"], workspace = true }
-rand_chacha           = { workspace = true }
-rstest                = { workspace = true }
-tempfile              = { version = "3.20" }
-
-[package.metadata.cargo-machete]
-ignored = ["libsqlite3-sys"]
+miden-node-utils = { features = ["testing"], workspace = true }
+miden-protocol   = { default-features = true, features = ["testing"], workspace = true }
+miden-standards  = { features = ["testing"], workspace = true }
+rand_chacha      = { workspace = true }
+rstest           = { workspace = true }
+tempfile         = { workspace = true }

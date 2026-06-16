@@ -16,7 +16,7 @@ workspace = true
 
 [dependencies]
 anyhow                      = { workspace = true }
-hex                         = { version = "0.4" }
+hex                         = { workspace = true }
 http                        = { workspace = true }
 miden-node-grpc-error-macro = { workspace = true }
 miden-node-utils            = { workspace = true }
@@ -29,14 +29,13 @@ tonic-prost                 = { workspace = true }
 url                         = { workspace = true }
 
 [dev-dependencies]
-assert_matches = { workspace = true }
-proptest       = { version = "1.7" }
+proptest = { version = "1.7" }
 
 [build-dependencies]
 build-rs               = { workspace = true }
 fs-err                 = { workspace = true }
 miden-node-proto-build = { features = ["internal"], workspace = true }
-miette                 = { version = "7.6" }
+miette                 = { workspace = true }
 tonic-prost-build      = { workspace = true }
 
 [package.metadata.cargo-machete]

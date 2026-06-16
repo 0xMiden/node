@@ -65,6 +65,12 @@ impl ToValue for usize {
     }
 }
 
+impl ToValue for u64 {
+    fn to_value(&self) -> Value {
+        i64::try_from(*self).unwrap_or(i64::MAX).into()
+    }
+}
+
 /// Generates `impl ToValue` blocks for types that are `ToString`.
 macro_rules! impl_to_string_to_value {
     ($($t:ty),*) => {

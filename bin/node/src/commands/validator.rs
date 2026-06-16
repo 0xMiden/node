@@ -6,7 +6,6 @@ use miden_node_store::genesis::config::{AccountFileWithName, GenesisConfig};
 use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::fs::ensure_empty_directory;
 use miden_node_utils::grpc::UrlExt;
-use miden_node_utils::signer::BlockSigner;
 use miden_node_validator::{Validator, ValidatorSigner};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
@@ -196,28 +195,14 @@ impl ValidatorCommand {
 
         // Bootstrap with KMS key or local key.
         let signer = validator_key.into_signer().await?;
-        match signer {
-            ValidatorSigner::Kms(signer) => {
-                build_and_write_genesis(
-                    config,
-                    signer,
-                    accounts_directory,
-                    genesis_block_directory,
-                    data_directory,
-                )
-                .await
-            },
-            ValidatorSigner::Local(signer) => {
-                build_and_write_genesis(
-                    config,
-                    signer,
-                    accounts_directory,
-                    genesis_block_directory,
-                    data_directory,
-                )
-                .await
-            },
-        }
+        build_and_write_genesis(
+            config,
+            signer,
+            accounts_directory,
+            genesis_block_directory,
+            data_directory,
+        )
+        .await
     }
 }
 
@@ -225,13 +210,13 @@ impl ValidatorCommand {
 /// to disk, and initializes the validator's database with the genesis block as the chain tip.
 async fn build_and_write_genesis(
     config: GenesisConfig,
-    signer: impl BlockSigner,
+    signer: ValidatorSigner,
     accounts_directory: &Path,
     genesis_block_directory: &Path,
     data_directory: &Path,
 ) -> anyhow::Result<()> {
     // Build genesis state with the provided signer.
-    let (genesis_state, secrets) = config.into_state(signer)?;
+    let (genesis_state, secrets) = config.into_state(signer.public_key())?;
 
     // Write account secret files.
     for item in secrets.as_account_files(&genesis_state) {
@@ -247,8 +232,16 @@ async fn build_and_write_genesis(
     }
 
     // Build the signed genesis block.
-    let genesis_block =
-        genesis_state.into_block().await.context("failed to build the genesis block")?;
+    let unsigned_genesis_block = genesis_state
+        .into_unsigned_block()
+        .context("failed to build the unsigned genesis block")?;
+    let signature = signer
+        .sign(unsigned_genesis_block.header())
+        .await
+        .context("failed to sign the genesis block")?;
+    let genesis_block = unsigned_genesis_block
+        .into_block(signature)
+        .context("failed to build the genesis block")?;
 
     // Serialize and write the genesis block to disk.
     let block_bytes = genesis_block.inner().to_bytes();

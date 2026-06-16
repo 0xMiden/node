@@ -12,6 +12,8 @@ version.workspace      = true
 
 [lib]
 crate-type = ["lib"]
+doctest    = false
+test       = false
 
 [features]
 batch-prover = ["dep:miden-protocol", "dep:tokio"]
@@ -26,8 +28,7 @@ tonic                 = { features = ["codegen"], workspace = true }
 tonic-web-wasm-client = { default-features = false, version = "0.9" }
 
 [target.'cfg(not(all(target_arch = "wasm32", target_os = "unknown")))'.dependencies]
-tonic     = { features = ["codegen", "tls-native-roots", "tls-ring", "transport"], workspace = true }
-tonic-web = { optional = true, version = "0.14" }
+tonic = { features = ["codegen", "tls-native-roots", "tls-ring", "transport"], workspace = true }
 
 [lints]
 workspace = true
@@ -37,18 +38,19 @@ miden-protocol = { optional = true, workspace = true }
 miden-tx       = { optional = true, workspace = true }
 prost          = { default-features = false, features = ["derive"], workspace = true }
 thiserror      = { workspace = true }
-tokio          = { default-features = false, features = ["sync"], optional = true, version = "1.44" }
+tokio          = { default-features = false, features = ["sync"], optional = true, workspace = true }
 tonic-prost    = { workspace = true }
 
 [build-dependencies]
 build-rs               = { workspace = true }
 fs-err                 = { workspace = true }
 miden-node-proto-build = { workspace = true }
-miette                 = { features = ["fancy"], version = "7.5" }
+miette                 = { features = ["fancy"], workspace = true }
 tonic-prost-build      = { workspace = true }
 
-[package.metadata.cargo-machete]
+[package.metadata.cargo-shear]
 ignored = [
+  "getrandom",
   "prost",
   "tonic-prost", # used in generated OUT_DIR code
 ]

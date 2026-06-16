@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 use miden_node_utils::logging::OpenTelemetry;
 use seeding::seed_store;
 use store::{
+    bench_get_account,
     bench_sync_chain_mmr,
     bench_sync_notes,
     bench_sync_nullifiers,
@@ -39,6 +40,18 @@ pub enum Command {
         /// private accounts.
         #[arg(short, long, value_name = "PUBLIC_ACCOUNTS_PERCENTAGE", default_value = "0")]
         public_accounts_percentage: u8,
+
+        /// Number of entries to add to a deterministic storage map on every public account.
+        #[arg(long, value_name = "STORAGE_MAP_ENTRIES", default_value = "0")]
+        storage_map_entries: usize,
+
+        /// Number of distinct vault assets to add to every public account.
+        #[arg(long, value_name = "VAULT_ENTRIES", default_value = "1")]
+        vault_entries: usize,
+
+        /// Number of post-initialization blocks to generate with random account updates.
+        #[arg(long, value_name = "ACCOUNT_UPDATE_BLOCKS", default_value = "0")]
+        account_update_blocks: usize,
     },
 
     /// Benchmark the performance of the store endpoints.
@@ -62,7 +75,7 @@ pub enum Command {
     },
 }
 
-#[derive(Subcommand, Clone, Copy)]
+#[derive(Subcommand, Clone)]
 pub enum Endpoint {
     #[command(name = "sync-nullifiers")]
     SyncNullifiers {
@@ -89,6 +102,12 @@ pub enum Endpoint {
     },
     #[command(name = "load-state")]
     LoadState,
+    #[command(name = "get-account")]
+    GetAccount {
+        /// Storage slot name to request with all entries.
+        #[arg(long, value_name = "SLOT_NAME", default_value = seeding::BENCHMARK_STORAGE_MAP_SLOT_NAME)]
+        storage_map_slot: String,
+    },
 }
 
 #[tokio::main]
@@ -103,8 +122,19 @@ async fn main() {
             data_directory,
             num_accounts,
             public_accounts_percentage,
+            storage_map_entries,
+            vault_entries,
+            account_update_blocks,
         } => {
-            seed_store(data_directory, num_accounts, public_accounts_percentage).await;
+            seed_store(
+                data_directory,
+                num_accounts,
+                public_accounts_percentage,
+                storage_map_entries,
+                vault_entries,
+                account_update_blocks,
+            )
+            .await;
         },
         Command::BenchmarkStore {
             endpoint,
@@ -133,6 +163,9 @@ async fn main() {
             },
             Endpoint::LoadState => {
                 load_state(&data_directory).await;
+            },
+            Endpoint::GetAccount { storage_map_slot } => {
+                bench_get_account(data_directory, iterations, concurrency, storage_map_slot).await;
             },
         },
     }

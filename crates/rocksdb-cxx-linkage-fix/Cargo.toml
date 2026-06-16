@@ -11,7 +11,9 @@ rust-version.workspace = true
 version.workspace      = true
 
 [lib]
-path = "src/lib.rs"
+doctest = false
+path    = "src/lib.rs"
+test    = false
 
 [lints]
 workspace = true

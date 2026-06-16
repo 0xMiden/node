@@ -51,5 +51,5 @@ LABEL org.opencontainers.image.created=$CREATED \
 
 # Expose RPC port
 EXPOSE 57291
-# Miden node does not spawn sub-processes, so it can be used as the PID1
-CMD miden-node
+# Miden node does not spawn sub-processes, so it can be used as the PID1.
+CMD ["miden-node"]

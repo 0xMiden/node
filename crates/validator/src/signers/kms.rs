@@ -1,8 +1,7 @@
 use aws_sdk_kms::error::SdkError;
 use aws_sdk_kms::operation::sign::SignError;
 use aws_sdk_kms::types::SigningAlgorithmSpec;
-use miden_node_utils::signer::BlockSigner;
-use miden_protocol::block::BlockHeader;
+use miden_protocol::Word;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
 use miden_protocol::crypto::hash::keccak::Keccak256;
 use miden_protocol::utils::serde::{DeserializationError, Serializable};
@@ -74,18 +73,14 @@ impl KmsSigner {
         let pub_key = PublicKey::from_der(spki_der)?;
         Ok(Self { key_id, pub_key, client })
     }
-}
 
-impl BlockSigner for KmsSigner {
-    type Error = KmsSignerError;
-
-    async fn sign(&self, header: &BlockHeader) -> Result<Signature, Self::Error> {
+    pub async fn sign(&self, commitment: Word) -> Result<Signature, KmsSignerError> {
         // The Validator produces Ethereum-style ECDSA (secp256k1) signatures over Keccak-256
         // digests. AWS KMS does not support SHA-3 hashing for ECDSA keys
         // (ECC_SECG_P256K1 being the corresponding AWS key-spec), so we pre-hash the
         // message and pass MessageType::Digest. KMS signs the provided 32-byte digest
         // verbatim.
-        let msg = header.commitment().to_bytes();
+        let msg = commitment.to_bytes();
         let digest = Keccak256::hash(&msg);
 
         // Request signature from KMS backend.
@@ -109,14 +104,14 @@ impl BlockSigner for KmsSigner {
             .map_err(KmsSignerError::SignatureFormatError)?;
 
         // Check the returned signature.
-        if sig.verify(header.commitment(), &self.pub_key) {
+        if sig.verify(commitment, &self.pub_key) {
             Ok(sig)
         } else {
             Err(KmsSignerError::InvalidSignature)
         }
     }
 
-    fn public_key(&self) -> PublicKey {
+    pub fn public_key(&self) -> PublicKey {
         self.pub_key.clone()
     }
 }

@@ -27,16 +27,17 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Workflows on main
         id: main
         run: |
           git fetch origin main
           WORKFLOWS=$(git ls-tree -r origin/main --name-only | grep '^.github/workflows/')
-          printf "%s\n" $WORKFLOWS
+          printf "%s\n" "$WORKFLOWS"
           {
             echo "workflows<<EOF"
             echo "$WORKFLOWS"
@@ -48,7 +49,7 @@ jobs:
         run: |
           git fetch origin next
           WORKFLOWS=$(git ls-tree -r origin/next --name-only | grep '^.github/workflows/')
-          printf "%s\n" $WORKFLOWS
+          printf "%s\n" "$WORKFLOWS"
           {
             echo "workflows<<EOF"
             echo "$WORKFLOWS"
@@ -59,13 +60,15 @@ jobs:
         id: deleted
         env:
           GH_TOKEN: ${{ github.token }}
+          MAIN_WORKFLOWS: ${{ steps.main.outputs.workflows }}
+          NEXT_WORKFLOWS: ${{ steps.next.outputs.workflows }}
         run: |
           set -euo pipefail
 
           # Union of `main` and `next` workflows as a JSON array of strings (paths)
           EXISTING=$(printf "%s\n%s\n" \
-            "${{ steps.main.outputs.workflows }}" \
-            "${{ steps.next.outputs.workflows }}" \
+            "$MAIN_WORKFLOWS" \
+            "$NEXT_WORKFLOWS" \
           )
           EXISTING=$(echo "$EXISTING" | sort -u | jq -R . | jq -s .)
 
@@ -73,7 +76,7 @@ jobs:
           echo "$EXISTING"
 
           # Get workflows currently on GitHub as JSON array of objects
-          GITHUB=$(gh api repos/{owner}/{repo}/actions/workflows \
+          GITHUB=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows" \
             --jq '.workflows[] | select(.path | startswith(".github")) | { name, node_id, path }' \
               | jq -s '.')
 
@@ -126,6 +129,7 @@ jobs:
             local id="$1"
             local cursor="$2"
 
+            # shellcheck disable=SC2016 # GraphQL variables use $, not shell expansion.
             gh api graphql -F workflowId="$id" -F after="$cursor" \
               -f query='query($workflowId: ID!, $after: String) {
                   node(id: $workflowId) {
@@ -148,22 +152,31 @@ jobs:
           widths_name=30
           widths_count=14
           widths_total=12
-          widths_table=$(( $widths_index + 3 + $widths_name + 3 + $widths_count + 3 + $widths_total ))
+          widths_table=$((widths_index + 3 + widths_name + 3 + widths_count + 3 + widths_total))
 
           # Repeats a character a given number of times.
           repeat_char() {
             local char=$1
             local count=$2
-            printf "%0.s$char" $(seq 1 $count)
+            local i
+
+            for ((i = 0; i < count; i++)); do
+              printf "%s" "$char"
+            done
           }
 
           # Prints the given header as `==== <header> ====` to match the table layout.
           print_table_header() {
             local header="$1"
             local header_len=${#header}
-            local left_pad=$(( ( $widths_table - header_len - 2) / 2 ))
-            local right_pad=$(( $widths_table - header_len - 2 - left_pad ))
-            printf " \n%s %s %s\n" $(repeat_char = $left_pad) "$header" $(repeat_char = $right_pad)
+            local left_pad=$(((widths_table - header_len - 2) / 2))
+            local right_pad=$((widths_table - header_len - 2 - left_pad))
+            local left_fill
+            local right_fill
+
+            left_fill=$(repeat_char "=" "$left_pad")
+            right_fill=$(repeat_char "=" "$right_pad")
+            printf " \n%s %s %s\n" "$left_fill" "$header" "$right_fill"
           }
 
           # Prints |---+---+---+---| with appropriate widths to accomodate the table headers.
@@ -248,9 +261,9 @@ jobs:
               print_table_row "[$index/$n_workflows]" "$name" "$count" "$total"
 
               if [ "$MODE" = "execute" ]; then
-                for run_id in $run_ids; do
+                while IFS= read -r run_id; do
                   gh run delete "$run_id" >/dev/null
-                done
+                done <<< "$run_ids"
               fi
 
               [ "$has_next" != "true" ] && break

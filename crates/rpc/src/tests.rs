@@ -17,6 +17,7 @@ use miden_node_utils::limiter::{
     QueryParamNoteIdLimit,
     QueryParamNullifierLimit,
 };
+use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
@@ -38,6 +39,7 @@ use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::runtime::{self, Runtime};
 use tokio::task;
+use tokio::time::sleep;
 use url::Url;
 
 use crate::Rpc;
@@ -228,7 +230,7 @@ async fn rpc_startup_is_robust_to_network_failures() {
     let (store_runtime, data_directory, _genesis, store_addr) = start_store(store_listener).await;
 
     // Test: send request against RPC api and should succeed
-    let response = send_request(&mut rpc_client).await;
+    let response = send_request_until_success(&mut rpc_client).await;
     assert!(response.unwrap().into_inner().block_header.is_some());
 
     // Test: shutdown the store and should fail
@@ -238,7 +240,7 @@ async fn rpc_startup_is_robust_to_network_failures() {
 
     // Test: restart the store and request should succeed
     let store_runtime = restart_store(store_addr, data_directory.path()).await;
-    let response = send_request(&mut rpc_client).await;
+    let response = send_request_until_success(&mut rpc_client).await;
     assert_eq!(response.unwrap().into_inner().block_header.unwrap().block_num, 0);
 
     // Shutdown the store before data_directory is dropped to allow RocksDB to flush properly
@@ -440,6 +442,24 @@ async fn send_request(
     rpc_client.get_block_header_by_number(request).await
 }
 
+async fn send_request_until_success(
+    rpc_client: &mut RpcClient,
+) -> std::result::Result<tonic::Response<proto::rpc::BlockHeaderByNumberResponse>, tonic::Status> {
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+
+        match send_request(rpc_client).await {
+            Ok(response) => return Ok(response),
+            Err(err) if attempts < 30 => {
+                sleep(Duration::from_millis(200)).await;
+                tracing::warn!(%attempts, %err, "RPC request failed, retrying");
+            },
+            Err(err) => return Err(err),
+        }
+    }
+}
+
 async fn connect_rpc(url: Url, local_address: Option<IpAddr>) -> RpcClient {
     let mut endpoint = tonic::transport::Endpoint::from_shared(url.to_string())
         .expect("Url type always results in valid endpoint")
@@ -507,12 +527,12 @@ async fn start_store(store_listener: TcpListener) -> (Runtime, TempDir, Word, So
 
     let config = GenesisConfig::default();
     let signer = SecretKey::new();
-    let (genesis_state, _) = config.into_state(signer).unwrap();
+    let (genesis_state, _) = config.into_state(signer.public_key()).unwrap();
     let genesis_block = genesis_state
         .clone()
-        .into_block()
-        .await
+        .into_block(&signer)
         .expect("genesis block should be created");
+    let genesis_commitment = genesis_block.inner().header().commitment();
     Store::bootstrap(genesis_block, data_directory.path()).expect("store should bootstrap");
     let dir = data_directory.path().to_path_buf();
     let store_addr =
@@ -543,18 +563,13 @@ async fn start_store(store_listener: TcpListener) -> (Runtime, TempDir, Word, So
         .await
         .expect("store should start serving");
     });
-    (
-        store_runtime,
-        data_directory,
-        genesis_state.into_block().await.unwrap().inner().header().commitment(),
-        store_addr,
-    )
+    (store_runtime, data_directory, genesis_commitment, store_addr)
 }
 
 /// Shuts down the store runtime properly to allow `RocksDB` to flush before the temp directory is
 /// deleted.
 async fn shutdown_store(store_runtime: Runtime) {
-    task::spawn_blocking(move || store_runtime.shutdown_timeout(Duration::from_secs(3)))
+    spawn_blocking_in_current_span(move || store_runtime.shutdown_timeout(Duration::from_secs(3)))
         .await
         .expect("shutdown should complete");
     // Give RocksDB time to release its lock file after the runtime shutdown

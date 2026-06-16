@@ -1,8 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use backon::{ExponentialBuilder, Retryable};
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
+use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::Word;
 use miden_protocol::account::{
@@ -48,12 +51,11 @@ use miden_tx::{
     TransactionMastStore,
     TransactionProverError,
 };
-use tokio::sync::Mutex;
 use tracing::{Instrument, instrument};
 
 use crate::COMPONENT;
 use crate::actor::candidate::TransactionCandidate;
-use crate::clients::{BlockProducerClient, StoreClient, ValidatorClient};
+use crate::clients::{BlockProducerClient, StoreClient, StoreError, ValidatorClient};
 use crate::db::Db;
 
 #[derive(Debug, thiserror::Error)]
@@ -73,6 +75,53 @@ pub enum NtxError {
 }
 
 type NtxResult<T> = Result<T, NtxError>;
+
+/// Returns `true` for gRPC status codes that indicate a transient transport- or server-side
+/// problem worth retrying. Content-rejection codes (`InvalidArgument`, `FailedPrecondition`, ...)
+/// reflect the batch itself and are not retried.
+fn is_transient_status(status: &tonic::Status) -> bool {
+    matches!(
+        status.code(),
+        tonic::Code::Unavailable
+            | tonic::Code::DeadlineExceeded
+            | tonic::Code::Cancelled
+            | tonic::Code::Aborted
+            | tonic::Code::Unknown
+            | tonic::Code::Internal
+            | tonic::Code::ResourceExhausted,
+    )
+}
+
+/// Returns `true` for `StoreError`s that originate from a transient gRPC condition. All other
+/// store errors (deserialization, missing fields) are content errors and are not retried.
+fn is_transient_store_error(err: &StoreError) -> bool {
+    matches!(err, StoreError::GrpcClientError(status) if is_transient_status(status))
+}
+
+/// Maximum number of retries applied to a single transient request before the error is
+/// propagated to the actor-level retry.
+const MAX_REQUEST_RETRIES: usize = 20;
+
+/// Builds the [`ExponentialBuilder`] used to back off retries on transient request failures.
+fn request_backoff(initial: Duration, max: Duration) -> ExponentialBuilder {
+    ExponentialBuilder::default()
+        .with_min_delay(initial)
+        .with_max_delay(max)
+        .with_factor(2.0)
+        .with_max_times(MAX_REQUEST_RETRIES)
+        .with_jitter()
+}
+
+/// Emits a structured warning for a transient NTX request failure that is about to be retried.
+fn log_transient_retry<E: std::error::Error>(operation: &'static str, err: &E, sleep: Duration) {
+    tracing::warn!(
+        target: COMPONENT,
+        operation,
+        err = %err.as_report(),
+        sleep_ms = sleep.as_millis() as u64,
+        "ntx transient request failure; retrying after backoff",
+    );
+}
 
 /// The result of a successful transaction execution.
 ///
@@ -109,10 +158,14 @@ pub struct NtxContext {
 
     /// Maximum number of VM execution cycles for network transactions.
     max_cycles: u32,
+
+    /// [`ExponentialBuilder`] used to back off retries on transient request failures.
+    request_backoff: ExponentialBuilder,
 }
 
 impl NtxContext {
     /// Creates a new [`NtxContext`] instance.
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         block_producer: BlockProducerClient,
         validator: ValidatorClient,
@@ -121,7 +174,10 @@ impl NtxContext {
         script_cache: LruCache<Word, NoteScript>,
         db: Db,
         max_cycles: u32,
+        request_backoff_initial: Duration,
+        request_backoff_max: Duration,
     ) -> Self {
+        let request_backoff = request_backoff(request_backoff_initial, request_backoff_max);
         Self {
             block_producer,
             validator,
@@ -130,7 +186,13 @@ impl NtxContext {
             script_cache,
             db,
             max_cycles,
+            request_backoff,
         }
+    }
+
+    /// Returns the [`ExponentialBuilder`] used for per-request retry backoff.
+    fn request_backoff(&self) -> ExponentialBuilder {
+        self.request_backoff
     }
 
     /// Creates a [`TransactionExecutor`] configured with the network transaction cycle limit.
@@ -195,25 +257,41 @@ impl NtxContext {
 
         async move {
             Box::pin(async move {
-                let data_store = NtxDataStore::new(
-                    account,
-                    chain_tip_header,
-                    chain_mmr,
-                    self.store.clone(),
-                    self.script_cache.clone(),
-                    self.db.clone(),
-                );
-
-                // Filter notes.
                 let notes = notes.into_iter().map(Note::from).collect::<Vec<_>>();
-                let (successful_notes, failed_notes) =
-                    self.filter_notes(&data_store, notes).await?;
 
-                // Execute transaction.
-                let executed_tx = Box::pin(self.execute(&data_store, successful_notes)).await?;
+                // VM execution (note filtering + transaction execution) is CPU-intensive and
+                // may not yield between await points. Run on a dedicated blocking thread,
+                // using the parent runtime handle so that async data-store callbacks (gRPC
+                // calls to the store) are driven by the existing I/O driver.
+                let ctx = self.clone();
+                let handle = tokio::runtime::Handle::current();
+                let span = tracing::Span::current();
 
-                // Collect scripts fetched from the remote store during execution.
-                let scripts_to_cache = data_store.take_fetched_scripts().await;
+                let (executed_tx, failed_notes, scripts_to_cache) =
+                    spawn_blocking_in_current_span(move || {
+                        let data_store = NtxDataStore::new(
+                            account,
+                            chain_tip_header,
+                            chain_mmr,
+                            ctx.store.clone(),
+                            ctx.script_cache.clone(),
+                            ctx.db.clone(),
+                            ctx.request_backoff,
+                        );
+                        handle.block_on(
+                            async {
+                                let (successful_notes, failed_notes) =
+                                    ctx.filter_notes(&data_store, notes).await?;
+                                let executed_tx =
+                                    Box::pin(ctx.execute(&data_store, successful_notes)).await?;
+                                let scripts_to_cache = data_store.take_fetched_scripts();
+                                Ok::<_, NtxError>((executed_tx, failed_notes, scripts_to_cache))
+                            }
+                            .instrument(span),
+                        )
+                    })
+                    .await
+                    .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))?;
 
                 // Prove transaction.
                 let tx_inputs: TransactionInputs = executed_tx.into();
@@ -314,36 +392,69 @@ impl NtxContext {
 
     /// Delegates the transaction proof to the remote prover if configured, otherwise performs the
     /// proof locally.
+    ///
+    /// Transient transport failures against the remote prover are retried in-place; intrinsic
+    /// proving errors (witness rejected, malformed inputs) escape on the first attempt.
     #[instrument(target = COMPONENT, name = "ntx.execute_transaction.prove", skip_all, err)]
     async fn prove(&self, tx_inputs: &TransactionInputs) -> NtxResult<ProvenTransaction> {
         if let Some(remote) = &self.prover {
-            remote.prove(tx_inputs).await
+            (|| async { remote.prove(tx_inputs).await })
+                .retry(self.request_backoff())
+                .when(|err| matches!(err, TransactionProverError::Other { .. }))
+                .notify(|err, dur| {
+                    log_transient_retry("remote_prover.prove", err, dur);
+                })
+                .await
+                .map_err(NtxError::Proving)
         } else {
-            // Only perform tx inputs clone for local proving.
+            // ZK proof generation is CPU-intensive; run it on a dedicated blocking thread.
             let tx_inputs = tx_inputs.clone();
-            LocalTransactionProver::default().prove(tx_inputs).await
+            let span = tracing::Span::current();
+
+            spawn_blocking_in_current_span(move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("failed to build tokio runtime")
+                    .block_on(LocalTransactionProver::default().prove(tx_inputs).instrument(span))
+            })
+            .await
+            .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))
+            .map_err(NtxError::Proving)
         }
-        .map_err(NtxError::Proving)
     }
 
     /// Submits the transaction to the block producer.
+    ///
+    /// Transient gRPC failures (`Unavailable`, `DeadlineExceeded`, ...) are retried in-place;
+    /// content-rejection codes escape on the first attempt so the actor can mark the batch failed.
     #[instrument(target = COMPONENT, name = "ntx.execute_transaction.submit", skip_all, err)]
     async fn submit(&self, proven_tx: &ProvenTransaction) -> NtxResult<()> {
-        self.block_producer
-            .submit_proven_transaction(proven_tx)
+        (|| async { self.block_producer.submit_proven_transaction(proven_tx).await })
+            .retry(self.request_backoff())
+            .when(is_transient_status)
+            .notify(|status, dur| {
+                log_transient_retry("block_producer.submit_proven_transaction", status, dur);
+            })
             .await
             .map_err(NtxError::Submission)
     }
 
     /// Validates the transaction against the Validator.
+    ///
+    /// Transient gRPC failures are retried in-place; content-rejection codes escape immediately.
     #[instrument(target = COMPONENT, name = "ntx.execute_transaction.validate", skip_all, err)]
     async fn validate(
         &self,
         proven_tx: &ProvenTransaction,
         tx_inputs: &TransactionInputs,
     ) -> NtxResult<()> {
-        self.validator
-            .submit_proven_transaction(proven_tx, tx_inputs)
+        (|| async { self.validator.submit_proven_transaction(proven_tx, tx_inputs).await })
+            .retry(self.request_backoff())
+            .when(is_transient_status)
+            .notify(|status, dur| {
+                log_transient_retry("validator.submit_proven_transaction", status, dur);
+            })
             .await
             .map_err(NtxError::Submission)
     }
@@ -374,29 +485,11 @@ struct NtxDataStore {
     db: Db,
     /// Scripts fetched from the remote store during execution, to be persisted by the
     /// coordinator.
-    fetched_scripts: Arc<Mutex<Vec<(Word, NoteScript)>>>,
+    fetched_scripts: Arc<FetchedNoteScripts>,
     /// Mapping of storage map roots to storage slot names observed during various calls.
-    ///
-    /// The registered slot names are subsequently used to retrieve storage map witnesses from the
-    /// store. We need this because the store interface (and the underling SMT forest) use storage
-    /// slot names, but the `DataStore` interface works with tree roots. To get around this problem
-    /// we populate this map when:
-    /// - The the native account is loaded (in `get_transaction_inputs()`).
-    /// - When a foreign account is loaded (in `get_foreign_account_inputs`).
-    ///
-    /// The assumption here are:
-    /// - Once an account is loaded, the mapping between `(account_id, map_root)` and slot names do
-    ///   not change. This is always the case.
-    /// - New storage slots created during transaction execution will not be accesses in the same
-    ///   transaction. The mechanism for adding new storage slots is not implemented yet, but the
-    ///   plan for it is consistent with this assumption.
-    ///
-    /// One nuance worth mentioning: it is possible that there could be a root collision where an
-    /// account has two storage maps with the same root. In this case, the map will contain only a
-    /// single entry with the storage slot name that was added last. Thus, technically, requests
-    /// to the store could be "wrong", but given that two identical maps have identical witnesses
-    /// this does not cause issues in practice.
-    storage_slots: Arc<Mutex<BTreeMap<(AccountId, Word), StorageSlotName>>>,
+    storage_slots: Arc<StorageSlotRegistry>,
+    /// Per-request retry backoff for transient store failures.
+    request_backoff: ExponentialBuilder,
 }
 
 impl NtxDataStore {
@@ -408,6 +501,7 @@ impl NtxDataStore {
         store: StoreClient,
         script_cache: LruCache<Word, NoteScript>,
         db: Db,
+        request_backoff: ExponentialBuilder,
     ) -> Self {
         let mast_store = TransactionMastStore::new();
         mast_store.load_account_code(account.code());
@@ -420,30 +514,31 @@ impl NtxDataStore {
             store,
             script_cache,
             db,
-            fetched_scripts: Arc::new(Mutex::new(Vec::new())),
-            storage_slots: Arc::new(Mutex::new(BTreeMap::default())),
+            fetched_scripts: Arc::new(FetchedNoteScripts::new()),
+            storage_slots: Arc::new(StorageSlotRegistry::new()),
+            request_backoff,
         }
     }
 
+    /// Returns the [`ExponentialBuilder`] used for per-request retry backoff against the store.
+    fn store_backoff(&self) -> ExponentialBuilder {
+        self.request_backoff
+    }
+
     /// Returns the list of note scripts fetched from the remote store during execution.
-    async fn take_fetched_scripts(&self) -> Vec<(Word, NoteScript)> {
-        self.fetched_scripts.lock().await.drain(..).collect()
+    fn take_fetched_scripts(&self) -> Vec<(Word, NoteScript)> {
+        self.fetched_scripts.take_all()
     }
 
     /// Registers storage map slot names for the given account ID and storage header.
     ///
     /// These slot names are subsequently used to query for storage map witnesses against the store.
-    async fn register_storage_map_slots(
+    fn register_storage_map_slots(
         &self,
         account_id: AccountId,
         storage_header: &AccountStorageHeader,
     ) {
-        let mut storage_slots = self.storage_slots.lock().await;
-        for slot_header in storage_header.slots() {
-            if let StorageSlotType::Map = slot_header.slot_type() {
-                storage_slots.insert((account_id, slot_header.value()), slot_header.name().clone());
-            }
-        }
+        self.storage_slots.register_slots(account_id, storage_header);
     }
 }
 
@@ -467,8 +562,7 @@ impl DataStore for NtxDataStore {
             }
 
             // Register slot names from the native account for later use.
-            self.register_storage_map_slots(account_id, &self.account.storage().to_header())
-                .await;
+            self.register_storage_map_slots(account_id, &self.account.storage().to_header());
 
             let partial_account = PartialAccount::from(&self.account);
             Ok((partial_account, self.reference_block.clone(), (*self.chain_mmr).clone()))
@@ -483,19 +577,25 @@ impl DataStore for NtxDataStore {
         async move {
             debug_assert_eq!(ref_block, self.reference_block.block_num());
 
-            // Get foreign account inputs from store.
+            // Get foreign account inputs from store, retrying on transient gRPC failures.
             let account_inputs =
-                self.store.get_account_inputs(foreign_account_id, ref_block).await.map_err(
-                    |err| DataStoreError::other_with_source("failed to get account inputs", err),
-                )?;
+                (|| async { self.store.get_account_inputs(foreign_account_id, ref_block).await })
+                    .retry(self.store_backoff())
+                    .when(is_transient_store_error)
+                    .notify(|err, dur| {
+                        log_transient_retry("store.get_account_inputs", err, dur);
+                    })
+                    .await
+                    .map_err(|err| {
+                        DataStoreError::other_with_source("failed to get account inputs", err)
+                    })?;
 
             // Ensure foreign account procedures are available to the executor via the mast store.
             // This assumes the code was not loaded from before
             self.mast_store.load_account_code(account_inputs.code());
 
             // Register slot names from the foreign account for later use.
-            self.register_storage_map_slots(foreign_account_id, account_inputs.storage().header())
-                .await;
+            self.register_storage_map_slots(foreign_account_id, account_inputs.storage().header());
 
             Ok(account_inputs)
         }
@@ -510,14 +610,24 @@ impl DataStore for NtxDataStore {
         async move {
             let ref_block = self.reference_block.block_num();
 
-            // Get vault asset witnesses from the store.
-            let witnesses = self
-                .store
-                .get_vault_asset_witnesses(account_id, vault_keys, Some(ref_block))
-                .await
-                .map_err(|err| {
-                    DataStoreError::other_with_source("failed to get vault asset witnesses", err)
-                })?;
+            // Get vault asset witnesses from the store, retrying on transient gRPC failures.
+            let witnesses = (|| {
+                let vault_keys = vault_keys.clone();
+                async move {
+                    self.store
+                        .get_vault_asset_witnesses(account_id, vault_keys, Some(ref_block))
+                        .await
+                }
+            })
+            .retry(self.store_backoff())
+            .when(is_transient_store_error)
+            .notify(|err, dur| {
+                log_transient_retry("store.get_vault_asset_witnesses", err, dur);
+            })
+            .await
+            .map_err(|err| {
+                DataStoreError::other_with_source("failed to get vault asset witnesses", err)
+            })?;
 
             Ok(witnesses)
         }
@@ -532,8 +642,7 @@ impl DataStore for NtxDataStore {
         async move {
             // The slot name that corresponds to the given account ID and map root must have been
             // registered during previous calls of this data store.
-            let storage_slots = self.storage_slots.lock().await;
-            let Some(slot_name) = storage_slots.get(&(account_id, map_root)) else {
+            let Some(slot_name) = self.storage_slots.get_slot_name(account_id, map_root) else {
                 return Err(DataStoreError::other(
                     "requested storage slot has not been registered",
                 ));
@@ -541,14 +650,24 @@ impl DataStore for NtxDataStore {
 
             let ref_block = self.reference_block.block_num();
 
-            // Get storage map witness from the store.
-            let witness = self
-                .store
-                .get_storage_map_witness(account_id, slot_name.clone(), map_key, Some(ref_block))
-                .await
-                .map_err(|err| {
-                    DataStoreError::other_with_source("failed to get storage map witness", err)
-                })?;
+            // Get storage map witness from the store, retrying on transient gRPC failures.
+            let witness = (|| {
+                let slot_name = slot_name.clone();
+                async move {
+                    self.store
+                        .get_storage_map_witness(account_id, slot_name, map_key, Some(ref_block))
+                        .await
+                }
+            })
+            .retry(self.store_backoff())
+            .when(is_transient_store_error)
+            .notify(|err, dur| {
+                log_transient_retry("store.get_storage_map_witness", err, dur);
+            })
+            .await
+            .map_err(|err| {
+                DataStoreError::other_with_source("failed to get storage map witness", err)
+            })?;
 
             Ok(witness)
         }
@@ -578,9 +697,15 @@ impl DataStore for NtxDataStore {
                 return Ok(Some(script));
             }
 
-            // 3. Remote store.
-            let maybe_script =
-                self.store.get_note_script_by_root(script_root).await.map_err(|err| {
+            // 3. Remote store, retrying on transient gRPC failures.
+            let maybe_script = (|| async { self.store.get_note_script_by_root(script_root).await })
+                .retry(self.store_backoff())
+                .when(is_transient_store_error)
+                .notify(|err, dur| {
+                    log_transient_retry("store.get_note_script_by_root", err, dur);
+                })
+                .await
+                .map_err(|err| {
                     DataStoreError::other_with_source(
                         "failed to retrieve note script from store",
                         err,
@@ -589,7 +714,7 @@ impl DataStore for NtxDataStore {
 
             if let Some(script) = maybe_script {
                 // Collect for later persistence by the coordinator.
-                self.fetched_scripts.lock().await.push((script_root, script.clone()));
+                self.fetched_scripts.add(script_root, script.clone());
                 self.script_cache.put(script_root, script.clone());
                 Ok(Some(script))
             } else {
@@ -605,5 +730,139 @@ impl MastForestStore for NtxDataStore {
         procedure_hash: &miden_protocol::Word,
     ) -> Option<std::sync::Arc<miden_protocol::MastForest>> {
         self.mast_store.get(procedure_hash)
+    }
+}
+
+// HELPERS
+// ================================================================================================
+
+/// Scripts fetched from the remote store during execution, to be persisted by the
+/// coordinator.
+///
+/// The API guarantees that the mutex is never held across an await point.
+struct FetchedNoteScripts {
+    scripts: Mutex<Vec<(Word, NoteScript)>>,
+}
+
+impl FetchedNoteScripts {
+    fn new() -> Self {
+        Self { scripts: Mutex::new(Vec::new()) }
+    }
+
+    fn add(&self, script_root: Word, script: NoteScript) {
+        self.scripts
+            .lock()
+            .expect("Note scripts mutex is poisoned")
+            .push((script_root, script));
+    }
+
+    fn take_all(&self) -> Vec<(Word, NoteScript)> {
+        self.scripts.lock().expect("Note scripts mutex is poisoned").drain(..).collect()
+    }
+}
+
+/// Mapping of storage map roots to storage slot names observed during various calls.
+///
+/// The registered slot names are subsequently used to retrieve storage map witnesses from the
+/// store. We need this because the store interface (and the underling SMT forest) use storage
+/// slot names, but the `DataStore` interface works with tree roots. To get around this problem
+/// we populate this map when:
+/// - The the native account is loaded (in `get_transaction_inputs()`).
+/// - When a foreign account is loaded (in `get_foreign_account_inputs`).
+///
+/// The assumption here are:
+/// - Once an account is loaded, the mapping between `(account_id, map_root)` and slot names do not
+///   change. This is always the case.
+/// - New storage slots created during transaction execution will not be accesses in the same
+///   transaction. The mechanism for adding new storage slots is not implemented yet, but the plan
+///   for it is consistent with this assumption.
+///
+/// One nuance worth mentioning: it is possible that there could be a root collision where an
+/// account has two storage maps with the same root. In this case, the map will contain only a
+/// single entry with the storage slot name that was added last. Thus, technically, requests
+/// to the store could be "wrong", but given that two identical maps have identical witnesses
+/// this does not cause issues in practice.
+///
+/// The API guarantees that the mutex is never held across an await point.
+struct StorageSlotRegistry {
+    slots: Mutex<BTreeMap<(AccountId, Word), StorageSlotName>>,
+}
+
+impl StorageSlotRegistry {
+    fn new() -> Self {
+        Self { slots: Mutex::new(BTreeMap::default()) }
+    }
+
+    fn register_slots(&self, account_id: AccountId, storage_header: &AccountStorageHeader) {
+        let mut slots = self.slots.lock().expect("Storage slot registry mutex is poisoned");
+        for slot_header in storage_header.slots() {
+            if let StorageSlotType::Map = slot_header.slot_type() {
+                slots.insert((account_id, slot_header.value()), slot_header.name().clone());
+            }
+        }
+    }
+
+    fn get_slot_name(&self, account_id: AccountId, map_root: Word) -> Option<StorageSlotName> {
+        let slots = self.slots.lock().expect("Storage slot registry mutex is poisoned");
+        slots.get(&(account_id, map_root)).cloned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use miden_tx::TransactionProverError;
+
+    use super::{StoreError, is_transient_status, is_transient_store_error};
+
+    #[test]
+    fn transient_status_classifies_transport_codes() {
+        let transient = [
+            tonic::Status::unavailable("u"),
+            tonic::Status::deadline_exceeded("d"),
+            tonic::Status::cancelled("c"),
+            tonic::Status::aborted("a"),
+            tonic::Status::unknown("u"),
+            tonic::Status::internal("i"),
+            tonic::Status::resource_exhausted("r"),
+        ];
+        for s in &transient {
+            assert!(is_transient_status(s), "{:?} should be transient", s.code());
+        }
+
+        let terminal = [
+            tonic::Status::invalid_argument("ia"),
+            tonic::Status::failed_precondition("fp"),
+            tonic::Status::out_of_range("oor"),
+            tonic::Status::not_found("nf"),
+            tonic::Status::already_exists("ae"),
+            tonic::Status::unauthenticated("ua"),
+            tonic::Status::permission_denied("pd"),
+            tonic::Status::unimplemented("ui"),
+            tonic::Status::data_loss("dl"),
+        ];
+        for s in &terminal {
+            assert!(!is_transient_status(s), "{:?} should be terminal", s.code());
+        }
+    }
+
+    #[test]
+    fn transient_store_error_only_for_transient_grpc() {
+        let transient = StoreError::GrpcClientError(tonic::Status::unavailable("down"));
+        assert!(is_transient_store_error(&transient));
+
+        let terminal_grpc =
+            StoreError::GrpcClientError(tonic::Status::invalid_argument("bad input"));
+        assert!(!is_transient_store_error(&terminal_grpc));
+
+        let malformed = StoreError::MalformedResponse("bad".into());
+        assert!(!is_transient_store_error(&malformed));
+    }
+
+    /// Smoke-test that the predicates used by the request-level retry wrappers compile and select
+    /// the expected variants. Prover transport failures live behind `Other` only.
+    #[test]
+    fn prover_other_is_the_retried_variant() {
+        let err = TransactionProverError::other("remote prover unreachable");
+        assert!(matches!(err, TransactionProverError::Other { .. }));
     }
 }

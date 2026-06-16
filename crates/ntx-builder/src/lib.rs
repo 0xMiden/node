@@ -6,7 +6,7 @@ use std::time::Duration;
 use actor::AccountActorContext;
 use anyhow::Context;
 use builder::MempoolEventStream;
-use chain_state::ChainState;
+use chain_state::SharedChainState;
 use clients::{BlockProducerClient, StoreClient, ValidatorClient};
 use coordinator::Coordinator;
 use db::Db;
@@ -14,7 +14,7 @@ use futures::TryStreamExt;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
 use miden_remote_prover_client::RemoteTransactionProver;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::mpsc;
 use url::Url;
 
 pub(crate) type NoteError = Arc<dyn ErrorReport + Send + Sync>;
@@ -66,6 +66,14 @@ const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 /// Default maximum number of crashes an account actor is allowed before being deactivated.
 const DEFAULT_MAX_ACCOUNT_CRASHES: usize = 10;
+
+/// Default initial sleep applied between per-request retries on transient infrastructure failures
+/// (downed prover, transport error, validator/block-producer crash, store gRPC hiccup). Doubles
+/// on each retry up to [`DEFAULT_REQUEST_BACKOFF_MAX`].
+const DEFAULT_REQUEST_BACKOFF_INITIAL: Duration = Duration::from_millis(100);
+
+/// Default upper bound on the per-request retry backoff sleep.
+const DEFAULT_REQUEST_BACKOFF_MAX: Duration = Duration::from_secs(30);
 
 /// Default maximum number of VM execution cycles allowed for a network transaction.
 ///
@@ -131,6 +139,15 @@ pub struct NtxBuilderConfig {
     /// Defaults to 2^18 cycles.
     pub max_cycles: u32,
 
+    /// Initial sleep applied between per-request retries on transient infrastructure failures
+    /// (e.g. prover unreachable, validator/block-producer crash, transport error, store gRPC
+    /// hiccup). Doubles on each retry up to [`Self::request_backoff_max`]. Per-note
+    /// `attempt_count` is *not* advanced while retries are in progress.
+    pub request_backoff_initial: Duration,
+
+    /// Upper bound on the per-request retry backoff sleep.
+    pub request_backoff_max: Duration,
+
     /// Path to the SQLite database file used for persistent state.
     pub database_filepath: PathBuf,
 }
@@ -156,6 +173,8 @@ impl NtxBuilderConfig {
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
             max_account_crashes: DEFAULT_MAX_ACCOUNT_CRASHES,
             max_cycles: DEFAULT_MAX_TX_CYCLES,
+            request_backoff_initial: DEFAULT_REQUEST_BACKOFF_INITIAL,
+            request_backoff_max: DEFAULT_REQUEST_BACKOFF_MAX,
             database_filepath,
         }
     }
@@ -244,6 +263,15 @@ impl NtxBuilderConfig {
         self
     }
 
+    /// Sets the per-request retry backoff bounds (initial sleep and cap) used when retrying
+    /// transient infrastructure failures inside a single transaction attempt.
+    #[must_use]
+    pub fn with_request_backoff(mut self, initial: Duration, max: Duration) -> Self {
+        self.request_backoff_initial = initial;
+        self.request_backoff_max = max;
+        self
+    }
+
     /// Builds and initializes the network transaction builder.
     ///
     /// This method connects to the store and block producer services, fetches the current
@@ -290,7 +318,7 @@ impl NtxBuilderConfig {
             .await
             .context("failed to upsert chain state")?;
 
-        let chain_state = Arc::new(RwLock::new(ChainState::new(chain_tip_header, chain_mmr)));
+        let chain_state = Arc::new(SharedChainState::new(chain_tip_header, chain_mmr));
 
         let (request_tx, actor_request_rx) = mpsc::channel(1);
 
@@ -298,7 +326,7 @@ impl NtxBuilderConfig {
             block_producer: block_producer.clone(),
             validator,
             prover,
-            chain_state: chain_state.clone(),
+            chain_state: Arc::clone(&chain_state),
             store: store.clone(),
             script_cache,
             max_notes_per_tx: self.max_notes_per_tx,
@@ -307,6 +335,8 @@ impl NtxBuilderConfig {
             db: db.clone(),
             request_tx,
             max_cycles: self.max_cycles,
+            request_backoff_initial: self.request_backoff_initial,
+            request_backoff_max: self.request_backoff_max,
         };
 
         Ok(NetworkTransactionBuilder::new(

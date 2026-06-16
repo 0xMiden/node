@@ -1,11 +1,18 @@
 # Changelog
 
-## v0.14.10 (2026-05-29)
+## v0.14.11 (2026-05-19)
+
+- Replaced blocking-in-async operations in the validator, remote prover, and ntx-builder with `spawn_blocking` to avoid starving the Tokio runtime ([#2041](https://github.com/0xMiden/node/pull/2041)).
+- Implement persistent RocksDB backend for `AccountStateForest`, improving startup time ([#2020](https://github.com/0xMiden/node/pull/2020)).
+- Fixed network transaction builder permanently dropping notes after transient infrastructure failures. These now retry with exponential backoff at the actor level instead of consuming per-note retry budget ([#2052](https://github.com/0xMiden/node/issues/2052)).
+
+## v0.14.10 (2026-04-29)
 
 - Optimize `GetAccount` implementation to serve vault assets from `AccountStateForest` ([#1981](https://github.com/0xMiden/node/pull/1981)).
 - Added `accept`, `origin`, `user-agent`, `forwarded`, `x-forwarded-for` and `x-real-ip` headers to telemetry for gRPC requests ([#1982](https://github.com/0xMiden/node/pull/1982)).
 - Trace additional RPC request properties e.g. `account.id` in `GetAccount` ([#1983](https://github.com/0xMiden/node/pull/1983)).
 - Fixed occasional mempool panic during transaction submission, causing the lock to be held for longer than expected ([#1984](https://github.com/0xMiden/node/pull/1984)).
+- Optimize `GetAccount` implementation: `all_entries` requests now mostly use state from `AccountStateForest` ([#2012](https://github.com/0xMiden/node/pull/2012)).
 
 ## v0.14.9 (2026-04-21)
 

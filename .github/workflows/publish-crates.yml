@@ -12,26 +12,30 @@ jobs:
     name: Cargo publish release
     runs-on: Linux-ARM64-Runner
     if: ${{ github.repository_owner == '0xMiden' }}
+    environment: publish-crates
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
+          persist-credentials: false
           ref: ${{ github.event.release.tag_name }}
       - uses: ./.github/actions/install-rocksdb
       - uses: ./.github/actions/install-protobuf-compiler
       - name: Log release info
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          echo "Publishing release ${{ github.event.release.tag_name }}"
+          echo "Publishing release ${RELEASE_TAG}"
           echo "Commit: $(git rev-parse HEAD)"
       - name: Cleanup large tools for build space
         uses: ./.github/actions/cleanup-runner
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y jq
       - name: Update Rust toolchain
-        run: rustup update --no-self-update
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2
+        run: rustup toolchain install --no-self-update
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
         with:
           tool: cargo-binstall@1.16.6
       # - name: Install cargo-msrv

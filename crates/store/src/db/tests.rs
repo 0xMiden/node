@@ -1953,9 +1953,10 @@ async fn genesis_with_account_assets() {
         .build_existing()
         .unwrap();
 
+    let signer = random_secret_key();
     let genesis_state =
-        GenesisState::new(vec![account], test_fee_params(), 1, 0, random_secret_key());
-    let genesis_block = genesis_state.into_block().await.unwrap();
+        GenesisState::new(vec![account], test_fee_params(), 1, 0, signer.public_key());
+    let genesis_block = genesis_state.into_block(&signer).unwrap();
 
     crate::db::Db::bootstrap(":memory:".into(), genesis_block).unwrap();
 }
@@ -2008,9 +2009,10 @@ async fn genesis_with_account_storage_map() {
         .build_existing()
         .unwrap();
 
+    let signer = random_secret_key();
     let genesis_state =
-        GenesisState::new(vec![account], test_fee_params(), 1, 0, random_secret_key());
-    let genesis_block = genesis_state.into_block().await.unwrap();
+        GenesisState::new(vec![account], test_fee_params(), 1, 0, signer.public_key());
+    let genesis_block = genesis_state.into_block(&signer).unwrap();
 
     crate::db::Db::bootstrap(":memory:".into(), genesis_block).unwrap();
 }
@@ -2061,9 +2063,10 @@ async fn genesis_with_account_assets_and_storage() {
         .build_existing()
         .unwrap();
 
+    let signer = random_secret_key();
     let genesis_state =
-        GenesisState::new(vec![account], test_fee_params(), 1, 0, random_secret_key());
-    let genesis_block = genesis_state.into_block().await.unwrap();
+        GenesisState::new(vec![account], test_fee_params(), 1, 0, signer.public_key());
+    let genesis_block = genesis_state.into_block(&signer).unwrap();
 
     crate::db::Db::bootstrap(":memory:".into(), genesis_block).unwrap();
 }
@@ -2152,14 +2155,15 @@ async fn genesis_with_multiple_accounts() {
         .build_existing()
         .unwrap();
 
+    let signer = random_secret_key();
     let genesis_state = GenesisState::new(
         vec![account1, account2, account3],
         test_fee_params(),
         1,
         0,
-        random_secret_key(),
+        signer.public_key(),
     );
-    let genesis_block = genesis_state.into_block().await.unwrap();
+    let genesis_block = genesis_state.into_block(&signer).unwrap();
 
     crate::db::Db::bootstrap(":memory:".into(), genesis_block).unwrap();
 }

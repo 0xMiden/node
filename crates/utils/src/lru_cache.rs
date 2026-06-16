@@ -30,6 +30,28 @@ where
         self.lock().put(key, value);
     }
 
+    /// Retrieves multiple values from the cache while holding the cache lock once.
+    pub fn get_many<'a>(&self, keys: impl IntoIterator<Item = &'a K>) -> Vec<Option<V>>
+    where
+        K: 'a,
+    {
+        let mut cache = self.lock();
+        keys.into_iter().map(|key| cache.get(key).cloned()).collect()
+    }
+
+    /// Puts multiple values into the cache while holding the cache lock once.
+    pub fn put_many(&self, entries: impl IntoIterator<Item = (K, V)>) {
+        let mut cache = self.lock();
+        for (key, value) in entries {
+            cache.put(key, value);
+        }
+    }
+
+    /// Clears all entries from the cache.
+    pub fn clear(&self) {
+        self.lock().clear();
+    }
+
     #[instrument(name = "lru.lock", skip_all)]
     fn lock(&self) -> MutexGuard<'_, InnerCache<K, V>> {
         // SAFETY: The mutex is only held for the duration of the get/put operation

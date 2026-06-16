@@ -29,6 +29,5 @@ rand_chacha     = { workspace = true }
 
 [dev-dependencies]
 miden-node-store = { workspace = true }
-miden-node-utils = { workspace = true }
 tempfile         = { workspace = true }
 tokio            = { features = ["macros", "rt-multi-thread"], workspace = true }

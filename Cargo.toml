@@ -69,6 +69,7 @@ miden-crypto = { version = "0.23" }
 anyhow            = { version = "1.0" }
 assert_matches    = { version = "1.5" }
 async-trait       = { version = "0.1" }
+backon            = { version = "1.6" }
 build-rs          = { version = "0.3" }
 clap              = { features = ["derive"], version = "4.5" }
 deadpool          = { default-features = false, version = "0.12" }
@@ -85,20 +86,26 @@ indexmap          = { version = "2.12" }
 itertools         = { version = "0.14" }
 libsqlite3-sys    = { features = ["bundled"], version = "0.35" }
 lru               = { default-features = false, version = "0.16" }
+miette            = { version = "7.6" }
+opentelemetry     = { version = "0.31" }
 pretty_assertions = { version = "1.4" }
 # prost and protox are from different authors and are _not_ released in
 # lockstep, nor are they adhering to semver semantics. We keep this
 # to avoid future breakage.
 prost              = { default-features = false, version = "=0.14.3" }
 protox             = { version = "=0.9.1" }
+quote              = { version = "1.0" }
 rand               = { version = "0.9" }
 rand_chacha        = { default-features = false, version = "0.9" }
+rayon              = { version = "1.10" }
 reqwest            = { version = "0.13" }
 rstest             = { version = "0.26" }
 serde              = { features = ["derive"], version = "1" }
+serial_test        = { version = "3.2" }
+syn                = { version = "2.0" }
 tempfile           = { version = "3.12" }
 thiserror          = { default-features = false, version = "2.0" }
-tokio              = { features = ["rt-multi-thread"], version = "1.46" }
+tokio              = { default-features = false, version = "1.46" }
 tokio-stream       = { version = "0.1" }
 tokio-util         = { version = "0.7" }
 toml               = { version = "1.0" }
@@ -107,11 +114,17 @@ tonic-health       = { version = "0.14" }
 tonic-prost        = { version = "0.14" }
 tonic-prost-build  = { version = "0.14" }
 tonic-reflection   = { version = "0.14" }
+tonic-web          = { version = "0.14" }
 tower              = { version = "0.5" }
 tower-http         = { features = ["cors", "trace"], version = "0.6" }
 tracing            = { version = "0.1" }
 tracing-subscriber = { features = ["env-filter", "fmt", "json"], version = "0.3" }
 url                = { features = ["serde"], version = "2.5" }
+
+[workspace.metadata.cargo-shear]
+# libsqlite3-sys is kept to control the bundled SQLite linkage.
+# tonic-prost is used by generated gRPC code rather than handwritten Rust.
+ignored = ["libsqlite3-sys", "tonic-prost"]
 
 # Lints are set to warn for development, which are promoted to errors in CI.
 [workspace.lints.clippy]

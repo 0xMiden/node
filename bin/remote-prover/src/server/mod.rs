@@ -1,7 +1,6 @@
 use std::num::NonZeroUsize;
 
 use anyhow::Context;
-use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::cors::cors_for_grpc_web_layer;
 use miden_node_utils::panic::catch_panic_layer_fn;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
@@ -83,11 +82,9 @@ impl Server {
         // Mark the service as serving
         health_reporter.set_serving::<ApiServer<ProverService>>().await;
 
-        let grpc_options = GrpcOptionsInternal::default();
-
         let server = tonic::transport::Server::builder()
             .accept_http1(true)
-            .timeout(grpc_options.request_timeout)
+            .timeout(self.timeout)
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .layer(cors_for_grpc_web_layer())

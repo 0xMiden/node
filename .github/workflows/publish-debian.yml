@@ -43,12 +43,13 @@ on:
         type: string
 
 permissions:
-  id-token: write
-  contents: write
+  contents: read
 
 jobs:
   publish:
     name: Publish ${{ inputs.package }} ${{ matrix.arch }} Debian
+    permissions:
+      contents: write
     strategy:
       matrix:
         arch: [amd64, arm64]
@@ -56,9 +57,10 @@ jobs:
       labels: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@main
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: ./.github/actions/install-rocksdb
       - uses: ./.github/actions/install-protobuf-compiler
