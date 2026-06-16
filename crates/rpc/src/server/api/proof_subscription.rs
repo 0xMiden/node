@@ -2,7 +2,7 @@ use std::net::IpAddr;
 use std::sync::Arc;
 
 use miden_node_proto::generated as proto;
-use miden_node_store::state::StateSubscriptionError;
+use miden_node_store::state::SubscriptionStreamError;
 use miden_node_utils::grpc::ClientIp;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::block::BlockNumber;
@@ -15,7 +15,7 @@ use super::{
     GuardedStream,
     ProofSubscriptionStream,
     RpcService,
-    state_subscription_error_to_status,
+    proof_subscription_error_to_status,
     subscription_ban_status,
 };
 
@@ -74,12 +74,12 @@ impl proto::server::rpc_api::ProofSubscription for RpcService {
                 })
                 .map_err(|err| {
                     // Ban slow subscribers so they cannot immediately reconnect and re-stall.
-                    if matches!(err, StateSubscriptionError::TooSlow) {
+                    if matches!(err, SubscriptionStreamError::TooSlow) {
                         if let Some(ip) = client_ip {
                             ban_list.add(ip);
                         }
                     }
-                    state_subscription_error_to_status(err)
+                    proof_subscription_error_to_status(err)
                 })
         });
         let stream: Self::ItemStream = Box::pin(GuardedStream::new(Box::pin(stream), permit));

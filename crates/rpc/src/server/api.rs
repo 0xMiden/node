@@ -11,7 +11,13 @@ use miden_node_proto::domain::block::InvalidBlockRange;
 use miden_node_proto::generated::rpc::MempoolStats as ProtoMempoolStats;
 use miden_node_proto::generated::rpc::api_server::Api;
 use miden_node_proto::generated::{self as proto};
-use miden_node_store::state::{Finality, State, StateSubscriptionError};
+use miden_node_store::state::{
+    BlockSubscriptionError,
+    Finality,
+    ProofSubscriptionError,
+    State,
+    SubscriptionStreamError,
+};
 use miden_node_store::{DatabaseError, GetBlockHeaderError};
 use miden_node_utils::ErrorReport;
 use miden_node_utils::limiter::{
@@ -303,23 +309,37 @@ fn database_error_to_status(err: &DatabaseError) -> Status {
     }
 }
 
-fn state_subscription_error_to_status(err: StateSubscriptionError) -> Status {
+fn block_subscription_error_to_status(
+    err: SubscriptionStreamError<BlockSubscriptionError>,
+) -> Status {
     match err {
-        StateSubscriptionError::BlockNotFound(block_num) => {
+        SubscriptionStreamError::TooSlow => {
+            Status::resource_exhausted("subscriber is too slow to keep up with the chain")
+        },
+        SubscriptionStreamError::Source(BlockSubscriptionError::NotFound(block_num)) => {
             Status::not_found(format!("block {block_num} not found"))
         },
-        StateSubscriptionError::ProofNotFound(block_num) => {
-            Status::not_found(format!("proof for block {block_num} not found"))
-        },
-        StateSubscriptionError::BlockLoad { block_num, source } => {
+        SubscriptionStreamError::Source(BlockSubscriptionError::Load { block_num, source }) => {
             Status::internal(format!("failed to load block {block_num}: {}", source.as_report()))
         },
-        StateSubscriptionError::ProofLoad { block_num, source } => Status::internal(format!(
-            "failed to load proof for block {block_num}: {}",
-            source.as_report()
-        )),
-        StateSubscriptionError::TooSlow => {
+    }
+}
+
+fn proof_subscription_error_to_status(
+    err: SubscriptionStreamError<ProofSubscriptionError>,
+) -> Status {
+    match err {
+        SubscriptionStreamError::TooSlow => {
             Status::resource_exhausted("subscriber is too slow to keep up with the chain")
+        },
+        SubscriptionStreamError::Source(ProofSubscriptionError::NotFound(block_num)) => {
+            Status::not_found(format!("proof for block {block_num} not found"))
+        },
+        SubscriptionStreamError::Source(ProofSubscriptionError::Load { block_num, source }) => {
+            Status::internal(format!(
+                "failed to load proof for block {block_num}: {}",
+                source.as_report()
+            ))
         },
     }
 }

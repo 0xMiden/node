@@ -57,6 +57,19 @@ impl TestValidator {
         api_server::Api::sign_block(&self.server, request).await
     }
 
+    /// Opens a block subscription starting from `block_from`.
+    async fn call_block_subscription(
+        &self,
+        block_from: u32,
+    ) -> <ValidatorService as proto::server::validator_api::BlockSubscription>::ItemStream {
+        let request =
+            tonic::Request::new(proto::validator::BlockSubscriptionRequest { block_from });
+        api_server::Api::block_subscription(&self.server, request)
+            .await
+            .expect("subscription should open")
+            .into_inner()
+    }
+
     /// Loads the current chain tip from the validator's database.
     async fn load_chain_tip(&self) -> BlockHeader {
         self.server
@@ -489,4 +502,45 @@ async fn validate_block_number_mismatch() {
         matches!(result.unwrap_err(), ValidatorError::BlockNumberMismatch { .. }),
         "expected BlockNumberMismatch error"
     );
+}
+
+/// A block subscription replays the backed-up blocks from the requested height and then streams
+/// newly signed blocks as they arrive.
+#[tokio::test]
+async fn block_subscription_replays_then_follows() {
+    use std::time::Duration;
+
+    use miden_protocol::block::SignedBlock;
+    use miden_tx::utils::serde::Deserializable;
+    use tokio_stream::StreamExt;
+
+    let mut tv = TestValidator::new().await;
+
+    // Sign blocks 1 and 2 so the validator backs them up to its block store.
+    tv.apply_empty_block().await;
+    tv.apply_empty_block().await;
+
+    // Subscribe from the first signed block and confirm the backed-up blocks are replayed in order.
+    let mut stream = tv.call_block_subscription(1).await;
+    for expected in 1..=2 {
+        let response = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .expect("replayed block should arrive promptly")
+            .expect("stream should not end")
+            .expect("stream item should not be an error");
+        let block = SignedBlock::read_from_bytes(&response.block).expect("valid signed block");
+        assert_eq!(block.header().block_num().as_u32(), expected);
+        assert_eq!(response.committed_chain_tip, 2);
+    }
+
+    // Sign a new block and confirm it is streamed live to the existing subscriber.
+    tv.apply_empty_block().await;
+    let response = tokio::time::timeout(Duration::from_secs(5), stream.next())
+        .await
+        .expect("live block should arrive promptly")
+        .expect("stream should not end")
+        .expect("stream item should not be an error");
+    let block = SignedBlock::read_from_bytes(&response.block).expect("valid signed block");
+    assert_eq!(block.header().block_num().as_u32(), 3);
+    assert_eq!(response.committed_chain_tip, 3);
 }
