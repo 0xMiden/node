@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use miden_node_proto::generated as proto;
 use miden_node_store::state::StateSubscriptionError;
-use miden_node_utils::{grpc::ClientIp, tracing::OpenTelemetrySpanExt};
+use miden_node_utils::grpc::ClientIp;
+use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::block::BlockNumber;
 use tokio_stream::StreamExt;
 use tonic::{Request, Status};
@@ -63,7 +64,7 @@ impl proto::server::rpc_api::ProofSubscription for RpcService {
             .map_err(|_| Status::resource_exhausted("maximum proof subscriptions reached"))?;
 
         let from = BlockNumber::from(request.block_from);
-        let ban = Arc::clone(&self.subscription_ban);
+        let ban_list = Arc::clone(&self.subscription_ban);
         let stream = self.store.proof_subscription(from).map(move |event| {
             event
                 .map(|event| proto::rpc::ProofSubscriptionResponse {
@@ -75,7 +76,7 @@ impl proto::server::rpc_api::ProofSubscription for RpcService {
                     // Ban slow subscribers so they cannot immediately reconnect and re-stall.
                     if matches!(err, StateSubscriptionError::TooSlow) {
                         if let Some(ip) = client_ip {
-                            ban.ban(ip);
+                            ban_list.ban(ip);
                         }
                     }
                     state_subscription_error_to_status(err)
