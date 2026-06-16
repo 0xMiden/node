@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use miden_node_proto::generated as proto;
 use miden_node_store::state::StateSubscriptionError;
-use miden_node_utils::tracing::OpenTelemetrySpanExt;
+use miden_node_utils::{grpc::ClientIp, tracing::OpenTelemetrySpanExt};
 use miden_protocol::block::BlockNumber;
 use tokio_stream::StreamExt;
 use tonic::{Request, Status};
@@ -41,7 +41,7 @@ impl proto::server::rpc_api::ProofSubscription for RpcService {
         &self,
         request: Request<proto::rpc::ProofSubscriptionRequest>,
     ) -> tonic::Result<Self::ItemStream> {
-        let client_ip = request.remote_addr().map(|addr| addr.ip());
+        let client_ip = ClientIp::from_request(&request);
         let mut input = Self::decode(request.into_inner())?;
         input.client_ip = client_ip;
         self.handle(input).await
