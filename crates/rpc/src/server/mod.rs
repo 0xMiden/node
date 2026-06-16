@@ -167,6 +167,9 @@ impl Rpc {
             .layer(GrpcWebLayer::new())
             .layer(grpc::rate_limit_concurrent_connections(self.grpc_options))
             .layer(grpc::rate_limit_per_ip(self.grpc_options)?)
+            // Resolve the (load-balancer-aware) client IP once here so handlers can read it from
+            // request extensions instead of re-deriving it from headers.
+            .layer(grpc::ResolveClientIpLayer)
             // Note: must come after the CORS layer, as otherwise accept rejections do _not_ get
             // CORS headers applied, masking the accept error in web-clients (which would experience
             // CORS rejection).
