@@ -55,8 +55,8 @@ impl proto::server::rpc_api::ProofSubscription for RpcService {
         debug!(target: COMPONENT, ?request);
 
         // Reject clients that were recently disconnected for being too slow.
-        if let Some(remaining) = client_ip.and_then(|ip| self.subscription_ban.remaining(ip)) {
-            return Err(subscription_ban_status(remaining));
+        if let Some(until) = client_ip.and_then(|ip| self.subscription_ban.banned_until(ip)) {
+            return Err(subscription_ban_status(until));
         }
 
         let permit = Arc::clone(&self.proof_subscription_semaphore)
@@ -76,7 +76,7 @@ impl proto::server::rpc_api::ProofSubscription for RpcService {
                     // Ban slow subscribers so they cannot immediately reconnect and re-stall.
                     if matches!(err, StateSubscriptionError::TooSlow) {
                         if let Some(ip) = client_ip {
-                            ban_list.ban(ip);
+                            ban_list.add(ip);
                         }
                     }
                     state_subscription_error_to_status(err)

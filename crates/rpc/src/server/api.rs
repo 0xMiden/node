@@ -3,7 +3,7 @@ use std::ops::RangeInclusive;
 use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
 use std::task::{Context as TaskContext, Poll};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Context as AnyhowContext;
 use miden_node_proto::clients::NtxBuilderClient;
@@ -326,7 +326,8 @@ fn state_subscription_error_to_status(err: StateSubscriptionError) -> Status {
 
 /// Builds the status returned to a client that is temporarily banned from subscribing for having
 /// previously been disconnected as too slow.
-fn subscription_ban_status(remaining: Duration) -> Status {
+fn subscription_ban_status(until: Instant) -> Status {
+    let remaining = until.saturating_duration_since(Instant::now());
     Status::resource_exhausted(format!(
         "temporarily banned from subscribing for being too slow; retry in {} seconds",
         // Round up so the reported wait never undershoots the actual remaining ban.

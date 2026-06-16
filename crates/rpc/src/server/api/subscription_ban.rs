@@ -41,7 +41,7 @@ impl IpBanList {
     /// Bans `ip` for [`BAN_DURATION`] starting now.
     ///
     /// If the list is at capacity, the oldest entry is evicted first.
-    pub fn ban(&self, ip: IpAddr) {
+    pub fn add(&self, ip: IpAddr) {
         let expiry = Instant::now() + self.duration;
         let mut banned = self.banned.lock().expect("ban mutex should not be poisoned");
         if banned.len() == self.capacity {
@@ -50,8 +50,9 @@ impl IpBanList {
         banned.push_back((ip, expiry));
     }
 
-    /// Returns the remaining ban duration for `ip`, or `None` if it is not currently banned.
-    pub fn remaining(&self, ip: IpAddr) -> Option<Duration> {
+    /// Returns the [`Instant`] at which the ban for `ip` expires, or `None` if it is not currently
+    /// banned.
+    pub fn banned_until(&self, ip: IpAddr) -> Option<Instant> {
         let now = Instant::now();
         let banned = self.banned.lock().expect("ban mutex should not be poisoned");
         // Entries are ordered by expiry, so the last match is the most recent (longest-lived) ban.
@@ -59,8 +60,8 @@ impl IpBanList {
             .iter()
             .rev()
             .find(|(banned_ip, _)| *banned_ip == ip)
-            .map(|(_, expiry)| expiry.saturating_duration_since(now))
-            .filter(|remaining| !remaining.is_zero())
+            .map(|(_, expiry)| *expiry)
+            .filter(|expiry| *expiry > now)
     }
 }
 
@@ -80,25 +81,30 @@ mod tests {
     #[test]
     fn unknown_ip_is_not_banned() {
         let ban = IpBanList::default();
-        assert!(ban.remaining(ip(1)).is_none());
+        assert!(ban.banned_until(ip(1)).is_none());
     }
 
     #[test]
-    fn banned_ip_reports_remaining_time() {
+    fn banned_ip_reports_expiry() {
         let ban = IpBanList::new(Duration::from_secs(600), 16);
-        ban.ban(ip(1));
+        let before = Instant::now();
+        ban.add(ip(1));
+        let after = Instant::now();
 
-        let remaining = ban.remaining(ip(1)).expect("ip should be banned");
-        assert!(remaining <= Duration::from_secs(600));
-        assert!(ban.remaining(ip(2)).is_none());
+        // The ban expires `BAN_DURATION` after the instant it was added, which lies somewhere
+        // between `before` and `after`.
+        let until = ban.banned_until(ip(1)).expect("ip should be banned");
+        assert!(until >= before + Duration::from_secs(600));
+        assert!(until <= after + Duration::from_secs(600));
+        assert!(ban.banned_until(ip(2)).is_none());
     }
 
     #[test]
     fn expired_ban_is_ignored() {
         // A zero-length ban is already expired by the time it is queried.
         let ban = IpBanList::new(Duration::ZERO, 16);
-        ban.ban(ip(1));
-        assert!(ban.remaining(ip(1)).is_none());
+        ban.add(ip(1));
+        assert!(ban.banned_until(ip(1)).is_none());
     }
 
     #[test]
@@ -112,19 +118,19 @@ mod tests {
             banned.push_back((ip(1), now));
             banned.push_back((ip(1), now + Duration::from_secs(600)));
         }
-        assert!(ban.remaining(ip(1)).is_some());
+        assert!(ban.banned_until(ip(1)).is_some());
     }
 
     #[test]
     fn oldest_entry_is_evicted_at_capacity() {
         let ban = IpBanList::new(Duration::from_secs(600), 2);
-        ban.ban(ip(1));
-        ban.ban(ip(2));
-        ban.ban(ip(3));
+        ban.add(ip(1));
+        ban.add(ip(2));
+        ban.add(ip(3));
 
         // The first ban was evicted to make room for the third.
-        assert!(ban.remaining(ip(1)).is_none());
-        assert!(ban.remaining(ip(2)).is_some());
-        assert!(ban.remaining(ip(3)).is_some());
+        assert!(ban.banned_until(ip(1)).is_none());
+        assert!(ban.banned_until(ip(2)).is_some());
+        assert!(ban.banned_until(ip(3)).is_some());
     }
 }
