@@ -1,10 +1,12 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context;
-use miden_node_block_producer::Sequencer;
+use miden_node_block_producer::{DEFAULT_VALIDATOR_TIMEOUT, Sequencer};
 use miden_node_proto::clients::{Builder, NtxBuilderClient, RpcClient, ValidatorClient};
 use miden_node_rpc::{Rpc, RpcMode};
 use miden_node_store::State;
+use miden_node_utils::clap::duration_to_human_readable_string;
 use miden_node_utils::tasks::Tasks;
 use tokio::net::TcpListener;
 use url::Url;
@@ -43,6 +45,7 @@ impl SequencerCommand {
         let sequencer = Sequencer {
             store: Arc::clone(&state),
             validator_url: self.external_services.validator_url.clone(),
+            validator_timeout: self.external_services.validator_timeout,
             batch_prover_url: self.block_producer.batch.prover_url,
             block_prover_url: self.block_producer.block_prover.url,
             batch_interval: self.block_producer.batch.interval,
@@ -79,6 +82,19 @@ pub struct SequencerExternalServiceOptions {
     #[arg(long = "validator.url", env = "MIDEN_NODE_VALIDATOR_URL", value_name = "URL")]
     pub validator_url: Url,
 
+    /// Request timeout for calls to the validator service.
+    ///
+    /// Bounds the sequencer's `sign_block` call so a dropped validator connection fails fast and
+    /// retries, rather than stalling block production until the OS-level TCP timeout.
+    #[arg(
+        long = "validator.timeout",
+        env = "MIDEN_NODE_VALIDATOR_TIMEOUT",
+        default_value = duration_to_human_readable_string(DEFAULT_VALIDATOR_TIMEOUT),
+        value_parser = humantime::parse_duration,
+        value_name = "DURATION"
+    )]
+    pub validator_timeout: Duration,
+
     /// The network transaction builder service gRPC URL.
     #[arg(long = "ntx-builder.url", env = "MIDEN_NODE_NTX_BUILDER_URL", value_name = "URL")]
     pub ntx_builder_url: Url,
@@ -88,7 +104,7 @@ impl SequencerExternalServiceOptions {
     fn validator_client(&self) -> anyhow::Result<ValidatorClient> {
         Ok(Builder::new(self.validator_url.clone())
             .with_tls()?
-            .without_timeout()
+            .with_timeout(self.validator_timeout)
             .without_metadata_version()
             .without_metadata_genesis()
             .with_otel_context_injection()
