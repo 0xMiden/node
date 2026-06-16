@@ -554,6 +554,65 @@ pub(crate) fn select_account_vault_assets(
     Ok((last_block_included, values))
 }
 
+/// Query vault assets at a specific block by finding the most recent update for each `vault_key`.
+///
+/// Uses a single raw SQL query with a subquery join:
+/// ```sql
+/// SELECT a.asset FROM account_vault_assets a
+/// INNER JOIN (
+///     SELECT vault_key, MAX(block_num) as max_block
+///     FROM account_vault_assets
+///     WHERE account_id = ? AND block_num <= ?
+///     GROUP BY vault_key
+/// ) latest ON a.vault_key = latest.vault_key AND a.block_num = latest.max_block
+/// WHERE a.account_id = ?
+/// ```
+pub(crate) fn select_account_vault_at_block(
+    conn: &mut SqliteConnection,
+    account_id: AccountId,
+    block_num: BlockNumber,
+) -> Result<Vec<Asset>, DatabaseError> {
+    use diesel::sql_types::{BigInt, Binary};
+
+    let account_id_bytes = account_id.to_bytes();
+    let block_num_sql = block_num.to_raw_sql();
+
+    let entries: Vec<Option<Vec<u8>>> = diesel::sql_query(
+        r"
+        SELECT a.asset FROM account_vault_assets a
+        INNER JOIN (
+            SELECT vault_key, MAX(block_num) as max_block
+            FROM account_vault_assets
+            WHERE account_id = ? AND block_num <= ?
+            GROUP BY vault_key
+        ) latest ON a.vault_key = latest.vault_key AND a.block_num = latest.max_block
+        WHERE a.account_id = ?
+        ",
+    )
+    .bind::<Binary, _>(&account_id_bytes)
+    .bind::<BigInt, _>(block_num_sql)
+    .bind::<Binary, _>(&account_id_bytes)
+    .load::<AssetRow>(conn)?
+    .into_iter()
+    .map(|row| row.asset)
+    .collect();
+
+    // Convert to assets, filtering out deletions (None values)
+    let mut assets = Vec::new();
+    for asset_bytes in entries.into_iter().flatten() {
+        let asset = Asset::read_from_bytes(&asset_bytes)?;
+        assets.push(asset);
+    }
+
+    Ok(assets)
+}
+
+#[derive(QueryableByName)]
+struct AssetRow {
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Binary>)]
+    asset: Option<Vec<u8>>,
+}
+
 /// Select all accounts from the DB using the given [`SqliteConnection`].
 ///
 /// # Returns

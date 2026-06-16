@@ -20,7 +20,7 @@ use miden_protocol::account::{
     StorageMapKeyHash,
     StorageSlotName,
 };
-use miden_protocol::asset::Asset;
+use miden_protocol::asset::{Asset, AssetVaultKey, AssetVaultKeyHash};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::merkle::smt::{
     ForestOperation,
@@ -46,6 +46,8 @@ pub use crate::db::models::queries::HISTORICAL_BLOCK_RETENTION;
 mod tests;
 
 const HASHED_STORAGE_MAP_KEY_CACHE_CAPACITY: usize = 65_536;
+
+const HASHED_VAULT_KEY_CACHE_CAPACITY: usize = 65_536;
 
 // ERRORS
 // ================================================================================================
@@ -98,6 +100,9 @@ pub(crate) struct AccountStateForest<B: Backend = ForestInMemoryBackend> {
 
     /// Reverse lookup from hashed SMT storage keys to raw storage map keys.
     storage_map_key_cache: LruCache<StorageMapKeyHash, StorageMapKey>,
+
+    /// Reverse lookup from hashed SMT vault keys to raw vault keys.
+    vault_key_cache: LruCache<AssetVaultKeyHash, AssetVaultKey>,
 }
 
 #[cfg(test)]
@@ -108,6 +113,10 @@ impl AccountStateForest<ForestInMemoryBackend> {
             storage_map_key_cache: LruCache::new(
                 NonZeroUsize::new(HASHED_STORAGE_MAP_KEY_CACHE_CAPACITY)
                     .expect("storage map key cache capacity must be non-zero"),
+            ),
+            vault_key_cache: LruCache::new(
+                NonZeroUsize::new(HASHED_VAULT_KEY_CACHE_CAPACITY)
+                    .expect("vault key cache capacity must be non-zero"),
             ),
         }
     }
@@ -130,6 +139,10 @@ impl<B: Backend> AccountStateForest<B> {
             storage_map_key_cache: LruCache::new(
                 NonZeroUsize::new(HASHED_STORAGE_MAP_KEY_CACHE_CAPACITY)
                     .expect("storage map key cache capacity must be non-zero"),
+            ),
+            vault_key_cache: LruCache::new(
+                NonZeroUsize::new(HASHED_VAULT_KEY_CACHE_CAPACITY)
+                    .expect("vault key cache capacity must be non-zero"),
             ),
         })
     }
@@ -200,6 +213,15 @@ impl<B: Backend> AccountStateForest<B> {
 
     pub(crate) fn cache_storage_map_keys(&self, raw_keys: impl IntoIterator<Item = StorageMapKey>) {
         self.storage_map_key_cache
+            .put_many(raw_keys.into_iter().map(|raw_key| (raw_key.hash(), raw_key)));
+    }
+
+    fn cache_vault_keys_from_patch(&mut self, patch: &AccountPatch) {
+        self.cache_vault_keys(patch.vault().iter().map(|(vault_key, _)| *vault_key));
+    }
+
+    pub(crate) fn cache_vault_keys(&self, raw_keys: impl IntoIterator<Item = AssetVaultKey>) {
+        self.vault_key_cache
             .put_many(raw_keys.into_iter().map(|raw_key| (raw_key.hash(), raw_key)));
     }
 
@@ -300,31 +322,52 @@ impl<B: Backend> AccountStateForest<B> {
     // --------------------------------------------------------------------------------------------
 
     /// Enumerates vault contents for the specified account at the requested block.
+    ///
+    /// Vault keys are hashed before insertion into the SMT, so the forest can only reconstruct the
+    /// assets if all hashed keys are known in the reverse-key LRU cache. Returns `Ok(None)` when at
+    /// least one raw key is missing from the cache, so the caller should fall back to database
+    /// reconstruction.
     #[instrument(target = COMPONENT, skip_all)]
     pub(crate) fn get_vault_details(
         &self,
         account_id: AccountId,
         block_num: BlockNumber,
-    ) -> Result<AccountVaultDetails, WitnessError> {
+    ) -> Result<Option<AccountVaultDetails>, WitnessError> {
         let lineage = Self::vault_lineage_id(account_id);
         let tree = self.get_tree_id(lineage, block_num).ok_or(WitnessError::RootNotFound)?;
 
         // Return "limit exceeded" if the number of vault entries is above the limit.
-        let num_input_notes =
+        let num_entries =
             self.forest.entry_count(tree).map_err(Self::map_forest_error_to_witness)?;
-        if num_input_notes > AccountVaultDetails::MAX_RETURN_ENTRIES {
-            return Ok(AccountVaultDetails::LimitExceeded);
+        if num_entries > AccountVaultDetails::MAX_RETURN_ENTRIES {
+            return Ok(Some(AccountVaultDetails::LimitExceeded));
         }
 
         let entries = self.forest.entries(tree).map_err(Self::map_forest_error_to_witness)?;
-        let assets = entries
+        let hashed_entries = entries
             .map(|entry| {
                 let entry = entry.map_err(Self::map_forest_error_to_witness)?;
-                Asset::from_key_value_words(entry.key, entry.value).map_err(WitnessError::from)
+                Ok((AssetVaultKeyHash::from_raw(entry.key), entry.value))
+            })
+            .collect::<Result<Vec<_>, WitnessError>>()?;
+
+        let raw_keys = self
+            .vault_key_cache
+            .get_many(hashed_entries.iter().map(|(hashed_key, _)| hashed_key));
+        if raw_keys.iter().any(Option::is_none) {
+            return Ok(None);
+        }
+
+        let assets = raw_keys
+            .into_iter()
+            .flatten()
+            .zip(hashed_entries)
+            .map(|(raw_key, (_hashed_key, value))| {
+                Asset::from_key_value(raw_key, value).map_err(WitnessError::from)
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(AccountVaultDetails::from_assets(assets))
+        Ok(Some(AccountVaultDetails::from_assets(assets)))
     }
 
     /// Opens a storage map and returns storage map details with SMT proofs for the given keys.
@@ -509,6 +552,7 @@ impl<B: Backend> AccountStateForest<B> {
         }
 
         self.cache_storage_map_keys_from_patch(patch);
+        self.cache_vault_keys_from_patch(patch);
 
         Ok(())
     }
@@ -558,7 +602,7 @@ impl<B: Backend> AccountStateForest<B> {
         let mut entries: Vec<(Word, Word)> = Vec::new();
 
         for (vault_key, value) in vault_patch.iter() {
-            entries.push((Word::from(*vault_key), *value));
+            entries.push((vault_key.hash().as_word(), *value));
         }
 
         let num_entries = entries.len();
@@ -649,7 +693,7 @@ impl<B: Backend> AccountStateForest<B> {
         let mut entries: Vec<(Word, Word)> = Vec::new();
 
         for (vault_key, value) in vault_patch.iter() {
-            entries.push((Word::from(*vault_key), *value));
+            entries.push((vault_key.hash().as_word(), *value));
         }
 
         let vault_entries = entries.len();

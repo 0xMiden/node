@@ -184,10 +184,10 @@ fn vault_details_returns_latest_and_historical_assets() {
     let patch_2 = dummy_partial_patch(account_id, vault_patch_2, AccountStoragePatch::default());
     forest.update_account(block_2, &patch_2).unwrap();
 
-    let historical = forest.get_vault_details(account_id, block_1).unwrap();
+    let historical = forest.get_vault_details(account_id, block_1).unwrap().unwrap();
     assert_eq!(historical, AccountVaultDetails::Assets(vec![asset_100]));
 
-    let latest = forest.get_vault_details(account_id, block_2).unwrap();
+    let latest = forest.get_vault_details(account_id, block_2).unwrap().unwrap();
     assert_eq!(latest, AccountVaultDetails::Assets(vec![dummy_fungible_asset(faucet_id, 150)]));
 }
 
@@ -211,7 +211,7 @@ fn vault_details_limit_exceeded_for_large_vault() {
     forest.update_account(block_num, &full_patch).unwrap();
 
     assert_eq!(
-        forest.get_vault_details(account_id, block_num).unwrap(),
+        forest.get_vault_details(account_id, block_num).unwrap().unwrap(),
         AccountVaultDetails::LimitExceeded
     );
 }

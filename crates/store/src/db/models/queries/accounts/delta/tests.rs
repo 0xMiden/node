@@ -36,9 +36,9 @@ use miden_protocol::{EMPTY_WORD, Felt, Word};
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::code_builder::CodeBuilder;
 
-use crate::db::models::queries::accounts::tests::select_account_vault_at_block;
 use crate::db::models::queries::accounts::{
     select_account_header_with_storage_header_at_block,
+    select_account_vault_at_block,
     select_full_account,
     upsert_accounts,
 };
