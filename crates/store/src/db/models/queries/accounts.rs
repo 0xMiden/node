@@ -1556,10 +1556,18 @@ fn prune_account_codes(
         "DELETE FROM account_codes \
          WHERE code_commitment NOT IN ( \
              SELECT DISTINCT code_commitment \
-             FROM accounts \
-             WHERE code_commitment IS NOT NULL \
-               AND (block_num >= ?1 OR is_latest = 1 ) \
-         )",
+             FROM ( \
+                 SELECT code_commitment \
+                 FROM accounts INDEXED BY idx_accounts_prune_code \
+                 WHERE code_commitment IS NOT NULL \
+                   AND block_num >= ?1 \
+                 UNION ALL \
+                 SELECT code_commitment \
+                 FROM accounts INDEXED BY idx_accounts_latest_code_commitment \
+                 WHERE code_commitment IS NOT NULL \
+                   AND is_latest = 1 \
+             ) \
+        )",
     )
     .bind::<BigInt, _>(cutoff_block)
     .execute(conn)
