@@ -75,6 +75,8 @@ pub struct Sequencer {
     pub store: Arc<State>,
     /// The address of the validator component.
     pub validator_url: Url,
+    /// The request timeout for calls to the validator component.
+    pub validator_timeout: Duration,
     /// The address of the batch prover component.
     pub batch_prover_url: Option<Url>,
     /// The address of the block prover component.
@@ -102,7 +104,8 @@ impl Sequencer {
     pub async fn spawn(self) -> Result<SequencerHandle> {
         info!(target: COMPONENT, "Initializing sequencer");
         let store = self.store;
-        let validator = BlockProducerValidatorClient::new(self.validator_url.clone())?;
+        let validator =
+            BlockProducerValidatorClient::new(self.validator_url.clone(), self.validator_timeout)?;
         let chain_tip = store.chain_tip(Finality::Committed).await;
 
         info!(target: COMPONENT, "Sequencer initialized");
