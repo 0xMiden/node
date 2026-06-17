@@ -43,7 +43,11 @@ pub struct SequencerCommand {
     ///
     /// When unset the trusted submission service is not exposed. This interface accepts
     /// already-authenticated transactions from trusted full nodes *without* re-verification.
-    #[arg(long = "trusted.listen", env = "MIDEN_NODE_TRUSTED_LISTEN", value_name = "LISTEN")]
+    #[arg(
+        long = "trusted.listen",
+        env = "MIDEN_NODE_TRUSTED_LISTEN",
+        value_name = "LISTEN"
+    )]
     pub trusted_listen: Option<SocketAddr>,
 }
 
@@ -75,7 +79,10 @@ impl SequencerCommand {
         let rpc = Rpc {
             listener: bind_rpc(runtime.rpc_listen).await?,
             store: state,
-            mode: RpcMode::sequencer(block_producer.clone(), self.external_services.validator_client()?),
+            mode: RpcMode::sequencer(
+                block_producer.clone(),
+                self.external_services.validator_client()?,
+            ),
             ntx_builder: Some(self.external_services.ntx_builder_client()?),
             grpc_options: runtime.external_grpc_options,
             network_tx_auth,
@@ -85,10 +92,10 @@ impl SequencerCommand {
         tasks.spawn("RPC server", rpc.serve());
         if let Some(trusted_listen) = self.trusted_listen {
             let trusted = Trusted {
-                            listener: bind_rpc(trusted_listen).await?,
-                            block_producer,
-                            grpc_options: GrpcOptionsInternal::from(runtime.external_grpc_options),
-                        };
+                listener: bind_rpc(trusted_listen).await?,
+                block_producer,
+                grpc_options: GrpcOptionsInternal::from(runtime.external_grpc_options),
+            };
             tasks.spawn("trusted submission server", trusted.serve());
         }
 
@@ -197,8 +204,7 @@ pub struct TrustedFullNodeOptions {
 impl TrustedFullNodeOptions {
     /// Builds the trusted submission clients, or `None` if this full node is not trusted.
     fn trusted_submission(&self) -> anyhow::Result<Option<TrustedSubmission>> {
-        let (Some(validator_url), Some(sequencer_url)) =
-            (&self.validator_url, &self.sequencer_url)
+        let (Some(validator_url), Some(sequencer_url)) = (&self.validator_url, &self.sequencer_url)
         else {
             return Ok(None);
         };

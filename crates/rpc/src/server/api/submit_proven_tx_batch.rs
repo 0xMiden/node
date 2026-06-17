@@ -1,3 +1,4 @@
+use miden_node_proto::clients::ValidatorClient;
 use miden_node_proto::generated as proto;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
@@ -9,8 +10,6 @@ use miden_tx_batch_prover::LocalBatchProver;
 use tonic::metadata::{Ascii, MetadataValue};
 use tonic::{Request, Status};
 use tracing::Span;
-
-use miden_node_proto::clients::ValidatorClient;
 
 use super::{RpcMode, RpcService};
 use crate::server::TrustedSubmission;
@@ -134,13 +133,12 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
                 if let Some(trusted) = trusted {
                     // Trusted full node: validate and authenticate locally, then submit the
                     // authenticated batch to the sequencer's trusted API.
-                    self
-                        .submit_authenticated_batch_to_sequencer(
-                            trusted,
-                            proposed_batch,
-                            &request.transaction_inputs,
-                        )
-                        .await
+                    self.submit_authenticated_batch_to_sequencer(
+                        trusted,
+                        proposed_batch,
+                        &request.transaction_inputs,
+                    )
+                    .await
                 } else {
                     // Untrusted full node: forward the request to the source verbatim.
                     let mut forwarded_request = Request::new(request);
@@ -210,9 +208,11 @@ async fn verify_batch_proof(
     let expected_proof = spawn_blocking_in_current_span({
         let proposed_batch = proposed_batch.clone();
         move || {
-            LocalBatchProver::new(MIN_PROOF_SECURITY_LEVEL).prove(proposed_batch).map_err(|err| {
-                Status::invalid_argument(err.as_report_context("proposed block proof failed"))
-            })
+            LocalBatchProver::new(MIN_PROOF_SECURITY_LEVEL)
+                .prove(proposed_batch)
+                .map_err(|err| {
+                    Status::invalid_argument(err.as_report_context("proposed block proof failed"))
+                })
         }
     })
     .await
