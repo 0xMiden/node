@@ -160,6 +160,18 @@ impl Display for TransactionInputs {
 // STORE STATE
 // ================================================================================================
 
+/// Authenticates a proven transaction against the store, returning the [`TransactionInputs`]
+/// needed to admit it to the mempool.
+///
+/// This reads the committed state relevant to the transaction: the account's current commitment,
+/// the consumption status of each of the transaction's nullifiers, and which of its unauthenticated
+/// input notes have since been committed. The result is captured at the store's current committed
+/// chain tip.
+///
+/// # Errors
+///
+/// Returns an error if the store query fails, or if the transaction creates a new account whose ID
+/// prefix already exists in the store.
 #[instrument(target = COMPONENT, name = "store.state.get_tx_inputs", skip_all, err)]
 pub async fn get_tx_inputs(
     state: &State,

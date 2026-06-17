@@ -1,3 +1,4 @@
+use miden_node_block_producer::store::get_tx_inputs;
 use miden_node_proto::generated as proto;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
@@ -179,11 +180,9 @@ impl RpcService {
     ) -> tonic::Result<proto::blockchain::BlockNumber> {
         Self::submit_to_validator(&trusted.validator, &request).await?;
 
-        let auth_inputs = miden_node_block_producer::store::get_tx_inputs(&self.store, rebuilt_tx)
-            .await
-            .map_err(|err| {
-                Status::internal(err.as_report_context("failed to authenticate transaction"))
-            })?;
+        let auth_inputs = get_tx_inputs(&self.store, rebuilt_tx).await.map_err(|err| {
+            Status::internal(err.as_report_context("failed to authenticate transaction"))
+        })?;
 
         let authenticated_tx = proto::trusted::AuthenticatedTransaction {
             transaction: request.transaction,

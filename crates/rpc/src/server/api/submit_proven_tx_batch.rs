@@ -1,3 +1,4 @@
+use miden_node_block_producer::store::get_tx_inputs;
 use miden_node_proto::clients::ValidatorClient;
 use miden_node_proto::generated as proto;
 use miden_node_utils::ErrorReport;
@@ -175,11 +176,9 @@ impl RpcService {
 
         let mut auth_inputs = Vec::with_capacity(proposed_batch.transactions().len());
         for tx in proposed_batch.transactions() {
-            let inputs = miden_node_block_producer::store::get_tx_inputs(&self.store, tx)
-                .await
-                .map_err(|err| {
-                    Status::internal(err.as_report_context("failed to authenticate transaction"))
-                })?;
+            let inputs = get_tx_inputs(&self.store, tx).await.map_err(|err| {
+                Status::internal(err.as_report_context("failed to authenticate transaction"))
+            })?;
             auth_inputs.push(inputs.into());
         }
 

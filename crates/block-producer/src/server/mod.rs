@@ -20,7 +20,7 @@ use crate::block_prover::BlockProver;
 use crate::domain::transaction::AuthenticatedTransaction;
 use crate::errors::MempoolSubmissionError;
 use crate::mempool::{BatchBudget, BlockBudget, Mempool, MempoolConfig, SharedMempool};
-use crate::store::TransactionInputs;
+use crate::store::{TransactionInputs, get_tx_inputs};
 use crate::validator::BlockProducerValidatorClient;
 use crate::{
     CACHED_MEMPOOL_STATS_UPDATE_INTERVAL,
@@ -301,7 +301,7 @@ impl BlockProducerApi {
         debug!(target: COMPONENT, proof = ?tx.proof());
 
         // Authenticate against the local store, then add to the mempool.
-        let inputs = crate::store::get_tx_inputs(&self.store, &tx)
+        let inputs = get_tx_inputs(&self.store, &tx)
             .await
             .map_err(MempoolSubmissionError::StoreStateReadFailed)?;
 
@@ -357,7 +357,7 @@ impl BlockProducerApi {
         let mut inputs = Vec::with_capacity(batch.transactions().len());
         for tx in batch.transactions() {
             inputs.push(
-                crate::store::get_tx_inputs(&self.store, tx)
+                get_tx_inputs(&self.store, tx)
                     .await
                     .map_err(MempoolSubmissionError::StoreStateReadFailed)?,
             );
