@@ -4,7 +4,12 @@ use std::sync::Arc;
 use accept::AcceptHeaderLayer;
 use anyhow::Context;
 use miden_node_block_producer::{BlockProducerApi, RpcReadiness, RpcSync};
-use miden_node_proto::clients::{NtxBuilderClient, RpcClient as SourceRpcClient, ValidatorClient};
+use miden_node_proto::clients::{
+    NtxBuilderClient,
+    RpcClient as SourceRpcClient,
+    TrustedClient,
+    ValidatorClient,
+};
 use miden_node_proto::generated::rpc::api_server;
 use miden_node_proto_build::rpc_api_descriptor;
 use miden_node_store::state::State;
@@ -29,6 +34,9 @@ use crate::server::health::HealthCheckLayer;
 mod accept;
 pub(crate) mod api;
 mod health;
+mod trusted;
+
+pub use trusted::Trusted;
 
 /// The RPC server component.
 ///
@@ -55,14 +63,29 @@ pub enum RpcMode {
         block_producer: Box<BlockProducerApi>,
         validator: Box<ValidatorClient>,
     },
-    /// Full-node RPC forwards submissions to the source RPC.
+    /// Full-node RPC.
     ///
-    /// The caller is responsible for configuring this client with any request metadata the source
-    /// RPC requires.
+    /// By default it forwards submissions verbatim to the source RPC (the caller is responsible for
+    /// configuring this client with any request metadata the source RPC requires).
+    ///
+    /// When [`trusted`](FullNode::trusted) is set, the full node is a *trusted* full node: instead
+    /// of forwarding, it re-executes submissions through the validator and authenticates them
+    /// against its local (replica) store, then submits the authenticated result directly to the
+    /// sequencer's trusted submission API.
     FullNode {
         source_rpc: Box<SourceRpcClient>,
         readiness_threshold: u32,
+        trusted: Option<TrustedSubmission>,
     },
+}
+
+/// Clients a trusted full node uses to validate submissions and forward them to the sequencer.
+#[derive(Clone, Debug)]
+pub struct TrustedSubmission {
+    /// The (shared) validator used to re-execute transactions.
+    pub validator: Box<ValidatorClient>,
+    /// The sequencer's private trusted submission API.
+    pub sequencer: Box<TrustedClient>,
 }
 
 impl RpcMode {
@@ -73,10 +96,15 @@ impl RpcMode {
         }
     }
 
-    pub fn full_node(source_rpc: SourceRpcClient, readiness_threshold: u32) -> Self {
+    pub fn full_node(
+        source_rpc: SourceRpcClient,
+        readiness_threshold: u32,
+        trusted: Option<TrustedSubmission>,
+    ) -> Self {
         Self::FullNode {
             source_rpc: Box::new(source_rpc),
             readiness_threshold,
+            trusted,
         }
     }
 }
@@ -117,7 +145,7 @@ impl Rpc {
             RpcMode::Sequencer { .. } => {
                 health_reporter.set_serving::<api_server::ApiServer<api::RpcService>>().await;
             },
-            RpcMode::FullNode { source_rpc, readiness_threshold } => {
+            RpcMode::FullNode { source_rpc, readiness_threshold, .. } => {
                 health_reporter
                     .set_not_serving::<api_server::ApiServer<api::RpcService>>()
                     .await;

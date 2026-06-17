@@ -1,0 +1,84 @@
+// Specification of the internal, trusted transaction submission gRPC API.
+//
+// This service is served by the sequencer on a private, network-isolated listener and is intended
+// only for trusted full nodes. Submissions are added to the mempool *without* re-verification: the
+// sequencer trusts that the caller has already performed basic checks, proof verification,
+// validator re-execution and authentication. It must therefore never be exposed publicly.
+syntax = "proto3";
+package trusted;
+
+import "types/account.proto";
+import "types/blockchain.proto";
+import "types/primitives.proto";
+import "types/transaction.proto";
+
+// TRUSTED SUBMISSION API
+// ================================================================================================
+
+service Api {
+    // Submits an already-authenticated transaction directly to the mempool. Returns the node's
+    // current block height.
+    rpc SubmitAuthenticatedTx(AuthenticatedTransaction) returns (blockchain.BlockNumber) {}
+
+    // Submits a batch of already-authenticated transactions directly to the mempool. Returns the
+    // node's current block height.
+    rpc SubmitAuthenticatedTxBatch(AuthenticatedTransactionBatch) returns (blockchain.BlockNumber) {}
+}
+
+// MESSAGES
+// ================================================================================================
+
+// A proven transaction together with the inputs the caller authenticated it against.
+message AuthenticatedTransaction {
+    // The proven transaction.
+    //
+    // Encoded using [miden_protocol::transaction::ProvenTransaction::to_bytes].
+    bytes transaction = 1;
+
+    // The store inputs the transaction was authenticated against.
+    AuthInputs auth_inputs = 2;
+}
+
+// A proposed batch together with the inputs each of its transactions was authenticated against.
+message AuthenticatedTransactionBatch {
+    // The proposed batch.
+    //
+    // Encoded using [miden_protocol::batch::ProposedBatch::to_bytes].
+    bytes proposed_batch = 1;
+
+    // The store inputs for each transaction in the batch.
+    //
+    // Must match the transaction ordering in the batch.
+    repeated AuthInputs auth_inputs = 2;
+}
+
+// The store-derived inputs a transaction was authenticated against.
+//
+// This is the wire form of the block producer's lightweight transaction inputs (the result of
+// authenticating a transaction against the store state), not the protocol's transaction inputs
+// used for re-execution.
+message AuthInputs {
+    // The account ID of the transaction.
+    account.AccountId account_id = 1;
+
+    // The account commitment in the store, absent if the account does not yet exist.
+    optional primitives.Digest account_commitment = 2;
+
+    // The transaction's nullifiers and the block in which each was consumed, if any.
+    repeated NullifierRecord nullifiers = 3;
+
+    // Unauthenticated input note commitments which were found committed in the store.
+    repeated primitives.Digest found_unauthenticated_notes = 4;
+
+    // The store's chain tip height at the time of authentication.
+    fixed32 current_block_height = 5;
+}
+
+// A nullifier together with the block in which it was consumed.
+message NullifierRecord {
+    // The nullifier.
+    primitives.Digest nullifier = 1;
+
+    // The block number in which the nullifier was consumed; 0 if it is unspent.
+    fixed32 block_num = 2;
+}

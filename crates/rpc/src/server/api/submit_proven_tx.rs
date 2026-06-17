@@ -16,6 +16,7 @@ use tonic::{Request, Status};
 use tracing::{Span, debug};
 
 use super::{COMPONENT, RpcMode, RpcService};
+use crate::server::TrustedSubmission;
 
 pub struct SubmitProvenTxInput {
     request: proto::transaction::ProvenTransaction,
@@ -130,38 +131,70 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
             Status::internal(format!("transaction proof verification task failed: {err}"))
         })??;
 
-        // In full node mode we forward the request to the source.
-        let (block_producer, validator) = match &self.mode {
+        match &self.mode {
             RpcMode::Sequencer { block_producer, validator } => {
-                (block_producer.as_ref(), validator.as_ref())
-            },
-            RpcMode::FullNode { source_rpc, .. } => {
-                let mut forwarded_request = Request::new(request);
-                if let Some(accept) = original_accept_header {
-                    forwarded_request.metadata_mut().insert(http::header::ACCEPT.as_str(), accept);
-                }
-                return source_rpc
-                    .as_ref()
-                    .clone()
-                    .submit_proven_tx(forwarded_request)
+                Self::submit_to_validator(validator, &request).await?;
+                block_producer
+                    .submit_proven_tx(rebuilt_tx)
                     .await
-                    .map(tonic::Response::into_inner);
+                    .map(Into::into)
+                    .map_err(Into::into)
             },
-        };
-
-        // Transaction inputs must be provided in order to allow for transaction re-execution via
-        // the Validator.
-        if request.transaction_inputs.is_some() {
-            validator.clone().submit_proven_transaction(request.clone()).await?;
-        } else {
-            return Err(Status::invalid_argument("Transaction inputs must be provided"));
+            RpcMode::FullNode { source_rpc, trusted, .. } => {
+                if let Some(trusted) = trusted {
+                    // Trusted full node: validate and authenticate locally, then submit the
+                    // authenticated transaction to the sequencer's trusted API.
+                    self.submit_authenticated_to_sequencer(trusted, request, &rebuilt_tx).await
+                } else {
+                    // Untrusted full node: forward the request to the source verbatim.
+                    let mut forwarded_request = Request::new(request);
+                    if let Some(accept) = original_accept_header {
+                        forwarded_request
+                            .metadata_mut()
+                            .insert(http::header::ACCEPT.as_str(), accept);
+                    }
+                    source_rpc
+                        .as_ref()
+                        .clone()
+                        .submit_proven_tx(forwarded_request)
+                        .await
+                        .map(tonic::Response::into_inner)
+                }
+            },
         }
+    }
+}
 
-        block_producer
-            .submit_proven_tx(rebuilt_tx)
+impl RpcService {
+    /// Trusted full-node submission path for a single transaction.
+    ///
+    /// Re-executes the transaction via the validator, authenticates it against the local
+    /// (replica) store, then submits the authenticated transaction to the sequencer's
+    /// trusted API.
+    async fn submit_authenticated_to_sequencer(
+        &self,
+        trusted: &TrustedSubmission,
+        request: proto::transaction::ProvenTransaction,
+        rebuilt_tx: &ProvenTransaction,
+    ) -> tonic::Result<proto::blockchain::BlockNumber> {
+        Self::submit_to_validator(&trusted.validator, &request).await?;
+
+        let auth_inputs = miden_node_block_producer::store::get_tx_inputs(&self.store, rebuilt_tx)
             .await
-            .map(Into::into)
-            .map_err(Into::into)
+            .map_err(|err| {
+                Status::internal(err.as_report_context("failed to authenticate transaction"))
+            })?;
+
+        let authenticated_tx = proto::trusted::AuthenticatedTransaction {
+            transaction: request.transaction,
+            auth_inputs: Some(auth_inputs.into()),
+        };
+        trusted
+            .sequencer
+            .clone()
+            .submit_authenticated_tx(authenticated_tx)
+            .await
+            .map(tonic::Response::into_inner)
     }
 }
 

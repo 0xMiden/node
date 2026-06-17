@@ -3,6 +3,8 @@ use std::fmt::{Display, Formatter};
 use std::num::NonZeroU32;
 
 use itertools::Itertools;
+use miden_node_proto::errors::ConversionError;
+use miden_node_proto::generated::trusted;
 use miden_node_store::state::{Finality, State, TransactionInputs as StoreTransactionInputs};
 use miden_node_utils::formatting::format_opt;
 use miden_protocol::Word;
@@ -62,6 +64,73 @@ impl TransactionInputs {
             found_unauthenticated_notes: inputs.found_unauthenticated_notes,
             current_block_height,
         }
+    }
+}
+
+// PROTO CONVERSIONS
+// ------------------------------------------------------------------------------------------------
+
+impl From<TransactionInputs> for trusted::AuthInputs {
+    fn from(value: TransactionInputs) -> Self {
+        Self {
+            account_id: Some(value.account_id.into()),
+            account_commitment: value.account_commitment.map(Into::into),
+            nullifiers: value
+                .nullifiers
+                .into_iter()
+                .map(|(nullifier, block_num)| trusted::NullifierRecord {
+                    nullifier: Some(nullifier.into()),
+                    block_num: block_num.map_or(0, NonZeroU32::get),
+                })
+                .collect(),
+            found_unauthenticated_notes: value
+                .found_unauthenticated_notes
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            current_block_height: value.current_block_height.as_u32(),
+        }
+    }
+}
+
+impl TryFrom<trusted::AuthInputs> for TransactionInputs {
+    type Error = ConversionError;
+
+    fn try_from(value: trusted::AuthInputs) -> Result<Self, Self::Error> {
+        let account_id = value
+            .account_id
+            .ok_or_else(|| ConversionError::missing_field::<trusted::AuthInputs>("account_id"))?
+            .try_into()?;
+
+        let account_commitment = value.account_commitment.map(Word::try_from).transpose()?;
+
+        let nullifiers = value
+            .nullifiers
+            .into_iter()
+            .map(|record| {
+                let nullifier = record
+                    .nullifier
+                    .ok_or_else(|| {
+                        ConversionError::missing_field::<trusted::NullifierRecord>("nullifier")
+                    })?
+                    .try_into()?;
+                Ok((nullifier, NonZeroU32::new(record.block_num)))
+            })
+            .collect::<Result<_, ConversionError>>()?;
+
+        let found_unauthenticated_notes = value
+            .found_unauthenticated_notes
+            .into_iter()
+            .map(Word::try_from)
+            .collect::<Result<_, ConversionError>>()?;
+
+        Ok(Self {
+            account_id,
+            account_commitment,
+            nullifiers,
+            found_unauthenticated_notes,
+            current_block_height: value.current_block_height.into(),
+        })
     }
 }
 
