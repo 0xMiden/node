@@ -32,7 +32,7 @@ fn main() -> miette::Result<()> {
     ];
 
     for file_descriptors in &descriptor_sets {
-        generate_bindings(file_descriptors.clone(), &dst_dir)?;
+        generate_bindings(file_descriptors, &dst_dir)?;
     }
 
     let server_dst_dir = dst_dir.join("server");
@@ -54,16 +54,62 @@ fn main() -> miette::Result<()> {
 
 /// Generates protobuf bindings from the given file descriptor set and stores them in the given
 /// destination directory.
-fn generate_bindings(file_descriptors: FileDescriptorSet, dst_dir: &Path) -> miette::Result<()> {
+fn generate_bindings(file_descriptors: &FileDescriptorSet, dst_dir: &Path) -> miette::Result<()> {
     let mut prost_config = tonic_prost_build::Config::new();
     prost_config.skip_debug(["AccountId", "Digest"]);
 
     // Generate the stub of the user facing server from its proto file
     tonic_prost_build::configure()
+        .server_attribute(
+            ".",
+            r#"#[deprecated(note = "use the server constructors in `miden_node_proto::server` instead")]"#,
+        )
         .out_dir(dst_dir)
-        .compile_fds_with_config(file_descriptors, prost_config)
+        .compile_fds_with_config(file_descriptors.clone(), prost_config)
         .into_diagnostic()
         .wrap_err("compiling protobufs")?;
+
+    allow_deprecated_server_modules(file_descriptors, dst_dir)?;
+
+    Ok(())
+}
+
+/// Adds an inner `allow(deprecated)` attribute to tonic's generated server modules.
+///
+/// The generated server structs are deprecated to direct users to the facade constructors in
+/// `crate::server`, but tonic's generated impls naturally reference those structs internally. This
+/// must be an inner module attribute because tonic already emits inner clippy allowances inside the
+/// same modules; adding an outer attribute would trigger `clippy::mixed_attributes_style`.
+fn allow_deprecated_server_modules(
+    file_descriptors: &FileDescriptorSet,
+    dst_dir: &Path,
+) -> miette::Result<()> {
+    for file in &file_descriptors.file {
+        let package = file.package.as_deref().unwrap_or_default().replace('.', "_");
+        let path = dst_dir.join(format!("{package}.rs"));
+        if !path.exists() {
+            continue;
+        }
+
+        let mut contents = fs::read_to_string(&path)
+            .into_diagnostic()
+            .wrap_err_with(|| format!("reading generated bindings {}", path.display()))?;
+
+        for service in &file.service {
+            let service_name = service.name.as_deref().unwrap_or("Service");
+            let module_name = format!("{}_server", to_snake_case(service_name));
+            let module_decl = format!("pub mod {module_name} {{");
+            let replacement = format!("{module_decl}\n    #![allow(deprecated)]");
+            if contents.contains(&replacement) {
+                continue;
+            }
+            contents = contents.replace(&module_decl, &replacement);
+        }
+
+        fs::write(&path, contents)
+            .into_diagnostic()
+            .wrap_err_with(|| format!("writing generated bindings {}", path.display()))?;
+    }
 
     Ok(())
 }
@@ -331,6 +377,7 @@ impl Service {
     fn server_constructor(&self) -> Function {
         let mut ret = Function::new("server");
         ret.vis("pub")
+            .attr("allow(deprecated)")
             .generic("T")
             .arg("service", "T")
             .ret(
@@ -357,7 +404,7 @@ impl Service {
     /// Returns the gRPC service name used by tonic routing and health reporting.
     fn service_name(&self) -> Function {
         let mut ret = Function::new("service_name");
-        ret.vis("pub").ret("&'static str").line(format!(
+        ret.vis("pub").attr("allow(deprecated)").ret("&'static str").line(format!(
             "<{}::<()> as tonic::server::NamedService>::NAME",
             self.tonic_server_path()
         ));
