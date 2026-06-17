@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use miden_node_proto::clients::{Builder, ValidatorClient};
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated as proto;
@@ -35,12 +37,16 @@ pub struct BlockProducerValidatorClient {
 
 impl BlockProducerValidatorClient {
     /// Creates a new validator client with a lazy connection.
-    pub fn new(validator_url: Url) -> anyhow::Result<Self> {
+    ///
+    /// `timeout` bounds each request (notably `sign_block`) so that a silently dropped validator
+    /// connection surfaces as a fast, retryable error instead of hanging on the OS-level TCP
+    /// timeout and halting block production.
+    pub fn new(validator_url: Url, timeout: Duration) -> anyhow::Result<Self> {
         info!(target: COMPONENT, validator_endpoint = %validator_url, "Initializing validator client");
 
         let validator = Builder::new(validator_url)
             .with_tls()?
-            .without_timeout()
+            .with_timeout(timeout)
             .without_metadata_version()
             .without_metadata_genesis()
             .with_otel_context_injection()

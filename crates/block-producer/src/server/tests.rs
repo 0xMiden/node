@@ -15,6 +15,7 @@ use crate::{
     DEFAULT_MAX_BATCHES_PER_BLOCK,
     DEFAULT_MAX_CONCURRENT_PROOFS,
     DEFAULT_MAX_TXS_PER_BATCH,
+    DEFAULT_VALIDATOR_TIMEOUT,
     Sequencer,
 };
 
@@ -27,6 +28,7 @@ async fn block_producer_starts_with_store_state() {
     let block_producer = Sequencer {
         store,
         validator_url: Url::parse("http://127.0.0.1:0").unwrap(),
+        validator_timeout: DEFAULT_VALIDATOR_TIMEOUT,
         batch_prover_url: None,
         block_prover_url: None,
         batch_interval: Duration::from_secs(3600),
