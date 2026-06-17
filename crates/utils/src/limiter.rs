@@ -22,8 +22,8 @@ pub struct QueryLimitError {
     limit: usize,
 }
 
-/// Checks limits against the desired query parameters, per query parameter and
-/// bails if they exceed a defined value.
+/// Checks limits against the desired query parameters, per query parameter and bails if they exceed
+/// a defined value.
 pub trait QueryParamLimiter {
     /// Name of the parameter to mention in the error.
     const PARAM_NAME: &'static str;
@@ -42,8 +42,7 @@ pub trait QueryParamLimiter {
     }
 }
 
-/// Maximum payload size (in bytes) for paginated responses returned by the
-/// store.
+/// Maximum payload size (in bytes) for paginated responses returned by the store.
 pub const MAX_RESPONSE_PAYLOAD_BYTES: usize = 4 * 1024 * 1024;
 
 /// Used for the following RPC endpoints:
@@ -58,7 +57,7 @@ impl QueryParamLimiter for QueryParamAccountIdLimit {
 }
 
 /// Used for the following RPC endpoints:
-/// * `select_nullifiers_by_prefix`
+/// * `sync_nullifiers`
 ///
 /// Capped at 1000 prefixes to keep queries and responses comfortably within the 4 MB payload
 /// budget and to avoid unbounded prefix scans.
@@ -68,19 +67,8 @@ impl QueryParamLimiter for QueryParamNullifierPrefixLimit {
     const LIMIT: usize = GENERAL_REQUEST_LIMIT;
 }
 
-/// Used for the following RPC endpoints:
-/// * `select_nullifiers_by_prefix`
-/// * `sync_nullifiers`
-///
-/// Capped at 1000 nullifiers to bound `IN` clauses and keep response sizes under the 4 MB budget.
-pub struct QueryParamNullifierLimit;
-impl QueryParamLimiter for QueryParamNullifierLimit {
-    const PARAM_NAME: &str = "nullifier";
-    const LIMIT: usize = GENERAL_REQUEST_LIMIT;
-}
-
 /// Used for the following RPC endpoints
-/// * `get_note_sync`
+/// * `get_note_sync_multi`
 ///
 /// Capped at 1000 tags so note sync responses remain within the 4 MB payload budget.
 pub struct QueryParamNoteTagLimit;

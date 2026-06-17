@@ -5,21 +5,19 @@ version   = 1
 verification_base_fee = 0
 
 [[fungible_faucet]]
+account_type = "public"
 decimals     = 3
 max_supply   = 100_000_000
-storage_mode = "public"
 symbol       = "WHAT"
 
 [[wallet]]
+account_type = "private"
 assets       = [{ amount = 999_000, symbol = "MIDEN" }]
-storage_mode = "private"
-# has_updatable_code = false # default value
 
 [[wallet]]
+account_type = "private"
 assets       = [{ amount = 777, symbol = "MIDEN" }]
-storage_mode = "private"
-# has_updatable_code = false # default value
 
 [[wallet]]
+account_type = "private"
 assets       = [{ amount = 1, symbol = "WHAT" }]
-storage_mode = "private"

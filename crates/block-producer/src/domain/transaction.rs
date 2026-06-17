@@ -4,8 +4,8 @@ use std::sync::Arc;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::{NoteHeader, Nullifier};
-use miden_protocol::transaction::{OutputNote, ProvenTransaction, TransactionId, TxAccountUpdate};
+use miden_protocol::note::Nullifier;
+use miden_protocol::transaction::{ProvenTransaction, TransactionId, TxAccountUpdate};
 
 use crate::errors::StateConflict;
 use crate::store::TransactionInputs;
@@ -26,8 +26,9 @@ pub struct AuthenticatedTransaction {
     /// This does not necessarily have to match the transaction's initial state
     /// as this may still be modified by inflight transactions.
     store_account_state: Option<Word>,
-    /// Unauthenticated note commitments that have now been authenticated by the store
-    /// [inputs](TransactionInputs).
+    /// Unauthenticated note commitments that have now been authenticated by committed state,
+    /// either through store [inputs](TransactionInputs) or through locally committed mempool
+    /// history.
     ///
     /// In other words, notes which were unauthenticated at the time the transaction was proven,
     /// but which have since been committed to, and authenticated by the store.
@@ -89,15 +90,8 @@ impl AuthenticatedTransaction {
         self.inner.nullifiers()
     }
 
-    pub fn output_note_commitments(&self) -> impl Iterator<Item = Word> + '_ {
-        self.inner
-            .output_notes()
-            .iter()
-            .map(miden_protocol::transaction::OutputNote::to_commitment)
-    }
-
-    pub fn output_notes(&self) -> impl Iterator<Item = &OutputNote> + '_ {
-        self.inner.output_notes().iter()
+    pub fn output_note_ids(&self) -> impl Iterator<Item = Word> + '_ {
+        self.inner.output_notes().iter().map(|n| n.id().as_word())
     }
 
     pub fn output_note_count(&self) -> usize {
@@ -112,13 +106,17 @@ impl AuthenticatedTransaction {
         (self.inner.ref_block_num(), self.inner.ref_block_commitment())
     }
 
-    /// Note commitments which were unauthenticated in the transaction __and__ which were
-    /// not authenticated by the store inputs.
-    pub fn unauthenticated_note_commitments(&self) -> impl Iterator<Item = Word> + '_ {
+    /// Note IDs which were unauthenticated in the transaction __and__ which were not authenticated
+    /// by the store inputs.
+    pub fn unauthenticated_note_ids(&self) -> impl Iterator<Item = Word> + '_ {
         self.inner
             .unauthenticated_notes()
-            .map(NoteHeader::to_commitment)
+            .map(|h| h.id().as_word())
             .filter(|commitment| !self.notes_authenticated_by_store.contains(commitment))
+    }
+
+    pub(crate) fn mark_notes_authenticated(&mut self, notes: impl IntoIterator<Item = Word>) {
+        self.notes_authenticated_by_store.extend(notes);
     }
 
     pub fn proven_transaction(&self) -> Arc<ProvenTransaction> {

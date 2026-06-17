@@ -4,63 +4,46 @@
 //! data is atomically written, and that reads are consistent.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::ops::RangeInclusive;
-use std::path::Path;
+use std::num::NonZeroUsize;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use miden_node_proto::domain::account::{
-    AccountDetailRequest,
-    AccountDetails,
-    AccountInfo,
-    AccountRequest,
-    AccountResponse,
-    AccountStorageDetails,
-    AccountStorageMapDetails,
-    AccountVaultDetails,
-    SlotData,
-    StorageMapEntries,
-    StorageMapRequest,
-};
 use miden_node_proto::domain::batch::BatchInputs;
 use miden_node_utils::clap::StorageOptions;
 use miden_node_utils::formatting::format_array;
 use miden_protocol::Word;
-use miden_protocol::account::{AccountId, StorageMapKey, StorageMapWitness, StorageSlotName};
-use miden_protocol::asset::{AssetVaultKey, AssetWitness};
+use miden_protocol::account::AccountId;
 use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::block::nullifier_tree::{NullifierTree, NullifierWitness};
 use miden_protocol::block::{BlockHeader, BlockInputs, BlockNumber, Blockchain};
-use miden_protocol::crypto::merkle::mmr::{MmrPeaks, MmrProof, PartialMmr};
-use miden_protocol::crypto::merkle::smt::{LargeSmt, SmtProof, SmtStorage};
+use miden_protocol::crypto::merkle::mmr::{MmrProof, PartialMmr};
+use miden_protocol::crypto::merkle::smt::{LargeSmt, SmtStorage};
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
 use miden_protocol::transaction::PartialBlockchain;
-use tokio::sync::{Mutex, RwLock};
-use tracing::{Instrument, info, instrument};
+use tokio::sync::{Mutex, RwLock, watch};
+use tracing::{Instrument, Span, info, instrument};
 
-use crate::account_state_forest::{
-    AccountStateForest,
-    AccountStateForestBackend,
-    AccountStorageMapResult,
-    WitnessError,
-};
+use crate::account_state_forest::{AccountStateForest, AccountStateForestBackend};
 use crate::accounts::AccountTreeWithHistory;
 use crate::blocks::BlockStore;
-use crate::db::models::Page;
 use crate::db::{Db, NoteRecord, NullifierInfo};
 use crate::errors::{
-    ApplyBlockError,
     DatabaseError,
-    GetAccountError,
     GetBatchInputsError,
     GetBlockHeaderError,
     GetBlockInputsError,
-    GetCurrentBlockchainDataError,
     StateInitializationError,
 };
-use crate::{COMPONENT, DataDirectory};
+use crate::proven_tip::ProvenTipWriter;
+use crate::{COMPONENT, DataDirectory, DatabaseOptions};
+
+/// Number of recent committed blocks held in the in-memory cache for replica subscriptions.
+const BLOCK_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(512).unwrap();
+
+/// Number of recent block proofs held in the in-memory cache for replica subscriptions.
+const PROOF_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(512).unwrap();
 
 mod loader;
-
 use loader::{
     ACCOUNT_STATE_FOREST_STORAGE_DIR,
     ACCOUNT_TREE_STORAGE_DIR,
@@ -73,8 +56,42 @@ use loader::{
     verify_tree_consistency,
 };
 
+mod replica;
+pub use replica::{BlockCache, BlockNotification, ProofCache, ProofNotification};
+
+mod account;
+
+mod subscription;
+pub use subscription::{
+    BlockSubscriptionError,
+    BlockSubscriptionEvent,
+    BlockSubscriptionStream,
+    ProofSubscriptionError,
+    ProofSubscriptionEvent,
+    ProofSubscriptionStream,
+    SUBSCRIBER_CHANNEL_CAPACITY,
+    SubscriptionSource,
+    SubscriptionStreamError,
+    run_stream,
+};
+
 mod apply_block;
+mod apply_proof;
+mod bootstrap;
+mod disk_monitor;
 mod sync_state;
+
+// FINALITY
+// ================================================================================================
+
+/// The finality level for chain tip queries.
+#[derive(Debug, Clone, Copy)]
+pub enum Finality {
+    /// The latest committed (but not necessarily proven) block.
+    Committed,
+    /// The latest block that has been proven in an unbroken sequence from genesis.
+    Proven,
+}
 
 // STRUCTURES
 // ================================================================================================
@@ -86,6 +103,13 @@ pub struct TransactionInputs {
     pub found_unauthenticated_notes: HashSet<Word>,
     pub new_account_id_prefix_is_unique: Option<bool>,
 }
+
+type BlockInputWitnesses = (
+    BlockNumber,
+    BTreeMap<AccountId, AccountWitness>,
+    BTreeMap<Nullifier, NullifierWitness>,
+    PartialMmr,
+);
 
 /// Container for state that needs to be updated atomically.
 struct InnerState<S>
@@ -111,6 +135,9 @@ impl<S: SmtStorage> InnerState<S> {
 
 /// The rollup state.
 pub struct State {
+    /// Root directory containing the store's on-disk data.
+    data_directory: PathBuf,
+
     /// The database which stores block headers, nullifiers, notes, and the latest states of
     /// accounts.
     db: Arc<Db>,
@@ -130,8 +157,20 @@ pub struct State {
     /// TOCTOU issues, there must be no concurrent writers. This locks to serialize the writers.
     writer: Mutex<()>,
 
-    /// Request termination of the process due to a fatal internal state error.
-    termination_ask: tokio::sync::mpsc::Sender<ApplyBlockError>,
+    /// The latest proven-in-sequence block number, updated by the proof scheduler or `apply_proof`.
+    proven_tip: ProvenTipWriter,
+
+    /// Watch sender fired after each block is committed. Replicas subscribe via
+    /// `subscribe_committed_tip()` to be woken when new blocks arrive.
+    committed_tip_tx: watch::Sender<BlockNumber>,
+
+    /// FIFO cache of recent committed blocks for replica subscriptions. When a subscriber needs a
+    /// block that has been evicted, it falls back to loading from the block store.
+    pub(crate) block_cache: BlockCache,
+
+    /// FIFO cache of recent block proofs for replica subscriptions. When a subscriber needs a proof
+    /// that has been evicted, it falls back to loading from the block store.
+    pub(crate) proof_cache: ProofCache,
 }
 
 impl State {
@@ -139,11 +178,27 @@ impl State {
     // --------------------------------------------------------------------------------------------
 
     /// Loads the state from the data directory.
+    ///
+    /// The loaded state owns all store data structures and exposes subscription methods for
+    /// sequencer and replica tasks.
     #[instrument(target = COMPONENT, skip_all)]
     pub async fn load(
         data_path: &Path,
         storage_options: StorageOptions,
-        termination_ask: tokio::sync::mpsc::Sender<ApplyBlockError>,
+    ) -> Result<Self, StateInitializationError> {
+        Self::load_with_database_options(data_path, storage_options, DatabaseOptions::default())
+            .await
+    }
+
+    /// Loads the state from the data directory using explicit database options.
+    ///
+    /// The loaded state owns all store data structures and exposes subscription methods for
+    /// sequencer and replica tasks.
+    #[instrument(target = COMPONENT, skip_all)]
+    pub async fn load_with_database_options(
+        data_path: &Path,
+        storage_options: StorageOptions,
+        database_options: DatabaseOptions,
     ) -> Result<Self, StateInitializationError> {
         let data_directory = DataDirectory::load(data_path.to_path_buf())
             .map_err(StateInitializationError::DataDirectoryLoadError)?;
@@ -154,9 +209,12 @@ impl State {
         );
 
         let database_filepath = data_directory.database_path();
-        let mut db = Db::load(database_filepath.clone())
-            .await
-            .map_err(StateInitializationError::DatabaseLoadError)?;
+        let mut db = Db::load_with_pool_size(
+            database_filepath.clone(),
+            database_options.connection_pool_size,
+        )
+        .await
+        .map_err(StateInitializationError::DatabaseLoadError)?;
 
         let blockchain = load_mmr(&mut db).await?;
         let latest_block_num = blockchain.chain_tip().unwrap_or(BlockNumber::GENESIS);
@@ -180,9 +238,9 @@ impl State {
             TreeStorage::create(data_path, &nullifier_storage_config, NULLIFIER_TREE_STORAGE_DIR)?;
         let nullifier_tree = nullifier_storage.load_nullifier_tree(&mut db).await?;
 
-        // Verify that tree roots match the expected roots from the database.
-        // This catches any divergence between persistent storage and the database caused by
-        // corruption or incomplete shutdown.
+        // Verify that tree roots match the expected roots from the database. This catches any
+        // divergence between persistent storage and the database caused by corruption or incomplete
+        // shutdown.
         verify_tree_consistency(account_tree.root(), nullifier_tree.root(), &mut db).await?;
 
         let account_tree = AccountTreeWithHistory::new(account_tree, latest_block_num);
@@ -201,24 +259,110 @@ impl State {
         let writer = Mutex::new(());
         let db = Arc::new(db);
 
+        // Initialize the proven tip from the block store.
+        let proven_tip_init = block_store
+            .load_proven_tip()
+            .map_err(StateInitializationError::ProvenTipLoadError)?;
+        let (proven_tip, _rx) = ProvenTipWriter::new(proven_tip_init);
+
+        // Committed-tip watch: fires after each successful apply_block.
+        let (committed_tip_tx, _rx) = watch::channel(latest_block_num);
+
         Ok(Self {
+            data_directory: data_path.to_path_buf(),
             db,
             block_store,
             inner,
             forest,
             writer,
-            termination_ask,
+            proven_tip,
+            committed_tip_tx,
+            block_cache: BlockCache::new(BLOCK_CACHE_CAPACITY),
+            proof_cache: ProofCache::new(PROOF_CACHE_CAPACITY),
         })
     }
 
-    /// Returns the database.
-    pub(crate) fn db(&self) -> Arc<Db> {
-        Arc::clone(&self.db)
+    /// Returns a watch receiver that wakes every time a new block is committed.
+    pub fn subscribe_committed_tip(&self) -> watch::Receiver<BlockNumber> {
+        self.committed_tip_tx.subscribe()
     }
 
-    /// Returns the block store.
-    pub(crate) fn block_store(&self) -> Arc<BlockStore> {
-        Arc::clone(&self.block_store)
+    /// Loads serialized block proving inputs from the block store.
+    pub async fn load_proving_inputs(
+        &self,
+        block_num: BlockNumber,
+    ) -> std::io::Result<Option<Vec<u8>>> {
+        self.block_store.load_proving_inputs(block_num).await
+    }
+
+    /// Returns a watch receiver that wakes every time the proven-in-sequence tip advances.
+    pub(crate) fn subscribe_proven_tip(&self) -> watch::Receiver<BlockNumber> {
+        self.proven_tip.subscribe()
+    }
+
+    // HELPER FUNCTIONS TO AVOID BLOCKING CALLS IN ASYNC CONTEXT
+    // --------------------------------------------------------------------------------------------
+
+    /// Runs a synchronous read-only operation over the inner state on Tokio's blocking path.
+    ///
+    /// The account and nullifier trees may be backed by `RocksDB`, so tree access must not run on
+    /// an async worker thread directly. This helper preserves the current tracing span while
+    /// moving the blocking lock acquisition and closure body into `block_in_place`.
+    fn with_inner_read_blocking<R>(&self, f: impl FnOnce(&InnerState<TreeStorage>) -> R) -> R {
+        let span = Span::current();
+        tokio::task::block_in_place(|| {
+            span.in_scope(|| {
+                let inner = self.inner.blocking_read();
+                f(&inner)
+            })
+        })
+    }
+
+    /// Runs a synchronous mutable operation over the inner state on Tokio's blocking path.
+    ///
+    /// See [`Self::with_inner_read_blocking`] for why this uses `block_in_place`.
+    fn with_inner_write_blocking<R>(&self, f: impl FnOnce(&mut InnerState<TreeStorage>) -> R) -> R {
+        let span = Span::current();
+        tokio::task::block_in_place(|| {
+            span.in_scope(|| {
+                let mut inner = self.inner.blocking_write();
+                f(&mut inner)
+            })
+        })
+    }
+
+    /// Runs a synchronous read-only operation over the account state forest on Tokio's blocking
+    /// path.
+    ///
+    /// The forest may be backed by `RocksDB`, so accesses to the underlying `LargeSmtForest` must
+    /// not run directly on an async worker thread.
+    fn with_forest_read_blocking<R>(
+        &self,
+        f: impl FnOnce(&AccountStateForest<AccountStateForestBackend>) -> R,
+    ) -> R {
+        let span = Span::current();
+        tokio::task::block_in_place(|| {
+            span.in_scope(|| {
+                let forest = self.forest.blocking_read();
+                f(&forest)
+            })
+        })
+    }
+
+    /// Runs a synchronous mutable operation over the account state forest on Tokio's blocking path.
+    ///
+    /// See [`Self::with_forest_read_blocking`] for why this uses `block_in_place`.
+    fn with_forest_write_blocking<R>(
+        &self,
+        f: impl FnOnce(&mut AccountStateForest<AccountStateForestBackend>) -> R,
+    ) -> R {
+        let span = Span::current();
+        tokio::task::block_in_place(|| {
+            span.in_scope(|| {
+                let mut forest = self.forest.blocking_write();
+                f(&mut forest)
+            })
+        })
     }
 
     // STATE ACCESSORS
@@ -249,20 +393,6 @@ impl State {
         }
     }
 
-    /// Generates membership proofs for each one of the `nullifiers` against the latest nullifier
-    /// tree.
-    ///
-    /// Note: these proofs are invalidated once the nullifier tree is modified, i.e. on a new block.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret)]
-    pub async fn check_nullifiers(&self, nullifiers: &[Nullifier]) -> Vec<SmtProof> {
-        let inner = self.inner.read().await;
-        nullifiers
-            .iter()
-            .map(|n| inner.nullifier_tree.open(n))
-            .map(NullifierWitness::into_proof)
-            .collect()
-    }
-
     /// Queries a list of notes from the database.
     ///
     /// If the provided list of [`NoteId`] given is empty or no note matches the provided
@@ -272,34 +402,6 @@ impl State {
         note_ids: Vec<NoteId>,
     ) -> Result<Vec<NoteRecord>, DatabaseError> {
         self.db.select_notes_by_id(note_ids).await
-    }
-
-    /// If the input block number is the current chain tip, `None` is returned.
-    /// Otherwise, gets the current chain tip's block header with its corresponding MMR peaks.
-    pub async fn get_current_blockchain_data(
-        &self,
-        block_num: Option<BlockNumber>,
-    ) -> Result<Option<(BlockHeader, MmrPeaks)>, GetCurrentBlockchainDataError> {
-        let blockchain = &self.inner.read().await.blockchain;
-        if let Some(number) = block_num
-            && number == self.latest_block_num().await
-        {
-            return Ok(None);
-        }
-
-        // SAFETY: `select_block_header_by_block_num` will always return `Some(chain_tip_header)`
-        // when `None` is passed
-        let block_header: BlockHeader = self
-            .db
-            .select_block_header_by_block_num(None)
-            .await
-            .map_err(GetCurrentBlockchainDataError::ErrorRetrievingBlockHeader)?
-            .unwrap();
-        let peaks = blockchain
-            .peaks_at(block_header.block_num())
-            .map_err(GetCurrentBlockchainDataError::InvalidPeaks)?;
-
-        Ok(Some((block_header, peaks)))
     }
 
     /// Fetches the inputs for a transaction batch from the database.
@@ -329,9 +431,9 @@ impl State {
             return Err(GetBatchInputsError::TransactionBlockReferencesEmpty);
         }
 
-        // First we grab note inclusion proofs for the known notes. These proofs only
-        // prove that the note was included in a given block. We then also need to prove that
-        // each of those blocks is included in the chain.
+        // First we grab note inclusion proofs for the known notes. These proofs only prove that the
+        // note was included in a given block. We then also need to prove that each of those blocks
+        // is included in the chain.
         let note_proofs = self
             .db
             .select_note_inclusion_proofs(unauthenticated_note_commitments)
@@ -347,8 +449,8 @@ impl State {
         let mut blocks: BTreeSet<BlockNumber> = tx_reference_blocks;
         blocks.extend(note_blocks);
 
-        // Scoped block to automatically drop the read lock guard as soon as we're done.
-        // We also avoid accessing the db in the block as this would delay dropping the guard.
+        // Scoped block to automatically drop the read lock guard as soon as we're done. We also
+        // avoid accessing the db in the block as this would delay dropping the guard.
         let (batch_reference_block, partial_mmr) = {
             let inner_state = self.inner.read().await;
 
@@ -429,9 +531,9 @@ impl State {
         unauthenticated_note_commitments: BTreeSet<Word>,
         reference_blocks: BTreeSet<BlockNumber>,
     ) -> Result<BlockInputs, GetBlockInputsError> {
-        // Get the note inclusion proofs from the DB.
-        // We do this first so we have to acquire the lock to the state just once. There we need the
-        // reference blocks of the note proofs to get their authentication paths in the chain MMR.
+        // Get the note inclusion proofs from the DB. We do this first so we have to acquire the
+        // lock to the state just once. There we need the reference blocks of the note proofs to get
+        // their authentication paths in the chain MMR.
         let unauthenticated_note_proofs = self
             .db
             .select_note_inclusion_proofs(unauthenticated_note_commitments)
@@ -447,7 +549,7 @@ impl State {
         blocks.extend(note_proof_reference_blocks);
 
         let (latest_block_number, account_witnesses, nullifier_witnesses, partial_mmr) =
-            self.get_block_inputs_witnesses(&mut blocks, account_ids, nullifiers).await?;
+            self.get_block_inputs_witnesses(&mut blocks, &account_ids, &nullifiers)?;
 
         // Fetch the block headers for all blocks in the partial MMR plus the latest one which will
         // be used as the previous block header of the block being built.
@@ -457,8 +559,8 @@ impl State {
             .await
             .map_err(GetBlockInputsError::SelectBlockHeaderError)?;
 
-        // Find and remove the latest block as we must not add it to the chain MMR, since it is
-        // not yet in the chain.
+        // Find and remove the latest block as we must not add it to the chain MMR, since it is not
+        // yet in the chain.
         let latest_block_header_index = headers
             .iter()
             .enumerate()
@@ -496,68 +598,60 @@ impl State {
     ///
     /// This method acquires the lock to the inner state and does not access the DB so we release
     /// the lock asap.
-    async fn get_block_inputs_witnesses(
+    fn get_block_inputs_witnesses(
         &self,
         blocks: &mut BTreeSet<BlockNumber>,
-        account_ids: Vec<AccountId>,
-        nullifiers: Vec<Nullifier>,
-    ) -> Result<
-        (
-            BlockNumber,
-            BTreeMap<AccountId, AccountWitness>,
-            BTreeMap<Nullifier, NullifierWitness>,
-            PartialMmr,
-        ),
-        GetBlockInputsError,
-    > {
-        let inner = self.inner.read().await;
+        account_ids: &[AccountId],
+        nullifiers: &[Nullifier],
+    ) -> Result<BlockInputWitnesses, GetBlockInputsError> {
+        self.with_inner_read_blocking(|inner| {
+            let latest_block_number = inner.latest_block_num();
 
-        let latest_block_number = inner.latest_block_num();
+            // If `blocks` is empty, use the latest block number which will never trigger the error.
+            let highest_block_number = blocks.last().copied().unwrap_or(latest_block_number);
+            if highest_block_number > latest_block_number {
+                return Err(GetBlockInputsError::UnknownBatchBlockReference {
+                    highest_block_number,
+                    latest_block_number,
+                });
+            }
 
-        // If `blocks` is empty, use the latest block number which will never trigger the error.
-        let highest_block_number = blocks.last().copied().unwrap_or(latest_block_number);
-        if highest_block_number > latest_block_number {
-            return Err(GetBlockInputsError::UnknownBatchBlockReference {
-                highest_block_number,
-                latest_block_number,
-            });
-        }
+            // The latest block is not yet in the chain MMR, so we can't (and don't need to) prove
+            // its inclusion in the chain.
+            blocks.remove(&latest_block_number);
 
-        // The latest block is not yet in the chain MMR, so we can't (and don't need to) prove its
-        // inclusion in the chain.
-        blocks.remove(&latest_block_number);
+            // Fetch the partial MMR at the state of the latest block with authentication paths for
+            // the provided set of blocks.
+            //
+            // SAFETY:
+            // - The latest block num was retrieved from the inner blockchain from which we will
+            //   also retrieve the proofs, so it is guaranteed to exist in that chain.
+            // - We have checked that no block number in the blocks set is greater than latest block
+            //   number *and* latest block num was removed from the set. Therefore only block
+            //   numbers smaller than latest block num remain in the set. Therefore all the block
+            //   numbers are guaranteed to exist in the chain state at latest block num.
+            let partial_mmr =
+                inner.blockchain.partial_mmr_from_blocks(blocks, latest_block_number).expect(
+                    "latest block num should exist and all blocks in set should be < than latest block",
+                );
 
-        // Fetch the partial MMR at the state of the latest block with authentication paths for the
-        // provided set of blocks.
-        //
-        // SAFETY:
-        // - The latest block num was retrieved from the inner blockchain from which we will also
-        //   retrieve the proofs, so it is guaranteed to exist in that chain.
-        // - We have checked that no block number in the blocks set is greater than latest block
-        //   number *and* latest block num was removed from the set. Therefore only block numbers
-        //   smaller than latest block num remain in the set. Therefore all the block numbers are
-        //   guaranteed to exist in the chain state at latest block num.
-        let partial_mmr =
-            inner.blockchain.partial_mmr_from_blocks(blocks, latest_block_number).expect(
-                "latest block num should exist and all blocks in set should be < than latest block",
-            );
+            // Fetch witnesses for all accounts.
+            let account_witnesses = account_ids
+                .iter()
+                .copied()
+                .map(|account_id| (account_id, inner.account_tree.open_latest(account_id)))
+                .collect::<BTreeMap<AccountId, AccountWitness>>();
 
-        // Fetch witnesses for all accounts.
-        let account_witnesses = account_ids
-            .iter()
-            .copied()
-            .map(|account_id| (account_id, inner.account_tree.open_latest(account_id)))
-            .collect::<BTreeMap<AccountId, AccountWitness>>();
+            // Fetch witnesses for all nullifiers. We don't check whether the nullifiers are spent
+            // or not as this is done as part of proposing the block.
+            let nullifier_witnesses: BTreeMap<Nullifier, NullifierWitness> = nullifiers
+                .iter()
+                .copied()
+                .map(|nullifier| (nullifier, inner.nullifier_tree.open(&nullifier)))
+                .collect();
 
-        // Fetch witnesses for all nullifiers. We don't check whether the nullifiers are spent or
-        // not as this is done as part of proposing the block.
-        let nullifier_witnesses: BTreeMap<Nullifier, NullifierWitness> = nullifiers
-            .iter()
-            .copied()
-            .map(|nullifier| (nullifier, inner.nullifier_tree.open(&nullifier)))
-            .collect();
-
-        Ok((latest_block_number, account_witnesses, nullifier_witnesses, partial_mmr))
+            Ok((latest_block_number, account_witnesses, nullifier_witnesses, partial_mmr))
+        })
     }
 
     /// Returns data needed by the block producer to verify transactions validity.
@@ -570,31 +664,37 @@ impl State {
     ) -> Result<TransactionInputs, DatabaseError> {
         info!(target: COMPONENT, account_id = %account_id.to_string(), nullifiers = %format_array(nullifiers));
 
-        let inner = self.inner.read().await;
+        let tree_inputs = self.with_inner_read_blocking(|inner| {
+            let account_commitment = inner.account_tree.get_latest_commitment(account_id);
 
-        let account_commitment = inner.account_tree.get_latest_commitment(account_id);
+            let new_account_id_prefix_is_unique = if account_commitment.is_empty() {
+                Some(!inner.account_tree.contains_account_id_prefix_in_latest(account_id.prefix()))
+            } else {
+                None
+            };
 
-        let new_account_id_prefix_is_unique = if account_commitment.is_empty() {
-            Some(!inner.account_tree.contains_account_id_prefix_in_latest(account_id.prefix()))
-        } else {
-            None
+            // Non-unique account Id prefixes for new accounts are not allowed.
+            if let Some(false) = new_account_id_prefix_is_unique {
+                return Err(TransactionInputs {
+                    new_account_id_prefix_is_unique,
+                    ..Default::default()
+                });
+            }
+
+            let nullifiers = nullifiers
+                .iter()
+                .map(|nullifier| NullifierInfo {
+                    nullifier: *nullifier,
+                    block_num: inner.nullifier_tree.get_block_num(nullifier).unwrap_or_default(),
+                })
+                .collect();
+
+            Ok((account_commitment, nullifiers, new_account_id_prefix_is_unique))
+        });
+        let (account_commitment, nullifiers, new_account_id_prefix_is_unique) = match tree_inputs {
+            Ok(inputs) => inputs,
+            Err(inputs) => return Ok(inputs),
         };
-
-        // Non-unique account Id prefixes for new accounts are not allowed.
-        if let Some(false) = new_account_id_prefix_is_unique {
-            return Ok(TransactionInputs {
-                new_account_id_prefix_is_unique,
-                ..Default::default()
-            });
-        }
-
-        let nullifiers = nullifiers
-            .iter()
-            .map(|nullifier| NullifierInfo {
-                nullifier: *nullifier,
-                block_num: inner.nullifier_tree.get_block_num(nullifier).unwrap_or_default(),
-            })
-            .collect();
 
         let found_unauthenticated_notes = self
             .db
@@ -609,316 +709,29 @@ impl State {
         })
     }
 
-    /// Returns details for public (on-chain) account.
-    pub async fn get_account_details(&self, id: AccountId) -> Result<AccountInfo, DatabaseError> {
-        self.db.select_account(id).await
+    /// Filters `account_ids` down to the subset classified as network accounts.
+    pub async fn filter_network_accounts(
+        &self,
+        account_ids: &[AccountId],
+    ) -> Result<HashSet<AccountId>, DatabaseError> {
+        self.db.select_network_accounts_subset(account_ids.to_vec()).await
     }
 
-    /// Returns details for public (on-chain) network accounts by full account ID.
-    pub async fn get_network_account_details_by_id(
-        &self,
-        account_id: AccountId,
-    ) -> Result<Option<AccountInfo>, DatabaseError> {
-        self.db.select_network_account_by_id(account_id).await
-    }
-
-    /// Returns network account IDs within the specified block range (based on account creation
-    /// block).
+    /// Returns the effective chain tip for the given finality level.
     ///
-    /// The function may return fewer accounts than exist in the range if the result would exceed
-    /// `MAX_RESPONSE_PAYLOAD_BYTES / AccountId::SERIALIZED_SIZE` rows. In this case, the result is
-    /// truncated at a block boundary to ensure all accounts from included blocks are returned.
-    ///
-    /// The response includes the last block number that was fully included in the result.
-    pub async fn get_all_network_accounts(
-        &self,
-        block_range: RangeInclusive<BlockNumber>,
-    ) -> Result<(Vec<AccountId>, BlockNumber), DatabaseError> {
-        self.db.select_all_network_account_ids(block_range).await
-    }
-
-    /// Returns an account witness and optionally account details at a specific block.
-    ///
-    /// The witness is a Merkle proof of inclusion in the account tree, proving the account's
-    /// state commitment. If `details` is requested, the method also returns the account's code,
-    /// vault assets, and storage data. Account details are only available for public accounts.
-    ///
-    /// If `block_num` is provided, returns the state at that historical block; otherwise, returns
-    /// the latest state. Note that historical states are only available for recent blocks close
-    /// to the chain tip.
-    #[instrument(target = COMPONENT, skip_all)]
-    pub async fn get_account(
-        &self,
-        account_request: AccountRequest,
-    ) -> Result<AccountResponse, GetAccountError> {
-        let AccountRequest { block_num, account_id, details } = account_request;
-
-        if details.is_some() && !account_id.has_public_state() {
-            return Err(GetAccountError::AccountNotPublic(account_id));
-        }
-
-        let (block_num, witness) = self.get_account_witness(block_num, account_id).await?;
-
-        let details = if let Some(request) = details {
-            Some(self.fetch_public_account_details(account_id, block_num, request).await?)
-        } else {
-            None
-        };
-
-        Ok(AccountResponse { block_num, witness, details })
-    }
-
-    /// Returns an account witness (Merkle proof of inclusion in the account tree).
-    ///
-    /// If `block_num` is provided, returns the witness at that historical block;
-    /// otherwise, returns the witness at the latest block.
-    #[instrument(target = COMPONENT, skip_all)]
-    async fn get_account_witness(
-        &self,
-        block_num: Option<BlockNumber>,
-        account_id: AccountId,
-    ) -> Result<(BlockNumber, AccountWitness), GetAccountError> {
-        let inner_state =
-            self.inner.read().instrument(tracing::info_span!("acquire_inner_state")).await;
-
-        // Determine which block to query
-        let (block_num, witness) = if let Some(requested_block) = block_num {
-            // Historical query: use the account tree with history
-            let witness =
-                inner_state.account_tree.open_at(account_id, requested_block).ok_or_else(|| {
-                    let latest_block = inner_state.account_tree.block_number_latest();
-                    if requested_block > latest_block {
-                        GetAccountError::UnknownBlock(requested_block)
-                    } else {
-                        GetAccountError::BlockPruned(requested_block)
-                    }
-                })?;
-            (requested_block, witness)
-        } else {
-            // Latest query: use the latest state
-            let block_num = inner_state.account_tree.block_number_latest();
-            let witness = inner_state.account_tree.open_latest(account_id);
-            (block_num, witness)
-        };
-
-        Ok((block_num, witness))
-    }
-
-    /// Returns storage map details from the forest for a specific account and storage slot.
-    ///
-    /// The forest can only be used if all hashed keys in the storage map are known in the
-    /// reverse-key LRU cache. If any hashed key is unknown, the method returns `Ok(None)` to signal
-    /// that the caller should fall back to reconstructing the storage map details from the
-    /// database.
-    #[instrument(target = COMPONENT, skip_all)]
-    async fn get_storage_map_details_from_forest(
-        &self,
-        account_id: AccountId,
-        slot_name: StorageSlotName,
-        block_num: BlockNumber,
-    ) -> Result<Option<AccountStorageMapDetails>, DatabaseError> {
-        let forest_guard = self
-            .forest
-            .read()
-            .instrument(tracing::info_span!("acquire_forest_for_storage_map_entries"))
-            .await;
-        match forest_guard
-            .get_storage_map_details_for_all_entries(account_id, slot_name.clone(), block_num)
-            .map_err(DatabaseError::MerkleError)?
-        {
-            AccountStorageMapResult::NotFound => Err(DatabaseError::StorageRootNotFound {
-                account_id,
-                slot_name: slot_name.to_string(),
-                block_num,
-            }),
-            AccountStorageMapResult::Details(details) => Ok(Some(details)),
-            AccountStorageMapResult::CannotReconstructKeysFromCache => Ok(None),
-        }
-    }
-
-    /// Returns storage map details by reconstructing the storage map from the database.
-    ///
-    /// This is used as a fallback when the forest cannot be used, which happens when there are
-    /// hashed keys in the storage map that are not known in the reverse-key LRU cache.
-    async fn reconstruct_storage_map_details_from_db(
-        &self,
-        account_id: AccountId,
-        slot_name: StorageSlotName,
-        block_num: BlockNumber,
-    ) -> Result<AccountStorageMapDetails, DatabaseError> {
-        let details = self
-            .db
-            .reconstruct_storage_map_from_db(
-                account_id,
-                slot_name,
-                block_num,
-                Some(AccountStorageMapDetails::MAX_RETURN_ENTRIES),
-            )
-            .await?;
-
-        if let StorageMapEntries::AllEntries(entries) = &details.entries {
-            self.forest
-                .write()
-                .await
-                .cache_storage_map_keys(entries.iter().map(|(raw_key, _)| *raw_key));
-        }
-
-        Ok(details)
-    }
-
-    /// Fetches the account details (code, vault, storage) for a public account at the specified
-    /// block.
-    ///
-    /// This method queries the database to fetch the account state and processes the detail
-    /// request to return only the requested information.
-    ///
-    /// For specific key queries (`SlotData::MapKeys`), the forest is used to provide SMT proofs.
-    /// Returns an error if the forest doesn't have data for the requested slot.
-    /// All-entries queries (`SlotData::All`) use the forest when all hashed keys are known in the
-    /// reverse-key LRU cache, otherwise they fall back to database reconstruction.
-    #[expect(clippy::too_many_lines)]
-    #[instrument(target = COMPONENT, skip_all)]
-    async fn fetch_public_account_details(
-        &self,
-        account_id: AccountId,
-        block_num: BlockNumber,
-        detail_request: AccountDetailRequest,
-    ) -> Result<AccountDetails, GetAccountError> {
-        let AccountDetailRequest {
-            code_commitment,
-            asset_vault_commitment,
-            storage_requests,
-        } = detail_request;
-
-        if !account_id.has_public_state() {
-            return Err(GetAccountError::AccountNotPublic(account_id));
-        }
-
-        // Validate block exists in the blockchain before querying the database
-        {
-            let inner = self.inner.read().instrument(tracing::info_span!("acquire_inner")).await;
-            let latest_block_num = inner.latest_block_num();
-
-            if block_num > latest_block_num {
-                return Err(GetAccountError::UnknownBlock(block_num));
-            }
-        }
-
-        // Query account header and storage header together in a single DB call
-        let (account_header, storage_header) = self
-            .db
-            .select_account_header_with_storage_header_at_block(account_id, block_num)
-            .await?
-            .ok_or(GetAccountError::AccountNotFound(account_id, block_num))?;
-
-        let account_code = match code_commitment {
-            Some(commitment) if commitment == account_header.code_commitment() => None,
-            Some(_) => {
-                self.db
-                    .select_account_code_by_commitment(account_header.code_commitment())
-                    .await?
-            },
-            None => None,
-        };
-
-        let vault_details = match asset_vault_commitment {
-            Some(commitment) if commitment == account_header.vault_root() => {
-                AccountVaultDetails::empty()
-            },
-            Some(_) => self
-                .forest
+    /// - [`Finality::Committed`]: returns the latest committed block number (from in-memory MMR).
+    /// - [`Finality::Proven`]: returns the latest proven-in-sequence block number (cached via watch
+    ///   channel, updated by the proof scheduler).
+    pub async fn chain_tip(&self, finality: Finality) -> BlockNumber {
+        match finality {
+            Finality::Committed => self
+                .inner
                 .read()
-                .instrument(tracing::info_span!("acquire_forest_for_vault"))
+                .instrument(tracing::info_span!("acquire_inner"))
                 .await
-                .get_vault_details(account_id, block_num)
-                .map_err(|err| {
-                    DatabaseError::DataCorrupted(format!(
-                        "failed to reconstruct vault for account {account_id} at block {block_num}: {err}"
-                    ))
-                })?,
-            None => AccountVaultDetails::empty(),
-        };
-
-        let mut storage_map_details =
-            Vec::<AccountStorageMapDetails>::with_capacity(storage_requests.len());
-        let mut map_keys_requests = Vec::new();
-        let mut all_entries_requests = Vec::new();
-        let mut storage_request_slots = Vec::with_capacity(storage_requests.len());
-
-        for (index, StorageMapRequest { slot_name, slot_data }) in
-            storage_requests.into_iter().enumerate()
-        {
-            storage_request_slots.push(slot_name.clone());
-            match slot_data {
-                SlotData::MapKeys(keys) => {
-                    map_keys_requests.push((index, slot_name, keys));
-                },
-                SlotData::All => {
-                    all_entries_requests.push((index, slot_name));
-                },
-            }
+                .latest_block_num(),
+            Finality::Proven => self.proven_tip.read(),
         }
-
-        let mut storage_map_details_by_index = vec![None; storage_request_slots.len()];
-
-        if !map_keys_requests.is_empty() {
-            let forest_guard = self
-                .forest
-                .read()
-                .instrument(tracing::info_span!("acquire_forest_for_storage_map"))
-                .await;
-            for (index, slot_name, keys) in map_keys_requests {
-                let details = forest_guard
-                    .get_storage_map_details_for_keys(
-                        account_id,
-                        slot_name.clone(),
-                        block_num,
-                        &keys,
-                    )
-                    .ok_or_else(|| DatabaseError::StorageRootNotFound {
-                        account_id,
-                        slot_name: slot_name.to_string(),
-                        block_num,
-                    })?
-                    .map_err(DatabaseError::MerkleError)?;
-                storage_map_details_by_index[index] = Some(details);
-            }
-        }
-
-        for (index, slot_name) in all_entries_requests {
-            let details = match self
-                .get_storage_map_details_from_forest(account_id, slot_name.clone(), block_num)
-                .await?
-            {
-                Some(details) => details,
-                None => {
-                    self.reconstruct_storage_map_details_from_db(account_id, slot_name, block_num)
-                        .await?
-                },
-            };
-            storage_map_details_by_index[index] = Some(details);
-        }
-
-        for (details, slot_name) in
-            storage_map_details_by_index.into_iter().zip(storage_request_slots)
-        {
-            let details = details.ok_or_else(|| DatabaseError::StorageRootNotFound {
-                account_id,
-                slot_name: slot_name.to_string(),
-                block_num,
-            })?;
-            storage_map_details.push(details);
-        }
-
-        Ok(AccountDetails {
-            account_header,
-            account_code,
-            vault_details,
-            storage_details: AccountStorageDetails {
-                header: storage_header,
-                map_details: storage_map_details,
-            },
-        })
     }
 
     /// Loads a block from the block store. Return `Ok(None)` if the block is not found.
@@ -926,26 +739,21 @@ impl State {
         &self,
         block_num: BlockNumber,
     ) -> Result<Option<Vec<u8>>, DatabaseError> {
-        if block_num > self.latest_block_num().await {
+        if block_num > self.chain_tip(Finality::Committed).await {
             return Ok(None);
         }
         self.block_store.load_block(block_num).await.map_err(Into::into)
     }
 
-    /// Returns the latest block number.
-    pub async fn latest_block_num(&self) -> BlockNumber {
-        self.inner.read().await.latest_block_num()
-    }
-
-    /// Returns the network notes for an account that are unconsumed by a specified block number,
-    /// along with the next pagination token.
-    pub async fn get_unconsumed_network_notes_for_account(
+    /// Loads a block proof from the block store. Returns `Ok(None)` if the proof is not found.
+    pub async fn load_proof(
         &self,
-        account_id: AccountId,
         block_num: BlockNumber,
-        page: Page,
-    ) -> Result<(Vec<NoteRecord>, Page), DatabaseError> {
-        self.db.select_unconsumed_network_notes(account_id, block_num, page).await
+    ) -> Result<Option<Vec<u8>>, DatabaseError> {
+        if block_num > self.chain_tip(Finality::Proven).await {
+            return Ok(None);
+        }
+        self.block_store.load_proof(block_num).await.map_err(Into::into)
     }
 
     /// Returns the script for a note by its root.
@@ -954,40 +762,5 @@ impl State {
         root: Word,
     ) -> Result<Option<NoteScript>, DatabaseError> {
         self.db.select_note_script_by_root(root).await
-    }
-
-    /// Returns vault asset witnesses for the specified account and block number.
-    pub async fn get_vault_asset_witnesses(
-        &self,
-        account_id: AccountId,
-        block_num: BlockNumber,
-        vault_keys: BTreeSet<AssetVaultKey>,
-    ) -> Result<Vec<AssetWitness>, WitnessError> {
-        let witnesses = self
-            .forest
-            .read()
-            .await
-            .get_vault_asset_witnesses(account_id, block_num, vault_keys)?;
-        Ok(witnesses)
-    }
-
-    /// Returns a storage map witness for the specified account and storage entry at the block
-    /// number.
-    ///
-    /// Note that the `raw_key` is the raw, user-provided key that needs to be hashed in order to
-    /// get the actual key into the storage map.
-    pub async fn get_storage_map_witness(
-        &self,
-        account_id: AccountId,
-        slot_name: &StorageSlotName,
-        block_num: BlockNumber,
-        raw_key: StorageMapKey,
-    ) -> Result<StorageMapWitness, WitnessError> {
-        let witness = self
-            .forest
-            .read()
-            .await
-            .get_storage_map_witness(account_id, slot_name, block_num, raw_key)?;
-        Ok(witness)
     }
 }

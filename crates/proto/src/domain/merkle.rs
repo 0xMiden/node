@@ -93,10 +93,11 @@ impl TryFrom<proto::primitives::MmrDelta> for MmrDelta {
             .collect::<Result<_, _>>()
             .context("data")?;
 
-        Ok(MmrDelta {
-            forest: Forest::new(value.forest as usize),
-            data,
-        })
+        let forest_size: usize =
+            value.forest.try_into().context("forest size does not fit in usize")?;
+        let forest = Forest::new(forest_size).context("forest size out of range")?;
+
+        Ok(MmrDelta { forest, data })
     }
 }
 

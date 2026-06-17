@@ -1,506 +1,282 @@
 //! Task management for the network monitor.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use anyhow::Result;
-use miden_node_proto::clients::{
-    Builder as ClientBuilder,
-    RemoteProverProxyStatusClient,
-    RpcClient,
-};
+use backon::{ExponentialBuilder, Retryable};
+use miden_node_proto::clients::RemoteProverClient;
+use miden_node_utils::tasks::Tasks as SupervisedTasks;
 use tokio::sync::watch::Receiver;
 use tokio::sync::{Mutex, watch};
-use tokio::task::{Id, JoinSet};
-use tracing::{debug, instrument};
+use tracing::{debug, warn};
 
 use crate::COMPONENT;
 use crate::config::MonitorConfig;
-use crate::counter::{LatencyState, run_counter_tracking_task, run_increment_task};
-use crate::deploy::ensure_accounts_exist;
-use crate::explorer::{initial_explorer_status, run_explorer_status_task};
-use crate::faucet::run_faucet_test_task;
+use crate::counter::{CounterTrackingService, IncrementService, LatencyState};
+use crate::deploy::create_and_deploy_accounts;
+use crate::explorer::ExplorerService;
+use crate::faucet::FaucetService;
 use crate::frontend::{ServerState, serve};
-use crate::note_transport::{initial_note_transport_status, run_note_transport_status_task};
-use crate::remote_prover::{ProofType, generate_prover_test_payload, run_remote_prover_test_task};
+use crate::note_transport::NoteTransportService;
+use crate::remote_prover::ProverStatusService;
+use crate::service::{Service, build_tls_client};
 use crate::status::{
+    CounterTrackingDetails,
+    IncrementDetails,
+    RpcService,
+    ServiceDetails,
     ServiceStatus,
-    StaleChainTracker,
-    check_remote_prover_status,
-    check_rpc_status,
-    run_remote_prover_status_task,
-    run_rpc_status_task,
 };
+use crate::validator::ValidatorService;
 
-/// Task management structure that encapsulates `JoinSet` and component names.
+/// Task management structure that supervises named component tasks.
 #[derive(Default)]
 pub struct Tasks {
-    handles: JoinSet<()>,
-    names: HashMap<Id, String>,
+    handles: SupervisedTasks,
 }
 
 impl Tasks {
     /// Create a new Tasks instance.
     pub fn new() -> Self {
-        Self {
-            handles: JoinSet::new(),
-            names: HashMap::new(),
-        }
+        Self { handles: SupervisedTasks::new() }
     }
 
     /// Spawn the RPC status checker task.
-    #[instrument(
-        parent = None,
-        target = COMPONENT,
-        name = "network_monitor.tasks.spawn_rpc_checker",
-        skip_all,
-        level = "info",
-        ret(level = "debug"),
-        err
-    )]
-    pub async fn spawn_rpc_checker(
-        &mut self,
-        config: &MonitorConfig,
-    ) -> Result<Receiver<ServiceStatus>> {
-        debug!(target: COMPONENT, rpc_url = %config.rpc_url, "Spawning RPC status checker task");
-
-        // Create initial status for RPC service
-        let mut rpc = ClientBuilder::new(config.rpc_url.clone())
-            .with_tls()
-            .expect("TLS is enabled")
-            .with_timeout(config.request_timeout)
-            .without_metadata_version()
-            .without_metadata_genesis()
-            .without_otel_context_injection()
-            .connect_lazy::<RpcClient>();
-
-        let current_time = current_unix_timestamp_secs();
-        let mut stale_tracker = StaleChainTracker::new(config.stale_chain_tip_threshold);
-        let initial_rpc_status = check_rpc_status(
-            &mut rpc,
-            config.rpc_url.to_string(),
-            current_time,
-            &mut stale_tracker,
-        )
-        .await;
-
-        // Spawn the RPC checker
-        let (rpc_tx, rpc_rx) = watch::channel(initial_rpc_status);
-        let rpc_url = config.rpc_url.clone();
-        let status_check_interval = config.status_check_interval;
-        let request_timeout = config.request_timeout;
-        let stale_chain_tip_threshold = config.stale_chain_tip_threshold;
-        let id = self
-            .handles
-            .spawn(async move {
-                run_rpc_status_task(
-                    rpc_url,
-                    rpc_tx,
-                    status_check_interval,
-                    request_timeout,
-                    stale_chain_tip_threshold,
-                )
-                .await;
-            })
-            .id();
-        self.names.insert(id, "rpc-checker".to_string());
-
-        debug!(target: COMPONENT, "RPC status checker task spawned successfully");
-        Ok(rpc_rx)
+    pub fn spawn_rpc_checker(&mut self, config: &MonitorConfig) -> Receiver<ServiceStatus> {
+        let svc = RpcService::new(
+            config.rpc_url.clone(),
+            config.status_check_interval,
+            config.request_timeout,
+            config.stale_chain_tip_threshold,
+        );
+        self.spawn_service(svc)
     }
 
     /// Spawn the explorer status checker task.
-    #[instrument(target = COMPONENT, name = "tasks.spawn-explorer-checker", skip_all)]
-    pub async fn spawn_explorer_checker(
-        &mut self,
-        config: &MonitorConfig,
-    ) -> Result<Receiver<ServiceStatus>> {
+    pub fn spawn_explorer_checker(&mut self, config: &MonitorConfig) -> Receiver<ServiceStatus> {
         let explorer_url = config.explorer_url.clone().expect("Explorer URL exists");
-        let name = "Explorer".to_string();
-        let status_check_interval = config.status_check_interval;
-        let request_timeout = config.request_timeout;
-        let (explorer_status_tx, explorer_status_rx) = watch::channel(initial_explorer_status());
-
-        let id = self
-            .handles
-            .spawn(async move {
-                run_explorer_status_task(
-                    explorer_url,
-                    name,
-                    explorer_status_tx,
-                    status_check_interval,
-                    request_timeout,
-                )
-                .await;
-            })
-            .id();
-        self.names.insert(id, "explorer-checker".to_string());
-
-        println!("Spawned explorer status checker task");
-
-        Ok(explorer_status_rx)
+        let svc = ExplorerService::new(
+            explorer_url,
+            config.status_check_interval,
+            config.request_timeout,
+        );
+        self.spawn_service(svc)
     }
 
     /// Spawn the note transport status checker task.
-    #[instrument(target = COMPONENT, name = "tasks.spawn-note-transport-checker", skip_all)]
-    pub async fn spawn_note_transport_checker(
+    pub fn spawn_note_transport_checker(
         &mut self,
         config: &MonitorConfig,
-    ) -> Result<Receiver<ServiceStatus>> {
+    ) -> Receiver<ServiceStatus> {
         let note_transport_url =
             config.note_transport_url.clone().expect("Note transport URL exists");
-        let name = "Note Transport".to_string();
-        let status_check_interval = config.status_check_interval;
-        let request_timeout = config.request_timeout;
-        let (tx, rx) = watch::channel(initial_note_transport_status());
-
-        let id = self
-            .handles
-            .spawn(async move {
-                run_note_transport_status_task(
-                    note_transport_url,
-                    name,
-                    tx,
-                    status_check_interval,
-                    request_timeout,
-                )
-                .await;
-            })
-            .id();
-        self.names.insert(id, "note-transport-checker".to_string());
-
-        println!("Spawned note transport status checker task");
-
-        Ok(rx)
+        let svc = NoteTransportService::new(
+            note_transport_url,
+            config.status_check_interval,
+            config.request_timeout,
+        );
+        self.spawn_service(svc)
     }
 
-    /// Spawn prover status and test tasks for all configured provers.
-    #[instrument(
-        parent = None,
-        target = COMPONENT,
-        name = "network_monitor.tasks.spawn_prover_tasks",
-        skip_all,
-        level = "info",
-        ret(level = "debug"),
-        err
-    )]
-    pub async fn spawn_prover_tasks(
-        &mut self,
-        config: &MonitorConfig,
-    ) -> Result<Vec<(watch::Receiver<ServiceStatus>, watch::Receiver<ServiceStatus>)>> {
-        debug!(target: COMPONENT, prover_count = config.remote_prover_urls.len(), "Spawning prover tasks");
-        let mut prover_rxs = Vec::new();
+    /// Spawn the validator status checker task.
+    pub fn spawn_validator_checker(&mut self, config: &MonitorConfig) -> Receiver<ServiceStatus> {
+        let validator_url = config.validator_url.clone().expect("Validator URL exists");
+        let svc = ValidatorService::new(
+            validator_url,
+            config.status_check_interval,
+            config.request_timeout,
+        );
+        self.spawn_service(svc)
+    }
 
+    /// Spawn prover status tasks for all configured provers.
+    ///
+    /// Each prover is monitored by a [`ProverStatusService`] that polls on the status cadence.
+    /// Once it observes the prover reporting `ProofType::Transaction`, the status service spawns
+    /// (and keeps alive) a probe task that acquires its test payload from the RPC and runs
+    /// proof-test probes on the test cadence.
+    pub fn spawn_prover_tasks(&mut self, config: &MonitorConfig) -> Vec<Receiver<ServiceStatus>> {
+        let mut prover_rxs = Vec::new();
         for (i, prover_url) in config.remote_prover_urls.iter().enumerate() {
             let name = format!("Remote Prover ({})", i + 1);
+            let test_client =
+                build_tls_client::<RemoteProverClient>(prover_url.clone(), config.request_timeout);
 
-            let mut remote_prover = ClientBuilder::new(prover_url.clone())
-                .with_tls()
-                .expect("TLS is enabled")
-                .with_timeout(config.request_timeout)
-                .without_metadata_version()
-                .without_metadata_genesis()
-                .without_otel_context_injection()
-                .connect_lazy::<RemoteProverProxyStatusClient>();
-
-            let current_time = current_unix_timestamp_secs();
-
-            let initial_prover_status = check_remote_prover_status(
-                &mut remote_prover,
-                name.clone(),
-                prover_url.to_string(),
-                current_time,
-            )
-            .await;
-
-            let (prover_status_tx, prover_status_rx) =
-                watch::channel(initial_prover_status.clone());
-
-            // Spawn the remote prover status check task
-            let component_name = format!("prover-checker-{}", i + 1);
-            let prover_url_clone = prover_url.clone();
-            let name_clone = name.clone();
-            let status_check_interval = config.status_check_interval;
-            let request_timeout = config.request_timeout;
-            let id = self
-                .handles
-                .spawn(async move {
-                    run_remote_prover_status_task(
-                        prover_url_clone,
-                        name_clone,
-                        prover_status_tx,
-                        status_check_interval,
-                        request_timeout,
-                    )
-                    .await;
-                })
-                .id();
-            self.names.insert(id, component_name);
-
-            // Extract proof_type directly from the service status
-            // If the prover is not available during startup, skip spawning test tasks
-            let proof_type = if let crate::status::ServiceDetails::RemoteProverStatus(details) =
-                &initial_prover_status.details
-            {
-                Some(details.supported_proof_type.clone())
-            } else {
-                // Prover is not available during startup, but we'll still monitor its status
-                tracing::warn!(
-                    "Prover {} is not available during startup, skipping test task initialization",
-                    name
-                );
-                None
-            };
-
-            // Only spawn test tasks for transaction provers if proof_type is available
-            let prover_test_rx = if matches!(proof_type, Some(ProofType::Transaction)) {
-                debug!("Starting transaction proof tests for prover: {}", name);
-                let payload = generate_prover_test_payload().await;
-                let (prover_test_tx, prover_test_rx) =
-                    watch::channel(initial_prover_status.clone());
-
-                let prover_url_clone = prover_url.clone();
-                let name_clone = name.clone();
-                let proof_type = proof_type.expect("proof type is Some");
-                let remote_prover_interval = config.remote_prover_test_interval;
-
-                let id = self
-                    .handles
-                    .spawn(async move {
-                        run_remote_prover_test_task(
-                            prover_url_clone,
-                            &name_clone,
-                            proof_type,
-                            payload,
-                            prover_test_tx,
-                            request_timeout,
-                            remote_prover_interval,
-                        )
-                        .await;
-                    })
-                    .id();
-                let component_name = format!("prover-test-{}", i + 1);
-                self.names.insert(id, component_name);
-
-                prover_test_rx
-            } else {
-                debug!(
-                    "Skipping prover tests for {} (supports {:?} proofs, only testing Transaction proofs)",
-                    name, proof_type
-                );
-                // For non-transaction provers, create a dummy receiver with no test task
-                let (_tx, rx) = watch::channel(initial_prover_status.clone());
-                rx
-            };
-
-            prover_rxs.push((prover_status_rx, prover_test_rx));
+            let status_svc = ProverStatusService::new(
+                name,
+                prover_url.clone(),
+                config.rpc_url.clone(),
+                config.status_check_interval,
+                config.request_timeout,
+                config.remote_prover_test_interval,
+                test_client,
+            );
+            prover_rxs.push(self.spawn_service(status_svc));
         }
-
-        debug!(target: COMPONENT, spawned_provers = prover_rxs.len(), "All prover tasks spawned successfully");
-        Ok(prover_rxs)
+        prover_rxs
     }
 
     /// Spawn the faucet testing task.
-    #[instrument(
-        parent = None,
-        target = COMPONENT,
-        name = "network_monitor.tasks.spawn_faucet",
-        skip_all,
-        level = "info",
-        ret(level = "debug")
-    )]
     pub fn spawn_faucet(&mut self, config: &MonitorConfig) -> Receiver<ServiceStatus> {
-        let current_time = current_unix_timestamp_secs();
-
-        // Create initial faucet test status
-        let initial_faucet_status = ServiceStatus {
-            name: "Faucet".to_string(),
-            status: crate::status::Status::Unknown,
-            last_checked: current_time,
-            error: None,
-            details: crate::status::ServiceDetails::FaucetTest(crate::faucet::FaucetTestDetails {
-                url: config.faucet_url.as_ref().expect("faucet URL exists").to_string(),
-                test_duration_ms: 0,
-                success_count: 0,
-                failure_count: 0,
-                last_tx_id: None,
-                faucet_metadata: None,
-            }),
-        };
-
-        // Spawn the faucet testing task
-        let (faucet_tx, faucet_rx) = watch::channel(initial_faucet_status);
-        // SAFETY: config.faucet_url is Some
-        let faucet_url = config.faucet_url.clone().unwrap();
-        let faucet_test_interval = config.faucet_test_interval;
-        let request_timeout = config.request_timeout;
-        let id = self
-            .handles
-            .spawn(async move {
-                run_faucet_test_task(faucet_url, faucet_tx, faucet_test_interval, request_timeout)
-                    .await;
-            })
-            .id();
-        self.names.insert(id, "faucet-test".to_string());
-
-        faucet_rx
+        let faucet_url = config.faucet_url.clone().expect("faucet URL exists");
+        let svc =
+            FaucetService::new(faucet_url, config.faucet_test_interval, config.request_timeout);
+        self.spawn_service(svc)
     }
 
     /// Spawn the network transaction service checker task.
-    #[instrument(
-        parent = None,
-        target = COMPONENT,
-        name = "network_monitor.tasks.spawn_ntx_service",
-        skip_all,
-        level = "info",
-        ret(level = "debug"),
-        err
-    )]
-    pub async fn spawn_ntx_service(
+    ///
+    /// Returns the two status receivers immediately, seeded with an unknown "deploying monitor
+    /// accounts" status, and bootstraps the services in a supervised background task so that a
+    /// slow or unreachable RPC neither delays the dashboard nor aborts the monitor (see
+    /// [`run_ntx`]).
+    pub fn spawn_ntx_service(
         &mut self,
         config: &MonitorConfig,
-    ) -> Result<(Receiver<ServiceStatus>, Receiver<ServiceStatus>)> {
-        // Ensure accounts exist before starting monitoring tasks
-        ensure_accounts_exist(&config.wallet_filepath, &config.counter_filepath, &config.rpc_url)
-            .await?;
+    ) -> (Receiver<ServiceStatus>, Receiver<ServiceStatus>) {
+        let (increment_tx, increment_rx) = watch::channel(ntx_seed_status(
+            IncrementService::NAME,
+            ServiceDetails::NtxIncrement(IncrementDetails::default()),
+        ));
+        let (tracking_tx, tracking_rx) = watch::channel(ntx_seed_status(
+            CounterTrackingService::NAME,
+            ServiceDetails::NtxTracking(CounterTrackingDetails::default()),
+        ));
 
-        let current_time = current_unix_timestamp_secs();
+        let config = config.clone();
+        self.handles.spawn_infallible("ntx", run_ntx(config, increment_tx, tracking_tx));
+        debug!(target: COMPONENT, service = "ntx", "spawned service");
 
-        // Create shared atomic counter for tracking expected counter value
-        let expected_counter_value = Arc::new(AtomicU64::new(0));
-        let latency_state = Arc::new(Mutex::new(LatencyState::default()));
-        let latency_state_for_increment = latency_state.clone();
-        let latency_state_for_tracking = latency_state.clone();
+        (increment_rx, tracking_rx)
+    }
 
-        // Create initial increment status
-        let initial_increment_status = ServiceStatus {
-            name: "Local Transactions".to_string(),
-            status: crate::status::Status::Unknown,
-            last_checked: current_time,
-            error: None,
-            details: crate::status::ServiceDetails::NtxIncrement(crate::status::IncrementDetails {
-                success_count: 0,
-                failure_count: 0,
-                last_tx_id: None,
-                last_latency_blocks: None,
-            }),
-        };
-
-        // Create initial tracking status
-        let initial_tracking_status = ServiceStatus {
-            name: "Network Transactions".to_string(),
-            status: crate::status::Status::Unknown,
-            last_checked: current_time,
-            error: None,
-            details: crate::status::ServiceDetails::NtxTracking(
-                crate::status::CounterTrackingDetails {
-                    current_value: None,
-                    expected_value: None,
-                    last_updated: None,
-                    pending_increments: None,
-                },
-            ),
-        };
-
-        // Spawn the increment task
-        let (increment_tx, increment_rx) = watch::channel(initial_increment_status);
-        let config_clone = config.clone();
-        let counter_clone = Arc::clone(&expected_counter_value);
-        let increment_id = self
-            .handles
-            .spawn(async move {
-                Box::pin(run_increment_task(
-                    config_clone,
-                    increment_tx,
-                    counter_clone,
-                    latency_state_for_increment,
-                ))
-                .await
-                .expect("Counter increment task runs indefinitely");
-            })
-            .id();
-        self.names.insert(increment_id, "counter-increment".to_string());
-
-        // Spawn the tracking task
-        let (tracking_tx, tracking_rx) = watch::channel(initial_tracking_status);
-        let config_clone = config.clone();
-        let counter_clone = Arc::clone(&expected_counter_value);
-        let tracking_id = self
-            .handles
-            .spawn(async move {
-                Box::pin(run_counter_tracking_task(
-                    config_clone,
-                    tracking_tx,
-                    counter_clone,
-                    latency_state_for_tracking,
-                ))
-                .await
-                .expect("Counter tracking task runs indefinitely");
-            })
-            .id();
-        self.names.insert(tracking_id, "counter-tracking".to_string());
-
-        Ok((increment_rx, tracking_rx))
+    /// Spawns a [`Service`] and returns its `ServiceStatus` receiver.
+    ///
+    /// Seeds the `watch::channel` from [`Service::initial_status`] and hands the sender to
+    /// [`Service::run`] in a new task. The returned receiver is what [`ServerState`] consumes.
+    pub fn spawn_service<S: Service>(&mut self, svc: S) -> Receiver<ServiceStatus> {
+        let (tx, rx) = watch::channel(svc.initial_status());
+        let service_name = svc.name().to_string();
+        self.handles
+            .spawn_infallible(service_name.clone(), async move { svc.run(tx).await });
+        debug!(target: COMPONENT, service = %service_name, "spawned service");
+        rx
     }
 
     /// Spawn the HTTP frontend server.
-    #[instrument(
-        parent = None,
-        target = COMPONENT,
-        name = "network_monitor.tasks.spawn_http_server",
-        skip_all,
-        level = "info",
-        ret(level = "debug")
-    )]
     pub fn spawn_http_server(&mut self, server_state: ServerState, config: &MonitorConfig) {
         let config = config.clone();
-        let id = self.handles.spawn(async move { serve(server_state, config).await }).id();
-        self.names.insert(id, "frontend".to_string());
-    }
-
-    /// Wait for any task to complete or fail and return the result.
-    async fn join_next_with_id(&mut self) -> Option<Result<(Id, ()), tokio::task::JoinError>> {
-        self.handles.join_next_with_id().await
-    }
-
-    /// Get the component name for a given task ID.
-    fn get_component_name(&self, id: Id) -> Option<&String> {
-        self.names.get(&id)
+        self.handles
+            .spawn_infallible("frontend", async move { serve(server_state, config).await });
     }
 
     /// Handles the failure of a task.
     ///
-    /// This method waits for any task to complete or fail and returns an error.
-    /// Since we expect components to run indefinitely, any task completion is treated as fatal.
-    ///
-    /// # Returns
-    ///
-    /// An error if any task fails or completes unexpectedly.
-    pub async fn handle_failure(&mut self) -> Result<()> {
-        // Wait for any task to complete or fail
-        let component_result = self.join_next_with_id().await.expect("join set is not empty");
-
-        // We expect components to run indefinitely, so we treat any return as fatal.
-        let (id, err) = match component_result {
-            Ok((id, ())) => (id, anyhow::anyhow!("component completed unexpectedly")),
-            Err(join_err) => (join_err.id(), anyhow::Error::from(join_err)),
-        };
-        let component_name = self.get_component_name(id).map_or("unknown", String::as_str);
-
-        // Exit with error context
-        Err(err.context(format!("component {component_name} failed")))
+    /// Waits for any task to complete or fail and returns an error. Since components are
+    /// expected to run indefinitely, any task completion is treated as fatal.
+    pub async fn handle_failure(mut self) -> Result<()> {
+        self.handles.join_next_as_error().await
     }
 }
 
-/// Gets the current Unix timestamp in seconds.
+// NTX BOOTSTRAP
+// ================================================================================================
+
+/// Seed status published on the NTX channels until the accounts are deployed.
+fn ntx_seed_status(name: &str, details: ServiceDetails) -> ServiceStatus {
+    let mut status = ServiceStatus::unknown(name, details);
+    status.error = Some("deploying monitor accounts".to_string());
+    status
+}
+
+/// Bootstraps the network transaction services and runs them.
 ///
-/// This function is infallible - if the system time is somehow before Unix epoch
-/// (extremely unlikely), it returns 0.
-pub fn current_unix_timestamp_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_else(|_| Duration::from_secs(0))  // Fallback to 0 if before Unix epoch
-        .as_secs()
+/// Deployment is retried forever with exponential backoff, publishing an unhealthy status on both
+/// channels after each failed attempt, so a network that is down at startup degrades the cards
+/// instead of aborting the monitor. Once bootstrapped, both services run on separate tasks; if
+/// either exits or panics, this supervised task ends and [`Tasks::handle_failure`] treats it as
+/// fatal, the same semantics they had when spawned directly.
+async fn run_ntx(
+    config: MonitorConfig,
+    increment_tx: watch::Sender<ServiceStatus>,
+    tracking_tx: watch::Sender<ServiceStatus>,
+) {
+    let backoff = ExponentialBuilder::default()
+        .with_min_delay(Duration::from_secs(1))
+        .with_max_delay(Duration::from_secs(30))
+        .with_factor(2.0)
+        .with_jitter()
+        .without_max_times();
+
+    let (increment_svc, tracking_svc) = (|| async { bootstrap_ntx(&config).await })
+        .retry(backoff)
+        .notify(|err: &anyhow::Error, sleep: Duration| {
+            warn!(
+                target: COMPONENT,
+                err = ?err,
+                sleep_ms = sleep.as_millis() as u64,
+                "NTX bootstrap failed; retrying after backoff",
+            );
+            let msg = format!("deploying monitor accounts failed: {err:#}");
+            increment_tx.send_replace(ServiceStatus::unhealthy(
+                IncrementService::NAME,
+                &msg,
+                ServiceDetails::NtxIncrement(IncrementDetails::default()),
+            ));
+            tracking_tx.send_replace(ServiceStatus::unhealthy(
+                CounterTrackingService::NAME,
+                &msg,
+                ServiceDetails::NtxTracking(CounterTrackingDetails::default()),
+            ));
+        })
+        .await
+        .expect("unbounded retry only resolves on success");
+
+    // Run the services on their own tasks (a shared task would serialize the increment service's
+    // local proving with the tracking polls). The first one to finish ends this supervised task;
+    // the JoinSet aborts the other on drop.
+    let mut services = tokio::task::JoinSet::new();
+    services.spawn(increment_svc.run(increment_tx));
+    services.spawn(tracking_svc.run(tracking_tx));
+    services.join_next().await;
+}
+
+/// One bootstrap attempt: create and deploy fresh accounts, then build both services.
+///
+/// Creates a fresh wallet/counter pair in memory, deploys the counter to the network, and hands
+/// the same counter account to both services via a [`watch::channel`]. The increment service
+/// publishes new counters on the channel when it regenerates accounts after persistent failures;
+/// the tracking service observes the channel to switch over.
+async fn bootstrap_ntx(
+    config: &MonitorConfig,
+) -> Result<(IncrementService, CounterTrackingService)> {
+    let (wallet_account, secret_key, counter_account) =
+        create_and_deploy_accounts(&config.rpc_url).await?;
+
+    let (counter_tx, counter_rx) = watch::channel(counter_account.clone());
+
+    let expected_counter_value = Arc::new(AtomicU64::new(0));
+    let latency_state = Arc::new(Mutex::new(LatencyState::default()));
+
+    let increment_svc = IncrementService::new(
+        config.clone(),
+        wallet_account,
+        secret_key,
+        counter_account,
+        counter_tx,
+        Arc::clone(&expected_counter_value),
+        latency_state.clone(),
+    )
+    .await?;
+    let tracking_svc = CounterTrackingService::new(
+        config.clone(),
+        counter_rx,
+        Arc::clone(&expected_counter_value),
+        latency_state,
+    )
+    .await?;
+
+    Ok((increment_svc, tracking_svc))
 }

@@ -3,7 +3,6 @@
 //! This module contains the configuration structures and constants for the network monitor.
 //! Configuration for the monitor.
 
-use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::Parser;
@@ -95,16 +94,6 @@ pub struct MonitorConfig {
     )]
     pub port: u16,
 
-    /// Whether to enable OpenTelemetry.
-    #[arg(
-        long = "enable-otel",
-        env = "MIDEN_MONITOR_ENABLE_OTEL",
-        action = clap::ArgAction::SetTrue,
-        default_value_t = true,
-        help = "Whether to enable OpenTelemetry"
-    )]
-    pub enable_otel: bool,
-
     /// Whether to disable the network transaction service checks (enabled by default). The network
     /// transaction service is a network account with a counter deployed at startup and incremented
     /// by sending a transaction to it.
@@ -118,24 +107,6 @@ pub struct MonitorConfig {
         incremented by sending a transaction to it."
     )]
     pub disable_ntx_service: bool,
-
-    /// Path for the counter program network account file.
-    #[arg(
-        long = "counter-filepath",
-        env = "MIDEN_MONITOR_COUNTER_FILEPATH",
-        default_value = "counter_program.mac",
-        help = "Path where the counter account is located"
-    )]
-    pub counter_filepath: PathBuf,
-
-    /// Path for the wallet account file.
-    #[arg(
-        long = "wallet-filepath",
-        env = "MIDEN_MONITOR_WALLET_FILEPATH",
-        default_value = "wallet_account.mac",
-        help = "Path where the wallet account is located"
-    )]
-    pub wallet_filepath: PathBuf,
 
     /// The interval at which to send the increment counter transaction.
     #[arg(
@@ -156,6 +127,18 @@ pub struct MonitorConfig {
         help = "Maximum time to wait for a counter update after submitting a transaction"
     )]
     pub counter_latency_timeout: Duration,
+
+    /// Maximum allowed gap between the expected and observed counter values before the Network
+    /// Transactions card is flipped to unhealthy. A small backlog while transactions are in flight
+    /// is expected; this threshold guards against the network silently dropping notes.
+    #[arg(
+        long = "counter-pending-unhealthy-threshold",
+        env = "MIDEN_MONITOR_COUNTER_PENDING_UNHEALTHY_THRESHOLD",
+        default_value_t = 5,
+        help = "Mark the counter card unhealthy when the gap between expected and observed values \
+                stays above this threshold for several consecutive polls"
+    )]
+    pub counter_pending_unhealthy_threshold: u64,
 
     /// The timeout for the outgoing requests.
     #[arg(
@@ -182,6 +165,14 @@ pub struct MonitorConfig {
         help = "The URL of the note transport service"
     )]
     pub note_transport_url: Option<Url>,
+
+    /// The URL of the validator service.
+    #[arg(
+        long = "validator-url",
+        env = "MIDEN_MONITOR_VALIDATOR_URL",
+        help = "The URL of the validator service"
+    )]
+    pub validator_url: Option<Url>,
 
     /// Maximum time without a chain tip update before marking RPC as unhealthy.
     ///

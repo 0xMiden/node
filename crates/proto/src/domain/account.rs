@@ -1,6 +1,5 @@
 use std::fmt::{Debug, Display, Formatter};
 
-use miden_node_utils::formatting::format_opt;
 use miden_node_utils::limiter::{QueryParamLimiter, QueryParamStorageMapKeyTotalLimit};
 use miden_protocol::Word;
 use miden_protocol::account::{
@@ -14,15 +13,12 @@ use miden_protocol::account::{
     StorageSlotName,
     StorageSlotType,
 };
-use miden_protocol::asset::{Asset, AssetVault};
+use miden_protocol::asset::Asset;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::crypto::merkle::smt::SmtProof;
-use miden_protocol::note::NoteAttachment;
 use miden_protocol::utils::serde::{Deserializable, DeserializationError, Serializable};
-use miden_standards::note::{NetworkAccountTarget, NetworkAccountTargetError};
-use thiserror::Error;
 
 use super::try_convert;
 use crate::decode;
@@ -143,6 +139,7 @@ impl TryFrom<proto::account::AccountStorageHeader> for AccountStorageHeader {
 // ================================================================================================
 
 /// Represents a request for an account proof.
+#[derive(Debug)]
 pub struct AccountRequest {
     pub account_id: AccountId,
     // If not present, the latest account proof references the latest available
@@ -167,10 +164,18 @@ impl TryFrom<proto::rpc::AccountRequest> for AccountRequest {
 }
 
 /// Represents a request for account details alongside specific storage data.
+#[derive(Debug)]
 pub struct AccountDetailRequest {
     pub code_commitment: Option<Word>,
     pub asset_vault_commitment: Option<Word>,
-    pub storage_requests: Vec<StorageMapRequest>,
+    pub storage_request: AccountStorageRequest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccountStorageRequest {
+    None,
+    AllStorageMaps,
+    Explicit(Vec<StorageMapRequest>),
 }
 
 impl TryFrom<proto::rpc::account_request::AccountDetailRequest> for AccountDetailRequest {
@@ -179,10 +184,12 @@ impl TryFrom<proto::rpc::account_request::AccountDetailRequest> for AccountDetai
     fn try_from(
         value: proto::rpc::account_request::AccountDetailRequest,
     ) -> Result<Self, Self::Error> {
+        use proto::rpc::account_request::account_detail_request::StorageRequest as ProtoStorageRequest;
+
         let proto::rpc::account_request::AccountDetailRequest {
             code_commitment,
             asset_vault_commitment,
-            storage_maps,
+            storage_request,
         } = value;
 
         let code_commitment =
@@ -191,13 +198,27 @@ impl TryFrom<proto::rpc::account_request::AccountDetailRequest> for AccountDetai
             .map(TryFrom::try_from)
             .transpose()
             .context("asset_vault_commitment")?;
-        let storage_requests =
-            try_convert(storage_maps).collect::<Result<_, _>>().context("storage_maps")?;
+
+        let storage_request = match storage_request {
+            None => AccountStorageRequest::None,
+            Some(ProtoStorageRequest::AllStorageMaps(true)) => {
+                AccountStorageRequest::AllStorageMaps
+            },
+            Some(ProtoStorageRequest::AllStorageMaps(false)) => {
+                return Err(ConversionError::message("all_storage_maps must be true when set"));
+            },
+            Some(ProtoStorageRequest::StorageMaps(requests)) => {
+                let requests = try_convert(requests.storage_maps)
+                    .collect::<Result<_, _>>()
+                    .context("storage_maps")?;
+                AccountStorageRequest::Explicit(requests)
+            },
+        };
 
         Ok(AccountDetailRequest {
             code_commitment,
             asset_vault_commitment,
-            storage_requests,
+            storage_request,
         })
     }
 }
@@ -334,8 +355,8 @@ impl From<AccountStorageHeader> for proto::account::AccountStorageHeader {
 /// to use the `SyncAccountVault` endpoint instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountVaultDetails {
-    /// The vault has too many assets to return inline.
-    /// Clients must use `SyncAccountVault` endpoint instead.
+    /// The vault has too many assets to return inline. Clients must use `SyncAccountVault` endpoint
+    /// instead.
     LimitExceeded,
 
     /// The assets in the vault (up to `MAX_RETURN_ENTRIES`).
@@ -343,17 +364,9 @@ pub enum AccountVaultDetails {
 }
 
 impl AccountVaultDetails {
-    /// Maximum number of vault entries that can be returned in a single response.
-    /// Accounts with more assets will have `LimitExceeded` variant.
+    /// Maximum number of vault entries that can be returned in a single response. Accounts with
+    /// more assets will have `LimitExceeded` variant.
     pub const MAX_RETURN_ENTRIES: usize = 1000;
-
-    pub fn new(vault: &AssetVault) -> Self {
-        if vault.assets().nth(Self::MAX_RETURN_ENTRIES).is_some() {
-            Self::LimitExceeded
-        } else {
-            Self::Assets(Vec::from_iter(vault.assets()))
-        }
-    }
 
     pub fn empty() -> Self {
         Self::Assets(Vec::new())
@@ -419,16 +432,16 @@ pub struct AccountStorageMapDetails {
 /// instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StorageMapEntries {
-    /// The map has too many entries to return inline.
-    /// Clients must use `SyncAccountStorageMaps` endpoint instead.
+    /// The map has too many entries to return inline. Clients must use `SyncAccountStorageMaps`
+    /// endpoint instead.
     LimitExceeded,
 
-    /// All storage map entries (key-value pairs) without proofs.
-    /// Used when all entries are requested for small maps.
+    /// All storage map entries (key-value pairs) without proofs. Used when all entries are
+    /// requested for small maps.
     AllEntries(Vec<(StorageMapKey, Word)>),
 
-    /// Specific entries with their SMT proofs for client-side verification.
-    /// Used when specific keys are requested from the storage map.
+    /// Specific entries with their SMT proofs for client-side verification. Used when specific keys
+    /// are requested from the storage map.
     EntriesWithProofs(Vec<SmtProof>),
 }
 
@@ -686,7 +699,9 @@ fn storage_slot_type_from_raw(slot_type: u32) -> Result<StorageSlotType, Convers
     Ok(match slot_type {
         0 => StorageSlotType::Value,
         1 => StorageSlotType::Map,
-        _ => return Err(ConversionError::message("enum variant discriminant out of range")),
+        _ => {
+            return Err(ConversionError::message("enum variant discriminant out of range"));
+        },
     })
 }
 
@@ -893,60 +908,6 @@ impl From<AccountWitnessRecord> for proto::account::AccountWitness {
     }
 }
 
-// ACCOUNT STATE
-// ================================================================================================
-
-/// Information needed from the store to verify account in transaction.
-#[derive(Debug)]
-pub struct AccountState {
-    /// Account ID
-    pub account_id: AccountId,
-    /// The account commitment in the store corresponding to tx's account ID
-    pub account_commitment: Option<Word>,
-}
-
-impl Display for AccountState {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!(
-            "{{ account_id: {}, account_commitment: {} }}",
-            self.account_id,
-            format_opt(self.account_commitment.as_ref()),
-        ))
-    }
-}
-
-impl TryFrom<proto::store::transaction_inputs::AccountTransactionInputRecord> for AccountState {
-    type Error = ConversionError;
-
-    fn try_from(
-        from: proto::store::transaction_inputs::AccountTransactionInputRecord,
-    ) -> Result<Self, Self::Error> {
-        let decoder = from.decoder();
-        let account_id = decode!(decoder, from.account_id)?;
-
-        let account_commitment = decode!(decoder, from.account_commitment)?;
-
-        // If the commitment is equal to `Word::empty()`, it signifies that this is a new
-        // account which is not yet present in the Store.
-        let account_commitment = if account_commitment == Word::empty() {
-            None
-        } else {
-            Some(account_commitment)
-        };
-
-        Ok(Self { account_id, account_commitment })
-    }
-}
-
-impl From<AccountState> for proto::store::transaction_inputs::AccountTransactionInputRecord {
-    fn from(from: AccountState) -> Self {
-        Self {
-            account_id: Some(from.account_id.into()),
-            account_commitment: from.account_commitment.map(Into::into),
-        }
-    }
-}
-
 // ASSET
 // ================================================================================================
 
@@ -970,91 +931,4 @@ impl From<Asset> for proto::primitives::Asset {
             value: Some(asset_from.to_value_word().into()),
         }
     }
-}
-
-// NETWORK ACCOUNT PREFIX
-// ================================================================================================
-
-pub type AccountPrefix = u32;
-
-/// Newtype wrapper for network account IDs.
-///
-/// Provides type safety for accounts that are meant for network execution.
-/// This wraps the full `AccountId` of a network account, typically extracted
-/// from a `NetworkAccountTarget` attachment.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct NetworkAccountId(AccountId);
-
-impl std::fmt::Display for NetworkAccountId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl NetworkAccountId {
-    /// Returns the inner `AccountId`.
-    pub fn inner(&self) -> AccountId {
-        self.0
-    }
-
-    /// Gets the 30-bit prefix of the account ID used for tag matching.
-    pub fn prefix(&self) -> AccountPrefix {
-        get_account_id_tag_prefix(self.0)
-    }
-}
-
-impl TryFrom<AccountId> for NetworkAccountId {
-    type Error = NetworkAccountError;
-
-    fn try_from(id: AccountId) -> Result<Self, Self::Error> {
-        if !id.is_network() {
-            return Err(NetworkAccountError::NotNetworkAccount(id));
-        }
-        Ok(NetworkAccountId(id))
-    }
-}
-
-impl TryFrom<&NoteAttachment> for NetworkAccountId {
-    type Error = NetworkAccountError;
-
-    fn try_from(attachment: &NoteAttachment) -> Result<Self, Self::Error> {
-        let target = NetworkAccountTarget::try_from(attachment)
-            .map_err(NetworkAccountError::InvalidAttachment)?;
-        Ok(NetworkAccountId(target.target_id()))
-    }
-}
-
-impl TryFrom<NoteAttachment> for NetworkAccountId {
-    type Error = NetworkAccountError;
-
-    fn try_from(attachment: NoteAttachment) -> Result<Self, Self::Error> {
-        NetworkAccountId::try_from(&attachment)
-    }
-}
-
-impl From<NetworkAccountId> for AccountId {
-    fn from(value: NetworkAccountId) -> Self {
-        value.inner()
-    }
-}
-
-impl From<NetworkAccountId> for u32 {
-    /// Returns the 30-bit prefix of the network account ID.
-    /// This is used for note tag matching.
-    fn from(value: NetworkAccountId) -> Self {
-        value.prefix()
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum NetworkAccountError {
-    #[error("account ID {0} is not a valid network account ID")]
-    NotNetworkAccount(AccountId),
-    #[error("invalid network account attachment: {0}")]
-    InvalidAttachment(#[source] NetworkAccountTargetError),
-}
-
-/// Gets the 30-bit prefix of the account ID.
-fn get_account_id_tag_prefix(id: AccountId) -> AccountPrefix {
-    (id.prefix().as_u64() >> 34) as AccountPrefix
 }

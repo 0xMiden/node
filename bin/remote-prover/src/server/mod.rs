@@ -1,7 +1,10 @@
 use std::num::NonZeroUsize;
 
 use anyhow::Context;
+use miden_node_proto::generated::remote_prover::api_server::ApiServer;
+use miden_node_proto::generated::remote_prover::worker_status_api_server::WorkerStatusApiServer;
 use miden_node_utils::cors::cors_for_grpc_web_layer;
+use miden_node_utils::logging::OpenTelemetry;
 use miden_node_utils::panic::catch_panic_layer_fn;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use proof_kind::ProofKind;
@@ -12,10 +15,10 @@ use tonic_web::GrpcWebLayer;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::trace::TraceLayer;
 
-use crate::generated::api_server::ApiServer;
 use crate::server::service::ProverService;
 
 mod proof_kind;
+mod prove;
 mod prover;
 mod service;
 mod status;
@@ -32,8 +35,7 @@ pub struct Server {
     /// The proof type that the prover will be handling.
     #[arg(long, value_enum, env = "MIDEN_PROVER_KIND")]
     kind: ProofKind,
-    /// Maximum time allowed for a proof request to complete. Once exceeded, the request is
-    /// aborted.
+    /// Maximum time allowed for a proof request to complete. Once exceeded, the request is aborted.
     #[arg(long, default_value = "60s", env = "MIDEN_PROVER_TIMEOUT", value_parser = humantime::parse_duration)]
     timeout: std::time::Duration,
     /// Maximum number of concurrent proof requests that the prover will allow.
@@ -46,6 +48,12 @@ pub struct Server {
 }
 
 impl Server {
+    pub fn open_telemetry(&self) -> OpenTelemetry {
+        OpenTelemetry::from_env()
+            .with_name("remote-prover")
+            .with_attribute("miden.prover.kind", self.kind.as_str())
+    }
+
     /// Spawns the prover server, returning its handle and the port it is listening on.
     pub async fn spawn(&self) -> anyhow::Result<(JoinHandle<anyhow::Result<()>>, u16)> {
         let listener = TcpListener::bind(format!("0.0.0.0:{}", self.port))
@@ -66,7 +74,7 @@ impl Server {
             "proof server listening"
         );
 
-        let status_service = status::StatusService::new(self.kind);
+        let status_service = WorkerStatusApiServer::new(status::StatusService::new(self.kind));
         let prover_service = ProverService::with_capacity(self.kind, self.capacity);
         let prover_service = ApiServer::new(prover_service);
 

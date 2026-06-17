@@ -1,0 +1,19 @@
+[package]
+edition.workspace      = true
+license.workspace      = true
+name                   = "xtask"
+publish                = false
+rust-version.workspace = true
+version.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow           = { workspace = true }
+clap             = { features = ["derive"], workspace = true }
+fs-err           = { workspace = true }
+serde            = { workspace = true }
+toml             = { workspace = true }
+tree-sitter      = "0.26"
+tree-sitter-rust = "0.24"

@@ -1,0 +1,52 @@
+[package]
+authors.workspace      = true
+description            = "Miden validator"
+edition.workspace      = true
+homepage.workspace     = true
+keywords               = ["miden", "validator"]
+license.workspace      = true
+name                   = "miden-validator"
+readme                 = "README.md"
+repository.workspace   = true
+rust-version.workspace = true
+version.workspace      = true
+
+[lints]
+workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+anyhow                 = { workspace = true }
+aws-config             = { version = "1.8.14" }
+aws-sdk-kms            = { version = "1.100" }
+clap                   = { features = ["env", "string"], workspace = true }
+diesel                 = { workspace = true }
+fs-err                 = { workspace = true }
+hex                    = { workspace = true }
+miden-node-db          = { workspace = true }
+miden-node-proto       = { workspace = true }
+miden-node-proto-build = { features = ["internal"], workspace = true }
+miden-node-store       = { workspace = true }
+miden-node-utils       = { features = ["testing"], workspace = true }
+miden-protocol         = { workspace = true }
+miden-tx               = { features = ["concurrent"], workspace = true }
+thiserror              = { workspace = true }
+tokio                  = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
+tokio-stream           = { features = ["net"], workspace = true }
+tonic                  = { default-features = true, features = ["transport"], workspace = true }
+tonic-reflection       = { workspace = true }
+tower-http             = { features = ["util"], workspace = true }
+tracing                = { workspace = true }
+
+[build-dependencies]
+build-rs      = { workspace = true }
+miden-node-db = { workspace = true }
+
+[dev-dependencies]
+miden-node-store = { workspace = true }
+miden-node-utils = { features = ["testing"], workspace = true }
+miden-protocol   = { default-features = true, features = ["testing"], workspace = true }
+tempfile         = { workspace = true }
+tokio            = { features = ["macros", "rt-multi-thread"], workspace = true }

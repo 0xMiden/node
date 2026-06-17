@@ -1,299 +1,93 @@
-use std::net::SocketAddr;
-use std::num::NonZeroUsize;
-use std::path::{Path, PathBuf};
-use std::time::Duration;
+mod block_producer;
+mod lifecycle;
+mod modes;
+mod recover;
+mod rpc;
+mod runtime;
+pub(crate) mod section;
+mod store;
 
-use anyhow::Context;
-use miden_node_block_producer::{
-    DEFAULT_BATCH_INTERVAL,
-    DEFAULT_BLOCK_INTERVAL,
-    DEFAULT_MAX_BATCHES_PER_BLOCK,
-    DEFAULT_MAX_TXS_PER_BATCH,
-};
-use miden_node_utils::clap::duration_to_human_readable_string;
-use miden_node_validator::ValidatorSigner;
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
-use miden_protocol::utils::serde::Deserializable;
-use tokio::net::TcpListener;
-use url::Url;
+use clap::Subcommand;
+pub use lifecycle::{BootstrapCommand, MigrateCommand};
+use miden_node_utils::logging::OpenTelemetry;
+pub use modes::{FullNodeCommand, SequencerCommand};
+pub use recover::RecoverCommand;
 
-pub mod block_producer;
-pub mod bundled;
-pub mod rpc;
-pub mod store;
-pub mod validator;
-
-/// A predefined, insecure validator key for development purposes.
-const INSECURE_VALIDATOR_KEY_HEX: &str =
-    "0101010101010101010101010101010101010101010101010101010101010101";
-
-const ENV_BLOCK_PRODUCER_URL: &str = "MIDEN_NODE_BLOCK_PRODUCER_URL";
-const ENV_VALIDATOR_URL: &str = "MIDEN_NODE_VALIDATOR_URL";
-const ENV_BATCH_PROVER_URL: &str = "MIDEN_NODE_BATCH_PROVER_URL";
-const ENV_BLOCK_PROVER_URL: &str = "MIDEN_NODE_BLOCK_PROVER_URL";
-const ENV_NTX_PROVER_URL: &str = "MIDEN_NODE_NTX_PROVER_URL";
-const ENV_RPC_URL: &str = "MIDEN_NODE_RPC_URL";
-const ENV_STORE_RPC_URL: &str = "MIDEN_NODE_STORE_RPC_URL";
-const ENV_STORE_NTX_BUILDER_URL: &str = "MIDEN_NODE_STORE_NTX_BUILDER_URL";
-const ENV_STORE_BLOCK_PRODUCER_URL: &str = "MIDEN_NODE_STORE_BLOCK_PRODUCER_URL";
-const ENV_VALIDATOR_BLOCK_PRODUCER_URL: &str = "MIDEN_NODE_VALIDATOR_BLOCK_PRODUCER_URL";
 const ENV_DATA_DIRECTORY: &str = "MIDEN_NODE_DATA_DIRECTORY";
-const ENV_ENABLE_OTEL: &str = "MIDEN_NODE_ENABLE_OTEL";
-const ENV_GENESIS_CONFIG_FILE: &str = "MIDEN_GENESIS_CONFIG_FILE";
-const ENV_MAX_TXS_PER_BATCH: &str = "MIDEN_MAX_TXS_PER_BATCH";
-const ENV_MAX_BATCHES_PER_BLOCK: &str = "MIDEN_MAX_BATCHES_PER_BLOCK";
-const ENV_MEMPOOL_TX_CAPACITY: &str = "MIDEN_NODE_MEMPOOL_TX_CAPACITY";
-const ENV_NTX_SCRIPT_CACHE_SIZE: &str = "MIDEN_NTX_DATA_STORE_SCRIPT_CACHE_SIZE";
-const ENV_VALIDATOR_KEY: &str = "MIDEN_NODE_VALIDATOR_KEY";
-const ENV_VALIDATOR_KMS_KEY_ID: &str = "MIDEN_NODE_VALIDATOR_KMS_KEY_ID";
-const ENV_NTX_DATA_DIRECTORY: &str = "MIDEN_NODE_NTX_DATA_DIRECTORY";
-const ENV_NTX_BUILDER_URL: &str = "MIDEN_NODE_NTX_BUILDER_URL";
-const ENV_NTX_MAX_CYCLES: &str = "MIDEN_NTX_MAX_CYCLES";
 
-const DEFAULT_NTX_TICKER_INTERVAL: Duration = Duration::from_millis(200);
-const DEFAULT_NTX_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
-const DEFAULT_NTX_SCRIPT_CACHE_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
-const DEFAULT_NTX_MAX_CYCLES: u32 = 1 << 18;
+#[derive(Subcommand, Debug)]
+#[expect(clippy::large_enum_variant, reason = "cli is a once-off usage")]
+pub enum Command {
+    /// Start the node in sequencer mode.
+    ///
+    /// Each network has exactly one sequencer, operated by that network's operator. All other
+    /// nodes for the network must use `full` mode.
+    ///
+    /// Use `full` mode to run a non-sequencing node that syncs blocks from an upstream source.
+    Sequencer(SequencerCommand),
 
-/// Configuration for the Validator key used to sign blocks.
-///
-/// Used by the Validator command and the genesis bootstrap command.
-#[derive(clap::Args)]
-#[group(required = false, multiple = false)]
-pub struct ValidatorKey {
-    /// Insecure, hex-encoded validator secret key for development and testing purposes.
+    /// Start the node in full-node mode.
     ///
-    /// If not provided, a predefined key is used.
+    /// In this mode, the node syncs blocks from an upstream source and serves a local RPC API.
+    /// This is useful for avoiding rate limits on official networks, or for horizontally scaling
+    /// RPC traffic.
+    Full(FullNodeCommand),
+
+    /// Initialize the node's storage from a trusted genesis block.
     ///
-    /// Cannot be used with `validator.key.kms-id`.
-    #[arg(
-        long = "validator.key.hex",
-        env = ENV_VALIDATOR_KEY,
-        value_name = "VALIDATOR_KEY",
-        default_value = INSECURE_VALIDATOR_KEY_HEX,
-    )]
-    validator_key: String,
-    /// Key ID for the KMS key used by validator to sign blocks.
+    /// Performs one-time initialization of an empty node data directory from a trusted, signed
+    /// genesis block. The data directory contains the node's local data storage and must be
+    /// initialized before the node can be started.
+    Bootstrap(BootstrapCommand),
+
+    /// Apply pending migrations to the node's storage.
     ///
-    /// Cannot be used with `validator.key.hex`.
-    #[arg(
-        long = "validator.key.kms-id",
-        env = ENV_VALIDATOR_KMS_KEY_ID,
-        value_name = "VALIDATOR_KMS_KEY_ID",
-    )]
-    validator_kms_key_id: Option<String>,
+    /// Migrates the node's data storage from its current schema version to the version required by
+    /// this binary. This is a no-op if the data directory is already at the latest version.
+    ///
+    /// Backwards migrations are not supported. If the data directory is older than the minimum
+    /// supported version, run an older node binary first and migrate forward in stages until this
+    /// binary can complete the migration.
+    ///
+    /// Cannot be run on an empty data directory; use `bootstrap` first.
+    Migrate(MigrateCommand),
+
+    /// Recover missing chain data from the validator.
+    ///
+    /// Use this during emergency recovery, or before promoting a full node to sequencer,
+    /// to fill any committed blocks that the node did not receive from the sequencer.
+    ///
+    /// Full nodes receive sequencer data asynchronously, so if the sequencer fails they
+    /// may be missing the most recent committed blocks. The validator can be used as the
+    /// recovery source because every committed block must have been signed by the validator.
+    ///
+    /// This command synchronizes the node with the validator's committed chain state,
+    /// ensuring the node has a complete view of the chain before it is promoted.
+    Recover(RecoverCommand),
 }
 
-impl ValidatorKey {
-    /// Consumes the validator key configuration and returns a KMS or local key signer depending on
-    /// the supplied configuration.
-    pub async fn into_signer(self) -> anyhow::Result<ValidatorSigner> {
-        if let Some(kms_key_id) = self.validator_kms_key_id {
-            // Use KMS key ID to create a ValidatorSigner.
-            let signer = ValidatorSigner::new_kms(kms_key_id).await?;
-            Ok(signer)
-        } else {
-            // Use hex-encoded key to create a ValidatorSigner.
-            let signer = SecretKey::read_from_bytes(hex::decode(self.validator_key)?.as_ref())?;
-            let signer = ValidatorSigner::new_local(signer);
-            Ok(signer)
+impl Command {
+    pub(crate) fn open_telemetry(&self) -> OpenTelemetry {
+        match self {
+            Command::Sequencer(_) => OpenTelemetry::from_env()
+                .with_name("node")
+                .with_attribute("miden.node.role", "sequencer"),
+            Command::Full(_) => OpenTelemetry::from_env()
+                .with_name("node")
+                .with_attribute("miden.node.role", "full"),
+            Command::Bootstrap(_) | Command::Migrate(_) | Command::Recover(_) => {
+                OpenTelemetry::Disabled
+            },
         }
     }
-}
 
-/// Configuration for the Validator component when run in the bundled mode.
-#[derive(clap::Args)]
-pub struct BundledValidatorConfig {
-    /// Insecure, hex-encoded validator secret key for development and testing purposes.
-    /// Only used when the Validator URL argument is not set.
-    #[arg(
-        long = "validator.key",
-        env = ENV_VALIDATOR_KEY,
-        value_name = "VALIDATOR_KEY",
-        default_value = INSECURE_VALIDATOR_KEY_HEX
-    )]
-    validator_key: String,
-
-    /// The remote Validator's gRPC URL. If unset, will default to running a Validator
-    /// in-process. If set, the insecure key argument is ignored.
-    #[arg(long = "validator.url", env = ENV_VALIDATOR_URL, value_name = "URL")]
-    validator_url: Option<Url>,
-}
-
-impl BundledValidatorConfig {
-    /// Converts the [`BundledValidatorConfig`] into a URL and an optional [`SocketAddr`].
-    ///
-    /// If the `validator_url` is set, it returns the URL and `None` for the [`SocketAddr`].
-    ///
-    /// If `validator_url` is not set, it binds to a random port on localhost, creates a URL,
-    /// and returns the URL and the bound [`SocketAddr`].
-    async fn to_addresses(&self) -> anyhow::Result<(Url, Option<SocketAddr>)> {
-        if let Some(url) = &self.validator_url {
-            Ok((url.clone(), None))
-        } else {
-            let socket_addr = TcpListener::bind("127.0.0.1:0")
-                .await
-                .context("Failed to bind to validator gRPC endpoint")?
-                .local_addr()
-                .context("Failed to retrieve the validator's gRPC address")?;
-            let url = Url::parse(&format!("http://{socket_addr}"))
-                .context("Failed to parse Validator URL")?;
-            Ok((url, Some(socket_addr)))
+    pub(crate) async fn execute(self) -> anyhow::Result<()> {
+        match self {
+            Command::Bootstrap(bootstrap_command) => bootstrap_command.handle().await,
+            Command::Migrate(migrate_command) => migrate_command.handle(),
+            Command::Sequencer(sequencer_command) => sequencer_command.handle().await,
+            Command::Full(full_node_command) => full_node_command.handle().await,
+            Command::Recover(recover_command) => recover_command.handle().await,
         }
     }
-}
-
-/// Configuration for the Network Transaction Builder component.
-#[derive(clap::Args)]
-pub struct NtxBuilderConfig {
-    /// Disable spawning the network transaction builder.
-    #[arg(long = "no-ntx-builder", default_value_t = false)]
-    pub disabled: bool,
-
-    /// The remote transaction prover's gRPC url, used for the ntx builder. If unset,
-    /// will default to running a prover in-process which is expensive.
-    #[arg(long = "tx-prover.url", env = ENV_NTX_PROVER_URL, value_name = "URL")]
-    pub tx_prover_url: Option<Url>,
-
-    /// Interval at which to run the network transaction builder's ticker.
-    #[arg(
-        long = "ntx-builder.interval",
-        default_value = &duration_to_human_readable_string(DEFAULT_NTX_TICKER_INTERVAL),
-        value_parser = humantime::parse_duration,
-        value_name = "DURATION"
-    )]
-    pub ticker_interval: Duration,
-
-    /// Number of note scripts to cache locally.
-    ///
-    /// Note scripts not in cache must first be retrieved from the store.
-    #[arg(
-        long = "ntx-builder.script-cache-size",
-        env = ENV_NTX_SCRIPT_CACHE_SIZE,
-        value_name = "NUM",
-        default_value_t = DEFAULT_NTX_SCRIPT_CACHE_SIZE
-    )]
-    pub script_cache_size: NonZeroUsize,
-
-    /// Duration after which an idle network account will deactivate.
-    ///
-    /// An account is considered idle once it has no viable notes to consume.
-    /// A deactivated account will reactivate if targeted with new notes.
-    #[arg(
-        long = "ntx-builder.idle-timeout",
-        default_value = &duration_to_human_readable_string(DEFAULT_NTX_IDLE_TIMEOUT),
-        value_parser = humantime::parse_duration,
-        value_name = "DURATION"
-    )]
-    pub idle_timeout: Duration,
-
-    /// Maximum number of crashes before an account deactivated.
-    ///
-    /// Once this limit is reached, no new transactions will be created for this account.
-    #[arg(
-        long = "ntx-builder.max-account-crashes",
-        default_value_t = 10,
-        value_name = "NUM"
-    )]
-    pub max_account_crashes: usize,
-
-    /// Maximum number of VM execution cycles allowed for a single network transaction.
-    ///
-    /// Network transactions that exceed this limit will fail. Defaults to 2^18 (262.144) cycles.
-    #[arg(
-        long = "ntx-builder.max-cycles",
-        env = ENV_NTX_MAX_CYCLES,
-        default_value_t = DEFAULT_NTX_MAX_CYCLES,
-        value_name = "NUM",
-    )]
-    pub max_tx_cycles: u32,
-
-    /// Directory for the ntx-builder's persistent database.
-    ///
-    /// If not set, defaults to the node's data directory.
-    #[arg(long = "ntx-builder.data-directory", env = ENV_NTX_DATA_DIRECTORY, value_name = "DIR")]
-    pub ntx_data_directory: Option<PathBuf>,
-}
-
-impl NtxBuilderConfig {
-    /// Converts this CLI config into the ntx-builder's internal config.
-    ///
-    /// The `node_data_directory` is used as the default location for the ntx-builder's database
-    /// if `--ntx-builder.data-directory` is not explicitly set.
-    pub fn into_builder_config(
-        self,
-        store_url: Url,
-        block_producer_url: Url,
-        validator_url: Url,
-        node_data_directory: &Path,
-    ) -> miden_node_ntx_builder::NtxBuilderConfig {
-        let data_dir = self.ntx_data_directory.unwrap_or_else(|| node_data_directory.to_path_buf());
-        let database_filepath = data_dir.join("ntx-builder.sqlite3");
-
-        miden_node_ntx_builder::NtxBuilderConfig::new(
-            store_url,
-            block_producer_url,
-            validator_url,
-            database_filepath,
-        )
-        .with_tx_prover_url(self.tx_prover_url)
-        .with_script_cache_size(self.script_cache_size)
-        .with_idle_timeout(self.idle_timeout)
-        .with_max_account_crashes(self.max_account_crashes)
-        .with_max_cycles(self.max_tx_cycles)
-    }
-}
-
-/// Configuration for the Block Producer component
-#[derive(clap::Args)]
-pub struct BlockProducerConfig {
-    /// Interval at which to produce blocks.
-    #[arg(
-        long = "block.interval",
-        default_value = &duration_to_human_readable_string(DEFAULT_BLOCK_INTERVAL),
-        value_parser = humantime::parse_duration,
-        value_name = "DURATION"
-    )]
-    pub block_interval: Duration,
-
-    /// Interval at which to produce batches.
-    #[arg(
-        long = "batch.interval",
-        default_value = &duration_to_human_readable_string(DEFAULT_BATCH_INTERVAL),
-        value_parser = humantime::parse_duration,
-        value_name = "DURATION"
-    )]
-    pub batch_interval: Duration,
-
-    /// The remote batch prover's gRPC url. If unset, will default to running a prover
-    /// in-process which is expensive.
-    #[arg(long = "batch-prover.url", env = ENV_BATCH_PROVER_URL, value_name = "URL")]
-    pub batch_prover_url: Option<Url>,
-
-    /// The number of transactions per batch.
-    #[arg(
-        long = "max-txs-per-batch",
-        env = ENV_MAX_TXS_PER_BATCH,
-        value_name = "NUM",
-        default_value_t = DEFAULT_MAX_TXS_PER_BATCH
-    )]
-    pub max_txs_per_batch: usize,
-
-    /// Maximum number of batches per block.
-    #[arg(
-        long = "max-batches-per-block",
-        env = ENV_MAX_BATCHES_PER_BLOCK,
-        value_name = "NUM",
-        default_value_t = DEFAULT_MAX_BATCHES_PER_BLOCK
-    )]
-    pub max_batches_per_block: usize,
-
-    /// Maximum number of uncommitted transactions allowed in the mempool.
-    #[arg(
-        long = "mempool.tx-capacity",
-        default_value_t = miden_node_block_producer::DEFAULT_MEMPOOL_TX_CAPACITY,
-        env = ENV_MEMPOOL_TX_CAPACITY,
-        value_name = "NUM"
-    )]
-    mempool_tx_capacity: NonZeroUsize,
 }

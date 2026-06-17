@@ -1,54 +1,48 @@
-//! This file explicitly embeds each of the frontend files into the binary using `include_str!` and
-//! `include_bytes!`.
-
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+//! HTTP frontend for the network monitor.
+//!
+//! Routes:
+//! - `GET /` — full dashboard rendered with [`maud`].
+//! - `GET /fragments/status` — card grid only, swapped into `#status-container` by htmx every 10s.
+//! - `GET /status` — JSON snapshot, kept for external consumers.
+//! - Static assets (CSS, htmx bundle, probes.js, favicon) embedded at compile time via
+//!   `include_str!` / `include_bytes!`.
 
 use axum::Router;
 use axum::http::header;
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use maud::Markup;
 use tokio::sync::watch;
 use tracing::{info, instrument};
 
-use crate::COMPONENT;
 use crate::config::MonitorConfig;
 use crate::status::{NetworkStatus, ServiceStatus};
+use crate::{COMPONENT, view};
 
 // SERVER STATE
 // ================================================================================================
 
 /// State for the web server containing watch receivers for all services.
+///
+/// Each entry in `services` is a `ServiceStatus` channel. The frontend simply snapshots every
+/// entry on each `/status` request. Adding a new service is just pushing another receiver into
+/// this Vec at startup; no changes to this struct or `get_status` are required.
 #[derive(Clone)]
 pub struct ServerState {
-    pub rpc: watch::Receiver<ServiceStatus>,
-    pub provers: Vec<(watch::Receiver<ServiceStatus>, watch::Receiver<ServiceStatus>)>,
-    pub faucet: Option<watch::Receiver<ServiceStatus>>,
-    pub ntx_increment: Option<watch::Receiver<ServiceStatus>>,
-    pub ntx_tracking: Option<watch::Receiver<ServiceStatus>>,
-    pub explorer: Option<watch::Receiver<ServiceStatus>>,
-    pub note_transport: Option<watch::Receiver<ServiceStatus>>,
+    pub services: Vec<watch::Receiver<ServiceStatus>>,
     pub monitor_version: String,
     pub network_name: String,
 }
 
 /// Runs the frontend server.
-///
-/// This function runs the frontend server that serves the dashboard and the status data.
-///
-/// # Arguments
-///
-/// * `server_state` - The server state containing watch receivers for all services.
-/// * `config` - The configuration of the network.
 pub async fn serve(server_state: ServerState, config: MonitorConfig) {
-    // build our application with routes
     let app = Router::new()
-        // Serve embedded assets
         .route("/assets/index.css", get(serve_css))
-        .route("/assets/index.js", get(serve_js))
+        .route("/assets/htmx.min.js", get(serve_htmx))
+        .route("/assets/probes.js", get(serve_probes_js))
         .route("/assets/favicon.ico", get(serve_favicon))
-        // Main dashboard route
         .route("/", get(get_dashboard))
-        // API route for status data
+        .route("/fragments/status", get(get_status_fragment))
         .route("/status", get(get_status))
         .with_state(server_state);
 
@@ -61,65 +55,35 @@ pub async fn serve(server_state: ServerState, config: MonitorConfig) {
     axum::serve(listener, app).await.expect("Failed to start web server");
 }
 
+// HTML ROUTES
+// ================================================================================================
+
 #[instrument(target = COMPONENT, name = "frontend.get-dashboard", skip_all)]
-async fn get_dashboard() -> Html<&'static str> {
-    Html(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/index.html")))
+async fn get_dashboard(
+    axum::extract::State(server_state): axum::extract::State<ServerState>,
+) -> Markup {
+    view::page(&server_state)
 }
+
+#[instrument(target = COMPONENT, name = "frontend.get-status-fragment", skip_all)]
+async fn get_status_fragment(
+    axum::extract::State(server_state): axum::extract::State<ServerState>,
+) -> Markup {
+    view::status_fragment(&view::snapshot(&server_state))
+}
+
+// JSON ROUTE
+// ================================================================================================
 
 #[instrument(target = COMPONENT, name = "frontend.get-status", skip_all)]
 async fn get_status(
     axum::extract::State(server_state): axum::extract::State<ServerState>,
 ) -> axum::response::Json<NetworkStatus> {
-    let current_time = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_else(|_| Duration::from_secs(0))
-        .as_secs();
-
-    let mut services = Vec::new();
-
-    // Collect RPC status
-    services.push(server_state.rpc.borrow().clone());
-
-    // Collect faucet status if available
-    if let Some(faucet_rx) = &server_state.faucet {
-        services.push(faucet_rx.borrow().clone());
-    }
-
-    // Collect all remote prover statuses
-    for (prover_status_rx, prover_test_rx) in &server_state.provers {
-        services.push(prover_status_rx.borrow().clone());
-        services.push(prover_test_rx.borrow().clone());
-    }
-
-    // Collect explorer status if available
-    if let Some(explorer_rx) = &server_state.explorer {
-        services.push(explorer_rx.borrow().clone());
-    }
-
-    // Collect counter increment status if enabled
-    if let Some(ntx_increment_rx) = &server_state.ntx_increment {
-        services.push(ntx_increment_rx.borrow().clone());
-    }
-
-    // Collect counter tracking status if enabled
-    if let Some(ntx_tracking_rx) = &server_state.ntx_tracking {
-        services.push(ntx_tracking_rx.borrow().clone());
-    }
-
-    // Collect note transport status if available
-    if let Some(note_transport_rx) = &server_state.note_transport {
-        services.push(note_transport_rx.borrow().clone());
-    }
-
-    let network_status = NetworkStatus {
-        services,
-        last_updated: current_time,
-        monitor_version: server_state.monitor_version.clone(),
-        network_name: server_state.network_name.clone(),
-    };
-
-    axum::response::Json(network_status)
+    axum::response::Json(view::snapshot(&server_state))
 }
+
+// STATIC ASSETS
+// ================================================================================================
 
 async fn serve_css() -> Response {
     (
@@ -129,10 +93,18 @@ async fn serve_css() -> Response {
         .into_response()
 }
 
-async fn serve_js() -> Response {
+async fn serve_htmx() -> Response {
     (
         [(header::CONTENT_TYPE, header::HeaderValue::from_static("text/javascript"))],
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/index.js")),
+        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/htmx.min.js")),
+    )
+        .into_response()
+}
+
+async fn serve_probes_js() -> Response {
+    (
+        [(header::CONTENT_TYPE, header::HeaderValue::from_static("text/javascript"))],
+        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/probes.js")),
     )
         .into_response()
 }

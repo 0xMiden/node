@@ -3,40 +3,16 @@ name: Publish Debian Package
 on:
   workflow_dispatch:
     inputs:
-      package:
-        description: "Name of package to publish"
+      component:
+        description: "Component to publish"
         required: true
-        type: choice
-        options:
-          - miden-network-monitor
-          - miden-node
-          - miden-prover
-          - miden-prover-proxy
-      crate_dir:
-        required: true
-        description: "Name of crate directory"
         type: choice
         options:
           - network-monitor
           - node
-          - remote-prover
-      packaging_dir:
-        required: true
-        description: "Name of packaging directory"
-        type: choice
-        options:
-          - network-monitor
-          - node
+          - ntx-builder
           - prover
-          - prover-proxy
-      crate:
-        description: "Name of the binary crate to publish"
-        required: true
-        type: choice
-        options:
-          - miden-network-monitor
-          - miden-node
-          - miden-remote-prover
+          - validator
       version:
         description: "Version to release (E.G. v0.10.0-rc.1, v0.10.0). Corresponding git tag must already exist."
         required: true
@@ -47,7 +23,7 @@ permissions:
 
 jobs:
   publish:
-    name: Publish ${{ inputs.package }} ${{ matrix.arch }} Debian
+    name: Publish ${{ inputs.component }} ${{ matrix.arch }} Debian
     permissions:
       contents: write
     strategy:
@@ -57,10 +33,33 @@ jobs:
       labels: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Resolve component inputs
+        id: resolve
+        shell: bash
+        env:
+          COMPONENT: ${{ inputs.component }}
+        run: |
+          package="miden-${COMPONENT}"
+          packaging_dir="${COMPONENT}"
+
+          # prover's binary crate lives in bin/remote-prover and is named miden-remote-prover
+          if [ "${COMPONENT}" = "prover" ]; then
+            crate_dir="remote-prover"
+            crate="miden-remote-prover"
+          else
+            crate_dir="${COMPONENT}"
+            crate="miden-${COMPONENT}"
+          fi
+
+          echo "package=${package}"       >> "$GITHUB_OUTPUT"
+          echo "crate_dir=${crate_dir}"   >> "$GITHUB_OUTPUT"
+          echo "packaging_dir=${packaging_dir}" >> "$GITHUB_OUTPUT"
+          echo "crate=${crate}"           >> "$GITHUB_OUTPUT"
 
       - uses: ./.github/actions/install-rocksdb
       - uses: ./.github/actions/install-protobuf-compiler
@@ -70,8 +69,8 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           gitref: ${{ inputs.version }}
-          crate_dir: ${{ inputs.crate_dir }}
-          package: ${{ inputs.package }}
-          packaging_dir: ${{ inputs.packaging_dir }}
-          crate: ${{ inputs.crate }}
+          crate_dir: ${{ steps.resolve.outputs.crate_dir }}
+          package: ${{ steps.resolve.outputs.package }}
+          packaging_dir: ${{ steps.resolve.outputs.packaging_dir }}
+          crate: ${{ steps.resolve.outputs.crate }}
           arch: ${{ matrix.arch }}

@@ -34,3 +34,4 @@ accounts
 genesis.dat
 miden-store.*
 store.*
+/rust-toolchain.toml

@@ -1,13 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::mem::size_of;
+use std::num::NonZeroUsize;
 use std::ops::{Deref, DerefMut, RangeInclusive};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context;
 use diesel::{Connection, SqliteConnection};
+use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_node_proto::domain::account::AccountInfo;
-use miden_node_proto::{BlockProofRequest, generated as proto};
 use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountHeader, AccountId, AccountStorageHeader, StorageMapKey};
@@ -15,6 +16,7 @@ use miden_protocol::asset::{Asset, AssetVaultKey};
 use miden_protocol::block::{BlockHeader, BlockNoteIndex, BlockNumber, SignedBlock};
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::note::{
+    NoteAttachments,
     NoteDetails,
     NoteId,
     NoteInclusionProof,
@@ -23,13 +25,14 @@ use miden_protocol::note::{
     Nullifier,
 };
 use miden_protocol::transaction::TransactionHeader;
-use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::utils::serde::Deserializable;
 use tokio::sync::oneshot;
 use tracing::{info, instrument};
 
 use crate::COMPONENT;
-use crate::db::migrations::apply_migrations;
+use crate::db::migrations::{migrate_database, verify_latest_schema};
 use crate::db::models::conv::SqlTypeConvert;
+use crate::db::models::queries;
 pub use crate::db::models::queries::{
     AccountCommitmentsPage,
     NullifiersPage,
@@ -37,7 +40,6 @@ pub use crate::db::models::queries::{
     PublicAccountStateRootsPage,
 };
 use crate::db::models::queries::{BlockHeaderCommitment, StorageMapValuesPage};
-use crate::db::models::{Page, queries};
 use crate::errors::{DatabaseError, NoteSyncError};
 use crate::genesis::GenesisBlock;
 
@@ -49,7 +51,8 @@ fn default_storage_map_entries_limit() -> usize {
 }
 
 mod migrations;
-mod schema_hash;
+#[cfg(test)]
+pub(crate) use migrations::bootstrap_database;
 
 #[cfg(test)]
 mod tests;
@@ -58,26 +61,26 @@ pub(crate) mod models;
 
 /// [diesel](https://diesel.rs) generated schema
 ///
-/// ```sh
-/// cargo binstall diesel_cli
-/// sqlite3 -init ./src/db/migrations/001-init.sql ephemeral_setup.db ""
-/// diesel setup --database-url=./ephemeral_setup.db
-/// diesel print-schema > src/db/schema.rs
-/// ```
-///
-/// which assumes an _existing_ database.
-///
-/// Unfortunately, there is no systematic way of modifying the schema other
-/// than patching (in the diff sense) which is brittle at best.
-/// So the above must be followed by a manual editing step, for now it's
-/// limited to:
-///
-/// * `i64`/`u64` being represented as `BigInt`
-///
-/// The list might be extended.
+/// The ignored `diesel_schema_is_in_sync_with_migrations` test verifies that this file matches the
+/// schema produced by the current migrations.
 pub(crate) mod schema;
 
 pub type Result<T, E = DatabaseError> = std::result::Result<T, E>;
+
+/// Database options used by the store state.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct DatabaseOptions {
+    /// Maximum number of SQLite connections in the connection pool.
+    pub connection_pool_size: NonZeroUsize,
+}
+
+impl Default for DatabaseOptions {
+    fn default() -> Self {
+        Self {
+            connection_pool_size: miden_node_db::default_connection_pool_size(),
+        }
+    }
+}
 
 /// The Store's database.
 ///
@@ -139,44 +142,9 @@ impl PartialEq<(Nullifier, BlockNumber)> for NullifierInfo {
 pub struct TransactionRecord {
     pub block_num: BlockNumber,
     pub header: TransactionHeader,
-    /// Inclusion proofs for committed output notes. Notes in `header.output_notes()` without
-    /// a corresponding proof here were erased (created and consumed within the same batch).
+    /// Inclusion proofs for committed output notes. Notes in `header.output_notes()` without a
+    /// corresponding proof here were erased (created and consumed within the same batch).
     pub output_note_proofs: Vec<NoteSyncRecord>,
-}
-
-impl TransactionRecord {
-    /// Convert to proto `TransactionRecord`.
-    ///
-    /// The proto `TransactionHeader` contains all output notes as `NoteHeader`. Inclusion
-    /// proofs for committed output notes are placed separately in
-    /// `TransactionRecord.output_note_proofs`. Erased notes can be identified by comparing
-    /// note IDs in the proofs with the header's output notes.
-    pub fn into_proto(self) -> proto::rpc::TransactionRecord {
-        let output_note_proofs = self
-            .output_note_proofs
-            .into_iter()
-            .map(|n| proto::note::NoteInclusionInBlockProof {
-                note_id: Some(n.note_id.into()),
-                block_num: n.block_num.as_u32(),
-                note_index_in_block: n.note_index.leaf_index_value().into(),
-                inclusion_path: Some(n.inclusion_path.into()),
-            })
-            .collect();
-
-        proto::rpc::TransactionRecord {
-            header: Some(proto::transaction::TransactionHeader {
-                transaction_id: Some(self.header.id().into()),
-                account_id: Some(self.header.account_id().into()),
-                initial_state_commitment: Some(self.header.initial_state_commitment().into()),
-                final_state_commitment: Some(self.header.final_state_commitment().into()),
-                input_notes: self.header.input_notes().iter().cloned().map(Into::into).collect(),
-                output_notes: self.header.output_notes().iter().cloned().map(Into::into).collect(),
-                fee: Some(Asset::from(self.header.fee()).into()),
-            }),
-            block_num: self.block_num.as_u32(),
-            output_note_proofs,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -184,26 +152,10 @@ pub struct NoteRecord {
     pub block_num: BlockNumber,
     pub note_index: BlockNoteIndex,
     pub note_id: Word,
-    pub note_commitment: Word,
     pub metadata: NoteMetadata,
     pub details: Option<NoteDetails>,
+    pub attachments: NoteAttachments,
     pub inclusion_path: SparseMerklePath,
-}
-
-impl From<NoteRecord> for proto::note::CommittedNote {
-    fn from(note: NoteRecord) -> Self {
-        let inclusion_proof = Some(proto::note::NoteInclusionInBlockProof {
-            note_id: Some(note.note_id.into()),
-            block_num: note.block_num.as_u32(),
-            note_index_in_block: note.note_index.leaf_index_value().into(),
-            inclusion_path: Some(Into::into(note.inclusion_path)),
-        });
-        let note = Some(proto::note::Note {
-            metadata: Some(note.metadata.into()),
-            details: note.details.map(|details| details.to_bytes()),
-        });
-        Self { inclusion_proof, note }
-    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -216,22 +168,9 @@ pub struct NoteSyncUpdate {
 pub struct NoteSyncRecord {
     pub block_num: BlockNumber,
     pub note_index: BlockNoteIndex,
-    pub note_id: Word,
+    pub note_id: NoteId,
     pub metadata: NoteMetadata,
     pub inclusion_path: SparseMerklePath,
-}
-
-impl From<NoteSyncRecord> for proto::note::NoteSyncRecord {
-    fn from(note: NoteSyncRecord) -> Self {
-        let metadata_header = Some(note.metadata.to_header().into());
-        let inclusion_proof = Some(proto::note::NoteInclusionInBlockProof {
-            note_id: Some(note.note_id.into()),
-            block_num: note.block_num.as_u32(),
-            note_index_in_block: note.note_index.leaf_index_value().into(),
-            inclusion_path: Some(note.inclusion_path.into()),
-        });
-        Self { metadata_header, inclusion_proof }
-    }
 }
 
 impl From<NoteRecord> for NoteSyncRecord {
@@ -239,7 +178,7 @@ impl From<NoteRecord> for NoteSyncRecord {
         Self {
             block_num: note.block_num,
             note_index: note.note_index,
-            note_id: note.note_id,
+            note_id: NoteId::from_raw(note.note_id),
             metadata: note.metadata,
             inclusion_path: note.inclusion_path,
         }
@@ -256,11 +195,9 @@ impl Db {
         err,
     )]
     pub fn bootstrap(database_filepath: PathBuf, genesis: GenesisBlock) -> anyhow::Result<()> {
-        // Create database.
-        //
-        // This will create the file if it does not exist, but will also happily open it if already
-        // exists. In the latter case we will error out when attempting to insert the genesis
-        // block so this isn't such a problem.
+        migrations::bootstrap_database(&database_filepath)
+            .context("failed to bootstrap database schema")?;
+
         let mut conn: SqliteConnection = diesel::sqlite::SqliteConnection::establish(
             database_filepath.to_str().context("database filepath is invalid")?,
         )
@@ -268,29 +205,45 @@ impl Db {
 
         miden_node_db::configure_connection_on_creation(&mut conn)?;
 
-        // Run migrations.
-        apply_migrations(&mut conn).context("failed to apply database migrations")?;
-
-        // Insert genesis block data. Deconstruct into signed block.
-        let (header, body, signature, _proof) = genesis.into_inner().into_parts();
-        let genesis_block = SignedBlock::new_unchecked(header, body, signature);
-        conn.transaction(move |conn| models::queries::apply_block(conn, &genesis_block, &[], None))
+        // Insert genesis block data.
+        let genesis_block = genesis.into_inner();
+        conn.transaction(move |conn| models::queries::apply_block(conn, &genesis_block, &[]))
             .context("failed to insert genesis block")?;
         Ok(())
     }
 
-    /// Open a connection to the DB and apply any pending migrations.
+    /// Open a connection to the DB after verifying that it is at the latest schema version.
     #[instrument(target = COMPONENT, skip_all)]
     pub async fn load(database_filepath: PathBuf) -> Result<Self, DatabaseError> {
-        let db = miden_node_db::Db::new(&database_filepath)?;
+        Self::load_with_pool_size(database_filepath, miden_node_db::default_connection_pool_size())
+            .await
+    }
+
+    /// Open a connection to the DB with a specific pool size after verifying that it is at the
+    /// latest schema version.
+    #[instrument(target = COMPONENT, skip_all)]
+    pub async fn load_with_pool_size(
+        database_filepath: PathBuf,
+        connection_pool_size: NonZeroUsize,
+    ) -> Result<Self, DatabaseError> {
+        verify_latest_schema(&database_filepath)?;
+
+        let db = miden_node_db::Db::new_with_pool_size(&database_filepath, connection_pool_size)?;
         info!(
             target: COMPONENT,
             sqlite= %database_filepath.display(),
+            connection_pool_size = %connection_pool_size,
             "Connected to the database"
         );
 
-        db.query("migrations", apply_migrations).await?;
         Ok(Self { db })
+    }
+
+    /// Applies all pending migrations to an existing DB.
+    #[instrument(target = COMPONENT, skip_all)]
+    pub fn migrate(database_filepath: impl AsRef<Path>) -> Result<(), DatabaseError> {
+        migrate_database(database_filepath.as_ref())?;
+        Ok(())
     }
 
     /// Returns a page of nullifiers for tree rebuilding.
@@ -351,6 +304,19 @@ impl Db {
         .await
     }
 
+    /// Search for a [`BlockHeader`] and its [`Signature`] from the database by its `block_num`.
+    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    pub async fn select_block_header_and_signature_by_block_num(
+        &self,
+        block_number: BlockNumber,
+    ) -> Result<Option<(BlockHeader, Signature)>> {
+        self.transact("block headers and signature by block number", move |conn| {
+            let val = queries::select_block_header_and_signature_by_block_num(conn, block_number)?;
+            Ok(val)
+        })
+        .await
+    }
+
     /// Loads multiple block headers from the DB.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
     pub async fn select_block_headers(
@@ -359,16 +325,6 @@ impl Db {
     ) -> Result<Vec<BlockHeader>> {
         self.transact("block headers from given block numbers", move |conn| {
             let raw = queries::select_block_headers(conn, blocks)?;
-            Ok(raw)
-        })
-        .await
-    }
-
-    /// Loads all the block headers from the DB.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn select_all_block_headers(&self) -> Result<Vec<BlockHeader>> {
-        self.transact("all block headers", |conn| {
-            let raw = queries::select_all_block_headers(conn)?;
             Ok(raw)
         })
         .await
@@ -430,38 +386,14 @@ impl Db {
             .await
     }
 
-    /// Loads public account details for a network account by its full account ID.
+    /// Returns the subset of the provided account IDs that classify as network accounts.
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn select_network_account_by_id(
+    pub async fn select_network_accounts_subset(
         &self,
-        account_id: AccountId,
-    ) -> Result<Option<AccountInfo>> {
-        self.transact("Get network account by id", move |conn| {
-            queries::select_network_account_by_id(conn, account_id)
-        })
-        .await
-    }
-
-    /// Returns network account IDs within the specified block range (based on account creation
-    /// block).
-    ///
-    /// The function may return fewer accounts than exist in the range if the result would exceed
-    /// `MAX_RESPONSE_PAYLOAD_BYTES / AccountId::SERIALIZED_SIZE` rows. In this case, the result is
-    /// truncated at a block boundary to ensure all accounts from included blocks are returned.
-    ///
-    /// # Returns
-    ///
-    /// A tuple containing:
-    /// - A vector of network account IDs.
-    /// - The last block number that was fully included in the result. When truncated, this will be
-    ///   less than the requested range end.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn select_all_network_account_ids(
-        &self,
-        block_range: RangeInclusive<BlockNumber>,
-    ) -> Result<(Vec<AccountId>, BlockNumber)> {
-        self.transact("Get all network account IDs", move |conn| {
-            queries::select_all_network_account_ids(conn, block_range)
+        account_ids: Vec<AccountId>,
+    ) -> Result<HashSet<AccountId>> {
+        self.transact("Filter network accounts subset", move |conn| {
+            queries::select_network_accounts_subset(conn, &account_ids)
         })
         .await
     }
@@ -497,13 +429,13 @@ impl Db {
     }
 
     #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn get_note_sync(
+    pub async fn get_note_sync_multi(
         &self,
         block_range: RangeInclusive<BlockNumber>,
         note_tags: Arc<[u32]>,
-    ) -> Result<Option<NoteSyncUpdate>, NoteSyncError> {
+    ) -> Result<Vec<NoteSyncUpdate>, NoteSyncError> {
         self.transact("notes sync task", move |conn| {
-            queries::get_note_sync(conn, &note_tags, block_range)
+            queries::get_note_sync_multi(conn, &note_tags, block_range, MAX_RESPONSE_PAYLOAD_BYTES)
         })
         .await
     }
@@ -554,13 +486,12 @@ impl Db {
         acquire_done: oneshot::Receiver<()>,
         signed_block: SignedBlock,
         notes: Vec<(NoteRecord, Option<Nullifier>)>,
-        proving_inputs: Option<BlockProofRequest>,
     ) -> Result<()> {
         self.transact("apply block", move |conn| -> Result<()> {
-            models::queries::apply_block(conn, &signed_block, &notes, proving_inputs)?;
+            models::queries::apply_block(conn, &signed_block, &notes)?;
 
-            // XXX FIXME TODO free floating mutex MUST NOT exist
-            // it doesn't bind it properly to the data locked!
+            // XXX FIXME TODO free floating mutex MUST NOT exist it doesn't bind it properly to the
+            // data locked!
             {
                 let _span = tracing::info_span!(target: COMPONENT, "acquire_write_lock").entered();
                 if allow_acquire.send(()).is_err() {
@@ -575,58 +506,6 @@ impl Db {
             acquire_done.blocking_recv()?;
 
             Ok(())
-        })
-        .await
-    }
-
-    /// Marks a previously committed block as proven and advances the proven-in-sequence tip.
-    ///
-    /// Atomically clears `proving_inputs` for the given block, then walks forward from the
-    /// current proven-in-sequence tip through consecutive proven blocks, marking each as
-    /// proven-in-sequence. Returns the block numbers that were newly marked in-sequence.
-    #[instrument(target = COMPONENT, skip_all, err)]
-    pub async fn mark_proven_and_advance_sequence(
-        &self,
-        block_num: BlockNumber,
-    ) -> Result<Vec<BlockNumber>> {
-        self.transact("mark block proven", move |conn| {
-            mark_proven_and_advance_sequence(conn, block_num)
-        })
-        .await
-    }
-
-    /// Returns the proving inputs for a given block number, if stored.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
-    pub async fn select_block_proving_inputs(
-        &self,
-        block_num: BlockNumber,
-    ) -> Result<Option<BlockProofRequest>> {
-        self.transact("select block proving inputs", move |conn| {
-            models::queries::select_block_proving_inputs(conn, block_num)
-        })
-        .await
-    }
-
-    /// Returns unproven block numbers greater than `after`, in ascending order, up to `limit`.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
-    pub async fn select_unproven_blocks(
-        &self,
-        after: BlockNumber,
-        limit: usize,
-    ) -> Result<Vec<BlockNumber>> {
-        self.transact("select unproven blocks", move |conn| {
-            models::queries::select_unproven_blocks(conn, after, limit)
-        })
-        .await
-    }
-
-    /// Returns the highest block number that has been proven in sequence.
-    ///
-    /// This includes the genesis block, which is not technically proven, but treated as such.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
-    pub async fn select_latest_proven_in_sequence_block_num(&self) -> Result<BlockNumber> {
-        self.transact("select latest proven block num", |conn| {
-            models::queries::select_latest_proven_in_sequence_block_num(conn)
         })
         .await
     }
@@ -690,8 +569,8 @@ impl Db {
         values.extend(page.values);
         let mut last_block_included = page.last_block_included;
 
-        // If the first page returned no values, the block at block_range_start has more
-        // entries than the limit allows (e.g. genesis accounts with large storage maps).
+        // If the first page returned no values, the block at block_range_start has more entries
+        // than the limit allows (e.g. genesis accounts with large storage maps).
         if values.is_empty() && last_block_included == block_range_start {
             return Ok(AccountStorageMapDetails::limit_exceeded(slot_name));
         }
@@ -746,22 +625,6 @@ impl Db {
         })
     }
 
-    /// Loads the network notes for an account that are unconsumed by a specified block number.
-    /// Pagination is used to limit the number of notes returned.
-    pub(crate) async fn select_unconsumed_network_notes(
-        &self,
-        account_id: AccountId,
-        block_num: BlockNumber,
-        page: Page,
-    ) -> Result<(Vec<NoteRecord>, Page)> {
-        self.transact("unconsumed network notes for account", move |conn| {
-            models::queries::select_unconsumed_network_notes_by_account_id(
-                conn, account_id, block_num, page,
-            )
-        })
-        .await
-    }
-
     pub async fn get_account_vault_sync(
         &self,
         account_id: AccountId,
@@ -797,51 +660,4 @@ impl Db {
         })
         .await
     }
-}
-
-/// Mark a committed block as proven and advance the proven-in-sequence tip.
-///
-/// This is intended to atomically (when run in a transaction):
-/// 1. Clears `proving_inputs` for the given block (marking it proven).
-/// 2. Queries all blocks where `proving_inputs IS NULL AND proven_in_sequence = FALSE`.
-/// 3. Walks forward from the current proven-in-sequence tip through consecutive proven blocks and
-///    sets `proven_in_sequence = TRUE` for each.
-///
-/// Returns [`DatabaseError::DataCorrupted`] if any proven-but-not-in-sequence block is found at
-/// or below the current tip, as that indicates a consistency bug.
-pub(crate) fn mark_proven_and_advance_sequence(
-    conn: &mut SqliteConnection,
-    block_num: BlockNumber,
-) -> Result<Vec<BlockNumber>, DatabaseError> {
-    // Clear proving_inputs for the specified block.
-    models::queries::clear_block_proving_inputs(conn, block_num)?;
-
-    // Get the current proven-in-sequence tip (highest in-sequence).
-    let mut tip = models::queries::select_latest_proven_in_sequence_block_num(conn)?;
-
-    // Get all blocks that are proven but not yet marked in-sequence.
-    let unsequenced = models::queries::select_proven_not_in_sequence_blocks(conn)?;
-
-    // Walk forward from the tip through consecutive proven blocks.
-    let mut newly_in_sequence = Vec::new();
-    for candidate in unsequenced {
-        if candidate <= tip {
-            return Err(DatabaseError::DataCorrupted(format!(
-                "block {candidate} is proven but not marked in-sequence while the tip is at {tip}"
-            )));
-        }
-        if candidate == tip + 1 {
-            tip = candidate;
-            newly_in_sequence.push(candidate);
-        } else {
-            break;
-        }
-    }
-
-    // Mark the newly contiguous blocks as proven-in-sequence.
-    if let (Some(&from), Some(&to)) = (newly_in_sequence.first(), newly_in_sequence.last()) {
-        models::queries::mark_blocks_as_proven_in_sequence(conn, from, to)?;
-    }
-
-    Ok(newly_in_sequence)
 }

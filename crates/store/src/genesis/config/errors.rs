@@ -1,15 +1,10 @@
 use std::path::PathBuf;
 
 use miden_protocol::account::AccountId;
-use miden_protocol::errors::{
-    AccountDeltaError,
-    AccountError,
-    AssetError,
-    FeeError,
-    TokenSymbolError,
-};
+use miden_protocol::errors::{AccountDeltaError, AccountError, AssetError, TokenSymbolError};
 use miden_protocol::utils::serde::DeserializationError;
 use miden_standards::account::faucets::FungibleFaucetError;
+use miden_standards::account::policies::TokenPolicyManagerError;
 use miden_standards::account::wallets::BasicWalletError;
 
 use crate::genesis::config::TokenSymbolStr;
@@ -64,8 +59,6 @@ pub enum GenesisConfigError {
     IssuanceOverflow,
     #[error("missing fee faucet for native asset {0}")]
     MissingFeeFaucet(TokenSymbolStr),
-    #[error("fee error")]
-    FeeError(#[from] FeeError),
     #[error("faucet account of {0} is not a fungible faucet")]
     NativeAssetFaucetIsNotPublic(TokenSymbolStr),
     #[error("faucet account of {0} is not public")]
@@ -74,4 +67,6 @@ pub enum GenesisConfigError {
     InvalidSecretKey(#[from] DeserializationError),
     #[error("provided signer config is not supported")]
     UnsupportedSignerConfig,
+    #[error("token policy manager error")]
+    TokenPolicyManager(#[from] TokenPolicyManagerError),
 }

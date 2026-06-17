@@ -1,0 +1,174 @@
+# Environment variables:
+# - MIDEN_REMOTE_PROVER_URL: remote transaction prover URL. Defaults to the
+#   bundled miden-remote-prover service at http://tx-prover:50051.
+# - MIDEN_GENESIS_CONFIG_FILE: path to the genesis configuration file.
+#   By default, the local network bootstraps from the validator's built-in
+#   genesis configuration. Use this environment variable to override the
+#   built-in configuration.
+
+services:
+  bootstrap-validator:
+    image: miden-validator
+    pull_policy: if_not_present
+    volumes:
+      - node-data:/data
+      - type: bind
+        source: ${MIDEN_GENESIS_CONFIG_FILE:-./compose/genesis/dummy.toml}
+        target: /genesis.toml
+        read_only: true
+    environment:
+      MIDEN_NODE_VALIDATOR_USE_GENESIS_CONFIG: ${MIDEN_GENESIS_CONFIG_FILE:-}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        if [ -f /data/validator/.bootstrapped ]; then
+          echo "Validator already bootstrapped."
+          exit 0
+        fi
+
+        echo "Cleaning incomplete validator bootstrap state..."
+        rm -rf /data/genesis /data/validator /data/accounts
+        mkdir -p /data/genesis /data/validator /data/accounts
+
+        GENESIS_CONFIG_ARGS=""
+        if [ -n "$${MIDEN_NODE_VALIDATOR_USE_GENESIS_CONFIG:-}" ]; then
+          if [ ! -f /genesis.toml ]; then
+            echo "Genesis config requested but /genesis.toml is not mounted."
+            exit 1
+          fi
+
+          GENESIS_CONFIG_ARGS="--genesis-config-file /genesis.toml"
+        fi
+
+        echo "Bootstrapping validator..."
+        miden-validator bootstrap \
+          --data-directory /data/validator \
+          --genesis-block-directory /data/genesis \
+          --accounts-directory /data/accounts \
+          $$GENESIS_CONFIG_ARGS
+
+        touch /data/validator/.bootstrapped
+
+  bootstrap-node:
+    image: miden-node
+    pull_policy: if_not_present
+    volumes:
+      - node-data:/data
+    entrypoint: ["/bin/sh", "-c"]
+    depends_on:
+      bootstrap-validator:
+        condition: service_completed_successfully
+    command:
+      - |
+        set -e
+        if [ -f /data/node/.bootstrapped ]; then
+          echo "Node already bootstrapped."
+          exit 0
+        fi
+
+        echo "Cleaning incomplete node bootstrap state..."
+        rm -rf /data/node
+        mkdir -p /data/node
+
+        echo "Bootstrapping node..."
+        miden-node bootstrap \
+          --data-directory /data/node \
+          --file /data/genesis/genesis.dat
+
+        touch /data/node/.bootstrapped
+
+  bootstrap-ntx-builder:
+    image: miden-ntx-builder
+    pull_policy: if_not_present
+    volumes:
+      - node-data:/data
+    entrypoint: ["/bin/sh", "-c"]
+    depends_on:
+      bootstrap-node:
+        condition: service_completed_successfully
+    command:
+      - |
+        set -e
+        if [ -f /data/ntx-builder/.bootstrapped ]; then
+          echo "Network transaction builder already bootstrapped."
+          exit 0
+        fi
+
+        echo "Cleaning incomplete network transaction builder bootstrap state..."
+        rm -rf /data/ntx-builder
+        mkdir -p /data/ntx-builder
+
+        echo "Bootstrapping network transaction builder..."
+        miden-ntx-builder bootstrap \
+          --data-directory /data/ntx-builder \
+          --file /data/genesis/genesis.dat
+
+        touch /data/ntx-builder/.bootstrapped
+
+  sequencer:
+    image: miden-node
+    pull_policy: if_not_present
+    volumes:
+      - node-data:/data
+    depends_on:
+      bootstrap-node:
+        condition: service_completed_successfully
+      validator:
+        condition: service_started
+    command:
+      - miden-node
+      - sequencer
+      - --rpc.listen=0.0.0.0:57291
+      - --data-directory=/data/node
+      - --validator.url=http://validator:50101
+      - --ntx-builder.url=http://ntx-builder:50301
+      - --rpc.network-tx-auth-header-value=secret_value
+    ports:
+      - "127.0.0.1:57291:57291"
+
+  validator:
+    image: miden-validator
+    pull_policy: if_not_present
+    volumes:
+      - node-data:/data
+    depends_on:
+      bootstrap-validator:
+        condition: service_completed_successfully
+    command:
+      - miden-validator
+      - start
+      - --listen=0.0.0.0:50101
+      - --data-directory=/data/validator
+
+  tx-prover:
+    image: miden-remote-prover
+    pull_policy: if_not_present
+    command:
+      - miden-remote-prover
+      - --kind=transaction
+      - --port=50051
+
+  ntx-builder:
+    image: miden-ntx-builder
+    pull_policy: if_not_present
+    volumes:
+      - node-data:/data
+    depends_on:
+      bootstrap-ntx-builder:
+        condition: service_completed_successfully
+      sequencer:
+        condition: service_started
+      tx-prover:
+        condition: service_started
+    command:
+      - miden-ntx-builder
+      - start
+      - --listen=0.0.0.0:50301
+      - --rpc.url=http://sequencer:57291
+      - --rpc.auth-header-value=secret_value
+      - --tx-prover.url=${MIDEN_REMOTE_PROVER_URL:-http://tx-prover:50051}
+      - --data-directory=/data/ntx-builder
+
+volumes:
+  node-data:

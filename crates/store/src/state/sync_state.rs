@@ -1,7 +1,6 @@
 use std::ops::RangeInclusive;
-use std::sync::Arc;
 
-use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
+use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta, MmrProof};
@@ -12,17 +11,6 @@ use crate::COMPONENT;
 use crate::db::models::queries::StorageMapValuesPage;
 use crate::db::{AccountVaultValue, NoteSyncUpdate, NullifierInfo};
 use crate::errors::{DatabaseError, NoteSyncError, StateSyncError};
-
-/// Estimated byte size of a [`NoteSyncBlock`] excluding its notes.
-///
-/// `BlockHeader` (~341 bytes) + MMR proof with 32 siblings (~1216 bytes).
-const BLOCK_OVERHEAD_BYTES: usize = 1600;
-
-/// Estimated byte size of a single [`NoteSyncRecord`].
-///
-/// Note ID (~38 bytes) + index + metadata (~26 bytes) + sparse merkle path with 16
-/// siblings (~608 bytes).
-const NOTE_RECORD_BYTES: usize = 700;
 
 // STATE SYNCHRONIZATION ENDPOINTS
 // ================================================================================================
@@ -43,25 +31,26 @@ impl State {
     pub async fn sync_chain_mmr(
         &self,
         block_range: RangeInclusive<BlockNumber>,
-    ) -> Result<(MmrDelta, BlockHeader), StateSyncError> {
+    ) -> Result<(MmrDelta, BlockHeader, Signature), StateSyncError> {
         let block_from = *block_range.start();
         let block_to = *block_range.end();
 
         // SAFETY: block_to has been validated to be <= the effective tip (chain tip or latest
         // proven block) by the caller, so it must exist in the database.
-        let block_header = self
+        let (block_header, signature) = self
             .db
-            .select_block_header_by_block_num(Some(block_to))
+            .select_block_header_and_signature_by_block_num(block_to)
             .await?
             .expect("block_to should exist in the database");
 
         if block_from == block_to {
             return Ok((
                 MmrDelta {
-                    forest: Forest::new(block_from.as_usize()),
+                    forest: Forest::new(block_from.as_usize()).expect("block index fits in u32"),
                     data: vec![],
                 },
                 block_header,
+                signature,
             ));
         }
 
@@ -83,10 +72,13 @@ impl State {
             .await
             .blockchain
             .as_mmr()
-            .get_delta(Forest::new(from_forest), Forest::new(to_forest))
+            .get_delta(
+                Forest::new(from_forest).expect("from_forest fits in u32"),
+                Forest::new(to_forest).expect("to_forest fits in u32"),
+            )
             .map_err(StateSyncError::FailedToBuildMmrDelta)?;
 
-        Ok((mmr_delta, block_header))
+        Ok((mmr_delta, block_header, signature))
     }
 
     /// Loads data to synchronize a client's notes.
@@ -104,36 +96,23 @@ impl State {
         block_range: RangeInclusive<BlockNumber>,
     ) -> Result<(Vec<(NoteSyncUpdate, MmrProof)>, BlockNumber), NoteSyncError> {
         let block_end = *block_range.end();
-        let note_tags: Arc<[u32]> = note_tags.into();
+        // The MMR at forest N contains proofs for blocks 0..N-1, so we use block_end + 1 to include
+        // the proof for block_end. SAFETY: it is ensured that block_end <= chain_tip, and the
+        // blockchain MMR always has at least chain_tip + 1 leaves.
+        let mmr_checkpoint = block_end + 1;
+
+        let note_syncs = self.db.get_note_sync_multi(block_range, note_tags.into()).await?;
 
         let mut results = Vec::new();
-        let mut accumulated_size: usize = 0;
-        let mut current_from = *block_range.start();
 
-        loop {
-            let range = current_from..=block_end;
-            let Some(note_sync) = self.db.get_note_sync(range, Arc::clone(&note_tags)).await?
-            else {
-                break;
-            };
+        {
+            let inner = self.inner.read().await;
 
-            accumulated_size += BLOCK_OVERHEAD_BYTES + note_sync.notes.len() * NOTE_RECORD_BYTES;
-
-            if !results.is_empty() && accumulated_size > MAX_RESPONSE_PAYLOAD_BYTES {
-                break;
+            for note_sync in note_syncs {
+                let mmr_proof =
+                    inner.blockchain.open_at(note_sync.block_header.block_num(), mmr_checkpoint)?;
+                results.push((note_sync, mmr_proof));
             }
-
-            let block_num = note_sync.block_header.block_num();
-            // The MMR at forest N contains proofs for blocks 0..N-1, so we use block_end + 1 to
-            // include the proof for block_end.
-            // SAFETY: it is ensured that block_end <= chain_tip, and the blockchain MMR always has
-            // at least chain_tip + 1 leaves.
-            let mmr_checkpoint = block_end + 1;
-            let mmr_proof =
-                self.inner.read().await.blockchain.open_at(block_num, mmr_checkpoint)?;
-            results.push((note_sync, mmr_proof));
-
-            current_from = block_num + 1;
         }
 
         // if results is empty, return `block_end` since the sync is complete.

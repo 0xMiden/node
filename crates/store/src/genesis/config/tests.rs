@@ -3,8 +3,7 @@ use std::path::Path;
 
 use assert_matches::assert_matches;
 use miden_protocol::ONE;
-use miden_protocol::account::delta::AccountUpdateDetails;
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 
 use super::*;
 
@@ -27,7 +26,7 @@ fn parsing_yields_expected_default_values() -> TestResult {
     let config_path = write_toml_file(temp_dir.path(), sample_content);
 
     let gcfg = GenesisConfig::read_toml_file(&config_path)?;
-    let signer = SecretKey::new();
+    let signer = SigningKey::new();
     let (state, _secrets) = gcfg.into_state(signer.public_key())?;
     let _ = state;
     // faucets always precede wallet accounts
@@ -36,33 +35,37 @@ fn parsing_yields_expected_default_values() -> TestResult {
     let wallet1 = state.accounts[2].clone();
     let wallet2 = state.accounts[3].clone();
 
-    assert!(native_faucet.is_faucet());
-    assert!(wallet1.is_regular_account());
-    assert!(wallet2.is_regular_account());
+    assert!(FungibleFaucet::try_from(&native_faucet).is_ok());
+    assert!(FungibleFaucet::try_from(&wallet1).is_err());
+    assert!(FungibleFaucet::try_from(&wallet2).is_err());
 
     assert_eq!(native_faucet.nonce(), ONE);
     assert_eq!(wallet1.nonce(), ONE);
     assert_eq!(wallet2.nonce(), ONE);
 
     {
-        let faucet = BasicFungibleFaucet::try_from(native_faucet.clone()).unwrap();
+        let faucet = FungibleFaucet::try_from(native_faucet.storage()).unwrap();
 
-        assert_eq!(faucet.max_supply(), Felt::new(100_000_000_000_000_000));
+        assert_eq!(faucet.max_supply().as_u64(), 100_000_000_000_000_000);
         assert_eq!(faucet.decimals(), 6);
         assert_eq!(*faucet.symbol(), TokenSymbol::new("MIDEN").unwrap());
     }
 
     // check account balance, and ensure ordering is retained
-    assert_matches!(wallet1.vault().get_balance(native_faucet.id()), Ok(val) => {
-        assert_eq!(val, 999_000);
+    let faucet_vault_key = miden_protocol::asset::AssetVaultKey::new_fungible(
+        native_faucet.id(),
+        miden_protocol::asset::AssetCallbackFlag::Disabled,
+    );
+    assert_matches!(wallet1.vault().get_balance(faucet_vault_key), Ok(val) => {
+        assert_eq!(val.as_u64(), 999_000);
     });
-    assert_matches!(wallet2.vault().get_balance(native_faucet.id()), Ok(val) => {
-        assert_eq!(val, 777);
+    assert_matches!(wallet2.vault().get_balance(faucet_vault_key), Ok(val) => {
+        assert_eq!(val.as_u64(), 777);
     });
 
     // check total issuance of the faucet
-    let metadata = TokenMetadata::try_from(native_faucet.storage()).unwrap();
-    assert_eq!(metadata.token_supply(), Felt::new(999_777), "Issuance mismatch");
+    let faucet = FungibleFaucet::try_from(native_faucet.storage()).unwrap();
+    assert_eq!(faucet.token_supply().as_u64(), 999_777, "Issuance mismatch");
 
     Ok(())
 }
@@ -71,7 +74,7 @@ fn parsing_yields_expected_default_values() -> TestResult {
 #[miden_node_test_macro::enable_logging]
 async fn genesis_accounts_have_nonce_one() -> TestResult {
     let gcfg = GenesisConfig::default();
-    let signer = SecretKey::new();
+    let signer = SigningKey::new();
     let (state, secrets) = gcfg.into_state(signer.public_key()).unwrap();
     let mut iter = secrets.as_account_files(&state);
     let AccountFileWithName { account_file: status_quo, .. } = iter.next().unwrap().unwrap();
@@ -86,7 +89,7 @@ async fn genesis_accounts_have_nonce_one() -> TestResult {
 #[test]
 fn parsing_account_from_file() -> TestResult {
     use miden_protocol::account::auth::AuthScheme;
-    use miden_protocol::account::{AccountFile, AccountStorageMode, AccountType};
+    use miden_protocol::account::{AccountFile, AccountType};
     use miden_standards::AuthMethod;
     use miden_standards::account::wallets::create_basic_wallet;
     use tempfile::tempdir;
@@ -99,18 +102,13 @@ fn parsing_account_from_file() -> TestResult {
     let init_seed: [u8; 32] = rand::random();
     let mut rng = rand_chacha::ChaCha20Rng::from_seed(rand::random());
     let secret_key = miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey::with_rng(
-        &mut miden_node_utils::crypto::get_rpo_random_coin(&mut rng),
+        &mut miden_node_utils::crypto::get_random_coin(&mut rng),
     );
     let auth = AuthMethod::SingleSig {
         approver: (secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2),
     };
 
-    let test_account = create_basic_wallet(
-        init_seed,
-        auth,
-        AccountType::RegularAccountUpdatableCode,
-        AccountStorageMode::Public,
-    )?;
+    let test_account = create_basic_wallet(init_seed, auth, AccountType::Public)?;
 
     let account_id = test_account.id();
 
@@ -136,7 +134,7 @@ path = "test_account.mac"
     let gcfg = GenesisConfig::read_toml_file(&config_path)?;
 
     // Convert to state and verify the account is included
-    let signer = SecretKey::new();
+    let signer = SigningKey::new();
     let (state, _secrets) = gcfg.into_state(signer.public_key())?;
     assert!(state.accounts.iter().any(|a| a.id() == account_id));
 
@@ -146,8 +144,15 @@ path = "test_account.mac"
 #[test]
 fn parsing_native_faucet_from_file() -> TestResult {
     use miden_protocol::account::auth::AuthScheme;
-    use miden_protocol::account::{AccountBuilder, AccountFile, AccountStorageMode, AccountType};
+    use miden_protocol::account::{AccountBuilder, AccountFile, AccountType};
+    use miden_protocol::asset::AssetAmount;
     use miden_standards::account::auth::AuthSingleSig;
+    use miden_standards::account::policies::{
+        BurnPolicyConfig,
+        MintPolicyConfig,
+        PolicyRegistration,
+        TokenPolicyManager,
+    };
     use tempfile::tempdir;
 
     // Create a temporary directory for our test files
@@ -158,18 +163,26 @@ fn parsing_native_faucet_from_file() -> TestResult {
     let init_seed: [u8; 32] = rand::random();
     let mut rng = rand_chacha::ChaCha20Rng::from_seed(rand::random());
     let secret_key = miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey::with_rng(
-        &mut miden_node_utils::crypto::get_rpo_random_coin(&mut rng),
+        &mut miden_node_utils::crypto::get_random_coin(&mut rng),
     );
     let auth = AuthSingleSig::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
 
-    let faucet_component =
-        BasicFungibleFaucet::new(TokenSymbol::new("MIDEN").unwrap(), 6, Felt::new(1_000_000_000))?;
+    let faucet = FungibleFaucet::builder()
+        .name(TokenName::new("MIDEN").unwrap())
+        .symbol(TokenSymbol::new("MIDEN").unwrap())
+        .decimals(6)
+        .max_supply(AssetAmount::new(1_000_000_000)?)
+        .build()?;
 
     let faucet_account = AccountBuilder::new(init_seed)
-        .account_type(AccountType::FungibleFaucet)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_auth_component(auth)
-        .with_component(faucet_component)
+        .with_component(faucet)
+        .with_components(
+            TokenPolicyManager::new()
+                .with_mint_policy(MintPolicyConfig::AllowAll, PolicyRegistration::Active)?
+                .with_burn_policy(BurnPolicyConfig::AllowAll, PolicyRegistration::Active)?,
+        )
         .build()?;
 
     let faucet_id = faucet_account.id();
@@ -195,7 +208,7 @@ verification_base_fee = 0
     let gcfg = GenesisConfig::read_toml_file(&config_path)?;
 
     // Convert to state and verify the native faucet is included
-    let signer = SecretKey::new();
+    let signer = SigningKey::new();
     let (state, secrets) = gcfg.into_state(signer.public_key())?;
     assert!(state.accounts.iter().any(|a| a.id() == faucet_id));
 
@@ -208,7 +221,7 @@ verification_base_fee = 0
 #[test]
 fn native_faucet_from_file_must_be_faucet_type() -> TestResult {
     use miden_protocol::account::auth::AuthScheme;
-    use miden_protocol::account::{AccountFile, AccountStorageMode, AccountType};
+    use miden_protocol::account::{AccountFile, AccountType};
     use miden_standards::AuthMethod;
     use miden_standards::account::wallets::create_basic_wallet;
     use tempfile::tempdir;
@@ -221,18 +234,13 @@ fn native_faucet_from_file_must_be_faucet_type() -> TestResult {
     let init_seed: [u8; 32] = rand::random();
     let mut rng = rand_chacha::ChaCha20Rng::from_seed(rand::random());
     let secret_key = miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey::with_rng(
-        &mut miden_node_utils::crypto::get_rpo_random_coin(&mut rng),
+        &mut miden_node_utils::crypto::get_random_coin(&mut rng),
     );
     let auth = AuthMethod::SingleSig {
         approver: (secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2),
     };
 
-    let regular_account = create_basic_wallet(
-        init_seed,
-        auth,
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
-    )?;
+    let regular_account = create_basic_wallet(init_seed, auth, AccountType::Public)?;
 
     // Save to file
     let account_file_path = config_dir.join("not_a_faucet.mac");
@@ -255,7 +263,7 @@ verification_base_fee = 0
     let gcfg = GenesisConfig::read_toml_file(&config_path)?;
 
     // into_state should fail with NativeFaucetNotFungible error when loading the file
-    let result = gcfg.into_state(SecretKey::new().public_key());
+    let result = gcfg.into_state(SigningKey::new().public_key());
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
@@ -288,100 +296,11 @@ path = "does_not_exist.mac"
     let gcfg = GenesisConfig::read_toml_file(&config_path).unwrap();
 
     // into_state should fail with AccountFileRead error when loading the file
-    let result = gcfg.into_state(SecretKey::new().public_key());
+    let result = gcfg.into_state(SigningKey::new().public_key());
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
         matches!(err, GenesisConfigError::AccountFileRead(..)),
         "Expected AccountFileRead error, got: {err:?}"
     );
-}
-
-#[tokio::test]
-#[miden_node_test_macro::enable_logging]
-async fn parsing_agglayer_sample_with_account_files() -> TestResult {
-    use miden_protocol::account::AccountType;
-
-    // Use the actual sample file path since it references relative .mac files
-    let sample_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("src/genesis/config/samples/02-with-account-files.toml");
-
-    let gcfg = GenesisConfig::read_toml_file(&sample_path)?;
-    let signer = SecretKey::new();
-    let (state, secrets) = gcfg.into_state(signer.public_key())?;
-
-    // Should have 4 accounts:
-    // 1. Native faucet (MIDEN) - built from parameters
-    // 2. Bridge account (bridge.mac) - loaded from file
-    // 3. ETH faucet (agglayer_faucet_eth.mac) - loaded from file
-    // 4. USDC faucet (agglayer_faucet_usdc.mac) - loaded from file
-    assert_eq!(state.accounts.len(), 4, "Expected 4 accounts in genesis state");
-
-    // Verify account types
-    let native_faucet = &state.accounts[0];
-    let bridge_account = &state.accounts[1];
-    let eth_faucet = &state.accounts[2];
-    let usdc_faucet = &state.accounts[3];
-
-    // Native faucet should be a fungible faucet (built from parameters)
-    assert_eq!(
-        native_faucet.id().account_type(),
-        AccountType::FungibleFaucet,
-        "Native faucet should be a FungibleFaucet"
-    );
-
-    // Verify native faucet symbol
-    {
-        let faucet = BasicFungibleFaucet::try_from(native_faucet.clone()).unwrap();
-        assert_eq!(*faucet.symbol(), TokenSymbol::new("MIDEN").unwrap());
-    }
-
-    // Bridge account is a regular account (not a faucet)
-    assert!(
-        bridge_account.is_regular_account(),
-        "Bridge account should be a regular account"
-    );
-
-    // ETH faucet should be a fungible faucet (AggLayer faucet loaded from file)
-    assert_eq!(
-        eth_faucet.id().account_type(),
-        AccountType::FungibleFaucet,
-        "ETH faucet should be a FungibleFaucet"
-    );
-
-    // USDC faucet should be a fungible faucet (AggLayer faucet loaded from file)
-    assert_eq!(
-        usdc_faucet.id().account_type(),
-        AccountType::FungibleFaucet,
-        "USDC faucet should be a FungibleFaucet"
-    );
-
-    // Only the native faucet generates a secret (built from parameters)
-    assert_eq!(secrets.secrets.len(), 1, "Only native faucet should generate a secret");
-
-    // Verify the genesis state can be converted to a block
-    let block = state.into_block(&signer)?;
-
-    // Verify that non-private accounts (Public and Network) get full Delta details.
-    for update in block.inner().body().updated_accounts() {
-        let is_private = update.account_id().is_private();
-        match update.details() {
-            AccountUpdateDetails::Delta(_) => {
-                assert!(
-                    !is_private,
-                    "Private account {:?} should not have Delta details",
-                    update.account_id()
-                );
-            },
-            AccountUpdateDetails::Private => {
-                assert!(
-                    is_private,
-                    "Non-private account {:?} should have Delta details, not Private",
-                    update.account_id()
-                );
-            },
-        }
-    }
-
-    Ok(())
 }

@@ -57,8 +57,8 @@ pub fn grpc_trace_fn<T>(request: &http::Request<T>) -> tracing::Span {
         .get::<tonic::transport::server::TcpConnectInfo>()
         .and_then(tonic::transport::server::TcpConnectInfo::remote_addr);
 
-    // client.address should be the resolved IP address of the client, if available.
-    // In the case of a reverse proxy, this may not be the same as the remote address.
+    // client.address should be the resolved IP address of the client, if available. In the case of
+    // a reverse proxy, this may not be the same as the remote address.
     if let Ok(ip) = SmartIpKeyExtractor.extract(request) {
         span.set_attribute("client.address", ip);
     } else if let Some(addr) = remote_addr {
@@ -83,6 +83,7 @@ pub fn grpc_trace_fn<T>(request: &http::Request<T>) -> tracing::Span {
         http::header::FORWARDED,
         HeaderName::from_static("x-forwarded-for"),
         HeaderName::from_static("x-real-ip"),
+        HeaderName::from_static("x-request-id"),
     ] {
         if let Some(value) = request.headers().get(&header) {
             if let Ok(value) = value.to_str() {

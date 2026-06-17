@@ -1,38 +1,35 @@
 use core::error::Error as CoreError;
 
-use miden_node_proto::errors::{ConversionError, GrpcError};
+use miden_node_proto::errors::GrpcError;
+use miden_node_store::{
+    ApplyBlockWithProvingInputsError,
+    DatabaseError,
+    GetBatchInputsError,
+    GetBlockInputsError,
+};
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
+use miden_protocol::crypto::utils::DeserializationError;
 use miden_protocol::errors::{ProposedBatchError, ProposedBlockError, ProvenBatchError};
 use miden_protocol::note::Nullifier;
-use miden_protocol::transaction::TransactionId;
-use miden_protocol::utils::serde::DeserializationError;
 use miden_remote_prover_client::RemoteProverClientError;
 use thiserror::Error;
-use tokio::task::JoinError;
 
+use crate::mempool::MempoolPoisonError;
 use crate::validator::ValidatorError;
 
-// Block-producer errors
+// Proof scheduler errors
 // =================================================================================================
 
 #[derive(Debug, Error)]
-pub enum BlockProducerError {
-    /// A block-producer task completed although it should have ran indefinitely.
-    #[error("task {task} completed unexpectedly")]
-    UnexpectedTaskCompletion { task: &'static str },
-
-    /// A block-producer task panic'd.
-    #[error("task {task} panic'd")]
-    JoinError { task: &'static str, source: JoinError },
-
-    /// A block-producer task reported a transport error.
-    #[error("task {task} failed")]
-    TaskError {
-        task: &'static str,
-        source: anyhow::Error,
-    },
+pub enum ProofSchedulerError {
+    #[error("no proving inputs found for block {0}")]
+    MissingProvingInputs(BlockNumber),
+    #[error("failed to deserialize proving inputs for block")]
+    DeserializationFailed(#[source] DeserializationError),
+    #[error("invalid remote prover endpoint: {0}")]
+    InvalidProverEndpoint(String),
 }
 
 // Add transaction and add user batch errors
@@ -40,12 +37,9 @@ pub enum BlockProducerError {
 
 #[derive(Debug, Error, GrpcError)]
 pub enum MempoolSubmissionError {
-    #[error("failed to retrieve inputs from the store")]
+    #[error("failed to read state from the store")]
     #[grpc(internal)]
-    StoreConnectionFailed(#[source] StoreError),
-
-    #[error("invalid transaction proof error for transaction: {0}")]
-    InvalidTransactionProof(TransactionId),
+    StoreStateReadFailed(#[source] StoreError),
 
     #[error(
         "transaction input data from block {input_block} is rejected as stale because it is older than the limit of {stale_limit}"
@@ -55,9 +49,6 @@ pub enum MempoolSubmissionError {
         input_block: BlockNumber,
         stale_limit: BlockNumber,
     },
-
-    #[error("request deserialization failed")]
-    DeserializationFailed(#[source] DeserializationError),
 
     #[error(
         "transaction expired at block height {expired_at} but the block height limit was {limit}"
@@ -72,6 +63,10 @@ pub enum MempoolSubmissionError {
 
     #[error("the mempool is at capacity")]
     CapacityExceeded,
+
+    #[error("mempool lock is poisoned")]
+    #[grpc(internal)]
+    MempoolPoisoned(#[source] MempoolPoisonError),
 }
 
 // Mempool submission conflicts with current state
@@ -123,6 +118,9 @@ pub enum BuildBatchError {
 
     #[error("batch proof security level is too low: {0} < {1}")]
     SecurityLevelTooLow(u32, u32),
+
+    #[error("mempool lock is poisoned")]
+    MempoolPoisoned(#[source] MempoolPoisonError),
 }
 
 // Block building errors
@@ -147,6 +145,13 @@ pub enum BuildBlockError {
     ValidateBlockFailed(#[source] Box<ValidatorError>),
     #[error("block signature is invalid")]
     InvalidSignature,
+    #[error(
+        "block commitment signed by the validator {validator} does not match the block proposed by the sequencer {sequencer}"
+    )]
+    BlockCommitmentMismatch { validator: Word, sequencer: Word },
+
+    #[error("mempool lock is poisoned")]
+    MempoolPoisoned(#[source] MempoolPoisonError),
 
     /// We sometimes randomly inject errors into the batch building process to test our failure
     /// responses.
@@ -160,8 +165,7 @@ pub enum BuildBlockError {
 }
 
 impl BuildBlockError {
-    /// Creates a custom error using the [`BuildBlockError::Other`] variant from an
-    /// error message.
+    /// Creates a custom error using the [`BuildBlockError::Other`] variant from an error message.
     pub fn other(message: impl Into<String>) -> Self {
         let message: String = message.into();
         Self::Other { error_msg: message.into(), source: None }
@@ -171,21 +175,17 @@ impl BuildBlockError {
 // Store errors
 // =================================================================================================
 
-/// Errors returned by the [`StoreClient`](crate::store::StoreClient).
+/// Errors returned by the store state.
 #[derive(Debug, Error)]
 pub enum StoreError {
     #[error("account Id prefix already exists: {0}")]
     DuplicateAccountIdPrefix(AccountId),
-    #[error("gRPC client error")]
-    GrpcClientError(#[from] Box<tonic::Status>),
-    #[error("malformed response from store: {0}")]
-    MalformedResponse(String),
-    #[error("failed to parse response")]
-    DeserializationError(#[from] ConversionError),
-}
-
-impl From<tonic::Status> for StoreError {
-    fn from(value: tonic::Status) -> Self {
-        StoreError::GrpcClientError(value.into())
-    }
+    #[error("failed to get transaction inputs from store")]
+    GetTransactionInputsFailed(#[source] DatabaseError),
+    #[error("failed to get batch inputs from store")]
+    GetBatchInputsFailed(#[source] GetBatchInputsError),
+    #[error("failed to get block inputs from store")]
+    GetBlockInputsFailed(#[source] GetBlockInputsError),
+    #[error("failed to apply block to store")]
+    ApplyBlockFailed(#[source] ApplyBlockWithProvingInputsError),
 }

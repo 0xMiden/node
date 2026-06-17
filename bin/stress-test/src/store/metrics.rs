@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-/// Prints a summary of the benchmark results, including the average and various percentile
-/// request latencies to help diagnose performance outliers.
+/// Prints a summary of the benchmark results, including the average and various percentile request
+/// latencies to help diagnose performance outliers.
 pub fn print_summary(timers_accumulator: &[Duration]) {
     let avg_time = timers_accumulator.iter().sum::<Duration>() / timers_accumulator.len() as u32;
     println!("Average request latency: {avg_time:?}");
@@ -27,8 +27,8 @@ fn compute_percentile(times: &[Duration], percentile: f64) -> Duration {
     let mut sorted_times = times.to_vec();
     sorted_times.sort_unstable();
 
-    // Calculate the index for the given percentile
-    // For P99.9 with 10000 samples: index = (99.9 / 100.0) * 10000 = 9990
+    // Calculate the index for the given percentile For P99.9 with 10000 samples: index = (99.9 /
+    // 100.0) * 10000 = 9990
     let index = (percentile / 100.0 * sorted_times.len() as f64).round() as usize;
 
     // Ensure index is within bounds

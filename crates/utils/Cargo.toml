@@ -24,6 +24,7 @@ testing = ["miden-protocol/testing"]
 
 [dependencies]
 anyhow                = { workspace = true }
+backon                = { workspace = true }
 bytes                 = { version = "1.10" }
 clap                  = { workspace = true }
 fs-err                = { workspace = true }
@@ -38,6 +39,7 @@ opentelemetry         = { workspace = true }
 opentelemetry-otlp    = { default-features = false, features = ["grpc-tonic", "tls-roots", "trace"], version = "0.31" }
 opentelemetry_sdk     = { features = ["rt-tokio", "testing"], version = "0.31" }
 rand                  = { workspace = true }
+reqwest               = { workspace = true }
 thiserror             = { workspace = true }
 tokio                 = { workspace = true }
 tonic                 = { default-features = true, workspace = true }

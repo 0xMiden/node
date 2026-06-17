@@ -17,18 +17,6 @@ enum NoteType {
     NOTE_TYPE_PRIVATE = 2;
 }
 
-// The kind of a note attachment.
-enum NoteAttachmentKind {
-    // Unspecified attachment kind (default value, should not be used).
-    NOTE_ATTACHMENT_KIND_UNSPECIFIED = 0;
-    // No attachment.
-    NOTE_ATTACHMENT_KIND_NONE = 1;
-    // A single word attachment.
-    NOTE_ATTACHMENT_KIND_WORD = 2;
-    // An array attachment.
-    NOTE_ATTACHMENT_KIND_ARRAY = 3;
-}
-
 // Represents a note's ID.
 message NoteId {
     // A unique identifier of the note which is a 32-byte commitment to the underlying note data.
@@ -41,30 +29,12 @@ message NoteIdList {
     repeated NoteId ids = 1;
 }
 
-// Represents the header of a note's metadata.
-//
-// Contains the sender, note type, tag and attachment type information, but not the full
-// attachment data. See `miden_protocol::note::NoteMetadataHeader` for more info.
-message NoteMetadataHeader {
-    // The account which sent the note.
-    account.AccountId sender = 1;
-
-    // The type of the note.
-    NoteType note_type = 2;
-
-    // A value which can be used by the recipient to identify notes intended for them.
-    //
-    // See `miden_protocol::note::note_tag` for more info.
-    fixed32 tag = 3;
-
-    // The kind of the note attachment.
-    NoteAttachmentKind attachment_kind = 4;
-
-    // The scheme identifier of the note attachment.
-    fixed32 attachment_scheme = 5;
-}
-
 // Represents a note's metadata.
+//
+// Mirrors the protocol-level `miden_protocol::note::NoteMetadata`: it carries the partial metadata
+// (sender, note type, tag), the per-slot attachment schemes, and the commitment over the note's
+// attachments. The full attachment contents (when present) are carried separately on `Note` /
+// `NetworkNote`.
 message NoteMetadata {
     // The account which sent the note.
     account.AccountId sender = 1;
@@ -77,21 +47,33 @@ message NoteMetadata {
     // See `miden_protocol::note::note_tag` for more info.
     fixed32 tag = 3;
 
-    // Serialized note attachment
+    // The attachment scheme of each attachment slot.
     //
-    // See `miden_protocol::note::NoteAttachment` for more info.
-    bytes attachment = 4;
+    // The protocol allows up to `NoteAttachments::MAX_COUNT` attachments per note. Each slot carries
+    // either a scheme value in `1..=65534` or `0` to indicate that the slot is absent. Trailing
+    // absent slots may be omitted, so a note with no attachments has an empty list.
+    //
+    // See `miden_protocol::note::NoteAttachmentHeader` for more info.
+    repeated fixed32 attachment_schemes = 4;
+
+    // Commitment over the note's attachments.
+    //
+    // See `miden_protocol::note::NoteAttachments::to_commitment` for more info.
+    primitives.Digest attachments_commitment = 5;
 }
 
 // Represents a note.
 //
-// The note is composed of the note metadata and its serialized details.
+// The note is composed of the note metadata, its serialized details, and serialized attachments.
 message Note {
     // The note's metadata.
     NoteMetadata metadata = 1;
 
     // Serialized note details (empty for private notes).
     optional bytes details = 2;
+
+    // Serialized `miden_protocol::note::NoteAttachments`. Empty bytes encode an empty collection.
+    bytes attachments = 3;
 }
 
 // Represents a network note.
@@ -104,6 +86,9 @@ message NetworkNote {
 
     // Serialized note details (i.e., assets and recipient).
     bytes details = 2;
+
+    // Serialized `miden_protocol::note::NoteAttachments`. Empty bytes encode an empty collection.
+    bytes attachments = 3;
 }
 
 // Represents a committed note.
@@ -140,12 +125,12 @@ message NoteInclusionInBlockProof {
     primitives.SparseMerklePath inclusion_path = 4;
 }
 
-// Represents a note's metadata header together with proof of inclusion in a block.
+// Represents a note's metadata together with proof of inclusion in a block.
 //
-// To get the full `NoteMetadata` (including attachment), use `GetNotesById`.
+// To get the full note (including attachment contents), use `GetNotesById`.
 message NoteSyncRecord {
-    // The fixed-size metadata header of the note.
-    NoteMetadataHeader metadata_header = 1;
+    // The metadata of the note.
+    NoteMetadata metadata = 1;
 
     // Proof of the note's inclusion in a block.
     NoteInclusionInBlockProof inclusion_proof = 2;
@@ -153,10 +138,10 @@ message NoteSyncRecord {
 
 // Represents a note header.
 //
-// A note header consists of a note's ID and its metadata.
+// A note header consists of a commitment to the note's details and its metadata.
 message NoteHeader {
-    // A unique identifier of the note.
-    NoteId note_id = 1;
+    // Commitment to the note's details (recipient + assets), excluding metadata.
+    primitives.Digest details_commitment = 1;
 
     // The note's metadata.
     NoteMetadata metadata = 2;

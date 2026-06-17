@@ -22,19 +22,15 @@ anyhow                          = { workspace = true }
 deadpool                        = { features = ["managed", "rt_tokio_1"], workspace = true }
 deadpool-diesel                 = { features = ["sqlite"], workspace = true }
 diesel                          = { features = ["numeric", "sqlite"], workspace = true }
-diesel_migrations               = { features = ["sqlite"], workspace = true }
 fs-err                          = { workspace = true }
 hex                             = { workspace = true }
 indexmap                        = { workspace = true }
 libsqlite3-sys                  = { workspace = true }
-miden-block-prover              = { workspace = true }
 miden-crypto                    = { features = ["concurrent"], workspace = true }
 miden-large-smt-backend-rocksdb = { optional = true, workspace = true }
 miden-node-db                   = { workspace = true }
 miden-node-proto                = { workspace = true }
-miden-node-proto-build          = { features = ["internal"], workspace = true }
 miden-node-utils                = { workspace = true }
-miden-remote-prover-client      = { features = ["block-prover"], workspace = true }
 miden-standards                 = { workspace = true }
 # TODO remove `testing` from `miden-protocol`, required for `BlockProof::new_dummy`
 miden-protocol    = { features = ["std", "testing"], workspace = true }
@@ -44,19 +40,14 @@ rand_chacha       = { workspace = true }
 serde             = { workspace = true }
 thiserror         = { workspace = true }
 tokio             = { features = ["fs", "rt-multi-thread"], workspace = true }
-tokio-stream      = { features = ["net"], workspace = true }
+tokio-stream      = { features = ["sync"], workspace = true }
 toml              = { workspace = true }
-tonic             = { default-features = true, workspace = true }
-tonic-reflection  = { workspace = true }
-tower-http        = { features = ["util"], workspace = true }
 tracing           = { workspace = true }
-url               = { workspace = true }
 
 [build-dependencies]
-build-rs = { workspace = true }
-fs-err   = { workspace = true }
-# TODO: consider removing the `testing` from relevant functions in miden-agglayer
-miden-agglayer  = { features = ["testing"], workspace = true }
+build-rs        = { workspace = true }
+fs-err          = { workspace = true }
+miden-node-db   = { workspace = true }
 miden-protocol  = { features = ["std"], workspace = true }
 miden-standards = { workspace = true }
 

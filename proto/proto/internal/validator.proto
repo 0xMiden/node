@@ -18,8 +18,34 @@ service Api {
    // Submits a transaction to the validator.
    rpc SubmitProvenTransaction(transaction.ProvenTransaction) returns (google.protobuf.Empty) {}
 
-   // Validates a proposed block and returns the block header and body.
-   rpc SignBlock(blockchain.ProposedBlock) returns (blockchain.BlockSignature) {}
+   // Validates and signs a proposed block, returning the signature and the signed block commitment.
+   rpc SignBlock(blockchain.ProposedBlock) returns (blockchain.SignBlockResponse) {}
+
+   // Streams signed blocks starting from the given block number (inclusive).
+   //
+   // Replays backed-up blocks first, then streams live blocks as they are signed. Unlike the RPC
+   // block subscription, the blocks streamed here carry no proofs; they must be commissioned
+   // separately as part of recovery.
+   rpc BlockSubscription(BlockSubscriptionRequest) returns (stream BlockSubscriptionResponse) {}
+}
+
+// BLOCK SUBSCRIPTION
+// ================================================================================================
+
+// Request to subscribe to the signed block stream.
+message BlockSubscriptionRequest {
+    // The block number to start streaming from (inclusive).
+    fixed32 block_from = 1;
+}
+
+// A signed block streamed to a subscriber.
+message BlockSubscriptionResponse {
+    // The block encoded using [miden_serde_utils::Serializable] implementation for
+    // [miden_protocol::block::SignedBlock].
+    bytes block = 1;
+
+    // The signed chain tip when this item was emitted.
+    fixed32 committed_chain_tip = 2;
 }
 
 // VALIDATOR STATUS
@@ -32,4 +58,13 @@ message ValidatorStatus {
 
     // The validator's status.
     string status = 2;
+
+    // The validator's current chain tip (highest signed block number).
+    fixed32 chain_tip = 3;
+
+    // The total number of transactions validated by this validator.
+    fixed64 validated_transactions_count = 4;
+
+    // The total number of blocks signed by this validator.
+    fixed64 signed_blocks_count = 5;
 }

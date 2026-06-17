@@ -17,13 +17,13 @@ use miden_crypto::merkle::smt::{Backend, ForestInMemoryBackend};
 #[cfg(feature = "rocksdb")]
 use miden_crypto::merkle::smt::{ForestPersistentBackend, PersistentBackendConfig};
 #[cfg(feature = "rocksdb")]
-use miden_large_smt_backend_rocksdb::RocksDbStorage;
+use miden_large_smt_backend_rocksdb::{RocksDbStorage, SmtStorageReader};
 #[cfg(feature = "rocksdb")]
 use miden_node_utils::clap::RocksDbOptions;
 use miden_protocol::account::{AccountId, AccountStorageHeader, StorageSlotType};
 use miden_protocol::block::account_tree::{AccountIdKey, AccountTree};
 use miden_protocol::block::nullifier_tree::NullifierTree;
-use miden_protocol::block::{BlockNumber, Blockchain};
+use miden_protocol::block::{BlockHeader, BlockNumber, Blockchain};
 #[cfg(not(feature = "rocksdb"))]
 use miden_protocol::crypto::merkle::smt::MemoryStorage;
 use miden_protocol::crypto::merkle::smt::{LargeSmt, LargeSmtError, SmtStorage};
@@ -50,16 +50,16 @@ pub const NULLIFIER_TREE_STORAGE_DIR: &str = "nullifiertree";
 /// Directory name for the account state forest storage within the data directory.
 pub const ACCOUNT_STATE_FOREST_STORAGE_DIR: &str = "accountstateforest";
 
-/// Page size for loading account commitments from the database during tree rebuilding.
-/// This limits memory usage when rebuilding trees with millions of accounts.
+/// Page size for loading account commitments from the database during tree rebuilding. This limits
+/// memory usage when rebuilding trees with millions of accounts.
 const ACCOUNT_COMMITMENTS_PAGE_SIZE: NonZeroUsize = NonZeroUsize::new(10_000).unwrap();
 
-/// Page size for loading nullifiers from the database during tree rebuilding.
-/// This limits memory usage when rebuilding trees with millions of nullifiers.
+/// Page size for loading nullifiers from the database during tree rebuilding. This limits memory
+/// usage when rebuilding trees with millions of nullifiers.
 const NULLIFIERS_PAGE_SIZE: NonZeroUsize = NonZeroUsize::new(10_000).unwrap();
 
-/// Page size for loading public account IDs from the database during forest rebuilding.
-/// This limits memory usage when rebuilding with millions of public accounts.
+/// Page size for loading public account IDs from the database during forest rebuilding. This limits
+/// memory usage when rebuilding with millions of public accounts.
 const PUBLIC_ACCOUNT_IDS_PAGE_SIZE: NonZeroUsize = NonZeroUsize::new(1_000).unwrap();
 
 // STORAGE TYPE ALIAS
@@ -140,7 +140,7 @@ pub trait TreeStorageLoader: SmtStorage + Sized {
 /// For `ForestInMemoryBackend`, the forest is rebuilt from database entries on each startup. For
 /// `ForestPersistentBackend`, the forest is loaded directly from disk if data exists, otherwise it
 /// is rebuilt from the database and persisted.
-pub trait AccountForestLoader: Backend + Sized {
+pub(crate) trait AccountForestLoader: Backend + Sized {
     /// A configuration type for the implementation.
     type Config: std::fmt::Debug + std::default::Default;
 
@@ -212,9 +212,9 @@ impl TreeStorageLoader for MemoryStorage {
         AccountTree::new(smt).map_err(StateInitializationError::FailedToCreateAccountsTree)
     }
 
-    // TODO: Make the loading methodology for account and nullifier trees consistent.
-    // Currently we use `NullifierTree::new_unchecked()` for nullifiers but `AccountTree::new()`
-    // for accounts. Consider using `NullifierTree::with_storage_from_entries()` for consistency.
+    // TODO: Make the loading methodology for account and nullifier trees consistent. Currently we
+    // use `NullifierTree::new_unchecked()` for nullifiers but `AccountTree::new()` for accounts.
+    // Consider using `NullifierTree::with_storage_from_entries()` for consistency.
     #[instrument(target = COMPONENT, skip_all)]
     async fn load_nullifier_tree(
         self,
@@ -462,15 +462,43 @@ pub fn load_smt<S: SmtStorage>(storage: S) -> Result<LargeSmt<S>, StateInitializ
 /// Loads the blockchain MMR from all block headers in the database.
 #[instrument(target = COMPONENT, skip_all)]
 pub async fn load_mmr(db: &mut Db) -> Result<Blockchain, StateInitializationError> {
+    let latest_header = db.select_block_header_by_block_num(None).await?;
     let block_commitments = db.select_all_block_header_commitments().await?;
 
-    // SAFETY: We assume the loaded MMR is valid and does not have more than u32::MAX
-    // entries.
-    let chain_mmr = Blockchain::from_mmr_unchecked(Mmr::from(
-        block_commitments.iter().copied().map(BlockHeaderCommitment::word),
-    ));
+    // SAFETY: We assume the loaded MMR is valid and does not have more than u32::MAX entries.
+    let mmr = Mmr::try_from_iter(block_commitments.into_iter().map(BlockHeaderCommitment::word))
+        .expect("loaded MMR exceeds maximum allowed size");
+    let chain_mmr = Blockchain::from_mmr_unchecked(mmr);
+
+    verify_chain_mmr_consistency(&chain_mmr, latest_header.as_ref())?;
 
     Ok(chain_mmr)
+}
+
+fn verify_chain_mmr_consistency(
+    chain_mmr: &Blockchain,
+    latest_header: Option<&BlockHeader>,
+) -> Result<(), StateInitializationError> {
+    let Some(latest_header) = latest_header else {
+        return Err(StateInitializationError::GenesisBlockMissing);
+    };
+
+    let block_num = latest_header.block_num();
+    let expected_chain_commitment = latest_header.chain_commitment();
+    let actual_chain_commitment = chain_mmr
+        .peaks_at(block_num)
+        .map_err(|source| StateInitializationError::ChainMmrLoadError { block_num, source })?
+        .hash_peaks();
+
+    if actual_chain_commitment != expected_chain_commitment {
+        return Err(StateInitializationError::ChainMmrStorageDiverged {
+            block_num,
+            chain_mmr_commitment: actual_chain_commitment,
+            block_header_commitment: expected_chain_commitment,
+        });
+    }
+
+    Ok(())
 }
 
 /// Rebuilds SMT forest with storage map and vault Merkle paths for all public accounts.
@@ -493,8 +521,8 @@ pub async fn rebuild_account_state_forest(
 
         // Process each account in this page
         for account_id in page.account_ids {
-            // TODO: Loading the full account from the database is inefficient and will need to
-            // go away. <https://github.com/0xMiden/node/issues/1556>
+            // TODO: Loading the full account from the database is inefficient and will need to go
+            // away. <https://github.com/0xMiden/node/issues/1556>
             let account_info = db.select_account(account_id).await?;
             let account = account_info
                 .details
@@ -646,6 +674,7 @@ fn verify_account_state_forest_record(
 
 #[cfg(test)]
 mod tests {
+    use diesel::{ExpressionMethods, RunQueryDsl};
     use miden_protocol::account::{
         AccountId,
         AccountStorageHeader,
@@ -653,9 +682,103 @@ mod tests {
         StorageSlotName,
         StorageSlotType,
     };
+    use miden_protocol::block::BlockHeader;
+    use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
+    use miden_protocol::crypto::merkle::mmr::Mmr;
     use miden_protocol::testing::account_id::ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE;
+    use miden_protocol::utils::serde::Serializable;
 
     use super::*;
+
+    fn build_headers(count: u32) -> Vec<BlockHeader> {
+        let mut mmr = Mmr::new();
+        let mut headers = Vec::new();
+
+        for block_num in 0..count {
+            let chain_commitment = mmr.peaks().hash_peaks();
+            let header =
+                BlockHeader::mock(block_num, Some(chain_commitment), None, &[], Word::default());
+            mmr.add(header.commitment()).expect("test MMR should accept block commitment");
+            headers.push(header);
+        }
+
+        headers
+    }
+
+    #[test]
+    fn chain_mmr_consistency_accepts_valid_loaded_chain() {
+        let headers = build_headers(5);
+        let mmr = Mmr::try_from_iter(headers.iter().map(BlockHeader::commitment))
+            .expect("test MMR should build");
+        let blockchain = Blockchain::from_mmr_unchecked(mmr);
+
+        verify_chain_mmr_consistency(&blockchain, headers.last())
+            .expect("valid loaded chain MMR should match latest header chain commitment");
+    }
+
+    #[test]
+    fn chain_mmr_consistency_rejects_corrupted_loaded_chain() {
+        let headers = build_headers(5);
+        let mut commitments = headers.iter().map(BlockHeader::commitment).collect::<Vec<_>>();
+        commitments[2] = Word::from([42, 0, 0, 0u32]);
+
+        let mmr = Mmr::try_from_iter(commitments).expect("test MMR should build");
+        let blockchain = Blockchain::from_mmr_unchecked(mmr);
+
+        let error = verify_chain_mmr_consistency(&blockchain, headers.last())
+            .expect_err("corrupted chain MMR should be rejected");
+
+        assert_matches::assert_matches!(
+            error,
+            StateInitializationError::ChainMmrStorageDiverged {
+                block_num,
+                chain_mmr_commitment,
+                block_header_commitment,
+            } if block_num == headers.last().unwrap().block_num()
+                && chain_mmr_commitment != block_header_commitment
+                && block_header_commitment == headers.last().unwrap().chain_commitment()
+        );
+    }
+
+    #[tokio::test]
+    #[miden_node_test_macro::enable_logging]
+    async fn load_mmr_rejects_chain_mmr_mismatch_from_database() {
+        let temp_dir = tempfile::tempdir().expect("temp directory should be created");
+        let db_path = temp_dir.path().join("store.sqlite");
+        crate::db::bootstrap_database(&db_path).expect("test database should bootstrap");
+
+        let headers = build_headers(5);
+        let signing_key = SigningKey::new();
+        let mut db = crate::db::Db::load(db_path).await.expect("test database should load");
+
+        db.query("insert corrupted block headers", move |conn| {
+            for header in &headers {
+                let signature = signing_key.sign(header.commitment());
+                crate::db::models::queries::insert_block_header(conn, header, &signature)?;
+            }
+
+            diesel::update(crate::db::schema::block_headers::table)
+                .filter(crate::db::schema::block_headers::block_num.eq(2_i64))
+                .set(
+                    crate::db::schema::block_headers::commitment
+                        .eq(Word::from([42, 0, 0, 0u32]).to_bytes()),
+                )
+                .execute(conn)?;
+
+            Ok::<_, DatabaseError>(())
+        })
+        .await
+        .expect("test block headers should be inserted");
+
+        let error = load_mmr(&mut db)
+            .await
+            .expect_err("startup MMR load should reject inconsistent block headers");
+
+        assert_matches::assert_matches!(
+            error,
+            StateInitializationError::ChainMmrStorageDiverged { .. }
+        );
+    }
 
     #[test]
     fn account_state_forest_consistency_detects_storage_map_root_mismatch() {

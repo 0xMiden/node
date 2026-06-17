@@ -3,15 +3,7 @@
 use std::collections::BTreeMap;
 
 use diesel::query_dsl::methods::SelectDsl;
-use diesel::{
-    BoolExpressionMethods,
-    Connection,
-    ExpressionMethods,
-    OptionalExtension,
-    QueryDsl,
-    RunQueryDsl,
-};
-use diesel_migrations::MigrationHarness;
+use diesel::{BoolExpressionMethods, ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl};
 use miden_node_utils::fee::test_fee_params;
 use miden_protocol::account::auth::{AuthScheme, PublicKeyCommitment};
 use miden_protocol::account::component::AccountComponentMetadata;
@@ -26,7 +18,6 @@ use miden_protocol::account::{
     AccountStorage,
     AccountStorageDelta,
     AccountStorageHeader,
-    AccountStorageMode,
     AccountType,
     AccountVaultDelta,
     StorageMap,
@@ -39,25 +30,19 @@ use miden_protocol::account::{
     StorageSlotType,
 };
 use miden_protocol::block::{BlockAccountUpdate, BlockHeader, BlockNumber};
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SecretKey;
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{EMPTY_WORD, Felt, Word};
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::code_builder::CodeBuilder;
 
 use super::*;
-use crate::db::migrations::MIGRATIONS;
 use crate::db::models::conv::SqlTypeConvert;
 use crate::db::schema;
 use crate::errors::DatabaseError;
 
 fn setup_test_db() -> SqliteConnection {
-    let mut conn =
-        SqliteConnection::establish(":memory:").expect("Failed to create in-memory database");
-
-    conn.run_pending_migrations(MIGRATIONS).expect("Failed to run migrations");
-
-    conn
+    crate::db::migrations::test_connection()
 }
 
 /// Test helper: reconstructs account storage at a given block from DB.
@@ -137,14 +122,14 @@ fn reconstruct_account_storage_at_block(
 
 fn create_test_account_with_storage() -> (Account, AccountId) {
     // Create a simple public account with one value storage slot
-    let account_id = AccountId::dummy(
-        [1u8; 15],
-        AccountIdVersion::Version0,
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
-    );
+    let account_id = AccountId::dummy([1u8; 15], AccountIdVersion::Version1, AccountType::Public);
 
-    let storage_value = Word::from([Felt::new(1), Felt::new(2), Felt::new(3), Felt::new(4)]);
+    let storage_value = Word::from([
+        Felt::new_unchecked(1),
+        Felt::new_unchecked(2),
+        Felt::new_unchecked(3),
+        Felt::new_unchecked(4),
+    ]);
     let component_storage = vec![StorageSlot::with_value(StorageSlotName::mock(0), storage_value)];
 
     let account_component_code = CodeBuilder::default()
@@ -154,13 +139,12 @@ fn create_test_account_with_storage() -> (Account, AccountId) {
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
+        AccountComponentMetadata::new("test"),
     )
     .unwrap();
 
     let account = AccountBuilder::new([1u8; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
@@ -175,7 +159,7 @@ fn create_test_account_with_storage() -> (Account, AccountId) {
 fn insert_block_header(conn: &mut SqliteConnection, block_num: BlockNumber) {
     use crate::db::schema::block_headers;
 
-    let secret_key = SecretKey::new();
+    let secret_key = SigningKey::new();
     let block_header = BlockHeader::new(
         1_u8.into(),
         Word::default(),
@@ -217,13 +201,12 @@ fn create_account_with_map_storage(
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
+        AccountComponentMetadata::new("test"),
     )
     .unwrap();
 
     AccountBuilder::new([9u8; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
@@ -321,12 +304,7 @@ fn test_select_account_header_at_block_returns_none_for_nonexistent() {
     let block_num = BlockNumber::from_epoch(0);
     insert_block_header(&mut conn, block_num);
 
-    let account_id = AccountId::dummy(
-        [99u8; 15],
-        AccountIdVersion::Version0,
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
-    );
+    let account_id = AccountId::dummy([99u8; 15], AccountIdVersion::Version1, AccountType::Public);
 
     // Query for a non-existent account
     let result =
@@ -520,8 +498,12 @@ fn test_upsert_accounts_updates_is_latest_flag() {
     upsert_accounts(&mut conn, &[account_update_1], block_num_1).expect("First upsert failed");
 
     // Create modified account with different storage value
-    let storage_value_modified =
-        Word::from([Felt::new(10), Felt::new(20), Felt::new(30), Felt::new(40)]);
+    let storage_value_modified = Word::from([
+        Felt::new_unchecked(10),
+        Felt::new_unchecked(20),
+        Felt::new_unchecked(30),
+        Felt::new_unchecked(40),
+    ]);
     let component_storage_modified =
         vec![StorageSlot::with_value(StorageSlotName::mock(0), storage_value_modified)];
 
@@ -532,13 +514,12 @@ fn test_upsert_accounts_updates_is_latest_flag() {
     let component_2 = AccountComponent::new(
         account_component_code,
         component_storage_modified,
-        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
+        AccountComponentMetadata::new("test"),
     )
     .unwrap();
 
     let account_2 = AccountBuilder::new([1u8; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(component_2)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
@@ -607,16 +588,11 @@ fn test_upsert_accounts_with_multiple_storage_slots() {
     let mut conn = setup_test_db();
 
     // Create account with 3 storage slots
-    let account_id = AccountId::dummy(
-        [2u8; 15],
-        AccountIdVersion::Version0,
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
-    );
+    let account_id = AccountId::dummy([2u8; 15], AccountIdVersion::Version1, AccountType::Public);
 
-    let slot_value_1 = Word::from([Felt::new(1), Felt::new(2), Felt::new(3), Felt::new(4)]);
-    let slot_value_2 = Word::from([Felt::new(5), Felt::new(6), Felt::new(7), Felt::new(8)]);
-    let slot_value_3 = Word::from([Felt::new(9), Felt::new(10), Felt::new(11), Felt::new(12)]);
+    let slot_value_1 = Word::from([1, 2, 3, 4u32]);
+    let slot_value_2 = Word::from([5, 6, 7, 8u32]);
+    let slot_value_3 = Word::from([9, 10, 11, 12u32]);
 
     let component_storage = vec![
         StorageSlot::with_value(StorageSlotName::mock(0), slot_value_1),
@@ -631,13 +607,12 @@ fn test_upsert_accounts_with_multiple_storage_slots() {
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
+        AccountComponentMetadata::new("test"),
     )
     .unwrap();
 
     let account = AccountBuilder::new([2u8; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
@@ -677,8 +652,8 @@ fn test_upsert_accounts_with_multiple_storage_slots() {
         "Expected 5 storage slots (3 component + 2 auth)"
     );
 
-    // The storage commitment matching proves that all values are correctly preserved.
-    // We don't check individual slot values by index since slot ordering may vary.
+    // The storage commitment matching proves that all values are correctly preserved. We don't
+    // check individual slot values by index since slot ordering may vary.
 }
 
 #[test]
@@ -686,12 +661,7 @@ fn test_upsert_accounts_with_empty_storage() {
     let mut conn = setup_test_db();
 
     // Create account with no component storage slots (only auth slot)
-    let account_id = AccountId::dummy(
-        [3u8; 15],
-        AccountIdVersion::Version0,
-        AccountType::RegularAccountImmutableCode,
-        AccountStorageMode::Public,
-    );
+    let account_id = AccountId::dummy([3u8; 15], AccountIdVersion::Version1, AccountType::Public);
 
     let account_component_code = CodeBuilder::default()
         .compile_component_code("test::interface", "pub proc foo push.1 end")
@@ -700,13 +670,12 @@ fn test_upsert_accounts_with_empty_storage() {
     let component = AccountComponent::new(
         account_component_code,
         vec![],
-        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
+        AccountComponentMetadata::new("test"),
     )
     .unwrap();
 
     let account = AccountBuilder::new([3u8; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
@@ -773,9 +742,9 @@ fn test_select_latest_account_storage_ordering_semantics() {
     let key_2 = StorageMapKey::from_index(2);
     let key_3 = StorageMapKey::from_index(3);
 
-    let value_1 = Word::from([Felt::new(10), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
-    let value_2 = Word::from([Felt::new(20), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
-    let value_3 = Word::from([Felt::new(30), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+    let value_1 = Word::from([Felt::new_unchecked(10), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+    let value_2 = Word::from([Felt::new_unchecked(20), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+    let value_3 = Word::from([Felt::new_unchecked(30), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
 
     let mut entries = vec![(key_2, value_2), (key_1, value_1), (key_3, value_3)];
     entries.reverse();
@@ -818,8 +787,8 @@ fn test_select_latest_account_storage_multiple_slots() {
     let key_a = StorageMapKey::from_index(1);
     let key_b = StorageMapKey::from_index(2);
 
-    let value_a = Word::from([Felt::new(11), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
-    let value_b = Word::from([Felt::new(22), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+    let value_a = Word::from([Felt::new_unchecked(11), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+    let value_b = Word::from([Felt::new_unchecked(22), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
 
     let map_a = StorageMap::with_entries(vec![(key_a, value_a)]).unwrap();
     let map_b = StorageMap::with_entries(vec![(key_b, value_b)]).unwrap();
@@ -836,13 +805,12 @@ fn test_select_latest_account_storage_multiple_slots() {
     let component = AccountComponent::new(
         account_component_code,
         component_storage,
-        AccountComponentMetadata::new("test", [AccountType::RegularAccountImmutableCode]),
+        AccountComponentMetadata::new("test"),
     )
     .unwrap();
 
     let account = AccountBuilder::new([9u8; 32])
-        .account_type(AccountType::RegularAccountImmutableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
@@ -881,9 +849,9 @@ fn test_select_latest_account_storage_slot_updates() {
     let key_1 = StorageMapKey::from_index(1);
     let key_2 = StorageMapKey::from_index(2);
 
-    let value_1 = Word::from([Felt::new(10), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
-    let value_2 = Word::from([Felt::new(20), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
-    let value_3 = Word::from([Felt::new(30), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+    let value_1 = Word::from([Felt::new_unchecked(10), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+    let value_2 = Word::from([Felt::new_unchecked(20), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
+    let value_3 = Word::from([Felt::new_unchecked(30), Felt::ZERO, Felt::ZERO, Felt::ZERO]);
 
     let account = create_account_with_map_storage(slot_name.clone(), vec![(key_1, value_1)]);
     let account_id = account.id();
@@ -903,9 +871,13 @@ fn test_select_latest_account_storage_slot_updates() {
         StorageSlotDelta::Map(map_delta),
     )]));
 
-    let partial_delta =
-        AccountDelta::new(account_id, storage_delta, AccountVaultDelta::default(), Felt::new(1))
-            .unwrap();
+    let partial_delta = AccountDelta::new(
+        account_id,
+        storage_delta,
+        AccountVaultDelta::default(),
+        Felt::new_unchecked(1),
+    )
+    .unwrap();
 
     let mut expected_account = account.clone();
     expected_account.apply_delta(&partial_delta).unwrap();
@@ -1000,7 +972,7 @@ fn test_select_account_vault_at_block_historical_with_updates() {
         .expect("Query at block 1 should succeed");
 
     assert_eq!(assets_at_block_1.len(), 1, "Should have 1 asset at block 1");
-    assert_matches!(&assets_at_block_1[0], Asset::Fungible(f) if f.amount() == 1000);
+    assert_matches!(&assets_at_block_1[0], Asset::Fungible(f) if f.amount().as_u64() == 1000);
 
     // Query at block 2: should see vault_key_1 with 2000 tokens AND vault_key_2 with 500 tokens
     let assets_at_block_2 = select_account_vault_at_block(&mut conn, account_id, block_2)
@@ -1011,7 +983,7 @@ fn test_select_account_vault_at_block_historical_with_updates() {
     // Find the amounts (order may vary)
     let amounts: Vec<u64> = assets_at_block_2
         .iter()
-        .map(|a| assert_matches!(a, Asset::Fungible(f) => f.amount()))
+        .map(|a| assert_matches!(a, Asset::Fungible(f) => f.amount().as_u64()))
         .collect();
 
     assert!(amounts.contains(&2000), "Block 2 should have vault_key_1 with 2000 tokens");
@@ -1025,7 +997,7 @@ fn test_select_account_vault_at_block_historical_with_updates() {
 
     let amounts: Vec<u64> = assets_at_block_3
         .iter()
-        .map(|a| assert_matches!(a, Asset::Fungible(f) => f.amount()))
+        .map(|a| assert_matches!(a, Asset::Fungible(f) => f.amount().as_u64()))
         .collect();
 
     assert!(amounts.contains(&3000), "Block 3 should have vault_key_1 with 3000 tokens");
@@ -1038,7 +1010,7 @@ fn test_select_account_vault_at_block_exponential_updates() {
     const BLOCK_COUNT: u32 = 5;
 
     use assert_matches::assert_matches;
-    use miden_protocol::asset::{AssetVaultKey, FungibleAsset};
+    use miden_protocol::asset::{AssetCallbackFlag, AssetVaultKey, FungibleAsset};
     use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET;
 
     let mut conn = setup_test_db();
@@ -1065,7 +1037,7 @@ fn test_select_account_vault_at_block_exponential_updates() {
             .expect("upsert_accounts failed");
     }
 
-    let vault_key = AssetVaultKey::new_fungible(faucet_id).unwrap();
+    let vault_key = AssetVaultKey::new_fungible(faucet_id, AssetCallbackFlag::Disabled);
 
     for (index, block) in blocks.iter().enumerate() {
         let amount = 1u64 << index;
@@ -1082,13 +1054,13 @@ fn test_select_account_vault_at_block_exponential_updates() {
         let expected_amount = 1u64 << index;
         assert_matches!(
             &assets_at_block[0],
-            Asset::Fungible(f) if f.amount() == expected_amount
+            Asset::Fungible(f) if f.amount().as_u64() == expected_amount
         );
     }
 }
 
-/// Tests that deleted vault assets (asset = None) are correctly excluded from results,
-/// and that the deduplication handles deletion entries properly.
+/// Tests that deleted vault assets (asset = None) are correctly excluded from results, and that the
+/// deduplication handles deletion entries properly.
 #[test]
 fn test_select_account_vault_at_block_with_deletion() {
     use assert_matches::assert_matches;
@@ -1153,7 +1125,7 @@ fn test_select_account_vault_at_block_with_deletion() {
     let assets_at_block_3 = select_account_vault_at_block(&mut conn, account_id, block_3)
         .expect("Query at block 3 should succeed");
     assert_eq!(assets_at_block_3.len(), 1, "Should have 1 asset at block 3");
-    assert_matches!(&assets_at_block_3[0], Asset::Fungible(f) if f.amount() == 2000);
+    assert_matches!(&assets_at_block_3[0], Asset::Fungible(f) if f.amount().as_u64() == 2000);
 }
 
 // ACCOUNT CODE PRUNING TESTS
@@ -1208,19 +1180,15 @@ fn build_account_with_code(push_value: u32) -> Account {
         component_code,
         vec![StorageSlot::with_value(
             StorageSlotName::mock(0),
-            Word::from([Felt::new(1), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
+            Word::from([Felt::new_unchecked(1), Felt::ZERO, Felt::ZERO, Felt::ZERO]),
         )],
-        AccountComponentMetadata::new(
-            "code_prune_test",
-            [AccountType::RegularAccountUpdatableCode],
-        ),
+        AccountComponentMetadata::new("code_prune_test"),
     )
     .unwrap();
 
     // Seed [2u8; 32] keeps the account ID distinct from the other test helpers.
     AccountBuilder::new([2u8; 32])
-        .account_type(AccountType::RegularAccountUpdatableCode)
-        .storage_mode(AccountStorageMode::Public)
+        .account_type(AccountType::Public)
         .with_component(component)
         .with_auth_component(AuthSingleSig::new(
             PublicKeyCommitment::from(EMPTY_WORD),
@@ -1274,8 +1242,8 @@ fn test_prune_account_code_retains_latest_after_code_change() {
 
     assert_eq!(count_account_codes(&mut conn), 2, "both codes must exist before pruning");
 
-    // Advance past retention window and prune.
-    // cutoff = block_prunable - RETENTION = 2*RETENTION+1 - RETENTION = RETENTION+1 = block_code_b
+    // Advance past retention window and prune. cutoff = block_prunable - RETENTION = 2*RETENTION+1
+    // - RETENTION = RETENTION+1 = block_code_b
     let (_, _, codes_deleted) =
         prune_history(&mut conn, block_prunable).expect("prune_history failed");
 
@@ -1299,8 +1267,8 @@ fn test_prune_account_code_retains_latest_after_code_change() {
     );
 }
 
-/// Prune test 3: code A → code B → code A; after the retention window, code B must be pruned
-/// but code A must be retained because it is still the latest.
+/// Prune test 3: code A → code B → code A; after the retention window, code B must be pruned but
+/// code A must be retained because it is still the latest.
 #[test]
 fn test_prune_account_code_retains_revisited_code() {
     let mut conn = setup_test_db();
@@ -1354,8 +1322,8 @@ fn test_prune_account_code_retains_revisited_code() {
     let (_, _, codes_deleted) =
         prune_history(&mut conn, block_prunable).expect("prune_history failed");
 
-    // Code B is no longer referenced by any account row within the retention window → pruned.
-    // Code A is still referenced by the block_code_a_again accounts row (within cutoff) → retained.
+    // Code B is no longer referenced by any account row within the retention window → pruned. Code
+    // A is still referenced by the block_code_a_again accounts row (within cutoff) → retained.
     assert_eq!(codes_deleted, 1, "exactly one code (B) must be pruned");
     assert!(account_code_exists(&mut conn, code_commitment_a), "code A must be retained");
     assert!(!account_code_exists(&mut conn, code_commitment_b), "code B must be pruned");
@@ -1370,4 +1338,49 @@ fn test_prune_account_code_retains_revisited_code() {
         account_a.code().commitment(),
         "latest account must reference code A"
     );
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn network_accounts_subset_classifies_correctly() {
+    use crate::db::models::queries::accounts::{
+        AccountRowInsert,
+        NetworkAccountType,
+        select_network_accounts_subset,
+    };
+
+    let mut conn = setup_test_db();
+    let block_num = BlockNumber::from(1);
+    insert_block_header(&mut conn, block_num);
+
+    // Three accounts with distinct classifications. AccountIds are dummies — the queries only care
+    // about the (account_id, network_account_type, is_latest) tuple, not protocol-level validity.
+    let network_id = AccountId::dummy([1u8; 15], AccountIdVersion::Version1, AccountType::Public);
+    let public_id = AccountId::dummy([2u8; 15], AccountIdVersion::Version1, AccountType::Public);
+    let private_id = AccountId::dummy([3u8; 15], AccountIdVersion::Version1, AccountType::Private);
+    let unknown_id = AccountId::dummy([4u8; 15], AccountIdVersion::Version1, AccountType::Public);
+
+    for (id, ty) in [
+        (network_id, NetworkAccountType::Network),
+        (public_id, NetworkAccountType::None),
+        (private_id, NetworkAccountType::None),
+    ] {
+        let row = AccountRowInsert::new_private(id, ty, Word::default(), block_num, block_num);
+        diesel::insert_into(crate::db::schema::accounts::table)
+            .values(&row)
+            .execute(&mut conn)
+            .unwrap();
+    }
+
+    // Batched lookup returns only the network-classified id; public, private, and unknown ids are
+    // all omitted.
+    let subset =
+        select_network_accounts_subset(&mut conn, &[network_id, public_id, private_id, unknown_id])
+            .unwrap();
+    assert_eq!(subset.len(), 1);
+    assert!(subset.contains(&network_id));
+
+    // Empty input slice short-circuits to an empty result.
+    let empty = select_network_accounts_subset(&mut conn, &[]).unwrap();
+    assert!(empty.is_empty());
 }

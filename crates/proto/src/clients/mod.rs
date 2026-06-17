@@ -6,19 +6,20 @@
 //! # Examples
 //!
 //! ```rust
-//! # use miden_node_proto::clients::{Builder, WantsTls, StoreNtxBuilderClient};
+//! # use miden_node_proto::clients::{Builder, WantsTls, RpcClient};
 //! # use url::Url;
 //!
 //! # async fn example() -> anyhow::Result<()> {
-//! // Create a store client with OTEL and TLS
+//! // Create an RPC client with OTEL and TLS
 //! let url = Url::parse("https://example.com:8080")?;
-//! let client: StoreNtxBuilderClient = Builder::new(url)
+//! let client: RpcClient = Builder::new(url)
 //!     .with_tls()?                   // or `.without_tls()`
 //!     .without_timeout()             // or `.with_timeout(Duration::from_secs(10))`
 //!     .without_metadata_version()    // or `.with_metadata_version("1.0".into())`
 //!     .without_metadata_genesis()    // or `.with_metadata_genesis(genesis)`
+//!     .without_auth_header()         // or `.with_auth_header_value(AsciiMetadataValue::from_static("value"))`
 //!     .with_otel_context_injection() // or `.without_otel_context_injection()`
-//!     .connect::<StoreNtxBuilderClient>()
+//!     .connect::<RpcClient>()
 //!     .await?;
 //! # Ok(())
 //! # }
@@ -29,12 +30,11 @@ use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use http::header::ACCEPT;
 use miden_node_utils::tracing::grpc::OtelInterceptor;
 use tonic::metadata::AsciiMetadataValue;
 use tonic::service::interceptor::InterceptedService;
-use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
+use tonic::transport::{Channel, ClientTlsConfig, Endpoint, Error as TransportError};
 use tonic::{Request, Status};
 use url::Url;
 
@@ -44,6 +44,7 @@ use crate::generated;
 pub struct Interceptor {
     otel: Option<OtelInterceptor>,
     accept: AsciiMetadataValue,
+    auth_header_value: Option<AsciiMetadataValue>,
 }
 
 impl Default for Interceptor {
@@ -51,6 +52,7 @@ impl Default for Interceptor {
         Self {
             otel: None,
             accept: AsciiMetadataValue::from_static(Self::MEDIA_TYPE),
+            auth_header_value: None,
         }
     }
 }
@@ -59,8 +61,14 @@ impl Interceptor {
     const MEDIA_TYPE: &str = "application/vnd.miden";
     const VERSION: &str = "version";
     const GENESIS: &str = "genesis";
+    const NETWORK_TX_AUTH_HEADER_NAME: &str = "x-miden-network-tx-auth";
 
-    fn new(enable_otel: bool, version: Option<&str>, genesis: Option<&str>) -> Self {
+    fn new(
+        enable_otel: bool,
+        version: Option<&str>,
+        genesis: Option<&str>,
+        auth_header: Option<AsciiMetadataValue>,
+    ) -> Self {
         if let Some(version) = version
             && !version.is_ascii()
         {
@@ -88,6 +96,7 @@ impl Interceptor {
             otel: enable_otel.then_some(OtelInterceptor),
             // SAFETY: we checked that all values are ascii at the top of the function.
             accept: AsciiMetadataValue::from_str(&accept).unwrap(),
+            auth_header_value: auth_header,
         }
     }
 }
@@ -98,9 +107,47 @@ impl tonic::service::Interceptor for Interceptor {
             request = otel.call(request)?;
         }
 
-        request.metadata_mut().insert(ACCEPT.as_str(), self.accept.clone());
+        if request.metadata().get(ACCEPT.as_str()).is_none() {
+            request.metadata_mut().insert(ACCEPT.as_str(), self.accept.clone());
+        }
+
+        if let Some(value) = &self.auth_header_value {
+            request.metadata_mut().insert(Self::NETWORK_TX_AUTH_HEADER_NAME, value.clone());
+        }
 
         Ok(request)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn interceptor_preserves_existing_accept_metadata() {
+        let original_accept =
+            AsciiMetadataValue::from_static("application/vnd.miden; version=1.2; genesis=0x1234");
+        let mut request = Request::new(());
+        request.metadata_mut().insert(ACCEPT.as_str(), original_accept.clone());
+
+        let mut interceptor = Interceptor::new(false, Some("9.9"), Some("0xabcd"), None);
+        let request = tonic::service::Interceptor::call(&mut interceptor, request)
+            .expect("interceptor should succeed");
+
+        assert_eq!(request.metadata().get(ACCEPT.as_str()), Some(&original_accept));
+    }
+
+    #[test]
+    fn interceptor_inserts_accept_metadata_when_missing() {
+        let mut interceptor = Interceptor::new(false, Some("9.9"), Some("0xabcd"), None);
+
+        let request = tonic::service::Interceptor::call(&mut interceptor, Request::new(()))
+            .expect("interceptor should succeed");
+
+        assert_eq!(
+            request.metadata().get(ACCEPT.as_str()).and_then(|value| value.to_str().ok()),
+            Some("application/vnd.miden; version=9.9, genesis=0xabcd"),
+        );
     }
 }
 
@@ -109,13 +156,6 @@ impl tonic::service::Interceptor for Interceptor {
 
 type InterceptedChannel = InterceptedService<Channel, Interceptor>;
 type GeneratedRpcClient = generated::rpc::api_client::ApiClient<InterceptedChannel>;
-type GeneratedBlockProducerClient =
-    generated::block_producer::api_client::ApiClient<InterceptedChannel>;
-type GeneratedStoreClientForNtxBuilder =
-    generated::store::ntx_builder_client::NtxBuilderClient<InterceptedChannel>;
-type GeneratedStoreClientForBlockProducer =
-    generated::store::block_producer_client::BlockProducerClient<InterceptedChannel>;
-type GeneratedStoreClientForRpc = generated::store::rpc_client::RpcClient<InterceptedChannel>;
 type GeneratedProxyStatusClient =
     generated::remote_prover::proxy_status_api_client::ProxyStatusApiClient<InterceptedChannel>;
 type GeneratedProverClient = generated::remote_prover::api_client::ApiClient<InterceptedChannel>;
@@ -127,14 +167,6 @@ type GeneratedNtxBuilderClient = generated::ntx_builder::api_client::ApiClient<I
 
 #[derive(Debug, Clone)]
 pub struct RpcClient(GeneratedRpcClient);
-#[derive(Debug, Clone)]
-pub struct BlockProducerClient(GeneratedBlockProducerClient);
-#[derive(Debug, Clone)]
-pub struct StoreNtxBuilderClient(GeneratedStoreClientForNtxBuilder);
-#[derive(Debug, Clone)]
-pub struct StoreBlockProducerClient(GeneratedStoreClientForBlockProducer);
-#[derive(Debug, Clone)]
-pub struct StoreRpcClient(GeneratedStoreClientForRpc);
 #[derive(Debug, Clone)]
 pub struct RemoteProverProxyStatusClient(GeneratedProxyStatusClient);
 #[derive(Debug, Clone)]
@@ -152,62 +184,6 @@ impl DerefMut for RpcClient {
 
 impl Deref for RpcClient {
     type Target = GeneratedRpcClient;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for BlockProducerClient {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl Deref for BlockProducerClient {
-    type Target = GeneratedBlockProducerClient;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for StoreNtxBuilderClient {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl Deref for StoreNtxBuilderClient {
-    type Target = GeneratedStoreClientForNtxBuilder;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for StoreBlockProducerClient {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl Deref for StoreBlockProducerClient {
-    type Target = GeneratedStoreClientForBlockProducer;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for StoreRpcClient {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl Deref for StoreRpcClient {
-    type Target = GeneratedStoreClientForRpc;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -284,36 +260,6 @@ impl GrpcClient for RpcClient {
     }
 }
 
-impl GrpcClient for BlockProducerClient {
-    fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
-        Self(GeneratedBlockProducerClient::new(InterceptedService::new(channel, interceptor)))
-    }
-}
-
-impl GrpcClient for StoreNtxBuilderClient {
-    fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
-        Self(GeneratedStoreClientForNtxBuilder::new(InterceptedService::new(
-            channel,
-            interceptor,
-        )))
-    }
-}
-
-impl GrpcClient for StoreBlockProducerClient {
-    fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
-        Self(GeneratedStoreClientForBlockProducer::new(InterceptedService::new(
-            channel,
-            interceptor,
-        )))
-    }
-}
-
-impl GrpcClient for StoreRpcClient {
-    fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
-        Self(GeneratedStoreClientForRpc::new(InterceptedService::new(channel, interceptor)))
-    }
-}
-
 impl GrpcClient for RemoteProverProxyStatusClient {
     fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
         Self(GeneratedProxyStatusClient::new(InterceptedService::new(channel, interceptor)))
@@ -361,6 +307,7 @@ impl GrpcClient for NtxBuilderClient {
 ///     .with_timeout(Duration::from_secs(5)) // or `.without_timeout()`
 ///     .with_metadata_version("1.0".into())  // or `.without_metadata_version()`
 ///     .without_metadata_genesis()           // or `.with_metadata_genesis(genesis)`
+///     .without_auth_header()                // or `.with_auth_header_value(AsciiMetadataValue::from_static("value"))`
 ///     .with_otel_context_injection()        // or `.without_otel_context_injection()`
 ///     .connect::<RpcClient>()
 ///     .await?;
@@ -372,6 +319,7 @@ pub struct Builder<State> {
     endpoint: Endpoint,
     metadata_version: Option<String>,
     metadata_genesis: Option<String>,
+    metadata_auth_header_value: Option<AsciiMetadataValue>,
     enable_otel: bool,
     _state: PhantomData<State>,
 }
@@ -396,6 +344,7 @@ impl<State> Builder<State> {
             endpoint: self.endpoint,
             metadata_version: self.metadata_version,
             metadata_genesis: self.metadata_genesis,
+            metadata_auth_header_value: self.metadata_auth_header_value,
             enable_otel: self.enable_otel,
             _state: PhantomData::<Next>,
         }
@@ -403,8 +352,8 @@ impl<State> Builder<State> {
 }
 
 impl Builder<WantsTls> {
-    /// Create a new strict builder from a gRPC endpoint URL such as
-    /// `http://localhost:8080` or `https://api.example.com:443`.
+    /// Create a new strict builder from a gRPC endpoint URL such as `http://localhost:8080` or
+    /// `https://api.example.com:443`.
     pub fn new(url: Url) -> Builder<WantsTls> {
         let endpoint = Endpoint::from_shared(String::from(url))
             .expect("Url type always results in valid endpoint");
@@ -413,6 +362,7 @@ impl Builder<WantsTls> {
             endpoint,
             metadata_version: None,
             metadata_genesis: None,
+            metadata_auth_header_value: None,
             enable_otel: false,
             _state: PhantomData,
         }
@@ -424,11 +374,8 @@ impl Builder<WantsTls> {
     }
 
     /// Explicitly enable TLS.
-    pub fn with_tls(mut self) -> Result<Builder<WantsTimeout>> {
-        self.endpoint = self
-            .endpoint
-            .tls_config(ClientTlsConfig::new().with_native_roots())
-            .context("Failed to configure TLS")?;
+    pub fn with_tls(mut self) -> Result<Builder<WantsTimeout>, TransportError> {
+        self.endpoint = self.endpoint.tls_config(ClientTlsConfig::new().with_native_roots())?;
 
         Ok(self.next_state())
     }
@@ -476,6 +423,20 @@ impl Builder<WantsGenesis> {
 }
 
 impl Builder<WantsOTel> {
+    /// Do not include any additional metadata header in request metadata.
+    #[must_use]
+    pub fn without_auth_header(mut self) -> Self {
+        self.metadata_auth_header_value = None;
+        self
+    }
+
+    /// Include an additional ASCII metadata header in request metadata.
+    #[must_use]
+    pub fn with_auth_header_value(mut self, value: AsciiMetadataValue) -> Self {
+        self.metadata_auth_header_value = Some(value);
+        self
+    }
+
     /// Enables OpenTelemetry context propagation via gRPC.
     ///
     /// This is used to by OpenTelemetry to connect traces across network boundaries. The server on
@@ -495,7 +456,7 @@ impl Builder<WantsOTel> {
 
 impl Builder<WantsConnection> {
     /// Establish an eager connection and return a fully configured client.
-    pub async fn connect<T>(self) -> Result<T>
+    pub async fn connect<T>(self) -> Result<T, TransportError>
     where
         T: GrpcClient,
     {
@@ -520,6 +481,7 @@ impl Builder<WantsConnection> {
             self.enable_otel,
             self.metadata_version.as_deref(),
             self.metadata_genesis.as_deref(),
+            self.metadata_auth_header_value,
         );
         T::with_interceptor(channel, interceptor)
     }

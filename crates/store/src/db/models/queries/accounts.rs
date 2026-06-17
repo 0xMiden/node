@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
 
@@ -10,6 +10,8 @@ use diesel::{
     BoolExpressionMethods,
     ExpressionMethods,
     Insertable,
+    JoinOnDsl,
+    NullableExpressionMethods,
     OptionalExtension,
     QueryDsl,
     RunQueryDsl,
@@ -18,7 +20,11 @@ use diesel::{
     SqliteConnection,
 };
 use miden_node_proto::domain::account::{AccountInfo, AccountSummary};
-use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
+use miden_node_utils::limiter::{
+    MAX_RESPONSE_PAYLOAD_BYTES,
+    QueryParamAccountIdLimit,
+    QueryParamLimiter,
+};
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
     Account,
@@ -38,6 +44,7 @@ use miden_protocol::asset::{Asset, AssetVault, AssetVaultKey, FungibleAsset};
 use miden_protocol::block::{BlockAccountUpdate, BlockNumber};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{Felt, Word};
+use miden_standards::account::auth::NetworkAccount;
 
 use crate::COMPONENT;
 use crate::db::models::conv::{SqlTypeConvert, nonce_to_raw_sql, raw_sql_to_nonce};
@@ -56,7 +63,7 @@ use delta::{
     apply_storage_delta,
     select_latest_vault_assets,
     select_minimal_account_state_headers,
-    select_vault_balances_by_faucet_ids,
+    select_vault_balances_by_vault_keys,
 };
 
 #[cfg(test)]
@@ -64,7 +71,7 @@ mod tests;
 
 type StorageMapValueRow = (i64, String, Vec<u8>, Vec<u8>);
 type StorageHeaderWithEntries =
-    (AccountStorageHeader, BTreeMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>);
+    (AccountStorageHeader, HashMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>);
 
 // NETWORK ACCOUNT TYPE
 // ================================================================================================
@@ -145,9 +152,9 @@ pub(crate) fn select_account(
 
     let summary: AccountSummary = raw.try_into()?;
 
-    // Backfill account details from database
-    // For private accounts, we don't store full details in the database
-    let details = if account_id.has_public_state() {
+    // Backfill account details from database For private accounts, we don't store full details in
+    // the database
+    let details = if account_id.is_public() {
         Some(select_full_account(conn, account_id)?)
     } else {
         None
@@ -176,15 +183,17 @@ pub(crate) fn select_full_account(
     account_id: AccountId,
 ) -> Result<Account, DatabaseError> {
     // Get account metadata (nonce, code_commitment) and code in a single join query
-    let (nonce, code_bytes): (Option<i64>, Vec<u8>) = SelectDsl::select(
-        schema::accounts::table.inner_join(schema::account_codes::table),
-        (schema::accounts::nonce, schema::account_codes::code),
-    )
-    .filter(schema::accounts::account_id.eq(account_id.to_bytes()))
-    .filter(schema::accounts::is_latest.eq(true))
-    .get_result(conn)
-    .optional()?
-    .ok_or(DatabaseError::AccountNotFoundInDb(account_id))?;
+    let joined = schema::accounts::table.inner_join(schema::account_codes::table.on(
+        schema::accounts::code_commitment.eq(schema::account_codes::code_commitment.nullable()),
+    ));
+
+    let (nonce, code_bytes): (Option<i64>, Vec<u8>) =
+        SelectDsl::select(joined, (schema::accounts::nonce, schema::account_codes::code))
+            .filter(schema::accounts::account_id.eq(account_id.to_bytes()))
+            .filter(schema::accounts::is_latest.eq(true))
+            .get_result(conn)
+            .optional()?
+            .ok_or(DatabaseError::AccountNotFoundInDb(account_id))?;
 
     let nonce = raw_sql_to_nonce(nonce.ok_or_else(|| {
         DatabaseError::DataCorrupted(format!("No nonce found for account {account_id}"))
@@ -215,50 +224,6 @@ pub(crate) fn select_full_account(
     let vault = AssetVault::new(&assets)?;
 
     Ok(Account::new(account_id, vault, storage, code, nonce, None)?)
-}
-
-/// Select the latest account info for a network account by its full account ID.
-///
-/// # Returns
-///
-/// The latest account info, `None` if the account was not found, or an error.
-///
-/// # Raw SQL
-///
-/// ```sql
-/// SELECT
-///     accounts.account_id,
-///     accounts.account_commitment,
-///     accounts.block_num
-/// FROM
-///     accounts
-/// WHERE
-///     account_id = ?1
-///     AND network_account_type = 1
-///     AND is_latest = 1
-/// ```
-pub(crate) fn select_network_account_by_id(
-    conn: &mut SqliteConnection,
-    account_id: AccountId,
-) -> Result<Option<AccountInfo>, DatabaseError> {
-    let maybe_summary = SelectDsl::select(schema::accounts::table, AccountSummaryRaw::as_select())
-        .filter(schema::accounts::account_id.eq(account_id.to_bytes()))
-        .filter(schema::accounts::network_account_type.eq(NetworkAccountType::Network.to_raw_sql()))
-        .filter(schema::accounts::is_latest.eq(true))
-        .get_result::<AccountSummaryRaw>(conn)
-        .optional()
-        .map_err(DatabaseError::Diesel)?;
-
-    match maybe_summary {
-        None => Ok(None),
-        Some(raw) => {
-            let summary: AccountSummary = raw.try_into()?;
-            let account_id = summary.account_id;
-            // Backfill account details from database
-            let details = select_full_account(conn, account_id).ok();
-            Ok(Some(AccountInfo { summary, details }))
-        },
-    }
 }
 
 /// Page of account commitments returned by [`select_account_commitments_paged`].
@@ -348,8 +313,7 @@ pub struct PublicAccountStateRoots {
     pub storage_header: AccountStorageHeader,
 }
 
-/// Page of public account state roots returned by
-/// [`select_public_account_state_roots_paged`].
+/// Page of public account state roots returned by [`select_public_account_state_roots_paged`].
 #[derive(Debug)]
 pub struct PublicAccountStateRootsPage {
     /// The public account state roots in this page.
@@ -363,9 +327,9 @@ pub struct PublicAccountStateRootsPage {
 /// Returns up to `page_size` public account IDs, starting after `after_account_id` if provided.
 /// Results are ordered by `account_id` for stable pagination.
 ///
-/// Public accounts are those with `AccountStorageMode::Public` or `AccountStorageMode::Network`.
-/// We identify them by checking `code_commitment IS NOT NULL` - public accounts store their full
-/// state (including `code_commitment`), while private accounts only store the `account_commitment`.
+/// Public accounts are those with `AccountType::Public`. We identify them by checking
+/// against the store. Public accounts store their `code_commitment`, while private accounts only
+/// store the `account_commitment`.
 ///
 /// # Raw SQL
 ///
@@ -423,9 +387,9 @@ pub(crate) fn select_public_account_ids_paged(
 /// Returns up to `page_size` public account states, starting after `after_account_id` if provided.
 /// Results are ordered by `account_id` for stable pagination.
 ///
-/// Public accounts are those with `AccountStorageMode::Public` or `AccountStorageMode::Network`.
-/// We identify them by checking `code_commitment IS NOT NULL` - public accounts store their full
-/// state (including `code_commitment`), while private accounts only store the `account_commitment`.
+/// Public accounts are those with `AccountType::Public`. We identify them by checking
+/// against the store. Public accounts store their `code_commitment`, while private accounts only
+/// store the `account_commitment`.
 ///
 /// # Raw SQL
 ///
@@ -539,12 +503,12 @@ pub(crate) fn select_account_vault_assets(
     block_range: RangeInclusive<BlockNumber>,
 ) -> Result<(BlockNumber, Vec<AccountVaultValue>), DatabaseError> {
     use schema::account_vault_assets as t;
-    // TODO: These limits should be given by the protocol.
-    // See miden-protocol/issues/1770 for more details
+    // TODO: These limits should be given by the protocol. See miden-protocol/issues/1770 for more
+    // details
     const ROW_OVERHEAD_BYTES: usize = 2 * size_of::<Word>() + size_of::<u32>(); // key + asset + block_num
     const MAX_ROWS: usize = MAX_RESPONSE_PAYLOAD_BYTES / ROW_OVERHEAD_BYTES;
 
-    if !account_id.has_public_state() {
+    if !account_id.is_public() {
         return Err(DatabaseError::AccountNotPublic(account_id));
     }
 
@@ -567,8 +531,8 @@ pub(crate) fn select_account_vault_assets(
             .limit(i64::try_from(MAX_ROWS + 1).expect("should fit within i64"))
             .load::<(i64, Vec<u8>, Option<Vec<u8>>)>(conn)?;
 
-    // If we got more rows than the limit, the last block may be incomplete so we
-    // drop it entirely and derive last_block_included from the remaining rows.
+    // If we got more rows than the limit, the last block may be incomplete so we drop it entirely
+    // and derive last_block_included from the remaining rows.
     let (last_block_included, values) = if let Some(&(last_block_num, ..)) = raw.last()
         && raw.len() > MAX_ROWS
     {
@@ -633,85 +597,6 @@ pub(crate) fn select_all_accounts(
         .collect();
 
     Ok(account_infos)
-}
-
-/// Returns network account IDs within the specified block range (based on account creation
-/// block).
-///
-/// The function may return fewer accounts than exist in the range if the result would exceed
-/// `MAX_RESPONSE_PAYLOAD_BYTES / AccountId::SERIALIZED_SIZE` rows. In this case, the result is
-/// truncated at a block boundary to ensure all accounts from included blocks are returned.
-///
-/// # Returns
-///
-/// A tuple containing:
-/// - A vector of network account IDs.
-/// - The last block number that was fully included in the result. When truncated, this will be less
-///   than the requested range end.
-pub(crate) fn select_all_network_account_ids(
-    conn: &mut SqliteConnection,
-    block_range: RangeInclusive<BlockNumber>,
-) -> Result<(Vec<AccountId>, BlockNumber), DatabaseError> {
-    const ROW_OVERHEAD_BYTES: usize = AccountId::SERIALIZED_SIZE;
-    const MAX_ROWS: usize = MAX_RESPONSE_PAYLOAD_BYTES / ROW_OVERHEAD_BYTES;
-
-    const _: () = assert!(
-        MAX_ROWS > miden_protocol::MAX_ACCOUNTS_PER_BLOCK,
-        "Block pagination limit must exceed maximum block capacity to uphold assumed logic invariant"
-    );
-
-    if block_range.is_empty() {
-        return Err(DatabaseError::InvalidBlockRange {
-            from: *block_range.start(),
-            to: *block_range.end(),
-        });
-    }
-
-    let account_ids_raw: Vec<(Vec<u8>, i64)> = Box::new(
-        QueryDsl::select(
-            schema::accounts::table
-                .filter(
-                    schema::accounts::network_account_type
-                        .eq(NetworkAccountType::Network.to_raw_sql()),
-                )
-                .filter(schema::accounts::is_latest.eq(true)),
-            (schema::accounts::account_id, schema::accounts::created_at_block),
-        )
-        .filter(
-            schema::accounts::block_num
-                .between(block_range.start().to_raw_sql(), block_range.end().to_raw_sql()),
-        )
-        .order(schema::accounts::created_at_block.asc())
-        .limit(i64::try_from(MAX_ROWS + 1).expect("limit fits within i64")),
-    )
-    .load::<(Vec<u8>, i64)>(conn)?;
-
-    if account_ids_raw.len() > MAX_ROWS {
-        // SAFETY: We just checked that len > MAX_ROWS, so the vec is not empty.
-        let last_created_at_block = account_ids_raw.last().expect("vec is not empty").1;
-
-        let account_ids = account_ids_raw
-            .into_iter()
-            .take_while(|(_, created_at_block)| *created_at_block != last_created_at_block)
-            .map(|(id_bytes, _)| {
-                AccountId::read_from_bytes(&id_bytes).map_err(DatabaseError::DeserializationError)
-            })
-            .collect::<Result<Vec<AccountId>, DatabaseError>>()?;
-
-        let last_block_included =
-            BlockNumber::from_raw_sql(last_created_at_block.saturating_sub(1))?;
-
-        Ok((account_ids, last_block_included))
-    } else {
-        let account_ids = account_ids_raw
-            .into_iter()
-            .map(|(id_bytes, _)| {
-                AccountId::read_from_bytes(&id_bytes).map_err(DatabaseError::DeserializationError)
-            })
-            .collect::<Result<Vec<AccountId>, DatabaseError>>()?;
-
-        Ok((account_ids, *block_range.end()))
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -791,7 +676,7 @@ pub(crate) fn select_account_storage_map_values_paged(
 ) -> Result<StorageMapValuesPage, DatabaseError> {
     use schema::account_storage_map_values as t;
 
-    if !account_id.has_public_state() {
+    if !account_id.is_public() {
         return Err(DatabaseError::AccountNotPublic(account_id));
     }
 
@@ -814,8 +699,8 @@ pub(crate) fn select_account_storage_map_values_paged(
             .limit(i64::try_from(limit + 1).expect("limit fits within i64"))
             .load(conn)?;
 
-    // If we got more rows than the limit, the last block may be incomplete so we
-    // drop it entirely and derive last_block_included from the remaining rows.
+    // If we got more rows than the limit, the last block may be incomplete so we drop it entirely
+    // and derive last_block_included from the remaining rows.
     let (last_block_included, values) = if let Some(&(last_block_num, ..)) = raw.last()
         && raw.len() > limit
     {
@@ -902,7 +787,7 @@ pub(crate) fn select_latest_account_storage_components(
 fn select_latest_storage_map_entries_all(
     conn: &mut SqliteConnection,
     account_id: &AccountId,
-) -> Result<BTreeMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>, DatabaseError> {
+) -> Result<HashMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>, DatabaseError> {
     use schema::account_storage_map_values as t;
 
     let map_values: Vec<(String, Vec<u8>, Vec<u8>)> =
@@ -918,20 +803,20 @@ fn select_latest_storage_map_entries_for_slots(
     conn: &mut SqliteConnection,
     account_id: &AccountId,
     slot_names: &[StorageSlotName],
-) -> Result<BTreeMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>, DatabaseError> {
+) -> Result<HashMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>, DatabaseError> {
     use schema::account_storage_map_values as t;
 
     if slot_names.is_empty() {
-        return Ok(BTreeMap::new());
+        return Ok(HashMap::new());
     }
 
     if let [slot_name] = slot_names {
         let entries = select_latest_storage_map_entries_for_slot(conn, account_id, slot_name)?;
         if entries.is_empty() {
-            return Ok(BTreeMap::new());
+            return Ok(HashMap::new());
         }
 
-        let mut map_entries = BTreeMap::new();
+        let mut map_entries = HashMap::new();
         map_entries.insert(slot_name.clone(), entries);
         return Ok(map_entries);
     }
@@ -966,9 +851,9 @@ fn select_latest_storage_map_entries_for_slot(
 
 fn group_storage_map_entries(
     map_values: Vec<(String, Vec<u8>, Vec<u8>)>,
-) -> Result<BTreeMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>, DatabaseError> {
-    let mut map_entries_by_slot: BTreeMap<StorageSlotName, BTreeMap<StorageMapKey, Word>> =
-        BTreeMap::new();
+) -> Result<HashMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>, DatabaseError> {
+    let mut map_entries_by_slot: HashMap<StorageSlotName, BTreeMap<StorageMapKey, Word>> =
+        HashMap::new();
     for (slot_name_str, key_bytes, value_bytes) in map_values {
         let slot_name: StorageSlotName = slot_name_str.parse().map_err(|_| {
             DatabaseError::DataCorrupted(format!("Invalid slot name: {slot_name_str}"))
@@ -1151,7 +1036,7 @@ fn prepare_full_account_update(
     for asset in account.vault().assets() {
         // Only insert assets with non-zero values for fungible assets
         let should_insert = match asset {
-            Asset::Fungible(fungible) => fungible.amount() > 0,
+            Asset::Fungible(fungible) => fungible.amount().as_u64() > 0,
             Asset::NonFungible(_) => true,
         };
         if should_insert {
@@ -1169,16 +1054,16 @@ fn prepare_partial_account_update(
     account_id: AccountId,
     delta: &miden_protocol::account::delta::AccountDelta,
 ) -> Result<(AccountStateForInsert, PendingStorageInserts, PendingAssetInserts), DatabaseError> {
-    // Build the minimal account state needed for partial delta application.
-    // Only load the storage map entries and vault balances that will receive updates.
-    // The next line fetches the header, which will always change unless the delta is empty.
+    // Build the minimal account state needed for partial delta application. Only load the storage
+    // map entries and vault balances that will receive updates. The next line fetches the header,
+    // which will always change unless the delta is empty.
     let state_headers = select_minimal_account_state_headers(conn, account_id)?;
 
-    // --- Process asset updates. ---------------------------------
-    // Only query balances for faucet_ids that are being updated.
-    let faucet_ids =
-        Vec::from_iter(delta.vault().fungible().iter().map(|(vault_key, _)| vault_key.faucet_id()));
-    let prev_balances = select_vault_balances_by_faucet_ids(conn, account_id, &faucet_ids)?;
+    // --- Process asset updates. --------------------------------- Look up balances by vault key
+    // (which includes the callback flag), not by faucet id.
+    let vault_keys =
+        Vec::from_iter(delta.vault().fungible().iter().map(|(vault_key, _)| *vault_key));
+    let prev_balances = select_vault_balances_by_vault_keys(conn, account_id, &vault_keys)?;
 
     // Encode `Some` as update and `None` as removal.
     let mut assets = Vec::new();
@@ -1186,16 +1071,17 @@ fn prepare_partial_account_update(
     // Update fungible assets.
     for (vault_key, amount_delta) in delta.vault().fungible().iter() {
         let faucet_id = vault_key.faucet_id();
-        let prev_amount = prev_balances.get(&faucet_id).copied().unwrap_or(0);
-        let prev_asset = FungibleAsset::new(faucet_id, prev_amount)?;
+        let callback_flag = vault_key.callback_flag();
+        let prev_amount = prev_balances.get(&vault_key.to_word()).copied().unwrap_or(0);
+        let prev_asset = FungibleAsset::new(faucet_id, prev_amount)?.with_callbacks(callback_flag);
         let amount_abs = amount_delta.unsigned_abs();
-        let delta = FungibleAsset::new(faucet_id, amount_abs)?;
+        let delta = FungibleAsset::new(faucet_id, amount_abs)?.with_callbacks(callback_flag);
         let new_balance = if *amount_delta < 0 {
             prev_asset.sub(delta)?
         } else {
             prev_asset.add(delta)?
         };
-        let update_or_remove = if new_balance.amount() == 0 {
+        let update_or_remove = if new_balance.amount().as_u64() == 0 {
             None
         } else {
             Some(Asset::from(new_balance))
@@ -1244,8 +1130,7 @@ fn prepare_partial_account_update(
         vault.root()
     };
 
-    // --- Compute updated account state for the accounts row. ---
-    // Apply nonce delta.
+    // --- Compute updated account state for the accounts row. --- Apply nonce delta.
     let new_nonce_value = state_headers
         .nonce
         .as_canonical_u64()
@@ -1253,7 +1138,7 @@ fn prepare_partial_account_update(
         .ok_or_else(|| {
             DatabaseError::DataCorrupted(format!("Nonce overflow for account {account_id}"))
         })?;
-    let new_nonce = Felt::new(new_nonce_value);
+    let new_nonce = Felt::new_unchecked(new_nonce_value);
 
     // Create minimal account state data for the row insert.
     let account_state = PartialAccountState {
@@ -1281,12 +1166,45 @@ fn prepare_partial_account_update(
     Ok((AccountStateForInsert::PartialState(account_state), storage, assets))
 }
 
+/// Returns the subset of `account_ids` whose latest committed state is a network account.
+///
+/// Unknown ids and non-network accounts are silently omitted.
+pub(crate) fn select_network_accounts_subset(
+    conn: &mut SqliteConnection,
+    account_ids: &[AccountId],
+) -> Result<HashSet<AccountId>, DatabaseError> {
+    QueryParamAccountIdLimit::check(account_ids.len())?;
+    let id_bytes: Vec<Vec<u8>> =
+        account_ids.iter().map(miden_crypto::utils::Serializable::to_bytes).collect();
+
+    let rows: Vec<Vec<u8>> =
+        SelectDsl::select(schema::accounts::table, schema::accounts::account_id)
+            .filter(
+                schema::accounts::account_id
+                    .eq_any(&id_bytes)
+                    .and(
+                        schema::accounts::network_account_type
+                            .eq(NetworkAccountType::Network.to_raw_sql()),
+                    )
+                    .and(schema::accounts::is_latest.eq(true)),
+            )
+            .load::<Vec<u8>>(conn)
+            .map_err(DatabaseError::Diesel)?;
+
+    rows.into_iter()
+        .map(|bytes| {
+            AccountId::read_from_bytes(&bytes).map_err(DatabaseError::DeserializationError)
+        })
+        .collect()
+}
+
 /// Attention: Assumes the account details are NOT null! The schema explicitly allows this though!
 #[tracing::instrument(
     target = COMPONENT,
     skip_all,
     err,
 )]
+#[expect(clippy::too_many_lines)]
 pub(crate) fn upsert_accounts(
     conn: &mut SqliteConnection,
     accounts: &[BlockAccountUpdate],
@@ -1296,28 +1214,25 @@ pub(crate) fn upsert_accounts(
     for update in accounts {
         let account_id = update.account_id();
         let account_id_bytes = account_id.to_bytes();
-        let block_num_raw = block_num.to_raw_sql();
 
-        let network_account_type = if account_id.is_network() {
-            NetworkAccountType::Network
-        } else {
-            NetworkAccountType::None
-        };
-
-        // Preserve the original creation block when updating existing accounts.
-        let created_at_block_raw = QueryDsl::select(
+        // Pull the latest row (if any) so we can carry forward `created_at_block` and the
+        // `network_account_type` classification, both of which are fixed at account creation.
+        let existing: Option<(i64, i32)> = QueryDsl::select(
             schema::accounts::table.filter(
                 schema::accounts::account_id
                     .eq(&account_id_bytes)
                     .and(schema::accounts::is_latest.eq(true)),
             ),
-            schema::accounts::created_at_block,
+            (schema::accounts::created_at_block, schema::accounts::network_account_type),
         )
-        .first::<i64>(conn)
+        .first(conn)
         .optional()
-        .map_err(DatabaseError::Diesel)?
-        .unwrap_or(block_num_raw);
-        let created_at_block = BlockNumber::from_raw_sql(created_at_block_raw)?;
+        .map_err(DatabaseError::Diesel)?;
+
+        let created_at_block = match existing {
+            Some((raw, _)) => BlockNumber::from_raw_sql(raw)?,
+            None => block_num,
+        };
 
         // NOTE: we collect storage / asset inserts to apply them only after the account row is
         // written. The storage and vault tables have FKs pointing to accounts `(account_id,
@@ -1339,6 +1254,20 @@ pub(crate) fn upsert_accounts(
             // Update of an existing account
             AccountUpdateDetails::Delta(delta) => {
                 prepare_partial_account_update(conn, update, account_id, delta)?
+            },
+        };
+
+        // Inherit the classification when the account already exists; otherwise classify it once at
+        // creation based on the new state.
+        let network_account_type = match existing {
+            Some((_, raw)) => NetworkAccountType::from_raw_sql(raw)?,
+            None => match &account_state {
+                AccountStateForInsert::FullAccount(account)
+                    if NetworkAccount::new(account.clone()).is_ok() =>
+                {
+                    NetworkAccountType::Network
+                },
+                _ => NetworkAccountType::None,
             },
         };
 
@@ -1399,8 +1328,7 @@ pub(crate) fn upsert_accounts(
             .set(&account_value)
             .execute(conn)?;
 
-        // insert pending storage map entries
-        // TODO consider batching
+        // insert pending storage map entries TODO consider batching
         for (acc_id, slot_name, key, value) in pending_storage_inserts {
             insert_account_storage_map_value(conn, acc_id, block_num, slot_name, key, value)?;
         }
@@ -1439,7 +1367,7 @@ pub(crate) struct AccountRowInsert {
 
 impl AccountRowInsert {
     /// Creates an insert row for a private account (no public state).
-    fn new_private(
+    pub(crate) fn new_private(
         account_id: AccountId,
         network_account_type: NetworkAccountType,
         account_commitment: Word,
@@ -1555,8 +1483,8 @@ pub(crate) struct AccountStorageMapRowInsert {
 // ================================================================================================
 
 /// Number of historical blocks to retain for vault assets, storage map values, and account codes.
-/// Entries older than `chain_tip - HISTORICAL_BLOCK_RETENTION` will be deleted,
-/// except for entries marked with `is_latest=true` which are always retained.
+/// Entries older than `chain_tip - HISTORICAL_BLOCK_RETENTION` will be deleted, except for entries
+/// marked with `is_latest=true` which are always retained.
 pub const HISTORICAL_BLOCK_RETENTION: u32 = 50;
 
 /// Clean up old entries for all accounts, deleting entries older than the retention window.
@@ -1635,17 +1563,9 @@ fn prune_account_storage_map_values(
 /// references its `code_commitment`. This covers both active accounts (`is_latest=true`) and
 /// recent historical rows that still fall within the retention window.
 ///
-/// # Raw SQL
-///
-/// ```sql
-/// DELETE FROM account_codes
-/// WHERE code_commitment NOT IN (
-///     SELECT DISTINCT code_commitment
-///     FROM accounts
-///     WHERE code_commitment IS NOT NULL
-///       AND (block_num >= ?1 OR is_latest = 1)
-/// )
-/// ```
+/// The `UNION ALL` shape and explicit index selections avoid SQLite choosing
+/// `idx_accounts_code_commitment` for the whole predicate, which is expensive when the account
+/// history table has millions of public rows.
 #[tracing::instrument(
     target = COMPONENT,
     skip_all,
@@ -1662,9 +1582,17 @@ fn prune_account_codes(
         "DELETE FROM account_codes \
          WHERE code_commitment NOT IN ( \
              SELECT DISTINCT code_commitment \
-             FROM accounts \
-             WHERE code_commitment IS NOT NULL \
-               AND (block_num >= ?1 OR is_latest = 1 ) \
+             FROM ( \
+                 SELECT code_commitment \
+                 FROM accounts INDEXED BY idx_accounts_prune_code \
+                 WHERE code_commitment IS NOT NULL \
+                   AND block_num >= ?1 \
+                 UNION ALL \
+                 SELECT code_commitment \
+                 FROM accounts INDEXED BY idx_accounts_latest_code_commitment \
+                 WHERE code_commitment IS NOT NULL \
+                   AND is_latest = 1 \
+             ) \
          )",
     )
     .bind::<BigInt, _>(cutoff_block)

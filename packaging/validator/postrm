@@ -1,0 +1,12 @@
+#!/bin/bash
+#
+###############
+# Remove miden-validator install
+##############
+svc=miden-validator
+
+sudo rm -rf "/lib/systemd/system/$svc.service"
+sudo rm -rf "/etc/opt/$svc"
+sudo deluser "$svc"
+
+sudo systemctl daemon-reload

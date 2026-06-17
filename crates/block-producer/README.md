@@ -1,57 +1,31 @@
-# Miden block producer
+# Miden node block producer
 
-Contains code defining the [Miden node's block-producer](/README.md#architecture) component. It is responsible for
-ordering transactions into blocks and submitting these for inclusion in the blockchain.
+`block-producer` contains the block sequencing and block syncing implementation used by the Miden node. It is part of
+the [Miden node](https://github.com/0xMiden/node#readme) workspace and is embedded by the `node` binary rather than
+operated directly.
 
-It serves a small [gRPC](https://grpc.io) API which the node's RPC component uses to submit new transactions. In turn,
-the `block-producer` uses the store's gRPC API to submit blocks and query chain state.
+## Operation Modes
 
-For more information on the installation and operation of this component, please see the [node's readme](../../README.md).
+### Sequencer
 
-## API
+When `node` runs in sequencer mode, the block producer is active. It accepts transactions that have passed RPC-side
+validation, keeps them in the mempool, selects transactions into batches, proves those batches, assembles proposed
+blocks, and coordinates validation and commitment.
 
-The full gRPC API can be found [here](../../proto/proto/block_producer.proto).
+The sequencer mempool is modeled as a directed acyclic graph (DAG) of in-flight state transitions. A child depends on a
+parent when it consumes state produced by that parent, such as an output note or a new account state. This lets the
+block producer select only transactions and batches whose ancestors are already selected, while preserving the chain
+rule that later state transitions cannot be committed before the state they build on.
 
----
+Internally, the mempool maintains separate DAGs for transactions awaiting batching and batches awaiting inclusion in a
+block. Reverting a transaction or batch also reverts its descendants, and the DAG invariant avoids dependency cycles
+that would force several interdependent items to be committed atomically in the same block.
 
-### SubmitProvenTransaction
+### Full Node
 
-Submits a proven transaction to the block-producer, returning the current chain height if successful.
-
-The block-producer does _not_ verify the transaction's proof as it assumes the RPC component has done so. This is done
-to minimize the performance impact of new transactions on the block-producer.
-
-Transactions are verified before being added to the block-producer's mempool. Transaction which fail verification are
-rejected and an error is returned. Possible reasons for verification failure include
-
-- current account state does not match the transaction's initial account state
-- transaction attempts to consume non-existing, or already consumed notes
-- transaction attempts to create a duplicate note
-- invalid transaction proof (checked by the RPC component)
-
-Verified transactions are added to the mempool however they are still _not guaranteed_ to make it into a block.
-Transactions may be evicted from the mempool if their preconditions no longer hold. Currently the only precondition is
-transaction expiration height. Furthermore, as a defense against bugs the mempool may evict transactions it deems buggy
-e.g. cause block proofs to fail due to some bug in the VM, compiler, prover etc.
-
-Since transactions can depend on other transactions in the mempool this means a specific transaction may be evicted if:
-
-- it's own expiration height is exceeded, or
-- it is deemed buggy by the mempool, or
-- any ancestor transaction in the mempool is evicted
-
-This list will be extended in the future e.g. eviction due to gas price fluctuations.
-
-Note that since the RPC response only indicates admission into the mempool, its not directly possible to know if the
-transaction was evicted. The best way to ensure this is to effectively add a timeout to the transaction by setting the
-transaction's expiration height. Once the blockchain advances beyond this point without including the transaction you
-can know for certain it was evicted.
-
----
-
-## Crate Features
-
-- `tracing-forest`: sets logging using tracing-forest. Disabled by default.
+When `node` runs in full-node mode, the block producer syncs blocks from an upstream RPC source, stores the resulting
+state locally, and serves a local RPC API. It does not maintain a sequencing mempool or produce new blocks.
 
 ## License
+
 This project is [MIT licensed](../../LICENSE).

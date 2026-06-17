@@ -1,0 +1,427 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: "${{ github.workflow }} @ ${{ github.ref }}"
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  DOCKER_PLATFORMS: linux/amd64,linux/arm64
+
+jobs:
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      commit: ${{ steps.release.outputs.commit }}
+      created: ${{ steps.release.outputs.created }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+      workspace_packages: ${{ steps.release.outputs.workspace_packages }}
+      publishable_crates: ${{ steps.release.outputs.publishable_crates }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Rustup
+        run: rustup toolchain install --no-self-update
+
+      - name: Validate release tag and version
+        id: release
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "::error::Release tags must look like v1.2.3 or v1.2.3-rc.1"
+            exit 1
+          fi
+
+          version="${TAG#v}"
+          metadata="$(cargo metadata --no-deps --format-version 1)"
+          mapfile -t versions < <(jq -r '[.packages[] | select(.publish != []) | .version] | unique | .[]' <<< "${metadata}")
+          workspace_packages="$(
+            jq -c '
+              . as $m
+              | ($m.workspace_root + "/") as $root
+              | $m.workspace_members as $members
+              | $m.packages
+              | map(select(.id as $id | $members | index($id)))
+              | map({ name, manifest_path: (.manifest_path | ltrimstr($root)) })
+              | sort_by(.name)
+            ' <<< "${metadata}"
+          )"
+          publishable_crates="$(
+            jq -c '
+              [.packages[] | select(.publish != []) | { name }]
+              | sort_by(.name)
+            ' <<< "${metadata}"
+          )"
+
+          if [[ "${#versions[@]}" -ne 1 ]]; then
+            printf '%s\n' "${versions[@]}"
+            echo "::error::Publishable workspace packages do not share exactly one version"
+            exit 1
+          fi
+
+          if [[ "${versions[0]}" != "${version}" ]]; then
+            echo "::error::Release tag ${TAG} does not match workspace package version ${versions[0]}"
+            exit 1
+          fi
+
+          prerelease=false
+          if [[ "${version}" == *-* ]]; then
+            prerelease=true
+          fi
+
+          {
+            # Keep Docker metadata identical between dry-run and publish builds so the
+            # publish build can reuse the dry-run build cache instead of invalidating
+            # the final image layers with a new timestamp.
+            echo "commit=$(git rev-parse HEAD)"
+            echo "created=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            echo "tag=${TAG}"
+            echo "version=${version}"
+            echo "prerelease=${prerelease}"
+            echo "workspace_packages=${workspace_packages}"
+            echo "publishable_crates=${publishable_crates}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Ensure GitHub release does not exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "${TAG}" --repo "${REPO}" >/dev/null 2>&1; then
+            echo "::error::GitHub release ${TAG} already exists. Leaving the existing release and tag untouched."
+            exit 1
+          fi
+
+  check-crate-builds:
+    name: cargo check ${{ matrix.name }}
+    runs-on: warp-ubuntu-latest-x64-8x
+    needs: preflight
+    if: ${{ github.repository_owner == '0xMiden' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.preflight.outputs.publishable_crates) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.preflight.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: ./.github/actions/install-rocksdb
+      - uses: ./.github/actions/install-protobuf-compiler
+
+      - name: Cleanup large tools for build space
+        uses: ./.github/actions/cleanup-runner
+
+      - name: Rustup
+        run: rustup toolchain install --no-self-update
+
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          shared-key: release-dry-run-crates
+          cache-provider: warpbuild
+          save-if: false
+
+      - name: Check package builds
+        env:
+          PACKAGE: ${{ matrix.name }}
+        run: cargo check -p "${PACKAGE}" --locked
+
+  dry-run-crates:
+    name: Dry-run crates.io publish
+    runs-on: warp-ubuntu-latest-x64-8x
+    needs: preflight
+    if: ${{ github.repository_owner == '0xMiden' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.preflight.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Rustup
+        run: rustup toolchain install --no-self-update
+
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          shared-key: release-dry-run-crates
+          cache-provider: warpbuild
+          save-if: false
+
+      - name: Dry-run cargo publish without verification
+        run: cargo publish --workspace --dry-run --no-verify --locked
+
+  check-msrv:
+    name: Check MSRV ${{ matrix.name }}
+    runs-on: warp-ubuntu-latest-x64-8x
+    needs: preflight
+    if: ${{ github.repository_owner == '0xMiden' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.preflight.outputs.workspace_packages) }}
+    # Deliberately use stable Rust instead of rust-toolchain.toml because
+    # cargo-msrv itself may require a newer compiler than the repo MSRV.
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.preflight.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: ./.github/actions/install-rocksdb
+      - uses: ./.github/actions/install-protobuf-compiler
+
+      - name: Cleanup large tools for build space
+        uses: ./.github/actions/cleanup-runner
+
+      - name: Rustup
+        run: rustup toolchain install --no-self-update stable
+
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          shared-key: release-msrv
+          cache-provider: warpbuild
+          save-if: false
+
+      - name: Install cargo-binstall
+        uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
+        with:
+          tool: cargo-binstall
+
+      - name: Install cargo-msrv
+        run: cargo binstall --no-confirm cargo-msrv
+
+      - name: Show package info
+        env:
+          MANIFEST_PATH: ${{ matrix.manifest_path }}
+          PACKAGE: ${{ matrix.name }}
+        run: |
+          echo "Package: ${PACKAGE}"
+          echo "Manifest path: ${MANIFEST_PATH}"
+          cargo msrv show --manifest-path "${MANIFEST_PATH}"
+
+      - name: Check MSRV
+        env:
+          MANIFEST_PATH: ${{ matrix.manifest_path }}
+        run: cargo msrv verify --manifest-path "${MANIFEST_PATH}"
+
+  dry-run-docker:
+    name: Dry-run Docker ${{ matrix.component }}
+    runs-on: warp-ubuntu-latest-x64-8x
+    needs: preflight
+    if: ${{ github.repository_owner == '0xMiden' }}
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: node
+            bin: miden-node
+            port: 57291
+          - component: validator
+            bin: miden-validator
+            port: 50101
+          - component: ntx-builder
+            bin: miden-ntx-builder
+            port: 50301
+          - component: remote-prover
+            bin: miden-remote-prover
+            port: 50051
+          - component: network-monitor
+            bin: miden-network-monitor
+            port: 3000
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.preflight.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build Docker image
+        uses: WarpBuilds/build-push-action@ec038a9f4b87a7c7ccb50ac7a26a90d46a610a81 # v6.0.9
+        with:
+          context: .
+          push: false
+          file: ./Dockerfile
+          platforms: ${{ env.DOCKER_PLATFORMS }}
+          profile-name: ${{ vars.WARPBUILD_DOCKER_BUILDER_PROFILE }}
+          pull: true
+          build-args: |
+            BIN=${{ matrix.bin }}
+            PORT=${{ matrix.port }}
+            CREATED=${{ needs.preflight.outputs.created }}
+            VERSION=${{ needs.preflight.outputs.tag }}
+            COMMIT=${{ needs.preflight.outputs.commit }}
+
+  publish-docker:
+    name: Publish Docker ${{ matrix.component }}
+    runs-on: warp-ubuntu-latest-x64-8x
+    needs: [preflight, check-crate-builds, dry-run-crates, check-msrv, dry-run-docker]
+    if: ${{ github.repository_owner == '0xMiden' }}
+    environment: publish-docker
+    permissions:
+      id-token: write
+      contents: read
+      packages: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: node
+            bin: miden-node
+            port: 57291
+          - component: validator
+            bin: miden-validator
+            port: 50101
+          - component: ntx-builder
+            bin: miden-ntx-builder
+            port: 50301
+          - component: remote-prover
+            bin: miden-remote-prover
+            port: 50051
+          - component: network-monitor
+            bin: miden-network-monitor
+            port: 3000
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.preflight.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Ensure GitHub release still does not exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "${TAG}" --repo "${REPO}" >/dev/null 2>&1; then
+            echo "::error::GitHub release ${TAG} already exists. Refusing to publish Docker images."
+            exit 1
+          fi
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: WarpBuilds/build-push-action@ec038a9f4b87a7c7ccb50ac7a26a90d46a610a81 # v6.0.9
+        with:
+          context: .
+          push: true
+          file: ./Dockerfile
+          platforms: ${{ env.DOCKER_PLATFORMS }}
+          profile-name: ${{ vars.WARPBUILD_DOCKER_BUILDER_PROFILE }}
+          pull: false
+          build-args: |
+            BIN=${{ matrix.bin }}
+            PORT=${{ matrix.port }}
+            CREATED=${{ needs.preflight.outputs.created }}
+            VERSION=${{ needs.preflight.outputs.tag }}
+            COMMIT=${{ needs.preflight.outputs.commit }}
+          tags: ${{ env.REGISTRY }}/0xmiden/miden-${{ matrix.component }}:${{ needs.preflight.outputs.tag }}
+
+  publish-github-release:
+    name: Publish GitHub release
+    runs-on: ubuntu-24.04
+    needs: [preflight, publish-docker]
+    if: ${{ github.repository_owner == '0xMiden' }}
+    permissions:
+      actions: write
+      contents: write
+    steps:
+      - name: Re-check GitHub release absence
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "${TAG}" --repo "${REPO}" >/dev/null 2>&1; then
+            echo "::error::GitHub release ${TAG} already exists. Leaving it untouched."
+            exit 1
+          fi
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          prerelease_flag=()
+          if [[ "${PRERELEASE}" == "true" ]]; then
+            prerelease_flag=(--prerelease)
+          fi
+
+          gh release create "${TAG}" \
+            --repo "${REPO}" \
+            --verify-tag \
+            --title "${TAG}" \
+            --notes "Release ${TAG}" \
+            "${prerelease_flag[@]}"
+
+      - name: Trigger post-release publishing workflows
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          # The GitHub release is created with GITHUB_TOKEN, so its release
+          # event does not start follow-up workflows. workflow_dispatch events
+          # are allowed for GITHUB_TOKEN, so trigger those workflows directly.
+          gh workflow run publish-crates.yml \
+            --repo "${REPO}" \
+            --ref "${TAG}" \
+            --field "version=${TAG}"
+
+          gh workflow run publish-debian-all.yml \
+            --repo "${REPO}" \
+            --ref "${TAG}" \
+            --field "version=${TAG}"

@@ -27,8 +27,8 @@ pub enum Command {
     /// Create and store blocks into the store. Create a given number of accounts, where each
     /// account consumes a note created from a faucet.
     SeedStore {
-        /// Directory in which to store the database and raw block data. If the directory contains
-        /// a database dump file, it will be replaced.
+        /// Directory in which to store the database and raw block data. If the directory contains a
+        /// database dump file, it will be replaced.
         #[arg(short, long, value_name = "DATA_DIRECTORY")]
         data_directory: PathBuf,
 
@@ -36,8 +36,8 @@ pub enum Command {
         #[arg(short, long, value_name = "NUM_ACCOUNTS")]
         num_accounts: usize,
 
-        /// Percentage of accounts that will be created as public accounts. The rest will be
-        /// private accounts.
+        /// Percentage of accounts that will be created as public accounts. The rest will be private
+        /// accounts.
         #[arg(short, long, value_name = "PUBLIC_ACCOUNTS_PERCENTAGE", default_value = "0")]
         public_accounts_percentage: u8,
 
@@ -68,8 +68,8 @@ pub enum Command {
         #[arg(short, long, value_name = "ITERATIONS", default_value = "10000")]
         iterations: usize,
 
-        /// Concurrency level of the sync request. Represents the number of request that
-        /// can be sent in parallel.
+        /// Concurrency level of the sync request. Represents the number of request that can be sent
+        /// in parallel.
         #[arg(short, long, value_name = "CONCURRENCY", default_value = "1")]
         concurrency: usize,
     },
@@ -95,11 +95,7 @@ pub enum Endpoint {
         block_range: u32,
     },
     #[command(name = "sync-chain-mmr")]
-    SyncChainMmr {
-        /// Block range size for each request (number of blocks to query).
-        #[arg(short, long, value_name = "BLOCK_RANGE", default_value = "1000")]
-        block_range: u32,
-    },
+    SyncChainMmr,
     #[command(name = "load-state")]
     LoadState,
     #[command(name = "get-account")]
@@ -126,14 +122,14 @@ async fn main() {
             vault_entries,
             account_update_blocks,
         } => {
-            seed_store(
+            Box::pin(seed_store(
                 data_directory,
                 num_accounts,
                 public_accounts_percentage,
                 storage_map_entries,
                 vault_entries,
                 account_update_blocks,
-            )
+            ))
             .await;
         },
         Command::BenchmarkStore {
@@ -158,8 +154,8 @@ async fn main() {
                 )
                 .await;
             },
-            Endpoint::SyncChainMmr { block_range } => {
-                bench_sync_chain_mmr(data_directory, iterations, concurrency, block_range).await;
+            Endpoint::SyncChainMmr => {
+                bench_sync_chain_mmr(data_directory, iterations, concurrency).await;
             },
             Endpoint::LoadState => {
                 load_state(&data_directory).await;

@@ -53,8 +53,8 @@ fn valid_with_state_from_multiple_parents() {
     }
 }
 
-/// Ensures that transactions that expire before or within the expiration slack of the chain tip
-/// are rejected.
+/// Ensures that transactions that expire before or within the expiration slack of the chain tip are
+/// rejected.
 mod tx_expiration {
     use super::*;
 
@@ -70,7 +70,7 @@ mod tx_expiration {
         for _ in 0..slack + 10 {
             let block = uut.select_block();
             let header = BlockHeader::mock(block.block_number, None, None, &[], Word::default());
-            uut.commit_block(header);
+            uut.commit_block(&header);
         }
 
         uut
@@ -144,7 +144,7 @@ mod authentication_height {
         for _ in 0..retention + 10 {
             let block = uut.select_block();
             let header = BlockHeader::mock(block.block_number, None, None, &[], Word::default());
-            uut.commit_block(header);
+            uut.commit_block(&header);
         }
 
         uut

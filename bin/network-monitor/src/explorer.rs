@@ -1,33 +1,37 @@
 // EXPLORER STATUS CHECKER
 // ================================================================================================
 
-use std::fmt::{self, Display};
 use std::time::Duration;
 
+use anyhow::Context;
 use reqwest::Client;
-use serde::Serialize;
-use tokio::sync::watch;
-use tokio::time::MissedTickBehavior;
-use tracing::{info, instrument};
+use serde::{Deserialize, Deserializer, Serialize};
+use tracing::instrument;
 use url::Url;
 
-use crate::status::{ExplorerStatusDetails, ServiceDetails, ServiceStatus, Status};
-use crate::{COMPONENT, current_unix_timestamp_secs};
+use crate::COMPONENT;
+use crate::service::Service;
+use crate::status::{ExplorerStatusDetails, ServiceDetails, ServiceStatus};
 
-const LATEST_BLOCK_QUERY: &str = "
-query LatestBlock {
+/// Fetches network-wide totals from `overviewStats` together with the latest block header (number +
+/// timestamp + commitments). The latest block is still needed for tip-drift detection against the
+/// RPC.
+const NETWORK_OVERVIEW_QUERY: &str = "
+query NetworkOverview {
+    overviewStats {
+        total_count_transactions
+        total_count_nullifiers
+        total_count_notes
+        total_count_account_updates
+    }
     blocks(input: { sort_by: timestamp, order_by: desc }, first: 1) {
         edges {
             node {
                 block_number
                 timestamp
-                number_of_transactions
-                number_of_nullifiers
-                number_of_notes
                 block_commitment
                 chain_commitment
                 proof_commitment
-                number_of_account_updates
             }
         }
     }
@@ -43,224 +47,262 @@ struct GraphqlRequest<V> {
     variables: V,
 }
 
-const LATEST_BLOCK_REQUEST: GraphqlRequest<EmptyVariables> = GraphqlRequest {
-    query: LATEST_BLOCK_QUERY,
+const NETWORK_OVERVIEW_REQUEST: GraphqlRequest<EmptyVariables> = GraphqlRequest {
+    query: NETWORK_OVERVIEW_QUERY,
     variables: EmptyVariables,
 };
 
-/// Runs a task that continuously checks explorer status and updates a watch channel.
-///
-/// This function spawns a task that periodically checks the explorer service status
-/// and sends updates through a watch channel.
-///
-/// # Arguments
-///
-/// * `explorer_url` - The URL of the explorer service.
-/// * `name` - The name of the explorer.
-/// * `status_sender` - The sender for the watch channel.
-/// * `status_check_interval` - The interval at which to check the status of the services.
-///
-/// # Returns
-///
-/// `Ok(())` if the monitoring task runs and completes successfully, or an error if there are
-/// connection issues or failures while checking the explorer status.
-pub async fn run_explorer_status_task(
-    explorer_url: Url,
-    name: String,
-    status_sender: watch::Sender<ServiceStatus>,
-    status_check_interval: Duration,
+pub struct ExplorerService {
+    url: Url,
+    client: Client,
+    interval: Duration,
     request_timeout: Duration,
-) {
-    let mut explorer_client = reqwest::Client::new();
+}
 
-    let mut interval = tokio::time::interval(status_check_interval);
-    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-    loop {
-        interval.tick().await;
-
-        let current_time = current_unix_timestamp_secs();
-
-        let status = check_explorer_status(
-            &mut explorer_client,
-            explorer_url.clone(),
-            name.clone(),
-            current_time,
+impl ExplorerService {
+    pub fn new(url: Url, interval: Duration, request_timeout: Duration) -> Self {
+        Self {
+            url,
+            client: reqwest::Client::new(),
+            interval,
             request_timeout,
+        }
+    }
+}
+
+impl Service for ExplorerService {
+    fn name(&self) -> &'static str {
+        "Explorer"
+    }
+
+    fn interval(&self) -> Duration {
+        self.interval
+    }
+
+    fn initial_status(&self) -> ServiceStatus {
+        ServiceStatus::unknown(
+            self.name(),
+            ServiceDetails::ExplorerStatus(ExplorerStatusDetails::default()),
         )
-        .await;
+    }
 
-        // Send the status update; exit if no receivers (shutdown signal)
-        if status_sender.send(status).is_err() {
-            info!("No receivers for explorer status updates, shutting down");
-            return;
+    #[instrument(target = COMPONENT, name = "check-status.explorer", skip_all, ret(level = "info"))]
+    async fn check(&mut self) -> ServiceStatus {
+        let resp = self
+            .client
+            .post(self.url.clone())
+            .json(&NETWORK_OVERVIEW_REQUEST)
+            .timeout(self.request_timeout)
+            .send()
+            .await;
+
+        let body = match resp {
+            Ok(resp) => match resp.text().await {
+                Ok(body) => body,
+                Err(e) => return ServiceStatus::error(self.name(), e),
+            },
+            Err(e) => return ServiceStatus::error(self.name(), e),
+        };
+
+        match parse_response(&body) {
+            Ok(details) => {
+                ServiceStatus::healthy(self.name(), ServiceDetails::ExplorerStatus(details))
+            },
+            Err(e) => ServiceStatus::error(self.name(), e),
         }
     }
 }
 
-/// Checks the status of the explorer service.
+/// Deserialize the GraphQL response and project it onto [`ExplorerStatusDetails`].
 ///
-/// This function checks the status of the explorer service.
-///
-/// # GraphQL Query
-///
-/// See [`LATEST_BLOCK_QUERY`] for the exact query string used.
-///
-/// # Arguments
-///
-/// * `explorer` - The explorer client.
-/// * `name` - The name of the explorer.
-/// * `url` - The URL of the explorer.
-/// * `current_time` - The current time.
-///
-/// # Returns
-///
-/// A `ServiceStatus` containing the status of the explorer service.
-#[instrument(target = COMPONENT, name = "check-status.explorer", skip_all, ret(level = "info"))]
-pub(crate) async fn check_explorer_status(
-    explorer_client: &mut Client,
-    explorer_url: Url,
-    name: String,
-    current_time: u64,
-    request_timeout: Duration,
-) -> ServiceStatus {
-    let resp = explorer_client
-        .post(explorer_url.clone())
-        .json(&LATEST_BLOCK_REQUEST)
-        .timeout(request_timeout)
-        .send()
-        .await;
+/// Uses [`serde_path_to_error`] so that failures point at the specific JSON path that no longer
+/// matches the expected shape (e.g. `data.overviewStats.total_count_transactions`). The structs
+/// use `#[serde(deny_unknown_fields)]` so that unexpected additions surface in the same way.
+fn parse_response(body: &str) -> anyhow::Result<ExplorerStatusDetails> {
+    let mut de = serde_json::Deserializer::from_str(body);
+    let response: GraphqlResponse<NetworkOverviewData> = serde_path_to_error::deserialize(&mut de)
+        .with_context(|| format!("failed to parse explorer response: {body}"))?;
 
-    let body = match resp {
-        Ok(resp) => match resp.text().await {
-            Ok(body) => body,
-            Err(e) => return unhealthy(&name, current_time, &e),
-        },
-        Err(e) => return unhealthy(&name, current_time, &e),
-    };
+    let block = response
+        .data
+        .blocks
+        .edges
+        .into_iter()
+        .next()
+        .context("explorer returned no blocks")?
+        .node;
 
-    let value: serde_json::Value = match serde_json::from_str(&body) {
-        Ok(value) => value,
-        Err(e) => {
-            let msg = format!("{e}: {body}");
-            return unhealthy(&name, current_time, &msg);
-        },
-    };
+    Ok(ExplorerStatusDetails {
+        block_number: block.block_number,
+        timestamp: block.timestamp,
+        total_transactions: response.data.overview_stats.transactions,
+        total_nullifiers: response.data.overview_stats.nullifiers,
+        total_notes: response.data.overview_stats.notes,
+        total_account_updates: response.data.overview_stats.account_updates,
+        block_commitment: block.block_commitment,
+        chain_commitment: block.chain_commitment,
+        proof_commitment: block.proof_commitment,
+    })
+}
 
-    let details = ExplorerStatusDetails::try_from(value);
+// RESPONSE TYPES
+// ================================================================================================
 
-    match details {
-        Ok(details) => ServiceStatus {
-            name: name.clone(),
-            status: Status::Healthy,
-            last_checked: current_time,
-            error: None,
-            details: ServiceDetails::ExplorerStatus(details),
-        },
-        Err(e) => unhealthy(&name, current_time, &e),
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GraphqlResponse<T> {
+    data: T,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NetworkOverviewData {
+    #[serde(rename = "overviewStats")]
+    overview_stats: OverviewStats,
+    blocks: BlockConnection,
+}
+
+/// The explorer's `BigIntStringScalar` fields are wire-encoded as strings, so we parse them via
+/// [`u64_from_str`] rather than relying on serde's numeric deserialization.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OverviewStats {
+    #[serde(rename = "total_count_transactions", deserialize_with = "u64_from_str")]
+    transactions: u64,
+    #[serde(rename = "total_count_nullifiers", deserialize_with = "u64_from_str")]
+    nullifiers: u64,
+    #[serde(rename = "total_count_notes", deserialize_with = "u64_from_str")]
+    notes: u64,
+    #[serde(rename = "total_count_account_updates", deserialize_with = "u64_from_str")]
+    account_updates: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BlockConnection {
+    edges: Vec<BlockEdge>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BlockEdge {
+    node: BlockNode,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BlockNode {
+    #[serde(deserialize_with = "u64_from_str")]
+    block_number: u64,
+    #[serde(deserialize_with = "u64_from_str")]
+    timestamp: u64,
+    block_commitment: String,
+    chain_commitment: String,
+    proof_commitment: String,
+}
+
+fn u64_from_str<'de, D: Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+    let s = String::deserialize(d)?;
+    s.parse().map_err(serde::de::Error::custom)
+}
+
+// TESTS
+// ================================================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_response() -> String {
+        r#"{
+            "data": {
+                "overviewStats": {
+                    "total_count_transactions": "241820",
+                    "total_count_nullifiers": "53060",
+                    "total_count_notes": "125701",
+                    "total_count_account_updates": "241776"
+                },
+                "blocks": {
+                    "edges": [{
+                        "node": {
+                            "block_number": "1211961",
+                            "timestamp": "1779374922",
+                            "block_commitment": "0x7306",
+                            "chain_commitment": "0x11844a",
+                            "proof_commitment": "0xc2014763"
+                        }
+                    }]
+                }
+            }
+        }"#
+        .to_string()
     }
-}
 
-/// Returns an unhealthy service status.
-fn unhealthy(name: &str, current_time: u64, err: &impl ToString) -> ServiceStatus {
-    ServiceStatus {
-        name: name.to_owned(),
-        status: Status::Unhealthy,
-        last_checked: current_time,
-        error: Some(err.to_string()),
-        details: ServiceDetails::Error,
+    #[test]
+    fn parse_full_response() {
+        let details = parse_response(&sample_response()).unwrap();
+        assert_eq!(details.block_number, 1_211_961);
+        assert_eq!(details.timestamp, 1_779_374_922);
+        assert_eq!(details.total_transactions, 241_820);
+        assert_eq!(details.total_nullifiers, 53_060);
+        assert_eq!(details.total_notes, 125_701);
+        assert_eq!(details.total_account_updates, 241_776);
+        assert_eq!(details.block_commitment, "0x7306");
+        assert_eq!(details.chain_commitment, "0x11844a");
+        assert_eq!(details.proof_commitment, "0xc2014763");
     }
-}
 
-#[derive(Debug)]
-pub enum ExplorerStatusError {
-    MissingField(String),
-}
-
-impl Display for ExplorerStatusError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ExplorerStatusError::MissingField(field) => write!(f, "missing field: {field}"),
-        }
+    #[test]
+    fn missing_field_error_includes_path() {
+        let body = sample_response().replace("total_count_transactions", "txn_count");
+        let err = parse_response(&body).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("data.overviewStats"),
+            "error should locate the failing path, got: {msg}",
+        );
     }
-}
 
-/// Extracts a u64 from a JSON value that may be either a number or a
-/// string-encoded number (as returned by the Explorer's GraphQL API).
-fn value_as_u64(value: &serde_json::Value) -> Option<u64> {
-    value.as_u64().or_else(|| value.as_str().and_then(|s| s.parse().ok()))
-}
-
-impl TryFrom<serde_json::Value> for ExplorerStatusDetails {
-    type Error = ExplorerStatusError;
-
-    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
-        let node = value.pointer("/data/blocks/edges/0/node").ok_or_else(|| {
-            ExplorerStatusError::MissingField("data.blocks.edges[0].node".to_string())
-        })?;
-
-        let block_number = node
-            .get("block_number")
-            .and_then(value_as_u64)
-            .ok_or_else(|| ExplorerStatusError::MissingField("block_number".to_string()))?;
-        let timestamp = node
-            .get("timestamp")
-            .and_then(value_as_u64)
-            .ok_or_else(|| ExplorerStatusError::MissingField("timestamp".to_string()))?;
-
-        let number_of_transactions =
-            node.get("number_of_transactions").and_then(value_as_u64).ok_or_else(|| {
-                ExplorerStatusError::MissingField("number_of_transactions".to_string())
-            })?;
-        let number_of_nullifiers = node
-            .get("number_of_nullifiers")
-            .and_then(value_as_u64)
-            .ok_or_else(|| ExplorerStatusError::MissingField("number_of_nullifiers".to_string()))?;
-        let number_of_notes = node
-            .get("number_of_notes")
-            .and_then(value_as_u64)
-            .ok_or_else(|| ExplorerStatusError::MissingField("number_of_notes".to_string()))?;
-        let number_of_account_updates =
-            node.get("number_of_account_updates").and_then(value_as_u64).ok_or_else(|| {
-                ExplorerStatusError::MissingField("number_of_account_updates".to_string())
-            })?;
-
-        let block_commitment = node
-            .get("block_commitment")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ExplorerStatusError::MissingField("block_commitment".to_string()))?
-            .to_string();
-        let chain_commitment = node
-            .get("chain_commitment")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ExplorerStatusError::MissingField("chain_commitment".to_string()))?
-            .to_string();
-        let proof_commitment = node
-            .get("proof_commitment")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ExplorerStatusError::MissingField("proof_commitment".to_string()))?
-            .to_string();
-
-        Ok(Self {
-            block_number,
-            timestamp,
-            number_of_transactions,
-            number_of_nullifiers,
-            number_of_notes,
-            number_of_account_updates,
-            block_commitment,
-            chain_commitment,
-            proof_commitment,
-        })
+    #[test]
+    fn unknown_field_is_rejected() {
+        let body = sample_response().replace(
+            "\"total_count_transactions\": \"241820\",",
+            "\"total_count_transactions\": \"241820\", \"unexpected_field\": 1,",
+        );
+        let err = parse_response(&body).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("unexpected_field"),
+            "error should name the unknown field, got: {msg}",
+        );
     }
-}
 
-pub(crate) fn initial_explorer_status() -> ServiceStatus {
-    ServiceStatus {
-        name: "Explorer".to_string(),
-        status: Status::Unknown,
-        last_checked: current_unix_timestamp_secs(),
-        error: None,
-        details: ServiceDetails::ExplorerStatus(ExplorerStatusDetails::default()),
+    #[test]
+    fn empty_blocks_array_is_an_error() {
+        let body = r#"{
+            "data": {
+                "overviewStats": {
+                    "total_count_transactions": "1",
+                    "total_count_nullifiers": "1",
+                    "total_count_notes": "1",
+                    "total_count_account_updates": "1"
+                },
+                "blocks": { "edges": [] }
+            }
+        }"#;
+        let err = parse_response(body).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("no blocks"), "got: {msg}");
+    }
+
+    #[test]
+    fn non_numeric_string_is_rejected() {
+        let body = sample_response().replace("\"241820\"", "\"not-a-number\"");
+        let err = parse_response(&body).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("total_count_transactions"),
+            "error should point at the failing field, got: {msg}",
+        );
     }
 }

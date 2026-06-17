@@ -1,29 +1,37 @@
-//! Remote transaction prover test functionality.
+//! Remote prover monitoring: status polling and proof-test probing.
 //!
-//! This module contains the logic for periodically testing remote transaction prover functionality
-//! by sending mock transactions and checking for successful transaction proof generation.
+//! A prover is monitored by up to two tasks:
+//! - [`ProverStatusService`] (impl [`Service`]): polls the proxy status endpoint on the status
+//!   cadence and publishes the public [`ServiceStatus`] by merging in the latest probe outcome.
+//! - [`run_prover_test`] (spawned by the status service): acquires the proof-test payload from the
+//!   RPC, retrying until it succeeds, then runs proof-test probes on the longer test cadence and
+//!   publishes a private [`ProbeSnapshot`]. First spawned when the status service observes the
+//!   prover reporting [`ProofType::Transaction`]; respawned if it ever terminates, and its
+//!   snapshot is reported as stale once it stops updating.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use anyhow::Context;
-use miden_node_proto::clients::{Builder as ClientBuilder, RemoteProverClient};
+use miden_node_proto::clients::{RemoteProverClient, RemoteProverProxyStatusClient};
 use miden_node_proto::generated as proto;
-use miden_protocol::account::auth::AuthScheme;
-use miden_protocol::asset::{Asset, FungibleAsset};
-use miden_protocol::note::NoteType;
-use miden_protocol::testing::account_id::{ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET, ACCOUNT_ID_SENDER};
-use miden_protocol::transaction::TransactionInputs;
 use miden_protocol::utils::serde::Serializable;
-use miden_testing::{Auth, MockChainBuilder};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
+use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 use tonic::Request;
-use tracing::{info, instrument};
+use tracing::{debug, instrument, warn};
 use url::Url;
 
-use crate::status::{ServiceDetails, ServiceStatus, Status};
-use crate::{COMPONENT, current_unix_timestamp_secs};
+use crate::COMPONENT;
+use crate::service::{Service, build_tls_client};
+use crate::service_status::{
+    ProverTestOutcome,
+    RemoteProverDetails,
+    RemoteProverStatusDetails,
+    ServiceDetails,
+    ServiceStatus,
+    Status,
+};
 
 // PROOF TYPE
 // ================================================================================================
@@ -34,16 +42,8 @@ pub enum ProofType {
     Transaction,
     Block,
     Batch,
-}
-
-impl From<ProofType> for proto::remote_prover::ProofType {
-    fn from(value: ProofType) -> Self {
-        match value {
-            ProofType::Transaction => proto::remote_prover::ProofType::Transaction,
-            ProofType::Block => proto::remote_prover::ProofType::Block,
-            ProofType::Batch => proto::remote_prover::ProofType::Batch,
-        }
-    }
+    /// The prover reported a proof type this monitor version does not know about.
+    Unknown,
 }
 
 impl From<proto::remote_prover::ProofType> for ProofType {
@@ -69,167 +69,383 @@ pub struct ProverTestDetails {
     pub proof_type: ProofType,
 }
 
-// REMOTE TRANSACTION PROVER TEST TASK
+// PROBE SNAPSHOT
 // ================================================================================================
 
-/// Runs a task that continuously tests remote prover functionality and updates a watch channel.
-///
-/// This function spawns a task that periodically sends mock request payloads to a remote prover
-/// and measures the success/failure rate and performance metrics for proof generation.
-///
-/// # Arguments
-///
-/// * `prover_url` - The URL of the remote prover service to test.
-/// * `name` - The name of the remote prover.
-/// * `proof_type` - The type of proof to test.
-/// * `serialized_request_payload` - The serialized request payload to send to the remote prover.
-/// * `status_sender` - The sender for the watch channel.
-///
-/// # Returns
-///
-/// `Ok(())` if the task completes successfully, or an error if the task fails.
-pub async fn run_remote_prover_test_task(
-    prover_url: Url,
-    name: &str,
-    proof_type: ProofType,
-    serialized_request_payload: proto::remote_prover::ProofRequest,
-    status_sender: watch::Sender<ServiceStatus>,
+/// Private snapshot of the most recent probe result. Shared from the probe task to the status
+/// service via a `watch` channel.
+#[derive(Debug, Clone, Default)]
+pub struct ProbeSnapshot {
+    pub latest: Option<ProverTestOutcome>,
+    pub success_count: u64,
+    pub failure_count: u64,
+}
+
+// PROVER STATUS SERVICE
+// ================================================================================================
+
+/// Parameters captured at construction time for spawning (and respawning) the probe task once the
+/// status service observes the prover reporting [`ProofType::Transaction`].
+struct ProbeSpawner {
+    client: RemoteProverClient,
+    rpc_url: Url,
+    interval: Duration,
+    probe_tx: watch::Sender<ProbeSnapshot>,
+    name: String,
+}
+
+impl ProbeSpawner {
+    /// Spawns a probe task and returns its handle.
+    fn spawn(&self) -> JoinHandle<()> {
+        tokio::spawn(run_prover_test(
+            self.client.clone(),
+            self.rpc_url.clone(),
+            self.interval,
+            self.probe_tx.clone(),
+            self.name.clone(),
+        ))
+    }
+}
+
+/// Polls the remote prover's proxy status endpoint and publishes the combined [`ServiceStatus`]
+/// (status + latest probe outcome). Spawns the probe task once the prover reports Transaction type
+/// and keeps it alive from then on.
+pub struct ProverStatusService {
+    name: String,
+    url: String,
+    client: RemoteProverProxyStatusClient,
+    interval: Duration,
     request_timeout: Duration,
-    test_interval: Duration,
+    last_status: Option<RemoteProverStatusDetails>,
+    last_status_err: Option<String>,
+    probe_rx: watch::Receiver<ProbeSnapshot>,
+    probe_spawner: ProbeSpawner,
+    probe_handle: Option<JoinHandle<()>>,
+    /// When the most recent [`ProbeSnapshot`] change was observed; used to flag stale probe data.
+    last_probe_change: Option<Instant>,
+}
+
+impl ProverStatusService {
+    pub fn new(
+        name: String,
+        prover_url: Url,
+        rpc_url: Url,
+        interval: Duration,
+        request_timeout: Duration,
+        probe_interval: Duration,
+        test_client: RemoteProverClient,
+    ) -> Self {
+        let url = prover_url.to_string();
+        let client = build_tls_client::<RemoteProverProxyStatusClient>(prover_url, request_timeout);
+        let (probe_tx, probe_rx) = watch::channel(ProbeSnapshot::default());
+        let probe_spawner = ProbeSpawner {
+            client: test_client,
+            rpc_url,
+            interval: probe_interval,
+            probe_tx,
+            name: name.clone(),
+        };
+        Self {
+            name,
+            url,
+            client,
+            interval,
+            request_timeout,
+            last_status: None,
+            last_status_err: None,
+            probe_rx,
+            probe_spawner,
+            probe_handle: None,
+            last_probe_change: None,
+        }
+    }
+
+    /// Keeps the probe task alive once the prover has been observed to support Transaction proofs.
+    ///
+    /// Spawns the task on the first Transaction-type observation and respawns it if it ever
+    /// terminates. The task only ends by panicking (its snapshot channel outlives it), so a
+    /// finished handle is surfaced as an unhealthy outcome before respawning.
+    fn ensure_probe_running(&mut self) {
+        let Some(status) = &self.last_status else { return };
+        if !matches!(status.supported_proof_type, ProofType::Transaction) {
+            return;
+        }
+        match &self.probe_handle {
+            None => {
+                debug!(target: COMPONENT, prover = %self.name, "spawning probe task");
+                self.probe_handle = Some(self.probe_spawner.spawn());
+            },
+            Some(handle) if handle.is_finished() => {
+                warn!(
+                    target: COMPONENT,
+                    prover = %self.name,
+                    "probe task terminated unexpectedly; respawning"
+                );
+                self.probe_spawner.probe_tx.send_modify(|snapshot| {
+                    snapshot.failure_count += 1;
+                    snapshot.latest = Some(ProverTestOutcome {
+                        details: ProverTestDetails {
+                            test_duration_ms: 0,
+                            proof_size_bytes: 0,
+                            success_count: snapshot.success_count,
+                            failure_count: snapshot.failure_count,
+                            proof_type: ProofType::Transaction,
+                        },
+                        status: Status::Unhealthy,
+                        error: Some("probe task terminated unexpectedly; respawning".to_string()),
+                    });
+                });
+                self.probe_handle = Some(self.probe_spawner.spawn());
+            },
+            Some(_) => {},
+        }
+    }
+
+    /// Classifies the current status + probe state into a [`ServiceStatus`].
+    fn build_status(&self, probe: &ProbeSnapshot) -> ServiceStatus {
+        let Some(status_details) = self.last_status.clone() else {
+            let msg = self.last_status_err.clone().unwrap_or_else(|| "discovering".to_string());
+            let mut status = ServiceStatus::unknown(&self.name, ServiceDetails::Error);
+            status.error = Some(msg);
+            return status;
+        };
+
+        let test_outcome = classify_probe_outcome(
+            probe.latest.clone(),
+            self.last_probe_change.map(|changed| changed.elapsed()),
+            probe_staleness_window(self.probe_spawner.interval, self.request_timeout),
+        );
+
+        let details = ServiceDetails::RemoteProverStatus(RemoteProverDetails {
+            status: status_details.clone(),
+            test: test_outcome.clone(),
+        });
+
+        // Most recent status poll failed; report unhealthy but keep last known status details.
+        if let Some(err) = &self.last_status_err {
+            return ServiceStatus::unhealthy(&self.name, err.clone(), details);
+        }
+
+        if let Some(outcome) = &test_outcome {
+            if outcome.status == Status::Unhealthy {
+                let msg = outcome.error.clone().unwrap_or_else(|| "prover test failed".to_string());
+                return ServiceStatus::unhealthy(&self.name, msg, details);
+            }
+        }
+
+        let unhealthy_workers: Vec<_> = status_details
+            .workers
+            .iter()
+            .filter(|w| w.status != Status::Healthy)
+            .map(|w| w.name.clone())
+            .collect();
+
+        if status_details.workers.is_empty() {
+            ServiceStatus::unknown(&self.name, details)
+        } else if !unhealthy_workers.is_empty() {
+            ServiceStatus::unhealthy(
+                &self.name,
+                format!("unhealthy workers: {}", unhealthy_workers.join(", ")),
+                details,
+            )
+        } else {
+            ServiceStatus::healthy(&self.name, details)
+        }
+    }
+}
+
+impl Service for ProverStatusService {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn interval(&self) -> Duration {
+        self.interval
+    }
+
+    fn initial_status(&self) -> ServiceStatus {
+        self.build_status(&ProbeSnapshot::default())
+    }
+
+    #[instrument(
+        parent = None,
+        target = COMPONENT,
+        name = "network_monitor.prover.status_check",
+        skip_all,
+        level = "info",
+        ret(level = "debug"),
+        fields(prover = %self.name)
+    )]
+    async fn check(&mut self) -> ServiceStatus {
+        match self.client.status(()).await {
+            Ok(response) => {
+                self.last_status = Some(RemoteProverStatusDetails::from_proxy_status(
+                    response.into_inner(),
+                    self.url.clone(),
+                ));
+                self.last_status_err = None;
+            },
+            Err(e) => {
+                debug!(target: COMPONENT, prover = %self.name, error = %e, "Remote prover status check failed");
+                self.last_status_err = Some(e.to_string());
+            },
+        }
+        self.ensure_probe_running();
+        if self.probe_rx.has_changed().unwrap_or(false) {
+            self.last_probe_change = Some(Instant::now());
+        }
+        let probe = self.probe_rx.borrow_and_update().clone();
+        self.build_status(&probe)
+    }
+}
+
+// PROBE OUTCOME CLASSIFICATION
+// ================================================================================================
+
+/// Window after which a probe outcome with no fresh updates is considered stale.
+///
+/// Two full probe intervals plus the request timeout: a healthy probe task publishes at least
+/// once per interval, and a single in-flight `prove()` call cannot outlive the request timeout.
+fn probe_staleness_window(probe_interval: Duration, request_timeout: Duration) -> Duration {
+    probe_interval * 2 + request_timeout
+}
+
+/// Re-classifies a probe outcome as stale when no snapshot update has been observed within the
+/// staleness window.
+///
+/// Staleness is an observability gap, not a prover failure, so the outcome is degraded to
+/// [`Status::Unknown`] (which does not flip the prover card to unhealthy) instead of
+/// [`Status::Unhealthy`].
+fn classify_probe_outcome(
+    outcome: Option<ProverTestOutcome>,
+    elapsed_since_change: Option<Duration>,
+    staleness_window: Duration,
+) -> Option<ProverTestOutcome> {
+    let outcome = outcome?;
+    match elapsed_since_change {
+        Some(elapsed) if elapsed > staleness_window => Some(ProverTestOutcome {
+            status: Status::Unknown,
+            error: Some(format!("stale: no probe update for {}s", elapsed.as_secs())),
+            details: outcome.details,
+        }),
+        _ => Some(outcome),
+    }
+}
+
+// PROBE TASK
+// ================================================================================================
+
+/// Delay between payload-acquisition attempts. Each attempt is already bounded internally by the
+/// genesis-discovery backoff, so this only paces consecutive failed attempts.
+const PAYLOAD_RETRY_DELAY: Duration = Duration::from_secs(30);
+
+/// Runs proof-test probes on the configured interval. The task is spawned (and respawned) by
+/// [`ProverStatusService::ensure_probe_running`] only after the prover has been observed to
+/// support Transaction proofs.
+///
+/// The probe payload is acquired from the RPC first, retrying until it succeeds, so an RPC that
+/// is unreachable at spawn time delays probing instead of permanently disarming it. Acquisition
+/// failures are published as [`Status::Unknown`] outcomes: they are an RPC problem, not a prover
+/// failure.
+#[instrument(
+    parent = None,
+    target = COMPONENT,
+    name = "network_monitor.prover.run_test",
+    skip_all,
+    level = "info",
+    fields(prover = %name),
+)]
+async fn run_prover_test(
+    mut client: RemoteProverClient,
+    rpc_url: Url,
+    interval: Duration,
+    probe_tx: watch::Sender<ProbeSnapshot>,
+    name: String,
 ) {
-    let mut client = ClientBuilder::new(prover_url)
-        .with_tls()
-        .expect("TLS is enabled")
-        .with_timeout(request_timeout)
-        .without_metadata_version()
-        .without_metadata_genesis()
-        .without_otel_context_injection()
-        .connect_lazy::<RemoteProverClient>();
+    let payload = loop {
+        if probe_tx.is_closed() {
+            debug!(target: COMPONENT, prover = %name, "probe channel closed, exiting probe task");
+            return;
+        }
+        match generate_prover_test_payload(&rpc_url).await {
+            Ok(payload) => break payload,
+            Err(e) => {
+                warn!(
+                    target: COMPONENT,
+                    prover = %name,
+                    error = ?e,
+                    "failed to build remote-prover probe payload; retrying"
+                );
+                probe_tx.send_modify(|snapshot| {
+                    snapshot.latest = Some(ProverTestOutcome {
+                        details: ProverTestDetails {
+                            test_duration_ms: 0,
+                            proof_size_bytes: 0,
+                            success_count: snapshot.success_count,
+                            failure_count: snapshot.failure_count,
+                            proof_type: ProofType::Transaction,
+                        },
+                        status: Status::Unknown,
+                        error: Some(format!("building probe payload failed: {e:#}")),
+                    });
+                });
+                tokio::time::sleep(PAYLOAD_RETRY_DELAY).await;
+            },
+        }
+    };
 
-    let mut interval = tokio::time::interval(test_interval);
-    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-    let mut success_count = 0u64;
-    let mut failure_count = 0u64;
+    let mut timer = tokio::time::interval(interval);
+    timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    // Start from the last published snapshot so a respawned task keeps the running counters.
+    let mut state = probe_tx.borrow().clone();
 
     loop {
-        interval.tick().await;
+        timer.tick().await;
 
-        let current_time = current_unix_timestamp_secs();
+        let start = Instant::now();
+        let request = Request::new(payload.clone());
+        match client.prove(request).await {
+            Ok(response) => {
+                state.success_count += 1;
+                state.latest = Some(ProverTestOutcome {
+                    details: ProverTestDetails {
+                        test_duration_ms: start.elapsed().as_millis() as u64,
+                        proof_size_bytes: response.into_inner().payload.len(),
+                        success_count: state.success_count,
+                        failure_count: state.failure_count,
+                        proof_type: ProofType::Transaction,
+                    },
+                    status: Status::Healthy,
+                    error: None,
+                });
+            },
+            Err(e) => {
+                state.failure_count += 1;
+                state.latest = Some(ProverTestOutcome {
+                    details: ProverTestDetails {
+                        test_duration_ms: 0,
+                        proof_size_bytes: 0,
+                        success_count: state.success_count,
+                        failure_count: state.failure_count,
+                        proof_type: ProofType::Transaction,
+                    },
+                    status: Status::Unhealthy,
+                    error: Some(tonic_status_to_json(&e)),
+                });
+            },
+        }
 
-        let status = test_remote_prover(
-            &mut client,
-            name,
-            &proof_type,
-            &serialized_request_payload,
-            current_time,
-            &mut success_count,
-            &mut failure_count,
-        )
-        .await;
-
-        // Send the status update; exit if no receivers (shutdown signal)
-        if status_sender.send(status).is_err() {
-            info!("No receivers for remote prover status updates, shutting down");
+        if probe_tx.send(state.clone()).is_err() {
+            debug!(target: COMPONENT, prover = %name, "probe channel closed, exiting probe task");
             return;
         }
     }
 }
 
-/// Tests the remote prover by sending a mock request payload.
-///
-/// This function sends a mock request payload to the remote prover and measures the response time
-/// and success/failure rate for proof generation.
-///
-/// # Arguments
-///
-/// * `client` - The remote prover gRPC client.
-/// * `name` - The name of the remote prover.
-/// * `proof_type` - The type of proof to test.
-/// * `serialized_request_payload` - The serialized request payload to send to the remote prover.
-/// * `current_time` - The current time in seconds since UNIX epoch.
-/// * `success_count` - Mutable reference to the success counter.
-/// * `failure_count` - Mutable reference to the failure counter.
-///
-/// # Returns
-///
-/// A `ServiceStatus` containing the results of the proof test.
-#[instrument(
-    parent = None,
-    target = COMPONENT,
-    name = "network_monitor.remote_prover.test_remote_prover",
-    skip_all,
-    level = "info",
-    ret(level = "debug")
-)]
-async fn test_remote_prover(
-    client: &mut miden_node_proto::clients::RemoteProverClient,
-    name: &str,
-    proof_type: &ProofType,
-    serialized_request_payload: &proto::remote_prover::ProofRequest,
-    current_time: u64,
-    success_count: &mut u64,
-    failure_count: &mut u64,
-) -> ServiceStatus {
-    let start_time = std::time::Instant::now();
-
-    // Create the proof request
-    let request = Request::new(serialized_request_payload.clone());
-
-    // Send the request and measure the time
-    match client.prove(request).await {
-        Ok(response) => {
-            let duration = start_time.elapsed();
-            let response_inner = response.into_inner();
-
-            *success_count += 1;
-
-            ServiceStatus {
-                name: name.to_string(),
-                status: Status::Healthy,
-                last_checked: current_time,
-                error: None,
-                details: ServiceDetails::RemoteProverTest(ProverTestDetails {
-                    test_duration_ms: duration.as_millis() as u64,
-                    proof_size_bytes: response_inner.payload.len(),
-                    success_count: *success_count,
-                    failure_count: *failure_count,
-                    proof_type: proof_type.clone(),
-                }),
-            }
-        },
-        Err(e) => {
-            *failure_count += 1;
-
-            ServiceStatus {
-                name: name.to_string(),
-                status: Status::Unhealthy,
-                last_checked: current_time,
-                error: Some(tonic_status_to_json(&e)),
-                details: ServiceDetails::RemoteProverTest(ProverTestDetails {
-                    test_duration_ms: 0,
-                    proof_size_bytes: 0,
-                    success_count: *success_count,
-                    failure_count: *failure_count,
-                    proof_type: proof_type.clone(),
-                }),
-            }
-        },
-    }
-}
+// TONIC STATUS TO JSON
+// ================================================================================================
 
 /// Converts a `tonic::Status` error to a JSON string with structured error information.
-///
-/// This function extracts the code, message, details, and metadata from a `tonic::Status`
-/// error and serializes them into a JSON string for structured error reporting.
-///
-/// # Arguments
-///
-/// * `status` - The `tonic::Status` error to convert.
-///
-/// # Returns
-///
-/// A JSON string containing the structured error information.
 fn tonic_status_to_json(status: &tonic::Status) -> String {
     let error_json = serde_json::json!({
         "code": format!("{:?}", status.code()),
@@ -256,83 +472,111 @@ fn tonic_status_to_json(status: &tonic::Status) -> String {
     error_json.to_string()
 }
 
-// TRANSACTION WITNESS GENERATOR
-// ================================================================================================
-
-/// Generates a mock transaction for testing remote prover functionality.
-///
-/// This function creates a mock transaction using `MockChainBuilder` similar to what's done
-/// in the remote prover tests. The transaction is generated once and can be reused for
-/// multiple proof test calls.
-#[instrument(
-    parent = None,
-    target = COMPONENT,
-    name = "network_monitor.remote_prover.generate_mock_transaction",
-    skip_all,
-    level = "info",
-    ret(level = "debug"),
-    err
-)]
-pub async fn generate_mock_transaction() -> anyhow::Result<TransactionInputs> {
-    let mut mock_chain_builder = MockChainBuilder::new();
-
-    // Create an account with basic authentication
-    let account = mock_chain_builder
-        .add_existing_wallet(Auth::BasicAuth {
-            auth_scheme: AuthScheme::Falcon512Poseidon2,
-        })
-        .context("Failed to add wallet to mock chain")?;
-
-    // Create a fungible asset
-    let fungible_asset: Asset = FungibleAsset::new(
-        ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET
-            .try_into()
-            .context("Failed to convert account ID")?,
-        100,
-    )
-    .context("Failed to create fungible asset")?
-    .into();
-
-    // Create a P2ID note
-    let note = mock_chain_builder
-        .add_p2id_note(
-            ACCOUNT_ID_SENDER.try_into().context("Failed to convert sender account ID")?,
-            account.id(),
-            &[fungible_asset],
-            NoteType::Private,
-        )
-        .context("Failed to add P2ID note")?;
-
-    // Build the mock chain
-    let mock_chain = mock_chain_builder.build().context("Failed to build mock chain")?;
-
-    // Build transaction context
-    let tx_context = mock_chain
-        .build_tx_context(account.id(), &[note.id()], &[])
-        .context("Failed to build transaction context")?
-        .build()
-        .context("Failed to build transaction")?;
-
-    // Execute the transaction
-    let executed_transaction =
-        tx_context.execute().await.context("Failed to execute transaction")?;
-    Ok(executed_transaction.into())
-}
-
 // GENERATE TEST REQUEST PAYLOAD
 // ================================================================================================
 
+/// Builds the proof request used to probe a remote transaction prover.
+///
+/// The payload is a real, self-consistent counter genesis transaction built in-memory (see
+/// [`crate::deploy::build_probe_transaction_inputs`]); the remote prover re-executes and proves it.
+/// This requires a single RPC read for the genesis block header and is independent of the network
+/// transaction service.
 #[instrument(
     parent = None,
     target = COMPONENT,
     name = "network_monitor.remote_prover.generate_prover_test_payload",
     skip_all,
     level = "info",
-    ret(level = "debug")
+    ret(level = "debug"),
+    err
 )]
-pub(crate) async fn generate_prover_test_payload() -> proto::remote_prover::ProofRequest {
-    proto::remote_prover::ProofRequest {
+async fn generate_prover_test_payload(
+    rpc_url: &Url,
+) -> anyhow::Result<proto::remote_prover::ProofRequest> {
+    let tx_inputs = crate::deploy::build_probe_transaction_inputs(rpc_url).await?;
+    Ok(proto::remote_prover::ProofRequest {
         proof_type: proto::remote_prover::ProofType::Transaction.into(),
-        payload: generate_mock_transaction().await.unwrap().to_bytes(),
+        payload: tx_inputs.to_bytes(),
+    })
+}
+
+// TESTS
+// ================================================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn outcome(status: Status, error: Option<&str>) -> ProverTestOutcome {
+        ProverTestOutcome {
+            details: ProverTestDetails {
+                test_duration_ms: 50,
+                proof_size_bytes: 1024,
+                success_count: 3,
+                failure_count: 1,
+                proof_type: ProofType::Transaction,
+            },
+            status,
+            error: error.map(str::to_string),
+        }
+    }
+
+    const WINDOW: Duration = Duration::from_secs(100);
+
+    #[test]
+    fn fresh_outcome_passes_through() {
+        let classified = classify_probe_outcome(
+            Some(outcome(Status::Healthy, None)),
+            Some(Duration::from_secs(10)),
+            WINDOW,
+        )
+        .unwrap();
+        assert_eq!(classified.status, Status::Healthy);
+        assert!(classified.error.is_none());
+    }
+
+    #[test]
+    fn stale_outcome_degrades_to_unknown() {
+        let classified = classify_probe_outcome(
+            Some(outcome(Status::Healthy, None)),
+            Some(Duration::from_secs(101)),
+            WINDOW,
+        )
+        .unwrap();
+        assert_eq!(classified.status, Status::Unknown);
+        let err = classified.error.expect("stale outcome should carry an error note");
+        assert!(err.contains("stale"), "got: {err}");
+        // Numeric details from the last real probe are preserved.
+        assert_eq!(classified.details.success_count, 3);
+    }
+
+    #[test]
+    fn stale_unhealthy_outcome_degrades_to_unknown() {
+        // A stale failure must not keep the card unhealthy forever; staleness wins.
+        let classified = classify_probe_outcome(
+            Some(outcome(Status::Unhealthy, Some("prove failed"))),
+            Some(Duration::from_secs(500)),
+            WINDOW,
+        )
+        .unwrap();
+        assert_eq!(classified.status, Status::Unknown);
+    }
+
+    #[test]
+    fn missing_outcome_stays_missing() {
+        assert!(classify_probe_outcome(None, Some(Duration::from_secs(500)), WINDOW).is_none());
+    }
+
+    #[test]
+    fn outcome_without_observed_change_passes_through() {
+        let classified =
+            classify_probe_outcome(Some(outcome(Status::Healthy, None)), None, WINDOW).unwrap();
+        assert_eq!(classified.status, Status::Healthy);
+    }
+
+    #[test]
+    fn staleness_window_scales_with_interval_and_timeout() {
+        let window = probe_staleness_window(Duration::from_secs(120), Duration::from_secs(10));
+        assert_eq!(window, Duration::from_secs(250));
     }
 }

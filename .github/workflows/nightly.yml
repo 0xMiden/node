@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: "next"
           persist-credentials: false
@@ -41,7 +41,7 @@ jobs:
     name: feature combinations
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: "next"
           persist-credentials: false
@@ -68,7 +68,7 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: stable
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: "next"
           persist-credentials: false
@@ -96,14 +96,14 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: stable
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: "next"
           persist-credentials: false
       - name: Install binstall
         uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
         with:
-          tool: cargo-binstall@1.16.6
+          tool: cargo-binstall
       - name: Install cargo-msrv
         run: cargo binstall --no-confirm cargo-msrv
       - name: Get manifest path for package

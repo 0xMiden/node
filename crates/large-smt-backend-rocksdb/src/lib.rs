@@ -39,6 +39,7 @@ pub use miden_protocol::crypto::merkle::smt::{
     SmtLeafError,
     SmtProof,
     SmtStorage,
+    SmtStorageReader,
     StorageError,
     StorageUpdateParts,
     StorageUpdates,
@@ -56,4 +57,13 @@ pub use miden_protocol::{
         merkle::{EmptySubtreeRoots, InnerNodeInfo, MerkleError, NodeIndex, SparseMerklePath},
     },
 };
-pub use rocksdb::{RocksDbConfig, RocksDbStorage};
+pub use rocksdb::{
+    RocksDbBloomFilterBitsPerKey,
+    RocksDbConfig,
+    RocksDbDurabilityMode,
+    RocksDbMemoryBudget,
+    RocksDbSnapshotStorage,
+    RocksDbStorage,
+    RocksDbTuningOptions,
+    RocksDbWriteBufferManagerBudget,
+};

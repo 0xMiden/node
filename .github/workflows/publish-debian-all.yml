@@ -18,82 +18,45 @@ permissions:
   contents: read
 
 jobs:
-  publish-node:
-    name: Publish Node ${{ matrix.arch }} Debian
+  publish:
+    name: Publish ${{ matrix.component.name }} ${{ matrix.arch }} Debian
     permissions:
       contents: write
     strategy:
       matrix:
         arch: [amd64, arm64]
+        component:
+          - name: node
+            extra_deps: true
+          - name: prover
+            crate_dir: remote-prover
+            crate: miden-remote-prover
+            extra_deps: false
+          - name: validator
+            extra_deps: true
+          - name: ntx-builder
+            extra_deps: true
+          - name: network-monitor
+            extra_deps: false
     runs-on:
       labels: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: ./.github/actions/install-rocksdb
-      - uses: ./.github/actions/install-protobuf-compiler
-      - name: Build and Publish Node
+      - if: ${{ matrix.component.extra_deps }}
+        uses: ./.github/actions/install-rocksdb
+      - if: ${{ matrix.component.extra_deps }}
+        uses: ./.github/actions/install-protobuf-compiler
+      - name: Build and Publish ${{ matrix.component.name }}
         uses: ./.github/actions/debian
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           gitref: ${{ env.version }}
-          crate_dir: node
-          package: miden-node
-          packaging_dir: node
-          crate: miden-node
-          arch: ${{ matrix.arch }}
-
-  publish-prover:
-    name: Publish Prover ${{ matrix.arch }} Debian
-    permissions:
-      contents: write
-    strategy:
-      matrix:
-        arch: [amd64, arm64]
-    runs-on:
-      labels: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Build and Publish Prover
-        uses: ./.github/actions/debian
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          gitref: ${{ env.version }}
-          crate_dir: remote-prover
-          package: miden-prover
-          packaging_dir: prover
-          crate: miden-remote-prover
-          arch: ${{ matrix.arch }}
-
-  publish-network-monitor:
-    name: Publish Network Monitor ${{ matrix.arch }} Debian
-    permissions:
-      contents: write
-    strategy:
-      matrix:
-        arch: [amd64, arm64]
-    runs-on:
-      labels: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Build and Publish Network Monitor
-        uses: ./.github/actions/debian
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          gitref: ${{ env.version }}
-          crate_dir: network-monitor
-          package: miden-network-monitor
-          packaging_dir: network-monitor
-          crate: miden-network-monitor
+          crate_dir: ${{ matrix.component.crate_dir || matrix.component.name }}
+          package: miden-${{ matrix.component.name }}
+          packaging_dir: ${{ matrix.component.name }}
+          crate: ${{ matrix.component.crate || format('miden-{0}', matrix.component.name) }}
           arch: ${{ matrix.arch }}

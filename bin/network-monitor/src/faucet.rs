@@ -3,22 +3,21 @@
 //! This module contains the logic for periodically testing faucet functionality
 //! by requesting proof-of-work challenges, solving them, and submitting token requests.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use hex;
-use miden_protocol::account::AccountId;
-use miden_protocol::testing::account_id::ACCOUNT_ID_SENDER;
+use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tokio::sync::watch;
-use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, instrument, warn};
 use url::Url;
 
-use crate::status::{ServiceDetails, ServiceStatus, Status};
-use crate::{COMPONENT, current_unix_timestamp_secs};
+use crate::COMPONENT;
+use crate::deploy::wallet::create_wallet_account;
+use crate::service::Service;
+use crate::status::{ServiceDetails, ServiceStatus};
 
 // CONSTANTS
 // ================================================================================================
@@ -43,7 +42,12 @@ pub struct FaucetTestDetails {
 }
 
 /// Response from the faucet's `/pow` endpoint.
+///
+/// `deny_unknown_fields` makes the monitor flag schema drift loudly — a new field on the faucet
+/// response will fail deserialization and surface in the error message, instead of being
+/// silently dropped.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PowChallengeResponse {
     challenge: String,
     target: u64,
@@ -53,6 +57,7 @@ struct PowChallengeResponse {
 
 /// Response from the faucet's `/get_tokens` endpoint.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct GetTokensResponse {
     tx_id: String,
     #[expect(dead_code)] // Note ID is part of API response but not used in monitoring
@@ -60,107 +65,157 @@ struct GetTokensResponse {
 }
 
 /// Response from the faucet's `/get_metadata` endpoint.
+///
+/// Field set mirrors the faucet's `GetMetadataResponse` in
+/// `bin/faucet/src/api/get_metadata.rs` on the `next` branch. Keep these in sync; the
+/// `deny_unknown_fields` attribute will surface any drift loudly.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GetMetadataResponse {
-    version: String,
-    id: String,
-    max_supply: u64,
-    decimals: u8,
-    explorer_url: Option<String>,
-    pow_load_difficulty: u64,
-    base_amount: u64,
+    pub version: String,
+    pub id: String,
+    pub max_supply: u64,
+    pub decimals: u8,
+    pub explorer_url: Option<String>,
+    pub pow_load_difficulty: u64,
+    pub base_amount: u64,
+    pub note_transport_url: Option<String>,
 }
 
 // FAUCET TEST TASK
 // ================================================================================================
 
-/// Runs a task that continuously tests faucet functionality and updates a watch channel.
-///
-/// This function spawns a task that periodically requests proof-of-work challenges from the faucet,
-/// solves them, and submits token requests to verify the faucet is operational.
-///
-/// # Arguments
-///
-/// * `faucet_url` - The URL of the faucet service to test.
-/// * `status_sender` - The sender for the watch channel.
-/// * `test_interval` - The interval at which to test the faucet services.
-///
-/// # Returns
-///
-/// `Ok(())` if the task completes successfully, or an error if the task fails.
-pub async fn run_faucet_test_task(
-    faucet_url: Url,
-    status_sender: watch::Sender<ServiceStatus>,
-    test_interval: Duration,
-    request_timeout: Duration,
-) {
-    let client = Client::builder()
-        .timeout(request_timeout)
-        .build()
-        .expect("Failed to create HTTP client with timeout");
-    let mut success_count = 0u64;
-    let mut failure_count = 0u64;
-    let mut last_tx_id = None;
-    let mut last_error: Option<String>;
-    let mut faucet_metadata = None;
+pub struct FaucetService {
+    url: Url,
+    client: Client,
+    interval: Duration,
+    /// Wall-clock cap on solving a single `PoW` challenge.
+    solve_timeout: Duration,
+    /// A valid public account ID used as the recipient for faucet token requests. Generated once at
+    /// construction from a throwaway wallet account; the minted tokens are never spent.
+    account_id: String,
+    success_count: u64,
+    failure_count: u64,
+    last_tx_id: Option<String>,
+    faucet_metadata: Option<GetMetadataResponse>,
+}
 
-    let mut interval = tokio::time::interval(test_interval);
-    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-    loop {
-        interval.tick().await;
-
-        let current_time = current_unix_timestamp_secs();
-
-        let start_time = std::time::Instant::now();
-
-        match perform_faucet_test(&client, &faucet_url).await {
-            Ok((minted_tokens, metadata)) => {
-                success_count += 1;
-                last_tx_id = Some(minted_tokens.tx_id.clone());
-                last_error = None;
-                faucet_metadata = Some(metadata);
-                info!("Faucet test successful: tx_id={}", minted_tokens.tx_id);
-            },
-            Err(e) => {
-                failure_count += 1;
-                last_error = Some(format!("{e:#}"));
-                warn!("Faucet test failed: {}", e);
-            },
-        }
-
-        let test_duration_ms = start_time.elapsed().as_millis() as u64;
-
-        let test_details = FaucetTestDetails {
-            url: faucet_url.to_string(),
-            test_duration_ms,
-            success_count,
-            failure_count,
-            last_tx_id: last_tx_id.clone(),
-            faucet_metadata: faucet_metadata.clone(),
-        };
-
-        let status = ServiceStatus {
-            name: "Faucet".to_string(),
-            status: if last_error.is_some() {
-                Status::Unhealthy
-            } else {
-                Status::Healthy
-            },
-            last_checked: current_time,
-            error: last_error.clone(),
-            details: ServiceDetails::FaucetTest(test_details),
-        };
-
-        // Send the status update; exit if no receivers (shutdown signal)
-        if status_sender.send(status).is_err() {
-            info!("No receivers for faucet status updates, shutting down");
-            return;
+impl FaucetService {
+    pub fn new(url: Url, interval: Duration, request_timeout: Duration) -> Self {
+        let client = Client::builder()
+            .timeout(request_timeout)
+            .build()
+            .expect("Failed to create HTTP client with timeout");
+        let (wallet_account, _secret_key) =
+            create_wallet_account().expect("failed to create faucet recipient account");
+        Self {
+            url,
+            client,
+            interval,
+            solve_timeout: request_timeout,
+            account_id: wallet_account.id().to_string(),
+            success_count: 0,
+            failure_count: 0,
+            last_tx_id: None,
+            faucet_metadata: None,
         }
     }
 }
 
-/// Performs a complete faucet test by requesting a `PoW` challenge and submitting the solution.
+impl Service for FaucetService {
+    fn name(&self) -> &'static str {
+        "Faucet"
+    }
+
+    fn interval(&self) -> Duration {
+        self.interval
+    }
+
+    fn initial_status(&self) -> ServiceStatus {
+        ServiceStatus::unknown(
+            self.name(),
+            ServiceDetails::FaucetTest(FaucetTestDetails {
+                url: self.url.to_string(),
+                test_duration_ms: 0,
+                success_count: 0,
+                failure_count: 0,
+                last_tx_id: None,
+                faucet_metadata: None,
+            }),
+        )
+    }
+
+    async fn check(&mut self) -> ServiceStatus {
+        let start_time = std::time::Instant::now();
+
+        // Fetch metadata independently of the mint test so that token info (account id, version, …)
+        // is shown on the card even when minting is failing. We only overwrite the stored metadata
+        // on a successful fetch, so a transient metadata errors doesn't wipe the last-known values
+        // from the card.
+        match fetch_faucet_metadata(&self.client, &self.url).await {
+            Ok(metadata) => self.faucet_metadata = Some(metadata),
+            Err(e) => warn!("Failed to fetch faucet metadata: {e:#}"),
+        }
+
+        let last_error =
+            match perform_mint_test(&self.client, &self.url, &self.account_id, self.solve_timeout)
+                .await
+            {
+                Ok(minted_tokens) => {
+                    self.success_count += 1;
+                    self.last_tx_id = Some(minted_tokens.tx_id.clone());
+                    info!("Faucet test successful: tx_id={}", minted_tokens.tx_id);
+                    None
+                },
+                Err(e) => {
+                    self.failure_count += 1;
+                    warn!("Faucet test failed: {}", e);
+                    Some(format!("{e:#}"))
+                },
+            };
+
+        let details = ServiceDetails::FaucetTest(FaucetTestDetails {
+            url: self.url.to_string(),
+            test_duration_ms: start_time.elapsed().as_millis() as u64,
+            success_count: self.success_count,
+            failure_count: self.failure_count,
+            last_tx_id: self.last_tx_id.clone(),
+            faucet_metadata: self.faucet_metadata.clone(),
+        });
+
+        match last_error {
+            Some(err) => ServiceStatus::unhealthy(self.name(), err, details),
+            None => ServiceStatus::healthy(self.name(), details),
+        }
+    }
+}
+
+/// Fetches the faucet's metadata from the `/get_metadata` endpoint.
+#[instrument(
+    parent = None,
+    target = COMPONENT,
+    name = "network_monitor.faucet.fetch_faucet_metadata",
+    skip_all,
+    level = "info",
+    ret(level = "debug"),
+    err
+)]
+async fn fetch_faucet_metadata(
+    client: &Client,
+    faucet_url: &Url,
+) -> anyhow::Result<GetMetadataResponse> {
+    let metadata_url = faucet_url.join("/get_metadata")?;
+
+    let response = client.get(metadata_url).send().await?;
+
+    let response_text =
+        read_success_body(response).await.context("/get_metadata request failed")?;
+
+    parse_faucet_response(&response_text).context("unexpected response from /get_metadata")
+}
+
+/// Performs a complete faucet mint test by requesting a `PoW` challenge and submitting the
+/// solution.
 ///
 /// # Arguments
 ///
@@ -173,37 +228,34 @@ pub async fn run_faucet_test_task(
 #[instrument(
     parent = None,
     target = COMPONENT,
-    name = "network_monitor.faucet.perform_faucet_test",
+    name = "network_monitor.faucet.perform_mint_test",
     skip_all,
     level = "info",
     ret(level = "debug"),
     err
 )]
-async fn perform_faucet_test(
+async fn perform_mint_test(
     client: &Client,
     faucet_url: &Url,
-) -> anyhow::Result<(GetTokensResponse, GetMetadataResponse)> {
-    // Use a test account ID - convert to AccountId and format properly
-    let account_id = AccountId::try_from(ACCOUNT_ID_SENDER)
-        .context("Failed to create AccountId from test constant")?;
-
-    let account_id = account_id.to_string();
-    debug!("Generated account ID: {} (length: {})", account_id, account_id.len());
+    account_id: &str,
+    solve_timeout: Duration,
+) -> anyhow::Result<GetTokensResponse> {
+    debug!("Using recipient account ID: {} (length: {})", account_id, account_id.len());
 
     // Step 1: Request PoW challenge
     let mut pow_url = faucet_url.join("/pow")?;
     pow_url
         .query_pairs_mut()
-        .append_pair("account_id", &account_id)
+        .append_pair("account_id", account_id)
         .append_pair("amount", &MINT_AMOUNT.to_string());
 
     let response = client.get(pow_url).send().await?;
 
-    let response_text: String = response.text().await?;
+    let response_text = read_success_body(response).await.context("/pow request failed")?;
     debug!("Faucet PoW response: {}", response_text);
 
-    let challenge_response: PowChallengeResponse = serde_json::from_str(&response_text)
-        .with_context(|| format!("Failed to parse PoW response: {response_text}"))?;
+    let challenge_response: PowChallengeResponse =
+        parse_faucet_response(&response_text).context("unexpected response from /pow")?;
 
     debug!(
         "Received PoW challenge: target={}, challenge={}...",
@@ -211,9 +263,16 @@ async fn perform_faucet_test(
         &challenge_response.challenge[..16.min(challenge_response.challenge.len())]
     );
 
-    // Step 2: Solve the PoW challenge
-    let nonce = solve_pow_challenge(&challenge_response.challenge, challenge_response.target)
-        .context("Failed to solve PoW challenge")?;
+    // Step 2: Solve the PoW challenge off the async runtime; hashing is CPU-bound and would
+    // otherwise stall every other checker task scheduled on this worker thread.
+    let challenge = challenge_response.challenge.clone();
+    let target = challenge_response.target;
+    let nonce = spawn_blocking_in_current_span(move || {
+        solve_pow_challenge(&challenge, target, solve_timeout)
+    })
+    .await
+    .context("PoW solver task panicked")?
+    .context("Failed to solve PoW challenge")?;
 
     debug!("Solved PoW challenge with nonce: {}", nonce);
 
@@ -221,7 +280,7 @@ async fn perform_faucet_test(
     let mut tokens_url = faucet_url.join("/get_tokens")?;
     tokens_url
         .query_pairs_mut()
-        .append_pair("account_id", account_id.as_str())
+        .append_pair("account_id", account_id)
         .append_pair("is_private_note", "false")
         .append_pair("asset_amount", &MINT_AMOUNT.to_string())
         .append_pair("challenge", &challenge_response.challenge)
@@ -229,35 +288,52 @@ async fn perform_faucet_test(
 
     let response = client.get(tokens_url).send().await?;
 
-    let response_text: String = response.text().await?;
+    let response_text = read_success_body(response).await.context("/get_tokens request failed")?;
+    debug!("Faucet /get_tokens response: {}", response_text);
 
-    let tokens_response: GetTokensResponse = serde_json::from_str(&response_text)
-        .with_context(|| format!("Failed to parse tokens response: {response_text}"))?;
+    let tokens_response: GetTokensResponse =
+        parse_faucet_response(&response_text).context("unexpected response from /get_tokens")?;
 
-    // Step 4: Get faucet metadata
-    let metadata_url = faucet_url.join("/get_metadata")?;
+    Ok(tokens_response)
+}
 
-    let response = client.get(metadata_url).send().await?;
+/// Reads the response body, failing with the HTTP status code and body when the request was not
+/// successful, so server-side errors (e.g. 429 or 500) surface directly on the card instead of as a
+/// deserialization failure.
+async fn read_success_body(response: reqwest::Response) -> anyhow::Result<String> {
+    let status = response.status();
+    let body = response.text().await?;
+    anyhow::ensure!(status.is_success(), "HTTP {status}: {body}");
+    Ok(body)
+}
 
-    let response_text = response.text().await?;
-
-    let metadata: GetMetadataResponse = serde_json::from_str(&response_text)
-        .with_context(|| format!("Failed to parse metadata response: {response_text}"))?;
-
-    Ok((tokens_response, metadata))
+/// Deserialize a faucet response using [`serde_path_to_error`] so that the failing JSON path (e.g.
+/// `max_supply`, `explorer_url`) is included in the error message. Combined with
+/// `#[serde(deny_unknown_fields)]` on each response type, this means renamed, removed, or newly
+/// added fields all surface a precise field name rather than a generic "unexpected response".
+fn parse_faucet_response<T>(body: &str) -> anyhow::Result<T>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let mut de = serde_json::Deserializer::from_str(body);
+    serde_path_to_error::deserialize(&mut de).with_context(|| format!("response body: {body}"))
 }
 
 /// Solves a proof-of-work challenge using SHA-256 hashing.
+///
+/// This is CPU-bound and must run on a blocking thread (see the `spawn_blocking` call site).
 ///
 /// # Arguments
 ///
 /// * `challenge` - The challenge string in hexadecimal format.
 /// * `target` - The target value. A solution is valid if H(challenge, nonce) < target.
+/// * `timeout` - Wall-clock cap; checked every 100k attempts so a pathological difficulty cannot
+///   pin the blocking thread indefinitely.
 ///
 /// # Returns
 ///
-/// The nonce that solves the challenge, or an error if no solution is found within reasonable
-/// bounds.
+/// The nonce that solves the challenge, or an error if no solution is found within the attempt
+/// and time bounds.
 #[instrument(
     parent = None,
     target = COMPONENT,
@@ -267,8 +343,9 @@ async fn perform_faucet_test(
     ret(level = "debug"),
     err
 )]
-fn solve_pow_challenge(challenge: &str, target: u64) -> anyhow::Result<u64> {
+fn solve_pow_challenge(challenge: &str, target: u64, timeout: Duration) -> anyhow::Result<u64> {
     let challenge_bytes = hex::decode(challenge).context("Failed to decode challenge from hex")?;
+    let started = Instant::now();
 
     // Try up to 100 million nonces.
     for nonce in 0..MAX_CHALLENGE_ATTEMPTS {
@@ -291,8 +368,15 @@ fn solve_pow_challenge(challenge: &str, target: u64) -> anyhow::Result<u64> {
             return Ok(nonce);
         }
 
-        // Log progress every 100k attempts
+        // Check the deadline and log progress every 100k attempts
         if nonce % 100_000 == 0 && nonce > 0 {
+            let elapsed = started.elapsed();
+            if elapsed >= timeout {
+                anyhow::bail!(
+                    "Failed to solve PoW challenge within {timeout:?} ({nonce} attempts, target \
+                     {target})"
+                );
+            }
             debug!(
                 "PoW attempt {}: current_hash={}, target={} (~{} bits)",
                 nonce,

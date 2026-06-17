@@ -1,0 +1,41 @@
+services:
+  tempo:
+    image: grafana/tempo:2.10.4
+    volumes:
+      - ./compose/tempo/tempo.yml:/etc/tempo.yaml
+    command: ["-config.file=/etc/tempo.yaml"]
+    ports:
+      - "127.0.0.1:3200:3200"
+      - "127.0.0.1:4317:4317"
+
+  grafana:
+    image: grafana/grafana:12.4
+    volumes:
+      - ./compose/grafana/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yaml
+      - ./compose/grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yaml
+      - ./compose/grafana/dashboards:/var/lib/grafana/dashboards
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/miden-node.json
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - tempo
+
+  sequencer:
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+      - OTEL_RESOURCE_ATTRIBUTES=service.instance.id=sequencer
+
+  validator:
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+
+  tx-prover:
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+
+  ntx-builder:
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317

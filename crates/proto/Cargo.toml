@@ -29,13 +29,16 @@ tonic-prost                 = { workspace = true }
 url                         = { workspace = true }
 
 [dev-dependencies]
-proptest = { version = "1.7" }
+miden-protocol = { features = ["testing"], workspace = true }
+proptest       = { version = "1.7" }
 
 [build-dependencies]
 build-rs               = { workspace = true }
+codegen                = { workspace = true }
 fs-err                 = { workspace = true }
 miden-node-proto-build = { features = ["internal"], workspace = true }
 miette                 = { workspace = true }
+prost-types            = { workspace = true }
 tonic-prost-build      = { workspace = true }
 
 [package.metadata.cargo-machete]

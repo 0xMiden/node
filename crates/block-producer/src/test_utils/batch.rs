@@ -59,7 +59,7 @@ impl TransactionBatchConstructor for ProvenBatch {
             output_notes.extend(tx.output_notes().iter().cloned());
         }
 
-        ProvenBatch::new(
+        ProvenBatch::new_unchecked(
             BatchId::from_transactions(txs.iter().copied()),
             Word::empty(),
             BlockNumber::GENESIS,

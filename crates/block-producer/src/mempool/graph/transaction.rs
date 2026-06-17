@@ -27,11 +27,11 @@ impl GraphNode for Arc<AuthenticatedTransaction> {
     }
 
     fn output_notes(&self) -> Box<dyn Iterator<Item = Word> + '_> {
-        Box::new(self.output_note_commitments())
+        Box::new(self.output_note_ids())
     }
 
     fn unauthenticated_notes(&self) -> Box<dyn Iterator<Item = Word> + '_> {
-        Box::new(self.unauthenticated_note_commitments())
+        Box::new(self.unauthenticated_note_ids())
     }
 
     fn account_updates(
@@ -250,9 +250,9 @@ impl TransactionGraph {
                 self.failures.remove(&tx.id());
 
                 // Note that this is a pretty rough shod approach. We just dump the entire batch of
-                // transactions in, which will result in at least the current
-                // transaction being duplicated in `to_revert`. This isn't a concern
-                // though since we skip already processed transactions at the top of the loop.
+                // transactions in, which will result in at least the current transaction being
+                // duplicated in `to_revert`. This isn't a concern though since we skip already
+                // processed transactions at the top of the loop.
                 if let Some(batch_id) = self.user_batches.get_batch_containing_tx(&tx.id()).copied()
                 {
                     let batch_txs = self.user_batches.remove(&batch_id);
@@ -317,10 +317,29 @@ impl TransactionGraph {
     /// graph.
     pub fn prune(&mut self, batch: &SelectedBatch) {
         for tx in batch.transactions() {
+            self.mark_committed_notes_authenticated_for_descendants(tx);
             self.inner.prune(tx.id());
             self.failures.remove(&tx.id());
         }
         self.user_batches.remove(&batch.id());
+    }
+
+    fn mark_committed_notes_authenticated_for_descendants(
+        &mut self,
+        tx: &Arc<AuthenticatedTransaction>,
+    ) {
+        let output_notes = tx.output_note_ids().collect::<HashSet<_>>();
+        if output_notes.is_empty() {
+            return;
+        }
+
+        let tx_id = tx.id();
+        let descendants = self.inner.descendants(&tx_id);
+        for descendant in descendants.into_iter().filter(|descendant| *descendant != tx_id) {
+            if let Some(descendant) = self.inner.get_mut(&descendant) {
+                Arc::make_mut(descendant).mark_notes_authenticated(output_notes.iter().copied());
+            }
+        }
     }
 
     /// Number of transactions which have not been selected for inclusion in a batch.

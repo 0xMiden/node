@@ -41,9 +41,9 @@ pub enum GenesisNegotiation {
 #[derive(Clone)]
 pub struct AcceptHeaderLayer {
     supported_versions: VersionReq,
-    /// The pre-release label (e.g. `"alpha"` from `"alpha.3"`), or `None` for stable versions.
-    /// Only the label is stored so that different pre-release numbers are accepted
-    /// (e.g. a server at `alpha.3` accepts clients at `alpha.1`).
+    /// The pre-release label (e.g. `"alpha"` from `"alpha.3"`), or `None` for stable versions. Only
+    /// the label is stored so that different pre-release numbers are accepted (e.g. a server at
+    /// `alpha.3` accepts clients at `alpha.1`).
     expected_pre_label: Option<String>,
     /// The patch version of the server. Used to enforce exact patch matching for pre-release
     /// versions (patch flexibility only applies to stable versions).
@@ -51,7 +51,7 @@ pub struct AcceptHeaderLayer {
     genesis_commitment: Word,
     /// RPC method names for which the `genesis` parameter is mandatory.
     ///
-    /// These should be gRPC method names (e.g. `SubmitProvenTransaction`),
+    /// These should be gRPC method names (e.g. `SubmitProvenTx`),
     /// matched against the end of the request path like "/rpc.Api/<method>".
     require_genesis_methods: Vec<&'static str>,
 }
@@ -107,9 +107,9 @@ impl AcceptHeaderLayer {
     }
 }
 
-/// Extracts the label portion of a semver pre-release identifier, stripping any trailing
-/// numeric segment. For example, `"alpha.3"` returns `Some("alpha")` and `"rc.1"` returns
-/// `Some("rc")`. Returns `None` for empty (stable) pre-release identifiers.
+/// Extracts the label portion of a semver pre-release identifier, stripping any trailing numeric
+/// segment. For example, `"alpha.3"` returns `Some("alpha")` and `"rc.1"` returns `Some("rc")`.
+/// Returns `None` for empty (stable) pre-release identifiers.
 fn pre_release_label(pre: &semver::Prerelease) -> Option<String> {
     if pre.is_empty() {
         return None;
@@ -137,8 +137,8 @@ impl AcceptHeaderLayer {
     const GENESIS: Name<'static> = Name::new_unchecked("genesis");
     const GRPC: Name<'static> = Name::new_unchecked("grpc");
 
-    /// Parses the `Accept` header's contents, searching for any media type compatible with our
-    /// RPC version and genesis commitment, controlling whether `genesis` is optional or mandatory.
+    /// Parses the `Accept` header's contents, searching for any media type compatible with our RPC
+    /// version and genesis commitment, controlling whether `genesis` is optional or mandatory.
     fn negotiate(
         &self,
         accept: &str,
@@ -218,8 +218,8 @@ impl AcceptHeaderLayer {
                 if pre_release_label(&version.pre) != self.expected_pre_label {
                     continue;
                 }
-                // Pre-release versions must also match the patch version exactly
-                // (patch flexibility only applies to stable versions).
+                // Pre-release versions must also match the patch version exactly (patch flexibility
+                // only applies to stable versions).
                 if self.expected_pre_label.is_some() && version.patch != self.expected_patch {
                     continue;
                 }

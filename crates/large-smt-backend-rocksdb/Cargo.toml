@@ -18,7 +18,7 @@ workspace = true
 miden-crypto   = { features = ["concurrent", "std"], workspace = true }
 miden-protocol = { features = ["std"], workspace = true }
 rayon          = { workspace = true }
-rocksdb        = { default-features = false, features = ["bindgen-runtime", "lz4"], version = "0.24" }
+rocksdb        = { default-features = false, features = ["bindgen-runtime", "lz4", "zstd"], version = "0.24" }
 
 [build-dependencies]
 miden-node-rocksdb-cxx-linkage-fix = { workspace = true }

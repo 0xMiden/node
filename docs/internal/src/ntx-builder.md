@@ -36,20 +36,22 @@ definitions of network accounts, notes and transactions mature.
 
 The NTB uses an actor-per-account model managed by a central `Coordinator`. On startup the
 coordinator syncs all known network accounts and their unconsumed notes from the store. It then
-monitors the mempool for events (via a gRPC event stream from the block-producer) which would
-impact network account state.
+follows the committed block stream from the RPC service for updates which would impact network
+account state.
 
-For each network account that has available notes, the coordinator spawns a dedicated
-`AccountActor`. Each actor runs in its own async task and is responsible for creating transactions
-that consume network notes targeting its account. Actors read their state from the database and
-re-evaluate whenever notified by the coordinator.
+For each network account, the coordinator spawns a dedicated `AccountActor`. Each actor runs in
+its own async task and is responsible for creating transactions that consume network notes targeting
+its account. On startup, each actor waits until its account has been committed to the chain before
+producing any transactions. This means newly created network accounts will idle until their creation
+transaction is included in a block. Once the committed state is available, the actor reads its state
+from the database and re-evaluates whenever notified by the coordinator.
 
 Actors that have been idle (no available notes to consume) for longer than the **idle timeout**
 will be deactivated. The idle timeout is configurable via the `--ntx-builder.idle-timeout` CLI
 argument (default: 5 minutes).
 
-Deactivated actors are re-spawned when new notes targeting their account are detected by the
-coordinator (via the `send_targeted` path).
+Deactivated actors are re-spawned when committed-chain processing detects new notes targeting their
+account.
 
 Each actors crash count is tracked, and once the count reaches a configurable threshold, the account is 
 **deactivated** and no new actor will be spawned for it. This prevents resource exhaustion from a persistently
@@ -66,6 +68,7 @@ requests to this server. In bundled mode the server is started automatically on 
 wired to the RPC; in distributed mode operators must pass the NTB's address to the RPC via
 `--ntx-builder.url` (or `MIDEN_NODE_NTX_BUILDER_URL`).
 
-Currently the only endpoint is `GetNoteError(note_id)` which returns the latest execution error
-for a given network note, along with the attempt count and the block number of the last attempt.
-This is useful for debugging notes that fail to be consumed.
+Currently the only endpoint is `GetNetworkNoteStatus(note_id)` which returns the lifecycle status
+of a network note (pending, processed, or discarded), along with the latest execution error,
+attempt count, and block number of the last attempt. This is useful for debugging notes that fail
+to be consumed.

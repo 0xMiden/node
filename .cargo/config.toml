@@ -1,3 +1,6 @@
+[alias]
+xtask = "run --locked --package xtask --"
+
 [target.wasm32-unknown-unknown]
 rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
 
@@ -7,6 +10,9 @@ rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
 # memory allocator which can cause contention and performance
 # degradation in high-concurrency scenarios we have in the node.
 LIBSQLITE3_FLAGS = "-USQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_DEFAULT_MEMSTATUS=0"
+
+# Keep Clippy's config grouped with the other tool configs.
+CLIPPY_CONF_DIR = { relative = true, value = ".config" }
 
 [profile.release]
 debug = true

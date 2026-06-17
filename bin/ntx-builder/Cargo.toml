@@ -1,0 +1,55 @@
+[package]
+authors.workspace      = true
+description            = "Miden network transaction builder"
+edition.workspace      = true
+homepage.workspace     = true
+keywords               = ["miden", "ntx-builder"]
+license.workspace      = true
+name                   = "miden-ntx-builder"
+readme                 = "README.md"
+repository.workspace   = true
+rust-version.workspace = true
+version.workspace      = true
+
+[lints]
+workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+anyhow                     = { workspace = true }
+backon                     = { workspace = true }
+clap                       = { features = ["env", "string"], workspace = true }
+diesel                     = { features = ["numeric", "sqlite"], workspace = true }
+futures                    = { workspace = true }
+humantime                  = { workspace = true }
+libsqlite3-sys             = { workspace = true }
+miden-node-db              = { workspace = true }
+miden-node-proto           = { workspace = true }
+miden-node-proto-build     = { features = ["internal"], workspace = true }
+miden-node-utils           = { workspace = true }
+miden-protocol             = { default-features = true, workspace = true }
+miden-remote-prover-client = { features = ["tx-prover"], workspace = true }
+miden-standards            = { workspace = true }
+miden-tx                   = { features = ["concurrent"], workspace = true }
+thiserror                  = { workspace = true }
+tokio                      = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
+tokio-stream               = { features = ["net"], workspace = true }
+tonic                      = { workspace = true }
+tonic-reflection           = { workspace = true }
+tower-http                 = { workspace = true }
+tracing                    = { workspace = true }
+url                        = { workspace = true }
+
+[build-dependencies]
+build-rs      = { workspace = true }
+miden-node-db = { workspace = true }
+
+[dev-dependencies]
+miden-node-utils = { features = ["testing"], workspace = true }
+miden-protocol   = { default-features = true, features = ["testing"], workspace = true }
+miden-standards  = { features = ["testing"], workspace = true }
+rand_chacha      = { workspace = true }
+rstest           = { workspace = true }
+tempfile         = { workspace = true }

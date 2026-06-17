@@ -31,10 +31,11 @@ miden-node-store
 miden-remote-prover
 miden-remote-prover-client
 miden-node-block-producer
-miden-node-ntx-builder
 miden-node-rpc
 miden-node
 miden-network-monitor
+miden-ntx-builder
+miden-validator
 )
 for crate in ${crates[@]}; do
     echo "Publishing $crate..."

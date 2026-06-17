@@ -1,4 +1,4 @@
-use crate::generated as proto;
+use miden_node_proto::generated::remote_prover as proto;
 
 /// Specifies the type of proof supported by the remote prover.
 #[derive(Debug, Clone, Copy, PartialEq, clap::ValueEnum)]
@@ -6,6 +6,16 @@ pub enum ProofKind {
     Transaction,
     Batch,
     Block,
+}
+
+impl ProofKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ProofKind::Transaction => "transaction",
+            ProofKind::Batch => "batch",
+            ProofKind::Block => "block",
+        }
+    }
 }
 
 impl From<proto::ProofType> for ProofKind {
@@ -20,11 +30,7 @@ impl From<proto::ProofType> for ProofKind {
 
 impl std::fmt::Display for ProofKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ProofKind::Transaction => write!(f, "transaction"),
-            ProofKind::Batch => write!(f, "batch"),
-            ProofKind::Block => write!(f, "block"),
-        }
+        f.write_str(self.as_str())
     }
 }
 

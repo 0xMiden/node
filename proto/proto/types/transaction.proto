@@ -41,7 +41,7 @@ message ProvenTransaction {
 // private onchain). This requirement will be lifted as Miden matures.
 //
 // In addition, in order to verify the batch itself, we also require the proposed batch.
-message ProvenTransactionBatch {
+message TransactionBatch {
   // The batch proof.
   //
   // Encoded using [miden_protocol::batch::ProvenBatch::to_bytes].

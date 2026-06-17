@@ -8,7 +8,7 @@
 //!
 //! Instead, only the minimal data needed for the update is fetched.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use diesel::query_dsl::methods::SelectDsl;
 use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl, SqliteConnection};
@@ -22,7 +22,7 @@ use miden_protocol::account::{
     StorageSlotHeader,
     StorageSlotName,
 };
-use miden_protocol::asset::{Asset, FungibleAsset};
+use miden_protocol::asset::{Asset, AssetVaultKey};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{EMPTY_WORD, Felt, Word};
 
@@ -46,8 +46,8 @@ struct AccountStateDeltaRow {
     storage_header: Option<Vec<u8>>,
 }
 
-/// Data needed for applying a delta update to an existing account.
-/// Fetches only the minimal data required, avoiding loading full code and storage.
+/// Data needed for applying a delta update to an existing account. Fetches only the minimal data
+/// required, avoiding loading full code and storage.
 #[derive(Debug, Clone)]
 pub(super) struct AccountStateHeadersForDelta {
     pub nonce: Felt,
@@ -55,8 +55,8 @@ pub(super) struct AccountStateHeadersForDelta {
     pub storage_header: AccountStorageHeader,
 }
 
-/// Minimal account state computed from a partial delta update.
-/// Contains only the fields needed for the accounts table row insert.
+/// Minimal account state computed from a partial delta update. Contains only the fields needed for
+/// the accounts table row insert.
 #[derive(Debug, Clone)]
 pub(super) struct PartialAccountState {
     pub nonce: Felt,
@@ -65,8 +65,8 @@ pub(super) struct PartialAccountState {
     pub vault_root: Word,
 }
 
-/// Represents the account state to be inserted, either from a full account
-/// or from a partial delta update.
+/// Represents the account state to be inserted, either from a full account or from a partial delta
+/// update.
 pub(super) enum AccountStateForInsert {
     /// Private account - no public state stored
     Private,
@@ -133,12 +133,13 @@ pub(super) fn select_minimal_account_state_headers(
     Ok(AccountStateHeadersForDelta { nonce, code_commitment, storage_header })
 }
 
-/// Selects vault balances for specific faucet IDs.
+/// Selects vault balances for specific vault keys.
 ///
-/// Optimized query that only fetches balances for the faucet IDs
+/// Optimized query that only fetches balances for the vault keys
 /// that are being updated by a delta, rather than loading all vault assets.
 ///
-/// Returns a map from `faucet_id` to the current balance (0 if not found).
+/// Returns a map from the vault key word to the current balance (absent if not found). Keyed by
+/// vault key rather than faucet id because the callback flag is part of the key.
 ///
 /// # Raw SQL
 ///
@@ -147,41 +148,36 @@ pub(super) fn select_minimal_account_state_headers(
 /// FROM account_vault_assets
 /// WHERE account_id = ?1 AND is_latest = 1 AND vault_key IN (?2, ?3, ...)
 /// ```
-pub(super) fn select_vault_balances_by_faucet_ids(
+pub(super) fn select_vault_balances_by_vault_keys(
     conn: &mut SqliteConnection,
     account_id: AccountId,
-    faucet_ids: &[AccountId],
-) -> Result<BTreeMap<AccountId, u64>, DatabaseError> {
+    vault_keys: &[AssetVaultKey],
+) -> Result<HashMap<Word, u64>, DatabaseError> {
     use schema::account_vault_assets as vault;
 
-    if faucet_ids.is_empty() {
-        return Ok(BTreeMap::new());
+    if vault_keys.is_empty() {
+        return Ok(HashMap::new());
     }
 
     let account_id_bytes = account_id.to_bytes();
 
-    // Compute vault keys for each faucet ID
-    let vault_keys: Vec<Vec<u8>> = Result::from_iter(faucet_ids.iter().map(|faucet_id| {
-        let asset = FungibleAsset::new(*faucet_id, 0)
-            .map_err(|_| DatabaseError::DataCorrupted(format!("Invalid faucet id {faucet_id}")))?;
-        let key: Word = asset.vault_key().into();
-        Ok::<_, DatabaseError>(key.to_bytes())
-    }))?;
+    let vault_key_bytes: Vec<Vec<u8>> =
+        vault_keys.iter().map(|vault_key| vault_key.to_word().to_bytes()).collect();
 
     let entries: Vec<(Vec<u8>, Option<Vec<u8>>)> =
         SelectDsl::select(vault::table, (vault::vault_key, vault::asset))
             .filter(vault::account_id.eq(&account_id_bytes))
             .filter(vault::is_latest.eq(true))
-            .filter(vault::vault_key.eq_any(&vault_keys))
+            .filter(vault::vault_key.eq_any(&vault_key_bytes))
             .load(conn)?;
 
-    let mut balances = BTreeMap::from_iter(faucet_ids.iter().map(|faucet_id| (*faucet_id, 0)));
+    let mut balances = HashMap::new();
 
     for (_vault_key_bytes, maybe_asset_bytes) in entries {
         if let Some(asset_bytes) = maybe_asset_bytes {
             let asset = Asset::read_from_bytes(&asset_bytes)?;
             if let Asset::Fungible(fungible) = asset {
-                balances.insert(fungible.faucet_id(), fungible.amount());
+                balances.insert(fungible.vault_key().to_word(), fungible.amount().as_u64());
             }
         }
     }
@@ -229,10 +225,10 @@ pub(super) fn select_latest_vault_assets(
 pub(super) fn apply_storage_delta(
     header: &AccountStorageHeader,
     delta: &AccountStorageDelta,
-    map_entries: &BTreeMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>,
+    map_entries: &HashMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>,
 ) -> Result<AccountStorageHeader, DatabaseError> {
-    let mut value_updates: BTreeMap<&StorageSlotName, Word> = BTreeMap::new();
-    let mut map_updates: BTreeMap<&StorageSlotName, Word> = BTreeMap::new();
+    let mut value_updates: HashMap<&StorageSlotName, Word> = HashMap::new();
+    let mut map_updates: HashMap<&StorageSlotName, Word> = HashMap::new();
 
     for (slot_name, new_value) in delta.values() {
         value_updates.insert(slot_name, *new_value);

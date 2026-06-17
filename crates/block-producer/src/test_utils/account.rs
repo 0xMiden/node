@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use miden_protocol::account::{AccountId, AccountIdVersion, AccountStorageMode, AccountType};
+use miden_protocol::account::{AccountId, AccountIdVersion, AccountType};
 use miden_protocol::{Hasher, Word};
 
 pub static MOCK_ACCOUNTS: LazyLock<std::sync::Mutex<HashMap<u32, (AccountId, Word)>>> =
@@ -33,16 +33,15 @@ impl<const NUM_STATES: usize> MockPrivateAccount<NUM_STATES> {
     fn generate(init_seed: [u8; 32], new_account: bool) -> Self {
         let account_seed = AccountId::compute_account_seed(
             init_seed,
-            AccountType::RegularAccountUpdatableCode,
-            AccountStorageMode::Private,
-            AccountIdVersion::Version0,
+            AccountType::Private,
+            AccountIdVersion::Version1,
             Word::empty(),
             Word::empty(),
         )
         .unwrap();
 
         Self::new(
-            AccountId::new(account_seed, AccountIdVersion::Version0, Word::empty(), Word::empty())
+            AccountId::new(account_seed, AccountIdVersion::Version1, Word::empty(), Word::empty())
                 .unwrap(),
             if new_account {
                 Word::empty()
@@ -54,8 +53,8 @@ impl<const NUM_STATES: usize> MockPrivateAccount<NUM_STATES> {
 }
 
 impl<const NUM_STATES: usize> From<u32> for MockPrivateAccount<NUM_STATES> {
-    /// Each index gives rise to a different account ID
-    /// Passing index 0 signifies that it's a new account
+    /// Each index gives rise to a different account ID Passing index 0 signifies that it's a new
+    /// account
     fn from(index: u32) -> Self {
         let mut lock = MOCK_ACCOUNTS.lock().expect("Poisoned mutex");
         if let Some(&(account_id, init_state)) = lock.get(&index) {

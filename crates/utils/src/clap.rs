@@ -15,8 +15,8 @@ const DEFAULT_REPLENISH_N_PER_SECOND_PER_IP: NonZeroU64 = NonZeroU64::new(16).un
 const DEFAULT_BURST_SIZE: NonZeroU32 = NonZeroU32::new(128).unwrap();
 const DEFAULT_MAX_CONCURRENT_CONNECTIONS: u64 = 1_000;
 
-// Formats a Duration into a human-readable string for display in clap help text
-// and yields a &'static str by _leaking_ the string deliberately.
+// Formats a Duration into a human-readable string for display in clap help text and yields a
+// &'static str by _leaking_ the string deliberately.
 pub fn duration_to_human_readable_string(duration: Duration) -> &'static str {
     Box::new(humantime::format_duration(duration).to_string()).leak()
 }
@@ -80,8 +80,8 @@ pub struct GrpcOptionsExternal {
     )]
     pub max_connection_age: Duration,
 
-    /// Number of connections to be served before the "API tokens" need to be replenished
-    /// per IP address.
+    /// Number of connections to be served before the "API tokens" need to be replenished per IP
+    /// address.
     #[arg(
         long = "grpc.burst_size",
         default_value_t = DEFAULT_BURST_SIZE,
@@ -164,14 +164,17 @@ impl StorageOptions {
             let account_tree = AccountTreeRocksDbOptions {
                 max_open_fds: self::rocksdb::BENCH_ROCKSDB_MAX_OPEN_FDS,
                 cache_size_in_bytes: self::rocksdb::DEFAULT_ROCKSDB_CACHE_SIZE,
+                durability_mode: None,
             };
             let nullifier_tree = NullifierTreeRocksDbOptions {
                 max_open_fds: BENCH_ROCKSDB_MAX_OPEN_FDS,
                 cache_size_in_bytes: DEFAULT_ROCKSDB_CACHE_SIZE,
+                durability_mode: None,
             };
             let account_state_forest = AccountStateForestRocksDbOptions {
                 max_open_fds: BENCH_ROCKSDB_MAX_OPEN_FDS,
                 cache_size_in_bytes: DEFAULT_ROCKSDB_CACHE_SIZE,
+                durability_mode: None,
             };
             Self {
                 account_tree,

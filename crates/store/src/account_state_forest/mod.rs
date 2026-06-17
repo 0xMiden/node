@@ -1,11 +1,14 @@
-use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
 
 use miden_crypto::hash::rpo::Rpo256;
 #[cfg(feature = "rocksdb")]
 use miden_crypto::merkle::smt::ForestPersistentBackend;
 use miden_crypto::merkle::smt::{Backend, ForestInMemoryBackend};
-use miden_node_proto::domain::account::{AccountStorageMapDetails, AccountVaultDetails};
+use miden_node_proto::domain::account::{
+    AccountStorageMapDetails,
+    AccountVaultDetails,
+    StorageMapEntries,
+};
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::account::delta::{AccountDelta, AccountStorageDelta, AccountVaultDelta};
@@ -13,10 +16,10 @@ use miden_protocol::account::{
     AccountId,
     NonFungibleDeltaAction,
     StorageMapKey,
-    StorageMapWitness,
+    StorageMapKeyHash,
     StorageSlotName,
 };
-use miden_protocol::asset::{Asset, AssetVaultKey, AssetWitness, FungibleAsset};
+use miden_protocol::asset::{Asset, FungibleAsset};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::merkle::smt::{
     ForestOperation,
@@ -88,15 +91,12 @@ pub enum AccountStorageMapResult {
 
 /// Container for forest-related state that needs to be updated atomically.
 pub(crate) struct AccountStateForest<B: Backend = ForestInMemoryBackend> {
-    /// `LargeSmtForest` for efficient account storage reconstruction.
-    /// Populated during block import with storage and vault SMTs.
+    /// `LargeSmtForest` for efficient account storage reconstruction. Populated during block import
+    /// with storage and vault SMTs.
     forest: LargeSmtForest<B>,
 
     /// Reverse lookup from hashed SMT storage keys to raw storage map keys.
-    ///
-    /// Ideally this would be a mapping from `StorageMapKeyHash` to `StorageMapKey` but
-    /// unfortunately `StorageMapKeyHash` does not implement `Hash`.
-    storage_map_key_cache: LruCache<Word, StorageMapKey>,
+    storage_map_key_cache: LruCache<StorageMapKeyHash, StorageMapKey>,
 }
 
 #[cfg(test)]
@@ -199,7 +199,7 @@ impl<B: Backend> AccountStateForest<B> {
 
     pub(crate) fn cache_storage_map_keys(&self, raw_keys: impl IntoIterator<Item = StorageMapKey>) {
         self.storage_map_key_cache
-            .put_many(raw_keys.into_iter().map(|raw_key| (raw_key.hash().into(), raw_key)));
+            .put_many(raw_keys.into_iter().map(|raw_key| (raw_key.hash(), raw_key)));
     }
 
     #[cfg(test)]
@@ -295,51 +295,8 @@ impl<B: Backend> AccountStateForest<B> {
         self.get_tree_root(lineage, block_num)
     }
 
-    // WITNESSES and PROOFS
+    // DETAILS
     // --------------------------------------------------------------------------------------------
-
-    /// Retrieves a storage map witness for the specified account and storage slot.
-    ///
-    /// Note that the `raw_key` is the raw, user-provided key that needs to be hashed in order to
-    /// get the actual key into the storage map.
-    #[instrument(target = COMPONENT, skip_all)]
-    pub(crate) fn get_storage_map_witness(
-        &self,
-        account_id: AccountId,
-        slot_name: &StorageSlotName,
-        block_num: BlockNumber,
-        raw_key: StorageMapKey,
-    ) -> Result<StorageMapWitness, WitnessError> {
-        let lineage = Self::storage_lineage_id(account_id, slot_name);
-        let tree = self.get_tree_id(lineage, block_num).ok_or(WitnessError::RootNotFound)?;
-        let key = raw_key.hash().into();
-        let proof = self.forest.open(tree, key).map_err(Self::map_forest_error_to_witness)?;
-
-        Ok(StorageMapWitness::new(proof, vec![raw_key])?)
-    }
-
-    /// Retrieves a vault asset witnesses for the specified account and asset keys at the specified
-    /// block number.
-    #[instrument(target = COMPONENT, skip_all)]
-    pub fn get_vault_asset_witnesses(
-        &self,
-        account_id: AccountId,
-        block_num: BlockNumber,
-        asset_keys: BTreeSet<AssetVaultKey>,
-    ) -> Result<Vec<AssetWitness>, WitnessError> {
-        let lineage = Self::vault_lineage_id(account_id);
-        let tree = self.get_tree_id(lineage, block_num).ok_or(WitnessError::RootNotFound)?;
-        let witnessees: Result<Vec<_>, WitnessError> =
-            Result::from_iter(asset_keys.into_iter().map(|key| {
-                let proof = self
-                    .forest
-                    .open(tree, key.into())
-                    .map_err(Self::map_forest_error_to_witness)?;
-                let asset = AssetWitness::new(proof)?;
-                Ok(asset)
-            }));
-        witnessees
-    }
 
     /// Enumerates vault contents for the specified account at the requested block.
     #[instrument(target = COMPONENT, skip_all)]
@@ -350,13 +307,20 @@ impl<B: Backend> AccountStateForest<B> {
     ) -> Result<AccountVaultDetails, WitnessError> {
         let lineage = Self::vault_lineage_id(account_id);
         let tree = self.get_tree_id(lineage, block_num).ok_or(WitnessError::RootNotFound)?;
-        // TODO: we should be checking `.entry_count()` instead of pulling entries from the tree
-        // once the optimization making `.entry_count()` cheap once `miden-crypto` is upgraded to
-        // > 0.23.
+
+        // Return "limit exceeded" if the number of vault entries is above the limit.
+        let num_input_notes =
+            self.forest.entry_count(tree).map_err(Self::map_forest_error_to_witness)?;
+        if num_input_notes > AccountVaultDetails::MAX_RETURN_ENTRIES {
+            return Ok(AccountVaultDetails::LimitExceeded);
+        }
+
         let entries = self.forest.entries(tree).map_err(Self::map_forest_error_to_witness)?;
         let assets = entries
-            .take(AccountVaultDetails::MAX_RETURN_ENTRIES + 1)
-            .map(|entry| Asset::from_key_value_words(entry.key, entry.value))
+            .map(|entry| {
+                let entry = entry.map_err(Self::map_forest_error_to_witness)?;
+                Asset::from_key_value_words(entry.key, entry.value).map_err(WitnessError::from)
+            })
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(AccountVaultDetails::from_assets(assets))
@@ -397,17 +361,31 @@ impl<B: Backend> AccountStateForest<B> {
         account_id: AccountId,
         slot_name: &StorageSlotName,
         block_num: BlockNumber,
-        limit: usize,
-    ) -> Option<Result<Vec<(Word, Word)>, MerkleError>> {
+    ) -> Option<Result<Vec<(StorageMapKeyHash, Word)>, MerkleError>> {
         let lineage = Self::storage_lineage_id(account_id, slot_name);
         let tree = self.get_tree_id(lineage, block_num)?;
 
-        Some(
-            self.forest
-                .entries(tree)
-                .map_err(Self::map_forest_error)
-                .map(|entries| entries.take(limit).map(|entry| (entry.key, entry.value)).collect()),
-        )
+        Some(self.forest.entries(tree).map_err(Self::map_forest_error).and_then(|entries| {
+            entries
+                .map(|entry| {
+                    entry
+                        .map(|e| (StorageMapKeyHash::from_raw(e.key), e.value))
+                        .map_err(Self::map_forest_error)
+                })
+                .collect()
+        }))
+    }
+
+    /// Returns the number of storage map entries.
+    fn num_storage_map_entries(
+        &self,
+        account_id: AccountId,
+        slot_name: &StorageSlotName,
+        block_num: BlockNumber,
+    ) -> Option<Result<usize, MerkleError>> {
+        let lineage = Self::storage_lineage_id(account_id, slot_name);
+        let tree = self.get_tree_id(lineage, block_num)?;
+        Some(self.forest.entry_count(tree).map_err(Self::map_forest_error))
     }
 
     /// Returns all storage map entries when the forest and reverse-key cache contain enough data.
@@ -424,24 +402,25 @@ impl<B: Backend> AccountStateForest<B> {
         slot_name: StorageSlotName,
         block_num: BlockNumber,
     ) -> Result<AccountStorageMapResult, MerkleError> {
-        let Some(hashed_entries) = self
-            .get_storage_map_entries(
-                account_id,
-                &slot_name,
-                block_num,
-                AccountStorageMapDetails::MAX_RETURN_ENTRIES + 1,
-            )
-            .transpose()?
+        // Check if number of entries is not larger than the limit.
+        let Some(num_entries) =
+            self.num_storage_map_entries(account_id, &slot_name, block_num).transpose()?
         else {
             return Ok(AccountStorageMapResult::NotFound);
         };
-
-        if hashed_entries.len() > AccountStorageMapDetails::MAX_RETURN_ENTRIES {
+        if num_entries > AccountStorageMapDetails::MAX_RETURN_ENTRIES {
             return Ok(AccountStorageMapResult::Details(AccountStorageMapDetails {
                 slot_name,
-                entries: miden_node_proto::domain::account::StorageMapEntries::LimitExceeded,
+                entries: StorageMapEntries::LimitExceeded,
             }));
         }
+
+        // Fetch (hashed_key, value) pairs.
+        let Some(hashed_entries) =
+            self.get_storage_map_entries(account_id, &slot_name, block_num).transpose()?
+        else {
+            return Ok(AccountStorageMapResult::NotFound);
+        };
 
         let raw_keys = self
             .storage_map_key_cache
@@ -551,8 +530,8 @@ impl<B: Backend> AccountStateForest<B> {
         self.forest.latest_root(lineage).unwrap_or_else(empty_smt_root)
     }
 
-    /// Inserts asset vault data into the forest for the specified account. Assumes that asset
-    /// vault for this account does not yet exist in the forest.
+    /// Inserts asset vault data into the forest for the specified account. Assumes that asset vault
+    /// for this account does not yet exist in the forest.
     fn insert_account_vault(
         &mut self,
         block_num: BlockNumber,
@@ -587,7 +566,8 @@ impl<B: Backend> AccountStateForest<B> {
         for (vault_key, amount_delta) in vault_delta.fungible().iter() {
             let amount =
                 (*amount_delta).try_into().expect("full-state amount should be non-negative");
-            let asset = FungibleAsset::new(vault_key.faucet_id(), amount)?;
+            let asset = FungibleAsset::new(vault_key.faucet_id(), amount)?
+                .with_callbacks(vault_key.callback_flag());
             entries.push((asset.to_key_word(), asset.to_value_word()));
         }
 
@@ -704,11 +684,12 @@ impl<B: Backend> AccountStateForest<B> {
         // Process fungible assets
         for (vault_key, amount_delta) in vault_delta.fungible().iter() {
             let faucet_id = vault_key.faucet_id();
+            let callback_flag = vault_key.callback_flag();
             let delta_abs = amount_delta.unsigned_abs();
-            let delta = FungibleAsset::new(faucet_id, delta_abs)?;
+            let delta = FungibleAsset::new(faucet_id, delta_abs)?.with_callbacks(callback_flag);
             let key = Word::from(delta.vault_key());
 
-            let empty = FungibleAsset::new(faucet_id, 0)?;
+            let empty = FungibleAsset::new(faucet_id, 0)?.with_callbacks(callback_flag);
             let asset = if let Some(tree) = prev_tree {
                 self.forest
                     .get(tree, key)?
@@ -725,7 +706,7 @@ impl<B: Backend> AccountStateForest<B> {
                 asset.add(delta)?
             };
 
-            let value = if updated.amount() == 0 {
+            let value = if updated.amount().as_u64() == 0 {
                 EMPTY_WORD
             } else {
                 updated.to_value_word()

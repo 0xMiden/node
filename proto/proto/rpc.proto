@@ -24,24 +24,11 @@ service Api {
     // multiple smaller requests.
     rpc GetLimits(google.protobuf.Empty) returns (RpcLimits) {}
 
-    // Returns a Sparse Merkle Tree opening proof for each requested nullifier
-    //
-    // Each proof demonstrates either:
-    // - **Inclusion**: Nullifier exists in the tree (note was consumed)
-    // - **Non-inclusion**: Nullifier does not exist (note was not consumed)
-    //
-    // The `leaf` field indicates the status:
-    // * `empty_leaf_index`: Non-inclusion proof (nullifier not in tree)
-    // * `single` or `multiple`: Inclusion proof only if the requested nullifier appears as a key.
-    //
-    // Verify proofs against the nullifier tree root in the latest block header.
-    rpc CheckNullifiers(NullifierList) returns (CheckNullifiersResponse) {}
-
     // Returns the latest details of the specified account.
     rpc GetAccount(AccountRequest) returns (AccountResponse) {}
 
-    // Returns raw block data for the specified block number.
-    rpc GetBlockByNumber(blockchain.BlockNumber) returns (blockchain.MaybeBlock) {}
+    // Returns raw block data for the specified block number, optionally including the block proof.
+    rpc GetBlockByNumber(blockchain.BlockRequest) returns (blockchain.MaybeBlock) {}
 
     // Retrieves block header by given block number. Optionally, it also returns the MMR path
     // and current chain length to authenticate the block's inclusion.
@@ -57,14 +44,14 @@ service Api {
     // --------------------------------------------------------------------------------------------
 
     // Submits proven transaction to the Miden network. Returns the node's current block height.
-    rpc SubmitProvenTransaction(transaction.ProvenTransaction) returns (blockchain.BlockNumber) {}
+    rpc SubmitProvenTx(transaction.ProvenTransaction) returns (blockchain.BlockNumber) {}
 
     // Submits a batch of transactions to the Miden network.
     //
     // All transactions in this batch will be considered atomic, and be committed together or not all.
     //
     // Returns the node's current block height.
-    rpc SubmitProvenBatch(transaction.ProvenTransactionBatch) returns (blockchain.BlockNumber) {}
+    rpc SubmitProvenTxBatch(transaction.TransactionBatch) returns (blockchain.BlockNumber) {}
 
     // STATE SYNCHRONIZATION ENDPOINTS
     // --------------------------------------------------------------------------------------------
@@ -97,14 +84,71 @@ service Api {
     // Returns MMR delta needed to synchronize the chain MMR within the requested block range.
     rpc SyncChainMmr(SyncChainMmrRequest) returns (SyncChainMmrResponse) {}
 
+    // Streams committed blocks starting from the given block number (inclusive).
+    //
+    // Replays historical blocks first, then streams live blocks as they are committed.
+    // On lag (replica falls too far behind), the stream is closed with a DATA_LOSS error and
+    // the client should reconnect from its local tip.
+    rpc BlockSubscription(BlockSubscriptionRequest) returns (stream BlockSubscriptionResponse) {}
+
+    // Streams block proofs starting from the given block number (inclusive).
+    //
+    // Replays existing proofs first, then streams new proofs as they are generated.
+    // On lag, the stream is closed with a DATA_LOSS error.
+    rpc ProofSubscription(ProofSubscriptionRequest) returns (stream ProofSubscriptionResponse) {}
+
     // NOTE DEBUGGING ENDPOINTS
     // --------------------------------------------------------------------------------------------
 
-    // Returns the latest execution error for a network note, if any.
+    // Returns the current status of a network note.
     //
-    // This is useful for debugging notes that are failing to be consumed by
-    // the network transaction builder.
-    rpc GetNoteError(note.NoteId) returns (GetNoteErrorResponse) {}
+    // The status indicates where the note is in its lifecycle: pending execution,
+    // processed (consumed by a transaction in the mempool), or discarded after too
+    // many failed attempts.
+    //
+    // Returns `NOT_FOUND` if the note ID is not tracked by the network transaction builder.
+    rpc GetNetworkNoteStatus(note.NoteId) returns (GetNetworkNoteStatusResponse) {}
+}
+
+// BLOCK SUBSCRIPTION
+// ================================================================================================
+
+// Request to subscribe to the committed block stream.
+message BlockSubscriptionRequest {
+    // The block number to start streaming from (inclusive).
+    fixed32 block_from = 1;
+}
+
+// A committed block streamed to a replica.
+message BlockSubscriptionResponse {
+    // The block encoded using [miden_serde_utils::Serializable] implementation for
+    // [miden_protocol::block::SignedBlock].
+    bytes block = 1;
+
+    // The committed chain tip when this item was emitted.
+    fixed32 committed_chain_tip = 2;
+}
+
+// PROOF SUBSCRIPTION
+// ================================================================================================
+
+// Request to subscribe to the block proof stream.
+message ProofSubscriptionRequest {
+    // The block number to start streaming from (inclusive).
+    fixed32 block_from = 1;
+}
+
+// A block proof streamed to a replica.
+message ProofSubscriptionResponse {
+    // The block number this proof corresponds to.
+    fixed32 block_num = 1;
+
+    // The block proof encoded using [miden_serde_utils::Serializable] implementation for
+    // [miden_protocol::block::BlockProof].
+    bytes proof = 2;
+
+    // The proven chain tip when this item was emitted.
+    fixed32 proven_chain_tip = 3;
 }
 
 // RPC STATUS
@@ -118,8 +162,8 @@ message RpcStatus {
     // The genesis commitment.
     primitives.Digest genesis_commitment = 2;
 
-    // The store status.
-    StoreStatus store = 3;
+    // Number of the latest block in the chain.
+    fixed32 chain_tip = 3;
 
     // The block producer status.
     BlockProducerStatus block_producer = 4;
@@ -156,21 +200,6 @@ message MempoolStats {
 
     // Number of proven batches waiting for block inclusion.
     uint64 proven_batches = 3;
-}
-
-// STORE STATUS
-// ================================================================================================
-
-// Represents the status of the store.
-message StoreStatus {
-    // The store's running version.
-    string version = 1;
-
-    // The store's status.
-    string status = 2;
-
-    // Number of the latest block in the chain.
-    fixed32 chain_tip = 3;
 }
 
 // GET BLOCK HEADER BY NUMBER
@@ -248,8 +277,23 @@ message AccountRequest {
         // separately, which is signaled in the response message with dedicated flag.
         optional primitives.Digest asset_vault_commitment = 2;
 
-        // Additional request per storage map.
-        repeated StorageMapDetailRequest storage_maps = 3;
+        // Wrapper required because protobuf `oneof` fields cannot be `repeated`.
+        message StorageMapDetailRequests {
+            // Additional request per storage map.
+            repeated StorageMapDetailRequest storage_maps = 1;
+        }
+
+        oneof storage_request {
+            // Request all entries for all storage map slots in the account.
+            //
+            // Each map response is still capped independently. If a map exceeds the entry
+            // threshold, the response will set `too_many_entries` for that map and clients
+            // should use `SyncAccountStorageMaps` to fetch it.
+            bool all_storage_maps = 3;
+
+            // Request details for explicitly selected storage map slots.
+            StorageMapDetailRequests storage_maps = 4;
+        }
     }
 
     // ID of the account for which we want to get data
@@ -353,21 +397,6 @@ message AccountStorageDetails {
 
     // Additional data for the requested storage maps
     repeated AccountStorageMapDetails map_details = 2;
-}
-
-// CHECK NULLIFIERS
-// ================================================================================================
-
-// List of nullifiers to return proofs for.
-message NullifierList {
-    // List of nullifiers to return proofs for.
-    repeated primitives.Digest nullifiers = 1;
-}
-
-// Represents the result of checking nullifiers.
-message CheckNullifiersResponse {
-    // Each requested nullifier has its corresponding nullifier proof at the same position.
-    repeated primitives.SmtOpening proofs = 1;
 }
 
 // SYNC NULLIFIERS
@@ -494,41 +523,39 @@ message SyncNotesResponse {
 // SYNC CHAIN MMR
 // ================================================================================================
 
-// The finality level for chain data queries.
-enum Finality {
-    // Return data up to the latest committed block.
-    FINALITY_UNSPECIFIED = 0;
-    // Return data up to the latest committed block.
-    FINALITY_COMMITTED = 1;
-    // Return data only up to the latest proven block.
-    FINALITY_PROVEN = 2;
+// Finality level we'd like to sync up to.
+enum FinalityLevel {
+    FINALITY_LEVEL_UNSPECIFIED = 0;
+    // Sync up to the latest committed block (chain tip).
+    FINALITY_LEVEL_COMMITTED = 1;
+    // Sync up to the latest proven block.
+    FINALITY_LEVEL_PROVEN = 2;
 }
 
 // Chain MMR synchronization request.
 message SyncChainMmrRequest {
-    // Block range from which to synchronize the chain MMR.
-    //
-    // The response will contain MMR delta starting after `block_range.block_from` up to
-    // `block_range.block_to` or the effective tip (whichever is lower). Set `block_from` to the
-    // last block already present in the caller's MMR so the delta begins at the next block.
-    BlockRange block_range = 1;
+    // Block number from which to synchronize. Set this to the last block
+    // already present in the caller's MMR so the delta begins at the next block.
+    fixed32 current_client_block_height = 1;
 
-    // The finality level to use when clamping the upper bound of the block range.
-    //
-    // When set to `FINALITY_UNSPECIFIED` or `FINALITY_COMMITTED`, the upper bound is clamped to the chain tip.
-    // When set to `FINALITY_PROVEN`, the upper bound is clamped to the latest proven block.
-    Finality finality = 2;
+    // Sync target: either the committed or the proven tip.
+    FinalityLevel finality_level = 2;
 }
 
 // Represents the result of syncing chain MMR.
 message SyncChainMmrResponse {
     // For which block range the MMR delta is returned.
     BlockRange block_range = 1;
-    // Data needed to update the partial MMR from `request.block_range.block_from + 1` to
-    // `response.block_range.block_to` or the chain tip.
+
+    // Data needed to update the partial MMR from `request.current_client_block_height + 1` to
+    // the sync target.
     primitives.MmrDelta mmr_delta = 2;
-    // Block header for `block_range.block_to`.
+
+    // Block header for the sync target.
     blockchain.BlockHeader block_header = 3;
+
+    // Validator signature for the sync target.
+    blockchain.BlockSignature block_signature = 4;
 }
 
 // SYNC ACCOUNT STORAGE MAP
@@ -583,8 +610,8 @@ message BlockRange {
     // Block number from which to start (inclusive).
     fixed32 block_from = 1;
 
-    // Block number up to which to check (inclusive). If not specified, checks up to the latest block.
-    optional fixed32 block_to = 2;
+    // Block number up to which to check (inclusive).
+    fixed32 block_to = 2;
 }
 
 // PAGINATION INFO
@@ -647,17 +674,33 @@ message TransactionRecord {
     repeated note.NoteInclusionInBlockProof output_note_proofs = 3;
 }
 
-// GET NOTE ERROR
+// GET NETWORK NOTE STATUS
 // ================================================================================================
 
-// Response containing the latest execution error for a network note.
-message GetNoteErrorResponse {
-    // The latest error message, if any.
-    optional string error = 1;
+// Lifecycle status of a network note within the transaction builder.
+enum NetworkNoteStatus {
+    // Default / unspecified status.
+    NETWORK_NOTE_STATUS_UNSPECIFIED = 0;
+    // The note is awaiting execution or being retried after transient failures.
+    NETWORK_NOTE_STATUS_PENDING = 1;
+    // The note has been consumed by a transaction that was sent to the block producer.
+    NETWORK_NOTE_STATUS_NULLIFIER_INFLIGHT = 2;
+    // The note exceeded the maximum retry count and will not be retried.
+    NETWORK_NOTE_STATUS_DISCARDED = 3;
+    // The note's consuming transaction has been committed on-chain.
+    NETWORK_NOTE_STATUS_NULLIFIER_COMMITTED = 4;
+}
+
+// Response containing the lifecycle status and latest execution error for a network note.
+message GetNetworkNoteStatusResponse {
+    // Current lifecycle status of the note.
+    NetworkNoteStatus status = 1;
+    // The latest error message from execution, if any.
+    optional string last_error = 2;
     // Number of failed execution attempts.
-    uint32 attempt_count = 2;
+    uint32 attempt_count = 3;
     // Block number of the last failed attempt, if any.
-    optional fixed32 last_attempt_block_num = 3;
+    optional fixed32 last_attempt_block_num = 4;
 }
 
 // RPC LIMITS
@@ -666,7 +709,7 @@ message GetNoteErrorResponse {
 // Represents the query parameter limits for RPC endpoints.
 message RpcLimits {
     // Maps RPC endpoint names to their parameter limits.
-    // Key: endpoint name (e.g., "CheckNullifiers")
+    // Key: endpoint name (e.g., "SyncNullifiers")
     // Value: map of parameter names to their limit values
     map<string, EndpointLimits> endpoints = 1;
 }

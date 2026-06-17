@@ -3,17 +3,19 @@ use std::sync::Arc;
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::note::{
     Note,
-    NoteAttachment,
-    NoteAttachmentKind,
+    NoteAttachmentHeader,
+    NoteAttachmentScheme,
+    NoteAttachments,
     NoteDetails,
+    NoteDetailsCommitment,
     NoteHeader,
     NoteId,
     NoteInclusionProof,
     NoteMetadata,
-    NoteMetadataHeader,
     NoteScript,
     NoteTag,
     NoteType,
+    PartialNoteMetadata,
 };
 use miden_protocol::utils::serde::Serializable;
 use miden_protocol::{MastForest, MastNodeId, Word};
@@ -49,51 +51,30 @@ impl TryFrom<proto::note::NoteType> for NoteType {
     }
 }
 
-// NOTE ATTACHMENT KIND
-// ================================================================================================
-
-impl From<NoteAttachmentKind> for proto::note::NoteAttachmentKind {
-    fn from(kind: NoteAttachmentKind) -> Self {
-        match kind {
-            NoteAttachmentKind::None => proto::note::NoteAttachmentKind::None,
-            NoteAttachmentKind::Word => proto::note::NoteAttachmentKind::Word,
-            NoteAttachmentKind::Array => proto::note::NoteAttachmentKind::Array,
-        }
-    }
-}
-
-impl TryFrom<proto::note::NoteAttachmentKind> for NoteAttachmentKind {
-    type Error = ConversionError;
-
-    fn try_from(kind: proto::note::NoteAttachmentKind) -> Result<Self, Self::Error> {
-        match kind {
-            proto::note::NoteAttachmentKind::None => Ok(NoteAttachmentKind::None),
-            proto::note::NoteAttachmentKind::Word => Ok(NoteAttachmentKind::Word),
-            proto::note::NoteAttachmentKind::Array => Ok(NoteAttachmentKind::Array),
-            proto::note::NoteAttachmentKind::Unspecified => {
-                Err(ConversionError::message("enum variant discriminant out of range"))
-            },
-        }
-    }
-}
-
-// NOTE METADATA HEADER
-// ================================================================================================
-
-impl From<NoteMetadataHeader> for proto::note::NoteMetadataHeader {
-    fn from(header: NoteMetadataHeader) -> Self {
-        Self {
-            sender: Some(header.sender().into()),
-            note_type: proto::note::NoteType::from(header.note_type()) as i32,
-            tag: header.tag().as_u32(),
-            attachment_kind: proto::note::NoteAttachmentKind::from(header.attachment_kind()) as i32,
-            attachment_scheme: header.attachment_scheme().as_u32(),
-        }
-    }
-}
-
 // NOTE METADATA
 // ================================================================================================
+
+impl From<NoteMetadata> for proto::note::NoteMetadata {
+    fn from(val: NoteMetadata) -> Self {
+        let sender = Some(val.sender().into());
+        let note_type = proto::note::NoteType::from(val.note_type()) as i32;
+        let tag = val.tag().as_u32();
+        let attachment_schemes = val
+            .attachment_headers()
+            .iter()
+            .map(|header| u32::from(header.scheme().map_or(0, |s| s.as_u16())))
+            .collect();
+        let attachments_commitment = Some(val.attachments_commitment().into());
+
+        proto::note::NoteMetadata {
+            sender,
+            note_type,
+            tag,
+            attachment_schemes,
+            attachments_commitment,
+        }
+    }
+}
 
 impl TryFrom<proto::note::NoteMetadata> for NoteMetadata {
     type Error = ConversionError;
@@ -106,43 +87,51 @@ impl TryFrom<proto::note::NoteMetadata> for NoteMetadata {
             .try_into()
             .context("note_type")?;
         let tag = NoteTag::new(value.tag);
+        let attachments_commitment: Word = decode!(decoder, value.attachments_commitment)?;
 
-        // Deserialize attachment if present
-        let attachment = if value.attachment.is_empty() {
-            NoteAttachment::default()
-        } else {
-            NoteAttachment::decode_bytes(&value.attachment, "NoteAttachment")?
-        };
+        if value.attachment_schemes.len() > NoteAttachments::MAX_COUNT {
+            return Err(ConversionError::message("too many attachment schemes"));
+        }
+        let mut attachment_headers = [NoteAttachmentHeader::absent(); NoteAttachments::MAX_COUNT];
+        for (slot, raw) in attachment_headers.iter_mut().zip(value.attachment_schemes) {
+            let raw = u16::try_from(raw)
+                .map_err(|_| ConversionError::message("attachment scheme out of u16 range"))?;
+            *slot = if raw == 0 {
+                NoteAttachmentHeader::absent()
+            } else {
+                NoteAttachmentHeader::new(NoteAttachmentScheme::new(raw)?)
+            };
+        }
 
-        Ok(NoteMetadata::new(sender, note_type).with_tag(tag).with_attachment(attachment))
+        let partial = PartialNoteMetadata::new(sender, note_type).with_tag(tag);
+        Ok(NoteMetadata::from_parts(partial, attachment_headers, attachments_commitment))
     }
 }
 
+// NOTE
+// ================================================================================================
+
 impl From<Note> for proto::note::NetworkNote {
     fn from(note: Note) -> Self {
-        Self {
-            metadata: Some(proto::note::NoteMetadata::from(note.metadata().clone())),
-            details: NoteDetails::from(note).to_bytes(),
-        }
+        let metadata = Some(proto::note::NoteMetadata::from(*note.metadata()));
+        let attachments = note.attachments().to_bytes();
+        let details = NoteDetails::from(note).to_bytes();
+        Self { metadata, details, attachments }
     }
 }
 
 impl From<Note> for proto::note::Note {
     fn from(note: Note) -> Self {
-        Self {
-            metadata: Some(proto::note::NoteMetadata::from(note.metadata().clone())),
-            details: Some(NoteDetails::from(note).to_bytes()),
-        }
+        let metadata = Some(proto::note::NoteMetadata::from(*note.metadata()));
+        let attachments = note.attachments().to_bytes();
+        let details = Some(NoteDetails::from(note).to_bytes());
+        Self { metadata, details, attachments }
     }
 }
 
 impl From<AccountTargetNetworkNote> for proto::note::NetworkNote {
     fn from(note: AccountTargetNetworkNote) -> Self {
-        let note = note.into_note();
-        Self {
-            metadata: Some(proto::note::NoteMetadata::from(note.metadata().clone())),
-            details: NoteDetails::from(note).to_bytes(),
-        }
+        note.into_note().into()
     }
 }
 
@@ -150,25 +139,43 @@ impl TryFrom<proto::note::NetworkNote> for AccountTargetNetworkNote {
     type Error = ConversionError;
 
     fn try_from(value: proto::note::NetworkNote) -> Result<Self, Self::Error> {
-        let decoder = value.decoder();
-        let details = NoteDetails::decode_bytes(&value.details, "NoteDetails")?;
-        let (assets, recipient) = details.into_parts();
-        let metadata: NoteMetadata = decode!(decoder, value.metadata)?;
-        let note = Note::new(assets, metadata, recipient);
+        let proto::note::NetworkNote { metadata, details, attachments } = value;
+
+        let metadata = metadata
+            .ok_or(ConversionError::missing_field::<proto::note::NetworkNote>("metadata"))?;
+        let partial_metadata = partial_note_metadata_from_proto(metadata)?;
+
+        let note_details = NoteDetails::decode_bytes(&details, "NoteDetails")?;
+        let (assets, recipient) = note_details.into_parts();
+        let attachments = decode_attachments(&attachments)?;
+
+        let note = Note::with_attachments(assets, partial_metadata, recipient, attachments);
         AccountTargetNetworkNote::new(note).map_err(ConversionError::from)
     }
 }
 
-impl From<NoteMetadata> for proto::note::NoteMetadata {
-    fn from(val: NoteMetadata) -> Self {
-        let sender = Some(val.sender().into());
-        let note_type = proto::note::NoteType::from(val.note_type()) as i32;
-        let tag = val.tag().as_u32();
-        let attachment = val.attachment().to_bytes();
+impl TryFrom<proto::note::Note> for Note {
+    type Error = ConversionError;
 
-        proto::note::NoteMetadata { sender, note_type, tag, attachment }
+    fn try_from(proto_note: proto::note::Note) -> Result<Self, Self::Error> {
+        let proto::note::Note { metadata, details, attachments } = proto_note;
+
+        let metadata =
+            metadata.ok_or(ConversionError::missing_field::<proto::note::Note>("metadata"))?;
+        let partial_metadata = partial_note_metadata_from_proto(metadata)?;
+
+        let details =
+            details.ok_or(ConversionError::missing_field::<proto::note::Note>("details"))?;
+        let note_details = NoteDetails::decode_bytes(&details, "NoteDetails")?;
+        let (assets, recipient) = note_details.into_parts();
+        let attachments = decode_attachments(&attachments)?;
+
+        Ok(Note::with_attachments(assets, partial_metadata, recipient, attachments))
     }
 }
+
+// NOTE ID
+// ================================================================================================
 
 impl From<Word> for proto::note::NoteId {
     fn from(digest: Word) -> Self {
@@ -246,31 +253,13 @@ impl TryFrom<&proto::note::NoteInclusionInBlockProof> for (NoteId, NoteInclusion
     }
 }
 
-impl TryFrom<proto::note::Note> for Note {
-    type Error = ConversionError;
-
-    fn try_from(proto_note: proto::note::Note) -> Result<Self, Self::Error> {
-        let decoder = proto_note.decoder();
-        let metadata: NoteMetadata = decode!(decoder, proto_note.metadata)?;
-
-        let details = proto_note
-            .details
-            .ok_or(ConversionError::missing_field::<proto::note::Note>("details"))?;
-
-        let note_details = NoteDetails::decode_bytes(&details, "NoteDetails")?;
-
-        let (assets, recipient) = note_details.into_parts();
-        Ok(Note::new(assets, metadata, recipient))
-    }
-}
-
 // NOTE HEADER
 // ================================================================================================
 
 impl From<NoteHeader> for proto::note::NoteHeader {
     fn from(header: NoteHeader) -> Self {
         Self {
-            note_id: Some((&header.id()).into()),
+            details_commitment: Some(header.details_commitment().as_word().into()),
             metadata: Some(header.into_metadata().into()),
         }
     }
@@ -281,10 +270,13 @@ impl TryFrom<proto::note::NoteHeader> for NoteHeader {
 
     fn try_from(value: proto::note::NoteHeader) -> Result<Self, Self::Error> {
         let decoder = value.decoder();
-        let note_id_word: Word = decode!(decoder, value.note_id)?;
+        let details_commitment_word: Word = decode!(decoder, value.details_commitment)?;
         let metadata: NoteMetadata = decode!(decoder, value.metadata)?;
 
-        Ok(NoteHeader::new(NoteId::from_raw(note_id_word), metadata))
+        Ok(NoteHeader::new(
+            NoteDetailsCommitment::from_raw(details_commitment_word),
+            metadata,
+        ))
     }
 }
 
@@ -311,5 +303,67 @@ impl TryFrom<proto::note::NoteScript> for NoteScript {
             .map_err(|err| ConversionError::deserialization("note_script.entrypoint", err))?;
 
         Ok(Self::from_parts(Arc::new(mast), entrypoint))
+    }
+}
+
+// HELPERS
+// ================================================================================================
+
+/// Decodes the `(sender, note_type, tag)` triple from a proto `NoteMetadata` into a
+/// [`PartialNoteMetadata`]. The attachment-related fields on the proto are ignored — when full
+/// attachments are also transmitted, the receiver derives the canonical headers and commitment from
+/// those instead.
+fn partial_note_metadata_from_proto(
+    value: proto::note::NoteMetadata,
+) -> Result<PartialNoteMetadata, ConversionError> {
+    let decoder = value.decoder();
+    let sender = decode!(decoder, value.sender)?;
+    let note_type = proto::note::NoteType::try_from(value.note_type)
+        .map_err(|_| ConversionError::message("enum variant discriminant out of range"))?
+        .try_into()
+        .context("note_type")?;
+    let tag = NoteTag::new(value.tag);
+    Ok(PartialNoteMetadata::new(sender, note_type).with_tag(tag))
+}
+
+/// Decodes a serialized [`NoteAttachments`] payload. Empty bytes are treated as an empty collection
+/// so that proto3's default value round-trips cleanly.
+fn decode_attachments(bytes: &[u8]) -> Result<NoteAttachments, ConversionError> {
+    if bytes.is_empty() {
+        Ok(NoteAttachments::empty())
+    } else {
+        NoteAttachments::decode_bytes(bytes, "NoteAttachments")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use miden_protocol::account::{AccountId, AccountIdVersion, AccountType};
+
+    use super::*;
+
+    #[test]
+    fn note_header_roundtrip_preserves_id() {
+        // Build a NoteHeader with a known details_commitment and metadata.
+        let details_commitment =
+            NoteDetailsCommitment::from_raw(Word::try_from([1u64, 2, 3, 4]).unwrap());
+        let sender = AccountId::dummy([1; 15], AccountIdVersion::Version1, AccountType::Public);
+        let metadata = NoteMetadata::new(
+            PartialNoteMetadata::new(sender, NoteType::Public).with_tag(NoteTag::from(7u32)),
+            &NoteAttachments::default(),
+        );
+
+        let original = NoteHeader::new(details_commitment, metadata);
+
+        // Round-trip through proto.
+        let proto_header: proto::note::NoteHeader = original.into();
+        let decoded = NoteHeader::try_from(proto_header).expect("proto NoteHeader should decode");
+
+        // Both the derived id and the details_commitment must match — guards against the historical
+        // bug where the encoder wrote `id` into the same wire field the decoder interpreted as
+        // `details_commitment`.
+        assert_eq!(decoded.id(), original.id());
+        assert_eq!(decoded.details_commitment(), original.details_commitment());
+        assert_eq!(decoded.metadata(), original.metadata());
     }
 }

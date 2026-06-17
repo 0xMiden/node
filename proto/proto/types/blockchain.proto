@@ -21,11 +21,25 @@ message ProposedBlock {
     bytes proposed_block = 1;
 }
 
-// Represents a block or nothing.
+// Request for retrieving a block by its number, optionally including the block proof.
+message BlockRequest {
+    // The block number of the target block.
+    fixed32 block_num = 1;
+    // Whether to include the block proof in the response.
+    optional bool include_proof = 2;
+}
+
+// Response containing the block data and optionally its proof.
+//
+// Contains empty values for both blocks and proofs that are not found. Some blocks may not yet be
+// proven so it is possible to retrieve a block without a proof even if the proof has been requested.
 message MaybeBlock {
     // The requested block data encoded using [miden_serde_utils::Serializable] implementation for
-    // [miden_protocol::block::Block].
+    // [miden_protocol::block::SignedBlock].
     optional bytes block = 1;
+    // The block proof encoded using [miden_serde_utils::Serializable] implementation for
+    // [miden_protocol::block::BlockProof], if requested and available.
+    optional bytes proof = 2;
 }
 
 // Represents a block number.
@@ -97,6 +111,15 @@ message BlockSignature {
     // Signature encoded using [miden_serde_utils::Serializable] implementation for
     // [crypto::dsa::ecdsa_k256_keccak::Signature].
     bytes signature = 1;
+}
+
+// Response to a `SignBlock` request: the block signature together with the commitment of the block
+// header that the validator actually signed, so the block producer can detect a block-hash mismatch.
+message SignBlockResponse {
+    // The validator's signature over the block.
+    BlockSignature signature = 1;
+    // Commitment of the block header that the validator signed.
+    primitives.Digest block_commitment = 2;
 }
 
 

@@ -1,9 +1,9 @@
 [package]
 authors.workspace      = true
-description            = "Miden node's block producer component"
+description            = "Miden node component for sequencing and syncing blocks"
 edition.workspace      = true
 homepage.workspace     = true
-keywords               = ["block-producer", "miden", "node"]
+keywords               = ["block-producer", "miden", "node", "sequencer", "sync"]
 license.workspace      = true
 name                   = "miden-node-block-producer"
 readme                 = "README.md"
@@ -25,32 +25,29 @@ tracing-forest = ["miden-node-utils/tracing-forest"]
 anyhow                     = { workspace = true }
 futures                    = { workspace = true }
 itertools                  = { workspace = true }
+miden-block-prover         = { workspace = true }
 miden-node-proto           = { workspace = true }
-miden-node-proto-build     = { features = ["internal"], workspace = true }
+miden-node-store           = { workspace = true }
 miden-node-utils           = { features = ["testing"], workspace = true }
 miden-protocol             = { default-features = true, workspace = true }
 miden-remote-prover-client = { features = ["batch-prover", "block-prover"], workspace = true }
-miden-standards            = { workspace = true }
 miden-tx-batch-prover      = { workspace = true }
 rand                       = { workspace = true }
 thiserror                  = { workspace = true }
 tokio                      = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
-tokio-stream               = { features = ["net"], workspace = true }
+tokio-stream               = { workspace = true }
 tonic                      = { default-features = true, features = ["transport"], workspace = true }
-tonic-reflection           = { workspace = true }
-tower-http                 = { features = ["util"], workspace = true }
+tonic-health               = { workspace = true }
 tracing                    = { workspace = true }
 url                        = { workspace = true }
 
 [dev-dependencies]
-assert_matches       = { workspace = true }
-miden-node-store     = { workspace = true }
-miden-node-utils     = { features = ["testing"], workspace = true }
-miden-node-validator = { workspace = true }
-miden-protocol       = { default-features = true, features = ["testing"], workspace = true }
-miden-standards      = { features = ["testing"], workspace = true }
-pretty_assertions    = { workspace = true }
-rand_chacha          = { default-features = false, workspace = true }
-serial_test          = { workspace = true }
-tempfile             = { workspace = true }
-tokio                = { features = ["test-util"], workspace = true }
+assert_matches    = { workspace = true }
+miden-node-utils  = { features = ["testing"], workspace = true }
+miden-protocol    = { default-features = true, features = ["testing"], workspace = true }
+miden-standards   = { features = ["testing"], workspace = true }
+pretty_assertions = { workspace = true }
+rand_chacha       = { default-features = false, workspace = true }
+serial_test       = { workspace = true }
+tempfile          = { workspace = true }
+tokio             = { features = ["test-util"], workspace = true }
