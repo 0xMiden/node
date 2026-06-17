@@ -390,6 +390,40 @@ mod tests {
         assert!(html.contains("Last TX ID"));
     }
 
+    /// Metadata is fetched independently of the mint test, so an unhealthy faucet (minting failing)
+    /// must still display the token info block. See issue #2256.
+    #[test]
+    fn renders_faucet_metadata_when_unhealthy() {
+        let details = FaucetTestDetails {
+            url: "https://faucet.example".to_string(),
+            test_duration_ms: 12,
+            success_count: 0,
+            failure_count: 3,
+            last_tx_id: None,
+            faucet_metadata: Some(GetMetadataResponse {
+                version: "0.15.0".to_string(),
+                id: "tokenid".to_string(),
+                max_supply: 1_000_000,
+                decimals: 8,
+                explorer_url: None,
+                pow_load_difficulty: 4,
+                base_amount: 100,
+                note_transport_url: None,
+            }),
+        };
+        let status = ServiceStatus {
+            name: "faucet".to_string(),
+            status: Status::Unhealthy,
+            last_checked: 1_609_459_200,
+            error: Some("minting failed".to_string()),
+            details: ServiceDetails::FaucetTest(details),
+        };
+        let html = render(vec![status]);
+        assert!(html.contains("Faucet Token Info"));
+        assert!(html.contains("0.15.0"));
+        assert!(html.contains("tokenid"));
+    }
+
     #[test]
     fn renders_ntx_increment_card() {
         let details = IncrementDetails {
