@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_block_producer::Sequencer;
@@ -211,7 +212,7 @@ impl TrustedFullNodeOptions {
 
         let validator = Builder::new(validator_url.clone())
             .with_tls()?
-            .without_timeout() // TODO(currentpr): add timeout
+            .with_timeout(Duration::from_secs(20))
             .without_metadata_version()
             .without_metadata_genesis()
             .with_otel_context_injection()
@@ -219,7 +220,7 @@ impl TrustedFullNodeOptions {
 
         let sequencer = Builder::new(sequencer_url.clone())
             .with_tls()?
-            .without_timeout() // TODO(currentpr): add timeout
+            .with_timeout(Duration::from_secs(20))
             .without_metadata_version()
             .without_metadata_genesis()
             .with_otel_context_injection()
