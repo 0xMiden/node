@@ -60,15 +60,8 @@ async fn add_transaction_traces_are_correct() {
     let txs = MockProvenTxBuilder::sequential();
     uut.add_transaction(txs[0].clone()).unwrap();
 
-    // The global subscriber also receives spans emitted by other tests running in parallel, so
-    // drain the exporter until we find the span emitted by our `add_transaction` call rather than
-    // assuming it is the very first one exported.
-    let span_data = loop {
-        let span = rx_export.recv().await.unwrap();
-        if span.name == "mempool.add_transaction" {
-            break span;
-        }
-    };
+    let span_data = rx_export.recv().await.unwrap();
+    assert_eq!(span_data.name, "mempool.add_transaction");
     assert!(span_data.attributes.iter().any(|kv| kv.key == "code.module.name".into()
         && kv.value == "miden_node_block_producer::mempool".into()));
     assert!(
