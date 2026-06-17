@@ -7,6 +7,7 @@ use metrics::SeedingMetrics;
 use miden_node_proto::domain::batch::BatchInputs;
 use miden_node_store::{DataDirectory, GenesisState, State};
 use miden_node_utils::clap::StorageOptions;
+use miden_node_utils::crypto::FeltRngAdapter;
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
@@ -434,7 +435,7 @@ fn create_accounts_and_notes(
 
 /// Creates a public P2ID note containing 10 tokens for each requested fungible asset and sends it
 /// to the specified target account.
-fn create_note(faucet_ids: &[AccountId], target_id: AccountId, rng: &mut RandomCoin) -> Note {
+fn create_note(faucet_ids: &[AccountId], target_id: AccountId, rng: &mut impl Rng) -> Note {
     let assets = faucet_ids
         .iter()
         .map(|faucet_id| Asset::Fungible(FungibleAsset::new(*faucet_id, 10).unwrap()))
@@ -446,7 +447,7 @@ fn create_note(faucet_ids: &[AccountId], target_id: AccountId, rng: &mut RandomC
         assets,
         miden_protocol::note::NoteType::Public,
         miden_protocol::note::NoteAttachments::empty(),
-        rng,
+        &mut FeltRngAdapter::new(rng),
     )
     .expect("note creation failed")
 }

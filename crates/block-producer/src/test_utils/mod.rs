@@ -1,6 +1,7 @@
+use miden_node_utils::crypto::draw_word;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
-use miden_protocol::crypto::rand::{FeltRng, RandomCoin};
+use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::testing::account_id::AccountIdBuilder;
 use miden_protocol::transaction::TransactionId;
 
@@ -34,7 +35,7 @@ impl Random {
     }
 
     pub fn draw_tx_id(&mut self) -> TransactionId {
-        TransactionId::from_raw(self.0.draw_word())
+        TransactionId::from_raw(draw_word(&mut self.0))
     }
 
     pub fn draw_account_id(&mut self) -> AccountId {
@@ -42,6 +43,6 @@ impl Random {
     }
 
     pub fn draw_digest(&mut self) -> Word {
-        self.0.draw_word()
+        draw_word(&mut self.0)
     }
 }
