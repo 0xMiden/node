@@ -69,6 +69,12 @@ pub const DEFAULT_BLOCK_INTERVAL: Duration = Duration::from_secs(3);
 /// How often a batch is created.
 pub const DEFAULT_BATCH_INTERVAL: Duration = Duration::from_secs(1);
 
+/// The request timeout for the sequencer's `sign_block` call to the validator.
+///
+/// This bounds the wait to a fast, retryable error while leaving ample headroom above normal
+/// `sign_block` latency.
+pub const DEFAULT_VALIDATOR_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// The default transaction capacity of the mempool.
 ///
 /// The value is selected such that all transactions should approximately be processed within one
