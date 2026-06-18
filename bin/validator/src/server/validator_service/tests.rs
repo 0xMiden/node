@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use miden_node_proto::generated::validator::api_server;
 use miden_node_proto::generated::{self as proto};
+use miden_node_proto::server::validator_api;
 use miden_node_store::{BlockStore, GenesisState};
 use miden_node_utils::fee::test_fee_params;
 use miden_protocol::Word;
@@ -50,11 +50,11 @@ impl TestValidator {
     async fn call_sign_block(
         &self,
         proposed_block: &ProposedBlock,
-    ) -> Result<tonic::Response<proto::blockchain::SignBlockResponse>, tonic::Status> {
+    ) -> Result<proto::blockchain::SignBlockResponse, tonic::Status> {
         let request = tonic::Request::new(proto::blockchain::ProposedBlock {
             proposed_block: proposed_block.to_bytes(),
         });
-        api_server::Api::sign_block(&self.server, request).await
+        validator_api::SignBlock::full(&self.server, request).await
     }
 
     /// Opens a block subscription starting from `block_from`.
@@ -64,10 +64,9 @@ impl TestValidator {
     ) -> <ValidatorService as proto::server::validator_api::BlockSubscription>::ItemStream {
         let request =
             tonic::Request::new(proto::validator::BlockSubscriptionRequest { block_from });
-        api_server::Api::block_subscription(&self.server, request)
+        validator_api::BlockSubscription::full(&self.server, request)
             .await
             .expect("subscription should open")
-            .into_inner()
     }
 
     /// Loads the current chain tip from the validator's database.
@@ -163,11 +162,7 @@ async fn sign_block_returns_signed_commitment() {
     let tv = TestValidator::new().await;
 
     let proposed = tv.propose_empty_block();
-    let response = tv
-        .call_sign_block(&proposed)
-        .await
-        .expect("block should be signed")
-        .into_inner();
+    let response = tv.call_sign_block(&proposed).await.expect("block should be signed");
 
     let (header, _) = proposed.into_header_and_body().unwrap();
     let returned: Word = response
