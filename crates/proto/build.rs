@@ -32,7 +32,7 @@ fn main() -> miette::Result<()> {
     ];
 
     for file_descriptors in &descriptor_sets {
-        generate_bindings(file_descriptors.clone(), &dst_dir)?;
+        generate_bindings(file_descriptors, &dst_dir)?;
     }
 
     let server_dst_dir = dst_dir.join("server");
@@ -54,14 +54,19 @@ fn main() -> miette::Result<()> {
 
 /// Generates protobuf bindings from the given file descriptor set and stores them in the given
 /// destination directory.
-fn generate_bindings(file_descriptors: FileDescriptorSet, dst_dir: &Path) -> miette::Result<()> {
+fn generate_bindings(file_descriptors: &FileDescriptorSet, dst_dir: &Path) -> miette::Result<()> {
     let mut prost_config = tonic_prost_build::Config::new();
     prost_config.skip_debug(["AccountId", "Digest"]);
 
     // Generate the stub of the user facing server from its proto file
     tonic_prost_build::configure()
+        .server_mod_attribute(".", "#[allow(deprecated, clippy::mixed_attributes_style)]")
+        .server_attribute(
+            ".",
+            r#"#[deprecated(note = "use the service constructors in `miden_node_proto::server` instead")]"#,
+        )
         .out_dir(dst_dir)
-        .compile_fds_with_config(file_descriptors, prost_config)
+        .compile_fds_with_config(file_descriptors.clone(), prost_config)
         .into_diagnostic()
         .wrap_err("compiling protobufs")?;
 
@@ -216,6 +221,8 @@ impl Service {
     fn generate(&self) -> Module {
         let mut module = Module::new(&self.name);
 
+        module.push_fn(self.service_constructor());
+        module.push_fn(self.service_name());
         module.push_trait(self.service_trait());
         module.push_impl(self.blanket_impl());
         module.push_impl(self.tonic_impl());
@@ -302,12 +309,7 @@ impl Service {
     /// }
     /// ```
     fn tonic_impl(&self) -> Impl {
-        let tonic_path = format!(
-            "crate::generated::{}::{}_server::{}",
-            self.package,
-            to_snake_case(&self.name),
-            self.name
-        );
+        let tonic_path = self.tonic_trait_path();
 
         let mut ret = Impl::new("T");
         ret.generic("T")
@@ -328,6 +330,60 @@ impl Service {
         }
 
         ret
+    }
+
+    /// Constructs the underlying tonic server for this service behind an opaque tower service type.
+    fn service_constructor(&self) -> Function {
+        let mut ret = Function::new("service");
+        ret.vis("pub")
+            .attr("allow(deprecated)")
+            .generic("T")
+            .arg("service", "T")
+            .ret(
+                "impl tower::Service<
+    http::Request<tonic::body::Body>,
+    Response = http::Response<tonic::body::Body>,
+    Error = std::convert::Infallible,
+    Future: Send + 'static,
+> + tonic::server::NamedService
+  + Clone
+  + Send
+  + Sync
+  + 'static",
+            )
+            .bound("T", self.service_trait().ty())
+            .bound("T", "Send")
+            .bound("T", "Sync")
+            .bound("T", "'static")
+            .line(format!("{}::new(service)", self.tonic_server_path()));
+
+        ret
+    }
+
+    /// Returns the gRPC service name used by tonic routing and health reporting.
+    fn service_name(&self) -> Function {
+        let mut ret = Function::new("service_name");
+        ret.vis("pub").attr("allow(deprecated)").ret("&'static str").line(format!(
+            "<{}::<()> as tonic::server::NamedService>::NAME",
+            self.tonic_server_path()
+        ));
+
+        ret
+    }
+
+    /// Returns the full path to the service's trait.
+    fn tonic_trait_path(&self) -> String {
+        format!(
+            "crate::generated::{}::{}_server::{}",
+            self.package,
+            to_snake_case(&self.name),
+            self.name
+        )
+    }
+
+    /// Returns the full path to the generated server struct.
+    fn tonic_server_path(&self) -> String {
+        format!("{}Server", self.tonic_trait_path())
     }
 }
 
