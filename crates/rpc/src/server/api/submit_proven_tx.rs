@@ -1,3 +1,4 @@
+use miden_node_block_producer::AuthenticatedTransaction;
 use miden_node_block_producer::store::get_tx_inputs;
 use miden_node_proto::generated as proto;
 use miden_node_utils::ErrorReport;
@@ -134,7 +135,7 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
 
         match &self.mode {
             RpcMode::Sequencer { block_producer, validator } => {
-                Self::submit_to_validator(validator, &request).await?;
+                validator.clone().submit_proven_transaction(request.clone()).await?;
                 block_producer
                     .submit_proven_tx(rebuilt_tx)
                     .await
@@ -145,7 +146,7 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
                 if let Some(trusted) = trusted {
                     // Trusted full node: validate and authenticate locally, then submit the
                     // authenticated transaction to the sequencer's trusted API.
-                    self.submit_authenticated_to_sequencer(trusted, request, &rebuilt_tx).await
+                    self.submit_authenticated_to_sequencer(trusted, request, rebuilt_tx).await
                 } else {
                     // Untrusted full node: forward the request to the source verbatim.
                     let mut forwarded_request = Request::new(request);
@@ -176,17 +177,24 @@ impl RpcService {
         &self,
         trusted: &TrustedSubmission,
         request: proto::transaction::ProvenTransaction,
-        rebuilt_tx: &ProvenTransaction,
+        rebuilt_tx: ProvenTransaction,
     ) -> tonic::Result<proto::blockchain::BlockNumber> {
-        Self::submit_to_validator(&trusted.validator, &request).await?;
 
-        let auth_inputs = get_tx_inputs(&self.store, rebuilt_tx).await.map_err(|err| {
+
+        let tx_inputs = get_tx_inputs(&self.store, &rebuilt_tx).await.map_err(|err| {
+            Status::internal(err.as_report_context("failed to get transaction inputs"))
+        })?;
+
+        let authenticated_tx = AuthenticatedTransaction::new_unchecked(rebuilt_tx.into(), tx_inputs).map_err(|err| {
             Status::internal(err.as_report_context("failed to authenticate transaction"))
         })?;
 
+        // Submit to validator.
+        trusted.validator.clone().submit_proven_transaction(request).await?;
+
         let authenticated_tx = proto::trusted::AuthenticatedTransaction {
             transaction: request.transaction,
-            auth_inputs: Some(auth_inputs.into()),
+            auth_inputs: Some(tx_inputs.into()),
         };
         trusted
             .sequencer

@@ -257,23 +257,6 @@ impl RpcService {
         Ok(())
     }
 
-    /// Submits a proven transaction to the validator for re-execution and verification.
-    ///
-    /// Shared by the sequencer path and the trusted full-node path. The transaction inputs must be
-    /// present so the validator can re-execute the transaction.
-    async fn submit_to_validator(
-        validator: &ValidatorClient,
-        request: &proto::transaction::ProvenTransaction,
-    ) -> Result<(), Status> {
-        // Transaction inputs must be provided in order to allow for transaction re-execution via
-        // the Validator.
-        if request.transaction_inputs.is_none() {
-            return Err(Status::invalid_argument("Transaction inputs must be provided"));
-        }
-        validator.clone().submit_proven_transaction(request.clone()).await?;
-        Ok(())
-    }
-
     fn is_authorized_network_tx(&self, metadata: &MetadataMap) -> bool {
         let Some(auth) = &self.network_tx_auth else {
             return false;

@@ -307,8 +307,9 @@ impl BlockProducerApi {
         let inputs = get_tx_inputs(&self.store, &tx)
             .await
             .map_err(MempoolSubmissionError::StoreStateReadFailed)?;
+        let tx = AuthenticatedTransaction::new_unchecked(tx.into(), inputs).map_err(MempoolSubmissionError::AuthenticationFailed)?;
 
-        self.submit_authenticated_tx(tx, inputs).await
+        self.submit_authenticated_tx(tx).await
     }
 
     /// Adds a transaction that has already been authenticated against the store to the mempool.
@@ -326,20 +327,14 @@ impl BlockProducerApi {
     #[expect(clippy::let_and_return, reason = "required to lengthen arc lifetime")]
     pub async fn submit_authenticated_tx(
         &self,
-        tx: ProvenTransaction,
-        inputs: TransactionInputs,
+        tx: AuthenticatedTransaction,
     ) -> Result<BlockNumber, MempoolSubmissionError> {
-        // SAFETY: we assume that the rpc component has verified the transaction proof already.
-        let tx = AuthenticatedTransaction::new_unchecked(Arc::new(tx), inputs)
-            .map(Arc::new)
-            .map_err(MempoolSubmissionError::StateConflict)?;
-
         let shared_mempool = self.mempool.lock().await;
         // We need the let binding here to avoid E0597 `shared_mempool` does not live long enough
         let result = shared_mempool
             .lock()
             .map_err(MempoolSubmissionError::MempoolPoisoned)?
-            .add_transaction(tx);
+            .add_transaction(tx.into());
         result
     }
 
