@@ -61,7 +61,7 @@ message AuthInputs {
     // The account ID of the transaction.
     account.AccountId account_id = 1;
 
-    // The account commitment in the store, absent if the account does not yet exist.
+    // The transaction account's current onchain commitment, if any.
     optional primitives.Digest account_commitment = 2;
 
     // The transaction's nullifiers and the block in which each was consumed, if any.
