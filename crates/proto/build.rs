@@ -63,7 +63,7 @@ fn generate_bindings(file_descriptors: &FileDescriptorSet, dst_dir: &Path) -> mi
         .server_mod_attribute(".", "#[allow(deprecated, clippy::mixed_attributes_style)]")
         .server_attribute(
             ".",
-            r#"#[deprecated(note = "use the server constructors in `miden_node_proto::server` instead")]"#,
+            r#"#[deprecated(note = "use the service constructors in `miden_node_proto::server` instead")]"#,
         )
         .out_dir(dst_dir)
         .compile_fds_with_config(file_descriptors.clone(), prost_config)
@@ -221,7 +221,7 @@ impl Service {
     fn generate(&self) -> Module {
         let mut module = Module::new(&self.name);
 
-        module.push_fn(self.server_constructor());
+        module.push_fn(self.service_constructor());
         module.push_fn(self.service_name());
         module.push_trait(self.service_trait());
         module.push_impl(self.blanket_impl());
@@ -333,8 +333,8 @@ impl Service {
     }
 
     /// Constructs the underlying tonic server for this service behind an opaque tower service type.
-    fn server_constructor(&self) -> Function {
-        let mut ret = Function::new("server");
+    fn service_constructor(&self) -> Function {
+        let mut ret = Function::new("service");
         ret.vis("pub")
             .attr("allow(deprecated)")
             .generic("T")

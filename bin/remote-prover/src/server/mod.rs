@@ -74,9 +74,9 @@ impl Server {
         );
 
         let status_service =
-            remote_prover_worker_status_api::server(status::StatusService::new(self.kind));
+            remote_prover_worker_status_api::service(status::StatusService::new(self.kind));
         let prover_service = ProverService::with_capacity(self.kind, self.capacity);
-        let prover_service = remote_prover_api::server(prover_service);
+        let prover_service = remote_prover_api::service(prover_service);
 
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_file_descriptor_set(miden_node_proto_build::remote_prover_api_descriptor())

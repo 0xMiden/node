@@ -105,7 +105,7 @@ impl Rpc {
 
         api.set_genesis_commitment(genesis.commitment())?;
 
-        let api_service = rpc_api::server(api);
+        let api_service = rpc_api::service(api);
 
         info!(target: COMPONENT, endpoint=?self.listener, mode=?self.mode, "Server initialized");
 

@@ -94,7 +94,7 @@ impl ValidatorServer {
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .timeout(self.grpc_options.request_timeout)
-            .add_service(validator_api::server(
+            .add_service(validator_api::service(
                 ValidatorService::new(
                     self.signer,
                     db,

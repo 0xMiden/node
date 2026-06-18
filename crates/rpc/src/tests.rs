@@ -548,7 +548,7 @@ async fn start_ntx_builder(
 
     task::spawn(async move {
         tonic::transport::Server::builder()
-            .add_service(ntx_builder_api::server(service))
+            .add_service(ntx_builder_api::service(service))
             .serve_with_incoming(TcpListenerStream::new(listener))
             .await
             .expect("Failed to serve ntx-builder");
@@ -598,7 +598,7 @@ async fn start_source_rpc(ntx_builder: NtxBuilderClient) -> (RpcClient, TestStor
         );
 
         tonic::transport::Server::builder()
-            .add_service(rpc_api::server(source_rpc))
+            .add_service(rpc_api::service(source_rpc))
             .serve_with_incoming(TcpListenerStream::new(listener))
             .await
             .expect("Failed to serve source RPC");

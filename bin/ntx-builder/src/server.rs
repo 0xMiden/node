@@ -32,7 +32,7 @@ impl NtxBuilderRpcServer {
 
     /// Starts the gRPC server on the given listener.
     pub async fn serve(self, listener: TcpListener) -> anyhow::Result<()> {
-        let api_service = ntx_builder_api::server(self);
+        let api_service = ntx_builder_api::service(self);
         let reflection_service = server::Builder::configure()
             .register_file_descriptor_set(ntx_builder_api_descriptor())
             .build_v1()
