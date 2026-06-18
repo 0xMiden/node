@@ -323,7 +323,7 @@ impl BlockProducerApi {
          skip_all,
          err
      )]
-    #[expect(clippy::let_and_return)]
+    #[expect(clippy::let_and_return, reason = "required to lengthen arc lifetime")]
     pub async fn submit_authenticated_tx(
         &self,
         tx: ProvenTransaction,
