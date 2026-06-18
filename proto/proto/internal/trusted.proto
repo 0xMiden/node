@@ -70,7 +70,7 @@ message AuthInputs {
     // Unauthenticated input note commitments which were found committed in the store.
     repeated primitives.Digest found_unauthenticated_notes = 4;
 
-    // The store's chain tip height at the time of authentication.
+    // The current chain tip.
     fixed32 current_block_height = 5;
 }
 
