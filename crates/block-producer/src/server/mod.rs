@@ -307,7 +307,8 @@ impl BlockProducerApi {
         let inputs = get_tx_inputs(&self.store, &tx)
             .await
             .map_err(MempoolSubmissionError::StoreStateReadFailed)?;
-        let tx = AuthenticatedTransaction::new_unchecked(tx.into(), inputs).map_err(MempoolSubmissionError::AuthenticationFailed)?;
+        let tx = AuthenticatedTransaction::new_unchecked(tx.into(), inputs)
+            .map_err(MempoolSubmissionError::AuthenticationFailed)?;
 
         self.submit_authenticated_tx(tx).await
     }

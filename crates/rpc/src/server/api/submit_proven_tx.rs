@@ -179,27 +179,24 @@ impl RpcService {
         request: proto::transaction::ProvenTransaction,
         rebuilt_tx: ProvenTransaction,
     ) -> tonic::Result<proto::blockchain::BlockNumber> {
-
-
         let tx_inputs = get_tx_inputs(&self.store, &rebuilt_tx).await.map_err(|err| {
             Status::internal(err.as_report_context("failed to get transaction inputs"))
         })?;
 
-        let authenticated_tx = AuthenticatedTransaction::new_unchecked(rebuilt_tx.into(), tx_inputs).map_err(|err| {
-            Status::internal(err.as_report_context("failed to authenticate transaction"))
-        })?;
+        let authenticated_tx =
+            AuthenticatedTransaction::new_unchecked(rebuilt_tx.into(), tx_inputs).map_err(
+                |err| Status::internal(err.as_report_context("failed to authenticate transaction")),
+            )?;
 
         // Submit to validator.
         trusted.validator.clone().submit_proven_transaction(request).await?;
 
-        let authenticated_tx = proto::trusted::AuthenticatedTransaction {
-            transaction: request.transaction,
-            auth_inputs: Some(tx_inputs.into()),
-        };
         trusted
             .sequencer
             .clone()
-            .submit_authenticated_tx(authenticated_tx)
+            .submit_authenticated_tx(proto::trusted::AuthenticatedTransaction::from(
+                authenticated_tx,
+            ))
             .await
             .map(tonic::Response::into_inner)
     }

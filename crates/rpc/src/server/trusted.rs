@@ -1,6 +1,6 @@
 use anyhow::Context;
-use miden_node_block_producer::BlockProducerApi;
 use miden_node_block_producer::store::TransactionInputs;
+use miden_node_block_producer::{AuthenticatedTransaction, BlockProducerApi};
 use miden_node_proto::generated as proto;
 use miden_node_proto::generated::server::trusted_api;
 use miden_node_proto::generated::trusted::api_server;
@@ -9,7 +9,6 @@ use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use miden_protocol::batch::ProposedBatch;
-use miden_protocol::transaction::ProvenTransaction;
 use miden_protocol::utils::serde::Deserializable;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
@@ -67,30 +66,22 @@ struct TrustedService {
 
 #[tonic::async_trait]
 impl trusted_api::SubmitAuthenticatedTx for TrustedService {
-    type Input = (ProvenTransaction, TransactionInputs);
+    type Input = AuthenticatedTransaction;
     type Output = proto::blockchain::BlockNumber;
 
     fn decode(request: proto::trusted::AuthenticatedTransaction) -> tonic::Result<Self::Input> {
-        let tx = ProvenTransaction::read_from_bytes(&request.transaction).map_err(|err| {
-            Status::invalid_argument(err.as_report_context("invalid transaction"))
-        })?;
-        let inputs = request
-            .auth_inputs
-            .ok_or_else(|| Status::invalid_argument("missing auth_inputs"))?;
-        let inputs = TransactionInputs::try_from(inputs).map_err(|err| {
-            Status::invalid_argument(err.as_report_context("invalid auth_inputs"))
-        })?;
-
-        Ok((tx, inputs))
+        AuthenticatedTransaction::try_from(request).map_err(|err| {
+            Status::invalid_argument(err.as_report_context("invalid authenticated transaction"))
+        })
     }
 
     fn encode(output: Self::Output) -> tonic::Result<proto::blockchain::BlockNumber> {
         Ok(output)
     }
 
-    async fn handle(&self, (tx, inputs): Self::Input) -> tonic::Result<Self::Output> {
+    async fn handle(&self, tx: Self::Input) -> tonic::Result<Self::Output> {
         self.block_producer
-            .submit_authenticated_tx(tx, inputs)
+            .submit_authenticated_tx(tx)
             .await
             .map(Into::into)
             .map_err(Into::into)

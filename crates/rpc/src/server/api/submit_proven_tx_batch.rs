@@ -243,7 +243,7 @@ async fn submit_batch_to_validator(
             transaction: tx.to_bytes(),
             transaction_inputs: Some(inputs.clone()),
         };
-        RpcService::submit_to_validator(validator, &proven_tx).await?;
+        validator.clone().submit_proven_transaction(proven_tx).await?;
     }
     Ok(())
 }

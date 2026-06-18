@@ -1,11 +1,14 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use miden_node_proto::errors::ConversionError;
+use miden_node_proto::generated::trusted;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::{ProvenTransaction, TransactionId, TxAccountUpdate};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 
 use crate::errors::StateConflict;
 use crate::store::TransactionInputs;
@@ -129,6 +132,48 @@ impl AuthenticatedTransaction {
 
     pub fn raw_proven_transaction(&self) -> &ProvenTransaction {
         &self.inner
+    }
+}
+
+// PROTO CONVERSIONS
+// ================================================================================================
+
+impl From<AuthenticatedTransaction> for trusted::AuthenticatedTransaction {
+    fn from(value: AuthenticatedTransaction) -> Self {
+        Self {
+            transaction: value.inner.to_bytes(),
+            store_account_state: value.store_account_state.map(Into::into),
+            notes_authenticated_by_store: value
+                .notes_authenticated_by_store
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            authentication_height: value.authentication_height.as_u32(),
+        }
+    }
+}
+
+impl TryFrom<trusted::AuthenticatedTransaction> for AuthenticatedTransaction {
+    type Error = ConversionError;
+
+    fn try_from(value: trusted::AuthenticatedTransaction) -> Result<Self, Self::Error> {
+        let inner = ProvenTransaction::read_from_bytes(&value.transaction)
+            .map_err(|err| ConversionError::deserialization("ProvenTransaction", err))?;
+
+        let store_account_state = value.store_account_state.map(Word::try_from).transpose()?;
+
+        let notes_authenticated_by_store = value
+            .notes_authenticated_by_store
+            .into_iter()
+            .map(Word::try_from)
+            .collect::<Result<HashSet<_>, _>>()?;
+
+        Ok(Self {
+            inner: Arc::new(inner),
+            store_account_state,
+            notes_authenticated_by_store,
+            authentication_height: value.authentication_height.into(),
+        })
     }
 }
 

@@ -28,15 +28,21 @@ service Api {
 // MESSAGES
 // ================================================================================================
 
-// A proven transaction together with the inputs the caller authenticated it against.
+// An authenticated transaction.
 message AuthenticatedTransaction {
     // The proven transaction.
     //
     // Encoded using [miden_protocol::transaction::ProvenTransaction::to_bytes].
     bytes transaction = 1;
 
-    // The store inputs the transaction was authenticated against.
-    AuthInputs auth_inputs = 2;
+    // The account state provided by the store inputs, if any.
+    optional primitives.Digest store_account_state = 2;
+
+    // Unauthenticated input note commitments that have since been committed to, and authenticated.
+    repeated primitives.Digest notes_authenticated_by_store = 3;
+
+    // The chain height at which authentication took place.
+    fixed32 authentication_height = 4;
 }
 
 // A proposed batch together with the inputs each of its transactions was authenticated against.
