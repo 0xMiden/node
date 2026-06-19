@@ -106,108 +106,122 @@ node is stopped, then _clone_ the snapshot every time before bringing the node b
 
 ## Starting the node
 
-The benchmark needs a running Miden node with a reachable RPC endpoint.
+The benchmark needs a running Miden node with a reachable RPC endpoint. The node runs as a single
+`miden-node sequencer` process (store + block-producer + public RPC combined); the validator and
+ntx-builder are separate processes, and the ntx-builder requires a transaction prover.
 
-### Option A: docker-compose (recommended for benchmarking)
+### Option A: one-shot script (easiest)
 
-The repo's `docker-compose.yml` wires up all node components (`store`, `validator`, `block-producer`, `rpc`,
-`ntx-builder`) plus telemetry. From the repo root:
-
-```sh
-make docker-build      # build miden-node and miden-validator images
-make compose-genesis   # wipe the volume, bootstrap a fresh genesis
-make compose-up        # start the stack (RPC at http://127.0.0.1:57291)
-```
-
-Stop with `make compose-down`.
-
-### Option B: running `miden-node` and `miden-validator` directly
-
-Install both binaries:
+`scripts/bench-local.sh` bootstraps a fresh validator + node + ntx-builder, starts the stack plus a
+local transaction prover, runs `create-proofs` then `run-benchmark`, and tears everything down on
+exit. It expects the binaries on `$PATH`:
 
 ```sh
-make install-node
-make install-validator
+make install-node install-validator install-ntx-builder install-remote-prover install-benchmark
+
+scripts/bench-local.sh                       # 5 tx pairs, local prover
+N_TXS=20 scripts/bench-local.sh              # 20 tx pairs
+USE_REMOTE_PROVER=1 scripts/bench-local.sh   # offload create-proofs to the remote prover
 ```
 
-Bootstrap a fresh data directory (one-time):
+Logs and data land under `./bench-local-run/`.
+
+### Option B: docker-compose
+
+The repo's `docker-compose.yml` wires up all node components plus telemetry, and bootstraps genesis
+automatically the first time it comes up. From the repo root:
+
+```sh
+make local-network-build   # build the node/validator/ntx-builder/prover images
+make local-network-up      # bootstrap (first run) and start the stack; RPC at http://127.0.0.1:57291
+```
+
+- Follow logs with `make local-network-logs`.
+- Stop the stack (preserving volumes) with `make local-network-down`.
+- Stop and wipe volumes (forces a fresh genesis next time) with `make local-network-delete`.
+
+### Option C: running the binaries directly
+
+Install the binaries:
+
+```sh
+make install-node install-validator install-ntx-builder install-remote-prover
+```
+
+Bootstrap a fresh data directory (one-time). The validator creates the genesis block, then the node
+and ntx-builder bootstrap their storage from it:
 
 ```sh
 DATA=./node-data
 
 miden-validator bootstrap \
-  --data-directory          $DATA/validator \
-  --genesis-block-directory $DATA/genesis \
-  --accounts-directory      $DATA/accounts
+  --data-directory          "$DATA/validator" \
+  --genesis-block-directory "$DATA/genesis" \
+  --accounts-directory      "$DATA/accounts"
 
-miden-node store bootstrap \
-  --data-directory $DATA/store \
-  --genesis-block  $DATA/genesis/genesis.dat
+miden-node bootstrap \
+  --data-directory "$DATA/node" \
+  --file           "$DATA/genesis/genesis.dat"
+
+miden-ntx-builder bootstrap \
+  --data-directory "$DATA/ntx-builder" \
+  --file           "$DATA/genesis/genesis.dat"
 ```
 
-Start each component. The example below runs them in the background and captures logs under `./logs/`. For an
-interactive run, drop the trailing `&` and put each command in its own terminal.
+Start each component. The example runs them in the background and captures logs under `./logs/`. For
+an interactive run, drop the trailing `&` and put each command in its own terminal.
 
 ```sh
 mkdir -p logs
-
 DATA=./node-data
 
 nohup miden-validator start \
-  --listen 127.0.0.1:50101 \
+  --listen         127.0.0.1:50101 \
   --data-directory "$DATA/validator" \
   > logs/validator.log 2>&1 &
 
-nohup miden-node store start \
-  --rpc.listen            127.0.0.1:50001 \
-  --ntx-builder.listen    127.0.0.1:50002 \
-  --block-producer.listen 127.0.0.1:50003 \
-  --data-directory        "$DATA/store" \
-  > logs/store.log 2>&1 &
+# The ntx-builder needs a transaction prover, so start one regardless.
+nohup miden-remote-prover \
+  --port     50051 \
+  --kind     transaction \
+  --capacity 32 \
+  --timeout  300s \
+  > logs/remote-prover.log 2>&1 &
 
-nohup miden-node block-producer start \
-  --listen 127.0.0.1:50201 \
-  --store.url            http://127.0.0.1:50003 \
-  --validator.url        http://127.0.0.1:50101 \
-  --max-txs-per-batch     1024 \
-  --max-batches-per-block 64 \
-  --block.interval        2s \
-  --batch.interval        100ms \
-  --batch.workers         16 \
-  --mempool.tx-capacity   1000000 \
-  > logs/block-producer.log 2>&1 &
+# The node runs store + block-producer + RPC in a single sequencer process.
+nohup miden-node sequencer \
+  --data-directory                            "$DATA/node" \
+  --rpc.listen                                127.0.0.1:57291 \
+  --validator.url                             http://127.0.0.1:50101 \
+  --ntx-builder.url                           http://127.0.0.1:50301 \
+  --batch.max-txs                             1024 \
+  --block.max-batches                         64 \
+  --block.interval                            2s \
+  --batch.interval                            100ms \
+  --batch.workers                             16 \
+  --mempool.tx-capacity                       1000000 \
+  --rpc.grpc.timeout                          24h \
+  --rpc.grpc.max-connection-age               24h \
+  --rpc.rate-limit.burst-size                 100000 \
+  --rpc.rate-limit.replenish-per-second       100000 \
+  --rpc.rate-limit.max-concurrent-connections 1000000 \
+  > logs/node.log 2>&1 &
 
-nohup miden-node rpc start \
-  --listen 127.0.0.1:57291 \
-  --store.url          http://127.0.0.1:50001 \
-  --block-producer.url http://127.0.0.1:50201 \
-  --validator.url      http://127.0.0.1:50101 \
-  --grpc.timeout                    24h \
-  --grpc.max_connection_age         24h \
-  --grpc.burst_size                 100000 \
-  --grpc.replenish_n_per_second     100000 \
-  --grpc.max_concurrent_connections 1000000 \
-  > logs/rpc.log 2>&1 &
-
-nohup miden-node ntx-builder start \
-  --listen 127.0.0.1:50301 \
-  --store.url          http://127.0.0.1:50002 \
-  --block-producer.url http://127.0.0.1:50201 \
-  --validator.url      http://127.0.0.1:50101 \
-  --data-directory     "$DATA/ntx-builder" \
+nohup miden-ntx-builder start \
+  --listen         127.0.0.1:50301 \
+  --rpc.url        http://127.0.0.1:57291 \
+  --tx-prover.url  http://127.0.0.1:50051 \
+  --data-directory "$DATA/ntx-builder" \
   > logs/ntx-builder.log 2>&1 &
 ```
 
 #### Stopping the node
 
 ```sh
+pkill -f miden-ntx-builder
+pkill -f 'miden-node sequencer'
+pkill -f miden-remote-prover
 pkill -f miden-validator
-pkill -f 'miden-node store'
-pkill -f 'miden-node block-producer'
-pkill -f 'miden-node rpc'
-pkill -f 'miden-node ntx-builder'
-# Or, if no other miden binaries are running:
-pkill -f 'miden-(node|validator)'
 ```
 
 ## Lifting the TPS ceiling
@@ -218,8 +232,8 @@ At default settings the block-producer caps end-to-end inclusion at **~21 tx/s**
 
 | Cap                              | Default | Protocol max | Knob                      |
 | -------------------------------- | ------- | ------------ | ------------------------- |
-| Transactions per batch           | 8       | 1024         | `--max-txs-per-batch`     |
-| Batches per block                | 8       | 64           | `--max-batches-per-block` |
+| Transactions per batch           | 8       | 1024         | `--batch.max-txs`         |
+| Batches per block                | 8       | 64           | `--block.max-batches`     |
 | Block interval                   | 3 s     | n/a          | `--block.interval`        |
 | Batch interval                   | 1 s     | n/a          | `--batch.interval`        |
 | Concurrent batch-builder workers | 2       | n/a          | `--batch.workers`         |
@@ -237,7 +251,7 @@ to lift. Everything else is operator configuration.
 
 `--batch.workers` (env `MIDEN_NODE_BATCH_WORKERS`) sets how many batches the block-producer keeps proving in parallel.
 Each worker is responsible for one in-flight batch proof — locally with the built-in prover, or remotely if
-`--batch-prover.url` is set. The default is **2**. Once `--max-txs-per-batch` and `--max-batches-per-block` are pushed
+`--batch-prover.url` is set. The default is **2**. Once `--batch.max-txs` and `--block.max-batches` are pushed
 up, this worker count is the single setting that determines how fast the block-producer can refill the mempool's batch
 slots; leaving it at 2 caps effective throughput well before the new block capacity becomes reachable.
 
