@@ -106,15 +106,15 @@ node is stopped, then _clone_ the snapshot every time before bringing the node b
 
 ## Starting the node
 
-The benchmark needs a running Miden node with a reachable RPC endpoint. The node runs as a single
-`miden-node sequencer` process (store + block-producer + public RPC combined); the validator and
-ntx-builder are separate processes, and the ntx-builder requires a transaction prover.
+The benchmark needs a running Miden node with a reachable RPC endpoint. The node runs as a single `miden-node sequencer`
+process (store + block-producer + public RPC combined); the validator and ntx-builder are separate processes, and the
+ntx-builder requires a transaction prover.
 
 ### Option A: one-shot script (easiest)
 
-`scripts/bench-local.sh` bootstraps a fresh validator + node + ntx-builder, starts the stack plus a
-local transaction prover, runs `create-proofs` then `run-benchmark`, and tears everything down on
-exit. It expects the binaries on `$PATH`:
+`scripts/bench-local.sh` bootstraps a fresh validator + node + ntx-builder, starts the stack plus a local transaction
+prover, runs `create-proofs` then `run-benchmark`, and tears everything down on exit. It expects the binaries on
+`$PATH`:
 
 ```sh
 make install-node install-validator install-ntx-builder install-remote-prover install-benchmark
@@ -128,8 +128,8 @@ Logs and data land under `./bench-local-run/`.
 
 ### Option B: docker-compose
 
-The repo's `docker-compose.yml` wires up all node components plus telemetry, and bootstraps genesis
-automatically the first time it comes up. From the repo root:
+The repo's `docker-compose.yml` wires up all node components plus telemetry, and bootstraps genesis automatically the
+first time it comes up. From the repo root:
 
 ```sh
 make local-network-build   # build the node/validator/ntx-builder/prover images
@@ -148,8 +148,8 @@ Install the binaries:
 make install-node install-validator install-ntx-builder install-remote-prover
 ```
 
-Bootstrap a fresh data directory (one-time). The validator creates the genesis block, then the node
-and ntx-builder bootstrap their storage from it:
+Bootstrap a fresh data directory (one-time). The validator creates the genesis block, then the node and ntx-builder
+bootstrap their storage from it:
 
 ```sh
 DATA=./node-data
@@ -168,8 +168,8 @@ miden-ntx-builder bootstrap \
   --file           "$DATA/genesis/genesis.dat"
 ```
 
-Start each component. The example runs them in the background and captures logs under `./logs/`. For
-an interactive run, drop the trailing `&` and put each command in its own terminal.
+Start each component. The example runs them in the background and captures logs under `./logs/`. For an interactive run,
+drop the trailing `&` and put each command in its own terminal.
 
 ```sh
 mkdir -p logs
@@ -230,14 +230,14 @@ At default settings the block-producer caps end-to-end inclusion at **~21 tx/s**
 
 ### The layered ceiling
 
-| Cap                              | Default | Protocol max | Knob                      |
-| -------------------------------- | ------- | ------------ | ------------------------- |
-| Transactions per batch           | 8       | 1024         | `--batch.max-txs`         |
-| Batches per block                | 8       | 64           | `--block.max-batches`     |
-| Block interval                   | 3 s     | n/a          | `--block.interval`        |
-| Batch interval                   | 1 s     | n/a          | `--batch.interval`        |
-| Concurrent batch-builder workers | 2       | n/a          | `--batch.workers`         |
-| Inflight mempool transactions    | ~1280   | n/a          | `--mempool.tx-capacity`   |
+| Cap                              | Default | Protocol max | Knob                    |
+| -------------------------------- | ------- | ------------ | ----------------------- |
+| Transactions per batch           | 8       | 1024         | `--batch.max-txs`       |
+| Batches per block                | 8       | 64           | `--block.max-batches`   |
+| Block interval                   | 3 s     | n/a          | `--block.interval`      |
+| Batch interval                   | 1 s     | n/a          | `--batch.interval`      |
+| Concurrent batch-builder workers | 2       | n/a          | `--batch.workers`       |
+| Inflight mempool transactions    | ~1280   | n/a          | `--mempool.tx-capacity` |
 
 Block throughput ceiling = `max_batches_per_block x max_txs_per_batch / block.interval`.
 
@@ -251,9 +251,9 @@ to lift. Everything else is operator configuration.
 
 `--batch.workers` (env `MIDEN_NODE_BATCH_WORKERS`) sets how many batches the block-producer keeps proving in parallel.
 Each worker is responsible for one in-flight batch proof — locally with the built-in prover, or remotely if
-`--batch-prover.url` is set. The default is **2**. Once `--batch.max-txs` and `--block.max-batches` are pushed
-up, this worker count is the single setting that determines how fast the block-producer can refill the mempool's batch
-slots; leaving it at 2 caps effective throughput well before the new block capacity becomes reachable.
+`--batch-prover.url` is set. The default is **2**. Once `--batch.max-txs` and `--block.max-batches` are pushed up, this
+worker count is the single setting that determines how fast the block-producer can refill the mempool's batch slots;
+leaving it at 2 caps effective throughput well before the new block capacity becomes reachable.
 
 Rough sizing:
 
