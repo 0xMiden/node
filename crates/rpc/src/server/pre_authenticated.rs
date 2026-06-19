@@ -2,8 +2,8 @@ use anyhow::Context;
 use miden_node_block_producer::store::TransactionInputs;
 use miden_node_block_producer::{AuthenticatedTransaction, BlockProducerApi};
 use miden_node_proto::generated as proto;
-use miden_node_proto::generated::server::trusted_api;
-use miden_node_proto::generated::trusted::api_server;
+use miden_node_proto::generated::pre_authenticated::api_server;
+use miden_node_proto::generated::server::pre_authenticated_api;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
@@ -18,15 +18,16 @@ use tracing::info;
 
 use crate::COMPONENT;
 
-/// The trusted submission server.
+/// The pre-authenticated submission server.
 ///
-/// Serves the private `trusted.Api` gRPC service, which accepts already-authenticated transactions
-/// from trusted full nodes and submits them directly to the mempool *without* re-verification.
+/// Serves the private `pre_authenticated.Api` gRPC service, which accepts already-authenticated
+/// transactions from trusted full nodes and submits them directly to the mempool *without*
+/// re-verification.
 ///
 /// This must only ever be exposed on a private, network-isolated listener: callers can inject
 /// transactions that the sequencer will not independently verify.
-pub struct Trusted {
-    /// The listener the trusted submission service binds to.
+pub struct PreAuthenticated {
+    /// The listener the pre-authenticated submission service binds to.
     pub listener: TcpListener,
     /// The in-process block producer API submissions are forwarded to.
     pub block_producer: BlockProducerApi,
@@ -34,15 +35,15 @@ pub struct Trusted {
     pub grpc_options: GrpcOptionsInternal,
 }
 
-impl Trusted {
-    /// Serves the trusted submission API.
+impl PreAuthenticated {
+    /// Serves the pre-authenticated submission API.
     ///
     /// Executes in place (i.e. not spawned) and will run indefinitely until a fatal error is
     /// encountered.
     pub async fn serve(self) -> anyhow::Result<()> {
-        info!(target: COMPONENT, endpoint = ?self.listener, "Trusted submission server initialized");
+        info!(target: COMPONENT, endpoint = ?self.listener, "Pre-authenticated submission server initialized");
 
-        let service = TrustedService { block_producer: self.block_producer };
+        let service = PreAuthenticatedService { block_producer: self.block_producer };
 
         // Note: deliberately no accept-header / rate-limit / auth layers; this is a private,
         // trusted interface and is expected to be network-isolated.
@@ -53,23 +54,25 @@ impl Trusted {
             .add_service(api_server::ApiServer::new(service))
             .serve_with_incoming(TcpListenerStream::new(self.listener))
             .await
-            .context("failed to serve trusted submission API")
+            .context("failed to serve pre-authenticated submission API")
     }
 }
 
-// TRUSTED SERVICE
+// PRE-AUTHENTICATED SERVICE
 // ================================================================================================
 
-struct TrustedService {
+struct PreAuthenticatedService {
     block_producer: BlockProducerApi,
 }
 
 #[tonic::async_trait]
-impl trusted_api::SubmitAuthenticatedTx for TrustedService {
+impl pre_authenticated_api::SubmitAuthenticatedTx for PreAuthenticatedService {
     type Input = AuthenticatedTransaction;
     type Output = proto::blockchain::BlockNumber;
 
-    fn decode(request: proto::trusted::AuthenticatedTransaction) -> tonic::Result<Self::Input> {
+    fn decode(
+        request: proto::pre_authenticated::AuthenticatedTransaction,
+    ) -> tonic::Result<Self::Input> {
         AuthenticatedTransaction::try_from(request).map_err(|err| {
             Status::invalid_argument(err.as_report_context("invalid authenticated transaction"))
         })
@@ -89,12 +92,12 @@ impl trusted_api::SubmitAuthenticatedTx for TrustedService {
 }
 
 #[tonic::async_trait]
-impl trusted_api::SubmitAuthenticatedTxBatch for TrustedService {
+impl pre_authenticated_api::SubmitAuthenticatedTxBatch for PreAuthenticatedService {
     type Input = (ProposedBatch, Vec<TransactionInputs>);
     type Output = proto::blockchain::BlockNumber;
 
     fn decode(
-        request: proto::trusted::AuthenticatedTransactionBatch,
+        request: proto::pre_authenticated::AuthenticatedTransactionBatch,
     ) -> tonic::Result<Self::Input> {
         let batch = ProposedBatch::read_from_bytes(&request.proposed_batch).map_err(|err| {
             Status::invalid_argument(err.as_report_context("invalid proposed_batch"))

@@ -1,18 +1,18 @@
-// Specification of the internal, trusted transaction submission gRPC API.
+// Specification of the internal, pre-authenticated transaction submission gRPC API.
 //
 // This service is served by the sequencer on a private, network-isolated listener and is intended
-// only for trusted full nodes. Submissions are added to the mempool *without* re-verification: the
+// only for pre-authenticating full nodes. Submissions are added to the mempool *without* re-verification: the
 // sequencer trusts that the caller has already performed basic checks, proof verification,
 // validator re-execution and authentication. It must therefore never be exposed publicly.
 syntax = "proto3";
-package trusted;
+package pre_authenticated;
 
 import "types/account.proto";
 import "types/blockchain.proto";
 import "types/primitives.proto";
 import "types/transaction.proto";
 
-// TRUSTED SUBMISSION API
+// PRE-AUTHENTICATED SUBMISSION API
 // ================================================================================================
 
 service Api {

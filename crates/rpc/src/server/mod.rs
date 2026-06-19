@@ -6,8 +6,8 @@ use anyhow::Context;
 use miden_node_block_producer::{BlockProducerApi, RpcReadiness, RpcSync};
 use miden_node_proto::clients::{
     NtxBuilderClient,
+    PreAuthenticatedClient,
     RpcClient as SourceRpcClient,
-    TrustedClient,
     ValidatorClient,
 };
 use miden_node_proto::generated::rpc::api_server;
@@ -34,9 +34,9 @@ use crate::server::health::HealthCheckLayer;
 mod accept;
 pub(crate) mod api;
 mod health;
-mod trusted;
+mod pre_authenticated;
 
-pub use trusted::Trusted;
+pub use pre_authenticated::PreAuthenticated;
 
 /// The RPC server component.
 ///
@@ -71,21 +71,21 @@ pub enum RpcMode {
     /// When [`trusted`](FullNode::trusted) is set, the full node is a *trusted* full node: instead
     /// of forwarding, it re-executes submissions through the validator and authenticates them
     /// against its local (replica) store, then submits the authenticated result directly to the
-    /// sequencer's trusted submission API.
+    /// sequencer's pre-authenticated submission API.
     FullNode {
         source_rpc: Box<SourceRpcClient>,
         readiness_threshold: u32,
-        trusted: Option<TrustedSubmission>,
+        pre_auth_submit: Option<PreAuthenticatedSubmission>,
     },
 }
 
 /// Clients a trusted full node uses to validate submissions and forward them to the sequencer.
 #[derive(Clone, Debug)]
-pub struct TrustedSubmission {
+pub struct PreAuthenticatedSubmission {
     /// The (shared) validator used to re-execute transactions.
     pub validator: Box<ValidatorClient>,
-    /// The sequencer's private trusted submission API.
-    pub sequencer: Box<TrustedClient>,
+    /// The sequencer's private pre-authenticated submission API.
+    pub sequencer: Box<PreAuthenticatedClient>,
 }
 
 impl RpcMode {
@@ -99,12 +99,12 @@ impl RpcMode {
     pub fn full_node(
         source_rpc: SourceRpcClient,
         readiness_threshold: u32,
-        trusted: Option<TrustedSubmission>,
+        pre_auth_submit: Option<PreAuthenticatedSubmission>,
     ) -> Self {
         Self::FullNode {
             source_rpc: Box::new(source_rpc),
             readiness_threshold,
-            trusted,
+            pre_auth_submit,
         }
     }
 }

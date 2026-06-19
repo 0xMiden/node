@@ -6,9 +6,9 @@ use codegen::{Function, Impl, Module, Trait, Type};
 use fs_err as fs;
 use miden_node_proto_build::{
     ntx_builder_api_descriptor,
+    pre_authenticated_api_descriptor,
     remote_prover_api_descriptor,
     rpc_api_descriptor,
-    trusted_api_descriptor,
     validator_api_descriptor,
 };
 use miette::{Context, IntoDiagnostic};
@@ -30,7 +30,7 @@ fn main() -> miette::Result<()> {
         remote_prover_api_descriptor(),
         validator_api_descriptor(),
         ntx_builder_api_descriptor(),
-        trusted_api_descriptor(),
+        pre_authenticated_api_descriptor(),
     ];
 
     for file_descriptors in &descriptor_sets {

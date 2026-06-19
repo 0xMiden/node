@@ -13,7 +13,7 @@ use tonic::{Request, Status};
 use tracing::Span;
 
 use super::{RpcMode, RpcService};
-use crate::server::TrustedSubmission;
+use crate::server::PreAuthenticatedSubmission;
 
 pub struct SubmitProvenTxBatchInput {
     request: proto::transaction::TransactionBatch,
@@ -130,12 +130,12 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
                     .map(Into::into)
                     .map_err(Into::into)
             },
-            RpcMode::FullNode { source_rpc, trusted, .. } => {
-                if let Some(trusted) = trusted {
+            RpcMode::FullNode { source_rpc, pre_auth_submit, .. } => {
+                if let Some(pre_auth_submit) = pre_auth_submit {
                     // Trusted full node: validate and authenticate locally, then submit the
-                    // authenticated batch to the sequencer's trusted API.
+                    // authenticated batch to the sequencer's pre-authenticated API.
                     self.submit_authenticated_batch_to_sequencer(
-                        trusted,
+                        pre_auth_submit,
                         proposed_batch,
                         &request.transaction_inputs,
                     )
@@ -165,14 +165,15 @@ impl RpcService {
     ///
     /// Re-executes each transaction via the validator, authenticates each against the
     /// local (replica) store, then submits the authenticated batch to the sequencer's
-    /// trusted API.
+    /// pre-authenticated API.
     async fn submit_authenticated_batch_to_sequencer(
         &self,
-        trusted: &TrustedSubmission,
+        pre_auth_submit: &PreAuthenticatedSubmission,
         proposed_batch: ProposedBatch,
         transaction_inputs: &[Vec<u8>],
     ) -> tonic::Result<proto::blockchain::BlockNumber> {
-        submit_batch_to_validator(&trusted.validator, &proposed_batch, transaction_inputs).await?;
+        submit_batch_to_validator(&pre_auth_submit.validator, &proposed_batch, transaction_inputs)
+            .await?;
 
         let mut auth_inputs = Vec::with_capacity(proposed_batch.transactions().len());
         for tx in proposed_batch.transactions() {
@@ -182,11 +183,11 @@ impl RpcService {
             auth_inputs.push(inputs.into());
         }
 
-        let authenticated_batch = proto::trusted::AuthenticatedTransactionBatch {
+        let authenticated_batch = proto::pre_authenticated::AuthenticatedTransactionBatch {
             proposed_batch: proposed_batch.to_bytes(),
             auth_inputs,
         };
-        trusted
+        pre_auth_submit
             .sequencer
             .clone()
             .submit_authenticated_tx_batch(authenticated_batch)

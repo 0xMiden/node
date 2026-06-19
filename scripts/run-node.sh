@@ -29,7 +29,7 @@ NTX_BUILDER_DIR="/tmp/ntx-builder"
 ACCOUNTS_DIR="/tmp/accounts"
 
 VALIDATOR_PORT=50101
-TRUSTED_PORT=50201
+PRE_AUTHENTICATED_PORT=50201
 NTX_BUILDER_PORT=50301
 RPC_PORT=57291
 FULL_NODE_1_RPC_PORT=57292
@@ -49,7 +49,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 kill_ports() {
-    local ports=("$VALIDATOR_PORT" "$TRUSTED_PORT" "$NTX_BUILDER_PORT" "$RPC_PORT" "$REMOTE_PROVER_PORT")
+    local ports=("$VALIDATOR_PORT" "$PRE_AUTHENTICATED_PORT" "$NTX_BUILDER_PORT" "$RPC_PORT" "$REMOTE_PROVER_PORT")
 
     if [[ "$ENABLE_FULL_NODES" == "true" ]]; then
         ports+=("$FULL_NODE_1_RPC_PORT" "$FULL_NODE_2_RPC_PORT")
@@ -158,7 +158,7 @@ OTEL_RESOURCE_ATTRIBUTES="$(node_resource_attributes sequencer)" \
     --data-directory "$NODE_DIR" \
     --validator.url "http://127.0.0.1:$VALIDATOR_PORT" \
     --ntx-builder.url "http://127.0.0.1:$NTX_BUILDER_PORT" \
-    --trusted.listen "0.0.0.0:$TRUSTED_PORT" \
+    --pre-authenticated.listen "0.0.0.0:$PRE_AUTHENTICATED_PORT" \
     $EXTRA_ARGS &
 PIDS+=($!)
 
@@ -182,14 +182,14 @@ echo "Starting network transaction builder..."
 PIDS+=($!)
 
 if [[ "$ENABLE_FULL_NODES" == "true" ]]; then
-    echo "Starting full node 1 (trusted; upstream: sequencer at 127.0.0.1:$RPC_PORT)..."
+    echo "Starting full node 1 (pre-authenticated; upstream: sequencer at 127.0.0.1:$RPC_PORT)..."
     OTEL_RESOURCE_ATTRIBUTES="$(node_resource_attributes full-node-1)" \
         "$NODE_BINARY" full \
         --rpc.listen "0.0.0.0:$FULL_NODE_1_RPC_PORT" \
         --sync.block-source.url "http://127.0.0.1:$RPC_PORT" \
         --data-directory "$FULL_NODE_1_DIR" \
         --validator.url "http://127.0.0.1:$VALIDATOR_PORT" \
-        --sequencer.url "http://127.0.0.1:$TRUSTED_PORT" \
+        --sequencer.url "http://127.0.0.1:$PRE_AUTHENTICATED_PORT" \
         $EXTRA_ARGS &
     PIDS+=($!)
 
@@ -209,10 +209,10 @@ else
 fi
 
 echo "=== All components running. Ctrl+C to stop. ==="
-echo "=== Sequencer trusted submission endpoint: :$TRUSTED_PORT ==="
+echo "=== Sequencer pre-authenticated submission endpoint: :$PRE_AUTHENTICATED_PORT ==="
 if [[ "$ENABLE_FULL_NODES" == "true" ]]; then
     echo "=== Block propagation chain: :$RPC_PORT -> :$FULL_NODE_1_RPC_PORT -> :$FULL_NODE_2_RPC_PORT ==="
-    echo "=== RPC endpoints: :$RPC_PORT, :$FULL_NODE_1_RPC_PORT (trusted submitter), :$FULL_NODE_2_RPC_PORT ==="
+    echo "=== RPC endpoints: :$RPC_PORT, :$FULL_NODE_1_RPC_PORT (pre-authenticated submitter), :$FULL_NODE_2_RPC_PORT ==="
 else
     echo "=== RPC endpoint: :$RPC_PORT ==="
 fi

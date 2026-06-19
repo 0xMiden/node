@@ -18,7 +18,7 @@ use tonic::{Request, Status};
 use tracing::{Span, debug};
 
 use super::{COMPONENT, RpcMode, RpcService};
-use crate::server::TrustedSubmission;
+use crate::server::PreAuthenticatedSubmission;
 
 pub struct SubmitProvenTxInput {
     request: proto::transaction::ProvenTransaction,
@@ -142,11 +142,12 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
                     .map(Into::into)
                     .map_err(Into::into)
             },
-            RpcMode::FullNode { source_rpc, trusted, .. } => {
-                if let Some(trusted) = trusted {
+            RpcMode::FullNode { source_rpc, pre_auth_submit, .. } => {
+                if let Some(pre_auth_submit) = pre_auth_submit {
                     // Trusted full node: validate and authenticate locally, then submit the
-                    // authenticated transaction to the sequencer's trusted API.
-                    self.submit_authenticated_to_sequencer(trusted, request, rebuilt_tx).await
+                    // authenticated transaction to the sequencer's pre-authenticated API.
+                    self.submit_authenticated_to_sequencer(pre_auth_submit, request, rebuilt_tx)
+                        .await
                 } else {
                     // Untrusted full node: forward the request to the source verbatim.
                     let mut forwarded_request = Request::new(request);
@@ -172,10 +173,10 @@ impl RpcService {
     ///
     /// Re-executes the transaction via the validator, authenticates it against the local
     /// (replica) store, then submits the authenticated transaction to the sequencer's
-    /// trusted API.
+    /// pre-authenticated API.
     async fn submit_authenticated_to_sequencer(
         &self,
-        trusted: &TrustedSubmission,
+        pre_auth_submit: &PreAuthenticatedSubmission,
         request: proto::transaction::ProvenTransaction,
         rebuilt_tx: ProvenTransaction,
     ) -> tonic::Result<proto::blockchain::BlockNumber> {
@@ -189,12 +190,12 @@ impl RpcService {
             )?;
 
         // Submit to validator.
-        trusted.validator.clone().submit_proven_transaction(request).await?;
+        pre_auth_submit.validator.clone().submit_proven_transaction(request).await?;
 
-        trusted
+        pre_auth_submit
             .sequencer
             .clone()
-            .submit_authenticated_tx(proto::trusted::AuthenticatedTransaction::from(
+            .submit_authenticated_tx(proto::pre_authenticated::AuthenticatedTransaction::from(
                 authenticated_tx,
             ))
             .await

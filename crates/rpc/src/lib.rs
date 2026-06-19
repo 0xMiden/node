@@ -2,7 +2,7 @@ mod server;
 #[cfg(test)]
 mod tests;
 
-pub use server::{Rpc, RpcMode, Trusted, TrustedSubmission};
+pub use server::{PreAuthenticated, PreAuthenticatedSubmission, Rpc, RpcMode};
 
 // CONSTANTS
 // =================================================================================================

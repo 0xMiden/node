@@ -7,11 +7,11 @@ use miden_node_block_producer::{DEFAULT_VALIDATOR_TIMEOUT, Sequencer};
 use miden_node_proto::clients::{
     Builder,
     NtxBuilderClient,
+    PreAuthenticatedClient,
     RpcClient,
-    TrustedClient,
     ValidatorClient,
 };
-use miden_node_rpc::{Rpc, RpcMode, Trusted, TrustedSubmission};
+use miden_node_rpc::{PreAuthenticated, PreAuthenticatedSubmission, Rpc, RpcMode};
 use miden_node_store::State;
 use miden_node_utils::clap::{GrpcOptionsInternal, duration_to_human_readable_string};
 use miden_node_utils::tasks::Tasks;
@@ -40,9 +40,9 @@ pub struct SequencerCommand {
     #[command(flatten)]
     pub store: StoreOptions,
 
-    /// Socket address at which to serve the private trusted submission API.
+    /// Socket address at which to serve the private pre-authenticated submission API.
     ///
-    /// When unset the trusted submission service is not exposed. This interface accepts
+    /// When unset the pre-authenticated submission service is not exposed. This interface accepts
     /// already-authenticated transactions from trusted full nodes *without* re-verification.
     #[arg(
         long = "trusted.listen",
@@ -93,12 +93,12 @@ impl SequencerCommand {
         tasks.spawn("sequencer", sequencer.wait());
         tasks.spawn("RPC server", rpc.serve());
         if let Some(trusted_listen) = self.trusted_listen {
-            let trusted = Trusted {
+            let pre_authenticated = PreAuthenticated {
                 listener: bind_rpc(trusted_listen).await?,
                 block_producer,
                 grpc_options: GrpcOptionsInternal::from(runtime.external_grpc_options),
             };
-            tasks.spawn("trusted submission server", trusted.serve());
+            tasks.spawn("pre-authenticated submission server", pre_authenticated.serve());
         }
 
         tasks.join_next_as_error().await
@@ -163,14 +163,14 @@ pub struct FullNodeCommand {
     pub store: StoreOptions,
 
     #[command(flatten)]
-    pub trusted: TrustedFullNodeOptions,
+    pub pre_auth_options: PreAuthenticatedNodeOptions,
 }
 
 impl FullNodeCommand {
     pub async fn handle(self) -> anyhow::Result<()> {
         let runtime = self.runtime.runtime_config(&self.store);
         let source_rpc = self.sync.source_rpc_client()?;
-        let trusted = self.trusted.trusted_submission()?;
+        let pre_auth = self.pre_auth_options.pre_authenticated_submission()?;
         let network_tx_auth = self.runtime.rpc.network_tx_auth()?;
         let state = load_state(&runtime).await?;
         let _disk_monitor = state.spawn_disk_monitor();
@@ -178,7 +178,7 @@ impl FullNodeCommand {
         let rpc = Rpc {
             listener: bind_rpc(runtime.rpc_listen).await?,
             store: state,
-            mode: RpcMode::full_node(source_rpc, self.sync.readiness_threshold, trusted),
+            mode: RpcMode::full_node(source_rpc, self.sync.readiness_threshold, pre_auth),
             ntx_builder: None,
             grpc_options: runtime.external_grpc_options,
             network_tx_auth,
@@ -193,10 +193,10 @@ impl FullNodeCommand {
 /// Options that turn a full node into a *trusted* full node.
 ///
 /// When both URLs are set the full node validates and authenticates submissions locally and
-/// forwards the authenticated result to the sequencer's trusted submission API, rather than
-/// forwarding the raw transaction upstream. Both must be provided together.
+/// forwards the authenticated result to the sequencer's pre-authenticated submission API, rather
+/// than forwarding the raw transaction upstream. Both must be provided together.
 #[derive(clap::Args, Clone, Debug)]
-pub struct TrustedFullNodeOptions {
+pub struct PreAuthenticatedNodeOptions {
     /// The validator service gRPC URL.
     #[arg(
         long = "validator.url",
@@ -206,7 +206,7 @@ pub struct TrustedFullNodeOptions {
     )]
     pub validator_url: Option<Url>,
 
-    /// The sequencer's private trusted submission gRPC URL.
+    /// The sequencer's private pre-authenticated submission gRPC URL.
     #[arg(
         long = "sequencer.url",
         env = "MIDEN_NODE_SEQUENCER_URL",
@@ -216,9 +216,9 @@ pub struct TrustedFullNodeOptions {
     pub sequencer_url: Option<Url>,
 }
 
-impl TrustedFullNodeOptions {
-    /// Builds the trusted submission clients, or `None` if this full node is not trusted.
-    fn trusted_submission(&self) -> anyhow::Result<Option<TrustedSubmission>> {
+impl PreAuthenticatedNodeOptions {
+    /// Builds the pre-authenticated submission clients, or `None` if this full node is not trusted.
+    fn pre_authenticated_submission(&self) -> anyhow::Result<Option<PreAuthenticatedSubmission>> {
         let (Some(validator_url), Some(sequencer_url)) = (&self.validator_url, &self.sequencer_url)
         else {
             return Ok(None);
@@ -238,9 +238,9 @@ impl TrustedFullNodeOptions {
             .without_metadata_version()
             .without_metadata_genesis()
             .with_otel_context_injection()
-            .connect_lazy::<TrustedClient>();
+            .connect_lazy::<PreAuthenticatedClient>();
 
-        Ok(Some(TrustedSubmission {
+        Ok(Some(PreAuthenticatedSubmission {
             validator: Box::new(validator),
             sequencer: Box::new(sequencer),
         }))
