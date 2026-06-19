@@ -10,7 +10,7 @@ use miden_node_proto::clients::{
     RpcClient as SourceRpcClient,
     ValidatorClient,
 };
-use miden_node_proto::generated::rpc::api_server;
+use miden_node_proto::server::{pre_authenticated_api, rpc_api};
 use miden_node_proto_build::rpc_api_descriptor;
 use miden_node_store::state::State;
 use miden_node_utils::clap::{GrpcOptionsExternal, GrpcOptionsInternal};
@@ -131,7 +131,7 @@ impl Rpc {
 
         api.set_genesis_commitment(genesis.commitment())?;
 
-        let api_service = api_server::ApiServer::new(api);
+        let api_service = rpc_api::service(api);
 
         info!(target: COMPONENT, endpoint=?self.listener, mode=?self.mode, "Server initialized");
 
@@ -141,11 +141,19 @@ impl Rpc {
         let (health_reporter, health_service) = tonic_health::server::health_reporter();
         match self.mode {
             RpcMode::Sequencer { .. } => {
-                health_reporter.set_serving::<api_server::ApiServer<api::RpcService>>().await;
+                health_reporter
+                    .set_service_status(
+                        rpc_api::service_name(),
+                        tonic_health::ServingStatus::Serving,
+                    )
+                    .await;
             },
             RpcMode::FullNode { source_rpc, readiness_threshold, .. } => {
                 health_reporter
-                    .set_not_serving::<api_server::ApiServer<api::RpcService>>()
+                    .set_service_status(
+                        rpc_api::service_name(),
+                        tonic_health::ServingStatus::NotServing,
+                    )
                     .await;
                 let readiness = RpcReadiness::new(health_reporter, readiness_threshold);
                 tasks.spawn(
@@ -251,9 +259,7 @@ impl PreAuthenticated {
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .timeout(self.grpc_options.request_timeout)
-            .add_service(
-                miden_node_proto::generated::pre_authenticated::api_server::ApiServer::new(service),
-            )
+            .add_service(pre_authenticated_api::service(service))
             .serve_with_incoming(TcpListenerStream::new(self.listener))
             .await
             .context("failed to serve pre-authenticated submission API")
