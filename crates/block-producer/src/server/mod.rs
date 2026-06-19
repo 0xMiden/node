@@ -307,18 +307,13 @@ impl BlockProducerApi {
         let inputs = get_tx_inputs(&self.store, &tx)
             .await
             .map_err(MempoolSubmissionError::StoreStateReadFailed)?;
+        // SAFETY: we assume that the rpc component has verified the transaction proof already.
         let tx = AuthenticatedTransaction::new_unchecked(tx.into(), inputs)
             .map_err(MempoolSubmissionError::AuthenticationFailed)?;
-
         self.submit_authenticated_tx(tx).await
     }
 
-    /// Adds a transaction that has already been authenticated against the store to the mempool.
-    ///
-    /// Unlike [`Self::submit_proven_tx`] this skips the store authentication step
-    /// ([`crate::store::get_tx_inputs`]) and trusts the supplied [`TransactionInputs`]. It is used
-    /// by the pre-authenticated submission path where a full node performs authentication
-    /// on the sequencer's behalf.
+    /// Adds a transaction that has already been authenticated.
     #[instrument(
          target = COMPONENT,
          name = "block_producer.api.submit_authenticated_tx",
@@ -367,9 +362,6 @@ impl BlockProducerApi {
 
     /// Adds a batch whose transactions have already been authenticated against the store to the
     /// mempool.
-    ///
-    /// Counterpart to [`Self::submit_authenticated_tx`] for batches. The `inputs` must be in the
-    /// same order as the batch's transactions and have the same length.
     #[instrument(
          target = COMPONENT,
          name = "block_producer.api.submit_authenticated_tx_batch",
