@@ -22,7 +22,6 @@ anyhow                 = { workspace = true }
 aws-config             = { version = "1.8.14" }
 aws-sdk-kms            = { version = "1.100" }
 clap                   = { features = ["env", "string"], workspace = true }
-diesel                 = { workspace = true }
 fs-err                 = { workspace = true }
 hex                    = { workspace = true }
 miden-node-db          = { workspace = true }

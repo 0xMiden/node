@@ -71,10 +71,10 @@ impl ValidatorServer {
 
         // Load initial metrics from the database for the in-memory counters.
         let (initial_chain_tip, initial_tx_count, initial_block_count) = db
-            .query("load_initial_metrics", |conn| {
-                let tip = load_chain_tip(conn)?.map_or(0, |h| h.block_num().as_u32());
-                let tx_count = u64::try_from(count_validated_transactions(conn)?).unwrap_or(0);
-                let block_count = u64::try_from(count_signed_blocks(conn)?).unwrap_or(0);
+            .read("load_initial_metrics", |tx| {
+                let tip = load_chain_tip(tx)?.map_or(0, |h| h.block_num().as_u32());
+                let tx_count = u64::try_from(count_validated_transactions(tx)?).unwrap_or(0);
+                let block_count = u64::try_from(count_signed_blocks(tx)?).unwrap_or(0);
                 Ok::<_, miden_node_db::DatabaseError>((tip, tx_count, block_count))
             })
             .await

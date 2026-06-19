@@ -3738,7 +3738,6 @@ dependencies = [
  "aws-sdk-kms",
  "build-rs",
  "clap",
- "diesel",
  "fs-err",
  "hex",
  "miden-node-db",

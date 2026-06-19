@@ -1,7 +1,8 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
-use miden_node_db::{DatabaseError, Db};
+use miden_node_db::DatabaseError;
+use miden_node_db::sqlite::Database;
 use miden_node_store::BlockStore;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::block::{BlockHeader, BlockNumber, ProposedBlock, SignedBlock};
@@ -63,7 +64,7 @@ pub enum ValidatorError {
 /// Implements the gRPC API for the validator.
 pub(crate) struct ValidatorService {
     signer: ValidatorSigner,
-    db: Arc<Db>,
+    db: Arc<Database>,
     block_store: BlockStore,
     /// Serializes `sign_block` requests so that concurrent calls are processed sequentially,
     /// ensuring consistent chain tip reads and preventing race conditions.
@@ -80,7 +81,7 @@ pub(crate) struct ValidatorService {
 impl ValidatorService {
     pub(crate) async fn new(
         signer: ValidatorSigner,
-        db: Db,
+        db: Database,
         block_store: BlockStore,
         initial_chain_tip: u32,
         initial_tx_count: u64,
@@ -90,7 +91,7 @@ impl ValidatorService {
         // the signing key must match the chain's validator key for this validator's lifetime.
         // Reject a misconfigured key here.
         let chain_tip = db
-            .query("load_chain_tip", load_chain_tip)
+            .read("load_chain_tip", load_chain_tip)
             .await
             .map_err(ValidatorError::DatabaseError)?
             .ok_or(ValidatorError::NoChainTip)?;
@@ -132,8 +133,8 @@ impl ValidatorService {
             proposed_block.transactions().map(TransactionHeader::id).collect::<Vec<_>>();
         let unvalidated_txs = self
             .db
-            .transact("find_unvalidated_transactions", move |conn| {
-                find_unvalidated_transactions(conn, &proposed_tx_ids)
+            .read("find_unvalidated_transactions", move |tx| {
+                find_unvalidated_transactions(tx, &proposed_tx_ids)
             })
             .await
             .map_err(ValidatorError::DatabaseError)?;
@@ -159,7 +160,7 @@ impl ValidatorService {
             let prev_block_num =
                 chain_tip.block_num().parent().ok_or(ValidatorError::NoPrevBlockHeader)?;
             self.db
-                .query("load_block_header", move |conn| load_block_header(conn, prev_block_num))
+                .read("load_block_header", move |tx| load_block_header(tx, prev_block_num))
                 .await
                 .map_err(ValidatorError::DatabaseError)?
                 .ok_or(ValidatorError::NoPrevBlockHeader)?

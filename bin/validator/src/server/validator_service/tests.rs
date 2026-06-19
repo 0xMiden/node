@@ -73,7 +73,7 @@ impl TestValidator {
     async fn load_chain_tip(&self) -> BlockHeader {
         self.server
             .db
-            .query("load_chain_tip", load_chain_tip)
+            .read("load_chain_tip", load_chain_tip)
             .await
             .unwrap()
             .expect("chain tip should exist")
@@ -94,7 +94,9 @@ impl TestValidator {
 
 /// Creates a validator database seeded with a genesis block whose `validator_key` is the public key
 /// of `key`. Returns the database handle and the genesis block header.
-async fn setup_db_with_genesis(key: &SigningKey) -> (miden_node_db::Db, BlockStore, BlockHeader) {
+async fn setup_db_with_genesis(
+    key: &SigningKey,
+) -> (miden_node_db::sqlite::Database, BlockStore, BlockHeader) {
     let genesis_state = GenesisState::new(vec![], test_fee_params(), 1, 0, key.public_key());
     let genesis_block = genesis_state.into_block(key).unwrap();
     let genesis_header = genesis_block.inner().header().clone();
@@ -104,9 +106,9 @@ async fn setup_db_with_genesis(key: &SigningKey) -> (miden_node_db::Db, BlockSto
     let block_store =
         BlockStore::bootstrap(dir.path().join("blocks").clone(), &genesis_block).unwrap();
 
-    db.transact("upsert_genesis", {
+    db.write("upsert_genesis", {
         let h = genesis_header.clone();
-        move |conn| upsert_block_header(conn, &h)
+        move |tx| upsert_block_header(tx, &h)
     })
     .await
     .unwrap();
