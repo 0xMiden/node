@@ -144,12 +144,13 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
             },
             RpcMode::FullNode { source_rpc, pre_auth_submit, .. } => {
                 if let Some(pre_auth_submit) = pre_auth_submit {
-                    // Trusted full node: validate and authenticate locally, then submit the
-                    // authenticated transaction to the sequencer's pre-authenticated API.
+                    // Pre-authenticated transactions: validate and authenticate locally, then
+                    // submit the authenticated transaction to the sequencer's pre-authenticated
+                    // API.
                     self.submit_authenticated_to_sequencer(pre_auth_submit, request, rebuilt_tx)
                         .await
                 } else {
-                    // Untrusted full node: forward the request to the source verbatim.
+                    // Unauthenticated transactions: forward the request to the source verbatim.
                     let mut forwarded_request = Request::new(request);
                     if let Some(accept) = original_accept_header {
                         forwarded_request
@@ -169,7 +170,7 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
 }
 
 impl RpcService {
-    /// Trusted full-node submission path for a single transaction.
+    /// Pre-authenticated transaction submission path for a single transaction.
     ///
     /// Re-executes the transaction via the validator, authenticates it against the local
     /// (replica) store, then submits the authenticated transaction to the sequencer's

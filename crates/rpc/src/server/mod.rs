@@ -66,7 +66,7 @@ pub enum RpcMode {
     /// By default it forwards submissions verbatim to the source RPC (the caller is responsible for
     /// configuring this client with any request metadata the source RPC requires).
     ///
-    /// When [`trusted`](FullNode::trusted) is set, the full node is a *trusted* full node: instead
+    /// When [`pre_auth_submit`](FullNode::pre_auth_submit) is set, the full node is a *pre-authenticated* full node: instead
     /// of forwarding, it re-executes submissions through the validator and authenticates them
     /// against its local (replica) store, then submits the authenticated result directly to the
     /// sequencer's pre-authenticated submission API.
@@ -77,7 +77,8 @@ pub enum RpcMode {
     },
 }
 
-/// Clients a trusted full node uses to validate submissions and forward them to the sequencer.
+/// Clients a full node uses to validate submissions and forward them to the sequencer as
+/// pre-authenticated transactions.
 #[derive(Clone, Debug)]
 pub struct PreAuthenticatedSubmission {
     /// The (shared) validator used to re-execute transactions.
@@ -229,7 +230,7 @@ impl Rpc {
 /// The pre-authenticated submission server.
 ///
 /// Serves the private `pre_authenticated.Api` gRPC service, which accepts already-authenticated
-/// transactions from trusted full nodes and submits them directly to the mempool *without*
+/// transactions from full nodes and submits them directly to the mempool *without*
 /// re-verification.
 ///
 /// This must only ever be exposed on a private, network-isolated listener: callers can inject

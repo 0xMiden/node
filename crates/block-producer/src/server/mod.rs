@@ -317,7 +317,7 @@ impl BlockProducerApi {
     ///
     /// Unlike [`Self::submit_proven_tx`] this skips the store authentication step
     /// ([`crate::store::get_tx_inputs`]) and trusts the supplied [`TransactionInputs`]. It is used
-    /// by the pre-authenticated submission path where a trusted full node performs authentication
+    /// by the pre-authenticated submission path where a full node performs authentication
     /// on the sequencer's behalf.
     #[instrument(
          target = COMPONENT,

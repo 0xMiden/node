@@ -43,7 +43,7 @@ pub struct SequencerCommand {
     /// Socket address at which to serve the private pre-authenticated submission API.
     ///
     /// When unset the pre-authenticated submission service is not exposed. This interface accepts
-    /// already-authenticated transactions from trusted full nodes *without* re-verification.
+    /// already-authenticated transactions from full nodes *without* re-verification.
     #[arg(
         long = "pre-authenticated.listen",
         env = "MIDEN_NODE_PRE_AUTHENTICATED_LISTEN",
@@ -92,9 +92,9 @@ impl SequencerCommand {
         let mut tasks = Tasks::new();
         tasks.spawn("sequencer", sequencer.wait());
         tasks.spawn("RPC server", rpc.serve());
-        if let Some(trusted_listen) = self.pre_authenticated {
+        if let Some(pre_auth_listen) = self.pre_authenticated {
             let pre_authenticated = PreAuthenticated {
-                listener: bind_rpc(trusted_listen).await?,
+                listener: bind_rpc(pre_auth_listen).await?,
                 block_producer,
                 grpc_options: GrpcOptionsInternal::from(runtime.external_grpc_options),
             };
@@ -190,7 +190,7 @@ impl FullNodeCommand {
     }
 }
 
-/// Options that turn a full node into a *trusted* full node.
+/// Options that enable a full node to send pre-authenticated transactions to the sequencer.
 ///
 /// When both URLs are set the full node validates and authenticates submissions locally and
 /// forwards the authenticated result to the sequencer's pre-authenticated submission API, rather
@@ -217,7 +217,8 @@ pub struct PreAuthenticatedNodeOptions {
 }
 
 impl PreAuthenticatedNodeOptions {
-    /// Builds the pre-authenticated submission clients, or `None` if this full node is not trusted.
+    /// Builds the pre-authenticated submission clients, or `None` if this full node is not
+    /// configured for pre-authenticated transactions.
     fn pre_authenticated_submission(&self) -> anyhow::Result<Option<PreAuthenticatedSubmission>> {
         let (Some(validator_url), Some(sequencer_url)) = (&self.validator_url, &self.sequencer_url)
         else {
