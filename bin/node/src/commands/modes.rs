@@ -45,11 +45,11 @@ pub struct SequencerCommand {
     /// When unset the pre-authenticated submission service is not exposed. This interface accepts
     /// already-authenticated transactions from trusted full nodes *without* re-verification.
     #[arg(
-        long = "trusted.listen",
-        env = "MIDEN_NODE_TRUSTED_LISTEN",
+        long = "pre-authenticated.listen",
+        env = "MIDEN_NODE_PRE_AUTHENTICATED_LISTEN",
         value_name = "LISTEN"
     )]
-    pub trusted_listen: Option<SocketAddr>,
+    pub pre_authenticated: Option<SocketAddr>,
 }
 
 impl SequencerCommand {
@@ -92,7 +92,7 @@ impl SequencerCommand {
         let mut tasks = Tasks::new();
         tasks.spawn("sequencer", sequencer.wait());
         tasks.spawn("RPC server", rpc.serve());
-        if let Some(trusted_listen) = self.trusted_listen {
+        if let Some(trusted_listen) = self.pre_authenticated {
             let pre_authenticated = PreAuthenticated {
                 listener: bind_rpc(trusted_listen).await?,
                 block_producer,

@@ -13,7 +13,7 @@ use miden_node_proto::clients::{
 use miden_node_proto::generated::rpc::api_server;
 use miden_node_proto_build::rpc_api_descriptor;
 use miden_node_store::state::State;
-use miden_node_utils::clap::GrpcOptionsExternal;
+use miden_node_utils::clap::{GrpcOptionsExternal, GrpcOptionsInternal};
 use miden_node_utils::cors::cors_for_grpc_web_layer;
 use miden_node_utils::grpc;
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
@@ -29,14 +29,12 @@ use tower_http::trace::TraceLayer;
 use tracing::info;
 
 use crate::COMPONENT;
+use crate::server::api::PreAuthenticatedService;
 use crate::server::health::HealthCheckLayer;
 
 mod accept;
 pub(crate) mod api;
 mod health;
-mod pre_authenticated;
-
-pub use pre_authenticated::PreAuthenticated;
 
 /// The RPC server component.
 ///
@@ -214,5 +212,50 @@ impl Rpc {
         tasks.spawn("RPC server", async move { rpc.await.map_err(|e| anyhow::anyhow!(e)) });
 
         tasks.join_next_as_error().await
+    }
+}
+
+// PRE-AUTHENTICATED
+// ================================================================================================
+
+/// The pre-authenticated submission server.
+///
+/// Serves the private `pre_authenticated.Api` gRPC service, which accepts already-authenticated
+/// transactions from trusted full nodes and submits them directly to the mempool *without*
+/// re-verification.
+///
+/// This must only ever be exposed on a private, network-isolated listener: callers can inject
+/// transactions that the sequencer will not independently verify.
+pub struct PreAuthenticated {
+    /// The listener the pre-authenticated submission service binds to.
+    pub listener: TcpListener,
+    /// The in-process block producer API submissions are forwarded to.
+    pub block_producer: BlockProducerApi,
+    /// gRPC server options for internal services (timeouts).
+    pub grpc_options: GrpcOptionsInternal,
+}
+
+impl PreAuthenticated {
+    /// Serves the pre-authenticated submission API.
+    ///
+    /// Executes in place (i.e. not spawned) and will run indefinitely until a fatal error is
+    /// encountered.
+    pub async fn serve(self) -> anyhow::Result<()> {
+        info!(target: COMPONENT, endpoint = ?self.listener, "Pre-authenticated submission server initialized");
+
+        let service = PreAuthenticatedService { block_producer: self.block_producer };
+
+        // Note: deliberately no accept-header / rate-limit / auth layers; this is a private,
+        // trusted interface and is expected to be network-isolated.
+        tonic::transport::Server::builder()
+            .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
+            .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
+            .timeout(self.grpc_options.request_timeout)
+            .add_service(
+                miden_node_proto::generated::pre_authenticated::api_server::ApiServer::new(service),
+            )
+            .serve_with_incoming(TcpListenerStream::new(self.listener))
+            .await
+            .context("failed to serve pre-authenticated submission API")
     }
 }
