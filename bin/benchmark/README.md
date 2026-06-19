@@ -235,8 +235,8 @@ to lift. Everything else is operator configuration.
 
 ### The batch-builder worker pool (`--batch.workers`)
 
-`--batch.workers` (env `MIDEN_NODE_BLOCK_PRODUCER_BATCH_WORKERS`) sets how many batches the block-producer keeps proving
-in parallel. Each worker is responsible for one in-flight batch proof — locally with the built-in prover, or remotely if
+`--batch.workers` (env `MIDEN_NODE_BATCH_WORKERS`) sets how many batches the block-producer keeps proving in parallel.
+Each worker is responsible for one in-flight batch proof — locally with the built-in prover, or remotely if
 `--batch-prover.url` is set. The default is **2**. Once `--max-txs-per-batch` and `--max-batches-per-block` are pushed
 up, this worker count is the single setting that determines how fast the block-producer can refill the mempool's batch
 slots; leaving it at 2 caps effective throughput well before the new block capacity becomes reachable.

@@ -275,9 +275,9 @@ jobs:
             --bin miden-ntx-builder \
             --bin miden-remote-prover \
             --bin miden-benchmark
-      - name: Run benchmark with N=1
+      - name: Run benchmark with N=5
         env:
-          N_TXS: "1"
+          N_TXS: "5"
           USE_REMOTE_PROVER: "0"
           WAIT_BLOCKS: "30"
           RUN_DIR: ${{ runner.temp }}/bench-local-run

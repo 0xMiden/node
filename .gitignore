@@ -31,6 +31,7 @@ miden-node-stress-test-*
 /logs
 /snapshots
 /benchmark-proofs
+/bench-local-run
 
 # Sqlite db files
 *.sqlite3
