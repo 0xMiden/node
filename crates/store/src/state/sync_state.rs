@@ -41,7 +41,11 @@ impl State {
             .db
             .select_block_header_and_signature_by_block_num(block_to)
             .await?
-            .expect("block_to should exist in the database");
+            .ok_or_else(|| {
+                DatabaseError::DataCorrupted(format!(
+                    "block {block_to} should exist in the database but was not found"
+                ))
+            })?;
 
         if block_from == block_to {
             return Ok((

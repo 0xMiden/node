@@ -1244,8 +1244,7 @@ pub(crate) fn upsert_accounts(
 
             // New account is always a full account, but also comes as an update
             AccountUpdateDetails::Delta(delta) if delta.is_full_state() => {
-                let account = Account::try_from(delta)
-                    .expect("Delta to full account always works for full state deltas");
+                let account = Account::try_from(delta)?;
                 debug_assert_eq!(account_id, account.id());
 
                 prepare_full_account_update(update, account)?
