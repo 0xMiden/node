@@ -1,7 +1,9 @@
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
+use std::time::Duration;
 
 use anyhow::Context;
+use miden_node_proto::clients::{Builder, ValidatorClient};
 use miden_node_proto::server::validator_api;
 use miden_node_proto_build::validator_api_descriptor;
 use miden_node_store::BlockStore;
@@ -12,6 +14,7 @@ use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::trace::TraceLayer;
+use url::Url;
 
 use crate::db::{
     count_signed_blocks,
@@ -34,6 +37,10 @@ use validator_service::ValidatorService;
 pub struct ValidatorServer {
     /// The address of the validator component.
     pub address: SocketAddr,
+
+    /// The URL of the standby validator.
+    pub standby_validator_url: Option<Url>,
+
     /// gRPC server options for internal services (timeouts, connection caps).
     ///
     /// If the handler takes longer than this duration, the server cancels the call.
@@ -84,6 +91,17 @@ impl ValidatorServer {
             .await
             .context("failed to bind to block producer address")?;
 
+        let standby = self.standby_validator_url.map(|url| {
+            Builder::new(url)
+                    .with_tls()
+                    .expect("trusted certs should be available")
+                    .with_timeout(Duration::from_secs(5))
+                    .without_metadata_version()
+                    .without_metadata_genesis()
+                    .with_otel_context_injection()
+                    .connect_lazy::<ValidatorClient>()
+        });
+
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_file_descriptor_set(validator_api_descriptor())
             .build_v1()
@@ -102,6 +120,7 @@ impl ValidatorServer {
                     initial_chain_tip,
                     initial_tx_count,
                     initial_block_count,
+                    standby,
                 )
                 .await
                 .context("failed to initialize validator server")?,

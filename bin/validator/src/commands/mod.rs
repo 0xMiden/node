@@ -11,9 +11,11 @@ use miden_node_utils::logging::OpenTelemetry;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::utils::serde::Deserializable;
 use miden_validator::{DataDirectory, ValidatorSigner};
+use url::Url;
 
 const ENV_DATA_DIRECTORY: &str = "MIDEN_VALIDATOR_DATA_DIRECTORY";
 const ENV_LISTEN: &str = "MIDEN_VALIDATOR_LISTEN";
+const ENV_STANDBY_URL: &str = "MIDEN_VALIDATOR_STANDBY_URL";
 const ENV_KEY: &str = "MIDEN_VALIDATOR_KEY";
 const ENV_KMS_KEY_ID: &str = "MIDEN_VALIDATOR_KMS_KEY_ID";
 const ENV_GENESIS_CONFIG_FILE: &str = "MIDEN_VALIDATOR_GENESIS_CONFIG_FILE";
@@ -74,6 +76,10 @@ pub enum ValidatorCommand {
         /// Socket address at which to serve the gRPC API.
         #[arg(long = "listen", env = ENV_LISTEN, value_name = "LISTEN")]
         listen: std::net::SocketAddr,
+
+        /// URL to the standby Validator instance that all requests are forwarded to.
+        #[arg(long, env = ENV_STANDBY_URL, value_name = "URL")]
+        standby_url: Option<Url>,
 
         #[command(flatten)]
         grpc_options: GrpcOptionsInternal,
@@ -148,6 +154,7 @@ impl ValidatorCommand {
             },
             Self::Start {
                 listen,
+                standby_url,
                 grpc_options,
                 validator_key,
                 data_directory,
@@ -157,28 +164,21 @@ impl ValidatorCommand {
             } => {
                 let address = listen;
 
-                if let Some(kms_key_id) = kms_key_id {
-                    let signer = ValidatorSigner::new_kms(kms_key_id).await?;
-                    start::start(
-                        address,
-                        grpc_options,
-                        signer,
-                        data_directory,
-                        sqlite_connection_pool_size,
-                    )
-                    .await
-                } else {
-                    let signer = SigningKey::read_from_bytes(hex::decode(validator_key)?.as_ref())?;
-                    let signer = ValidatorSigner::new_local(signer);
-                    start::start(
-                        address,
-                        grpc_options,
-                        signer,
-                        data_directory,
-                        sqlite_connection_pool_size,
-                    )
-                    .await
-                }
+                let signer = if let Some(kms_key_id) = kms_key_id {
+                    ValidatorSigner::new_kms(kms_key_id).await?
+                }else{
+                    let signing_key = SigningKey::read_from_bytes(hex::decode(validator_key)?.as_ref())?;
+                    ValidatorSigner::new_local(signing_key)
+                };
+                start::start(
+                    address,
+                    standby_url,
+                    grpc_options,
+                    signer,
+                    data_directory,
+                    sqlite_connection_pool_size,
+                )
+                .await
             },
         }
     }

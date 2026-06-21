@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use miden_node_db::{DatabaseError, Db};
+use miden_node_proto::clients::ValidatorClient;
 use miden_node_store::BlockStore;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::block::{BlockHeader, BlockNumber, ProposedBlock, SignedBlock};
@@ -65,6 +66,7 @@ pub(crate) struct ValidatorService {
     signer: ValidatorSigner,
     db: Arc<Db>,
     block_store: BlockStore,
+    standby: Option<ValidatorClient>,
     /// Serializes `sign_block` requests so that concurrent calls are processed sequentially,
     /// ensuring consistent chain tip reads and preventing race conditions.
     sign_block_semaphore: Semaphore,
@@ -85,6 +87,7 @@ impl ValidatorService {
         initial_chain_tip: u32,
         initial_tx_count: u64,
         initial_block_count: u64,
+        standby: Option<ValidatorClient>,
     ) -> Result<Self, ValidatorError> {
         // The validator key is fixed at genesis and carried forward unchanged by every block, so
         // the signing key must match the chain's validator key for this validator's lifetime.
@@ -104,6 +107,7 @@ impl ValidatorService {
 
         Ok(Self {
             signer,
+            standby,
             db: db.into(),
             block_store,
             sign_block_semaphore: Semaphore::new(1),

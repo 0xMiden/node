@@ -39,6 +39,7 @@ tonic                  = { default-features = true, features = ["transport"], wo
 tonic-reflection       = { workspace = true }
 tower-http             = { features = ["util"], workspace = true }
 tracing                = { workspace = true }
+url                       = { workspace = true }
 
 [build-dependencies]
 build-rs      = { workspace = true }

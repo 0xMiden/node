@@ -35,7 +35,7 @@ impl TestValidator {
         let (db, block_store, genesis_header) = setup_db_with_genesis(&key).await;
 
         Self {
-            server: ValidatorService::new(signer, db, block_store, 0, 0, 0).await.unwrap(),
+            server: ValidatorService::new(signer, db, block_store, 0, 0, 0, None).await.unwrap(),
             chain: PartialBlockchain::default(),
             chain_tip: genesis_header,
         }
@@ -147,7 +147,7 @@ async fn signing_key_mismatch_rejected() {
         "test requires a signing key that differs from the genesis validator key",
     );
 
-    let result = ValidatorService::new(rogue_signer, db, block_store, 0, 0, 0).await;
+    let result = ValidatorService::new(rogue_signer, db, block_store, 0, 0, 0, None).await;
     assert!(
         matches!(result, Err(ValidatorError::ValidatorKeyMismatch { .. })),
         "expected ValidatorKeyMismatch error",
