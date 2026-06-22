@@ -39,7 +39,7 @@ impl grpc::server::validator_api::BlockSubscription for ValidatorService {
 
         let from = BlockNumber::from(request.block_from);
         let source = BlockStoreSource { block_store: self.block_store.clone() };
-        let stream = run_stream(from, self.committed_tip.subscribe(), source)
+        let stream = run_stream(from, self.finalized_tip.subscribe(), source)
             .map(|event| event.map_err(subscription_error_to_status));
 
         Ok(Box::pin(stream))

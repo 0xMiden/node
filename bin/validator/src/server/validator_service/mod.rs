@@ -68,9 +68,14 @@ pub(crate) struct ValidatorService {
     /// Serializes `sign_block` requests so that concurrent calls are processed sequentially,
     /// ensuring consistent chain tip reads and preventing race conditions.
     sign_block_semaphore: Semaphore,
-    /// In-memory chain tip, updated after each signed block. Block subscriptions follow this to
-    /// stream live blocks as they are signed.
-    committed_tip: watch::Sender<BlockNumber>,
+    /// In-memory signed chain tip, updated after each signed block. The tip is provisional: it can
+    /// be replaced by a different block at the same height until a child block is signed on top of
+    /// it (see [`Self::finalized_tip`]).
+    signed_tip: watch::Sender<BlockNumber>,
+    /// In-memory finalized chain tip: the highest block that can no longer be replaced (the parent
+    /// of [`Self::signed_tip`]). Block subscriptions follow this so that only finalized blocks are
+    /// streamed downstream; the provisional tip is withheld until a child is signed on top of it.
+    finalized_tip: watch::Sender<BlockNumber>,
     /// In-memory count of validated transactions, incremented after each new insert.
     validated_transactions_count: AtomicU64,
     /// In-memory count of signed blocks, incremented after each signed block.
@@ -102,12 +107,14 @@ impl ValidatorService {
             });
         }
 
+        let signed_tip = BlockNumber::from(initial_chain_tip);
         Ok(Self {
             signer,
             db: db.into(),
             block_store,
             sign_block_semaphore: Semaphore::new(1),
-            committed_tip: watch::Sender::new(BlockNumber::from(initial_chain_tip)),
+            signed_tip: watch::Sender::new(signed_tip),
+            finalized_tip: watch::Sender::new(finalized_tip(signed_tip)),
             validated_transactions_count: AtomicU64::new(initial_tx_count),
             signed_blocks_count: AtomicU64::new(initial_block_count),
         })
@@ -215,4 +222,14 @@ impl ValidatorService {
             .await
             .map_err(|err| ValidatorError::BlockSigningFailed(err.to_string()))
     }
+}
+
+/// Returns the finalized chain tip for a given signed chain tip.
+///
+/// The signed tip is provisional: it can be replaced by a different block at the same height until a
+/// child block is signed on top of it. The finalized tip is therefore the parent of the signed tip,
+/// since that parent can no longer be replaced. Genesis has no parent and is itself always final
+/// (it cannot be replaced), so it maps to itself.
+pub(super) fn finalized_tip(signed_tip: BlockNumber) -> BlockNumber {
+    signed_tip.parent().unwrap_or(signed_tip)
 }

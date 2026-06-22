@@ -7,7 +7,7 @@ use miden_protocol::block::{BlockNumber, ProposedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_tx::utils::serde::{Deserializable, Serializable};
 
-use super::ValidatorService;
+use super::{ValidatorService, finalized_tip};
 use crate::db::{load_chain_tip, upsert_block_header};
 
 #[tonic::async_trait]
@@ -73,10 +73,14 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
                 ))
             })?;
 
-        // Update the in-memory counters after successful persistence. The block has already been
-        // backed up to the block store by `validate_block`, so it is available to subscribers by
-        // the time they observe this new tip.
-        self.committed_tip.send_replace(BlockNumber::from(new_block_num));
+        // Update the in-memory tips after successful persistence. The newly signed block becomes
+        // the provisional tip, and its parent becomes finalized: the parent can no longer be
+        // replaced, so it is now safe to stream downstream. On a replacement (same-height) block
+        // the finalized tip is unchanged, so subscribers never observe a block that was later
+        // replaced.
+        let signed_tip = BlockNumber::from(new_block_num);
+        self.signed_tip.send_replace(signed_tip);
+        self.finalized_tip.send_replace(finalized_tip(signed_tip));
         self.signed_blocks_count.fetch_add(1, Ordering::Relaxed);
 
         Ok((signature, block_commitment))

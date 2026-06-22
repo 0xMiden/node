@@ -499,8 +499,8 @@ async fn validate_block_number_mismatch() {
     );
 }
 
-/// A block subscription replays the backed-up blocks from the requested height and then streams
-/// newly signed blocks as they arrive.
+/// A block subscription replays the finalized backed-up blocks from the requested height and then
+/// streams blocks live as they are finalized (i.e. once a child block is signed on top of them).
 #[tokio::test]
 async fn block_subscription_replays_then_follows() {
     use std::time::Duration;
@@ -511,11 +511,14 @@ async fn block_subscription_replays_then_follows() {
 
     let mut tv = TestValidator::new().await;
 
-    // Sign blocks 1 and 2 so the validator backs them up to its block store.
+    // Sign blocks 1, 2 and 3. The signed tip is 3, so blocks 1 and 2 are finalized while block 3
+    // remains the provisional, replaceable tip and is withheld from subscribers.
+    tv.apply_empty_block().await;
     tv.apply_empty_block().await;
     tv.apply_empty_block().await;
 
-    // Subscribe from the first signed block and confirm the backed-up blocks are replayed in order.
+    // Subscribe from the first signed block and confirm only the finalized blocks (1 and 2) are
+    // replayed; the provisional tip (block 3) is withheld.
     let mut stream = tv.call_block_subscription(1).await;
     for expected in 1..=2 {
         let response = tokio::time::timeout(Duration::from_secs(5), stream.next())
@@ -528,7 +531,7 @@ async fn block_subscription_replays_then_follows() {
         assert_eq!(response.committed_chain_tip, 2);
     }
 
-    // Sign a new block and confirm it is streamed live to the existing subscriber.
+    // Sign a new block (4), finalizing block 3, and confirm block 3 is now streamed live.
     tv.apply_empty_block().await;
     let response = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await
@@ -538,4 +541,37 @@ async fn block_subscription_replays_then_follows() {
     let block = SignedBlock::read_from_bytes(&response.block).expect("valid signed block");
     assert_eq!(block.header().block_num().as_u32(), 3);
     assert_eq!(response.committed_chain_tip, 3);
+}
+
+/// The provisional chain tip (the most recently signed block) must be withheld from subscribers
+/// until a child block is signed on top of it, since it can still be replaced.
+#[tokio::test]
+async fn provisional_tip_is_withheld_from_subscribers() {
+    use std::time::Duration;
+
+    use miden_protocol::block::SignedBlock;
+    use miden_tx::utils::serde::Deserializable;
+    use tokio_stream::StreamExt;
+
+    let mut tv = TestValidator::new().await;
+
+    // Sign blocks 1 and 2. Block 1 is finalized (it has a child); block 2 is the provisional tip.
+    tv.apply_empty_block().await;
+    tv.apply_empty_block().await;
+
+    let mut stream = tv.call_block_subscription(1).await;
+
+    // Block 1 is finalized and streamed.
+    let response = tokio::time::timeout(Duration::from_secs(5), stream.next())
+        .await
+        .expect("finalized block should arrive promptly")
+        .expect("stream should not end")
+        .expect("stream item should not be an error");
+    let block = SignedBlock::read_from_bytes(&response.block).expect("valid signed block");
+    assert_eq!(block.header().block_num().as_u32(), 1);
+    assert_eq!(response.committed_chain_tip, 1);
+
+    // Block 2 is the provisional tip and must not be streamed while it remains replaceable.
+    let next = tokio::time::timeout(Duration::from_millis(500), stream.next()).await;
+    assert!(next.is_err(), "provisional tip (block 2) should be withheld from subscribers");
 }
