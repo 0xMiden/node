@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::sync::atomic::Ordering;
 
 use miden_node_proto::generated as grpc;
@@ -38,47 +39,97 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
             tonic::Status::internal(format!("sign_block semaphore closed: {err}"))
         })?;
 
-        // Load the current chain tip from the database.
-        let chain_tip = self
-            .db
-            .query("load_chain_tip", load_chain_tip)
-            .await
-            .map_err(|err| {
-                tonic::Status::internal(format!("Failed to load chain tip: {}", err.as_report()))
-            })?
-            .ok_or_else(|| tonic::Status::internal("Chain tip not found in database"))?;
+        // Forward the request to the standby validator, if one is configured. The forward runs
+        // concurrently with local processing (below) so the standby's latency is hidden behind the
+        // primary's own validation work, and stays inside the semaphore so the standby observes
+        // blocks in the same order as the primary.
+        let forward = self.forward_sign_block(&proposed_block);
 
-        // Validate the block against the current chain tip.
-        let (signature, header) =
-            self.validate_block(proposed_block, chain_tip).await.map_err(|err| {
-                tonic::Status::invalid_argument(format!(
-                    "Failed to validate block: {}",
-                    err.as_report()
-                ))
-            })?;
+        // Local processing of the block, run concurrently with the standby forward.
+        let local = async move {
+            // Load the current chain tip from the database.
+            let chain_tip = self
+                .db
+                .query("load_chain_tip", load_chain_tip)
+                .await
+                .map_err(|err| {
+                    tonic::Status::internal(format!(
+                        "Failed to load chain tip: {}",
+                        err.as_report()
+                    ))
+                })?
+                .ok_or_else(|| tonic::Status::internal("Chain tip not found in database"))?;
 
-        // Capture the commitment that was signed before `header` is moved into the persistence
-        // closure, so it can be returned to the block producer for cross-checking.
-        let block_commitment = header.commitment();
+            // Validate the block against the current chain tip.
+            let (signature, header) =
+                self.validate_block(proposed_block, chain_tip).await.map_err(|err| {
+                    tonic::Status::invalid_argument(format!(
+                        "Failed to validate block: {}",
+                        err.as_report()
+                    ))
+                })?;
 
-        // Persist the validated block header.
-        let new_block_num = header.block_num().as_u32();
-        self.db
-            .transact("upsert_block_header", move |conn| upsert_block_header(conn, &header))
-            .await
-            .map_err(|err| {
-                tonic::Status::internal(format!(
-                    "Failed to persist block header: {}",
-                    err.as_report()
-                ))
-            })?;
+            // Capture the commitment that was signed before `header` is moved into the persistence
+            // closure, so it can be returned to the block producer for cross-checking.
+            let block_commitment = header.commitment();
 
-        // Update the in-memory counters after successful persistence. The block has already been
-        // backed up to the block store by `validate_block`, so it is available to subscribers by
-        // the time they observe this new tip.
-        self.committed_tip.send_replace(BlockNumber::from(new_block_num));
-        self.signed_blocks_count.fetch_add(1, Ordering::Relaxed);
+            // Persist the validated block header.
+            let new_block_num = header.block_num().as_u32();
+            self.db
+                .transact("upsert_block_header", move |conn| upsert_block_header(conn, &header))
+                .await
+                .map_err(|err| {
+                    tonic::Status::internal(format!(
+                        "Failed to persist block header: {}",
+                        err.as_report()
+                    ))
+                })?;
 
-        Ok((signature, block_commitment))
+            // Update the in-memory counters after successful persistence. The block has already
+            // been backed up to the block store by `validate_block`, so it is available to
+            // subscribers by the time they observe this new tip.
+            self.committed_tip.send_replace(BlockNumber::from(new_block_num));
+            self.signed_blocks_count.fetch_add(1, Ordering::Relaxed);
+
+            Ok::<_, tonic::Status>((signature, block_commitment))
+        };
+
+        // Both the local processing and the standby forward must succeed. The primary's own
+        // validation error takes precedence; only if it succeeds do we surface a standby failure.
+        let (result, forward) = tokio::join!(local, forward);
+        let output = result?;
+        forward?;
+        Ok(output)
+    }
+}
+
+impl ValidatorService {
+    /// Forwards a `sign_block` request to the standby validator, if one is configured.
+    ///
+    /// `use<>` keeps the future from borrowing `proposed_block`, so the caller can move the block
+    /// into local validation while the forward is in flight.
+    fn forward_sign_block(
+        &self,
+        proposed_block: &ProposedBlock,
+    ) -> impl Future<Output = tonic::Result<()>> + use<> {
+        let forward = self.standby.clone().map(|mut client| {
+            let request = grpc::blockchain::ProposedBlock {
+                proposed_block: proposed_block.to_bytes(),
+            };
+            async move {
+                client.sign_block(request).await.map(|_| ()).map_err(|err| {
+                    tonic::Status::internal(format!(
+                        "failed to forward sign_block to standby validator: {}",
+                        err.as_report()
+                    ))
+                })
+            }
+        });
+        async move {
+            match forward {
+                Some(forward) => forward.await,
+                None => Ok(()),
+            }
+        }
     }
 }
