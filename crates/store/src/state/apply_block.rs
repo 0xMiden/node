@@ -81,6 +81,7 @@ impl State {
 
         let block_num = header.block_num();
         let block_commitment = header.commitment();
+        let num_transactions = body.transactions().as_slice().len();
 
         self.validate_block_header(header, body).await?;
 
@@ -186,7 +187,7 @@ impl State {
             .expect("block cache receives sequential block numbers");
         let _ = self.committed_tip_tx.send(block_num);
 
-        info!(%block_commitment, block_num = block_num.as_u32(), COMPONENT, "apply_block successful");
+        info!(target: COMPONENT, %block_commitment, block_num = block_num.as_u32(), %num_transactions, "Block applied");
 
         Ok(())
     }

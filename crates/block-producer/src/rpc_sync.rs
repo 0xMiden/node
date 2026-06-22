@@ -14,6 +14,8 @@ use tonic_health::ServingStatus;
 use tonic_health::server::HealthReporter;
 use tracing::{info, warn};
 
+use crate::COMPONENT;
+
 pub(crate) const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 
 // RPC READINESS
@@ -112,7 +114,7 @@ impl BlockSync {
 
     async fn sync(&self) -> anyhow::Result<()> {
         let block_from = self.state.chain_tip(Finality::Committed).await.child().as_u32();
-        info!(block_from, "Connecting to upstream RPC for blocks");
+        info!(target: COMPONENT, block_from, "Connecting to upstream RPC for blocks");
 
         let mut client = self.source_rpc.clone();
         let mut stream = client
