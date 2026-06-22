@@ -166,8 +166,9 @@ impl ValidatorCommand {
 
                 let signer = if let Some(kms_key_id) = kms_key_id {
                     ValidatorSigner::new_kms(kms_key_id).await?
-                }else{
-                    let signing_key = SigningKey::read_from_bytes(hex::decode(validator_key)?.as_ref())?;
+                } else {
+                    let signing_key =
+                        SigningKey::read_from_bytes(hex::decode(validator_key)?.as_ref())?;
                     ValidatorSigner::new_local(signing_key)
                 };
                 start::start(

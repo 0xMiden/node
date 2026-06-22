@@ -93,13 +93,13 @@ impl ValidatorServer {
 
         let standby = self.standby_validator_url.map(|url| {
             Builder::new(url)
-                    .with_tls()
-                    .expect("trusted certs should be available")
-                    .with_timeout(Duration::from_secs(5))
-                    .without_metadata_version()
-                    .without_metadata_genesis()
-                    .with_otel_context_injection()
-                    .connect_lazy::<ValidatorClient>()
+                .with_tls()
+                .expect("trusted certs should be available")
+                .with_timeout(Duration::from_secs(5))
+                .without_metadata_version()
+                .without_metadata_genesis()
+                .with_otel_context_injection()
+                .connect_lazy::<ValidatorClient>()
         });
 
         let reflection_service = tonic_reflection::server::Builder::configure()

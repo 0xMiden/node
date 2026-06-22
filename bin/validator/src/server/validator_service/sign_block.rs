@@ -112,24 +112,22 @@ impl ValidatorService {
         &self,
         proposed_block: &ProposedBlock,
     ) -> impl Future<Output = tonic::Result<()>> + use<> {
-        let forward = self.standby.clone().map(|mut client| {
+        let forward = self.standby.clone().map(|client| {
             let request = grpc::blockchain::ProposedBlock {
                 proposed_block: proposed_block.to_bytes(),
             };
-            async move {
-                client.sign_block(request).await.map(|_| ()).map_err(|err| {
-                    tonic::Status::internal(format!(
-                        "failed to forward sign_block to standby validator: {}",
-                        err.as_report()
-                    ))
-                })
-            }
+            (client, request)
         });
         async move {
-            match forward {
-                Some(forward) => forward.await,
-                None => Ok(()),
-            }
+            let Some((mut client, request)) = forward else {
+                return Ok(());
+            };
+            client.sign_block(request).await.map(|_| ()).map_err(|err| {
+                tonic::Status::internal(format!(
+                    "failed to forward sign_block to standby validator: {}",
+                    err.as_report()
+                ))
+            })
         }
     }
 }

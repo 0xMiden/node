@@ -81,25 +81,23 @@ impl ValidatorService {
         tx: &ProvenTransaction,
         inputs: &TransactionInputs,
     ) -> impl Future<Output = tonic::Result<()>> + use<> {
-        let forward = self.standby.clone().map(|mut client| {
+        let forward = self.standby.clone().map(|client| {
             let request = grpc::transaction::ProvenTransaction {
                 transaction: tx.to_bytes(),
                 transaction_inputs: Some(inputs.to_bytes()),
             };
-            async move {
-                client.submit_proven_transaction(request).await.map(|_| ()).map_err(|err| {
-                    Status::internal(format!(
-                        "failed to forward submit_proven_transaction to standby validator: {}",
-                        err.as_report()
-                    ))
-                })
-            }
+            (client, request)
         });
         async move {
-            match forward {
-                Some(forward) => forward.await,
-                None => Ok(()),
-            }
+            let Some((mut client, request)) = forward else {
+                return Ok(());
+            };
+            client.submit_proven_transaction(request).await.map(|_| ()).map_err(|err| {
+                Status::internal(format!(
+                    "failed to forward submit_proven_transaction to standby validator: {}",
+                    err.as_report()
+                ))
+            })
         }
     }
 }
