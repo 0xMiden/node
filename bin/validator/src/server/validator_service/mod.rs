@@ -230,6 +230,6 @@ impl ValidatorService {
 /// child block is signed on top of it. The finalized tip is therefore the parent of the signed tip,
 /// since that parent can no longer be replaced. Genesis has no parent and is itself always final
 /// (it cannot be replaced), so it maps to itself.
-pub(super) fn finalized_tip(signed_tip: BlockNumber) -> BlockNumber {
+fn finalized_tip(signed_tip: BlockNumber) -> BlockNumber {
     signed_tip.parent().unwrap_or(signed_tip)
 }
