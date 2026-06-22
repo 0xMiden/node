@@ -10,7 +10,7 @@ use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::ProvenTransaction;
-use tracing::{debug, info, instrument};
+use tracing::{info, instrument};
 
 use crate::COMPONENT;
 use crate::errors::StoreError;
@@ -125,8 +125,6 @@ pub async fn get_tx_inputs(
         store_inputs,
         current_block_height,
     );
-
-    debug!(target: COMPONENT, %tx_inputs);
 
     Ok(tx_inputs)
 }

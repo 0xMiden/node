@@ -169,7 +169,7 @@ struct BatchJob {
 impl BatchJob {
     async fn build_batch(&self) -> Result<(), BuildBatchError> {
         let Some(batch) = self.select_batch()? else {
-            tracing::info!("No transactions available.");
+            tracing::trace!("No transactions available.");
             return Ok(());
         };
 
@@ -181,7 +181,6 @@ impl BatchJob {
             .and_then(|(txs, inputs)| Self::propose_batch(txs, inputs))
             .inspect_ok(TelemetryInjectorExt::inject_telemetry)
             .and_then(|proposed| self.prove_batch(proposed))
-
             // Failure must be injected before the final pipeline stage i.e. before commit is
             // called. The system cannot handle errors after it considers the process complete
             // (which makes sense).

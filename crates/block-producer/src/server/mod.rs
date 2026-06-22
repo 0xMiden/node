@@ -303,7 +303,6 @@ impl BlockProducerApi {
             ref_block_commitment = %tx.ref_block_commitment(),
             "Submitting transaction"
         );
-        debug!(target: COMPONENT, proof = ?tx.proof());
 
         let inputs = crate::store::get_tx_inputs(&self.store, &tx)
             .await

@@ -372,7 +372,7 @@ impl State {
     ///
     /// If [None] is given as the value of `block_num`, the data for the latest [BlockHeader] is
     /// returned.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn get_block_header(
         &self,
         block_num: Option<BlockNumber>,
