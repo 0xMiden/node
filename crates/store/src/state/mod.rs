@@ -21,7 +21,7 @@ use miden_protocol::crypto::merkle::smt::{LargeSmt, SmtStorage};
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
 use miden_protocol::transaction::PartialBlockchain;
 use tokio::sync::{Mutex, RwLock, watch};
-use tracing::{Instrument, Span, info, instrument};
+use tracing::{Instrument, Span, instrument};
 
 use crate::account_state_forest::{AccountStateForest, AccountStateForestBackend};
 use crate::accounts::AccountTreeWithHistory;
@@ -655,15 +655,13 @@ impl State {
     }
 
     /// Returns data needed by the block producer to verify transactions validity.
-    #[instrument(target = COMPONENT, skip_all, ret)]
+    #[instrument(target = COMPONENT, skip_all, fields(account.id=%account_id, nullifiers = %format_array(nullifiers)))]
     pub async fn get_transaction_inputs(
         &self,
         account_id: AccountId,
         nullifiers: &[Nullifier],
         unauthenticated_note_commitments: Vec<Word>,
     ) -> Result<TransactionInputs, DatabaseError> {
-        info!(target: COMPONENT, account_id = %account_id.to_string(), nullifiers = %format_array(nullifiers));
-
         let tree_inputs = self.with_inner_read_blocking(|inner| {
             let account_commitment = inner.account_tree.get_latest_commitment(account_id);
 

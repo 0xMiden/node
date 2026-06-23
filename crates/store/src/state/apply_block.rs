@@ -12,7 +12,7 @@ use miden_protocol::note::{NoteDetails, Nullifier};
 use miden_protocol::transaction::OutputNote;
 use miden_protocol::utils::serde::Serializable;
 use tokio::sync::oneshot;
-use tracing::{Instrument, info, info_span, instrument};
+use tracing::{Instrument, info_span, instrument};
 
 use crate::db::NoteRecord;
 use crate::errors::{ApplyBlockError, ApplyBlockWithProvingInputsError, InvalidBlockError};
@@ -81,7 +81,6 @@ impl State {
 
         let block_num = header.block_num();
         let block_commitment = header.commitment();
-        let num_transactions = body.transactions().as_slice().len();
 
         self.validate_block_header(header, body).await?;
 
@@ -187,7 +186,7 @@ impl State {
             .expect("block cache receives sequential block numbers");
         let _ = self.committed_tip_tx.send(block_num);
 
-        info!(target: COMPONENT, %block_commitment, block_num = block_num.as_u32(), %num_transactions, "Block applied");
+        tracing::debug!(target: COMPONENT, "Block applied");
 
         Ok(())
     }

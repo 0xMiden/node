@@ -107,7 +107,10 @@ impl TracingConfig {
     pub fn from_env(open_telemetry: OpenTelemetry) -> Self {
         Self {
             open_telemetry,
-            stdout_filter: filter_env_or_default("MIDEN_STDOUT_FILTER", "info"),
+            stdout_filter: filter_env_or_default(
+                "MIDEN_STDOUT_FILTER",
+                "debug,h2=info,tower_http=info,tower=info,hyper_util=info,tower=info,tonic_web=info",
+            ),
             otel_filter: filter_env_or_default("MIDEN_OTEL_FILTER", "info,axum::rejection=trace"),
         }
     }
@@ -149,7 +152,7 @@ impl Drop for OtelGuard {
 
 /// Initializes tracing to stdout and optionally an open-telemetry exporter.
 ///
-/// Stdout trace filtering is configured with `MIDEN_STDOUT_FILTER`, then `RUST_LOG`, then `info`.
+/// Stdout trace filtering is configured with `MIDEN_STDOUT_FILTER`, then `RUST_LOG`, then `debug,h2=info,tower_http=info,tower=info,hyper_util=info,tower=info,tonic_web=info`.
 /// OpenTelemetry export filtering is configured with `MIDEN_OTEL_FILTER`, then `RUST_LOG`, then
 /// `info,axum::rejection=trace`.
 ///
@@ -321,7 +324,7 @@ pub fn setup_test_tracing() -> anyhow::Result<(
     let otel_layer =
         OpenTelemetryLayer::new(tracer_provider.tracer("tracing-otel-subscriber")).boxed();
     let subscriber = Registry::default()
-        .with(stdout_layer().with_filter(filter_from_string("info")?))
+        .with(stdout_layer().with_filter(filter_from_string("debug")?))
         .with(otel_layer.with_filter(filter_from_string("info,axum::rejection=trace")?));
     tracing::subscriber::set_global_default(subscriber)?;
     Ok((rx_export, rx_shutdown))

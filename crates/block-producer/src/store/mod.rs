@@ -10,7 +10,7 @@ use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::ProvenTransaction;
-use tracing::{info, instrument};
+use tracing::instrument;
 
 use crate::COMPONENT;
 use crate::errors::StoreError;
@@ -91,13 +91,11 @@ impl Display for TransactionInputs {
 // STORE STATE
 // ================================================================================================
 
-#[instrument(target = COMPONENT, name = "store.state.get_tx_inputs", skip_all, err)]
+#[instrument(target = COMPONENT, name = "store.state.get_tx_inputs", skip_all, err, fields(transaction.id = %proven_tx.id().to_hex()))]
 pub async fn get_tx_inputs(
     state: &State,
     proven_tx: &ProvenTransaction,
 ) -> Result<TransactionInputs, StoreError> {
-    info!(target: COMPONENT, tx_id = %proven_tx.id().to_hex());
-
     let nullifiers = proven_tx.nullifiers().collect::<Vec<_>>();
     let unauthenticated_note_commitments =
         proven_tx.unauthenticated_notes().map(|header| header.id().as_word()).collect();
@@ -125,6 +123,8 @@ pub async fn get_tx_inputs(
         store_inputs,
         current_block_height,
     );
+
+    tracing::debug!(?tx_inputs, "Transaction inputs");
 
     Ok(tx_inputs)
 }
