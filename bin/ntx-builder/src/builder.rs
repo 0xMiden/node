@@ -248,6 +248,21 @@ impl NetworkTransactionBuilder {
             .await
             .context("failed to apply committed block to DB")?;
 
+        // Bound persistence of notes whose target account is never created as a network account:
+        // expire any note that has stayed pending for longer than the retention window. Runs on the
+        // pinned loop connection per block; consumed notes are retained for status reporting.
+        let expired = loop_db
+            .delete_expired_pending_notes(block_num, self.config.pending_note_retention_blocks)
+            .await
+            .context("failed to expire stale pending notes")?;
+        if expired > 0 {
+            tracing::info!(
+                num_expired = expired,
+                block.number = %block_num,
+                "expired stale pending network notes",
+            );
+        }
+
         self.last_applied_block = block_num;
 
         Ok(effects)

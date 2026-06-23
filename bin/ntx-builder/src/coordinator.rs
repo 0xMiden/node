@@ -194,8 +194,8 @@ impl Coordinator {
 
     /// Reacts to a committed block: spawns actors for any newly-targeted network accounts whose
     /// committed state exists (deferring the rest until their creation commits), releases deferred
-    /// spawns for accounts created by this block, and wakes every active actor so it can
-    /// re-evaluate its state.
+    /// spawns for accounts created by this block, prunes deferred spawns whose notes have since
+    /// been expired, and wakes every active actor so it can re-evaluate its state.
     pub async fn handle_committed_block(
         &mut self,
         effects: &CommittedBlockEffects,
@@ -212,13 +212,44 @@ impl Coordinator {
             .iter()
             .map(AccountTargetNetworkNote::target_account_id)
             .collect();
-        for account_id in targeted {
-            self.spawn_actor_when_committed(account_id).await?;
+        for account_id in &targeted {
+            self.spawn_actor_when_committed(*account_id).await?;
         }
+
+        self.prune_pending_spawns(&targeted).await?;
 
         for handle in self.actor_registry.values() {
             handle.notify();
         }
+        Ok(())
+    }
+
+    /// Drops deferred spawns whose target no longer has a live pending note.
+    ///
+    /// A spawn is deferred when a note targets an account whose creation has not committed. If that
+    /// account is never created, the event loop eventually expires the note; Accounts targeted by the
+    /// current block are retained unconditionally since their note was just persisted.
+    async fn prune_pending_spawns(
+        &mut self,
+        targeted_this_block: &HashSet<AccountId>,
+    ) -> anyhow::Result<()> {
+        if self.pending_spawns.is_empty() {
+            return Ok(());
+        }
+
+        let live: HashSet<AccountId> = self
+            .actor_context
+            .state
+            .db
+            .accounts_with_pending_notes(self.actor_context.config.max_note_attempts)
+            .await
+            .context("failed to load accounts with pending notes for pruning")?
+            .into_iter()
+            .collect();
+
+        self.pending_spawns.retain(|account_id| {
+            targeted_this_block.contains(account_id) || live.contains(account_id)
+        });
         Ok(())
     }
 
@@ -374,6 +405,52 @@ mod tests {
         assert!(
             coordinator.pending_spawns.is_empty(),
             "a released spawn must leave the pending set",
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_committed_block_prunes_deferred_spawn_after_note_expiry() {
+        use miden_protocol::crypto::merkle::mmr::PartialMmr;
+
+        let (mut coordinator, _dir, _rx) = Coordinator::test().await;
+        let db = coordinator.actor_context.state.db.clone();
+
+        // A note in block 1 targets an account whose creation has not committed, so its spawn is
+        // deferred. Persist the note first, mirroring the event loop applying the block to the DB
+        // before handing it to the coordinator.
+        let account_id = mock_network_account_id();
+        let note = mock_single_target_note(account_id, 10);
+        let block_1 = CommittedBlockEffects {
+            header: mock_block_header(1_u32.into()),
+            network_notes: vec![note],
+            nullifiers: vec![],
+            network_account_updates: vec![],
+            account_transactions: vec![],
+        };
+        db.apply_committed_block(block_1.clone(), PartialMmr::default()).await.unwrap();
+        coordinator.handle_committed_block(&block_1).await.unwrap();
+        assert!(
+            coordinator.pending_spawns.contains(&account_id),
+            "the spawn must be deferred while the note is pending",
+        );
+
+        // The account is never created, so the event loop eventually expires the pending note.
+        let deleted = db.delete_expired_pending_notes(1000_u32.into(), 10).await.unwrap();
+        assert_eq!(deleted, 1);
+
+        // A later block with no work for the account must prune the now-noteless deferred spawn so
+        // the set cannot grow without bound.
+        let block_2 = CommittedBlockEffects {
+            header: mock_block_header(1001_u32.into()),
+            network_notes: vec![],
+            nullifiers: vec![],
+            network_account_updates: vec![],
+            account_transactions: vec![],
+        };
+        coordinator.handle_committed_block(&block_2).await.unwrap();
+        assert!(
+            coordinator.pending_spawns.is_empty(),
+            "a deferred spawn whose note has expired must be pruned",
         );
     }
 

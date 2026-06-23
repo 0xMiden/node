@@ -225,6 +225,21 @@ impl Db {
             .await
     }
 
+    /// Deletes still-pending notes first observed more than `retention_blocks` blocks before
+    /// `chain_tip`, bounding persistence of notes whose target account is never created as a
+    /// network account. Returns the number of rows deleted.
+    pub async fn delete_expired_pending_notes(
+        &self,
+        chain_tip: BlockNumber,
+        retention_blocks: u32,
+    ) -> Result<usize> {
+        self.inner
+            .transact("delete_expired_pending_notes", move |conn| {
+                queries::delete_expired_pending_notes(conn, chain_tip, retention_blocks)
+            })
+            .await
+    }
+
     /// Returns the latest transaction recorded against `account_id` in a committed block, if any.
     /// An actor waiting on its submission compares this against its own transaction id to confirm
     /// landing.
@@ -360,6 +375,19 @@ impl LoopDb {
         self.conn
             .query("accounts_with_pending_notes", move |conn| {
                 queries::accounts_with_pending_notes(conn, max_attempts)
+            })
+            .await
+    }
+
+    /// Deletes pending notes older than `retention_blocks` on the pinned connection.
+    pub async fn delete_expired_pending_notes(
+        &self,
+        chain_tip: BlockNumber,
+        retention_blocks: u32,
+    ) -> Result<usize> {
+        self.conn
+            .transact("delete_expired_pending_notes", move |conn| {
+                queries::delete_expired_pending_notes(conn, chain_tip, retention_blocks)
             })
             .await
     }

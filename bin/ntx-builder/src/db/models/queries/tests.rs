@@ -57,9 +57,9 @@ fn insert_network_notes_is_idempotent() {
     let account_id = mock_network_account_id();
     let note = mock_single_target_note(account_id, 7);
 
-    insert_network_notes(conn, std::slice::from_ref(&note)).unwrap();
+    insert_network_notes(conn, std::slice::from_ref(&note), BlockNumber::from(1u32)).unwrap();
     // Re-applying the same block (e.g. on a subscription redelivery) must not error or duplicate.
-    insert_network_notes(conn, std::slice::from_ref(&note)).unwrap();
+    insert_network_notes(conn, std::slice::from_ref(&note), BlockNumber::from(1u32)).unwrap();
 
     assert_eq!(count_notes(conn), 1);
 }
@@ -71,7 +71,7 @@ fn mark_notes_consumed_keeps_rows_and_sets_committed_at() {
     let note_a = mock_single_target_note(account_id, 1);
     let note_b = mock_single_target_note(account_id, 2);
 
-    insert_network_notes(conn, &[note_a.clone(), note_b.clone()]).unwrap();
+    insert_network_notes(conn, &[note_a.clone(), note_b.clone()], BlockNumber::from(1u32)).unwrap();
     assert_eq!(count_notes(conn), 2);
 
     let consumed_at = BlockNumber::from(42);
@@ -98,7 +98,7 @@ fn mark_notes_consumed_is_noop_when_unknown() {
     let (conn, _dir) = &mut test_conn();
     let account_id = mock_network_account_id();
     let note = mock_single_target_note(account_id, 3);
-    insert_network_notes(conn, std::slice::from_ref(&note)).unwrap();
+    insert_network_notes(conn, std::slice::from_ref(&note), BlockNumber::from(1u32)).unwrap();
 
     // A nullifier we never inserted should not affect existing rows.
     let phantom = mock_single_target_note(account_id, 99).as_note().nullifier();
@@ -117,7 +117,7 @@ fn available_notes_excludes_consumed_notes() {
     let (conn, _dir) = &mut test_conn();
     let account_id = mock_network_account_id();
     let note = mock_single_target_note(account_id, 21);
-    insert_network_notes(conn, std::slice::from_ref(&note)).unwrap();
+    insert_network_notes(conn, std::slice::from_ref(&note), BlockNumber::from(1u32)).unwrap();
 
     assert_eq!(available_notes(conn, account_id, BlockNumber::from(1), 30).unwrap().len(), 1);
 
@@ -138,7 +138,7 @@ fn available_notes_returns_unconsumed_under_attempt_cap() {
     let (conn, _dir) = &mut test_conn();
     let account_id = mock_network_account_id();
     let note = mock_single_target_note(account_id, 11);
-    insert_network_notes(conn, std::slice::from_ref(&note)).unwrap();
+    insert_network_notes(conn, std::slice::from_ref(&note), BlockNumber::from(1u32)).unwrap();
 
     let available = available_notes(conn, account_id, BlockNumber::from(1), 30).unwrap();
     assert_eq!(available.len(), 1);
@@ -149,7 +149,7 @@ fn available_notes_excludes_attempts_at_cap() {
     let (conn, _dir) = &mut test_conn();
     let account_id = mock_network_account_id();
     let note = mock_single_target_note(account_id, 13);
-    insert_network_notes(conn, std::slice::from_ref(&note)).unwrap();
+    insert_network_notes(conn, std::slice::from_ref(&note), BlockNumber::from(1u32)).unwrap();
 
     // Push attempt_count up to the cap.
     let nullifier = note.as_note().nullifier();
@@ -159,6 +159,72 @@ fn available_notes_excludes_attempts_at_cap() {
 
     let available = available_notes(conn, account_id, BlockNumber::from(1000), 30).unwrap();
     assert!(available.is_empty(), "notes at the attempt cap should not be available");
+}
+
+// PENDING NOTE EXPIRY
+// ================================================================================================
+
+#[test]
+fn delete_expired_pending_notes_removes_old_keeps_recent() {
+    let (conn, _dir) = &mut test_conn();
+    let account_id = mock_network_account_id();
+
+    // An old note (received long ago) and a recent one for the same account.
+    let old_note = mock_single_target_note(account_id, 1);
+    let recent_note = mock_single_target_note(account_id, 2);
+    insert_network_notes(conn, std::slice::from_ref(&old_note), BlockNumber::from(1u32)).unwrap();
+    insert_network_notes(conn, std::slice::from_ref(&recent_note), BlockNumber::from(100u32))
+        .unwrap();
+    assert_eq!(count_notes(conn), 2);
+
+    // Tip 100, retention 50 → cutoff block 50. Only the note received at block 1 is older.
+    let deleted = delete_expired_pending_notes(conn, BlockNumber::from(100u32), 50).unwrap();
+    assert_eq!(deleted, 1);
+
+    assert!(
+        get_note_status(conn, &crate::db::models::conv::note_id_to_bytes(&old_note.as_note().id()))
+            .unwrap()
+            .is_none(),
+        "the stale pending note should be deleted",
+    );
+    assert!(
+        get_note_status(
+            conn,
+            &crate::db::models::conv::note_id_to_bytes(&recent_note.as_note().id())
+        )
+        .unwrap()
+        .is_some(),
+        "the recent pending note should be retained",
+    );
+}
+
+#[test]
+fn delete_expired_pending_notes_keeps_consumed_notes() {
+    let (conn, _dir) = &mut test_conn();
+    let account_id = mock_network_account_id();
+
+    // An old note that has since been consumed must be retained for status reporting even though it
+    // is well past the retention window.
+    let note = mock_single_target_note(account_id, 1);
+    insert_network_notes(conn, std::slice::from_ref(&note), BlockNumber::from(1u32)).unwrap();
+    mark_notes_consumed(conn, &[note.as_note().nullifier()], BlockNumber::from(5)).unwrap();
+
+    let deleted = delete_expired_pending_notes(conn, BlockNumber::from(1000u32), 10).unwrap();
+    assert_eq!(deleted, 0, "consumed notes are exempt from age expiry");
+    assert_eq!(count_notes(conn), 1);
+}
+
+#[test]
+fn delete_expired_pending_notes_is_noop_before_window_elapses() {
+    let (conn, _dir) = &mut test_conn();
+    let account_id = mock_network_account_id();
+    let note = mock_single_target_note(account_id, 1);
+    insert_network_notes(conn, std::slice::from_ref(&note), BlockNumber::from(1u32)).unwrap();
+
+    // Tip below the retention window: cutoff saturates to 0, so nothing is old enough yet.
+    let deleted = delete_expired_pending_notes(conn, BlockNumber::from(5u32), 50).unwrap();
+    assert_eq!(deleted, 0);
+    assert_eq!(count_notes(conn), 1);
 }
 
 // CHAIN STATE
@@ -244,6 +310,7 @@ fn accounts_with_pending_notes_distinct_and_filters_consumed_and_capped() {
     insert_network_notes(
         conn,
         &[alice_note_1.clone(), alice_note_2, bob_note.clone(), carol_note.clone()],
+        BlockNumber::from(1u32),
     )
     .unwrap();
 
@@ -347,7 +414,7 @@ fn notes_failed_increments_attempt_and_records_error() {
     let (conn, _dir) = &mut test_conn();
     let account_id = mock_network_account_id();
     let note = mock_single_target_note(account_id, 19);
-    insert_network_notes(conn, std::slice::from_ref(&note)).unwrap();
+    insert_network_notes(conn, std::slice::from_ref(&note), BlockNumber::from(1u32)).unwrap();
 
     let nullifier = note.as_note().nullifier();
     notes_failed(conn, &[(nullifier, test_note_error("nope"))], BlockNumber::from(5)).unwrap();

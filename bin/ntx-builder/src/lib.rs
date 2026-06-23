@@ -143,6 +143,14 @@ const DEFAULT_MAX_TX_CYCLES: u32 = 1 << 19;
 /// waits in `WaitForBlock` before resubmitting. Must be within the kernel's `1..=u16::MAX` range.
 const DEFAULT_TX_EXPIRATION_DELTA: NonZeroU16 = NonZeroU16::new(30).unwrap();
 
+/// Default number of blocks a network note may stay pending before it is expired and deleted.
+///
+/// The ntx-builder persists every network note from a committed block, including notes targeting
+/// accounts it does not track. Notes whose target is never created as a network account can never be
+/// consumed, so they are deleted once they have been pending for this many blocks. Sized to comfortably
+/// exceed both the time a legitimate target takes to be created and the per-note retry budget.
+const DEFAULT_PENDING_NOTE_RETENTION_BLOCKS: u32 = 100_000;
+
 // CONFIGURATION
 // =================================================================================================
 
@@ -203,6 +211,10 @@ pub struct NtxBuilderConfig {
     /// within `1..=u16::MAX` (enforced by the transaction kernel).
     pub tx_expiration_delta: NonZeroU16,
 
+    /// Number of blocks a network note may stay pending (unconsumed) before the event loop deletes
+    /// it. Bounds persistence of notes whose target account is never created as a network account.
+    pub pending_note_retention_blocks: u32,
+
     /// Initial sleep applied between per-request retries on transient infrastructure failures (e.g.
     /// prover unreachable, RPC crash, transport error, RPC gRPC hiccup). Doubles on each retry up
     /// to [`Self::request_backoff_max`]. Per-note `attempt_count` is *not* advanced while retries
@@ -235,6 +247,7 @@ impl NtxBuilderConfig {
             max_account_crashes: DEFAULT_MAX_ACCOUNT_CRASHES,
             max_cycles: DEFAULT_MAX_TX_CYCLES,
             tx_expiration_delta: DEFAULT_TX_EXPIRATION_DELTA,
+            pending_note_retention_blocks: DEFAULT_PENDING_NOTE_RETENTION_BLOCKS,
             request_backoff_initial: DEFAULT_REQUEST_BACKOFF_INITIAL,
             request_backoff_max: DEFAULT_REQUEST_BACKOFF_MAX,
             database_filepath,
@@ -329,6 +342,13 @@ impl NtxBuilderConfig {
     #[must_use]
     pub fn with_tx_expiration_delta(mut self, delta: NonZeroU16) -> Self {
         self.tx_expiration_delta = delta;
+        self
+    }
+
+    /// Sets the number of blocks a pending network note is retained before being expired.
+    #[must_use]
+    pub fn with_pending_note_retention_blocks(mut self, blocks: u32) -> Self {
+        self.pending_note_retention_blocks = blocks;
         self
     }
 

@@ -87,7 +87,7 @@ pub fn apply_committed_block(
         }
     }
 
-    insert_network_notes(conn, &effects.network_notes)?;
+    insert_network_notes(conn, &effects.network_notes, effects.header.block_num())?;
 
     mark_notes_consumed(conn, &effects.nullifiers, effects.header.block_num())?;
 

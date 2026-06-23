@@ -38,6 +38,7 @@ pub struct NoteInsert {
     pub last_attempt: Option<i64>,
     pub last_error: Option<String>,
     pub committed_at: Option<i64>,
+    pub received_at_block: i64,
 }
 
 /// Row returned by `get_note_status()`.
@@ -58,10 +59,15 @@ pub struct NoteStatusRow {
 /// Inserts network notes from a committed block. Uses `INSERT OR IGNORE` so re-applying the same
 /// block (e.g. on a redelivery from the subscription stream) is a no-op rather than a constraint
 /// violation.
+///
+/// `block_num` is the block in which the notes were observed; it is recorded as `received_at_block`
+/// so the event loop can age-expire notes that stay pending for too many blocks.
 pub fn insert_network_notes(
     conn: &mut SqliteConnection,
     notes: &[AccountTargetNetworkNote],
+    block_num: BlockNumber,
 ) -> Result<(), DatabaseError> {
+    let received_at_block = conversions::block_num_to_i64(block_num);
     for note in notes {
         let row = NoteInsert {
             nullifier: conversions::nullifier_to_bytes(&note.as_note().nullifier()),
@@ -72,10 +78,48 @@ pub fn insert_network_notes(
             last_attempt: None,
             last_error: None,
             committed_at: None,
+            received_at_block,
         };
         diesel::insert_or_ignore_into(schema::notes::table).values(&row).execute(conn)?;
     }
     Ok(())
+}
+
+/// Deletes still-pending notes that were first observed more than `retention_blocks` blocks before
+/// `chain_tip`.
+///
+/// The ntx-builder persists every network note from a committed block, including notes targeting
+/// accounts it does not (yet) track. Notes whose target account is never created as a network
+/// account can never be consumed, so without this sweep they would accumulate forever. Notes that
+/// have already been consumed (`committed_at` set) are retained for `GetNetworkNoteStatus` lifecycle
+/// reporting and are never touched here.
+///
+/// Returns the number of rows deleted.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// DELETE FROM notes
+/// WHERE committed_at IS NULL AND received_at_block < ?1
+/// ```
+pub fn delete_expired_pending_notes(
+    conn: &mut SqliteConnection,
+    chain_tip: BlockNumber,
+    retention_blocks: u32,
+) -> Result<usize, DatabaseError> {
+    // Saturating: until the chain advances past the retention window there is nothing old enough to
+    // expire, so the cutoff is clamped at 0 (notes received at block 0 are not `< 0`).
+    let cutoff = chain_tip.as_u32().saturating_sub(retention_blocks);
+    let cutoff = conversions::block_num_to_i64(BlockNumber::from(cutoff));
+
+    let deleted = diesel::delete(
+        schema::notes::table
+            .filter(schema::notes::committed_at.is_null())
+            .filter(schema::notes::received_at_block.lt(cutoff)),
+    )
+    .execute(conn)?;
+
+    Ok(deleted)
 }
 
 /// Marks notes as consumed by setting `committed_at` to the block number whose committed body

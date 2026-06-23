@@ -35,6 +35,7 @@ diesel::table! {
         last_attempt -> Nullable<BigInt>,
         last_error -> Nullable<Text>,
         committed_at -> Nullable<BigInt>,
+        received_at_block -> BigInt,
     }
 }
 
