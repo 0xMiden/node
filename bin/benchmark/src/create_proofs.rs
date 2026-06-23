@@ -70,6 +70,9 @@ use crate::{
     write_to_file,
 };
 
+/// Maximum attempts to observe a stable chain tip.
+const MAX_TIP_FETCH_ATTEMPTS: u32 = 10;
+
 // PROVING TASK HELPERS
 // ================================================================================================
 
@@ -127,14 +130,31 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
         .expect("RPC returned no block header");
     let genesis_header: BlockHeader = genesis_header_proto.try_into().unwrap();
 
-    println!("Fetching chain tip header...");
-    let ref_block_header = fetch_chain_tip_header(&mut rpc_client).await;
-    let ref_block_num = ref_block_header.block_num();
-    println!("  ref block = {ref_block_num} (proofs will bind to this block's chain state)");
+    // The tip header and chain MMR come from separate RPC calls, so retry until they refer to the
+    // same chain tip.
+    let mut tip_state = None;
+    for _ in 0..MAX_TIP_FETCH_ATTEMPTS {
+        println!("Fetching chain tip header...");
+        let ref_block_header = fetch_chain_tip_header(&mut rpc_client).await;
+        let ref_block_num = ref_block_header.block_num();
 
-    println!("Fetching chain MMR up to ref block...");
-    let partial_blockchain =
-        fetch_partial_blockchain(&mut rpc_client, ref_block_num.as_u32(), &genesis_header).await;
+        println!("Fetching chain MMR up to ref block...");
+        let partial_blockchain =
+            fetch_partial_blockchain(&mut rpc_client, ref_block_num.as_u32(), &genesis_header)
+                .await;
+
+        if partial_blockchain.chain_length() == ref_block_num {
+            tip_state = Some((ref_block_header, partial_blockchain));
+            break;
+        }
+    }
+    let (ref_block_header, partial_blockchain) = tip_state.unwrap_or_else(|| {
+        panic!(
+            "failed to fetch a consistent tip header and chain MMR after \
+             {MAX_TIP_FETCH_ATTEMPTS} attempts",
+        )
+    });
+    let ref_block_num = ref_block_header.block_num();
 
     println!("Creating faucet...");
     let (mut faucet, faucet_secret_key) = create_faucet();
