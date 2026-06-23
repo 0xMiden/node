@@ -29,6 +29,7 @@ use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::note::{Note, NoteAttachments, NoteScript, NoteScriptRoot, PartialNote};
 use miden_protocol::transaction::{
     AccountInputs,
+    ExecutedTransaction,
     InputNote,
     InputNotes,
     PartialBlockchain,
@@ -36,7 +37,7 @@ use miden_protocol::transaction::{
     TransactionArgs,
 };
 use miden_protocol::utils::serde::Serializable;
-use miden_protocol::{Felt, MAX_OUTPUT_NOTES_PER_TX, MastForest, Word};
+use miden_protocol::{Felt, MastForest, Word};
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::account::faucets::{FungibleFaucet, TokenName};
 use miden_standards::account::interface::{AccountInterface, AccountInterfaceExt};
@@ -73,38 +74,98 @@ use crate::{
 /// Maximum attempts to observe a stable chain tip.
 const MAX_TIP_FETCH_ATTEMPTS: u32 = 10;
 
+// CONSTANTS
+// ================================================================================================
+
+/// Maximum number of output notes packed into a single mint transaction.
+///
+/// 100 notes (~3.3 MB) keeps us comfortably under the 4 MiB gRPC limit with margin for the proof
+/// growing slightly linearly in the note count.
+const MAX_NOTES_PER_MINT_TX: usize = 100;
+
 // PROVING TASK HELPERS
 // ================================================================================================
 
-/// Result of a single spawned proving task: the proof attempt and the wall time that task spent
-/// (which, for the remote path, includes rate-limit and retry waits).
+/// Result of a single proving job: the proof attempt and the wall time it spent (which, for the
+/// remote path, includes rate-limit and retry waits).
 type ProveOutcome = (anyhow::Result<ProvenTransaction>, Duration);
 
-/// Await every spawned proving task in spawn order, returning the proofs in that same order plus
-/// the summed per-task wall time. If any task fails (or panics) we print the error and exit with a
-/// non-zero status. Proven txs later in the bundle reference earlier ones, so a single failure
-/// means the bundle is unusable anyway.
-async fn collect_proofs(
-    label: &str,
-    tasks: Vec<tokio::task::JoinHandle<ProveOutcome>>,
-) -> (Vec<ProvenTransaction>, Duration) {
-    let mut proofs = Vec::with_capacity(tasks.len());
-    let mut total = Duration::ZERO;
-    for (i, handle) in tasks.into_iter().enumerate() {
-        let (result, elapsed) = handle.await.unwrap_or_else(|err| {
-            eprintln!("{label} proving task {i} panicked: {err}");
-            std::process::exit(1);
-        });
-        total += elapsed;
-        match result {
-            Ok(tx) => proofs.push(tx),
-            Err(err) => {
-                eprintln!("{label} proving failed for tx {i}: {err:#}");
-                std::process::exit(1);
+/// Accumulates the proving jobs of one phase, dispatching them according to the prover's strategy:
+///
+/// - [`BenchmarkProver::supports_concurrent_proving`] true (remote): each job is spawned as a task
+///   and awaited at [`collect`](Self::collect) time, so proving overlaps with later executions while
+///   the prover's own rate limiter + in-flight cap bound the concurrency.
+/// - false (local): each job runs inline and sequentially as it is submitted, since local proving is
+///   single-process and memory-heavy.
+enum ProofCollector {
+    Sequential(Vec<ProveOutcome>),
+    Concurrent(Vec<tokio::task::JoinHandle<ProveOutcome>>),
+}
+
+impl ProofCollector {
+    fn new(prover: &BenchmarkProver, capacity: usize) -> Self {
+        if prover.supports_concurrent_proving() {
+            Self::Concurrent(Vec::with_capacity(capacity))
+        } else {
+            Self::Sequential(Vec::with_capacity(capacity))
+        }
+    }
+
+    /// Submit one executed tx for proving. The remote path spawns a concurrent task and returns
+    /// immediately; the local path proves inline now, blocking until the proof is done.
+    async fn submit(&mut self, prover: &Arc<BenchmarkProver>, executed_tx: ExecutedTransaction) {
+        match self {
+            Self::Concurrent(tasks) => {
+                let prover = Arc::clone(prover);
+                tasks.push(tokio::spawn(async move {
+                    let prove_t0 = Instant::now();
+                    let result = prover.prove(executed_tx).await;
+                    (result, prove_t0.elapsed())
+                }));
+            },
+            Self::Sequential(outcomes) => {
+                let prove_t0 = Instant::now();
+                // Box the proof future so it doesn't inflate the caller's (`run`) future, which the
+                // spawned remote path keeps off-stack via `tokio::spawn`.
+                let result = Box::pin(prover.prove(executed_tx)).await;
+                outcomes.push((result, prove_t0.elapsed()));
             },
         }
     }
-    (proofs, total)
+
+    /// Gather every proof in submission order, returning them plus the summed per-job wall time. If
+    /// any job fails (or a spawned task panics) we print the error and exit with a non-zero status.
+    /// Proven txs later in the bundle reference earlier ones, so a single failure makes the bundle
+    /// unusable anyway.
+    async fn collect(self, label: &str) -> (Vec<ProvenTransaction>, Duration) {
+        let outcomes = match self {
+            Self::Sequential(outcomes) => outcomes,
+            Self::Concurrent(tasks) => {
+                let mut outcomes = Vec::with_capacity(tasks.len());
+                for (i, handle) in tasks.into_iter().enumerate() {
+                    outcomes.push(handle.await.unwrap_or_else(|err| {
+                        eprintln!("{label} proving task {i} panicked: {err}");
+                        std::process::exit(1);
+                    }));
+                }
+                outcomes
+            },
+        };
+
+        let mut proofs = Vec::with_capacity(outcomes.len());
+        let mut total = Duration::ZERO;
+        for (i, (result, elapsed)) in outcomes.into_iter().enumerate() {
+            total += elapsed;
+            match result {
+                Ok(tx) => proofs.push(tx),
+                Err(err) => {
+                    eprintln!("{label} proving failed for tx {i}: {err:#}");
+                    std::process::exit(1);
+                },
+            }
+        }
+        (proofs, total)
+    }
 }
 
 // ORCHESTRATOR
@@ -192,23 +253,22 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
 
     // Mint phase: executions are sequential (each mutates the shared faucet), but proving runs
     // concurrently on the prover (under the rate limiter when remote). Each mint tx emits as many
-    // output notes as the protocol allows (`MAX_OUTPUT_NOTES_PER_TX`), one per destination wallet,
-    // so the sequential phase shrinks from `num_transactions` txs to `ceil(num_transactions /
-    // MAX_OUTPUT_NOTES_PER_TX)` while still producing exactly one note per wallet for the consume
+    // output notes as execution allows (`MAX_NOTES_PER_MINT_TX`), one per destination wallet, so
+    // the sequential phase shrinks from `num_transactions` txs to `ceil(num_transactions /
+    // MAX_NOTES_PER_MINT_TX)` while still producing exactly one note per wallet for the consume
     // phase to spend.
-    let num_mint_txs = (num_transactions as usize).div_ceil(MAX_OUTPUT_NOTES_PER_TX);
+    let num_mint_txs = (num_transactions as usize).div_ceil(MAX_NOTES_PER_MINT_TX);
     println!(
-        "Executing {num_mint_txs} mint transactions (sequential, up to {MAX_OUTPUT_NOTES_PER_TX} \
+        "Executing {num_mint_txs} mint transactions (sequential, up to {MAX_NOTES_PER_MINT_TX} \
          notes each, {num_transactions} notes total)..."
     );
-    let mut mint_tasks: Vec<tokio::task::JoinHandle<ProveOutcome>> =
-        Vec::with_capacity(num_mint_txs);
+    let mut mint_proofs = ProofCollector::new(&prover, num_mint_txs);
     let mut mint_tx_inputs: Vec<Vec<u8>> = Vec::with_capacity(num_mint_txs);
     let mut mint_notes: Vec<Note> = Vec::with_capacity(num_transactions as usize);
     let mint_phase_start = Instant::now();
     let mut mint_exec_total = Duration::ZERO;
 
-    for (mint_tx_index, wallet_chunk) in wallets.chunks(MAX_OUTPUT_NOTES_PER_TX).enumerate() {
+    for (mint_tx_index, wallet_chunk) in wallets.chunks(MAX_NOTES_PER_MINT_TX).enumerate() {
         // One P2ID note per wallet in this chunk; they all become output notes of a single mint tx.
         let notes: Vec<Note> = wallet_chunk
             .iter()
@@ -265,12 +325,7 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
         }
         data_store.add_account(faucet.clone());
 
-        let prover = Arc::clone(&prover);
-        mint_tasks.push(tokio::spawn(async move {
-            let prove_t0 = Instant::now();
-            let result = prover.prove(executed_tx).await;
-            (result, prove_t0.elapsed())
-        }));
+        mint_proofs.submit(&prover, executed_tx).await;
         mint_tx_inputs.push(tx_inputs_bytes);
         mint_notes.extend(notes);
 
@@ -282,7 +337,7 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
     }
 
     println!("Awaiting {num_mint_txs} mint proofs...");
-    let (mint_txs, mint_prove_total) = collect_proofs("mint", mint_tasks).await;
+    let (mint_txs, mint_prove_total) = mint_proofs.collect("mint").await;
     let mint_phase_elapsed = mint_phase_start.elapsed();
     print_proving_summary(
         "Mint",
@@ -292,10 +347,10 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
         mint_prove_total,
     );
 
-    // Consume phase — same shape: sequential executions, concurrent proving.
+    // Consume phase — same shape: sequential executions; proving dispatched per the prover
+    // strategy.
     println!("Executing {num_transactions} consume transactions (sequential)...");
-    let mut consume_tasks: Vec<tokio::task::JoinHandle<ProveOutcome>> =
-        Vec::with_capacity(num_transactions as usize);
+    let mut consume_proofs = ProofCollector::new(&prover, num_transactions as usize);
     let mut consume_tx_inputs: Vec<Vec<u8>> = Vec::with_capacity(num_transactions as usize);
     let consume_phase_start = Instant::now();
     let mut consume_exec_total = Duration::ZERO;
@@ -322,12 +377,7 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
 
         let tx_inputs_bytes = executed_tx.tx_inputs().to_bytes();
 
-        let prover = Arc::clone(&prover);
-        consume_tasks.push(tokio::spawn(async move {
-            let prove_t0 = Instant::now();
-            let result = prover.prove(executed_tx).await;
-            (result, prove_t0.elapsed())
-        }));
+        consume_proofs.submit(&prover, executed_tx).await;
         consume_tx_inputs.push(tx_inputs_bytes);
 
         if (index + 1) % 10 == 0 || index + 1 == num_transactions {
@@ -336,7 +386,7 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
     }
 
     println!("Awaiting {num_transactions} consume proofs...");
-    let (consume_txs, consume_prove_total) = collect_proofs("consume", consume_tasks).await;
+    let (consume_txs, consume_prove_total) = consume_proofs.collect("consume").await;
     let consume_phase_elapsed = consume_phase_start.elapsed();
     print_proving_summary(
         "Consume",

@@ -44,9 +44,8 @@ pub(crate) async fn run(rpc_url: Url, concurrency: usize, wait_blocks: u32) {
     let consume_tx_inputs: Vec<Vec<u8>> = read_from_file(&in_dir.join("consume_tx_inputs.bin"));
     assert_eq!(consume_txs.len(), consume_tx_inputs.len(), "consume tx/inputs length mismatch");
 
-    // Compute the tx-id master lists up front so we can match them against on-chain block contents
-    // later, without having to interrogate the node.
-    let mint_ids: Vec<TransactionId> = mint_txs.iter().map(ProvenTransaction::id).collect();
+    // Compute the consume tx-id master list up front so we can match it against on-chain block
+    // contents later, without having to interrogate the node. (Mints are not tracked on-chain.)
     let consume_ids: Vec<TransactionId> = consume_txs.iter().map(ProvenTransaction::id).collect();
 
     println!("Connecting to {rpc_url}...");
@@ -70,9 +69,9 @@ pub(crate) async fn run(rpc_url: Url, concurrency: usize, wait_blocks: u32) {
         submit_all(rpc_client.clone(), consume_txs, consume_tx_inputs, concurrency).await;
     print_phase_progress("consume", &consume_stats);
 
-    let ack_by_id = build_ack_map(&mint_ids, &mint_stats, &consume_ids, &consume_stats);
+    let ack_by_id = build_ack_map(&consume_ids, &consume_stats);
     println!(
-        "Watching for inclusion of {} acked tx(s) (max {wait_blocks} blocks past height {h_start})...",
+        "Watching for inclusion of {} acked consume tx(s) (max {wait_blocks} blocks past height {h_start})...",
         ack_by_id.len(),
     );
     let (h_final, inclusion) =
@@ -241,21 +240,14 @@ async fn submit_sequential(
     PhaseStats { elapsed: start.elapsed(), outcomes }
 }
 
-/// Build a lookup from the on-chain `TransactionId` of every successfully submitted tx to the
-/// `SystemTime` at which the node ack'd its submission. Used by [`compute_inclusion`] to compute
-/// per-tx inclusion latency.
+/// Build a lookup from the on-chain `TransactionId` of every successfully submitted consume tx to
+/// the `SystemTime` at which the node ack'd its submission. Used by the inclusion scan to compute
+/// per-tx inclusion latency. Mint txs are intentionally excluded (see the call site).
 fn build_ack_map(
-    mint_ids: &[TransactionId],
-    mint_stats: &PhaseStats,
     consume_ids: &[TransactionId],
     consume_stats: &PhaseStats,
 ) -> HashMap<TransactionId, SystemTime> {
     let mut map = HashMap::new();
-    for outcome in &mint_stats.outcomes {
-        if let Some(ack_at) = outcome.ack_at {
-            map.insert(mint_ids[outcome.index], ack_at);
-        }
-    }
     for outcome in &consume_stats.outcomes {
         if let Some(ack_at) = outcome.ack_at {
             map.insert(consume_ids[outcome.index], ack_at);

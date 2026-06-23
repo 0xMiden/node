@@ -59,6 +59,13 @@ impl BenchmarkProver {
         Self::Local(LocalTransactionProver::default())
     }
 
+    /// Whether proofs for this prover should be dispatched concurrently. The remote prover paces
+    /// many in-flight requests through its rate limiter + in-flight cap, so concurrency is a win.
+    /// The local prover is already uses concurrency per tx.
+    pub(crate) fn supports_concurrent_proving(&self) -> bool {
+        matches!(self, Self::Remote { .. })
+    }
+
     pub(crate) fn remote(endpoint: String) -> Self {
         let prover = RemoteTransactionProver::new(endpoint).with_timeout(PROVE_TIMEOUT);
         Self::Remote {

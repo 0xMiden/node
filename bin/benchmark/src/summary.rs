@@ -124,7 +124,7 @@ fn print_inclusion_summary(inclusion: &InclusionResult) {
     let drop = submitted.saturating_sub(included);
     let drop_pct = ratio_pct(drop, submitted);
 
-    println!("Inclusion (per-tx ID match against block contents):");
+    println!("Consume inclusion (per-tx ID match against block contents; mints excluded):");
     println!(
         "  included = {included} / {submitted} submitted   ({drop} missing, {drop_pct:.1}% drop)",
     );
