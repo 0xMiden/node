@@ -13,9 +13,10 @@ use tracing::Instrument;
 use crate::sqlite::tx::{ReadTx, WriteTx};
 use crate::{DatabaseError, default_connection_pool_size};
 
-/// Per-connection prepared-statement cache capacity. Raised above rusqlite's default of 16 because
-/// the store keeps a larger set of distinct statements.
-const STATEMENT_CACHE_CAPACITY: usize = 64;
+/// Per-connection prepared-statement cache capacity. Raised well above rusqlite's default of 16
+/// because we keep a large set of distinct statements; the bounded connection pool caps total
+/// cached-statement memory.
+const STATEMENT_CACHE_CAPACITY: usize = 512;
 
 // CONNECTION MANAGER
 // =================================================================================================
