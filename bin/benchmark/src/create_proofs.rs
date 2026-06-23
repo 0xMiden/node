@@ -26,7 +26,7 @@ use miden_protocol::asset::{Asset, AssetVaultKey, AssetWitness, FungibleAsset, T
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
 use miden_protocol::crypto::rand::RandomCoin;
-use miden_protocol::note::{Note, NoteAttachments, NoteScript, NoteScriptRoot};
+use miden_protocol::note::{Note, NoteAttachments, NoteScript, NoteScriptRoot, PartialNote};
 use miden_protocol::transaction::{
     AccountInputs,
     InputNote,
@@ -36,7 +36,7 @@ use miden_protocol::transaction::{
     TransactionArgs,
 };
 use miden_protocol::utils::serde::Serializable;
-use miden_protocol::{Felt, MastForest, Word};
+use miden_protocol::{Felt, MAX_OUTPUT_NOTES_PER_TX, MastForest, Word};
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::account::faucets::{FungibleFaucet, TokenName};
 use miden_standards::account::interface::{AccountInterface, AccountInterfaceExt};
@@ -191,37 +191,51 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
     let faucet_id = faucet.id();
 
     // Mint phase: executions are sequential (each mutates the shared faucet), but proving runs
-    // concurrently on the prover (under the rate limiter when remote).
-    println!("Executing {num_transactions} mint transactions (sequential)...");
+    // concurrently on the prover (under the rate limiter when remote). Each mint tx emits as many
+    // output notes as the protocol allows (`MAX_OUTPUT_NOTES_PER_TX`), one per destination wallet,
+    // so the sequential phase shrinks from `num_transactions` txs to `ceil(num_transactions /
+    // MAX_OUTPUT_NOTES_PER_TX)` while still producing exactly one note per wallet for the consume
+    // phase to spend.
+    let num_mint_txs = (num_transactions as usize).div_ceil(MAX_OUTPUT_NOTES_PER_TX);
+    println!(
+        "Executing {num_mint_txs} mint transactions (sequential, up to {MAX_OUTPUT_NOTES_PER_TX} \
+         notes each, {num_transactions} notes total)..."
+    );
     let mut mint_tasks: Vec<tokio::task::JoinHandle<ProveOutcome>> =
-        Vec::with_capacity(num_transactions as usize);
-    let mut mint_tx_inputs: Vec<Vec<u8>> = Vec::with_capacity(num_transactions as usize);
+        Vec::with_capacity(num_mint_txs);
+    let mut mint_tx_inputs: Vec<Vec<u8>> = Vec::with_capacity(num_mint_txs);
     let mut mint_notes: Vec<Note> = Vec::with_capacity(num_transactions as usize);
     let mint_phase_start = Instant::now();
     let mut mint_exec_total = Duration::ZERO;
 
-    for index in 0..num_transactions {
-        let wallet_id = wallets[index as usize].id();
-        let note = {
-            let asset = Asset::Fungible(FungibleAsset::new(faucet_id, 10).unwrap());
-            P2idNote::create(
-                faucet_id,
-                wallet_id,
-                vec![asset],
-                miden_protocol::note::NoteType::Public,
-                NoteAttachments::empty(),
-                &mut seed_rng,
-            )
-            .expect("note creation failed")
-        };
+    for (mint_tx_index, wallet_chunk) in wallets.chunks(MAX_OUTPUT_NOTES_PER_TX).enumerate() {
+        // One P2ID note per wallet in this chunk; they all become output notes of a single mint tx.
+        let notes: Vec<Note> = wallet_chunk
+            .iter()
+            .map(|wallet| {
+                let asset = Asset::Fungible(FungibleAsset::new(faucet_id, 10).unwrap());
+                P2idNote::create(
+                    faucet_id,
+                    wallet.id(),
+                    vec![asset],
+                    miden_protocol::note::NoteType::Public,
+                    NoteAttachments::empty(),
+                    &mut seed_rng,
+                )
+                .expect("note creation failed")
+            })
+            .collect();
 
+        let partial_notes: Vec<PartialNote> = notes.iter().map(|n| n.clone().into()).collect();
         let account_interface = AccountInterface::from_account(&faucet);
         let script = account_interface
-            .build_send_notes_script(&[note.clone().into()], None)
+            .build_send_notes_script(&partial_notes, None)
             .expect("failed to build mint send-notes script");
 
         let mut tx_args = TransactionArgs::default().with_tx_script(script);
-        tx_args.add_output_note_recipient(Box::new(note.recipient().clone()));
+        for note in &notes {
+            tx_args.add_output_note_recipient(Box::new(note.recipient().clone()));
+        }
 
         let executor = TransactionExecutor::new(&data_store).with_authenticator(&authenticator);
 
@@ -258,19 +272,21 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
             (result, prove_t0.elapsed())
         }));
         mint_tx_inputs.push(tx_inputs_bytes);
-        mint_notes.push(note);
+        mint_notes.extend(notes);
 
-        if (index + 1) % 10 == 0 || index + 1 == num_transactions {
-            println!("  executed {} / {num_transactions} mint txs", index + 1);
-        }
+        println!(
+            "  executed {} / {num_mint_txs} mint txs ({} / {num_transactions} notes)",
+            mint_tx_index + 1,
+            mint_notes.len(),
+        );
     }
 
-    println!("Awaiting {num_transactions} mint proofs...");
+    println!("Awaiting {num_mint_txs} mint proofs...");
     let (mint_txs, mint_prove_total) = collect_proofs("mint", mint_tasks).await;
     let mint_phase_elapsed = mint_phase_start.elapsed();
     print_proving_summary(
         "Mint",
-        num_transactions,
+        num_mint_txs as u64,
         mint_phase_elapsed,
         mint_exec_total,
         mint_prove_total,
