@@ -1,67 +1,41 @@
 //! Variable-length `IN (...)` lists that keep the SQL text constant.
 //!
 //! Binding a list as `IN (?, ?, ...)` produces a different SQL string per list length, so SQLite
-//! cannot cache the prepared statement. Instead, serialize the list into a single JSON-array text
-//! parameter and expand it with `json_each`, keeping the SQL text constant:
+//! cannot cache the prepared statement. Instead, bind the list as a single array parameter via
+//! rusqlite's [`array`](https://docs.rs/rusqlite/latest/rusqlite/vtab/array/index.html) extension
+//! and expand it with `rarray`, keeping the SQL text constant and the comparison on the raw column
+//! (so an index on the column can be used):
 //!
-//! - integer keys: `... WHERE col IN (SELECT value FROM json_each(?1))`
-//! - BLOB keys:    `... WHERE hex(col) IN (SELECT value FROM json_each(?1))`
+//! ```sql
+//! ... WHERE col IN (SELECT value FROM rarray(?1))
+//! ```
 //!
-//! `json_each` yields TEXT, so BLOB key columns must be compared as uppercase hex (see
-//! [`in_list_hex`]); [`hex()`](https://sqlite.org/lang_corefunc.html#hex) produces uppercase too.
+//! The same idiom works for both integer and BLOB keys: the values are bound natively, so there is
+//! no per-row `hex()`/`unhex()` conversion and no JSON serialization.
 
-use std::fmt::Write;
+use rusqlite::types::Value;
 
 use crate::sqlite::codec::{DbValue, ToSqlValue};
 
-/// A list serialized as a JSON-array text parameter for use with `json_each`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InList(String);
-
-impl InList {
-    /// The JSON array text, e.g. `[1,2,3]`.
-    pub fn as_json(&self) -> &str {
-        &self.0
-    }
-}
+/// A list bound as an array parameter for use with `rarray`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InList(Vec<Value>);
 
 impl ToSqlValue for InList {
     fn to_sql_value(&self) -> DbValue {
-        DbValue::text(self.0.clone())
+        DbValue::array(self.0.clone())
     }
 }
 
-/// Builds a JSON array of integers for an integer-keyed `IN` list.
+/// Builds an integer-keyed `IN` list. Pair with `... IN (SELECT value FROM rarray(?))`.
 pub fn in_list_i64(items: impl IntoIterator<Item = i64>) -> InList {
-    let mut json = String::from("[");
-    for (i, value) in items.into_iter().enumerate() {
-        if i > 0 {
-            json.push(',');
-        }
-        // `i64` always renders as valid JSON, so writing to a String cannot fail.
-        let _ = write!(json, "{value}");
-    }
-    json.push(']');
-    InList(json)
+    InList(items.into_iter().map(Value::Integer).collect())
 }
 
-/// Builds a JSON array of uppercase hex strings for a BLOB-keyed `IN` list. Pair with `hex(col)` in
-/// the query so the TEXT values from `json_each` compare against the column.
-pub fn in_list_hex<'a>(items: impl IntoIterator<Item = &'a [u8]>) -> InList {
-    let mut json = String::from("[");
-    for (i, bytes) in items.into_iter().enumerate() {
-        if i > 0 {
-            json.push(',');
-        }
-        json.push('"');
-        for byte in bytes {
-            // Hex of a byte is always valid JSON string content, so this cannot fail.
-            let _ = write!(json, "{byte:02X}");
-        }
-        json.push('"');
-    }
-    json.push(']');
-    InList(json)
+/// Builds a BLOB-keyed `IN` list. Pair with `... IN (SELECT value FROM rarray(?))`; the column is
+/// compared directly against the bound blobs, with no hex conversion.
+pub fn in_list_blob<'a>(items: impl IntoIterator<Item = &'a [u8]>) -> InList {
+    InList(items.into_iter().map(|bytes| Value::Blob(bytes.to_vec())).collect())
 }
 
 #[cfg(test)]
@@ -69,17 +43,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn in_list_i64_renders_constant_shape() {
-        // Different list lengths produce the same SQL template (`json_each(?1)`); only the bound
-        // parameter text differs.
-        assert_eq!(in_list_i64([1]).as_json(), "[1]");
-        assert_eq!(in_list_i64([1, 2, 3]).as_json(), "[1,2,3]");
-        assert_eq!(in_list_i64(std::iter::empty()).as_json(), "[]");
+    fn in_list_i64_collects_integer_values() {
+        // Different list lengths produce the same SQL template (`rarray(?1)`); only the bound
+        // parameter contents differ.
+        assert_eq!(in_list_i64([1]).0, vec![Value::Integer(1)]);
+        assert_eq!(
+            in_list_i64([1, 2, 3]).0,
+            vec![Value::Integer(1), Value::Integer(2), Value::Integer(3)]
+        );
+        assert_eq!(in_list_i64(std::iter::empty()).0, Vec::<Value>::new());
     }
 
     #[test]
-    fn in_list_hex_uppercases_bytes() {
-        assert_eq!(in_list_hex([[0x0a, 0xff].as_slice()]).as_json(), r#"["0AFF"]"#);
-        assert_eq!(in_list_hex([[0x01].as_slice(), [0x02].as_slice()]).as_json(), r#"["01","02"]"#);
+    fn in_list_blob_collects_blob_values() {
+        assert_eq!(in_list_blob([[0x0a, 0xff].as_slice()]).0, vec![Value::Blob(vec![0x0a, 0xff])]);
+        assert_eq!(
+            in_list_blob([[0x01].as_slice(), [0x02].as_slice()]).0,
+            vec![Value::Blob(vec![0x01]), Value::Blob(vec![0x02])]
+        );
     }
 }

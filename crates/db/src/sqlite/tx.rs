@@ -6,10 +6,9 @@
 //! that receives `&ReadTx` cannot compile a mutation.
 
 use rusqlite::Transaction;
-use rusqlite::types::Value;
 
 use crate::DatabaseError;
-use crate::sqlite::codec::{DbValueRef, FromSqlValue, ToSqlValue};
+use crate::sqlite::codec::{DbValue, DbValueRef, FromSqlValue, ToSqlValue};
 
 // ROW
 // =================================================================================================
@@ -164,8 +163,8 @@ impl<'t> WriteTx<'t> {
 // SHARED QUERY HELPERS
 // =================================================================================================
 
-fn to_values(params: &[&dyn ToSqlValue]) -> Vec<Value> {
-    params.iter().map(|param| param.to_sql_value().into_inner()).collect()
+fn to_values(params: &[&dyn ToSqlValue]) -> Vec<DbValue> {
+    params.iter().map(ToSqlValue::to_sql_value).collect()
 }
 
 fn debug_assert_no_dynamic_in(sql: &str) {
@@ -240,10 +239,13 @@ mod tests {
     use rusqlite::Connection;
 
     use super::*;
-    use crate::sqlite::{in_list_hex, in_list_i64};
+    use crate::sqlite::{in_list_blob, in_list_i64};
 
     fn in_memory() -> Connection {
         let conn = Connection::open_in_memory().expect("open in-memory db");
+        // `rarray()` is provided by rusqlite's `array` extension, which must be loaded per
+        // connection (the pool does this in `configure_connection`).
+        rusqlite::vtab::array::load_module(&conn).expect("load array module");
         conn.execute_batch(
             "CREATE TABLE items (id INTEGER PRIMARY KEY, payload BLOB, label TEXT);",
         )
@@ -302,10 +304,10 @@ mod tests {
         assert_eq!(got, None);
     }
 
-    // Regression guard for the cacheable IN-list idiom: the json_each form must run through the
-    // verbs without tripping `debug_assert_no_dynamic_in` (tests run with debug assertions on).
+    // Regression guard for the cacheable IN-list idiom: the rarray form must run through the verbs
+    // without tripping `debug_assert_no_dynamic_in` (tests run with debug assertions on).
     #[test]
-    fn in_list_i64_json_each_runs_and_matches() {
+    fn in_list_i64_rarray_runs_and_matches() {
         let mut conn = in_memory();
         let tx = conn.transaction().unwrap();
         let w = WriteTx::new(&tx);
@@ -316,7 +318,7 @@ mod tests {
         let wanted = in_list_i64([1, 3]);
         let mut ids = w
             .query_rows(
-                "SELECT id FROM items WHERE id IN (SELECT value FROM json_each(?1))",
+                "SELECT id FROM items WHERE id IN (SELECT value FROM rarray(?1))",
                 &[&wanted],
                 |row| row.get::<i64>(0),
             )
@@ -326,7 +328,7 @@ mod tests {
     }
 
     #[test]
-    fn in_list_hex_matches_blob_column() {
+    fn in_list_blob_matches_blob_column() {
         let mut conn = in_memory();
         let tx = conn.transaction().unwrap();
         let w = WriteTx::new(&tx);
@@ -335,10 +337,10 @@ mod tests {
         w.execute("INSERT INTO items (id, payload) VALUES (1, ?1)", &[&a]).unwrap();
         w.execute("INSERT INTO items (id, payload) VALUES (2, ?1)", &[&b]).unwrap();
 
-        let wanted = in_list_hex([a.as_slice()]);
+        let wanted = in_list_blob([a.as_slice()]);
         let ids = w
             .query_rows(
-                "SELECT id FROM items WHERE hex(payload) IN (SELECT value FROM json_each(?1))",
+                "SELECT id FROM items WHERE payload IN (SELECT value FROM rarray(?1))",
                 &[&wanted],
                 |row| row.get::<i64>(0),
             )

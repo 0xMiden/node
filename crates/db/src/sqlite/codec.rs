@@ -9,7 +9,10 @@
 //! types map onto an SQLite `INTEGER`/`TEXT` and implement the traits directly (see the impls ported
 //! from the legacy `SqlTypeConvert` below).
 
-use rusqlite::types::{Value, ValueRef};
+use std::rc::Rc;
+
+use rusqlite::ToSql;
+use rusqlite::types::{ToSqlOutput, Value, ValueRef};
 
 use crate::DatabaseError;
 
@@ -18,38 +21,55 @@ use crate::DatabaseError;
 
 /// An owned SQL value produced when binding a Rust value as a query parameter.
 ///
-/// Wraps `rusqlite::types::Value` so codec implementors never name `rusqlite`.
+/// Wraps `rusqlite`'s value types so codec implementors never name `rusqlite`. A value is either a
+/// single column value or a list bound for a `rarray(?)` table-valued parameter (used by the
+/// cacheable IN-list helpers in [`in_list`](crate::sqlite::in_list)).
 #[derive(Debug, Clone)]
-pub struct DbValue(Value);
+pub enum DbValue {
+    /// A single SQL column value.
+    Single(Value),
+    /// A list of values bound via rusqlite's `array` extension for use with `rarray(?)`.
+    Array(Rc<Vec<Value>>),
+}
 
 impl DbValue {
     /// Builds an `INTEGER` value.
     pub fn integer(value: i64) -> Self {
-        Self(Value::Integer(value))
+        Self::Single(Value::Integer(value))
     }
 
     /// Builds a `REAL` value.
     pub fn real(value: f64) -> Self {
-        Self(Value::Real(value))
+        Self::Single(Value::Real(value))
     }
 
     /// Builds a `TEXT` value.
     pub fn text(value: String) -> Self {
-        Self(Value::Text(value))
+        Self::Single(Value::Text(value))
     }
 
     /// Builds a `BLOB` value.
     pub fn blob(value: Vec<u8>) -> Self {
-        Self(Value::Blob(value))
+        Self::Single(Value::Blob(value))
     }
 
     /// Builds a `NULL` value.
     pub fn null() -> Self {
-        Self(Value::Null)
+        Self::Single(Value::Null)
     }
 
-    pub(crate) fn into_inner(self) -> Value {
-        self.0
+    /// Builds a list value bound for a `rarray(?)` table-valued parameter.
+    pub(crate) fn array(values: Vec<Value>) -> Self {
+        Self::Array(Rc::new(values))
+    }
+}
+
+impl ToSql for DbValue {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        match self {
+            Self::Single(value) => value.to_sql(),
+            Self::Array(values) => values.to_sql(),
+        }
     }
 }
 

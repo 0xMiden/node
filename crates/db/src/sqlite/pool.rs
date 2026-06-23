@@ -79,6 +79,9 @@ fn configure_connection(conn: &Connection) -> rusqlite::Result<()> {
          PRAGMA foreign_keys = ON;",
     )?;
     conn.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
+    // Register the `array` extension so the cacheable IN-list helpers can bind lists via
+    // `rarray(?)` (see `crate::sqlite::in_list`).
+    rusqlite::vtab::array::load_module(conn)?;
     Ok(())
 }
 
