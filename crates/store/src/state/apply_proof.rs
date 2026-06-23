@@ -1,5 +1,6 @@
-use anyhow::ensure;
-use miden_protocol::block::BlockNumber;
+use anyhow::{Context, ensure};
+use miden_protocol::block::{BlockNumber, BlockProof};
+use miden_protocol::utils::serde::Deserializable;
 use tracing::instrument;
 
 use crate::COMPONENT;
@@ -30,6 +31,8 @@ impl State {
             "proof for uncommitted block {block_num} exceeds committed tip {committed_tip}",
         );
 
+        verify_block_proof(block_num, &proof_bytes)?;
+
         self.block_store.commit_proof(block_num, &proof_bytes).await?;
         self.proof_cache
             .push(block_num, ProofNotification::new(block_num, proof_bytes))
@@ -37,4 +40,13 @@ impl State {
         self.proven_tip.advance(block_num);
         Ok(())
     }
+}
+
+/// Verifies that `proof_bytes` is a valid [`BlockProof`] for the block at `block_num`.
+fn verify_block_proof(_block_num: BlockNumber, proof_bytes: &[u8]) -> anyhow::Result<()> {
+    let _proof =
+        BlockProof::read_from_bytes(proof_bytes).context("failed to deserialize block proof")?;
+
+    // TODO: perform verification.
+    Ok(())
 }
