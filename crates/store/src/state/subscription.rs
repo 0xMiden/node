@@ -209,6 +209,9 @@ impl SubscriptionSource for ProofSource {
 /// subscriber with [`SubscriptionStreamError::TooSlow`] if it falls too far behind the tip or if a
 /// single send blocks for longer than [`SEND_TIMEOUT`], which may occur only after the buffer has
 /// [`SUBSCRIBER_CHANNEL_CAPACITY`] blocks queued.
+///
+/// Sources are allowed to re-drive earlier tips so consumers of the stream should allow for
+/// overwrites so as to be idempotent.
 pub fn run_stream<S: SubscriptionSource>(
     from: BlockNumber,
     tip_rx: watch::Receiver<BlockNumber>,
@@ -234,6 +237,11 @@ async fn run_stream_inner<S: SubscriptionSource>(
     let mut running_gap = 0u32;
     loop {
         let mut tip = *tip_rx.borrow_and_update();
+
+        // Allow for re-drive of the stream to earlier tips.
+        if tip < next {
+            next = tip;
+        }
 
         let current_gap = tip.saturating_sub(next.as_u32()).as_u32();
         (previous_gap, running_gap) =
