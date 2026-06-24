@@ -3575,6 +3575,7 @@ dependencies = [
  "build-rs",
  "fs-err",
  "getrandom 0.4.2",
+ "miden-node-proto",
  "miden-node-proto-build",
  "miden-protocol",
  "miden-tx",

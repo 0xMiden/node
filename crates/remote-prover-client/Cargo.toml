@@ -34,12 +34,13 @@ tonic = { features = ["codegen", "tls-native-roots", "tls-ring", "transport"], w
 workspace = true
 
 [dependencies]
-miden-protocol = { optional = true, workspace = true }
-miden-tx       = { optional = true, workspace = true }
-prost          = { default-features = false, features = ["derive"], workspace = true }
-thiserror      = { workspace = true }
-tokio          = { default-features = false, features = ["sync"], optional = true, workspace = true }
-tonic-prost    = { workspace = true }
+miden-protocol   = { optional = true, workspace = true }
+miden-tx         = { optional = true, workspace = true }
+prost            = { default-features = false, features = ["derive"], workspace = true }
+thiserror        = { workspace = true }
+tokio            = { default-features = false, features = ["sync"], optional = true, workspace = true }
+tonic-prost      = { workspace = true }
+miden-node-proto = { workspace = true }
 
 [build-dependencies]
 build-rs               = { workspace = true }

@@ -43,12 +43,11 @@ impl BlockProver {
         &self,
         tx_batches: OrderedBatches,
         block_inputs: BlockInputs,
-        block_header: &BlockHeader,
+        block_header: BlockHeader,
     ) -> Result<BlockProof, ProverError> {
         match self {
             Self::Local(prover) => {
                 let prover = prover.clone();
-                let block_header = block_header.clone();
 
                 spawn_blocking_in_current_span(move || {
                     prover

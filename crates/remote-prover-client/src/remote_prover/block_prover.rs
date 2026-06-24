@@ -3,6 +3,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::time::Duration;
 
+use miden_node_proto::BlockProofRequest;
 use miden_protocol::batch::{OrderedBatches, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockInputs, BlockProof, ProposedBlock, ProvenBlock};
 use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionHeader};
@@ -11,7 +12,7 @@ use tokio::sync::Mutex;
 
 use super::generated::api_client::ApiClient;
 use crate::RemoteProverClientError;
-use crate::remote_prover::generated as proto;
+use crate::remote_prover::generated::{self as proto, ProofRequest};
 
 // REMOTE BLOCK PROVER
 // ================================================================================================
@@ -105,7 +106,7 @@ impl RemoteBlockProver {
     pub async fn prove(
         &self,
         tx_batches: OrderedBatches,
-        block_header: &BlockHeader,
+        block_header: BlockHeader,
         block_inputs: BlockInputs,
     ) -> Result<BlockProof, RemoteProverClientError> {
         self.connect().await?;
@@ -120,15 +121,7 @@ impl RemoteBlockProver {
             })?
             .clone();
 
-        let block_proof_request =
-            ProposedBlock::new_at(block_inputs, tx_batches.into_vec(), block_header.timestamp())
-                .map_err(|err| {
-                    RemoteProverClientError::other_with_source(
-                        "failed to create proposed block",
-                        err,
-                    )
-                })?;
-
+        let block_proof_request = BlockProofRequest { tx_batches, block_header, block_inputs };
         let request = tonic::Request::new(block_proof_request.into());
 
         let response = client.prove(request).await.map_err(|err| {
@@ -158,11 +151,11 @@ impl TryFrom<proto::Proof> for BlockProof {
     }
 }
 
-impl From<ProposedBlock> for proto::ProofRequest {
-    fn from(proposed_block: ProposedBlock) -> Self {
+impl From<BlockProofRequest> for proto::ProofRequest {
+    fn from(block_proof_request: BlockProofRequest) -> Self {
         proto::ProofRequest {
             proof_type: proto::ProofType::Block.into(),
-            payload: proposed_block.to_bytes(),
+            payload: block_proof_request.to_bytes(),
         }
     }
 }

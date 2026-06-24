@@ -238,7 +238,7 @@ async fn generate_block_proof(
         .map_err(|e| ProveBlockError::Fatal(ProofSchedulerError::DeserializationFailed(e)))?;
 
     let proof = block_prover
-        .prove(request.tx_batches, request.block_inputs, &request.block_header)
+        .prove(request.tx_batches, request.block_inputs, request.block_header)
         .await
         .map_err(ProveBlockError::from_prover_error)?;
 
