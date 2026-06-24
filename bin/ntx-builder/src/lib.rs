@@ -415,12 +415,9 @@ impl NtxBuilderConfig {
             "ntx-builder opening committed-block subscription"
         );
 
-        let raw_stream = rpc
-            .block_subscription_with_retry(block_from)
-            .await
-            .map_err(|err| anyhow::anyhow!(err))
-            .context("failed to subscribe to committed blocks")?;
-        let block_stream: BlockStream = Box::pin(raw_stream);
+        // The stream reconnects on its own whenever the node closes the subscription, resuming from
+        // the next un-applied block, so a dropped connection no longer crashes the builder.
+        let block_stream: BlockStream = Box::pin(rpc.block_subscription_reconnecting(block_from));
 
         let chain = Arc::new(SharedChainState::new(header, mmr));
 
