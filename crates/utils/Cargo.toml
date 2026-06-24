@@ -34,26 +34,28 @@ http-body-util        = { version = "0.1" }
 humantime             = { workspace = true }
 itertools             = { workspace = true }
 lru                   = { workspace = true }
-miden-protocol        = { workspace = true }
-opentelemetry         = { workspace = true }
-opentelemetry-otlp    = { default-features = false, features = ["grpc-tonic", "tls-roots", "trace"], version = "0.31" }
-opentelemetry_sdk     = { features = ["rt-tokio", "testing"], version = "0.31" }
-rand                  = { workspace = true }
-reqwest               = { workspace = true }
-thiserror             = { workspace = true }
-tokio                 = { workspace = true }
-tonic                 = { default-features = true, workspace = true }
-tower                 = { features = ["limit"], workspace = true }
-tower-http            = { features = ["catch-panic"], workspace = true }
-tower_governor        = { version = "0.8" }
-tracing               = { workspace = true }
-tracing-forest        = { features = ["chrono"], optional = true, version = "0.3" }
-tracing-opentelemetry = { version = "0.32" }
-tracing-subscriber    = { workspace = true }
-url                   = { workspace = true }
+miden-node-tracing-macro = { workspace = true }
+miden-protocol           = { workspace = true }
+opentelemetry            = { workspace = true }
+opentelemetry-otlp       = { default-features = false, features = ["grpc-tonic", "tls-roots", "trace"], version = "0.31" }
+opentelemetry_sdk        = { features = ["rt-tokio", "testing"], version = "0.31" }
+rand                     = { workspace = true }
+reqwest                  = { workspace = true }
+thiserror                = { workspace = true }
+tokio                    = { workspace = true }
+tonic                    = { default-features = true, workspace = true }
+tower                    = { features = ["limit"], workspace = true }
+tower-http               = { features = ["catch-panic"], workspace = true }
+tower_governor           = { version = "0.8" }
+tracing                  = { workspace = true }
+tracing-forest           = { features = ["chrono"], optional = true, version = "0.3" }
+tracing-opentelemetry    = { version = "0.32" }
+tracing-subscriber       = { workspace = true }
+url                      = { workspace = true }
 
 # RocksDbConfig is needed due to orphan rules
 miden-large-smt-backend-rocksdb = { optional = true, workspace = true }
 
 [dev-dependencies]
 thiserror = { workspace = true }
+trybuild = { workspace = true }

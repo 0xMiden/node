@@ -5,12 +5,12 @@ use anyhow::Context;
 use miden_node_store::state::State;
 use miden_node_utils::formatting::format_array;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
-use miden_node_utils::tracing::OpenTelemetrySpanExt;
+use miden_node_utils::tracing::{OpenTelemetrySpanExt, miden_instrument, miden_span_record};
 use miden_protocol::batch::{OrderedBatches, ProvenBatch};
 use miden_protocol::block::{BlockInputs, BlockNumber, ProposedBlock, ProvenBlock, SignedBlock};
 use miden_protocol::transaction::TransactionHeader;
 use tokio::time::Duration;
-use tracing::{Span, field, instrument};
+use tracing::{Span, instrument};
 
 use crate::errors::{BuildBlockError, StoreError};
 use crate::mempool::SharedMempool;
@@ -277,16 +277,11 @@ impl BlockBuilder {
         })
     }
 
-    #[instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "block_builder.commit_block",
         skip_all,
-        err,
-        fields(
-            block_num = field::Empty,
-            block_commitment = field::Empty,
-            num_transactions = field::Empty,
-        )
+        err
     )]
     async fn commit_block(
         &self,
@@ -301,10 +296,11 @@ impl BlockBuilder {
         let header = signed_block.header().clone();
         let num_transactions = signed_block.body().transactions().as_slice().len();
 
-        let span = Span::current();
-        span.record("block_num", field::display(header.block_num()));
-        span.record("block_commitment", field::display(header.commitment()));
-        span.record("num_transactions", num_transactions);
+        miden_span_record!(
+            block_num = %header.block_num(),
+            block_commitment = %header.commitment(),
+            num_transactions = num_transactions,
+        );
 
         if num_transactions > 0 {
             let transaction_ids =
