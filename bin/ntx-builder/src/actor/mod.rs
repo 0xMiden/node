@@ -311,6 +311,12 @@ impl AccountActor {
             ActorMode::NoViableNotes
         };
 
+        // Absolute instant at which the actor deactivates if it has done no real work. The
+        // coordinator wakes every actor on every committed block, so a relative timer would restart
+        // on each notification and a workless actor would never expire on an active chain. The
+        // deadline is only pushed back when the actor actually executes a transaction.
+        let mut idle_deadline = tokio::time::Instant::now() + self.config.idle_timeout;
+
         loop {
             // Acquire an execution permit only when there are notes to process.
             let tx_permit_acquisition = match mode {
@@ -322,7 +328,7 @@ impl AccountActor {
 
             // The idle timer only ticks while there is nothing to do.
             let idle_timeout_sleep = match mode {
-                ActorMode::NoViableNotes => tokio::time::sleep(self.config.idle_timeout).boxed(),
+                ActorMode::NoViableNotes => tokio::time::sleep_until(idle_deadline).boxed(),
                 _ => std::future::pending().boxed(),
             };
 
@@ -339,7 +345,12 @@ impl AccountActor {
                     let chain_state = self.state.chain.get_cloned();
                     let tx_candidate = self.select_candidate(&account, chain_state).await?;
                     mode = match tx_candidate {
-                        Some(candidate) => self.execute_transactions(account_id, candidate).await,
+                        Some(candidate) => {
+                            let next = self.execute_transactions(account_id, candidate).await;
+                            // The actor did real work; push the idle deadline back.
+                            idle_deadline = tokio::time::Instant::now() + self.config.idle_timeout;
+                            next
+                        },
                         None => ActorMode::NoViableNotes,
                     };
                 }
@@ -753,6 +764,53 @@ mod tests {
             account.to_commitment(),
             "a still-pending submission must not change the in-memory account",
         );
+    }
+
+    /// The idle timeout must still fire while the coordinator keeps waking the actor every block.
+    /// The coordinator notifies every registered actor on every committed block, so a workless
+    /// actor would never expire if notifications reset the idle timer. The deadline is absolute and
+    /// only pushed back by real work, so repeated notifications cannot keep a no-work actor
+    /// resident indefinitely.
+    #[tokio::test]
+    async fn idle_timeout_fires_despite_repeated_notifications() {
+        let (db, _dir) = Db::test_setup().await;
+        // A real network account with a populated allowlist, so re-evaluation on each wake reaches
+        // a clean "no viable notes" outcome instead of erroring on a missing allowlist slot.
+        let (account, _) = crate::test_utils::mock_network_account_update();
+        let account_id = account.id();
+
+        // Seed the committed account but no notes, so the actor starts and stays in NoViableNotes:
+        // every wake re-checks the DB, finds nothing, and returns to the idle state.
+        db.upsert_account_for_test(account_id, account.clone(), mock_transaction_id(1))
+            .await
+            .unwrap();
+
+        let mut ctx = AccountActorContext::test(&db);
+        // Short idle timeout keeps the test fast.
+        ctx.config.idle_timeout = Duration::from_millis(300);
+
+        let notify = Arc::new(Notify::new());
+        let actor = AccountActor::new(account_id, &ctx, notify.clone());
+        let semaphore = Arc::new(Semaphore::new(1));
+        let handle = tokio::spawn(actor.run(semaphore));
+
+        // Wake the actor far more often than the idle timeout, and keep doing so for longer than
+        // the test's deadline. With a per-iteration `sleep(idle_timeout)` every wake would restart
+        // the timer and the actor would never deactivate, failing the timeout below.
+        let notifier = tokio::spawn(async move {
+            loop {
+                notify.notify_one();
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        });
+
+        let result = tokio::time::timeout(Duration::from_secs(3), handle)
+            .await
+            .expect("actor must deactivate on idle timeout despite repeated notifications")
+            .expect("actor task should not panic");
+        assert!(result.is_ok(), "idle deactivation is a clean shutdown");
+
+        notifier.abort();
     }
 
     /// The expiration script must compile for the full valid delta range, and the delta must be
