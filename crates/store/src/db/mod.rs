@@ -625,6 +625,22 @@ impl Db {
         })
     }
 
+    /// Reconstructs the account vault from the database for a specific account at a block.
+    ///
+    /// Used as fallback when the `AccountStateForest` vault-key cache misses (historical or evicted
+    /// queries). Returns the latest asset for each vault key at or before `block_num`.
+    #[instrument(target = COMPONENT, skip_all)]
+    pub async fn select_account_vault_at_block(
+        &self,
+        account_id: AccountId,
+        block_num: BlockNumber,
+    ) -> Result<Vec<Asset>, DatabaseError> {
+        self.transact("select account vault at block", move |conn| {
+            queries::select_account_vault_at_block(conn, account_id, block_num)
+        })
+        .await
+    }
+
     pub async fn get_account_vault_sync(
         &self,
         account_id: AccountId,

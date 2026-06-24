@@ -22,7 +22,6 @@ use miden_node_proto::server::{ntx_builder_api, rpc_api};
 use miden_node_store::genesis::config::GenesisConfig;
 use miden_node_store::state::State;
 use miden_node_utils::clap::{GrpcOptionsExternal, StorageOptions};
-use miden_node_utils::fee::test_fee;
 use miden_node_utils::limiter::{
     QueryParamAccountIdLimit,
     QueryParamLimiter,
@@ -31,14 +30,14 @@ use miden_node_utils::limiter::{
     QueryParamNullifierPrefixLimit,
 };
 use miden_protocol::Word;
-use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::account::{
     Account,
     AccountBuilder,
-    AccountDelta,
     AccountId,
     AccountIdVersion,
+    AccountPatch,
     AccountType,
+    AccountUpdateDetails,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::testing::noop_auth_component::NoopAuthComponent;
@@ -125,8 +124,8 @@ async fn load_state(path: &std::path::Path) -> Arc<State> {
 const DELTA_COMMITMENT_BYTE_OFFSET: usize = 15 + 32 + 32;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Creates a minimal account and its delta for testing proven transaction building.
-fn build_test_account(seed: [u8; 32]) -> (Account, AccountDelta) {
+/// Creates a minimal account and its patch for testing proven transaction building.
+fn build_test_account(seed: [u8; 32]) -> (Account, AccountPatch) {
     let account = AccountBuilder::new(seed)
         .account_type(AccountType::Public)
         .with_assets(vec![])
@@ -135,8 +134,8 @@ fn build_test_account(seed: [u8; 32]) -> (Account, AccountDelta) {
         .build_existing()
         .unwrap();
 
-    let delta: AccountDelta = account.clone().try_into().unwrap();
-    (account, delta)
+    let patch = AccountPatch::try_from(account.clone()).unwrap();
+    (account, patch)
 }
 
 /// Creates a minimal proven transaction for testing.
@@ -145,7 +144,7 @@ fn build_test_account(seed: [u8; 32]) -> (Account, AccountDelta) {
 /// need to test validation logic.
 fn build_test_proven_tx(
     account: &Account,
-    delta: &AccountDelta,
+    patch: &AccountPatch,
     genesis: Word,
 ) -> ProvenTransaction {
     let account_id = AccountId::dummy([0; 15], AccountIdVersion::Version1, AccountType::Public);
@@ -154,8 +153,8 @@ fn build_test_proven_tx(
         account_id,
         [8; 32].try_into().unwrap(),
         account.to_commitment(),
-        delta.to_commitment(),
-        AccountUpdateDetails::Delta(delta.clone()),
+        patch.to_commitment(),
+        AccountUpdateDetails::Public(patch.clone()),
     )
     .unwrap();
 
@@ -165,7 +164,6 @@ fn build_test_proven_tx(
         Vec::<miden_protocol::transaction::OutputNote>::new(),
         0.into(),
         genesis,
-        test_fee(),
         u32::MAX.into(),
         ExecutionProof::new_dummy(),
     )
@@ -177,15 +175,15 @@ fn build_test_proven_tx(
 fn build_test_proven_tx_with_id(
     account_id: AccountId,
     account: &Account,
-    delta: &AccountDelta,
     genesis: Word,
 ) -> ProvenTransaction {
+    let patch = AccountPatch::empty(account_id);
     let account_update = TxAccountUpdate::new(
         account_id,
         [8; 32].try_into().unwrap(),
         account.to_commitment(),
-        delta.to_commitment(),
-        AccountUpdateDetails::Delta(delta.clone()),
+        patch.to_commitment(),
+        AccountUpdateDetails::Public(patch),
     )
     .unwrap();
 
@@ -195,7 +193,6 @@ fn build_test_proven_tx_with_id(
         Vec::<miden_protocol::transaction::OutputNote>::new(),
         0.into(),
         genesis,
-        test_fee(),
         u32::MAX.into(),
         ExecutionProof::new_dummy(),
     )
@@ -375,15 +372,15 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
             .connect_lazy::<miden_node_proto::clients::RpcClient>();
 
     // Build a valid proven transaction
-    let (account, account_delta) = build_test_account([0; 32]);
-    let tx = build_test_proven_tx(&account, &account_delta, genesis);
+    let (account, account_patch) = build_test_account([0; 32]);
+    let tx = build_test_proven_tx(&account, &account_patch, genesis);
 
-    // Create an incorrect delta commitment from a different account
+    // Create an incorrect patch commitment from a different account
     let (other_account, _) = build_test_account([1; 32]);
-    let incorrect_delta: AccountDelta = other_account.try_into().unwrap();
-    let incorrect_commitment_bytes = incorrect_delta.to_commitment().as_bytes();
+    let incorrect_patch: AccountPatch = AccountPatch::try_from(other_account).unwrap();
+    let incorrect_commitment_bytes = incorrect_patch.to_commitment().as_bytes();
 
-    // Corrupt the transaction bytes with the incorrect delta commitment
+    // Corrupt the transaction bytes with the incorrect patch commitment
     let mut tx_bytes = tx.to_bytes();
     tx_bytes[DELTA_COMMITMENT_BYTE_OFFSET..DELTA_COMMITMENT_BYTE_OFFSET + 32]
         .copy_from_slice(&incorrect_commitment_bytes);
@@ -401,8 +398,8 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
     // Assert that the error is due to the invalid account delta commitment.
     let err = response.as_ref().unwrap_err().message();
     assert!(
-        err.contains("failed to validate account delta in transaction account update"),
-        "expected error message to contain delta commitment error but got: {err}"
+        err.contains("failed to validate account patch in transaction account update"),
+        "expected error message to contain patch commitment error but got: {err}"
     );
 }
 
@@ -424,8 +421,8 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_reference_block() {
 
     // Build a valid proven transaction but with the incorrect hash (empty).
     let invalid = Word::empty();
-    let (account, account_delta) = build_test_account([0; 32]);
-    let tx = build_test_proven_tx(&account, &account_delta, invalid);
+    let (account, account_patch) = build_test_account([0; 32]);
+    let tx = build_test_proven_tx(&account, &account_patch, invalid);
 
     let request = proto::transaction::ProvenTransaction {
         transaction: tx.to_bytes(),
@@ -460,8 +457,8 @@ async fn rpc_rejects_post_deployment_network_account_tx() {
     );
 
     // Build a non-deployment tx for that account.
-    let (account, account_delta) = build_test_account([0; 32]);
-    let tx = build_test_proven_tx_with_id(network_account_id, &account, &account_delta, genesis);
+    let (account, _) = build_test_account([0; 32]);
+    let tx = build_test_proven_tx_with_id(network_account_id, &account, genesis);
     let request = proto::transaction::ProvenTransaction {
         transaction: tx.to_bytes(),
         transaction_inputs: None,
@@ -707,8 +704,8 @@ async fn rpc_server_rejects_tx_submissions_without_genesis() {
             .without_otel_context_injection()
             .connect_lazy::<miden_node_proto::clients::RpcClient>();
 
-    let (account, account_delta) = build_test_account([0; 32]);
-    let tx = build_test_proven_tx(&account, &account_delta, genesis);
+    let (account, account_patch) = build_test_account([0; 32]);
+    let tx = build_test_proven_tx(&account, &account_patch, genesis);
 
     let request = proto::transaction::ProvenTransaction {
         transaction: tx.to_bytes(),

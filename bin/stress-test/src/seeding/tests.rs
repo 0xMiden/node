@@ -91,17 +91,11 @@ fn public_account_storage_map_entry_can_be_updated_for_benchmark_blocks() {
     let mut account = create_account(key_pair.public_key(), 42, AccountType::Public, 4);
 
     let key = StorageMapKey::from_index(2);
-    let old_value = account
-        .storage()
-        .get_map_item(&benchmark_storage_map_slot(), key.into())
-        .unwrap();
+    let old_value = account.storage().get_map_item(&benchmark_storage_map_slot(), key).unwrap();
 
     let updated = update_benchmark_storage_map_entry(&mut account, 3, 9, 4);
 
-    let new_value = account
-        .storage()
-        .get_map_item(&benchmark_storage_map_slot(), key.into())
-        .unwrap();
+    let new_value = account.storage().get_map_item(&benchmark_storage_map_slot(), key).unwrap();
     assert!(updated);
     assert_ne!(new_value, old_value);
     assert_eq!(new_value, benchmark_storage_map_update_value(3, 9, 2));

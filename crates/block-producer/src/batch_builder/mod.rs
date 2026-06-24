@@ -11,7 +11,7 @@ use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{BatchId, ProposedBatch, ProvenBatch};
 use miden_remote_prover_client::RemoteBatchProver;
-use miden_tx_batch_prover::LocalBatchProver;
+use miden_tx_batch::{BatchExecutor, LocalBatchProver};
 use rand::Rng;
 use tokio::task::JoinSet;
 use tokio::time;
@@ -63,8 +63,7 @@ impl BatchBuilder {
         batch_prover_url: Option<Url>,
         batch_interval: Duration,
     ) -> Self {
-        let batch_prover = batch_prover_url
-            .map_or(BatchProver::local(MIN_PROOF_SECURITY_LEVEL), BatchProver::remote);
+        let batch_prover = batch_prover_url.map_or(BatchProver::local(), BatchProver::remote);
 
         // It is important that the worker pool is filled to capacity with ready workers. See
         // `Self::worker_pool` and `Self::wait_for_available_worker` for more context.
@@ -250,6 +249,7 @@ impl BatchJob {
             inputs.batch_reference_block_header,
             inputs.partial_block_chain,
             inputs.note_proofs,
+            MIN_PROOF_SECURITY_LEVEL,
         )
         .map_err(BuildBatchError::ProposeBatchError)
     }
@@ -269,7 +269,10 @@ impl BatchJob {
             BatchProver::Local(prover) => {
                 let prover = prover.clone();
                 spawn_blocking_in_current_span(move || {
-                    prover.prove(proposed_batch).map_err(BuildBatchError::ProveBatchError)
+                    let executed_batch = BatchExecutor::new()
+                        .execute(proposed_batch)
+                        .map_err(BuildBatchError::ProveBatchError)?;
+                    prover.prove(executed_batch).map_err(BuildBatchError::ProveBatchError)
                 })
                 .await
                 .map_err(BuildBatchError::JoinError)?
@@ -337,8 +340,8 @@ impl BatchProver {
         }
     }
 
-    fn local(security_level: u32) -> Self {
-        Self::Local(LocalBatchProver::new(security_level))
+    fn local() -> Self {
+        Self::Local(LocalBatchProver::new())
     }
 
     fn remote(endpoint: impl Into<String>) -> Self {

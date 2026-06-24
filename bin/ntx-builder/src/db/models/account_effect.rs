@@ -1,5 +1,4 @@
-use miden_protocol::account::delta::AccountUpdateDetails;
-use miden_protocol::account::{Account, AccountDelta};
+use miden_protocol::account::{Account, AccountPatch, AccountUpdateDetails};
 use miden_standards::account::auth::NetworkAccount;
 
 // NETWORK ACCOUNT EFFECT
@@ -9,23 +8,23 @@ use miden_standards::account::auth::NetworkAccount;
 #[derive(Clone)]
 pub enum NetworkAccountEffect {
     Created(Account),
-    Updated(AccountDelta),
+    Updated(AccountPatch),
 }
 
 impl NetworkAccountEffect {
     pub fn from_protocol(update: &AccountUpdateDetails) -> Option<Self> {
         match update {
             AccountUpdateDetails::Private => None,
-            AccountUpdateDetails::Delta(update) if update.is_full_state() => {
+            AccountUpdateDetails::Public(update) if update.is_full_state() => {
                 // Only treat full-state creations as network if the storage carries the
                 // standardized `NetworkAccountNoteAllowlist` slot.
                 let account = Account::try_from(update)
-                    .expect("Account should be derivable by full state AccountDelta");
+                    .expect("Account should be derivable by full state AccountPatch");
                 NetworkAccount::new(account)
                     .ok()
                     .map(|na| NetworkAccountEffect::Created(na.into_account()))
             },
-            AccountUpdateDetails::Delta(update) => {
+            AccountUpdateDetails::Public(update) => {
                 // Partial updates carry no storage we can inspect here. Forward them as updates and
                 // let the coordinator's actor registry filter to known network accounts.
                 Some(NetworkAccountEffect::Updated(update.clone()))

@@ -77,9 +77,9 @@ mod tests {
     use super::*;
 
     const EXPECTED_SCHEMA_HASHES: [SchemaHash; 3] = [
-        SchemaHash::from_hex("d8f0b2f5c2d7011c2a806ebdb7ddf3d957a6edeed065ccf21019205ebc1a01a4"),
-        SchemaHash::from_hex("c68edd8e9f345926b9bde34e2651ca70ee5665ac10c0002f78f589647f7a0d11"),
-        SchemaHash::from_hex("9dd91717599abe702e8727f72369ea78302154acf4fdaa5b0f811e405030c7d6"),
+        SchemaHash::from_hex("cc92cb332410e6f63036b52cf953acb446c142d5c0fbbdbd6d3b4f466510b210"),
+        SchemaHash::from_hex("7c783947d0bb2c9745d28f4bdcf329f84ad970c36aa07ea85441e62718d8bbbb"),
+        SchemaHash::from_hex("e026a70464e897ae9a217f45c80d72341b1bfb757200e57e41145348473a9961"),
     ];
 
     #[test]

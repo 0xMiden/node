@@ -3,7 +3,6 @@ use miden_node_proto::generated as proto;
 use miden_node_store::{NoteSyncRecord, TransactionRecord};
 use miden_node_utils::limiter::QueryParamAccountIdLimit;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
-use miden_protocol::asset::Asset;
 use tonic::Status;
 use tracing::{Span, debug};
 
@@ -86,7 +85,6 @@ fn transaction_record_to_proto(record: TransactionRecord) -> proto::rpc::Transac
             final_state_commitment: Some(record.header.final_state_commitment().into()),
             input_notes: record.header.input_notes().iter().cloned().map(Into::into).collect(),
             output_notes: record.header.output_notes().iter().copied().map(Into::into).collect(),
-            fee: Some(Asset::from(record.header.fee()).into()),
         }),
         block_num: record.block_num.as_u32(),
         output_note_proofs,

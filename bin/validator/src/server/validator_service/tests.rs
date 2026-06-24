@@ -357,7 +357,6 @@ async fn empty_block_succeeds() {
 #[tokio::test]
 async fn unknown_transactions_rejected() {
     use miden_protocol::Word;
-    use miden_protocol::asset::FungibleAsset;
     use miden_protocol::batch::{BatchAccountUpdate, BatchId, ProvenBatch};
     use miden_protocol::block::BlockNumber;
     use miden_protocol::testing::account_id::ACCOUNT_ID_SENDER;
@@ -367,6 +366,7 @@ async fn unknown_transactions_rejected() {
         OrderedTransactionHeaders,
         TransactionHeader,
     };
+    use miden_protocol::vm::ExecutionProof;
 
     let tv = TestValidator::new().await;
     let genesis_header = tv.chain_tip.clone();
@@ -374,14 +374,12 @@ async fn unknown_transactions_rejected() {
     // Build a dummy transaction header with a transaction ID that has NOT been submitted through
     // `submit_proven_transaction`.
     let account_id = ACCOUNT_ID_SENDER.try_into().unwrap();
-    let fee = FungibleAsset::new(test_fee_params().fee_faucet_id(), 0).unwrap();
     let tx_header = TransactionHeader::new(
         account_id,
         Word::default(),
         Word::default(),
         InputNotes::<InputNoteCommitment>::default(),
         vec![],
-        fee,
     );
     let tx_id = tx_header.id();
 
@@ -396,13 +394,14 @@ async fn unknown_transactions_rejected() {
                 account_id,
                 Word::default(),
                 Word::default(),
-                miden_protocol::account::delta::AccountUpdateDetails::Private,
+                miden_protocol::account::AccountUpdateDetails::Private,
             ),
         )]),
         InputNotes::default(),
         vec![],
         BlockNumber::MAX,
         OrderedTransactionHeaders::new_unchecked(vec![tx_header]),
+        ExecutionProof::new_dummy(),
     )
     .unwrap();
 

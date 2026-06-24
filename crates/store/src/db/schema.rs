@@ -99,7 +99,6 @@ diesel::table! {
         input_notes -> Binary,
         output_notes -> Binary,
         size_in_bytes -> BigInt,
-        fee -> Binary,
     }
 }
 

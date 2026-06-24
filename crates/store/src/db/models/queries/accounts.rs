@@ -25,14 +25,15 @@ use miden_node_utils::limiter::{
     QueryParamAccountIdLimit,
     QueryParamLimiter,
 };
-use miden_protocol::account::delta::AccountUpdateDetails;
+use miden_protocol::Word;
 use miden_protocol::account::{
     Account,
     AccountCode,
     AccountId,
+    AccountPatch,
     AccountStorage,
     AccountStorageHeader,
-    NonFungibleDeltaAction,
+    AccountUpdateDetails,
     StorageMap,
     StorageMapKey,
     StorageSlot,
@@ -40,10 +41,9 @@ use miden_protocol::account::{
     StorageSlotName,
     StorageSlotType,
 };
-use miden_protocol::asset::{Asset, AssetVault, AssetVaultKey, FungibleAsset};
+use miden_protocol::asset::{Asset, AssetVault, AssetVaultKey};
 use miden_protocol::block::{BlockAccountUpdate, BlockNumber};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
-use miden_protocol::{Felt, Word};
 use miden_standards::account::auth::NetworkAccount;
 
 use crate::COMPONENT;
@@ -60,10 +60,9 @@ mod delta;
 use delta::{
     AccountStateForInsert,
     PartialAccountState,
-    apply_storage_delta,
+    apply_storage_patch,
     select_latest_vault_assets,
     select_minimal_account_state_headers,
-    select_vault_balances_by_vault_keys,
 };
 
 #[cfg(test)]
@@ -553,6 +552,65 @@ pub(crate) fn select_account_vault_assets(
     };
 
     Ok((last_block_included, values))
+}
+
+/// Query vault assets at a specific block by finding the most recent update for each `vault_key`.
+///
+/// Uses a single raw SQL query with a subquery join:
+/// ```sql
+/// SELECT a.asset FROM account_vault_assets a
+/// INNER JOIN (
+///     SELECT vault_key, MAX(block_num) as max_block
+///     FROM account_vault_assets
+///     WHERE account_id = ? AND block_num <= ?
+///     GROUP BY vault_key
+/// ) latest ON a.vault_key = latest.vault_key AND a.block_num = latest.max_block
+/// WHERE a.account_id = ?
+/// ```
+pub(crate) fn select_account_vault_at_block(
+    conn: &mut SqliteConnection,
+    account_id: AccountId,
+    block_num: BlockNumber,
+) -> Result<Vec<Asset>, DatabaseError> {
+    use diesel::sql_types::{BigInt, Binary};
+
+    let account_id_bytes = account_id.to_bytes();
+    let block_num_sql = block_num.to_raw_sql();
+
+    let entries: Vec<Option<Vec<u8>>> = diesel::sql_query(
+        r"
+        SELECT a.asset FROM account_vault_assets a
+        INNER JOIN (
+            SELECT vault_key, MAX(block_num) as max_block
+            FROM account_vault_assets
+            WHERE account_id = ? AND block_num <= ?
+            GROUP BY vault_key
+        ) latest ON a.vault_key = latest.vault_key AND a.block_num = latest.max_block
+        WHERE a.account_id = ?
+        ",
+    )
+    .bind::<Binary, _>(&account_id_bytes)
+    .bind::<BigInt, _>(block_num_sql)
+    .bind::<Binary, _>(&account_id_bytes)
+    .load::<AssetRow>(conn)?
+    .into_iter()
+    .map(|row| row.asset)
+    .collect();
+
+    // Convert to assets, filtering out deletions (None values)
+    let mut assets = Vec::new();
+    for asset_bytes in entries.into_iter().flatten() {
+        let asset = Asset::read_from_bytes(&asset_bytes)?;
+        assets.push(asset);
+    }
+
+    Ok(assets)
+}
+
+#[derive(QueryableByName)]
+struct AssetRow {
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Binary>)]
+    asset: Option<Vec<u8>>,
 }
 
 /// Select all accounts from the DB using the given [`SqliteConnection`].
@@ -1047,69 +1105,42 @@ fn prepare_full_account_update(
     Ok((AccountStateForInsert::FullAccount(account), storage, assets))
 }
 
-/// Prepare partial delta data for account upserts and follow-up storage and vault inserts.
+/// Prepare partial patch data for account upserts and follow-up storage and vault inserts.
 fn prepare_partial_account_update(
     conn: &mut SqliteConnection,
     update: &BlockAccountUpdate,
     account_id: AccountId,
-    delta: &miden_protocol::account::delta::AccountDelta,
+    patch: &AccountPatch,
 ) -> Result<(AccountStateForInsert, PendingStorageInserts, PendingAssetInserts), DatabaseError> {
-    // Build the minimal account state needed for partial delta application. Only load the storage
-    // map entries and vault balances that will receive updates. The next line fetches the header,
-    // which will always change unless the delta is empty.
+    // Build the minimal account state needed for partial patch application. Only load the storage
+    // map entries that will receive updates. The next line fetches the header, which will always
+    // change unless the patch is empty.
     let state_headers = select_minimal_account_state_headers(conn, account_id)?;
 
-    // --- Process asset updates. --------------------------------- Look up balances by vault key
-    // (which includes the callback flag), not by faucet id.
-    let vault_keys =
-        Vec::from_iter(delta.vault().fungible().iter().map(|(vault_key, _)| *vault_key));
-    let prev_balances = select_vault_balances_by_vault_keys(conn, account_id, &vault_keys)?;
-
-    // Encode `Some` as update and `None` as removal.
+    // --- Process asset updates. --------------------------------- The patch carries absolute final
+    // values, so encode `Some` as update and `None` (an empty value word) as removal.
     let mut assets = Vec::new();
-
-    // Update fungible assets.
-    for (vault_key, amount_delta) in delta.vault().fungible().iter() {
-        let faucet_id = vault_key.faucet_id();
-        let callback_flag = vault_key.callback_flag();
-        let prev_amount = prev_balances.get(&vault_key.to_word()).copied().unwrap_or(0);
-        let prev_asset = FungibleAsset::new(faucet_id, prev_amount)?.with_callbacks(callback_flag);
-        let amount_abs = amount_delta.unsigned_abs();
-        let delta = FungibleAsset::new(faucet_id, amount_abs)?.with_callbacks(callback_flag);
-        let new_balance = if *amount_delta < 0 {
-            prev_asset.sub(delta)?
-        } else {
-            prev_asset.add(delta)?
-        };
-        let update_or_remove = if new_balance.amount().as_u64() == 0 {
+    for (vault_key, value) in patch.vault().iter() {
+        let update_or_remove = if *value == Word::empty() {
             None
         } else {
-            Some(Asset::from(new_balance))
+            Some(Asset::from_key_value(*vault_key, *value)?)
         };
-        assets.push((account_id, new_balance.vault_key(), update_or_remove));
-    }
-
-    // Update non-fungible assets.
-    for (asset, delta_action) in delta.vault().non_fungible().iter() {
-        let asset_update = match delta_action {
-            NonFungibleDeltaAction::Add => Some(Asset::NonFungible(*asset)),
-            NonFungibleDeltaAction::Remove => None,
-        };
-        assets.push((account_id, asset.vault_key(), asset_update));
+        assets.push((account_id, *vault_key, update_or_remove));
     }
 
     // --- Collect storage map updates. ---------------------------
 
     let mut storage = Vec::new();
-    for (slot_name, map_delta) in delta.storage().maps() {
-        for (key, value) in map_delta.entries() {
+    for (slot_name, map_patch) in patch.storage().maps() {
+        for (key, value) in map_patch.entries() {
             storage.push((account_id, slot_name.clone(), *key, *value));
         }
     }
 
     // First collect entries that have associated changes.
-    let slot_names = Vec::from_iter(delta.storage().maps().filter_map(|(slot_name, map_delta)| {
-        if map_delta.is_empty() {
+    let slot_names = Vec::from_iter(patch.storage().maps().filter_map(|(slot_name, map_patch)| {
+        if map_patch.is_empty() {
             None
         } else {
             Some(slot_name.clone())
@@ -1118,27 +1149,20 @@ fn prepare_partial_account_update(
 
     let map_entries = select_latest_storage_map_entries_for_slots(conn, &account_id, &slot_names)?;
 
-    // Apply the delta storage to the given storage header.
+    // Apply the patch storage to the given storage header.
     let new_storage_header =
-        apply_storage_delta(&state_headers.storage_header, delta.storage(), &map_entries)?;
+        apply_storage_patch(&state_headers.storage_header, patch.storage(), &map_entries)?;
 
     // --- Update the vault root by constructing the asset vault from DB.
     let new_vault_root = {
         let assets = select_latest_vault_assets(conn, account_id)?;
         let mut vault = AssetVault::new(&assets)?;
-        vault.apply_delta(delta.vault())?;
+        vault.apply_patch(patch.vault())?;
         vault.root()
     };
 
-    // --- Compute updated account state for the accounts row. --- Apply nonce delta.
-    let new_nonce_value = state_headers
-        .nonce
-        .as_canonical_u64()
-        .checked_add(delta.nonce_delta().as_canonical_u64())
-        .ok_or_else(|| {
-            DatabaseError::DataCorrupted(format!("Nonce overflow for account {account_id}"))
-        })?;
-    let new_nonce = Felt::new_unchecked(new_nonce_value);
+    // --- Compute updated account state for the accounts row. --- Use the absolute final nonce.
+    let new_nonce = patch.final_nonce().unwrap_or(state_headers.nonce);
 
     // Create minimal account state data for the row insert.
     let account_state = PartialAccountState {
@@ -1243,17 +1267,17 @@ pub(crate) fn upsert_accounts(
             AccountUpdateDetails::Private => (AccountStateForInsert::Private, vec![], vec![]),
 
             // New account is always a full account, but also comes as an update
-            AccountUpdateDetails::Delta(delta) if delta.is_full_state() => {
-                let account = Account::try_from(delta)
-                    .expect("Delta to full account always works for full state deltas");
+            AccountUpdateDetails::Public(patch) if patch.is_full_state() => {
+                let account = Account::try_from(patch)
+                    .expect("Patch to full account always works for full state patches");
                 debug_assert_eq!(account_id, account.id());
 
                 prepare_full_account_update(update, account)?
             },
 
             // Update of an existing account
-            AccountUpdateDetails::Delta(delta) => {
-                prepare_partial_account_update(conn, update, account_id, delta)?
+            AccountUpdateDetails::Public(patch) => {
+                prepare_partial_account_update(conn, update, account_id, patch)?
             },
         };
 
@@ -1411,7 +1435,7 @@ impl AccountRowInsert {
         }
     }
 
-    /// Creates an insert row from a partial account state (delta update).
+    /// Creates an insert row from a partial account state (patch update).
     fn new_from_partial(
         account_id: AccountId,
         network_account_type: NetworkAccountType,

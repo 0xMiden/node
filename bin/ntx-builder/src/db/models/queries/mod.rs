@@ -74,14 +74,14 @@ pub fn apply_committed_block(
             NetworkAccountEffect::Created(account) => {
                 upsert_account(conn, *account_id, &account, last_tx_id)?;
             },
-            NetworkAccountEffect::Updated(delta) => {
+            NetworkAccountEffect::Updated(patch) => {
                 // If the account is not already tracked locally, skip it.
                 let Some(mut current) = get_account(conn, *account_id)? else {
                     continue;
                 };
                 current
-                    .apply_delta(&delta)
-                    .expect("network account delta should apply since the block was committed");
+                    .apply_patch(&patch)
+                    .expect("network account patch should apply since the block was committed");
                 upsert_account(conn, *account_id, &current, last_tx_id)?;
             },
         }

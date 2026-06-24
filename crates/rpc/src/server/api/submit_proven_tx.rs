@@ -7,10 +7,10 @@ use miden_protocol::transaction::{
     OutputNote,
     ProvenTransaction,
     PublicOutputNote,
+    TransactionVerifier,
     TxAccountUpdate,
 };
 use miden_protocol::utils::serde::{Deserializable, Serializable};
-use miden_tx::TransactionVerifier;
 use tonic::metadata::{Ascii, MetadataValue};
 use tonic::{Request, Status};
 use tracing::{Span, debug};
@@ -84,7 +84,7 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
             tx.account_id(),
             tx.account_update().initial_state_commitment(),
             tx.account_update().final_state_commitment(),
-            tx.account_update().account_delta_commitment(),
+            tx.account_update().account_patch_commitment(),
             tx.account_update().details().clone(),
         )
         .map_err(|e| Status::invalid_argument(e.to_string()))?;
@@ -96,7 +96,6 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
             stripped_outputs,
             tx.ref_block_num(),
             tx.ref_block_commitment(),
-            tx.fee(),
             tx.expiration_block_num(),
             tx.proof().clone(),
         )

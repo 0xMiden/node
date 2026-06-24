@@ -28,8 +28,7 @@ miden-node-proto-build    = { workspace = true }
 miden-node-store          = { workspace = true }
 miden-node-utils          = { workspace = true }
 miden-protocol            = { default-features = true, workspace = true }
-miden-tx                  = { features = ["concurrent"], workspace = true }
-miden-tx-batch-prover     = { workspace = true }
+miden-tx-batch            = { workspace = true }
 semver                    = { version = "1.0" }
 thiserror                 = { workspace = true }
 tokio                     = { features = ["macros", "net", "rt-multi-thread", "time"], workspace = true }
