@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use backon::ExponentialBuilder;
-use futures::Stream;
-use futures::stream::TryStreamExt;
+use futures::stream::{BoxStream, TryStreamExt};
+use futures::{Stream, StreamExt};
 use miden_node_proto::clients::{Builder, RpcClient as InnerRpcClient};
 use miden_node_proto::domain::account::{
     AccountDetails, AccountResponse, AccountVaultDetails, StorageMapEntries
@@ -40,6 +40,14 @@ use crate::COMPONENT;
 
 // RPC CLIENT
 // ================================================================================================
+
+/// A signed block paired with the node's committed chain tip at the moment the block was emitted.
+type BlockSubscriptionItem = Result<(SignedBlock, BlockNumber), RpcError>;
+
+/// Delay between block-subscription reconnect attempts, paced so a node that immediately closes the
+/// connection cannot spin the reconnect loop. Connection *failures* are already backed off
+/// exponentially inside [`RpcClient::block_subscription_with_retry`].
+const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 
 /// Thin wrapper around the node RPC gRPC service that the ntx-builder uses to consume the
 /// committed-block subscription stream.
@@ -111,10 +119,7 @@ impl RpcClient {
     pub async fn block_subscription_with_retry(
         &self,
         block_from: BlockNumber,
-    ) -> Result<
-        impl Stream<Item = Result<(SignedBlock, BlockNumber), RpcError>> + Send + 'static,
-        RpcError,
-    > {
+    ) -> Result<BoxStream<'static, BlockSubscriptionItem>, RpcError> {
         (|| async move {
             let request =
                 tonic::Request::new(BlockSubscriptionRequest { block_from: block_from.as_u32() });
@@ -126,9 +131,13 @@ impl RpcClient {
                 .map_err(RpcError::GrpcClientError)?
                 .into_inner();
 
+            // Box the stream so its type is named and explicitly `'static` (it owns the cloned
+            // client, borrowing nothing from `self`). This keeps the return type from capturing
+            // `&self`, so callers like `block_subscription_reconnecting` can store it freely.
             Ok(stream
                 .map_err(RpcError::GrpcClientError)
-                .and_then(|response| async move { decode_block_subscription_response(&response) }))
+                .and_then(|response| async move { decode_block_subscription_response(&response) })
+                .boxed())
         })
         .retry(self.backoff)
         .notify(|err: &RpcError, dur| {
@@ -140,6 +149,63 @@ impl RpcClient {
             );
         })
         .await
+    }
+
+    /// Opens a committed-block subscription that transparently reconnects whenever the gRPC
+    /// connection is closed.
+    ///
+    /// Each reconnection resumes from the block after the last one yielded, so no committed block
+    /// is skipped or replayed. A closed or errored subscription is logged and re-opened, paced by
+    /// the client's exponential backoff schedule.
+    pub fn block_subscription_reconnecting(
+        &self,
+        block_from: BlockNumber,
+    ) -> impl Stream<Item = BlockSubscriptionItem> + Send + 'static {
+        let client = self.clone();
+
+        futures::stream::unfold(
+            (client, block_from, None),
+            |(client, mut next_from, mut inner)| async move {
+                loop {
+                    // Open the subscription if we don't hold a live one. The connect itself retries
+                    // indefinitely with exponential backoff.
+                    let stream = match &mut inner {
+                        Some(stream) => stream,
+                        None => match client.block_subscription_with_retry(next_from).await {
+                            Ok(stream) => inner.insert(stream),
+                            Err(err) => {
+                                tracing::warn!(
+                                    target: COMPONENT, err = %err.as_report(), %next_from,
+                                    "failed to open block subscription, retrying",
+                                );
+                                tokio::time::sleep(RECONNECT_DELAY).await;
+                                continue;
+                            },
+                        },
+                    };
+
+                    match stream.next().await {
+                        Some(Ok((block, committed_tip))) => {
+                            next_from = block.header().block_num().child();
+                            return Some((Ok((block, committed_tip)), (client, next_from, inner)));
+                        },
+                        Some(Err(err)) => tracing::warn!(
+                            target: COMPONENT, err = %err.as_report(), %next_from,
+                            "block subscription failed, reconnecting",
+                        ),
+                        None => tracing::warn!(
+                            target: COMPONENT, %next_from,
+                            "block subscription closed by node, reconnecting",
+                        ),
+                    }
+
+                    // The subscription dropped: discard it, pace the reconnect, and resume from the
+                    // next un-applied block on the following loop iteration.
+                    inner = None;
+                    tokio::time::sleep(RECONNECT_DELAY).await;
+                }
+            },
+        )
     }
 
     #[instrument(target = COMPONENT, name = "ntx.rpc.client.submit_proven_tx", skip_all, err)]
