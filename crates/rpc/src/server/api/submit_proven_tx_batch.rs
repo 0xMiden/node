@@ -1,16 +1,16 @@
 use miden_node_proto::generated as proto;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
-use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_tx_batch_prover::LocalBatchProver;
 use tonic::metadata::{Ascii, MetadataValue};
 use tonic::{Request, Status};
-use tracing::Span;
+use tracing::{Span, field, instrument};
 
 use super::{RpcMode, RpcService};
+use crate::{COMPONENT, LOG_TARGET};
 
 pub struct SubmitProvenTxBatchInput {
     request: proto::transaction::TransactionBatch,
@@ -50,6 +50,18 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
         Self::encode(output)
     }
 
+    #[instrument(
+        target = COMPONENT,
+        name = "submit_proven_tx_batch",
+        skip_all,
+        fields(
+            batch.id = field::Empty,
+            batch.expires_at = field::Empty,
+            batch.reference_block.number = field::Empty,
+            batch.reference_block.commitment = field::Empty,
+        ),
+        err,
+    )]
     async fn handle(&self, input: Self::Input) -> tonic::Result<Self::Output> {
         let SubmitProvenTxBatchInput {
             request,
@@ -57,17 +69,22 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
             original_accept_header,
         } = input;
 
+        tracing::trace!(target: LOG_TARGET, ?request);
+
         let proven_batch = ProvenBatch::read_from_bytes(&request.batch_proof).map_err(|err| {
             Status::invalid_argument(err.as_report_context("invalid proven_batch"))
         })?;
 
         let span = Span::current();
-        span.set_attribute("batch.id", proven_batch.id());
-        span.set_attribute("batch.expires_at", proven_batch.batch_expiration_block_num());
-        span.set_attribute("batch.reference_block.number", proven_batch.reference_block_num());
-        span.set_attribute(
+        span.record("batch.id", field::display(proven_batch.id()));
+        span.record("batch.expires_at", field::display(proven_batch.batch_expiration_block_num()));
+        span.record(
+            "batch.reference_block.number",
+            field::display(proven_batch.reference_block_num()),
+        );
+        span.record(
             "batch.reference_block.commitment",
-            proven_batch.reference_block_commitment(),
+            field::display(proven_batch.reference_block_commitment()),
         );
 
         let proposed_batch = request
@@ -79,6 +96,8 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
                 Status::invalid_argument(err.as_report_context("invalid proposed_batch"))
             })?
             .ok_or(Status::invalid_argument("missing `proposed_batch` field"))?;
+
+        tracing::debug!(target: LOG_TARGET, "Submitting transaction batch");
 
         // Verify the reference block is actually part of the chain.
         self.verify_reference_commitment(

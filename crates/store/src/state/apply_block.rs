@@ -17,7 +17,7 @@ use tracing::{Instrument, field, info_span, instrument};
 use crate::db::NoteRecord;
 use crate::errors::{ApplyBlockError, ApplyBlockWithProvingInputsError, InvalidBlockError};
 use crate::state::{BlockNotification, State};
-use crate::{COMPONENT, HistoricalError};
+use crate::{COMPONENT, HistoricalError, LOG_TARGET};
 
 impl State {
     /// Saves proving inputs for a signed block and applies it to the state.
@@ -198,7 +198,7 @@ impl State {
             .expect("block cache receives sequential block numbers");
         let _ = self.committed_tip_tx.send(block_num);
 
-        tracing::debug!(target: COMPONENT, "Block applied");
+        tracing::debug!(target: LOG_TARGET, "Block applied");
 
         Ok(())
     }

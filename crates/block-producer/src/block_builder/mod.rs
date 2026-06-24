@@ -15,7 +15,7 @@ use tracing::{Span, field, instrument};
 use crate::errors::{BuildBlockError, StoreError};
 use crate::mempool::SharedMempool;
 use crate::validator::BlockProducerValidatorClient;
-use crate::{COMPONENT, TelemetryInjectorExt};
+use crate::{COMPONENT, LOG_TARGET, TelemetryInjectorExt};
 
 // BLOCK BUILDER
 // =================================================================================================
@@ -309,7 +309,7 @@ impl BlockBuilder {
         if num_transactions > 0 {
             let transaction_ids =
                 signed_block.body().transactions().as_slice().iter().map(|tx| tx.id());
-            tracing::debug!(transactions = %format_array(transaction_ids), "Included transactions");
+            tracing::debug!(target: LOG_TARGET, transactions = %format_array(transaction_ids), "Included transactions");
         }
 
         self.store

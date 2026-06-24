@@ -15,6 +15,7 @@ use tonic::{Request, Status};
 use tracing::{Span, debug, field, instrument};
 
 use super::{COMPONENT, RpcMode, RpcService};
+use crate::LOG_TARGET;
 
 pub struct SubmitProvenTxInput {
     request: proto::transaction::ProvenTransaction,
@@ -60,18 +61,23 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
         name = "submit_proven_tx",
         skip_all,
         fields(
+            COMPONENT = field::Empty,
             transaction.id = field::Empty,
             account.id = field::Empty,
             transaction.expires_at = field::Empty,
             transaction.reference_block.number = field::Empty,
             transaction.reference_block.commitment = field::Empty,
-        ))]
+        ),
+        err,
+    )]
     async fn handle(&self, input: Self::Input) -> tonic::Result<Self::Output> {
         let SubmitProvenTxInput {
             mut request,
             is_authorized_network_tx,
             original_accept_header,
         } = input;
+
+        tracing::trace!(target: LOG_TARGET, ?request);
 
         let tx = ProvenTransaction::read_from_bytes(&request.transaction).map_err(|err| {
             Status::invalid_argument(err.as_report_context("invalid transaction"))
@@ -87,7 +93,7 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
             field::display(tx.ref_block_commitment()),
         );
 
-        debug!(target: COMPONENT, "Submitting transaction");
+        debug!(target: LOG_TARGET, "Submitting transaction");
 
         // Verify the reference block is actually part of the chain.
         self.verify_reference_commitment(tx.ref_block_num(), tx.ref_block_commitment())

@@ -12,8 +12,8 @@ use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::ProvenTransaction;
 use tracing::instrument;
 
-use crate::COMPONENT;
 use crate::errors::StoreError;
+use crate::{COMPONENT, LOG_TARGET};
 
 // TRANSACTION INPUTS
 // ================================================================================================
@@ -124,7 +124,7 @@ pub async fn get_tx_inputs(
         current_block_height,
     );
 
-    tracing::debug!(?tx_inputs, "Transaction inputs");
+    tracing::debug!(target: LOG_TARGET, ?tx_inputs, "Transaction inputs");
 
     Ok(tx_inputs)
 }

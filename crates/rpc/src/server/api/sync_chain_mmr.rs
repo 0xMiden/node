@@ -1,10 +1,10 @@
 use miden_node_proto::generated as proto;
-use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::block::BlockNumber;
 use tonic::Status;
-use tracing::{Span, debug};
+use tracing::{debug, instrument};
 
-use super::{COMPONENT, Finality, RpcService};
+use super::{Finality, RpcService};
+use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::SyncChainMmr for RpcService {
@@ -19,12 +19,18 @@ impl proto::server::rpc_api::SyncChainMmr for RpcService {
         Ok(output)
     }
 
+    #[instrument(
+        target = COMPONENT,
+        name = "sync_chain_mmr",
+        skip_all,
+        fields(
+            current_client_block_height = %request.current_client_block_height,
+            finality_level = %request.finality_level().as_str_name(),
+        ),
+        err,
+    )]
     async fn handle(&self, request: Self::Input) -> tonic::Result<Self::Output> {
-        let span = Span::current();
-        span.set_attribute("current_client_block_height", request.current_client_block_height);
-        span.set_attribute("finality_level", request.finality_level().as_str_name());
-
-        debug!(target: COMPONENT, ?request);
+        debug!(target: LOG_TARGET, "Syncing chain MMR");
 
         let current_client_block_height = BlockNumber::from(request.current_client_block_height);
         let sync_target = match request.finality_level() {

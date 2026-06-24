@@ -107,10 +107,7 @@ impl TracingConfig {
     pub fn from_env(open_telemetry: OpenTelemetry) -> Self {
         Self {
             open_telemetry,
-            stdout_filter: filter_env_or_default(
-                "MIDEN_STDOUT_FILTER",
-                "debug,h2=info,tower_http=info,tower=info,hyper_util=info,tower=info,tonic_web=info",
-            ),
+            stdout_filter: filter_env_or_default("MIDEN_STDOUT_FILTER", "info,user=debug"),
             otel_filter: filter_env_or_default("MIDEN_OTEL_FILTER", "info,axum::rejection=trace"),
         }
     }
@@ -152,7 +149,7 @@ impl Drop for OtelGuard {
 
 /// Initializes tracing to stdout and optionally an open-telemetry exporter.
 ///
-/// Stdout trace filtering is configured with `MIDEN_STDOUT_FILTER`, then `RUST_LOG`, then `debug,h2=info,tower_http=info,tower=info,hyper_util=info,tower=info,tonic_web=info`.
+/// Stdout trace filtering is configured with `MIDEN_STDOUT_FILTER`, then `RUST_LOG`, then `info,user=debug`.
 /// OpenTelemetry export filtering is configured with `MIDEN_OTEL_FILTER`, then `RUST_LOG`, then
 /// `info,axum::rejection=trace`.
 ///
