@@ -17,7 +17,7 @@ test       = false
 
 [features]
 batch-prover = ["dep:miden-protocol", "dep:tokio"]
-block-prover = ["dep:miden-protocol", "dep:tokio", "dep:miden-node-proto"]
+block-prover = ["dep:miden-protocol", "dep:tokio"]
 default      = ["std"]
 std          = ["miden-protocol/std", "miden-tx/std"]
 tx-prover    = ["dep:miden-protocol", "dep:miden-tx", "dep:tokio"]
@@ -34,7 +34,6 @@ tonic = { features = ["codegen", "tls-native-roots", "tls-ring", "transport"], w
 workspace = true
 
 [dependencies]
-miden-node-proto = { optional = true, workspace = true }
 miden-protocol   = { optional = true, workspace = true }
 miden-tx         = { optional = true, workspace = true }
 prost            = { default-features = false, features = ["derive"], workspace = true }

@@ -3,16 +3,15 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::time::Duration;
 
-use miden_node_proto::BlockProofRequest;
 use miden_protocol::batch::{OrderedBatches, ProvenBatch};
-use miden_protocol::block::{BlockHeader, BlockInputs, BlockProof, ProposedBlock, ProvenBlock};
+use miden_protocol::block::{BlockHeader, BlockInputs, BlockProof, ProvenBlock};
 use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionHeader};
 use miden_protocol::utils::serde::{Deserializable, DeserializationError, Serializable};
 use tokio::sync::Mutex;
 
 use super::generated::api_client::ApiClient;
 use crate::RemoteProverClientError;
-use crate::remote_prover::generated::{self as proto, ProofRequest};
+use crate::remote_prover::generated as proto;
 
 // REMOTE BLOCK PROVER
 // ================================================================================================
@@ -121,8 +120,11 @@ impl RemoteBlockProver {
             })?
             .clone();
 
-        let block_proof_request = BlockProofRequest { tx_batches, block_header, block_inputs };
-        let request = tonic::Request::new(block_proof_request.into());
+        let request = tonic::Request::new(encode_block_proof_request(
+            &tx_batches,
+            &block_header,
+            &block_inputs,
+        ));
 
         let response = client.prove(request).await.map_err(|err| {
             RemoteProverClientError::other_with_source("failed to prove block", err)
@@ -151,11 +153,25 @@ impl TryFrom<proto::Proof> for BlockProof {
     }
 }
 
-impl From<BlockProofRequest> for proto::ProofRequest {
-    fn from(block_proof_request: BlockProofRequest) -> Self {
-        proto::ProofRequest {
-            proof_type: proto::ProofType::Block.into(),
-            payload: block_proof_request.to_bytes(),
-        }
+/// Encodes a block proof request in the wire format the remote prover server expects.
+///
+/// The server decodes the `BLOCK` payload as a `miden_node_proto::BlockProofRequest`, whose
+/// serialized layout is `tx_batches`, then `block_header`, then `block_inputs`. This crate also
+/// builds for `wasm32` (where `miden-node-proto`, via tonic transport / tokio net, does not
+/// compile), so it cannot depend on that type and instead mirrors its layout here. Keep this in
+/// sync with `BlockProofRequest`'s `Serializable` impl.
+fn encode_block_proof_request(
+    tx_batches: &OrderedBatches,
+    block_header: &BlockHeader,
+    block_inputs: &BlockInputs,
+) -> proto::ProofRequest {
+    let mut payload = Vec::new();
+    tx_batches.write_into(&mut payload);
+    block_header.write_into(&mut payload);
+    block_inputs.write_into(&mut payload);
+
+    proto::ProofRequest {
+        proof_type: proto::ProofType::Block.into(),
+        payload,
     }
 }
