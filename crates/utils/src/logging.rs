@@ -337,12 +337,11 @@ where
     for<'a> S: tracing_subscriber::registry::LookupSpan<'a>,
 {
     tracing_subscriber::fmt::layer()
-        .pretty()
         .compact()
         .with_level(true)
         .with_file(false)
         .with_line_number(false)
-        .with_target(true)
+        .with_target(false)
         .boxed()
 }
 
