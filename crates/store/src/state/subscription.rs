@@ -238,12 +238,11 @@ async fn run_stream_inner<S: SubscriptionSource>(
     loop {
         let mut tip = *tip_rx.borrow_and_update();
 
-        // Support redrives: a producer may overwrite the current tip block in place (e.g. re-sign
-        // and re-commit it) without advancing the chain. Since the tip otherwise only moves
-        // forward, observing it at or below an already-emitted block (`tip < next`) means that
-        // block was rewritten, so rewind to re-emit it. The `tip >= from` guard preserves
-        // subscriptions that start from a future block, where `tip < next` instead means the
-        // requested start has not been reached yet.
+        // Support redrives: a producer may overwrite the current tip block in place. Since the tip
+        // otherwise only moves forward, observing it at or below an already-emitted block (`tip <
+        // next`) means that block was rewritten, so rewind to re-emit it. The `tip >= from` guard
+        // preserves subscriptions that start from a future block, where `tip < next` instead means
+        // the requested start has not been reached yet.
         if tip < next && tip >= from {
             next = tip;
         }
