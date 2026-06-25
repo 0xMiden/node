@@ -305,9 +305,8 @@ pub fn select_transactions_records(
         });
     }
 
-    // SAFETY: block_num came from the database and was previously validated. Subtraction is
-    // safe under the assumption that genesis block (where it could fail) does not have any
-    // transactions.
+    // SAFETY: block_num came from the database and was previously validated. Subtraction is safe
+    // under the assumption that genesis block (where it could fail) does not have any transactions.
     let last_included_block = BlockNumber::from_raw_sql(truncation_block.saturating_sub(1))?;
     Ok((last_included_block, with_output_note_proofs(conn, complete_transactions)?))
 }
