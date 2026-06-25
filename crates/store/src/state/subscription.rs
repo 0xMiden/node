@@ -238,8 +238,13 @@ async fn run_stream_inner<S: SubscriptionSource>(
     loop {
         let mut tip = *tip_rx.borrow_and_update();
 
-        // Allow for re-drive of the stream to earlier tips.
-        if tip < next {
+        // Support redrives: a producer may overwrite the current tip block in place (e.g. re-sign
+        // and re-commit it) without advancing the chain. Since the tip otherwise only moves
+        // forward, observing it at or below an already-emitted block (`tip < next`) means that
+        // block was rewritten, so rewind to re-emit it. The `tip >= from` guard preserves
+        // subscriptions that start from a future block, where `tip < next` instead means the
+        // requested start has not been reached yet.
+        if tip < next && tip >= from {
             next = tip;
         }
 
@@ -294,7 +299,71 @@ fn check_growing_gap(
 
 #[cfg(test)]
 mod tests {
+    use tokio_stream::StreamExt;
+
     use super::*;
+
+    /// Test [`SubscriptionSource`] that emits the requested block number, so emissions can be
+    /// asserted directly against the driving tips.
+    struct NumberSource;
+
+    impl SubscriptionSource for NumberSource {
+        type Event = BlockNumber;
+        type Error = std::convert::Infallible;
+
+        async fn fetch(&self, block_num: BlockNumber) -> Result<Vec<u8>, Self::Error> {
+            Ok(block_num.as_u32().to_le_bytes().to_vec())
+        }
+
+        fn build_event(
+            &self,
+            block_num: BlockNumber,
+            _data: Vec<u8>,
+            _tip: BlockNumber,
+        ) -> BlockNumber {
+            block_num
+        }
+    }
+
+    /// A redrive overwrites the current tip block in place, and the subscriber re-emits it.
+    ///
+    /// Each emission is awaited before driving the next tip so the spawned stream task observes
+    /// every tip update individually rather than coalescing them.
+    #[tokio::test]
+    async fn redrive_re_emits_the_current_tip_block() {
+        let (tip_tx, tip_rx) = watch::channel(BlockNumber::GENESIS);
+        let mut stream = Box::pin(run_stream(BlockNumber::GENESIS, tip_rx, NumberSource));
+
+        // Genesis is emitted from the initial tip.
+        assert_eq!(stream.next().await.unwrap().unwrap(), BlockNumber::GENESIS);
+
+        // Drive block 1.
+        tip_tx.send_replace(BlockNumber::from(1u32));
+        assert_eq!(stream.next().await.unwrap().unwrap(), BlockNumber::from(1u32));
+
+        // Redrive block 1: the tip does not advance, but block 1 is emitted again.
+        tip_tx.send_replace(BlockNumber::from(1u32));
+        assert_eq!(stream.next().await.unwrap().unwrap(), BlockNumber::from(1u32));
+
+        // Drive block 2: the stream resumes forward progress without re-emitting block 1.
+        tip_tx.send_replace(BlockNumber::from(2u32));
+        assert_eq!(stream.next().await.unwrap().unwrap(), BlockNumber::from(2u32));
+    }
+
+    /// A subscription that starts ahead of the tip waits for the tip to reach `from` rather than
+    /// rewinding to re-emit earlier blocks.
+    #[tokio::test]
+    async fn subscription_from_future_block_does_not_rewind() {
+        let from = BlockNumber::from(10u32);
+        let (tip_tx, tip_rx) = watch::channel(BlockNumber::from(5u32));
+        let mut stream = Box::pin(run_stream(from, tip_rx, NumberSource));
+
+        // Advance the tip up to `from`; no earlier block should be emitted while behind it.
+        for tip in 6..=10 {
+            tip_tx.send_replace(BlockNumber::from(tip));
+        }
+        assert_eq!(stream.next().await.unwrap().unwrap(), from);
+    }
 
     fn run(gaps: &[u32]) -> Result<(), ()> {
         let mut previous_gap = gaps.first().copied().unwrap_or(u32::MAX);
