@@ -127,10 +127,16 @@ pub(crate) fn find_unvalidated_transactions(
     let mut unvalidated_tx_ids = Vec::new();
     for tx_id in tx_ids {
         // Check whether each transaction id exists in the database.
-        let exists = tx.exists(
-            "SELECT EXISTS(SELECT 1 FROM validated_transactions WHERE id = ?1)",
-            &[&tx_id.to_bytes()],
-        )?;
+        let exists = tx
+            .query(
+                "SELECT EXISTS(SELECT 1 FROM validated_transactions WHERE id = ?1)",
+                &[&tx_id.to_bytes()],
+                |row| row.get::<i64>(0),
+            )?
+            .first()
+            .copied()
+            .unwrap_or(0)
+            != 0;
         // Record any transaction ids that do not exist.
         if !exists {
             unvalidated_tx_ids.push(*tx_id);
@@ -159,11 +165,14 @@ pub fn upsert_block_header(tx: &WriteTx<'_>, header: &BlockHeader) -> Result<(),
 /// Returns `None` if no block headers have been persisted (i.e. bootstrap has not been run).
 #[instrument(target = COMPONENT, skip(tx), err)]
 pub fn load_chain_tip(tx: &ReadTx<'_>) -> Result<Option<BlockHeader>, DatabaseError> {
-    tx.query_opt(
-        "SELECT block_header FROM block_headers ORDER BY block_num DESC LIMIT 1",
-        &[],
-        |row| row.get::<BlockHeader>(0),
-    )
+    Ok(tx
+        .query(
+            "SELECT block_header FROM block_headers ORDER BY block_num DESC LIMIT 1",
+            &[],
+            |row| row.get::<BlockHeader>(0),
+        )?
+        .into_iter()
+        .next())
 }
 
 /// Loads a block header by its block number.
@@ -174,23 +183,34 @@ pub fn load_block_header(
     tx: &ReadTx<'_>,
     block_num: BlockNumber,
 ) -> Result<Option<BlockHeader>, DatabaseError> {
-    tx.query_opt(
-        "SELECT block_header FROM block_headers WHERE block_num = ?1",
-        &[&i64::from(block_num.as_u32())],
-        |row| row.get::<BlockHeader>(0),
-    )
+    Ok(tx
+        .query(
+            "SELECT block_header FROM block_headers WHERE block_num = ?1",
+            &[&i64::from(block_num.as_u32())],
+            |row| row.get::<BlockHeader>(0),
+        )?
+        .into_iter()
+        .next())
 }
 
 /// Returns the total number of validated transactions in the database.
 #[instrument(target = COMPONENT, skip(tx), err)]
 pub fn count_validated_transactions(tx: &ReadTx<'_>) -> Result<i64, DatabaseError> {
-    tx.count("SELECT COUNT(*) FROM validated_transactions", &[])
+    Ok(tx
+        .query("SELECT COUNT(*) FROM validated_transactions", &[], |row| row.get::<i64>(0))?
+        .into_iter()
+        .next()
+        .unwrap_or(0))
 }
 
 /// Returns the total number of signed blocks in the database.
 #[instrument(target = COMPONENT, skip(tx), err)]
 pub fn count_signed_blocks(tx: &ReadTx<'_>) -> Result<i64, DatabaseError> {
-    tx.count("SELECT COUNT(*) FROM block_headers", &[])
+    Ok(tx
+        .query("SELECT COUNT(*) FROM block_headers", &[], |row| row.get::<i64>(0))?
+        .into_iter()
+        .next()
+        .unwrap_or(0))
 }
 
 #[cfg(test)]
