@@ -297,9 +297,9 @@ impl BlockBuilder {
         let num_transactions = signed_block.body().transactions().as_slice().len();
 
         miden_span_record!(
-            block_num = %header.block_num(),
-            block_commitment = %header.commitment(),
-            num_transactions = num_transactions,
+            block.number = %header.block_num(),
+            block.commitment = %header.commitment(),
+            block.transactions.count = num_transactions,
         );
 
         if num_transactions > 0 {

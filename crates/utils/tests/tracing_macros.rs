@@ -46,8 +46,8 @@ fn records_delayed_fields() {
     let parsed_text = "parsed";
 
     miden_span_record!(
-        parsed.value = parsed_value,
-        parsed.text = %parsed_text,
+        block.number = parsed_value,
+        transaction.id = %parsed_text,
     );
 }
 
@@ -58,12 +58,13 @@ fn inferred_fields_can_be_recorded_after_span_creation() {
 
     tracing::subscriber::with_default(subscriber, records_delayed_fields);
 
-    assert_eq!(recorded.get("parsed.value").as_deref(), Some("42"));
-    assert_eq!(recorded.get("parsed.text").as_deref(), Some("parsed"));
+    assert_eq!(recorded.get("block.number").as_deref(), Some("42"));
+    assert_eq!(recorded.get("transaction.id").as_deref(), Some("parsed"));
 }
 
 #[test]
 fn ui_tests() {
     let tests = trybuild::TestCases::new();
     tests.pass("tests/ui/tracing_macros/pass.rs");
+    tests.compile_fail("tests/ui/tracing_macros/invalid_field_name.rs");
 }
