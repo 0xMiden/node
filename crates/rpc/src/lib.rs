@@ -7,3 +7,4 @@ pub use server::{Rpc, RpcMode};
 // CONSTANTS
 // =================================================================================================
 pub const COMPONENT: &str = "miden-rpc";
+pub const LOG_TARGET: &str = "user::miden-rpc";

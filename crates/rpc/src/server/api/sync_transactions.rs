@@ -2,19 +2,18 @@ use miden_node_proto::decode::{read_account_ids, read_block_range};
 use miden_node_proto::generated as proto;
 use miden_node_store::{NoteSyncRecord, TransactionRecord};
 use miden_node_utils::limiter::QueryParamAccountIdLimit;
-use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::asset::Asset;
 use tonic::Status;
-use tracing::{Span, debug};
+use tracing::{Span, debug, field, instrument};
 
 use super::{
-    COMPONENT,
     RpcInvalidBlockRange,
     RpcService,
     check,
     database_error_to_status,
     invalid_block_range_to_status,
 };
+use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::SyncTransactions for RpcService {
@@ -29,19 +28,33 @@ impl proto::server::rpc_api::SyncTransactions for RpcService {
         Ok(output)
     }
 
+    #[instrument(
+        target = COMPONENT,
+        name = "sync_transactions",
+        skip_all,
+        fields(
+            block_range.from = field::Empty,
+            block_range.to = field::Empty,
+            account.ids = field::Empty,
+            account.ids.count = field::Empty,
+        ),
+        err,
+    )]
     async fn handle(&self, request: Self::Input) -> tonic::Result<Self::Output> {
+        tracing::trace!(target: LOG_TARGET, ?request);
+
         let range = read_block_range::<Status>(request.block_range, "SyncTransactionsRequest")?;
         let n_accounts = request.account_ids.len();
         let account_ids =
             read_account_ids::<Status, _>(request.account_ids.iter().take(10).cloned())?;
 
         let span = Span::current();
-        span.set_attribute("block_range.from", range.block_from);
-        span.set_attribute("block_range.to", range.block_to);
-        span.set_attribute("account.ids", format!("{account_ids:?}").as_str());
-        span.set_attribute("account.ids.count", n_accounts);
+        span.record("block_range.from", range.block_from);
+        span.record("block_range.to", range.block_to);
+        span.record("account.ids", format!("{account_ids:?}").as_str());
+        span.record("account.ids.count", n_accounts);
 
-        debug!(target: COMPONENT, ?request);
+        debug!(target: LOG_TARGET, "Syncing transactions");
 
         check::<QueryParamAccountIdLimit>(request.account_ids.len())?;
 

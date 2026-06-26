@@ -23,8 +23,8 @@ use tower_http::classify::{GrpcCode, GrpcErrorsAsFailures, SharedClassifier};
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
-use crate::COMPONENT;
 use crate::server::health::HealthCheckLayer;
+use crate::{COMPONENT, LOG_TARGET};
 
 mod accept;
 pub(crate) mod api;
@@ -107,7 +107,7 @@ impl Rpc {
 
         let api_service = rpc_api::service(api);
 
-        info!(target: COMPONENT, endpoint=?self.listener, mode=?self.mode, "Server initialized");
+        info!(target: LOG_TARGET, endpoint=?self.listener, mode=?self.mode, "Server initialized");
 
         let mut tasks = Tasks::new();
 

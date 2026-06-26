@@ -1,18 +1,17 @@
 use miden_node_proto::decode::read_block_range;
 use miden_node_proto::generated as proto;
 use miden_node_utils::limiter::QueryParamNullifierPrefixLimit;
-use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use tonic::Status;
-use tracing::{Span, debug};
+use tracing::{Span, debug, field, instrument};
 
 use super::{
-    COMPONENT,
     RpcInvalidBlockRange,
     RpcService,
     check,
     database_error_to_status,
     invalid_block_range_to_status,
 };
+use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::SyncNullifiers for RpcService {
@@ -27,14 +26,26 @@ impl proto::server::rpc_api::SyncNullifiers for RpcService {
         Ok(output)
     }
 
+    #[instrument(
+        target = COMPONENT,
+        name = "sync_nullifiers",
+        skip_all,
+        fields(
+            block_range.from = field::Empty,
+            block_range.to = field::Empty,
+        ),
+        err,
+    )]
     async fn handle(&self, request: Self::Input) -> tonic::Result<Self::Output> {
+        tracing::trace!(target: LOG_TARGET, ?request);
+
         let range = read_block_range::<Status>(request.block_range, "SyncNullifiersRequest")?;
 
         let span = Span::current();
-        span.set_attribute("block_range.from", range.block_from);
-        span.set_attribute("block_range.to", range.block_to);
+        span.record("block_range.from", range.block_from);
+        span.record("block_range.to", range.block_to);
 
-        debug!(target: COMPONENT, ?request);
+        debug!(target: LOG_TARGET, "Syncing nullifiers");
 
         check::<QueryParamNullifierPrefixLimit>(request.nullifiers.len())?;
 
