@@ -7,7 +7,7 @@ use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::token::Dot;
 use syn::visit::Visit;
-use syn::{Expr, Ident, ItemFn, Macro, Result, Token, parse_macro_input};
+use syn::{Block, Expr, Ident, ItemFn, Macro, Result, Token, parse_macro_input, parse_quote};
 
 const ALLOWED_FIELD_NAMES: &[&str] = &[
     "account.id",
@@ -24,13 +24,23 @@ const ALLOWED_FIELD_NAMES: &[&str] = &[
 #[proc_macro_attribute]
 pub fn miden_instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attr = TokenStream2::from(attr);
-    let function = parse_macro_input!(item as ItemFn);
+    let mut function = parse_macro_input!(item as ItemFn);
     let fields = collect_recorded_fields(&function);
     let args = if attr.is_empty() {
         quote! { fields(#(#fields = ::tracing::field::Empty),*) }
     } else {
         quote! { #attr, fields(#(#fields = ::tracing::field::Empty),*) }
     };
+    let statements = &function.block.stmts;
+    let block: Block = parse_quote! {{
+        #[allow(unused_macros)]
+        macro_rules! __miden_span_record_must_be_used_within_miden_instrument {
+            () => {};
+        }
+
+        #(#statements)*
+    }};
+    *function.block = block;
 
     let expanded = quote! {
         #[::tracing::instrument(#args)]
@@ -53,6 +63,7 @@ pub fn miden_span_record(input: TokenStream) -> TokenStream {
     });
 
     quote! {
+        __miden_span_record_must_be_used_within_miden_instrument!();
         #(#records)*
     }
     .into()

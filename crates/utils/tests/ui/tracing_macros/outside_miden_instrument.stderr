@@ -1,0 +1,7 @@
+error: cannot find macro `__miden_span_record_must_be_used_within_miden_instrument` in this scope
+ --> tests/ui/tracing_macros/outside_miden_instrument.rs:6:5
+  |
+6 |     miden_span_record!(transaction.id = %tx_id);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `miden_span_record` (in Nightly builds, run with -Z macro-backtrace for more info)
