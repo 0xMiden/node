@@ -11,7 +11,7 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::ProvenTransaction;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
-use tracing::{debug, info, instrument};
+use tracing::instrument;
 use url::Url;
 
 use crate::batch_builder::BatchBuilder;
@@ -24,6 +24,7 @@ use crate::validator::BlockProducerValidatorClient;
 use crate::{
     CACHED_MEMPOOL_STATS_UPDATE_INTERVAL,
     COMPONENT,
+    LOG_TARGET,
     SERVER_NUM_BATCH_BUILDERS,
     proof_scheduler,
 };
@@ -101,13 +102,13 @@ pub struct Sequencer {
 impl Sequencer {
     /// Spawns the sequencer tasks and returns its in-process API.
     pub async fn spawn(self) -> Result<SequencerHandle> {
-        info!(target: COMPONENT, "Initializing sequencer");
+        tracing::info!(target: LOG_TARGET, "Initializing sequencer");
         let store = self.store;
         let validator =
             BlockProducerValidatorClient::new(self.validator_url.clone(), self.validator_timeout)?;
         let chain_tip = store.chain_tip(Finality::Committed).await;
 
-        info!(target: COMPONENT, "Sequencer initialized");
+        tracing::info!(target: LOG_TARGET, "Sequencer initialized");
 
         let block_builder = BlockBuilder::new(Arc::clone(&store), validator, self.block_interval);
         let batch_builder = BatchBuilder::new(
@@ -292,8 +293,8 @@ impl BlockProducerApi {
     ) -> Result<BlockNumber, MempoolSubmissionError> {
         let tx_id = tx.id();
 
-        debug!(
-            target: COMPONENT,
+        tracing::debug!(
+            target: LOG_TARGET,
             tx_id = %tx_id.to_hex(),
             account_id = %tx.account_id().to_hex(),
             initial_state_commitment = %tx.account_update().initial_state_commitment(),
@@ -303,7 +304,6 @@ impl BlockProducerApi {
             ref_block_commitment = %tx.ref_block_commitment(),
             "Submitting transaction"
         );
-        debug!(target: COMPONENT, proof = ?tx.proof());
 
         let inputs = crate::store::get_tx_inputs(&self.store, &tx)
             .await
