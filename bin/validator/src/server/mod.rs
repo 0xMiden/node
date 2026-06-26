@@ -19,7 +19,7 @@ use crate::db::{
     load_chain_tip,
     load_with_pool_size,
 };
-use crate::{COMPONENT, DataDirectory, ValidatorSigner};
+use crate::{COMPONENT, DataDirectory, LOG_TARGET, ValidatorSigner};
 
 mod validator_service;
 
@@ -55,7 +55,7 @@ impl ValidatorServer {
     /// Executes in place (i.e. not spawned) and will run indefinitely until a fatal error is
     /// encountered.
     pub async fn serve(self) -> anyhow::Result<()> {
-        tracing::info!(target: COMPONENT, endpoint=?self.address, "Initializing server");
+        tracing::info!(target: LOG_TARGET, endpoint=?self.address, "Initializing server");
 
         // Initialize database connection.
         let db = load_with_pool_size(

@@ -14,10 +14,10 @@ use miden_protocol::transaction::TransactionId;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use tracing::instrument;
 
-use crate::COMPONENT;
 use crate::db::migrations::{bootstrap_database, migrate_database, verify_latest_schema};
 use crate::db::models::{BlockHeaderRowInsert, ValidatedTransactionRowInsert};
 use crate::tx_validation::ValidatedTransaction;
+use crate::{COMPONENT, LOG_TARGET};
 
 /// Open a connection to the DB after verifying that it is at the latest schema version.
 #[instrument(target = COMPONENT, skip_all)]
@@ -67,7 +67,7 @@ fn open_with_pool_size(
 ) -> Result<Db, DatabaseError> {
     let db = Db::new_with_pool_size(database_filepath, connection_pool_size)?;
     tracing::info!(
-        target: COMPONENT,
+        target: LOG_TARGET,
         sqlite= %database_filepath.display(),
         connection_pool_size = %connection_pool_size,
         "Connected to the database"
