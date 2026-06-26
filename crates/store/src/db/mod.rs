@@ -29,7 +29,6 @@ use miden_protocol::utils::serde::Deserializable;
 use tokio::sync::oneshot;
 use tracing::{info, instrument};
 
-use crate::COMPONENT;
 use crate::db::migrations::{migrate_database, verify_latest_schema};
 use crate::db::models::conv::SqlTypeConvert;
 use crate::db::models::queries;
@@ -42,6 +41,7 @@ pub use crate::db::models::queries::{
 use crate::db::models::queries::{BlockHeaderCommitment, StorageMapValuesPage};
 use crate::errors::{DatabaseError, NoteSyncError};
 use crate::genesis::GenesisBlock;
+use crate::{COMPONENT, LOG_TARGET};
 
 const STORAGE_MAP_VALUE_PER_ROW_BYTES: usize =
     2 * size_of::<Word>() + size_of::<u32>() + size_of::<u8>();
@@ -230,7 +230,7 @@ impl Db {
 
         let db = miden_node_db::Db::new_with_pool_size(&database_filepath, connection_pool_size)?;
         info!(
-            target: COMPONENT,
+            target: LOG_TARGET,
             sqlite= %database_filepath.display(),
             connection_pool_size = %connection_pool_size,
             "Connected to the database"
@@ -247,7 +247,7 @@ impl Db {
     }
 
     /// Returns a page of nullifiers for tree rebuilding.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_nullifiers_paged(
         &self,
         page_size: std::num::NonZeroUsize,
@@ -265,7 +265,6 @@ impl Db {
         target = COMPONENT,
         skip_all,
         fields(prefix_len, prefixes = nullifier_prefixes.len()),
-        ret(level = "debug"),
         err
     )]
     pub async fn select_nullifiers_by_prefix(
@@ -292,7 +291,7 @@ impl Db {
     /// Search for a [`BlockHeader`] from the database by its `block_num`.
     ///
     /// When `block_number` is [None], the latest block header is returned.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_block_header_by_block_num(
         &self,
         maybe_block_number: Option<BlockNumber>,
@@ -305,7 +304,7 @@ impl Db {
     }
 
     /// Search for a [`BlockHeader`] and its [`Signature`] from the database by its `block_num`.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_block_header_and_signature_by_block_num(
         &self,
         block_number: BlockNumber,
@@ -318,7 +317,7 @@ impl Db {
     }
 
     /// Loads multiple block headers from the DB.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_block_headers(
         &self,
         blocks: impl Iterator<Item = BlockNumber> + Send + 'static,
@@ -331,7 +330,7 @@ impl Db {
     }
 
     /// Loads all the block headers from the DB.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_all_block_header_commitments(&self) -> Result<Vec<BlockHeaderCommitment>> {
         self.transact("all block headers", |conn| {
             let raw = queries::select_all_block_header_commitments(conn)?;
@@ -341,7 +340,7 @@ impl Db {
     }
 
     /// Returns a page of account commitments for tree rebuilding.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_account_commitments_paged(
         &self,
         page_size: std::num::NonZeroUsize,
@@ -354,7 +353,7 @@ impl Db {
     }
 
     /// Returns a page of public account IDs for forest rebuilding.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_public_account_ids_paged(
         &self,
         page_size: std::num::NonZeroUsize,
@@ -367,7 +366,7 @@ impl Db {
     }
 
     /// Returns a page of public account state roots for forest consistency verification.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_public_account_state_roots_paged(
         &self,
         page_size: std::num::NonZeroUsize,
@@ -380,14 +379,14 @@ impl Db {
     }
 
     /// Loads public account details from the DB.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_account(&self, id: AccountId) -> Result<AccountInfo> {
         self.transact("Get account details", move |conn| queries::select_account(conn, id))
             .await
     }
 
     /// Returns the subset of the provided account IDs that classify as network accounts.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_network_accounts_subset(
         &self,
         account_ids: Vec<AccountId>,
@@ -428,7 +427,7 @@ impl Db {
         .await
     }
 
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn get_note_sync_multi(
         &self,
         block_range: RangeInclusive<BlockNumber>,
@@ -442,7 +441,7 @@ impl Db {
 
     /// Loads all the [`miden_protocol::note::Note`]s matching a certain [`NoteId`] from the
     /// database.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_notes_by_id(&self, note_ids: Vec<NoteId>) -> Result<Vec<NoteRecord>> {
         self.transact("note by id", move |conn| {
             queries::select_notes_by_id(conn, note_ids.as_slice())
@@ -451,7 +450,7 @@ impl Db {
     }
 
     /// Returns all note commitments from the DB that match the provided ones.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_existing_note_commitments(
         &self,
         note_commitments: Vec<Word>,
@@ -463,7 +462,7 @@ impl Db {
     }
 
     /// Loads inclusion proofs for notes matching the given note commitments.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_note_inclusion_proofs(
         &self,
         note_commitments: BTreeSet<Word>,
