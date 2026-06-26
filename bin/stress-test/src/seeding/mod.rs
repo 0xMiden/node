@@ -421,20 +421,20 @@ fn create_accounts_and_notes(
 /// Creates a public P2ID note containing 10 tokens for each requested fungible asset and sends it
 /// to the specified target account.
 fn create_note(faucet_ids: &[AccountId], target_id: AccountId, rng: &mut RandomCoin) -> Note {
-    let assets = faucet_ids
+    let assets: Vec<Asset> = faucet_ids
         .iter()
         .map(|faucet_id| Asset::Fungible(FungibleAsset::new(*faucet_id, 10).unwrap()))
         .collect();
     let sender = faucet_ids.first().copied().unwrap_or(target_id);
-    P2idNote::create(
-        sender,
-        target_id,
-        assets,
-        miden_protocol::note::NoteType::Public,
-        miden_protocol::note::NoteAttachments::empty(),
-        rng,
-    )
-    .expect("note creation failed")
+    P2idNote::builder()
+        .sender(sender)
+        .target(target_id)
+        .assets(assets)
+        .note_type(miden_protocol::note::NoteType::Public)
+        .generate_serial_number(rng)
+        .build()
+        .expect("note creation failed")
+        .into()
 }
 
 fn select_random_account_ids_for_update_notes<R: Rng + ?Sized>(

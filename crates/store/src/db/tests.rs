@@ -198,17 +198,18 @@ pub fn create_note(account_id: AccountId) -> Note {
     let coin_seed: [u64; 4] = rand::rng().random();
     let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.map(Felt::new_unchecked).into())));
     let mut rng = rng.lock().unwrap();
-    P2idNote::create(
-        account_id,
-        account_id,
-        vec![Asset::Fungible(
+
+    P2idNote::builder()
+        .sender(account_id)
+        .target(account_id)
+        .asset(Asset::Fungible(
             FungibleAsset::new(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap(), 10).unwrap(),
-        )],
-        NoteType::Public,
-        NoteAttachments::empty(),
-        &mut *rng,
-    )
-    .expect("Failed to create note")
+        ))
+        .note_type(NoteType::Public)
+        .generate_serial_number(&mut *rng)
+        .build()
+        .expect("Failed to create note")
+        .into()
 }
 
 #[test]
