@@ -9,6 +9,18 @@ use syn::token::Dot;
 use syn::visit::Visit;
 use syn::{Expr, Ident, ItemFn, Macro, Result, Token, parse_macro_input};
 
+const ALLOWED_FIELD_NAMES: &[&str] = &[
+    "account.id",
+    "account.ids",
+    "account.ids.count",
+    "batch.id",
+    "block.commitment",
+    "block.number",
+    "block.transactions.count",
+    "transaction.id",
+    "transactions.ids",
+];
+
 #[proc_macro_attribute]
 pub fn miden_instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attr = TokenStream2::from(attr);
@@ -46,16 +58,28 @@ pub fn miden_span_record(input: TokenStream) -> TokenStream {
     .into()
 }
 
+fn validate_field_name(path: &FieldPath) -> Result<()> {
+    let name = path.name();
+
+    if ALLOWED_FIELD_NAMES.contains(&name.as_str()) {
+        Ok(())
+    } else {
+        Err(syn::Error::new_spanned(
+            path,
+            format!(
+                "unsupported tracing field `{name}`; use one of: {}",
+                ALLOWED_FIELD_NAMES.join(", "),
+            ),
+        ))
+    }
+}
+
 fn collect_recorded_fields(function: &ItemFn) -> Vec<FieldPath> {
     let mut visitor = MacroVisitor::default();
     visitor.visit_block(&function.block);
 
     let mut names = BTreeSet::new();
-    visitor
-        .fields
-        .into_iter()
-        .filter(|field| names.insert(field.name()))
-        .collect()
+    visitor.fields.into_iter().filter(|field| names.insert(field.name())).collect()
 }
 
 #[derive(Default)]
@@ -72,8 +96,7 @@ impl<'ast> Visit<'ast> for MacroVisitor {
             .is_some_and(|segment| segment.ident == "miden_span_record")
         {
             if let Ok(records) = syn::parse2::<RecordFields>(mac.tokens.clone()) {
-                self.fields
-                    .extend(records.fields.into_iter().map(|field| field.path));
+                self.fields.extend(records.fields.into_iter().map(|field| field.path));
             }
         }
 
@@ -101,6 +124,7 @@ struct RecordField {
 impl Parse for RecordField {
     fn parse(input: ParseStream<'_>) -> Result<Self> {
         let path = input.parse()?;
+        validate_field_name(&path)?;
         input.parse::<Token![=]>()?;
         let value = input.parse()?;
 
