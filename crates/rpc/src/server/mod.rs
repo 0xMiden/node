@@ -23,8 +23,8 @@ use tower_http::classify::{GrpcCode, GrpcErrorsAsFailures, SharedClassifier};
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
+use crate::LOG_TARGET;
 use crate::server::health::HealthCheckLayer;
-use crate::{COMPONENT, LOG_TARGET};
 
 mod accept;
 pub(crate) mod api;
