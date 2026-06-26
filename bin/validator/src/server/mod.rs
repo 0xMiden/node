@@ -19,7 +19,7 @@ use crate::db::{
     load_chain_tip,
     load_with_pool_size,
 };
-use crate::{COMPONENT, DataDirectory, LOG_TARGET, ValidatorSigner};
+use crate::{DataDirectory, LOG_TARGET, ValidatorSigner};
 
 mod validator_service;
 
