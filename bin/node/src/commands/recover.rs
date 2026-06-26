@@ -15,6 +15,7 @@ use url::Url;
 
 use super::ENV_DATA_DIRECTORY;
 use super::store::StoreOptions;
+use crate::LOG_TARGET;
 
 // RECOVER
 // ================================================================================================
@@ -83,8 +84,9 @@ async fn recover_from_validator(
     let local_tip = state.chain_tip(Finality::Committed).await;
     if local_tip >= validator_tip {
         info!(
-            local.tip = local_tip.as_u32(),
-            validator.tip = validator_tip.as_u32(),
+            target: LOG_TARGET,
+            local_tip = local_tip.as_u32(),
+            validator_tip = validator_tip.as_u32(),
             "Local chain is already at the validator's chain tip; nothing to recover",
         );
         return Ok(());
@@ -92,6 +94,7 @@ async fn recover_from_validator(
 
     let block_from = local_tip.child().as_u32();
     info!(
+        target: LOG_TARGET,
         block_from,
         validator.tip = validator_tip.as_u32(),
         "Recovering blocks from validator",
@@ -109,7 +112,7 @@ async fn recover_from_validator(
             .context("failed to deserialize block from validator")?;
         let block_num = block.header().block_num();
         state.apply_block(block).await.context("failed to apply recovered block")?;
-        info!(block.number = block_num.as_u32(), "Applied recovered block");
+        info!(target: LOG_TARGET, block_number = %block_num.as_u32(), "Applied recovered block");
 
         // Stop once we reach the tip captured at the start of recovery.
         if block_num >= validator_tip {
@@ -126,6 +129,6 @@ async fn recover_from_validator(
         validator_tip.as_u32(),
     );
 
-    info!(chain_tip = final_tip.as_u32(), "Block recovery complete");
+    info!(target: LOG_TARGET, chain_tip = final_tip.as_u32(), "Block recovery complete");
     Ok(())
 }
