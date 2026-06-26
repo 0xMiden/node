@@ -308,7 +308,7 @@ impl BlockBuilder {
 
         if num_transactions > 0 {
             let transaction_ids =
-                signed_block.body().transactions().as_slice().iter().map(|tx| tx.id());
+                signed_block.body().transactions().as_slice().iter().map(TransactionHeader::id);
             tracing::debug!(target: LOG_TARGET, transactions = %format_array(transaction_ids), "Included transactions");
         }
 
