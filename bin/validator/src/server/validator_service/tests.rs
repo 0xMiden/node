@@ -24,6 +24,9 @@ struct TestValidator {
     server: ValidatorService,
     chain: PartialBlockchain,
     chain_tip: BlockHeader,
+    // Keeps the database's temp directory alive for the validator's lifetime: the reader pool opens
+    // connections lazily, so the file must still exist when the first read runs.
+    _temp_dir: tempfile::TempDir,
 }
 
 impl TestValidator {
@@ -32,12 +35,13 @@ impl TestValidator {
     async fn new() -> Self {
         let key = random_secret_key();
         let signer = ValidatorSigner::new_local(key.clone());
-        let (db, block_store, genesis_header) = setup_db_with_genesis(&key).await;
+        let (temp_dir, db, block_store, genesis_header) = setup_db_with_genesis(&key).await;
 
         Self {
             server: ValidatorService::new(signer, db, block_store, 0, 0, 0).await.unwrap(),
             chain: PartialBlockchain::default(),
             chain_tip: genesis_header,
+            _temp_dir: temp_dir,
         }
     }
 
@@ -96,7 +100,7 @@ impl TestValidator {
 /// of `key`. Returns the database handle and the genesis block header.
 async fn setup_db_with_genesis(
     key: &SigningKey,
-) -> (miden_node_db::sqlite::Database, BlockStore, BlockHeader) {
+) -> (tempfile::TempDir, miden_node_db::sqlite::Database, BlockStore, BlockHeader) {
     let genesis_state = GenesisState::new(vec![], test_fee_params(), 1, 0, key.public_key());
     let genesis_block = genesis_state.into_block(key).unwrap();
     let genesis_header = genesis_block.inner().header().clone();
@@ -113,7 +117,7 @@ async fn setup_db_with_genesis(
     .await
     .unwrap();
 
-    (db, block_store, genesis_header)
+    (dir, db, block_store, genesis_header)
 }
 
 /// Builds an empty [`ProposedBlock`] that extends the given parent block header using the provided
@@ -139,7 +143,7 @@ fn empty_block(parent_header: &BlockHeader, chain: &PartialBlockchain) -> Propos
 async fn signing_key_mismatch_rejected() {
     // Seed a database whose genesis designates `genesis_key` as the validator key.
     let genesis_key = random_secret_key();
-    let (db, block_store, genesis_header) = setup_db_with_genesis(&genesis_key).await;
+    let (_temp_dir, db, block_store, genesis_header) = setup_db_with_genesis(&genesis_key).await;
 
     // Start a validator with a different key, modelling a validator configured with the wrong key.
     let rogue_signer = ValidatorSigner::new_local(random_secret_key());
