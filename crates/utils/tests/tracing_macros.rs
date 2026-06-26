@@ -67,4 +67,5 @@ fn ui_tests() {
     let tests = trybuild::TestCases::new();
     tests.pass("tests/ui/tracing_macros/pass.rs");
     tests.compile_fail("tests/ui/tracing_macros/invalid_field_name.rs");
+    tests.compile_fail("tests/ui/tracing_macros/outside_miden_instrument.rs");
 }
