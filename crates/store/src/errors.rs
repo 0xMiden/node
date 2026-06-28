@@ -72,8 +72,8 @@ pub enum DatabaseError {
     #[error("invalid block parameters: block_from ({from}) > block_to ({to})")]
     InvalidBlockRange { from: BlockNumber, to: BlockNumber },
     #[error(
-        "transaction records for block {block_num} exceed the maximum response payload size and \
-         cannot be paginated"
+        "transactions for block {block_num} would exceed maximum response size, \
+         use a stricter filter to reduce the number of transactions returned"
     )]
     TransactionPageExceedsPayloadLimit { block_num: BlockNumber },
     #[error("data corrupted: {0}")]
