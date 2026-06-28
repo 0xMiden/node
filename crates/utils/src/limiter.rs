@@ -130,6 +130,6 @@ impl QueryParamLimiter for QueryParamStorageMapKeyTotalLimit {
 /// [`QueryParamStorageMapKeyTotalLimit`] and could be repeated without bound.
 pub struct QueryParamStorageMapSlotLimit;
 impl QueryParamLimiter for QueryParamStorageMapSlotLimit {
-    const PARAM_NAME: &str = "storage_map_slot";
+    const PARAM_NAME: &str = "storage_maps";
     const LIMIT: usize = miden_protocol::account::AccountStorage::MAX_NUM_STORAGE_SLOTS;
 }
