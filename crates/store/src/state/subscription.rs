@@ -303,6 +303,8 @@ fn check_growing_gap(
 
 #[cfg(test)]
 mod tests {
+    use tokio_stream::StreamExt;
+
     use super::*;
 
     /// Minimal [`SubscriptionSource`] for lifetime tests. `fetch` is never reached when `from` is
@@ -329,7 +331,7 @@ mod tests {
 
         // `from` is far ahead of the tip, so the task never enters the send loop and parks on the
         // tip. The spawned task holds the only watch receiver.
-        let stream = run_stream(BlockNumber::from(1_000_000), tip_rx, MockSource);
+        let stream = run_stream(BlockNumber::from(MAX_FUTURE_GAP - 1), tip_rx, MockSource);
         assert_eq!(tip_tx.receiver_count(), 1, "the spawned task should hold the tip receiver");
 
         // The client disconnects.
@@ -344,6 +346,37 @@ mod tests {
         })
         .await
         .expect("subscription task must terminate after the subscriber disconnects");
+    }
+
+    #[tokio::test]
+    async fn starting_block_exceeds_future_gap_returns_too_far_ahead() {
+        let (_tip_tx, tip_rx) = watch::channel(BlockNumber::GENESIS);
+        let from = BlockNumber::from(MAX_FUTURE_GAP + 1);
+        let mut stream = run_stream(from, tip_rx, MockSource);
+
+        let item = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .expect("stream must yield promptly")
+            .expect("stream must not end without an item");
+        assert!(matches!(item, Err(SubscriptionStreamError::TooFarAhead)));
+    }
+
+    #[tokio::test]
+    async fn starting_block_at_exact_future_gap_boundary_is_accepted() {
+        let (tip_tx, tip_rx) = watch::channel(BlockNumber::GENESIS);
+        // Exactly at the boundary: `from == tip + MAX_FUTURE_GAP` is NOT > tip + MAX_FUTURE_GAP, so
+        // the subscription must be accepted.
+        let from = BlockNumber::from(MAX_FUTURE_GAP);
+        let mut stream = run_stream(from, tip_rx, MockSource);
+
+        // Advance the tip to `from` so the task can produce an event rather than parking forever.
+        tip_tx.send(from).unwrap();
+
+        let item = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .expect("stream must yield promptly")
+            .expect("stream must not end without an item");
+        assert!(matches!(item, Ok(())), "expected an event, not TooFarAhead: {item:?}");
     }
 
     fn run(gaps: &[u32]) -> Result<(), ()> {
