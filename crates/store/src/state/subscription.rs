@@ -18,6 +18,9 @@ pub const SUBSCRIBER_CHANNEL_CAPACITY: usize = 32;
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 /// Maximum running block-gap allowed before a subscriber is disconnected.
 const MAX_RUNNING_GAP: u32 = 100u32;
+/// Maximum gap between tip and subscriber's requested starting block where the starting block is
+/// greater than the tip.
+const MAX_FUTURE_GAP: u32 = 100u32;
 
 // SUBSCRIPTION EVENTS
 // ================================================================================================
@@ -44,6 +47,8 @@ pub struct ProofSubscriptionEvent {
 pub enum SubscriptionStreamError<E> {
     #[error("subscriber is too slow to keep up with the chain")]
     TooSlow,
+    #[error("subscriber's requested starting block is too far ahead of the chain tip")]
+    TooFarAhead,
     #[error(transparent)]
     Source(#[from] E),
 }
@@ -230,7 +235,12 @@ async fn run_stream_inner<S: SubscriptionSource>(
     source: S,
 ) -> Result<(), SubscriptionStreamError<S::Error>> {
     let mut next = from;
-    let mut previous_gap = tip_rx.borrow().as_u32();
+    let tip = tip_rx.borrow().as_u32();
+    if next.as_u32() > tip.saturating_add(MAX_FUTURE_GAP) {
+        return Err(SubscriptionStreamError::TooFarAhead);
+    }
+
+    let mut previous_gap = tip;
     let mut running_gap = 0u32;
     loop {
         let mut tip = *tip_rx.borrow_and_update();
@@ -252,10 +262,7 @@ async fn run_stream_inner<S: SubscriptionSource>(
             next = next.child();
         }
         // Wait for the tip to advance, but also terminate promptly if the subscriber has
-        // disconnected. A subscription whose `from` is ahead of the tip never enters the send loop
-        // above, so without also watching `tx.closed()` here the detached task would park on tip
-        // changes until the chain reaches `from` (or the node shuts down), leaking the task, its
-        // watch receiver, and its `Arc<State>` long after the client dropped the stream.
+        // disconnected (in case the tip is less than `next`).
         tokio::select! {
             changed = tip_rx.changed() => {
                 if changed.is_err() {
