@@ -16,6 +16,21 @@ use crate::mempool::budget::BudgetStatus;
 use crate::mempool::graph::dag::Graph;
 use crate::mempool::graph::node::GraphNode;
 
+enum BatchSelection {
+    Empty,
+    Partial(SelectedBatch),
+    Full(SelectedBatch),
+}
+
+impl BatchSelection {
+    fn into_batch(self) -> Option<SelectedBatch> {
+        match self {
+            Self::Empty => None,
+            Self::Partial(batch) | Self::Full(batch) => Some(batch),
+        }
+    }
+}
+
 // TRANSACTION GRAPH NODE
 // ================================================================================================
 
@@ -119,8 +134,31 @@ impl TransactionGraph {
         Ok(())
     }
 
-    pub fn select_batch(&mut self, budget: BatchBudget) -> Option<SelectedBatch> {
-        self.select_user_batch().or_else(|| self.select_internal_batch(budget))
+    pub fn select_any_batch(&mut self, budget: BatchBudget) -> Option<SelectedBatch> {
+        self.select_user_batch()
+            .or_else(|| self.select_internal_batch(budget).into_batch())
+    }
+
+    pub fn select_full_batch(&mut self, budget: BatchBudget) -> Option<SelectedBatch> {
+        if let Some(user_batch) = self.select_user_batch() {
+            return Some(user_batch);
+        }
+
+        match self.select_internal_batch(budget) {
+            BatchSelection::Full(batch) => Some(batch),
+            BatchSelection::Partial(batch) => {
+                // Full-batch selection is speculative; partial selections must not reserve txs.
+                self.deselect_batch(batch);
+                None
+            },
+            BatchSelection::Empty => None,
+        }
+    }
+
+    fn deselect_batch(&mut self, batch: SelectedBatch) {
+        for tx in batch.into_transactions().into_iter().rev() {
+            self.inner.deselect(tx.id());
+        }
     }
 
     fn select_user_batch(&mut self) -> Option<SelectedBatch> {
@@ -166,7 +204,7 @@ impl TransactionGraph {
         Some(selected.build())
     }
 
-    fn select_internal_batch(&mut self, mut budget: BatchBudget) -> Option<SelectedBatch> {
+    fn select_internal_batch(&mut self, mut budget: BatchBudget) -> BatchSelection {
         let mut selected = SelectedBatch::builder();
 
         loop {
@@ -179,7 +217,18 @@ impl TransactionGraph {
             };
 
             if budget.check_then_subtract(candidate) == BudgetStatus::Exceeded {
-                break;
+                assert!(
+                    !selected.is_empty(),
+                    "selectable transaction {} exceeds the batch budget; \
+                     candidate resources: transactions=1, accounts=1, input_notes={}, \
+                     output_notes={}; batch budget: {:?}",
+                    candidate.id(),
+                    candidate.input_note_count(),
+                    candidate.output_note_count(),
+                    budget,
+                );
+
+                return BatchSelection::Full(selected.build());
             }
 
             let candidate = Arc::clone(candidate);
@@ -188,11 +237,14 @@ impl TransactionGraph {
         }
 
         if selected.is_empty() {
-            return None;
+            BatchSelection::Empty
+        } else if budget.is_exhausted() {
+            // The selected transactions may exactly consume the budget without another candidate
+            // being available to trigger the "would exceed" branch above.
+            BatchSelection::Full(selected.build())
+        } else {
+            BatchSelection::Partial(selected.build())
         }
-        let selected = selected.build();
-
-        Some(selected)
     }
 
     /// Reverts expired transactions and their descendants.

@@ -54,6 +54,14 @@ impl Default for BlockBudget {
 }
 
 impl BatchBudget {
+    /// Returns `true` if no more transaction resources can be consumed from this budget.
+    pub(crate) fn is_exhausted(&self) -> bool {
+        self.transactions == 0
+            || self.input_notes == 0
+            || self.output_notes == 0
+            || self.accounts == 0
+    }
+
     /// Attempts to consume the transaction's resources from the budget.
     ///
     /// Returns [`BudgetStatus::Exceeded`] if the transaction would exceed the remaining budget,

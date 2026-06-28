@@ -14,7 +14,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, info, instrument};
 use url::Url;
 
-use crate::batch_builder::BatchBuilder;
+use crate::batch_builder::{BatchBuilder, BatchIntervals};
 use crate::block_builder::BlockBuilder;
 use crate::block_prover::BlockProver;
 use crate::domain::transaction::AuthenticatedTransaction;
@@ -80,7 +80,7 @@ pub struct Sequencer {
     pub batch_prover_url: Option<Url>,
     /// The address of the block prover component.
     pub block_prover_url: Option<Url>,
-    /// The interval at which to produce batches.
+    /// Maximum interval between batch scheduler checks.
     pub batch_interval: Duration,
     /// The interval at which to produce blocks.
     pub block_interval: Duration,
@@ -110,11 +110,12 @@ impl Sequencer {
         info!(target: COMPONENT, "Sequencer initialized");
 
         let block_builder = BlockBuilder::new(Arc::clone(&store), validator, self.block_interval);
+        let batch_intervals = BatchIntervals::derive_from(self.block_interval, self.batch_interval);
         let batch_builder = BatchBuilder::new(
             Arc::clone(&store),
             SERVER_NUM_BATCH_BUILDERS,
             self.batch_prover_url,
-            self.batch_interval,
+            batch_intervals,
         );
         let api_config = BlockProducerApiConfig {
             max_txs_per_batch: self.max_txs_per_batch,

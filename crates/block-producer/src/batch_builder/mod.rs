@@ -13,8 +13,8 @@ use miden_protocol::batch::{BatchId, ProposedBatch, ProvenBatch};
 use miden_remote_prover_client::RemoteBatchProver;
 use miden_tx_batch_prover::LocalBatchProver;
 use rand::Rng;
-use tokio::task::JoinSet;
-use tokio::time;
+use tokio::task::{JoinError, JoinSet};
+use tokio::time::{Instant, MissedTickBehavior};
 use tracing::{Instrument, Span, instrument};
 use url::Url;
 
@@ -29,18 +29,14 @@ use crate::{COMPONENT, TelemetryInjectorExt};
 
 /// Builds [`ProvenBatch`] from sets of transactions.
 ///
-/// Transaction sets are pulled from the mempool at a configurable interval, and passed to
-/// a pool of provers for proof generation. Proving is currently unimplemented and is instead
-/// simulated via the given proof time and failure rate.
+/// Transaction sets are pulled from the mempool dynamically, and passed to a pool of provers for
+/// proof generation. Full batches are built immediately; partial batches are delayed briefly to
+/// give more transactions time to arrive.
 pub struct BatchBuilder {
-    /// Represents all batch building workers.
-    ///
-    /// This pool is always at maximum capacity. Idle workers will be in a [`std::future::Ready`]
-    /// state and are immediately available for a new batch building job.
-    ///
-    /// See also: [`BatchBuilder::wait_for_available_worker`].
-    worker_pool: JoinSet<Result<(), BuildBatchError>>,
-    batch_interval: Duration,
+    /// Batch building jobs currently running.
+    active_jobs: JoinSet<Result<(), BuildBatchError>>,
+    num_workers: NonZeroUsize,
+    intervals: BatchIntervals,
     /// The batch prover to use.
     ///
     /// If not provided, a local batch prover is used.
@@ -52,6 +48,36 @@ pub struct BatchBuilder {
     store: Arc<State>,
 }
 
+pub(crate) struct BatchIntervals {
+    /// Maximum time between spawned batch jobs before an any-size batch is attempted.
+    max_batch_interval: Duration,
+    /// How often the scheduler wakes to check whether a full batch can be spawned.
+    full_batch_check_interval: Duration,
+}
+
+impl BatchIntervals {
+    const MIN_SCHEDULER_INTERVAL: Duration = Duration::from_millis(50);
+
+    /// Derives batch scheduler intervals from the block and legacy batch intervals.
+    ///
+    /// Full batches are produced as often as possible, but a batch is attempted at
+    /// least every `batch_interval` if traffic is low.
+    pub(crate) fn derive_from(block_interval: Duration, batch_interval: Duration) -> Self {
+        let max_batch_interval = (block_interval / 2).max(Self::MIN_SCHEDULER_INTERVAL);
+        let full_batch_check_interval = (max_batch_interval / 10).max(Self::MIN_SCHEDULER_INTERVAL);
+        let full_batch_check_interval = if batch_interval.is_zero() {
+            full_batch_check_interval
+        } else {
+            full_batch_check_interval.min(batch_interval)
+        };
+
+        BatchIntervals {
+            max_batch_interval,
+            full_batch_check_interval,
+        }
+    }
+}
+
 impl BatchBuilder {
     /// Creates a new [`BatchBuilder`] with the given batch prover URL and maximum concurrent batch
     /// building workers.
@@ -61,53 +87,66 @@ impl BatchBuilder {
         store: Arc<State>,
         num_workers: NonZeroUsize,
         batch_prover_url: Option<Url>,
-        batch_interval: Duration,
+        intervals: BatchIntervals,
     ) -> Self {
         let batch_prover = batch_prover_url
             .map_or(BatchProver::local(MIN_PROOF_SECURITY_LEVEL), BatchProver::remote);
 
-        // It is important that the worker pool is filled to capacity with ready workers. See
-        // `Self::worker_pool` and `Self::wait_for_available_worker` for more context.
-        let worker_pool = (0..num_workers.get()).map(|_| std::future::ready(Ok(()))).collect();
-
         Self {
-            batch_interval,
-            worker_pool,
+            active_jobs: JoinSet::new(),
+            num_workers,
+            intervals,
             failure_rate: 0.0,
             batch_prover,
             store,
         }
     }
 
-    /// Starts the [`BatchBuilder`], creating and proving batches at the configured interval.
+    /// Starts the [`BatchBuilder`], creating and proving batches dynamically.
     ///
-    /// A pool of batch-proving workers is spawned, which are fed new batch jobs periodically.
-    /// A batch is skipped if there are no available workers, or if there are no transactions
-    /// available to batch.
+    /// Full batches are spawned on each check and job completion. A batch of any size is attempted
+    /// when no batch has been spawned for the maximum batch interval.
     pub async fn run(mut self, mempool: SharedMempool) -> anyhow::Result<()> {
         assert!(
             self.failure_rate < 1.0 && self.failure_rate.is_sign_positive(),
             "Failure rate must be a percentage"
         );
 
-        let mut interval = tokio::time::interval(self.batch_interval);
-        // We set the interval's missed tick behaviour to burst. This means we'll catch up missed
-        // batches as fast as possible. In other words, we try our best to keep the desired batch
-        // interval on average. The other options would result in at least one skipped batch.
-        interval.set_missed_tick_behavior(time::MissedTickBehavior::Burst);
+        let mut last_spawn = Instant::now();
+        let mut full_batch_check = tokio::time::interval(self.intervals.full_batch_check_interval);
+        full_batch_check.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         loop {
-            interval.tick().await;
-            self.build_batch(mempool.clone()).await?;
+            // Force a batch attempt after the maximum interval, even if it is partial.
+            let force_at = tokio::time::sleep_until(last_spawn + self.intervals.max_batch_interval);
+            let has_available_worker = self.has_available_worker();
+            let has_active_job = !self.active_jobs.is_empty();
+
+            tokio::select! {
+                _ = force_at => {
+                    last_spawn = Instant::now();
+                    if has_available_worker {
+                        self.spawn_any_batch_job(mempool.clone())?;
+                    }
+                },
+                result = self.active_jobs.join_next(), if has_active_job => {
+                    Self::handle_job_result(result.expect("active job set is not empty"))?;
+                },
+                _ = full_batch_check.tick() => {},
+            }
+
+            while self.has_available_worker() && self.spawn_full_batch_job(mempool.clone())? {
+                last_spawn = Instant::now();
+            }
         }
     }
 
     #[instrument(parent = None, target = COMPONENT, name = "batch_builder.build_batch", skip_all)]
-    async fn build_batch(&mut self, mempool: SharedMempool) -> Result<(), BuildBatchError> {
-        Span::current().set_attribute("workers.count", self.worker_pool.len());
+    fn build_batch(&mut self, mempool: SharedMempool, batch: SelectedBatch) {
+        Span::current().set_attribute("workers.active", self.active_jobs.len());
+        Span::current().set_attribute("workers.capacity", self.num_workers.get());
 
-        self.wait_for_available_worker().await?;
-
+        batch.inject_telemetry();
         let job = BatchJob {
             failure_rate: self.failure_rate,
             store: self.store.clone(),
@@ -115,28 +154,49 @@ impl BatchBuilder {
             batch_prover: self.batch_prover.clone(),
         };
 
-        self.worker_pool
-            .spawn(async move { job.build_batch().await }.instrument(tracing::Span::current()));
-
-        Ok(())
+        self.active_jobs.spawn(
+            async move { job.build_batch(batch).await }.instrument(tracing::Span::current()),
+        );
     }
 
-    /// Waits for a new batch building worker to become available.
-    ///
-    /// The worker pool is _always_ at full capacity because:
-    ///   - It is instantiated with a full cohort of [`std::future::ready()`].
-    ///   - This function removes a worker but it's _always_ added afterwards again in
-    ///     `build_batch`, keeping the pool at capacity.
-    ///
-    /// An alternate implementation might instead check the currently active jobs, but this would
-    /// require the same logic as here to handle the case when the pool is at capacity. This
-    /// design was chosen instead as it removes this branching logic by "always" having the pool
-    /// at max capacity. Instead completed workers wait to be culled by this function.
-    #[instrument(target = COMPONENT, name = "batch_builder.wait_for_available_worker", skip_all)]
-    async fn wait_for_available_worker(&mut self) -> Result<(), BuildBatchError> {
-        // We must crash here because otherwise we have a batch that has been selected from the
-        // mempool, but which is now in limbo. This effectively corrupts the mempool.
-        match self.worker_pool.join_next().await.expect("worker pool is never empty") {
+    fn spawn_full_batch_job(&mut self, mempool: SharedMempool) -> Result<bool, BuildBatchError> {
+        let Some(batch) = Self::select_full_batch(&mempool)? else {
+            return Ok(false);
+        };
+
+        self.build_batch(mempool, batch);
+        Ok(true)
+    }
+
+    fn spawn_any_batch_job(&mut self, mempool: SharedMempool) -> Result<bool, BuildBatchError> {
+        let Some(batch) = Self::select_any_batch(&mempool)? else {
+            return Ok(false);
+        };
+
+        self.build_batch(mempool, batch);
+        Ok(true)
+    }
+
+    #[instrument(target = COMPONENT, name = "batch_builder.select_full_batch", skip_all)]
+    fn select_full_batch(
+        mempool: &SharedMempool,
+    ) -> Result<Option<SelectedBatch>, BuildBatchError> {
+        Ok(mempool.lock().map_err(BuildBatchError::MempoolPoisoned)?.select_full_batch())
+    }
+
+    #[instrument(target = COMPONENT, name = "batch_builder.select_any_batch", skip_all)]
+    fn select_any_batch(mempool: &SharedMempool) -> Result<Option<SelectedBatch>, BuildBatchError> {
+        Ok(mempool.lock().map_err(BuildBatchError::MempoolPoisoned)?.select_any_batch())
+    }
+
+    fn has_available_worker(&self) -> bool {
+        self.active_jobs.len() < self.num_workers.get()
+    }
+
+    fn handle_job_result(
+        result: Result<Result<(), BuildBatchError>, JoinError>,
+    ) -> Result<(), BuildBatchError> {
+        match result {
             Ok(Ok(())) => Ok(()),
             Ok(Err(err)) => Err(err),
             Err(crash) => {
@@ -152,8 +212,8 @@ impl BatchBuilder {
 
 /// Represents a single batch building job.
 ///
-/// It is entirely self-contained and performs the full batch creation flow, from selecting the
-/// batch from the [`Mempool`] up to and including submitting the results back to the [`Mempool`].
+/// It is entirely self-contained and performs the full batch creation flow, from fetching the
+/// selected batch's inputs up to and including submitting the results back to the [`Mempool`].
 ///
 /// Recoverable errors are handled internally. Mempool poison is propagated as a fatal error.
 struct BatchJob {
@@ -167,13 +227,7 @@ struct BatchJob {
 }
 
 impl BatchJob {
-    async fn build_batch(&self) -> Result<(), BuildBatchError> {
-        let Some(batch) = self.select_batch()? else {
-            tracing::info!("No transactions available.");
-            return Ok(());
-        };
-
-        batch.inject_telemetry();
+    async fn build_batch(&self, batch: SelectedBatch) -> Result<(), BuildBatchError> {
         let batch_id = batch.id();
 
         let result = self
@@ -181,7 +235,6 @@ impl BatchJob {
             .and_then(|(txs, inputs)| Self::propose_batch(txs, inputs))
             .inspect_ok(TelemetryInjectorExt::inject_telemetry)
             .and_then(|proposed| self.prove_batch(proposed))
-
             // Failure must be injected before the final pipeline stage i.e. before commit is
             // called. The system cannot handle errors after it considers the process complete
             // (which makes sense).
@@ -200,11 +253,6 @@ impl BatchJob {
                 Ok(())
             },
         }
-    }
-
-    #[instrument(target = COMPONENT, name = "batch_builder.select_batch", skip_all)]
-    fn select_batch(&self) -> Result<Option<SelectedBatch>, BuildBatchError> {
-        Ok(self.mempool.lock().map_err(BuildBatchError::MempoolPoisoned)?.select_batch())
     }
 
     #[instrument(target = COMPONENT, name = "batch_builder.get_batch_inputs", skip_all, err)]

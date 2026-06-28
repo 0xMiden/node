@@ -106,7 +106,7 @@ mod tests {
 
 #[derive(clap::Args, Clone, Debug)]
 pub struct BatchOptions {
-    /// Interval at which to produce batches.
+    /// Maximum interval between batch scheduler checks.
     #[arg(
         id = "batch.interval",
         long = "batch.interval",
