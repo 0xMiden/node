@@ -12,7 +12,6 @@ use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{BatchId, ProposedBatch, ProvenBatch};
 use miden_remote_prover_client::RemoteBatchProver;
 use miden_tx_batch_prover::LocalBatchProver;
-use rand::Rng;
 use tokio::task::{JoinError, JoinSet};
 use tokio::time::{Instant, MissedTickBehavior};
 use tracing::{Instrument, Span, instrument};
@@ -41,10 +40,6 @@ pub struct BatchBuilder {
     ///
     /// If not provided, a local batch prover is used.
     batch_prover: BatchProver,
-    /// Simulated block failure rate as a percentage.
-    ///
-    /// Note: this _must_ be sign positive and less than 1.0.
-    failure_rate: f64,
     store: Arc<State>,
 }
 
@@ -96,7 +91,6 @@ impl BatchBuilder {
             active_jobs: JoinSet::new(),
             num_workers,
             intervals,
-            failure_rate: 0.0,
             batch_prover,
             store,
         }
@@ -107,11 +101,6 @@ impl BatchBuilder {
     /// Full batches are spawned on each check and job completion. A batch of any size is attempted
     /// when no batch has been spawned for the maximum batch interval.
     pub async fn run(mut self, mempool: SharedMempool) -> anyhow::Result<()> {
-        assert!(
-            self.failure_rate < 1.0 && self.failure_rate.is_sign_positive(),
-            "Failure rate must be a percentage"
-        );
-
         let mut last_spawn = Instant::now();
         let mut full_batch_check = tokio::time::interval(self.intervals.full_batch_check_interval);
         full_batch_check.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -148,7 +137,6 @@ impl BatchBuilder {
 
         batch.inject_telemetry();
         let job = BatchJob {
-            failure_rate: self.failure_rate,
             store: self.store.clone(),
             mempool,
             batch_prover: self.batch_prover.clone(),
@@ -217,10 +205,6 @@ impl BatchBuilder {
 ///
 /// Recoverable errors are handled internally. Mempool poison is propagated as a fatal error.
 struct BatchJob {
-    /// Simulated block failure rate as a percentage.
-    ///
-    /// Note: this _must_ be sign positive and less than 1.0.
-    failure_rate: f64,
     store: Arc<State>,
     batch_prover: BatchProver,
     mempool: SharedMempool,
@@ -235,10 +219,6 @@ impl BatchJob {
             .and_then(|(txs, inputs)| Self::propose_batch(txs, inputs))
             .inspect_ok(TelemetryInjectorExt::inject_telemetry)
             .and_then(|proposed| self.prove_batch(proposed))
-            // Failure must be injected before the final pipeline stage i.e. before commit is
-            // called. The system cannot handle errors after it considers the process complete
-            // (which makes sense).
-            .and_then(|x| self.inject_failure(x))
             .and_then(|proven_batch| async { self.commit_batch(proven_batch) })
             // Handle errors by propagating the error to the root span and rolling back the batch.
             .inspect_err(|err| Span::current().set_error(err))
@@ -331,20 +311,6 @@ impl BatchJob {
             ))
         } else {
             Ok(Arc::new(proven_batch))
-        }
-    }
-
-    #[instrument(target = COMPONENT, name = "batch_builder.inject_failure", skip_all, err)]
-    async fn inject_failure<T>(&self, value: T) -> Result<T, BuildBatchError> {
-        let roll = rand::rng().random::<f64>();
-
-        Span::current().set_attribute("failure_rate", self.failure_rate);
-        Span::current().set_attribute("dice_roll", roll);
-
-        if roll < self.failure_rate {
-            Err(BuildBatchError::InjectedFailure)
-        } else {
-            Ok(value)
         }
     }
 

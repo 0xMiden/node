@@ -96,11 +96,6 @@ pub enum StateConflict {
 /// Error encountered while building a batch.
 #[derive(Debug, Error)]
 pub enum BuildBatchError {
-    /// We sometimes randomly inject errors into the batch building process to test our failure
-    /// responses.
-    #[error("nothing actually went wrong, failure was injected on purpose")]
-    InjectedFailure,
-
     #[error("batch proving task panic'd")]
     JoinError(#[from] tokio::task::JoinError),
 
@@ -152,9 +147,6 @@ pub enum BuildBlockError {
 
     #[error("mempool lock is poisoned")]
     MempoolPoisoned(#[source] MempoolPoisonError),
-
-    /// We sometimes randomly inject errors into the batch building process to test our failure
-    /// responses.
 
     /// Custom error variant for errors not covered by the other variants.
     #[error("{error_msg}")]
