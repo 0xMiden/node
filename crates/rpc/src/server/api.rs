@@ -28,6 +28,7 @@ use miden_node_utils::limiter::{
     QueryParamNoteTagLimit,
     QueryParamNullifierPrefixLimit,
     QueryParamStorageMapKeyTotalLimit,
+    QueryParamStorageMapSlotLimit,
 };
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::retry::{self, Retryable};
@@ -396,6 +397,7 @@ static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
     use QueryParamNoteTagLimit as NoteTag;
     use QueryParamNullifierPrefixLimit as NullifierPrefix;
     use QueryParamStorageMapKeyTotalLimit as StorageMapKeyTotal;
+    use QueryParamStorageMapSlotLimit as StorageMapSlot;
 
     proto::rpc::RpcLimits {
         endpoints: std::collections::HashMap::from([
@@ -411,7 +413,10 @@ static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
             ("GetNotesById".into(), endpoint_limits(&[(NoteId::PARAM_NAME, NoteId::LIMIT)])),
             (
                 "GetAccount".into(),
-                endpoint_limits(&[(StorageMapKeyTotal::PARAM_NAME, StorageMapKeyTotal::LIMIT)]),
+                endpoint_limits(&[
+                    (StorageMapKeyTotal::PARAM_NAME, StorageMapKeyTotal::LIMIT),
+                    (StorageMapSlot::PARAM_NAME, StorageMapSlot::LIMIT),
+                ]),
             ),
         ]),
     }

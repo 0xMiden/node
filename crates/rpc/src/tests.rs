@@ -29,6 +29,8 @@ use miden_node_utils::limiter::{
     QueryParamNoteIdLimit,
     QueryParamNoteTagLimit,
     QueryParamNullifierPrefixLimit,
+    QueryParamStorageMapKeyTotalLimit,
+    QueryParamStorageMapSlotLimit,
 };
 use miden_protocol::Word;
 use miden_protocol::account::delta::AccountUpdateDetails;
@@ -868,6 +870,23 @@ async fn get_limits_endpoint() {
         "GetNotesById {} limit should be {}",
         QueryParamNoteIdLimit::PARAM_NAME,
         QueryParamNoteIdLimit::LIMIT
+    );
+
+    // Verify GetAccount endpoint advertises both the per-key and per-slot storage map limits.
+    let get_account = limits.endpoints.get("GetAccount").expect("GetAccount should exist");
+    assert_eq!(
+        get_account.parameters.get(QueryParamStorageMapKeyTotalLimit::PARAM_NAME),
+        Some(&(QueryParamStorageMapKeyTotalLimit::LIMIT as u32)),
+        "GetAccount {} limit should be {}",
+        QueryParamStorageMapKeyTotalLimit::PARAM_NAME,
+        QueryParamStorageMapKeyTotalLimit::LIMIT
+    );
+    assert_eq!(
+        get_account.parameters.get(QueryParamStorageMapSlotLimit::PARAM_NAME),
+        Some(&(QueryParamStorageMapSlotLimit::LIMIT as u32)),
+        "GetAccount {} limit should be {}",
+        QueryParamStorageMapSlotLimit::PARAM_NAME,
+        QueryParamStorageMapSlotLimit::LIMIT
     );
 }
 
