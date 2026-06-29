@@ -92,13 +92,13 @@ impl SequencerCommand {
         let mut tasks = Tasks::new();
         tasks.spawn("sequencer", sequencer.wait());
         tasks.spawn("RPC server", rpc.serve());
-        if let Some(pre_auth_listen) = self.internal {
-            let pre_authenticated = SequencerInternal {
-                listener: bind_rpc(pre_auth_listen).await?,
+        if let Some(internal_listen) = self.internal {
+            let sequencer_internal = SequencerInternal {
+                listener: bind_rpc(internal_listen).await?,
                 block_producer,
                 grpc_options: GrpcOptionsInternal::from(runtime.external_grpc_options),
             };
-            tasks.spawn("pre-authenticated submission server", pre_authenticated.serve());
+            tasks.spawn("pre-authenticated submission server", sequencer_internal.serve());
         }
 
         tasks.join_next_as_error().await
