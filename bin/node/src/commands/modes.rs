@@ -46,7 +46,7 @@ pub struct SequencerCommand {
     /// already-authenticated transactions from full nodes *without* re-verification.
     #[arg(
         long = "internal.listen",
-        env = "MIDEN_NODE_PRE_AUTHENTICATED_LISTEN",
+        env = "MIDEN_NODE_INTERNAL_LISTEN",
         value_name = "LISTEN"
     )]
     pub pre_authenticated: Option<SocketAddr>,
