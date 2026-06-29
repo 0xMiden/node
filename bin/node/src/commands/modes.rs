@@ -45,7 +45,7 @@ pub struct SequencerCommand {
     /// When unset the pre-authenticated submission service is not exposed. This interface accepts
     /// already-authenticated transactions from full nodes *without* re-verification.
     #[arg(
-        long = "pre-authenticated.listen",
+        long = "internal.listen",
         env = "MIDEN_NODE_PRE_AUTHENTICATED_LISTEN",
         value_name = "LISTEN"
     )]

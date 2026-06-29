@@ -158,7 +158,7 @@ OTEL_RESOURCE_ATTRIBUTES="$(node_resource_attributes sequencer)" \
     --data-directory "$NODE_DIR" \
     --validator.url "http://127.0.0.1:$VALIDATOR_PORT" \
     --ntx-builder.url "http://127.0.0.1:$NTX_BUILDER_PORT" \
-    --pre-authenticated.listen "0.0.0.0:$PRE_AUTHENTICATED_PORT" \
+    --internal.listen "0.0.0.0:$PRE_AUTHENTICATED_PORT" \
     $EXTRA_ARGS &
 PIDS+=($!)
 
