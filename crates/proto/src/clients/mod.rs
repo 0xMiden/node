@@ -32,6 +32,8 @@ use std::time::Duration;
 
 use http::header::ACCEPT;
 use miden_node_utils::tracing::grpc::OtelInterceptor;
+use miden_protocol::batch::ProposedBatch;
+use miden_protocol::utils::serde::Serializable;
 use tonic::metadata::AsciiMetadataValue;
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint, Error as TransportError};
@@ -507,5 +509,31 @@ impl Builder<WantsConnection> {
             self.metadata_auth_header_value,
         );
         T::with_interceptor(channel, interceptor)
+    }
+}
+
+impl ValidatorClient {
+    /// Submits each transaction in the batch to the validator for re-execution.
+    ///
+    /// The caller must ensure `transaction_inputs` matches the batch's transactions in length and
+    /// order.
+    pub async fn submit_batch(
+        &mut self,
+        proposed_batch: &ProposedBatch,
+        transaction_inputs: &[Vec<u8>],
+    ) -> Result<(), Status> {
+        debug_assert_eq!(
+            proposed_batch.transactions().len(),
+            transaction_inputs.len(),
+            "transaction inputs must match the batch's transactions"
+        );
+        for (tx, inputs) in proposed_batch.transactions().iter().zip(transaction_inputs) {
+            let proven_tx = generated::transaction::ProvenTransaction {
+                transaction: tx.to_bytes(),
+                transaction_inputs: Some(inputs.clone()),
+            };
+            self.submit_proven_transaction(proven_tx).await?;
+        }
+        Ok(())
     }
 }
