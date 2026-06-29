@@ -13,6 +13,11 @@ impl grpc::server::validator_api::Status for ValidatorService {
         &self,
         _request: tonic::Request<()>,
     ) -> tonic::Result<grpc::validator::ValidatorStatus> {
+        // Reject requests while a backup subscription is streaming. Fails fast rather than blocking.
+        let _guard = self.serve_lock.try_read().map_err(|_| {
+            tonic::Status::resource_exhausted("validator is busy streaming a backup")
+        })?;
+
         Ok(grpc::validator::ValidatorStatus {
             version: env!("CARGO_PKG_VERSION").to_string(),
             status: "OK".to_string(),

@@ -1,4 +1,5 @@
 use std::pin::Pin;
+use std::sync::Arc;
 
 use miden_node_proto::generated as grpc;
 use miden_node_store::BlockStore;
@@ -37,10 +38,21 @@ impl grpc::server::validator_api::BlockSubscription for ValidatorService {
     async fn handle(&self, request: Self::Input) -> tonic::Result<Self::ItemStream> {
         Span::current().set_attribute("block.from", request.block_from);
 
+        // Hold the exclusive backup lock for the entire lifetime of the stream. While a backup
+        // subscription is active no other RPCs may run, and vice versa. `try_write_owned` rejects
+        // the backup outright if any request is in flight, and yields a `'static` guard that we can
+        // move into the stream so it is released only once the stream is dropped.
+        let guard = Arc::clone(&self.serve_lock).try_write_owned().map_err(|_| {
+            Status::resource_exhausted("cannot stream backup while validator is serving requests")
+        })?;
+
         let from = BlockNumber::from(request.block_from);
         let source = BlockStoreSource { block_store: self.block_store.clone() };
-        let stream = run_stream(from, self.committed_tip.subscribe(), source)
-            .map(|event| event.map_err(subscription_error_to_status));
+        let stream = run_stream(from, self.committed_tip.subscribe(), source).map(move |event| {
+            // Keep the guard alive for as long as the stream is polled.
+            let _guard = &guard;
+            event.map_err(subscription_error_to_status)
+        });
 
         Ok(Box::pin(stream))
     }

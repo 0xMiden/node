@@ -17,6 +17,12 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
     type Output = ();
 
     async fn handle(&self, input: Self::Input) -> tonic::Result<Self::Output> {
+        // Reject requests while a backup subscription is streaming.
+        let _guard = self
+            .serve_lock
+            .try_read()
+            .map_err(|_| Status::resource_exhausted("validator is busy streaming a backup"))?;
+
         tracing::Span::current().set_attribute("transaction.id", input.tx.id());
 
         // Validate the transaction.
