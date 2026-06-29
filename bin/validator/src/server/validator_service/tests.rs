@@ -62,11 +62,41 @@ impl TestValidator {
         &self,
         block_from: u32,
     ) -> <ValidatorService as proto::server::validator_api::BlockSubscription>::ItemStream {
-        let request =
-            tonic::Request::new(proto::validator::BlockSubscriptionRequest { block_from });
-        validator_api::BlockSubscription::full(&self.server, request)
+        self.try_call_block_subscription(block_from)
             .await
             .expect("subscription should open")
+    }
+
+    /// Opens a block subscription starting from `block_from`, returning the raw result so callers
+    /// can assert on rejection.
+    async fn try_call_block_subscription(
+        &self,
+        block_from: u32,
+    ) -> Result<
+        <ValidatorService as proto::server::validator_api::BlockSubscription>::ItemStream,
+        tonic::Status,
+    > {
+        let request =
+            tonic::Request::new(proto::validator::BlockSubscriptionRequest { block_from });
+        validator_api::BlockSubscription::full(&self.server, request).await
+    }
+
+    /// Calls the `status` endpoint on the validator server.
+    async fn call_status(&self) -> proto::validator::ValidatorStatus {
+        validator_api::Status::full(&self.server, tonic::Request::new(()))
+            .await
+            .expect("status should always be available")
+    }
+
+    /// Asserts that opening a backup subscription is rejected with `resource_exhausted`. The
+    /// success type ([`Self::ItemStream`]) is not `Debug`, so we match rather than `expect_err`.
+    async fn assert_backup_rejected(&self, block_from: u32) {
+        match self.try_call_block_subscription(block_from).await {
+            Ok(_) => panic!("backup subscription should have been rejected"),
+            Err(status) => {
+                assert_eq!(status.code(), tonic::Code::ResourceExhausted, "got: {status:?}");
+            },
+        }
     }
 
     /// Loads the current chain tip from the validator's database.
@@ -538,4 +568,114 @@ async fn block_subscription_replays_then_follows() {
     let block = SignedBlock::read_from_bytes(&response.block).expect("valid signed block");
     assert_eq!(block.header().block_num().as_u32(), 3);
     assert_eq!(response.committed_chain_tip, 3);
+}
+
+// SERVE LOCK TESTS
+// ================================================================================================
+//
+// A backup subscription holds the exclusive write side of `serve_lock` for the lifetime of the
+// returned stream; every other RPC takes the read side. The two are therefore mutually exclusive:
+// a backup cannot start while requests are in flight, and requests are rejected while a backup is
+// streaming. Both sides fail fast with `resource_exhausted` rather than blocking.
+
+/// While a backup subscription is streaming, `sign_block` is rejected, and it succeeds again once
+/// the subscription is dropped and the lock released.
+#[tokio::test]
+async fn backup_stream_blocks_sign_block_until_dropped() {
+    let mut tv = TestValidator::new().await;
+    tv.apply_empty_block().await;
+
+    // Open a backup subscription; the returned stream holds the exclusive lock.
+    let stream = tv.call_block_subscription(1).await;
+
+    let proposed = tv.propose_empty_block();
+    let status = tv
+        .call_sign_block(&proposed)
+        .await
+        .expect_err("sign_block must be rejected while a backup is streaming");
+    assert_eq!(status.code(), tonic::Code::ResourceExhausted, "got: {status:?}");
+
+    // Dropping the subscription releases the lock, so the same request now succeeds.
+    drop(stream);
+    tv.call_sign_block(&proposed)
+        .await
+        .expect("sign_block should succeed once the backup stream is dropped");
+}
+
+/// Unlike other RPCs, `status` stays available during a backup and reports `BACKUP` instead of
+/// `OK`, reverting to `OK` once the subscription is dropped.
+#[tokio::test]
+async fn status_reports_backup_while_streaming() {
+    let mut tv = TestValidator::new().await;
+    tv.apply_empty_block().await;
+
+    assert_eq!(tv.call_status().await.status, "OK");
+
+    let stream = tv.call_block_subscription(1).await;
+    assert_eq!(
+        tv.call_status().await.status,
+        "BACKUP",
+        "status must report BACKUP while a backup is streaming",
+    );
+
+    drop(stream);
+    assert_eq!(
+        tv.call_status().await.status,
+        "OK",
+        "status must revert to OK once the backup stream is dropped",
+    );
+}
+
+/// A backup subscription cannot start while another request holds the read side of the lock,
+/// modelling an in-flight RPC. Once that reader is released, the backup opens successfully.
+#[tokio::test]
+async fn in_flight_request_blocks_backup() {
+    let tv = TestValidator::new().await;
+
+    // Simulate an in-flight RPC by holding the read side of the lock, exactly as the RPC handlers
+    // do for their duration.
+    let read_guard = tv.server.serve_lock.try_read().expect("read side should be available");
+
+    tv.assert_backup_rejected(0).await;
+
+    // Releasing the reader lets a backup start.
+    drop(read_guard);
+    let _stream = tv.call_block_subscription(0).await;
+}
+
+/// Only one backup subscription can run at a time: opening a second while the first is live is
+/// rejected.
+#[tokio::test]
+async fn concurrent_backups_rejected() {
+    let tv = TestValidator::new().await;
+
+    let first = tv.call_block_subscription(0).await;
+
+    tv.assert_backup_rejected(0).await;
+
+    // The slot frees up once the first subscription is dropped.
+    drop(first);
+    let _stream = tv.call_block_subscription(0).await;
+}
+
+/// Ordinary requests share the read side of the lock and so run concurrently with one another; only
+/// a backup is exclusive.
+#[tokio::test]
+async fn requests_run_concurrently() {
+    let tv = TestValidator::new().await;
+
+    // Multiple readers may hold the lock at once, so requests are not serialized against each
+    // other.
+    let first = tv.server.serve_lock.try_read().expect("first reader should acquire");
+    let second = tv
+        .server
+        .serve_lock
+        .try_read()
+        .expect("second reader should acquire concurrently");
+
+    // A backup is still excluded while any reader is held.
+    tv.assert_backup_rejected(0).await;
+
+    drop(first);
+    drop(second);
 }
