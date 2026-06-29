@@ -4,11 +4,16 @@ use std::sync::Arc;
 use accept::AcceptHeaderLayer;
 use anyhow::Context;
 use miden_node_block_producer::{BlockProducerApi, RpcReadiness, RpcSync};
-use miden_node_proto::clients::{NtxBuilderClient, RpcClient as SourceRpcClient, ValidatorClient};
-use miden_node_proto::server::rpc_api;
+use miden_node_proto::clients::{
+    NtxBuilderClient,
+    RpcClient as SourceRpcClient,
+    SequencerClient,
+    ValidatorClient,
+};
+use miden_node_proto::server::{rpc_api, sequencer_api};
 use miden_node_proto_build::rpc_api_descriptor;
 use miden_node_store::state::State;
-use miden_node_utils::clap::GrpcOptionsExternal;
+use miden_node_utils::clap::{GrpcOptionsExternal, GrpcOptionsInternal};
 use miden_node_utils::cors::cors_for_grpc_web_layer;
 use miden_node_utils::grpc;
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
@@ -24,6 +29,7 @@ use tower_http::trace::TraceLayer;
 use tracing::info;
 
 use crate::COMPONENT;
+use crate::server::api::SequencerInternalService;
 use crate::server::health::HealthCheckLayer;
 
 mod accept;
@@ -55,13 +61,19 @@ pub enum RpcMode {
         block_producer: Box<BlockProducerApi>,
         validator: Box<ValidatorClient>,
     },
-    /// Full-node RPC forwards submissions to the source RPC.
+    /// Full-node RPC.
     ///
-    /// The caller is responsible for configuring this client with any request metadata the source
-    /// RPC requires.
+    /// By default it forwards submissions verbatim to the source RPC (the caller is responsible for
+    /// configuring this client with any request metadata the source RPC requires).
+    ///
+    /// When the validator and sequencer clients are set, the full-node will, instead of forwarding,
+    /// re-execute submissions through the validator and authenticate them against its store, then
+    /// submit the authenticated result directly to the sequencer's internal API.
     FullNode {
         source_rpc: Box<SourceRpcClient>,
         readiness_threshold: u32,
+        validator: Option<Box<ValidatorClient>>,
+        sequencer: Option<Box<SequencerClient>>,
     },
 }
 
@@ -73,10 +85,17 @@ impl RpcMode {
         }
     }
 
-    pub fn full_node(source_rpc: SourceRpcClient, readiness_threshold: u32) -> Self {
+    pub fn full_node(
+        source_rpc: SourceRpcClient,
+        readiness_threshold: u32,
+        validator: Option<ValidatorClient>,
+        sequencer: Option<SequencerClient>,
+    ) -> Self {
         Self::FullNode {
             source_rpc: Box::new(source_rpc),
             readiness_threshold,
+            sequencer: sequencer.map(Box::new),
+            validator: validator.map(Box::new),
         }
     }
 }
@@ -122,7 +141,7 @@ impl Rpc {
                     )
                     .await;
             },
-            RpcMode::FullNode { source_rpc, readiness_threshold } => {
+            RpcMode::FullNode { source_rpc, readiness_threshold, .. } => {
                 health_reporter
                     .set_service_status(
                         rpc_api::service_name(),
@@ -194,5 +213,48 @@ impl Rpc {
         tasks.spawn("RPC server", async move { rpc.await.map_err(|e| anyhow::anyhow!(e)) });
 
         tasks.join_next_as_error().await
+    }
+}
+
+// INTERNAL SEQUENCER
+// ================================================================================================
+
+/// The internal Sequencer server.
+///
+/// Serves the private `sequencer.Api` gRPC service, which accepts already-authenticated
+/// transactions from full nodes and submits them directly to the mempool *without*
+/// re-verification.
+///
+/// This must only ever be exposed on a private, network-isolated listener: callers can inject
+/// transactions that the sequencer will not independently verify.
+pub struct SequencerInternal {
+    /// The listener the service binds to.
+    pub listener: TcpListener,
+    /// The in-process block producer API submissions are forwarded to.
+    pub block_producer: BlockProducerApi,
+    /// gRPC server options for internal services (timeouts).
+    pub grpc_options: GrpcOptionsInternal,
+}
+
+impl SequencerInternal {
+    /// Serves the internal sequencer API.
+    ///
+    /// Executes in place (i.e. not spawned) and will run indefinitely until a fatal error is
+    /// encountered.
+    pub async fn serve(self) -> anyhow::Result<()> {
+        info!(target: COMPONENT, endpoint = ?self.listener, "Internal sequencer server initialized");
+
+        let service = SequencerInternalService { block_producer: self.block_producer };
+
+        // Note: deliberately no accept-header / rate-limit / auth layers; this is a private,
+        // trusted interface and is expected to be network-isolated.
+        tonic::transport::Server::builder()
+            .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
+            .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
+            .timeout(self.grpc_options.request_timeout)
+            .add_service(sequencer_api::service(service))
+            .serve_with_incoming(TcpListenerStream::new(self.listener))
+            .await
+            .context("failed to serve internal sequencer API")
     }
 }
