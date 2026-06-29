@@ -26,12 +26,12 @@ use url::Url;
 
 use crate::inclusion::{current_block_height, scan_with_drain};
 use crate::summary::{print_phase_progress, print_summary};
-use crate::{PROOFS_DIR, create_genesis_aware_rpc_client, read_from_file};
+use crate::{PROOFS_DIR, create_genesis_aware_rpc_client_pool, read_from_file};
 
 // ORCHESTRATOR
 // ================================================================================================
 
-pub(crate) async fn run(rpc_url: Url, concurrency: usize, wait_blocks: u32) {
+pub(crate) async fn run(rpc_url: Url, concurrency: usize, connections: usize, wait_blocks: u32) {
     let in_dir = PathBuf::from(PROOFS_DIR);
 
     println!("Loading mint txs from {}", in_dir.join("mint_txs.bin").display());
@@ -48,12 +48,13 @@ pub(crate) async fn run(rpc_url: Url, concurrency: usize, wait_blocks: u32) {
     // contents later, without having to interrogate the node. (Mints are not tracked on-chain.)
     let consume_ids: Vec<TransactionId> = consume_txs.iter().map(ProvenTransaction::id).collect();
 
-    println!("Connecting to {rpc_url}...");
-    let rpc_client = create_genesis_aware_rpc_client(&rpc_url, Duration::from_secs(30))
+    println!("Connecting to {rpc_url} ({connections} connection(s))...");
+    let pool = create_genesis_aware_rpc_client_pool(&rpc_url, Duration::from_secs(30), connections)
         .await
-        .expect("failed to create RPC client");
+        .expect("failed to create RPC client pool");
+    let pool = Arc::new(pool);
 
-    let h_start = current_block_height(rpc_client.clone()).await;
+    let h_start = current_block_height(pool[0].clone()).await;
     println!("Chain height at start: {h_start}");
 
     println!(
@@ -61,12 +62,15 @@ pub(crate) async fn run(rpc_url: Url, concurrency: usize, wait_blocks: u32) {
          submits must be serialized for the mempool to chain them)...",
         mint_txs.len()
     );
-    let mint_stats = submit_sequential(rpc_client.clone(), mint_txs, mint_tx_inputs).await;
+    let mint_stats = submit_sequential(pool[0].clone(), mint_txs, mint_tx_inputs).await;
     print_phase_progress("mint", &mint_stats);
 
-    println!("Submitting {} consume txs with concurrency={concurrency}...", consume_txs.len());
-    let consume_stats =
-        submit_all(rpc_client.clone(), consume_txs, consume_tx_inputs, concurrency).await;
+    println!(
+        "Submitting {} consume txs with concurrency={concurrency} across {} connection(s)...",
+        consume_txs.len(),
+        pool.len(),
+    );
+    let consume_stats = submit_all(pool.clone(), consume_txs, consume_tx_inputs, concurrency).await;
     print_phase_progress("consume", &consume_stats);
 
     let ack_by_id = build_ack_map(&consume_ids, &consume_stats);
@@ -75,7 +79,7 @@ pub(crate) async fn run(rpc_url: Url, concurrency: usize, wait_blocks: u32) {
         ack_by_id.len(),
     );
     let (h_final, inclusion) =
-        scan_with_drain(rpc_client.clone(), h_start, wait_blocks, ack_by_id).await;
+        scan_with_drain(pool[0].clone(), h_start, wait_blocks, ack_by_id).await;
 
     print_summary(h_start, h_final, &mint_stats, &consume_stats, concurrency, &inclusion);
 }
@@ -134,7 +138,7 @@ impl PhaseStats {
 // ================================================================================================
 
 async fn submit_all(
-    client: RpcClient,
+    pool: Arc<Vec<RpcClient>>,
     txs: Vec<ProvenTransaction>,
     tx_inputs: Vec<Vec<u8>>,
     concurrency: usize,
@@ -154,7 +158,9 @@ async fn submit_all(
     let mut set = tokio::task::JoinSet::new();
     for (i, (tx, inputs)) in txs.into_iter().zip(tx_inputs.into_iter()).enumerate() {
         let permit = semaphore.clone().acquire_owned().await.unwrap();
-        let mut client = client.clone();
+        // Round-robin across the connection pool so concurrent submissions ride separate HTTP/2
+        // sockets instead of multiplexing over one channel.
+        let mut client = pool[i % pool.len()].clone();
         let printed = printed.clone();
         set.spawn(async move {
             let request = proto::transaction::ProvenTransaction {

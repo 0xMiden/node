@@ -65,6 +65,15 @@ pub enum Command {
         /// Number of concurrent submission tasks.
         #[arg(long, default_value_t = 32)]
         concurrency: usize,
+        /// Number of independent gRPC connections to spread concurrent submissions across.
+        ///
+        /// A single tonic channel multiplexes every request over one HTTP/2 socket and pins them to
+        /// one backend replica behind a load balancer, so a high `--concurrency` over a single
+        /// connection head-of-line blocks and times out. Submissions are round-robined across this
+        /// many connections, capping per-connection streams at roughly `concurrency / connections`
+        /// and letting a load balancer fan requests out across replicas.
+        #[arg(long, default_value_t = 8)]
+        connections: usize,
         /// Maximum number of blocks past the submission point to scan before giving up. The scan
         /// exits early as soon as every submitted tx has been seen on-chain, so this is an upper
         /// bound on the wait, not a fixed delay. Bump this when running large batches that may take
@@ -90,8 +99,13 @@ impl Cli {
             } => {
                 create_proofs::run(rpc_url, num_transactions, remote_prover_url).await;
             },
-            Command::RunBenchmark { rpc_url, concurrency, wait_blocks } => {
-                submit::run(rpc_url, concurrency, wait_blocks).await;
+            Command::RunBenchmark {
+                rpc_url,
+                concurrency,
+                connections,
+                wait_blocks,
+            } => {
+                submit::run(rpc_url, concurrency, connections, wait_blocks).await;
             },
         }
     }
@@ -100,11 +114,12 @@ impl Cli {
 // SHARED INFRA
 // ================================================================================================
 
-/// Create an RPC client configured with the correct genesis metadata in the `Accept` header so that
-/// write RPCs such as `SubmitProvenTransaction` are accepted by the node.
-pub(crate) async fn create_genesis_aware_rpc_client(
+/// Build a single RPC client over its own gRPC connection, optionally carrying the genesis
+/// commitment in request metadata.
+async fn build_rpc_client(
     rpc_url: &Url,
     timeout: Duration,
+    genesis: Option<String>,
 ) -> Result<RpcClient> {
     let use_tls = rpc_url.scheme() == "https";
 
@@ -114,12 +129,22 @@ pub(crate) async fn create_genesis_aware_rpc_client(
     } else {
         tls_stage.without_tls()
     };
-    let mut rpc: RpcClient = timeout_stage
-        .with_timeout(timeout)
-        .without_metadata_version()
-        .without_metadata_genesis()
+    let genesis_stage = timeout_stage.with_timeout(timeout).without_metadata_version();
+    let otel_stage = match genesis {
+        Some(genesis) => genesis_stage.with_metadata_genesis(genesis),
+        None => genesis_stage.without_metadata_genesis(),
+    };
+    otel_stage
         .without_otel_context_injection()
         .connect()
+        .await
+        .context("Failed to connect to RPC server")
+}
+
+/// Discover the genesis commitment (hex) of the node at `rpc_url`. This is the value write RPCs
+/// such as `SubmitProvenTransaction` expect echoed back in request metadata.
+async fn discover_genesis(rpc_url: &Url, timeout: Duration) -> Result<String> {
+    let mut rpc = build_rpc_client(rpc_url, timeout, None)
         .await
         .context("Failed to create RPC client for genesis discovery")?;
 
@@ -136,25 +161,36 @@ pub(crate) async fn create_genesis_aware_rpc_client(
     let genesis_header: BlockHeader =
         genesis_block_header.try_into().context("Failed to convert block header")?;
 
-    let genesis_commitment = genesis_header.commitment();
-    let genesis = genesis_commitment.to_hex();
+    Ok(genesis_header.commitment().to_hex())
+}
 
-    let tls_stage = Builder::new(rpc_url.clone());
-    let timeout_stage = if use_tls {
-        tls_stage.with_tls().context("Failed to configure TLS for RPC client")?
-    } else {
-        tls_stage.without_tls()
-    };
-    let rpc_client = timeout_stage
-        .with_timeout(timeout)
-        .without_metadata_version()
-        .with_metadata_genesis(genesis)
-        .without_otel_context_injection()
-        .connect()
-        .await
-        .context("Failed to connect to RPC server with genesis metadata")?;
+/// Create an RPC client configured with the correct genesis metadata in the `Accept` header so that
+/// write RPCs such as `SubmitProvenTransaction` are accepted by the node.
+pub(crate) async fn create_genesis_aware_rpc_client(
+    rpc_url: &Url,
+    timeout: Duration,
+) -> Result<RpcClient> {
+    let genesis = discover_genesis(rpc_url, timeout).await?;
+    build_rpc_client(rpc_url, timeout, Some(genesis)).await
+}
 
-    Ok(rpc_client)
+/// Create a pool of `size` genesis-aware RPC clients, each on its own gRPC connection.
+///
+/// Genesis is discovered once and reused. Because every client owns a distinct channel, concurrent
+/// submissions spread across this pool ride separate HTTP/2 sockets (and, behind a load balancer,
+/// separate backend replicas) instead of multiplexing over a single connection.
+pub(crate) async fn create_genesis_aware_rpc_client_pool(
+    rpc_url: &Url,
+    timeout: Duration,
+    size: usize,
+) -> Result<Vec<RpcClient>> {
+    let size = size.max(1);
+    let genesis = discover_genesis(rpc_url, timeout).await?;
+    let mut pool = Vec::with_capacity(size);
+    for _ in 0..size {
+        pool.push(build_rpc_client(rpc_url, timeout, Some(genesis.clone())).await?);
+    }
+    Ok(pool)
 }
 
 pub(crate) fn get_genesis_header_request() -> BlockHeaderByNumberRequest {
