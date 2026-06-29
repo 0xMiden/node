@@ -21,6 +21,7 @@ pub mod errors;
 mod errors;
 
 pub mod server;
+pub use domain::transaction::AuthenticatedTransaction;
 pub use errors::MempoolSubmissionError;
 pub use proof_scheduler::DEFAULT_MAX_CONCURRENT_PROOFS;
 pub use rpc_sync::{RpcReadiness, RpcSync};

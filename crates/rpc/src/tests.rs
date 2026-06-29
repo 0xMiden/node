@@ -471,7 +471,7 @@ async fn rpc_rejects_post_deployment_network_account_tx() {
 
     let service = RpcService::new(
         Arc::clone(&store.state),
-        RpcMode::full_node(source_rpc_client(), 100),
+        RpcMode::full_node(source_rpc_client(), 100, None, None),
         None,
         NonZeroUsize::new(1_000_000).unwrap(),
         None,
@@ -631,7 +631,7 @@ async fn full_node_forwards_get_network_note_status_to_source_rpc() {
     let local_store = TestStore::start().await;
     let full_node = RpcService::new(
         Arc::clone(&local_store.state),
-        RpcMode::full_node(source_rpc, 100),
+        RpcMode::full_node(source_rpc, 100, None, None),
         None,
         NonZeroUsize::new(1_000).unwrap(),
         None,
@@ -661,7 +661,7 @@ async fn full_node_preserves_original_accept_metadata_when_forwarding() {
     let local_store = TestStore::start().await;
     let full_node = RpcService::new(
         Arc::clone(&local_store.state),
-        RpcMode::full_node(source_rpc, 100),
+        RpcMode::full_node(source_rpc, 100, None, None),
         None,
         NonZeroUsize::new(1_000).unwrap(),
         None,
