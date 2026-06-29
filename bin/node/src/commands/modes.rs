@@ -7,11 +7,11 @@ use miden_node_block_producer::{DEFAULT_VALIDATOR_TIMEOUT, Sequencer};
 use miden_node_proto::clients::{
     Builder,
     NtxBuilderClient,
-    PreAuthenticatedClient,
     RpcClient,
+    SequencerClient,
     ValidatorClient,
 };
-use miden_node_rpc::{PreAuthenticated, PreAuthenticatedSubmission, Rpc, RpcMode};
+use miden_node_rpc::{PreAuthenticated, Rpc, RpcMode};
 use miden_node_store::State;
 use miden_node_utils::clap::{GrpcOptionsInternal, duration_to_human_readable_string};
 use miden_node_utils::tasks::Tasks;
@@ -170,7 +170,8 @@ impl FullNodeCommand {
     pub async fn handle(self) -> anyhow::Result<()> {
         let runtime = self.runtime.runtime_config(&self.store);
         let source_rpc = self.sync.source_rpc_client()?;
-        let pre_auth = self.pre_auth_options.pre_authenticated_submission()?;
+        let validator_client = self.pre_auth_options.validator_client();
+        let sequencer_client = self.pre_auth_options.sequencer_client();
         let network_tx_auth = self.runtime.rpc.network_tx_auth()?;
         let state = load_state(&runtime).await?;
         let _disk_monitor = state.spawn_disk_monitor();
@@ -178,7 +179,12 @@ impl FullNodeCommand {
         let rpc = Rpc {
             listener: bind_rpc(runtime.rpc_listen).await?,
             store: state,
-            mode: RpcMode::full_node(source_rpc, self.sync.readiness_threshold, pre_auth),
+            mode: RpcMode::full_node(
+                source_rpc,
+                self.sync.readiness_threshold,
+                validator_client,
+                sequencer_client,
+            ),
             ntx_builder: None,
             grpc_options: runtime.external_grpc_options,
             network_tx_auth,
@@ -217,34 +223,30 @@ pub struct PreAuthenticatedNodeOptions {
 }
 
 impl PreAuthenticatedNodeOptions {
-    /// Builds the pre-authenticated submission clients, or `None` if this full node is not
-    /// configured for pre-authenticated transactions.
-    fn pre_authenticated_submission(&self) -> anyhow::Result<Option<PreAuthenticatedSubmission>> {
-        let (Some(validator_url), Some(sequencer_url)) = (&self.validator_url, &self.sequencer_url)
-        else {
-            return Ok(None);
-        };
+    fn sequencer_client(&self) -> Option<SequencerClient> {
+        self.sequencer_url.as_ref().map(|url| {
+            Builder::new(url.clone())
+                .with_tls()
+                .expect("TLS is enabled")
+                .with_timeout(Duration::from_secs(5))
+                .without_metadata_version()
+                .without_metadata_genesis()
+                .with_otel_context_injection()
+                .connect_lazy::<SequencerClient>()
+        })
+    }
 
-        let validator = Builder::new(validator_url.clone())
-            .with_tls()?
-            .with_timeout(Duration::from_secs(5))
-            .without_metadata_version()
-            .without_metadata_genesis()
-            .with_otel_context_injection()
-            .connect_lazy::<ValidatorClient>();
-
-        let sequencer = Builder::new(sequencer_url.clone())
-            .with_tls()?
-            .with_timeout(Duration::from_secs(5))
-            .without_metadata_version()
-            .without_metadata_genesis()
-            .with_otel_context_injection()
-            .connect_lazy::<PreAuthenticatedClient>();
-
-        Ok(Some(PreAuthenticatedSubmission {
-            validator: Box::new(validator),
-            sequencer: Box::new(sequencer),
-        }))
+    fn validator_client(&self) -> Option<ValidatorClient> {
+        self.validator_url.as_ref().map(|url| {
+            Builder::new(url.clone())
+                .with_tls()
+                .expect("TLS is enabled")
+                .with_timeout(Duration::from_secs(5))
+                .without_metadata_version()
+                .without_metadata_genesis()
+                .with_otel_context_injection()
+                .connect_lazy::<ValidatorClient>()
+        })
     }
 }
 

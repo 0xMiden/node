@@ -6,11 +6,11 @@ use anyhow::Context;
 use miden_node_block_producer::{BlockProducerApi, RpcReadiness, RpcSync};
 use miden_node_proto::clients::{
     NtxBuilderClient,
-    PreAuthenticatedClient,
     RpcClient as SourceRpcClient,
+    SequencerClient,
     ValidatorClient,
 };
-use miden_node_proto::server::{pre_authenticated_api, rpc_api};
+use miden_node_proto::server::{rpc_api, sequencer_api};
 use miden_node_proto_build::rpc_api_descriptor;
 use miden_node_store::state::State;
 use miden_node_utils::clap::{GrpcOptionsExternal, GrpcOptionsInternal};
@@ -73,18 +73,9 @@ pub enum RpcMode {
     FullNode {
         source_rpc: Box<SourceRpcClient>,
         readiness_threshold: u32,
-        pre_auth_submit: Option<PreAuthenticatedSubmission>,
+        sequencer: Option<Box<SequencerClient>>,
+        validator: Option<Box<ValidatorClient>>,
     },
-}
-
-/// Clients a full node uses to validate submissions and forward them to the sequencer as
-/// pre-authenticated transactions.
-#[derive(Clone, Debug)]
-pub struct PreAuthenticatedSubmission {
-    /// The (shared) validator used to re-execute transactions.
-    pub validator: Box<ValidatorClient>,
-    /// The sequencer's private pre-authenticated submission API.
-    pub sequencer: Box<PreAuthenticatedClient>,
 }
 
 impl RpcMode {
@@ -98,12 +89,14 @@ impl RpcMode {
     pub fn full_node(
         source_rpc: SourceRpcClient,
         readiness_threshold: u32,
-        pre_auth_submit: Option<PreAuthenticatedSubmission>,
+        validator: Option<ValidatorClient>,
+        sequencer: Option<SequencerClient>,
     ) -> Self {
         Self::FullNode {
             source_rpc: Box::new(source_rpc),
             readiness_threshold,
-            pre_auth_submit,
+            sequencer: sequencer.map(Box::new),
+            validator: validator.map(Box::new),
         }
     }
 }
@@ -260,7 +253,7 @@ impl PreAuthenticated {
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .timeout(self.grpc_options.request_timeout)
-            .add_service(pre_authenticated_api::service(service))
+            .add_service(sequencer_api::service(service))
             .serve_with_incoming(TcpListenerStream::new(self.listener))
             .await
             .context("failed to serve pre-authenticated submission API")

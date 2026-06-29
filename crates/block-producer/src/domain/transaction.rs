@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use miden_node_proto::errors::ConversionError;
-use miden_node_proto::generated::pre_authenticated;
+use miden_node_proto::generated::sequencer;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
@@ -138,7 +138,7 @@ impl AuthenticatedTransaction {
 // PROTO CONVERSIONS
 // ================================================================================================
 
-impl From<AuthenticatedTransaction> for pre_authenticated::AuthenticatedTransaction {
+impl From<AuthenticatedTransaction> for sequencer::AuthenticatedTransaction {
     fn from(value: AuthenticatedTransaction) -> Self {
         Self {
             transaction: value.inner.to_bytes(),
@@ -153,10 +153,10 @@ impl From<AuthenticatedTransaction> for pre_authenticated::AuthenticatedTransact
     }
 }
 
-impl TryFrom<pre_authenticated::AuthenticatedTransaction> for AuthenticatedTransaction {
+impl TryFrom<sequencer::AuthenticatedTransaction> for AuthenticatedTransaction {
     type Error = ConversionError;
 
-    fn try_from(value: pre_authenticated::AuthenticatedTransaction) -> Result<Self, Self::Error> {
+    fn try_from(value: sequencer::AuthenticatedTransaction) -> Result<Self, Self::Error> {
         let inner = ProvenTransaction::read_from_bytes(&value.transaction)
             .map_err(|err| ConversionError::deserialization("ProvenTransaction", err))?;
 

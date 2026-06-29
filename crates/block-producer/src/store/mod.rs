@@ -4,7 +4,7 @@ use std::num::NonZeroU32;
 
 use itertools::Itertools;
 use miden_node_proto::errors::ConversionError;
-use miden_node_proto::generated::pre_authenticated;
+use miden_node_proto::generated::sequencer;
 use miden_node_store::state::{Finality, State, TransactionInputs as StoreTransactionInputs};
 use miden_node_utils::formatting::format_opt;
 use miden_protocol::Word;
@@ -70,7 +70,7 @@ impl TransactionInputs {
 // PROTO CONVERSIONS
 // ------------------------------------------------------------------------------------------------
 
-impl From<TransactionInputs> for pre_authenticated::AuthInputs {
+impl From<TransactionInputs> for sequencer::AuthInputs {
     fn from(value: TransactionInputs) -> Self {
         Self {
             account_id: Some(value.account_id.into()),
@@ -78,7 +78,7 @@ impl From<TransactionInputs> for pre_authenticated::AuthInputs {
             nullifiers: value
                 .nullifiers
                 .into_iter()
-                .map(|(nullifier, block_num)| pre_authenticated::NullifierRecord {
+                .map(|(nullifier, block_num)| sequencer::NullifierRecord {
                     nullifier: Some(nullifier.into()),
                     block_num: block_num.map_or(0, NonZeroU32::get),
                 })
@@ -93,15 +93,13 @@ impl From<TransactionInputs> for pre_authenticated::AuthInputs {
     }
 }
 
-impl TryFrom<pre_authenticated::AuthInputs> for TransactionInputs {
+impl TryFrom<sequencer::AuthInputs> for TransactionInputs {
     type Error = ConversionError;
 
-    fn try_from(value: pre_authenticated::AuthInputs) -> Result<Self, Self::Error> {
+    fn try_from(value: sequencer::AuthInputs) -> Result<Self, Self::Error> {
         let account_id = value
             .account_id
-            .ok_or_else(|| {
-                ConversionError::missing_field::<pre_authenticated::AuthInputs>("account_id")
-            })?
+            .ok_or_else(|| ConversionError::missing_field::<sequencer::AuthInputs>("account_id"))?
             .try_into()?;
 
         let account_commitment = value.account_commitment.map(Word::try_from).transpose()?;
@@ -113,9 +111,7 @@ impl TryFrom<pre_authenticated::AuthInputs> for TransactionInputs {
                 let nullifier = record
                     .nullifier
                     .ok_or_else(|| {
-                        ConversionError::missing_field::<pre_authenticated::NullifierRecord>(
-                            "nullifier",
-                        )
+                        ConversionError::missing_field::<sequencer::NullifierRecord>("nullifier")
                     })?
                     .try_into()?;
                 Ok((nullifier, NonZeroU32::new(record.block_num)))

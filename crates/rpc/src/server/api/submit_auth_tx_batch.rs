@@ -1,6 +1,6 @@
 use miden_node_block_producer::store::TransactionInputs;
 use miden_node_proto::generated as proto;
-use miden_node_proto::generated::server::pre_authenticated_api;
+use miden_node_proto::generated::server::sequencer_api;
 use miden_node_utils::ErrorReport;
 use miden_protocol::batch::ProposedBatch;
 use miden_protocol::utils::serde::Deserializable;
@@ -9,12 +9,12 @@ use tonic::Status;
 use super::PreAuthenticatedService;
 
 #[tonic::async_trait]
-impl pre_authenticated_api::SubmitAuthenticatedTxBatch for PreAuthenticatedService {
+impl sequencer_api::SubmitAuthenticatedTxBatch for PreAuthenticatedService {
     type Input = (ProposedBatch, Vec<TransactionInputs>);
     type Output = proto::blockchain::BlockNumber;
 
     fn decode(
-        request: proto::pre_authenticated::AuthenticatedTransactionBatch,
+        request: proto::sequencer::AuthenticatedTransactionBatch,
     ) -> tonic::Result<Self::Input> {
         let batch = ProposedBatch::read_from_bytes(&request.proposed_batch).map_err(|err| {
             Status::invalid_argument(err.as_report_context("invalid proposed_batch"))

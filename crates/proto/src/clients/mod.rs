@@ -161,8 +161,7 @@ type GeneratedProxyStatusClient =
 type GeneratedProverClient = generated::remote_prover::api_client::ApiClient<InterceptedChannel>;
 type GeneratedValidatorClient = generated::validator::api_client::ApiClient<InterceptedChannel>;
 type GeneratedNtxBuilderClient = generated::ntx_builder::api_client::ApiClient<InterceptedChannel>;
-type GeneratedPreAuthenticatedClient =
-    generated::pre_authenticated::api_client::ApiClient<InterceptedChannel>;
+type GeneratedSequencerClient = generated::sequencer::api_client::ApiClient<InterceptedChannel>;
 
 // gRPC CLIENTS
 // ================================================================================================
@@ -178,7 +177,7 @@ pub struct ValidatorClient(GeneratedValidatorClient);
 #[derive(Debug, Clone)]
 pub struct NtxBuilderClient(GeneratedNtxBuilderClient);
 #[derive(Debug, Clone)]
-pub struct PreAuthenticatedClient(GeneratedPreAuthenticatedClient);
+pub struct SequencerClient(GeneratedSequencerClient);
 
 impl DerefMut for RpcClient {
     fn deref_mut(&mut self) -> &mut Self::Target {
@@ -250,14 +249,14 @@ impl Deref for NtxBuilderClient {
     }
 }
 
-impl DerefMut for PreAuthenticatedClient {
+impl DerefMut for SequencerClient {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-impl Deref for PreAuthenticatedClient {
-    type Target = GeneratedPreAuthenticatedClient;
+impl Deref for SequencerClient {
+    type Target = GeneratedSequencerClient;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -302,12 +301,9 @@ impl GrpcClient for NtxBuilderClient {
     }
 }
 
-impl GrpcClient for PreAuthenticatedClient {
+impl GrpcClient for SequencerClient {
     fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
-        Self(GeneratedPreAuthenticatedClient::new(InterceptedService::new(
-            channel,
-            interceptor,
-        )))
+        Self(GeneratedSequencerClient::new(InterceptedService::new(channel, interceptor)))
     }
 }
 
