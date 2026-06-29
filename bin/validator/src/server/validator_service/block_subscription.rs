@@ -39,9 +39,7 @@ impl grpc::server::validator_api::BlockSubscription for ValidatorService {
         Span::current().set_attribute("block.from", request.block_from);
 
         // Hold the exclusive backup lock for the entire lifetime of the stream. While a backup
-        // subscription is active no other RPCs may run, and vice versa. `try_write_owned` rejects
-        // the backup outright if any request is in flight, and yields a `'static` guard that we can
-        // move into the stream so it is released only once the stream is dropped.
+        // subscription is active no other RPCs may run, and vice versa.
         let guard = Arc::clone(&self.serve_lock).try_write_owned().map_err(|_| {
             Status::resource_exhausted("cannot stream backup while validator is serving requests")
         })?;
