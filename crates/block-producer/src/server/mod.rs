@@ -362,6 +362,11 @@ impl BlockProducerApi {
 
     /// Adds a batch whose transactions have already been authenticated against the store to the
     /// mempool.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the number of transactions in `batch` does not match the number of inputs in
+    /// `inputs`.
     #[instrument(
          target = COMPONENT,
          name = "block_producer.api.submit_authenticated_tx_batch",
@@ -374,7 +379,7 @@ impl BlockProducerApi {
         batch: ProposedBatch,
         inputs: Vec<TransactionInputs>,
     ) -> Result<BlockNumber, MempoolSubmissionError> {
-        debug_assert_eq!(
+        assert_eq!(
             batch.transactions().len(),
             inputs.len(),
             "transaction inputs must match the batch's transactions"
