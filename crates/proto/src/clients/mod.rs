@@ -524,7 +524,9 @@ impl ValidatorClient {
         transaction_inputs: &[Vec<u8>],
     ) -> Result<(), Status> {
         if proposed_batch.transactions().len() != transaction_inputs.len() {
-            return Err(Status::invalid_argument("transaction inputs do not match the batch's transactions"));
+            return Err(Status::invalid_argument(
+                "transaction inputs do not match the batch's transactions",
+            ));
         }
         for (tx, inputs) in proposed_batch.transactions().iter().zip(transaction_inputs) {
             let proven_tx = generated::transaction::ProvenTransaction {
