@@ -2,7 +2,7 @@ mod server;
 #[cfg(test)]
 mod tests;
 
-pub use server::{PreAuthenticated, Rpc, RpcMode};
+pub use server::{SequencerInternal, Rpc, RpcMode};
 
 // CONSTANTS
 // =================================================================================================

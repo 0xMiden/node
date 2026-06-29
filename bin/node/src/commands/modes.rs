@@ -11,7 +11,7 @@ use miden_node_proto::clients::{
     SequencerClient,
     ValidatorClient,
 };
-use miden_node_rpc::{PreAuthenticated, Rpc, RpcMode};
+use miden_node_rpc::{SequencerInternal, Rpc, RpcMode};
 use miden_node_store::State;
 use miden_node_utils::clap::{GrpcOptionsInternal, duration_to_human_readable_string};
 use miden_node_utils::tasks::Tasks;
@@ -46,10 +46,10 @@ pub struct SequencerCommand {
     /// already-authenticated transactions from full nodes *without* re-verification.
     #[arg(
         long = "internal.listen",
-        env = "MIDEN_NODE_INTERNAL_LISTEN",
+        env = "MIDEN_NODE__LISTEN",
         value_name = "LISTEN"
     )]
-    pub pre_authenticated: Option<SocketAddr>,
+    pub internal: Option<SocketAddr>,
 }
 
 impl SequencerCommand {
@@ -92,8 +92,8 @@ impl SequencerCommand {
         let mut tasks = Tasks::new();
         tasks.spawn("sequencer", sequencer.wait());
         tasks.spawn("RPC server", rpc.serve());
-        if let Some(pre_auth_listen) = self.pre_authenticated {
-            let pre_authenticated = PreAuthenticated {
+        if let Some(pre_auth_listen) = self.internal {
+            let pre_authenticated = SequencerInternal {
                 listener: bind_rpc(pre_auth_listen).await?,
                 block_producer,
                 grpc_options: GrpcOptionsInternal::from(runtime.external_grpc_options),

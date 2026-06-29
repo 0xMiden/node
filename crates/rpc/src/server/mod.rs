@@ -220,7 +220,7 @@ impl Rpc {
 // PRE-AUTHENTICATED
 // ================================================================================================
 
-/// The pre-authenticated submission server.
+/// The internal Sequencer server.
 ///
 /// Serves the private `pre_authenticated.Api` gRPC service, which accepts already-authenticated
 /// transactions from full nodes and submits them directly to the mempool *without*
@@ -228,7 +228,7 @@ impl Rpc {
 ///
 /// This must only ever be exposed on a private, network-isolated listener: callers can inject
 /// transactions that the sequencer will not independently verify.
-pub struct PreAuthenticated {
+pub struct SequencerInternal {
     /// The listener the pre-authenticated submission service binds to.
     pub listener: TcpListener,
     /// The in-process block producer API submissions are forwarded to.
@@ -237,13 +237,13 @@ pub struct PreAuthenticated {
     pub grpc_options: GrpcOptionsInternal,
 }
 
-impl PreAuthenticated {
-    /// Serves the pre-authenticated submission API.
+impl SequencerInternal {
+    /// Serves the internal sequencer API.
     ///
     /// Executes in place (i.e. not spawned) and will run indefinitely until a fatal error is
     /// encountered.
     pub async fn serve(self) -> anyhow::Result<()> {
-        info!(target: COMPONENT, endpoint = ?self.listener, "Pre-authenticated submission server initialized");
+        info!(target: COMPONENT, endpoint = ?self.listener, "Internal sequencer server initialized");
 
         let service = PreAuthenticatedService { block_producer: self.block_producer };
 
@@ -256,6 +256,6 @@ impl PreAuthenticated {
             .add_service(sequencer_api::service(service))
             .serve_with_incoming(TcpListenerStream::new(self.listener))
             .await
-            .context("failed to serve pre-authenticated submission API")
+            .context("failed to serve internal sequencer API")
     }
 }
