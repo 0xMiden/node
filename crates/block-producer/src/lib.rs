@@ -99,9 +99,3 @@ const _: () = assert!(
     DEFAULT_MAX_TXS_PER_BATCH <= miden_protocol::MAX_ACCOUNTS_PER_BATCH,
     "Server constraint cannot exceed the protocol's constraint"
 );
-
-/// An extension trait used only locally to implement telemetry injection.
-trait TelemetryInjectorExt {
-    /// Inject [`tracing`] telemetry from self.
-    fn inject_telemetry(&self);
-}

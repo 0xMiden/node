@@ -1,9 +1,7 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use miden_node_utils::spawn::spawn_blocking_in_span;
-use miden_node_utils::tracing::ErrorSpanExt;
-use tracing::info_span;
+use miden_node_utils::spawn::spawn_blocking_in_current_span;
 
 use crate::COMPONENT;
 use crate::state::State;
@@ -18,37 +16,35 @@ impl State {
             let mut interval = tokio::time::interval(Duration::from_mins(5));
             loop {
                 interval.tick().await;
-                let dir = data_directory.clone();
-                let span = info_span!(
-                    target: COMPONENT,
-                    "measure_disk_space_usage",
-                    db.sqlite.size = tracing::field::Empty,
-                    db.sqlite.wal.size = tracing::field::Empty,
-                    db.block_store.size = tracing::field::Empty,
-                    db.account_tree.size = tracing::field::Empty,
-                    db.nullifier_tree.size = tracing::field::Empty,
-                    db.account_state_forest.size = tracing::field::Empty,
-                );
-                let result =
-                    spawn_blocking_in_span(move || measure_disk_usage_bytes(&dir), span.clone())
-                        .await;
-                match result {
-                    Ok(usage) => {
-                        span.record("db.sqlite.size", usage.sqlite_db);
-                        span.record("db.sqlite.wal.size", usage.sqlite_wal);
-                        span.record("db.block_store.size", usage.block_store);
-                        #[cfg(feature = "rocksdb")]
-                        {
-                            span.record("db.account_tree.size", usage.account_tree);
-                            span.record("db.nullifier_tree.size", usage.nullifier_tree);
-                            span.record("db.account_state_forest.size", usage.account_state_forest);
-                        }
-                    },
-                    Err(err) => span.set_error(&err),
-                }
+                let _ = measure_disk_space_usage(data_directory.clone()).await;
             }
         })
     }
+}
+
+#[miden_node_utils::tracing::miden_instrument(
+    target = COMPONENT,
+    name = "measure_disk_space_usage",
+    skip_all,
+    err
+)]
+async fn measure_disk_space_usage(data_dir: PathBuf) -> Result<(), tokio::task::JoinError> {
+    let usage = spawn_blocking_in_current_span(move || measure_disk_usage_bytes(&data_dir)).await?;
+    miden_node_utils::tracing::miden_span_record!(
+        db.sqlite.size = usage.sqlite_db,
+        db.sqlite.wal.size = usage.sqlite_wal,
+        db.block_store.size = usage.block_store,
+    );
+    #[cfg(feature = "rocksdb")]
+    {
+        miden_node_utils::tracing::miden_span_record!(
+            db.account_tree.size = usage.account_tree,
+            db.nullifier_tree.size = usage.nullifier_tree,
+            db.account_state_forest.size = usage.account_state_forest,
+        );
+    }
+
+    Ok(())
 }
 
 /// Byte counts for each on-disk storage component.

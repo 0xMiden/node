@@ -10,6 +10,7 @@ use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::tracing::ErrorSpanExt;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{BatchId, ProposedBatch, ProvenBatch};
+use miden_protocol::transaction::TransactionId;
 use miden_remote_prover_client::RemoteBatchProver;
 use miden_tx_batch_prover::LocalBatchProver;
 use rand::Rng;
@@ -18,11 +19,11 @@ use tokio::time;
 use tracing::{Instrument, Span};
 use url::Url;
 
+use crate::COMPONENT;
 use crate::domain::batch::SelectedBatch;
 use crate::domain::transaction::AuthenticatedTransaction;
 use crate::errors::{BuildBatchError, StoreError};
 use crate::mempool::SharedMempool;
-use crate::{COMPONENT, TelemetryInjectorExt};
 
 // BATCH BUILDER
 // ================================================================================================
@@ -106,20 +107,7 @@ impl BatchBuilder {
         parent = None,
         target = COMPONENT,
         name = "batch_builder.build_batch",
-        skip_all,
-        fields(
-            workers.count = tracing::field::Empty,
-            batch.id = tracing::field::Empty,
-            transactions.count = tracing::field::Empty,
-            transactions.ids = tracing::field::Empty,
-            transactions.input_notes.count = tracing::field::Empty,
-            transactions.output_notes.count = tracing::field::Empty,
-            transactions.unauthenticated_notes.count = tracing::field::Empty,
-            batch.expiration_height = tracing::field::Empty,
-            batch.account_updates.count = tracing::field::Empty,
-            batch.input_notes.count = tracing::field::Empty,
-            batch.output_notes.count = tracing::field::Empty,
-        )
+        skip_all
     )]
     async fn build_batch(&mut self, mempool: SharedMempool) -> Result<(), BuildBatchError> {
         miden_node_utils::tracing::miden_span_record!(workers.count = self.worker_pool.len());
@@ -185,19 +173,41 @@ struct BatchJob {
 }
 
 impl BatchJob {
+    #[miden_node_utils::tracing::miden_instrument(
+        target = COMPONENT,
+        name = "batch_builder.build_batch_job",
+        skip_all,
+        err
+    )]
     async fn build_batch(&self) -> Result<(), BuildBatchError> {
         let Some(batch) = self.select_batch()? else {
             tracing::trace!("No transactions available.");
             return Ok(());
         };
 
-        batch.inject_telemetry();
+        let telemetry = batch.telemetry();
+        miden_node_utils::tracing::miden_span_record!(
+            batch.id = %telemetry.batch_id,
+            transactions.count = telemetry.transactions_count,
+            transactions.ids = ?telemetry.transaction_ids,
+            transactions.input_notes.count = telemetry.input_notes_count,
+            transactions.output_notes.count = telemetry.output_notes_count,
+            transactions.unauthenticated_notes.count = telemetry.unauthenticated_notes_count,
+        );
         let batch_id = batch.id();
 
         let result = self
             .get_batch_inputs(batch)
             .and_then(|(txs, inputs)| Self::propose_batch(txs, inputs))
-            .inspect_ok(TelemetryInjectorExt::inject_telemetry)
+            .inspect_ok(|proposed| {
+                let telemetry = proposed_batch_telemetry(proposed);
+                miden_node_utils::tracing::miden_span_record!(
+                    batch.expiration_height = %telemetry.expiration_height,
+                    batch.account_updates.count = telemetry.account_updates_count,
+                    batch.input_notes.count = telemetry.input_notes_count,
+                    batch.output_notes.count = telemetry.output_notes_count,
+                );
+            })
             .and_then(|proposed| self.prove_batch(proposed))
             // Failure must be injected before the final pipeline stage i.e. before commit is
             // called. The system cannot handle errors after it considers the process complete
@@ -368,11 +378,17 @@ impl BatchProver {
 // TELEMETRY
 // ================================================================================================
 
-impl TelemetryInjectorExt for SelectedBatch {
-    fn inject_telemetry(&self) {
-        let span = Span::current();
-        span.record("batch.id", tracing::field::display(self.id()));
-        span.record("transactions.count", self.transactions().len());
+struct SelectedBatchTelemetry {
+    batch_id: BatchId,
+    transactions_count: usize,
+    transaction_ids: Vec<TransactionId>,
+    input_notes_count: usize,
+    output_notes_count: usize,
+    unauthenticated_notes_count: usize,
+}
+
+impl SelectedBatch {
+    fn telemetry(&self) -> SelectedBatchTelemetry {
         // Accumulate all telemetry based on transactions.
         let (tx_ids, input_notes_count, output_notes_count, unauth_notes_count) =
             self.transactions().iter().fold(
@@ -391,22 +407,29 @@ impl TelemetryInjectorExt for SelectedBatch {
                     (tx_ids, input_notes_count, output_notes_count, unauth_notes_count)
                 },
             );
-        span.record("transactions.ids", tracing::field::debug(tx_ids));
-        span.record("transactions.input_notes.count", input_notes_count);
-        span.record("transactions.output_notes.count", output_notes_count);
-        span.record("transactions.unauthenticated_notes.count", unauth_notes_count);
+        SelectedBatchTelemetry {
+            batch_id: self.id(),
+            transactions_count: self.transactions().len(),
+            transaction_ids: tx_ids,
+            input_notes_count,
+            output_notes_count,
+            unauthenticated_notes_count: unauth_notes_count,
+        }
     }
 }
 
-impl TelemetryInjectorExt for ProposedBatch {
-    fn inject_telemetry(&self) {
-        let span = Span::current();
-        span.record(
-            "batch.expiration_height",
-            tracing::field::display(self.batch_expiration_block_num()),
-        );
-        span.record("batch.account_updates.count", self.account_updates().len());
-        span.record("batch.input_notes.count", self.input_notes().num_notes());
-        span.record("batch.output_notes.count", self.output_notes().len());
+struct ProposedBatchTelemetry {
+    expiration_height: miden_protocol::block::BlockNumber,
+    account_updates_count: usize,
+    input_notes_count: usize,
+    output_notes_count: usize,
+}
+
+fn proposed_batch_telemetry(batch: &ProposedBatch) -> ProposedBatchTelemetry {
+    ProposedBatchTelemetry {
+        expiration_height: batch.batch_expiration_block_num(),
+        account_updates_count: batch.account_updates().len(),
+        input_notes_count: usize::from(batch.input_notes().num_notes()),
+        output_notes_count: batch.output_notes().len(),
     }
 }

@@ -122,18 +122,15 @@ impl ValidatorService {
     #[miden_node_utils::tracing::miden_instrument(
         target = COMPONENT,
         skip_all,
-        err,
-        fields(
-            tip.number = chain_tip.block_num().as_u32(),
-            block.number = tracing::field::Empty,
-            block.commitment = tracing::field::Empty,
-        )
+        err
     )]
     pub async fn validate_block(
         &self,
         proposed_block: ProposedBlock,
         chain_tip: BlockHeader,
     ) -> Result<(Signature, BlockHeader), ValidatorError> {
+        miden_node_utils::tracing::miden_span_record!(tip.number = chain_tip.block_num().as_u32(),);
+
         // Search for any proposed transactions that have not previously been validated.
         let proposed_tx_ids =
             proposed_block.transactions().map(TransactionHeader::id).collect::<Vec<_>>();

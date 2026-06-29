@@ -75,6 +75,7 @@ const ALLOWED_FIELD_NAMES: &[&str] = &[
     "transaction.output_notes.count",
     "transaction.reference_block.commitment",
     "transaction.reference_block.number",
+    "tip.number",
     "transactions.count",
     "transactions.ids",
     "transactions.input_notes.count",

@@ -43,6 +43,7 @@ fn records_allowed_canonical_fields() {
         transaction.expires_at = block_number,
         transaction.reference_block.number = block_number,
         transaction.reference_block.commitment = %tx_id,
+        tip.number = block_number,
         transaction.input_notes.count = transaction_count,
         transaction.output_notes.count = transaction_count,
         account.id = %account_id,

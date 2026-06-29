@@ -7,7 +7,7 @@ use miden_node_utils::formatting::format_array;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::tracing::{ErrorSpanExt, miden_instrument, miden_span_record};
 use miden_protocol::batch::{OrderedBatches, ProvenBatch};
-use miden_protocol::block::{BlockInputs, BlockNumber, ProposedBlock, ProvenBlock, SignedBlock};
+use miden_protocol::block::{BlockInputs, BlockNumber, ProposedBlock, SignedBlock};
 use miden_protocol::transaction::TransactionHeader;
 use tokio::time::Duration;
 use tracing::Span;
@@ -15,7 +15,7 @@ use tracing::Span;
 use crate::errors::{BuildBlockError, StoreError};
 use crate::mempool::SharedMempool;
 use crate::validator::BlockProducerValidatorClient;
-use crate::{COMPONENT, LOG_TARGET, TelemetryInjectorExt};
+use crate::{COMPONENT, LOG_TARGET};
 
 // BLOCK BUILDER
 // =================================================================================================
@@ -110,44 +110,39 @@ impl BlockBuilder {
         parent = None,
         target = COMPONENT,
         name = "block_builder.build_block",
-        skip_all,
-        fields(
-            block.number = tracing::field::Empty,
-            block.batches.count = tracing::field::Empty,
-            block.batch.ids = tracing::field::Empty,
-            block.transactions.ids = tracing::field::Empty,
-            block.transactions.count = tracing::field::Empty,
-            block.updated_accounts.count = tracing::field::Empty,
-            block.erased_note_proofs.count = tracing::field::Empty,
-            block.nullifiers.count = tracing::field::Empty,
-            block.output_notes.count = tracing::field::Empty,
-            block.batches.output_notes.count = tracing::field::Empty,
-            block.erased_notes.count = tracing::field::Empty,
-            block.commitment = tracing::field::Empty,
-            block.sub_commitment = tracing::field::Empty,
-            block.prev_block_commitment = tracing::field::Empty,
-            block.timestamp = tracing::field::Empty,
-            block.protocol.version = tracing::field::Empty,
-            block.commitments.kernel = tracing::field::Empty,
-            block.commitments.nullifier = tracing::field::Empty,
-            block.commitments.account = tracing::field::Empty,
-            block.commitments.chain = tracing::field::Empty,
-            block.commitments.note = tracing::field::Empty,
-            block.commitments.transaction = tracing::field::Empty,
-        )
+        skip_all
     )]
     async fn build_block(&self, mempool: &SharedMempool) -> Result<(), BuildBlockError> {
         use futures::TryFutureExt;
 
         let selected = Self::select_block(mempool)?;
-        selected.inject_telemetry();
+        let telemetry = selected.telemetry();
+        miden_node_utils::tracing::miden_span_record!(
+            block.number = %telemetry.block_number,
+            block.batches.count = telemetry.batches_count,
+            block.batch.ids = ?telemetry.batch_ids,
+            block.transactions.ids = ?telemetry.transaction_ids,
+            block.transactions.count = telemetry.transactions_count,
+        );
         let block_num = selected.block_number;
 
         self.get_block_inputs(selected)
-            .inspect_ok(BlockBatchesAndInputs::inject_telemetry)
+            .inspect_ok(|inputs| {
+                let telemetry = inputs.telemetry();
+                miden_node_utils::tracing::miden_span_record!(
+                    block.updated_accounts.count = telemetry.updated_accounts_count,
+                    block.erased_note_proofs.count = telemetry.erased_note_proofs_count,
+                );
+            })
             .and_then(|inputs| self.propose_block(inputs))
             .inspect_ok(|proposed_block| {
-                ProposedBlock::inject_telemetry(&proposed_block.proposed_block);
+                let telemetry = proposed_block_telemetry(&proposed_block.proposed_block);
+                miden_node_utils::tracing::miden_span_record!(
+                    block.nullifiers.count = telemetry.nullifiers_count,
+                    block.output_notes.count = telemetry.output_notes_count,
+                    block.batches.output_notes.count = telemetry.batch_output_notes_count,
+                    block.erased_notes.count = telemetry.erased_notes_count,
+                );
             })
             .and_then(|proposed_block| self.build_and_validate_block(proposed_block))
             .and_then(|block_commit| self.commit_block(mempool, block_commit))
@@ -363,11 +358,16 @@ pub struct SelectedBlock {
     pub batches: Vec<Arc<ProvenBatch>>,
 }
 
-impl TelemetryInjectorExt for SelectedBlock {
-    fn inject_telemetry(&self) {
-        let span = Span::current();
-        span.record("block.number", tracing::field::display(self.block_number));
-        span.record("block.batches.count", self.batches.len());
+struct SelectedBlockTelemetry {
+    block_number: BlockNumber,
+    batches_count: usize,
+    batch_ids: Vec<miden_protocol::batch::BatchId>,
+    transaction_ids: Vec<miden_protocol::transaction::TransactionId>,
+    transactions_count: usize,
+}
+
+impl SelectedBlock {
+    fn telemetry(&self) -> SelectedBlockTelemetry {
         // Accumulate all telemetry based on batches.
         let (batch_ids, tx_ids, tx_count) = self.batches.iter().fold(
             (Vec::new(), Vec::new(), 0),
@@ -378,9 +378,13 @@ impl TelemetryInjectorExt for SelectedBlock {
                 (batch_ids, tx_ids, tx_count)
             },
         );
-        span.record("block.batch.ids", tracing::field::debug(batch_ids));
-        span.record("block.transactions.ids", tracing::field::debug(tx_ids));
-        span.record("block.transactions.count", tx_count);
+        SelectedBlockTelemetry {
+            block_number: self.block_number,
+            batches_count: self.batches.len(),
+            batch_ids,
+            transaction_ids: tx_ids,
+            transactions_count: tx_count,
+        }
     }
 }
 
@@ -404,74 +408,40 @@ struct BlockCommit {
     signed_block: SignedBlock,
 }
 
-impl TelemetryInjectorExt for BlockBatchesAndInputs {
-    fn inject_telemetry(&self) {
-        let span = Span::current();
+struct BlockInputsTelemetry {
+    updated_accounts_count: usize,
+    erased_note_proofs_count: usize,
+}
 
-        // SAFETY: We do not expect to have more than u32::MAX of any count per block.
-        span.record(
-            "block.updated_accounts.count",
-            i64::try_from(self.inputs.account_witnesses().len())
-                .expect("less than u32::MAX account updates"),
-        );
-        span.record(
-            "block.erased_note_proofs.count",
-            i64::try_from(self.inputs.unauthenticated_note_proofs().len())
-                .expect("less than u32::MAX unauthenticated notes"),
-        );
+impl BlockBatchesAndInputs {
+    fn telemetry(&self) -> BlockInputsTelemetry {
+        BlockInputsTelemetry {
+            updated_accounts_count: self.inputs.account_witnesses().len(),
+            erased_note_proofs_count: self.inputs.unauthenticated_note_proofs().len(),
+        }
     }
 }
 
-impl TelemetryInjectorExt for ProposedBlock {
-    /// Emit the input and output note related attributes. We do this here since this is the
-    /// earliest point we can set attributes after note erasure was done.
-    fn inject_telemetry(&self) {
-        let span = Span::current();
-
-        span.record("block.nullifiers.count", self.created_nullifiers().len());
-
-        let num_block_created_notes: usize = self.output_note_batches().iter().map(Vec::len).sum();
-        span.record("block.output_notes.count", num_block_created_notes);
-
-        let num_batch_created_notes = self.batches().num_created_notes();
-        span.record("block.batches.output_notes.count", num_batch_created_notes);
-
-        let num_erased_notes = num_batch_created_notes
-            .checked_sub(num_block_created_notes)
-            .expect("all batches in the block should not create fewer notes than the block itself");
-        span.record("block.erased_notes.count", num_erased_notes);
-    }
+struct ProposedBlockTelemetry {
+    nullifiers_count: usize,
+    output_notes_count: usize,
+    batch_output_notes_count: usize,
+    erased_notes_count: usize,
 }
 
-impl TelemetryInjectorExt for ProvenBlock {
-    fn inject_telemetry(&self) {
-        let span = Span::current();
-        let header = self.header();
+/// Emit the input and output note related attributes. We do this here since this is the earliest
+/// point we can set attributes after note erasure was done.
+fn proposed_block_telemetry(block: &ProposedBlock) -> ProposedBlockTelemetry {
+    let num_block_created_notes: usize = block.output_note_batches().iter().map(Vec::len).sum();
+    let num_batch_created_notes = block.batches().num_created_notes();
+    let num_erased_notes = num_batch_created_notes
+        .checked_sub(num_block_created_notes)
+        .expect("all batches in the block should not create fewer notes than the block itself");
 
-        span.record("block.commitment", tracing::field::display(header.commitment()));
-        span.record("block.sub_commitment", tracing::field::display(header.sub_commitment()));
-        span.record(
-            "block.prev_block_commitment",
-            tracing::field::display(header.prev_block_commitment()),
-        );
-        span.record("block.timestamp", header.timestamp());
-
-        span.record("block.protocol.version", i64::from(header.version()));
-
-        span.record(
-            "block.commitments.kernel",
-            tracing::field::display(header.tx_kernel_commitment()),
-        );
-        span.record(
-            "block.commitments.nullifier",
-            tracing::field::display(header.nullifier_root()),
-        );
-        span.record("block.commitments.account", tracing::field::display(header.account_root()));
-        span.record("block.commitments.chain", tracing::field::display(header.chain_commitment()));
-        span.record("block.commitments.note", tracing::field::display(header.note_root()));
-        span.record(
-            "block.commitments.transaction",
-            tracing::field::display(header.tx_commitment()),
-        );
+    ProposedBlockTelemetry {
+        nullifiers_count: block.created_nullifiers().len(),
+        output_notes_count: num_block_created_notes,
+        batch_output_notes_count: num_batch_created_notes,
+        erased_notes_count: num_erased_notes,
     }
 }
