@@ -21,7 +21,7 @@ use miden_protocol::crypto::merkle::smt::{LargeSmt, SmtStorage};
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
 use miden_protocol::transaction::PartialBlockchain;
 use tokio::sync::{Mutex, RwLock, watch};
-use tracing::{Instrument, Span, instrument};
+use tracing::{Instrument, Span};
 
 use crate::account_state_forest::{AccountStateForest, AccountStateForestBackend};
 use crate::accounts::AccountTreeWithHistory;
@@ -181,7 +181,7 @@ impl State {
     ///
     /// The loaded state owns all store data structures and exposes subscription methods for
     /// sequencer and replica tasks.
-    #[instrument(target = COMPONENT, skip_all)]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all)]
     pub async fn load(
         data_path: &Path,
         storage_options: StorageOptions,
@@ -194,7 +194,7 @@ impl State {
     ///
     /// The loaded state owns all store data structures and exposes subscription methods for
     /// sequencer and replica tasks.
-    #[instrument(target = COMPONENT, skip_all)]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all)]
     pub async fn load_with_database_options(
         data_path: &Path,
         storage_options: StorageOptions,
@@ -372,7 +372,7 @@ impl State {
     ///
     /// If [None] is given as the value of `block_num`, the data for the latest [BlockHeader] is
     /// returned.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+    #[miden_node_utils::tracing::miden_instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn get_block_header(
         &self,
         block_num: Option<BlockNumber>,
@@ -655,7 +655,7 @@ impl State {
     }
 
     /// Returns data needed by the block producer to verify transactions validity.
-    #[instrument(target = COMPONENT, skip_all, fields(account.id=%account_id, nullifiers = %format_array(nullifiers)))]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all, fields(account.id=%account_id, nullifiers = %format_array(nullifiers)))]
     pub async fn get_transaction_inputs(
         &self,
         account_id: AccountId,

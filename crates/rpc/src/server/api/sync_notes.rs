@@ -3,7 +3,7 @@ use miden_node_proto::generated as proto;
 use miden_node_store::{NoteSyncError, NoteSyncRecord};
 use miden_node_utils::limiter::QueryParamNoteTagLimit;
 use tonic::Status;
-use tracing::{Span, debug, field, instrument};
+use tracing::debug;
 
 use super::{RpcInvalidBlockRange, RpcService, check, invalid_block_range_to_status};
 use crate::{COMPONENT, LOG_TARGET};
@@ -21,14 +21,10 @@ impl proto::server::rpc_api::SyncNotes for RpcService {
         Ok(output)
     }
 
-    #[instrument(
+    #[miden_node_utils::tracing::miden_instrument(
         target = COMPONENT,
         name = "sync_notes",
         skip_all,
-        fields(
-            block_range.from = field::Empty,
-            block_range.to = field::Empty,
-        ),
         err,
     )]
     async fn handle(&self, request: Self::Input) -> tonic::Result<Self::Output> {
@@ -36,9 +32,10 @@ impl proto::server::rpc_api::SyncNotes for RpcService {
 
         let range = read_block_range::<Status>(request.block_range, "SyncNotesRequest")?;
 
-        let span = Span::current();
-        span.record("block_range.from", range.block_from);
-        span.record("block_range.to", range.block_to);
+        miden_node_utils::tracing::miden_span_record!(
+            block_range.from = range.block_from,
+            block_range.to = range.block_to,
+        );
 
         debug!(target: LOG_TARGET, "Syncing notes");
 

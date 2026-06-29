@@ -1,7 +1,7 @@
 use miden_node_proto::generated as proto;
 use miden_protocol::block::BlockNumber;
 use tonic::Status;
-use tracing::{debug, instrument};
+use tracing::debug;
 
 use super::{Finality, RpcService};
 use crate::{COMPONENT, LOG_TARGET};
@@ -19,7 +19,7 @@ impl proto::server::rpc_api::SyncChainMmr for RpcService {
         Ok(output)
     }
 
-    #[instrument(
+    #[miden_node_utils::tracing::miden_instrument(
         target = COMPONENT,
         name = "sync_chain_mmr",
         skip_all,

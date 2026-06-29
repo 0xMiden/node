@@ -12,7 +12,7 @@ use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_tx::TransactionVerifier;
 use tonic::metadata::{Ascii, MetadataValue};
 use tonic::{Request, Status};
-use tracing::{Span, debug, field, instrument};
+use tracing::debug;
 
 use super::{COMPONENT, RpcMode, RpcService};
 use crate::LOG_TARGET;
@@ -56,18 +56,10 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
         Self::encode(output)
     }
 
-    #[instrument(
+    #[miden_node_utils::tracing::miden_instrument(
         target = COMPONENT,
         name = "submit_proven_tx",
         skip_all,
-        fields(
-            COMPONENT = field::Empty,
-            transaction.id = field::Empty,
-            account.id = field::Empty,
-            transaction.expires_at = field::Empty,
-            transaction.reference_block.number = field::Empty,
-            transaction.reference_block.commitment = field::Empty,
-        ),
         err,
     )]
     async fn handle(&self, input: Self::Input) -> tonic::Result<Self::Output> {
@@ -83,14 +75,12 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
             Status::invalid_argument(err.as_report_context("invalid transaction"))
         })?;
 
-        let span = Span::current();
-        span.record("transaction.id", field::display(tx.id()));
-        span.record("account.id", field::display(tx.account_id()));
-        span.record("transaction.expires_at", field::display(tx.expiration_block_num()));
-        span.record("transaction.reference_block.number", field::display(tx.ref_block_num()));
-        span.record(
-            "transaction.reference_block.commitment",
-            field::display(tx.ref_block_commitment()),
+        miden_node_utils::tracing::miden_span_record!(
+            transaction.id = %tx.id(),
+            account.id = %tx.account_id(),
+            transaction.expires_at = %tx.expiration_block_num(),
+            transaction.reference_block.number = %tx.ref_block_num(),
+            transaction.reference_block.commitment = %tx.ref_block_commitment(),
         );
 
         debug!(target: LOG_TARGET, "Submitting transaction");

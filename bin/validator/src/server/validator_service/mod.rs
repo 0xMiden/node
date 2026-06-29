@@ -3,14 +3,12 @@ use std::sync::atomic::AtomicU64;
 
 use miden_node_db::{DatabaseError, Db};
 use miden_node_store::BlockStore;
-use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::block::{BlockHeader, BlockNumber, ProposedBlock, SignedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
 use miden_protocol::crypto::utils::Serializable;
 use miden_protocol::errors::ProposedBlockError;
 use miden_protocol::transaction::{TransactionHeader, TransactionId};
 use tokio::sync::{Semaphore, watch};
-use tracing::{Span, instrument};
 
 use crate::db::{find_unvalidated_transactions, load_block_header, load_chain_tip};
 use crate::{COMPONENT, ValidatorSigner};
@@ -121,7 +119,16 @@ impl ValidatorService {
     ///    tip, validated against the previous block header.
     ///
     /// On success, returns the signature and the validated block header.
-    #[instrument(target = COMPONENT, skip_all, err, fields(tip.number = chain_tip.block_num().as_u32()))]
+    #[miden_node_utils::tracing::miden_instrument(
+        target = COMPONENT,
+        skip_all,
+        err,
+        fields(
+            tip.number = chain_tip.block_num().as_u32(),
+            block.number = tracing::field::Empty,
+            block.commitment = tracing::field::Empty,
+        )
+    )]
     pub async fn validate_block(
         &self,
         proposed_block: ProposedBlock,
@@ -148,9 +155,10 @@ impl ValidatorService {
             .into_header_and_body()
             .map_err(ValidatorError::BlockBuildingFailed)?;
 
-        let span = Span::current();
-        span.set_attribute("block.number", proposed_header.block_num().as_u32());
-        span.set_attribute("block.commitment", proposed_header.commitment());
+        miden_node_utils::tracing::miden_span_record!(
+            block.number = proposed_header.block_num().as_u32(),
+            block.commitment = %proposed_header.commitment(),
+        );
 
         // If the proposed block has the same block number as the current chain tip, this is a
         // replacement block. Validate it against the previous block header.
@@ -208,7 +216,7 @@ impl ValidatorService {
     }
 
     /// Signs a block header using the validator's signer.
-    #[instrument(target = COMPONENT, name = "sign_block", skip_all, err, fields(block.number = header.block_num().as_u32()))]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "sign_block", skip_all, err, fields(block.number = header.block_num().as_u32()))]
     async fn sign_header(&self, header: &BlockHeader) -> Result<Signature, ValidatorError> {
         self.signer
             .sign(header)

@@ -7,7 +7,7 @@ use miden_node_utils::grpc::ClientIp;
 use miden_protocol::block::BlockNumber;
 use tokio_stream::StreamExt;
 use tonic::{Request, Status};
-use tracing::{debug, instrument};
+use tracing::debug;
 
 use super::{
     GuardedStream,
@@ -47,7 +47,7 @@ impl proto::server::rpc_api::ProofSubscription for RpcService {
         self.handle(input).await
     }
 
-    #[instrument(
+    #[miden_node_utils::tracing::miden_instrument(
         target = COMPONENT,
         name = "proof_subscription",
         skip_all,

@@ -4,13 +4,12 @@ use miden_node_proto::generated as grpc;
 use miden_node_store::BlockStore;
 use miden_node_store::state::{SubscriptionSource, SubscriptionStreamError, run_stream};
 use miden_node_utils::ErrorReport;
-use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::block::BlockNumber;
 use tokio_stream::{Stream, StreamExt};
 use tonic::Status;
-use tracing::Span;
 
 use super::ValidatorService;
+use crate::COMPONENT;
 
 type BlockSubscriptionStream = Pin<
     Box<
@@ -34,8 +33,14 @@ impl grpc::server::validator_api::BlockSubscription for ValidatorService {
         Ok(item)
     }
 
+    #[miden_node_utils::tracing::miden_instrument(
+        target = COMPONENT,
+        name = "validator.block_subscription",
+        skip_all,
+        err,
+    )]
     async fn handle(&self, request: Self::Input) -> tonic::Result<Self::ItemStream> {
-        Span::current().set_attribute("block.from", request.block_from);
+        miden_node_utils::tracing::miden_span_record!(block.from = request.block_from);
 
         let from = BlockNumber::from(request.block_from);
         let source = BlockStoreSource { block_store: self.block_store.clone() };

@@ -10,7 +10,7 @@ use miden_protocol::crypto::merkle::mmr::PartialMmr;
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
 use miden_protocol::transaction::TransactionId;
 use miden_standards::note::AccountTargetNetworkNote;
-use tracing::{info, instrument};
+use tracing::info;
 
 use crate::committed_block::CommittedBlockEffects;
 use crate::db::migrations::{bootstrap_database, migrate_database, verify_latest_schema};
@@ -33,7 +33,7 @@ pub struct Db {
 
 impl Db {
     /// Opens an async connection pool after verifying the database is at the latest schema version.
-    #[instrument(
+    #[miden_node_utils::tracing::miden_instrument(
         target = COMPONENT,
         name = "ntx_builder.database.load",
         skip_all,
@@ -47,7 +47,7 @@ impl Db {
 
     /// Opens an async connection pool with a specific pool size after verifying the database is at
     /// the latest schema version.
-    #[instrument(
+    #[miden_node_utils::tracing::miden_instrument(
         target = COMPONENT,
         name = "ntx_builder.database.load",
         skip_all,
@@ -64,7 +64,7 @@ impl Db {
     }
 
     /// Applies all pending migrations to an existing DB.
-    #[instrument(target = COMPONENT, skip_all)]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all)]
     pub fn migrate(database_filepath: impl AsRef<Path>) -> Result<()> {
         migrate_database(database_filepath.as_ref())?;
         Ok(())
@@ -95,7 +95,7 @@ impl Db {
     /// committed-block subscription on startup.
     ///
     /// Returns an error if the database has already been bootstrapped.
-    #[instrument(
+    #[miden_node_utils::tracing::miden_instrument(
         target = COMPONENT,
         name = "ntx_builder.database.bootstrap",
         skip_all,

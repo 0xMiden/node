@@ -2,7 +2,6 @@ use miden_node_proto::decode::{read_account_id, read_block_range};
 use miden_node_proto::generated as proto;
 use miden_protocol::Word;
 use tonic::Status;
-use tracing::{Span, field, instrument};
 
 use super::{
     RpcInvalidBlockRange,
@@ -25,15 +24,10 @@ impl proto::server::rpc_api::SyncAccountVault for RpcService {
         Ok(output)
     }
 
-    #[instrument(
+    #[miden_node_utils::tracing::miden_instrument(
         target = COMPONENT,
         name = "sync_account_vault",
         skip_all,
-        fields(
-            account.id = field::Empty,
-            block_range.from = field::Empty,
-            block_range.to = field::Empty,
-        ),
         err,
     )]
     async fn handle(&self, request: Self::Input) -> tonic::Result<Self::Output> {
@@ -44,10 +38,11 @@ impl proto::server::rpc_api::SyncAccountVault for RpcService {
         )?;
         let range = read_block_range::<Status>(request.block_range, "SyncAccountVaultRequest")?;
 
-        let span = Span::current();
-        span.record("account.id", field::display(account_id));
-        span.record("block_range.from", range.block_from);
-        span.record("block_range.to", range.block_to);
+        miden_node_utils::tracing::miden_span_record!(
+            account.id = %account_id,
+            block_range.from = range.block_from,
+            block_range.to = range.block_to,
+        );
 
         tracing::debug!(target: LOG_TARGET, "Syncing account vault");
 

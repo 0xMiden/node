@@ -11,7 +11,6 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::ProvenTransaction;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
-use tracing::instrument;
 use url::Url;
 
 use crate::batch_builder::BatchBuilder;
@@ -280,7 +279,7 @@ impl BlockProducerApi {
     // ENDPOINTS
     // --------------------------------------------------------------------------------------------
 
-    #[instrument(
+    #[miden_node_utils::tracing::miden_instrument(
          target = COMPONENT,
          name = "block_producer.api.submit_proven_tx",
          skip_all,
@@ -323,7 +322,7 @@ impl BlockProducerApi {
         result
     }
 
-    #[instrument(
+    #[miden_node_utils::tracing::miden_instrument(
          target = COMPONENT,
          name = "block_producer.api.submit_proven_tx_batch",
          skip_all,

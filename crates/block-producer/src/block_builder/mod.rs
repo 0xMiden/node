@@ -5,12 +5,12 @@ use anyhow::Context;
 use miden_node_store::state::State;
 use miden_node_utils::formatting::format_array;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
-use miden_node_utils::tracing::{OpenTelemetrySpanExt, miden_instrument, miden_span_record};
+use miden_node_utils::tracing::{ErrorSpanExt, miden_instrument, miden_span_record};
 use miden_protocol::batch::{OrderedBatches, ProvenBatch};
 use miden_protocol::block::{BlockInputs, BlockNumber, ProposedBlock, ProvenBlock, SignedBlock};
 use miden_protocol::transaction::TransactionHeader;
 use tokio::time::Duration;
-use tracing::{Span, instrument};
+use tracing::Span;
 
 use crate::errors::{BuildBlockError, StoreError};
 use crate::mempool::SharedMempool;
@@ -106,7 +106,36 @@ impl BlockBuilder {
     /// - Each stage has its own child span and are free to add further field data.
     /// - A failed stage will emit an error event, and both its own span and the root span will be
     ///   marked as errors.
-    #[instrument(parent = None, target = COMPONENT, name = "block_builder.build_block", skip_all)]
+    #[miden_node_utils::tracing::miden_instrument(
+        parent = None,
+        target = COMPONENT,
+        name = "block_builder.build_block",
+        skip_all,
+        fields(
+            block.number = tracing::field::Empty,
+            block.batches.count = tracing::field::Empty,
+            block.batch.ids = tracing::field::Empty,
+            block.transactions.ids = tracing::field::Empty,
+            block.transactions.count = tracing::field::Empty,
+            block.updated_accounts.count = tracing::field::Empty,
+            block.erased_note_proofs.count = tracing::field::Empty,
+            block.nullifiers.count = tracing::field::Empty,
+            block.output_notes.count = tracing::field::Empty,
+            block.batches.output_notes.count = tracing::field::Empty,
+            block.erased_notes.count = tracing::field::Empty,
+            block.commitment = tracing::field::Empty,
+            block.sub_commitment = tracing::field::Empty,
+            block.prev_block_commitment = tracing::field::Empty,
+            block.timestamp = tracing::field::Empty,
+            block.protocol.version = tracing::field::Empty,
+            block.commitments.kernel = tracing::field::Empty,
+            block.commitments.nullifier = tracing::field::Empty,
+            block.commitments.account = tracing::field::Empty,
+            block.commitments.chain = tracing::field::Empty,
+            block.commitments.note = tracing::field::Empty,
+            block.commitments.transaction = tracing::field::Empty,
+        )
+    )]
     async fn build_block(&self, mempool: &SharedMempool) -> Result<(), BuildBlockError> {
         use futures::TryFutureExt;
 
@@ -131,7 +160,7 @@ impl BlockBuilder {
             .await
     }
 
-    #[instrument(target = COMPONENT, name = "block_builder.select_block", skip_all)]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "block_builder.select_block", skip_all)]
     fn select_block(mempool: &SharedMempool) -> Result<SelectedBlock, BuildBlockError> {
         Ok(mempool.lock().map_err(BuildBlockError::MempoolPoisoned)?.select_block())
     }
@@ -152,7 +181,7 @@ impl BlockBuilder {
     ///     which nullifiers the block will actually create, we fetch witnesses for all nullifiers
     ///     created by batches. If we knew that a certain note will be erased, we would not have to
     ///     supply a nullifier witness for it.
-    #[instrument(target = COMPONENT, name = "block_builder.get_block_inputs", skip_all, err)]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "block_builder.get_block_inputs", skip_all, err)]
     async fn get_block_inputs(
         &self,
         selected_block: SelectedBlock,
@@ -211,7 +240,7 @@ impl BlockBuilder {
         Ok(BlockBatchesAndInputs { batches, inputs })
     }
 
-    #[instrument(target = COMPONENT, name = "block_builder.propose_block", skip_all, err)]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "block_builder.propose_block", skip_all, err)]
     async fn propose_block(
         &self,
         batches_inputs: BlockBatchesAndInputs,
@@ -226,7 +255,7 @@ impl BlockBuilder {
         Ok(ProposedBlockAndInputs { proposed_block, block_inputs })
     }
 
-    #[instrument(target = COMPONENT, name = "block_builder.validate_block", skip_all, err)]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "block_builder.validate_block", skip_all, err)]
     async fn build_and_validate_block(
         &self,
         proposal: ProposedBlockAndInputs,
@@ -319,7 +348,7 @@ impl BlockBuilder {
         Ok(())
     }
 
-    #[instrument(target = COMPONENT, name = "block_builder.rollback_block", skip_all)]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "block_builder.rollback_block", skip_all)]
     fn rollback_block(mempool: &SharedMempool, block: BlockNumber) -> Result<(), BuildBlockError> {
         mempool.lock().map_err(BuildBlockError::MempoolPoisoned)?.rollback_block(block);
         Ok(())
@@ -337,8 +366,8 @@ pub struct SelectedBlock {
 impl TelemetryInjectorExt for SelectedBlock {
     fn inject_telemetry(&self) {
         let span = Span::current();
-        span.set_attribute("block.number", self.block_number);
-        span.set_attribute("block.batches.count", self.batches.len() as u32);
+        span.record("block.number", tracing::field::display(self.block_number));
+        span.record("block.batches.count", self.batches.len());
         // Accumulate all telemetry based on batches.
         let (batch_ids, tx_ids, tx_count) = self.batches.iter().fold(
             (Vec::new(), Vec::new(), 0),
@@ -349,9 +378,9 @@ impl TelemetryInjectorExt for SelectedBlock {
                 (batch_ids, tx_ids, tx_count)
             },
         );
-        span.set_attribute("block.batch.ids", batch_ids);
-        span.set_attribute("block.transactions.ids", tx_ids);
-        span.set_attribute("block.transactions.count", tx_count);
+        span.record("block.batch.ids", tracing::field::debug(batch_ids));
+        span.record("block.transactions.ids", tracing::field::debug(tx_ids));
+        span.record("block.transactions.count", tx_count);
     }
 }
 
@@ -380,12 +409,12 @@ impl TelemetryInjectorExt for BlockBatchesAndInputs {
         let span = Span::current();
 
         // SAFETY: We do not expect to have more than u32::MAX of any count per block.
-        span.set_attribute(
+        span.record(
             "block.updated_accounts.count",
             i64::try_from(self.inputs.account_witnesses().len())
                 .expect("less than u32::MAX account updates"),
         );
-        span.set_attribute(
+        span.record(
             "block.erased_note_proofs.count",
             i64::try_from(self.inputs.unauthenticated_note_proofs().len())
                 .expect("less than u32::MAX unauthenticated notes"),
@@ -399,18 +428,18 @@ impl TelemetryInjectorExt for ProposedBlock {
     fn inject_telemetry(&self) {
         let span = Span::current();
 
-        span.set_attribute("block.nullifiers.count", self.created_nullifiers().len());
+        span.record("block.nullifiers.count", self.created_nullifiers().len());
 
         let num_block_created_notes: usize = self.output_note_batches().iter().map(Vec::len).sum();
-        span.set_attribute("block.output_notes.count", num_block_created_notes);
+        span.record("block.output_notes.count", num_block_created_notes);
 
         let num_batch_created_notes = self.batches().num_created_notes();
-        span.set_attribute("block.batches.output_notes.count", num_batch_created_notes);
+        span.record("block.batches.output_notes.count", num_batch_created_notes);
 
         let num_erased_notes = num_batch_created_notes
             .checked_sub(num_block_created_notes)
             .expect("all batches in the block should not create fewer notes than the block itself");
-        span.set_attribute("block.erased_notes.count", num_erased_notes);
+        span.record("block.erased_notes.count", num_erased_notes);
     }
 }
 
@@ -419,18 +448,30 @@ impl TelemetryInjectorExt for ProvenBlock {
         let span = Span::current();
         let header = self.header();
 
-        span.set_attribute("block.commitment", header.commitment());
-        span.set_attribute("block.sub_commitment", header.sub_commitment());
-        span.set_attribute("block.prev_block_commitment", header.prev_block_commitment());
-        span.set_attribute("block.timestamp", header.timestamp());
+        span.record("block.commitment", tracing::field::display(header.commitment()));
+        span.record("block.sub_commitment", tracing::field::display(header.sub_commitment()));
+        span.record(
+            "block.prev_block_commitment",
+            tracing::field::display(header.prev_block_commitment()),
+        );
+        span.record("block.timestamp", header.timestamp());
 
-        span.set_attribute("block.protocol.version", i64::from(header.version()));
+        span.record("block.protocol.version", i64::from(header.version()));
 
-        span.set_attribute("block.commitments.kernel", header.tx_kernel_commitment());
-        span.set_attribute("block.commitments.nullifier", header.nullifier_root());
-        span.set_attribute("block.commitments.account", header.account_root());
-        span.set_attribute("block.commitments.chain", header.chain_commitment());
-        span.set_attribute("block.commitments.note", header.note_root());
-        span.set_attribute("block.commitments.transaction", header.tx_commitment());
+        span.record(
+            "block.commitments.kernel",
+            tracing::field::display(header.tx_kernel_commitment()),
+        );
+        span.record(
+            "block.commitments.nullifier",
+            tracing::field::display(header.nullifier_root()),
+        );
+        span.record("block.commitments.account", tracing::field::display(header.account_root()));
+        span.record("block.commitments.chain", tracing::field::display(header.chain_commitment()));
+        span.record("block.commitments.note", tracing::field::display(header.note_root()));
+        span.record(
+            "block.commitments.transaction",
+            tracing::field::display(header.tx_commitment()),
+        );
     }
 }

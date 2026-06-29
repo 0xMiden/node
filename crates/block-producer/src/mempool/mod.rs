@@ -59,7 +59,6 @@ use miden_protocol::batch::{BatchId, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::transaction::{TransactionHeader, TransactionId};
 use thiserror::Error;
-use tracing::instrument;
 
 use crate::block_builder::SelectedBlock;
 use crate::domain::batch::SelectedBatch;
@@ -152,7 +151,7 @@ impl SharedMempool {
     ///
     /// Callers should minimise the amount of work performed while holding the lock to reduce
     /// contention with other subsystems that need to access the pool.
-    #[instrument(target = COMPONENT, name = "mempool.lock", skip_all, err)]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "mempool.lock", skip_all, err)]
     pub fn lock(&self) -> Result<MutexGuard<'_, Mempool>, MempoolPoisonError> {
         let result: LockResult<MutexGuard<'_, Mempool>> = self.0.lock();
         result.map_err(|_| MempoolPoisonError)
@@ -227,7 +226,21 @@ impl Mempool {
         clippy::needless_pass_by_value,
         reason = "Not impactful, and we may want ownership in the future"
     )]
-    #[instrument(target = COMPONENT, name = "mempool.add_transaction", skip_all, fields(tx=%tx.id()))]
+    #[miden_node_utils::tracing::miden_instrument(
+        target = COMPONENT,
+        name = "mempool.add_transaction",
+        skip_all,
+        fields(
+            tx = %tx.id(),
+            mempool.transactions.uncommitted = tracing::field::Empty,
+            mempool.transactions.unbatched = tracing::field::Empty,
+            mempool.batches.proposed = tracing::field::Empty,
+            mempool.batches.proven = tracing::field::Empty,
+            mempool.accounts = tracing::field::Empty,
+            mempool.nullifiers = tracing::field::Empty,
+            mempool.output_notes = tracing::field::Empty,
+        )
+    )]
     pub fn add_transaction(
         &mut self,
         tx: Arc<AuthenticatedTransaction>,
@@ -248,7 +261,20 @@ impl Mempool {
         Ok(self.committed_chain_tip)
     }
 
-    #[instrument(target = COMPONENT, name = "mempool.add_user_batch", skip_all)]
+    #[miden_node_utils::tracing::miden_instrument(
+        target = COMPONENT,
+        name = "mempool.add_user_batch",
+        skip_all,
+        fields(
+            mempool.transactions.uncommitted = tracing::field::Empty,
+            mempool.transactions.unbatched = tracing::field::Empty,
+            mempool.batches.proposed = tracing::field::Empty,
+            mempool.batches.proven = tracing::field::Empty,
+            mempool.accounts = tracing::field::Empty,
+            mempool.nullifiers = tracing::field::Empty,
+            mempool.output_notes = tracing::field::Empty,
+        )
+    )]
     pub fn add_user_batch(
         &mut self,
         txs: &[Arc<AuthenticatedTransaction>],
@@ -287,7 +313,20 @@ impl Mempool {
     /// Transactions are returned in a valid execution ordering.
     ///
     /// Returns `None` if no transactions are available.
-    #[instrument(target = COMPONENT, name = "mempool.select_batch", skip_all)]
+    #[miden_node_utils::tracing::miden_instrument(
+        target = COMPONENT,
+        name = "mempool.select_batch",
+        skip_all,
+        fields(
+            mempool.transactions.uncommitted = tracing::field::Empty,
+            mempool.transactions.unbatched = tracing::field::Empty,
+            mempool.batches.proposed = tracing::field::Empty,
+            mempool.batches.proven = tracing::field::Empty,
+            mempool.accounts = tracing::field::Empty,
+            mempool.nullifiers = tracing::field::Empty,
+            mempool.output_notes = tracing::field::Empty,
+        )
+    )]
     pub fn select_batch(&mut self) -> Option<SelectedBatch> {
         let batch = self.transactions.select_batch(self.config.batch_budget)?;
         if let Err(err) = self.batches.append(batch.clone()) {
@@ -302,7 +341,20 @@ impl Mempool {
     /// The transactions are re-queued for inclusion in a batch. Additionally, the batch's
     /// transactions have their failure count incremented, reverting them if they now exceed the
     /// failure limit.
-    #[instrument(target = COMPONENT, name = "mempool.rollback_batch", skip_all)]
+    #[miden_node_utils::tracing::miden_instrument(
+        target = COMPONENT,
+        name = "mempool.rollback_batch",
+        skip_all,
+        fields(
+            mempool.transactions.uncommitted = tracing::field::Empty,
+            mempool.transactions.unbatched = tracing::field::Empty,
+            mempool.batches.proposed = tracing::field::Empty,
+            mempool.batches.proven = tracing::field::Empty,
+            mempool.accounts = tracing::field::Empty,
+            mempool.nullifiers = tracing::field::Empty,
+            mempool.output_notes = tracing::field::Empty,
+        )
+    )]
     pub fn rollback_batch(&mut self, batch: BatchId) {
         // Guards against bugs in the proof scheduler where a retry results in multiple results
         // coming back for the same batch. If the batch previously succeeded, then yanking it would
@@ -336,7 +388,20 @@ impl Mempool {
     }
 
     /// Marks a batch as proven if it exists.
-    #[instrument(target = COMPONENT, name = "mempool.commit_batch", skip_all)]
+    #[miden_node_utils::tracing::miden_instrument(
+        target = COMPONENT,
+        name = "mempool.commit_batch",
+        skip_all,
+        fields(
+            mempool.transactions.uncommitted = tracing::field::Empty,
+            mempool.transactions.unbatched = tracing::field::Empty,
+            mempool.batches.proposed = tracing::field::Empty,
+            mempool.batches.proven = tracing::field::Empty,
+            mempool.accounts = tracing::field::Empty,
+            mempool.nullifiers = tracing::field::Empty,
+            mempool.output_notes = tracing::field::Empty,
+        )
+    )]
     pub fn commit_batch(&mut self, proof: Arc<ProvenBatch>) {
         self.batches.submit_proof(proof);
         self.inject_telemetry();
@@ -351,7 +416,20 @@ impl Mempool {
     /// # Panics
     ///
     /// Panics if there is already a block in flight.
-    #[instrument(target = COMPONENT, name = "mempool.select_block", skip_all)]
+    #[miden_node_utils::tracing::miden_instrument(
+        target = COMPONENT,
+        name = "mempool.select_block",
+        skip_all,
+        fields(
+            mempool.transactions.uncommitted = tracing::field::Empty,
+            mempool.transactions.unbatched = tracing::field::Empty,
+            mempool.batches.proposed = tracing::field::Empty,
+            mempool.batches.proven = tracing::field::Empty,
+            mempool.accounts = tracing::field::Empty,
+            mempool.nullifiers = tracing::field::Empty,
+            mempool.output_notes = tracing::field::Empty,
+        )
+    )]
     pub fn select_block(&mut self) -> SelectedBlock {
         assert!(
             self.pending_block.is_none(),
@@ -378,7 +456,20 @@ impl Mempool {
     /// # Panics
     ///
     /// Panics if there is no matching block in flight.
-    #[instrument(target = COMPONENT, name = "mempool.commit_block", skip_all)]
+    #[miden_node_utils::tracing::miden_instrument(
+        target = COMPONENT,
+        name = "mempool.commit_block",
+        skip_all,
+        fields(
+            mempool.transactions.uncommitted = tracing::field::Empty,
+            mempool.transactions.unbatched = tracing::field::Empty,
+            mempool.batches.proposed = tracing::field::Empty,
+            mempool.batches.proven = tracing::field::Empty,
+            mempool.accounts = tracing::field::Empty,
+            mempool.nullifiers = tracing::field::Empty,
+            mempool.output_notes = tracing::field::Empty,
+        )
+    )]
     pub fn commit_block(&mut self, block_header: &BlockHeader) {
         assert_eq!(self.committed_chain_tip.child(), block_header.block_num());
         let block = self
@@ -404,7 +495,20 @@ impl Mempool {
     /// # Panics
     ///
     /// Panics if there is no matching block in flight.
-    #[instrument(target = COMPONENT, name = "mempool.rollback_block", skip_all)]
+    #[miden_node_utils::tracing::miden_instrument(
+        target = COMPONENT,
+        name = "mempool.rollback_block",
+        skip_all,
+        fields(
+            mempool.transactions.uncommitted = tracing::field::Empty,
+            mempool.transactions.unbatched = tracing::field::Empty,
+            mempool.batches.proposed = tracing::field::Empty,
+            mempool.batches.proven = tracing::field::Empty,
+            mempool.accounts = tracing::field::Empty,
+            mempool.nullifiers = tracing::field::Empty,
+            mempool.output_notes = tracing::field::Empty,
+        )
+    )]
     pub fn rollback_block(&mut self, block: BlockNumber) {
         // FIXME: We should consider a more robust check here to identify the block by a hash.
         //        If multiple jobs are possible, then so are multiple variants with the same
@@ -458,7 +562,6 @@ impl Mempool {
     /// Note that these are only visible in the OpenTelemetry context, as conventional tracing
     /// does not track fields added dynamically.
     fn inject_telemetry(&self) {
-        use miden_node_utils::tracing::OpenTelemetrySpanExt;
         let span = tracing::Span::current();
 
         let committed_txs = self
@@ -467,17 +570,14 @@ impl Mempool {
             .flat_map(|block| block.batches.iter())
             .map(|batch| batch.transactions().as_slice().len())
             .sum::<usize>();
-        span.set_attribute(
-            "mempool.transactions.uncommitted",
-            self.transactions.count() - committed_txs,
-        );
-        span.set_attribute("mempool.transactions.unbatched", self.unbatched_transactions_count());
-        span.set_attribute("mempool.batches.proposed", self.proposed_batches_count());
-        span.set_attribute("mempool.batches.proven", self.proven_batches_count());
+        span.record("mempool.transactions.uncommitted", self.transactions.count() - committed_txs);
+        span.record("mempool.transactions.unbatched", self.unbatched_transactions_count());
+        span.record("mempool.batches.proposed", self.proposed_batches_count());
+        span.record("mempool.batches.proven", self.proven_batches_count());
 
-        span.set_attribute("mempool.accounts", self.transactions.accounts_count());
-        span.set_attribute("mempool.nullifiers", self.transactions.nullifier_count());
-        span.set_attribute("mempool.output_notes", self.transactions.output_note_count());
+        span.record("mempool.accounts", self.transactions.accounts_count());
+        span.record("mempool.nullifiers", self.transactions.nullifier_count());
+        span.record("mempool.output_notes", self.transactions.output_note_count());
     }
 
     /// This includes pruning the block's batches and transactions from their graphs.

@@ -10,7 +10,6 @@ use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::ProvenTransaction;
-use tracing::instrument;
 
 use crate::errors::StoreError;
 use crate::{COMPONENT, LOG_TARGET};
@@ -91,7 +90,7 @@ impl Display for TransactionInputs {
 // STORE STATE
 // ================================================================================================
 
-#[instrument(target = COMPONENT, name = "store.state.get_tx_inputs", skip_all, err, fields(transaction.id = %proven_tx.id().to_hex()))]
+#[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "store.state.get_tx_inputs", skip_all, err, fields(transaction.id = %proven_tx.id().to_hex()))]
 pub async fn get_tx_inputs(
     state: &State,
     proven_tx: &ProvenTransaction,

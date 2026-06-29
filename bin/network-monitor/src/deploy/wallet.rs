@@ -9,14 +9,13 @@ use miden_standards::AuthMethod;
 use miden_standards::account::wallets::create_basic_wallet;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
-use tracing::instrument;
 
 use crate::COMPONENT;
 
 /// Create a wallet account with `RpoFalcon512` authentication.
 ///
 /// Returns the created account and the secret key for authentication.
-#[instrument(target = COMPONENT, name = "create-wallet-account", skip_all, ret(level = "debug"))]
+#[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "create-wallet-account", skip_all, ret(level = "debug"))]
 pub fn create_wallet_account() -> Result<(Account, SecretKey)> {
     let mut rng = ChaCha20Rng::from_seed(rand::random());
     let secret_key = SecretKey::with_rng(&mut get_random_coin(&mut rng));

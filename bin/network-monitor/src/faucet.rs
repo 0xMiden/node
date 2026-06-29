@@ -11,7 +11,7 @@ use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, info, warn};
 use url::Url;
 
 use crate::COMPONENT;
@@ -191,7 +191,7 @@ impl Service for FaucetService {
 }
 
 /// Fetches the faucet's metadata from the `/get_metadata` endpoint.
-#[instrument(
+#[miden_node_utils::tracing::miden_instrument(
     parent = None,
     target = COMPONENT,
     name = "network_monitor.faucet.fetch_faucet_metadata",
@@ -225,7 +225,7 @@ async fn fetch_faucet_metadata(
 /// # Returns
 ///
 /// The response from the faucet if successful, or an error if the test fails.
-#[instrument(
+#[miden_node_utils::tracing::miden_instrument(
     parent = None,
     target = COMPONENT,
     name = "network_monitor.faucet.perform_mint_test",
@@ -334,7 +334,7 @@ where
 ///
 /// The nonce that solves the challenge, or an error if no solution is found within the attempt
 /// and time bounds.
-#[instrument(
+#[miden_node_utils::tracing::miden_instrument(
     parent = None,
     target = COMPONENT,
     name = "network_monitor.faucet.solve_pow_challenge",

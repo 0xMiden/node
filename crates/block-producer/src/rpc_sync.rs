@@ -12,7 +12,7 @@ use miden_protocol::utils::serde::Deserializable;
 use tokio_stream::StreamExt;
 use tonic_health::ServingStatus;
 use tonic_health::server::HealthReporter;
-use tracing::{info, instrument, warn};
+use tracing::{info, warn};
 
 use crate::{COMPONENT, LOG_TARGET};
 
@@ -112,7 +112,7 @@ impl BlockSync {
         .await
     }
 
-    #[instrument(target = COMPONENT, skip_all, err)]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all, err)]
     async fn sync(&self) -> anyhow::Result<()> {
         let block_from = self.state.chain_tip(Finality::Committed).await.child().as_u32();
         info!(target: LOG_TARGET, block_from, "Connecting to upstream RPC for blocks");

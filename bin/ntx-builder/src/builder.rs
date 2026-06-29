@@ -222,7 +222,7 @@ impl NetworkTransactionBuilder {
     /// Applies a committed block and returns the computed `CommittedBlockEffects` so the
     /// steady-state loop can hand them to the coordinator without re-deriving from the signed
     /// block.
-    #[tracing::instrument(
+    #[miden_node_utils::tracing::miden_instrument(
         name = "ntx.builder.apply_committed_block",
         skip(self, loop_db, block),
         fields(block_num = %block.header().block_num(), %committed_tip),

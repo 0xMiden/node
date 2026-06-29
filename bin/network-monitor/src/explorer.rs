@@ -6,7 +6,6 @@ use std::time::Duration;
 use anyhow::Context;
 use reqwest::Client;
 use serde::{Deserialize, Deserializer, Serialize};
-use tracing::instrument;
 use url::Url;
 
 use crate::COMPONENT;
@@ -86,7 +85,7 @@ impl Service for ExplorerService {
         )
     }
 
-    #[instrument(target = COMPONENT, name = "check-status.explorer", skip_all, ret(level = "info"))]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "check-status.explorer", skip_all, ret(level = "info"))]
     async fn check(&mut self) -> ServiceStatus {
         let resp = self
             .client

@@ -2,12 +2,12 @@ use std::sync::atomic::Ordering;
 
 use miden_node_proto::generated as grpc;
 use miden_node_utils::ErrorReport;
-use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
 use miden_tx::utils::serde::Deserializable;
 use tonic::Status;
 
 use super::ValidatorService;
+use crate::COMPONENT;
 use crate::db::insert_transaction;
 use crate::tx_validation::validate_transaction;
 
@@ -16,8 +16,14 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
     type Input = Input;
     type Output = ();
 
+    #[miden_node_utils::tracing::miden_instrument(
+        target = COMPONENT,
+        name = "validator.submit_proven_transaction",
+        skip_all,
+        err,
+    )]
     async fn handle(&self, input: Self::Input) -> tonic::Result<Self::Output> {
-        tracing::Span::current().set_attribute("transaction.id", input.tx.id());
+        miden_node_utils::tracing::miden_span_record!(transaction.id = %input.tx.id());
 
         // Validate the transaction.
         let tx_info = validate_transaction(input.tx, input.inputs).await.map_err(|err| {

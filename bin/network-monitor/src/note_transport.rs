@@ -6,7 +6,6 @@ use std::time::Duration;
 use tonic::transport::{Channel, ClientTlsConfig};
 use tonic_health::pb::health_client::HealthClient;
 use tonic_health::pb::{HealthCheckRequest, health_check_response};
-use tracing::instrument;
 use url::Url;
 
 use crate::COMPONENT;
@@ -43,7 +42,7 @@ impl Service for NoteTransportService {
         )
     }
 
-    #[instrument(
+    #[miden_node_utils::tracing::miden_instrument(
         target = COMPONENT,
         name = "check-status.note-transport",
         skip_all,

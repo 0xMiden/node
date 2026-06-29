@@ -2,7 +2,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use miden_node_utils::spawn::spawn_blocking_in_span;
-use miden_node_utils::tracing::OpenTelemetrySpanExt;
+use miden_node_utils::tracing::ErrorSpanExt;
 use tracing::info_span;
 
 use crate::COMPONENT;
@@ -19,23 +19,29 @@ impl State {
             loop {
                 interval.tick().await;
                 let dir = data_directory.clone();
-                let span = info_span!(target: COMPONENT, "measure_disk_space_usage");
+                let span = info_span!(
+                    target: COMPONENT,
+                    "measure_disk_space_usage",
+                    db.sqlite.size = tracing::field::Empty,
+                    db.sqlite.wal.size = tracing::field::Empty,
+                    db.block_store.size = tracing::field::Empty,
+                    db.account_tree.size = tracing::field::Empty,
+                    db.nullifier_tree.size = tracing::field::Empty,
+                    db.account_state_forest.size = tracing::field::Empty,
+                );
                 let result =
                     spawn_blocking_in_span(move || measure_disk_usage_bytes(&dir), span.clone())
                         .await;
                 match result {
                     Ok(usage) => {
-                        span.set_attribute("db.sqlite.size", usage.sqlite_db);
-                        span.set_attribute("db.sqlite.wal.size", usage.sqlite_wal);
-                        span.set_attribute("db.block_store.size", usage.block_store);
+                        span.record("db.sqlite.size", usage.sqlite_db);
+                        span.record("db.sqlite.wal.size", usage.sqlite_wal);
+                        span.record("db.block_store.size", usage.block_store);
                         #[cfg(feature = "rocksdb")]
                         {
-                            span.set_attribute("db.account_tree.size", usage.account_tree);
-                            span.set_attribute("db.nullifier_tree.size", usage.nullifier_tree);
-                            span.set_attribute(
-                                "db.account_state_forest.size",
-                                usage.account_state_forest,
-                            );
+                            span.record("db.account_tree.size", usage.account_tree);
+                            span.record("db.nullifier_tree.size", usage.nullifier_tree);
+                            span.record("db.account_state_forest.size", usage.account_state_forest);
                         }
                     },
                     Err(err) => span.set_error(&err),

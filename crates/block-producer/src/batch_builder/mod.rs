@@ -7,7 +7,7 @@ use futures::TryFutureExt;
 use miden_node_proto::domain::batch::BatchInputs;
 use miden_node_store::state::State;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
-use miden_node_utils::tracing::OpenTelemetrySpanExt;
+use miden_node_utils::tracing::ErrorSpanExt;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{BatchId, ProposedBatch, ProvenBatch};
 use miden_remote_prover_client::RemoteBatchProver;
@@ -15,7 +15,7 @@ use miden_tx_batch_prover::LocalBatchProver;
 use rand::Rng;
 use tokio::task::JoinSet;
 use tokio::time;
-use tracing::{Instrument, Span, instrument};
+use tracing::{Instrument, Span};
 use url::Url;
 
 use crate::domain::batch::SelectedBatch;
@@ -102,9 +102,27 @@ impl BatchBuilder {
         }
     }
 
-    #[instrument(parent = None, target = COMPONENT, name = "batch_builder.build_batch", skip_all)]
+    #[miden_node_utils::tracing::miden_instrument(
+        parent = None,
+        target = COMPONENT,
+        name = "batch_builder.build_batch",
+        skip_all,
+        fields(
+            workers.count = tracing::field::Empty,
+            batch.id = tracing::field::Empty,
+            transactions.count = tracing::field::Empty,
+            transactions.ids = tracing::field::Empty,
+            transactions.input_notes.count = tracing::field::Empty,
+            transactions.output_notes.count = tracing::field::Empty,
+            transactions.unauthenticated_notes.count = tracing::field::Empty,
+            batch.expiration_height = tracing::field::Empty,
+            batch.account_updates.count = tracing::field::Empty,
+            batch.input_notes.count = tracing::field::Empty,
+            batch.output_notes.count = tracing::field::Empty,
+        )
+    )]
     async fn build_batch(&mut self, mempool: SharedMempool) -> Result<(), BuildBatchError> {
-        Span::current().set_attribute("workers.count", self.worker_pool.len());
+        miden_node_utils::tracing::miden_span_record!(workers.count = self.worker_pool.len());
 
         self.wait_for_available_worker().await?;
 
@@ -132,7 +150,7 @@ impl BatchBuilder {
     /// require the same logic as here to handle the case when the pool is at capacity. This
     /// design was chosen instead as it removes this branching logic by "always" having the pool
     /// at max capacity. Instead completed workers wait to be culled by this function.
-    #[instrument(target = COMPONENT, name = "batch_builder.wait_for_available_worker", skip_all)]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "batch_builder.wait_for_available_worker", skip_all)]
     async fn wait_for_available_worker(&mut self) -> Result<(), BuildBatchError> {
         // We must crash here because otherwise we have a batch that has been selected from the
         // mempool, but which is now in limbo. This effectively corrupts the mempool.
@@ -201,12 +219,12 @@ impl BatchJob {
         }
     }
 
-    #[instrument(target = COMPONENT, name = "batch_builder.select_batch", skip_all)]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "batch_builder.select_batch", skip_all)]
     fn select_batch(&self) -> Result<Option<SelectedBatch>, BuildBatchError> {
         Ok(self.mempool.lock().map_err(BuildBatchError::MempoolPoisoned)?.select_batch())
     }
 
-    #[instrument(target = COMPONENT, name = "batch_builder.get_batch_inputs", skip_all, err)]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "batch_builder.get_batch_inputs", skip_all, err)]
     async fn get_batch_inputs(
         &self,
         batch: SelectedBatch,
@@ -233,7 +251,7 @@ impl BatchJob {
             .map(|inputs| (batch, inputs))
     }
 
-    #[instrument(target = COMPONENT, name = "batch_builder.propose_batch", skip_all, err)]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "batch_builder.propose_batch", skip_all, err)]
     async fn propose_batch(
         selected: SelectedBatch,
         inputs: BatchInputs,
@@ -253,12 +271,12 @@ impl BatchJob {
         .map_err(BuildBatchError::ProposeBatchError)
     }
 
-    #[instrument(target = COMPONENT, name = "batch_builder.prove_batch", skip_all, err)]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "batch_builder.prove_batch", skip_all, err)]
     async fn prove_batch(
         &self,
         proposed_batch: ProposedBatch,
     ) -> Result<Arc<ProvenBatch>, BuildBatchError> {
-        Span::current().set_attribute("prover.kind", self.batch_prover.kind());
+        miden_node_utils::tracing::miden_span_record!(prover.kind = self.batch_prover.kind());
 
         let proven_batch = match &self.batch_prover {
             BatchProver::Remote(prover) => prover
@@ -285,12 +303,14 @@ impl BatchJob {
         }
     }
 
-    #[instrument(target = COMPONENT, name = "batch_builder.inject_failure", skip_all, err)]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "batch_builder.inject_failure", skip_all, err)]
     async fn inject_failure<T>(&self, value: T) -> Result<T, BuildBatchError> {
         let roll = rand::rng().random::<f64>();
 
-        Span::current().set_attribute("failure_rate", self.failure_rate);
-        Span::current().set_attribute("dice_roll", roll);
+        miden_node_utils::tracing::miden_span_record!(
+            failure_rate = self.failure_rate,
+            dice_roll = roll,
+        );
 
         if roll < self.failure_rate {
             Err(BuildBatchError::InjectedFailure)
@@ -299,7 +319,7 @@ impl BatchJob {
         }
     }
 
-    #[instrument(target = COMPONENT, name = "batch_builder.commit_batch", skip_all)]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "batch_builder.commit_batch", skip_all)]
     fn commit_batch(&self, batch: Arc<ProvenBatch>) -> Result<(), BuildBatchError> {
         self.mempool
             .lock()
@@ -308,7 +328,7 @@ impl BatchJob {
         Ok(())
     }
 
-    #[instrument(target = COMPONENT, name = "batch_builder.rollback_batch", skip_all)]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "batch_builder.rollback_batch", skip_all)]
     fn rollback_batch(&self, batch_id: BatchId) -> Result<(), BuildBatchError> {
         self.mempool
             .lock()
@@ -350,8 +370,9 @@ impl BatchProver {
 
 impl TelemetryInjectorExt for SelectedBatch {
     fn inject_telemetry(&self) {
-        Span::current().set_attribute("batch.id", self.id());
-        Span::current().set_attribute("transactions.count", self.transactions().len());
+        let span = Span::current();
+        span.record("batch.id", tracing::field::display(self.id()));
+        span.record("transactions.count", self.transactions().len());
         // Accumulate all telemetry based on transactions.
         let (tx_ids, input_notes_count, output_notes_count, unauth_notes_count) =
             self.transactions().iter().fold(
@@ -370,19 +391,22 @@ impl TelemetryInjectorExt for SelectedBatch {
                     (tx_ids, input_notes_count, output_notes_count, unauth_notes_count)
                 },
             );
-        Span::current().set_attribute("transactions.ids", tx_ids);
-        Span::current().set_attribute("transactions.input_notes.count", input_notes_count);
-        Span::current().set_attribute("transactions.output_notes.count", output_notes_count);
-        Span::current()
-            .set_attribute("transactions.unauthenticated_notes.count", unauth_notes_count);
+        span.record("transactions.ids", tracing::field::debug(tx_ids));
+        span.record("transactions.input_notes.count", input_notes_count);
+        span.record("transactions.output_notes.count", output_notes_count);
+        span.record("transactions.unauthenticated_notes.count", unauth_notes_count);
     }
 }
 
 impl TelemetryInjectorExt for ProposedBatch {
     fn inject_telemetry(&self) {
-        Span::current().set_attribute("batch.expiration_height", self.batch_expiration_block_num());
-        Span::current().set_attribute("batch.account_updates.count", self.account_updates().len());
-        Span::current().set_attribute("batch.input_notes.count", self.input_notes().num_notes());
-        Span::current().set_attribute("batch.output_notes.count", self.output_notes().len());
+        let span = Span::current();
+        span.record(
+            "batch.expiration_height",
+            tracing::field::display(self.batch_expiration_block_num()),
+        );
+        span.record("batch.account_updates.count", self.account_updates().len());
+        span.record("batch.input_notes.count", self.input_notes().num_notes());
+        span.record("batch.output_notes.count", self.output_notes().len());
     }
 }

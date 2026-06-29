@@ -8,7 +8,7 @@ use miden_protocol::block::ProposedBlock;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_protocol::utils::serde::Serializable;
 use thiserror::Error;
-use tracing::{info, instrument};
+use tracing::info;
 use url::Url;
 
 use crate::{COMPONENT, LOG_TARGET};
@@ -57,7 +57,7 @@ impl BlockProducerValidatorClient {
 
     /// Signs the proposed block via the validator, returning the signature and the block commitment
     /// that the validator reports it signed (for cross-checking against the locally built block).
-    #[instrument(target = COMPONENT, name = "validator.client.validate_block", skip_all, err)]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "validator.client.validate_block", skip_all, err)]
     pub async fn sign_block(
         &self,
         proposed_block: ProposedBlock,

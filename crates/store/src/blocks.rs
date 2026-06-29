@@ -13,7 +13,6 @@ use std::path::{Path, PathBuf};
 
 use miden_protocol::block::BlockNumber;
 use miden_protocol::utils::serde::Serializable;
-use tracing::instrument;
 
 use crate::COMPONENT;
 use crate::genesis::GenesisBlock;
@@ -33,7 +32,7 @@ impl BlockStore {
     /// # Errors
     ///
     /// Uses [`std::fs::create_dir`] and therefore has the same error conditions.
-    #[instrument(
+    #[miden_node_utils::tracing::miden_instrument(
         target = COMPONENT,
         name = "store.block_store.bootstrap",
         skip_all,
@@ -84,7 +83,7 @@ impl BlockStore {
         }
     }
 
-    #[instrument(
+    #[miden_node_utils::tracing::miden_instrument(
         target = COMPONENT,
         name = "store.block_store.save_block",
         skip(self, data),
@@ -112,7 +111,7 @@ impl BlockStore {
     // PROOF STORAGE
     // --------------------------------------------------------------------------------------------
 
-    #[instrument(
+    #[miden_node_utils::tracing::miden_instrument(
         target = COMPONENT,
         name = "store.block_store.save_proof",
         skip_all,
@@ -139,7 +138,7 @@ impl BlockStore {
     // PROVING INPUTS STORAGE
     // --------------------------------------------------------------------------------------------
 
-    #[instrument(
+    #[miden_node_utils::tracing::miden_instrument(
         target = COMPONENT,
         name = "store.block_store.save_proving_inputs",
         skip_all,

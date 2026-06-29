@@ -1,6 +1,6 @@
 use miden_node_block_producer::{BlockProducerStatus, MempoolStats};
 use miden_node_proto::generated as proto;
-use tracing::{debug, instrument};
+use tracing::debug;
 
 use super::{Finality, ProtoMempoolStats, Request, RpcMode, RpcService};
 use crate::{COMPONENT, LOG_TARGET};
@@ -18,7 +18,7 @@ impl proto::server::rpc_api::Status for RpcService {
         Ok(output)
     }
 
-    #[instrument(
+    #[miden_node_utils::tracing::miden_instrument(
         target = COMPONENT,
         name = "status",
         skip_all,

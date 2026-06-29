@@ -27,7 +27,7 @@ use miden_protocol::note::{
 use miden_protocol::transaction::TransactionHeader;
 use miden_protocol::utils::serde::Deserializable;
 use tokio::sync::oneshot;
-use tracing::{info, instrument};
+use tracing::info;
 
 use crate::db::migrations::{migrate_database, verify_latest_schema};
 use crate::db::models::conv::SqlTypeConvert;
@@ -187,7 +187,7 @@ impl From<NoteRecord> for NoteSyncRecord {
 
 impl Db {
     /// Creates a new database and inserts the genesis block.
-    #[instrument(
+    #[miden_node_utils::tracing::miden_instrument(
         target = COMPONENT,
         name = "store.database.bootstrap",
         skip_all,
@@ -213,7 +213,7 @@ impl Db {
     }
 
     /// Open a connection to the DB after verifying that it is at the latest schema version.
-    #[instrument(target = COMPONENT, skip_all)]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all)]
     pub async fn load(database_filepath: PathBuf) -> Result<Self, DatabaseError> {
         Self::load_with_pool_size(database_filepath, miden_node_db::default_connection_pool_size())
             .await
@@ -221,7 +221,7 @@ impl Db {
 
     /// Open a connection to the DB with a specific pool size after verifying that it is at the
     /// latest schema version.
-    #[instrument(target = COMPONENT, skip_all)]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all)]
     pub async fn load_with_pool_size(
         database_filepath: PathBuf,
         connection_pool_size: NonZeroUsize,
@@ -240,14 +240,14 @@ impl Db {
     }
 
     /// Applies all pending migrations to an existing DB.
-    #[instrument(target = COMPONENT, skip_all)]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all)]
     pub fn migrate(database_filepath: impl AsRef<Path>) -> Result<(), DatabaseError> {
         migrate_database(database_filepath.as_ref())?;
         Ok(())
     }
 
     /// Returns a page of nullifiers for tree rebuilding.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+    #[miden_node_utils::tracing::miden_instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_nullifiers_paged(
         &self,
         page_size: std::num::NonZeroUsize,
@@ -260,7 +260,7 @@ impl Db {
     }
 
     /// Loads the nullifiers that match the prefixes from the DB.
-    #[instrument(
+    #[miden_node_utils::tracing::miden_instrument(
         level = "debug",
         target = COMPONENT,
         skip_all,
@@ -291,7 +291,7 @@ impl Db {
     /// Search for a [`BlockHeader`] from the database by its `block_num`.
     ///
     /// When `block_number` is [None], the latest block header is returned.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+    #[miden_node_utils::tracing::miden_instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_block_header_by_block_num(
         &self,
         maybe_block_number: Option<BlockNumber>,
@@ -304,7 +304,7 @@ impl Db {
     }
 
     /// Search for a [`BlockHeader`] and its [`Signature`] from the database by its `block_num`.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+    #[miden_node_utils::tracing::miden_instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_block_header_and_signature_by_block_num(
         &self,
         block_number: BlockNumber,
@@ -317,7 +317,7 @@ impl Db {
     }
 
     /// Loads multiple block headers from the DB.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+    #[miden_node_utils::tracing::miden_instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_block_headers(
         &self,
         blocks: impl Iterator<Item = BlockNumber> + Send + 'static,
@@ -330,7 +330,7 @@ impl Db {
     }
 
     /// Loads all the block headers from the DB.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+    #[miden_node_utils::tracing::miden_instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_all_block_header_commitments(&self) -> Result<Vec<BlockHeaderCommitment>> {
         self.transact("all block headers", |conn| {
             let raw = queries::select_all_block_header_commitments(conn)?;
@@ -340,7 +340,7 @@ impl Db {
     }
 
     /// Returns a page of account commitments for tree rebuilding.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+    #[miden_node_utils::tracing::miden_instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_account_commitments_paged(
         &self,
         page_size: std::num::NonZeroUsize,
@@ -353,7 +353,7 @@ impl Db {
     }
 
     /// Returns a page of public account IDs for forest rebuilding.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+    #[miden_node_utils::tracing::miden_instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_public_account_ids_paged(
         &self,
         page_size: std::num::NonZeroUsize,
@@ -366,7 +366,7 @@ impl Db {
     }
 
     /// Returns a page of public account state roots for forest consistency verification.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+    #[miden_node_utils::tracing::miden_instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_public_account_state_roots_paged(
         &self,
         page_size: std::num::NonZeroUsize,
@@ -379,14 +379,14 @@ impl Db {
     }
 
     /// Loads public account details from the DB.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+    #[miden_node_utils::tracing::miden_instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_account(&self, id: AccountId) -> Result<AccountInfo> {
         self.transact("Get account details", move |conn| queries::select_account(conn, id))
             .await
     }
 
     /// Returns the subset of the provided account IDs that classify as network accounts.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+    #[miden_node_utils::tracing::miden_instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_network_accounts_subset(
         &self,
         account_ids: Vec<AccountId>,
@@ -400,7 +400,7 @@ impl Db {
     /// Queries the account code by its commitment hash.
     ///
     /// Returns `None` if no code exists with that commitment.
-    #[instrument(target = COMPONENT, skip_all)]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all)]
     pub async fn select_account_code_by_commitment(
         &self,
         code_commitment: Word,
@@ -415,7 +415,7 @@ impl Db {
     ///
     /// Returns both in a single query to avoid querying the database twice.
     /// Returns `None` if the account doesn't exist at that block.
-    #[instrument(target = COMPONENT, skip_all)]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all)]
     pub async fn select_account_header_with_storage_header_at_block(
         &self,
         account_id: AccountId,
@@ -427,7 +427,7 @@ impl Db {
         .await
     }
 
-    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+    #[miden_node_utils::tracing::miden_instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn get_note_sync_multi(
         &self,
         block_range: RangeInclusive<BlockNumber>,
@@ -441,7 +441,7 @@ impl Db {
 
     /// Loads all the [`miden_protocol::note::Note`]s matching a certain [`NoteId`] from the
     /// database.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+    #[miden_node_utils::tracing::miden_instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_notes_by_id(&self, note_ids: Vec<NoteId>) -> Result<Vec<NoteRecord>> {
         self.transact("note by id", move |conn| {
             queries::select_notes_by_id(conn, note_ids.as_slice())
@@ -450,7 +450,7 @@ impl Db {
     }
 
     /// Returns all note commitments from the DB that match the provided ones.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+    #[miden_node_utils::tracing::miden_instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_existing_note_commitments(
         &self,
         note_commitments: Vec<Word>,
@@ -462,7 +462,7 @@ impl Db {
     }
 
     /// Loads inclusion proofs for notes matching the given note commitments.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+    #[miden_node_utils::tracing::miden_instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn select_note_inclusion_proofs(
         &self,
         note_commitments: BTreeSet<Word>,
@@ -478,7 +478,7 @@ impl Db {
     /// `allow_acquire` and `acquire_done` are used to synchronize writes to the DB with writes to
     /// the in-memory trees. Further details available on [`super::state::State::apply_block`].
     // TODO: This span is logged in a root span, we should connect it to the parent one.
-    #[instrument(target = COMPONENT, skip_all, err)]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all, err)]
     pub async fn apply_block(
         &self,
         allow_acquire: oneshot::Sender<()>,
@@ -540,7 +540,7 @@ impl Db {
     /// Returns:
     ///     - `::LimitExceeded` when too many entries are present
     ///     - `::AllEntries` if the size is less than or equal given `entries_limit`, if any
-    #[instrument(target = COMPONENT, skip_all)]
+    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all)]
     pub(crate) async fn reconstruct_storage_map_from_db(
         &self,
         account_id: AccountId,
