@@ -89,6 +89,30 @@ pub(crate) fn insert_transaction(
     Ok(count)
 }
 
+/// Returns whether a transaction with the given id has already been validated.
+///
+/// # Raw SQL
+///
+/// ```sql
+/// SELECT EXISTS(
+///   SELECT 1
+///   FROM validated_transactions
+///   WHERE id = ?
+/// );
+/// ```
+#[instrument(target = COMPONENT, skip(conn), err)]
+pub(crate) fn transaction_exists(
+    conn: &mut SqliteConnection,
+    tx_id: TransactionId,
+) -> Result<bool, DatabaseError> {
+    let exists = diesel::select(exists(
+        schema::validated_transactions::table
+            .filter(schema::validated_transactions::id.eq(tx_id.to_bytes())),
+    ))
+    .get_result::<bool>(conn)?;
+    Ok(exists)
+}
+
 /// Scans the database for transaction Ids that do not exist.
 ///
 /// If the resulting vector is empty, all supplied transaction ids have been validated in the past.
@@ -215,5 +239,49 @@ mod tests {
 
         setup(db_path.clone()).await.expect("setup should bootstrap the database");
         load(db_path).await.expect("load should accept a bootstrapped database");
+    }
+
+    #[tokio::test]
+    async fn transaction_exists_detects_validated_transactions() {
+        use miden_protocol::Word;
+
+        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
+        let db = setup(temp_dir.path().join("validator.sqlite3")).await.unwrap();
+
+        let validated_id = TransactionId::from_raw(Word::try_from([1u64, 2, 3, 4]).unwrap());
+        let unknown_id = TransactionId::from_raw(Word::try_from([5u64, 6, 7, 8]).unwrap());
+
+        // Insert a row keyed by `validated_id`. Only the primary key matters for this query, so the
+        // remaining columns are filled with placeholder bytes.
+        let row = ValidatedTransactionRowInsert {
+            id: validated_id.to_bytes(),
+            block_num: 0,
+            account_id: vec![],
+            account_delta: vec![],
+            input_notes: vec![],
+            output_notes: vec![],
+            initial_account_hash: vec![],
+            final_account_hash: vec![],
+            fee: vec![],
+        };
+        db.transact("insert_row", move |conn| -> Result<usize, DatabaseError> {
+            Ok(diesel::insert_into(schema::validated_transactions::table)
+                .values(row)
+                .execute(conn)?)
+        })
+        .await
+        .unwrap();
+
+        let validated_exists = db
+            .query("transaction_exists", move |conn| transaction_exists(conn, validated_id))
+            .await
+            .unwrap();
+        assert!(validated_exists, "an inserted transaction id should be reported as existing");
+
+        let unknown_exists = db
+            .query("transaction_exists", move |conn| transaction_exists(conn, unknown_id))
+            .await
+            .unwrap();
+        assert!(!unknown_exists, "an unknown transaction id should not be reported as existing");
     }
 }
