@@ -6,6 +6,7 @@ use std::task::{Context as TaskContext, Poll};
 use std::time::{Duration, Instant};
 
 use anyhow::Context as AnyhowContext;
+use miden_node_block_producer::BlockProducerApi;
 use miden_node_proto::clients::NtxBuilderClient;
 use miden_node_proto::domain::block::InvalidBlockRange;
 use miden_node_proto::generated::rpc::MempoolStats as ProtoMempoolStats;
@@ -267,6 +268,13 @@ impl RpcService {
     }
 }
 
+// INTERNAL SEQUENCER SERVICE
+// ================================================================================================
+
+pub(crate) struct SequencerInternalService {
+    pub(crate) block_producer: BlockProducerApi,
+}
+
 // API IMPLEMENTATION
 // ================================================================================================
 
@@ -280,6 +288,8 @@ mod get_note_script_by_root;
 mod get_notes_by_id;
 mod proof_subscription;
 mod status;
+mod submit_auth_tx;
+mod submit_auth_tx_batch;
 mod submit_proven_tx;
 mod submit_proven_tx_batch;
 mod subscription_ban;
