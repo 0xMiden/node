@@ -16,7 +16,6 @@ pub use recover::RecoverCommand;
 const ENV_DATA_DIRECTORY: &str = "MIDEN_NODE_DATA_DIRECTORY";
 
 #[derive(Subcommand, Debug)]
-#[expect(clippy::large_enum_variant, reason = "cli is a once-off usage")]
 pub enum Command {
     /// Start the node in sequencer mode.
     ///

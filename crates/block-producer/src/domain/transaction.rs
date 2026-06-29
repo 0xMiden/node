@@ -1,11 +1,14 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use miden_node_proto::errors::ConversionError;
+use miden_node_proto::generated::sequencer;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::{ProvenTransaction, TransactionId, TxAccountUpdate};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 
 use crate::errors::StateConflict;
 use crate::store::TransactionInputs;
@@ -132,6 +135,48 @@ impl AuthenticatedTransaction {
     }
 }
 
+// PROTO CONVERSIONS
+// ================================================================================================
+
+impl From<AuthenticatedTransaction> for sequencer::AuthenticatedTransaction {
+    fn from(value: AuthenticatedTransaction) -> Self {
+        Self {
+            transaction: value.inner.to_bytes(),
+            store_account_state: value.store_account_state.map(Into::into),
+            notes_authenticated_by_store: value
+                .notes_authenticated_by_store
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            authentication_height: value.authentication_height.as_u32(),
+        }
+    }
+}
+
+impl TryFrom<sequencer::AuthenticatedTransaction> for AuthenticatedTransaction {
+    type Error = ConversionError;
+
+    fn try_from(value: sequencer::AuthenticatedTransaction) -> Result<Self, Self::Error> {
+        let inner = ProvenTransaction::read_from_bytes(&value.transaction)
+            .map_err(|err| ConversionError::deserialization("ProvenTransaction", err))?;
+
+        let store_account_state = value.store_account_state.map(Word::try_from).transpose()?;
+
+        let notes_authenticated_by_store = value
+            .notes_authenticated_by_store
+            .into_iter()
+            .map(Word::try_from)
+            .collect::<Result<HashSet<_>, _>>()?;
+
+        Ok(Self {
+            inner: Arc::new(inner),
+            store_account_state,
+            notes_authenticated_by_store,
+            authentication_height: value.authentication_height.into(),
+        })
+    }
+}
+
 #[cfg(test)]
 impl AuthenticatedTransaction {
     //! Builder methods intended for easier test setup.
@@ -157,18 +202,21 @@ impl AuthenticatedTransaction {
     }
 
     /// Overrides the authentication height with the given value.
+    #[must_use]
     pub fn with_authentication_height(mut self, height: BlockNumber) -> Self {
         self.authentication_height = height;
         self
     }
 
     /// Overrides the store state with the given value.
+    #[must_use]
     pub fn with_store_state(mut self, state: Word) -> Self {
         self.store_account_state = Some(state);
         self
     }
 
     /// Unsets the store state.
+    #[must_use]
     pub fn with_empty_store_state(mut self) -> Self {
         self.store_account_state = None;
         self

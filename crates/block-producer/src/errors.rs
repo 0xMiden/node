@@ -41,6 +41,10 @@ pub enum MempoolSubmissionError {
     #[grpc(internal)]
     StoreStateReadFailed(#[source] StoreError),
 
+    #[error("failed to authenticate transaction")]
+    #[grpc(internal)]
+    AuthenticationFailed(#[source] StateConflict),
+
     #[error(
         "transaction input data from block {input_block} is rejected as stale because it is older than the limit of {stale_limit}"
     )]
