@@ -169,7 +169,6 @@ impl State {
     /// Returns an error if the forest doesn't have data for the requested slot.
     /// All-entries queries (`SlotData::All`) use the forest when all hashed keys are known in the
     /// reverse-key LRU cache, otherwise they fall back to database reconstruction.
-    #[expect(clippy::too_many_lines)]
     #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all)]
     async fn fetch_public_account_details(
         &self,

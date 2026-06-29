@@ -422,6 +422,7 @@ impl BlockBatchesAndInputs {
     }
 }
 
+#[expect(clippy::struct_field_names)]
 struct ProposedBlockTelemetry {
     nullifiers_count: usize,
     output_notes_count: usize,

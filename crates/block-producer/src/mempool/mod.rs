@@ -232,10 +232,6 @@ impl Mempool {
     ///
     /// Returns an error if the transaction would exceed the mempool capacity or if its initial
     /// conditions don't match the current state.
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "Not impactful, and we may want ownership in the future"
-    )]
     #[miden_node_utils::tracing::miden_instrument(
         target = COMPONENT,
         name = "mempool.add_transaction",
