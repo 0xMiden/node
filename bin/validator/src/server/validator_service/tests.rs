@@ -529,10 +529,11 @@ async fn validate_block_number_mismatch() {
     );
 }
 
-/// A block subscription replays the backed-up blocks from the requested height and then streams
-/// newly signed blocks as they arrive.
+/// A block subscription replays the backed-up blocks from the requested height. While the
+/// subscription is live it holds the exclusive backup lock, so signing is frozen for its duration
+/// and no further blocks can be produced or streamed.
 #[tokio::test]
-async fn block_subscription_replays_then_follows() {
+async fn block_subscription_replays_then_freezes_signing() {
     use std::time::Duration;
 
     use miden_protocol::block::SignedBlock;
@@ -558,16 +559,21 @@ async fn block_subscription_replays_then_follows() {
         assert_eq!(response.committed_chain_tip, 2);
     }
 
-    // Sign a new block and confirm it is streamed live to the existing subscriber.
-    tv.apply_empty_block().await;
-    let response = tokio::time::timeout(Duration::from_secs(5), stream.next())
+    // The live subscription holds the backup lock, so no new block can be signed while it is open.
+    // The validator therefore cannot produce a block to stream, and signing is rejected until the
+    // subscriber disconnects.
+    let proposed = tv.propose_empty_block();
+    let status = tv
+        .call_sign_block(&proposed)
         .await
-        .expect("live block should arrive promptly")
-        .expect("stream should not end")
-        .expect("stream item should not be an error");
-    let block = SignedBlock::read_from_bytes(&response.block).expect("valid signed block");
-    assert_eq!(block.header().block_num().as_u32(), 3);
-    assert_eq!(response.committed_chain_tip, 3);
+        .expect_err("sign_block must be rejected while a backup subscription is live");
+    assert_eq!(status.code(), tonic::Code::ResourceExhausted, "got: {status:?}");
+
+    // Once the subscriber disconnects, signing resumes.
+    drop(stream);
+    tv.call_sign_block(&proposed)
+        .await
+        .expect("sign_block should succeed once the subscription is dropped");
 }
 
 // SERVE LOCK TESTS
