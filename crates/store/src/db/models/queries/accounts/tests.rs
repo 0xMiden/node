@@ -33,7 +33,7 @@ use miden_protocol::block::{BlockAccountUpdate, BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{EMPTY_WORD, Felt, Word};
-use miden_standards::account::auth::AuthSingleSig;
+use miden_standards::account::auth::{Approver, AuthSingleSig};
 use miden_standards::code_builder::CodeBuilder;
 
 use super::*;
@@ -146,10 +146,10 @@ fn create_test_account_with_storage() -> (Account, AccountId) {
     let account = AccountBuilder::new([1u8; 32])
         .account_type(AccountType::Public)
         .with_component(component)
-        .with_auth_component(AuthSingleSig::new(
+        .with_auth_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
             AuthScheme::Falcon512Poseidon2,
-        ))
+        )))
         .build_existing()
         .unwrap();
 
@@ -208,10 +208,10 @@ fn create_account_with_map_storage(
     AccountBuilder::new([9u8; 32])
         .account_type(AccountType::Public)
         .with_component(component)
-        .with_auth_component(AuthSingleSig::new(
+        .with_auth_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
             AuthScheme::Falcon512Poseidon2,
-        ))
+        )))
         .build_existing()
         .unwrap()
 }
@@ -464,10 +464,10 @@ fn test_upsert_accounts_updates_is_latest_flag() {
     let account_2 = AccountBuilder::new([1u8; 32])
         .account_type(AccountType::Public)
         .with_component(component_2)
-        .with_auth_component(AuthSingleSig::new(
+        .with_auth_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
             AuthScheme::Falcon512Poseidon2,
-        ))
+        )))
         .build_existing()
         .unwrap();
 
@@ -557,10 +557,10 @@ fn test_upsert_accounts_with_multiple_storage_slots() {
     let account = AccountBuilder::new([2u8; 32])
         .account_type(AccountType::Public)
         .with_component(component)
-        .with_auth_component(AuthSingleSig::new(
+        .with_auth_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
             AuthScheme::Falcon512Poseidon2,
-        ))
+        )))
         .build_existing()
         .unwrap();
 
@@ -623,10 +623,10 @@ fn test_upsert_accounts_with_empty_storage() {
     let account = AccountBuilder::new([3u8; 32])
         .account_type(AccountType::Public)
         .with_component(component)
-        .with_auth_component(AuthSingleSig::new(
+        .with_auth_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
             AuthScheme::Falcon512Poseidon2,
-        ))
+        )))
         .build_existing()
         .unwrap();
 
@@ -764,10 +764,10 @@ fn test_select_latest_account_storage_multiple_slots() {
     let account = AccountBuilder::new([9u8; 32])
         .account_type(AccountType::Public)
         .with_component(component)
-        .with_auth_component(AuthSingleSig::new(
+        .with_auth_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
             AuthScheme::Falcon512Poseidon2,
-        ))
+        )))
         .build_existing()
         .unwrap();
 
@@ -821,13 +821,12 @@ fn test_select_latest_account_storage_slot_updates() {
 
     upsert_accounts(&mut conn, &[account_update], block_1).expect("upsert_accounts failed");
 
-    let mut map_patch = StorageMapPatch::default();
-    map_patch.insert(key_1, value_2);
-    map_patch.insert(key_2, value_3);
+    let map_patch = StorageMapPatch::from_iters([], [(key_1, value_2), (key_2, value_3)]);
     let storage_patch = AccountStoragePatch::from_raw(BTreeMap::from_iter([(
         slot_name.clone(),
         StorageSlotPatch::Map(map_patch),
-    )]));
+    )]))
+    .unwrap();
 
     let final_nonce = Felt::new_unchecked(account.nonce().as_canonical_u64() + 1);
     let partial_patch = AccountPatch::new(
@@ -1150,10 +1149,10 @@ fn build_account_with_code(push_value: u32) -> Account {
     AccountBuilder::new([2u8; 32])
         .account_type(AccountType::Public)
         .with_component(component)
-        .with_auth_component(AuthSingleSig::new(
+        .with_auth_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
             AuthScheme::Falcon512Poseidon2,
-        ))
+        )))
         .build_existing()
         .unwrap()
 }

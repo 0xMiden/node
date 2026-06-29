@@ -19,6 +19,7 @@ use miden_protocol::account::{
     AccountUpdateDetails,
     AccountVaultPatch,
     StorageMapKey,
+    StorageMapPatchEntries,
     StorageSlot,
     StorageSlotContent,
     StorageSlotName,
@@ -69,7 +70,7 @@ use miden_protocol::transaction::{
 };
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{EMPTY_WORD, Felt, Word};
-use miden_standards::account::auth::AuthSingleSig;
+use miden_standards::account::auth::{Approver, AuthSingleSig};
 use miden_standards::code_builder::CodeBuilder;
 use miden_standards::note::{NetworkAccountTarget, NoteExecutionHint, P2idNote};
 use pretty_assertions::assert_eq;
@@ -960,7 +961,7 @@ fn insert_account_patch(
     patch: &AccountPatch,
 ) {
     for (slot_name, slot_patch) in patch.storage().maps() {
-        for (k, v) in slot_patch.entries() {
+        for (k, v) in slot_patch.entries().into_iter().flat_map(StorageMapPatchEntries::as_map) {
             insert_account_storage_map_value(
                 conn,
                 account_id,
@@ -1003,11 +1004,9 @@ fn sql_account_storage_map_values_insertion() {
     let value3 = Word::from([30u32, 31, 32, 33]);
 
     // Insert at block 1
-    let mut map1 = StorageMapPatch::default();
-    map1.insert(key1, value1);
-    map1.insert(key2, value2);
+    let map1 = StorageMapPatch::from_iters([], [(key1, value1), (key2, value2)]);
     let delta1 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map1))]);
-    let storage1 = AccountStoragePatch::from_raw(delta1);
+    let storage1 = AccountStoragePatch::from_raw(delta1).unwrap();
     let patch1 = AccountPatch::new(
         account_id,
         storage1,
@@ -1028,10 +1027,9 @@ fn sql_account_storage_map_values_insertion() {
     assert_eq!(storage_map_page.values.len(), 2, "expect 2 initial rows");
 
     // Update key1 at block 2
-    let mut map2 = StorageMapPatch::default();
-    map2.insert(key1, value3);
+    let map2 = StorageMapPatch::from_iters([], [(key1, value3)]);
     let delta2 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map2))]);
-    let storage2 = AccountStoragePatch::from_raw(delta2);
+    let storage2 = AccountStoragePatch::from_raw(delta2).unwrap();
     let patch2 = AccountPatch::new(
         account_id,
         storage2,
@@ -1580,10 +1578,10 @@ fn create_account_with_code(code_str: &str, seed: [u8; 32]) -> Account {
     AccountBuilder::new(seed)
         .account_type(AccountType::Public)
         .with_component(component)
-        .with_auth_component(AuthSingleSig::new(
+        .with_auth_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
             AuthScheme::Falcon512Poseidon2,
-        ))
+        )))
         .build_existing()
         .unwrap()
 }
@@ -1679,10 +1677,10 @@ fn mock_account_code_and_storage(
         .account_type(account_type)
         .with_assets(assets)
         .with_component(account_component)
-        .with_auth_component(AuthSingleSig::new(
+        .with_auth_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
             AuthScheme::Falcon512Poseidon2,
-        ))
+        )))
         .build_existing()
         .unwrap()
 }
@@ -1840,10 +1838,10 @@ async fn genesis_with_account_assets() {
         .account_type(AccountType::Public)
         .with_component(account_component)
         .with_assets([fungible_asset.into()])
-        .with_auth_component(AuthSingleSig::new(
+        .with_auth_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
             AuthScheme::Falcon512Poseidon2,
-        ))
+        )))
         .build_existing()
         .unwrap();
 
@@ -1907,10 +1905,10 @@ async fn genesis_with_account_storage_map() {
     let account = AccountBuilder::new([2u8; 32])
         .account_type(AccountType::Public)
         .with_component(account_component)
-        .with_auth_component(AuthSingleSig::new(
+        .with_auth_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
             AuthScheme::Falcon512Poseidon2,
-        ))
+        )))
         .build_existing()
         .unwrap();
 
@@ -1967,10 +1965,10 @@ async fn genesis_with_account_assets_and_storage() {
         .account_type(AccountType::Public)
         .with_component(account_component)
         .with_assets([fungible_asset.into()])
-        .with_auth_component(AuthSingleSig::new(
+        .with_auth_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
             AuthScheme::Falcon512Poseidon2,
-        ))
+        )))
         .build_existing()
         .unwrap();
 
@@ -2006,10 +2004,10 @@ async fn genesis_with_multiple_accounts() {
     let account1 = AccountBuilder::new([1u8; 32])
         .account_type(AccountType::Public)
         .with_component(account_component1)
-        .with_auth_component(AuthSingleSig::new(
+        .with_auth_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
             AuthScheme::Falcon512Poseidon2,
-        ))
+        )))
         .build_existing()
         .unwrap();
 
@@ -2030,10 +2028,10 @@ async fn genesis_with_multiple_accounts() {
         .account_type(AccountType::Public)
         .with_component(account_component2)
         .with_assets([fungible_asset.into()])
-        .with_auth_component(AuthSingleSig::new(
+        .with_auth_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
             AuthScheme::Falcon512Poseidon2,
-        ))
+        )))
         .build_existing()
         .unwrap();
 
@@ -2063,10 +2061,10 @@ async fn genesis_with_multiple_accounts() {
     let account3 = AccountBuilder::new([3u8; 32])
         .account_type(AccountType::Public)
         .with_component(account_component3)
-        .with_auth_component(AuthSingleSig::new(
+        .with_auth_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
             AuthScheme::Falcon512Poseidon2,
-        ))
+        )))
         .build_existing()
         .unwrap();
 
@@ -2530,10 +2528,10 @@ fn db_roundtrip_account_storage_with_maps() {
     let account = AccountBuilder::new([50u8; 32])
         .account_type(AccountType::Public)
         .with_component(account_component)
-        .with_auth_component(AuthSingleSig::new(
+        .with_auth_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
             AuthScheme::Falcon512Poseidon2,
-        ))
+        )))
         .build_existing()
         .unwrap();
 
@@ -2914,7 +2912,7 @@ fn test_prune_history() {
 fn account_state_forest_matches_db_storage_map_roots_across_updates() {
     use std::collections::BTreeMap;
 
-    use miden_protocol::account::{StorageMapPatch, StorageSlotPatch};
+    use miden_protocol::account::{StorageMapPatch, StorageSlotPatch, StorageValuePatch};
     use miden_protocol::crypto::merkle::smt::Smt;
 
     use crate::account_state_forest::AccountStateForest;
@@ -3002,15 +3000,16 @@ fn account_state_forest_matches_db_storage_map_roots_across_updates() {
     let value3 = num_to_word(3000);
 
     // Block 1: Add storage map entries and a storage value
-    let mut map_patch_1 = StorageMapPatch::default();
-    map_patch_1.insert(key1, value1);
-    map_patch_1.insert(key2, value2);
+    let map_patch_1 = StorageMapPatch::from_iters([], [(key1, value1), (key2, value2)]);
 
     let raw_1 = BTreeMap::from_iter([
         (slot_map.clone(), StorageSlotPatch::Map(map_patch_1)),
-        (slot_value.clone(), StorageSlotPatch::Value(value1)),
+        (
+            slot_value.clone(),
+            StorageSlotPatch::Value(StorageValuePatch::Update { value: value1 }),
+        ),
     ]);
-    let storage_1 = AccountStoragePatch::from_raw(raw_1);
+    let storage_1 = AccountStoragePatch::from_raw(raw_1).unwrap();
     let patch_1 = AccountPatch::new(
         account_id,
         storage_1.clone(),
@@ -3034,14 +3033,16 @@ fn account_state_forest_matches_db_storage_map_roots_across_updates() {
     );
 
     // Block 2: Delete storage map entry (set to EMPTY_WORD) and delete storage value
-    let mut map_patch_2 = StorageMapPatch::default();
-    map_patch_2.insert(key1, EMPTY_WORD);
+    let map_patch_2 = StorageMapPatch::from_iters([], [(key1, EMPTY_WORD)]);
 
     let raw_2 = BTreeMap::from_iter([
         (slot_map.clone(), StorageSlotPatch::Map(map_patch_2)),
-        (slot_value.clone(), StorageSlotPatch::Value(EMPTY_WORD)),
+        (
+            slot_value.clone(),
+            StorageSlotPatch::Value(StorageValuePatch::Update { value: EMPTY_WORD }),
+        ),
     ]);
-    let storage_2 = AccountStoragePatch::from_raw(raw_2);
+    let storage_2 = AccountStoragePatch::from_raw(raw_2).unwrap();
     let patch_2 = AccountPatch::new(
         account_id,
         storage_2.clone(),
@@ -3065,14 +3066,16 @@ fn account_state_forest_matches_db_storage_map_roots_across_updates() {
     );
 
     // Block 3: Re-add same value as block 1 and add different map entry
-    let mut map_patch_3 = StorageMapPatch::default();
-    map_patch_3.insert(key2, value3); // Update existing key
+    let map_patch_3 = StorageMapPatch::from_iters([], [(key2, value3)]); // Update existing key
 
     let raw_3 = BTreeMap::from_iter([
         (slot_map.clone(), StorageSlotPatch::Map(map_patch_3)),
-        (slot_value.clone(), StorageSlotPatch::Value(value1)), // Same as block 1
+        (
+            slot_value.clone(),
+            StorageSlotPatch::Value(StorageValuePatch::Update { value: value1 }),
+        ), // Same as block 1
     ]);
-    let storage_3 = AccountStoragePatch::from_raw(raw_3);
+    let storage_3 = AccountStoragePatch::from_raw(raw_3).unwrap();
     let patch_3 = AccountPatch::new(
         account_id,
         storage_3.clone(),
@@ -3142,13 +3145,11 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
     let value2 = num_to_word(2000);
 
     // All three accounts add identical storage maps at block 1
-    let mut map_patch = StorageMapPatch::default();
-    map_patch.insert(key1, value1);
-    map_patch.insert(key2, value2);
+    let map_patch = StorageMapPatch::from_iters([], [(key1, value1), (key2, value2)]);
 
     // Setups a single slot with a map and two key-value-pairs
     let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_patch.clone()))]);
-    let storage = AccountStoragePatch::from_raw(raw);
+    let storage = AccountStoragePatch::from_raw(raw).unwrap();
 
     // Account 1
     let patch1 = AccountPatch::new(
@@ -3196,11 +3197,10 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
     assert_eq!(total_roots_removed, 0);
 
     // Update accounts 1,2,3
-    let mut map_patch_update = StorageMapPatch::default();
-    map_patch_update.insert(key1, num_to_word(1001)); // Slight change
+    let map_patch_update = StorageMapPatch::from_iters([], [(key1, num_to_word(1001))]); // Slight change
     let raw_update =
         BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_patch_update))]);
-    let storage_update = AccountStoragePatch::from_raw(raw_update);
+    let storage_update = AccountStoragePatch::from_raw(raw_update).unwrap();
     let patch2_update = AccountPatch::new(
         account2,
         storage_update.clone(),
@@ -3273,12 +3273,10 @@ fn account_state_forest_retains_latest_after_100_blocks_and_pruning() {
     let block_1 = BlockNumber::from(1);
 
     // Create storage map with two entries
-    let mut map_patch = StorageMapPatch::default();
-    map_patch.insert(key1, value1);
-    map_patch.insert(key2, value2);
+    let map_patch = StorageMapPatch::from_iters([], [(key1, value1), (key2, value2)]);
 
     let raw = BTreeMap::from_iter([(slot_map.clone(), StorageSlotPatch::Map(map_patch))]);
-    let storage_patch = AccountStoragePatch::from_raw(raw);
+    let storage_patch = AccountStoragePatch::from_raw(raw).unwrap();
 
     // Create vault with one asset
     let asset = FungibleAsset::new(faucet_id, 100).unwrap();
@@ -3329,11 +3327,10 @@ fn account_state_forest_retains_latest_after_100_blocks_and_pruning() {
 
     // Update with new values
     let value1_new = num_to_word(3000);
-    let mut map_patch_51 = StorageMapPatch::default();
-    map_patch_51.insert(key1, value1_new);
+    let map_patch_51 = StorageMapPatch::from_iters([], [(key1, value1_new)]);
 
     let raw_51 = BTreeMap::from_iter([(slot_map.clone(), StorageSlotPatch::Map(map_patch_51))]);
-    let storage_patch_51 = AccountStoragePatch::from_raw(raw_51);
+    let storage_patch_51 = AccountStoragePatch::from_raw(raw_51).unwrap();
 
     let asset_51 = FungibleAsset::new(faucet_id, 200).unwrap();
     let vault_patch_51 = AccountVaultPatch::with_assets([asset_51.into()]);
@@ -3524,11 +3521,10 @@ fn account_state_forest_preserves_most_recent_storage_map_only() {
 
     // Block 1: Create storage map
     let block_1 = BlockNumber::from(1);
-    let mut map_patch = StorageMapPatch::default();
-    map_patch.insert(key1, value1);
+    let map_patch = StorageMapPatch::from_iters([], [(key1, value1)]);
 
     let raw = BTreeMap::from_iter([(slot_map.clone(), StorageSlotPatch::Map(map_patch))]);
-    let storage_patch = AccountStoragePatch::from_raw(raw);
+    let storage_patch = AccountStoragePatch::from_raw(raw).unwrap();
 
     let delta_1 = AccountPatch::new(
         account_id,
@@ -3570,7 +3566,7 @@ fn account_state_forest_preserves_most_recent_storage_map_only() {
 fn account_state_forest_preserves_most_recent_storage_value_slot() {
     use std::collections::BTreeMap;
 
-    use miden_protocol::account::StorageSlotPatch;
+    use miden_protocol::account::{StorageSlotPatch, StorageValuePatch};
 
     use crate::account_state_forest::AccountStateForest;
 
@@ -3583,8 +3579,11 @@ fn account_state_forest_preserves_most_recent_storage_value_slot() {
     // Block 1: Create storage value slot
     let block_1 = BlockNumber::from(1);
 
-    let raw = BTreeMap::from_iter([(slot_value.clone(), StorageSlotPatch::Value(value1))]);
-    let storage_patch = AccountStoragePatch::from_raw(raw);
+    let raw = BTreeMap::from_iter([(
+        slot_value.clone(),
+        StorageSlotPatch::Value(StorageValuePatch::Update { value: value1 }),
+    )]);
+    let storage_patch = AccountStoragePatch::from_raw(raw).unwrap();
 
     let delta_1 = AccountPatch::new(
         account_id,
@@ -3626,7 +3625,7 @@ fn account_state_forest_preserves_most_recent_storage_value_slot() {
 fn account_state_forest_preserves_mixed_slots_independently() {
     use std::collections::BTreeMap;
 
-    use miden_protocol::account::{StorageMapPatch, StorageSlotPatch};
+    use miden_protocol::account::{StorageMapPatch, StorageSlotPatch, StorageValuePatch};
 
     use crate::account_state_forest::AccountStateForest;
 
@@ -3648,18 +3647,19 @@ fn account_state_forest_preserves_mixed_slots_independently() {
     let asset = FungibleAsset::new(faucet_id, 100).unwrap();
     let vault_patch = AccountVaultPatch::with_assets([asset.into()]);
 
-    let mut map_patch_a = StorageMapPatch::default();
-    map_patch_a.insert(key1, value1);
+    let map_patch_a = StorageMapPatch::from_iters([], [(key1, value1)]);
 
-    let mut map_patch_b = StorageMapPatch::default();
-    map_patch_b.insert(key1, value1);
+    let map_patch_b = StorageMapPatch::from_iters([], [(key1, value1)]);
 
     let raw = BTreeMap::from_iter([
         (slot_map_a.clone(), StorageSlotPatch::Map(map_patch_a)),
         (slot_map_b.clone(), StorageSlotPatch::Map(map_patch_b)),
-        (slot_value.clone(), StorageSlotPatch::Value(value_slot_data)),
+        (
+            slot_value.clone(),
+            StorageSlotPatch::Value(StorageValuePatch::Update { value: value_slot_data }),
+        ),
     ]);
-    let storage_patch = AccountStoragePatch::from_raw(raw);
+    let storage_patch = AccountStoragePatch::from_raw(raw).unwrap();
 
     let delta_1 = AccountPatch::new(
         account_id,
@@ -3680,12 +3680,11 @@ fn account_state_forest_preserves_mixed_slots_independently() {
     let block_51 = BlockNumber::from(51);
     let value2 = num_to_word(2000);
 
-    let mut map_patch_a_update = StorageMapPatch::default();
-    map_patch_a_update.insert(key1, value2);
+    let map_patch_a_update = StorageMapPatch::from_iters([], [(key1, value2)]);
 
     let raw_51 =
         BTreeMap::from_iter([(slot_map_a.clone(), StorageSlotPatch::Map(map_patch_a_update))]);
-    let storage_patch_51 = AccountStoragePatch::from_raw(raw_51);
+    let storage_patch_51 = AccountStoragePatch::from_raw(raw_51).unwrap();
 
     let delta_51 = AccountPatch::new(
         account_id,

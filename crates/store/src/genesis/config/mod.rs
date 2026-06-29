@@ -21,7 +21,7 @@ use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey as RpoSecretKey;
 use miden_protocol::errors::TokenSymbolError;
 use miden_protocol::{Felt, ONE};
-use miden_standards::account::auth::AuthSingleSig;
+use miden_standards::account::auth::{Approver, AuthSingleSig};
 use miden_standards::account::faucets::{FungibleFaucet, TokenName};
 use miden_standards::account::policies::{BurnPolicy, MintPolicy, TokenPolicyManager};
 use miden_standards::account::wallets::create_basic_wallet;
@@ -216,7 +216,7 @@ impl GenesisConfig {
             let mut rng = ChaCha20Rng::from_seed(rand::random());
             let secret_key = RpoSecretKey::with_rng(&mut get_random_coin(&mut rng));
             let auth =
-                AuthSingleSig::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
+                Approver::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
             let init_seed: [u8; 32] = rng.random();
 
             let mut wallet_account = create_basic_wallet(init_seed, auth, account_type.into())?;
@@ -408,8 +408,10 @@ impl FungibleFaucetConfig {
         } = self;
         let mut rng = ChaCha20Rng::from_seed(rand::random());
         let secret_key = RpoSecretKey::with_rng(&mut get_random_coin(&mut rng));
-        let auth =
-            AuthSingleSig::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
+        let auth = AuthSingleSig::new(Approver::new(
+            secret_key.public_key().into(),
+            AuthScheme::Falcon512Poseidon2,
+        ));
         let init_seed: [u8; 32] = rng.random();
 
         let faucet = FungibleFaucet::builder()

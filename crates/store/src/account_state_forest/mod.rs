@@ -196,10 +196,9 @@ impl<B: Backend> AccountStateForest<B> {
     }
 
     fn cache_storage_map_keys_from_patch(&mut self, patch: &AccountPatch) {
-        let raw_keys = patch
-            .storage()
-            .maps()
-            .flat_map(|(_slot_name, map_patch)| map_patch.entries().keys().copied());
+        let raw_keys = patch.storage().maps().flat_map(|(_slot_name, map_patch)| {
+            map_patch.entries().into_iter().flat_map(|e| e.as_map().keys().copied())
+        });
         self.cache_storage_map_keys(raw_keys);
     }
 
@@ -623,10 +622,11 @@ impl<B: Backend> AccountStateForest<B> {
             let prev_root = self.get_latest_storage_map_root(account_id, slot_name);
             assert_eq!(prev_root, empty_smt_root(), "account should not be in the forest");
 
-            let raw_map_entries: Vec<(StorageMapKey, Word)> =
-                Vec::from_iter(map_patch.entries().iter().filter_map(|(&key, &value)| {
-                    if value == EMPTY_WORD { None } else { Some((key, value)) }
-                }));
+            let raw_map_entries: Vec<(StorageMapKey, Word)> = Vec::from_iter(
+                map_patch.entries().into_iter().flat_map(|e| e.as_map().iter()).filter_map(
+                    |(&key, &value)| if value == EMPTY_WORD { None } else { Some((key, value)) },
+                ),
+            );
 
             if raw_map_entries.is_empty() {
                 let lineage = Self::storage_lineage_id(account_id, slot_name);
@@ -729,14 +729,17 @@ impl<B: Backend> AccountStateForest<B> {
     ) {
         for (slot_name, map_patch) in storage_patch.maps() {
             // map patch shouldn't be empty, but if it is for some reason, there is nothing to do
-            if map_patch.is_empty() {
+            let Some(entries) = map_patch.entries() else {
+                continue;
+            };
+            if entries.is_empty() {
                 continue;
             }
 
             // update the storage map tree in the forest and add an entry to the storage map roots
             let lineage = Self::storage_lineage_id(account_id, slot_name);
             let patch_entries: Vec<(StorageMapKey, Word)> =
-                Vec::from_iter(map_patch.entries().iter().map(|(key, value)| (*key, *value)));
+                Vec::from_iter(entries.as_map().iter().map(|(key, value)| (*key, *value)));
 
             let hashed_entries = Vec::from_iter(
                 patch_entries.iter().map(|(raw_key, value)| (raw_key.hash().into(), *value)),

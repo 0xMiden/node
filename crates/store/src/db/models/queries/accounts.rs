@@ -36,6 +36,7 @@ use miden_protocol::account::{
     AccountUpdateDetails,
     StorageMap,
     StorageMapKey,
+    StorageMapPatchEntries,
     StorageSlot,
     StorageSlotContent,
     StorageSlotName,
@@ -1133,14 +1134,15 @@ fn prepare_partial_account_update(
 
     let mut storage = Vec::new();
     for (slot_name, map_patch) in patch.storage().maps() {
-        for (key, value) in map_patch.entries() {
+        for (key, value) in map_patch.entries().into_iter().flat_map(StorageMapPatchEntries::as_map)
+        {
             storage.push((account_id, slot_name.clone(), *key, *value));
         }
     }
 
     // First collect entries that have associated changes.
     let slot_names = Vec::from_iter(patch.storage().maps().filter_map(|(slot_name, map_patch)| {
-        if map_patch.is_empty() {
+        if map_patch.entries().is_none_or(StorageMapPatchEntries::is_empty) {
             None
         } else {
             Some(slot_name.clone())

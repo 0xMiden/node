@@ -23,6 +23,7 @@ use miden_protocol::account::{
     StorageSlot,
     StorageSlotName,
     StorageSlotPatch,
+    StorageValuePatch,
 };
 use miden_protocol::asset::{Asset, AssetCallbackFlag, FungibleAsset};
 use miden_protocol::block::{BlockAccountUpdate, BlockHeader, BlockNumber};
@@ -33,7 +34,7 @@ use miden_protocol::testing::account_id::{
 };
 use miden_protocol::utils::serde::Serializable;
 use miden_protocol::{EMPTY_WORD, Felt, Word};
-use miden_standards::account::auth::AuthSingleSig;
+use miden_standards::account::auth::{Approver, AuthSingleSig};
 use miden_standards::code_builder::CodeBuilder;
 
 use crate::db::models::queries::accounts::{
@@ -139,10 +140,10 @@ fn optimized_delta_matches_full_account_method() {
     let account = AccountBuilder::new(ACCOUNT_SEED)
         .account_type(AccountType::Public)
         .with_component(component)
-        .with_auth_component(AuthSingleSig::new(
+        .with_auth_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
             AuthScheme::Falcon512Poseidon2,
-        ))
+        )))
         .build_existing()
         .unwrap();
 
@@ -190,9 +191,9 @@ fn optimized_delta_matches_full_account_method() {
     let storage_patch = {
         let deltas = BTreeMap::from_iter([(
             value_slot_name.clone(),
-            StorageSlotPatch::Value(new_slot_value),
+            StorageSlotPatch::Value(StorageValuePatch::Update { value: new_slot_value }),
         )]);
-        AccountStoragePatch::from_raw(deltas)
+        AccountStoragePatch::from_raw(deltas).unwrap()
     };
 
     // Build the vault patch (the absolute end-state is 500 tokens, starting from an empty vault)
@@ -338,10 +339,10 @@ fn optimized_delta_updates_non_empty_vault() {
     let account = AccountBuilder::new(ACCOUNT_SEED)
         .account_type(AccountType::Public)
         .with_component(component)
-        .with_auth_component(AuthSingleSig::new(
+        .with_auth_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
             AuthScheme::Falcon512Poseidon2,
-        ))
+        )))
         .with_assets([initial_asset])
         .build_existing()
         .unwrap();
@@ -483,10 +484,10 @@ fn optimized_delta_updates_preserve_callback_flag() {
     let account = AccountBuilder::new(ACCOUNT_SEED)
         .account_type(AccountType::Public)
         .with_component(component)
-        .with_auth_component(AuthSingleSig::new(
+        .with_auth_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
             AuthScheme::Falcon512Poseidon2,
-        ))
+        )))
         .build_existing()
         .unwrap();
 
@@ -635,10 +636,10 @@ fn optimized_delta_updates_storage_map_header() {
     let account = AccountBuilder::new(ACCOUNT_SEED)
         .account_type(AccountType::Public)
         .with_component(component)
-        .with_auth_component(AuthSingleSig::new(
+        .with_auth_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
             AuthScheme::Falcon512Poseidon2,
-        ))
+        )))
         .build_existing()
         .unwrap();
 
@@ -658,12 +659,12 @@ fn optimized_delta_updates_storage_map_header() {
     let full_account_before =
         select_full_account(&mut conn, account.id()).expect("Failed to load full account");
 
-    let mut map_patch = StorageMapPatch::default();
-    map_patch.insert(map_key, map_value_updated);
+    let map_patch = StorageMapPatch::from_iters([], [(map_key, map_value_updated)]);
     let storage_patch = AccountStoragePatch::from_raw(BTreeMap::from_iter([(
         StorageSlotName::mock(SLOT_INDEX_MAP),
         StorageSlotPatch::Map(map_patch),
-    )]));
+    )]))
+    .unwrap();
 
     let final_nonce =
         Felt::new_unchecked(full_account_before.nonce().as_canonical_u64() + NONCE_DELTA);
@@ -806,10 +807,10 @@ fn upsert_full_state_delta() {
     let account = AccountBuilder::new(ACCOUNT_SEED)
         .account_type(AccountType::Public)
         .with_component(component)
-        .with_auth_component(AuthSingleSig::new(
+        .with_auth_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
             AuthScheme::Falcon512Poseidon2,
-        ))
+        )))
         .build_existing()
         .unwrap();
 

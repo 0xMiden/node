@@ -205,7 +205,7 @@ impl IncrementService {
         let mut storage = wallet.storage().clone();
         for (slot_name, value) in account_patch.storage().values() {
             storage
-                .set_item(slot_name, *value)
+                .set_item(slot_name, value.value().unwrap_or_else(Word::empty))
                 .expect("wallet tx only writes existing value slots");
         }
         let new_nonce = account_patch.final_nonce().unwrap_or_else(|| wallet.nonce());

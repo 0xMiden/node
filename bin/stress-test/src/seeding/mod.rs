@@ -21,8 +21,11 @@ use miden_protocol::account::{
     AccountVaultPatch,
     StorageMap,
     StorageMapKey,
+    StorageMapPatch,
+    StorageMapPatchEntries,
     StorageSlot,
     StorageSlotName,
+    StorageSlotPatch,
 };
 use miden_protocol::asset::{Asset, FungibleAsset, TokenSymbol};
 use miden_protocol::batch::{BatchAccountUpdate, BatchId, ProvenBatch};
@@ -52,7 +55,7 @@ use miden_protocol::transaction::{
 use miden_protocol::utils::serde::Serializable;
 use miden_protocol::vm::ExecutionProof;
 use miden_protocol::{Felt, ONE, Word};
-use miden_standards::account::auth::AuthSingleSig;
+use miden_standards::account::auth::{Approver, AuthSingleSig};
 use miden_standards::account::faucets::{FungibleFaucet, TokenName};
 use miden_standards::account::policies::{BurnPolicy, MintPolicy, TokenPolicyManager};
 use miden_standards::account::wallets::BasicWallet;
@@ -507,7 +510,10 @@ fn create_account(
     let init_seed: Vec<_> = index.to_be_bytes().into_iter().chain([0u8; 24]).collect();
     let mut builder = AccountBuilder::new(init_seed.try_into().unwrap())
         .account_type(account_type)
-        .with_auth_component(AuthSingleSig::new(public_key.into(), AuthScheme::Falcon512Poseidon2))
+        .with_auth_component(AuthSingleSig::new(Approver::new(
+            public_key.into(),
+            AuthScheme::Falcon512Poseidon2,
+        )))
         .with_component(BasicWallet);
 
     if account_type == AccountType::Public && storage_map_entries > 0 {
@@ -568,10 +574,10 @@ fn create_faucet_with_seed(index: u64) -> Account {
                 .active_burn_policy(BurnPolicy::allow_all())
                 .build(),
         )
-        .with_auth_component(AuthSingleSig::new(
+        .with_auth_component(AuthSingleSig::new(Approver::new(
             key_pair.public_key().into(),
             AuthScheme::Falcon512Poseidon2,
-        ))
+        )))
         .build()
         .unwrap()
 }
@@ -697,26 +703,27 @@ fn create_existing_account_patch(
         vault_patch.insert_asset(updated_asset);
     }
 
-    let mut storage_patch = AccountStoragePatch::new();
-    if let Some((storage_update, tx_index)) = storage_update {
-        if storage_update.storage_map_entries > 0
-            && account.storage().get(&benchmark_storage_map_slot()).is_some()
+    let storage_patch = match storage_update {
+        Some((storage_update, tx_index))
+            if storage_update.storage_map_entries > 0
+                && account.storage().get(&benchmark_storage_map_slot()).is_some() =>
         {
             let key_index = u32::try_from((tx_index % storage_update.storage_map_entries) + 1)
                 .expect("storage map key fits into u32");
-            storage_patch
-                .set_map_item(
-                    benchmark_storage_map_slot(),
-                    StorageMapKey::from_index(key_index),
-                    benchmark_storage_map_update_value(
-                        storage_update.block_index,
-                        tx_index,
-                        key_index,
-                    ),
-                )
-                .unwrap();
-        }
-    }
+            let mut entries = StorageMapPatchEntries::new();
+            entries.insert(
+                StorageMapKey::from_index(key_index),
+                benchmark_storage_map_update_value(storage_update.block_index, tx_index, key_index),
+            );
+            let map_patch = StorageMapPatch::Update { entries };
+            AccountStoragePatch::from_raw(BTreeMap::from_iter([(
+                benchmark_storage_map_slot(),
+                StorageSlotPatch::Map(map_patch),
+            )]))
+            .unwrap()
+        },
+        _ => AccountStoragePatch::new(),
+    };
 
     AccountPatch::new(account.id(), storage_patch, vault_patch, None, Some(account.nonce()))
         .unwrap()

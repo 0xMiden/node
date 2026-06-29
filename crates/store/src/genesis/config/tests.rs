@@ -90,7 +90,7 @@ async fn genesis_accounts_have_nonce_one() -> TestResult {
 fn parsing_account_from_file() -> TestResult {
     use miden_protocol::account::auth::AuthScheme;
     use miden_protocol::account::{AccountFile, AccountType};
-    use miden_standards::account::auth::AuthSingleSig;
+    use miden_standards::account::auth::Approver;
     use miden_standards::account::wallets::create_basic_wallet;
     use tempfile::tempdir;
 
@@ -104,7 +104,7 @@ fn parsing_account_from_file() -> TestResult {
     let secret_key = miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey::with_rng(
         &mut miden_node_utils::crypto::get_random_coin(&mut rng),
     );
-    let auth = AuthSingleSig::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
+    let auth = Approver::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
 
     let test_account = create_basic_wallet(init_seed, auth, AccountType::Public)?;
 
@@ -144,7 +144,7 @@ fn parsing_native_faucet_from_file() -> TestResult {
     use miden_protocol::account::auth::AuthScheme;
     use miden_protocol::account::{AccountBuilder, AccountFile, AccountType};
     use miden_protocol::asset::AssetAmount;
-    use miden_standards::account::auth::AuthSingleSig;
+    use miden_standards::account::auth::{Approver, AuthSingleSig};
     use miden_standards::account::policies::{BurnPolicy, MintPolicy, TokenPolicyManager};
     use tempfile::tempdir;
 
@@ -158,7 +158,10 @@ fn parsing_native_faucet_from_file() -> TestResult {
     let secret_key = miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey::with_rng(
         &mut miden_node_utils::crypto::get_random_coin(&mut rng),
     );
-    let auth = AuthSingleSig::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
+    let auth = AuthSingleSig::new(Approver::new(
+        secret_key.public_key().into(),
+        AuthScheme::Falcon512Poseidon2,
+    ));
 
     let faucet = FungibleFaucet::builder()
         .name(TokenName::new("MIDEN").unwrap())
@@ -216,7 +219,7 @@ verification_base_fee = 0
 fn native_faucet_from_file_must_be_faucet_type() -> TestResult {
     use miden_protocol::account::auth::AuthScheme;
     use miden_protocol::account::{AccountFile, AccountType};
-    use miden_standards::account::auth::AuthSingleSig;
+    use miden_standards::account::auth::Approver;
     use miden_standards::account::wallets::create_basic_wallet;
     use tempfile::tempdir;
 
@@ -230,7 +233,7 @@ fn native_faucet_from_file_must_be_faucet_type() -> TestResult {
     let secret_key = miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey::with_rng(
         &mut miden_node_utils::crypto::get_random_coin(&mut rng),
     );
-    let auth = AuthSingleSig::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
+    let auth = Approver::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
 
     let regular_account = create_basic_wallet(init_seed, auth, AccountType::Public)?;
 

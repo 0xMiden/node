@@ -182,17 +182,20 @@ pub(super) fn apply_storage_patch(
     let mut value_updates: HashMap<&StorageSlotName, Word> = HashMap::new();
     let mut map_updates: HashMap<&StorageSlotName, Word> = HashMap::new();
 
-    for (slot_name, new_value) in patch.values() {
-        value_updates.insert(slot_name, *new_value);
+    for (slot_name, value_patch) in patch.values() {
+        value_updates.insert(slot_name, value_patch.value().unwrap_or(EMPTY_WORD));
     }
 
     for (slot_name, map_patch) in patch.maps() {
-        if map_patch.is_empty() {
+        let Some(map_patch_entries) = map_patch.entries() else {
+            continue;
+        };
+        if map_patch_entries.is_empty() {
             continue;
         }
 
         let mut entries = map_entries.get(slot_name).cloned().unwrap_or_default();
-        for (key, value) in map_patch.entries() {
+        for (key, value) in map_patch_entries.as_map() {
             if *value == EMPTY_WORD {
                 entries.remove(key);
             } else {
