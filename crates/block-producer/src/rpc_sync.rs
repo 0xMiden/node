@@ -162,7 +162,7 @@ impl ProofSync {
     async fn sync(&self) -> anyhow::Result<()> {
         // Subscribe from next proven tip.
         let starting_block = self.state.chain_tip(Finality::Proven).await.child();
-        info!("Connecting to upstream RPC for proofs from {starting_block}");
+        info!(block.from=%starting_block, "Subscribing to block proof stream");
         let mut client = self.source_rpc.clone();
         let mut stream = client
             .proof_subscription(ProofSubscriptionRequest { block_from: starting_block.as_u32() })
