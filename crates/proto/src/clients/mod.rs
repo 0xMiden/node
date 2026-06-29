@@ -32,6 +32,8 @@ use std::time::Duration;
 
 use http::header::ACCEPT;
 use miden_node_utils::tracing::grpc::OtelInterceptor;
+use miden_protocol::batch::ProposedBatch;
+use miden_protocol::utils::serde::Serializable;
 use tonic::metadata::AsciiMetadataValue;
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint, Error as TransportError};
@@ -161,6 +163,7 @@ type GeneratedProxyStatusClient =
 type GeneratedProverClient = generated::remote_prover::api_client::ApiClient<InterceptedChannel>;
 type GeneratedValidatorClient = generated::validator::api_client::ApiClient<InterceptedChannel>;
 type GeneratedNtxBuilderClient = generated::ntx_builder::api_client::ApiClient<InterceptedChannel>;
+type GeneratedSequencerClient = generated::sequencer::api_client::ApiClient<InterceptedChannel>;
 
 // gRPC CLIENTS
 // ================================================================================================
@@ -175,6 +178,8 @@ pub struct RemoteProverClient(GeneratedProverClient);
 pub struct ValidatorClient(GeneratedValidatorClient);
 #[derive(Debug, Clone)]
 pub struct NtxBuilderClient(GeneratedNtxBuilderClient);
+#[derive(Debug, Clone)]
+pub struct SequencerClient(GeneratedSequencerClient);
 
 impl DerefMut for RpcClient {
     fn deref_mut(&mut self) -> &mut Self::Target {
@@ -246,6 +251,20 @@ impl Deref for NtxBuilderClient {
     }
 }
 
+impl DerefMut for SequencerClient {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Deref for SequencerClient {
+    type Target = GeneratedSequencerClient;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 // GRPC CLIENT BUILDER TRAIT
 // ================================================================================================
 
@@ -281,6 +300,12 @@ impl GrpcClient for ValidatorClient {
 impl GrpcClient for NtxBuilderClient {
     fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
         Self(GeneratedNtxBuilderClient::new(InterceptedService::new(channel, interceptor)))
+    }
+}
+
+impl GrpcClient for SequencerClient {
+    fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
+        Self(GeneratedSequencerClient::new(InterceptedService::new(channel, interceptor)))
     }
 }
 
@@ -484,5 +509,32 @@ impl Builder<WantsConnection> {
             self.metadata_auth_header_value,
         );
         T::with_interceptor(channel, interceptor)
+    }
+}
+
+impl ValidatorClient {
+    /// Submits each transaction in the batch to the validator for re-execution.
+    ///
+    /// # Errors
+    ///
+    /// - If `transaction_inputs` does not match the batch's transactions in length
+    pub async fn submit_batch(
+        &mut self,
+        proposed_batch: &ProposedBatch,
+        transaction_inputs: &[Vec<u8>],
+    ) -> Result<(), Status> {
+        if proposed_batch.transactions().len() != transaction_inputs.len() {
+            return Err(Status::invalid_argument(
+                "transaction inputs do not match the batch's transactions",
+            ));
+        }
+        for (tx, inputs) in proposed_batch.transactions().iter().zip(transaction_inputs) {
+            let proven_tx = generated::transaction::ProvenTransaction {
+                transaction: tx.to_bytes(),
+                transaction_inputs: Some(inputs.clone()),
+            };
+            self.submit_proven_transaction(proven_tx).await?;
+        }
+        Ok(())
     }
 }
