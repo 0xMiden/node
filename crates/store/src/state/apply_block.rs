@@ -177,8 +177,8 @@ impl State {
         })?;
 
         self.with_forest_write_blocking(|forest| {
-            forest.apply_block_updates(block_num, account_patches)
-        })?;
+            forest.apply_block_updates(block_num, account_patches);
+        });
 
         // Push to cache and notify replica subscribers.
         self.block_cache

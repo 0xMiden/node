@@ -88,7 +88,7 @@ fn update_account_with_empty_deltas() {
         AccountStoragePatch::default(),
     );
 
-    forest.update_account(block_num, &patch).unwrap();
+    forest.update_account(block_num, &patch);
 
     assert!(forest.get_vault_root(account_id, block_num).is_none());
     assert_eq!(forest.forest.lineage_count(), 0);
@@ -110,12 +110,12 @@ fn vault_partial_vs_full_state_produces_same_root() {
     vault_patch.insert_asset(asset);
     let partial_patch =
         dummy_partial_patch(account_id, vault_patch, AccountStoragePatch::default());
-    forest_partial.update_account(block_num, &partial_patch).unwrap();
+    forest_partial.update_account(block_num, &partial_patch);
 
     // Full-state patch (DB reconstruction)
     let mut forest_full = AccountStateForest::new();
     let full_patch = dummy_full_state_patch(account_id, &[asset]);
-    forest_full.update_account(block_num, &full_patch).unwrap();
+    forest_full.update_account(block_num, &full_patch);
 
     let root_partial = forest_partial.get_vault_root(account_id, block_num).unwrap();
     let root_full = forest_full.get_vault_root(account_id, block_num).unwrap();
@@ -135,7 +135,7 @@ fn vault_incremental_updates_with_add_and_remove() {
     let mut vault_patch_1 = AccountVaultPatch::default();
     vault_patch_1.insert_asset(dummy_fungible_asset(faucet_id, 100));
     let patch_1 = dummy_partial_patch(account_id, vault_patch_1, AccountStoragePatch::default());
-    forest.update_account(block_1, &patch_1).unwrap();
+    forest.update_account(block_1, &patch_1);
     let root_after_100 = forest.get_vault_root(account_id, block_1).unwrap();
 
     // Block 2: Set balance to 150 tokens
@@ -143,7 +143,7 @@ fn vault_incremental_updates_with_add_and_remove() {
     let mut vault_patch_2 = AccountVaultPatch::default();
     vault_patch_2.insert_asset(dummy_fungible_asset(faucet_id, 150));
     let patch_2 = dummy_partial_patch(account_id, vault_patch_2, AccountStoragePatch::default());
-    forest.update_account(block_2, &patch_2).unwrap();
+    forest.update_account(block_2, &patch_2);
     let root_after_150 = forest.get_vault_root(account_id, block_2).unwrap();
 
     assert_ne!(root_after_100, root_after_150);
@@ -153,7 +153,7 @@ fn vault_incremental_updates_with_add_and_remove() {
     let mut vault_patch_3 = AccountVaultPatch::default();
     vault_patch_3.insert_asset(dummy_fungible_asset(faucet_id, 120));
     let patch_3 = dummy_partial_patch(account_id, vault_patch_3, AccountStoragePatch::default());
-    forest.update_account(block_3, &patch_3).unwrap();
+    forest.update_account(block_3, &patch_3);
     let root_after_120 = forest.get_vault_root(account_id, block_3).unwrap();
 
     assert_ne!(root_after_150, root_after_120);
@@ -161,7 +161,7 @@ fn vault_incremental_updates_with_add_and_remove() {
     // Verify by comparing to full-state patch
     let mut fresh_forest = AccountStateForest::new();
     let full_patch = dummy_full_state_patch(account_id, &[dummy_fungible_asset(faucet_id, 120)]);
-    fresh_forest.update_account(block_3, &full_patch).unwrap();
+    fresh_forest.update_account(block_3, &full_patch);
     let root_full_state_120 = fresh_forest.get_vault_root(account_id, block_3).unwrap();
 
     assert_eq!(root_after_120, root_full_state_120);
@@ -176,13 +176,13 @@ fn vault_details_returns_latest_and_historical_assets() {
     let block_1 = BlockNumber::GENESIS.child();
     let asset_100 = dummy_fungible_asset(faucet_id, 100);
     let full_patch = dummy_full_state_patch(account_id, &[asset_100]);
-    forest.update_account(block_1, &full_patch).unwrap();
+    forest.update_account(block_1, &full_patch);
 
     let block_2 = block_1.child();
     let mut vault_patch_2 = AccountVaultPatch::default();
     vault_patch_2.insert_asset(dummy_fungible_asset(faucet_id, 150));
     let patch_2 = dummy_partial_patch(account_id, vault_patch_2, AccountStoragePatch::default());
-    forest.update_account(block_2, &patch_2).unwrap();
+    forest.update_account(block_2, &patch_2);
 
     let historical = forest.get_vault_details(account_id, block_1).unwrap().unwrap();
     assert_eq!(historical, AccountVaultDetails::Assets(vec![asset_100]));
@@ -208,7 +208,7 @@ fn vault_details_limit_exceeded_for_large_vault() {
         .collect::<Vec<_>>();
 
     let full_patch = dummy_full_state_patch(account_id, &assets);
-    forest.update_account(block_num, &full_patch).unwrap();
+    forest.update_account(block_num, &full_patch);
 
     assert_eq!(
         forest.get_vault_details(account_id, block_num).unwrap().unwrap(),
@@ -242,7 +242,7 @@ fn forest_versions_are_continuous_for_sequential_updates() {
         let storage_patch = AccountStoragePatch::from_raw(raw);
 
         let patch = dummy_partial_patch(account_id, vault_patch, storage_patch);
-        forest.update_account(block_num, &patch).unwrap();
+        forest.update_account(block_num, &patch);
 
         let vault_tree = forest.tree_id_for_vault_root(account_id, block_num);
         let storage_tree = forest.tree_id_for_root(account_id, &slot_name, block_num);
@@ -262,13 +262,13 @@ fn vault_state_is_not_available_for_block_gaps() {
     let mut vault_patch_1 = AccountVaultPatch::default();
     vault_patch_1.insert_asset(dummy_fungible_asset(faucet_id, 100));
     let patch_1 = dummy_partial_patch(account_id, vault_patch_1, AccountStoragePatch::default());
-    forest.update_account(block_1, &patch_1).unwrap();
+    forest.update_account(block_1, &patch_1);
 
     let block_6 = BlockNumber::from(6);
     let mut vault_patch_6 = AccountVaultPatch::default();
     vault_patch_6.insert_asset(dummy_fungible_asset(faucet_id, 150));
     let patch_6 = dummy_partial_patch(account_id, vault_patch_6, AccountStoragePatch::default());
-    forest.update_account(block_6, &patch_6).unwrap();
+    forest.update_account(block_6, &patch_6);
 
     assert!(forest.get_vault_root(account_id, BlockNumber::from(3)).is_some());
     assert!(forest.get_vault_root(account_id, BlockNumber::from(5)).is_some());
@@ -293,7 +293,7 @@ fn vault_full_state_with_empty_vault_records_root() {
     assert!(full_patch.vault().is_empty());
     assert!(full_patch.is_full_state());
 
-    forest.update_account(block_num, &full_patch).unwrap();
+    forest.update_account(block_num, &full_patch);
 
     let recorded_root = forest.get_vault_root(account_id, block_num);
     assert_eq!(recorded_root, Some(AccountStateForest::empty_smt_root()));
@@ -313,12 +313,12 @@ fn vault_shared_root_retained_when_one_entry_pruned() {
     let mut vault_patch_1 = AccountVaultPatch::default();
     vault_patch_1.insert_asset(asset);
     let patch_1 = dummy_partial_patch(account1, vault_patch_1, AccountStoragePatch::default());
-    forest.update_account(block_1, &patch_1).unwrap();
+    forest.update_account(block_1, &patch_1);
 
     let mut vault_patch_2 = AccountVaultPatch::default();
     vault_patch_2.insert_asset(dummy_fungible_asset(faucet_id, asset_amount));
     let patch_2 = dummy_partial_patch(account2, vault_patch_2, AccountStoragePatch::default());
-    forest.update_account(block_1, &patch_2).unwrap();
+    forest.update_account(block_1, &patch_2);
 
     let root1 = forest.get_vault_root(account1, block_1).unwrap();
     let root2 = forest.get_vault_root(account2, block_1).unwrap();
@@ -330,7 +330,7 @@ fn vault_shared_root_retained_when_one_entry_pruned() {
         .insert_asset(dummy_fungible_asset(faucet_id, asset_amount + amount_increment));
     let patch_2_update =
         dummy_partial_patch(account2, vault_patch_2_update, AccountStoragePatch::default());
-    forest.update_account(block_at_51, &patch_2_update).unwrap();
+    forest.update_account(block_at_51, &patch_2_update);
 
     let block_at_52 = BlockNumber::from(HISTORICAL_BLOCK_RETENTION + 2);
     let total_roots_removed = forest.prune(block_at_52);
@@ -369,7 +369,7 @@ fn storage_map_incremental_updates() {
     let raw_1 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_patch_1))]);
     let storage_patch_1 = AccountStoragePatch::from_raw(raw_1);
     let patch_1 = dummy_partial_patch(account_id, AccountVaultPatch::default(), storage_patch_1);
-    forest.update_account(block_1, &patch_1).unwrap();
+    forest.update_account(block_1, &patch_1);
     let root_1 = forest.get_storage_map_root(account_id, &slot_name, block_1).unwrap();
 
     // Block 2: Insert key2 -> value2
@@ -379,7 +379,7 @@ fn storage_map_incremental_updates() {
     let raw_2 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_patch_2))]);
     let storage_patch_2 = AccountStoragePatch::from_raw(raw_2);
     let patch_2 = dummy_partial_patch(account_id, AccountVaultPatch::default(), storage_patch_2);
-    forest.update_account(block_2, &patch_2).unwrap();
+    forest.update_account(block_2, &patch_2);
     let root_2 = forest.get_storage_map_root(account_id, &slot_name, block_2).unwrap();
 
     // Block 3: Update key1 -> value3
@@ -389,7 +389,7 @@ fn storage_map_incremental_updates() {
     let raw_3 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_patch_3))]);
     let storage_patch_3 = AccountStoragePatch::from_raw(raw_3);
     let patch_3 = dummy_partial_patch(account_id, AccountVaultPatch::default(), storage_patch_3);
-    forest.update_account(block_3, &patch_3).unwrap();
+    forest.update_account(block_3, &patch_3);
     let root_3 = forest.get_storage_map_root(account_id, &slot_name, block_3).unwrap();
 
     assert_ne!(root_1, root_2);
@@ -422,14 +422,14 @@ fn test_storage_map_removals() {
     let raw_1 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_patch_1))]);
     let storage_patch_1 = AccountStoragePatch::from_raw(raw_1);
     let patch_1 = dummy_partial_patch(account_id, AccountVaultPatch::default(), storage_patch_1);
-    forest.update_account(block_1, &patch_1).unwrap();
+    forest.update_account(block_1, &patch_1);
 
     let block_2 = block_1.child();
     let map_patch_2 = StorageMapPatch::from_iters([key_1], []);
     let raw_2 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_patch_2))]);
     let storage_patch_2 = AccountStoragePatch::from_raw(raw_2);
     let patch_2 = dummy_partial_patch(account_id, AccountVaultPatch::default(), storage_patch_2);
-    forest.update_account(block_2, &patch_2).unwrap();
+    forest.update_account(block_2, &patch_2);
 
     let tree = forest.tree_id_for_root(account_id, &slot_name, block_2);
 
@@ -469,7 +469,7 @@ fn storage_map_state_is_not_available_for_block_gaps() {
     let raw_1 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_patch_1))]);
     let storage_patch_1 = AccountStoragePatch::from_raw(raw_1);
     let patch_1 = dummy_partial_patch(account_id, AccountVaultPatch::default(), storage_patch_1);
-    forest.update_account(block_1, &patch_1).unwrap();
+    forest.update_account(block_1, &patch_1);
 
     let block_4 = BlockNumber::from(BLOCK_SECOND);
     let mut map_patch_4 = StorageMapPatch::default();
@@ -478,7 +478,7 @@ fn storage_map_state_is_not_available_for_block_gaps() {
     let raw_4 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_patch_4))]);
     let storage_patch_4 = AccountStoragePatch::from_raw(raw_4);
     let patch_4 = dummy_partial_patch(account_id, AccountVaultPatch::default(), storage_patch_4);
-    forest.update_account(block_4, &patch_4).unwrap();
+    forest.update_account(block_4, &patch_4);
 
     assert!(
         forest
@@ -538,7 +538,7 @@ fn storage_map_empty_entries_query() {
     let full_patch = AccountPatch::try_from(account).unwrap();
     assert!(full_patch.is_full_state());
 
-    forest.update_account(block_num, &full_patch).unwrap();
+    forest.update_account(block_num, &full_patch);
 
     let root = forest.get_storage_map_root(account_id, &slot_name, block_num);
     assert_eq!(root, Some(AccountStateForest::empty_smt_root()));
@@ -565,7 +565,7 @@ fn storage_map_open_returns_proofs() {
     let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_patch))]);
     let storage_patch = AccountStoragePatch::from_raw(raw);
     let patch = dummy_partial_patch(account_id, AccountVaultPatch::default(), storage_patch);
-    forest.update_account(block_num, &patch).unwrap();
+    forest.update_account(block_num, &patch);
 
     let keys: Vec<StorageMapKey> = (0..20u32).map(StorageMapKey::from_index).collect();
     let result =
@@ -595,7 +595,7 @@ fn storage_map_all_entries_returns_raw_keys_after_update() {
     let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_patch))]);
     let storage_patch = AccountStoragePatch::from_raw(raw);
     let patch = dummy_partial_patch(account_id, AccountVaultPatch::default(), storage_patch);
-    forest.update_account(block_num, &patch).unwrap();
+    forest.update_account(block_num, &patch);
 
     let result = forest
         .get_storage_map_details_for_all_entries(account_id, slot_name.clone(), block_num)
@@ -628,7 +628,7 @@ fn storage_map_all_entries_returns_cache_miss_when_raw_key_is_not_cached() {
     let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_patch))]);
     let storage_patch = AccountStoragePatch::from_raw(raw);
     let patch = dummy_partial_patch(account_id, AccountVaultPatch::default(), storage_patch);
-    forest.update_account(block_num, &patch).unwrap();
+    forest.update_account(block_num, &patch);
 
     forest.clear_storage_map_key_cache();
 
@@ -697,7 +697,7 @@ fn prune_removes_smt_roots_from_forest() {
         };
 
         let patch = dummy_partial_patch(account_id, vault_patch, storage_patch);
-        forest.update_account(block_num, &patch).unwrap();
+        forest.update_account(block_num, &patch);
     }
 
     let retained_block = BlockNumber::from(TEST_PRUNE_CHAIN_TIP);
@@ -733,7 +733,7 @@ fn prune_respects_retention_boundary() {
         vault_patch
             .insert_asset(dummy_fungible_asset(faucet_id, (i * TEST_AMOUNT_MULTIPLIER).into()));
         let patch = dummy_partial_patch(account_id, vault_patch, AccountStoragePatch::default());
-        forest.update_account(block_num, &patch).unwrap();
+        forest.update_account(block_num, &patch);
     }
 
     let total_roots_removed = forest.prune(BlockNumber::from(HISTORICAL_BLOCK_RETENTION));
@@ -766,7 +766,7 @@ fn prune_roots_removes_old_entries() {
             AccountStoragePatch::new().add_updated_maps([(slot_name.clone(), map_patch)]);
 
         let patch = dummy_partial_patch(account_id, vault_patch, storage_patch);
-        forest.update_account(block_num, &patch).unwrap();
+        forest.update_account(block_num, &patch);
     }
 
     assert_eq!(forest.forest.tree_count(), 22);
@@ -792,12 +792,12 @@ fn prune_handles_multiple_accounts() {
         let mut vault_patch1 = AccountVaultPatch::default();
         vault_patch1.insert_asset(dummy_fungible_asset(faucet_id, amount));
         let patch1 = dummy_partial_patch(account1, vault_patch1, AccountStoragePatch::default());
-        forest.update_account(block_num, &patch1).unwrap();
+        forest.update_account(block_num, &patch1);
 
         let mut vault_patch2 = AccountVaultPatch::default();
         vault_patch2.insert_asset(dummy_fungible_asset(account2, amount * 2));
         let patch2 = dummy_partial_patch(account2, vault_patch2, AccountStoragePatch::default());
-        forest.update_account(block_num, &patch2).unwrap();
+        forest.update_account(block_num, &patch2);
     }
 
     assert_eq!(forest.forest.tree_count(), 22);
@@ -834,7 +834,7 @@ fn prune_handles_multiple_slots() {
         ]);
         let storage_patch = AccountStoragePatch::from_raw(raw);
         let patch = dummy_partial_patch(account_id, AccountVaultPatch::default(), storage_patch);
-        forest.update_account(block_num, &patch).unwrap();
+        forest.update_account(block_num, &patch);
     }
 
     assert_eq!(forest.forest.tree_count(), 22);
@@ -878,7 +878,7 @@ fn prune_preserves_most_recent_state_per_entity() {
     ]);
     let storage_patch_1 = AccountStoragePatch::from_raw(raw);
     let patch_1 = dummy_partial_patch(account_id, vault_patch_1, storage_patch_1);
-    forest.update_account(block_1, &patch_1).unwrap();
+    forest.update_account(block_1, &patch_1);
 
     // Block 51: Update only map_a
     let block_at_51 = BlockNumber::from(51);
@@ -891,7 +891,7 @@ fn prune_preserves_most_recent_state_per_entity() {
     let storage_patch_at_51 = AccountStoragePatch::from_raw(raw_at_51);
     let patch_at_51 =
         dummy_partial_patch(account_id, AccountVaultPatch::default(), storage_patch_at_51);
-    forest.update_account(block_at_51, &patch_at_51).unwrap();
+    forest.update_account(block_at_51, &patch_at_51);
 
     // Block 100: Prune
     let block_100 = BlockNumber::from(100);
@@ -930,7 +930,7 @@ fn prune_preserves_entries_within_retention_window() {
         let raw = BTreeMap::from_iter([(slot_map.clone(), StorageSlotPatch::Map(map_patch))]);
         let storage_patch = AccountStoragePatch::from_raw(raw);
         let patch = dummy_partial_patch(account_id, vault_patch, storage_patch);
-        forest.update_account(block, &patch).unwrap();
+        forest.update_account(block, &patch);
     }
 
     // Block 100: Prune (retention window = 50 blocks, cutoff = 50)
@@ -965,12 +965,12 @@ fn shared_vault_root_retained_when_one_account_changes() {
     let mut vault_patch_1 = AccountVaultPatch::default();
     vault_patch_1.insert_asset(asset);
     let patch_1 = dummy_partial_patch(account1, vault_patch_1, AccountStoragePatch::default());
-    forest.update_account(block_1, &patch_1).unwrap();
+    forest.update_account(block_1, &patch_1);
 
     let mut vault_patch_2 = AccountVaultPatch::default();
     vault_patch_2.insert_asset(dummy_fungible_asset(faucet_id, initial_amount));
     let patch_2 = dummy_partial_patch(account2, vault_patch_2, AccountStoragePatch::default());
-    forest.update_account(block_1, &patch_2).unwrap();
+    forest.update_account(block_1, &patch_2);
 
     // Both accounts should have the same vault root (structural sharing in SmtForest)
     let root1_at_block1 = forest.get_vault_root(account1, block_1).unwrap();
@@ -983,7 +983,7 @@ fn shared_vault_root_retained_when_one_account_changes() {
     vault_patch_2_update.insert_asset(dummy_fungible_asset(faucet_id, initial_amount + 500));
     let patch_2_update =
         dummy_partial_patch(account2, vault_patch_2_update, AccountStoragePatch::default());
-    forest.update_account(block_2, &patch_2_update).unwrap();
+    forest.update_account(block_2, &patch_2_update);
 
     // Account2 now has a different root
     let root2_at_block2 = forest.get_vault_root(account2, block_2).unwrap();

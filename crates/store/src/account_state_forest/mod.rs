@@ -53,14 +53,6 @@ const HASHED_VAULT_KEY_CACHE_CAPACITY: usize = 65_536;
 // ================================================================================================
 
 #[derive(Debug, Error)]
-pub enum AccountStateForestError {
-    #[error(transparent)]
-    Asset(#[from] AssetError),
-    #[error(transparent)]
-    Forest(#[from] LargeSmtForestError),
-}
-
-#[derive(Debug, Error)]
 pub enum WitnessError {
     #[error("root not found")]
     RootNotFound,
@@ -503,9 +495,9 @@ impl<B: Backend> AccountStateForest<B> {
         &mut self,
         block_num: BlockNumber,
         account_updates: impl IntoIterator<Item = AccountPatch>,
-    ) -> Result<(), AccountStateForestError> {
+    ) {
         for patch in account_updates {
-            self.update_account(block_num, &patch)?;
+            self.update_account(block_num, &patch);
 
             tracing::debug!(
                 target: crate::COMPONENT,
@@ -517,8 +509,6 @@ impl<B: Backend> AccountStateForest<B> {
         }
 
         self.prune(block_num);
-
-        Ok(())
     }
 
     /// Updates the forest with account vault and storage changes from a patch.
@@ -529,19 +519,15 @@ impl<B: Backend> AccountStateForest<B> {
     ///
     /// Full-state patches (`patch.is_full_state() == true`) populate the forest from scratch using
     /// an empty SMT root. Partial patches apply changes on top of the previous block's state.
-    pub(crate) fn update_account(
-        &mut self,
-        block_num: BlockNumber,
-        patch: &AccountPatch,
-    ) -> Result<(), AccountStateForestError> {
+    pub(crate) fn update_account(&mut self, block_num: BlockNumber, patch: &AccountPatch) {
         let account_id = patch.id();
         let is_full_state = patch.is_full_state();
 
         // Apply vault changes.
         if is_full_state {
-            self.insert_account_vault(block_num, account_id, patch.vault())?;
+            self.insert_account_vault(block_num, account_id, patch.vault());
         } else if !patch.vault().is_empty() {
-            self.update_account_vault(block_num, account_id, patch.vault())?;
+            self.update_account_vault(block_num, account_id, patch.vault());
         }
 
         // Apply storage map changes.
@@ -553,8 +539,6 @@ impl<B: Backend> AccountStateForest<B> {
 
         self.cache_storage_map_keys_from_patch(patch);
         self.cache_vault_keys_from_patch(patch);
-
-        Ok(())
     }
 
     // ASSET VAULT DELTA PROCESSING
@@ -569,13 +553,15 @@ impl<B: Backend> AccountStateForest<B> {
 
     /// Inserts asset vault data into the forest for the specified account. Assumes that asset vault
     /// for this account does not yet exist in the forest.
-    #[expect(clippy::unnecessary_wraps)]
+    ///
+    /// # Panics
+    /// Panics if the account's vault is already present in the forest.
     fn insert_account_vault(
         &mut self,
         block_num: BlockNumber,
         account_id: AccountId,
         vault_patch: &AccountVaultPatch,
-    ) -> Result<(), AccountStateForestError> {
+    ) {
         let prev_root = self.get_latest_vault_root(account_id);
         let lineage = Self::vault_lineage_id(account_id);
         assert_eq!(prev_root, empty_smt_root(), "account should not be in the forest");
@@ -596,19 +582,21 @@ impl<B: Backend> AccountStateForest<B> {
                 vault_entries = 0,
                 "Inserted vault into forest"
             );
-            return Ok(());
+            return;
         }
 
-        let mut entries: Vec<(Word, Word)> = Vec::new();
+        let mut entries: Vec<(AssetVaultKey, Word)> = Vec::new();
 
         for (vault_key, value) in vault_patch.iter() {
-            entries.push((vault_key.hash().as_word(), *value));
+            entries.push((*vault_key, *value));
         }
 
         let num_entries = entries.len();
 
         let lineage = Self::vault_lineage_id(account_id);
-        let operations = Self::build_forest_operations(entries);
+        let operations = Self::build_forest_operations(
+            entries.into_iter().map(|(key, value)| (key.hash().as_word(), value)),
+        );
         let new_root = self.apply_forest_updates(lineage, block_num, operations);
 
         tracing::debug!(
@@ -619,7 +607,6 @@ impl<B: Backend> AccountStateForest<B> {
             vault_entries = num_entries,
             "Inserted vault into forest"
         );
-        Ok(())
     }
 
     /// Updates the forest with storage map changes from a patch.
@@ -681,25 +668,29 @@ impl<B: Backend> AccountStateForest<B> {
     ///
     /// Writes the patch's absolute vault entries to the vault SMT, where an empty value removes the
     /// corresponding asset.
-    #[expect(clippy::unnecessary_wraps)]
+    ///
+    /// # Panics
+    /// Panics if the provided vault patch is empty.
     fn update_account_vault(
         &mut self,
         block_num: BlockNumber,
         account_id: AccountId,
         vault_patch: &AccountVaultPatch,
-    ) -> Result<(), AccountStateForestError> {
+    ) {
         assert!(!vault_patch.is_empty(), "expected the patch not to be empty");
 
-        let mut entries: Vec<(Word, Word)> = Vec::new();
+        let mut entries: Vec<(AssetVaultKey, Word)> = Vec::new();
 
         for (vault_key, value) in vault_patch.iter() {
-            entries.push((vault_key.hash().as_word(), *value));
+            entries.push((*vault_key, *value));
         }
 
         let vault_entries = entries.len();
 
         let lineage = Self::vault_lineage_id(account_id);
-        let operations = Self::build_forest_operations(entries);
+        let operations = Self::build_forest_operations(
+            entries.into_iter().map(|(key, value)| (key.hash().as_word(), value)),
+        );
         let new_root = self.apply_forest_updates(lineage, block_num, operations);
 
         tracing::debug!(
@@ -710,7 +701,6 @@ impl<B: Backend> AccountStateForest<B> {
             %vault_entries,
             "Updated vault in forest"
         );
-        Ok(())
     }
 
     // STORAGE MAP DELTA PROCESSING

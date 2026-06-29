@@ -306,12 +306,11 @@ impl NtxContext {
                     .await
                     .unwrap_or_else(|err| std::panic::resume_unwind(err.into_panic()))?;
 
-                // Capture the account patch before the executed tx is consumed; the actor applies
-                // it to its in-memory account once this transaction lands in a committed block.
-                let account_patch = executed_tx.account_patch().clone();
+                // Destructure the executed tx into its parts; the actor applies the account patch
+                // to its in-memory account once this transaction lands in a committed block.
+                let (tx_inputs, _, account_patch, _) = executed_tx.into_parts();
 
                 // Prove transaction.
-                let tx_inputs: TransactionInputs = executed_tx.into();
                 let proven_tx = Box::pin(self.prove(&tx_inputs)).await?;
 
                 // Submit transaction through the RPC service.

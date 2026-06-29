@@ -24,7 +24,6 @@ use miden_protocol::transaction::OutputNote;
 use thiserror::Error;
 use tokio::sync::oneshot::error::RecvError;
 
-use crate::account_state_forest::AccountStateForestError;
 use crate::db::models::conv::DatabaseTypeConversionError;
 
 // DATABASE ERRORS
@@ -108,8 +107,6 @@ pub enum StateInitializationError {
     ProvenTipLoadError(#[source] std::io::Error),
     #[error("failed to load database")]
     DatabaseLoadError(#[source] DatabaseError),
-    #[error("account state forest error")]
-    AccountStateForestError(#[from] AccountStateForestError),
     #[error(
         "{tree_name} SMT root ({tree_root:?}) does not match expected root from block {block_num} \
          ({block_root:?}). Delete the tree storage directories and restart the node to rebuild \
@@ -200,8 +197,6 @@ pub enum ApplyBlockError {
     TokioJoinError(#[from] tokio::task::JoinError),
     #[error("invalid block error")]
     InvalidBlockError(#[from] InvalidBlockError),
-    #[error("account state forest error")]
-    AccountStateForestError(#[from] AccountStateForestError),
 
     // OTHER ERRORS
     // ---------------------------------------------------------------------------------------------

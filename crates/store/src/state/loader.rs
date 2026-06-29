@@ -533,7 +533,7 @@ pub async fn rebuild_account_state_forest(
                 StateInitializationError::AccountToDeltaConversionFailed(e.to_string())
             })?;
 
-            forest.update_account(block_num, &patch)?;
+            forest.update_account(block_num, &patch);
         }
 
         cursor = page.next_cursor;

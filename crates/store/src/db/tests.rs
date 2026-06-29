@@ -3021,7 +3021,7 @@ fn account_state_forest_matches_db_storage_map_roots_across_updates() {
     .unwrap();
 
     insert_account_patch(&mut conn, account_id, block1, &patch_1);
-    forest.update_account(block1, &patch_1).unwrap();
+    forest.update_account(block1, &patch_1);
 
     // Verify forest matches DB for block 1
     let forest_root_1 = forest.get_storage_map_root(account_id, &slot_map, block1).unwrap();
@@ -3052,7 +3052,7 @@ fn account_state_forest_matches_db_storage_map_roots_across_updates() {
     .unwrap();
 
     insert_account_patch(&mut conn, account_id, block2, &patch_2);
-    forest.update_account(block2, &patch_2).unwrap();
+    forest.update_account(block2, &patch_2);
 
     // Verify forest matches DB for block 2
     let forest_root_2 = forest.get_storage_map_root(account_id, &slot_map, block2).unwrap();
@@ -3083,7 +3083,7 @@ fn account_state_forest_matches_db_storage_map_roots_across_updates() {
     .unwrap();
 
     insert_account_patch(&mut conn, account_id, block3, &patch_3);
-    forest.update_account(block3, &patch_3).unwrap();
+    forest.update_account(block3, &patch_3);
 
     // Verify forest matches DB for block 3
     let forest_root_3 = forest.get_storage_map_root(account_id, &slot_map, block3).unwrap();
@@ -3159,7 +3159,7 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
         Some(Felt::new_unchecked(2)),
     )
     .unwrap();
-    forest.update_account(block01, &patch1).unwrap();
+    forest.update_account(block01, &patch1);
 
     // Account 2 (same storage)
     let patch2 = AccountPatch::new(
@@ -3170,7 +3170,7 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
         Some(Felt::new_unchecked(2)),
     )
     .unwrap();
-    forest.update_account(block02, &patch2).unwrap();
+    forest.update_account(block02, &patch2);
 
     // Account 3 (same storage)
     let patch3 = AccountPatch::new(
@@ -3181,7 +3181,7 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
         Some(Felt::new_unchecked(2)),
     )
     .unwrap();
-    forest.update_account(block02, &patch3).unwrap();
+    forest.update_account(block02, &patch3);
 
     // All three accounts should have the same root (structural sharing in SmtForest)
     let root1 = forest.get_storage_map_root(account1, &slot_name, block01).unwrap();
@@ -3209,7 +3209,7 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
         Some(Felt::new_unchecked(3)),
     )
     .unwrap();
-    forest.update_account(block51, &patch2_update).unwrap();
+    forest.update_account(block51, &patch2_update);
 
     let patch3_update = AccountPatch::new(
         account3,
@@ -3219,7 +3219,7 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
         Some(Felt::new_unchecked(3)),
     )
     .unwrap();
-    forest.update_account(block52, &patch3_update).unwrap();
+    forest.update_account(block52, &patch3_update);
 
     // Prune at block 52
     let total_roots_removed = forest.prune(block52);
@@ -3237,7 +3237,7 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
         Some(Felt::new_unchecked(3)),
     )
     .unwrap();
-    forest.update_account(block53, &patch1_update).unwrap();
+    forest.update_account(block53, &patch1_update);
 
     // Prune at block 53
     let total_roots_removed = forest.prune(block53);
@@ -3293,7 +3293,7 @@ fn account_state_forest_retains_latest_after_100_blocks_and_pruning() {
     )
     .unwrap();
 
-    forest.update_account(block_1, &delta_1).unwrap();
+    forest.update_account(block_1, &delta_1);
 
     // Capture the roots from block 1
     let initial_vault_root = forest.get_vault_root(account_id, block_1).unwrap();
@@ -3347,7 +3347,7 @@ fn account_state_forest_retains_latest_after_100_blocks_and_pruning() {
     )
     .unwrap();
 
-    forest.update_account(block_51, &delta_51).unwrap();
+    forest.update_account(block_51, &delta_51);
 
     // Prune again at block 100
     let total_roots_removed = forest.prune(block_100);
@@ -3390,7 +3390,7 @@ fn account_state_forest_preserves_most_recent_vault_only() {
     )
     .unwrap();
 
-    forest.update_account(block_1, &delta_1).unwrap();
+    forest.update_account(block_1, &delta_1);
 
     let initial_vault_root = forest.get_vault_root(account_id, block_1).unwrap();
 
@@ -3539,7 +3539,7 @@ fn account_state_forest_preserves_most_recent_storage_map_only() {
     )
     .unwrap();
 
-    forest.update_account(block_1, &delta_1).unwrap();
+    forest.update_account(block_1, &delta_1);
 
     let initial_storage_root = forest.get_storage_map_root(account_id, &slot_map, block_1).unwrap();
 
@@ -3595,7 +3595,7 @@ fn account_state_forest_preserves_most_recent_storage_value_slot() {
     )
     .unwrap();
 
-    forest.update_account(block_1, &delta_1).unwrap();
+    forest.update_account(block_1, &delta_1);
 
     // Note: Value slots don't have roots in AccountStateForest - they're just part of the account
     // storage header. The AccountStateForest only tracks map slots. So there's nothing to verify
@@ -3670,7 +3670,7 @@ fn account_state_forest_preserves_mixed_slots_independently() {
     )
     .unwrap();
 
-    forest.update_account(block_1, &delta_1).unwrap();
+    forest.update_account(block_1, &delta_1);
 
     let initial_vault_root = forest.get_vault_root(account_id, block_1).unwrap();
     let initial_map_a_root = forest.get_storage_map_root(account_id, &slot_map_a, block_1).unwrap();
@@ -3696,7 +3696,7 @@ fn account_state_forest_preserves_mixed_slots_independently() {
     )
     .unwrap();
 
-    forest.update_account(block_51, &delta_51).unwrap();
+    forest.update_account(block_51, &delta_51);
 
     // Advance to block 100
     let block_100 = BlockNumber::from(100);
