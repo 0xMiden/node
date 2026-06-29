@@ -2,7 +2,7 @@ mod server;
 #[cfg(test)]
 mod tests;
 
-pub use server::{SequencerInternal, Rpc, RpcMode};
+pub use server::{Rpc, RpcMode, SequencerInternal};
 
 // CONSTANTS
 // =================================================================================================

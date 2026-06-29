@@ -4,10 +4,10 @@ use miden_node_proto::generated::server::sequencer_api;
 use miden_node_utils::ErrorReport;
 use tonic::Status;
 
-use super::PreAuthenticatedService;
+use super::SequencerInternalService;
 
 #[tonic::async_trait]
-impl sequencer_api::SubmitAuthenticatedTx for PreAuthenticatedService {
+impl sequencer_api::SubmitAuthenticatedTx for SequencerInternalService {
     type Input = AuthenticatedTransaction;
     type Output = proto::blockchain::BlockNumber;
 

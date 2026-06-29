@@ -11,7 +11,7 @@ use miden_node_proto::clients::{
     SequencerClient,
     ValidatorClient,
 };
-use miden_node_rpc::{SequencerInternal, Rpc, RpcMode};
+use miden_node_rpc::{Rpc, RpcMode, SequencerInternal};
 use miden_node_store::State;
 use miden_node_utils::clap::{GrpcOptionsInternal, duration_to_human_readable_string};
 use miden_node_utils::tasks::Tasks;
@@ -40,13 +40,10 @@ pub struct SequencerCommand {
     #[command(flatten)]
     pub store: StoreOptions,
 
-    /// Socket address at which to serve the private pre-authenticated submission API.
-    ///
-    /// When unset the pre-authenticated submission service is not exposed. This interface accepts
-    /// already-authenticated transactions from full nodes *without* re-verification.
+    /// Socket address at which to serve the internal sequencer API.
     #[arg(
         long = "internal.listen",
-        env = "MIDEN_NODE__LISTEN",
+        env = "MIDEN_NODE_SEQUENCER_INTERNAL_LISTEN",
         value_name = "LISTEN"
     )]
     pub internal: Option<SocketAddr>,
@@ -98,7 +95,7 @@ impl SequencerCommand {
                 block_producer,
                 grpc_options: GrpcOptionsInternal::from(runtime.external_grpc_options),
             };
-            tasks.spawn("pre-authenticated submission server", sequencer_internal.serve());
+            tasks.spawn("sequencer internal server", sequencer_internal.serve());
         }
 
         tasks.join_next_as_error().await
@@ -162,16 +159,31 @@ pub struct FullNodeCommand {
     #[command(flatten)]
     pub store: StoreOptions,
 
-    #[command(flatten)]
-    pub pre_auth_options: PreAuthenticatedNodeOptions,
+    /// The validator service gRPC URL.
+    #[arg(
+        long = "validator.url",
+        env = "MIDEN_NODE_VALIDATOR_URL",
+        value_name = "URL",
+        requires = "sequencer_url"
+    )]
+    pub validator_url: Option<Url>,
+
+    /// The sequencer's internal service gRPC URL.
+    #[arg(
+        long = "sequencer.internal.url",
+        env = "MIDEN_NODE_SEQUENCER_INTERNAL_URL",
+        value_name = "URL",
+        requires = "validator_url"
+    )]
+    pub sequencer_url: Option<Url>,
 }
 
 impl FullNodeCommand {
     pub async fn handle(self) -> anyhow::Result<()> {
         let runtime = self.runtime.runtime_config(&self.store);
         let source_rpc = self.sync.source_rpc_client()?;
-        let validator_client = self.pre_auth_options.validator_client();
-        let sequencer_client = self.pre_auth_options.sequencer_client();
+        let validator_client = self.validator_client();
+        let sequencer_client = self.sequencer_client();
         let network_tx_auth = self.runtime.rpc.network_tx_auth()?;
         let state = load_state(&runtime).await?;
         let _disk_monitor = state.spawn_disk_monitor();
@@ -194,35 +206,7 @@ impl FullNodeCommand {
 
         tasks.join_next_as_error().await
     }
-}
 
-/// Options that enable a full node to send pre-authenticated transactions to the sequencer.
-///
-/// When both URLs are set the full node validates and authenticates submissions locally and
-/// forwards the authenticated result to the sequencer's pre-authenticated submission API, rather
-/// than forwarding the raw transaction upstream. Both must be provided together.
-#[derive(clap::Args, Clone, Debug)]
-pub struct PreAuthenticatedNodeOptions {
-    /// The validator service gRPC URL.
-    #[arg(
-        long = "validator.url",
-        env = "MIDEN_NODE_VALIDATOR_URL",
-        value_name = "URL",
-        requires = "sequencer_url"
-    )]
-    pub validator_url: Option<Url>,
-
-    /// The sequencer's private pre-authenticated submission gRPC URL.
-    #[arg(
-        long = "sequencer.url",
-        env = "MIDEN_NODE_SEQUENCER_URL",
-        value_name = "URL",
-        requires = "validator_url"
-    )]
-    pub sequencer_url: Option<Url>,
-}
-
-impl PreAuthenticatedNodeOptions {
     fn sequencer_client(&self) -> Option<SequencerClient> {
         self.sequencer_url.as_ref().map(|url| {
             Builder::new(url.clone())

@@ -6,10 +6,10 @@ use miden_protocol::batch::ProposedBatch;
 use miden_protocol::utils::serde::Deserializable;
 use tonic::Status;
 
-use super::PreAuthenticatedService;
+use super::SequencerInternalService;
 
 #[tonic::async_trait]
-impl sequencer_api::SubmitAuthenticatedTxBatch for PreAuthenticatedService {
+impl sequencer_api::SubmitAuthenticatedTxBatch for SequencerInternalService {
     type Input = (ProposedBatch, Vec<TransactionInputs>);
     type Output = proto::blockchain::BlockNumber;
 
@@ -19,6 +19,15 @@ impl sequencer_api::SubmitAuthenticatedTxBatch for PreAuthenticatedService {
         let batch = ProposedBatch::read_from_bytes(&request.proposed_batch).map_err(|err| {
             Status::invalid_argument(err.as_report_context("invalid proposed_batch"))
         })?;
+
+        if batch.transactions().len() != request.auth_inputs.len() {
+            return Err(Status::invalid_argument(format!(
+                "Number of inputs {} does not match number of transactions {} in batch",
+                request.auth_inputs.len(),
+                batch.transactions().len()
+            )));
+        }
+
         let inputs = request
             .auth_inputs
             .into_iter()
@@ -27,14 +36,6 @@ impl sequencer_api::SubmitAuthenticatedTxBatch for PreAuthenticatedService {
             .map_err(|err| {
                 Status::invalid_argument(err.as_report_context("invalid auth_inputs"))
             })?;
-
-        if batch.transactions().len() != inputs.len() {
-            return Err(Status::invalid_argument(format!(
-                "Number of inputs {} does not match number of transactions {} in batch",
-                inputs.len(),
-                batch.transactions().len()
-            )));
-        }
 
         Ok((batch, inputs))
     }

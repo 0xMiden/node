@@ -29,7 +29,7 @@ use tower_http::trace::TraceLayer;
 use tracing::info;
 
 use crate::COMPONENT;
-use crate::server::api::PreAuthenticatedService;
+use crate::server::api::SequencerInternalService;
 use crate::server::health::HealthCheckLayer;
 
 mod accept;
@@ -66,15 +66,14 @@ pub enum RpcMode {
     /// By default it forwards submissions verbatim to the source RPC (the caller is responsible for
     /// configuring this client with any request metadata the source RPC requires).
     ///
-    /// When [`pre_auth_submit`](FullNode::pre_auth_submit) is set, the full node is a *pre-authenticated* full node: instead
-    /// of forwarding, it re-executes submissions through the validator and authenticates them
-    /// against its local (replica) store, then submits the authenticated result directly to the
-    /// sequencer's pre-authenticated submission API.
+    /// When the validator and sequencer clients are set, the full-node will, instead of forwarding,
+    /// re-execute submissions through the validator and authenticate them against its store, then
+    /// submit the authenticated result directly to the sequencer's internal API.
     FullNode {
         source_rpc: Box<SourceRpcClient>,
         readiness_threshold: u32,
-        sequencer: Option<Box<SequencerClient>>,
         validator: Option<Box<ValidatorClient>>,
+        sequencer: Option<Box<SequencerClient>>,
     },
 }
 
@@ -217,19 +216,19 @@ impl Rpc {
     }
 }
 
-// PRE-AUTHENTICATED
+// INTERNAL SEQUENCER
 // ================================================================================================
 
 /// The internal Sequencer server.
 ///
-/// Serves the private `pre_authenticated.Api` gRPC service, which accepts already-authenticated
+/// Serves the private `sequencer.Api` gRPC service, which accepts already-authenticated
 /// transactions from full nodes and submits them directly to the mempool *without*
 /// re-verification.
 ///
 /// This must only ever be exposed on a private, network-isolated listener: callers can inject
 /// transactions that the sequencer will not independently verify.
 pub struct SequencerInternal {
-    /// The listener the pre-authenticated submission service binds to.
+    /// The listener the service binds to.
     pub listener: TcpListener,
     /// The in-process block producer API submissions are forwarded to.
     pub block_producer: BlockProducerApi,
@@ -245,7 +244,7 @@ impl SequencerInternal {
     pub async fn serve(self) -> anyhow::Result<()> {
         info!(target: COMPONENT, endpoint = ?self.listener, "Internal sequencer server initialized");
 
-        let service = PreAuthenticatedService { block_producer: self.block_producer };
+        let service = SequencerInternalService { block_producer: self.block_producer };
 
         // Note: deliberately no accept-header / rate-limit / auth layers; this is a private,
         // trusted interface and is expected to be network-isolated.

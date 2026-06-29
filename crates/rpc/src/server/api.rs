@@ -267,10 +267,10 @@ impl RpcService {
     }
 }
 
-// PRE-AUTHENTICATED SERVICE
+// INTERNAL SEQUENCER SERVICE
 // ================================================================================================
 
-pub(crate) struct PreAuthenticatedService {
+pub(crate) struct SequencerInternalService {
     pub(crate) block_producer: BlockProducerApi,
 }
 
