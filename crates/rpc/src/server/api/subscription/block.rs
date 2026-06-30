@@ -16,9 +16,9 @@ use super::super::{COMPONENT, RpcService};
 use super::stream::{DataError, StreamError, SubscriptionStream};
 use super::{
     IpBanList,
-    MAX_FUTURE_GAP_IN_SUBSCRIPTIONS,
     stream_error_to_status,
     subscription_ban_status,
+    subscription_start_exceeds_future_gap,
 };
 
 pub struct BlockSubscriptionInput {
@@ -56,11 +56,12 @@ impl proto::server::rpc_api::BlockSubscription for RpcService {
 
         debug!(target: COMPONENT, ?request);
 
-        if request.block_from + MAX_FUTURE_GAP_IN_SUBSCRIPTIONS
-            > self.store.chain_tip(Finality::Committed).await.as_u32()
-        {
+        if subscription_start_exceeds_future_gap(
+            request.block_from,
+            self.store.chain_tip(Finality::Committed).await,
+        ) {
             return Err(tonic::Status::out_of_range(
-                "subscription starting block exceeds committed chain tip",
+                "subscription starting block is too far ahead of committed chain tip",
             ));
         }
 

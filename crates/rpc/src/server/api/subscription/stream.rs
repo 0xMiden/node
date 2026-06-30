@@ -33,13 +33,19 @@ pub trait SubscriptionStream: Sized + Send {
         let (tx, rx) = tokio::sync::mpsc::channel(SUBSCRIBER_CHANNEL_CAPACITY);
 
         tokio::spawn(async move {
-            let mut next = from.child();
+            let mut next = from;
             let mut lag_tracker = SubscriberLagTracker::default();
 
             let err = loop {
                 // Wait for the requisite data to become part of the chain.
-                let Ok(tip) = chain_tip.wait_for(|tip| tip >= &next).await.map(|x| *x) else {
-                    break StreamError::ServerShutdown;
+                let tip = tokio::select! {
+                    biased;
+
+                    () = tx.closed() => break StreamError::ConnectionClosed,
+                    result = chain_tip.wait_for(|tip| tip >= &next) => match result {
+                        Ok(tip) => *tip,
+                        Err(_) => break StreamError::ServerShutdown,
+                    },
                 };
 
                 // Ensure the client is keeping up with the chain.
@@ -58,12 +64,14 @@ pub trait SubscriptionStream: Sized + Send {
                 };
 
                 let event = StreamEvent { data, block: next, tip };
-                if let Err(err) =
-                    tx.send_timeout(Ok(event), SEND_TIMEOUT).await.map_err(|err| match err {
-                        SendTimeoutError::Timeout(_) => StreamError::SlowSubscriber,
-                        SendTimeoutError::Closed(_) => StreamError::ConnectionClosed,
-                    })
-                {
+                let send_result = tokio::select! {
+                    () = wait_for_chain_tip_close(&mut chain_tip) => break StreamError::ServerShutdown,
+                    result = tx.send_timeout(Ok(event), SEND_TIMEOUT) => result,
+                };
+                if let Err(err) = send_result.map_err(|err| match err {
+                    SendTimeoutError::Timeout(_) => StreamError::SlowSubscriber,
+                    SendTimeoutError::Closed(_) => StreamError::ConnectionClosed,
+                }) {
                     break err;
                 }
 
@@ -78,7 +86,11 @@ pub trait SubscriptionStream: Sized + Send {
     }
 }
 
-#[derive(Clone, Copy, Debug, thiserror::Error)]
+async fn wait_for_chain_tip_close(chain_tip: &mut watch::Receiver<BlockNumber>) {
+    while chain_tip.changed().await.is_ok() {}
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum StreamError {
     #[error("server is shutting down")]
     ServerShutdown,
@@ -143,6 +155,7 @@ impl SubscriberLagTracker {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     use tokio_stream::StreamExt;
@@ -152,19 +165,21 @@ mod tests {
     #[derive(Default)]
     struct MockStream {
         eos: Arc<Mutex<Vec<StreamError>>>,
+        fetch_count: Arc<AtomicUsize>,
         fail_at: Option<BlockNumber>,
     }
 
     impl MockStream {
         fn failing_at(block: BlockNumber) -> Self {
-            Self {
-                eos: Arc::new(Mutex::new(Vec::new())),
-                fail_at: Some(block),
-            }
+            Self { fail_at: Some(block), ..Self::default() }
         }
 
         fn eos(&self) -> Arc<Mutex<Vec<StreamError>>> {
             Arc::clone(&self.eos)
+        }
+
+        fn fetch_count(&self) -> Arc<AtomicUsize> {
+            Arc::clone(&self.fetch_count)
         }
     }
 
@@ -174,6 +189,7 @@ mod tests {
         }
 
         async fn get_data(&self, block: BlockNumber) -> Result<Vec<u8>, DataError> {
+            self.fetch_count.fetch_add(1, Ordering::Relaxed);
             if Some(block) == self.fail_at {
                 return Err(DataError::NotFound);
             }
@@ -186,7 +202,7 @@ mod tests {
         let (tip_tx, tip_rx) = watch::channel(BlockNumber::GENESIS);
         let source = MockStream::default();
         let eos = source.eos();
-        let mut stream = source.stream(BlockNumber::GENESIS, tip_rx);
+        let mut stream = source.stream(BlockNumber::from(1u32), tip_rx);
 
         drop(tip_tx);
 
@@ -203,9 +219,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stream_yields_next_block_once_tip_reaches_it() {
+    async fn stream_yields_requested_block_once_tip_reaches_it() {
         let (_tip_tx, tip_rx) = watch::channel(BlockNumber::from(1u32));
-        let mut stream = MockStream::default().stream(BlockNumber::GENESIS, tip_rx);
+        let mut stream = MockStream::default().stream(BlockNumber::from(1u32), tip_rx);
 
         let item = tokio::time::timeout(Duration::from_secs(5), stream.next())
             .await
@@ -223,7 +239,7 @@ mod tests {
         let (_tip_tx, tip_rx) = watch::channel(BlockNumber::from(1u32));
         let source = MockStream::failing_at(BlockNumber::from(1u32));
         let eos = source.eos();
-        let mut stream = source.stream(BlockNumber::GENESIS, tip_rx);
+        let mut stream = source.stream(BlockNumber::from(1u32), tip_rx);
 
         let item = tokio::time::timeout(Duration::from_secs(5), stream.next())
             .await
@@ -235,6 +251,56 @@ mod tests {
             eos.lock().expect("eos mutex should not be poisoned").as_slice(),
             [StreamError::Internal],
         ));
+    }
+
+    #[tokio::test]
+    async fn stream_waiting_for_tip_exits_when_receiver_is_dropped() {
+        let (_tip_tx, tip_rx) = watch::channel(BlockNumber::GENESIS);
+        let source = MockStream::default();
+        let eos = source.eos();
+        let stream = source.stream(BlockNumber::from(1u32), tip_rx);
+
+        drop(stream);
+
+        wait_for_eos(&eos, StreamError::ConnectionClosed).await;
+    }
+
+    #[tokio::test]
+    async fn shutdown_while_send_is_pending_reports_server_shutdown() {
+        let (tip_tx, tip_rx) =
+            watch::channel(BlockNumber::from((SUBSCRIBER_CHANNEL_CAPACITY + 1) as u32));
+        let source = MockStream::default();
+        let eos = source.eos();
+        let fetch_count = source.fetch_count();
+        let _stream = source.stream(BlockNumber::GENESIS, tip_rx);
+
+        wait_for_fetch_count(&fetch_count, SUBSCRIBER_CHANNEL_CAPACITY + 1).await;
+        drop(tip_tx);
+
+        wait_for_eos(&eos, StreamError::ServerShutdown).await;
+    }
+
+    async fn wait_for_eos(eos: &Arc<Mutex<Vec<StreamError>>>, expected: StreamError) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if eos.lock().expect("eos mutex should not be poisoned").as_slice() == [expected] {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("stream must report eos promptly");
+    }
+
+    async fn wait_for_fetch_count(fetch_count: &AtomicUsize, expected: usize) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while fetch_count.load(Ordering::Relaxed) < expected {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("stream must fetch events promptly");
     }
 
     fn run(gaps: &[u32]) -> Result<(), ()> {
