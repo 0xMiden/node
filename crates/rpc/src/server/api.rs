@@ -316,6 +316,7 @@ fn database_error_to_status(err: &DatabaseError) -> Status {
         DatabaseError::AccountNotFoundInDb(_)
         | DatabaseError::AccountsNotFoundInDb(_)
         | DatabaseError::AccountNotPublic(_) => Status::not_found(message),
+        DatabaseError::TransactionPageExceedsPayloadLimit { .. } => Status::out_of_range(message),
         _ => Status::internal(message),
     }
 }
@@ -327,6 +328,9 @@ fn block_subscription_error_to_status(
         SubscriptionStreamError::TooSlow => {
             Status::resource_exhausted("subscriber is too slow to keep up with the chain")
         },
+        SubscriptionStreamError::TooFarAhead => Status::out_of_range(
+            "subscriber's requested starting block is too far ahead of the chain tip",
+        ),
         SubscriptionStreamError::Source(BlockSubscriptionError::NotFound(block_num)) => {
             Status::not_found(format!("block {block_num} not found"))
         },
@@ -343,6 +347,9 @@ fn proof_subscription_error_to_status(
         SubscriptionStreamError::TooSlow => {
             Status::resource_exhausted("subscriber is too slow to keep up with the chain")
         },
+        SubscriptionStreamError::TooFarAhead => Status::out_of_range(
+            "subscriber's requested starting block is too far ahead of the chain tip",
+        ),
         SubscriptionStreamError::Source(ProofSubscriptionError::NotFound(block_num)) => {
             Status::not_found(format!("proof for block {block_num} not found"))
         },
