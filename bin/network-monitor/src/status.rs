@@ -11,9 +11,9 @@ use miden_node_proto::clients::RpcClient;
 use tracing::debug;
 use url::Url;
 
-use crate::COMPONENT;
 use crate::service::{Service, build_tls_client};
 pub use crate::service_status::*;
+use crate::{COMPONENT, LOG_TARGET};
 
 // STALE CHAIN TIP TRACKER
 // ================================================================================================
@@ -135,7 +135,7 @@ impl Service for RpcService {
                     self.stale_tracker.update(rpc_details.chain_tip, current_unix_timestamp_secs())
                 {
                     debug!(
-                        target: COMPONENT,
+                        target: LOG_TARGET,
                         chain_tip = rpc_details.chain_tip,
                         stale_duration_secs = stale_duration,
                         "Chain tip is stale"
@@ -153,7 +153,7 @@ impl Service for RpcService {
                 ServiceStatus::healthy(self.name(), ServiceDetails::RpcStatus(rpc_details))
             },
             Err(e) => {
-                debug!(target: COMPONENT, error = %e, "RPC status check failed");
+                debug!(target: LOG_TARGET, error = %e, "RPC status check failed");
                 ServiceStatus::error(self.name(), e)
             },
         }

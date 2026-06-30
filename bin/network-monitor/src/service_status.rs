@@ -11,7 +11,7 @@ use miden_node_proto::generated::rpc::{BlockProducerStatus, RpcStatus};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use crate::COMPONENT;
+use crate::LOG_TARGET;
 use crate::faucet::FaucetTestDetails;
 use crate::remote_prover::{ProofType, ProverTestDetails};
 
@@ -332,10 +332,10 @@ impl From<proto::remote_prover::ProxyWorkerStatus> for WorkerStatusDetails {
         let status = proto::remote_prover::WorkerHealthStatus::try_from(value.status).map_or_else(
             |_| {
                 warn!(
-                    target: COMPONENT,
+                    target: LOG_TARGET,
                     raw = value.status,
                     worker = %value.name,
-                    "unknown worker health status discriminant"
+                    "Unknown worker health status discriminant"
                 );
                 Status::Unknown
             },
@@ -358,9 +358,9 @@ impl RemoteProverStatusDetails {
             .map_or_else(
                 |_| {
                     warn!(
-                        target: COMPONENT,
+                        target: LOG_TARGET,
                         raw = status.supported_proof_type,
-                        "unknown supported proof type discriminant"
+                        "Unknown supported proof type discriminant"
                     );
                     ProofType::Unknown
                 },

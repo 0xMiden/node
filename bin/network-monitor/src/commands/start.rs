@@ -6,10 +6,10 @@ use anyhow::Result;
 use miden_node_utils::logging::OpenTelemetry;
 use tracing::info;
 
-use crate::COMPONENT;
 use crate::config::MonitorConfig;
 use crate::frontend::ServerState;
 use crate::monitor::tasks::Tasks;
+use crate::{COMPONENT, LOG_TARGET};
 
 /// Start the network monitoring service.
 ///
@@ -26,7 +26,7 @@ use crate::monitor::tasks::Tasks;
     err
 )]
 pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
-    info!("Loaded configuration: {:?}", config);
+    info!(target: LOG_TARGET, "Loaded configuration: {:?}", config);
 
     let _otel_guard =
         miden_node_utils::logging::setup_tracing(OpenTelemetry::from_env().with_name("monitor"))?;

@@ -11,13 +11,13 @@ use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 use url::Url;
 
-use crate::COMPONENT;
 use crate::deploy::wallet::create_wallet_account;
 use crate::service::Service;
 use crate::status::{ServiceDetails, ServiceStatus};
+use crate::{COMPONENT, LOG_TARGET};
 
 // CONSTANTS
 // ================================================================================================
@@ -154,25 +154,29 @@ impl Service for FaucetService {
         // from the card.
         match fetch_faucet_metadata(&self.client, &self.url).await {
             Ok(metadata) => self.faucet_metadata = Some(metadata),
-            Err(e) => warn!("Failed to fetch faucet metadata: {e:#}"),
+            Err(e) => warn!(target: LOG_TARGET, "Failed to fetch faucet metadata: {e:#}"),
         }
 
-        let last_error =
-            match perform_mint_test(&self.client, &self.url, &self.account_id, self.solve_timeout)
-                .await
-            {
-                Ok(minted_tokens) => {
-                    self.success_count += 1;
-                    self.last_tx_id = Some(minted_tokens.tx_id.clone());
-                    info!("Faucet test successful: tx_id={}", minted_tokens.tx_id);
-                    None
-                },
-                Err(e) => {
-                    self.failure_count += 1;
-                    warn!("Faucet test failed: {}", e);
-                    Some(format!("{e:#}"))
-                },
-            };
+        let last_error = match perform_mint_test(
+            &self.client,
+            &self.url,
+            &self.account_id,
+            self.solve_timeout,
+        )
+        .await
+        {
+            Ok(minted_tokens) => {
+                self.success_count += 1;
+                self.last_tx_id = Some(minted_tokens.tx_id.clone());
+                info!(target: LOG_TARGET, { transaction.id = %minted_tokens.tx_id }, "Faucet test successful");
+                None
+            },
+            Err(e) => {
+                self.failure_count += 1;
+                warn!(target: LOG_TARGET, error=%e, "Faucet test failed");
+                Some(format!("{e:#}"))
+            },
+        };
 
         let details = ServiceDetails::FaucetTest(FaucetTestDetails {
             url: self.url.to_string(),
@@ -240,7 +244,7 @@ async fn perform_mint_test(
     account_id: &str,
     solve_timeout: Duration,
 ) -> anyhow::Result<GetTokensResponse> {
-    debug!("Using recipient account ID: {} (length: {})", account_id, account_id.len());
+    debug!(target: LOG_TARGET, "Using recipient account ID: {} (length: {})", account_id, account_id.len());
 
     // Step 1: Request PoW challenge
     let mut pow_url = faucet_url.join("/pow")?;
@@ -252,12 +256,13 @@ async fn perform_mint_test(
     let response = client.get(pow_url).send().await?;
 
     let response_text = read_success_body(response).await.context("/pow request failed")?;
-    debug!("Faucet PoW response: {}", response_text);
+    debug!(target: LOG_TARGET, "Faucet PoW response: {}", response_text);
 
     let challenge_response: PowChallengeResponse =
         parse_faucet_response(&response_text).context("unexpected response from /pow")?;
 
     debug!(
+        target: LOG_TARGET,
         "Received PoW challenge: target={}, challenge={}...",
         challenge_response.target,
         &challenge_response.challenge[..16.min(challenge_response.challenge.len())]
@@ -274,7 +279,7 @@ async fn perform_mint_test(
     .context("PoW solver task panicked")?
     .context("Failed to solve PoW challenge")?;
 
-    debug!("Solved PoW challenge with nonce: {}", nonce);
+    debug!(target: LOG_TARGET, "Solved PoW challenge with nonce: {}", nonce);
 
     // Step 3: Request tokens with the solution
     let mut tokens_url = faucet_url.join("/get_tokens")?;
@@ -289,7 +294,7 @@ async fn perform_mint_test(
     let response = client.get(tokens_url).send().await?;
 
     let response_text = read_success_body(response).await.context("/get_tokens request failed")?;
-    debug!("Faucet /get_tokens response: {}", response_text);
+    debug!(target: LOG_TARGET, "Faucet /get_tokens response: {}", response_text);
 
     let tokens_response: GetTokensResponse =
         parse_faucet_response(&response_text).context("unexpected response from /get_tokens")?;
@@ -358,12 +363,10 @@ fn solve_pow_challenge(challenge: &str, target: u64, timeout: Duration) -> anyho
         let hash_as_u64 = u64::from_be_bytes(hash_result[..8].try_into().unwrap());
 
         if hash_as_u64 < target {
-            debug!(
-                "PoW solution found! nonce={}, hash={}, target={} (~{} bits)",
-                nonce,
-                hash_as_u64,
-                target,
-                target.leading_zeros(),
+            trace!(
+                target: LOG_TARGET,
+                %nonce, hash=%hash_as_u64, %target, bits=%target.leading_zeros(),
+                "PoW solution found",
             );
             return Ok(nonce);
         }
@@ -377,12 +380,10 @@ fn solve_pow_challenge(challenge: &str, target: u64, timeout: Duration) -> anyho
                      {target})"
                 );
             }
-            debug!(
-                "PoW attempt {}: current_hash={}, target={} (~{} bits)",
-                nonce,
-                hash_as_u64,
-                target,
-                target.leading_zeros(),
+            trace!(
+                target: LOG_TARGET,
+                %nonce, current_hash=%hash_as_u64, %target, bits=%target.leading_zeros(),
+                "PoW attempt",
             );
         }
     }
