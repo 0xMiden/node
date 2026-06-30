@@ -264,7 +264,7 @@ impl BlockProducerApi {
 
                 let stats = {
                     let Ok(mempool) = mempool.lock() else {
-                        tracing::error!("mempool lock poisoned, stopping mempool stats updater");
+                        tracing::error!(target: LOG_TARGET, "Mempool lock poisoned, stopping mempool stats updater");
                         return;
                     };
                     MempoolStats::from_mempool(&mempool)

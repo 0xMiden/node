@@ -494,7 +494,7 @@ impl Db {
             {
                 let _span = tracing::info_span!(target: COMPONENT, "acquire_write_lock").entered();
                 if allow_acquire.send(()).is_err() {
-                    tracing::warn!(target: COMPONENT, "failed to send notification for successful block application, potential deadlock");
+                    tracing::warn!(target: LOG_TARGET, "Failed to send notification for successful block application, potential deadlock");
                 }
             }
 
