@@ -3,31 +3,16 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use miden_node_proto::generated as proto;
-use miden_node_store::state::{
-    BlockNotification,
-    DataError,
-    StreamError,
-    SubscriptionStream,
-    SubscriptionStreamError,
-};
-use miden_node_store::{BlockStore, State};
-use miden_node_utils::block_cache::BlockOrderedCache;
+use miden_node_store::State;
+use miden_node_store::state::{DataError, StreamError, SubscriptionStream};
 use miden_node_utils::grpc::ClientIp;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::block::BlockNumber;
-use tokio::sync::{OwnedSemaphorePermit, watch};
-use tokio_stream::StreamExt;
+use tokio::sync::OwnedSemaphorePermit;
 use tonic::{Request, Status};
 use tracing::{Span, debug};
 
-use super::{
-    BlockSubscriptionStream,
-    COMPONENT,
-    GuardedStream,
-    RpcService,
-    stream_error_to_status,
-    subscription_ban_status,
-};
+use super::{COMPONENT, RpcService, stream_error_to_status, subscription_ban_status};
 use crate::server::api::subscription_ban::IpBanList;
 
 pub struct BlockSubscriptionInput {
@@ -42,7 +27,10 @@ impl proto::server::rpc_api::BlockSubscription for RpcService {
     type ItemStream = BlockSubscriptionStream;
 
     fn decode(request: proto::rpc::BlockSubscriptionRequest) -> tonic::Result<Self::Input> {
-        Ok(BlockSubscriptionInput { request, client_ip: None })
+        Ok(BlockSubscriptionInput {
+            request,
+            client_ip: None,
+        })
     }
 
     fn encode(item: Self::Item) -> tonic::Result<proto::rpc::BlockSubscriptionResponse> {
@@ -84,14 +72,16 @@ impl proto::server::rpc_api::BlockSubscription for RpcService {
             store: Arc::clone(&self.store),
         };
 
-        let stream = stream.stream(from, self.store.subscribe_committed_tip()).map(move |event| {
-            event
-                .map(|event| proto::rpc::BlockSubscriptionResponse {
-                    block: event.data,
-                    committed_chain_tip: event.tip.as_u32(),
-                })
-                .map_err(|err| stream_error_to_status(err))
-        });
+        let stream = stream
+            .stream(from, self.store.subscribe_committed_tip())
+            .map(move |event| {
+                event
+                    .map(|event| proto::rpc::BlockSubscriptionResponse {
+                        block: event.data,
+                        committed_chain_tip: event.tip.as_u32(),
+                    })
+                    .map_err(stream_error_to_status)
+            });
         Ok(stream.boxed())
     }
 }
@@ -102,6 +92,15 @@ struct BlockStream {
     store: Arc<State>,
     _permit: OwnedSemaphorePermit,
 }
+
+type BlockSubscriptionStream = std::pin::Pin<
+    Box<
+        dyn tonic::codegen::tokio_stream::Stream<
+                Item = Result<proto::rpc::BlockSubscriptionResponse, Status>,
+            > + Send
+            + 'static,
+    >,
+>;
 
 impl miden_node_store::state::SubscriptionStream for BlockStream {
     fn on_eos(&self, err: &StreamError) {
