@@ -36,7 +36,7 @@ use tonic::metadata::AsciiMetadataValue;
 use tracing::{info};
 use url::Url;
 
-use crate::COMPONENT;
+use crate::{COMPONENT, LOG_TARGET};
 
 // RPC CLIENT
 // ================================================================================================
@@ -84,7 +84,7 @@ impl RpcClient {
         backoff_initial: Duration,
         backoff_max: Duration,
     ) -> anyhow::Result<Self> {
-        info!(target: COMPONENT, rpc_endpoint = %rpc_url, "Initializing RPC client");
+        info!(target: LOG_TARGET, rpc_endpoint = %rpc_url, "Initializing RPC client");
 
         let builder = Builder::new(rpc_url)
             .with_tls()?
@@ -142,9 +142,9 @@ impl RpcClient {
         .retry(self.backoff)
         .notify(|err: &RpcError, dur| {
             tracing::warn!(
-                target: COMPONENT,
+                target: LOG_TARGET,
                 sleep_ms = dur.as_millis() as u64,
-                err = %err.as_report(),
+                error = %err.as_report(),
                 "RPC connection failed while opening block subscription, retrying",
             );
         })
@@ -175,7 +175,7 @@ impl RpcClient {
                             Ok(stream) => inner.insert(stream),
                             Err(err) => {
                                 tracing::warn!(
-                                    target: COMPONENT, err = %err.as_report(), %next_from,
+                                    target: LOG_TARGET, error = %err.as_report(), %next_from,
                                     "failed to open block subscription, retrying",
                                 );
                                 tokio::time::sleep(RECONNECT_DELAY).await;
@@ -190,11 +190,11 @@ impl RpcClient {
                             return Some((Ok((block, committed_tip)), (client, next_from, inner)));
                         },
                         Some(Err(err)) => tracing::warn!(
-                            target: COMPONENT, err = %err.as_report(), %next_from,
+                            target: LOG_TARGET, error = %err.as_report(), %next_from,
                             "block subscription failed, reconnecting",
                         ),
                         None => tracing::warn!(
-                            target: COMPONENT, %next_from,
+                            target: LOG_TARGET, %next_from,
                             "block subscription closed by node, reconnecting",
                         ),
                     }

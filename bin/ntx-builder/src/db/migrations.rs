@@ -2,7 +2,7 @@ use std::path::Path;
 
 use miden_node_db::DatabaseError;
 
-use crate::COMPONENT;
+use crate::{COMPONENT, LOG_TARGET};
 
 include!(concat!(env!("OUT_DIR"), "/db_migrator.rs"));
 
@@ -10,7 +10,7 @@ include!(concat!(env!("OUT_DIR"), "/db_migrator.rs"));
 pub fn bootstrap_database(database_filepath: &Path) -> Result<(), DatabaseError> {
     let migrator = migrator().map_err(DatabaseError::migration)?;
     tracing::info!(
-        target: COMPONENT,
+        target: LOG_TARGET,
         migration_count = migrator.schema_hashes().len(),
         "Bootstrapping database schema"
     );
@@ -23,7 +23,7 @@ pub fn bootstrap_database(database_filepath: &Path) -> Result<(), DatabaseError>
 pub fn migrate_database(database_filepath: &Path) -> Result<(), DatabaseError> {
     let migrator = migrator().map_err(DatabaseError::migration)?;
     tracing::info!(
-        target: COMPONENT,
+        target: LOG_TARGET,
         migration_count = migrator.schema_hashes().len(),
         "Applying database migrations"
     );
@@ -36,7 +36,7 @@ pub fn migrate_database(database_filepath: &Path) -> Result<(), DatabaseError> {
 pub fn verify_latest_schema(database_filepath: &Path) -> Result<(), DatabaseError> {
     let migrator = migrator().map_err(DatabaseError::migration)?;
     tracing::info!(
-        target: COMPONENT,
+        target: LOG_TARGET,
         migration_count = migrator.schema_hashes().len(),
         "Verifying database schema"
     );

@@ -15,7 +15,7 @@ use tracing::info;
 use crate::committed_block::CommittedBlockEffects;
 use crate::db::migrations::{bootstrap_database, migrate_database, verify_latest_schema};
 use crate::db::models::queries;
-use crate::{COMPONENT, NoteError};
+use crate::{COMPONENT, LOG_TARGET, NoteError};
 
 pub(crate) mod models;
 
@@ -78,7 +78,7 @@ impl Db {
             .context("failed to build connection pool")?;
 
         info!(
-            target: COMPONENT,
+            target: LOG_TARGET,
             sqlite = %database_filepath.display(),
             connection_pool_size = %connection_pool_size,
             "Connected to the database"

@@ -2,6 +2,7 @@ use miden_node_proto::generated::{self as grpc, rpc};
 use miden_protocol::Word;
 
 use super::NtxBuilderRpcServer;
+use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
 impl grpc::server::ntx_builder_api::GetNetworkNoteStatus for NtxBuilderRpcServer {
@@ -19,9 +20,18 @@ impl grpc::server::ntx_builder_api::GetNetworkNoteStatus for NtxBuilderRpcServer
         Ok(miden_protocol::note::NoteId::from_raw(note_id_digest))
     }
 
+    #[miden_node_utils::tracing::miden_instrument(
+        target = COMPONENT,
+        name = "get_network_note_status",
+        skip_all,
+        fields (
+            note.id = %note_id,
+        ),
+        err,
+    )]
     async fn handle(&self, note_id: Self::Input) -> tonic::Result<Self::Output> {
         let row = self.db.get_note_status(note_id).await.map_err(|err| {
-            tracing::error!(err = %err, "failed to query note status from DB");
+            tracing::error!(target: LOG_TARGET, error = %err, "Failed to query note status from DB");
             tonic::Status::internal("database error")
         })?;
 

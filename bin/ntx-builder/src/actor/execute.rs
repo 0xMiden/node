@@ -55,10 +55,10 @@ use miden_tx::{
 };
 use tracing::Instrument;
 
-use crate::COMPONENT;
 use crate::actor::candidate::TransactionCandidate;
 use crate::clients::{RpcClient, RpcError};
 use crate::db::Db;
+use crate::{COMPONENT, LOG_TARGET};
 
 #[derive(Debug, thiserror::Error)]
 pub enum NtxError {
@@ -112,9 +112,9 @@ fn request_backoff(initial: Duration, max: Duration) -> ExponentialBuilder {
 /// Emits a structured warning for a transient NTX request failure that is about to be retried.
 fn log_transient_retry<E: std::error::Error>(operation: &'static str, err: &E, sleep: Duration) {
     tracing::warn!(
-        target: COMPONENT,
+        target: LOG_TARGET,
         operation,
-        err = %err.as_report(),
+        error = %err.as_report(),
         sleep_ms = sleep.as_millis() as u64,
         "ntx transient request failure; retrying after backoff",
     );
@@ -369,10 +369,11 @@ impl NtxContext {
                 let (successful, failed) = consumption_info.into_parts();
                 for failed_note in &failed {
                     tracing::info!(
-                        note.id = %failed_note.note().id(),
+                        target: LOG_TARGET,
+                        { note.id = %failed_note.note().id() ,
                         nullifier = %failed_note.note().nullifier(),
-                        err = %failed_note.error().as_report(),
-                        "note failed consumability check",
+                        error = %failed_note.error().as_report() },
+                        "Note failed consumability check",
                     );
                 }
 
