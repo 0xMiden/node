@@ -40,7 +40,6 @@ rand_chacha       = { workspace = true }
 serde             = { workspace = true }
 thiserror         = { workspace = true }
 tokio             = { features = ["fs", "rt-multi-thread"], workspace = true }
-tokio-stream      = { features = ["sync"], workspace = true }
 toml              = { workspace = true }
 tracing           = { workspace = true }
 
