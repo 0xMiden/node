@@ -10,7 +10,7 @@ use tokio_stream::Stream;
 use tokio_stream::wrappers::ReceiverStream;
 
 /// Buffered messages per subscriber before back-pressure begins.
-pub const SUBSCRIBER_CHANNEL_CAPACITY: usize = 32;
+const SUBSCRIBER_CHANNEL_CAPACITY: usize = 32;
 /// Safety-net timeout for a single send when the client has stalled.
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 
