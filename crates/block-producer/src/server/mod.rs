@@ -14,7 +14,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, info, instrument};
 use url::Url;
 
-use crate::batch_builder::BatchBuilder;
+use crate::batch_builder::{BatchBuilder, BatchIntervals};
 use crate::block_builder::BlockBuilder;
 use crate::block_prover::BlockProver;
 use crate::domain::transaction::AuthenticatedTransaction;
@@ -22,12 +22,7 @@ use crate::errors::MempoolSubmissionError;
 use crate::mempool::{BatchBudget, BlockBudget, Mempool, MempoolConfig, SharedMempool};
 use crate::store::{TransactionInputs, get_tx_inputs};
 use crate::validator::BlockProducerValidatorClient;
-use crate::{
-    CACHED_MEMPOOL_STATS_UPDATE_INTERVAL,
-    COMPONENT,
-    SERVER_NUM_BATCH_BUILDERS,
-    proof_scheduler,
-};
+use crate::{CACHED_MEMPOOL_STATS_UPDATE_INTERVAL, COMPONENT, proof_scheduler};
 
 #[cfg(test)]
 mod tests;
@@ -36,9 +31,9 @@ mod tests;
 #[derive(Clone, Copy, Debug)]
 pub struct BlockProducerApiConfig {
     /// The maximum number of transactions per batch.
-    pub max_txs_per_batch: usize,
+    pub max_txs_per_batch: NonZeroUsize,
     /// The maximum number of batches per block.
-    pub max_batches_per_block: usize,
+    pub max_batches_per_block: NonZeroUsize,
     /// The maximum number of inflight transactions allowed in the mempool at once.
     pub mempool_tx_capacity: NonZeroUsize,
 }
@@ -57,10 +52,12 @@ impl BlockProducerApiConfig {
     fn mempool_config(self) -> MempoolConfig {
         MempoolConfig {
             batch_budget: BatchBudget {
-                transactions: self.max_txs_per_batch,
+                transactions: self.max_txs_per_batch.get(),
                 ..BatchBudget::default()
             },
-            block_budget: BlockBudget { batches: self.max_batches_per_block },
+            block_budget: BlockBudget {
+                batches: self.max_batches_per_block.get(),
+            },
             tx_capacity: self.mempool_tx_capacity,
             ..Default::default()
         }
@@ -81,19 +78,22 @@ pub struct Sequencer {
     pub batch_prover_url: Option<Url>,
     /// The address of the block prover component.
     pub block_prover_url: Option<Url>,
-    /// The interval at which to produce batches.
+    /// Maximum interval between batch scheduler checks.
     pub batch_interval: Duration,
     /// The interval at which to produce blocks.
     pub block_interval: Duration,
     /// The maximum number of transactions per batch.
-    pub max_txs_per_batch: usize,
+    pub max_txs_per_batch: NonZeroUsize,
     /// The maximum number of batches per block.
-    pub max_batches_per_block: usize,
+    pub max_batches_per_block: NonZeroUsize,
     /// The maximum number of concurrent block proofs to schedule.
     pub max_concurrent_proofs: NonZeroUsize,
 
     /// The maximum number of inflight transactions allowed in the mempool at once.
     pub mempool_tx_capacity: NonZeroUsize,
+
+    /// The number of concurrent batch-builder workers.
+    pub batch_workers: NonZeroUsize,
 }
 
 // BLOCK PRODUCER
@@ -111,11 +111,12 @@ impl Sequencer {
         info!(target: COMPONENT, "Sequencer initialized");
 
         let block_builder = BlockBuilder::new(Arc::clone(&store), validator, self.block_interval);
+        let batch_intervals = BatchIntervals::derive_from(self.block_interval, self.batch_interval);
         let batch_builder = BatchBuilder::new(
             Arc::clone(&store),
-            SERVER_NUM_BATCH_BUILDERS,
+            self.batch_workers,
             self.batch_prover_url,
-            self.batch_interval,
+            batch_intervals,
         );
         let api_config = BlockProducerApiConfig {
             max_txs_per_batch: self.max_txs_per_batch,

@@ -218,10 +218,14 @@ pub fn select_transactions_records(
 
     // Read transactions in chunks to prevent loading excessive data and to stop as soon as we
     // approach the size limit
-    let mut all_transactions = Vec::new();
+    let mut transactions = Vec::new();
     let mut total_size = 0i64;
     let mut last_block_num: Option<i64> = None;
     let mut last_transaction_id: Option<Vec<u8>> = None;
+    // Track the block number of the first transaction that did not fit within the payload cap. This
+    // is the explicit "we truncated" signal; the accumulated byte total cannot be used as a proxy,
+    // since a transaction can fail to fit while `total_size` is still below the cap.
+    let mut truncated_at_block: Option<i64> = None;
 
     loop {
         let mut query =
@@ -259,43 +263,49 @@ pub fn select_transactions_records(
                 total_size += tx.size_in_bytes;
                 last_block_num = Some(tx.block_num);
                 last_transaction_id = Some(tx.transaction_id.clone());
-                all_transactions.push(tx);
+                transactions.push(tx);
                 added_from_chunk += 1;
             } else {
-                // Can't fit this transaction, stop here
+                // This transaction does not fit, so the response is truncated at its block.
+                truncated_at_block = Some(tx.block_num);
                 break;
             }
         }
 
-        // Break if chunk incomplete (size limit hit or data exhausted)
-        if added_from_chunk < NUM_TXS_PER_CHUNK {
+        // Break if we truncated due to the payload cap, or the chunk was incomplete (i.e. the
+        // matching transactions are exhausted).
+        if truncated_at_block.is_some() || added_from_chunk < NUM_TXS_PER_CHUNK {
             break;
         }
     }
 
-    // Ensure block consistency: remove the last block if it's incomplete (we may have stopped
-    // loading mid-block due to size constraints)
-    if total_size >= max_payload_bytes {
-        // SAFETY: We're guaranteed to have at least one transaction since total_size > 0
-        let last_block_num = last_block_num.expect(
-            "guaranteed to have processed at least one transaction when size limit is reached",
-        );
-        let filtered_transactions = with_output_note_proofs(
-            conn,
-            all_transactions
-                .into_iter()
-                .take_while(|row| row.block_num != last_block_num)
-                .collect(),
-        )?;
+    let Some(truncation_block) = truncated_at_block else {
+        // Every matching transaction in the range fit within the payload cap.
+        return Ok((*block_range.end(), with_output_note_proofs(conn, transactions)?));
+    };
 
-        // SAFETY: block_num came from the database and was previously validated. Subtraction is
-        // safe under the assumption that genesis block (where it could fail) does not have any
-        // transactions.
-        let last_included_block = BlockNumber::from_raw_sql(last_block_num.saturating_sub(1))?;
-        Ok((last_included_block, filtered_transactions))
-    } else {
-        Ok((*block_range.end(), with_output_note_proofs(conn, all_transactions)?))
+    // We stopped within `truncation_block`, so that block may be partial. Block-based pagination
+    // can only report fully-included blocks, so drop every transaction belonging to the truncation
+    // block and report the previous block as the cursor. Transactions are ordered ascending by
+    // block number, so the truncation block's transactions form a contiguous suffix:
+    // `partition_point` locates the boundary and `truncate` drops the suffix in place, without
+    // allocating a new vector, with O(log n) complexity.
+    let complete_len = transactions.partition_point(|row| row.block_num < truncation_block);
+    transactions.truncate(complete_len);
+
+    if transactions.is_empty() {
+        // A single block's transactions exceed the payload cap. Reporting `truncation_block - 1`
+        // here would tell the client to resume from `truncation_block`, which can never fit, so
+        // pagination would loop forever. Surface the condition instead of silently looping.
+        return Err(DatabaseError::TransactionPageExceedsPayloadLimit {
+            block_num: BlockNumber::from_raw_sql(truncation_block)?,
+        });
     }
+
+    // SAFETY: block_num came from the database and was previously validated. Subtraction is safe
+    // under the assumption that genesis block (where it could fail) does not have any transactions.
+    let last_included_block = BlockNumber::from_raw_sql(truncation_block.saturating_sub(1))?;
+    Ok((last_included_block, with_output_note_proofs(conn, transactions)?))
 }
 
 fn with_output_note_proofs(

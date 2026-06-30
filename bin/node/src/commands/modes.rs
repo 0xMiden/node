@@ -69,6 +69,7 @@ impl SequencerCommand {
             max_batches_per_block: self.block_producer.block.max_batches,
             max_concurrent_proofs: self.block_producer.block.max_concurrent_proofs,
             mempool_tx_capacity: self.block_producer.mempool.tx_capacity,
+            batch_workers: self.block_producer.batch.workers,
         }
         .spawn()
         .await
