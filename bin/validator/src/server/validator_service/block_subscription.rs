@@ -58,7 +58,9 @@ impl grpc::server::validator_api::BlockSubscription for ValidatorService {
                         )),
                     };
 
-                    if response.is_err() || tx.send(response).await.is_err() {
+                    let is_err = response.is_err();
+
+                    if tx.send(response).await.is_err() || is_err {
                         return;
                     }
                 }
