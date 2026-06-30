@@ -17,6 +17,7 @@ use miden_node_store::state::{
     Finality,
     ProofSubscriptionError,
     State,
+    StreamError,
     SubscriptionStreamError,
 };
 use miden_node_store::{DatabaseError, GetBlockHeaderError};
@@ -321,23 +322,15 @@ fn database_error_to_status(err: &DatabaseError) -> Status {
     }
 }
 
-fn block_subscription_error_to_status(
-    err: SubscriptionStreamError<BlockSubscriptionError>,
-) -> Status {
-    match err {
-        SubscriptionStreamError::TooSlow => {
-            Status::resource_exhausted("subscriber is too slow to keep up with the chain")
-        },
-        SubscriptionStreamError::TooFarAhead => Status::out_of_range(
-            "subscriber's requested starting block is too far ahead of the chain tip",
-        ),
-        SubscriptionStreamError::Source(BlockSubscriptionError::NotFound(block_num)) => {
-            Status::not_found(format!("block {block_num} not found"))
-        },
-        SubscriptionStreamError::Source(BlockSubscriptionError::Load { block_num, source }) => {
-            Status::internal(format!("failed to load block {block_num}: {}", source.as_report()))
-        },
-    }
+fn stream_error_to_status(err: StreamError) -> Status {
+    let code = match err {
+        StreamError::ServerShutdown => tonic::Code::Unavailable,
+        StreamError::ConnectionClosed => tonic::Code::Aborted,
+        StreamError::SlowSubscriber => tonic::Code::ResourceExhausted,
+        StreamError::Internal => tonic::Code::Internal,
+    };
+
+    Status::new(code, err.to_string())
 }
 
 fn proof_subscription_error_to_status(

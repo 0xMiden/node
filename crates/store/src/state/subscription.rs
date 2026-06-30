@@ -3,9 +3,12 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use miden_node_utils::ErrorReport;
 use miden_protocol::block::BlockNumber;
 use thiserror::Error;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc::error::SendTimeoutError;
+use tokio::sync::mpsc::{self};
+use tokio::sync::watch;
 use tokio_stream::Stream;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -21,6 +24,132 @@ const MAX_RUNNING_GAP: u32 = 100u32;
 /// Maximum gap between tip and subscriber's requested starting block where the starting block is
 /// greater than the tip.
 const MAX_FUTURE_GAP: u32 = 100u32;
+
+pub trait SubscriptionStream: Sized + Send {
+    fn on_eos(&self, err: &StreamError);
+
+    fn get_data(
+        &self,
+        block: BlockNumber,
+    ) -> impl Future<Output = Result<Vec<u8>, DataError>> + Send + '_;
+
+    fn stream(
+        self,
+        from: BlockNumber,
+        mut chain_tip: watch::Receiver<BlockNumber>,
+    ) -> impl Stream<Item = Result<StreamEvent, StreamError>> + Send + 'static
+    where
+        Self: 'static,
+    {
+        let (tx, rx) = tokio::sync::mpsc::channel(SUBSCRIBER_CHANNEL_CAPACITY);
+
+        tokio::spawn(async move {
+            let mut next = from.child();
+            let mut gap_checker = StreamGapCheck::default();
+
+            let err = loop {
+                // Wait for the requisite data to become part of the chain.
+                let Ok(tip) = chain_tip.wait_for(|tip| tip >= &next).await.map(|x| *x) else {
+                    break StreamError::ServerShutdown;
+                };
+
+                // Ensure the client is keeping up with the chain.
+                if gap_checker.check(next, tip).is_err() {
+                    break StreamError::SlowSubscriber;
+                }
+
+                let Ok(data) = self.get_data(next).await.inspect_err(|err| {
+                    tracing::error!(
+                        block.number = %next,
+                        message = %err.as_report(),
+                        "failed to load data for stream"
+                    );
+                }) else {
+                    break StreamError::Internal;
+                };
+
+                let event = StreamEvent { data, block: next, tip };
+
+                // TODO: When server is shutting down, we need to early cancel this so we don't wait
+                // on the full timeout.
+                if let Err(err) =
+                    tx.send_timeout(Ok(event), SEND_TIMEOUT).await.map_err(|err| match err {
+                        SendTimeoutError::Timeout(_) => StreamError::SlowSubscriber,
+                        SendTimeoutError::Closed(_) => StreamError::ConnectionClosed,
+                    })
+                {
+                    break err;
+                }
+
+                next = next.child();
+            };
+
+            self.on_eos(&err);
+            let _ = tx.try_send(Err(err));
+        });
+
+        ReceiverStream::new(rx)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum StreamError {
+    #[error("server is shutting down")]
+    ServerShutdown,
+    #[error("client closed the stream")]
+    ConnectionClosed,
+    #[error("client is too slow to keep up with the chain")]
+    SlowSubscriber,
+    #[error("internal error")]
+    Internal,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum DataError {
+    #[error("data not found")]
+    NotFound,
+    #[error(transparent)]
+    DatabaseError { source: DatabaseError },
+}
+
+pub struct StreamEvent {
+    pub data: Vec<u8>,
+    pub block: BlockNumber,
+    pub tip: BlockNumber,
+}
+
+struct StreamGapCheck {
+    previous_gap: u32,
+    running_total: u32,
+}
+
+impl Default for StreamGapCheck {
+    fn default() -> Self {
+        Self { previous_gap: u32::MAX, running_total: 0 }
+    }
+}
+
+impl StreamGapCheck {
+    const MAX_RUNNING_GAP: u32 = 100;
+
+    fn check(&mut self, current: BlockNumber, tip: BlockNumber) -> Result<(), ()> {
+        let gap = tip.saturating_sub(current.as_u32()).as_u32();
+
+        self.running_total = if gap > self.previous_gap {
+            self.running_total + (gap - self.previous_gap)
+        } else {
+            self.running_total.saturating_sub(self.previous_gap - gap)
+        };
+
+        self.previous_gap = gap;
+
+        if self.running_total <= Self::MAX_RUNNING_GAP {
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+}
 
 // SUBSCRIPTION EVENTS
 // ================================================================================================

@@ -1,11 +1,21 @@
 use std::net::IpAddr;
 use std::sync::Arc;
 
+use futures::StreamExt;
 use miden_node_proto::generated as proto;
-use miden_node_store::state::SubscriptionStreamError;
+use miden_node_store::state::{
+    BlockNotification,
+    DataError,
+    StreamError,
+    SubscriptionStream,
+    SubscriptionStreamError,
+};
+use miden_node_store::{BlockStore, State};
+use miden_node_utils::block_cache::BlockOrderedCache;
 use miden_node_utils::grpc::ClientIp;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::block::BlockNumber;
+use tokio::sync::{OwnedSemaphorePermit, watch};
 use tokio_stream::StreamExt;
 use tonic::{Request, Status};
 use tracing::{Span, debug};
@@ -15,9 +25,10 @@ use super::{
     COMPONENT,
     GuardedStream,
     RpcService,
-    block_subscription_error_to_status,
+    stream_error_to_status,
     subscription_ban_status,
 };
+use crate::server::api::subscription_ban::IpBanList;
 
 pub struct BlockSubscriptionInput {
     request: proto::rpc::BlockSubscriptionRequest,
@@ -65,23 +76,45 @@ impl proto::server::rpc_api::BlockSubscription for RpcService {
 
         let from = BlockNumber::from(request.block_from);
         let ban_list = Arc::clone(&self.subscription_ban);
-        let stream = self.store.block_subscription(from).map(move |event| {
+
+        let stream = BlockStream {
+            client_ip,
+            ban_list,
+            _permit: permit,
+            store: Arc::clone(&self.store),
+        };
+
+        let stream = stream.stream(from, self.store.subscribe_committed_tip()).map(move |event| {
             event
                 .map(|event| proto::rpc::BlockSubscriptionResponse {
-                    block: event.block,
-                    committed_chain_tip: event.committed_chain_tip.as_u32(),
+                    block: event.data,
+                    committed_chain_tip: event.tip.as_u32(),
                 })
-                .map_err(|err| {
-                    // Ban slow subscribers so they cannot immediately reconnect and re-stall.
-                    if matches!(err, SubscriptionStreamError::TooSlow) {
-                        if let Some(ip) = client_ip {
-                            ban_list.add(ip);
-                        }
-                    }
-                    block_subscription_error_to_status(err)
-                })
+                .map_err(|err| stream_error_to_status(err))
         });
-        let stream: Self::ItemStream = Box::pin(GuardedStream::new(Box::pin(stream), permit));
-        Ok(stream)
+        Ok(stream.boxed())
+    }
+}
+
+struct BlockStream {
+    client_ip: Option<IpAddr>,
+    ban_list: Arc<IpBanList>,
+    store: Arc<State>,
+    _permit: OwnedSemaphorePermit,
+}
+
+impl miden_node_store::state::SubscriptionStream for BlockStream {
+    fn on_eos(&self, err: &StreamError) {
+        if let (Some(ip), StreamError::SlowSubscriber) = (self.client_ip, err) {
+            self.ban_list.add(ip);
+        }
+    }
+
+    async fn get_data(&self, block: BlockNumber) -> Result<Vec<u8>, DataError> {
+        self.store
+            .load_block(block)
+            .await
+            .map_err(|source| DataError::DatabaseError { source })?
+            .ok_or(DataError::NotFound)
     }
 }
