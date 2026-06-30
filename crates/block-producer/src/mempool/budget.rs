@@ -39,7 +39,7 @@ pub(crate) enum BudgetStatus {
 impl Default for BatchBudget {
     fn default() -> Self {
         Self {
-            transactions: DEFAULT_MAX_TXS_PER_BATCH,
+            transactions: DEFAULT_MAX_TXS_PER_BATCH.get(),
             input_notes: MAX_INPUT_NOTES_PER_BATCH,
             output_notes: MAX_OUTPUT_NOTES_PER_BATCH,
             accounts: MAX_ACCOUNTS_PER_BATCH,
@@ -49,11 +49,21 @@ impl Default for BatchBudget {
 
 impl Default for BlockBudget {
     fn default() -> Self {
-        Self { batches: DEFAULT_MAX_BATCHES_PER_BLOCK }
+        Self {
+            batches: DEFAULT_MAX_BATCHES_PER_BLOCK.get(),
+        }
     }
 }
 
 impl BatchBudget {
+    /// Returns `true` if no more transaction resources can be consumed from this budget.
+    pub(crate) fn is_exhausted(&self) -> bool {
+        self.transactions == 0
+            || self.input_notes == 0
+            || self.output_notes == 0
+            || self.accounts == 0
+    }
+
     /// Attempts to consume the transaction's resources from the budget.
     ///
     /// Returns [`BudgetStatus::Exceeded`] if the transaction would exceed the remaining budget,
