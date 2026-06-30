@@ -166,7 +166,9 @@ impl ProverStatusService {
     /// terminates. The task only ends by panicking (its snapshot channel outlives it), so a
     /// finished handle is surfaced as an unhealthy outcome before respawning.
     fn ensure_probe_running(&mut self) {
-        let Some(status) = &self.last_status else { return };
+        let Some(status) = &self.last_status else {
+            return;
+        };
         if !matches!(status.supported_proof_type, ProofType::Transaction) {
             return;
         }
