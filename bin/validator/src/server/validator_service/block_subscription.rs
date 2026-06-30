@@ -38,18 +38,18 @@ impl grpc::server::validator_api::BlockSubscription for ValidatorService {
     async fn handle(&self, request: Self::Input) -> tonic::Result<Self::ItemStream> {
         Span::current().set_attribute("block.from", request.block_from);
 
-        // Hold the exclusive backup lock for the entire lifetime of the stream. While a backup
-        // subscription is active no other RPCs may run, and vice versa.
-        let guard = Arc::clone(&self.serve_lock).try_write_owned().map_err(|_| {
-            Status::resource_exhausted("cannot stream backup while validator is serving requests")
-        })?;
-
         let committed_tip = self.committed_tip.borrow().as_u32();
         if request.block_from > committed_tip {
             return Err(Status::out_of_range(
                 "subscriber's requested starting block should be <= the committed chain tip",
             ));
         }
+
+        // Hold the exclusive backup lock for the entire lifetime of the stream. While a backup
+        // subscription is active no other RPCs may run, and vice versa.
+        let guard = Arc::clone(&self.serve_lock).try_write_owned().map_err(|_| {
+            Status::resource_exhausted("cannot stream backup while validator is serving requests")
+        })?;
 
         let from = BlockNumber::from(request.block_from);
         let source = BlockStoreSource { block_store: self.block_store.clone() };
