@@ -1,27 +1,19 @@
 use std::future::Future;
-use std::pin::Pin;
-use std::sync::Arc;
 use std::time::Duration;
 
 use miden_node_utils::ErrorReport;
 use miden_protocol::block::BlockNumber;
-use thiserror::Error;
 use tokio::sync::mpsc::error::SendTimeoutError;
-use tokio::sync::mpsc::{self};
 use tokio::sync::watch;
 use tokio_stream::Stream;
 use tokio_stream::wrappers::ReceiverStream;
 
-use super::{BlockCache, ProofCache, State};
 use crate::errors::DatabaseError;
 
 /// Buffered messages per subscriber before back-pressure begins.
 pub const SUBSCRIBER_CHANNEL_CAPACITY: usize = 32;
 /// Safety-net timeout for a single send when the client has stalled.
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
-/// Maximum gap between tip and subscriber's requested starting block where the starting block is
-/// greater than the tip.
-const MAX_FUTURE_GAP: u32 = 100u32;
 
 pub trait SubscriptionStream: Sized + Send {
     fn on_eos(&self, err: &StreamError);
@@ -147,333 +139,103 @@ impl StreamGapCheck {
     }
 }
 
-// SUBSCRIPTION EVENTS
-// ================================================================================================
-
-#[derive(Debug)]
-pub struct BlockSubscriptionEvent {
-    pub block: Vec<u8>,
-    pub committed_chain_tip: BlockNumber,
-}
-
-#[derive(Debug)]
-pub struct ProofSubscriptionEvent {
-    pub block_num: BlockNumber,
-    pub proof: Vec<u8>,
-    pub proven_chain_tip: BlockNumber,
-}
-
-/// Error returned by a subscription stream.
-///
-/// Separates the two failure domains: [`TooSlow`](Self::TooSlow) is raised by the streaming
-/// machinery itself when a subscriber falls too far behind, while [`Source`](Self::Source) wraps a
-/// failure of the underlying [`SubscriptionSource`] to produce data.
-#[derive(Debug, Error)]
-pub enum SubscriptionStreamError<E> {
-    #[error("subscriber is too slow to keep up with the chain")]
-    TooSlow,
-    #[error("subscriber's requested starting block is too far ahead of the chain tip")]
-    TooFarAhead,
-    #[error(transparent)]
-    Source(#[from] E),
-}
-
-/// Error raised while loading a block for a block subscription.
-#[derive(Debug, Error)]
-pub enum BlockSubscriptionError {
-    #[error("failed to load block {block_num}")]
-    Load {
-        block_num: BlockNumber,
-        #[source]
-        source: DatabaseError,
-    },
-    #[error("block {0} not found")]
-    NotFound(BlockNumber),
-}
-
-/// Error raised while loading a proof for a proof subscription.
-#[derive(Debug, Error)]
-pub enum ProofSubscriptionError {
-    #[error("failed to load proof for block {block_num}")]
-    Load {
-        block_num: BlockNumber,
-        #[source]
-        source: DatabaseError,
-    },
-    #[error("proof for block {0} not found")]
-    NotFound(BlockNumber),
-}
-
-pub type BlockSubscriptionStream = Pin<
-    Box<
-        dyn Stream<
-                Item = Result<
-                    BlockSubscriptionEvent,
-                    SubscriptionStreamError<BlockSubscriptionError>,
-                >,
-            > + Send,
-    >,
->;
-
-pub type ProofSubscriptionStream = Pin<
-    Box<
-        dyn Stream<
-                Item = Result<
-                    ProofSubscriptionEvent,
-                    SubscriptionStreamError<ProofSubscriptionError>,
-                >,
-            > + Send,
-    >,
->;
-
-impl State {
-    /// Streams committed blocks starting from `from`, replaying historical blocks first and then
-    /// following live commits.
-    pub fn block_subscription(self: &Arc<Self>, from: BlockNumber) -> BlockSubscriptionStream {
-        Box::pin(run_stream(
-            from,
-            self.subscribe_committed_tip(),
-            BlockSource {
-                cache: self.block_cache.clone(),
-                state: Arc::clone(self),
-            },
-        ))
-    }
-
-    /// Streams block proofs starting from `from`, replaying historical proofs first and then
-    /// following newly proven blocks.
-    pub fn proof_subscription(self: &Arc<Self>, from: BlockNumber) -> ProofSubscriptionStream {
-        Box::pin(run_stream(
-            from,
-            self.subscribe_proven_tip(),
-            ProofSource {
-                cache: self.proof_cache.clone(),
-                state: Arc::clone(self),
-            },
-        ))
-    }
-}
-
-// SUBSCRIPTION SOURCE
-// ================================================================================================
-
-pub trait SubscriptionSource: Send + Sync + 'static {
-    type Event: Send + 'static;
-    type Error: std::error::Error + Send + 'static;
-
-    fn fetch(
-        &self,
-        block_num: BlockNumber,
-    ) -> impl Future<Output = Result<Vec<u8>, Self::Error>> + Send + '_;
-
-    fn build_event(&self, block_num: BlockNumber, data: Vec<u8>, tip: BlockNumber) -> Self::Event;
-}
-
-struct BlockSource {
-    cache: BlockCache,
-    state: Arc<State>,
-}
-
-impl SubscriptionSource for BlockSource {
-    type Event = BlockSubscriptionEvent;
-    type Error = BlockSubscriptionError;
-
-    async fn fetch(&self, block_num: BlockNumber) -> Result<Vec<u8>, BlockSubscriptionError> {
-        if let Some(entry) = self.cache.get(block_num) {
-            return Ok(entry.block_bytes().to_vec());
-        }
-        self.state
-            .load_block(block_num)
-            .await
-            .map_err(|source| BlockSubscriptionError::Load { block_num, source })?
-            .ok_or(BlockSubscriptionError::NotFound(block_num))
-    }
-
-    fn build_event(
-        &self,
-        _block_num: BlockNumber,
-        block: Vec<u8>,
-        committed_chain_tip: BlockNumber,
-    ) -> BlockSubscriptionEvent {
-        BlockSubscriptionEvent { block, committed_chain_tip }
-    }
-}
-
-struct ProofSource {
-    cache: ProofCache,
-    state: Arc<State>,
-}
-
-impl SubscriptionSource for ProofSource {
-    type Event = ProofSubscriptionEvent;
-    type Error = ProofSubscriptionError;
-
-    async fn fetch(&self, block_num: BlockNumber) -> Result<Vec<u8>, ProofSubscriptionError> {
-        if let Some(entry) = self.cache.get(block_num) {
-            return Ok(entry.proof_bytes().to_vec());
-        }
-        self.state
-            .load_proof(block_num)
-            .await
-            .map_err(|source| ProofSubscriptionError::Load { block_num, source })?
-            .ok_or(ProofSubscriptionError::NotFound(block_num))
-    }
-
-    fn build_event(
-        &self,
-        block_num: BlockNumber,
-        proof: Vec<u8>,
-        proven_chain_tip: BlockNumber,
-    ) -> ProofSubscriptionEvent {
-        ProofSubscriptionEvent { block_num, proof, proven_chain_tip }
-    }
-}
-
-// STREAM
-// ================================================================================================
-
-/// Drives a generic subscription stream, replaying history then following live tip advances.
-///
-/// Calls [`SubscriptionSource::fetch`] for each block in sequence starting from `from`, builds an
-/// event with [`SubscriptionSource::build_event`], and sends it to `tx`. Disconnects the
-/// subscriber with [`SubscriptionStreamError::TooSlow`] if it falls too far behind the tip or if a
-/// single send blocks for longer than [`SEND_TIMEOUT`], which may occur only after the buffer has
-/// [`SUBSCRIBER_CHANNEL_CAPACITY`] blocks queued.
-pub fn run_stream<S: SubscriptionSource>(
-    from: BlockNumber,
-    tip_rx: watch::Receiver<BlockNumber>,
-    source: S,
-) -> impl Stream<Item = Result<S::Event, SubscriptionStreamError<S::Error>>> + Send + 'static {
-    let (tx, rx) = mpsc::channel(SUBSCRIBER_CHANNEL_CAPACITY);
-    tokio::spawn(async move {
-        if let Err(err) = run_stream_inner(from, tip_rx, &tx, source).await {
-            let _ = tx.send(Err(err)).await;
-        }
-    });
-    ReceiverStream::new(rx)
-}
-
-async fn run_stream_inner<S: SubscriptionSource>(
-    from: BlockNumber,
-    mut tip_rx: watch::Receiver<BlockNumber>,
-    tx: &mpsc::Sender<Result<S::Event, SubscriptionStreamError<S::Error>>>,
-    source: S,
-) -> Result<(), SubscriptionStreamError<S::Error>> {
-    let mut next = from;
-    let tip = tip_rx.borrow().as_u32();
-    if next.as_u32() > tip.saturating_add(MAX_FUTURE_GAP) {
-        return Err(SubscriptionStreamError::TooFarAhead);
-    }
-
-    let mut gap_checker = StreamGapCheck::default();
-    loop {
-        let mut tip = *tip_rx.borrow_and_update();
-
-        gap_checker.check(next, tip).map_err(|()| SubscriptionStreamError::TooSlow)?;
-
-        while next <= tip {
-            let data = source.fetch(next).await?;
-            tip = *tip_rx.borrow_and_update();
-            let permit = match tokio::time::timeout(SEND_TIMEOUT, tx.reserve()).await {
-                Ok(Ok(permit)) => permit,
-                Ok(Err(_)) => return Ok(()),
-                Err(_) => return Err(SubscriptionStreamError::TooSlow),
-            };
-            permit.send(Ok(source.build_event(next, data, tip)));
-            next = next.child();
-        }
-        // Wait for the tip to advance, but also terminate promptly if the subscriber has
-        // disconnected (in case the tip is less than `next`).
-        tokio::select! {
-            changed = tip_rx.changed() => {
-                if changed.is_err() {
-                    return Ok(());
-                }
-            },
-            () = tx.closed() => return Ok(()),
-        }
-    }
-}
-
 // TESTS
 // ================================================================================================
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use tokio_stream::StreamExt;
 
     use super::*;
 
-    /// Minimal [`SubscriptionSource`] for lifetime tests. `fetch` is never reached when `from` is
-    /// ahead of the tip, so it just yields empty data.
-    struct MockSource;
+    #[derive(Default)]
+    struct MockStream {
+        eos: Arc<Mutex<Vec<StreamError>>>,
+        fail_at: Option<BlockNumber>,
+    }
 
-    impl SubscriptionSource for MockSource {
-        type Event = ();
-        type Error = BlockSubscriptionError;
-
-        async fn fetch(&self, _block_num: BlockNumber) -> Result<Vec<u8>, Self::Error> {
-            Ok(Vec::new())
+    impl MockStream {
+        fn failing_at(block: BlockNumber) -> Self {
+            Self {
+                eos: Arc::new(Mutex::new(Vec::new())),
+                fail_at: Some(block),
+            }
         }
 
-        fn build_event(&self, _block_num: BlockNumber, _data: Vec<u8>, _tip: BlockNumber) {}
+        fn eos(&self) -> Arc<Mutex<Vec<StreamError>>> {
+            Arc::clone(&self.eos)
+        }
     }
 
-    /// A subscription whose `from` is ahead of the tip parks waiting for the tip to advance. When
-    /// the subscriber disconnects (the returned stream is dropped), the detached task must
-    /// terminate rather than leaking until the chain reaches `from`.
-    #[tokio::test]
-    async fn future_subscription_task_terminates_on_disconnect() {
-        let (tip_tx, tip_rx) = watch::channel(BlockNumber::GENESIS);
+    impl SubscriptionStream for MockStream {
+        fn on_eos(&self, err: &StreamError) {
+            self.eos.lock().expect("eos mutex should not be poisoned").push(*err);
+        }
 
-        // `from` is far ahead of the tip, so the task never enters the send loop and parks on the
-        // tip. The spawned task holds the only watch receiver.
-        let stream = run_stream(BlockNumber::from(MAX_FUTURE_GAP - 1), tip_rx, MockSource);
-        assert_eq!(tip_tx.receiver_count(), 1, "the spawned task should hold the tip receiver");
-
-        // The client disconnects.
-        drop(stream);
-
-        // The task must observe the closed channel and drop its watch receiver. The tip never
-        // advances, so a task that only waited on tip changes would hang here.
-        tokio::time::timeout(Duration::from_secs(5), async {
-            while tip_tx.receiver_count() > 0 {
-                tokio::task::yield_now().await;
+        async fn get_data(&self, block: BlockNumber) -> Result<Vec<u8>, DataError> {
+            if Some(block) == self.fail_at {
+                return Err(DataError::NotFound);
             }
-        })
-        .await
-        .expect("subscription task must terminate after the subscriber disconnects");
+            Ok(block.as_u32().to_be_bytes().to_vec())
+        }
     }
 
     #[tokio::test]
-    async fn starting_block_exceeds_future_gap_returns_too_far_ahead() {
-        let (_tip_tx, tip_rx) = watch::channel(BlockNumber::GENESIS);
-        let from = BlockNumber::from(MAX_FUTURE_GAP + 1);
-        let mut stream = run_stream(from, tip_rx, MockSource);
-
-        let item = tokio::time::timeout(Duration::from_secs(5), stream.next())
-            .await
-            .expect("stream must yield promptly")
-            .expect("stream must not end without an item");
-        assert!(matches!(item, Err(SubscriptionStreamError::TooFarAhead)));
-    }
-
-    #[tokio::test]
-    async fn starting_block_at_exact_future_gap_boundary_is_accepted() {
+    async fn stream_waiting_for_tip_returns_server_shutdown_when_tip_sender_closes() {
         let (tip_tx, tip_rx) = watch::channel(BlockNumber::GENESIS);
-        // Exactly at the boundary: `from == tip + MAX_FUTURE_GAP` is NOT > tip + MAX_FUTURE_GAP, so
-        // the subscription must be accepted.
-        let from = BlockNumber::from(MAX_FUTURE_GAP);
-        let mut stream = run_stream(from, tip_rx, MockSource);
+        let source = MockStream::default();
+        let eos = source.eos();
+        let mut stream = source.stream(BlockNumber::GENESIS, tip_rx);
 
-        // Advance the tip to `from` so the task can produce an event rather than parking forever.
-        tip_tx.send(from).unwrap();
+        drop(tip_tx);
 
         let item = tokio::time::timeout(Duration::from_secs(5), stream.next())
             .await
             .expect("stream must yield promptly")
             .expect("stream must not end without an item");
-        assert!(matches!(item, Ok(())), "expected an event, not TooFarAhead: {item:?}");
+        assert!(matches!(item, Err(StreamError::ServerShutdown)));
+
+        assert!(matches!(
+            eos.lock().expect("eos mutex should not be poisoned").as_slice(),
+            [StreamError::ServerShutdown],
+        ));
+    }
+
+    #[tokio::test]
+    async fn stream_yields_next_block_once_tip_reaches_it() {
+        let (_tip_tx, tip_rx) = watch::channel(BlockNumber::from(1u32));
+        let mut stream = MockStream::default().stream(BlockNumber::GENESIS, tip_rx);
+
+        let item = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .expect("stream must yield promptly")
+            .expect("stream must not end without an item")
+            .expect("stream event must be ok");
+
+        assert_eq!(item.block, BlockNumber::from(1u32));
+        assert_eq!(item.tip, BlockNumber::from(1u32));
+        assert_eq!(item.data, 1u32.to_be_bytes().to_vec());
+    }
+
+    #[tokio::test]
+    async fn data_error_returns_internal_and_reports_eos() {
+        let (_tip_tx, tip_rx) = watch::channel(BlockNumber::from(1u32));
+        let source = MockStream::failing_at(BlockNumber::from(1u32));
+        let eos = source.eos();
+        let mut stream = source.stream(BlockNumber::GENESIS, tip_rx);
+
+        let item = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .expect("stream must yield promptly")
+            .expect("stream must not end without an item");
+        assert!(matches!(item, Err(StreamError::Internal)));
+
+        assert!(matches!(
+            eos.lock().expect("eos mutex should not be poisoned").as_slice(),
+            [StreamError::Internal],
+        ));
     }
 
     fn run(gaps: &[u32]) -> Result<(), ()> {
