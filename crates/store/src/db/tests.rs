@@ -1647,21 +1647,18 @@ fn mock_block_transaction_with_output_notes(
         })
         .collect();
 
-    let fee = test_fee();
     TransactionHeader::new_unchecked(
         TransactionId::new(
             initial_state_commitment,
             final_account_commitment,
             input_notes_commitment,
             output_notes_commitment,
-            fee,
         ),
         account_id,
         initial_state_commitment,
         final_account_commitment,
         input_notes,
         output_notes,
-        fee,
     )
 }
 

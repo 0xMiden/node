@@ -257,12 +257,11 @@ mod tests {
             id: validated_id.to_bytes(),
             block_num: 0,
             account_id: vec![],
-            account_delta: vec![],
+            account_patch: vec![],
             input_notes: vec![],
             output_notes: vec![],
             initial_account_hash: vec![],
             final_account_hash: vec![],
-            fee: vec![],
         };
         db.transact("insert_row", move |conn| -> Result<usize, DatabaseError> {
             Ok(diesel::insert_into(schema::validated_transactions::table)
