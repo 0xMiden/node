@@ -34,8 +34,8 @@ impl grpc::server::validator_api::BlockSubscription for ValidatorService {
         Span::current().set_attribute("block.from", request.block_from);
 
         let from = BlockNumber::from(request.block_from);
-        // The tip should never move since we are in recovery mode and therefore there
-        // is no active sequencer.
+        // The tip should never move since we are in recovery mode and therefore there is no active
+        // sequencer.
         let tip = *self.committed_tip.subscribe().borrow();
         Span::current().set_attribute("chain.tip", tip);
 
@@ -52,7 +52,7 @@ impl grpc::server::validator_api::BlockSubscription for ValidatorService {
                         }),
                         Ok(None) => {
                             Err(tonic::Status::not_found(format!("block {block} not found")))
-                        }
+                        },
                         Err(err) => Err(tonic::Status::internal(
                             err.as_report_context("failed to load block"),
                         )),
