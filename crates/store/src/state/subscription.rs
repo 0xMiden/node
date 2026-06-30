@@ -19,8 +19,6 @@ use crate::errors::DatabaseError;
 pub const SUBSCRIBER_CHANNEL_CAPACITY: usize = 32;
 /// Safety-net timeout for a single send when the client has stalled.
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
-/// Maximum running block-gap allowed before a subscriber is disconnected.
-const MAX_RUNNING_GAP: u32 = 100u32;
 /// Maximum gap between tip and subscriber's requested starting block where the starting block is
 /// greater than the tip.
 const MAX_FUTURE_GAP: u32 = 100u32;
@@ -130,6 +128,7 @@ impl Default for StreamGapCheck {
 }
 
 impl StreamGapCheck {
+    /// Maximum running block-gap allowed before a subscriber is disconnected.
     const MAX_RUNNING_GAP: u32 = 100;
 
     fn check(&mut self, current: BlockNumber, tip: BlockNumber) -> Result<(), ()> {
@@ -369,15 +368,13 @@ async fn run_stream_inner<S: SubscriptionSource>(
         return Err(SubscriptionStreamError::TooFarAhead);
     }
 
-    let mut previous_gap = tip;
-    let mut running_gap = 0u32;
+    let mut gap_checker = StreamGapCheck::default();
     loop {
         let mut tip = *tip_rx.borrow_and_update();
 
-        let current_gap = tip.saturating_sub(next.as_u32()).as_u32();
-        (previous_gap, running_gap) =
-            check_growing_gap(current_gap, previous_gap, running_gap, MAX_RUNNING_GAP)
-                .map_err(|()| SubscriptionStreamError::TooSlow)?;
+        gap_checker
+            .check(next, tip)
+            .map_err(|()| SubscriptionStreamError::TooSlow)?;
 
         while next <= tip {
             let data = source.fetch(next).await?;
@@ -401,30 +398,6 @@ async fn run_stream_inner<S: SubscriptionSource>(
             () = tx.closed() => return Ok(()),
         }
     }
-}
-
-/// Tracks how many blocks a subscriber's gap to the tip has grown across consecutive checks.
-///
-/// Tracks a running total of how far a subscriber's gap to the tip has grown.
-///
-/// The total increases by the block-count delta each time the gap grows, and decreases by the
-/// delta each time it shrinks (saturating at zero). Returns updated `(previous_gap, running_gap)`
-/// on success, or `Err(())` once the running total exceeds `max_gap`.
-fn check_growing_gap(
-    current_gap: u32,
-    previous_gap: u32,
-    running_gap: u32,
-    max_gap: u32,
-) -> Result<(u32, u32), ()> {
-    let running_gap = if current_gap > previous_gap {
-        running_gap + (current_gap - previous_gap)
-    } else {
-        running_gap.saturating_sub(previous_gap - current_gap)
-    };
-    if running_gap > max_gap {
-        return Err(());
-    }
-    Ok((current_gap, running_gap))
 }
 
 // TESTS
@@ -509,11 +482,9 @@ mod tests {
     }
 
     fn run(gaps: &[u32]) -> Result<(), ()> {
-        let mut previous_gap = gaps.first().copied().unwrap_or(u32::MAX);
-        let mut growth_run = 0u32;
+        let mut gap_checker = StreamGapCheck::default();
         for &gap in gaps {
-            (previous_gap, growth_run) =
-                check_growing_gap(gap, previous_gap, growth_run, MAX_RUNNING_GAP)?;
+            gap_checker.check(BlockNumber::GENESIS, BlockNumber::from(gap))?;
         }
         Ok(())
     }
@@ -532,31 +503,34 @@ mod tests {
     #[test]
     fn shrinking_gap_reduces_accumulation() {
         // Accumulate close to the limit, then shrink — running total decreases, no error.
-        assert!(run(&[10, 20, MAX_RUNNING_GAP - 1, 5]).is_ok());
+        assert!(run(&[10, 20, StreamGapCheck::MAX_RUNNING_GAP - 1, 5]).is_ok());
     }
 
     #[test]
     fn starting_above_max_growth_is_ok() {
-        assert!(run(&[MAX_RUNNING_GAP * 2]).is_ok());
+        assert!(run(&[StreamGapCheck::MAX_RUNNING_GAP * 2]).is_ok());
     }
 
     #[test]
     fn exactly_max_growth_run_is_ok() {
         // A single jump of exactly MAX_RUNNING_GAP is the boundary — still ok.
-        assert!(run(&[0, MAX_RUNNING_GAP]).is_ok());
+        assert!(run(&[0, StreamGapCheck::MAX_RUNNING_GAP]).is_ok());
     }
 
     #[test]
     fn exceeding_max_growth_run_returns_too_slow() {
         // One block past the limit triggers TooSlow, even in a single jump.
-        assert!(matches!(run(&[0, MAX_RUNNING_GAP + 1]), Err(())));
+        assert!(matches!(
+            run(&[0, StreamGapCheck::MAX_RUNNING_GAP + 1]),
+            Err(())
+        ));
     }
 
     #[test]
     fn growth_spread_across_windows_accumulates() {
         // Many small growths that each stay below the limit still trigger TooSlow once they sum
         // past MAX_RUNNING_GAP.
-        let step = MAX_RUNNING_GAP / 4;
+        let step = StreamGapCheck::MAX_RUNNING_GAP / 4;
         let gaps: Vec<u32> = (1..=6).map(|i| i * step).collect(); // total growth = 5 * step
         assert!(matches!(run(&gaps), Err(())));
     }
@@ -564,7 +538,7 @@ mod tests {
     #[test]
     fn recovery_reduces_and_allows_fresh_accumulation() {
         // Grow close to the limit, recover most of the way, then grow again — still ok.
-        let near_limit = MAX_RUNNING_GAP - 1;
+        let near_limit = StreamGapCheck::MAX_RUNNING_GAP - 1;
         assert!(run(&[near_limit, 1, near_limit]).is_ok());
     }
 
@@ -572,7 +546,9 @@ mod tests {
     fn token_improvement_does_not_prevent_disconnection() {
         // A client that grows by a large amount then shrinks by just one block on each cycle
         // accumulates net growth and is eventually disconnected.
-        let gaps: Vec<u32> = (0u32..MAX_RUNNING_GAP + 10).flat_map(|i| [50 + i, 49 + i]).collect();
+        let gaps: Vec<u32> = (0u32..StreamGapCheck::MAX_RUNNING_GAP + 10)
+            .flat_map(|i| [50 + i, 49 + i])
+            .collect();
         assert!(matches!(run(&gaps), Err(())));
     }
 }
