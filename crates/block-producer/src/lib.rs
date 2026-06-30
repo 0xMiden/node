@@ -21,6 +21,7 @@ pub mod errors;
 mod errors;
 
 pub mod server;
+pub use domain::transaction::AuthenticatedTransaction;
 pub use errors::MempoolSubmissionError;
 pub use proof_scheduler::DEFAULT_MAX_CONCURRENT_PROOFS;
 pub use rpc_sync::{RpcReadiness, RpcSync};
@@ -45,8 +46,13 @@ pub const DEFAULT_MAX_TXS_PER_BATCH: NonZeroUsize = NonZeroUsize::new(8).unwrap(
 /// Maximum number of batches per block.
 pub const DEFAULT_MAX_BATCHES_PER_BLOCK: NonZeroUsize = NonZeroUsize::new(8).unwrap();
 
-/// Size of the batch building worker pool.
-const SERVER_NUM_BATCH_BUILDERS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
+/// Default size of the batch-builder worker pool.
+///
+/// Each worker can prove one batch at a time. Raising this allows more
+/// concurrent batch proofs in-flight, which is the primary lever for lifting
+/// the per-block-producer TPS ceiling once `--max-txs-per-batch` and
+/// `--max-batches-per-block` are pushed up.
+pub const DEFAULT_BATCH_WORKERS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 
 /// The number of blocks of committed state that the mempool retains.
 ///

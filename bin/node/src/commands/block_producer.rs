@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use miden_node_block_producer::{
     DEFAULT_BATCH_INTERVAL,
+    DEFAULT_BATCH_WORKERS,
     DEFAULT_BLOCK_INTERVAL,
     DEFAULT_MAX_BATCHES_PER_BLOCK,
     DEFAULT_MAX_CONCURRENT_PROOFS,
@@ -72,6 +73,7 @@ mod tests {
                 interval: DEFAULT_BATCH_INTERVAL,
                 max_txs: NonZeroUsize::new(max_txs).unwrap(),
                 prover_url: None,
+                workers: miden_node_block_producer::DEFAULT_BATCH_WORKERS,
             },
             block: BlockOptions {
                 interval: DEFAULT_BLOCK_INTERVAL,
@@ -140,6 +142,20 @@ pub struct BatchOptions {
         help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
     )]
     pub prover_url: Option<Url>,
+
+    /// Number of concurrent batch-builder workers.
+    ///
+    /// Each worker can prove one batch at a time, so this caps how many batch
+    /// proofs the block-producer keeps in flight.
+    #[arg(
+        id = "batch.workers",
+        long = "batch.workers",
+        env = "MIDEN_NODE_BATCH_WORKERS",
+        value_name = "NUM",
+        default_value_t = DEFAULT_BATCH_WORKERS,
+        help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
+    )]
+    pub workers: NonZeroUsize,
 }
 
 #[derive(clap::Args, Clone, Debug)]
