@@ -150,7 +150,7 @@ impl TransactionGraph {
                 // Full-batch selection is speculative; partial selections must not reserve txs.
                 self.deselect_batch(batch);
                 None
-            },
+            }
             BatchSelection::Empty => None,
         }
     }
@@ -207,33 +207,36 @@ impl TransactionGraph {
     fn select_internal_batch(&mut self, mut budget: BatchBudget) -> BatchSelection {
         let mut selected = SelectedBatch::builder();
 
-        loop {
+        'outer: loop {
             // Select arbitrary candidate which is _not_ part of a user batch.
             let candidates = self.inner.selection_candidates();
-            let Some(candidate) =
-                candidates.values().find(|tx| !self.user_batches.contains_tx(&tx.id()))
-            else {
-                break;
-            };
 
-            if budget.check_then_subtract(candidate) == BudgetStatus::Exceeded {
-                assert!(
-                    !selected.is_empty(),
-                    "selectable transaction {} exceeds the batch budget; \
-                     candidate resources: transactions=1, accounts=1, input_notes={}, \
-                     output_notes={}; batch budget: {:?}",
-                    candidate.id(),
-                    candidate.input_note_count(),
-                    candidate.output_note_count(),
-                    budget,
-                );
+            for tx in candidates
+                .values()
+                .filter(|tx| !self.user_batches.contains_tx(&tx.id()))
+            {
+                if budget.check_then_subtract(tx) == BudgetStatus::Exceeded {
+                    assert!(
+                        !selected.is_empty(),
+                        "selectable transaction {} exceeds the batch budget; \
+                         candidate resources: transactions=1, accounts=1, input_notes={}, \
+                         output_notes={}; batch budget: {:?}",
+                        tx.id(),
+                        tx.input_note_count(),
+                        tx.output_note_count(),
+                        budget,
+                    );
 
-                return BatchSelection::Full(selected.build());
+                    continue;
+                }
+
+                let candidate = Arc::clone(tx);
+                self.inner.select_candidate(candidate.id());
+                selected.push(candidate);
+                continue 'outer;
             }
 
-            let candidate = Arc::clone(candidate);
-            self.inner.select_candidate(candidate.id());
-            selected.push(candidate);
+            break;
         }
 
         if selected.is_empty() {
@@ -387,7 +390,10 @@ impl TransactionGraph {
 
         let tx_id = tx.id();
         let descendants = self.inner.descendants(&tx_id);
-        for descendant in descendants.into_iter().filter(|descendant| *descendant != tx_id) {
+        for descendant in descendants
+            .into_iter()
+            .filter(|descendant| *descendant != tx_id)
+        {
             if let Some(descendant) = self.inner.get_mut(&descendant) {
                 Arc::make_mut(descendant).mark_notes_authenticated(output_notes.iter().copied());
             }

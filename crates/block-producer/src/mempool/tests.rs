@@ -81,6 +81,58 @@ fn full_batch_selection_returns_internal_batch_at_transaction_limit() {
     assert!(batch.transactions().contains(&tx_b));
 }
 
+#[test]
+fn internal_batch_selection_skips_candidates_exceeding_remaining_budget() {
+    let (mut uut, _) = Mempool::for_tests();
+    uut.config.batch_budget.output_notes = 3;
+
+    let parent = MockProvenTxBuilder::with_account_index(1000)
+        .private_notes_created_range(0..2)
+        .build();
+    let parent = Arc::new(AuthenticatedTransaction::from_inner(parent));
+    let (oversized, fitting) = output_budget_ordered_child_transactions();
+
+    uut.add_transaction(parent.clone()).unwrap();
+    uut.add_transaction(oversized.clone()).unwrap();
+    uut.add_transaction(fitting.clone()).unwrap();
+    let reference = uut.clone();
+
+    assert!(uut.select_full_batch().is_none());
+    assert_eq!(uut, reference);
+
+    let batch = uut.select_any_batch().unwrap();
+    assert_eq!(batch.transactions().len(), 2);
+    assert!(batch.transactions().contains(&parent));
+    assert!(batch.transactions().contains(&fitting));
+    assert!(!batch.transactions().contains(&oversized));
+}
+
+fn output_budget_ordered_child_transactions()
+-> (Arc<AuthenticatedTransaction>, Arc<AuthenticatedTransaction>) {
+    // Candidate selection is ordered by transaction ID, so find a deterministic pair where the
+    // oversized child is considered before the fitting child.
+    for oversized_account in 1001..1100 {
+        let oversized = MockProvenTxBuilder::with_account_index(oversized_account)
+            .unauthenticated_notes_range(0..1)
+            .private_notes_created_range(10..12)
+            .build();
+        let oversized = Arc::new(AuthenticatedTransaction::from_inner(oversized));
+
+        for fitting_account in 1100..1200 {
+            let fitting = MockProvenTxBuilder::with_account_index(fitting_account)
+                .unauthenticated_notes_range(1..2)
+                .build();
+            let fitting = Arc::new(AuthenticatedTransaction::from_inner(fitting));
+
+            if oversized.id() < fitting.id() {
+                return (oversized, fitting);
+            }
+        }
+    }
+
+    panic!("failed to find deterministic transaction ids for budget-ordering test");
+}
+
 // OTEL TRACE TESTS
 // ================================================================================================
 
