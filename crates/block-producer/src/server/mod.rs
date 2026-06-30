@@ -20,6 +20,7 @@ use crate::block_prover::BlockProver;
 use crate::domain::transaction::AuthenticatedTransaction;
 use crate::errors::MempoolSubmissionError;
 use crate::mempool::{BatchBudget, BlockBudget, Mempool, MempoolConfig, SharedMempool};
+use crate::store::{TransactionInputs, get_tx_inputs};
 use crate::validator::BlockProducerValidatorClient;
 use crate::{
     CACHED_MEMPOOL_STATS_UPDATE_INTERVAL,
@@ -285,16 +286,13 @@ impl BlockProducerApi {
          skip_all,
          err
      )]
-    #[expect(clippy::let_and_return)]
     pub async fn submit_proven_tx(
         &self,
         tx: ProvenTransaction,
     ) -> Result<BlockNumber, MempoolSubmissionError> {
-        let tx_id = tx.id();
-
         debug!(
             target: COMPONENT,
-            tx_id = %tx_id.to_hex(),
+            tx_id = %tx.id().to_hex(),
             account_id = %tx.account_id().to_hex(),
             initial_state_commitment = %tx.account_update().initial_state_commitment(),
             final_state_commitment = %tx.account_update().final_state_commitment(),
@@ -305,21 +303,34 @@ impl BlockProducerApi {
         );
         debug!(target: COMPONENT, proof = ?tx.proof());
 
-        let inputs = crate::store::get_tx_inputs(&self.store, &tx)
+        // Authenticate against the local store, then add to the mempool.
+        let inputs = get_tx_inputs(&self.store, &tx)
             .await
             .map_err(MempoolSubmissionError::StoreStateReadFailed)?;
-
         // SAFETY: we assume that the rpc component has verified the transaction proof already.
-        let tx = AuthenticatedTransaction::new_unchecked(Arc::new(tx), inputs)
-            .map(Arc::new)
-            .map_err(MempoolSubmissionError::StateConflict)?;
+        let tx = AuthenticatedTransaction::new_unchecked(tx.into(), inputs)
+            .map_err(MempoolSubmissionError::AuthenticationFailed)?;
+        self.submit_authenticated_tx(tx).await
+    }
 
+    /// Adds a transaction that has already been authenticated.
+    #[instrument(
+         target = COMPONENT,
+         name = "block_producer.api.submit_authenticated_tx",
+         skip_all,
+         err
+     )]
+    #[expect(clippy::let_and_return, reason = "required to lengthen arc lifetime")]
+    pub async fn submit_authenticated_tx(
+        &self,
+        tx: AuthenticatedTransaction,
+    ) -> Result<BlockNumber, MempoolSubmissionError> {
         let shared_mempool = self.mempool.lock().await;
         // We need the let binding here to avoid E0597 `shared_mempool` does not live long enough
         let result = shared_mempool
             .lock()
             .map_err(MempoolSubmissionError::MempoolPoisoned)?
-            .add_transaction(tx);
+            .add_transaction(tx.into());
         result
     }
 
@@ -329,7 +340,6 @@ impl BlockProducerApi {
          skip_all,
          err
      )]
-    #[expect(clippy::let_and_return)]
     pub async fn submit_proven_tx_batch(
         &self,
         batch: ProposedBatch,
@@ -337,12 +347,46 @@ impl BlockProducerApi {
         // We assume that the rpc component has verified everything, including the transaction
         // proofs.
 
-        let mut txs = Vec::with_capacity(batch.transactions().len());
+        // Authenticate each transaction against the local store, then add the batch to the mempool.
+        let mut inputs = Vec::with_capacity(batch.transactions().len());
         for tx in batch.transactions() {
-            let inputs = crate::store::get_tx_inputs(&self.store, tx)
-                .await
-                .map_err(MempoolSubmissionError::StoreStateReadFailed)?;
+            inputs.push(
+                get_tx_inputs(&self.store, tx)
+                    .await
+                    .map_err(MempoolSubmissionError::StoreStateReadFailed)?,
+            );
+        }
 
+        self.submit_authenticated_tx_batch(batch, inputs).await
+    }
+
+    /// Adds a batch whose transactions have already been authenticated against the store to the
+    /// mempool.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the number of transactions in `batch` does not match the number of inputs in
+    /// `inputs`.
+    #[instrument(
+         target = COMPONENT,
+         name = "block_producer.api.submit_authenticated_tx_batch",
+         skip_all,
+         err
+     )]
+    #[expect(clippy::let_and_return)]
+    pub async fn submit_authenticated_tx_batch(
+        &self,
+        batch: ProposedBatch,
+        inputs: Vec<TransactionInputs>,
+    ) -> Result<BlockNumber, MempoolSubmissionError> {
+        assert_eq!(
+            batch.transactions().len(),
+            inputs.len(),
+            "transaction inputs must match the batch's transactions"
+        );
+
+        let mut txs = Vec::with_capacity(batch.transactions().len());
+        for (tx, inputs) in batch.transactions().iter().zip(inputs) {
             // SAFETY: We assume that the rpc component has verified the transaction proofs, as well
             // as the batch integrity itself.
             let tx = AuthenticatedTransaction::new_unchecked(Arc::clone(tx), inputs)

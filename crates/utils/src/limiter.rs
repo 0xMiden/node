@@ -118,3 +118,18 @@ impl QueryParamLimiter for QueryParamStorageMapKeyTotalLimit {
     const PARAM_NAME: &str = "storage_map_key";
     const LIMIT: usize = 64;
 }
+
+/// Used for the following RPC endpoints
+/// * `get_account`
+///
+/// Capped at the maximum number of storage slots an account can have
+/// ([`AccountStorage::MAX_NUM_STORAGE_SLOTS`]). An explicit storage request can never legitimately
+/// reference more distinct slots than that, so this bounds the per-request work (forest lookups and
+/// database reconstructions) regardless of how many `all-entries` slots are requested. Without this
+/// cap, `all-entries` requests are otherwise uncounted by
+/// [`QueryParamStorageMapKeyTotalLimit`] and could be repeated without bound.
+pub struct QueryParamStorageMapSlotLimit;
+impl QueryParamLimiter for QueryParamStorageMapSlotLimit {
+    const PARAM_NAME: &str = "storage_maps";
+    const LIMIT: usize = miden_protocol::account::AccountStorage::MAX_NUM_STORAGE_SLOTS;
+}
