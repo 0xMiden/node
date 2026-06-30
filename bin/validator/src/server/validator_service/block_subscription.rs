@@ -51,7 +51,7 @@ impl grpc::server::validator_api::BlockSubscription for ValidatorService {
             ));
         }
 
-        let from = BlockNumber::from(block_from);
+        let from = BlockNumber::from(request.block_from);
         let source = BlockStoreSource { block_store: self.block_store.clone() };
         let stream = run_stream(from, self.committed_tip.subscribe(), source).map(move |event| {
             // Keep the guard alive for as long as the stream is polled.
