@@ -308,8 +308,15 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
         let patch = executed_tx.account_patch().clone();
 
         // Evolve the faucet state for the next iteration before we hand the executed tx off for
-        // proving, applying the patch the executed transaction produced.
-        faucet.apply_patch(&patch).expect("failed to apply faucet patch");
+        // proving. The first mint tx creates the faucet on-chain and emits a full-state patch
+        // (which carries account code) that must be converted into the account directly, later txs
+        // emit partial-state delta patches that are applied onto the existing faucet.
+        if patch.is_full_state() {
+            faucet =
+                Account::try_from(&patch).expect("failed to build faucet from full-state patch");
+        } else {
+            faucet.apply_patch(&patch).expect("failed to apply faucet patch");
+        }
         data_store.add_account(faucet.clone());
 
         mint_proofs.submit(&prover, executed_tx).await;
