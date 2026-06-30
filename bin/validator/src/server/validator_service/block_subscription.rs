@@ -44,7 +44,13 @@ impl grpc::server::validator_api::BlockSubscription for ValidatorService {
             Status::resource_exhausted("cannot stream backup while validator is serving requests")
         })?;
 
-        let from = BlockNumber::from(request.block_from);
+        // Clamp the requested block so that the stream ends when the committed tip is reached. This
+        // prevents the stream from continuing indefinitely, even if the requested block is far
+        // ahead.
+        let committed_tip = self.committed_tip.borrow().as_u32();
+        let block_from = request.block_from.min(committed_tip);
+
+        let from = BlockNumber::from(block_from);
         let source = BlockStoreSource { block_store: self.block_store.clone() };
         let stream = run_stream(from, self.committed_tip.subscribe(), source).map(move |event| {
             // Keep the guard alive for as long as the stream is polled.
