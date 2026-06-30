@@ -66,9 +66,15 @@ pub trait SubscriptionStream: Sized + Send {
                     break StreamError::Internal;
                 };
 
-                let event = StreamEvent { data, block: next, tip };
-                if let Err(err) =
-                    tx.send_timeout(Ok(event), SEND_TIMEOUT).await.map_err(|err| match err {
+                let event = StreamEvent {
+                    data,
+                    block: next,
+                    tip,
+                };
+                if let Err(err) = tx
+                    .send_timeout(Ok(event), SEND_TIMEOUT)
+                    .await
+                    .map_err(|err| match err {
                         SendTimeoutError::Timeout(_) => StreamError::SlowSubscriber,
                         SendTimeoutError::Closed(_) => StreamError::ConnectionClosed,
                     })
@@ -87,7 +93,7 @@ pub trait SubscriptionStream: Sized + Send {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Copy, Debug, thiserror::Error)]
 pub enum StreamError {
     #[error("server is shutting down")]
     ServerShutdown,
@@ -120,7 +126,10 @@ struct StreamGapCheck {
 
 impl Default for StreamGapCheck {
     fn default() -> Self {
-        Self { previous_gap: u32::MAX, running_total: 0 }
+        Self {
+            previous_gap: u32::MAX,
+            running_total: 0,
+        }
     }
 }
 
@@ -295,7 +304,10 @@ impl SubscriptionSource for BlockSource {
         block: Vec<u8>,
         committed_chain_tip: BlockNumber,
     ) -> BlockSubscriptionEvent {
-        BlockSubscriptionEvent { block, committed_chain_tip }
+        BlockSubscriptionEvent {
+            block,
+            committed_chain_tip,
+        }
     }
 }
 
@@ -325,7 +337,11 @@ impl SubscriptionSource for ProofSource {
         proof: Vec<u8>,
         proven_chain_tip: BlockNumber,
     ) -> ProofSubscriptionEvent {
-        ProofSubscriptionEvent { block_num, proof, proven_chain_tip }
+        ProofSubscriptionEvent {
+            block_num,
+            proof,
+            proven_chain_tip,
+        }
     }
 }
 
@@ -369,7 +385,9 @@ async fn run_stream_inner<S: SubscriptionSource>(
     loop {
         let mut tip = *tip_rx.borrow_and_update();
 
-        gap_checker.check(next, tip).map_err(|()| SubscriptionStreamError::TooSlow)?;
+        gap_checker
+            .check(next, tip)
+            .map_err(|()| SubscriptionStreamError::TooSlow)?;
 
         while next <= tip {
             let data = source.fetch(next).await?;
@@ -429,7 +447,11 @@ mod tests {
         // `from` is far ahead of the tip, so the task never enters the send loop and parks on the
         // tip. The spawned task holds the only watch receiver.
         let stream = run_stream(BlockNumber::from(MAX_FUTURE_GAP - 1), tip_rx, MockSource);
-        assert_eq!(tip_tx.receiver_count(), 1, "the spawned task should hold the tip receiver");
+        assert_eq!(
+            tip_tx.receiver_count(),
+            1,
+            "the spawned task should hold the tip receiver"
+        );
 
         // The client disconnects.
         drop(stream);
@@ -473,7 +495,10 @@ mod tests {
             .await
             .expect("stream must yield promptly")
             .expect("stream must not end without an item");
-        assert!(matches!(item, Ok(())), "expected an event, not TooFarAhead: {item:?}");
+        assert!(
+            matches!(item, Ok(())),
+            "expected an event, not TooFarAhead: {item:?}"
+        );
     }
 
     fn run(gaps: &[u32]) -> Result<(), ()> {
@@ -515,7 +540,10 @@ mod tests {
     #[test]
     fn exceeding_max_growth_run_returns_too_slow() {
         // One block past the limit triggers TooSlow, even in a single jump.
-        assert!(matches!(run(&[0, StreamGapCheck::MAX_RUNNING_GAP + 1]), Err(())));
+        assert!(matches!(
+            run(&[0, StreamGapCheck::MAX_RUNNING_GAP + 1]),
+            Err(())
+        ));
     }
 
     #[test]

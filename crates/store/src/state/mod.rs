@@ -290,11 +290,6 @@ impl State {
         self.committed_tip_tx.subscribe()
     }
 
-    /// Returns a watch receiver that wakes every time a new block is proven.
-    pub fn subscribe_proven_tip(&self) -> watch::Receiver<BlockNumber> {
-        self.proven_tip.subscribe()
-    }
-
     /// Loads serialized block proving inputs from the block store.
     pub async fn load_proving_inputs(
         &self,
@@ -304,7 +299,7 @@ impl State {
     }
 
     /// Returns a watch receiver that wakes every time the proven-in-sequence tip advances.
-    pub(crate) fn subscribe_proven_tip(&self) -> watch::Receiver<BlockNumber> {
+    pub fn subscribe_proven_tip(&self) -> watch::Receiver<BlockNumber> {
         self.proven_tip.subscribe()
     }
 
