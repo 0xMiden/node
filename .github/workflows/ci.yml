@@ -251,6 +251,50 @@ jobs:
             --data-directory ${{ env.DATA_DIR }} \
             --iterations 10 --concurrency 1 sync-nullifiers --prefixes 10
 
+  # Smoke-tests `miden-benchmark` end-to-end against a locally bootstrapped node.
+  benchmark:
+    name: benchmark smoke
+    runs-on: warp-ubuntu-latest-x64-8x
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Rustup
+        run: rustup toolchain install --no-self-update
+      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+        with:
+          shared-key: ${{ github.job }}
+          prefix-key: ${{ env.CACHE_PREFIX }}
+          save-if: ${{ env.SAVE_CACHE }}
+      - name: Build benchmark stack
+        run: |
+          cargo build --release --locked \
+            --bin miden-node \
+            --bin miden-validator \
+            --bin miden-ntx-builder \
+            --bin miden-remote-prover \
+            --bin miden-benchmark
+      - name: Run benchmark with N=5
+        env:
+          N_TXS: "5"
+          USE_REMOTE_PROVER: "0"
+          WAIT_BLOCKS: "30"
+          RUN_DIR: ${{ runner.temp }}/bench-local-run
+        run: |
+          export PATH="$PWD/target/release:$PATH"
+          ./scripts/bench-local.sh
+      - name: Dump component logs on failure
+        if: failure()
+        run: |
+          set +e
+          for f in ${{ runner.temp }}/bench-local-run/logs/*.log; do
+            [ -f "$f" ] || continue
+            echo "::group::$(basename "$f")"
+            tail -n 200 "$f"
+            echo "::endgroup::"
+          done
+
   # ===============================================================================================
   # WASM related jobs
   # ===============================================================================================

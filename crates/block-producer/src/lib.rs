@@ -46,8 +46,13 @@ pub const DEFAULT_MAX_TXS_PER_BATCH: usize = 8;
 /// Maximum number of batches per block.
 pub const DEFAULT_MAX_BATCHES_PER_BLOCK: usize = 8;
 
-/// Size of the batch building worker pool.
-const SERVER_NUM_BATCH_BUILDERS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
+/// Default size of the batch-builder worker pool.
+///
+/// Each worker can prove one batch at a time. Raising this allows more
+/// concurrent batch proofs in-flight, which is the primary lever for lifting
+/// the per-block-producer TPS ceiling once `--max-txs-per-batch` and
+/// `--max-batches-per-block` are pushed up.
+pub const DEFAULT_BATCH_WORKERS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 
 /// The number of blocks of committed state that the mempool retains.
 ///
