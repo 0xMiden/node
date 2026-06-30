@@ -17,6 +17,9 @@ use tonic_prost_build::FileDescriptorSet;
 
 /// Generates Rust protobuf bindings using `miden-node-proto-build`.
 fn main() -> miette::Result<()> {
+    build_rs::output::rerun_if_changed("build.rs");
+    build_rs::output::rerun_if_changed("../../proto/proto");
+
     let dst_dir = build_rs::input::out_dir().join("generated");
 
     // Remove all existing files.
