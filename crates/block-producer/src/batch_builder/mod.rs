@@ -58,13 +58,8 @@ impl BatchIntervals {
     /// Full batches are produced as often as possible, but a batch is attempted at
     /// least every `batch_interval` if traffic is low.
     pub(crate) fn derive_from(block_interval: Duration, batch_interval: Duration) -> Self {
-        let max_batch_interval = (block_interval / 2).max(Self::MIN_SCHEDULER_INTERVAL);
-        let full_batch_check_interval = (max_batch_interval / 10).max(Self::MIN_SCHEDULER_INTERVAL);
-        let full_batch_check_interval = if batch_interval.is_zero() {
-            full_batch_check_interval
-        } else {
-            full_batch_check_interval.min(batch_interval)
-        };
+        let max_batch_interval = batch_interval.max(Self::MIN_SCHEDULER_INTERVAL);
+        let full_batch_check_interval = (block_interval / 10).max(Self::MIN_SCHEDULER_INTERVAL);
 
         BatchIntervals {
             max_batch_interval,
