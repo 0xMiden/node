@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use miden_node_block_producer::{
     DEFAULT_BATCH_INTERVAL,
+    DEFAULT_BATCH_WORKERS,
     DEFAULT_BLOCK_INTERVAL,
     DEFAULT_MAX_BATCHES_PER_BLOCK,
     DEFAULT_MAX_CONCURRENT_PROOFS,
@@ -31,14 +32,14 @@ pub struct BlockProducerOptions {
 
 impl BlockProducerOptions {
     pub fn validate(&self) -> anyhow::Result<()> {
-        if self.block.max_batches > miden_protocol::MAX_BATCHES_PER_BLOCK {
+        if self.block.max_batches.get() > miden_protocol::MAX_BATCHES_PER_BLOCK {
             anyhow::bail!(
                 "block.max-batches cannot exceed protocol limit of {}",
                 miden_protocol::MAX_BATCHES_PER_BLOCK
             );
         }
 
-        if self.batch.max_txs > miden_protocol::MAX_ACCOUNTS_PER_BATCH {
+        if self.batch.max_txs.get() > miden_protocol::MAX_ACCOUNTS_PER_BATCH {
             anyhow::bail!(
                 "batch.max-txs cannot exceed protocol limit of {}",
                 miden_protocol::MAX_ACCOUNTS_PER_BATCH
@@ -51,6 +52,8 @@ impl BlockProducerOptions {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+
     use super::{
         BatchOptions,
         BlockOptions,
@@ -68,12 +71,13 @@ mod tests {
         BlockProducerOptions {
             batch: BatchOptions {
                 interval: DEFAULT_BATCH_INTERVAL,
-                max_txs,
+                max_txs: NonZeroUsize::new(max_txs).unwrap(),
                 prover_url: None,
+                workers: miden_node_block_producer::DEFAULT_BATCH_WORKERS,
             },
             block: BlockOptions {
                 interval: DEFAULT_BLOCK_INTERVAL,
-                max_batches,
+                max_batches: NonZeroUsize::new(max_batches).unwrap(),
                 max_concurrent_proofs: miden_node_block_producer::DEFAULT_MAX_CONCURRENT_PROOFS,
             },
             block_prover: BlockProverOptions { url: None },
@@ -86,7 +90,7 @@ mod tests {
     #[test]
     fn rejects_too_large_max_batches_per_block() {
         let too_large = miden_protocol::MAX_BATCHES_PER_BLOCK + 1;
-        let err = options(too_large, DEFAULT_MAX_TXS_PER_BATCH)
+        let err = options(too_large, DEFAULT_MAX_TXS_PER_BATCH.get())
             .validate()
             .expect_err("protocol limit should be enforced");
 
@@ -106,7 +110,7 @@ mod tests {
 
 #[derive(clap::Args, Clone, Debug)]
 pub struct BatchOptions {
-    /// Interval at which to produce batches.
+    /// Maximum interval between batch scheduler checks.
     #[arg(
         id = "batch.interval",
         long = "batch.interval",
@@ -127,7 +131,7 @@ pub struct BatchOptions {
         default_value_t = DEFAULT_MAX_TXS_PER_BATCH,
         help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
     )]
-    pub max_txs: usize,
+    pub max_txs: NonZeroUsize,
 
     /// The remote batch prover gRPC URL. If unset, a local prover will be used.
     #[arg(
@@ -138,6 +142,20 @@ pub struct BatchOptions {
         help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
     )]
     pub prover_url: Option<Url>,
+
+    /// Number of concurrent batch-builder workers.
+    ///
+    /// Each worker can prove one batch at a time, so this caps how many batch
+    /// proofs the block-producer keeps in flight.
+    #[arg(
+        id = "batch.workers",
+        long = "batch.workers",
+        env = "MIDEN_NODE_BATCH_WORKERS",
+        value_name = "NUM",
+        default_value_t = DEFAULT_BATCH_WORKERS,
+        help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
+    )]
+    pub workers: NonZeroUsize,
 }
 
 #[derive(clap::Args, Clone, Debug)]
@@ -163,7 +181,7 @@ pub struct BlockOptions {
         default_value_t = DEFAULT_MAX_BATCHES_PER_BLOCK,
         help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
     )]
-    pub max_batches: usize,
+    pub max_batches: NonZeroUsize,
 
     /// Maximum number of concurrent block proofs to be scheduled.
     #[arg(

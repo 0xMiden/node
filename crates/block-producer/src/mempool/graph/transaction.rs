@@ -16,6 +16,21 @@ use crate::mempool::budget::BudgetStatus;
 use crate::mempool::graph::dag::Graph;
 use crate::mempool::graph::node::GraphNode;
 
+enum BatchSelection {
+    Empty,
+    Partial(SelectedBatch),
+    Full(SelectedBatch),
+}
+
+impl BatchSelection {
+    fn into_batch(self) -> Option<SelectedBatch> {
+        match self {
+            Self::Empty => None,
+            Self::Partial(batch) | Self::Full(batch) => Some(batch),
+        }
+    }
+}
+
 // TRANSACTION GRAPH NODE
 // ================================================================================================
 
@@ -119,8 +134,31 @@ impl TransactionGraph {
         Ok(())
     }
 
-    pub fn select_batch(&mut self, budget: BatchBudget) -> Option<SelectedBatch> {
-        self.select_user_batch().or_else(|| self.select_internal_batch(budget))
+    pub fn select_any_batch(&mut self, budget: BatchBudget) -> Option<SelectedBatch> {
+        self.select_user_batch()
+            .or_else(|| self.select_internal_batch(budget).into_batch())
+    }
+
+    pub fn select_full_batch(&mut self, budget: BatchBudget) -> Option<SelectedBatch> {
+        if let Some(user_batch) = self.select_user_batch() {
+            return Some(user_batch);
+        }
+
+        match self.select_internal_batch(budget) {
+            BatchSelection::Full(batch) => Some(batch),
+            BatchSelection::Partial(batch) => {
+                // Full-batch selection is speculative; partial selections must not reserve txs.
+                self.deselect_batch(batch);
+                None
+            },
+            BatchSelection::Empty => None,
+        }
+    }
+
+    fn deselect_batch(&mut self, batch: SelectedBatch) {
+        for tx in batch.into_transactions().into_iter().rev() {
+            self.inner.deselect(tx.id());
+        }
     }
 
     fn select_user_batch(&mut self) -> Option<SelectedBatch> {
@@ -166,33 +204,47 @@ impl TransactionGraph {
         Some(selected.build())
     }
 
-    fn select_internal_batch(&mut self, mut budget: BatchBudget) -> Option<SelectedBatch> {
+    fn select_internal_batch(&mut self, mut budget: BatchBudget) -> BatchSelection {
         let mut selected = SelectedBatch::builder();
 
-        loop {
+        'outer: loop {
             // Select arbitrary candidate which is _not_ part of a user batch.
             let candidates = self.inner.selection_candidates();
-            let Some(candidate) =
-                candidates.values().find(|tx| !self.user_batches.contains_tx(&tx.id()))
-            else {
-                break;
-            };
 
-            if budget.check_then_subtract(candidate) == BudgetStatus::Exceeded {
-                break;
+            for tx in candidates.values().filter(|tx| !self.user_batches.contains_tx(&tx.id())) {
+                if budget.check_then_subtract(tx) == BudgetStatus::Exceeded {
+                    assert!(
+                        !selected.is_empty(),
+                        "selectable transaction {} exceeds the batch budget; \
+                         candidate resources: transactions=1, accounts=1, input_notes={}, \
+                         output_notes={}; batch budget: {:?}",
+                        tx.id(),
+                        tx.input_note_count(),
+                        tx.output_note_count(),
+                        budget,
+                    );
+
+                    continue;
+                }
+
+                let candidate = Arc::clone(tx);
+                self.inner.select_candidate(candidate.id());
+                selected.push(candidate);
+                continue 'outer;
             }
 
-            let candidate = Arc::clone(candidate);
-            self.inner.select_candidate(candidate.id());
-            selected.push(candidate);
+            break;
         }
 
         if selected.is_empty() {
-            return None;
+            BatchSelection::Empty
+        } else if budget.is_exhausted() {
+            // The selected transactions may exactly consume the budget without another candidate
+            // being available to trigger the "would exceed" branch above.
+            BatchSelection::Full(selected.build())
+        } else {
+            BatchSelection::Partial(selected.build())
         }
-        let selected = selected.build();
-
-        Some(selected)
     }
 
     /// Reverts expired transactions and their descendants.

@@ -108,6 +108,9 @@ fn subscription_error_to_status(err: SubscriptionStreamError<BlockSubscriptionEr
         SubscriptionStreamError::TooSlow => {
             Status::resource_exhausted("subscriber is too slow to keep up with the chain")
         },
+        SubscriptionStreamError::TooFarAhead => Status::out_of_range(
+            "subscriber's requested starting block is too far ahead of the chain tip",
+        ),
         SubscriptionStreamError::Source(BlockSubscriptionError::NotFound(block_num)) => {
             Status::not_found(format!("block {block_num} not found"))
         },
