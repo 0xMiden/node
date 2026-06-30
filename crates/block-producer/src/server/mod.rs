@@ -35,9 +35,9 @@ mod tests;
 #[derive(Clone, Copy, Debug)]
 pub struct BlockProducerApiConfig {
     /// The maximum number of transactions per batch.
-    pub max_txs_per_batch: usize,
+    pub max_txs_per_batch: NonZeroUsize,
     /// The maximum number of batches per block.
-    pub max_batches_per_block: usize,
+    pub max_batches_per_block: NonZeroUsize,
     /// The maximum number of inflight transactions allowed in the mempool at once.
     pub mempool_tx_capacity: NonZeroUsize,
 }
@@ -56,10 +56,12 @@ impl BlockProducerApiConfig {
     fn mempool_config(self) -> MempoolConfig {
         MempoolConfig {
             batch_budget: BatchBudget {
-                transactions: self.max_txs_per_batch,
+                transactions: self.max_txs_per_batch.get(),
                 ..BatchBudget::default()
             },
-            block_budget: BlockBudget { batches: self.max_batches_per_block },
+            block_budget: BlockBudget {
+                batches: self.max_batches_per_block.get(),
+            },
             tx_capacity: self.mempool_tx_capacity,
             ..Default::default()
         }
@@ -85,9 +87,9 @@ pub struct Sequencer {
     /// The interval at which to produce blocks.
     pub block_interval: Duration,
     /// The maximum number of transactions per batch.
-    pub max_txs_per_batch: usize,
+    pub max_txs_per_batch: NonZeroUsize,
     /// The maximum number of batches per block.
-    pub max_batches_per_block: usize,
+    pub max_batches_per_block: NonZeroUsize,
     /// The maximum number of concurrent block proofs to schedule.
     pub max_concurrent_proofs: NonZeroUsize,
 

@@ -39,7 +39,7 @@ pub(crate) enum BudgetStatus {
 impl Default for BatchBudget {
     fn default() -> Self {
         Self {
-            transactions: DEFAULT_MAX_TXS_PER_BATCH,
+            transactions: DEFAULT_MAX_TXS_PER_BATCH.get(),
             input_notes: MAX_INPUT_NOTES_PER_BATCH,
             output_notes: MAX_OUTPUT_NOTES_PER_BATCH,
             accounts: MAX_ACCOUNTS_PER_BATCH,
@@ -49,7 +49,9 @@ impl Default for BatchBudget {
 
 impl Default for BlockBudget {
     fn default() -> Self {
-        Self { batches: DEFAULT_MAX_BATCHES_PER_BLOCK }
+        Self {
+            batches: DEFAULT_MAX_BATCHES_PER_BLOCK.get(),
+        }
     }
 }
 

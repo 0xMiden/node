@@ -40,10 +40,10 @@ pub use server::{
 pub const COMPONENT: &str = "miden-block-producer";
 
 /// The number of transactions per batch.
-pub const DEFAULT_MAX_TXS_PER_BATCH: usize = 8;
+pub const DEFAULT_MAX_TXS_PER_BATCH: NonZeroUsize = NonZeroUsize::new(8).unwrap();
 
 /// Maximum number of batches per block.
-pub const DEFAULT_MAX_BATCHES_PER_BLOCK: usize = 8;
+pub const DEFAULT_MAX_BATCHES_PER_BLOCK: NonZeroUsize = NonZeroUsize::new(8).unwrap();
 
 /// Size of the batch building worker pool.
 const SERVER_NUM_BATCH_BUILDERS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
@@ -81,19 +81,19 @@ pub const DEFAULT_VALIDATOR_TIMEOUT: Duration = Duration::from_secs(30);
 /// minutes with a block time of 5s.
 #[expect(clippy::cast_sign_loss, reason = "Both durations are positive")]
 pub const DEFAULT_MEMPOOL_TX_CAPACITY: NonZeroUsize = NonZeroUsize::new(
-    DEFAULT_MAX_BATCHES_PER_BLOCK
-        * DEFAULT_MAX_TXS_PER_BATCH
+    DEFAULT_MAX_BATCHES_PER_BLOCK.get()
+        * DEFAULT_MAX_TXS_PER_BATCH.get()
         * (Duration::from_secs(60).div_duration_f32(DEFAULT_BLOCK_INTERVAL)) as usize,
 )
 .unwrap();
 
 const _: () = assert!(
-    DEFAULT_MAX_BATCHES_PER_BLOCK <= miden_protocol::MAX_BATCHES_PER_BLOCK,
+    DEFAULT_MAX_BATCHES_PER_BLOCK.get() <= miden_protocol::MAX_BATCHES_PER_BLOCK,
     "Server constraint cannot exceed the protocol's constraint"
 );
 
 const _: () = assert!(
-    DEFAULT_MAX_TXS_PER_BATCH <= miden_protocol::MAX_ACCOUNTS_PER_BATCH,
+    DEFAULT_MAX_TXS_PER_BATCH.get() <= miden_protocol::MAX_ACCOUNTS_PER_BATCH,
     "Server constraint cannot exceed the protocol's constraint"
 );
 
