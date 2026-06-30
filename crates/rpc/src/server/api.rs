@@ -13,22 +13,14 @@ use miden_node_proto::generated::rpc::MempoolStats as ProtoMempoolStats;
 use miden_node_proto::generated::rpc::api_server::Api;
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::state::{
-    BlockSubscriptionError,
-    Finality,
-    ProofSubscriptionError,
-    State,
-    StreamError,
+    BlockSubscriptionError, Finality, ProofSubscriptionError, State, StreamError,
     SubscriptionStreamError,
 };
 use miden_node_store::{DatabaseError, GetBlockHeaderError};
 use miden_node_utils::ErrorReport;
 use miden_node_utils::limiter::{
-    QueryParamAccountIdLimit,
-    QueryParamLimiter,
-    QueryParamNoteIdLimit,
-    QueryParamNoteTagLimit,
-    QueryParamNullifierPrefixLimit,
-    QueryParamStorageMapKeyTotalLimit,
+    QueryParamAccountIdLimit, QueryParamLimiter, QueryParamNoteIdLimit, QueryParamNoteTagLimit,
+    QueryParamNullifierPrefixLimit, QueryParamStorageMapKeyTotalLimit,
     QueryParamStorageMapSlotLimit,
 };
 use miden_node_utils::lru_cache::LruCache;
@@ -50,24 +42,6 @@ const NETWORK_TX_AUTH_HEADER_NAME: &str = "x-miden-network-tx-auth";
 /// Maximum number of concurrent block or proof subscriptions served by this RPC instance.
 const MAX_REPLICA_SUBSCRIPTIONS: usize = 10;
 
-type BlockSubscriptionStream = Pin<
-    Box<
-        dyn tonic::codegen::tokio_stream::Stream<
-                Item = Result<proto::rpc::BlockSubscriptionResponse, Status>,
-            > + Send
-            + 'static,
-    >,
->;
-
-type ProofSubscriptionStream = Pin<
-    Box<
-        dyn tonic::codegen::tokio_stream::Stream<
-                Item = Result<proto::rpc::ProofSubscriptionResponse, Status>,
-            > + Send
-            + 'static,
-    >,
->;
-
 struct GuardedStream<S> {
     inner: S,
     _permit: OwnedSemaphorePermit,
@@ -75,7 +49,10 @@ struct GuardedStream<S> {
 
 impl<S> GuardedStream<S> {
     fn new(inner: S, permit: OwnedSemaphorePermit) -> Self {
-        Self { inner, _permit: permit }
+        Self {
+            inner,
+            _permit: permit,
+        }
     }
 }
 
@@ -161,7 +138,10 @@ impl RpcService {
             )
             .await
         })
-        .retry(retry::exponential(Duration::from_millis(500), Duration::from_secs(30)))
+        .retry(retry::exponential(
+            Duration::from_millis(500),
+            Duration::from_secs(30),
+        ))
         .when(|err| err.code() == tonic::Code::Unavailable)
         .notify(|err, backoff| {
             tracing::warn!(
@@ -172,7 +152,10 @@ impl RpcService {
         })
         .await?;
 
-        let header = header.into_inner().block_header.context("response is missing the header")?;
+        let header = header
+            .into_inner()
+            .block_header
+            .context("response is missing the header")?;
         BlockHeader::try_from(header).context("failed to parse response")
     }
 
@@ -246,8 +229,11 @@ impl RpcService {
             return Ok(());
         }
 
-        let network_accounts =
-            self.store.filter_network_accounts(&account_ids).await.map_err(|err| {
+        let network_accounts = self
+            .store
+            .filter_network_accounts(&account_ids)
+            .await
+            .map_err(|err| {
                 Status::internal(format!("network-account classification failed: {err}"))
             })?;
 
@@ -265,7 +251,9 @@ impl RpcService {
             return false;
         };
 
-        metadata.get(NETWORK_TX_AUTH_HEADER_NAME).is_some_and(|value| value == auth.0)
+        metadata
+            .get(NETWORK_TX_AUTH_HEADER_NAME)
+            .is_some_and(|value| value == auth.0)
     }
 }
 
@@ -339,19 +327,19 @@ fn proof_subscription_error_to_status(
     match err {
         SubscriptionStreamError::TooSlow => {
             Status::resource_exhausted("subscriber is too slow to keep up with the chain")
-        },
+        }
         SubscriptionStreamError::TooFarAhead => Status::out_of_range(
             "subscriber's requested starting block is too far ahead of the chain tip",
         ),
         SubscriptionStreamError::Source(ProofSubscriptionError::NotFound(block_num)) => {
             Status::not_found(format!("proof for block {block_num} not found"))
-        },
+        }
         SubscriptionStreamError::Source(ProofSubscriptionError::Load { block_num, source }) => {
             Status::internal(format!(
                 "failed to load proof for block {block_num}: {}",
                 source.as_report()
             ))
-        },
+        }
     }
 }
 
@@ -386,7 +374,10 @@ fn check<Q: QueryParamLimiter>(n: usize) -> Result<(), Status> {
 /// Helper to build an [`EndpointLimits`](proto::rpc::EndpointLimits) from (name, limit) pairs.
 fn endpoint_limits(params: &[(&str, usize)]) -> proto::rpc::EndpointLimits {
     proto::rpc::EndpointLimits {
-        parameters: params.iter().map(|(k, v)| ((*k).to_string(), *v as u32)).collect(),
+        parameters: params
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), *v as u32))
+            .collect(),
     }
 }
 
@@ -409,8 +400,14 @@ static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
                 "SyncTransactions".into(),
                 endpoint_limits(&[(AccountId::PARAM_NAME, AccountId::LIMIT)]),
             ),
-            ("SyncNotes".into(), endpoint_limits(&[(NoteTag::PARAM_NAME, NoteTag::LIMIT)])),
-            ("GetNotesById".into(), endpoint_limits(&[(NoteId::PARAM_NAME, NoteId::LIMIT)])),
+            (
+                "SyncNotes".into(),
+                endpoint_limits(&[(NoteTag::PARAM_NAME, NoteTag::LIMIT)]),
+            ),
+            (
+                "GetNotesById".into(),
+                endpoint_limits(&[(NoteId::PARAM_NAME, NoteId::LIMIT)]),
+            ),
             (
                 "GetAccount".into(),
                 endpoint_limits(&[
