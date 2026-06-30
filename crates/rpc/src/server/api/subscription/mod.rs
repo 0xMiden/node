@@ -1,13 +1,14 @@
 use std::time::Instant;
 
-use miden_node_store::state::StreamError;
 use tonic::Status;
 
 mod ban;
 mod block;
 mod proof;
+mod stream;
 
 pub(super) use ban::IpBanList;
+use stream::StreamError;
 
 /// Maximum number of concurrent block or proof subscriptions served by this RPC instance.
 pub(super) const MAX_REPLICA_SUBSCRIPTIONS: usize = 10;

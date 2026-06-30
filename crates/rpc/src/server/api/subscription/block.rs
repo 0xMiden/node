@@ -4,7 +4,7 @@ use std::sync::Arc;
 use futures::StreamExt;
 use miden_node_proto::generated as proto;
 use miden_node_store::State;
-use miden_node_store::state::{DataError, Finality, StreamError, SubscriptionStream};
+use miden_node_store::state::Finality;
 use miden_node_utils::grpc::ClientIp;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::block::BlockNumber;
@@ -13,6 +13,7 @@ use tonic::{Request, Status};
 use tracing::{Span, debug};
 
 use super::super::{COMPONENT, RpcService};
+use super::stream::{DataError, StreamError, SubscriptionStream};
 use super::{
     IpBanList,
     MAX_FUTURE_GAP_IN_SUBSCRIPTIONS,
@@ -110,8 +111,8 @@ type BlockSubscriptionStream = std::pin::Pin<
     >,
 >;
 
-impl miden_node_store::state::SubscriptionStream for BlockStream {
-    fn on_eos(&self, err: &StreamError) {
+impl SubscriptionStream for BlockStream {
+    fn on_eos(&self, err: StreamError) {
         if let (Some(ip), StreamError::SlowSubscriber) = (self.client_ip, err) {
             self.ban_list.add(ip);
         }

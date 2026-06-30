@@ -61,15 +61,6 @@ pub use replica::{BlockCache, BlockNotification, ProofCache, ProofNotification};
 
 mod account;
 
-mod subscription;
-pub use subscription::{
-    DataError,
-    SUBSCRIBER_CHANNEL_CAPACITY,
-    StreamError,
-    StreamEvent,
-    SubscriptionStream,
-};
-
 mod apply_block;
 mod apply_proof;
 mod bootstrap;
