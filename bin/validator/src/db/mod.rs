@@ -117,16 +117,21 @@ pub(crate) fn insert_transaction(
 ///   WHERE id = ?
 /// );
 /// ```
-#[instrument(target = COMPONENT, skip(conn), err)]
+#[instrument(target = COMPONENT, skip(tx), err)]
 pub(crate) fn transaction_exists(
-    conn: &mut SqliteConnection,
+    tx: &ReadTx<'_>,
     tx_id: TransactionId,
 ) -> Result<bool, DatabaseError> {
-    let exists = diesel::select(exists(
-        schema::validated_transactions::table
-            .filter(schema::validated_transactions::id.eq(tx_id.to_bytes())),
-    ))
-    .get_result::<bool>(conn)?;
+    let exists = tx
+        .query(
+            "SELECT EXISTS(SELECT 1 FROM validated_transactions WHERE id = ?1)",
+            &[&tx_id.to_bytes()],
+            |row| row.get::<i64>(0),
+        )?
+        .first()
+        .copied()
+        .unwrap_or(0)
+        != 0;
     Ok(exists)
 }
 
@@ -273,33 +278,28 @@ mod tests {
 
         // Insert a row keyed by `validated_id`. Only the primary key matters for this query, so the
         // remaining columns are filled with placeholder bytes.
-        let row = ValidatedTransactionRowInsert {
-            id: validated_id.to_bytes(),
-            block_num: 0,
-            account_id: vec![],
-            account_delta: vec![],
-            input_notes: vec![],
-            output_notes: vec![],
-            initial_account_hash: vec![],
-            final_account_hash: vec![],
-            fee: vec![],
-        };
-        db.transact("insert_row", move |conn| -> Result<usize, DatabaseError> {
-            Ok(diesel::insert_into(schema::validated_transactions::table)
-                .values(row)
-                .execute(conn)?)
+        let id = validated_id.to_bytes();
+        let empty: Vec<u8> = vec![];
+        db.write("insert_row", move |tx| {
+            tx.execute(
+                "INSERT INTO validated_transactions \
+                 (id, block_num, account_id, account_delta, input_notes, output_notes, \
+                  initial_account_hash, final_account_hash, fee) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                &[&id, &0i64, &empty, &empty, &empty, &empty, &empty, &empty, &empty],
+            )
         })
         .await
         .unwrap();
 
         let validated_exists = db
-            .query("transaction_exists", move |conn| transaction_exists(conn, validated_id))
+            .read("transaction_exists", move |tx| transaction_exists(tx, validated_id))
             .await
             .unwrap();
         assert!(validated_exists, "an inserted transaction id should be reported as existing");
 
         let unknown_exists = db
-            .query("transaction_exists", move |conn| transaction_exists(conn, unknown_id))
+            .read("transaction_exists", move |tx| transaction_exists(tx, unknown_id))
             .await
             .unwrap();
         assert!(!unknown_exists, "an unknown transaction id should not be reported as existing");
