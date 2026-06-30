@@ -67,9 +67,6 @@ pub trait SubscriptionStream: Sized + Send {
                 };
 
                 let event = StreamEvent { data, block: next, tip };
-
-                // TODO: When server is shutting down, we need to early cancel this so we don't wait
-                // on the full timeout.
                 if let Err(err) =
                     tx.send_timeout(Ok(event), SEND_TIMEOUT).await.map_err(|err| match err {
                         SendTimeoutError::Timeout(_) => StreamError::SlowSubscriber,
@@ -128,7 +125,7 @@ impl Default for StreamGapCheck {
 }
 
 impl StreamGapCheck {
-    /// Maximum running block-gap allowed before a subscriber is disconnected.
+    /// Maximum accumulated block-gap allowed before a subscriber is disconnected.
     const MAX_RUNNING_GAP: u32 = 100;
 
     fn check(&mut self, current: BlockNumber, tip: BlockNumber) -> Result<(), ()> {
@@ -372,9 +369,7 @@ async fn run_stream_inner<S: SubscriptionSource>(
     loop {
         let mut tip = *tip_rx.borrow_and_update();
 
-        gap_checker
-            .check(next, tip)
-            .map_err(|()| SubscriptionStreamError::TooSlow)?;
+        gap_checker.check(next, tip).map_err(|()| SubscriptionStreamError::TooSlow)?;
 
         while next <= tip {
             let data = source.fetch(next).await?;
@@ -520,10 +515,7 @@ mod tests {
     #[test]
     fn exceeding_max_growth_run_returns_too_slow() {
         // One block past the limit triggers TooSlow, even in a single jump.
-        assert!(matches!(
-            run(&[0, StreamGapCheck::MAX_RUNNING_GAP + 1]),
-            Err(())
-        ));
+        assert!(matches!(run(&[0, StreamGapCheck::MAX_RUNNING_GAP + 1]), Err(())));
     }
 
     #[test]

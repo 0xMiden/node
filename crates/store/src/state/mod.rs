@@ -28,7 +28,10 @@ use crate::accounts::AccountTreeWithHistory;
 use crate::blocks::BlockStore;
 use crate::db::{Db, NoteRecord, NullifierInfo};
 use crate::errors::{
-    DatabaseError, GetBatchInputsError, GetBlockHeaderError, GetBlockInputsError,
+    DatabaseError,
+    GetBatchInputsError,
+    GetBlockHeaderError,
+    GetBlockInputsError,
     StateInitializationError,
 };
 use crate::proven_tip::ProvenTipWriter;
@@ -42,9 +45,15 @@ const PROOF_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(512).unwrap();
 
 mod loader;
 use loader::{
-    ACCOUNT_STATE_FOREST_STORAGE_DIR, ACCOUNT_TREE_STORAGE_DIR, AccountForestLoader,
-    NULLIFIER_TREE_STORAGE_DIR, TreeStorage, TreeStorageLoader, load_mmr,
-    verify_account_state_forest_consistency, verify_tree_consistency,
+    ACCOUNT_STATE_FOREST_STORAGE_DIR,
+    ACCOUNT_TREE_STORAGE_DIR,
+    AccountForestLoader,
+    NULLIFIER_TREE_STORAGE_DIR,
+    TreeStorage,
+    TreeStorageLoader,
+    load_mmr,
+    verify_account_state_forest_consistency,
+    verify_tree_consistency,
 };
 
 mod replica;
@@ -54,10 +63,19 @@ mod account;
 
 mod subscription;
 pub use subscription::{
-    BlockSubscriptionError, BlockSubscriptionEvent, BlockSubscriptionStream, DataError,
-    ProofSubscriptionError, ProofSubscriptionEvent, ProofSubscriptionStream,
-    SUBSCRIBER_CHANNEL_CAPACITY, StreamError, SubscriptionSource, SubscriptionStream,
-    SubscriptionStreamError, run_stream,
+    BlockSubscriptionError,
+    BlockSubscriptionEvent,
+    BlockSubscriptionStream,
+    DataError,
+    ProofSubscriptionError,
+    ProofSubscriptionEvent,
+    ProofSubscriptionStream,
+    SUBSCRIBER_CHANNEL_CAPACITY,
+    StreamError,
+    SubscriptionSource,
+    SubscriptionStream,
+    SubscriptionStreamError,
+    run_stream,
 };
 
 mod apply_block;
@@ -219,11 +237,8 @@ impl State {
             TreeStorage::create(data_path, &account_storage_config, ACCOUNT_TREE_STORAGE_DIR)?;
         let account_tree = account_storage.load_account_tree(&mut db).await?;
 
-        let nullifier_storage = TreeStorage::create(
-            data_path,
-            &nullifier_storage_config,
-            NULLIFIER_TREE_STORAGE_DIR,
-        )?;
+        let nullifier_storage =
+            TreeStorage::create(data_path, &nullifier_storage_config, NULLIFIER_TREE_STORAGE_DIR)?;
         let nullifier_tree = nullifier_storage.load_nullifier_tree(&mut db).await?;
 
         // Verify that tree roots match the expected roots from the database. This catches any
@@ -238,16 +253,10 @@ impl State {
             &forest_storage_config,
             ACCOUNT_STATE_FOREST_STORAGE_DIR,
         )?;
-        let forest = forest_backend
-            .load_account_state_forest(&mut db, latest_block_num)
-            .await?;
+        let forest = forest_backend.load_account_state_forest(&mut db, latest_block_num).await?;
         verify_account_state_forest_consistency(&forest, &mut db).await?;
 
-        let inner = RwLock::new(InnerState {
-            nullifier_tree,
-            blockchain,
-            account_tree,
-        });
+        let inner = RwLock::new(InnerState { nullifier_tree, blockchain, account_tree });
 
         let forest = RwLock::new(forest);
         let writer = Mutex::new(());
@@ -440,9 +449,7 @@ impl State {
             .map_err(GetBatchInputsError::SelectNoteInclusionProofError)?;
 
         // The set of blocks that the notes are included in.
-        let note_blocks = note_proofs
-            .values()
-            .map(|proof| proof.location().block_num());
+        let note_blocks = note_proofs.values().map(|proof| proof.location().block_num());
 
         // Collect all blocks we need to query without duplicates, which is:
         // - all blocks for which we need to prove note inclusion.
@@ -457,9 +464,8 @@ impl State {
 
             let latest_block_num = inner_state.latest_block_num();
 
-            let highest_block_num = *blocks
-                .last()
-                .expect("we should have checked for empty block references");
+            let highest_block_num =
+                *blocks.last().expect("we should have checked for empty block references");
             if highest_block_num > latest_block_num {
                 return Err(GetBatchInputsError::UnknownTransactionBlockReference {
                     highest_block_num,
@@ -491,11 +497,7 @@ impl State {
         // up in a separate DB access.
         let mut headers = self
             .db
-            .select_block_headers(
-                blocks
-                    .into_iter()
-                    .chain(std::iter::once(batch_reference_block)),
-            )
+            .select_block_headers(blocks.into_iter().chain(std::iter::once(batch_reference_block)))
             .await
             .map_err(GetBatchInputsError::SelectBlockHeaderError)?;
 
@@ -547,9 +549,8 @@ impl State {
             .map_err(GetBlockInputsError::SelectNoteInclusionProofError)?;
 
         // The set of blocks that the notes are included in.
-        let note_proof_reference_blocks = unauthenticated_note_proofs
-            .values()
-            .map(|proof| proof.location().block_num());
+        let note_proof_reference_blocks =
+            unauthenticated_note_proofs.values().map(|proof| proof.location().block_num());
 
         // Collect all blocks we need to prove inclusion for, without duplicates.
         let mut blocks = reference_blocks;
@@ -562,11 +563,7 @@ impl State {
         // be used as the previous block header of the block being built.
         let mut headers = self
             .db
-            .select_block_headers(
-                blocks
-                    .into_iter()
-                    .chain(std::iter::once(latest_block_number)),
-            )
+            .select_block_headers(blocks.into_iter().chain(std::iter::once(latest_block_number)))
             .await
             .map_err(GetBlockInputsError::SelectBlockHeaderError)?;
 
@@ -679,11 +676,7 @@ impl State {
             let account_commitment = inner.account_tree.get_latest_commitment(account_id);
 
             let new_account_id_prefix_is_unique = if account_commitment.is_empty() {
-                Some(
-                    !inner
-                        .account_tree
-                        .contains_account_id_prefix_in_latest(account_id.prefix()),
-                )
+                Some(!inner.account_tree.contains_account_id_prefix_in_latest(account_id.prefix()))
             } else {
                 None
             };
@@ -700,18 +693,11 @@ impl State {
                 .iter()
                 .map(|nullifier| NullifierInfo {
                     nullifier: *nullifier,
-                    block_num: inner
-                        .nullifier_tree
-                        .get_block_num(nullifier)
-                        .unwrap_or_default(),
+                    block_num: inner.nullifier_tree.get_block_num(nullifier).unwrap_or_default(),
                 })
                 .collect();
 
-            Ok((
-                account_commitment,
-                nullifiers,
-                new_account_id_prefix_is_unique,
-            ))
+            Ok((account_commitment, nullifiers, new_account_id_prefix_is_unique))
         });
         let (account_commitment, nullifiers, new_account_id_prefix_is_unique) = match tree_inputs {
             Ok(inputs) => inputs,
@@ -736,9 +722,7 @@ impl State {
         &self,
         account_ids: &[AccountId],
     ) -> Result<HashSet<AccountId>, DatabaseError> {
-        self.db
-            .select_network_accounts_subset(account_ids.to_vec())
-            .await
+        self.db.select_network_accounts_subset(account_ids.to_vec()).await
     }
 
     /// Returns the effective chain tip for the given finality level.
@@ -766,10 +750,7 @@ impl State {
         if block_num > self.chain_tip(Finality::Committed).await {
             return Ok(None);
         }
-        self.block_store
-            .load_block(block_num)
-            .await
-            .map_err(Into::into)
+        self.block_store.load_block(block_num).await.map_err(Into::into)
     }
 
     /// Loads a block proof from the block store. Returns `Ok(None)` if the proof is not found.
@@ -780,10 +761,7 @@ impl State {
         if block_num > self.chain_tip(Finality::Proven).await {
             return Ok(None);
         }
-        self.block_store
-            .load_proof(block_num)
-            .await
-            .map_err(Into::into)
+        self.block_store.load_proof(block_num).await.map_err(Into::into)
     }
 
     /// Returns the script for a note by its root.
