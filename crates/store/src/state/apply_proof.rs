@@ -13,7 +13,14 @@ impl State {
     ///
     /// - If proofs are not applied in strict ascending order (exactly one block past the proven tip)
     /// - If the proof's corresponding block was not already committed
-    #[miden_instrument(target = COMPONENT, skip_all, err, fields(block.number = block_num.as_u32()))]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+        err,
+        fields(
+            block.number = block_num.as_u32(),
+        ),
+    )]
     pub async fn apply_proof(
         &self,
         block_num: BlockNumber,

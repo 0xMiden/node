@@ -282,11 +282,11 @@ impl BlockProducerApi {
     // --------------------------------------------------------------------------------------------
 
     #[miden_instrument(
-         target = COMPONENT,
-         name = "block_producer.api.submit_proven_tx",
-         skip_all,
-         err
-     )]
+        target = COMPONENT,
+        name = "block_producer.api.submit_proven_tx",
+        skip_all,
+        err,
+    )]
     pub async fn submit_proven_tx(
         &self,
         tx: ProvenTransaction,
@@ -316,11 +316,11 @@ impl BlockProducerApi {
 
     /// Adds a transaction that has already been authenticated.
     #[miden_instrument(
-         target = COMPONENT,
-         name = "block_producer.api.submit_authenticated_tx",
-         skip_all,
-         err
-     )]
+        target = COMPONENT,
+        name = "block_producer.api.submit_authenticated_tx",
+        skip_all,
+        err,
+    )]
     #[expect(clippy::let_and_return, reason = "required to lengthen arc lifetime")]
     pub async fn submit_authenticated_tx(
         &self,
@@ -336,11 +336,11 @@ impl BlockProducerApi {
     }
 
     #[miden_instrument(
-         target = COMPONENT,
-         name = "block_producer.api.submit_proven_tx_batch",
-         skip_all,
-         err
-     )]
+        target = COMPONENT,
+        name = "block_producer.api.submit_proven_tx_batch",
+        skip_all,
+        err,
+    )]
     pub async fn submit_proven_tx_batch(
         &self,
         batch: ProposedBatch,
@@ -369,11 +369,11 @@ impl BlockProducerApi {
     /// Panics if the number of transactions in `batch` does not match the number of inputs in
     /// `inputs`.
     #[miden_instrument(
-         target = COMPONENT,
-         name = "block_producer.api.submit_authenticated_tx_batch",
-         skip_all,
-         err
-     )]
+        target = COMPONENT,
+        name = "block_producer.api.submit_authenticated_tx_batch",
+        skip_all,
+        err,
+    )]
     #[expect(clippy::let_and_return)]
     pub async fn submit_authenticated_tx_batch(
         &self,

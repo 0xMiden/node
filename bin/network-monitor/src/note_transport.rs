@@ -47,7 +47,7 @@ impl Service for NoteTransportService {
         target = COMPONENT,
         name = "check-status.note-transport",
         skip_all,
-        ret(level = "info")
+        ret(level = "info"),
     )]
     async fn check(&mut self) -> ServiceStatus {
         let request = HealthCheckRequest { service: String::new() };

@@ -502,7 +502,10 @@ impl AccountActor {
     /// error) are retried inside [`execute::NtxContext::execute_transaction`].
     /// Any error reaching this method is therefore terminal for the candidate: the batch's notes
     /// are marked failed and the actor moves on.
-    #[miden_instrument(name = "ntx.actor.execute_transactions", skip(self, tx_candidate))]
+    #[miden_instrument(
+        name = "ntx.actor.execute_transactions",
+        skip(self, tx_candidate),
+    )]
     async fn execute_transactions(
         &self,
         account_id: AccountId,

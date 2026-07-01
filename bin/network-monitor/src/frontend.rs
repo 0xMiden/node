@@ -59,14 +59,22 @@ pub async fn serve(server_state: ServerState, config: MonitorConfig) {
 // HTML ROUTES
 // ================================================================================================
 
-#[miden_instrument(target = COMPONENT, name = "frontend.get-dashboard", skip_all)]
+#[miden_instrument(
+    target = COMPONENT,
+    name = "frontend.get-dashboard",
+    skip_all,
+)]
 async fn get_dashboard(
     axum::extract::State(server_state): axum::extract::State<ServerState>,
 ) -> Markup {
     view::page(&server_state)
 }
 
-#[miden_instrument(target = COMPONENT, name = "frontend.get-status-fragment", skip_all)]
+#[miden_instrument(
+    target = COMPONENT,
+    name = "frontend.get-status-fragment",
+    skip_all,
+)]
 async fn get_status_fragment(
     axum::extract::State(server_state): axum::extract::State<ServerState>,
 ) -> Markup {
@@ -76,7 +84,11 @@ async fn get_status_fragment(
 // JSON ROUTE
 // ================================================================================================
 
-#[miden_instrument(target = COMPONENT, name = "frontend.get-status", skip_all)]
+#[miden_instrument(
+    target = COMPONENT,
+    name = "frontend.get-status",
+    skip_all,
+)]
 async fn get_status(
     axum::extract::State(server_state): axum::extract::State<ServerState>,
 ) -> axum::response::Json<NetworkStatus> {

@@ -129,7 +129,7 @@ impl ValidatorService {
     #[miden_instrument(
         target = COMPONENT,
         skip_all,
-        err
+        err,
     )]
     pub async fn validate_block(
         &self,
@@ -220,7 +220,15 @@ impl ValidatorService {
     }
 
     /// Signs a block header using the validator's signer.
-    #[miden_instrument(target = COMPONENT, name = "sign_block", skip_all, err, fields(block.number = header.block_num().as_u32()))]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "sign_block",
+        skip_all,
+        err,
+        fields(
+            block.number = header.block_num().as_u32(),
+        ),
+    )]
     async fn sign_header(&self, header: &BlockHeader) -> Result<Signature, ValidatorError> {
         self.signer
             .sign(header)

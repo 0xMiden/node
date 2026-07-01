@@ -182,7 +182,10 @@ impl State {
     ///
     /// The loaded state owns all store data structures and exposes subscription methods for
     /// sequencer and replica tasks.
-    #[miden_instrument(target = COMPONENT, skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+    )]
     pub async fn load(
         data_path: &Path,
         storage_options: StorageOptions,
@@ -195,7 +198,10 @@ impl State {
     ///
     /// The loaded state owns all store data structures and exposes subscription methods for
     /// sequencer and replica tasks.
-    #[miden_instrument(target = COMPONENT, skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+    )]
     pub async fn load_with_database_options(
         data_path: &Path,
         storage_options: StorageOptions,
@@ -373,7 +379,12 @@ impl State {
     ///
     /// If [None] is given as the value of `block_num`, the data for the latest [BlockHeader] is
     /// returned.
-    #[miden_instrument(level = "debug", target = COMPONENT, skip_all, err)]
+    #[miden_instrument(
+        level = "debug",
+        target = COMPONENT,
+        skip_all,
+        err,
+    )]
     pub async fn get_block_header(
         &self,
         block_num: Option<BlockNumber>,
@@ -656,7 +667,14 @@ impl State {
     }
 
     /// Returns data needed by the block producer to verify transactions validity.
-    #[miden_instrument(target = COMPONENT, skip_all, fields(account.id=%account_id, nullifiers = %format_array(nullifiers)))]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+        fields(
+            account.id=%account_id,
+            nullifiers = %format_array(nullifiers),
+        ),
+    )]
     pub async fn get_transaction_inputs(
         &self,
         account_id: AccountId,

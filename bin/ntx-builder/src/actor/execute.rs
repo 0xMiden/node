@@ -250,7 +250,12 @@ impl NtxContext {
     /// - Transaction execution.
     /// - Proof generation.
     /// - Submission to the network.
-    #[miden_instrument(target = COMPONENT, name = "ntx.execute_transaction", skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "ntx.execute_transaction",
+        skip_all,
+        err,
+    )]
     pub fn execute_transaction(
         self,
         tx: TransactionCandidate,
@@ -348,7 +353,12 @@ impl NtxContext {
     /// Returns an [`NtxError`] if:
     /// - The consumability check fails unexpectedly.
     /// - All notes fail the check (i.e., no note is consumable).
-    #[miden_instrument(target = COMPONENT, name = "ntx.execute_transaction.filter_notes", skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "ntx.execute_transaction.filter_notes",
+        skip_all,
+        err,
+    )]
     async fn filter_notes(
         &self,
         data_store: &NtxDataStore,
@@ -394,7 +404,12 @@ impl NtxContext {
     }
 
     /// Creates an executes a transaction with the network account and the given set of notes.
-    #[miden_instrument(target = COMPONENT, name = "ntx.execute_transaction.execute", skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "ntx.execute_transaction.execute",
+        skip_all,
+        err,
+    )]
     async fn execute(
         &self,
         data_store: &NtxDataStore,
@@ -427,7 +442,12 @@ impl NtxContext {
     ///
     /// Transient transport failures against the remote prover are retried in-place; intrinsic
     /// proving errors (witness rejected, malformed inputs) escape on the first attempt.
-    #[miden_instrument(target = COMPONENT, name = "ntx.execute_transaction.prove", skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "ntx.execute_transaction.prove",
+        skip_all,
+        err,
+    )]
     async fn prove(&self, tx_inputs: &TransactionInputs) -> NtxResult<ProvenTransaction> {
         (|| async { self.prover.prove(tx_inputs).await })
             .retry(self.request_backoff())
@@ -443,7 +463,12 @@ impl NtxContext {
     ///
     /// Transient gRPC failures (`Unavailable`, `DeadlineExceeded`, ...) are retried in-place;
     /// content-rejection codes escape on the first attempt so the actor can mark the batch failed.
-    #[miden_instrument(target = COMPONENT, name = "ntx.execute_transaction.submit", skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "ntx.execute_transaction.submit",
+        skip_all,
+        err,
+    )]
     async fn submit(
         &self,
         proven_tx: &ProvenTransaction,

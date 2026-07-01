@@ -21,7 +21,7 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
         target = COMPONENT,
         name = "submit_proven_transaction",
         skip_all,
-        err
+        err,
     )]
     async fn handle(&self, input: Self::Input) -> tonic::Result<Self::Output> {
         // Reject requests while a backup subscription is streaming.

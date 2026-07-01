@@ -157,8 +157,15 @@ pub(crate) async fn run(
 // ================================================================================================
 
 /// Proves a single block and returns the proof bytes on success.
-#[miden_instrument(target = COMPONENT, name = "prove_block", skip_all,
-    fields(block.number=block_num.as_u32()), err)]
+#[miden_instrument(
+    target = COMPONENT,
+    name = "prove_block",
+    skip_all,
+    fields(
+        block.number=block_num.as_u32(),
+    ),
+    err,
+)]
 async fn prove_block(
     state: &State,
     block_prover: &BlockProver,
@@ -221,7 +228,15 @@ async fn prove_block(
 }
 
 /// Generates a block proof by loading inputs from the block store and invoking the block prover.
-#[miden_instrument(target = COMPONENT, name = "prove_block.generate", skip_all, fields(block.number=block_num.as_u32()), err)]
+#[miden_instrument(
+    target = COMPONENT,
+    name = "prove_block.generate",
+    skip_all,
+    fields(
+        block.number=block_num.as_u32(),
+    ),
+    err,
+)]
 async fn generate_block_proof(
     state: &State,
     block_prover: &BlockProver,

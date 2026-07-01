@@ -27,7 +27,7 @@ impl State {
     target = COMPONENT,
     name = "measure_disk_space_usage",
     skip_all,
-    err
+    err,
 )]
 async fn measure_disk_space_usage(data_dir: PathBuf) -> Result<(), tokio::task::JoinError> {
     let usage = spawn_blocking_in_current_span(move || measure_disk_usage_bytes(&data_dir)).await?;

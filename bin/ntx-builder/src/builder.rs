@@ -226,7 +226,10 @@ impl NetworkTransactionBuilder {
     #[miden_instrument(
         name = "ntx.builder.apply_committed_block",
         skip(self, loop_db, block),
-        fields(block_num = %block.header().block_num(), %committed_tip),
+        fields(
+            block_num = %block.header().block_num(),
+            %committed_tip,
+        ),
     )]
     async fn apply_committed_block_with_effects(
         &mut self,

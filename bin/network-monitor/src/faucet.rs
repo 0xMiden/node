@@ -199,7 +199,7 @@ impl Service for FaucetService {
     skip_all,
     level = "info",
     ret(level = "debug"),
-    err
+    err,
 )]
 async fn fetch_faucet_metadata(
     client: &Client,
@@ -233,7 +233,7 @@ async fn fetch_faucet_metadata(
     skip_all,
     level = "info",
     ret(level = "debug"),
-    err
+    err,
 )]
 async fn perform_mint_test(
     client: &Client,
@@ -342,7 +342,7 @@ where
     skip_all,
     level = "info",
     ret(level = "debug"),
-    err
+    err,
 )]
 fn solve_pow_challenge(challenge: &str, target: u64, timeout: Duration) -> anyhow::Result<u64> {
     let challenge_bytes = hex::decode(challenge).context("Failed to decode challenge from hex")?;

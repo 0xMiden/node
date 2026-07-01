@@ -36,7 +36,11 @@ pub enum TransactionValidationError {
 /// provided proven transaction.
 ///
 /// Returns the header of the executed transaction if successful.
-#[miden_instrument(target = COMPONENT, skip_all, err)]
+#[miden_instrument(
+    target = COMPONENT,
+    skip_all,
+    err,
+)]
 pub async fn validate_transaction(
     proven_tx: ProvenTransaction,
     tx_inputs: TransactionInputs,

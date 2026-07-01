@@ -115,7 +115,9 @@ impl RpcClient {
         target = COMPONENT,
         name = "rpc.client.block_subscription_with_retry",
         skip_all,
-        fields(%block_from),
+        fields(
+            %block_from,
+        ),
         err,
     )]
     pub async fn block_subscription_with_retry(
@@ -210,7 +212,12 @@ impl RpcClient {
         )
     }
 
-    #[miden_instrument(target = COMPONENT, name = "ntx.rpc.client.submit_proven_tx", skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "ntx.rpc.client.submit_proven_tx",
+        skip_all,
+        err,
+    )]
     pub async fn submit_proven_tx(
         &self,
         proven_tx: &ProvenTransaction,
@@ -369,7 +376,12 @@ impl RpcClient {
     }
 
     /// Fetches a note script by its root, returning `None` if the node does not know it.
-    #[miden_instrument(target = COMPONENT, name = "ntx.rpc.client.get_note_script_by_root", skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "ntx.rpc.client.get_note_script_by_root",
+        skip_all,
+        err,
+    )]
     pub async fn get_note_script_by_root(
         &self,
         script_root: Word,

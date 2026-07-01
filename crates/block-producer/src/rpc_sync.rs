@@ -108,7 +108,11 @@ impl BlockSync {
         .await
     }
 
-    #[miden_instrument(target = COMPONENT, skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+        err,
+    )]
     async fn sync(&self) -> anyhow::Result<()> {
         let block_from = self.state.chain_tip(Finality::Committed).await.child().as_u32();
         info!(target: LOG_TARGET, block_from, "Connecting to upstream RPC for blocks");

@@ -179,7 +179,14 @@ impl RpcService {
     /// Returns the given block's onchain commitment.
     ///
     /// This is retrieved from the local LRU cache, or otherwise from the store on cache miss.
-    #[miden_instrument(target = COMPONENT, name = "get_block_commitment", skip_all, fields(block.number = %block))]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "get_block_commitment",
+        skip_all,
+        fields(
+            block.number = %block,
+        ),
+    )]
     async fn get_block_commitment(&self, block: BlockNumber) -> Result<Word, Status> {
         if let Some(commitment) = self.block_commitment_cache.get(&block) {
             return Ok(commitment);

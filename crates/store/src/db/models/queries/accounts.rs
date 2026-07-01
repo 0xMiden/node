@@ -1499,7 +1499,9 @@ pub const HISTORICAL_BLOCK_RETENTION: u32 = 50;
     target = COMPONENT,
     skip_all,
     err,
-    fields(cutoff_block),
+    fields(
+        cutoff_block,
+    ),
 )]
 pub(crate) fn prune_history(
     conn: &mut SqliteConnection,
@@ -1518,7 +1520,9 @@ pub(crate) fn prune_history(
     target = COMPONENT,
     skip_all,
     err,
-    fields(cutoff_block),
+    fields(
+        cutoff_block,
+    ),
 )]
 fn prune_account_vault_assets(
     conn: &mut SqliteConnection,
@@ -1539,7 +1543,9 @@ fn prune_account_vault_assets(
     target = COMPONENT,
     skip_all,
     err,
-    fields(cutoff_block),
+    fields(
+        cutoff_block,
+    ),
 )]
 fn prune_account_storage_map_values(
     conn: &mut SqliteConnection,
@@ -1570,7 +1576,9 @@ fn prune_account_storage_map_values(
     target = COMPONENT,
     skip_all,
     err,
-    fields(cutoff_block),
+    fields(
+        cutoff_block,
+    ),
 )]
 fn prune_account_codes(
     conn: &mut SqliteConnection,

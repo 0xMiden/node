@@ -233,7 +233,9 @@ impl IncrementService {
         target = COMPONENT,
         name = "network_monitor.counter.try_resync_wallet_account",
         skip_all,
-        fields(account.id = %self.tx.wallet_account.id()),
+        fields(
+            account.id = %self.tx.wallet_account.id(),
+        ),
         level = "warn",
         err,
     )]
@@ -298,7 +300,7 @@ impl IncrementService {
         skip_all,
         level = "info",
         ret(level = "debug"),
-        err
+        err,
     )]
     async fn submit_increment(&mut self) -> Result<(String, AccountDelta, BlockNumber)> {
         let (network_note, note_recipient) = create_network_note(

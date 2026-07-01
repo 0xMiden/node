@@ -22,9 +22,11 @@ use crate::monitor::tasks::Tasks;
     name = "network_monitor.start_monitor",
     skip_all,
     level = "info",
-    fields(port = %config.port),
+    fields(
+        port = %config.port,
+    ),
     ret(level = "debug"),
-    err
+    err,
 )]
 pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
     info!("Loaded configuration: {:?}", config);

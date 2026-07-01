@@ -58,7 +58,12 @@ impl BlockProducerValidatorClient {
 
     /// Signs the proposed block via the validator, returning the signature and the block commitment
     /// that the validator reports it signed (for cross-checking against the locally built block).
-    #[miden_instrument(target = COMPONENT, name = "validator.client.validate_block", skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "validator.client.validate_block",
+        skip_all,
+        err,
+    )]
     pub async fn sign_block(
         &self,
         proposed_block: ProposedBlock,

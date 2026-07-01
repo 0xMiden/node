@@ -24,7 +24,11 @@ impl State {
     /// Saves proving inputs for a signed block and applies it to the state.
     ///
     /// Used by the in-process block producer after it has built and signed a block.
-    #[miden_instrument(target = COMPONENT, skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+        err,
+    )]
     pub async fn apply_block_with_proving_inputs(
         &self,
         ordered_batches: OrderedBatches,
@@ -73,7 +77,11 @@ impl State {
     /// - the in-memory structures are updated, including the latest block pointer and the lock is
     ///   released.
     // TODO: This span is logged in a root span, we should connect it to the parent span.
-    #[miden_instrument(target = COMPONENT, skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+        err,
+    )]
     pub async fn apply_block(&self, signed_block: SignedBlock) -> Result<(), ApplyBlockError> {
         let _lock = self.writer.try_lock().map_err(|_| ApplyBlockError::ConcurrentWrite)?;
 
@@ -211,7 +219,11 @@ impl State {
     }
 
     /// Validates that the block header is consistent with the block body and the current state.
-    #[miden_instrument(target = COMPONENT, skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+        err,
+    )]
     async fn validate_block_header(
         &self,
         header: &BlockHeader,
@@ -251,7 +263,11 @@ impl State {
     }
 
     /// Computes nullifier and account tree mutations, validating roots against the block header.
-    #[miden_instrument(target = COMPONENT, skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+        err,
+    )]
     async fn compute_tree_mutations(
         &self,
         header: &BlockHeader,
@@ -320,7 +336,11 @@ impl State {
     }
 
     /// Builds note records with inclusion proofs from the block body.
-    #[miden_instrument(target = COMPONENT, skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+        err,
+    )]
     fn build_note_records(
         header: &BlockHeader,
         body: &BlockBody,

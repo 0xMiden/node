@@ -172,7 +172,15 @@ impl Display for TransactionInputs {
 ///
 /// Returns an error if the store query fails, or if the transaction creates a new account whose ID
 /// prefix already exists in the store.
-#[miden_instrument(target = COMPONENT, name = "store.state.get_tx_inputs", skip_all, err, fields(transaction.id = %proven_tx.id().to_hex()))]
+#[miden_instrument(
+    target = COMPONENT,
+    name = "store.state.get_tx_inputs",
+    skip_all,
+    err,
+    fields(
+        transaction.id = %proven_tx.id().to_hex(),
+    ),
+)]
 pub async fn get_tx_inputs(
     state: &State,
     proven_tx: &ProvenTransaction,

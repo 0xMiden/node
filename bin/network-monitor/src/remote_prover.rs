@@ -277,7 +277,9 @@ impl Service for ProverStatusService {
         skip_all,
         level = "info",
         ret(level = "debug"),
-        fields(prover = %self.name)
+        fields(
+            prover = %self.name,
+        ),
     )]
     async fn check(&mut self) -> ServiceStatus {
         match self.client.status(()).await {
@@ -356,7 +358,9 @@ const PAYLOAD_RETRY_DELAY: Duration = Duration::from_secs(30);
     name = "network_monitor.prover.run_test",
     skip_all,
     level = "info",
-    fields(prover = %name),
+    fields(
+        prover = %name,
+    ),
 )]
 async fn run_prover_test(
     mut client: RemoteProverClient,
@@ -491,7 +495,7 @@ fn tonic_status_to_json(status: &tonic::Status) -> String {
     skip_all,
     level = "info",
     ret(level = "debug"),
-    err
+    err,
 )]
 async fn generate_prover_test_payload(
     rpc_url: &Url,

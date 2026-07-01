@@ -38,7 +38,9 @@ impl BlockStore {
         name = "store.block_store.bootstrap",
         skip_all,
         err,
-        fields(path = %store_dir.display()),
+        fields(
+            path = %store_dir.display(),
+        ),
     )]
     pub fn bootstrap(store_dir: PathBuf, genesis_block: &GenesisBlock) -> std::io::Result<Self> {
         fs_err::create_dir(&store_dir)?;
@@ -89,7 +91,9 @@ impl BlockStore {
         name = "store.block_store.save_block",
         skip(self, data),
         err,
-        fields(block_size = data.len())
+        fields(
+            block_size = data.len(),
+        ),
     )]
     pub async fn save_block(&self, block_num: BlockNumber, data: &[u8]) -> std::io::Result<()> {
         let (epoch_path, block_path) = self.epoch_block_path(block_num)?;
@@ -117,7 +121,10 @@ impl BlockStore {
         name = "store.block_store.save_proof",
         skip_all,
         err,
-        fields(block.number = block_num.as_u32(), proof_size = data.len())
+        fields(
+            block.number = block_num.as_u32(),
+            proof_size = data.len(),
+        ),
     )]
     async fn save_proof(&self, block_num: BlockNumber, data: &[u8]) -> std::io::Result<()> {
         let (epoch_path, proof_path) = self.epoch_proof_path(block_num)?;
@@ -144,7 +151,10 @@ impl BlockStore {
         name = "store.block_store.save_proving_inputs",
         skip_all,
         err,
-        fields(block.number = block_num.as_u32(), inputs_size = data.len())
+        fields(
+            block.number = block_num.as_u32(),
+            inputs_size = data.len(),
+        ),
     )]
     pub async fn save_proving_inputs(
         &self,

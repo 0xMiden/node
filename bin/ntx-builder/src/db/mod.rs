@@ -38,7 +38,9 @@ impl Db {
         target = COMPONENT,
         name = "ntx_builder.database.load",
         skip_all,
-        fields(path=%database_filepath.display()),
+        fields(
+            path=%database_filepath.display(),
+        ),
         err,
     )]
     pub async fn load(database_filepath: PathBuf) -> anyhow::Result<Self> {
@@ -52,7 +54,9 @@ impl Db {
         target = COMPONENT,
         name = "ntx_builder.database.load",
         skip_all,
-        fields(path=%database_filepath.display()),
+        fields(
+            path=%database_filepath.display(),
+        ),
         err,
     )]
     pub async fn load_with_pool_size(
@@ -65,7 +69,10 @@ impl Db {
     }
 
     /// Applies all pending migrations to an existing DB.
-    #[miden_instrument(target = COMPONENT, skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+    )]
     pub fn migrate(database_filepath: impl AsRef<Path>) -> Result<()> {
         migrate_database(database_filepath.as_ref())?;
         Ok(())
@@ -100,7 +107,9 @@ impl Db {
         target = COMPONENT,
         name = "ntx_builder.database.bootstrap",
         skip_all,
-        fields(path=%database_filepath.display()),
+        fields(
+            path=%database_filepath.display(),
+        ),
         err,
     )]
     pub async fn bootstrap(

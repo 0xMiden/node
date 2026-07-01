@@ -49,7 +49,11 @@ impl Visit for FieldVisitor {
     }
 }
 
-#[miden_instrument(target = "miden-node-utils-test", name = "records_delayed_fields", skip_all)]
+#[miden_instrument(
+    target = "miden-node-utils-test",
+    name = "records_delayed_fields",
+    skip_all,
+)]
 fn records_inferred_fields() {
     let parsed_value = 42;
     let parsed_text = "parsed";
@@ -67,7 +71,7 @@ fn records_inferred_fields() {
     fields(
         account.id = tracing::field::Empty,
         account.updated = tracing::field::Empty,
-    )
+    ),
 )]
 fn records_explicit_fields() {
     tracing::Span::current().record("account.id", tracing::field::display("explicit-account"));
@@ -78,7 +82,9 @@ fn records_explicit_fields() {
     target = "miden-node-utils-test",
     name = "records_explicit_argument_field",
     skip_all,
-    fields(account.id = %account_id)
+    fields(
+        account.id = %account_id,
+    ),
 )]
 fn records_explicit_argument_field(account_id: &str) {}
 
@@ -86,7 +92,9 @@ fn records_explicit_argument_field(account_id: &str) {}
     target = "miden-node-utils-test",
     name = "records_explicit_and_inferred_fields",
     skip_all,
-    fields(account.id = tracing::field::Empty)
+    fields(
+        account.id = tracing::field::Empty,
+    ),
 )]
 fn records_explicit_and_inferred_fields() {
     let block_number = 9;

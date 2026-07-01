@@ -224,7 +224,12 @@ pub async fn build_probe_transaction_inputs(rpc_url: &Url) -> Result<Transaction
 }
 
 /// Deploy a counter account to the network by submitting its genesis transaction via RPC.
-#[miden_instrument(target = COMPONENT, name = "deploy-counter-account", skip_all, ret(level = "debug"))]
+#[miden_instrument(
+    target = COMPONENT,
+    name = "deploy-counter-account",
+    skip_all,
+    ret(level = "debug"),
+)]
 pub async fn deploy_counter_account(counter_account: &Account, rpc_url: &Url) -> Result<()> {
     // Deploy counter account to the network using a genesis-aware RPC client.
     let mut rpc_client = create_genesis_aware_rpc_client(rpc_url, Duration::from_secs(10)).await?;

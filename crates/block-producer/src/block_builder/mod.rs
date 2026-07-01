@@ -90,7 +90,12 @@ impl BlockBuilder {
     /// - Each stage has its own child span and are free to add further field data.
     /// - A failed stage will emit an error event, and both its own span and the root span will be
     ///   marked as errors.
-    #[miden_instrument(parent = None, target = COMPONENT, name = "block_builder.build_block", skip_all)]
+    #[miden_instrument(
+        parent = None,
+        target = COMPONENT,
+        name = "block_builder.build_block",
+        skip_all,
+    )]
     async fn build_block(&self, mempool: &SharedMempool) -> Result<(), BuildBlockError> {
         use futures::TryFutureExt;
 
@@ -134,7 +139,11 @@ impl BlockBuilder {
             .await
     }
 
-    #[miden_instrument(target = COMPONENT, name = "block_builder.select_block", skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "block_builder.select_block",
+        skip_all,
+    )]
     fn select_block(mempool: &SharedMempool) -> Result<SelectedBlock, BuildBlockError> {
         Ok(mempool.lock().map_err(BuildBlockError::MempoolPoisoned)?.select_block())
     }
@@ -155,7 +164,12 @@ impl BlockBuilder {
     ///     which nullifiers the block will actually create, we fetch witnesses for all nullifiers
     ///     created by batches. If we knew that a certain note will be erased, we would not have to
     ///     supply a nullifier witness for it.
-    #[miden_instrument(target = COMPONENT, name = "block_builder.get_block_inputs", skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "block_builder.get_block_inputs",
+        skip_all,
+        err,
+    )]
     async fn get_block_inputs(
         &self,
         selected_block: SelectedBlock,
@@ -214,7 +228,12 @@ impl BlockBuilder {
         Ok(BlockBatchesAndInputs { batches, inputs })
     }
 
-    #[miden_instrument(target = COMPONENT, name = "block_builder.propose_block", skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "block_builder.propose_block",
+        skip_all,
+        err,
+    )]
     async fn propose_block(
         &self,
         batches_inputs: BlockBatchesAndInputs,
@@ -229,7 +248,12 @@ impl BlockBuilder {
         Ok(ProposedBlockAndInputs { proposed_block, block_inputs })
     }
 
-    #[miden_instrument(target = COMPONENT, name = "block_builder.validate_block", skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "block_builder.validate_block",
+        skip_all,
+        err,
+    )]
     async fn build_and_validate_block(
         &self,
         proposal: ProposedBlockAndInputs,
@@ -284,7 +308,7 @@ impl BlockBuilder {
         target = COMPONENT,
         name = "block_builder.commit_block",
         skip_all,
-        err
+        err,
     )]
     async fn commit_block(
         &self,
@@ -322,7 +346,11 @@ impl BlockBuilder {
         Ok(())
     }
 
-    #[miden_instrument(target = COMPONENT, name = "block_builder.rollback_block", skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "block_builder.rollback_block",
+        skip_all,
+    )]
     fn rollback_block(mempool: &SharedMempool, block: BlockNumber) -> Result<(), BuildBlockError> {
         mempool.lock().map_err(BuildBlockError::MempoolPoisoned)?.rollback_block(block);
         Ok(())

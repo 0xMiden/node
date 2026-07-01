@@ -38,7 +38,11 @@ impl BlockProver {
         Self::Remote(RemoteBlockProver::new(endpoint))
     }
 
-    #[miden_instrument(target = COMPONENT, skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+        err,
+    )]
     pub async fn prove(
         &self,
         tx_batches: OrderedBatches,
