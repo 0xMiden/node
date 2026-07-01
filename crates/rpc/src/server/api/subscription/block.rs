@@ -1,19 +1,14 @@
 use std::net::IpAddr;
-use std::sync::Arc;
 
 use futures::StreamExt;
 use miden_node_proto::generated as proto;
-use miden_node_store::State;
 use miden_node_utils::grpc::ClientIp;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::block::BlockNumber;
-use tokio::sync::OwnedSemaphorePermit;
 use tonic::{Request, Status};
 use tracing::{Span, debug};
 
 use super::super::{COMPONENT, RpcService};
-use super::stream::{DataError, StreamError, Subscription};
-use super::{IpBanList, subscription_ban_status};
 
 pub struct BlockSubscriptionInput {
     request: proto::rpc::BlockSubscriptionRequest,
@@ -50,42 +45,15 @@ impl proto::server::rpc_api::BlockSubscription for RpcService {
 
         debug!(target: COMPONENT, ?request);
 
-        // Reject clients that were recently disconnected for being too slow.
-        if let Some(until) = client_ip.and_then(|ip| self.subscription_ban.banned_until(ip)) {
-            return Err(subscription_ban_status(until));
-        }
-
-        let permit = Arc::clone(&self.block_subscription_semaphore)
-            .try_acquire_owned()
-            .map_err(|_| Status::resource_exhausted("maximum block subscriptions reached"))?;
-
         let from = BlockNumber::from(request.block_from);
-        let ban_list = Arc::clone(&self.subscription_ban);
-
-        let stream = BlockStream {
-            client_ip,
-            ban_list,
-            _permit: permit,
-            store: Arc::clone(&self.store),
-        };
-
-        let stream = stream.into_stream(from, self.store.subscribe_committed_tip()).await?.map(
-            move |event| {
-                event.map(|event| proto::rpc::BlockSubscriptionResponse {
-                    block: event.data,
-                    committed_chain_tip: event.tip.as_u32(),
-                })
-            },
-        );
+        let stream = self.block_subscription_stream(from, client_ip)?.map(move |event| {
+            event.map(|event| proto::rpc::BlockSubscriptionResponse {
+                block: event.data,
+                committed_chain_tip: event.tip.as_u32(),
+            })
+        });
         Ok(stream.boxed())
     }
-}
-
-struct BlockStream {
-    client_ip: Option<IpAddr>,
-    ban_list: Arc<IpBanList>,
-    store: Arc<State>,
-    _permit: OwnedSemaphorePermit,
 }
 
 type BlockSubscriptionStream = std::pin::Pin<
@@ -96,19 +64,3 @@ type BlockSubscriptionStream = std::pin::Pin<
             + 'static,
     >,
 >;
-
-impl Subscription for BlockStream {
-    fn on_eos(&self, err: StreamError) {
-        if let (Some(ip), StreamError::SlowSubscriber) = (self.client_ip, err) {
-            self.ban_list.add(ip);
-        }
-    }
-
-    async fn get_data(&self, block: BlockNumber) -> Result<Vec<u8>, DataError> {
-        self.store
-            .load_block(block)
-            .await
-            .map_err(|source| DataError::DatabaseError { source })?
-            .ok_or(DataError::NotFound)
-    }
-}
