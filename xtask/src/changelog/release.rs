@@ -1,6 +1,5 @@
-use std::env;
-use std::fmt;
 use std::process::Command;
+use std::{env, fmt};
 
 use anyhow::{Context, Result, bail, ensure};
 
@@ -19,10 +18,7 @@ pub(super) struct CurrentChangelog {
 }
 
 pub(super) fn release_changelog_entries(release_tag: &str) -> Result<ChangelogEntries> {
-    ensure!(
-        !release_tag.trim().is_empty(),
-        "release tag must not be empty"
-    );
+    ensure!(!release_tag.trim().is_empty(), "release tag must not be empty");
 
     let release = ReleaseTag::parse(release_tag)?;
     let tag_commit = format!("refs/tags/{release_tag}^{{commit}}");
@@ -135,11 +131,7 @@ impl StableVersion {
             return None;
         }
 
-        Some(Self {
-            major,
-            minor,
-            patch,
-        })
+        Some(Self { major, minor, patch })
     }
 
     fn parse_stable_tag(tag: &str) -> Option<Self> {
@@ -162,7 +154,7 @@ impl fmt::Display for StableVersion {
 fn previous_stable_tag(before: StableVersion, release_commit: &str) -> Result<String> {
     for (tag, version) in stable_tags_merged_into(release_commit)? {
         if version < before {
-            return Ok(tag.to_owned());
+            return Ok(tag.clone());
         }
     }
 
@@ -178,15 +170,8 @@ fn latest_stable_tag(release_commit: &str) -> Result<String> {
 }
 
 fn stable_tags_merged_into(commit: &str) -> Result<Vec<(String, StableVersion)>> {
-    let tags = git_output(&[
-        "tag",
-        "--merged",
-        commit,
-        "--list",
-        "v*",
-        "--sort=-v:refname",
-    ])
-    .context("listing stable release tags")?;
+    let tags = git_output(&["tag", "--merged", commit, "--list", "v*", "--sort=-v:refname"])
+        .context("listing stable release tags")?;
 
     Ok(tags
         .lines()
@@ -221,14 +206,7 @@ fn github_repo() -> Result<String> {
     }
 
     let mut command = Command::new("gh");
-    command.args([
-        "repo",
-        "view",
-        "--json",
-        "nameWithOwner",
-        "--jq",
-        ".nameWithOwner",
-    ]);
+    command.args(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]);
     let repo = command_output(&mut command).context("resolving GitHub repository")?;
     let repo = repo.trim();
 
@@ -251,13 +229,13 @@ fn pull_requests_for_commits(
             match missing_pull_request {
                 MissingPullRequest::Error => {
                     bail!("commit {commit} was not found in GitHub repository {repo}");
-                }
+                },
                 MissingPullRequest::WarnAndSkip => {
                     eprintln!(
                         "warning: skipping commit {commit}; not found in GitHub repository {repo}"
                     );
                     continue;
-                }
+                },
             }
         };
 
@@ -265,11 +243,11 @@ fn pull_requests_for_commits(
             match missing_pull_request {
                 MissingPullRequest::Error => {
                     bail!("commit {commit} has no associated pull request");
-                }
+                },
                 MissingPullRequest::WarnAndSkip => {
                     eprintln!("warning: skipping commit {commit}; no associated pull request");
                     continue;
-                }
+                },
             }
         }
 
@@ -333,7 +311,7 @@ fn changelog_entries_for_pull_requests(
                     order,
                 });
                 continue;
-            }
+            },
         };
 
         let ChangelogDocument::Entries(pr_entries) = document else {
@@ -351,26 +329,13 @@ fn changelog_entries_for_pull_requests(
         }
     }
 
-    Ok(ChangelogEntries {
-        entries,
-        invalid_entries,
-    })
+    Ok(ChangelogEntries { entries, invalid_entries })
 }
 
 fn pull_request_body(repo: &str, pull_request: u64) -> Result<String> {
     let pull_request = pull_request.to_string();
     let mut command = Command::new("gh");
-    command.args([
-        "pr",
-        "view",
-        &pull_request,
-        "--repo",
-        repo,
-        "--json",
-        "body",
-        "--jq",
-        ".body",
-    ]);
+    command.args(["pr", "view", &pull_request, "--repo", repo, "--json", "body", "--jq", ".body"]);
 
     command_output(&mut command)
 }
@@ -383,9 +348,7 @@ fn git_output(args: &[&str]) -> Result<String> {
 
 fn command_output(command: &mut Command) -> Result<String> {
     let command_display = format!("{command:?}");
-    let output = command
-        .output()
-        .with_context(|| format!("running `{command_display}`"))?;
+    let output = command.output().with_context(|| format!("running `{command_display}`"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -402,9 +365,7 @@ fn command_output(command: &mut Command) -> Result<String> {
 
 fn gh_api_output(command: &mut Command) -> Result<Option<String>> {
     let command_display = format!("{command:?}");
-    let output = command
-        .output()
-        .with_context(|| format!("running `{command_display}`"))?;
+    let output = command.output().with_context(|| format!("running `{command_display}`"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

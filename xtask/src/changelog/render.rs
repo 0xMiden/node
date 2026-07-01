@@ -22,10 +22,7 @@ pub(super) fn release_notes(
     notes.push_str("\n## Changes by Scope\n");
 
     for scope in SCOPE_ORDER {
-        let mut entries = entries
-            .iter()
-            .filter(|entry| entry.scope == scope)
-            .collect::<Vec<_>>();
+        let mut entries = entries.iter().filter(|entry| entry.scope == scope).collect::<Vec<_>>();
 
         if entries.is_empty() {
             continue;
@@ -68,10 +65,7 @@ fn append_impact_section(
     impact: Impact,
     entries: &[ReleaseNoteEntry],
 ) {
-    let mut entries = entries
-        .iter()
-        .filter(|entry| entry.impact == impact)
-        .collect::<Vec<_>>();
+    let mut entries = entries.iter().filter(|entry| entry.impact == impact).collect::<Vec<_>>();
 
     if entries.is_empty() {
         return;
@@ -218,7 +212,7 @@ mod tests {
 
         assert_eq!(
             notes,
-            r#"Release v0.16.0
+            r"Release v0.16.0
 
 ## Changelog Entries Requiring Attention
 
@@ -249,7 +243,7 @@ mod tests {
 ### Node
 
 - **Added:** Added startup command. (#12)
-"#
+"
         );
     }
 }

@@ -188,10 +188,7 @@ description = ""
 
     let err = verify_pr_body(&body).unwrap_err();
 
-    assert!(
-        err.to_string()
-            .contains("entry 1 field `description` must not be empty")
-    );
+    assert!(err.to_string().contains("entry 1 field `description` must not be empty"));
 }
 
 #[test]

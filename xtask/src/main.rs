@@ -73,9 +73,8 @@ impl Changelog {
                 let notes = if args.current {
                     changelog::render_current_changelog()?
                 } else {
-                    let release_tag = args
-                        .release_tag
-                        .expect("clap requires either --release-tag or --current");
+                    let release_tag =
+                        args.release_tag.expect("clap requires either --release-tag or --current");
                     changelog::render_release_notes(&release_tag)?
                 };
                 let mut stdout = io::stdout().lock();

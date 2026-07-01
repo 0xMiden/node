@@ -184,15 +184,15 @@ fn parse_document(source: &str) -> Result<ChangelogDocument> {
     match (has_entries, has_no_changelog_marker) {
         (true, true) => {
             bail!("changelog TOML block cannot contain both `[[entry]]` and `changelog`")
-        }
+        },
         (true, false) => Ok(ChangelogDocument::Entries(parse_entries(source)?)),
         (false, true) => {
             validate_no_changelog(source)?;
             Ok(ChangelogDocument::None)
-        }
+        },
         (false, false) => {
             bail!("changelog TOML block must contain `[[entry]]` or `changelog = \"none\"`")
-        }
+        },
     }
 }
 
@@ -200,10 +200,7 @@ fn parse_entries(source: &str) -> Result<Vec<Entry>> {
     let document = toml::from_str::<EntriesDocument>(source)
         .map_err(|err| anyhow!("parsing changelog entries: {err}"))?;
 
-    ensure!(
-        !document.entry.is_empty(),
-        "`[[entry]]` must contain at least one entry"
-    );
+    ensure!(!document.entry.is_empty(), "`[[entry]]` must contain at least one entry");
 
     for (index, entry) in document.entry.iter().enumerate() {
         validate_entry(index, entry)?;
