@@ -4,20 +4,19 @@ use std::sync::Arc;
 use miden_node_proto::generated as proto;
 use miden_node_store::state::SubscriptionStreamError;
 use miden_node_utils::grpc::ClientIp;
-use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::block::BlockNumber;
 use tokio_stream::StreamExt;
 use tonic::{Request, Status};
-use tracing::{Span, debug};
+use tracing::{debug, instrument};
 
 use super::{
-    COMPONENT,
     GuardedStream,
     ProofSubscriptionStream,
     RpcService,
     proof_subscription_error_to_status,
     subscription_ban_status,
 };
+use crate::{COMPONENT, LOG_TARGET};
 
 pub struct ProofSubscriptionInput {
     request: proto::rpc::ProofSubscriptionRequest,
@@ -48,11 +47,19 @@ impl proto::server::rpc_api::ProofSubscription for RpcService {
         self.handle(input).await
     }
 
+    #[instrument(
+        target = COMPONENT,
+        name = "proof_subscription",
+        skip_all,
+        fields(
+            block.from = %input.request.block_from,
+        ),
+        err,
+    )]
     async fn handle(&self, input: Self::Input) -> tonic::Result<Self::ItemStream> {
         let ProofSubscriptionInput { request, client_ip } = input;
-        Span::current().set_attribute("block.from", request.block_from);
 
-        debug!(target: COMPONENT, ?request);
+        debug!(target: LOG_TARGET, "Subscribing to block proofs");
 
         // Reject clients that were recently disconnected for being too slow.
         if let Some(until) = client_ip.and_then(|ip| self.subscription_ban.banned_until(ip)) {

@@ -26,11 +26,11 @@ use miden_remote_prover_client::RemoteProverClientError;
 use thiserror::Error;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
-use tracing::{Instrument, info, instrument};
+use tracing::{Instrument, debug, info, instrument};
 
-use crate::COMPONENT;
 use crate::block_prover::{BlockProver, ProverError};
 use crate::errors::ProofSchedulerError;
+use crate::{COMPONENT, LOG_TARGET};
 
 // CONSTANTS
 // ================================================================================================
@@ -106,7 +106,7 @@ pub(crate) async fn run(
     mut chain_tip_rx: watch::Receiver<BlockNumber>,
     max_concurrent_proofs: NonZeroUsize,
 ) -> anyhow::Result<()> {
-    info!(target: COMPONENT, "Proof scheduler started");
+    info!(target: LOG_TARGET, "Proof scheduler started");
 
     // In-flight proving tasks.
     let mut proving_tasks = ProofTaskJoinSet::new();
@@ -144,7 +144,7 @@ pub(crate) async fn run(
             // New chain tip received - re-enter the scheduling loop on next iteration.
             result = chain_tip_rx.changed() => {
                 if result.is_err() {
-                    info!(target: COMPONENT, "Chain tip channel closed, proof scheduler exiting");
+                    debug!(target: LOG_TARGET, "Chain tip channel closed, proof scheduler exiting");
                     return Ok(());
                 }
             },

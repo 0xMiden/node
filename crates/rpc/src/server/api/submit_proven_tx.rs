@@ -4,7 +4,6 @@ use miden_node_proto::clients::{SequencerClient, ValidatorClient};
 use miden_node_proto::generated as proto;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
-use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::transaction::{
     OutputNote,
@@ -16,9 +15,10 @@ use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_tx::TransactionVerifier;
 use tonic::metadata::{Ascii, MetadataValue};
 use tonic::{Request, Status};
-use tracing::{Span, debug};
+use tracing::{Span, debug, field, instrument};
 
 use super::{COMPONENT, RpcMode, RpcService};
+use crate::LOG_TARGET;
 
 pub struct SubmitProvenTxInput {
     request: proto::transaction::ProvenTransaction,
@@ -59,24 +59,44 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
         Self::encode(output)
     }
 
+    #[instrument(
+        target = COMPONENT,
+        name = "submit_proven_tx",
+        skip_all,
+        fields(
+            COMPONENT = field::Empty,
+            transaction.id = field::Empty,
+            account.id = field::Empty,
+            transaction.expires_at = field::Empty,
+            transaction.reference_block.number = field::Empty,
+            transaction.reference_block.commitment = field::Empty,
+        ),
+        err,
+    )]
     async fn handle(&self, input: Self::Input) -> tonic::Result<Self::Output> {
         let SubmitProvenTxInput {
             mut request,
             is_authorized_network_tx,
             original_accept_header,
         } = input;
-        debug!(target: COMPONENT, ?request);
+
+        tracing::trace!(target: LOG_TARGET, ?request);
 
         let tx = ProvenTransaction::read_from_bytes(&request.transaction).map_err(|err| {
             Status::invalid_argument(err.as_report_context("invalid transaction"))
         })?;
 
         let span = Span::current();
-        span.set_attribute("transaction.id", tx.id());
-        span.set_attribute("account.id", tx.account_id());
-        span.set_attribute("transaction.expires_at", tx.expiration_block_num());
-        span.set_attribute("transaction.reference_block.number", tx.ref_block_num());
-        span.set_attribute("transaction.reference_block.commitment", tx.ref_block_commitment());
+        span.record("transaction.id", field::display(tx.id()));
+        span.record("account.id", field::display(tx.account_id()));
+        span.record("transaction.expires_at", field::display(tx.expiration_block_num()));
+        span.record("transaction.reference_block.number", field::display(tx.ref_block_num()));
+        span.record(
+            "transaction.reference_block.commitment",
+            field::display(tx.ref_block_commitment()),
+        );
+
+        debug!(target: LOG_TARGET, "Submitting transaction");
 
         // Verify the reference block is actually part of the chain.
         self.verify_reference_commitment(tx.ref_block_num(), tx.ref_block_commitment())

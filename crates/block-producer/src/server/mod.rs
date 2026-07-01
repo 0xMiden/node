@@ -11,7 +11,7 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::ProvenTransaction;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
-use tracing::{debug, info, instrument};
+use tracing::instrument;
 use url::Url;
 
 use crate::batch_builder::{BatchBuilder, BatchIntervals};
@@ -22,7 +22,7 @@ use crate::errors::MempoolSubmissionError;
 use crate::mempool::{BatchBudget, BlockBudget, Mempool, MempoolConfig, SharedMempool};
 use crate::store::{TransactionInputs, get_tx_inputs};
 use crate::validator::BlockProducerValidatorClient;
-use crate::{CACHED_MEMPOOL_STATS_UPDATE_INTERVAL, COMPONENT, proof_scheduler};
+use crate::{CACHED_MEMPOOL_STATS_UPDATE_INTERVAL, COMPONENT, LOG_TARGET, proof_scheduler};
 
 #[cfg(test)]
 mod tests;
@@ -102,13 +102,13 @@ pub struct Sequencer {
 impl Sequencer {
     /// Spawns the sequencer tasks and returns its in-process API.
     pub async fn spawn(self) -> Result<SequencerHandle> {
-        info!(target: COMPONENT, "Initializing sequencer");
+        tracing::info!(target: LOG_TARGET, "Initializing sequencer");
         let store = self.store;
         let validator =
             BlockProducerValidatorClient::new(self.validator_url.clone(), self.validator_timeout)?;
         let chain_tip = store.chain_tip(Finality::Committed).await;
 
-        info!(target: COMPONENT, "Sequencer initialized");
+        tracing::info!(target: LOG_TARGET, "Sequencer initialized");
 
         let block_builder = BlockBuilder::new(Arc::clone(&store), validator, self.block_interval);
         let batch_intervals = BatchIntervals::derive_from(self.block_interval, self.batch_interval);
@@ -291,8 +291,8 @@ impl BlockProducerApi {
         &self,
         tx: ProvenTransaction,
     ) -> Result<BlockNumber, MempoolSubmissionError> {
-        debug!(
-            target: COMPONENT,
+        tracing::debug!(
+            target: LOG_TARGET,
             tx_id = %tx.id().to_hex(),
             account_id = %tx.account_id().to_hex(),
             initial_state_commitment = %tx.account_update().initial_state_commitment(),
@@ -302,7 +302,7 @@ impl BlockProducerApi {
             ref_block_commitment = %tx.ref_block_commitment(),
             "Submitting transaction"
         );
-        debug!(target: COMPONENT, proof = ?tx.proof());
+        tracing::debug!(target: COMPONENT, proof = ?tx.proof());
 
         // Authenticate against the local store, then add to the mempool.
         let inputs = get_tx_inputs(&self.store, &tx)

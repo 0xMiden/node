@@ -7,9 +7,10 @@ use miden_protocol::Word;
 use miden_protocol::note::NoteId;
 use miden_protocol::utils::serde::Serializable;
 use tonic::Status;
-use tracing::debug;
+use tracing::instrument;
 
-use super::{COMPONENT, RpcService, check, database_error_to_status};
+use super::{RpcService, check, database_error_to_status};
+use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::GetNotesById for RpcService {
@@ -24,13 +25,20 @@ impl proto::server::rpc_api::GetNotesById for RpcService {
         Ok(proto::note::CommittedNoteList { notes })
     }
 
+    #[instrument(
+        target = COMPONENT,
+        name = "get_notes_by_id",
+        skip_all,
+        err,
+    )]
     async fn handle(&self, request: Self::Input) -> tonic::Result<Self::Output> {
-        debug!(target: COMPONENT, ?request);
+        tracing::trace!(target: LOG_TARGET, ?request);
 
         check::<QueryParamNoteIdLimit>(request.ids.len())?;
 
         let note_ids: Vec<Word> = convert_digests_to_words::<Status, _>(request.ids)?;
         let note_ids: Vec<NoteId> = note_ids.into_iter().map(NoteId::from_raw).collect();
+
         let notes = self
             .store
             .get_notes_by_id(note_ids)
