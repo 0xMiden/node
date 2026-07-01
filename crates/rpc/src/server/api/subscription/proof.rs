@@ -10,7 +10,7 @@ use tonic::{Request, Status};
 use tracing::{Span, debug};
 
 use super::super::{COMPONENT, RpcService};
-use super::stream::{StreamEvent, SubscriptionEventStream};
+use super::stream::{StreamItem, SubscriptionStream};
 
 pub struct ProofSubscriptionInput {
     request: proto::rpc::ProofSubscriptionRequest,
@@ -20,8 +20,8 @@ pub struct ProofSubscriptionInput {
 #[tonic::async_trait]
 impl proto::server::rpc_api::ProofSubscription for RpcService {
     type Input = ProofSubscriptionInput;
-    type Item = StreamEvent;
-    type ItemStream = SubscriptionEventStream;
+    type Item = StreamItem;
+    type ItemStream = SubscriptionStream;
 
     fn decode(request: proto::rpc::ProofSubscriptionRequest) -> tonic::Result<Self::Input> {
         Ok(ProofSubscriptionInput { request, client_ip: None })

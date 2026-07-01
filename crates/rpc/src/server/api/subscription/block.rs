@@ -9,7 +9,7 @@ use tonic::{Request, Status};
 use tracing::{Span, debug};
 
 use super::super::{COMPONENT, RpcService};
-use super::stream::{StreamEvent, SubscriptionEventStream};
+use super::stream::{StreamItem, SubscriptionStream};
 
 pub struct BlockSubscriptionInput {
     request: proto::rpc::BlockSubscriptionRequest,
@@ -19,8 +19,8 @@ pub struct BlockSubscriptionInput {
 #[tonic::async_trait]
 impl proto::server::rpc_api::BlockSubscription for RpcService {
     type Input = BlockSubscriptionInput;
-    type Item = StreamEvent;
-    type ItemStream = SubscriptionEventStream;
+    type Item = StreamItem;
+    type ItemStream = SubscriptionStream;
 
     fn decode(request: proto::rpc::BlockSubscriptionRequest) -> tonic::Result<Self::Input> {
         Ok(BlockSubscriptionInput { request, client_ip: None })

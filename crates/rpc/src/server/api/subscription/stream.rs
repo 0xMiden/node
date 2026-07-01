@@ -21,14 +21,14 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 /// greater than the tip.
 const MAX_FUTURE_GAP_IN_SUBSCRIPTIONS: u32 = 100u32;
 
-pub(super) type SubscriptionEventStream = ReceiverStream<tonic::Result<StreamEvent>>;
+pub(super) type SubscriptionStream = ReceiverStream<tonic::Result<StreamItem>>;
 
 impl RpcService {
     pub(super) fn block_subscription_stream(
         &self,
         from: BlockNumber,
         client_ip: Option<IpAddr>,
-    ) -> tonic::Result<SubscriptionEventStream> {
+    ) -> tonic::Result<SubscriptionStream> {
         let store = Arc::clone(&self.store);
 
         subscription_stream(
@@ -55,7 +55,7 @@ impl RpcService {
         &self,
         from: BlockNumber,
         client_ip: Option<IpAddr>,
-    ) -> tonic::Result<SubscriptionEventStream> {
+    ) -> tonic::Result<SubscriptionStream> {
         let store = Arc::clone(&self.store);
 
         subscription_stream(
@@ -87,7 +87,7 @@ fn subscription_stream<GetData, Fut>(
     max_subscriptions_error: &'static str,
     mut chain_tip: watch::Receiver<BlockNumber>,
     get_data: GetData,
-) -> tonic::Result<SubscriptionEventStream>
+) -> tonic::Result<SubscriptionStream>
 where
     GetData: Fn(BlockNumber) -> Fut + Send + 'static,
     Fut: Future<Output = Result<Vec<u8>, DataError>> + Send + 'static,
@@ -141,7 +141,7 @@ where
                 break StreamError::Internal;
             };
 
-            let event = StreamEvent { data, block: next, tip };
+            let event = StreamItem { data, block: next, tip };
 
             // Send the event but also check server shutdown condition so we don't hang for the full
             // timeout if the server is shutting down.
@@ -215,11 +215,14 @@ enum DataError {
     DatabaseError { source: DatabaseError },
 }
 
-pub struct StreamEvent {
+pub struct StreamItem {
     pub data: Vec<u8>,
     pub block: BlockNumber,
     pub tip: BlockNumber,
 }
+
+// LAG TRACKER
+// ================================================================================================
 
 struct SubscriberLagTracker {
     previous_gap: u32,
@@ -299,7 +302,7 @@ mod tests {
             &self,
             from: BlockNumber,
             chain_tip: watch::Receiver<BlockNumber>,
-        ) -> tonic::Result<SubscriptionEventStream> {
+        ) -> tonic::Result<SubscriptionStream> {
             self.stream_for_ip(None, from, chain_tip)
         }
 
@@ -308,7 +311,7 @@ mod tests {
             client_ip: Option<IpAddr>,
             from: BlockNumber,
             chain_tip: watch::Receiver<BlockNumber>,
-        ) -> tonic::Result<SubscriptionEventStream> {
+        ) -> tonic::Result<SubscriptionStream> {
             let fetch_count = Arc::clone(&self.fetch_count);
             let fail_at = self.fail_at;
 
@@ -482,7 +485,7 @@ mod tests {
         .expect("stream must fetch events promptly");
     }
 
-    fn assert_stream_status(item: tonic::Result<StreamEvent>, code: tonic::Code) {
+    fn assert_stream_status(item: tonic::Result<StreamItem>, code: tonic::Code) {
         let Err(err) = item else {
             panic!("stream item must be an error");
         };
