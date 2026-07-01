@@ -3477,6 +3477,8 @@ fn db_roundtrip_transactions() {
         block_num,
         header: tx.clone(),
         output_note_proofs: expected_sync_records.clone(),
+        // The input note's nullifier is not present in the `notes` table, so it does not resolve.
+        consumed_note_refs: vec![],
     };
 
     // Verify database roundtrip
@@ -3509,9 +3511,54 @@ fn db_roundtrip_transactions_filters_missing_output_note_sync_records() {
         block_num,
         header: tx,
         output_note_proofs: vec![],
+        consumed_note_refs: vec![],
     };
 
     assert_eq!(*record, expected);
+}
+
+/// A public note whose nullifier matches an authenticated (headerless) input of a transaction is
+/// resolved into a `consumed_note_refs` entry, so a follower can recover the consumed note by id.
+/// This is the positive counterpart to `db_roundtrip_transactions`, where the input's nullifier is
+/// absent from the `notes` table and therefore stays unresolved.
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn select_transactions_records_resolves_consumed_public_note_refs() {
+    let mut conn = create_db();
+    let block_num = BlockNumber::from(1);
+    create_block(&mut conn, block_num);
+
+    let bob = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(bob, 0)], block_num).unwrap();
+
+    // `mock_block_transaction` consumes a single authenticated input whose nullifier is
+    // `num_to_nullifier(num)`. Record a public note carrying that same nullifier so the node can
+    // map it back to the note id.
+    let num = 1;
+    let tx = mock_block_transaction(bob, num);
+    let ordered = OrderedTransactionHeaders::new_unchecked(vec![tx.clone()]);
+
+    let nullifier = num_to_nullifier(num);
+    let note = create_note(bob);
+    let note_id = note.id();
+    let note_record = NoteRecord {
+        block_num,
+        note_index: BlockNoteIndex::new(0, 0).unwrap(),
+        note_id: note_id.as_word(),
+        metadata: *note.metadata(),
+        details: None,
+        attachments: NoteAttachments::default(),
+        inclusion_path: SparseMerklePath::default(),
+    };
+    queries::insert_notes(&mut conn, &[(note_record, Some(nullifier))]).unwrap();
+    queries::insert_transactions(&mut conn, block_num, &ordered).unwrap();
+
+    let retrieved =
+        queries::select_transactions_records(&mut conn, &[bob], BlockNumber::GENESIS..=block_num)
+            .unwrap();
+    let record = retrieved.1.first().expect("entry should exist");
+
+    assert_eq!(record.consumed_note_refs, vec![(nullifier, note_id)]);
 }
 
 /// Per-output-note contribution to a transaction's recorded `size_in_bytes`, mirroring

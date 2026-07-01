@@ -20,7 +20,7 @@ use miden_node_utils::limiter::{
 };
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::{NoteHeader, NoteId};
+use miden_protocol::note::{NoteHeader, NoteId, Nullifier};
 use miden_protocol::transaction::{
     InputNoteCommitment,
     InputNotes,
@@ -30,7 +30,7 @@ use miden_protocol::transaction::{
 };
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 
-use super::{DatabaseError, select_note_sync_records};
+use super::{DatabaseError, select_note_ids_by_nullifier, select_note_sync_records};
 use crate::COMPONENT;
 use crate::db::models::conv::SqlTypeConvert;
 use crate::db::models::serialize_vec;
@@ -108,6 +108,9 @@ impl TransactionSummaryRowInsert {
         const HEADER_BASE_SIZE_BYTES: usize = 4 + 32 + 16 + 64;
         const INPUT_NOTE_COMMITMENT_SIZE_BYTES: usize = 64;
         const OUTPUT_NOTE_SYNC_RECORD_SIZE_BYTES: usize = 700;
+        // Worst case, every input note resolves to a consumed-note reference (nullifier + note id)
+        // in the sync response. Counting it per input keeps input-heavy transactions under the cap.
+        const CONSUMED_NOTE_REF_SIZE_BYTES: usize = 64;
 
         // Serialize input notes as full InputNoteCommitments (nullifier + optional NoteHeader).
         let input_notes: Vec<InputNoteCommitment> =
@@ -125,9 +128,10 @@ impl TransactionSummaryRowInsert {
         // - 16 bytes for account ID
         // - 64 bytes for initial + final state commitments (32 bytes each)
         // - ~64 bytes per input note (nullifier + optional NoteHeader)
+        // - ~64 bytes per input note for its possible consumed-note reference
         // - ~700 bytes per output note sync record (metadata header + inclusion proof)
         let input_notes_size = (transaction_header.input_notes().num_notes() as usize)
-            * INPUT_NOTE_COMMITMENT_SIZE_BYTES;
+            * (INPUT_NOTE_COMMITMENT_SIZE_BYTES + CONSUMED_NOTE_REF_SIZE_BYTES);
         let output_notes_size =
             transaction_header.output_notes().len() * OUTPUT_NOTE_SYNC_RECORD_SIZE_BYTES;
         let size_in_bytes = (HEADER_BASE_SIZE_BYTES + input_notes_size + output_notes_size) as i64;
@@ -332,11 +336,34 @@ fn with_output_note_proofs(
         output_notes_by_id.extend(select_note_sync_records(conn, chunk)?);
     }
 
+    // Deserialize each transaction's input notes once and reuse them below. Authenticated inputs
+    // have no header and carry only a nullifier, so gather those nullifiers to look their note IDs
+    // up in one batch.
+    let mut tx_input_notes: Vec<Vec<InputNoteCommitment>> =
+        Vec::with_capacity(raw_transactions.len());
+    let mut authenticated_nullifiers: Vec<Nullifier> = Vec::new();
+    for raw in &raw_transactions {
+        let commitments: Vec<InputNoteCommitment> =
+            Deserializable::read_from_bytes(&raw.input_notes)?;
+        for commitment in &commitments {
+            if commitment.header().is_none() {
+                authenticated_nullifiers.push(commitment.nullifier());
+            }
+        }
+        tx_input_notes.push(commitments);
+    }
+
+    let mut note_ids_by_nullifier = std::collections::BTreeMap::new();
+    for chunk in authenticated_nullifiers.chunks(QueryParamNoteCommitmentLimit::LIMIT) {
+        note_ids_by_nullifier.extend(select_note_ids_by_nullifier(conn, chunk)?);
+    }
+
     // Deserialize remaining fields and assemble final records.
     raw_transactions
         .into_iter()
         .zip(tx_output_notes)
-        .map(|(raw, output_notes)| {
+        .zip(tx_input_notes)
+        .map(|((raw, output_notes), input_notes)| {
             let transaction_id = TransactionId::read_from_bytes(&raw.transaction_id)?;
             // Collect inclusion proofs for committed output notes. Notes not found in the `notes`
             // table were erased (created and consumed in the same batch).
@@ -348,12 +375,23 @@ fn with_output_note_proofs(
                 })
                 .collect();
 
+            // Build the side-channel refs. The input note commitments are left untouched, so the
+            // header and its commitment stay exactly as the transaction submitted them.
+            let consumed_note_refs = input_notes
+                .iter()
+                .filter(|commitment| commitment.header().is_none())
+                .filter_map(|commitment| {
+                    let nullifier = commitment.nullifier();
+                    note_ids_by_nullifier.get(&nullifier).map(|note_id| (nullifier, *note_id))
+                })
+                .collect();
+
             let header = TransactionHeader::new_unchecked(
                 transaction_id,
                 AccountId::read_from_bytes(&raw.account_id)?,
                 Word::read_from_bytes(&raw.initial_state_commitment)?,
                 Word::read_from_bytes(&raw.final_state_commitment)?,
-                InputNotes::new_unchecked(Deserializable::read_from_bytes(&raw.input_notes)?),
+                InputNotes::new_unchecked(input_notes),
                 output_notes,
                 FungibleAsset::read_from_bytes(&raw.fee)?,
             );
@@ -362,6 +400,7 @@ fn with_output_note_proofs(
                 block_num: BlockNumber::from_raw_sql(raw.block_num)?,
                 header,
                 output_note_proofs,
+                consumed_note_refs,
             })
         })
         .collect()

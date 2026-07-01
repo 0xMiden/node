@@ -145,6 +145,9 @@ pub struct TransactionRecord {
     /// Inclusion proofs for committed output notes. Notes in `header.output_notes()` without a
     /// corresponding proof here were erased (created and consumed within the same batch).
     pub output_note_proofs: Vec<NoteSyncRecord>,
+    /// Maps each consumed input note's nullifier to its note ID, for public notes the node could
+    /// resolve. This is to enable the recover of notes by their id.
+    pub consumed_note_refs: Vec<(Nullifier, NoteId)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
