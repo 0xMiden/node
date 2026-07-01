@@ -52,14 +52,19 @@ impl grpc::server::validator_api::BlockSubscription for ValidatorService {
                         }),
                         Ok(None) => {
                             Err(tonic::Status::not_found(format!("block {block} not found")))
-                        },
+                        }
                         Err(err) => Err(tonic::Status::internal(
                             err.as_report_context("failed to load block"),
                         )),
                     };
 
+                    // Errors are not recoverable so we abort the stream after informing the client.
+                    //
+                    // Also exit if the client closed the stream.
+                    //
+                    // Note that the condition ordering is deliberate; otherwise `is_err` would short-circuit
+                    // and prevent the sending of the error response.
                     let is_err = response.is_err();
-
                     if tx.send(response).await.is_err() || is_err {
                         return;
                     }
