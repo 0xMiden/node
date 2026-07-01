@@ -1,0 +1,41 @@
+# Wallet self-counter component for the network monitor.
+#
+# The wallet increments this counter in the same transaction that emits an increment note to the
+# counter account, so the slot is an on-chain, atomically-committed count of *committed* increment
+# requests (the authoritative `expected` value). Unlike the counter contract, no note-sender
+# authorization is needed: the wallet increments its own storage from its own (signed) transaction.
+#
+# Storage layout:
+# - COUNTER_SLOT: counter value (u64)
+
+use miden::core::sys
+use miden::protocol::active_account
+use miden::protocol::native_account
+
+const COUNTER_SLOT = word("miden::monitor::wallet_contract::counter")
+
+# Increment the wallet's own counter slot.
+# => []
+pub proc increment
+    push.COUNTER_SLOT[0..2] exec.active_account::get_item
+    # => [count, 0, 0, 0]
+
+    push.1 add
+    # => [count+1, 0, 0, 0]
+
+    push.COUNTER_SLOT[0..2] exec.native_account::set_item
+    # => [OLD_VALUE]
+
+    dropw
+    # => []
+end
+
+# Read the wallet's own counter slot (no auth required).
+# => [count]
+pub proc get_count
+    push.COUNTER_SLOT[0..2] exec.active_account::get_item
+    # => [count, 0, 0, 0]
+
+    exec.sys::truncate_stack
+    # => [count]
+end
