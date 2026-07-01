@@ -720,7 +720,8 @@ impl State {
         }
     }
 
-    /// Loads a block from the block store. Return `Ok(None)` if the block is not found.
+    /// Loads a block from the in-memory replica cache or block store. Return `Ok(None)` if the
+    /// block is not found.
     pub async fn load_block(
         &self,
         block_num: BlockNumber,
@@ -728,16 +729,23 @@ impl State {
         if block_num > self.chain_tip(Finality::Committed).await {
             return Ok(None);
         }
+        if let Some(block) = self.block_cache.get(block_num) {
+            return Ok(Some(block.block_bytes().to_vec()));
+        }
         self.block_store.load_block(block_num).await.map_err(Into::into)
     }
 
-    /// Loads a block proof from the block store. Returns `Ok(None)` if the proof is not found.
+    /// Loads a block proof from the in-memory replica cache or block store. Returns `Ok(None)` if
+    /// the proof is not found.
     pub async fn load_proof(
         &self,
         block_num: BlockNumber,
     ) -> Result<Option<Vec<u8>>, DatabaseError> {
         if block_num > self.chain_tip(Finality::Proven).await {
             return Ok(None);
+        }
+        if let Some(proof) = self.proof_cache.get(block_num) {
+            return Ok(Some(proof.proof_bytes().to_vec()));
         }
         self.block_store.load_proof(block_num).await.map_err(Into::into)
     }
