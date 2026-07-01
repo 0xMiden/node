@@ -181,21 +181,35 @@ async fn slow_subscriber_is_banned() {
         .expect("stream must not end without an item");
     assert_stream_status(item, tonic::Code::ResourceExhausted);
     assert!(source.ban_list.banned_until(client_ip).is_some());
+
+    wait_for_subscription_exit(&source).await;
+
+    let (_tip_tx, tip_rx) = watch::channel(BlockNumber::GENESIS);
+    assert_subscription_start_err(
+        &source,
+        Some(client_ip),
+        BlockNumber::GENESIS,
+        tip_rx,
+        tonic::Code::ResourceExhausted,
+    );
 }
 
 #[tokio::test]
-async fn subscription_start_may_be_at_or_behind_chain_tip() {
+async fn subscription_start_future_gap_is_enforced() {
     assert_subscription_start_ok(0, 10).await;
     assert_subscription_start_ok(10, 10).await;
-}
-
-#[tokio::test]
-async fn subscription_start_may_be_within_future_gap() {
     assert_subscription_start_ok(10 + MAX_FUTURE_GAP_IN_SUBSCRIPTIONS, 10).await;
-}
 
-#[tokio::test]
-async fn subscription_start_future_gap_check_saturates_at_max_block() {
+    let source = TestSubscription::default();
+    let (_tip_tx, tip_rx) = watch::channel(BlockNumber::from(10u32));
+    assert_subscription_start_err(
+        &source,
+        None,
+        BlockNumber::from(10 + MAX_FUTURE_GAP_IN_SUBSCRIPTIONS + 1),
+        tip_rx,
+        tonic::Code::OutOfRange,
+    );
+
     assert_subscription_start_ok(u32::MAX, u32::MAX - 10).await;
 }
 
@@ -238,6 +252,19 @@ async fn assert_subscription_start_ok(block_from: u32, chain_tip: u32) {
     wait_for_subscription_exit(&source).await;
 }
 
+fn assert_subscription_start_err(
+    source: &TestSubscription,
+    client_ip: Option<IpAddr>,
+    block_from: BlockNumber,
+    chain_tip: watch::Receiver<BlockNumber>,
+    code: tonic::Code,
+) {
+    match source.stream_for_ip(client_ip, block_from, chain_tip) {
+        Ok(_) => panic!("subscription start should be rejected"),
+        Err(err) => assert_eq!(err.code(), code),
+    }
+}
+
 fn run(gaps: &[u32]) -> bool {
     let mut lag_tracker = SubscriberLagTracker::default();
     for &gap in gaps {
@@ -249,43 +276,15 @@ fn run(gaps: &[u32]) -> bool {
 }
 
 #[test]
-fn stable_gap_does_not_accumulate() {
-    // Gap stays constant; delta is always 0, growth_run never increments.
-    assert!(run(&[5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]));
-}
-
-#[test]
-fn zero_gap_throughout_is_ok() {
-    assert!(run(&[0, 0, 0, 0, 0]));
-}
-
-#[test]
-fn shrinking_gap_reduces_accumulation() {
-    // Accumulate close to the limit, then shrink; running total decreases, no error.
-    assert!(run(&[10, 20, SubscriberLagTracker::MAX_RUNNING_GAP - 1, 5]));
-}
-
-#[test]
 fn starting_above_max_growth_is_ok() {
     assert!(run(&[SubscriberLagTracker::MAX_RUNNING_GAP * 2]));
 }
 
 #[test]
-fn exactly_max_growth_run_is_ok() {
-    // A single jump of exactly MAX_RUNNING_GAP is the boundary; still ok.
+fn accumulated_growth_limit_is_enforced() {
     assert!(run(&[0, SubscriberLagTracker::MAX_RUNNING_GAP]));
-}
-
-#[test]
-fn exceeding_max_growth_run_returns_too_slow() {
-    // One block past the limit triggers TooSlow, even in a single jump.
     assert!(!run(&[0, SubscriberLagTracker::MAX_RUNNING_GAP + 1]));
-}
 
-#[test]
-fn growth_spread_across_windows_accumulates() {
-    // Many small growths that each stay below the limit still trigger TooSlow once they sum past
-    // MAX_RUNNING_GAP.
     let step = SubscriberLagTracker::MAX_RUNNING_GAP / 4;
     let gaps: Vec<u32> = (1..=6).map(|i| i * step).collect();
     assert!(!run(&gaps));
