@@ -49,7 +49,7 @@ pub async fn serve(server_state: ServerState, config: MonitorConfig) {
 
     let bind_address = format!("0.0.0.0:{}", config.port);
     info!(target: LOG_TARGET, %bind_address, "Starting web server");
-    info!(target: LOG_TARGET, port = config.port, "Dashboard available");
+    info!(target: LOG_TARGET, "Dashboard available at: http://localhost:{}/", config.port);
     let listener = tokio::net::TcpListener::bind(&bind_address)
         .await
         .expect("Failed to bind to address");
