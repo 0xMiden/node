@@ -26,6 +26,13 @@ miden-node-stress-test-*
 /accounts
 /data
 
+# Native benchmark runtime artifacts (data dir, logs, snapshots, proofs).
+/node-data*
+/logs
+/snapshots
+/benchmark-proofs
+/bench-local-run
+
 # Sqlite db files
 *.sqlite3
 *.sqlite3-shm

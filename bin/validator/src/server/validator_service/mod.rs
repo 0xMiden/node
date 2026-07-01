@@ -63,6 +63,11 @@ pub(crate) struct ValidatorService {
     signer: ValidatorSigner,
     db: Arc<Db>,
     block_store: BlockStore,
+    /// Enforces mutual exclusion between backup block subscriptions and all other RPCs. Regular
+    /// RPCs take the read side (any number may run concurrently); a backup subscription takes the
+    /// exclusive write side for its entire lifetime. Acquired with `try_*` on both sides so that a
+    /// conflicting request fails fast with `resource_exhausted` rather than blocking.
+    serve_lock: Arc<tokio::sync::RwLock<()>>,
     /// Serializes `sign_block` requests so that concurrent calls are processed sequentially,
     /// ensuring consistent chain tip reads and preventing race conditions.
     sign_block_semaphore: Semaphore,
@@ -102,6 +107,7 @@ impl ValidatorService {
 
         Ok(Self {
             signer,
+            serve_lock: Arc::new(tokio::sync::RwLock::new(())),
             db: db.into(),
             block_store,
             sign_block_semaphore: Semaphore::new(1),

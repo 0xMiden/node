@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "bin/benchmark",
   "bin/network-monitor",
   "bin/node",
   "bin/ntx-builder",
@@ -160,6 +161,10 @@ should_panic_without_expect  = "allow" # We don't care about the specific panic 
 # Configure `cargo-typos`
 [workspace.metadata.typos]
 files.extend-exclude = [
-  "*.min.js", # Minified JS bundles (vendored htmx etc.).
-  "*.svg",    # SVG files.
+  "*.min.js",          # Minified JS bundles (vendored htmx etc.).
+  "*.svg",             # SVG files.
+  "benchmark-proofs/", # miden-benchmark output.
+  "logs/",             # Native benchmark process logs.
+  "node-data*/",       # Native benchmark runtime data dir + any sibling clones (RocksDB LOGs etc.).
+  "snapshots/",        # Snapshot tarballs used by the bench replay workflow.
 ]

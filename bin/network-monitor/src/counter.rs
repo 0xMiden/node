@@ -3,8 +3,8 @@
 //! This module contains the implementation for periodically incrementing the counter
 //! of the network account deployed at startup by creating and submitting network notes.
 
+use std::fmt::Write;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -13,7 +13,7 @@ use miden_node_proto::generated::rpc::BlockHeaderByNumberRequest;
 use miden_node_proto::generated::transaction::ProvenTransaction;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_protocol::account::auth::AuthSecretKey;
-use miden_protocol::account::{Account, AccountCode, AccountHeader, AccountId};
+use miden_protocol::account::{Account, AccountCode, AccountDelta, AccountId};
 use miden_protocol::asset::AssetVault;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
@@ -26,12 +26,17 @@ use miden_protocol::note::{
     NoteScript,
     NoteStorage,
     NoteType,
+    PartialNote,
     PartialNoteMetadata,
 };
-use miden_protocol::transaction::{InputNotes, PartialBlockchain, TransactionArgs};
+use miden_protocol::transaction::{
+    InputNotes,
+    PartialBlockchain,
+    TransactionArgs,
+    TransactionScript,
+};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{Felt, Word};
-use miden_standards::account::interface::{AccountInterface, AccountInterfaceExt};
 use miden_standards::code_builder::CodeBuilder;
 use miden_standards::note::{NetworkAccountTarget, NoteExecutionHint};
 use miden_tx::auth::BasicAuthenticator;
@@ -43,6 +48,7 @@ use tracing::{error, info, warn};
 
 use crate::config::MonitorConfig;
 use crate::deploy::counter::COUNTER_SLOT_NAME;
+use crate::deploy::wallet::WALLET_COUNTER_SLOT_NAME;
 use crate::deploy::{
     MonitorDataStore,
     create_and_deploy_accounts,
@@ -80,6 +86,17 @@ pub struct LatencyState {
     pending: Option<PendingLatencyDetails>,
     pending_started: Option<Instant>,
     last_latency_blocks: Option<u32>,
+}
+
+/// The wallet/counter pair shared from [`IncrementService`] to [`CounterTrackingService`].
+///
+/// Republished whenever the increment task regenerates accounts after persistent failures, so the
+/// tracker switches to the new pair without polling disk. The tracker reads `expected` from the
+/// wallet's on-chain counter slot and `observed` from the counter account's slot.
+#[derive(Clone)]
+pub struct TrackedAccounts {
+    pub wallet: Account,
+    pub counter: Account,
 }
 
 // TX BUILDER
@@ -140,12 +157,11 @@ pub struct IncrementService {
     tx: TxBuilder,
     failures: FailureTracker,
     details: IncrementDetails,
-    expected_counter_value: Arc<AtomicU64>,
     latency_state: Arc<Mutex<LatencyState>>,
-    /// Publishes the current counter account to [`CounterTrackingService`]. A new value is sent
+    /// Publishes the current wallet/counter pair to [`CounterTrackingService`]. A new value is sent
     /// whenever the increment task regenerates accounts after persistent failures, so the tracker
-    /// can switch to the new account ID without polling disk.
-    counter_sender: watch::Sender<Account>,
+    /// can switch to the new account IDs without polling disk.
+    accounts_sender: watch::Sender<TrackedAccounts>,
 }
 
 impl IncrementService {
@@ -158,8 +174,7 @@ impl IncrementService {
         wallet_account: Account,
         secret_key: SecretKey,
         counter_account: Account,
-        counter_sender: watch::Sender<Account>,
-        expected_counter_value: Arc<AtomicU64>,
+        accounts_sender: watch::Sender<TrackedAccounts>,
         latency_state: Arc<Mutex<LatencyState>>,
     ) -> Result<Self> {
         let mut rpc_client =
@@ -173,30 +188,42 @@ impl IncrementService {
             tx,
             failures: FailureTracker::default(),
             details,
-            expected_counter_value,
             latency_state,
-            counter_sender,
+            accounts_sender,
         })
     }
 
-    /// Applies a successful increment: updates the wallet nonce, bumps counters, and returns the
-    /// next expected counter value.
-    fn handle_increment_success(&mut self, final_account: &AccountHeader, tx_id: String) -> u64 {
+    /// Applies a successful increment: advances the local wallet by the transaction's account
+    /// delta, bumps the success count, and returns the value used as the latency-measurement
+    /// target.
+    ///
+    /// The authoritative `expected` value lives in the wallet's on-chain counter slot (read by
+    /// [`CounterTrackingService`]); the returned success count is used purely as a best-effort
+    /// latency target — on a fresh wallet/counter pair both start at zero and advance together.
+    fn handle_increment_success(&mut self, account_delta: &AccountDelta, tx_id: String) -> u64 {
+        let wallet = &self.tx.wallet_account;
+        let mut storage = wallet.storage().clone();
+        for (slot_name, value) in account_delta.storage().values() {
+            storage
+                .set_item(slot_name, *value)
+                .expect("wallet tx only writes existing value slots");
+        }
+        let new_nonce = wallet.nonce() + account_delta.nonce_delta();
         let updated_wallet = Account::new(
-            self.tx.wallet_account.id(),
-            self.tx.wallet_account.vault().clone(),
-            self.tx.wallet_account.storage().clone(),
-            self.tx.wallet_account.code().clone(),
-            final_account.nonce(),
+            wallet.id(),
+            wallet.vault().clone(),
+            storage,
+            wallet.code().clone(),
+            new_nonce,
             None,
         )
-        .expect("nonce-only update of an already-valid account cannot fail");
+        .expect("rebuilding the wallet from its own transaction delta cannot fail");
         self.tx.wallet_account = updated_wallet;
 
         self.details.success_count += 1;
         self.details.last_tx_id = Some(tx_id);
 
-        self.expected_counter_value.fetch_add(1, Ordering::Relaxed) + 1
+        self.details.success_count
     }
 
     /// Re-sync the wallet account from the RPC after repeated failures.
@@ -244,18 +271,18 @@ impl IncrementService {
                 .await
                 .context("failed to regenerate accounts")?;
 
-        let (tx, details) = setup_increment_task(
-            wallet_account,
-            secret_key,
-            counter_account.clone(),
-            &mut self.rpc_client,
-        )
-        .await?;
+        let tracked = TrackedAccounts {
+            wallet: wallet_account.clone(),
+            counter: counter_account.clone(),
+        };
+        let (tx, details) =
+            setup_increment_task(wallet_account, secret_key, counter_account, &mut self.rpc_client)
+                .await?;
         self.tx = tx;
         self.details = details;
 
-        self.counter_sender
-            .send(counter_account)
+        self.accounts_sender
+            .send(tracked)
             .context("counter tracker dropped before regeneration completed")?;
 
         info!("account regeneration completed, increment task re-initialized");
@@ -272,16 +299,18 @@ impl IncrementService {
         ret(level = "debug"),
         err
     )]
-    async fn submit_increment(&mut self) -> Result<(String, AccountHeader, BlockNumber)> {
-        let account_interface = AccountInterface::from_account(&self.tx.wallet_account);
-
+    async fn submit_increment(&mut self) -> Result<(String, AccountDelta, BlockNumber)> {
         let (network_note, note_recipient) = create_network_note(
             &self.tx.wallet_account,
             &self.tx.counter_account,
             self.tx.increment_script.clone(),
             &mut self.tx.rng,
         )?;
-        let script = account_interface.build_send_notes_script(&[network_note.into()], None)?;
+
+        // One transaction does two things atomically: it increments the wallet's own on-chain
+        // counter slot (the authoritative `expected`) and emits the network note that increments
+        // the counter account (`observed`). If the tx is reverted, neither commits.
+        let script = create_increment_tx_script(&network_note)?;
 
         let mut tx_args = TransactionArgs::default().with_tx_script(script);
         tx_args.add_output_note_recipient(Box::new(note_recipient));
@@ -291,7 +320,7 @@ impl IncrementService {
         let block_header = self.tx.block_header.clone();
         let secret_key = self.tx.secret_key.clone();
         let handle = tokio::runtime::Handle::current();
-        let (proven_tx, tx_inputs, final_account) = spawn_blocking_in_current_span(move || {
+        let (proven_tx, tx_inputs, account_delta) = spawn_blocking_in_current_span(move || {
             let account_id = wallet_account.id();
             let block_num = block_header.block_num();
             let mut data_store = MonitorDataStore::new(block_header, PartialBlockchain::default());
@@ -312,12 +341,14 @@ impl IncrementService {
                 .context("Failed to execute transaction")?;
 
             let tx_inputs = executed_tx.tx_inputs().to_bytes();
-            let final_account = executed_tx.final_account().clone();
+            // The delta captures the wallet's nonce bump and counter-slot write; the increment task
+            // applies it to keep its local wallet copy in sync with chain.
+            let account_delta = executed_tx.account_delta().clone();
             let proven_tx = handle
                 .block_on(LocalTransactionProver::default().prove(executed_tx))
                 .context("Failed to prove transaction")?;
 
-            Ok::<_, anyhow::Error>((proven_tx, tx_inputs, final_account))
+            Ok::<_, anyhow::Error>((proven_tx, tx_inputs, account_delta))
         })
         .await
         .context("counter increment task failed")??;
@@ -340,7 +371,7 @@ impl IncrementService {
 
         let tx_id = proven_tx.id().to_hex();
 
-        Ok((tx_id, final_account, block_height))
+        Ok((tx_id, account_delta, block_height))
     }
 }
 
@@ -364,9 +395,9 @@ impl Service for IncrementService {
         let mut last_error = None;
 
         match self.submit_increment().await {
-            Ok((tx_id, final_account, block_height)) => {
+            Ok((tx_id, account_delta, block_height)) => {
                 self.failures.reset();
-                let target_value = self.handle_increment_success(&final_account, tx_id);
+                let target_value = self.handle_increment_success(&account_delta, tx_id);
                 let mut guard = self.latency_state.lock().await;
                 guard.pending = Some(PendingLatencyDetails {
                     submit_height: block_height.as_u32(),
@@ -417,11 +448,13 @@ impl Service for IncrementService {
 pub struct CounterTrackingService {
     config: MonitorConfig,
     rpc_client: RpcClient,
+    /// Source of the `expected` value: the wallet's on-chain counter slot.
+    wallet_account: Account,
+    /// Source of the `observed` value: the counter account's slot.
     counter_account: Account,
-    /// Observes regenerations of the counter account from [`IncrementService`].
-    counter_receiver: watch::Receiver<Account>,
+    /// Observes regenerations of the wallet/counter pair from [`IncrementService`].
+    accounts_receiver: watch::Receiver<TrackedAccounts>,
     details: CounterTrackingDetails,
-    expected_counter_value: Arc<AtomicU64>,
     latency_state: Arc<Mutex<LatencyState>>,
     /// Consecutive polls that observed `pending_increments > counter_pending_unhealthy_threshold`.
     /// Used to confirm a real backlog before flipping the card to unhealthy.
@@ -435,84 +468,111 @@ impl CounterTrackingService {
 
     pub async fn new(
         config: MonitorConfig,
-        counter_receiver: watch::Receiver<Account>,
-        expected_counter_value: Arc<AtomicU64>,
+        accounts_receiver: watch::Receiver<TrackedAccounts>,
         latency_state: Arc<Mutex<LatencyState>>,
     ) -> Result<Self> {
         let mut rpc_client =
             create_genesis_aware_rpc_client(&config.rpc_url, config.request_timeout).await?;
-        let counter_account = counter_receiver.borrow().clone();
+        let TrackedAccounts {
+            wallet: wallet_account,
+            counter: counter_account,
+        } = accounts_receiver.borrow().clone();
 
         let mut details = CounterTrackingDetails::default();
-        initialize_tracking_state(
-            &mut rpc_client,
-            &counter_account,
-            &expected_counter_value,
-            &mut details,
-        )
-        .await;
+        initialize_tracking_state(&mut rpc_client, &wallet_account, &counter_account, &mut details)
+            .await;
 
         Ok(Self {
             config,
             rpc_client,
+            wallet_account,
             counter_account,
-            counter_receiver,
+            accounts_receiver,
             details,
-            expected_counter_value,
             latency_state,
             over_threshold_streak: 0,
         })
     }
 
-    /// If [`IncrementService`] regenerated accounts and published a new counter, adopt it and reset
+    /// If [`IncrementService`] regenerated accounts and published a new pair, adopt it and reset
     /// tracking state.
     async fn reload_counter_account_if_changed(&mut self) {
-        if !self.counter_receiver.has_changed().unwrap_or(false) {
+        if !self.accounts_receiver.has_changed().unwrap_or(false) {
             return;
         }
-        let reloaded = self.counter_receiver.borrow_and_update().clone();
-        if reloaded.id() == self.counter_account.id() {
+        let reloaded = self.accounts_receiver.borrow_and_update().clone();
+        if reloaded.counter.id() == self.counter_account.id()
+            && reloaded.wallet.id() == self.wallet_account.id()
+        {
             return;
         }
 
         info!(
-            old.id = %self.counter_account.id(),
-            new.id = %reloaded.id(),
-            "counter account changed, resetting tracking state",
+            old.counter.id = %self.counter_account.id(),
+            new.counter.id = %reloaded.counter.id(),
+            old.wallet.id = %self.wallet_account.id(),
+            new.wallet.id = %reloaded.wallet.id(),
+            "monitor accounts changed, resetting tracking state",
         );
-        self.counter_account = reloaded;
+        self.wallet_account = reloaded.wallet;
+        self.counter_account = reloaded.counter;
         self.details = CounterTrackingDetails::default();
         self.over_threshold_streak = 0;
         initialize_tracking_state(
             &mut self.rpc_client,
+            &self.wallet_account,
             &self.counter_account,
-            &self.expected_counter_value,
             &mut self.details,
         )
         .await;
     }
 
     /// Poll the counter once, updating details and latency tracking state.
+    ///
+    /// `observed` comes from the counter account's slot; `expected` comes from the wallet's own
+    /// on-chain counter slot, which is bumped atomically with each committed increment note.
     async fn poll_counter_once(&mut self) -> Option<String> {
         let mut last_error = None;
         let current_time = current_unix_timestamp_secs();
 
-        match fetch_counter_value(&mut self.rpc_client, self.counter_account.id()).await {
-            Ok(Some(value)) => {
-                self.details.current_value = Some(value);
-                self.details.last_updated = Some(current_time);
-
-                update_expected_and_pending(&mut self.details, &self.expected_counter_value, value);
-                self.handle_latency_tracking(value, &mut last_error).await;
-            },
-            Ok(None) => {
-                // Counter value not available, but not an error
-            },
+        let observed = match fetch_slot_value(
+            &mut self.rpc_client,
+            self.counter_account.id(),
+            COUNTER_SLOT_NAME.as_str(),
+        )
+        .await
+        {
+            Ok(Some(value)) => value,
+            // Counter value not available yet, but not an error.
+            Ok(None) => return None,
             Err(e) => {
                 error!("Failed to fetch counter value: {:?}", e);
-                last_error = Some(format!("fetch counter value failed: {e}"));
+                return Some(format!("fetch counter value failed: {e}"));
+            },
+        };
+
+        self.details.current_value = Some(observed);
+        self.details.last_updated = Some(current_time);
+
+        match fetch_slot_value(
+            &mut self.rpc_client,
+            self.wallet_account.id(),
+            WALLET_COUNTER_SLOT_NAME.as_str(),
+        )
+        .await
+        {
+            Ok(Some(expected)) => {
+                update_expected_and_pending(&mut self.details, expected, observed);
+            },
+            // Wallet not on-chain yet (no committed increment): leave `expected` unknown.
+            Ok(None) => {},
+            Err(e) => {
+                error!("Failed to fetch expected (wallet) counter value: {:?}", e);
+                last_error = Some(format!("fetch expected value failed: {e}"));
             },
         }
+
+        self.handle_latency_tracking(observed, &mut last_error).await;
 
         last_error
     }
@@ -645,29 +705,33 @@ async fn setup_increment_task(
     Ok((tx, IncrementDetails::default()))
 }
 
-/// Initialize tracking state by fetching the current counter value from the node.
+/// Initialize tracking state by fetching the current observed (counter) and expected (wallet slot)
+/// values from the node.
 async fn initialize_tracking_state(
     rpc_client: &mut RpcClient,
+    wallet_account: &Account,
     counter_account: &Account,
-    expected_counter_value: &Arc<AtomicU64>,
     details: &mut CounterTrackingDetails,
 ) {
-    match fetch_counter_value(rpc_client, counter_account.id()).await {
-        Ok(Some(initial_value)) => {
-            expected_counter_value.store(initial_value, Ordering::Relaxed);
-            details.current_value = Some(initial_value);
-            details.expected_value = Some(initial_value);
+    match fetch_slot_value(rpc_client, counter_account.id(), COUNTER_SLOT_NAME.as_str()).await {
+        Ok(Some(observed)) => {
+            details.current_value = Some(observed);
             details.last_updated = Some(current_unix_timestamp_secs());
-            info!("Initialized counter tracking with value: {}", initial_value);
+            info!("Initialized counter tracking with observed value: {}", observed);
         },
-        Ok(None) => {
-            expected_counter_value.store(0, Ordering::Relaxed);
-            warn!("Counter account not found, initializing expected value to 0");
-        },
-        Err(e) => {
-            expected_counter_value.store(0, Ordering::Relaxed);
-            error!("Failed to fetch initial counter value, initializing to 0: {:?}", e);
-        },
+        Ok(None) => warn!("Counter account not found at init"),
+        Err(e) => error!("Failed to fetch initial counter value: {:?}", e),
+    }
+
+    match fetch_slot_value(rpc_client, wallet_account.id(), WALLET_COUNTER_SLOT_NAME.as_str()).await
+    {
+        Ok(Some(expected)) => details.expected_value = Some(expected),
+        Ok(None) => {},
+        Err(e) => error!("Failed to fetch initial expected (wallet) value: {:?}", e),
+    }
+
+    if let (Some(expected), Some(observed)) = (details.expected_value, details.current_value) {
+        update_expected_and_pending(details, expected, observed);
     }
 }
 
@@ -728,13 +792,13 @@ fn build_tracking_status(
     }
 }
 
-/// Update expected and pending counters based on the latest observed value.
+/// Update expected and pending counters from the latest on-chain expected (wallet slot) and
+/// observed (counter) values.
 fn update_expected_and_pending(
     details: &mut CounterTrackingDetails,
-    expected_counter_value: &Arc<AtomicU64>,
+    expected: u64,
     observed_value: u64,
 ) {
-    let expected = expected_counter_value.load(Ordering::Relaxed);
     details.expected_value = Some(expected);
 
     if expected >= observed_value {
@@ -794,23 +858,26 @@ async fn fetch_account_storage_header(
     Ok(Some(storage_header))
 }
 
-/// Fetch the latest nonce of the given account from RPC.
-async fn fetch_counter_value(
+/// Fetch the u64 value held in the named value slot of the given account from RPC.
+///
+/// Returns `None` if the account is not yet available on-chain. The value is stored as a `Word`,
+/// with the actual u64 in the first element.
+async fn fetch_slot_value(
     rpc_client: &mut RpcClient,
     account_id: AccountId,
+    slot_name: &str,
 ) -> Result<Option<u64>> {
     let Some(storage_header) = fetch_account_storage_header(rpc_client, account_id).await? else {
         return Ok(None);
     };
 
-    let counter_slot = storage_header
+    let slot = storage_header
         .slots
         .iter()
-        .find(|slot| slot.slot_name == COUNTER_SLOT_NAME.as_str())
-        .context(format!("counter slot '{}' not found", COUNTER_SLOT_NAME.as_str()))?;
+        .find(|slot| slot.slot_name == slot_name)
+        .context(format!("slot '{slot_name}' not found"))?;
 
-    // The counter value is stored as a Word, with the actual u64 value in the first element
-    let slot_value: Word = counter_slot
+    let slot_value: Word = slot
         .commitment
         .as_ref()
         .context("missing storage slot value")?
@@ -1008,6 +1075,80 @@ pub(crate) fn create_increment_script() -> Result<NoteScript> {
     Ok(note_script)
 }
 
+/// Build the transaction script for one increment.
+///
+/// The script does two things atomically in the wallet's transaction:
+/// 1. `call`s the wallet's own `increment` procedure, bumping the wallet's on-chain counter slot
+/// 2. Emits the network note that targets the counter account (the `observed` value).
+///
+/// The note-emission section mirrors `miden_standards`' `build_send_notes_script` for an
+/// asset-less note with attachments; it is not reused directly because that builder produces a
+/// complete, non-composable script. Keep it in sync with `miden-standards` on version bumps; the
+/// `wallet_self_increment_tx` test exercises it end-to-end.
+fn create_increment_tx_script(network_note: &Note) -> Result<TransactionScript> {
+    let wallet_program = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/assets/wallet_counter_program.masm"
+    ));
+
+    let partial: PartialNote = network_note.clone().into();
+    let recipient = partial.recipient_digest();
+    let note_type = Felt::from(partial.metadata().note_type());
+    let tag = Felt::from(partial.metadata().tag());
+
+    let mut note_section = format!(
+        "
+        push.{recipient}
+        push.{note_type}
+        push.{tag}
+        # => [tag, note_type, RECIPIENT, pad(16)]
+        exec.::miden::protocol::output_note::create
+        # => [note_idx, pad(16)]
+        "
+    );
+    for attachment in partial.attachments().iter() {
+        let scheme = attachment.attachment_scheme().as_u16();
+        let commitment = attachment.content().to_commitment();
+        write!(
+            note_section,
+            "
+        dup
+        push.{commitment}
+        push.{scheme}
+        exec.::miden::protocol::output_note::add_attachment
+        # => [note_idx, pad(16)]
+        "
+        )
+        .expect("writing to a String cannot fail");
+    }
+    note_section.push_str("        drop\n");
+
+    let script_src = format!(
+        "use external_contract::wallet_counter
+
+        begin
+            call.wallet_counter::increment
+{note_section}
+        end"
+    );
+
+    let mut code_builder = CodeBuilder::new()
+        .with_linked_module("external_contract::wallet_counter", wallet_program)
+        .context("Failed to link wallet counter module")?;
+
+    // The note's attachments (e.g. the network-account target) are resolved at runtime from the
+    // advice map keyed by their commitment, matching `build_send_notes_script`.
+    for attachment in partial.attachments().iter() {
+        code_builder.add_advice_map_entry(attachment.to_commitment(), attachment.to_elements());
+    }
+
+    let tx_script = code_builder
+        .compile_tx_script(script_src)
+        .context("Failed to compile increment transaction script")?;
+
+    Ok(tx_script)
+}
+
 /// Create a network note that targets the counter account.
 fn create_network_note(
     wallet_account: &Account,
@@ -1056,10 +1197,40 @@ async fn fetch_chain_tip(rpc_client: &mut RpcClient) -> Result<u32> {
 
 #[cfg(test)]
 mod tests {
-    use crate::counter::{PENDING_UNHEALTHY_CONFIRMATION_POLLS, build_tracking_status};
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha20Rng;
+
+    use crate::counter::{
+        PENDING_UNHEALTHY_CONFIRMATION_POLLS,
+        build_tracking_status,
+        create_increment_script,
+        create_increment_tx_script,
+        create_network_note,
+    };
+    use crate::deploy::counter::create_counter_account;
+    use crate::deploy::wallet::create_wallet_account;
     use crate::status::{CounterTrackingDetails, Status};
 
     const THRESHOLD: u64 = 5;
+
+    /// The wallet's self-counter component, the increment note script, and the combined increment
+    /// transaction script must all assemble, and the tx script must link against the wallet's
+    /// `increment` procedure. This guards the hand-authored MASM (which mirrors `miden-standards`
+    /// note-emission internals) against silent breakage on dependency bumps.
+    #[test]
+    fn increment_masm_assembles_and_links() {
+        let (wallet, _secret_key) = create_wallet_account().expect("wallet account should build");
+        let counter = create_counter_account(wallet.id()).expect("counter account should build");
+        let note_script = create_increment_script().expect("note script should compile");
+
+        let mut rng = ChaCha20Rng::from_seed([7u8; 32]);
+        let (network_note, _recipient) =
+            create_network_note(&wallet, &counter, note_script, &mut rng)
+                .expect("network note should build");
+
+        create_increment_tx_script(&network_note)
+            .expect("combined increment tx script should compile and link the wallet procedure");
+    }
 
     fn details(current: u64, expected: u64) -> CounterTrackingDetails {
         let pending = expected.saturating_sub(current);

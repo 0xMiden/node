@@ -321,14 +321,12 @@ impl Mempool {
     /// Returns `None` if no transactions are available.
     #[miden_node_utils::tracing::miden_instrument(
         target = COMPONENT,
-        name = "mempool.select_batch",
+        name = "mempool.select_any_batch",
         skip_all
     )]
-    pub fn select_batch(&mut self) -> Option<SelectedBatch> {
-        let batch = self.transactions.select_batch(self.config.batch_budget)?;
-        if let Err(err) = self.batches.append(batch.clone()) {
-            panic!("failed to append batch to dependency graph: {}", err.as_report());
-        }
+    pub fn select_any_batch(&mut self) -> Option<SelectedBatch> {
+        let batch = self.transactions.select_any_batch(self.config.batch_budget)?;
+        let batch = self.append_selected_batch(batch);
         let telemetry = self.telemetry();
         miden_node_utils::tracing::miden_span_record!(
             mempool.transactions.uncommitted = telemetry.uncommitted_transactions,
@@ -340,6 +338,39 @@ impl Mempool {
             mempool.output_notes = telemetry.output_notes,
         );
         Some(batch)
+    }
+
+    /// Returns a full set of transactions for the next batch.
+    ///
+    /// User batches count as full because they are externally chosen atomic batches.
+    /// Non-user batches are only returned when the selected set saturates the batch budget or when
+    /// another selectable transaction cannot fit into the remaining budget.
+    #[miden_node_utils::tracing::miden_instrument(
+        target = COMPONENT,
+        name = "mempool.select_full_batch",
+        skip_all
+    )]
+    pub fn select_full_batch(&mut self) -> Option<SelectedBatch> {
+        let batch = self.transactions.select_full_batch(self.config.batch_budget)?;
+        let batch = self.append_selected_batch(batch);
+        let telemetry = self.telemetry();
+        miden_node_utils::tracing::miden_span_record!(
+            mempool.transactions.uncommitted = telemetry.uncommitted_transactions,
+            mempool.transactions.unbatched = telemetry.unbatched_transactions,
+            mempool.batches.proposed = telemetry.proposed_batches,
+            mempool.batches.proven = telemetry.proven_batches,
+            mempool.accounts = telemetry.accounts,
+            mempool.nullifiers = telemetry.nullifiers,
+            mempool.output_notes = telemetry.output_notes,
+        );
+        Some(batch)
+    }
+
+    fn append_selected_batch(&mut self, batch: SelectedBatch) -> SelectedBatch {
+        if let Err(err) = self.batches.append(batch.clone()) {
+            panic!("failed to append batch to dependency graph: {}", err.as_report());
+        }
+        batch
     }
 
     /// Drops the proposed batch and all of its descendants.

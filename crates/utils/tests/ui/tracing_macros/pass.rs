@@ -92,6 +92,8 @@ fn records_allowed_canonical_fields() {
         reference_block.number = block_number,
         request.kind = "block",
         workers.count = transaction_count,
+        workers.active = transaction_count,
+        workers.capacity = transaction_count,
         prover.kind = "local",
         failure_rate = 0.0,
         dice_roll = 0.5,

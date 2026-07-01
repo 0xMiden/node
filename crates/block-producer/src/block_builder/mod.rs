@@ -24,11 +24,6 @@ pub struct BlockBuilder {
     /// The frequency at which blocks are produced.
     pub block_interval: Duration,
 
-    /// Simulated block failure rate as a percentage.
-    ///
-    /// Note: this _must_ be sign positive and less than 1.0.
-    pub failure_rate: f64,
-
     /// The store state for committing blocks.
     pub store: Arc<State>,
 
@@ -45,13 +40,7 @@ impl BlockBuilder {
         validator: BlockProducerValidatorClient,
         block_interval: Duration,
     ) -> Self {
-        Self {
-            block_interval,
-            // Note: The range cannot be empty.
-            failure_rate: 0.0,
-            store,
-            validator,
-        }
+        Self { block_interval, store, validator }
     }
     /// Starts the [`BlockBuilder`], infinitely producing blocks at the configured interval.
     ///
@@ -64,11 +53,6 @@ impl BlockBuilder {
     ///   3. Proving the block (this is simulated using random sleeps)
     ///   4. Committing the block to the store
     pub async fn run(self, mempool: SharedMempool) -> anyhow::Result<()> {
-        assert!(
-            self.failure_rate < 1.0 && self.failure_rate.is_sign_positive(),
-            "Failure rate must be a percentage"
-        );
-
         let mut interval = tokio::time::interval(self.block_interval);
         // We set the interval's missed tick behaviour to burst. This means we'll catch up missed
         // blocks as fast as possible. In other words, we try our best to keep the desired block
@@ -106,18 +90,13 @@ impl BlockBuilder {
     /// - Each stage has its own child span and are free to add further field data.
     /// - A failed stage will emit an error event, and both its own span and the root span will be
     ///   marked as errors.
-    #[miden_node_utils::tracing::miden_instrument(
-        parent = None,
-        target = COMPONENT,
-        name = "block_builder.build_block",
-        skip_all
-    )]
+    #[miden_instrument(parent = None, target = COMPONENT, name = "block_builder.build_block", skip_all)]
     async fn build_block(&self, mempool: &SharedMempool) -> Result<(), BuildBlockError> {
         use futures::TryFutureExt;
 
         let selected = Self::select_block(mempool)?;
         let telemetry = selected.telemetry();
-        miden_node_utils::tracing::miden_span_record!(
+        miden_span_record!(
             block.number = %telemetry.block_number,
             block.batches.count = telemetry.batches_count,
             block.batch.ids = ?telemetry.batch_ids,
@@ -129,7 +108,7 @@ impl BlockBuilder {
         self.get_block_inputs(selected)
             .inspect_ok(|inputs| {
                 let telemetry = inputs.telemetry();
-                miden_node_utils::tracing::miden_span_record!(
+                miden_span_record!(
                     block.updated_accounts.count = telemetry.updated_accounts_count,
                     block.erased_note_proofs.count = telemetry.erased_note_proofs_count,
                 );
@@ -137,7 +116,7 @@ impl BlockBuilder {
             .and_then(|inputs| self.propose_block(inputs))
             .inspect_ok(|proposed_block| {
                 let telemetry = proposed_block_telemetry(&proposed_block.proposed_block);
-                miden_node_utils::tracing::miden_span_record!(
+                miden_span_record!(
                     block.nullifiers.count = telemetry.nullifiers_count,
                     block.output_notes.count = telemetry.output_notes_count,
                     block.batches.output_notes.count = telemetry.batch_output_notes_count,
@@ -155,7 +134,7 @@ impl BlockBuilder {
             .await
     }
 
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "block_builder.select_block", skip_all)]
+    #[miden_instrument(target = COMPONENT, name = "block_builder.select_block", skip_all)]
     fn select_block(mempool: &SharedMempool) -> Result<SelectedBlock, BuildBlockError> {
         Ok(mempool.lock().map_err(BuildBlockError::MempoolPoisoned)?.select_block())
     }
@@ -176,7 +155,7 @@ impl BlockBuilder {
     ///     which nullifiers the block will actually create, we fetch witnesses for all nullifiers
     ///     created by batches. If we knew that a certain note will be erased, we would not have to
     ///     supply a nullifier witness for it.
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "block_builder.get_block_inputs", skip_all, err)]
+    #[miden_instrument(target = COMPONENT, name = "block_builder.get_block_inputs", skip_all, err)]
     async fn get_block_inputs(
         &self,
         selected_block: SelectedBlock,
@@ -235,7 +214,7 @@ impl BlockBuilder {
         Ok(BlockBatchesAndInputs { batches, inputs })
     }
 
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "block_builder.propose_block", skip_all, err)]
+    #[miden_instrument(target = COMPONENT, name = "block_builder.propose_block", skip_all, err)]
     async fn propose_block(
         &self,
         batches_inputs: BlockBatchesAndInputs,
@@ -250,7 +229,7 @@ impl BlockBuilder {
         Ok(ProposedBlockAndInputs { proposed_block, block_inputs })
     }
 
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "block_builder.validate_block", skip_all, err)]
+    #[miden_instrument(target = COMPONENT, name = "block_builder.validate_block", skip_all, err)]
     async fn build_and_validate_block(
         &self,
         proposal: ProposedBlockAndInputs,
@@ -343,7 +322,7 @@ impl BlockBuilder {
         Ok(())
     }
 
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "block_builder.rollback_block", skip_all)]
+    #[miden_instrument(target = COMPONENT, name = "block_builder.rollback_block", skip_all)]
     fn rollback_block(mempool: &SharedMempool, block: BlockNumber) -> Result<(), BuildBlockError> {
         mempool.lock().map_err(BuildBlockError::MempoolPoisoned)?.rollback_block(block);
         Ok(())
@@ -430,11 +409,12 @@ struct ProposedBlockTelemetry {
     erased_notes_count: usize,
 }
 
-/// Emit the input and output note related attributes. We do this here since this is the earliest
-/// point we can set attributes after note erasure was done.
+/// Extract the input and output note related telemetry. We do this here since this is the earliest
+/// point we can observe it after note erasure was done.
 fn proposed_block_telemetry(block: &ProposedBlock) -> ProposedBlockTelemetry {
     let num_block_created_notes: usize = block.output_note_batches().iter().map(Vec::len).sum();
     let num_batch_created_notes = block.batches().num_created_notes();
+
     let num_erased_notes = num_batch_created_notes
         .checked_sub(num_block_created_notes)
         .expect("all batches in the block should not create fewer notes than the block itself");

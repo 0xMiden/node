@@ -1,4 +1,5 @@
 use std::pin::Pin;
+use std::sync::Arc;
 
 use miden_node_proto::generated as grpc;
 use miden_node_store::BlockStore;
@@ -42,10 +43,26 @@ impl grpc::server::validator_api::BlockSubscription for ValidatorService {
     async fn handle(&self, request: Self::Input) -> tonic::Result<Self::ItemStream> {
         miden_node_utils::tracing::miden_span_record!(block.from = request.block_from);
 
+        let committed_tip = self.committed_tip.borrow().as_u32();
+        if request.block_from > committed_tip {
+            return Err(Status::out_of_range(
+                "subscriber's requested starting block should be <= the committed chain tip",
+            ));
+        }
+
+        // Hold the exclusive backup lock for the entire lifetime of the stream. While a backup
+        // subscription is active no other RPCs may run, and vice versa.
+        let guard = Arc::clone(&self.serve_lock).try_write_owned().map_err(|_| {
+            Status::resource_exhausted("cannot stream backup while validator is serving requests")
+        })?;
+
         let from = BlockNumber::from(request.block_from);
         let source = BlockStoreSource { block_store: self.block_store.clone() };
-        let stream = run_stream(from, self.committed_tip.subscribe(), source)
-            .map(|event| event.map_err(subscription_error_to_status));
+        let stream = run_stream(from, self.committed_tip.subscribe(), source).map(move |event| {
+            // Keep the guard alive for as long as the stream is polled.
+            let _guard = &guard;
+            event.map_err(subscription_error_to_status)
+        });
 
         Ok(Box::pin(stream))
     }
@@ -103,6 +120,9 @@ fn subscription_error_to_status(err: SubscriptionStreamError<BlockSubscriptionEr
         SubscriptionStreamError::TooSlow => {
             Status::resource_exhausted("subscriber is too slow to keep up with the chain")
         },
+        SubscriptionStreamError::TooFarAhead => Status::out_of_range(
+            "subscriber's requested starting block is too far ahead of the chain tip",
+        ),
         SubscriptionStreamError::Source(BlockSubscriptionError::NotFound(block_num)) => {
             Status::not_found(format!("block {block_num} not found"))
         },

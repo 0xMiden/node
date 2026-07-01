@@ -54,7 +54,7 @@ block data when this occurs. See [Recovery](/network-operator/recovery) for the 
 | `--rpc.network-tx-auth-header-value` | Shared secret for authorized network transaction flow. |
 | `--validator.url`                    | Internal validator service URL.                        |
 | `--ntx-builder.url`                  | Internal network transaction builder service URL.      |
-| `--batch.interval`                   | Batch production interval.                             |
+| `--batch.interval`                   | Maximum interval between batch scheduler checks.       |
 | `--block.interval`                   | Block production interval.                             |
 
 Use `miden-node sequencer --help` for the complete current option list.
