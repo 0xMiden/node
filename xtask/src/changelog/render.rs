@@ -1,9 +1,15 @@
 use std::fmt::Write as _;
 
-use super::{Impact, ReleaseNoteEntry, Scope};
+use super::{Impact, InvalidChangelogEntry, ReleaseNoteEntry, Scope};
 
-pub(super) fn release_notes(release_tag: &str, entries: &[ReleaseNoteEntry]) -> String {
-    let mut notes = format!("Release {release_tag}\n");
+pub(super) fn release_notes(
+    title: &str,
+    entries: &[ReleaseNoteEntry],
+    invalid_entries: &[InvalidChangelogEntry],
+) -> String {
+    let mut notes = format!("{title}\n");
+
+    append_invalid_entries(&mut notes, invalid_entries);
 
     if entries.is_empty() {
         notes.push_str("\nNo release-note-worthy changes.\n");
@@ -35,6 +41,25 @@ pub(super) fn release_notes(release_tag: &str, entries: &[ReleaseNoteEntry]) -> 
     }
 
     notes
+}
+
+fn append_invalid_entries(notes: &mut String, invalid_entries: &[InvalidChangelogEntry]) {
+    if invalid_entries.is_empty() {
+        return;
+    }
+
+    let mut invalid_entries = invalid_entries.iter().collect::<Vec<_>>();
+    invalid_entries.sort_by_key(|entry| entry.order);
+
+    writeln!(notes, "\n## Changelog Entries Requiring Attention\n")
+        .expect("writing to String cannot fail");
+
+    for entry in invalid_entries {
+        let pr_number = entry.pr_number;
+        let reason = &entry.reason;
+
+        writeln!(notes, "- #{pr_number}: {reason}").expect("writing to String cannot fail");
+    }
 }
 
 fn append_impact_section(
@@ -153,6 +178,11 @@ mod tests {
 
     #[test]
     fn renders_callouts_and_changes_by_scope() {
+        let invalid_entries = vec![InvalidChangelogEntry {
+            pr_number: 9,
+            reason: "missing `## Changelog` section".to_owned(),
+            order: 0,
+        }];
         let entries = vec![
             ReleaseNoteEntry {
                 pr_number: 10,
@@ -184,11 +214,15 @@ mod tests {
             },
         ];
 
-        let notes = release_notes("v0.16.0", &entries);
+        let notes = release_notes("Release v0.16.0", &entries, &invalid_entries);
 
         assert_eq!(
             notes,
             r#"Release v0.16.0
+
+## Changelog Entries Requiring Attention
+
+- #9: missing `## Changelog` section
 
 ## Breaking Changes
 

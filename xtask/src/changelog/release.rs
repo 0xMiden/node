@@ -4,10 +4,21 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail, ensure};
 
-use super::ReleaseNoteEntry;
 use super::pr::{self, ChangelogDocument};
+use super::{InvalidChangelogEntry, ReleaseNoteEntry};
 
-pub(super) fn release_note_entries(release_tag: &str) -> Result<Vec<ReleaseNoteEntry>> {
+pub(super) struct ChangelogEntries {
+    pub(super) entries: Vec<ReleaseNoteEntry>,
+    pub(super) invalid_entries: Vec<InvalidChangelogEntry>,
+}
+
+pub(super) struct CurrentChangelog {
+    pub(super) title: String,
+    pub(super) entries: Vec<ReleaseNoteEntry>,
+    pub(super) invalid_entries: Vec<InvalidChangelogEntry>,
+}
+
+pub(super) fn release_changelog_entries(release_tag: &str) -> Result<ChangelogEntries> {
     ensure!(
         !release_tag.trim().is_empty(),
         "release tag must not be empty"
@@ -25,11 +36,45 @@ pub(super) fn release_note_entries(release_tag: &str) -> Result<Vec<ReleaseNoteE
     );
 
     let previous_stable_tag = previous_stable_tag(release.version, release_commit)?;
-    let commits = release_commits(&previous_stable_tag, release_tag)?;
+    let commits = commits_since_tag(&previous_stable_tag, &format!("refs/tags/{release_tag}"))?;
+    ensure!(
+        !commits.is_empty(),
+        "release range refs/tags/{previous_stable_tag}..refs/tags/{release_tag} contains no commits"
+    );
     let repo = github_repo()?;
-    let pull_requests = pull_requests_for_commits(&repo, &commits)?;
+    let pull_requests = pull_requests_for_commits(&repo, &commits, MissingPullRequest::Error)?;
 
     changelog_entries_for_pull_requests(&repo, &pull_requests)
+}
+
+pub(super) fn current_changelog_entries() -> Result<CurrentChangelog> {
+    let head_commit =
+        git_output(&["rev-parse", "--verify", "HEAD^{commit}"]).context("resolving HEAD")?;
+    let head_commit = head_commit.trim();
+
+    ensure!(!head_commit.is_empty(), "HEAD did not resolve to a commit");
+
+    let previous_stable_tag = latest_stable_tag(head_commit)?;
+    let commits = commits_since_tag(&previous_stable_tag, "HEAD")?;
+
+    if commits.is_empty() {
+        return Ok(CurrentChangelog {
+            title: format!("Changes since {previous_stable_tag}"),
+            entries: Vec::new(),
+            invalid_entries: Vec::new(),
+        });
+    }
+
+    let repo = github_repo()?;
+    let pull_requests =
+        pull_requests_for_commits(&repo, &commits, MissingPullRequest::WarnAndSkip)?;
+    let changelog = changelog_entries_for_pull_requests(&repo, &pull_requests)?;
+
+    Ok(CurrentChangelog {
+        title: format!("Changes since {previous_stable_tag}"),
+        entries: changelog.entries,
+        invalid_entries: changelog.invalid_entries,
+    })
 }
 
 #[derive(Debug)]
@@ -42,6 +87,17 @@ struct StableVersion {
     major: u64,
     minor: u64,
     patch: u64,
+}
+
+#[derive(Clone, Copy)]
+enum MissingPullRequest {
+    Error,
+    WarnAndSkip,
+}
+
+enum CommitPullRequests {
+    Found(Vec<u64>),
+    CommitNotFound,
 }
 
 impl ReleaseTag {
@@ -104,21 +160,7 @@ impl fmt::Display for StableVersion {
 }
 
 fn previous_stable_tag(before: StableVersion, release_commit: &str) -> Result<String> {
-    let tags = git_output(&[
-        "tag",
-        "--merged",
-        release_commit,
-        "--list",
-        "v*",
-        "--sort=-v:refname",
-    ])
-    .context("listing stable release tags")?;
-
-    for tag in tags.lines().map(str::trim).filter(|tag| !tag.is_empty()) {
-        let Some(version) = StableVersion::parse_stable_tag(tag) else {
-            continue;
-        };
-
+    for (tag, version) in stable_tags_merged_into(release_commit)? {
         if version < before {
             return Ok(tag.to_owned());
         }
@@ -127,23 +169,46 @@ fn previous_stable_tag(before: StableVersion, release_commit: &str) -> Result<St
     bail!("could not find a previous stable release tag before v{before}");
 }
 
-fn release_commits(previous_stable_tag: &str, release_tag: &str) -> Result<Vec<String>> {
-    let range = format!("refs/tags/{previous_stable_tag}..refs/tags/{release_tag}");
+fn latest_stable_tag(release_commit: &str) -> Result<String> {
+    stable_tags_merged_into(release_commit)?
+        .into_iter()
+        .map(|(tag, _version)| tag)
+        .next()
+        .context("could not find a stable release tag reachable from HEAD")
+}
+
+fn stable_tags_merged_into(commit: &str) -> Result<Vec<(String, StableVersion)>> {
+    let tags = git_output(&[
+        "tag",
+        "--merged",
+        commit,
+        "--list",
+        "v*",
+        "--sort=-v:refname",
+    ])
+    .context("listing stable release tags")?;
+
+    Ok(tags
+        .lines()
+        .map(str::trim)
+        .filter(|tag| !tag.is_empty())
+        .filter_map(|tag| {
+            StableVersion::parse_stable_tag(tag).map(|version| (tag.to_owned(), version))
+        })
+        .collect())
+}
+
+fn commits_since_tag(previous_stable_tag: &str, end_ref: &str) -> Result<Vec<String>> {
+    let range = format!("refs/tags/{previous_stable_tag}..{end_ref}");
     let commits = git_output(&["log", "--reverse", "--format=%H", &range])
         .with_context(|| format!("listing commits in {range}"))?;
-    let commits = commits
+
+    Ok(commits
         .lines()
         .map(str::trim)
         .filter(|commit| !commit.is_empty())
         .map(str::to_owned)
-        .collect::<Vec<_>>();
-
-    ensure!(
-        !commits.is_empty(),
-        "release range {range} contains no commits"
-    );
-
-    Ok(commits)
+        .collect())
 }
 
 fn github_repo() -> Result<String> {
@@ -172,17 +237,41 @@ fn github_repo() -> Result<String> {
     Ok(repo.to_owned())
 }
 
-fn pull_requests_for_commits(repo: &str, commits: &[String]) -> Result<Vec<u64>> {
+fn pull_requests_for_commits(
+    repo: &str,
+    commits: &[String],
+    missing_pull_request: MissingPullRequest,
+) -> Result<Vec<u64>> {
     let mut pull_requests = Vec::new();
 
     for commit in commits {
         let commit_pull_requests = pull_requests_for_commit(repo, commit)
             .with_context(|| format!("fetching pull requests associated with commit {commit}"))?;
+        let CommitPullRequests::Found(commit_pull_requests) = commit_pull_requests else {
+            match missing_pull_request {
+                MissingPullRequest::Error => {
+                    bail!("commit {commit} was not found in GitHub repository {repo}");
+                }
+                MissingPullRequest::WarnAndSkip => {
+                    eprintln!(
+                        "warning: skipping commit {commit}; not found in GitHub repository {repo}"
+                    );
+                    continue;
+                }
+            }
+        };
 
-        ensure!(
-            !commit_pull_requests.is_empty(),
-            "commit {commit} has no associated pull request"
-        );
+        if commit_pull_requests.is_empty() {
+            match missing_pull_request {
+                MissingPullRequest::Error => {
+                    bail!("commit {commit} has no associated pull request");
+                }
+                MissingPullRequest::WarnAndSkip => {
+                    eprintln!("warning: skipping commit {commit}; no associated pull request");
+                    continue;
+                }
+            }
+        }
 
         for pull_request in commit_pull_requests {
             if !pull_requests.contains(&pull_request) {
@@ -194,7 +283,7 @@ fn pull_requests_for_commits(repo: &str, commits: &[String]) -> Result<Vec<u64>>
     Ok(pull_requests)
 }
 
-fn pull_requests_for_commit(repo: &str, commit: &str) -> Result<Vec<u64>> {
+fn pull_requests_for_commit(repo: &str, commit: &str) -> Result<CommitPullRequests> {
     let endpoint = format!("repos/{repo}/commits/{commit}/pulls");
     let mut command = Command::new("gh");
     command.args([
@@ -206,9 +295,12 @@ fn pull_requests_for_commit(repo: &str, commit: &str) -> Result<Vec<u64>> {
         ".[].number",
     ]);
 
-    let output = command_output(&mut command)?;
+    let output = gh_api_output(&mut command)?;
+    let Some(output) = output else {
+        return Ok(CommitPullRequests::CommitNotFound);
+    };
 
-    output
+    let pull_requests = output
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
@@ -216,22 +308,33 @@ fn pull_requests_for_commit(repo: &str, commit: &str) -> Result<Vec<u64>> {
             line.parse::<u64>()
                 .with_context(|| format!("parsing pull request number `{line}`"))
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(CommitPullRequests::Found(pull_requests))
 }
 
 fn changelog_entries_for_pull_requests(
     repo: &str,
     pull_requests: &[u64],
-) -> Result<Vec<ReleaseNoteEntry>> {
+) -> Result<ChangelogEntries> {
     let mut entries = Vec::new();
+    let mut invalid_entries = Vec::new();
 
     for (order, pull_request) in pull_requests.iter().enumerate() {
         let body = pull_request_body(repo, *pull_request)
             .with_context(|| format!("fetching pull request #{pull_request} body"))?;
 
-        let document = pr::changelog_document_from_pr_body(&body).with_context(|| {
-            format!("parsing changelog metadata in pull request #{pull_request}")
-        })?;
+        let document = match pr::changelog_document_from_pr_body(&body) {
+            Ok(document) => document,
+            Err(err) => {
+                invalid_entries.push(InvalidChangelogEntry {
+                    pr_number: *pull_request,
+                    reason: normalize_description(&format!("{err:#}")),
+                    order,
+                });
+                continue;
+            }
+        };
 
         let ChangelogDocument::Entries(pr_entries) = document else {
             continue;
@@ -248,7 +351,10 @@ fn changelog_entries_for_pull_requests(
         }
     }
 
-    Ok(entries)
+    Ok(ChangelogEntries {
+        entries,
+        invalid_entries,
+    })
 }
 
 fn pull_request_body(repo: &str, pull_request: u64) -> Result<String> {
@@ -291,6 +397,31 @@ fn command_output(command: &mut Command) -> Result<String> {
     }
 
     String::from_utf8(output.stdout)
+        .with_context(|| format!("command `{command_display}` printed non-UTF-8 output"))
+}
+
+fn gh_api_output(command: &mut Command) -> Result<Option<String>> {
+    let command_display = format!("{command:?}");
+    let output = command
+        .output()
+        .with_context(|| format!("running `{command_display}`"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        if stderr.contains("No commit found for SHA") {
+            return Ok(None);
+        }
+
+        bail!(
+            "command `{command_display}` failed with status {}: {}",
+            output.status,
+            stderr.trim()
+        );
+    }
+
+    String::from_utf8(output.stdout)
+        .map(Some)
         .with_context(|| format!("command `{command_display}` printed non-UTF-8 output"))
 }
 

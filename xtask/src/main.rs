@@ -5,7 +5,7 @@ use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
-use clap::{Args, Parser, Subcommand};
+use clap::{ArgGroup, Args, Parser, Subcommand};
 
 #[derive(Debug, Parser)]
 #[command(about = "Repository maintenance tasks", name = "xtask")]
@@ -33,12 +33,25 @@ enum Changelog {
         pr_body_file: PathBuf,
     },
 
-    /// Render release notes for a release tag.
-    Render {
-        /// Release tag to render notes for.
-        #[arg(long)]
-        release_tag: String,
-    },
+    /// Render release notes.
+    Render(RenderArgs),
+}
+
+#[derive(Debug, Args)]
+#[command(group(
+    ArgGroup::new("target")
+        .required(true)
+        .multiple(false)
+        .args(["release_tag", "current"])
+))]
+struct RenderArgs {
+    /// Release tag to render notes for.
+    #[arg(long)]
+    release_tag: Option<String>,
+
+    /// Render notes for the current commit range since the latest stable release tag.
+    #[arg(long)]
+    current: bool,
 }
 
 impl Changelog {
@@ -56,8 +69,15 @@ impl Changelog {
                     emit_github_error_annotation("Invalid changelog metadata", err);
                 })
             },
-            Self::Render { release_tag } => {
-                let notes = changelog::render_release_notes(&release_tag)?;
+            Self::Render(args) => {
+                let notes = if args.current {
+                    changelog::render_current_changelog()?
+                } else {
+                    let release_tag = args
+                        .release_tag
+                        .expect("clap requires either --release-tag or --current");
+                    changelog::render_release_notes(&release_tag)?
+                };
                 let mut stdout = io::stdout().lock();
                 stdout.write_all(notes.as_bytes())?;
                 stdout.flush()?;
