@@ -23,10 +23,10 @@ use miden_standards::code_builder::CodeBuilder;
 use miden_tx::FailedNote;
 use tokio::sync::{Notify, Semaphore, mpsc};
 
-use crate::NoteError;
 use crate::chain_state::{ChainState, SharedChainState};
 use crate::clients::RpcClient;
 use crate::db::Db;
+use crate::{LOG_TARGET, NoteError};
 
 /// Compiles the standalone transaction script that sets the on-chain expiration of a network
 /// transaction to `delta` blocks. The script is account-independent, so the builder compiles it
@@ -357,7 +357,11 @@ impl AccountActor {
                 }
                 // Idle timeout: actor has been idle too long, deactivate.
                 () = idle_timeout_sleep => {
-                    tracing::info!(%account_id, "Account actor deactivated due to idle timeout");
+                    tracing::debug!(
+                        target: LOG_TARGET,
+                        %account_id,
+                        "Account actor deactivated due to idle timeout"
+                    );
                     return Ok(());
                 }
             }
@@ -405,6 +409,7 @@ impl AccountActor {
                 .apply_delta(&pending_delta)
                 .context("failed to apply landed transaction delta to in-memory account")?;
             tracing::info!(
+                target: LOG_TARGET,
                 account_id = %self.account_id,
                 tx_id = %submitted_tx_id,
                 "submitted transaction landed; advanced in-memory account by its delta",
@@ -416,6 +421,7 @@ impl AccountActor {
         let elapsed = chain_tip.checked_sub(submitted_at.as_u32()).unwrap_or_default();
         if elapsed.as_u32() >= u32::from(self.config.tx_expiration_delta.get()) {
             tracing::info!(
+                target: LOG_TARGET,
                 account_id = %self.account_id,
                 %submitted_at,
                 current_tip = %chain_tip,
@@ -473,6 +479,7 @@ impl AccountActor {
                 })
                 .collect::<Vec<_>>();
             tracing::info!(
+                target: LOG_TARGET,
                 %account_id,
                 rejected_count = failed_notes.len(),
                 "dropping network notes whose script roots are not allowlisted",
@@ -526,6 +533,7 @@ impl AccountActor {
         let account_id = tx_candidate.account.id();
         let note_ids: Vec<_> = notes.iter().map(|n| n.as_note().id()).collect();
         tracing::info!(
+            target: LOG_TARGET,
             %account_id,
             ?note_ids,
             num_notes = notes.len(),
@@ -541,6 +549,7 @@ impl AccountActor {
                 fetched_scripts,
             }) => {
                 tracing::info!(
+                    target: LOG_TARGET,
                     %account_id,
                     %tx_id,
                     num_failed = failed.len(),
@@ -571,6 +580,7 @@ impl AccountActor {
             Err(err) => {
                 let error_msg = err.as_report();
                 tracing::error!(
+                    target: LOG_TARGET,
                     %account_id,
                     ?note_ids,
                     err = %error_msg,
@@ -587,9 +597,12 @@ impl AccountActor {
                             .iter()
                             .map(|note| {
                                 tracing::info!(
-                                    note.id = %note.as_note().id(),
-                                    nullifier = %note.as_note().nullifier(),
-                                    err = %error_msg,
+                                    target: LOG_TARGET,
+                                    {
+                                        note.id = %note.as_note().id(),
+                                        nullifier = %note.as_note().nullifier(),
+                                        err = %error_msg,
+                                    },
                                     "note failed: transaction execution error",
                                 );
                                 (note.as_note().nullifier(), error.clone())
@@ -650,9 +663,12 @@ fn log_failed_notes(failed: Vec<FailedNote>) -> Vec<(Nullifier, NoteError)> {
         .map(|f| {
             let error_msg = f.error().as_report();
             tracing::info!(
-                note.id = %f.note().id(),
-                nullifier = %f.note().nullifier(),
-                err = %error_msg,
+                target: LOG_TARGET,
+                {
+                    note.id = %f.note().id(),
+                    nullifier = %f.note().nullifier(),
+                    err = %error_msg,
+                },
                 "note failed: consumability check",
             );
             let error: NoteError = Arc::new(std::io::Error::other(error_msg));

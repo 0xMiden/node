@@ -100,6 +100,7 @@ impl BlockSync {
         .retry(retry::constant(RECONNECT_DELAY, None))
         .notify(|err, _| {
             warn!(
+                target: LOG_TARGET,
                 err = %format!("{err:#}"),
                 retry.delay = %RECONNECT_DELAY.as_secs(),
                 "Block sync failed, retrying",
@@ -159,6 +160,7 @@ impl ProofSync {
         .retry(retry::constant(RECONNECT_DELAY, None))
         .notify(|err, _| {
             warn!(
+                target: LOG_TARGET,
                 err = %format!("{err:#}"),
                 retry.delay = %RECONNECT_DELAY.as_secs(),
                 "Proof sync failed, retrying",
