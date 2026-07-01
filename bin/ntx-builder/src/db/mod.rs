@@ -9,8 +9,9 @@ use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockHeader, BlockNumber, SignedBlock};
 use miden_protocol::crypto::merkle::mmr::PartialMmr;
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
+// Only the test-only `upsert_account_for_test` helper names `TransactionId` directly.
+#[cfg(test)]
 use miden_protocol::transaction::TransactionId;
-use miden_standards::note::AccountTargetNetworkNote;
 use tracing::info;
 
 use crate::committed_block::CommittedBlockEffects;
@@ -173,21 +174,6 @@ impl Db {
     // ACTOR-PATH QUERIES
     // ============================================================================================
 
-    /// Returns `true` if there are notes available for consumption by the given account.
-    pub async fn has_available_notes(
-        &self,
-        account_id: AccountId,
-        block_num: BlockNumber,
-        max_attempts: usize,
-    ) -> Result<bool> {
-        self.inner
-            .query("has_available_notes", move |conn| {
-                let notes = queries::available_notes(conn, account_id, block_num, max_attempts)?;
-                Ok(!notes.is_empty())
-            })
-            .await
-    }
-
     /// Returns `true` if a committed state for the given account is tracked locally.
     ///
     /// The coordinator uses this to defer actor spawning until the account's creation transaction
@@ -211,16 +197,33 @@ impl Db {
             .await
     }
 
-    /// Returns the notes currently available for consumption by the given account.
+    /// Returns the notes currently available for consumption by the given account, along with the
+    /// earliest block at which a currently-ineligible note becomes eligible (see
+    /// [`queries::AvailableNotes`]).
     pub async fn available_notes(
         &self,
         account_id: AccountId,
         block_num: BlockNumber,
         max_note_attempts: usize,
-    ) -> Result<Vec<AccountTargetNetworkNote>> {
+    ) -> Result<queries::AvailableNotes> {
         self.inner
             .query("available_notes", move |conn| {
                 queries::available_notes(conn, account_id, block_num, max_note_attempts)
+            })
+            .await
+    }
+
+    /// Returns `true` if the account has any pending (unconsumed, within attempt budget) note. Used
+    /// by the coordinator to decide whether to respawn an actor that just idle-timed-out, without
+    /// loading or deserializing the notes themselves.
+    pub async fn account_has_pending_notes(
+        &self,
+        account_id: AccountId,
+        max_attempts: usize,
+    ) -> Result<bool> {
+        self.inner
+            .query("account_has_pending_notes", move |conn| {
+                queries::account_has_pending_notes(conn, account_id, max_attempts)
             })
             .await
     }
@@ -232,15 +235,6 @@ impl Db {
             .query("accounts_with_pending_notes", move |conn| {
                 queries::accounts_with_pending_notes(conn, max_attempts)
             })
-            .await
-    }
-
-    /// Returns the latest transaction recorded against `account_id` in a committed block, if any.
-    /// An actor waiting on its submission compares this against its own transaction id to confirm
-    /// landing.
-    pub async fn account_last_tx(&self, account_id: AccountId) -> Result<Option<TransactionId>> {
-        self.inner
-            .query("account_last_tx", move |conn| queries::account_last_tx(conn, account_id))
             .await
     }
 

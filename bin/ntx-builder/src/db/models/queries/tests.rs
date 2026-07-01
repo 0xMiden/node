@@ -119,13 +119,20 @@ fn available_notes_excludes_consumed_notes() {
     let note = mock_single_target_note(account_id, 21);
     insert_network_notes(conn, std::slice::from_ref(&note)).unwrap();
 
-    assert_eq!(available_notes(conn, account_id, BlockNumber::from(1), 30).unwrap().len(), 1);
+    assert_eq!(
+        available_notes(conn, account_id, BlockNumber::from(1), 30)
+            .unwrap()
+            .eligible
+            .len(),
+        1
+    );
 
     mark_notes_consumed(conn, &[note.as_note().nullifier()], BlockNumber::from(7)).unwrap();
 
     assert!(
         available_notes(conn, account_id, BlockNumber::from(1000), 30)
             .unwrap()
+            .eligible
             .is_empty()
     );
 }
@@ -141,7 +148,11 @@ fn available_notes_returns_unconsumed_under_attempt_cap() {
     insert_network_notes(conn, std::slice::from_ref(&note)).unwrap();
 
     let available = available_notes(conn, account_id, BlockNumber::from(1), 30).unwrap();
-    assert_eq!(available.len(), 1);
+    assert_eq!(available.eligible.len(), 1);
+    assert!(
+        available.next_retry_block.is_none(),
+        "an eligible note leaves nothing to re-check later",
+    );
 }
 
 #[test]
@@ -158,7 +169,41 @@ fn available_notes_excludes_attempts_at_cap() {
     }
 
     let available = available_notes(conn, account_id, BlockNumber::from(1000), 30).unwrap();
-    assert!(available.is_empty(), "notes at the attempt cap should not be available");
+    assert!(
+        available.eligible.is_empty(),
+        "notes at the attempt cap should not be available"
+    );
+    assert!(
+        available.next_retry_block.is_none(),
+        "notes at the attempt cap are dead and never become eligible again",
+    );
+}
+
+#[test]
+fn available_notes_reports_backoff_next_retry_block() {
+    let (conn, _dir) = &mut test_conn();
+    let account_id = mock_network_account_id();
+    let note = mock_single_target_note(account_id, 17);
+    insert_network_notes(conn, std::slice::from_ref(&note)).unwrap();
+
+    // One failed attempt at block 5. With attempts = 1 the backoff threshold is round(e^0.25) = 1,
+    // so the note is eligible again once `chain_tip - last_attempt > 1`, i.e. starting at block 7.
+    let nullifier = note.as_note().nullifier();
+    notes_failed(conn, &[(nullifier, test_note_error("boom"))], BlockNumber::from(5)).unwrap();
+
+    // Block 6: still in backoff. Nothing eligible, and the re-check is scheduled for block 7.
+    let at_six = available_notes(conn, account_id, BlockNumber::from(6), 30).unwrap();
+    assert!(at_six.eligible.is_empty(), "note is still in backoff at block 6");
+    assert_eq!(
+        at_six.next_retry_block,
+        Some(BlockNumber::from(7)),
+        "next_retry_block must equal the first block at which has_backoff_passed turns true",
+    );
+
+    // Block 7: eligible, with nothing left to re-check.
+    let at_seven = available_notes(conn, account_id, BlockNumber::from(7), 30).unwrap();
+    assert_eq!(at_seven.eligible.len(), 1, "backoff has elapsed by block 7");
+    assert!(at_seven.next_retry_block.is_none());
 }
 
 // CHAIN STATE

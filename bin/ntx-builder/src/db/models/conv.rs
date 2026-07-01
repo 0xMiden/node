@@ -55,6 +55,9 @@ pub fn account_id_from_bytes(bytes: &[u8]) -> Result<AccountId, DatabaseError> {
     AccountId::read_from_bytes(bytes).map_err(|e| DatabaseError::deserialization("account id", e))
 }
 
+/// Only the test-only `account_last_tx` read accessor decodes `last_tx_id` back into a
+/// [`TransactionId`]; production code never reads the column.
+#[cfg(test)]
 pub fn transaction_id_from_bytes(bytes: &[u8]) -> Result<TransactionId, DatabaseError> {
     TransactionId::read_from_bytes(bytes)
         .map_err(|e| DatabaseError::deserialization("transaction id", e))

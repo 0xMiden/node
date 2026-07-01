@@ -68,11 +68,16 @@ pub fn upsert_account(
 /// Returns the latest transaction recorded against `account_id`, or `None` if the account is not
 /// tracked locally.
 ///
+/// The committed-transaction landing check now reads `last_committed_tx` from the
+/// [`AccountView`](crate::coordinator) the coordinator pushes, so this read accessor is only used by
+/// tests to verify that `upsert_account` persists `accounts.last_tx_id` correctly.
+///
 /// # Raw SQL
 ///
 /// ```sql
 /// SELECT last_tx_id FROM accounts WHERE account_id = ?1
 /// ```
+#[cfg(test)]
 pub fn account_last_tx(
     conn: &mut SqliteConnection,
     account_id: AccountId,

@@ -21,11 +21,12 @@ use miden_protocol::transaction::{TransactionId, TransactionScript};
 use miden_remote_prover_client::RemoteTransactionProver;
 use miden_standards::code_builder::CodeBuilder;
 use miden_tx::FailedNote;
-use tokio::sync::{Notify, Semaphore, mpsc};
+use tokio::sync::{Semaphore, mpsc, watch};
 
 use crate::NoteError;
 use crate::chain_state::{ChainState, SharedChainState};
 use crate::clients::RpcClient;
+use crate::coordinator::AccountView;
 use crate::db::Db;
 
 /// Compiles the standalone transaction script that sets the on-chain expiration of a network
@@ -194,11 +195,11 @@ enum ActorMode {
     /// candidate.
     NotesAvailable,
     /// A network transaction has been submitted; the actor waits for it to land in a committed
-    /// block. Landing is detected from the local DB: `apply_committed_block` records the
-    /// transaction id that updated each network account as `accounts.last_tx_id`, so the actor
-    /// checks whether its own submitted id is the account's latest. On landing it applies
-    /// `pending_delta` to its in-memory account, avoiding a re-read of the full account from the
-    /// database.
+    /// block. Landing is detected from the pushed [`AccountView`]: the coordinator reports the
+    /// latest transaction id committed against each network account (mirroring
+    /// `accounts.last_tx_id`), so the actor checks whether its own submitted id is the account's
+    /// latest. On landing it applies `pending_delta` to its in-memory account, avoiding a re-read
+    /// of the full account from the database.
     WaitForBlock {
         /// Id of the network transaction the actor submitted.
         submitted_tx_id: TransactionId,
@@ -220,31 +221,32 @@ enum ActorMode {
 ///
 /// ## Core Responsibilities
 ///
-/// - **State Management**: Queries the database for the current state of network accounts,
-///   including available notes and the latest account state.
+/// - **State Management**: Tracks the account's committed state in memory, advancing it from the
+///   [`AccountView`] the coordinator pushes after each block.
 /// - **Transaction Selection**: Selects viable notes and constructs a [`TransactionCandidate`]
-///   based on current chain state and DB queries.
+///   based on current chain state and a DB query for the account's available notes.
 /// - **Transaction Execution**: Executes selected transactions using either local or remote
 ///   proving.
-/// - **Chain Integration**: Reacts to committed-chain updates persisted by the coordinator to stay
-///   synchronized with the network state.
+/// - **Chain Integration**: Reacts to per-account [`AccountView`] updates pushed by the coordinator
+///   to stay synchronized with the network state.
 ///
 /// ## Lifecycle
 ///
 /// 1. **Initialization**: Loads the committed account state (guaranteed to exist, since the
 ///    coordinator only spawns actors for committed accounts), then checks DB for available notes.
-/// 2. **Event Loop**: Re-evaluates database state on notification and executes transactions.
+/// 2. **Event Loop**: Re-evaluates state from the pushed [`AccountView`] and executes transactions.
 /// 3. **Transaction Processing**: Selects, executes, proves, and submits transactions through RPC.
-/// 4. **State Updates**: Committed-chain updates are persisted to DB before actors are
-///    notified.
-/// 5. **Shutdown**: Terminates gracefully on idle timeout, or returns an error on unrecoverable
-///    failures.
+/// 4. **State Updates**: Committed-chain updates are persisted to DB and reflected in the view
+///    before actors observe them.
+/// 5. **Shutdown**: Terminates gracefully on idle timeout (only when it has no pending notes), or
+///    returns an error on unrecoverable failures.
 ///
 /// ## Concurrency
 ///
 /// Each actor runs in its own async task and communicates with other system components through
-/// shared state. The coordinator signals state changes by notifying a shared [`Notify`]; the
-/// actor exits of its own accord when idle for longer than [`ActorConfig::idle_timeout`].
+/// shared state. The coordinator signals state changes by pushing an [`AccountView`] over a watch
+/// channel; the actor exits of its own accord when idle for longer than
+/// [`ActorConfig::idle_timeout`].
 pub struct AccountActor {
     /// The network account this actor is responsible for.
     account_id: AccountId,
@@ -254,26 +256,18 @@ pub struct AccountActor {
     state: State,
     /// Per-actor configuration knobs.
     config: ActorConfig,
-    /// Notification signal from the coordinator indicating that DB state relevant to this actor may
-    /// have changed. The actor re-evaluates its state from the DB on each notification.
-    notify: Arc<Notify>,
     /// Channel for sending requests to the coordinator.
     request: mpsc::Sender<ActorRequest>,
 }
 
 impl AccountActor {
     /// Constructs a new account actor with the given configuration.
-    pub fn new(
-        account_id: AccountId,
-        actor_context: &AccountActorContext,
-        notify: Arc<Notify>,
-    ) -> Self {
+    pub fn new(account_id: AccountId, actor_context: &AccountActorContext) -> Self {
         Self {
             account_id,
             clients: actor_context.clients.clone(),
             state: actor_context.state.clone(),
             config: actor_context.config,
-            notify,
             request: actor_context.request_tx.clone(),
         }
     }
@@ -284,7 +278,11 @@ impl AccountActor {
     ///
     /// - `Ok(())`: intentional shutdown (idle timeout).
     /// - `Err(_)`: crash (database error, semaphore failure, or any other bug).
-    pub async fn run(self, semaphore: Arc<Semaphore>) -> anyhow::Result<()> {
+    pub async fn run(
+        self,
+        semaphore: Arc<Semaphore>,
+        mut view_rx: watch::Receiver<AccountView>,
+    ) -> anyhow::Result<()> {
         let account_id = self.account_id;
 
         // Load the account once and keep it in memory for the actor's lifetime, advancing it from
@@ -298,24 +296,31 @@ impl AccountActor {
             .context("failed to load committed account")?
             .context("no committed state for the account; the coordinator must only spawn actors for committed accounts")?;
 
-        // Determine initial mode by checking the DB for available notes.
+        // Determine initial mode by querying the DB for available notes. `next_retry_block` records
+        // when a currently-ineligible note (awaiting backoff or an execution-hint window) becomes
+        // eligible, so the actor can wait for that block instead of re-querying every block.
         let block_num = self.state.chain.chain_tip_block_number();
-        let has_notes = self
+        let availability = self
             .state
             .db
-            .has_available_notes(account_id, block_num, self.config.max_note_attempts)
+            .available_notes(account_id, block_num, self.config.max_note_attempts)
             .await
             .context("failed to check for available notes")?;
-        let mut mode = if has_notes {
-            ActorMode::NotesAvailable
-        } else {
+        let mut next_retry_block = availability.next_retry_block;
+        let mut mode = if availability.eligible.is_empty() {
             ActorMode::NoViableNotes
+        } else {
+            ActorMode::NotesAvailable
         };
 
+        // Local cursor over the view's monotone note counter. Mark the spawn-time view as seen so
+        // the first `changed()` corresponds to the next committed block.
+        let mut notes_cursor = view_rx.borrow_and_update().notes_seen;
+
         // Absolute instant at which the actor deactivates if it has done no real work. The
-        // coordinator wakes every actor on every committed block, so a relative timer would restart
-        // on each notification and a workless actor would never expire on an active chain. The
-        // deadline is only pushed back when the actor actually executes a transaction.
+        // coordinator pushes a view to every actor on every committed block, so a relative timer
+        // would restart on each update and a workless actor would never expire on an active chain.
+        // The deadline is only pushed back when the actor actually executes a transaction.
         let mut idle_deadline = tokio::time::Instant::now() + self.config.idle_timeout;
 
         loop {
@@ -329,22 +334,33 @@ impl AccountActor {
 
             // The idle timer only ticks while there is nothing to do.
             let idle_timeout_sleep = match mode {
-                ActorMode::NoViableNotes => tokio::time::sleep_until(idle_deadline).boxed(),
+                ActorMode::NoViableNotes if next_retry_block.is_none() => {
+                    tokio::time::sleep_until(idle_deadline).boxed()
+                },
                 _ => std::future::pending().boxed(),
             };
 
             tokio::select! {
-                // A committed block touched this account (or the coordinator woke everyone): the
-                // submission may have landed (advancing the in-memory account by its own delta),
-                // the submission may have expired, or new notes may be available.
-                _ = self.notify.notified() => {
-                    mode = self.reevaluate_mode(&mut account, mode).await?;
+                // Poll the view before the idle timer so a pending update is always processed
+                // rather than racing an idle shutdown. Tokio native.
+                biased;
+
+                // A committed block updated this account's view: the submission may have landed
+                // (advancing the in-memory account by its own delta) or expired, or new notes / a
+                // due retry may make work available. All of this is answered in memory.
+                changed = view_rx.changed() => {
+                    changed.context("coordinator dropped the account view channel")?;
+                    let view = view_rx.borrow_and_update().clone();
+                    mode = self
+                        .reevaluate_mode(&mut account, mode, &view, &mut notes_cursor, next_retry_block)
+                        .await?;
                 },
                 // Execute a transaction once a permit is available.
                 permit = tx_permit_acquisition => {
                     let _permit = permit.context("semaphore closed")?;
                     let chain_state = self.state.chain.get_cloned();
-                    let tx_candidate = self.select_candidate(&account, chain_state).await?;
+                    let (tx_candidate, retry) = self.select_candidate(&account, chain_state).await?;
+                    next_retry_block = retry;
                     mode = match tx_candidate {
                         Some(candidate) => {
                             let next = self.execute_transactions(account_id, candidate).await;
@@ -364,15 +380,16 @@ impl AccountActor {
         }
     }
 
-    /// Decides the actor's next mode after a coordinator notification, advancing the in-memory
-    /// account when the actor's own transaction lands.
+    /// Decides the actor's next mode after the coordinator pushes a fresh [`AccountView`], advancing
+    /// the in-memory account when the actor's own transaction lands.
     ///
-    /// - In `NoViableNotes`/`NotesAvailable`, a wake means the DB may now have new work; advance to
-    ///   `NotesAvailable` and let the next `select_candidate` decide whether a real candidate
-    ///   exists.
-    /// - In `WaitForBlock`, query the latest transaction recorded against the account:
-    ///   - If it equals the actor's submitted id, the transaction landed: apply its `pending_delta`
-    ///     to the in-memory account and resume selection.
+    /// - In `NotesAvailable`, keep the mode so the pending permit acquisition can complete.
+    /// - In `NoViableNotes`, advance to `NotesAvailable` only if the view shows new notes (its
+    ///   counter moved past `notes_cursor`) or a scheduled retry is due (`next_retry_block` reached);
+    ///   otherwise stay idle without touching the DB.
+    /// - In `WaitForBlock`, use the view rather than a DB query:
+    ///   - If `last_committed_tx` equals the actor's submitted id, the transaction landed: apply its
+    ///     `pending_delta` to the in-memory account and resume selection.
     ///   - Else if `tx_expiration_delta` blocks have passed since submission, the submission expired:
     ///     reload the account from the DB (in case a different transaction changed it while we
     ///     waited) and resume selection.
@@ -381,89 +398,110 @@ impl AccountActor {
         &self,
         account: &mut Account,
         mode: ActorMode,
+        view: &AccountView,
+        notes_cursor: &mut u64,
+        next_retry_block: Option<BlockNumber>,
     ) -> anyhow::Result<ActorMode> {
-        let ActorMode::WaitForBlock {
-            submitted_tx_id,
-            submitted_at,
-            pending_delta,
-        } = mode
-        else {
-            return Ok(ActorMode::NotesAvailable);
+        let next = match mode {
+            // A permit acquisition is already in flight; let it complete rather than cancel it.
+            ActorMode::NotesAvailable => ActorMode::NotesAvailable,
+
+            // Resume selection only when there is a reason to: new notes arrived, or a previously
+            // ineligible note's backoff/hint window is now due. Otherwise stay idle, no DB query.
+            ActorMode::NoViableNotes => {
+                let new_work = view.notes_seen > *notes_cursor;
+                let retry_due = next_retry_block.is_some_and(|block| view.chain_tip >= block);
+                if new_work || retry_due {
+                    ActorMode::NotesAvailable
+                } else {
+                    ActorMode::NoViableNotes
+                }
+            },
+
+            // Waiting on a submission: detect landing or expiry from the view, not the DB.
+            ActorMode::WaitForBlock {
+                submitted_tx_id,
+                submitted_at,
+                pending_delta,
+            } => {
+                let elapsed = view.chain_tip.checked_sub(submitted_at.as_u32()).unwrap_or_default();
+                if view.last_committed_tx == Some(submitted_tx_id) {
+                    // The landed transaction is the one we executed, so the committed state is our
+                    // in-memory account plus the delta it produced.
+                    account
+                        .apply_delta(&pending_delta)
+                        .context("failed to apply landed transaction delta to in-memory account")?;
+                    tracing::info!(
+                        account_id = %self.account_id,
+                        tx_id = %submitted_tx_id,
+                        "submitted transaction landed; advanced in-memory account by its delta",
+                    );
+                    ActorMode::NotesAvailable
+                } else if elapsed.as_u32() >= u32::from(self.config.tx_expiration_delta.get()) {
+                    tracing::info!(
+                        account_id = %self.account_id,
+                        %submitted_at,
+                        current_tip = %view.chain_tip,
+                        delta = self.config.tx_expiration_delta,
+                        "submitted transaction expired",
+                    );
+                    // The submission did not land. Reload the authoritative account in case a
+                    // different transaction changed it while we waited, then resume selection.
+                    if let Some(latest) = self
+                        .state
+                        .db
+                        .get_account(self.account_id)
+                        .await
+                        .context("failed to reload account after submission expiry")?
+                    {
+                        *account = latest;
+                    }
+                    ActorMode::NotesAvailable
+                } else {
+                    ActorMode::WaitForBlock {
+                        submitted_tx_id,
+                        submitted_at,
+                        pending_delta,
+                    }
+                }
+            },
         };
 
-        let landed = self
-            .state
-            .db
-            .account_last_tx(self.account_id)
-            .await
-            .context("failed to check submitted tx landing")?
-            == Some(submitted_tx_id);
-        if landed {
-            // The landed transaction is the one we executed, so the committed state is exactly our
-            // in-memory account plus the delta it produced.
-            account
-                .apply_delta(&pending_delta)
-                .context("failed to apply landed transaction delta to in-memory account")?;
-            tracing::info!(
-                account_id = %self.account_id,
-                tx_id = %submitted_tx_id,
-                "submitted transaction landed; advanced in-memory account by its delta",
-            );
-            return Ok(ActorMode::NotesAvailable);
+        // Whenever the actor resumes selection it accounts for every note seen so far, so sync the
+        // cursor to the view's counter in that one place.
+        if matches!(next, ActorMode::NotesAvailable) {
+            *notes_cursor = view.notes_seen;
         }
-
-        let chain_tip = self.state.chain.chain_tip_block_number();
-        let elapsed = chain_tip.checked_sub(submitted_at.as_u32()).unwrap_or_default();
-        if elapsed.as_u32() >= u32::from(self.config.tx_expiration_delta.get()) {
-            tracing::info!(
-                account_id = %self.account_id,
-                %submitted_at,
-                current_tip = %chain_tip,
-                delta = self.config.tx_expiration_delta,
-                "submitted transaction expired",
-            );
-            // The submission did not land. Reload the authoritative account in case a different
-            // transaction changed it while we waited, then resume selection.
-            if let Some(latest) = self
-                .state
-                .db
-                .get_account(self.account_id)
-                .await
-                .context("failed to reload account after submission expiry")?
-            {
-                *account = latest;
-            }
-            return Ok(ActorMode::NotesAvailable);
-        }
-
-        Ok(ActorMode::WaitForBlock {
-            submitted_tx_id,
-            submitted_at,
-            pending_delta,
-        })
+        Ok(next)
     }
 
     /// Selects a transaction candidate for the in-memory account by querying its available notes.
+    ///
+    /// Returns the candidate (if any) alongside the earliest block at which a currently-ineligible
+    /// note becomes eligible, so the caller can schedule a single re-check instead of polling every
+    /// block. `None` for that block means the account has no pending notes awaiting a window.
     async fn select_candidate(
         &self,
         account: &Account,
         chain_state: ChainState,
-    ) -> anyhow::Result<Option<TransactionCandidate>> {
+    ) -> anyhow::Result<(Option<TransactionCandidate>, Option<BlockNumber>)> {
         let account_id = self.account_id;
         let block_num = chain_state.chain_tip_header.block_num();
         let max_notes = self.config.max_notes_per_tx.get();
 
-        let notes = self
+        let availability = self
             .state
             .db
             .available_notes(account_id, block_num, self.config.max_note_attempts)
             .await
             .context("failed to query DB for available notes")?;
+        let next_retry_block = availability.next_retry_block;
 
-        let partitioned_notes = partition_by_allowlist(account, notes)
+        let partitioned_notes = partition_by_allowlist(account, availability.eligible)
             .context("failed to read network account note allowlist")?;
 
-        if !partitioned_notes.rejected.is_empty() {
+        let rejected_any = !partitioned_notes.rejected.is_empty();
+        if rejected_any {
             let failed_notes = partitioned_notes
                 .rejected
                 .into_iter()
@@ -482,16 +520,29 @@ impl AccountActor {
 
         let notes: Vec<_> = partitioned_notes.allowed.into_iter().take(max_notes).collect();
         if notes.is_empty() {
-            return Ok(None);
+            // Notes just marked failed re-enter eligibility via backoff; re-check on the next block
+            // so the actor does not deactivate while it still has notes aging through their budget.
+            let next_retry_block = if rejected_any {
+                Some(
+                    next_retry_block
+                        .map_or(block_num.child(), |block| block.min(block_num.child())),
+                )
+            } else {
+                next_retry_block
+            };
+            return Ok((None, next_retry_block));
         }
 
         let (chain_tip_header, chain_mmr) = chain_state.into_parts();
-        Ok(Some(TransactionCandidate {
-            account: account.clone(),
-            notes,
-            chain_tip_header,
-            chain_mmr,
-        }))
+        Ok((
+            Some(TransactionCandidate {
+                account: account.clone(),
+                notes,
+                chain_tip_header,
+                chain_mmr,
+            }),
+            next_retry_block,
+        ))
     }
 
     /// Execute a transaction candidate and mark notes as failed as required.
@@ -667,7 +718,7 @@ mod tests {
 
     use miden_protocol::ONE;
     use miden_protocol::account::{Account, AccountDelta, AccountStorageDelta, AccountVaultDelta};
-    use tokio::sync::Notify;
+    use tokio::sync::watch;
 
     use super::*;
     use crate::db::Db;
@@ -684,14 +735,27 @@ mod tests {
         .expect("a nonce-only delta is valid")
     }
 
-    /// Builds an actor wired to `db` for the given account, plus the in-memory account to drive.
+    /// Builds an actor wired to `db` for the given account.
     fn test_actor(db: &Db, account: &Account) -> AccountActor {
         let ctx = AccountActorContext::test(db);
-        AccountActor::new(account.id(), &ctx, Arc::new(Notify::new()))
+        AccountActor::new(account.id(), &ctx)
     }
 
-    /// When the submitted transaction lands (its id is the account's latest committed tx), the
-    /// actor advances its in-memory account by exactly the delta the transaction produced.
+    /// Builds an [`AccountView`] for driving `reevaluate_mode` directly.
+    fn view(
+        chain_tip: u32,
+        last_committed_tx: Option<TransactionId>,
+        notes_seen: u64,
+    ) -> AccountView {
+        AccountView {
+            chain_tip: chain_tip.into(),
+            last_committed_tx,
+            notes_seen,
+        }
+    }
+
+    /// When the submitted transaction lands (its id is the view's latest committed tx), the actor
+    /// advances its in-memory account by exactly the delta the transaction produced.
     #[tokio::test]
     async fn landing_advances_in_memory_account_by_its_delta() {
         let (db, _dir) = Db::test_setup().await;
@@ -699,17 +763,15 @@ mod tests {
         let account_id = account.id();
         let submitted = mock_transaction_id(7);
 
-        // Seed the committed row so the landing check sees our submission as the latest tx.
-        db.upsert_account_for_test(account_id, account.clone(), submitted)
-            .await
-            .unwrap();
-
         let delta = nonce_bump_delta(account_id);
         let mut expected = account.clone();
         expected.apply_delta(&delta).unwrap();
 
         let actor = test_actor(&db, &account);
         let mut in_memory = account.clone();
+        let mut notes_cursor = 0;
+        // The view reports our submission as the account's latest committed transaction.
+        let view = view(1, Some(submitted), 0);
         let mode = actor
             .reevaluate_mode(
                 &mut in_memory,
@@ -718,6 +780,9 @@ mod tests {
                     submitted_at: 0_u32.into(),
                     pending_delta: delta,
                 },
+                &view,
+                &mut notes_cursor,
+                None,
             )
             .await
             .unwrap();
@@ -737,11 +802,13 @@ mod tests {
         let (db, _dir) = Db::test_setup().await;
         let account = mock_account(mock_network_account_id());
 
-        // Nothing seeded: `account_last_tx` returns `None`, so the submission has not landed. The
-        // test chain sits at genesis, well within `tx_expiration_delta`, so it has not expired.
+        // The view shows no committed tx for the account (submission has not landed) and a tip well
+        // within `tx_expiration_delta` of the submission block, so it has not expired either.
         let actor = test_actor(&db, &account);
         let mut in_memory = account.clone();
+        let mut notes_cursor = 0;
         let submitted = mock_transaction_id(7);
+        let view = view(1, None, 0);
         let mode = actor
             .reevaluate_mode(
                 &mut in_memory,
@@ -750,6 +817,9 @@ mod tests {
                     submitted_at: 0_u32.into(),
                     pending_delta: nonce_bump_delta(account.id()),
                 },
+                &view,
+                &mut notes_cursor,
+                None,
             )
             .await
             .unwrap();
@@ -767,21 +837,112 @@ mod tests {
         );
     }
 
-    /// The idle timeout must still fire while the coordinator keeps waking the actor every block.
-    /// The coordinator notifies every registered actor on every committed block, so a workless
-    /// actor would never expire if notifications reset the idle timer. The deadline is absolute and
-    /// only pushed back by real work, so repeated notifications cannot keep a no-work actor
-    /// resident indefinitely.
+    /// An idle actor must not re-select (and so must not hit the DB) on a view that only advances
+    /// the chain tip: no new notes arrived and no scheduled retry is due.
     #[tokio::test]
-    async fn idle_timeout_fires_despite_repeated_notifications() {
+    async fn idle_actor_ignores_view_without_new_work() {
+        let (db, _dir) = Db::test_setup().await;
+        let account = mock_account(mock_network_account_id());
+        let actor = test_actor(&db, &account);
+        let mut in_memory = account.clone();
+        let mut notes_cursor = 3;
+
+        // notes_seen matches the cursor (no new notes) and there is no pending retry.
+        let view = view(10, None, 3);
+        let mode = actor
+            .reevaluate_mode(
+                &mut in_memory,
+                ActorMode::NoViableNotes,
+                &view,
+                &mut notes_cursor,
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            matches!(mode, ActorMode::NoViableNotes),
+            "no new notes and no due retry must leave the actor idle",
+        );
+        assert_eq!(notes_cursor, 3, "the cursor is untouched while the actor stays idle");
+    }
+
+    /// New notes (the view's counter moving past the local cursor) wake an idle actor.
+    #[tokio::test]
+    async fn new_notes_wake_idle_actor() {
+        let (db, _dir) = Db::test_setup().await;
+        let account = mock_account(mock_network_account_id());
+        let actor = test_actor(&db, &account);
+        let mut in_memory = account.clone();
+        let mut notes_cursor = 3;
+
+        let view = view(10, None, 4);
+        let mode = actor
+            .reevaluate_mode(
+                &mut in_memory,
+                ActorMode::NoViableNotes,
+                &view,
+                &mut notes_cursor,
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(mode, ActorMode::NotesAvailable), "a new note must trigger a re-select");
+        assert_eq!(notes_cursor, 4, "the cursor advances to the observed note count");
+    }
+
+    /// A scheduled retry wakes an idle actor exactly when the chain tip reaches `next_retry_block`,
+    /// and not before. This is how backoff/hint retries fire without a new note arriving.
+    #[tokio::test]
+    async fn due_retry_wakes_idle_actor_at_its_block() {
+        let (db, _dir) = Db::test_setup().await;
+        let account = mock_account(mock_network_account_id());
+        let actor = test_actor(&db, &account);
+        let mut in_memory = account.clone();
+
+        // Tip below the retry block: stay idle.
+        let mut notes_cursor = 0;
+        let early = actor
+            .reevaluate_mode(
+                &mut in_memory,
+                ActorMode::NoViableNotes,
+                &view(9, None, 0),
+                &mut notes_cursor,
+                Some(10_u32.into()),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(early, ActorMode::NoViableNotes), "a retry is not due before its block");
+
+        // Tip reaches the retry block: re-select.
+        let due = actor
+            .reevaluate_mode(
+                &mut in_memory,
+                ActorMode::NoViableNotes,
+                &view(10, None, 0),
+                &mut notes_cursor,
+                Some(10_u32.into()),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(due, ActorMode::NotesAvailable), "a due retry must trigger a re-select");
+    }
+
+    /// The idle timeout must still fire while the coordinator keeps pushing a view every block. The
+    /// coordinator updates every actor's view on every committed block, so a workless actor would
+    /// never expire if updates reset the idle timer. The deadline is absolute and only pushed back
+    /// by real work, so repeated view updates cannot keep a no-work actor resident indefinitely.
+    #[tokio::test]
+    async fn idle_timeout_fires_despite_repeated_view_updates() {
         let (db, _dir) = Db::test_setup().await;
         // A real network account with a populated allowlist, so re-evaluation on each wake reaches
         // a clean "no viable notes" outcome instead of erroring on a missing allowlist slot.
         let (account, _) = crate::test_utils::mock_network_account_update();
         let account_id = account.id();
 
-        // Seed the committed account but no notes, so the actor starts and stays in NoViableNotes:
-        // every wake re-checks the DB, finds nothing, and returns to the idle state.
+        // Seed the committed account but no notes, so the actor starts and stays in NoViableNotes
+        // with no pending retry: it remains genuinely note-less and the idle timer ticks.
         db.upsert_account_for_test(account_id, account.clone(), mock_transaction_id(1))
             .await
             .unwrap();
@@ -790,24 +951,24 @@ mod tests {
         // Short idle timeout keeps the test fast.
         ctx.config.idle_timeout = Duration::from_millis(300);
 
-        let notify = Arc::new(Notify::new());
-        let actor = AccountActor::new(account_id, &ctx, notify.clone());
+        let actor = AccountActor::new(account_id, &ctx);
+        let (view_tx, view_rx) = watch::channel(view(0, None, 0));
         let semaphore = Arc::new(Semaphore::new(1));
-        let handle = tokio::spawn(actor.run(semaphore));
+        let handle = tokio::spawn(actor.run(semaphore, view_rx));
 
-        // Wake the actor far more often than the idle timeout, and keep doing so for longer than
-        // the test's deadline. With a per-iteration `sleep(idle_timeout)` every wake would restart
-        // the timer and the actor would never deactivate, failing the timeout below.
+        // Push a view update far more often than the idle timeout, advancing only the chain tip (no
+        // new notes), for longer than the test's deadline. With a relative timer every update would
+        // restart it and the actor would never deactivate, failing the timeout below.
         let notifier = tokio::spawn(async move {
             loop {
-                notify.notify_one();
+                view_tx.send_modify(|v| v.chain_tip = v.chain_tip.child());
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
         });
 
         let result = tokio::time::timeout(Duration::from_secs(3), handle)
             .await
-            .expect("actor must deactivate on idle timeout despite repeated notifications")
+            .expect("actor must deactivate on idle timeout despite repeated view updates")
             .expect("actor task should not panic");
         assert!(result.is_ok(), "idle deactivation is a clean shutdown");
 

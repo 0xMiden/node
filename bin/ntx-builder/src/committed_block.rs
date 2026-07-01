@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use miden_protocol::account::AccountId;
 use miden_protocol::account::delta::AccountUpdateDetails;
 use miden_protocol::block::{BlockHeader, SignedBlock};
@@ -90,5 +92,15 @@ impl CommittedBlockEffects {
             )
             .then_some(*account_id)
         })
+    }
+
+    /// The latest transaction committed against each account in this block.
+    ///
+    /// `account_transactions` is in block order, so collecting into a map keeps the last
+    /// transaction per account. Both `apply_committed_block` (to persist `accounts.last_tx_id`) and
+    /// the coordinator (to populate each [`AccountView`](crate::coordinator)'s `last_committed_tx`)
+    /// derive landing state from this single definition, so the two never disagree.
+    pub fn latest_tx_per_account(&self) -> HashMap<AccountId, TransactionId> {
+        self.account_transactions.iter().copied().collect()
     }
 }
