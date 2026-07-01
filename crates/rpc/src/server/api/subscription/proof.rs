@@ -10,6 +10,7 @@ use tonic::{Request, Status};
 use tracing::{Span, debug};
 
 use super::super::{COMPONENT, RpcService};
+use super::stream::{StreamEvent, SubscriptionEventStream};
 
 pub struct ProofSubscriptionInput {
     request: proto::rpc::ProofSubscriptionRequest,
@@ -19,25 +20,30 @@ pub struct ProofSubscriptionInput {
 #[tonic::async_trait]
 impl proto::server::rpc_api::ProofSubscription for RpcService {
     type Input = ProofSubscriptionInput;
-    type Item = proto::rpc::ProofSubscriptionResponse;
-    type ItemStream = ProofSubscriptionStream;
+    type Item = StreamEvent;
+    type ItemStream = SubscriptionEventStream;
 
     fn decode(request: proto::rpc::ProofSubscriptionRequest) -> tonic::Result<Self::Input> {
         Ok(ProofSubscriptionInput { request, client_ip: None })
     }
 
-    fn encode(item: Self::Item) -> tonic::Result<proto::rpc::ProofSubscriptionResponse> {
-        Ok(item)
+    fn encode(event: Self::Item) -> tonic::Result<proto::rpc::ProofSubscriptionResponse> {
+        Ok(proto::rpc::ProofSubscriptionResponse {
+            block_num: event.block.as_u32(),
+            proof: event.data,
+            proven_chain_tip: event.tip.as_u32(),
+        })
     }
 
     async fn full(
         &self,
         request: Request<proto::rpc::ProofSubscriptionRequest>,
-    ) -> tonic::Result<Self::ItemStream> {
+    ) -> tonic::Result<ProofSubscriptionResponseStream> {
         let client_ip = ClientIp::from_request(&request);
         let mut input = Self::decode(request.into_inner())?;
         input.client_ip = client_ip;
-        self.handle(input).await
+        let stream = self.handle(input).await?;
+        Ok(Box::pin(stream.map(|item| item.and_then(Self::encode))))
     }
 
     async fn handle(&self, input: Self::Input) -> tonic::Result<Self::ItemStream> {
@@ -48,18 +54,11 @@ impl proto::server::rpc_api::ProofSubscription for RpcService {
 
         let from = BlockNumber::from(request.block_from);
 
-        let stream = self.proof_subscription_stream(from, client_ip)?.map(move |event| {
-            event.map(|event| proto::rpc::ProofSubscriptionResponse {
-                block_num: event.block.as_u32(),
-                proof: event.data,
-                proven_chain_tip: event.tip.as_u32(),
-            })
-        });
-        Ok(stream.boxed())
+        self.proof_subscription_stream(from, client_ip)
     }
 }
 
-type ProofSubscriptionStream = Pin<
+type ProofSubscriptionResponseStream = Pin<
     Box<
         dyn tonic::codegen::tokio_stream::Stream<
                 Item = Result<proto::rpc::ProofSubscriptionResponse, Status>,

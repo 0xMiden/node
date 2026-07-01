@@ -8,7 +8,6 @@ use miden_node_utils::ErrorReport;
 use miden_protocol::block::BlockNumber;
 use tokio::sync::mpsc::error::SendTimeoutError;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
-use tokio_stream::Stream;
 use tokio_stream::wrappers::ReceiverStream;
 
 use super::super::RpcService;
@@ -22,12 +21,14 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 /// greater than the tip.
 const MAX_FUTURE_GAP_IN_SUBSCRIPTIONS: u32 = 100u32;
 
+pub(super) type SubscriptionEventStream = ReceiverStream<tonic::Result<StreamEvent>>;
+
 impl RpcService {
     pub(super) fn block_subscription_stream(
         &self,
         from: BlockNumber,
         client_ip: Option<IpAddr>,
-    ) -> tonic::Result<impl Stream<Item = tonic::Result<StreamEvent>> + Send + 'static> {
+    ) -> tonic::Result<SubscriptionEventStream> {
         let store = Arc::clone(&self.store);
 
         subscription_stream(
@@ -54,7 +55,7 @@ impl RpcService {
         &self,
         from: BlockNumber,
         client_ip: Option<IpAddr>,
-    ) -> tonic::Result<impl Stream<Item = tonic::Result<StreamEvent>> + Send + 'static> {
+    ) -> tonic::Result<SubscriptionEventStream> {
         let store = Arc::clone(&self.store);
 
         subscription_stream(
@@ -86,7 +87,7 @@ fn subscription_stream<GetData, Fut>(
     max_subscriptions_error: &'static str,
     mut chain_tip: watch::Receiver<BlockNumber>,
     get_data: GetData,
-) -> tonic::Result<impl Stream<Item = tonic::Result<StreamEvent>> + Send + 'static>
+) -> tonic::Result<SubscriptionEventStream>
 where
     GetData: Fn(BlockNumber) -> Fut + Send + 'static,
     Fut: Future<Output = Result<Vec<u8>, DataError>> + Send + 'static,
@@ -263,7 +264,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use tokio_stream::{Stream, StreamExt};
+    use tokio_stream::StreamExt;
 
     use super::*;
 
@@ -298,8 +299,7 @@ mod tests {
             &self,
             from: BlockNumber,
             chain_tip: watch::Receiver<BlockNumber>,
-        ) -> tonic::Result<impl Stream<Item = tonic::Result<StreamEvent>> + Send + 'static>
-        {
+        ) -> tonic::Result<SubscriptionEventStream> {
             self.stream_for_ip(None, from, chain_tip)
         }
 
@@ -308,8 +308,7 @@ mod tests {
             client_ip: Option<IpAddr>,
             from: BlockNumber,
             chain_tip: watch::Receiver<BlockNumber>,
-        ) -> tonic::Result<impl Stream<Item = tonic::Result<StreamEvent>> + Send + 'static>
-        {
+        ) -> tonic::Result<SubscriptionEventStream> {
             let fetch_count = Arc::clone(&self.fetch_count);
             let fail_at = self.fail_at;
 
