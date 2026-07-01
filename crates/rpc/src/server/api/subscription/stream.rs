@@ -64,8 +64,11 @@ pub trait SubscriptionStream: Sized + Send {
                 };
 
                 let event = StreamEvent { data, block: next, tip };
+
+                // Send the event but also check server shutdown condition so we don't hang for the
+                // full timeout if the server is shutting down.
                 let send_result = tokio::select! {
-                    () = wait_for_chain_tip_close(&mut chain_tip) => break StreamError::ServerShutdown,
+                    () = wait_for_server_shutdown(&mut chain_tip) => break StreamError::ServerShutdown,
                     result = tx.send_timeout(Ok(event), SEND_TIMEOUT) => result,
                 };
                 if let Err(err) = send_result.map_err(|err| match err {
@@ -86,7 +89,7 @@ pub trait SubscriptionStream: Sized + Send {
     }
 }
 
-async fn wait_for_chain_tip_close(chain_tip: &mut watch::Receiver<BlockNumber>) {
+async fn wait_for_server_shutdown(chain_tip: &mut watch::Receiver<BlockNumber>) {
     while chain_tip.changed().await.is_ok() {}
 }
 
