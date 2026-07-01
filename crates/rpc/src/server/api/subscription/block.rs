@@ -13,7 +13,7 @@ use tracing::{Span, debug};
 
 use super::super::{COMPONENT, RpcService};
 use super::stream::{DataError, StreamError, Subscription};
-use super::{IpBanList, stream_error_to_status, subscription_ban_status};
+use super::{IpBanList, subscription_ban_status};
 
 pub struct BlockSubscriptionInput {
     request: proto::rpc::BlockSubscriptionRequest,
@@ -71,12 +71,10 @@ impl proto::server::rpc_api::BlockSubscription for RpcService {
 
         let stream = stream.into_stream(from, self.store.subscribe_committed_tip()).await?.map(
             move |event| {
-                event
-                    .map(|event| proto::rpc::BlockSubscriptionResponse {
-                        block: event.data,
-                        committed_chain_tip: event.tip.as_u32(),
-                    })
-                    .map_err(stream_error_to_status)
+                event.map(|event| proto::rpc::BlockSubscriptionResponse {
+                    block: event.data,
+                    committed_chain_tip: event.tip.as_u32(),
+                })
             },
         );
         Ok(stream.boxed())

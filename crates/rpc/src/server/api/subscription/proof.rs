@@ -14,7 +14,7 @@ use tracing::{Span, debug};
 
 use super::super::{COMPONENT, RpcService};
 use super::stream::{DataError, StreamError, Subscription};
-use super::{IpBanList, stream_error_to_status, subscription_ban_status};
+use super::{IpBanList, subscription_ban_status};
 
 pub struct ProofSubscriptionInput {
     request: proto::rpc::ProofSubscriptionRequest,
@@ -75,13 +75,11 @@ impl proto::server::rpc_api::ProofSubscription for RpcService {
                 .into_stream(from, self.store.subscribe_proven_tip())
                 .await?
                 .map(move |event| {
-                    event
-                        .map(|event| proto::rpc::ProofSubscriptionResponse {
-                            block_num: event.block.as_u32(),
-                            proof: event.data,
-                            proven_chain_tip: event.tip.as_u32(),
-                        })
-                        .map_err(stream_error_to_status)
+                    event.map(|event| proto::rpc::ProofSubscriptionResponse {
+                        block_num: event.block.as_u32(),
+                        proof: event.data,
+                        proven_chain_tip: event.tip.as_u32(),
+                    })
                 });
         Ok(stream.boxed())
     }

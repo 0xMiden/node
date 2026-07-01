@@ -8,21 +8,9 @@ mod proof;
 mod stream;
 
 pub(super) use ban::IpBanList;
-use stream::StreamError;
 
 /// Maximum number of concurrent block or proof subscriptions served by this RPC instance.
 pub(super) const MAX_REPLICA_SUBSCRIPTIONS: usize = 10;
-
-fn stream_error_to_status(err: StreamError) -> Status {
-    let code = match err {
-        StreamError::ServerShutdown => tonic::Code::Unavailable,
-        StreamError::ConnectionClosed => tonic::Code::Aborted,
-        StreamError::SlowSubscriber => tonic::Code::ResourceExhausted,
-        StreamError::Internal => tonic::Code::Internal,
-    };
-
-    Status::new(code, err.to_string())
-}
 
 /// Builds the status returned to a client that is temporarily banned from subscribing for having
 /// previously been disconnected as too slow.

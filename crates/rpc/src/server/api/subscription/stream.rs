@@ -29,7 +29,7 @@ pub trait Subscription: Sized + Send {
         self,
         from: BlockNumber,
         mut chain_tip: watch::Receiver<BlockNumber>,
-    ) -> tonic::Result<impl Stream<Item = Result<StreamEvent, StreamError>> + Send + 'static>
+    ) -> tonic::Result<impl Stream<Item = tonic::Result<StreamEvent>> + Send + 'static>
     where
         Self: 'static,
     {
@@ -92,7 +92,7 @@ pub trait Subscription: Sized + Send {
             };
 
             self.on_eos(err);
-            let _ = tx.try_send(Err(err));
+            let _ = tx.try_send(Err(stream_error_to_status(err)));
         });
 
         Ok(ReceiverStream::new(rx))
@@ -101,6 +101,17 @@ pub trait Subscription: Sized + Send {
 
 async fn wait_for_server_shutdown(chain_tip: &mut watch::Receiver<BlockNumber>) {
     while chain_tip.changed().await.is_ok() {}
+}
+
+fn stream_error_to_status(err: StreamError) -> tonic::Status {
+    let code = match err {
+        StreamError::ServerShutdown => tonic::Code::Unavailable,
+        StreamError::ConnectionClosed => tonic::Code::Aborted,
+        StreamError::SlowSubscriber => tonic::Code::ResourceExhausted,
+        StreamError::Internal => tonic::Code::Internal,
+    };
+
+    tonic::Status::new(code, err.to_string())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -226,7 +237,7 @@ mod tests {
             .await
             .expect("stream must yield promptly")
             .expect("stream must not end without an item");
-        assert!(matches!(item, Err(StreamError::ServerShutdown)));
+        assert_stream_status(item, tonic::Code::Unavailable);
 
         assert!(matches!(
             eos.lock().expect("eos mutex should not be poisoned").as_slice(),
@@ -267,7 +278,7 @@ mod tests {
             .await
             .expect("stream must yield promptly")
             .expect("stream must not end without an item");
-        assert!(matches!(item, Err(StreamError::Internal)));
+        assert_stream_status(item, tonic::Code::Internal);
 
         assert!(matches!(
             eos.lock().expect("eos mutex should not be poisoned").as_slice(),
@@ -348,6 +359,14 @@ mod tests {
         })
         .await
         .expect("stream must fetch events promptly");
+    }
+
+    fn assert_stream_status(item: tonic::Result<StreamEvent>, code: tonic::Code) {
+        let Err(err) = item else {
+            panic!("stream item must be an error");
+        };
+
+        assert_eq!(err.code(), code);
     }
 
     async fn assert_subscription_start_ok(block_from: u32, chain_tip: u32) {
