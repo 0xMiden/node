@@ -3246,6 +3246,7 @@ dependencies = [
  "rusqlite",
  "sha2",
  "thiserror 2.0.18",
+ "tokio",
  "tracing",
 ]
 
@@ -3768,7 +3769,6 @@ dependencies = [
  "aws-sdk-kms",
  "build-rs",
  "clap",
- "diesel",
  "fs-err",
  "hex",
  "miden-node-db",

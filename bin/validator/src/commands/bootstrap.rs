@@ -88,8 +88,8 @@ async fn build_and_write_genesis(
     )
     .await
     .context("failed to initialize validator database during bootstrap")?;
-    db.transact("upsert_block_header", move |conn| {
-        miden_validator::db::upsert_block_header(conn, &genesis_header)
+    db.write("upsert_block_header", move |tx| {
+        miden_validator::db::upsert_block_header(tx, &genesis_header)
     })
     .await
     .context("failed to persist genesis block header as chain tip")?;

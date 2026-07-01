@@ -45,6 +45,8 @@ pub enum DatabaseError {
     },
     #[error(transparent)]
     Diesel(#[from] diesel::result::Error),
+    #[error(transparent)]
+    Rusqlite(#[from] rusqlite::Error),
     #[error("failed to apply database migrations")]
     Migration(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
     #[error("schema verification failed")]

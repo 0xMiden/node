@@ -50,9 +50,7 @@ pub fn verify_latest_schema(database_filepath: &Path) -> std::result::Result<(),
 
 #[cfg(test)]
 mod tests {
-    use std::process::Command;
-
-    use anyhow::{Context, Result, ensure};
+    use anyhow::Result;
     use miden_node_db::migration::{SchemaHash, SchemaHashes};
 
     use super::*;
@@ -66,36 +64,6 @@ mod tests {
         let migrator = migrator()?;
 
         assert_eq!(migrator.schema_hashes(), SchemaHashes(&EXPECTED_SCHEMA_HASHES));
-        Ok(())
-    }
-
-    #[test]
-    #[ignore = "requires diesel CLI; CI runs this in the diesel-schema job"]
-    fn diesel_schema_is_in_sync_with_migrations() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
-        let database_filepath = temp_dir.path().join("validator.sqlite3");
-        bootstrap_database(&database_filepath)?;
-
-        let output = Command::new("diesel")
-            .arg("print-schema")
-            .arg("--database-url")
-            .arg(&database_filepath)
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .output()
-            .context(
-                "failed to run diesel CLI; install it with \
-                 `cargo install diesel_cli --no-default-features --features sqlite`",
-            )?;
-
-        ensure!(
-            output.status.success(),
-            "diesel print-schema failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-
-        let generated =
-            String::from_utf8(output.stdout).context("diesel CLI output is not UTF-8")?;
-        assert_eq!(generated, include_str!("schema.rs"));
         Ok(())
     }
 }

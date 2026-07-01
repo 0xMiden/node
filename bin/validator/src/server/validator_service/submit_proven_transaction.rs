@@ -29,7 +29,7 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
         // Short-circuit transactions that have already been validated.
         let already_validated = self
             .db
-            .query("transaction_exists", move |conn| transaction_exists(conn, tx_id))
+            .read("transaction_exists", move |tx| transaction_exists(tx, tx_id))
             .await
             .map_err(|err| {
                 Status::internal(err.as_report_context("Failed to query transaction"))
@@ -46,7 +46,7 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
         // Store the validated transaction.
         let count = self
             .db
-            .transact("insert_transaction", move |conn| insert_transaction(conn, &tx_info))
+            .write("insert_transaction", move |tx| insert_transaction(tx, &tx_info))
             .await
             .map_err(|err| {
                 Status::internal(err.as_report_context("Failed to insert transaction"))

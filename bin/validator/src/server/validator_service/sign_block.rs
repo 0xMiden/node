@@ -46,7 +46,7 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
         // Load the current chain tip from the database.
         let chain_tip = self
             .db
-            .query("load_chain_tip", load_chain_tip)
+            .read("load_chain_tip", load_chain_tip)
             .await
             .map_err(|err| {
                 tonic::Status::internal(format!("Failed to load chain tip: {}", err.as_report()))
@@ -69,7 +69,7 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
         // Persist the validated block header.
         let new_block_num = header.block_num().as_u32();
         self.db
-            .transact("upsert_block_header", move |conn| upsert_block_header(conn, &header))
+            .write("upsert_block_header", move |tx| upsert_block_header(tx, &header))
             .await
             .map_err(|err| {
                 tonic::Status::internal(format!(
