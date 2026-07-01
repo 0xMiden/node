@@ -53,7 +53,9 @@ impl proto::server::rpc_api::GetNetworkNoteStatus for RpcService {
             .try_into()
             .map_err(|_| tonic::Status::invalid_argument("invalid note ID digest"))?;
         let note_id = miden_protocol::note::NoteId::from_raw(note_id_digest);
-        miden_span_record!(note.id = %note_id);
+        miden_span_record!(
+            note.id = %note_id,
+        );
 
         debug!(target: LOG_TARGET, "Getting network note status");
 

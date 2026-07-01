@@ -17,7 +17,9 @@ impl grpc::server::remote_prover_api::Prove for ProverService {
         err,
     )]
     async fn handle(&self, (proof_kind, request): Self::Input) -> tonic::Result<Self::Output> {
-        miden_span_record!(request.kind = %proof_kind);
+        miden_span_record!(
+            request.kind = %proof_kind,
+        );
 
         // Reject unsupported proof types early so they don't clog the queue.
         if !self.is_supported(proof_kind) {

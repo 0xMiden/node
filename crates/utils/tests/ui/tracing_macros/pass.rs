@@ -21,7 +21,9 @@ fn records_fields() {
 fn records_with_default_instrument_args() {
     let value = 1;
 
-    miden_span_record!(block.number = value);
+    miden_span_record!(
+        block.number = value,
+    );
 }
 
 #[miden_instrument(
@@ -31,8 +33,12 @@ fn records_same_field_more_than_once() {
     let value = 1;
     let updated = 2;
 
-    miden_span_record!(block.number = value);
-    miden_span_record!(block.number = updated);
+    miden_span_record!(
+        block.number = value,
+    );
+    miden_span_record!(
+        block.number = updated,
+    );
 }
 
 #[miden_instrument(

@@ -31,7 +31,9 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
             .map_err(|_| Status::resource_exhausted("validator is busy streaming a backup"))?;
 
         let tx_id = input.tx.id();
-        miden_span_record!(transaction.id = %tx_id);
+        miden_span_record!(
+            transaction.id = %tx_id,
+        );
 
         // Short-circuit transactions that have already been validated.
         let already_validated = self
