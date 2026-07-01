@@ -2,8 +2,6 @@ use http::header::HeaderName;
 use tower_governor::key_extractor::{KeyExtractor, SmartIpKeyExtractor};
 use tracing::field;
 
-use crate::tracing::OpenTelemetrySpanExt;
-
 /// Returns a [`trace_fn`](tonic::transport::server::Server) implementation for gRPC requests
 /// which adds open-telemetry information to the span.
 ///
@@ -25,7 +23,16 @@ pub fn grpc_trace_fn<T>(request: &http::Request<T>) -> tracing::Span {
         "rpc",
         otel.name = field::Empty,
         rpc.service = service,
-        rpc.method = method
+        rpc.method = method,
+        rpc.system = field::Empty,
+        server.address = field::Empty,
+        server.port = field::Empty,
+        client.address = field::Empty,
+        client.port = field::Empty,
+        network.peer.address = field::Empty,
+        network.peer.port = field::Empty,
+        network.transport = field::Empty,
+        network.type = field::Empty,
     );
 
     // Set the span name via otel.name
@@ -45,12 +52,12 @@ pub fn grpc_trace_fn<T>(request: &http::Request<T>) -> tracing::Span {
     // See [server attributes](https://opentelemetry.io/docs/specs/semconv/rpc/rpc-spans/#server-attributes).
 
     // Set HTTP attributes.
-    span.set_attribute("rpc.system", "grpc");
+    span.record("rpc.system", "grpc");
     if let Some(host) = request.uri().host() {
-        span.set_attribute("server.address", host);
+        span.record("server.address", host);
     }
     if let Some(host_port) = request.uri().port() {
-        span.set_attribute("server.port", host_port.as_u16());
+        span.record("server.port", host_port.as_u16());
     }
     let remote_addr = request
         .extensions()
@@ -60,20 +67,20 @@ pub fn grpc_trace_fn<T>(request: &http::Request<T>) -> tracing::Span {
     // client.address should be the resolved IP address of the client, if available. In the case of
     // a reverse proxy, this may not be the same as the remote address.
     if let Ok(ip) = SmartIpKeyExtractor.extract(request) {
-        span.set_attribute("client.address", ip);
+        span.record("client.address", field::display(ip));
     } else if let Some(addr) = remote_addr {
-        span.set_attribute("client.address", addr.ip());
-        span.set_attribute("client.port", addr.port());
+        span.record("client.address", field::display(addr.ip()));
+        span.record("client.port", addr.port());
     }
 
     if let Some(addr) = remote_addr {
-        span.set_attribute("network.peer.address", addr.ip());
-        span.set_attribute("network.peer.port", addr.port());
-        span.set_attribute("network.transport", "tcp");
+        span.record("network.peer.address", field::display(addr.ip()));
+        span.record("network.peer.port", addr.port());
+        span.record("network.transport", "tcp");
         match addr.ip() {
-            std::net::IpAddr::V4(_) => span.set_attribute("network.type", "ipv4"),
-            std::net::IpAddr::V6(_) => span.set_attribute("network.type", "ipv6"),
-        }
+            std::net::IpAddr::V4(_) => span.record("network.type", "ipv4"),
+            std::net::IpAddr::V6(_) => span.record("network.type", "ipv6"),
+        };
     }
 
     for header in [
@@ -87,7 +94,11 @@ pub fn grpc_trace_fn<T>(request: &http::Request<T>) -> tracing::Span {
     ] {
         if let Some(value) = request.headers().get(&header) {
             if let Ok(value) = value.to_str() {
-                span.set_attribute(format!("http.request.header.{header}"), value);
+                tracing_opentelemetry::OpenTelemetrySpanExt::set_attribute(
+                    &span,
+                    format!("http.request.header.{header}"),
+                    value.to_owned(),
+                );
             }
         }
     }

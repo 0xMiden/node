@@ -22,6 +22,15 @@ where
     S: Subscriber,
     for<'a> S: LookupSpan<'a>,
 {
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        _id: &tracing::Id,
+        _ctx: Context<'_, S>,
+    ) {
+        attrs.record(&mut FieldVisitor(self.0.clone()));
+    }
+
     fn on_record(
         &self,
         _span: &tracing::Id,
@@ -41,7 +50,7 @@ impl Visit for FieldVisitor {
 }
 
 #[miden_instrument(target = "miden-node-utils-test", name = "records_delayed_fields", skip_all)]
-fn records_delayed_fields() {
+fn records_inferred_fields() {
     let parsed_value = 42;
     let parsed_text = "parsed";
 
@@ -51,15 +60,118 @@ fn records_delayed_fields() {
     );
 }
 
+#[miden_instrument(
+    target = "miden-node-utils-test",
+    name = "records_explicit_fields",
+    skip_all,
+    fields(
+        account.id = tracing::field::Empty,
+        account.updated = tracing::field::Empty,
+    ),
+)]
+fn records_explicit_fields() {
+    tracing::Span::current().record("account.id", tracing::field::display("explicit-account"));
+    tracing::Span::current().record("account.updated", true);
+}
+
+#[miden_instrument(
+    target = "miden-node-utils-test",
+    name = "records_explicit_argument_field",
+    skip_all,
+    fields(
+        account.id = %account_id,
+    ),
+)]
+fn records_explicit_argument_field(account_id: &str) {}
+
+#[miden_instrument(
+    target = "miden-node-utils-test",
+    name = "records_explicit_and_inferred_fields",
+    skip_all,
+    fields(
+        account.id = tracing::field::Empty,
+    ),
+)]
+fn records_explicit_and_inferred_fields() {
+    let block_number = 9;
+
+    tracing::Span::current().record("account.id", tracing::field::display("mixed-account"));
+    miden_span_record!(
+        block.number = block_number,
+        transaction.id = %"mixed-tx",
+    );
+}
+
+#[miden_instrument(
+    target = "miden-node-utils-test",
+    name = "records_fields_from_multiple_calls",
+    skip_all
+)]
+fn records_fields_from_multiple_calls() {
+    let block_number = 14;
+    let tx_id = "multi-call-tx";
+
+    miden_span_record!(block.number = block_number,);
+    miden_span_record!(
+        transaction.id = %tx_id,
+    );
+}
+
 #[test]
 fn inferred_fields_can_be_recorded_after_span_creation() {
     let recorded = RecordedFields::default();
     let subscriber = tracing_subscriber::registry().with(recorded.clone());
 
-    tracing::subscriber::with_default(subscriber, records_delayed_fields);
+    tracing::subscriber::with_default(subscriber, records_inferred_fields);
 
     assert_eq!(recorded.get("block.number").as_deref(), Some("42"));
     assert_eq!(recorded.get("transaction.id").as_deref(), Some("parsed"));
+}
+
+#[test]
+fn explicit_fields_can_be_recorded_after_span_creation() {
+    let recorded = RecordedFields::default();
+    let subscriber = tracing_subscriber::registry().with(recorded.clone());
+
+    tracing::subscriber::with_default(subscriber, records_explicit_fields);
+
+    assert_eq!(recorded.get("account.id").as_deref(), Some("explicit-account"));
+    assert_eq!(recorded.get("account.updated").as_deref(), Some("true"));
+}
+
+#[test]
+fn explicit_argument_fields_are_recorded_at_span_creation() {
+    let recorded = RecordedFields::default();
+    let subscriber = tracing_subscriber::registry().with(recorded.clone());
+
+    tracing::subscriber::with_default(subscriber, || {
+        records_explicit_argument_field("argument-account");
+    });
+
+    assert_eq!(recorded.get("account.id").as_deref(), Some("argument-account"));
+}
+
+#[test]
+fn explicit_and_inferred_fields_can_be_recorded_after_span_creation() {
+    let recorded = RecordedFields::default();
+    let subscriber = tracing_subscriber::registry().with(recorded.clone());
+
+    tracing::subscriber::with_default(subscriber, records_explicit_and_inferred_fields);
+
+    assert_eq!(recorded.get("account.id").as_deref(), Some("mixed-account"));
+    assert_eq!(recorded.get("block.number").as_deref(), Some("9"));
+    assert_eq!(recorded.get("transaction.id").as_deref(), Some("mixed-tx"));
+}
+
+#[test]
+fn multiple_span_record_macros_can_record_fields_after_span_creation() {
+    let recorded = RecordedFields::default();
+    let subscriber = tracing_subscriber::registry().with(recorded.clone());
+
+    tracing::subscriber::with_default(subscriber, records_fields_from_multiple_calls);
+
+    assert_eq!(recorded.get("block.number").as_deref(), Some("14"));
+    assert_eq!(recorded.get("transaction.id").as_deref(), Some("multi-call-tx"));
 }
 
 #[test]

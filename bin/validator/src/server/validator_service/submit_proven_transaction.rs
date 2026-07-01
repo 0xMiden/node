@@ -2,12 +2,13 @@ use std::sync::atomic::Ordering;
 
 use miden_node_proto::generated as grpc;
 use miden_node_utils::ErrorReport;
-use miden_node_utils::tracing::OpenTelemetrySpanExt;
+use miden_node_utils::tracing::{miden_instrument, miden_span_record};
 use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
 use miden_tx::utils::serde::Deserializable;
 use tonic::Status;
 
 use super::ValidatorService;
+use crate::COMPONENT;
 use crate::db::{insert_transaction, transaction_exists};
 use crate::tx_validation::validate_transaction;
 
@@ -16,6 +17,12 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
     type Input = Input;
     type Output = ();
 
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "submit_proven_transaction",
+        skip_all,
+        err,
+    )]
     async fn handle(&self, input: Self::Input) -> tonic::Result<Self::Output> {
         // Reject requests while a backup subscription is streaming.
         let _guard = self
@@ -24,7 +31,9 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
             .map_err(|_| Status::resource_exhausted("validator is busy streaming a backup"))?;
 
         let tx_id = input.tx.id();
-        tracing::Span::current().set_attribute("transaction.id", tx_id);
+        miden_span_record!(
+            transaction.id = %tx_id,
+        );
 
         // Short-circuit transactions that have already been validated.
         let already_validated = self

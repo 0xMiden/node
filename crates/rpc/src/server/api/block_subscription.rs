@@ -4,10 +4,11 @@ use std::sync::Arc;
 use miden_node_proto::generated as proto;
 use miden_node_store::state::SubscriptionStreamError;
 use miden_node_utils::grpc::ClientIp;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::block::BlockNumber;
 use tokio_stream::StreamExt;
 use tonic::{Request, Status};
-use tracing::{debug, instrument};
+use tracing::debug;
 
 use super::{
     BlockSubscriptionStream,
@@ -47,7 +48,7 @@ impl proto::server::rpc_api::BlockSubscription for RpcService {
         self.handle(input).await
     }
 
-    #[instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "block_subscription",
         skip_all,

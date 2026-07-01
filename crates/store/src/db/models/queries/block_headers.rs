@@ -14,6 +14,7 @@ use diesel::{
 use miden_crypto::Word;
 use miden_crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_node_utils::limiter::{QueryParamBlockLimit, QueryParamLimiter};
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 
@@ -219,7 +220,7 @@ pub struct BlockHeaderInsert {
 ///
 /// The [`SqliteConnection`] object is not consumed. It's up to the caller to commit or rollback the
 /// transaction
-#[tracing::instrument(
+#[miden_instrument(
     target = COMPONENT,
     skip_all,
     err,

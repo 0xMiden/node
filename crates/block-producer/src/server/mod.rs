@@ -6,12 +6,12 @@ use anyhow::Result;
 use miden_node_store::state::{Finality, State};
 use miden_node_utils::formatting::{format_input_notes, format_output_notes};
 use miden_node_utils::tasks::Tasks;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::batch::ProposedBatch;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::ProvenTransaction;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
-use tracing::instrument;
 use url::Url;
 
 use crate::batch_builder::{BatchBuilder, BatchIntervals};
@@ -281,12 +281,12 @@ impl BlockProducerApi {
     // ENDPOINTS
     // --------------------------------------------------------------------------------------------
 
-    #[instrument(
-         target = COMPONENT,
-         name = "block_producer.api.submit_proven_tx",
-         skip_all,
-         err
-     )]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "block_producer.api.submit_proven_tx",
+        skip_all,
+        err,
+    )]
     pub async fn submit_proven_tx(
         &self,
         tx: ProvenTransaction,
@@ -315,12 +315,12 @@ impl BlockProducerApi {
     }
 
     /// Adds a transaction that has already been authenticated.
-    #[instrument(
-         target = COMPONENT,
-         name = "block_producer.api.submit_authenticated_tx",
-         skip_all,
-         err
-     )]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "block_producer.api.submit_authenticated_tx",
+        skip_all,
+        err,
+    )]
     #[expect(clippy::let_and_return, reason = "required to lengthen arc lifetime")]
     pub async fn submit_authenticated_tx(
         &self,
@@ -335,12 +335,12 @@ impl BlockProducerApi {
         result
     }
 
-    #[instrument(
-         target = COMPONENT,
-         name = "block_producer.api.submit_proven_tx_batch",
-         skip_all,
-         err
-     )]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "block_producer.api.submit_proven_tx_batch",
+        skip_all,
+        err,
+    )]
     pub async fn submit_proven_tx_batch(
         &self,
         batch: ProposedBatch,
@@ -368,12 +368,12 @@ impl BlockProducerApi {
     ///
     /// Panics if the number of transactions in `batch` does not match the number of inputs in
     /// `inputs`.
-    #[instrument(
-         target = COMPONENT,
-         name = "block_producer.api.submit_authenticated_tx_batch",
-         skip_all,
-         err
-     )]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "block_producer.api.submit_authenticated_tx_batch",
+        skip_all,
+        err,
+    )]
     #[expect(clippy::let_and_return)]
     pub async fn submit_authenticated_tx_batch(
         &self,
