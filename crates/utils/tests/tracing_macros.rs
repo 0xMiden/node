@@ -102,6 +102,21 @@ fn records_explicit_and_inferred_fields() {
     );
 }
 
+#[miden_instrument(
+    target = "miden-node-utils-test",
+    name = "records_fields_from_multiple_calls",
+    skip_all
+)]
+fn records_fields_from_multiple_calls() {
+    let block_number = 14;
+    let tx_id = "multi-call-tx";
+
+    miden_span_record!(block.number = block_number,);
+    miden_span_record!(
+        transaction.id = %tx_id,
+    );
+}
+
 #[test]
 fn inferred_fields_can_be_recorded_after_span_creation() {
     let recorded = RecordedFields::default();
@@ -146,6 +161,17 @@ fn explicit_and_inferred_fields_can_be_recorded_after_span_creation() {
     assert_eq!(recorded.get("account.id").as_deref(), Some("mixed-account"));
     assert_eq!(recorded.get("block.number").as_deref(), Some("9"));
     assert_eq!(recorded.get("transaction.id").as_deref(), Some("mixed-tx"));
+}
+
+#[test]
+fn multiple_span_record_macros_can_record_fields_after_span_creation() {
+    let recorded = RecordedFields::default();
+    let subscriber = tracing_subscriber::registry().with(recorded.clone());
+
+    tracing::subscriber::with_default(subscriber, records_fields_from_multiple_calls);
+
+    assert_eq!(recorded.get("block.number").as_deref(), Some("14"));
+    assert_eq!(recorded.get("transaction.id").as_deref(), Some("multi-call-tx"));
 }
 
 #[test]
