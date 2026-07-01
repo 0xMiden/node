@@ -1,0 +1,5 @@
+error: unsupported tracing field `tx_id`; use one of: account.id, account.ids, account.ids.count, batch.id, block.commitment, block.number, block.transactions.count, transaction.id, transactions.ids
+ --> tests/ui/tracing_macros/invalid_field_name.rs:7:24
+  |
+7 |     miden_span_record!(tx_id = %tx_id);
+  |                        ^^^^^

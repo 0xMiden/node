@@ -3,18 +3,19 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use miden_node_store::state::State;
+use miden_node_utils::formatting::format_array;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::batch::{OrderedBatches, ProvenBatch};
 use miden_protocol::block::{BlockInputs, BlockNumber, ProposedBlock, ProvenBlock, SignedBlock};
 use miden_protocol::transaction::TransactionHeader;
 use tokio::time::Duration;
-use tracing::{Span, instrument};
+use tracing::{Span, field, instrument};
 
 use crate::errors::{BuildBlockError, StoreError};
 use crate::mempool::SharedMempool;
 use crate::validator::BlockProducerValidatorClient;
-use crate::{COMPONENT, TelemetryInjectorExt};
+use crate::{COMPONENT, LOG_TARGET, TelemetryInjectorExt};
 
 // BLOCK BUILDER
 // =================================================================================================
@@ -22,11 +23,6 @@ use crate::{COMPONENT, TelemetryInjectorExt};
 pub struct BlockBuilder {
     /// The frequency at which blocks are produced.
     pub block_interval: Duration,
-
-    /// Simulated block failure rate as a percentage.
-    ///
-    /// Note: this _must_ be sign positive and less than 1.0.
-    pub failure_rate: f64,
 
     /// The store state for committing blocks.
     pub store: Arc<State>,
@@ -44,13 +40,7 @@ impl BlockBuilder {
         validator: BlockProducerValidatorClient,
         block_interval: Duration,
     ) -> Self {
-        Self {
-            block_interval,
-            // Note: The range cannot be empty.
-            failure_rate: 0.0,
-            store,
-            validator,
-        }
+        Self { block_interval, store, validator }
     }
     /// Starts the [`BlockBuilder`], infinitely producing blocks at the configured interval.
     ///
@@ -63,11 +53,6 @@ impl BlockBuilder {
     ///   3. Proving the block (this is simulated using random sleeps)
     ///   4. Committing the block to the store
     pub async fn run(self, mempool: SharedMempool) -> anyhow::Result<()> {
-        assert!(
-            self.failure_rate < 1.0 && self.failure_rate.is_sign_positive(),
-            "Failure rate must be a percentage"
-        );
-
         let mut interval = tokio::time::interval(self.block_interval);
         // We set the interval's missed tick behaviour to burst. This means we'll catch up missed
         // blocks as fast as possible. In other words, we try our best to keep the desired block
@@ -276,7 +261,17 @@ impl BlockBuilder {
         })
     }
 
-    #[instrument(target = COMPONENT, name = "block_builder.commit_block", skip_all, err)]
+    #[instrument(
+        target = COMPONENT,
+        name = "block_builder.commit_block",
+        skip_all,
+        err,
+        fields(
+            block_num = field::Empty,
+            block_commitment = field::Empty,
+            num_transactions = field::Empty,
+        )
+    )]
     async fn commit_block(
         &self,
         mempool: &SharedMempool,
@@ -288,6 +283,18 @@ impl BlockBuilder {
             signed_block,
         } = block_commit;
         let header = signed_block.header().clone();
+        let num_transactions = signed_block.body().transactions().as_slice().len();
+
+        let span = Span::current();
+        span.record("block_num", field::display(header.block_num()));
+        span.record("block_commitment", field::display(header.commitment()));
+        span.record("num_transactions", num_transactions);
+
+        if num_transactions > 0 {
+            let transaction_ids =
+                signed_block.body().transactions().as_slice().iter().map(TransactionHeader::id);
+            tracing::debug!(target: LOG_TARGET, transactions = %format_array(transaction_ids), "Included transactions");
+        }
 
         self.store
             .apply_block_with_proving_inputs(ordered_batches, block_inputs, signed_block)

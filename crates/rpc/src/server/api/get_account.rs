@@ -9,11 +9,11 @@ use miden_node_proto::domain::account::{
 use miden_node_proto::generated as proto;
 use miden_node_store::GetAccountError;
 use miden_node_utils::limiter::{QueryParamStorageMapKeyTotalLimit, QueryParamStorageMapSlotLimit};
-use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use tonic::Status;
-use tracing::{Span, debug, info_span};
+use tracing::{Span, debug, field, info_span, instrument};
 
-use super::{COMPONENT, RpcService, check};
+use super::{RpcService, check};
+use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::GetAccount for RpcService {
@@ -28,14 +28,22 @@ impl proto::server::rpc_api::GetAccount for RpcService {
         Ok(output.into())
     }
 
+    #[instrument(
+        target = COMPONENT,
+        name = "get_account",
+        skip_all,
+        fields(
+            account.id = %request.account_id,
+            block.number = field::Empty,
+        ),
+        err,
+    )]
     async fn handle(&self, request: Self::Input) -> tonic::Result<Self::Output> {
-        debug!(target: COMPONENT, ?request);
-
-        let span = Span::current();
-        span.set_attribute("account.id", request.account_id);
         if let Some(block) = request.block_num {
-            span.set_attribute("block.number", block);
+            Span::current().record("block.number", field::display(block));
         }
+        tracing::trace!(target: LOG_TARGET, ?request);
+        debug!(target: LOG_TARGET, "Getting account");
 
         // Validate storage map request limits before forwarding to store.
         if let Some(details) = &request.details {

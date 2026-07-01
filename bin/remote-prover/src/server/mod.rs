@@ -14,6 +14,7 @@ use tonic_web::GrpcWebLayer;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::trace::TraceLayer;
 
+use crate::LOG_TARGET;
 use crate::server::service::ProverService;
 
 mod proof_kind;
@@ -66,11 +67,12 @@ impl Server {
             .port();
 
         tracing::info!(
-            server.timeout=%humantime::Duration::from(self.timeout),
-            server.capacity=self.capacity,
-            proof.kind = %self.kind,
-            server.port = port,
-            "proof server listening"
+            target: LOG_TARGET,
+            server_timeout=%humantime::Duration::from(self.timeout),
+            server_capacity=self.capacity,
+            proof_kind = %self.kind,
+            server_port = port,
+            "Proof server listening"
         );
 
         let status_service =

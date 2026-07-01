@@ -12,12 +12,12 @@ use miden_protocol::note::{NoteDetails, Nullifier};
 use miden_protocol::transaction::OutputNote;
 use miden_protocol::utils::serde::Serializable;
 use tokio::sync::oneshot;
-use tracing::{Instrument, info, info_span, instrument};
+use tracing::{Instrument, field, info_span, instrument};
 
 use crate::db::NoteRecord;
 use crate::errors::{ApplyBlockError, ApplyBlockWithProvingInputsError, InvalidBlockError};
 use crate::state::{BlockNotification, State};
-use crate::{COMPONENT, HistoricalError};
+use crate::{COMPONENT, HistoricalError, LOG_TARGET};
 
 impl State {
     /// Saves proving inputs for a signed block and applies it to the state.
@@ -72,7 +72,13 @@ impl State {
     /// - the in-memory structures are updated, including the latest block pointer and the lock is
     ///   released.
     // TODO: This span is logged in a root span, we should connect it to the parent span.
-    #[instrument(target = COMPONENT, skip_all, err)]
+    #[instrument(target = COMPONENT, skip_all, err,
+                fields(
+                    block_num = field::Empty,
+                    block_commitment = field::Empty,
+                    num_transactions = field::Empty,
+                )
+    )]
     pub async fn apply_block(&self, signed_block: SignedBlock) -> Result<(), ApplyBlockError> {
         let _lock = self.writer.try_lock().map_err(|_| ApplyBlockError::ConcurrentWrite)?;
 
@@ -81,6 +87,12 @@ impl State {
 
         let block_num = header.block_num();
         let block_commitment = header.commitment();
+        let num_transactions = body.transactions().as_slice().len();
+
+        let span = tracing::Span::current();
+        span.record("block_num", field::display(block_num));
+        span.record("block_commitment", field::display(block_commitment));
+        span.record("num_transactions", num_transactions);
 
         self.validate_block_header(header, body).await?;
 
@@ -186,7 +198,7 @@ impl State {
             .expect("block cache receives sequential block numbers");
         let _ = self.committed_tip_tx.send(block_num);
 
-        info!(%block_commitment, block_num = block_num.as_u32(), COMPONENT, "apply_block successful");
+        tracing::debug!(target: LOG_TARGET, "Block applied");
 
         Ok(())
     }

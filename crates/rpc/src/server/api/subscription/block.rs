@@ -6,10 +6,11 @@ use miden_node_utils::grpc::ClientIp;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::block::BlockNumber;
 use tonic::{Request, Status};
-use tracing::{Span, debug};
+use tracing::{Span, debug, instrument};
 
 use super::super::{COMPONENT, RpcService};
 use super::stream::{StreamItem, SubscriptionStream};
+use crate::LOG_TARGET;
 
 pub struct BlockSubscriptionInput {
     request: proto::rpc::BlockSubscriptionRequest,
@@ -44,11 +45,20 @@ impl proto::server::rpc_api::BlockSubscription for RpcService {
         Ok(Box::pin(stream.map(|item| item.and_then(Self::encode))))
     }
 
+    #[instrument(
+        target = COMPONENT,
+        name = "block_subscription",
+        skip_all,
+        fields(
+            block.from = %input.request.block_from,
+        ),
+        err,
+    )]
     async fn handle(&self, input: Self::Input) -> tonic::Result<Self::ItemStream> {
         let BlockSubscriptionInput { request, client_ip } = input;
         Span::current().set_attribute("block.from", request.block_from);
 
-        debug!(target: COMPONENT, ?request);
+        debug!(target: LOG_TARGET, "Subscribing to blocks");
 
         let from = BlockNumber::from(request.block_from);
         SubscriptionStream::blocks(self, from, client_ip)
