@@ -56,7 +56,9 @@ impl grpc::server::validator_api::BlockSubscription for ValidatorService {
                         Err(err) => Err(tonic::Status::internal(
                             err.as_report_context("failed to load block"),
                         )),
-                    };
+                    }.inspect_err(|err| {
+                        tracing::error!(block.number = %block, message = %err.message(), "failed to load block in validator recovery stream");
+                    });
 
                     // Errors are not recoverable so we abort the stream after informing the client.
                     //
@@ -66,6 +68,7 @@ impl grpc::server::validator_api::BlockSubscription for ValidatorService {
                     // and prevent the sending of the error response.
                     let is_err = response.is_err();
                     if tx.send(response).await.is_err() || is_err {
+                        tracing::info!("validator recovery stream closing");
                         return;
                     }
                 }
