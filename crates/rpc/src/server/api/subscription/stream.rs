@@ -14,7 +14,7 @@ const SUBSCRIBER_CHANNEL_CAPACITY: usize = 32;
 /// Safety-net timeout for a single send when the client has stalled.
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 
-pub trait SubscriptionStream: Sized + Send {
+pub trait Subscription: Sized + Send {
     fn on_eos(&self, err: StreamError);
 
     fn get_data(
@@ -22,7 +22,7 @@ pub trait SubscriptionStream: Sized + Send {
         block: BlockNumber,
     ) -> impl Future<Output = Result<Vec<u8>, DataError>> + Send + '_;
 
-    fn stream(
+    fn into_stream(
         self,
         from: BlockNumber,
         mut chain_tip: watch::Receiver<BlockNumber>,
@@ -186,7 +186,7 @@ mod tests {
         }
     }
 
-    impl SubscriptionStream for MockStream {
+    impl Subscription for MockStream {
         fn on_eos(&self, err: StreamError) {
             self.eos.lock().expect("eos mutex should not be poisoned").push(err);
         }
@@ -205,7 +205,7 @@ mod tests {
         let (tip_tx, tip_rx) = watch::channel(BlockNumber::GENESIS);
         let source = MockStream::default();
         let eos = source.eos();
-        let mut stream = source.stream(BlockNumber::from(1u32), tip_rx);
+        let mut stream = source.into_stream(BlockNumber::from(1u32), tip_rx);
 
         drop(tip_tx);
 
@@ -224,7 +224,7 @@ mod tests {
     #[tokio::test]
     async fn stream_yields_requested_block_once_tip_reaches_it() {
         let (_tip_tx, tip_rx) = watch::channel(BlockNumber::from(1u32));
-        let mut stream = MockStream::default().stream(BlockNumber::from(1u32), tip_rx);
+        let mut stream = MockStream::default().into_stream(BlockNumber::from(1u32), tip_rx);
 
         let item = tokio::time::timeout(Duration::from_secs(5), stream.next())
             .await
@@ -242,7 +242,7 @@ mod tests {
         let (_tip_tx, tip_rx) = watch::channel(BlockNumber::from(1u32));
         let source = MockStream::failing_at(BlockNumber::from(1u32));
         let eos = source.eos();
-        let mut stream = source.stream(BlockNumber::from(1u32), tip_rx);
+        let mut stream = source.into_stream(BlockNumber::from(1u32), tip_rx);
 
         let item = tokio::time::timeout(Duration::from_secs(5), stream.next())
             .await
@@ -261,7 +261,7 @@ mod tests {
         let (_tip_tx, tip_rx) = watch::channel(BlockNumber::GENESIS);
         let source = MockStream::default();
         let eos = source.eos();
-        let stream = source.stream(BlockNumber::from(1u32), tip_rx);
+        let stream = source.into_stream(BlockNumber::from(1u32), tip_rx);
 
         drop(stream);
 
@@ -275,7 +275,7 @@ mod tests {
         let source = MockStream::default();
         let eos = source.eos();
         let fetch_count = source.fetch_count();
-        let _stream = source.stream(BlockNumber::GENESIS, tip_rx);
+        let _stream = source.into_stream(BlockNumber::GENESIS, tip_rx);
 
         wait_for_fetch_count(&fetch_count, SUBSCRIBER_CHANNEL_CAPACITY + 1).await;
         drop(tip_tx);

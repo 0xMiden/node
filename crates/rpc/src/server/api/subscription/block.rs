@@ -13,7 +13,7 @@ use tonic::{Request, Status};
 use tracing::{Span, debug};
 
 use super::super::{COMPONENT, RpcService};
-use super::stream::{DataError, StreamError, SubscriptionStream};
+use super::stream::{DataError, StreamError, Subscription};
 use super::{
     IpBanList,
     stream_error_to_status,
@@ -84,14 +84,17 @@ impl proto::server::rpc_api::BlockSubscription for RpcService {
             store: Arc::clone(&self.store),
         };
 
-        let stream = stream.stream(from, self.store.subscribe_committed_tip()).map(move |event| {
-            event
-                .map(|event| proto::rpc::BlockSubscriptionResponse {
-                    block: event.data,
-                    committed_chain_tip: event.tip.as_u32(),
-                })
-                .map_err(stream_error_to_status)
-        });
+        let stream =
+            stream
+                .into_stream(from, self.store.subscribe_committed_tip())
+                .map(move |event| {
+                    event
+                        .map(|event| proto::rpc::BlockSubscriptionResponse {
+                            block: event.data,
+                            committed_chain_tip: event.tip.as_u32(),
+                        })
+                        .map_err(stream_error_to_status)
+                });
         Ok(stream.boxed())
     }
 }
@@ -112,7 +115,7 @@ type BlockSubscriptionStream = std::pin::Pin<
     >,
 >;
 
-impl SubscriptionStream for BlockStream {
+impl Subscription for BlockStream {
     fn on_eos(&self, err: StreamError) {
         if let (Some(ip), StreamError::SlowSubscriber) = (self.client_ip, err) {
             self.ban_list.add(ip);
