@@ -4,6 +4,7 @@ use std::sync::LazyLock;
 
 use anyhow::{Context, Result};
 use miden_node_utils::crypto::get_random_coin;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::Word;
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::account::{
@@ -38,7 +39,7 @@ pub static WALLET_COUNTER_SLOT_NAME: LazyLock<StorageSlotName> = LazyLock::new(|
 /// Create a wallet account with `RpoFalcon512` authentication and a self-counter component.
 ///
 /// Returns the created account and the secret key for authentication.
-#[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "create-wallet-account", skip_all, ret(level = "debug"))]
+#[miden_instrument(target = COMPONENT, name = "create-wallet-account", skip_all, ret(level = "debug"))]
 pub fn create_wallet_account() -> Result<(Account, SecretKey)> {
     let mut rng = ChaCha20Rng::from_seed(rand::random());
     let secret_key = SecretKey::with_rng(&mut get_random_coin(&mut rng));

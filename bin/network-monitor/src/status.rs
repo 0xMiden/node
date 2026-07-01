@@ -8,6 +8,7 @@
 use std::time::Duration;
 
 use miden_node_proto::clients::RpcClient;
+use miden_node_utils::tracing::miden_instrument;
 use tracing::debug;
 use url::Url;
 
@@ -117,7 +118,7 @@ impl Service for RpcService {
         )
     }
 
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         parent = None,
         target = COMPONENT,
         name = "network_monitor.status.check_rpc",

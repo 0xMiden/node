@@ -9,6 +9,7 @@ use miden_node_proto::domain::account::{
 use miden_node_proto::generated as proto;
 use miden_node_store::GetAccountError;
 use miden_node_utils::limiter::{QueryParamStorageMapKeyTotalLimit, QueryParamStorageMapSlotLimit};
+use miden_node_utils::tracing::{miden_instrument, miden_span_record};
 use tonic::Status;
 use tracing::{debug, info_span};
 
@@ -28,16 +29,16 @@ impl proto::server::rpc_api::GetAccount for RpcService {
         Ok(output.into())
     }
 
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "get_account",
         skip_all,
         err,
     )]
     async fn handle(&self, request: Self::Input) -> tonic::Result<Self::Output> {
-        miden_node_utils::tracing::miden_span_record!(account.id = %request.account_id);
+        miden_span_record!(account.id = %request.account_id);
         if let Some(block) = request.block_num {
-            miden_node_utils::tracing::miden_span_record!(block.number = %block);
+            miden_span_record!(block.number = %block);
         }
         tracing::trace!(target: LOG_TARGET, ?request);
         debug!(target: LOG_TARGET, "Getting account");

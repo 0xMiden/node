@@ -1,4 +1,5 @@
 use miden_node_proto::generated as proto;
+use miden_node_utils::tracing::miden_instrument;
 use tracing::debug;
 
 use super::{RPC_LIMITS, RpcService};
@@ -17,7 +18,7 @@ impl proto::server::rpc_api::GetLimits for RpcService {
         Ok(output)
     }
 
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "get_limits",
         skip_all,

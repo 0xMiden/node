@@ -9,6 +9,7 @@ use diesel::SqliteConnection;
 use diesel::dsl::{count_star, exists};
 use diesel::prelude::*;
 use miden_node_db::{DatabaseError, Db, SqlTypeConvert};
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::transaction::TransactionId;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
@@ -19,14 +20,14 @@ use crate::tx_validation::ValidatedTransaction;
 use crate::{COMPONENT, LOG_TARGET};
 
 /// Open a connection to the DB after verifying that it is at the latest schema version.
-#[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all)]
+#[miden_instrument(target = COMPONENT, skip_all)]
 pub async fn load(database_filepath: PathBuf) -> Result<Db, DatabaseError> {
     load_with_pool_size(database_filepath, miden_node_db::default_connection_pool_size()).await
 }
 
 /// Open a connection to the DB with a specific pool size after verifying that it is at the latest
 /// schema version.
-#[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all)]
+#[miden_instrument(target = COMPONENT, skip_all)]
 pub async fn load_with_pool_size(
     database_filepath: PathBuf,
     connection_pool_size: NonZeroUsize,
@@ -37,13 +38,13 @@ pub async fn load_with_pool_size(
 }
 
 /// Creates a new database, applies all migrations, and opens a connection pool.
-#[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all)]
+#[miden_instrument(target = COMPONENT, skip_all)]
 pub async fn setup(database_filepath: PathBuf) -> Result<Db, DatabaseError> {
     setup_with_pool_size(database_filepath, miden_node_db::default_connection_pool_size()).await
 }
 
 /// Creates a new database with a specific pool size and applies all migrations.
-#[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all)]
+#[miden_instrument(target = COMPONENT, skip_all)]
 pub async fn setup_with_pool_size(
     database_filepath: PathBuf,
     connection_pool_size: NonZeroUsize,
@@ -54,7 +55,7 @@ pub async fn setup_with_pool_size(
 }
 
 /// Applies all pending migrations to an existing DB.
-#[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all)]
+#[miden_instrument(target = COMPONENT, skip_all)]
 pub fn migrate(database_filepath: impl AsRef<Path>) -> Result<(), DatabaseError> {
     migrate_database(database_filepath.as_ref())?;
     Ok(())
@@ -75,7 +76,7 @@ fn open_with_pool_size(
 }
 
 /// Inserts a new validated transaction into the database.
-#[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all, fields(tx_id = %tx_info.tx_id()), err)]
+#[miden_instrument(target = COMPONENT, skip_all, fields(tx_id = %tx_info.tx_id()), err)]
 pub(crate) fn insert_transaction(
     conn: &mut SqliteConnection,
     tx_info: &ValidatedTransaction,
@@ -99,7 +100,7 @@ pub(crate) fn insert_transaction(
 ///   WHERE id = ?
 /// );
 /// ```
-#[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip(conn), err)]
+#[miden_instrument(target = COMPONENT, skip(conn), err)]
 pub(crate) fn transaction_exists(
     conn: &mut SqliteConnection,
     tx_id: TransactionId,
@@ -125,7 +126,7 @@ pub(crate) fn transaction_exists(
 ///   WHERE id = ?
 /// );
 /// ```
-#[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip(conn), err)]
+#[miden_instrument(target = COMPONENT, skip(conn), err)]
 pub(crate) fn find_unvalidated_transactions(
     conn: &mut SqliteConnection,
     tx_ids: &[TransactionId],
@@ -150,7 +151,7 @@ pub(crate) fn find_unvalidated_transactions(
 ///
 /// Inserts a new row if no block header exists at the given block number, or replaces the
 /// existing block header if one already exists.
-#[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip(conn, header), err)]
+#[miden_instrument(target = COMPONENT, skip(conn, header), err)]
 pub fn upsert_block_header(
     conn: &mut SqliteConnection,
     header: &BlockHeader,
@@ -166,7 +167,7 @@ pub fn upsert_block_header(
 /// Loads the chain tip (block header with the highest block number) from the database.
 ///
 /// Returns `None` if no block headers have been persisted (i.e. bootstrap has not been run).
-#[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip(conn), err)]
+#[miden_instrument(target = COMPONENT, skip(conn), err)]
 pub fn load_chain_tip(conn: &mut SqliteConnection) -> Result<Option<BlockHeader>, DatabaseError> {
     let row = schema::block_headers::table
         .order(schema::block_headers::block_num.desc())
@@ -184,7 +185,7 @@ pub fn load_chain_tip(conn: &mut SqliteConnection) -> Result<Option<BlockHeader>
 /// Loads a block header by its block number.
 ///
 /// Returns `None` if no block header exists at the given block number.
-#[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip(conn), err)]
+#[miden_instrument(target = COMPONENT, skip(conn), err)]
 pub fn load_block_header(
     conn: &mut SqliteConnection,
     block_num: BlockNumber,
@@ -203,14 +204,14 @@ pub fn load_block_header(
 }
 
 /// Returns the total number of validated transactions in the database.
-#[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip(conn), err)]
+#[miden_instrument(target = COMPONENT, skip(conn), err)]
 pub fn count_validated_transactions(conn: &mut SqliteConnection) -> Result<i64, DatabaseError> {
     let count = schema::validated_transactions::table.select(count_star()).first::<i64>(conn)?;
     Ok(count)
 }
 
 /// Returns the total number of signed blocks in the database.
-#[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip(conn), err)]
+#[miden_instrument(target = COMPONENT, skip(conn), err)]
 pub fn count_signed_blocks(conn: &mut SqliteConnection) -> Result<i64, DatabaseError> {
     let count = schema::block_headers::table.select(count_star()).first::<i64>(conn)?;
     Ok(count)

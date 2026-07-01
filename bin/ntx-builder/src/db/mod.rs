@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use miden_node_db::DatabaseError;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockHeader, BlockNumber, SignedBlock};
@@ -33,7 +34,7 @@ pub struct Db {
 
 impl Db {
     /// Opens an async connection pool after verifying the database is at the latest schema version.
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "ntx_builder.database.load",
         skip_all,
@@ -47,7 +48,7 @@ impl Db {
 
     /// Opens an async connection pool with a specific pool size after verifying the database is at
     /// the latest schema version.
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "ntx_builder.database.load",
         skip_all,
@@ -64,7 +65,7 @@ impl Db {
     }
 
     /// Applies all pending migrations to an existing DB.
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all)]
+    #[miden_instrument(target = COMPONENT, skip_all)]
     pub fn migrate(database_filepath: impl AsRef<Path>) -> Result<()> {
         migrate_database(database_filepath.as_ref())?;
         Ok(())
@@ -95,7 +96,7 @@ impl Db {
     /// committed-block subscription on startup.
     ///
     /// Returns an error if the database has already been bootstrapped.
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "ntx_builder.database.bootstrap",
         skip_all,

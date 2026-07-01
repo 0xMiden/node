@@ -11,6 +11,7 @@ use std::io::ErrorKind;
 use std::ops::Not;
 use std::path::{Path, PathBuf};
 
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::utils::serde::Serializable;
 
@@ -32,7 +33,7 @@ impl BlockStore {
     /// # Errors
     ///
     /// Uses [`std::fs::create_dir`] and therefore has the same error conditions.
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "store.block_store.bootstrap",
         skip_all,
@@ -83,7 +84,7 @@ impl BlockStore {
         }
     }
 
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "store.block_store.save_block",
         skip(self, data),
@@ -111,7 +112,7 @@ impl BlockStore {
     // PROOF STORAGE
     // --------------------------------------------------------------------------------------------
 
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "store.block_store.save_proof",
         skip_all,
@@ -138,7 +139,7 @@ impl BlockStore {
     // PROVING INPUTS STORAGE
     // --------------------------------------------------------------------------------------------
 
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "store.block_store.save_proving_inputs",
         skip_all,

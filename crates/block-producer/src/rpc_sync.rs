@@ -7,6 +7,7 @@ use miden_node_proto::generated::rpc::{BlockSubscriptionRequest, ProofSubscripti
 use miden_node_store::state::{Finality, State};
 use miden_node_utils::retry::{self, Retryable};
 use miden_node_utils::tasks::Tasks;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use miden_protocol::utils::serde::Deserializable;
 use tokio_stream::StreamExt;
@@ -107,7 +108,7 @@ impl BlockSync {
         .await
     }
 
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all, err)]
+    #[miden_instrument(target = COMPONENT, skip_all, err)]
     async fn sync(&self) -> anyhow::Result<()> {
         let block_from = self.state.chain_tip(Finality::Committed).await.child().as_u32();
         info!(target: LOG_TARGET, block_from, "Connecting to upstream RPC for blocks");

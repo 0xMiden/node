@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
+use miden_node_utils::tracing::{miden_instrument, miden_span_record};
 
 use crate::COMPONENT;
 use crate::state::State;
@@ -22,7 +23,7 @@ impl State {
     }
 }
 
-#[miden_node_utils::tracing::miden_instrument(
+#[miden_instrument(
     target = COMPONENT,
     name = "measure_disk_space_usage",
     skip_all,
@@ -30,14 +31,14 @@ impl State {
 )]
 async fn measure_disk_space_usage(data_dir: PathBuf) -> Result<(), tokio::task::JoinError> {
     let usage = spawn_blocking_in_current_span(move || measure_disk_usage_bytes(&data_dir)).await?;
-    miden_node_utils::tracing::miden_span_record!(
+    miden_span_record!(
         db.sqlite.size = usage.sqlite_db,
         db.sqlite.wal.size = usage.sqlite_wal,
         db.block_store.size = usage.block_store,
     );
     #[cfg(feature = "rocksdb")]
     {
-        miden_node_utils::tracing::miden_span_record!(
+        miden_span_record!(
             db.account_tree.size = usage.account_tree,
             db.nullifier_tree.size = usage.nullifier_tree,
             db.account_state_forest.size = usage.account_state_forest,

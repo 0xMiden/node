@@ -2,6 +2,7 @@ use std::sync::atomic::Ordering;
 
 use miden_node_proto::generated as grpc;
 use miden_node_utils::ErrorReport;
+use miden_node_utils::tracing::{miden_instrument, miden_span_record};
 use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
 use miden_tx::utils::serde::Deserializable;
 use tonic::Status;
@@ -16,7 +17,7 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
     type Input = Input;
     type Output = ();
 
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "submit_proven_transaction",
         skip_all,
@@ -30,7 +31,7 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
             .map_err(|_| Status::resource_exhausted("validator is busy streaming a backup"))?;
 
         let tx_id = input.tx.id();
-        miden_node_utils::tracing::miden_span_record!(transaction.id = %tx_id);
+        miden_span_record!(transaction.id = %tx_id);
 
         // Short-circuit transactions that have already been validated.
         let already_validated = self

@@ -12,6 +12,7 @@ use candidate::TransactionCandidate;
 use futures::FutureExt;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountDelta, AccountId};
 use miden_protocol::block::BlockNumber;
@@ -501,10 +502,7 @@ impl AccountActor {
     /// error) are retried inside [`execute::NtxContext::execute_transaction`].
     /// Any error reaching this method is therefore terminal for the candidate: the batch's notes
     /// are marked failed and the actor moves on.
-    #[miden_node_utils::tracing::miden_instrument(
-        name = "ntx.actor.execute_transactions",
-        skip(self, tx_candidate)
-    )]
+    #[miden_instrument(name = "ntx.actor.execute_transactions", skip(self, tx_candidate))]
     async fn execute_transactions(
         &self,
         account_id: AccountId,

@@ -12,6 +12,7 @@ use miden_node_proto::clients::RpcClient;
 use miden_node_proto::generated::rpc::BlockHeaderByNumberRequest;
 use miden_node_proto::generated::transaction::ProvenTransaction;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{Account, AccountCode, AccountDelta, AccountId};
 use miden_protocol::asset::AssetVault;
@@ -227,7 +228,7 @@ impl IncrementService {
     }
 
     /// Re-sync the wallet account from the RPC after repeated failures.
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         parent = None,
         target = COMPONENT,
         name = "network_monitor.counter.try_resync_wallet_account",
@@ -257,7 +258,7 @@ impl IncrementService {
     /// Builds a fresh wallet/counter pair in memory, deploys the counter to the network, swaps
     /// the local [`TxBuilder`] state, and publishes the new counter on [`Self::counter_sender`]
     /// so the tracker switches over without polling disk.
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         parent = None,
         target = COMPONENT,
         name = "network_monitor.counter.try_regenerate_accounts",
@@ -290,7 +291,7 @@ impl IncrementService {
     }
 
     /// Create and submit a network note that increments the counter account.
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         parent = None,
         target = COMPONENT,
         name = "network_monitor.counter.submit_increment",

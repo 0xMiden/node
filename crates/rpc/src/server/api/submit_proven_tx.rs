@@ -4,6 +4,7 @@ use miden_node_proto::clients::{SequencerClient, ValidatorClient};
 use miden_node_proto::generated as proto;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
+use miden_node_utils::tracing::{miden_instrument, miden_span_record};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::transaction::{
     OutputNote,
@@ -59,7 +60,7 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
         Self::encode(output)
     }
 
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "submit_proven_tx",
         skip_all,
@@ -78,7 +79,7 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
             Status::invalid_argument(err.as_report_context("invalid transaction"))
         })?;
 
-        miden_node_utils::tracing::miden_span_record!(
+        miden_span_record!(
             transaction.id = %tx.id(),
             account.id = %tx.account_id(),
             transaction.expires_at = %tx.expiration_block_num(),

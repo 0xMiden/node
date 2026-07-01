@@ -11,6 +11,7 @@ use miden_node_proto::domain::account::{
 };
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::account::delta::{AccountDelta, AccountStorageDelta, AccountVaultDelta};
 use miden_protocol::account::{
     AccountId,
@@ -298,7 +299,7 @@ impl<B: Backend> AccountStateForest<B> {
     // --------------------------------------------------------------------------------------------
 
     /// Enumerates vault contents for the specified account at the requested block.
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all)]
+    #[miden_instrument(target = COMPONENT, skip_all)]
     pub(crate) fn get_vault_details(
         &self,
         account_id: AccountId,
@@ -329,7 +330,7 @@ impl<B: Backend> AccountStateForest<B> {
     ///
     /// Returns `None` if no storage root is tracked for this account/slot/block combination.
     /// Returns a `MerkleError` if the forest doesn't contain sufficient data for the proofs.
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all)]
+    #[miden_instrument(target = COMPONENT, skip_all)]
     pub(crate) fn get_storage_map_details_for_keys(
         &self,
         account_id: AccountId,
@@ -394,7 +395,7 @@ impl<B: Backend> AccountStateForest<B> {
     /// Returns `AccountStorageMapResult::CannotReconstructKeysFromCache` when the forest has hashed
     /// entries but at least one raw key is missing from the reverse-key cache, so the caller
     /// should fall back to database reconstruction.
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all)]
+    #[miden_instrument(target = COMPONENT, skip_all)]
     pub(crate) fn get_storage_map_details_for_all_entries(
         &self,
         account_id: AccountId,
@@ -457,7 +458,7 @@ impl<B: Backend> AccountStateForest<B> {
     /// # Errors
     ///
     /// Returns an error if applying a vault delta results in a negative balance.
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all, fields(block.number = %block_num, num_pruned = tracing::field::Empty))]
+    #[miden_instrument(target = COMPONENT, skip_all, fields(block.number = %block_num, num_pruned = tracing::field::Empty))]
     pub(crate) fn apply_block_updates(
         &mut self,
         block_num: BlockNumber,

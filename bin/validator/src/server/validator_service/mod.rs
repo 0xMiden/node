@@ -3,6 +3,7 @@ use std::sync::atomic::AtomicU64;
 
 use miden_node_db::{DatabaseError, Db};
 use miden_node_store::BlockStore;
+use miden_node_utils::tracing::{miden_instrument, miden_span_record};
 use miden_protocol::block::{BlockHeader, BlockNumber, ProposedBlock, SignedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
 use miden_protocol::crypto::utils::Serializable;
@@ -125,7 +126,7 @@ impl ValidatorService {
     ///    tip, validated against the previous block header.
     ///
     /// On success, returns the signature and the validated block header.
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         skip_all,
         err
@@ -135,7 +136,7 @@ impl ValidatorService {
         proposed_block: ProposedBlock,
         chain_tip: BlockHeader,
     ) -> Result<(Signature, BlockHeader), ValidatorError> {
-        miden_node_utils::tracing::miden_span_record!(tip.number = chain_tip.block_num().as_u32(),);
+        miden_span_record!(tip.number = chain_tip.block_num().as_u32(),);
 
         // Search for any proposed transactions that have not previously been validated.
         let proposed_tx_ids =
@@ -158,7 +159,7 @@ impl ValidatorService {
             .into_header_and_body()
             .map_err(ValidatorError::BlockBuildingFailed)?;
 
-        miden_node_utils::tracing::miden_span_record!(
+        miden_span_record!(
             block.number = proposed_header.block_num().as_u32(),
             block.commitment = %proposed_header.commitment(),
         );
@@ -219,7 +220,7 @@ impl ValidatorService {
     }
 
     /// Signs a block header using the validator's signer.
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "sign_block", skip_all, err, fields(block.number = header.block_num().as_u32()))]
+    #[miden_instrument(target = COMPONENT, name = "sign_block", skip_all, err, fields(block.number = header.block_num().as_u32()))]
     async fn sign_header(&self, header: &BlockHeader) -> Result<Signature, ValidatorError> {
         self.signer
             .sign(header)

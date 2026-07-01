@@ -1,6 +1,7 @@
 use miden_node_proto::decode::read_block_range;
 use miden_node_proto::generated as proto;
 use miden_node_utils::limiter::QueryParamNullifierPrefixLimit;
+use miden_node_utils::tracing::{miden_instrument, miden_span_record};
 use tonic::Status;
 use tracing::debug;
 
@@ -26,7 +27,7 @@ impl proto::server::rpc_api::SyncNullifiers for RpcService {
         Ok(output)
     }
 
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "sync_nullifiers",
         skip_all,
@@ -37,10 +38,7 @@ impl proto::server::rpc_api::SyncNullifiers for RpcService {
 
         let range = read_block_range::<Status>(request.block_range, "SyncNullifiersRequest")?;
 
-        miden_node_utils::tracing::miden_span_record!(
-            block_range.from = range.block_from,
-            block_range.to = range.block_to,
-        );
+        miden_span_record!(block_range.from = range.block_from, block_range.to = range.block_to,);
 
         debug!(target: LOG_TARGET, "Syncing nullifiers");
 

@@ -20,6 +20,7 @@ use miden_crypto::merkle::smt::{ForestPersistentBackend, PersistentBackendConfig
 use miden_large_smt_backend_rocksdb::{RocksDbStorage, SmtStorageReader};
 #[cfg(feature = "rocksdb")]
 use miden_node_utils::clap::RocksDbOptions;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::account::{AccountId, AccountStorageHeader, StorageSlotType};
 use miden_protocol::block::account_tree::{AccountIdKey, AccountTree};
 use miden_protocol::block::nullifier_tree::NullifierTree;
@@ -172,7 +173,7 @@ impl TreeStorageLoader for MemoryStorage {
         Ok(MemoryStorage::default())
     }
 
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all)]
+    #[miden_instrument(target = COMPONENT, skip_all)]
     async fn load_account_tree(
         self,
         db: &mut Db,
@@ -214,7 +215,7 @@ impl TreeStorageLoader for MemoryStorage {
     // TODO: Make the loading methodology for account and nullifier trees consistent. Currently we
     // use `NullifierTree::new_unchecked()` for nullifiers but `AccountTree::new()` for accounts.
     // Consider using `NullifierTree::with_storage_from_entries()` for consistency.
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all)]
+    #[miden_instrument(target = COMPONENT, skip_all)]
     async fn load_nullifier_tree(
         self,
         db: &mut Db,
@@ -270,7 +271,7 @@ impl TreeStorageLoader for RocksDbStorage {
             .map_err(|e| StateInitializationError::AccountTreeIoError(e.to_string()))
     }
 
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all)]
+    #[miden_instrument(target = COMPONENT, skip_all)]
     async fn load_account_tree(
         self,
         db: &mut Db,
@@ -323,7 +324,7 @@ impl TreeStorageLoader for RocksDbStorage {
         AccountTree::new(smt).map_err(StateInitializationError::FailedToCreateAccountsTree)
     }
 
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all)]
+    #[miden_instrument(target = COMPONENT, skip_all)]
     async fn load_nullifier_tree(
         self,
         db: &mut Db,
@@ -386,7 +387,7 @@ impl AccountForestLoader for ForestInMemoryBackend {
         Ok(ForestInMemoryBackend::new())
     }
 
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all, fields(block.number = %block_num))]
+    #[miden_instrument(target = COMPONENT, skip_all, fields(block.number = %block_num))]
     async fn load_account_state_forest(
         self,
         db: &mut Db,
@@ -427,7 +428,7 @@ impl AccountForestLoader for ForestPersistentBackend {
             .map_err(|e| StateInitializationError::AccountStateForestIoError(e.to_string()))
     }
 
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all, fields(block.number = %block_num))]
+    #[miden_instrument(target = COMPONENT, skip_all, fields(block.number = %block_num))]
     async fn load_account_state_forest(
         self,
         db: &mut Db,
@@ -462,7 +463,7 @@ pub fn load_smt<S: SmtStorage>(storage: S) -> Result<LargeSmt<S>, StateInitializ
 // ================================================================================================
 
 /// Loads the blockchain MMR from all block headers in the database.
-#[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all)]
+#[miden_instrument(target = COMPONENT, skip_all)]
 pub async fn load_mmr(db: &mut Db) -> Result<Blockchain, StateInitializationError> {
     let latest_header = db.select_block_header_by_block_num(None).await?;
     let block_commitments = db.select_all_block_header_commitments().await?;
@@ -504,7 +505,7 @@ fn verify_chain_mmr_consistency(
 }
 
 /// Rebuilds SMT forest with storage map and vault Merkle paths for all public accounts.
-#[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all, fields(block.number = %block_num))]
+#[miden_instrument(target = COMPONENT, skip_all, fields(block.number = %block_num))]
 pub async fn rebuild_account_state_forest(
     forest: &mut AccountStateForest<impl Backend>,
     db: &mut Db,
@@ -563,7 +564,7 @@ pub async fn rebuild_account_state_forest(
 ///
 /// # Errors
 /// Returns `StateInitializationError::TreeStorageDiverged` if any root doesn't match.
-#[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all)]
+#[miden_instrument(target = COMPONENT, skip_all)]
 pub async fn verify_tree_consistency(
     account_tree_root: Word,
     nullifier_tree_root: Word,
@@ -604,7 +605,7 @@ pub async fn verify_tree_consistency(
 /// This check ensures persisted account state forest has not diverged from the latest
 /// account states in SQLite. When the forest is rebuilt from SQLite, it will naturally
 /// match; when loaded from `RocksDB`, this catches corruption or incomplete shutdown.
-#[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all)]
+#[miden_instrument(target = COMPONENT, skip_all)]
 pub async fn verify_account_state_forest_consistency(
     forest: &AccountStateForest<impl Backend>,
     db: &mut Db,

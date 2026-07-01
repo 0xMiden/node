@@ -6,6 +6,7 @@ use anyhow::Result;
 use miden_node_store::state::{Finality, State};
 use miden_node_utils::formatting::{format_input_notes, format_output_notes};
 use miden_node_utils::tasks::Tasks;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::batch::ProposedBatch;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::ProvenTransaction;
@@ -280,7 +281,7 @@ impl BlockProducerApi {
     // ENDPOINTS
     // --------------------------------------------------------------------------------------------
 
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
          target = COMPONENT,
          name = "block_producer.api.submit_proven_tx",
          skip_all,
@@ -314,7 +315,7 @@ impl BlockProducerApi {
     }
 
     /// Adds a transaction that has already been authenticated.
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
          target = COMPONENT,
          name = "block_producer.api.submit_authenticated_tx",
          skip_all,
@@ -334,7 +335,7 @@ impl BlockProducerApi {
         result
     }
 
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
          target = COMPONENT,
          name = "block_producer.api.submit_proven_tx_batch",
          skip_all,
@@ -367,7 +368,7 @@ impl BlockProducerApi {
     ///
     /// Panics if the number of transactions in `batch` does not match the number of inputs in
     /// `inputs`.
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
          target = COMPONENT,
          name = "block_producer.api.submit_authenticated_tx_batch",
          skip_all,

@@ -3,6 +3,7 @@ use miden_node_proto::clients::{SequencerClient, ValidatorClient};
 use miden_node_proto::generated as proto;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
+use miden_node_utils::tracing::{miden_instrument, miden_span_record};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
@@ -51,7 +52,7 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
         Self::encode(output)
     }
 
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "submit_proven_tx_batch",
         skip_all,
@@ -70,7 +71,7 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
             Status::invalid_argument(err.as_report_context("invalid proven_batch"))
         })?;
 
-        miden_node_utils::tracing::miden_span_record!(
+        miden_span_record!(
             batch.id = %proven_batch.id(),
             batch.expires_at = %proven_batch.batch_expiration_block_num(),
             batch.reference_block.number = %proven_batch.reference_block_num(),

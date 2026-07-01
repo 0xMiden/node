@@ -4,6 +4,7 @@
 
 use anyhow::Result;
 use miden_node_utils::logging::OpenTelemetry;
+use miden_node_utils::tracing::miden_instrument;
 use tracing::info;
 
 use crate::COMPONENT;
@@ -15,7 +16,7 @@ use crate::monitor::tasks::Tasks;
 ///
 /// This function initializes all monitoring tasks including RPC status checking,
 /// remote prover testing, faucet testing, and the web frontend.
-#[miden_node_utils::tracing::miden_instrument(
+#[miden_instrument(
     parent = None,
     target = COMPONENT,
     name = "network_monitor.start_monitor",

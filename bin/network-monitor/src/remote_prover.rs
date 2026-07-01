@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use miden_node_proto::clients::{RemoteProverClient, RemoteProverProxyStatusClient};
 use miden_node_proto::generated as proto;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::utils::serde::Serializable;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
@@ -269,7 +270,7 @@ impl Service for ProverStatusService {
         self.build_status(&ProbeSnapshot::default())
     }
 
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         parent = None,
         target = COMPONENT,
         name = "network_monitor.prover.status_check",
@@ -349,7 +350,7 @@ const PAYLOAD_RETRY_DELAY: Duration = Duration::from_secs(30);
 /// is unreachable at spawn time delays probing instead of permanently disarming it. Acquisition
 /// failures are published as [`Status::Unknown`] outcomes: they are an RPC problem, not a prover
 /// failure.
-#[miden_node_utils::tracing::miden_instrument(
+#[miden_instrument(
     parent = None,
     target = COMPONENT,
     name = "network_monitor.prover.run_test",
@@ -483,7 +484,7 @@ fn tonic_status_to_json(status: &tonic::Status) -> String {
 /// [`crate::deploy::build_probe_transaction_inputs`]); the remote prover re-executes and proves it.
 /// This requires a single RPC read for the genesis block header and is independent of the network
 /// transaction service.
-#[miden_node_utils::tracing::miden_instrument(
+#[miden_instrument(
     parent = None,
     target = COMPONENT,
     name = "network_monitor.remote_prover.generate_prover_test_payload",

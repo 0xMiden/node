@@ -55,6 +55,7 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, LockResult, Mutex, MutexGuard};
 
 use miden_node_utils::ErrorReport;
+use miden_node_utils::tracing::{miden_instrument, miden_span_record};
 use miden_protocol::batch::{BatchId, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::transaction::{TransactionHeader, TransactionId};
@@ -151,7 +152,7 @@ impl SharedMempool {
     ///
     /// Callers should minimise the amount of work performed while holding the lock to reduce
     /// contention with other subsystems that need to access the pool.
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "mempool.lock", skip_all, err)]
+    #[miden_instrument(target = COMPONENT, name = "mempool.lock", skip_all, err)]
     pub fn lock(&self) -> Result<MutexGuard<'_, Mempool>, MempoolPoisonError> {
         let result: LockResult<MutexGuard<'_, Mempool>> = self.0.lock();
         result.map_err(|_| MempoolPoisonError)
@@ -232,7 +233,7 @@ impl Mempool {
     ///
     /// Returns an error if the transaction would exceed the mempool capacity or if its initial
     /// conditions don't match the current state.
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "mempool.add_transaction",
         skip_all
@@ -253,7 +254,7 @@ impl Mempool {
             .append(Arc::clone(&tx))
             .map_err(MempoolSubmissionError::StateConflict)?;
         let telemetry = self.telemetry();
-        miden_node_utils::tracing::miden_span_record!(
+        miden_span_record!(
             transaction.id = %tx.id(),
             mempool.transactions.uncommitted = telemetry.uncommitted_transactions,
             mempool.transactions.unbatched = telemetry.unbatched_transactions,
@@ -267,7 +268,7 @@ impl Mempool {
         Ok(self.committed_chain_tip)
     }
 
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "mempool.add_user_batch",
         skip_all
@@ -301,7 +302,7 @@ impl Mempool {
             .map_err(MempoolSubmissionError::StateConflict)?;
 
         let telemetry = self.telemetry();
-        miden_node_utils::tracing::miden_span_record!(
+        miden_span_record!(
             mempool.transactions.uncommitted = telemetry.uncommitted_transactions,
             mempool.transactions.unbatched = telemetry.unbatched_transactions,
             mempool.batches.proposed = telemetry.proposed_batches,
@@ -319,7 +320,7 @@ impl Mempool {
     /// Transactions are returned in a valid execution ordering.
     ///
     /// Returns `None` if no transactions are available.
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "mempool.select_any_batch",
         skip_all
@@ -328,7 +329,7 @@ impl Mempool {
         let batch = self.transactions.select_any_batch(self.config.batch_budget)?;
         let batch = self.append_selected_batch(batch);
         let telemetry = self.telemetry();
-        miden_node_utils::tracing::miden_span_record!(
+        miden_span_record!(
             mempool.transactions.uncommitted = telemetry.uncommitted_transactions,
             mempool.transactions.unbatched = telemetry.unbatched_transactions,
             mempool.batches.proposed = telemetry.proposed_batches,
@@ -345,7 +346,7 @@ impl Mempool {
     /// User batches count as full because they are externally chosen atomic batches.
     /// Non-user batches are only returned when the selected set saturates the batch budget or when
     /// another selectable transaction cannot fit into the remaining budget.
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "mempool.select_full_batch",
         skip_all
@@ -354,7 +355,7 @@ impl Mempool {
         let batch = self.transactions.select_full_batch(self.config.batch_budget)?;
         let batch = self.append_selected_batch(batch);
         let telemetry = self.telemetry();
-        miden_node_utils::tracing::miden_span_record!(
+        miden_span_record!(
             mempool.transactions.uncommitted = telemetry.uncommitted_transactions,
             mempool.transactions.unbatched = telemetry.unbatched_transactions,
             mempool.batches.proposed = telemetry.proposed_batches,
@@ -378,7 +379,7 @@ impl Mempool {
     /// The transactions are re-queued for inclusion in a batch. Additionally, the batch's
     /// transactions have their failure count incremented, reverting them if they now exceed the
     /// failure limit.
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "mempool.rollback_batch",
         skip_all
@@ -413,7 +414,7 @@ impl Mempool {
         }
 
         let telemetry = self.telemetry();
-        miden_node_utils::tracing::miden_span_record!(
+        miden_span_record!(
             mempool.transactions.uncommitted = telemetry.uncommitted_transactions,
             mempool.transactions.unbatched = telemetry.unbatched_transactions,
             mempool.batches.proposed = telemetry.proposed_batches,
@@ -425,7 +426,7 @@ impl Mempool {
     }
 
     /// Marks a batch as proven if it exists.
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "mempool.commit_batch",
         skip_all
@@ -433,7 +434,7 @@ impl Mempool {
     pub fn commit_batch(&mut self, proof: Arc<ProvenBatch>) {
         self.batches.submit_proof(proof);
         let telemetry = self.telemetry();
-        miden_node_utils::tracing::miden_span_record!(
+        miden_span_record!(
             mempool.transactions.uncommitted = telemetry.uncommitted_transactions,
             mempool.transactions.unbatched = telemetry.unbatched_transactions,
             mempool.batches.proposed = telemetry.proposed_batches,
@@ -453,7 +454,7 @@ impl Mempool {
     /// # Panics
     ///
     /// Panics if there is already a block in flight.
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "mempool.select_block",
         skip_all
@@ -470,7 +471,7 @@ impl Mempool {
         let block = SelectedBlock { block_number, batches };
         self.pending_block = Some(block.clone());
         let telemetry = self.telemetry();
-        miden_node_utils::tracing::miden_span_record!(
+        miden_span_record!(
             mempool.transactions.uncommitted = telemetry.uncommitted_transactions,
             mempool.transactions.unbatched = telemetry.unbatched_transactions,
             mempool.batches.proposed = telemetry.proposed_batches,
@@ -493,7 +494,7 @@ impl Mempool {
     /// # Panics
     ///
     /// Panics if there is no matching block in flight.
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "mempool.commit_block",
         skip_all
@@ -512,7 +513,7 @@ impl Mempool {
 
         self.revert_expired();
         let telemetry = self.telemetry();
-        miden_node_utils::tracing::miden_span_record!(
+        miden_span_record!(
             mempool.transactions.uncommitted = telemetry.uncommitted_transactions,
             mempool.transactions.unbatched = telemetry.unbatched_transactions,
             mempool.batches.proposed = telemetry.proposed_batches,
@@ -532,7 +533,7 @@ impl Mempool {
     /// # Panics
     ///
     /// Panics if there is no matching block in flight.
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "mempool.rollback_block",
         skip_all
@@ -562,7 +563,7 @@ impl Mempool {
             .flat_map(|batch| batch.transactions().as_slice().iter().map(TransactionHeader::id));
         self.transactions.increment_failure_count(failed_txs);
         let telemetry = self.telemetry();
-        miden_node_utils::tracing::miden_span_record!(
+        miden_span_record!(
             mempool.transactions.uncommitted = telemetry.uncommitted_transactions,
             mempool.transactions.unbatched = telemetry.unbatched_transactions,
             mempool.batches.proposed = telemetry.proposed_batches,

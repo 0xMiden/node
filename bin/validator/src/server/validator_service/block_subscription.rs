@@ -5,6 +5,7 @@ use miden_node_proto::generated as grpc;
 use miden_node_store::BlockStore;
 use miden_node_store::state::{SubscriptionSource, SubscriptionStreamError, run_stream};
 use miden_node_utils::ErrorReport;
+use miden_node_utils::tracing::{miden_instrument, miden_span_record};
 use miden_protocol::block::BlockNumber;
 use tokio_stream::{Stream, StreamExt};
 use tonic::Status;
@@ -34,14 +35,14 @@ impl grpc::server::validator_api::BlockSubscription for ValidatorService {
         Ok(item)
     }
 
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "validator.block_subscription",
         skip_all,
         err,
     )]
     async fn handle(&self, request: Self::Input) -> tonic::Result<Self::ItemStream> {
-        miden_node_utils::tracing::miden_span_record!(block.from = request.block_from);
+        miden_span_record!(block.from = request.block_from);
 
         let committed_tip = self.committed_tip.borrow().as_u32();
         if request.block_from > committed_tip {

@@ -3,6 +3,7 @@ use std::time::Duration;
 use miden_node_proto::clients::{Builder, ValidatorClient};
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated as proto;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::Word;
 use miden_protocol::block::ProposedBlock;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
@@ -57,7 +58,7 @@ impl BlockProducerValidatorClient {
 
     /// Signs the proposed block via the validator, returning the signature and the block commitment
     /// that the validator reports it signed (for cross-checking against the locally built block).
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "validator.client.validate_block", skip_all, err)]
+    #[miden_instrument(target = COMPONENT, name = "validator.client.validate_block", skip_all, err)]
     pub async fn sign_block(
         &self,
         proposed_block: ProposedBlock,

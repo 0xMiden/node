@@ -1,4 +1,6 @@
 use std::collections::BTreeSet;
+use miden_node_utils::tracing::miden_instrument;
+
 use std::time::Duration;
 
 use backon::ExponentialBuilder;
@@ -109,7 +111,7 @@ impl RpcClient {
     /// committed_chain_tip)` pair. The committed chain tip is the latest block the node believes
     /// is committed at the moment the response was emitted; the ntx-builder uses it to decide
     /// when it has caught up to the live tip.
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "rpc.client.block_subscription_with_retry",
         skip_all,
@@ -208,7 +210,7 @@ impl RpcClient {
         )
     }
 
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "ntx.rpc.client.submit_proven_tx", skip_all, err)]
+    #[miden_instrument(target = COMPONENT, name = "ntx.rpc.client.submit_proven_tx", skip_all, err)]
     pub async fn submit_proven_tx(
         &self,
         proven_tx: &ProvenTransaction,
@@ -367,7 +369,7 @@ impl RpcClient {
     }
 
     /// Fetches a note script by its root, returning `None` if the node does not know it.
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "ntx.rpc.client.get_note_script_by_root", skip_all, err)]
+    #[miden_instrument(target = COMPONENT, name = "ntx.rpc.client.get_note_script_by_root", skip_all, err)]
     pub async fn get_note_script_by_root(
         &self,
         script_root: Word,
