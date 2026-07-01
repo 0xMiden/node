@@ -3,7 +3,7 @@ use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use miden_node_store::DatabaseError;
 use miden_node_utils::ErrorReport;
@@ -11,9 +11,10 @@ use miden_protocol::block::BlockNumber;
 use tokio::sync::mpsc::error::SendTimeoutError;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
+use tonic::Status;
 
 use super::super::RpcService;
-use super::{IpBanList, subscription_ban_status};
+use super::IpBanList;
 
 #[cfg(test)]
 mod tests;
@@ -42,13 +43,7 @@ impl SubscriptionStream {
             rpc.store.subscribe_committed_tip(),
             move |block| {
                 let store = Arc::clone(&store);
-                async move {
-                    store
-                        .load_block(block)
-                        .await
-                        .map_err(|source| DataError::DatabaseError { source })?
-                        .ok_or(DataError::NotFound)
-                }
+                async move { store.load_block(block).await }
             },
         )
     }
@@ -68,13 +63,7 @@ impl SubscriptionStream {
             rpc.store.subscribe_proven_tip(),
             move |block| {
                 let store = Arc::clone(&store);
-                async move {
-                    store
-                        .load_proof(block)
-                        .await
-                        .map_err(|source| DataError::DatabaseError { source })?
-                        .ok_or(DataError::NotFound)
-                }
+                async move { store.load_proof(block).await }
             },
         )
     }
@@ -93,37 +82,52 @@ impl SubscriptionStream {
     ) -> tonic::Result<SubscriptionStream>
     where
         GetData: Fn(BlockNumber) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<Vec<u8>, DataError>> + Send + 'static,
+        Fut: Future<Output = Result<Option<Vec<u8>>, DatabaseError>> + Send + 'static,
     {
-        validate_start(from, &chain_tip)?;
+        let tip = *chain_tip.borrow();
+        if from.as_u32() > tip.as_u32().saturating_add(MAX_FUTURE_GAP_IN_SUBSCRIPTIONS) {
+            return Err(tonic::Status::out_of_range(
+                "subscription starting block is too far ahead of chain tip",
+            ));
+        }
 
-        let context = SubscriptionContext::new(client_ip, ban_list, subscription_semaphore)?;
+        if let Some(until) = client_ip.and_then(|ip| ban_list.banned_until(ip)) {
+            let remaining = until.saturating_duration_since(Instant::now());
+            return Err(Status::resource_exhausted(format!(
+                "temporarily banned from subscribing for being too slow; retry in {} seconds",
+                // Round up so the reported wait never undershoots the actual remaining ban.
+                remaining.as_secs() + 1,
+            )));
+        }
+
+        let permit = subscription_semaphore
+            .try_acquire_owned()
+            .map_err(|_| tonic::Status::resource_exhausted("maximum subscriptions reached"))?;
+
         let (tx, rx) = mpsc::channel(SUBSCRIBER_CHANNEL_CAPACITY);
-        SubscriptionProducer::new(from, chain_tip, tx, context, get_data).spawn();
+        SubscriptionProducer {
+            next: from,
+            chain_tip,
+            tx,
+            client_ip,
+            ban_list,
+            _permit: permit,
+            get_data,
+            lag_tracker: SubscriberLagTracker::default(),
+        }
+        .spawn();
 
         Ok(SubscriptionStream::new(ReceiverStream::new(rx)))
     }
-}
-
-fn validate_start(
-    from: BlockNumber,
-    chain_tip: &watch::Receiver<BlockNumber>,
-) -> tonic::Result<()> {
-    let tip = *chain_tip.borrow();
-    if from.as_u32() > tip.as_u32().saturating_add(MAX_FUTURE_GAP_IN_SUBSCRIPTIONS) {
-        return Err(tonic::Status::out_of_range(
-            "subscription starting block is too far ahead of chain tip",
-        ));
-    }
-
-    Ok(())
 }
 
 struct SubscriptionProducer<GetData> {
     next: BlockNumber,
     chain_tip: watch::Receiver<BlockNumber>,
     tx: mpsc::Sender<tonic::Result<StreamItem>>,
-    context: SubscriptionContext,
+    client_ip: Option<IpAddr>,
+    ban_list: Arc<IpBanList>,
+    _permit: OwnedSemaphorePermit,
     get_data: GetData,
     lag_tracker: SubscriberLagTracker,
 }
@@ -131,25 +135,8 @@ struct SubscriptionProducer<GetData> {
 impl<GetData, Fut> SubscriptionProducer<GetData>
 where
     GetData: Fn(BlockNumber) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = Result<Vec<u8>, DataError>> + Send + 'static,
+    Fut: Future<Output = Result<Option<Vec<u8>>, DatabaseError>> + Send + 'static,
 {
-    fn new(
-        from: BlockNumber,
-        chain_tip: watch::Receiver<BlockNumber>,
-        tx: mpsc::Sender<tonic::Result<StreamItem>>,
-        context: SubscriptionContext,
-        get_data: GetData,
-    ) -> Self {
-        Self {
-            next: from,
-            chain_tip,
-            tx,
-            context,
-            get_data,
-            lag_tracker: SubscriberLagTracker::default(),
-        }
-    }
-
     fn spawn(self) {
         tokio::spawn(self.run());
     }
@@ -160,7 +147,7 @@ where
             Err(err) => err,
         };
 
-        self.context.on_eos(err);
+        self.on_eos(err);
         let _ = self.tx.try_send(Err(err.into_status()));
     }
 
@@ -199,7 +186,7 @@ where
 
     async fn load_data(&self) -> Result<Vec<u8>, StreamError> {
         let block = self.next;
-        (self.get_data)(block)
+        let data = (self.get_data)(block)
             .await
             .inspect_err(|err| {
                 tracing::error!(
@@ -208,7 +195,12 @@ where
                     "failed to load data for stream"
                 );
             })
-            .map_err(|_| StreamError::Internal)
+            .map_err(|_| StreamError::Internal)?;
+
+        data.ok_or_else(|| {
+            tracing::error!(block.number = %block, "stream data not found");
+            StreamError::Internal
+        })
     }
 
     async fn send_event(&mut self, event: StreamItem) -> Result<(), StreamError> {
@@ -224,6 +216,12 @@ where
             SendTimeoutError::Closed(_) => StreamError::ConnectionClosed,
         })
     }
+
+    fn on_eos(&self, err: StreamError) {
+        if let (Some(ip), StreamError::SlowSubscriber) = (self.client_ip, err) {
+            self.ban_list.add(ip);
+        }
+    }
 }
 
 pub struct SubscriptionStream {
@@ -235,36 +233,6 @@ impl tokio_stream::Stream for SubscriptionStream {
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         Pin::new(&mut self.get_mut().inner).poll_next(cx)
-    }
-}
-
-struct SubscriptionContext {
-    client_ip: Option<IpAddr>,
-    ban_list: Arc<IpBanList>,
-    _permit: OwnedSemaphorePermit,
-}
-
-impl SubscriptionContext {
-    fn new(
-        client_ip: Option<IpAddr>,
-        ban_list: Arc<IpBanList>,
-        subscription_semaphore: Arc<Semaphore>,
-    ) -> tonic::Result<Self> {
-        if let Some(until) = client_ip.and_then(|ip| ban_list.banned_until(ip)) {
-            return Err(subscription_ban_status(until));
-        }
-
-        let permit = subscription_semaphore
-            .try_acquire_owned()
-            .map_err(|_| tonic::Status::resource_exhausted("maximum subscriptions reached"))?;
-
-        Ok(Self { client_ip, ban_list, _permit: permit })
-    }
-
-    fn on_eos(&self, err: StreamError) {
-        if let (Some(ip), StreamError::SlowSubscriber) = (self.client_ip, err) {
-            self.ban_list.add(ip);
-        }
     }
 }
 
@@ -291,14 +259,6 @@ impl StreamError {
             StreamError::Internal => tonic::Status::internal("internal error"),
         }
     }
-}
-
-#[derive(Debug, thiserror::Error)]
-enum DataError {
-    #[error("data not found")]
-    NotFound,
-    #[error(transparent)]
-    DatabaseError { source: DatabaseError },
 }
 
 pub struct StreamItem {

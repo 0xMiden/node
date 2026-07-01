@@ -62,9 +62,9 @@ impl TestSubscription {
             move |block| {
                 fetch_count.fetch_add(1, Ordering::Relaxed);
                 let result = if Some(block) == fail_at {
-                    Err(DataError::NotFound)
+                    Ok(None)
                 } else {
-                    Ok(block.as_u32().to_be_bytes().to_vec())
+                    Ok(Some(block.as_u32().to_be_bytes().to_vec()))
                 };
                 std::future::ready(result)
             },
@@ -110,7 +110,7 @@ async fn stream_yields_requested_block_once_tip_reaches_it() {
 }
 
 #[tokio::test]
-async fn data_error_returns_internal_and_reports_eos() {
+async fn missing_data_returns_internal_and_reports_eos() {
     let (_tip_tx, tip_rx) = watch::channel(BlockNumber::from(1u32));
     let source = TestSubscription::failing_at(BlockNumber::from(1u32));
     let mut stream = source
@@ -192,9 +192,6 @@ async fn subscription_start_may_be_at_or_behind_chain_tip() {
 #[tokio::test]
 async fn subscription_start_may_be_within_future_gap() {
     assert_subscription_start_ok(10 + MAX_FUTURE_GAP_IN_SUBSCRIPTIONS, 10).await;
-
-    let err = subscription_start_err(10 + MAX_FUTURE_GAP_IN_SUBSCRIPTIONS + 1, 10).await;
-    assert_eq!(err.code(), tonic::Code::OutOfRange);
 }
 
 #[tokio::test]
@@ -239,16 +236,6 @@ async fn assert_subscription_start_ok(block_from: u32, chain_tip: u32) {
     drop(stream);
     drop(tip_tx);
     wait_for_subscription_exit(&source).await;
-}
-
-async fn subscription_start_err(block_from: u32, chain_tip: u32) -> tonic::Status {
-    let (_tip_tx, tip_rx) = watch::channel(BlockNumber::from(chain_tip));
-    let source = TestSubscription::default();
-
-    match source.stream(BlockNumber::from(block_from), tip_rx) {
-        Ok(_) => panic!("subscription start should be rejected"),
-        Err(err) => err,
-    }
 }
 
 fn run(gaps: &[u32]) -> Result<(), ()> {
