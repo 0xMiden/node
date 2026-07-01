@@ -51,7 +51,7 @@ impl proto::server::rpc_api::BlockSubscription for RpcService {
         debug!(target: COMPONENT, ?request);
 
         let from = BlockNumber::from(request.block_from);
-        self.block_subscription_stream(from, client_ip)
+        SubscriptionStream::blocks(self, from, client_ip)
     }
 }
 

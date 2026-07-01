@@ -54,7 +54,7 @@ impl proto::server::rpc_api::ProofSubscription for RpcService {
 
         let from = BlockNumber::from(request.block_from);
 
-        self.proof_subscription_stream(from, client_ip)
+        SubscriptionStream::proofs(self, from, client_ip)
     }
 }
 

@@ -1,6 +1,8 @@
 use std::future::Future;
 use std::net::IpAddr;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use miden_node_store::DatabaseError;
@@ -21,23 +23,21 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 /// greater than the tip.
 const MAX_FUTURE_GAP_IN_SUBSCRIPTIONS: u32 = 100u32;
 
-pub(super) type SubscriptionStream = ReceiverStream<tonic::Result<StreamItem>>;
-
-impl RpcService {
-    pub(super) fn block_subscription_stream(
-        &self,
+impl SubscriptionStream {
+    pub(super) fn blocks(
+        rpc: &RpcService,
         from: BlockNumber,
         client_ip: Option<IpAddr>,
     ) -> tonic::Result<SubscriptionStream> {
-        let store = Arc::clone(&self.store);
+        let store = Arc::clone(&rpc.store);
 
-        subscription_stream(
+        Self::create(
             from,
             client_ip,
-            Arc::clone(&self.subscription_ban),
-            Arc::clone(&self.block_subscription_semaphore),
+            Arc::clone(&rpc.subscription_ban),
+            Arc::clone(&rpc.block_subscription_semaphore),
             "maximum block subscriptions reached",
-            self.store.subscribe_committed_tip(),
+            rpc.store.subscribe_committed_tip(),
             move |block| {
                 let store = Arc::clone(&store);
                 async move {
@@ -51,20 +51,20 @@ impl RpcService {
         )
     }
 
-    pub(super) fn proof_subscription_stream(
-        &self,
+    pub(super) fn proofs(
+        rpc: &RpcService,
         from: BlockNumber,
         client_ip: Option<IpAddr>,
     ) -> tonic::Result<SubscriptionStream> {
-        let store = Arc::clone(&self.store);
+        let store = Arc::clone(&rpc.store);
 
-        subscription_stream(
+        Self::create(
             from,
             client_ip,
-            Arc::clone(&self.subscription_ban),
-            Arc::clone(&self.proof_subscription_semaphore),
+            Arc::clone(&rpc.subscription_ban),
+            Arc::clone(&rpc.proof_subscription_semaphore),
             "maximum proof subscriptions reached",
-            self.store.subscribe_proven_tip(),
+            rpc.store.subscribe_proven_tip(),
             move |block| {
                 let store = Arc::clone(&store);
                 async move {
@@ -77,93 +77,109 @@ impl RpcService {
             },
         )
     }
+
+    fn new(inner: ReceiverStream<tonic::Result<StreamItem>>) -> Self {
+        Self { inner }
+    }
+
+    fn create<GetData, Fut>(
+        from: BlockNumber,
+        client_ip: Option<IpAddr>,
+        ban_list: Arc<IpBanList>,
+        subscription_semaphore: Arc<Semaphore>,
+        max_subscriptions_error: &'static str,
+        mut chain_tip: watch::Receiver<BlockNumber>,
+        get_data: GetData,
+    ) -> tonic::Result<SubscriptionStream>
+    where
+        GetData: Fn(BlockNumber) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<Vec<u8>, DataError>> + Send + 'static,
+    {
+        let tip = *chain_tip.borrow();
+        if from.as_u32() > tip.as_u32().saturating_add(MAX_FUTURE_GAP_IN_SUBSCRIPTIONS) {
+            return Err(tonic::Status::out_of_range(
+                "subscription starting block is too far ahead of chain tip",
+            ));
+        }
+
+        if let Some(until) = client_ip.and_then(|ip| ban_list.banned_until(ip)) {
+            return Err(subscription_ban_status(until));
+        }
+
+        let permit = subscription_semaphore
+            .try_acquire_owned()
+            .map_err(|_| tonic::Status::resource_exhausted(max_subscriptions_error))?;
+
+        let (tx, rx) = tokio::sync::mpsc::channel(SUBSCRIBER_CHANNEL_CAPACITY);
+        let context = SubscriptionContext { client_ip, ban_list, _permit: permit };
+
+        tokio::spawn(async move {
+            let mut next = from;
+            let mut lag_tracker = SubscriberLagTracker::default();
+
+            let err = loop {
+                // Wait for the requisite data to become part of the chain.
+                let tip = tokio::select! {
+                    biased;
+
+                    () = tx.closed() => break StreamError::ConnectionClosed,
+                    result = chain_tip.wait_for(|tip| tip >= &next) => match result {
+                        Ok(tip) => *tip,
+                        Err(_) => break StreamError::ServerShutdown,
+                    },
+                };
+
+                // Ensure the client is keeping up with the chain.
+                if lag_tracker.check(next, tip).is_err() {
+                    break StreamError::SlowSubscriber;
+                }
+
+                let Ok(data) = get_data(next).await.inspect_err(|err| {
+                    tracing::error!(
+                        block.number = %next,
+                        message = %err.as_report(),
+                        "failed to load data for stream"
+                    );
+                }) else {
+                    break StreamError::Internal;
+                };
+
+                let event = StreamItem { data, block: next, tip };
+
+                // Send the event but also check server shutdown condition so we don't hang for the
+                // full timeout if the server is shutting down.
+                let send_result = tokio::select! {
+                    () = wait_for_server_shutdown(&mut chain_tip) => break StreamError::ServerShutdown,
+                    result = tx.send_timeout(Ok(event), SEND_TIMEOUT) => result,
+                };
+                if let Err(err) = send_result.map_err(|err| match err {
+                    SendTimeoutError::Timeout(_) => StreamError::SlowSubscriber,
+                    SendTimeoutError::Closed(_) => StreamError::ConnectionClosed,
+                }) {
+                    break err;
+                }
+
+                next = next.child();
+            };
+
+            context.on_eos(err);
+            let _ = tx.try_send(Err(stream_error_to_status(err)));
+        });
+
+        Ok(SubscriptionStream::new(ReceiverStream::new(rx)))
+    }
 }
 
-fn subscription_stream<GetData, Fut>(
-    from: BlockNumber,
-    client_ip: Option<IpAddr>,
-    ban_list: Arc<IpBanList>,
-    subscription_semaphore: Arc<Semaphore>,
-    max_subscriptions_error: &'static str,
-    mut chain_tip: watch::Receiver<BlockNumber>,
-    get_data: GetData,
-) -> tonic::Result<SubscriptionStream>
-where
-    GetData: Fn(BlockNumber) -> Fut + Send + 'static,
-    Fut: Future<Output = Result<Vec<u8>, DataError>> + Send + 'static,
-{
-    let tip = *chain_tip.borrow();
-    if from.as_u32() > tip.as_u32().saturating_add(MAX_FUTURE_GAP_IN_SUBSCRIPTIONS) {
-        return Err(tonic::Status::out_of_range(
-            "subscription starting block is too far ahead of chain tip",
-        ));
+pub struct SubscriptionStream {
+    inner: ReceiverStream<tonic::Result<StreamItem>>,
+}
+
+impl tokio_stream::Stream for SubscriptionStream {
+    type Item = tonic::Result<StreamItem>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.get_mut().inner).poll_next(cx)
     }
-
-    if let Some(until) = client_ip.and_then(|ip| ban_list.banned_until(ip)) {
-        return Err(subscription_ban_status(until));
-    }
-
-    let permit = subscription_semaphore
-        .try_acquire_owned()
-        .map_err(|_| tonic::Status::resource_exhausted(max_subscriptions_error))?;
-
-    let (tx, rx) = tokio::sync::mpsc::channel(SUBSCRIBER_CHANNEL_CAPACITY);
-    let context = SubscriptionContext { client_ip, ban_list, _permit: permit };
-
-    tokio::spawn(async move {
-        let mut next = from;
-        let mut lag_tracker = SubscriberLagTracker::default();
-
-        let err = loop {
-            // Wait for the requisite data to become part of the chain.
-            let tip = tokio::select! {
-                biased;
-
-                () = tx.closed() => break StreamError::ConnectionClosed,
-                result = chain_tip.wait_for(|tip| tip >= &next) => match result {
-                    Ok(tip) => *tip,
-                    Err(_) => break StreamError::ServerShutdown,
-                },
-            };
-
-            // Ensure the client is keeping up with the chain.
-            if lag_tracker.check(next, tip).is_err() {
-                break StreamError::SlowSubscriber;
-            }
-
-            let Ok(data) = get_data(next).await.inspect_err(|err| {
-                tracing::error!(
-                    block.number = %next,
-                    message = %err.as_report(),
-                    "failed to load data for stream"
-                );
-            }) else {
-                break StreamError::Internal;
-            };
-
-            let event = StreamItem { data, block: next, tip };
-
-            // Send the event but also check server shutdown condition so we don't hang for the full
-            // timeout if the server is shutting down.
-            let send_result = tokio::select! {
-                () = wait_for_server_shutdown(&mut chain_tip) => break StreamError::ServerShutdown,
-                result = tx.send_timeout(Ok(event), SEND_TIMEOUT) => result,
-            };
-            if let Err(err) = send_result.map_err(|err| match err {
-                SendTimeoutError::Timeout(_) => StreamError::SlowSubscriber,
-                SendTimeoutError::Closed(_) => StreamError::ConnectionClosed,
-            }) {
-                break err;
-            }
-
-            next = next.child();
-        };
-
-        context.on_eos(err);
-        let _ = tx.try_send(Err(stream_error_to_status(err)));
-    });
-
-    Ok(ReceiverStream::new(rx))
 }
 
 struct SubscriptionContext {
@@ -315,7 +331,7 @@ mod tests {
             let fetch_count = Arc::clone(&self.fetch_count);
             let fail_at = self.fail_at;
 
-            subscription_stream(
+            SubscriptionStream::create(
                 from,
                 client_ip,
                 Arc::clone(&self.ban_list),
