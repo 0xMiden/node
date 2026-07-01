@@ -40,7 +40,7 @@ use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use serde::{Deserialize, Serialize};
 
-use crate::GenesisState;
+use crate::{GenesisState, LOG_TARGET};
 
 mod errors;
 use self::errors::GenesisConfigError;
@@ -221,7 +221,7 @@ impl GenesisConfig {
         // Setup all wallet accounts, which reference the faucet's for their provided assets.
         for (index, WalletConfig { account_type, assets }) in wallet_configs.into_iter().enumerate()
         {
-            tracing::debug!(index, assets = ?assets, "Adding wallet account");
+            tracing::debug!(target: LOG_TARGET, index, assets = ?assets, "Adding wallet account");
 
             let mut rng = ChaCha20Rng::from_seed(rand::random());
             let secret_key = RpoSecretKey::with_rng(&mut get_random_coin(&mut rng));
@@ -292,6 +292,7 @@ impl GenesisConfig {
                 let slot = updated_faucet.token_config_slot_value();
                 storage_delta.set_item(slot.name().clone(), slot.value())?;
                 tracing::debug!(
+                    target: LOG_TARGET,
                     "Reducing faucet account {faucet} for {symbol} by {amount}",
                     faucet = faucet_id.to_hex(),
                     symbol = symbol,
@@ -299,6 +300,7 @@ impl GenesisConfig {
                 );
             } else {
                 tracing::debug!(
+                    target: LOG_TARGET,
                     "No wallet is referencing {faucet} for {symbol}",
                     faucet = faucet_id.to_hex(),
                     symbol = symbol,
@@ -578,6 +580,7 @@ fn prepare_fungible_asset_update(
         let faucet_id = vault_key.faucet_id();
         let issuance: &mut u64 = faucet_issuance.entry(faucet_id).or_default();
         tracing::debug!(
+            target: LOG_TARGET,
             "Updating faucet issuance {faucet} with {issuance} += {amount}",
             faucet = faucet_id.to_hex()
         );

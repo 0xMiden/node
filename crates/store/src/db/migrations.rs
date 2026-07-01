@@ -1,17 +1,22 @@
 use std::path::Path;
 
 use miden_node_db::DatabaseError;
-use tracing::instrument;
+use miden_node_utils::tracing::miden_instrument;
 
-use crate::COMPONENT;
+use crate::{COMPONENT, LOG_TARGET};
 
 include!(concat!(env!("OUT_DIR"), "/db_migrator.rs"));
 
-#[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+#[miden_instrument(
+    level = "debug",
+    target = COMPONENT,
+    skip_all,
+    err,
+)]
 pub fn bootstrap_database(database_filepath: &Path) -> std::result::Result<(), DatabaseError> {
     let migrator = migrator().map_err(DatabaseError::migration)?;
     tracing::info!(
-        target: COMPONENT,
+        target: LOG_TARGET,
         migration_count = migrator.schema_hashes().len(),
         "Bootstrapping database schema"
     );
@@ -21,11 +26,16 @@ pub fn bootstrap_database(database_filepath: &Path) -> std::result::Result<(), D
     Ok(())
 }
 
-#[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+#[miden_instrument(
+    level = "debug",
+    target = COMPONENT,
+    skip_all,
+    err,
+)]
 pub fn migrate_database(database_filepath: &Path) -> std::result::Result<(), DatabaseError> {
     let migrator = migrator().map_err(DatabaseError::migration)?;
     tracing::info!(
-        target: COMPONENT,
+        target: LOG_TARGET,
         migration_count = migrator.schema_hashes().len(),
         "Applying database migrations"
     );
@@ -35,11 +45,16 @@ pub fn migrate_database(database_filepath: &Path) -> std::result::Result<(), Dat
     Ok(())
 }
 
-#[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+#[miden_instrument(
+    level = "debug",
+    target = COMPONENT,
+    skip_all,
+    err,
+)]
 pub fn verify_latest_schema(database_filepath: &Path) -> std::result::Result<(), DatabaseError> {
     let migrator = migrator().map_err(DatabaseError::migration)?;
     tracing::info!(
-        target: COMPONENT,
+        target: LOG_TARGET,
         migration_count = migrator.schema_hashes().len(),
         "Verifying database schema"
     );

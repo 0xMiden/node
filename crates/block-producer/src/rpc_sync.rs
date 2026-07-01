@@ -7,12 +7,15 @@ use miden_node_proto::generated::rpc::{BlockSubscriptionRequest, ProofSubscripti
 use miden_node_store::state::{Finality, State};
 use miden_node_utils::retry::{self, Retryable};
 use miden_node_utils::tasks::Tasks;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use miden_protocol::utils::serde::Deserializable;
 use tokio_stream::StreamExt;
 use tonic_health::ServingStatus;
 use tonic_health::server::HealthReporter;
 use tracing::{info, warn};
+
+use crate::{COMPONENT, LOG_TARGET};
 
 pub(crate) const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 
@@ -105,9 +108,14 @@ impl BlockSync {
         .await
     }
 
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+        err,
+    )]
     async fn sync(&self) -> anyhow::Result<()> {
         let block_from = self.state.chain_tip(Finality::Committed).await.child().as_u32();
-        info!(block_from, "Connecting to upstream RPC for blocks");
+        info!(target: LOG_TARGET, block_from, "Connecting to upstream RPC for blocks");
 
         let mut client = self.source_rpc.clone();
         let mut stream = client
@@ -162,7 +170,11 @@ impl ProofSync {
     async fn sync(&self) -> anyhow::Result<()> {
         // Subscribe from next proven tip.
         let starting_block = self.state.chain_tip(Finality::Proven).await.child();
-        info!(block.from=%starting_block, "Subscribing to block proof stream");
+        info!(
+            target: LOG_TARGET,
+            block_from = %starting_block,
+            "Subscribing to block proof stream"
+        );
         let mut client = self.source_rpc.clone();
         let mut stream = client
             .proof_subscription(ProofSubscriptionRequest { block_from: starting_block.as_u32() })

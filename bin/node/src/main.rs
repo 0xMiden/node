@@ -8,6 +8,8 @@ use commands::Command;
 
 mod commands;
 
+const LOG_TARGET: &str = "user::miden-node";
+
 // COMMANDS
 // ================================================================================================
 

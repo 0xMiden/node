@@ -12,8 +12,9 @@ use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use maud::Markup;
+use miden_node_utils::tracing::miden_instrument;
 use tokio::sync::watch;
-use tracing::{info, instrument};
+use tracing::info;
 
 use crate::config::MonitorConfig;
 use crate::status::{NetworkStatus, ServiceStatus};
@@ -58,14 +59,22 @@ pub async fn serve(server_state: ServerState, config: MonitorConfig) {
 // HTML ROUTES
 // ================================================================================================
 
-#[instrument(target = COMPONENT, name = "frontend.get-dashboard", skip_all)]
+#[miden_instrument(
+    target = COMPONENT,
+    name = "frontend.get-dashboard",
+    skip_all,
+)]
 async fn get_dashboard(
     axum::extract::State(server_state): axum::extract::State<ServerState>,
 ) -> Markup {
     view::page(&server_state)
 }
 
-#[instrument(target = COMPONENT, name = "frontend.get-status-fragment", skip_all)]
+#[miden_instrument(
+    target = COMPONENT,
+    name = "frontend.get-status-fragment",
+    skip_all,
+)]
 async fn get_status_fragment(
     axum::extract::State(server_state): axum::extract::State<ServerState>,
 ) -> Markup {
@@ -75,7 +84,11 @@ async fn get_status_fragment(
 // JSON ROUTE
 // ================================================================================================
 
-#[instrument(target = COMPONENT, name = "frontend.get-status", skip_all)]
+#[miden_instrument(
+    target = COMPONENT,
+    name = "frontend.get-status",
+    skip_all,
+)]
 async fn get_status(
     axum::extract::State(server_state): axum::extract::State<ServerState>,
 ) -> axum::response::Json<NetworkStatus> {

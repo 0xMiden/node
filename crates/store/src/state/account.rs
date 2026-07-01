@@ -15,6 +15,7 @@ use miden_node_proto::generated as proto;
 use miden_node_proto::prost::Message as _;
 use miden_node_proto::prost::encoding::{encoded_len_varint, key_len};
 use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::account::{
     AccountHeader,
     AccountId,
@@ -24,7 +25,7 @@ use miden_protocol::account::{
 };
 use miden_protocol::block::BlockNumber;
 use miden_protocol::block::account_tree::AccountWitness;
-use tracing::{Instrument, instrument};
+use tracing::Instrument;
 
 use super::State;
 use crate::COMPONENT;
@@ -41,7 +42,10 @@ impl State {
     /// If `block_num` is provided, returns the state at that historical block; otherwise, returns
     /// the latest state. Note that historical states are only available for recent blocks close
     /// to the chain tip.
-    #[instrument(target = COMPONENT, skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+    )]
     pub async fn get_account(
         &self,
         account_request: AccountRequest,
@@ -70,7 +74,10 @@ impl State {
     ///
     /// If `block_num` is provided, returns the witness at that historical block;
     /// otherwise, returns the witness at the latest block.
-    #[instrument(target = COMPONENT, skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+    )]
     async fn get_account_witness(
         &self,
         block_num: Option<BlockNumber>,
@@ -109,7 +116,10 @@ impl State {
     /// reverse-key LRU cache. If any hashed key is unknown, the method returns `Ok(None)` to signal
     /// that the caller should fall back to reconstructing the storage map details from the
     /// database.
-    #[instrument(target = COMPONENT, skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+    )]
     fn get_storage_map_details_from_forest(
         &self,
         account_id: AccountId,
@@ -169,8 +179,10 @@ impl State {
     /// Returns an error if the forest doesn't have data for the requested slot.
     /// All-entries queries (`SlotData::All`) use the forest when all hashed keys are known in the
     /// reverse-key LRU cache, otherwise they fall back to database reconstruction.
-    #[expect(clippy::too_many_lines)]
-    #[instrument(target = COMPONENT, skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+    )]
     async fn fetch_public_account_details(
         &self,
         account_id: AccountId,

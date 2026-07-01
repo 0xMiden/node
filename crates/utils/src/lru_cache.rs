@@ -3,7 +3,6 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use lru::LruCache as InnerCache;
-use tracing::instrument;
 
 /// A newtype wrapper around an LRU cache. Ensures that the cache lock is not held across await
 /// points.
@@ -52,7 +51,7 @@ where
         self.lock().clear();
     }
 
-    #[instrument(name = "lru.lock", skip_all)]
+    #[crate::tracing::miden_instrument(name = "lru.lock", skip_all)]
     fn lock(&self) -> MutexGuard<'_, InnerCache<K, V>> {
         // SAFETY: The mutex is only held for the duration of the get/put operation where panics are
         // possible only if we're running out of memory, in which case the entire process is likely
