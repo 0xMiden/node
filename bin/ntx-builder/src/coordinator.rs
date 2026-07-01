@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::Context;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::account::AccountId;
 use miden_standards::note::AccountTargetNetworkNote;
 use tokio::sync::{Notify, Semaphore};
@@ -127,15 +128,17 @@ impl Coordinator {
     /// This method creates a new [`AccountActor`] instance for the specified account origin
     /// and adds it to the coordinator's management system. The actor will be responsible for
     /// processing transactions and managing state for the network account.
-    #[miden_node_utils::tracing::miden_instrument(name = "ntx.builder.spawn_actor", skip(self), fields(account.id = %account_id))]
+    #[miden_instrument(name = "ntx.builder.spawn_actor", skip(self))]
     pub fn spawn_actor(&mut self, account_id: AccountId) {
         if let Some(&count) = self.crash_counts.get(&account_id)
             && count >= self.max_account_crashes
         {
             tracing::warn!(
                 target: LOG_TARGET,
-                { account.id = %account_id,
-                crash_count = count },
+                {
+                    account.id = %account_id,
+                    crash_count = count,
+                },
                 "Account deactivated due to repeated crashes, skipping actor spawn"
             );
             return;
@@ -159,7 +162,11 @@ impl Coordinator {
             .spawn(Box::pin(async move { (account_id, actor.run(semaphore).await) }));
 
         self.actor_registry.insert(account_id, handle);
-        tracing::debug!(target: LOG_TARGET, "Created actor for account");
+        tracing::debug!(
+            target: LOG_TARGET,
+            { account.id = %account_id },
+            "Created actor for account"
+        );
     }
 
     /// Spawns an actor for the given account if its committed state exists in the DB; otherwise
@@ -167,7 +174,6 @@ impl Coordinator {
     ///
     /// Actors only operate on committed account state, so spawning earlier would only produce an
     /// actor idling for the creation transaction to commit.
-    #[miden_node_utils::tracing::miden_instrument(name = "ntx.builder.spawn_actor_when_committed", skip(self), fields(account.id = %account_id))]
     pub async fn spawn_actor_when_committed(
         &mut self,
         account_id: AccountId,
@@ -189,7 +195,8 @@ impl Coordinator {
         } else {
             tracing::info!(
                 target: LOG_TARGET,
-                "Deferring actor spawn until the account's creation is committed",
+                { account.id = %account_id },
+                "deferring actor spawn until the account's creation is committed",
             );
             self.pending_spawns.insert(account_id);
         }
@@ -250,8 +257,10 @@ impl Coordinator {
                 *count += 1;
                 tracing::error!(
                     target: LOG_TARGET,
-                    { account.id = %account_id,
-                        error=?err },
+                    {
+                        account.id = %account_id,
+                        error = %format!("{err:#}"),
+                    },
                     "Account actor crashed"
                 );
                 self.actor_registry.remove(&account_id);

@@ -1,5 +1,6 @@
 use miden_block_prover::{BlockProverError as LocalBlockProverError, LocalBlockProver};
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{BlockHeader, BlockInputs, BlockProof};
 use miden_remote_prover_client::{RemoteBlockProver, RemoteProverClientError};
@@ -37,7 +38,11 @@ impl BlockProver {
         Self::Remote(RemoteBlockProver::new(endpoint))
     }
 
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+        err,
+    )]
     pub async fn prove(
         &self,
         tx_batches: OrderedBatches,

@@ -81,6 +81,8 @@ const ALLOWED_FIELD_NAMES: &[&str] = &[
     "transactions.input_notes.count",
     "transactions.output_notes.count",
     "transactions.unauthenticated_notes.count",
+    "workers.active",
+    "workers.capacity",
     "workers.count",
 ];
 

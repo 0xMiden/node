@@ -3,6 +3,7 @@
 use std::collections::BTreeSet;
 
 use anyhow::Result;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::account::component::AccountComponentMetadata;
 use miden_protocol::account::{
     Account,
@@ -32,7 +33,12 @@ pub static COUNTER_SLOT_NAME: LazyLock<StorageSlotName> = LazyLock::new(|| {
 });
 
 /// Create a counter program account with custom MASM script.
-#[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "create-counter-account", skip_all, ret(level = "debug"))]
+#[miden_instrument(
+    target = COMPONENT,
+    name = "create-counter-account",
+    skip_all,
+    ret(level = "debug"),
+)]
 pub fn create_counter_account(owner_account_id: AccountId) -> Result<Account> {
     // Load and customize the MASM script
     let script =

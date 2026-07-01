@@ -1,6 +1,10 @@
+use miden_node_block_producer::AuthenticatedTransaction;
+use miden_node_block_producer::store::get_tx_inputs;
+use miden_node_proto::clients::{SequencerClient, ValidatorClient};
 use miden_node_proto::generated as proto;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
+use miden_node_utils::tracing::{miden_instrument, miden_span_record};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::transaction::{
     OutputNote,
@@ -56,7 +60,7 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
         Self::encode(output)
     }
 
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "submit_proven_tx",
         skip_all,
@@ -75,7 +79,7 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
             Status::invalid_argument(err.as_report_context("invalid transaction"))
         })?;
 
-        miden_node_utils::tracing::miden_span_record!(
+        miden_span_record!(
             transaction.id = %tx.id(),
             account.id = %tx.account_id(),
             transaction.expires_at = %tx.expiration_block_num(),
@@ -140,38 +144,87 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
             Status::internal(format!("transaction proof verification task failed: {err}"))
         })??;
 
-        // In full node mode we forward the request to the source.
-        let (block_producer, validator) = match &self.mode {
+        match &self.mode {
             RpcMode::Sequencer { block_producer, validator } => {
-                (block_producer.as_ref(), validator.as_ref())
-            },
-            RpcMode::FullNode { source_rpc, .. } => {
-                let mut forwarded_request = Request::new(request);
-                if let Some(accept) = original_accept_header {
-                    forwarded_request.metadata_mut().insert(http::header::ACCEPT.as_str(), accept);
-                }
-                return source_rpc
-                    .as_ref()
-                    .clone()
-                    .submit_proven_tx(forwarded_request)
+                validator.clone().submit_proven_transaction(request.clone()).await?;
+                block_producer
+                    .submit_proven_tx(rebuilt_tx)
                     .await
-                    .map(tonic::Response::into_inner);
+                    .map(Into::into)
+                    .map_err(Into::into)
             },
-        };
-
-        // Transaction inputs must be provided in order to allow for transaction re-execution via
-        // the Validator.
-        if request.transaction_inputs.is_some() {
-            validator.clone().submit_proven_transaction(request.clone()).await?;
-        } else {
-            return Err(Status::invalid_argument("Transaction inputs must be provided"));
+            RpcMode::FullNode { source_rpc, validator, sequencer, .. } => {
+                match (validator, sequencer) {
+                    (Some(validator), Some(sequencer)) => {
+                        // Pre-authenticated transactions: validate and authenticate locally, then
+                        // submit the authenticated transaction to the sequencer's pre-authenticated
+                        // API.
+                        self.submit_authenticated_to_sequencer(
+                            *validator.clone(),
+                            *sequencer.clone(),
+                            request,
+                            rebuilt_tx,
+                        )
+                        .await
+                    },
+                    (None, None) => {
+                        // Unauthenticated transactions: forward the request to the source verbatim.
+                        let mut forwarded_request = Request::new(request);
+                        if let Some(accept) = original_accept_header {
+                            forwarded_request
+                                .metadata_mut()
+                                .insert(http::header::ACCEPT.as_str(), accept);
+                        }
+                        source_rpc
+                            .as_ref()
+                            .clone()
+                            .submit_proven_tx(forwarded_request)
+                            .await
+                            .map(tonic::Response::into_inner)
+                    },
+                    (Some(_), None) | (None, Some(_)) => {
+                        Err(Status::internal("one of validator or sequencer are not configured"))
+                    },
+                }
+            },
         }
+    }
+}
 
-        block_producer
-            .submit_proven_tx(rebuilt_tx)
+impl RpcService {
+    /// Pre-authenticated transaction submission path for a single transaction.
+    ///
+    /// Re-executes the transaction via the validator, authenticates it against the local
+    /// (replica) store, then submits the authenticated transaction to the sequencer's
+    /// pre-authenticated API.
+    async fn submit_authenticated_to_sequencer(
+        &self,
+        validator: ValidatorClient,
+        sequencer: SequencerClient,
+        request: proto::transaction::ProvenTransaction,
+        rebuilt_tx: ProvenTransaction,
+    ) -> tonic::Result<proto::blockchain::BlockNumber> {
+        let tx_inputs = get_tx_inputs(&self.store, &rebuilt_tx).await.map_err(|err| {
+            Status::internal(err.as_report_context("failed to get transaction inputs"))
+        })?;
+
+        let authenticated_tx =
+            AuthenticatedTransaction::new_unchecked(rebuilt_tx.into(), tx_inputs).map_err(
+                |err| Status::internal(err.as_report_context("failed to authenticate transaction")),
+            )?;
+
+        // Submit to validator.
+        let mut validator = validator;
+        validator.submit_proven_transaction(request).await?;
+
+        // Submit to sequencer.
+        let mut sequencer = sequencer;
+        sequencer
+            .submit_authenticated_tx(proto::sequencer::AuthenticatedTransaction::from(
+                authenticated_tx,
+            ))
             .await
-            .map(Into::into)
-            .map_err(Into::into)
+            .map(tonic::Response::into_inner)
     }
 }
 

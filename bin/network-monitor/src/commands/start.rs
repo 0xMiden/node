@@ -4,6 +4,7 @@
 
 use anyhow::Result;
 use miden_node_utils::logging::OpenTelemetry;
+use miden_node_utils::tracing::miden_instrument;
 use tracing::info;
 
 use crate::config::MonitorConfig;
@@ -15,18 +16,20 @@ use crate::{COMPONENT, LOG_TARGET};
 ///
 /// This function initializes all monitoring tasks including RPC status checking,
 /// remote prover testing, faucet testing, and the web frontend.
-#[miden_node_utils::tracing::miden_instrument(
+#[miden_instrument(
     parent = None,
     target = COMPONENT,
     name = "network_monitor.start_monitor",
     skip_all,
     level = "info",
-    fields(port = %config.port),
+    fields(
+        port = %config.port,
+    ),
     ret(level = "debug"),
-    err
+    err,
 )]
 pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
-    info!(target: LOG_TARGET, "Loaded configuration: {:?}", config);
+    info!(target: LOG_TARGET, config = ?config, "Loaded configuration");
 
     let _otel_guard =
         miden_node_utils::logging::setup_tracing(OpenTelemetry::from_env().with_name("monitor"))?;

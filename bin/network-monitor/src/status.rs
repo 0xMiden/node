@@ -8,12 +8,13 @@
 use std::time::Duration;
 
 use miden_node_proto::clients::RpcClient;
+use miden_node_utils::tracing::miden_instrument;
 use tracing::debug;
 use url::Url;
 
+use crate::COMPONENT;
 use crate::service::{Service, build_tls_client};
 pub use crate::service_status::*;
-use crate::{COMPONENT, LOG_TARGET};
 
 // STALE CHAIN TIP TRACKER
 // ================================================================================================
@@ -117,13 +118,13 @@ impl Service for RpcService {
         )
     }
 
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         parent = None,
         target = COMPONENT,
         name = "network_monitor.status.check_rpc",
         skip_all,
         level = "info",
-        ret(level = "debug")
+        ret(level = "debug"),
     )]
     async fn check(&mut self) -> ServiceStatus {
         match self.rpc.status(()).await {
@@ -135,7 +136,7 @@ impl Service for RpcService {
                     self.stale_tracker.update(rpc_details.chain_tip, current_unix_timestamp_secs())
                 {
                     debug!(
-                        target: LOG_TARGET,
+                        target: COMPONENT,
                         chain_tip = rpc_details.chain_tip,
                         stale_duration_secs = stale_duration,
                         "Chain tip is stale"
@@ -153,7 +154,7 @@ impl Service for RpcService {
                 ServiceStatus::healthy(self.name(), ServiceDetails::RpcStatus(rpc_details))
             },
             Err(e) => {
-                debug!(target: LOG_TARGET, error = %e, "RPC status check failed");
+                debug!(target: COMPONENT, error = %e, "RPC status check failed");
                 ServiceStatus::error(self.name(), e)
             },
         }

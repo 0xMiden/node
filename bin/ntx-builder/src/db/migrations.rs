@@ -1,16 +1,22 @@
 use std::path::Path;
 
 use miden_node_db::DatabaseError;
+use miden_node_utils::tracing::miden_instrument;
 
-use crate::{COMPONENT, LOG_TARGET};
+use crate::COMPONENT;
 
 include!(concat!(env!("OUT_DIR"), "/db_migrator.rs"));
 
-#[miden_node_utils::tracing::miden_instrument(level = "debug", target = COMPONENT, skip_all, err)]
+#[miden_instrument(
+    level = "debug",
+    target = COMPONENT,
+    skip_all,
+    err,
+)]
 pub fn bootstrap_database(database_filepath: &Path) -> Result<(), DatabaseError> {
     let migrator = migrator().map_err(DatabaseError::migration)?;
     tracing::info!(
-        target: LOG_TARGET,
+        target: COMPONENT,
         migration_count = migrator.schema_hashes().len(),
         "Bootstrapping database schema"
     );
@@ -19,11 +25,16 @@ pub fn bootstrap_database(database_filepath: &Path) -> Result<(), DatabaseError>
     Ok(())
 }
 
-#[miden_node_utils::tracing::miden_instrument(level = "debug", target = COMPONENT, skip_all, err)]
+#[miden_instrument(
+    level = "debug",
+    target = COMPONENT,
+    skip_all,
+    err,
+)]
 pub fn migrate_database(database_filepath: &Path) -> Result<(), DatabaseError> {
     let migrator = migrator().map_err(DatabaseError::migration)?;
     tracing::info!(
-        target: LOG_TARGET,
+        target: COMPONENT,
         migration_count = migrator.schema_hashes().len(),
         "Applying database migrations"
     );
@@ -32,11 +43,16 @@ pub fn migrate_database(database_filepath: &Path) -> Result<(), DatabaseError> {
     Ok(())
 }
 
-#[miden_node_utils::tracing::miden_instrument(level = "debug", target = COMPONENT, skip_all, err)]
+#[miden_instrument(
+    level = "debug",
+    target = COMPONENT,
+    skip_all,
+    err,
+)]
 pub fn verify_latest_schema(database_filepath: &Path) -> Result<(), DatabaseError> {
     let migrator = migrator().map_err(DatabaseError::migration)?;
     tracing::info!(
-        target: LOG_TARGET,
+        target: COMPONENT,
         migration_count = migrator.schema_hashes().len(),
         "Verifying database schema"
     );

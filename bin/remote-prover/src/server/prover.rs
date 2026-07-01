@@ -3,7 +3,7 @@ use miden_node_proto::BlockProofRequest;
 use miden_node_proto::generated::remote_prover as proto;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
-use miden_node_utils::tracing::ErrorSpanExt;
+use miden_node_utils::tracing::{ErrorSpanExt, miden_instrument};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::block::BlockProof;
@@ -78,7 +78,11 @@ trait ProveRequest: Send + Sync {
         result.map(|output| Self::encode_response(output))
     }
 
-    #[miden_node_utils::tracing::miden_instrument(target=COMPONENT, skip_all, err)]
+    #[miden_instrument(
+        target=COMPONENT,
+        skip_all,
+        err,
+    )]
     fn decode_request(request: proto::ProofRequest) -> Result<Self::Input, tonic::Status> {
         use miden_protocol::utils::serde::Deserializable;
 
@@ -87,7 +91,10 @@ trait ProveRequest: Send + Sync {
         })
     }
 
-    #[miden_node_utils::tracing::miden_instrument(target=COMPONENT, skip_all)]
+    #[miden_instrument(
+        target=COMPONENT,
+        skip_all,
+    )]
     fn encode_response(output: Self::Output) -> proto::Proof {
         use miden_protocol::utils::serde::Serializable;
 

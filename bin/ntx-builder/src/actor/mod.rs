@@ -12,6 +12,7 @@ use candidate::TransactionCandidate;
 use futures::FutureExt;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountDelta, AccountId};
 use miden_protocol::block::BlockNumber;
@@ -356,7 +357,11 @@ impl AccountActor {
                 }
                 // Idle timeout: actor has been idle too long, deactivate.
                 () = idle_timeout_sleep => {
-                    tracing::debug!(target: LOG_TARGET, %account_id, "Account actor deactivated due to idle timeout");
+                    tracing::debug!(
+                        target: LOG_TARGET,
+                        %account_id,
+                        "Account actor deactivated due to idle timeout"
+                    );
                     return Ok(());
                 }
             }
@@ -403,11 +408,11 @@ impl AccountActor {
             account
                 .apply_delta(&pending_delta)
                 .context("failed to apply landed transaction delta to in-memory account")?;
-            tracing::debug!(
+            tracing::info!(
                 target: LOG_TARGET,
                 account_id = %self.account_id,
                 tx_id = %submitted_tx_id,
-                "Submitted transaction landed; advanced in-memory account by its delta",
+                "submitted transaction landed; advanced in-memory account by its delta",
             );
             return Ok(ActorMode::NotesAvailable);
         }
@@ -421,7 +426,7 @@ impl AccountActor {
                 %submitted_at,
                 current_tip = %chain_tip,
                 delta = self.config.tx_expiration_delta,
-                "Submitted transaction expired",
+                "submitted transaction expired",
             );
             // The submission did not land. Reload the authoritative account in case a different
             // transaction changed it while we waited, then resume selection.
@@ -477,7 +482,7 @@ impl AccountActor {
                 target: LOG_TARGET,
                 %account_id,
                 rejected_count = failed_notes.len(),
-                "Dropping network notes whose script roots are not allowlisted",
+                "dropping network notes whose script roots are not allowlisted",
             );
             self.mark_notes_failed(&failed_notes, block_num).await;
         }
@@ -504,10 +509,7 @@ impl AccountActor {
     /// error) are retried inside [`execute::NtxContext::execute_transaction`].
     /// Any error reaching this method is therefore terminal for the candidate: the batch's notes
     /// are marked failed and the actor moves on.
-    #[miden_node_utils::tracing::miden_instrument(
-        name = "ntx.actor.execute_transactions",
-        skip(self, tx_candidate)
-    )]
+    #[miden_instrument(name = "ntx.actor.execute_transactions", skip(self, tx_candidate))]
     async fn execute_transactions(
         &self,
         account_id: AccountId,
@@ -551,7 +553,7 @@ impl AccountActor {
                     %account_id,
                     %tx_id,
                     num_failed = failed.len(),
-                    "Network transaction executed with some failed notes",
+                    "network transaction executed with some failed notes",
                 );
                 self.cache_note_scripts(fetched_scripts).await;
 
@@ -581,8 +583,8 @@ impl AccountActor {
                     target: LOG_TARGET,
                     %account_id,
                     ?note_ids,
-                    error = %error_msg,
-                    "Network transaction failed",
+                    err = %error_msg,
+                    "network transaction failed",
                 );
 
                 // For `AllNotesFailed`, use the per-note errors which contain the specific reason
@@ -596,10 +598,12 @@ impl AccountActor {
                             .map(|note| {
                                 tracing::info!(
                                     target: LOG_TARGET,
-                                    { note.id = %note.as_note().id(),
-                                    nullifier = %note.as_note().nullifier(),
-                                    error = %error_msg },
-                                    "Note failed: transaction execution error",
+                                    {
+                                        note.id = %note.as_note().id(),
+                                        nullifier = %note.as_note().nullifier(),
+                                        err = %error_msg,
+                                    },
+                                    "note failed: transaction execution error",
                                 );
                                 (note.as_note().nullifier(), error.clone())
                             })
@@ -660,10 +664,12 @@ fn log_failed_notes(failed: Vec<FailedNote>) -> Vec<(Nullifier, NoteError)> {
             let error_msg = f.error().as_report();
             tracing::info!(
                 target: LOG_TARGET,
-                { note.id = %f.note().id(),
-                nullifier = %f.note().nullifier(),
-                error = %error_msg },
-                "Note failed: consumability check",
+                {
+                    note.id = %f.note().id(),
+                    nullifier = %f.note().nullifier(),
+                    err = %error_msg,
+                },
+                "note failed: consumability check",
             );
             let error: NoteError = Arc::new(std::io::Error::other(error_msg));
             (f.note().nullifier(), error)

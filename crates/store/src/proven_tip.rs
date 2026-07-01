@@ -3,8 +3,8 @@ use tokio::sync::watch;
 
 /// Cloneable handle that can advance the proven chain tip.
 ///
-/// All clones share the same underlying watch channel, so any `advance()` call is immediately
-/// visible to all receivers returned by `subscribe()`.
+/// All clones share the same underlying watch channel, so any [`ProvenTipWriter::advance()`] call is immediately
+/// visible to all receivers returned by [`ProvenTipWriter::subscribe()`].
 #[derive(Clone)]
 pub struct ProvenTipWriter(watch::Sender<BlockNumber>);
 
@@ -23,9 +23,14 @@ impl ProvenTipWriter {
     /// Advances the tip to `new_tip` if it is greater than the current value.
     ///
     /// Notifies all subscribers only when the tip actually increases.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `new_tip` is greater than the current tip's child.
     pub fn advance(&self, new_tip: BlockNumber) {
         self.0.send_if_modified(|current| {
             if new_tip > *current {
+                assert_eq!(new_tip, current.child());
                 *current = new_tip;
                 true
             } else {
@@ -50,19 +55,19 @@ mod tests {
         assert_eq!(writer.read(), BlockNumber::from(5u32));
 
         // Advancing to a higher value updates the tip.
-        writer.advance(BlockNumber::from(10u32));
-        assert_eq!(writer.read(), BlockNumber::from(10u32));
+        writer.advance(BlockNumber::from(6u32));
+        assert_eq!(writer.read(), BlockNumber::from(6u32));
 
         // Advancing to a lower value is a no-op.
-        writer.advance(BlockNumber::from(7u32));
-        assert_eq!(writer.read(), BlockNumber::from(10u32));
+        writer.advance(BlockNumber::from(3u32));
+        assert_eq!(writer.read(), BlockNumber::from(6u32));
 
         // Advancing to the same value is a no-op.
-        writer.advance(BlockNumber::from(10u32));
-        assert_eq!(writer.read(), BlockNumber::from(10u32));
+        writer.advance(BlockNumber::from(6u32));
+        assert_eq!(writer.read(), BlockNumber::from(6u32));
 
         // Advancing to a higher value again works.
-        writer.advance(BlockNumber::from(15u32));
-        assert_eq!(writer.read(), BlockNumber::from(15u32));
+        writer.advance(BlockNumber::from(7u32));
+        assert_eq!(writer.read(), BlockNumber::from(7u32));
     }
 }

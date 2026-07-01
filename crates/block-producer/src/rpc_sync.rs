@@ -7,6 +7,7 @@ use miden_node_proto::generated::rpc::{BlockSubscriptionRequest, ProofSubscripti
 use miden_node_store::state::{Finality, State};
 use miden_node_utils::retry::{self, Retryable};
 use miden_node_utils::tasks::Tasks;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use miden_protocol::utils::serde::Deserializable;
 use tokio_stream::StreamExt;
@@ -89,11 +90,6 @@ struct BlockSync {
     readiness: RpcReadiness,
 }
 
-struct ProofSync {
-    state: Arc<State>,
-    source_rpc: RpcClient,
-}
-
 impl BlockSync {
     async fn run(self) -> anyhow::Result<()> {
         (|| async {
@@ -113,7 +109,11 @@ impl BlockSync {
         .await
     }
 
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+        err,
+    )]
     async fn sync(&self) -> anyhow::Result<()> {
         let block_from = self.state.chain_tip(Finality::Committed).await.child().as_u32();
         info!(target: LOG_TARGET, block_from, "Connecting to upstream RPC for blocks");
@@ -139,6 +139,11 @@ impl BlockSync {
     }
 }
 
+struct ProofSync {
+    state: Arc<State>,
+    source_rpc: RpcClient,
+}
+
 impl ProofSync {
     /// Synchronizes block proofs from an upstream RPC service.
     ///
@@ -156,7 +161,7 @@ impl ProofSync {
         .notify(|err, _| {
             warn!(
                 target: LOG_TARGET,
-                error = %format!("{err:#}"),
+                err = %format!("{err:#}"),
                 retry.delay = %RECONNECT_DELAY.as_secs(),
                 "Proof sync failed, retrying",
             );
@@ -166,27 +171,39 @@ impl ProofSync {
 
     async fn sync(&self) -> anyhow::Result<()> {
         // Subscribe from next proven tip.
-        let starting_block = self.state.chain_tip(Finality::Proven).await.child().as_u32();
-        info!(target: LOG_TARGET, starting_block, "Connecting to upstream RPC for proofs");
+        let starting_block = self.state.chain_tip(Finality::Proven).await.child();
+        info!(
+            target: LOG_TARGET,
+            block_from = %starting_block,
+            "Subscribing to block proof stream"
+        );
         let mut client = self.source_rpc.clone();
         let mut stream = client
-            .proof_subscription(ProofSubscriptionRequest { block_from: starting_block })
+            .proof_subscription(ProofSubscriptionRequest { block_from: starting_block.as_u32() })
             .await?
             .into_inner();
 
+        let mut expected = starting_block;
         let mut committed_tip_rx = self.state.subscribe_committed_tip();
         while let Some(result) = stream.next().await {
             let event = result?;
-            let proven_tip = BlockNumber::from(event.block_num);
+            let block_num = BlockNumber::from(event.block_num);
+
+            anyhow::ensure!(
+                block_num == expected,
+                "upstream sent out-of-sequence proof: expected block {expected}, got {block_num}",
+            );
 
             // Ensure the block is committed before applying its proof so that proven tip never
             // exceeds committed tip.
             committed_tip_rx
-                .wait_for(|committed_tip| *committed_tip >= proven_tip)
+                .wait_for(|committed_tip| *committed_tip >= block_num)
                 .await
                 .context("committed tip channel closed")?;
 
-            self.state.apply_proof(proven_tip, event.proof).await?;
+            self.state.apply_proof(block_num, event.proof).await?;
+
+            expected = expected.child();
         }
 
         Ok(())

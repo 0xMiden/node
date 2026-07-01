@@ -1,5 +1,6 @@
 use std::num::NonZeroUsize;
 
+use miden_node_utils::tracing::miden_instrument;
 use tokio::sync::{Mutex, MutexGuard, SemaphorePermit};
 
 use crate::COMPONENT;
@@ -23,14 +24,21 @@ impl ProverService {
         self.kind == kind
     }
 
-    #[miden_node_utils::tracing::miden_instrument(target=COMPONENT, skip_all, err)]
+    #[miden_instrument(
+        target=COMPONENT,
+        skip_all,
+        err,
+    )]
     pub(super) fn acquire_permit(&self) -> Result<SemaphorePermit<'_>, tonic::Status> {
         self.permits
             .try_acquire()
             .map_err(|_| tonic::Status::resource_exhausted("proof queue is full"))
     }
 
-    #[miden_node_utils::tracing::miden_instrument(target=COMPONENT, skip_all)]
+    #[miden_instrument(
+        target=COMPONENT,
+        skip_all,
+    )]
     pub(super) async fn acquire_prover(&self) -> MutexGuard<'_, Prover> {
         self.prover.lock().await
     }

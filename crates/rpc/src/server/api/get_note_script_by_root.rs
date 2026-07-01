@@ -1,5 +1,6 @@
 use miden_node_proto::decode::read_root;
 use miden_node_proto::generated as proto;
+use miden_node_utils::tracing::{miden_instrument, miden_span_record};
 use miden_protocol::note::NoteScript;
 use tonic::Status;
 use tracing::debug;
@@ -20,7 +21,7 @@ impl proto::server::rpc_api::GetNoteScriptByRoot for RpcService {
         Ok(proto::rpc::MaybeNoteScript { script: output.map(Into::into) })
     }
 
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "get_note_script_by_root",
         skip_all,
@@ -30,7 +31,9 @@ impl proto::server::rpc_api::GetNoteScriptByRoot for RpcService {
         tracing::trace!(target: LOG_TARGET, ?request);
 
         let root = read_root::<Status>(request.root, "NoteScriptRoot")?;
-        miden_node_utils::tracing::miden_span_record!(script.root = %root);
+        miden_span_record!(
+            script.root = %root,
+        );
 
         debug!(target: LOG_TARGET, "Getting note script by root");
 

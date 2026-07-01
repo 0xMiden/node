@@ -11,6 +11,7 @@ use backon::{ExponentialBuilder, Retryable};
 use miden_node_proto::clients::{Builder, RpcClient};
 use miden_node_proto::generated::rpc::BlockHeaderByNumberRequest;
 use miden_node_proto::generated::transaction::ProvenTransaction;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::account::{Account, AccountId, PartialAccount, StorageMapKey};
 use miden_protocol::asset::{AssetVaultKey, AssetWitness};
 use miden_protocol::block::{BlockHeader, BlockNumber};
@@ -129,8 +130,8 @@ pub async fn create_genesis_aware_rpc_client(
     .retry(genesis_discovery_backoff())
     .notify(|err: &anyhow::Error, sleep: Duration| {
         tracing::warn!(
-            target: LOG_TARGET,
-            error = ?err,
+            target: COMPONENT,
+            err = ?err,
             sleep_ms = sleep.as_millis() as u64,
             "RPC genesis discovery failed; retrying after backoff",
         );
@@ -223,7 +224,12 @@ pub async fn build_probe_transaction_inputs(rpc_url: &Url) -> Result<Transaction
 }
 
 /// Deploy a counter account to the network by submitting its genesis transaction via RPC.
-#[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "deploy-counter-account", skip_all, ret(level = "debug"))]
+#[miden_instrument(
+    target = COMPONENT,
+    name = "deploy-counter-account",
+    skip_all,
+    ret(level = "debug"),
+)]
 pub async fn deploy_counter_account(counter_account: &Account, rpc_url: &Url) -> Result<()> {
     // Deploy counter account to the network using a genesis-aware RPC client.
     let mut rpc_client = create_genesis_aware_rpc_client(rpc_url, Duration::from_secs(10)).await?;

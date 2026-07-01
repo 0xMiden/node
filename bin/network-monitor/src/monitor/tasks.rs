@@ -1,7 +1,6 @@
 //! Task management for the network monitor.
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -14,7 +13,7 @@ use tracing::{debug, warn};
 
 use crate::LOG_TARGET;
 use crate::config::MonitorConfig;
-use crate::counter::{CounterTrackingService, IncrementService, LatencyState};
+use crate::counter::{CounterTrackingService, IncrementService, LatencyState, TrackedAccounts};
 use crate::deploy::create_and_deploy_accounts;
 use crate::explorer::ExplorerService;
 use crate::faucet::FaucetService;
@@ -255,9 +254,11 @@ async fn bootstrap_ntx(
     let (wallet_account, secret_key, counter_account) =
         create_and_deploy_accounts(&config.rpc_url).await?;
 
-    let (counter_tx, counter_rx) = watch::channel(counter_account.clone());
+    let (accounts_tx, accounts_rx) = watch::channel(TrackedAccounts {
+        wallet: wallet_account.clone(),
+        counter: counter_account.clone(),
+    });
 
-    let expected_counter_value = Arc::new(AtomicU64::new(0));
     let latency_state = Arc::new(Mutex::new(LatencyState::default()));
 
     let increment_svc = IncrementService::new(
@@ -265,18 +266,12 @@ async fn bootstrap_ntx(
         wallet_account,
         secret_key,
         counter_account,
-        counter_tx,
-        Arc::clone(&expected_counter_value),
+        accounts_tx,
         latency_state.clone(),
     )
     .await?;
-    let tracking_svc = CounterTrackingService::new(
-        config.clone(),
-        counter_rx,
-        Arc::clone(&expected_counter_value),
-        latency_state,
-    )
-    .await?;
+    let tracking_svc =
+        CounterTrackingService::new(config.clone(), accounts_rx, latency_state).await?;
 
     Ok((increment_svc, tracking_svc))
 }

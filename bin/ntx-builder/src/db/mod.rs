@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use miden_node_db::DatabaseError;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockHeader, BlockNumber, SignedBlock};
@@ -15,7 +16,7 @@ use tracing::info;
 use crate::committed_block::CommittedBlockEffects;
 use crate::db::migrations::{bootstrap_database, migrate_database, verify_latest_schema};
 use crate::db::models::queries;
-use crate::{COMPONENT, LOG_TARGET, NoteError};
+use crate::{COMPONENT, NoteError};
 
 pub(crate) mod models;
 
@@ -33,11 +34,13 @@ pub struct Db {
 
 impl Db {
     /// Opens an async connection pool after verifying the database is at the latest schema version.
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "ntx_builder.database.load",
         skip_all,
-        fields(path=%database_filepath.display()),
+        fields(
+            path=%database_filepath.display(),
+        ),
         err,
     )]
     pub async fn load(database_filepath: PathBuf) -> anyhow::Result<Self> {
@@ -47,11 +50,13 @@ impl Db {
 
     /// Opens an async connection pool with a specific pool size after verifying the database is at
     /// the latest schema version.
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "ntx_builder.database.load",
         skip_all,
-        fields(path=%database_filepath.display()),
+        fields(
+            path=%database_filepath.display(),
+        ),
         err,
     )]
     pub async fn load_with_pool_size(
@@ -64,7 +69,10 @@ impl Db {
     }
 
     /// Applies all pending migrations to an existing DB.
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+    )]
     pub fn migrate(database_filepath: impl AsRef<Path>) -> Result<()> {
         migrate_database(database_filepath.as_ref())?;
         Ok(())
@@ -78,7 +86,7 @@ impl Db {
             .context("failed to build connection pool")?;
 
         info!(
-            target: LOG_TARGET,
+            target: COMPONENT,
             sqlite = %database_filepath.display(),
             connection_pool_size = %connection_pool_size,
             "Connected to the database"
@@ -95,11 +103,13 @@ impl Db {
     /// committed-block subscription on startup.
     ///
     /// Returns an error if the database has already been bootstrapped.
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "ntx_builder.database.bootstrap",
         skip_all,
-        fields(path=%database_filepath.display()),
+        fields(
+            path=%database_filepath.display(),
+        ),
         err,
     )]
     pub async fn bootstrap(

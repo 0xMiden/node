@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use miden_node_proto::clients::{RemoteProverClient, RemoteProverProxyStatusClient};
 use miden_node_proto::generated as proto;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::utils::serde::Serializable;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
@@ -22,6 +23,7 @@ use tonic::Request;
 use tracing::{debug, warn};
 use url::Url;
 
+use crate::COMPONENT;
 use crate::service::{Service, build_tls_client};
 use crate::service_status::{
     ProverTestOutcome,
@@ -31,7 +33,6 @@ use crate::service_status::{
     ServiceStatus,
     Status,
 };
-use crate::{COMPONENT, LOG_TARGET};
 
 // PROOF TYPE
 // ================================================================================================
@@ -166,20 +167,22 @@ impl ProverStatusService {
     /// terminates. The task only ends by panicking (its snapshot channel outlives it), so a
     /// finished handle is surfaced as an unhealthy outcome before respawning.
     fn ensure_probe_running(&mut self) {
-        let Some(status) = &self.last_status else { return };
+        let Some(status) = &self.last_status else {
+            return;
+        };
         if !matches!(status.supported_proof_type, ProofType::Transaction) {
             return;
         }
         match &self.probe_handle {
             None => {
-                debug!(target: LOG_TARGET, prover = %self.name, "Spawning probe task");
+                debug!(target: COMPONENT, prover = %self.name, "spawning probe task");
                 self.probe_handle = Some(self.probe_spawner.spawn());
             },
             Some(handle) if handle.is_finished() => {
                 warn!(
-                    target: LOG_TARGET,
+                    target: COMPONENT,
                     prover = %self.name,
-                    "Probe task terminated unexpectedly; respawning"
+                    "probe task terminated unexpectedly; respawning"
                 );
                 self.probe_spawner.probe_tx.send_modify(|snapshot| {
                     snapshot.failure_count += 1;
@@ -267,14 +270,16 @@ impl Service for ProverStatusService {
         self.build_status(&ProbeSnapshot::default())
     }
 
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         parent = None,
         target = COMPONENT,
         name = "network_monitor.prover.status_check",
         skip_all,
         level = "info",
         ret(level = "debug"),
-        fields(prover = %self.name)
+        fields(
+            prover = %self.name,
+        ),
     )]
     async fn check(&mut self) -> ServiceStatus {
         match self.client.status(()).await {
@@ -286,7 +291,7 @@ impl Service for ProverStatusService {
                 self.last_status_err = None;
             },
             Err(e) => {
-                debug!(target: LOG_TARGET, prover = %self.name, error = %e, "Remote prover status check failed");
+                debug!(target: COMPONENT, prover = %self.name, error = %e, "Remote prover status check failed");
                 self.last_status_err = Some(e.to_string());
             },
         }
@@ -347,13 +352,15 @@ const PAYLOAD_RETRY_DELAY: Duration = Duration::from_secs(30);
 /// is unreachable at spawn time delays probing instead of permanently disarming it. Acquisition
 /// failures are published as [`Status::Unknown`] outcomes: they are an RPC problem, not a prover
 /// failure.
-#[miden_node_utils::tracing::miden_instrument(
+#[miden_instrument(
     parent = None,
     target = COMPONENT,
     name = "network_monitor.prover.run_test",
     skip_all,
     level = "info",
-    fields(prover = %name),
+    fields(
+        prover = %name,
+    ),
 )]
 async fn run_prover_test(
     mut client: RemoteProverClient,
@@ -364,17 +371,17 @@ async fn run_prover_test(
 ) {
     let payload = loop {
         if probe_tx.is_closed() {
-            debug!(target: LOG_TARGET, prover = %name, "Probe channel closed, exiting probe task");
+            debug!(target: COMPONENT, prover = %name, "probe channel closed, exiting probe task");
             return;
         }
         match generate_prover_test_payload(&rpc_url).await {
             Ok(payload) => break payload,
             Err(e) => {
                 warn!(
-                    target: LOG_TARGET,
+                    target: COMPONENT,
                     prover = %name,
                     error = ?e,
-                    "Failed to build remote-prover probe payload; retrying"
+                    "failed to build remote-prover probe payload; retrying"
                 );
                 probe_tx.send_modify(|snapshot| {
                     snapshot.latest = Some(ProverTestOutcome {
@@ -436,7 +443,7 @@ async fn run_prover_test(
         }
 
         if probe_tx.send(state.clone()).is_err() {
-            debug!(target: LOG_TARGET, prover = %name, "Probe channel closed, exiting probe task");
+            debug!(target: COMPONENT, prover = %name, "probe channel closed, exiting probe task");
             return;
         }
     }
@@ -481,14 +488,14 @@ fn tonic_status_to_json(status: &tonic::Status) -> String {
 /// [`crate::deploy::build_probe_transaction_inputs`]); the remote prover re-executes and proves it.
 /// This requires a single RPC read for the genesis block header and is independent of the network
 /// transaction service.
-#[miden_node_utils::tracing::miden_instrument(
+#[miden_instrument(
     parent = None,
     target = COMPONENT,
     name = "network_monitor.remote_prover.generate_prover_test_payload",
     skip_all,
     level = "info",
     ret(level = "debug"),
-    err
+    err,
 )]
 async fn generate_prover_test_payload(
     rpc_url: &Url,

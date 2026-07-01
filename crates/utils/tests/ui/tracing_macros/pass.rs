@@ -1,6 +1,10 @@
 use miden_node_utils::tracing::{miden_instrument, miden_span_record};
 
-#[miden_instrument(target = "miden-node-utils-test", name = "records_fields", skip_all)]
+#[miden_instrument(
+    target = "miden-node-utils-test",
+    name = "records_fields",
+    skip_all,
+)]
 fn records_fields() {
     let display_value = "display";
     let debug_value = vec![1, 2, 3];
@@ -17,19 +21,29 @@ fn records_fields() {
 fn records_with_default_instrument_args() {
     let value = 1;
 
-    miden_span_record!(block.number = value);
+    miden_span_record!(
+        block.number = value,
+    );
 }
 
-#[miden_instrument(skip_all)]
+#[miden_instrument(
+    skip_all,
+)]
 fn records_same_field_more_than_once() {
     let value = 1;
     let updated = 2;
 
-    miden_span_record!(block.number = value);
-    miden_span_record!(block.number = updated);
+    miden_span_record!(
+        block.number = value,
+    );
+    miden_span_record!(
+        block.number = updated,
+    );
 }
 
-#[miden_instrument(skip_all)]
+#[miden_instrument(
+    skip_all,
+)]
 fn records_allowed_canonical_fields() {
     let tx_id = "0x1234";
     let account_id = "0xabcd";
@@ -92,6 +106,8 @@ fn records_allowed_canonical_fields() {
         reference_block.number = block_number,
         request.kind = "block",
         workers.count = transaction_count,
+        workers.active = transaction_count,
+        workers.capacity = transaction_count,
         prover.kind = "local",
         failure_rate = 0.0,
         dice_roll = 0.5,

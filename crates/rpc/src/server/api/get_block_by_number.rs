@@ -1,4 +1,5 @@
 use miden_node_proto::generated as proto;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::block::BlockNumber;
 use tracing::debug;
 
@@ -18,7 +19,7 @@ impl proto::server::rpc_api::GetBlockByNumber for RpcService {
         Ok(output)
     }
 
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "get_block_by_number",
         skip_all,

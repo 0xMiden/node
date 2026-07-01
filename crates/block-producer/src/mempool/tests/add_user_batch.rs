@@ -29,8 +29,8 @@ fn user_batch_is_isolated_from_other_transactions() {
         BatchId::from_transactions(user_batch_txs.iter().map(|tx| tx.raw_proven_transaction()));
     uut.add_user_batch(&user_batch_txs).unwrap();
 
-    let batch_a = uut.select_batch().unwrap();
-    let batch_b = uut.select_batch().unwrap();
+    let batch_a = uut.select_any_batch().unwrap();
+    let batch_b = uut.select_any_batch().unwrap();
 
     let (user, conventional) = if batch_a.id() == user_batch_id {
         (batch_a, batch_b)
@@ -55,6 +55,18 @@ fn user_batch_respects_batch_budget() {
     let result = uut.add_user_batch(&user_batch_txs[..2]);
 
     assert_matches!(result, Err(MempoolSubmissionError::CapacityExceeded));
+}
+
+#[test]
+fn user_batch_counts_as_full_batch() {
+    let (mut uut, _) = Mempool::for_tests();
+    uut.config.batch_budget.transactions = 3;
+
+    let user_batch_txs = MockProvenTxBuilder::sequential();
+    uut.add_user_batch(&user_batch_txs[..1]).unwrap();
+
+    let batch = uut.select_full_batch().unwrap();
+    assert_eq!(batch.transactions(), &user_batch_txs[..1]);
 }
 
 #[test]

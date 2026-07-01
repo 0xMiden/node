@@ -7,7 +7,7 @@ use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::retry::{self, Retryable};
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
-use miden_node_utils::tracing::ErrorSpanExt;
+use miden_node_utils::tracing::{ErrorSpanExt, miden_instrument, miden_span_record};
 use miden_protocol::Word;
 use miden_protocol::account::{
     Account,
@@ -112,9 +112,9 @@ fn request_backoff(initial: Duration, max: Duration) -> ExponentialBuilder {
 /// Emits a structured warning for a transient NTX request failure that is about to be retried.
 fn log_transient_retry<E: std::error::Error>(operation: &'static str, err: &E, sleep: Duration) {
     tracing::warn!(
-        target: LOG_TARGET,
+        target: COMPONENT,
         operation,
-        error = %err.as_report(),
+        err = %err.as_report(),
         sleep_ms = sleep.as_millis() as u64,
         "ntx transient request failure; retrying after backoff",
     );
@@ -250,7 +250,12 @@ impl NtxContext {
     /// - Transaction execution.
     /// - Proof generation.
     /// - Submission to the network.
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "ntx.execute_transaction", skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "ntx.execute_transaction",
+        skip_all,
+        err,
+    )]
     pub fn execute_transaction(
         self,
         tx: TransactionCandidate,
@@ -261,7 +266,7 @@ impl NtxContext {
             chain_tip_header,
             chain_mmr,
         } = tx;
-        miden_node_utils::tracing::miden_span_record!(
+        miden_span_record!(
             account.id = %account.id(),
             account.id.network_prefix = %account.id().prefix(),
             notes.count = notes.len(),
@@ -348,7 +353,12 @@ impl NtxContext {
     /// Returns an [`NtxError`] if:
     /// - The consumability check fails unexpectedly.
     /// - All notes fail the check (i.e., no note is consumable).
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "ntx.execute_transaction.filter_notes", skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "ntx.execute_transaction.filter_notes",
+        skip_all,
+        err,
+    )]
     async fn filter_notes(
         &self,
         data_store: &NtxDataStore,
@@ -370,10 +380,12 @@ impl NtxContext {
                 for failed_note in &failed {
                     tracing::info!(
                         target: LOG_TARGET,
-                        { note.id = %failed_note.note().id() ,
-                        nullifier = %failed_note.note().nullifier(),
-                        error = %failed_note.error().as_report() },
-                        "Note failed consumability check",
+                        {
+                            note.id = %failed_note.note().id(),
+                            nullifier = %failed_note.note().nullifier(),
+                            err = %failed_note.error().as_report(),
+                        },
+                        "note failed consumability check",
                     );
                 }
 
@@ -395,7 +407,12 @@ impl NtxContext {
     }
 
     /// Creates an executes a transaction with the network account and the given set of notes.
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "ntx.execute_transaction.execute", skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "ntx.execute_transaction.execute",
+        skip_all,
+        err,
+    )]
     async fn execute(
         &self,
         data_store: &NtxDataStore,
@@ -428,7 +445,12 @@ impl NtxContext {
     ///
     /// Transient transport failures against the remote prover are retried in-place; intrinsic
     /// proving errors (witness rejected, malformed inputs) escape on the first attempt.
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "ntx.execute_transaction.prove", skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "ntx.execute_transaction.prove",
+        skip_all,
+        err,
+    )]
     async fn prove(&self, tx_inputs: &TransactionInputs) -> NtxResult<ProvenTransaction> {
         (|| async { self.prover.prove(tx_inputs).await })
             .retry(self.request_backoff())
@@ -444,7 +466,12 @@ impl NtxContext {
     ///
     /// Transient gRPC failures (`Unavailable`, `DeadlineExceeded`, ...) are retried in-place;
     /// content-rejection codes escape on the first attempt so the actor can mark the batch failed.
-    #[miden_node_utils::tracing::miden_instrument(target = COMPONENT, name = "ntx.execute_transaction.submit", skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "ntx.execute_transaction.submit",
+        skip_all,
+        err,
+    )]
     async fn submit(
         &self,
         proven_tx: &ProvenTransaction,
