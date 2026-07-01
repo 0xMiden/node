@@ -127,10 +127,7 @@ impl Coordinator {
     /// This method creates a new [`AccountActor`] instance for the specified account origin
     /// and adds it to the coordinator's management system. The actor will be responsible for
     /// processing transactions and managing state for the network account.
-    #[miden_instrument(
-        name = "ntx.builder.spawn_actor",
-        skip(self),
-    )]
+    #[miden_instrument(name = "ntx.builder.spawn_actor", skip(self))]
     pub fn spawn_actor(&mut self, account_id: AccountId) {
         if let Some(&count) = self.crash_counts.get(&account_id)
             && count >= self.max_account_crashes

@@ -335,9 +335,7 @@ impl BatchJob {
         &self,
         proposed_batch: ProposedBatch,
     ) -> Result<Arc<ProvenBatch>, BuildBatchError> {
-        miden_span_record!(
-            prover.kind = self.batch_prover.kind(),
-        );
+        miden_span_record!(prover.kind = self.batch_prover.kind(),);
 
         let proven_batch = match &self.batch_prover {
             BatchProver::Remote(prover) => prover

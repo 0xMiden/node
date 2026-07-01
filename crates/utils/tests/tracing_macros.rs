@@ -49,11 +49,7 @@ impl Visit for FieldVisitor {
     }
 }
 
-#[miden_instrument(
-    target = "miden-node-utils-test",
-    name = "records_delayed_fields",
-    skip_all,
-)]
+#[miden_instrument(target = "miden-node-utils-test", name = "records_delayed_fields", skip_all)]
 fn records_inferred_fields() {
     let parsed_value = 42;
     let parsed_text = "parsed";

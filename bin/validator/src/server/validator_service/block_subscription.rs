@@ -42,9 +42,7 @@ impl grpc::server::validator_api::BlockSubscription for ValidatorService {
         err,
     )]
     async fn handle(&self, request: Self::Input) -> tonic::Result<Self::ItemStream> {
-        miden_span_record!(
-            block.from = request.block_from,
-        );
+        miden_span_record!(block.from = request.block_from,);
 
         let committed_tip = self.committed_tip.borrow().as_u32();
         if request.block_from > committed_tip {

@@ -38,10 +38,7 @@ impl proto::server::rpc_api::SyncNullifiers for RpcService {
 
         let range = read_block_range::<Status>(request.block_range, "SyncNullifiersRequest")?;
 
-        miden_span_record!(
-            block_range.from = range.block_from,
-            block_range.to = range.block_to,
-        );
+        miden_span_record!(block_range.from = range.block_from, block_range.to = range.block_to,);
 
         debug!(target: LOG_TARGET, "Syncing nullifiers");
 

@@ -136,9 +136,7 @@ impl ValidatorService {
         proposed_block: ProposedBlock,
         chain_tip: BlockHeader,
     ) -> Result<(Signature, BlockHeader), ValidatorError> {
-        miden_span_record!(
-            tip.number = chain_tip.block_num().as_u32(),
-        );
+        miden_span_record!(tip.number = chain_tip.block_num().as_u32(),);
 
         // Search for any proposed transactions that have not previously been validated.
         let proposed_tx_ids =
