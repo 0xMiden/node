@@ -1,11 +1,13 @@
 use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use miden_node_proto::generated as grpc;
 use miden_node_proto::generated::validator::BlockSubscriptionResponse;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::block::BlockNumber;
+use tokio::sync::OwnedRwLockWriteGuard;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Status;
 use tonic::codegen::tokio_stream::Stream;
@@ -15,6 +17,19 @@ use super::ValidatorService;
 
 type BlockStream =
     Pin<Box<dyn Stream<Item = tonic::Result<BlockSubscriptionResponse>> + Send + 'static>>;
+
+struct BackupBlockStream {
+    inner: ReceiverStream<tonic::Result<BlockSubscriptionResponse>>,
+    _guard: OwnedRwLockWriteGuard<()>,
+}
+
+impl Stream for BackupBlockStream {
+    type Item = tonic::Result<BlockSubscriptionResponse>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.get_mut().inner).poll_next(cx)
+    }
+}
 
 #[tonic::async_trait]
 impl grpc::server::validator_api::BlockSubscription for ValidatorService {
@@ -57,9 +72,6 @@ impl grpc::server::validator_api::BlockSubscription for ValidatorService {
         tokio::spawn({
             let store = self.block_store.clone();
             async move {
-                // Keep the guard alive for as long as the stream is polled.
-                let _guard = &guard;
-
                 for block in from.as_u32()..=tip.as_u32() {
                     let response = match store.load_block(block.into()).await {
                         Ok(Some(block)) => Ok(BlockSubscriptionResponse {
@@ -91,6 +103,9 @@ impl grpc::server::validator_api::BlockSubscription for ValidatorService {
             }
         });
 
-        Ok(Box::pin(ReceiverStream::new(rx)))
+        Ok(Box::pin(BackupBlockStream {
+            inner: ReceiverStream::new(rx),
+            _guard: guard,
+        }))
     }
 }
