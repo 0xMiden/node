@@ -30,6 +30,7 @@ const MAX_FUTURE_GAP_IN_SUBSCRIPTIONS: u32 = 100u32;
 // STREAM
 // ================================================================================================
 
+/// A stream of either block or block proofs.
 pub struct SubscriptionStream {
     inner: ReceiverStream<tonic::Result<StreamItem>>,
 }
@@ -37,18 +38,24 @@ pub struct SubscriptionStream {
 impl tokio_stream::Stream for SubscriptionStream {
     type Item = tonic::Result<StreamItem>;
 
+    /// Polls the underlying receiver for the next subscription event or terminal status.
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         Pin::new(&mut self.get_mut().inner).poll_next(cx)
     }
 }
 
+/// Raw subscription payload plus the chain position that produced it.
 pub struct StreamItem {
+    /// Encoded block or proof bytes.
     pub data: Vec<u8>,
+    /// Block number for `data`.
     pub block: BlockNumber,
+    /// Chain tip observed when `data` was sent.
     pub tip: BlockNumber,
 }
 
 impl SubscriptionStream {
+    /// Creates a stream of committed blocks starting at `from`.
     pub(super) fn blocks(
         rpc: &RpcService,
         from: BlockNumber,
@@ -69,6 +76,7 @@ impl SubscriptionStream {
         )
     }
 
+    /// Creates a stream of proven block proofs starting at `from`.
     pub(super) fn proofs(
         rpc: &RpcService,
         from: BlockNumber,
@@ -89,6 +97,7 @@ impl SubscriptionStream {
         )
     }
 
+    /// Builds a subscription stream around a spawned producer task.
     fn create<GetData, Fut>(
         from: BlockNumber,
         client_ip: Option<IpAddr>,
@@ -121,6 +130,7 @@ impl SubscriptionStream {
         Ok(Self { inner: ReceiverStream::new(rx) })
     }
 
+    /// Rejects subscriptions whose starting block is too far ahead of the current chain tip.
     fn validate_start(
         from: BlockNumber,
         chain_tip: &watch::Receiver<BlockNumber>,
@@ -135,6 +145,7 @@ impl SubscriptionStream {
         Ok(())
     }
 
+    /// Rejects clients that are still temporarily banned for a previous slow subscription.
     fn reject_banned_client(client_ip: Option<IpAddr>, ban_list: &IpBanList) -> tonic::Result<()> {
         if let Some(until) = client_ip.and_then(|ip| ban_list.banned_until(ip)) {
             let remaining = until.saturating_duration_since(Instant::now());
@@ -148,6 +159,7 @@ impl SubscriptionStream {
         Ok(())
     }
 
+    /// Acquires one subscription slot for the lifetime of the producer task.
     fn acquire_subscription_permit(
         subscription_semaphore: Arc<Semaphore>,
     ) -> tonic::Result<OwnedSemaphorePermit> {
@@ -160,6 +172,7 @@ impl SubscriptionStream {
 // PRODUCER
 // ================================================================================================
 
+/// Background task state that produces subscription events for one client.
 struct SubscriptionProducer<GetData> {
     next: BlockNumber,
     chain_tip: watch::Receiver<BlockNumber>,
@@ -176,15 +189,14 @@ where
     GetData: Fn(BlockNumber) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<Option<Vec<u8>>, DatabaseError>> + Send + 'static,
 {
+    /// Spawns the producer task that feeds the receiver side of the subscription stream.
     fn spawn(self) {
         tokio::spawn(self.run());
     }
 
+    /// Runs the producer until it reaches a terminal stream error, then reports that status.
     async fn run(mut self) {
-        let err = match self.produce_until_error().await {
-            Ok(()) => unreachable!("subscription producer loop does not exit successfully"),
-            Err(err) => err,
-        };
+        let err = self.produce_until_error().await;
 
         if let (Some(ip), StreamError::SlowSubscriber) = (self.client_ip, err) {
             self.ban_list.add(ip);
@@ -192,14 +204,18 @@ where
         let _ = self.tx.try_send(Err(err.into_status()));
     }
 
-    async fn produce_until_error(&mut self) -> Result<(), StreamError> {
+    /// Produces stream items until a terminal stream error occurs.
+    async fn produce_until_error(&mut self) -> StreamError {
         loop {
-            self.produce_next().await?;
+            if let Err(err) = self.produce_next().await {
+                return err;
+            }
         }
     }
 
+    /// Produces the next available stream item and advances the next block pointer.
     async fn produce_next(&mut self) -> Result<(), StreamError> {
-        let tip = self.wait_for_tip().await?;
+        let tip = self.wait_for_next_block().await?;
         if !self.lag_tracker.record_and_check(self.next, tip) {
             return Err(StreamError::SlowSubscriber);
         }
@@ -212,7 +228,8 @@ where
         Ok(())
     }
 
-    async fn wait_for_tip(&mut self) -> Result<BlockNumber, StreamError> {
+    /// Waits until `self.next` is included by the chain tip.
+    async fn wait_for_next_block(&mut self) -> Result<BlockNumber, StreamError> {
         let next = self.next;
 
         tokio::select! {
@@ -225,6 +242,7 @@ where
         }
     }
 
+    /// Loads the bytes for `self.next` from the stream-specific data source.
     async fn load_data(&self) -> Result<Vec<u8>, StreamError> {
         let block = self.next;
         let data = (self.get_data)(block)
@@ -244,6 +262,7 @@ where
         })
     }
 
+    /// Sends a stream item to the client while also observing server shutdown.
     async fn send_event(&mut self, event: StreamItem) -> Result<(), StreamError> {
         let send_result = tokio::select! {
             () = Self::wait_for_server_shutdown(&mut self.chain_tip) => {
@@ -258,6 +277,7 @@ where
         })
     }
 
+    /// Waits for the chain-tip watcher to close, which is this stream's shutdown signal.
     async fn wait_for_server_shutdown(chain_tip: &mut watch::Receiver<BlockNumber>) {
         while chain_tip.changed().await.is_ok() {}
     }
@@ -272,6 +292,7 @@ enum StreamError {
 }
 
 impl StreamError {
+    /// Converts a terminal stream error into the gRPC status sent to the client.
     fn into_status(self) -> tonic::Status {
         match self {
             StreamError::ServerShutdown => tonic::Status::unavailable("server is shutting down"),
@@ -287,12 +308,14 @@ impl StreamError {
 // LAG TRACKER
 // ================================================================================================
 
+/// Tracks how far a subscriber falls behind the chain tip over time.
 struct SubscriberLagTracker {
     previous_gap: u32,
     running_total: u32,
 }
 
 impl Default for SubscriberLagTracker {
+    /// Creates a tracker with no accumulated lag.
     fn default() -> Self {
         Self { previous_gap: u32::MAX, running_total: 0 }
     }
@@ -302,6 +325,7 @@ impl SubscriberLagTracker {
     /// Maximum accumulated block-gap allowed before a subscriber is disconnected.
     const MAX_RUNNING_GAP: u32 = 100;
 
+    /// Records the latest subscriber gap and returns whether it is still within the allowed limit.
     fn record_and_check(&mut self, current: BlockNumber, tip: BlockNumber) -> bool {
         let gap = tip.saturating_sub(current.as_u32()).as_u32();
 
