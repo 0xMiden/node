@@ -4,7 +4,6 @@ use std::sync::Arc;
 use futures::StreamExt;
 use miden_node_proto::generated as proto;
 use miden_node_store::State;
-use miden_node_store::state::Finality;
 use miden_node_utils::grpc::ClientIp;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::block::BlockNumber;
@@ -14,12 +13,7 @@ use tracing::{Span, debug};
 
 use super::super::{COMPONENT, RpcService};
 use super::stream::{DataError, StreamError, Subscription};
-use super::{
-    IpBanList,
-    stream_error_to_status,
-    subscription_ban_status,
-    subscription_start_exceeds_future_gap,
-};
+use super::{IpBanList, stream_error_to_status, subscription_ban_status};
 
 pub struct BlockSubscriptionInput {
     request: proto::rpc::BlockSubscriptionRequest,
@@ -56,15 +50,6 @@ impl proto::server::rpc_api::BlockSubscription for RpcService {
 
         debug!(target: COMPONENT, ?request);
 
-        if subscription_start_exceeds_future_gap(
-            request.block_from,
-            self.store.chain_tip(Finality::Committed).await,
-        ) {
-            return Err(tonic::Status::out_of_range(
-                "subscription starting block is too far ahead of committed chain tip",
-            ));
-        }
-
         // Reject clients that were recently disconnected for being too slow.
         if let Some(until) = client_ip.and_then(|ip| self.subscription_ban.banned_until(ip)) {
             return Err(subscription_ban_status(until));
@@ -84,17 +69,16 @@ impl proto::server::rpc_api::BlockSubscription for RpcService {
             store: Arc::clone(&self.store),
         };
 
-        let stream =
-            stream
-                .into_stream(from, self.store.subscribe_committed_tip())
-                .map(move |event| {
-                    event
-                        .map(|event| proto::rpc::BlockSubscriptionResponse {
-                            block: event.data,
-                            committed_chain_tip: event.tip.as_u32(),
-                        })
-                        .map_err(stream_error_to_status)
-                });
+        let stream = stream.into_stream(from, self.store.subscribe_committed_tip()).await?.map(
+            move |event| {
+                event
+                    .map(|event| proto::rpc::BlockSubscriptionResponse {
+                        block: event.data,
+                        committed_chain_tip: event.tip.as_u32(),
+                    })
+                    .map_err(stream_error_to_status)
+            },
+        );
         Ok(stream.boxed())
     }
 }
