@@ -36,7 +36,6 @@ impl SubscriptionStream {
             client_ip,
             Arc::clone(&rpc.subscription_ban),
             Arc::clone(&rpc.block_subscription_semaphore),
-            "maximum block subscriptions reached",
             rpc.store.subscribe_committed_tip(),
             move |block| {
                 let store = Arc::clone(&store);
@@ -63,7 +62,6 @@ impl SubscriptionStream {
             client_ip,
             Arc::clone(&rpc.subscription_ban),
             Arc::clone(&rpc.proof_subscription_semaphore),
-            "maximum proof subscriptions reached",
             rpc.store.subscribe_proven_tip(),
             move |block| {
                 let store = Arc::clone(&store);
@@ -87,7 +85,6 @@ impl SubscriptionStream {
         client_ip: Option<IpAddr>,
         ban_list: Arc<IpBanList>,
         subscription_semaphore: Arc<Semaphore>,
-        max_subscriptions_error: &'static str,
         mut chain_tip: watch::Receiver<BlockNumber>,
         get_data: GetData,
     ) -> tonic::Result<SubscriptionStream>
@@ -108,7 +105,7 @@ impl SubscriptionStream {
 
         let permit = subscription_semaphore
             .try_acquire_owned()
-            .map_err(|_| tonic::Status::resource_exhausted(max_subscriptions_error))?;
+            .map_err(|_| tonic::Status::resource_exhausted("maximum subscriptions reached"))?;
 
         let (tx, rx) = tokio::sync::mpsc::channel(SUBSCRIBER_CHANNEL_CAPACITY);
         let context = SubscriptionContext { client_ip, ban_list, _permit: permit };
@@ -163,7 +160,7 @@ impl SubscriptionStream {
             };
 
             context.on_eos(err);
-            let _ = tx.try_send(Err(stream_error_to_status(err)));
+            let _ = tx.try_send(Err(err.into_status()));
         });
 
         Ok(SubscriptionStream::new(ReceiverStream::new(rx)))
@@ -200,27 +197,25 @@ async fn wait_for_server_shutdown(chain_tip: &mut watch::Receiver<BlockNumber>) 
     while chain_tip.changed().await.is_ok() {}
 }
 
-fn stream_error_to_status(err: StreamError) -> tonic::Status {
-    let code = match err {
-        StreamError::ServerShutdown => tonic::Code::Unavailable,
-        StreamError::ConnectionClosed => tonic::Code::Aborted,
-        StreamError::SlowSubscriber => tonic::Code::ResourceExhausted,
-        StreamError::Internal => tonic::Code::Internal,
-    };
-
-    tonic::Status::new(code, err.to_string())
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StreamError {
+    ServerShutdown,
+    ConnectionClosed,
+    SlowSubscriber,
+    Internal,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-enum StreamError {
-    #[error("server is shutting down")]
-    ServerShutdown,
-    #[error("client closed the stream")]
-    ConnectionClosed,
-    #[error("client is too slow to keep up with the chain")]
-    SlowSubscriber,
-    #[error("internal error")]
-    Internal,
+impl StreamError {
+    fn into_status(self) -> tonic::Status {
+        match self {
+            StreamError::ServerShutdown => tonic::Status::unavailable("server is shutting down"),
+            StreamError::ConnectionClosed => tonic::Status::aborted("client closed the stream"),
+            StreamError::SlowSubscriber => {
+                tonic::Status::resource_exhausted("client is too slow to keep up with the chain")
+            },
+            StreamError::Internal => tonic::Status::internal("internal error"),
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -336,7 +331,6 @@ mod tests {
                 client_ip,
                 Arc::clone(&self.ban_list),
                 Arc::clone(&self.semaphore),
-                "maximum test subscriptions reached",
                 chain_tip,
                 move |block| {
                     fetch_count.fetch_add(1, Ordering::Relaxed);
