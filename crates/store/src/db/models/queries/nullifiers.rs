@@ -17,6 +17,7 @@ use miden_node_utils::limiter::{
     QueryParamLimiter,
     QueryParamNullifierPrefixLimit,
 };
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
@@ -225,7 +226,7 @@ pub(crate) fn select_nullifiers_paged(
 /// INSERT INTO nullifiers (nullifier, nullifier_prefix, block_num)
 /// VALUES (?1, ?2, ?3)
 /// ```
-#[tracing::instrument(
+#[miden_instrument(
     target = COMPONENT,
     skip_all,
     err,

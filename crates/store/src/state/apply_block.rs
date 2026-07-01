@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use miden_node_proto::domain::proof_request::BlockProofRequest;
 use miden_node_utils::ErrorReport;
+use miden_node_utils::tracing::{miden_instrument, miden_span_record};
 use miden_protocol::Word;
 use miden_protocol::account::AccountUpdateDetails;
 use miden_protocol::batch::OrderedBatches;
@@ -12,18 +13,22 @@ use miden_protocol::note::{NoteDetails, Nullifier};
 use miden_protocol::transaction::OutputNote;
 use miden_protocol::utils::serde::Serializable;
 use tokio::sync::oneshot;
-use tracing::{Instrument, info, info_span, instrument};
+use tracing::{Instrument, info_span};
 
 use crate::db::NoteRecord;
 use crate::errors::{ApplyBlockError, ApplyBlockWithProvingInputsError, InvalidBlockError};
 use crate::state::{BlockNotification, State};
-use crate::{COMPONENT, HistoricalError};
+use crate::{COMPONENT, HistoricalError, LOG_TARGET};
 
 impl State {
     /// Saves proving inputs for a signed block and applies it to the state.
     ///
     /// Used by the in-process block producer after it has built and signed a block.
-    #[instrument(target = COMPONENT, skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+        err,
+    )]
     pub async fn apply_block_with_proving_inputs(
         &self,
         ordered_batches: OrderedBatches,
@@ -72,7 +77,11 @@ impl State {
     /// - the in-memory structures are updated, including the latest block pointer and the lock is
     ///   released.
     // TODO: This span is logged in a root span, we should connect it to the parent span.
-    #[instrument(target = COMPONENT, skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+        err,
+    )]
     pub async fn apply_block(&self, signed_block: SignedBlock) -> Result<(), ApplyBlockError> {
         let _lock = self.writer.try_lock().map_err(|_| ApplyBlockError::ConcurrentWrite)?;
 
@@ -81,6 +90,13 @@ impl State {
 
         let block_num = header.block_num();
         let block_commitment = header.commitment();
+        let num_transactions = body.transactions().as_slice().len();
+
+        miden_span_record!(
+            block.number = %block_num,
+            block.commitment = %block_commitment,
+            block.transactions.count = num_transactions,
+        );
 
         self.validate_block_header(header, body).await?;
 
@@ -186,7 +202,7 @@ impl State {
             .expect("block cache receives sequential block numbers");
         let _ = self.committed_tip_tx.send(block_num);
 
-        info!(%block_commitment, block_num = block_num.as_u32(), COMPONENT, "apply_block successful");
+        tracing::debug!(target: LOG_TARGET, "Block applied");
 
         Ok(())
     }
@@ -203,7 +219,11 @@ impl State {
     }
 
     /// Validates that the block header is consistent with the block body and the current state.
-    #[instrument(target = COMPONENT, skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+        err,
+    )]
     async fn validate_block_header(
         &self,
         header: &BlockHeader,
@@ -243,7 +263,11 @@ impl State {
     }
 
     /// Computes nullifier and account tree mutations, validating roots against the block header.
-    #[instrument(target = COMPONENT, skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+        err,
+    )]
     async fn compute_tree_mutations(
         &self,
         header: &BlockHeader,
@@ -312,7 +336,11 @@ impl State {
     }
 
     /// Builds note records with inclusion proofs from the block body.
-    #[instrument(target = COMPONENT, skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+        err,
+    )]
     fn build_note_records(
         header: &BlockHeader,
         body: &BlockBody,

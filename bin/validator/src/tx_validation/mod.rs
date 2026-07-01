@@ -3,6 +3,7 @@ mod validated_tx;
 
 pub use data_store::TransactionInputsDataStore;
 use miden_node_utils::spawn::{spawn_blocking_in_current_span, spawn_blocking_in_span};
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::transaction::{
     ProvenTransaction,
@@ -12,7 +13,7 @@ use miden_protocol::transaction::{
 };
 use miden_tx::auth::UnreachableAuth;
 use miden_tx::{TransactionExecutor, TransactionExecutorError};
-use tracing::{Instrument, info_span, instrument};
+use tracing::{Instrument, info_span};
 pub use validated_tx::ValidatedTransaction;
 
 use crate::COMPONENT;
@@ -40,7 +41,11 @@ pub enum TransactionValidationError {
 /// provided proven transaction.
 ///
 /// Returns the header of the executed transaction if successful.
-#[instrument(target = COMPONENT, skip_all, err)]
+#[miden_instrument(
+    target = COMPONENT,
+    skip_all,
+    err,
+)]
 pub async fn validate_transaction(
     proven_tx: ProvenTransaction,
     tx_inputs: TransactionInputs,

@@ -11,6 +11,7 @@ use miden_node_proto::domain::account::{
 };
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::account::{
     AccountId,
     AccountPatch,
@@ -37,7 +38,6 @@ use miden_protocol::errors::{AssetError, StorageMapError};
 use miden_protocol::utils::serde::Serializable;
 use miden_protocol::{EMPTY_WORD, Word};
 use thiserror::Error;
-use tracing::instrument;
 
 use crate::COMPONENT;
 pub use crate::db::models::queries::HISTORICAL_BLOCK_RETENTION;
@@ -318,7 +318,10 @@ impl<B: Backend> AccountStateForest<B> {
     /// assets if all hashed keys are known in the reverse-key LRU cache. Returns `Ok(None)` when at
     /// least one raw key is missing from the cache, so the caller should fall back to database
     /// reconstruction.
-    #[instrument(target = COMPONENT, skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+    )]
     pub(crate) fn get_vault_details(
         &self,
         account_id: AccountId,
@@ -365,7 +368,10 @@ impl<B: Backend> AccountStateForest<B> {
     ///
     /// Returns `None` if no storage root is tracked for this account/slot/block combination.
     /// Returns a `MerkleError` if the forest doesn't contain sufficient data for the proofs.
-    #[instrument(target = COMPONENT, skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+    )]
     pub(crate) fn get_storage_map_details_for_keys(
         &self,
         account_id: AccountId,
@@ -430,7 +436,10 @@ impl<B: Backend> AccountStateForest<B> {
     /// Returns `AccountStorageMapResult::CannotReconstructKeysFromCache` when the forest has hashed
     /// entries but at least one raw key is missing from the reverse-key cache, so the caller
     /// should fall back to database reconstruction.
-    #[instrument(target = COMPONENT, skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+    )]
     pub(crate) fn get_storage_map_details_for_all_entries(
         &self,
         account_id: AccountId,
@@ -489,7 +498,14 @@ impl<B: Backend> AccountStateForest<B> {
     ///
     /// * `block_num` - Block number for which these updates apply
     /// * `account_updates` - Iterator of `AccountPatch` for public accounts
-    #[instrument(target = COMPONENT, skip_all, fields(block.number = %block_num))]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+        fields(
+            block.number = %block_num,
+            num_pruned = tracing::field::Empty,
+        ),
+    )]
     pub(crate) fn apply_block_updates(
         &mut self,
         block_num: BlockNumber,
@@ -498,8 +514,8 @@ impl<B: Backend> AccountStateForest<B> {
         for patch in account_updates {
             self.update_account(block_num, &patch);
 
-            tracing::debug!(
-                target: crate::COMPONENT,
+            tracing::trace!(
+                target: crate::LOG_TARGET,
                 account_id = %patch.id(),
                 %block_num,
                 is_full_state = patch.is_full_state(),
@@ -507,7 +523,8 @@ impl<B: Backend> AccountStateForest<B> {
             );
         }
 
-        self.prune(block_num);
+        let number_of_pruned_blocks = self.prune(block_num);
+        tracing::Span::current().record("num_pruned", number_of_pruned_blocks);
     }
 
     /// Updates the forest with account vault and storage changes from a patch.
@@ -573,8 +590,8 @@ impl<B: Backend> AccountStateForest<B> {
             let lineage = Self::vault_lineage_id(account_id);
             let new_root = self.apply_forest_updates(lineage, block_num, Vec::new());
 
-            tracing::debug!(
-                target: crate::COMPONENT,
+            tracing::trace!(
+                target: crate::LOG_TARGET,
                 %account_id,
                 %block_num,
                 %new_root,
@@ -598,8 +615,8 @@ impl<B: Backend> AccountStateForest<B> {
         );
         let new_root = self.apply_forest_updates(lineage, block_num, operations);
 
-        tracing::debug!(
-            target: crate::COMPONENT,
+        tracing::trace!(
+            target: crate::LOG_TARGET,
             %account_id,
             %block_num,
             %new_root,
@@ -649,8 +666,8 @@ impl<B: Backend> AccountStateForest<B> {
 
             let num_entries = raw_map_entries.len();
 
-            tracing::debug!(
-                target: crate::COMPONENT,
+            tracing::trace!(
+                target: crate::LOG_TARGET,
                 %account_id,
                 %block_num,
                 ?slot_name,
@@ -693,8 +710,8 @@ impl<B: Backend> AccountStateForest<B> {
         );
         let new_root = self.apply_forest_updates(lineage, block_num, operations);
 
-        tracing::debug!(
-            target: crate::COMPONENT,
+        tracing::trace!(
+            target: crate::LOG_TARGET,
             %account_id,
             %block_num,
             %new_root,
@@ -748,8 +765,8 @@ impl<B: Backend> AccountStateForest<B> {
             let operations = Self::build_forest_operations(hashed_entries);
             let new_root = self.apply_forest_updates(lineage, block_num, operations);
 
-            tracing::debug!(
-                target: crate::COMPONENT,
+            tracing::trace!(
+                target: crate::LOG_TARGET,
                 %account_id,
                 %block_num,
                 ?slot_name,
@@ -768,7 +785,6 @@ impl<B: Backend> AccountStateForest<B> {
     /// The `LargeSmtForest` itself is truncated to drop historical versions beyond the cutoff.
     ///
     /// Returns the number of pruned roots for observability.
-    #[instrument(target = COMPONENT, skip_all, ret, fields(block.number = %chain_tip))]
     pub(crate) fn prune(&mut self, chain_tip: BlockNumber) -> usize {
         let cutoff_block = chain_tip
             .checked_sub(HISTORICAL_BLOCK_RETENTION)

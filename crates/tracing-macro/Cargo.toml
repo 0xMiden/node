@@ -1,0 +1,25 @@
+[package]
+authors.workspace      = true
+description            = "Procedural macros for Miden node tracing"
+edition.workspace      = true
+homepage.workspace     = true
+keywords               = ["macro", "miden", "node", "tracing"]
+license.workspace      = true
+name                   = "miden-node-tracing-macro"
+publish                = false
+repository.workspace   = true
+rust-version.workspace = true
+version.workspace      = true
+
+[lints]
+workspace = true
+
+[lib]
+doctest    = false
+proc-macro = true
+test       = false
+
+[dependencies]
+proc-macro2 = { workspace = true }
+quote       = { workspace = true }
+syn         = { features = ["full", "visit"], workspace = true }

@@ -55,11 +55,11 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, LockResult, Mutex, MutexGuard};
 
 use miden_node_utils::ErrorReport;
+use miden_node_utils::tracing::{miden_instrument, miden_span_record};
 use miden_protocol::batch::{BatchId, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::transaction::{TransactionHeader, TransactionId};
 use thiserror::Error;
-use tracing::instrument;
 
 use crate::block_builder::SelectedBlock;
 use crate::domain::batch::SelectedBatch;
@@ -152,7 +152,12 @@ impl SharedMempool {
     ///
     /// Callers should minimise the amount of work performed while holding the lock to reduce
     /// contention with other subsystems that need to access the pool.
-    #[instrument(target = COMPONENT, name = "mempool.lock", skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "mempool.lock",
+        skip_all,
+        err,
+    )]
     pub fn lock(&self) -> Result<MutexGuard<'_, Mempool>, MempoolPoisonError> {
         let result: LockResult<MutexGuard<'_, Mempool>> = self.0.lock();
         result.map_err(|_| MempoolPoisonError)
@@ -179,6 +184,16 @@ pub struct Mempool {
     committed_chain_tip: BlockNumber,
 
     config: MempoolConfig,
+}
+
+struct MempoolTelemetry {
+    uncommitted_transactions: usize,
+    unbatched_transactions: usize,
+    proposed_batches: usize,
+    proven_batches: usize,
+    accounts: usize,
+    nullifiers: usize,
+    output_notes: usize,
 }
 
 impl Mempool {
@@ -223,11 +238,11 @@ impl Mempool {
     ///
     /// Returns an error if the transaction would exceed the mempool capacity or if its initial
     /// conditions don't match the current state.
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "Not impactful, and we may want ownership in the future"
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "mempool.add_transaction",
+        skip_all,
     )]
-    #[instrument(target = COMPONENT, name = "mempool.add_transaction", skip_all, fields(tx=%tx.id()))]
     pub fn add_transaction(
         &mut self,
         tx: Arc<AuthenticatedTransaction>,
@@ -243,12 +258,26 @@ impl Mempool {
         self.transactions
             .append(Arc::clone(&tx))
             .map_err(MempoolSubmissionError::StateConflict)?;
-        self.inject_telemetry();
+        let telemetry = self.telemetry();
+        miden_span_record!(
+            transaction.id = %tx.id(),
+            mempool.transactions.uncommitted = telemetry.uncommitted_transactions,
+            mempool.transactions.unbatched = telemetry.unbatched_transactions,
+            mempool.batches.proposed = telemetry.proposed_batches,
+            mempool.batches.proven = telemetry.proven_batches,
+            mempool.accounts = telemetry.accounts,
+            mempool.nullifiers = telemetry.nullifiers,
+            mempool.output_notes = telemetry.output_notes,
+        );
 
         Ok(self.committed_chain_tip)
     }
 
-    #[instrument(target = COMPONENT, name = "mempool.add_user_batch", skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "mempool.add_user_batch",
+        skip_all,
+    )]
     pub fn add_user_batch(
         &mut self,
         txs: &[Arc<AuthenticatedTransaction>],
@@ -277,7 +306,16 @@ impl Mempool {
             .append_user_batch(txs)
             .map_err(MempoolSubmissionError::StateConflict)?;
 
-        self.inject_telemetry();
+        let telemetry = self.telemetry();
+        miden_span_record!(
+            mempool.transactions.uncommitted = telemetry.uncommitted_transactions,
+            mempool.transactions.unbatched = telemetry.unbatched_transactions,
+            mempool.batches.proposed = telemetry.proposed_batches,
+            mempool.batches.proven = telemetry.proven_batches,
+            mempool.accounts = telemetry.accounts,
+            mempool.nullifiers = telemetry.nullifiers,
+            mempool.output_notes = telemetry.output_notes,
+        );
 
         Ok(self.committed_chain_tip)
     }
@@ -287,10 +325,25 @@ impl Mempool {
     /// Transactions are returned in a valid execution ordering.
     ///
     /// Returns `None` if no transactions are available.
-    #[instrument(target = COMPONENT, name = "mempool.select_any_batch", skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "mempool.select_any_batch",
+        skip_all,
+    )]
     pub fn select_any_batch(&mut self) -> Option<SelectedBatch> {
         let batch = self.transactions.select_any_batch(self.config.batch_budget)?;
-        Some(self.append_selected_batch(batch))
+        let batch = self.append_selected_batch(batch);
+        let telemetry = self.telemetry();
+        miden_span_record!(
+            mempool.transactions.uncommitted = telemetry.uncommitted_transactions,
+            mempool.transactions.unbatched = telemetry.unbatched_transactions,
+            mempool.batches.proposed = telemetry.proposed_batches,
+            mempool.batches.proven = telemetry.proven_batches,
+            mempool.accounts = telemetry.accounts,
+            mempool.nullifiers = telemetry.nullifiers,
+            mempool.output_notes = telemetry.output_notes,
+        );
+        Some(batch)
     }
 
     /// Returns a full set of transactions for the next batch.
@@ -298,17 +351,31 @@ impl Mempool {
     /// User batches count as full because they are externally chosen atomic batches.
     /// Non-user batches are only returned when the selected set saturates the batch budget or when
     /// another selectable transaction cannot fit into the remaining budget.
-    #[instrument(target = COMPONENT, name = "mempool.select_full_batch", skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "mempool.select_full_batch",
+        skip_all,
+    )]
     pub fn select_full_batch(&mut self) -> Option<SelectedBatch> {
         let batch = self.transactions.select_full_batch(self.config.batch_budget)?;
-        Some(self.append_selected_batch(batch))
+        let batch = self.append_selected_batch(batch);
+        let telemetry = self.telemetry();
+        miden_span_record!(
+            mempool.transactions.uncommitted = telemetry.uncommitted_transactions,
+            mempool.transactions.unbatched = telemetry.unbatched_transactions,
+            mempool.batches.proposed = telemetry.proposed_batches,
+            mempool.batches.proven = telemetry.proven_batches,
+            mempool.accounts = telemetry.accounts,
+            mempool.nullifiers = telemetry.nullifiers,
+            mempool.output_notes = telemetry.output_notes,
+        );
+        Some(batch)
     }
 
     fn append_selected_batch(&mut self, batch: SelectedBatch) -> SelectedBatch {
         if let Err(err) = self.batches.append(batch.clone()) {
             panic!("failed to append batch to dependency graph: {}", err.as_report());
         }
-        self.inject_telemetry();
         batch
     }
 
@@ -317,7 +384,11 @@ impl Mempool {
     /// The transactions are re-queued for inclusion in a batch. Additionally, the batch's
     /// transactions have their failure count incremented, reverting them if they now exceed the
     /// failure limit.
-    #[instrument(target = COMPONENT, name = "mempool.rollback_batch", skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "mempool.rollback_batch",
+        skip_all,
+    )]
     pub fn rollback_batch(&mut self, batch: BatchId) {
         // Guards against bugs in the proof scheduler where a retry results in multiple results
         // coming back for the same batch. If the batch previously succeeded, then yanking it would
@@ -347,14 +418,36 @@ impl Mempool {
             self.transactions.increment_failure_count(failed_txs);
         }
 
-        self.inject_telemetry();
+        let telemetry = self.telemetry();
+        miden_span_record!(
+            mempool.transactions.uncommitted = telemetry.uncommitted_transactions,
+            mempool.transactions.unbatched = telemetry.unbatched_transactions,
+            mempool.batches.proposed = telemetry.proposed_batches,
+            mempool.batches.proven = telemetry.proven_batches,
+            mempool.accounts = telemetry.accounts,
+            mempool.nullifiers = telemetry.nullifiers,
+            mempool.output_notes = telemetry.output_notes,
+        );
     }
 
     /// Marks a batch as proven if it exists.
-    #[instrument(target = COMPONENT, name = "mempool.commit_batch", skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "mempool.commit_batch",
+        skip_all,
+    )]
     pub fn commit_batch(&mut self, proof: Arc<ProvenBatch>) {
         self.batches.submit_proof(proof);
-        self.inject_telemetry();
+        let telemetry = self.telemetry();
+        miden_span_record!(
+            mempool.transactions.uncommitted = telemetry.uncommitted_transactions,
+            mempool.transactions.unbatched = telemetry.unbatched_transactions,
+            mempool.batches.proposed = telemetry.proposed_batches,
+            mempool.batches.proven = telemetry.proven_batches,
+            mempool.accounts = telemetry.accounts,
+            mempool.nullifiers = telemetry.nullifiers,
+            mempool.output_notes = telemetry.output_notes,
+        );
     }
 
     /// Select batches for the next block.
@@ -366,7 +459,11 @@ impl Mempool {
     /// # Panics
     ///
     /// Panics if there is already a block in flight.
-    #[instrument(target = COMPONENT, name = "mempool.select_block", skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "mempool.select_block",
+        skip_all,
+    )]
     pub fn select_block(&mut self) -> SelectedBlock {
         assert!(
             self.pending_block.is_none(),
@@ -378,7 +475,16 @@ impl Mempool {
         let batches = self.batches.select_block(self.config.block_budget);
         let block = SelectedBlock { block_number, batches };
         self.pending_block = Some(block.clone());
-        self.inject_telemetry();
+        let telemetry = self.telemetry();
+        miden_span_record!(
+            mempool.transactions.uncommitted = telemetry.uncommitted_transactions,
+            mempool.transactions.unbatched = telemetry.unbatched_transactions,
+            mempool.batches.proposed = telemetry.proposed_batches,
+            mempool.batches.proven = telemetry.proven_batches,
+            mempool.accounts = telemetry.accounts,
+            mempool.nullifiers = telemetry.nullifiers,
+            mempool.output_notes = telemetry.output_notes,
+        );
         block
     }
 
@@ -393,7 +499,11 @@ impl Mempool {
     /// # Panics
     ///
     /// Panics if there is no matching block in flight.
-    #[instrument(target = COMPONENT, name = "mempool.commit_block", skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "mempool.commit_block",
+        skip_all,
+    )]
     pub fn commit_block(&mut self, block_header: &BlockHeader) {
         assert_eq!(self.committed_chain_tip.child(), block_header.block_num());
         let block = self
@@ -407,7 +517,16 @@ impl Mempool {
         self.prune_oldest_block();
 
         self.revert_expired();
-        self.inject_telemetry();
+        let telemetry = self.telemetry();
+        miden_span_record!(
+            mempool.transactions.uncommitted = telemetry.uncommitted_transactions,
+            mempool.transactions.unbatched = telemetry.unbatched_transactions,
+            mempool.batches.proposed = telemetry.proposed_batches,
+            mempool.batches.proven = telemetry.proven_batches,
+            mempool.accounts = telemetry.accounts,
+            mempool.nullifiers = telemetry.nullifiers,
+            mempool.output_notes = telemetry.output_notes,
+        );
     }
 
     /// Notify the pool that construction of the in flight block failed.
@@ -419,7 +538,11 @@ impl Mempool {
     /// # Panics
     ///
     /// Panics if there is no matching block in flight.
-    #[instrument(target = COMPONENT, name = "mempool.rollback_block", skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "mempool.rollback_block",
+        skip_all,
+    )]
     pub fn rollback_block(&mut self, block: BlockNumber) {
         // FIXME: We should consider a more robust check here to identify the block by a hash.
         //        If multiple jobs are possible, then so are multiple variants with the same
@@ -444,7 +567,16 @@ impl Mempool {
             .iter()
             .flat_map(|batch| batch.transactions().as_slice().iter().map(TransactionHeader::id));
         self.transactions.increment_failure_count(failed_txs);
-        self.inject_telemetry();
+        let telemetry = self.telemetry();
+        miden_span_record!(
+            mempool.transactions.uncommitted = telemetry.uncommitted_transactions,
+            mempool.transactions.unbatched = telemetry.unbatched_transactions,
+            mempool.batches.proposed = telemetry.proposed_batches,
+            mempool.batches.proven = telemetry.proven_batches,
+            mempool.accounts = telemetry.accounts,
+            mempool.nullifiers = telemetry.nullifiers,
+            mempool.output_notes = telemetry.output_notes,
+        );
     }
 
     // STATS & INSPECTION
@@ -468,31 +600,22 @@ impl Mempool {
     // INTERNAL HELPERS
     // --------------------------------------------------------------------------------------------
 
-    /// Adds mempool stats to the current tracing span.
-    ///
-    /// Note that these are only visible in the OpenTelemetry context, as conventional tracing
-    /// does not track fields added dynamically.
-    fn inject_telemetry(&self) {
-        use miden_node_utils::tracing::OpenTelemetrySpanExt;
-        let span = tracing::Span::current();
-
+    fn telemetry(&self) -> MempoolTelemetry {
         let committed_txs = self
             .committed_blocks
             .iter()
             .flat_map(|block| block.batches.iter())
             .map(|batch| batch.transactions().as_slice().len())
             .sum::<usize>();
-        span.set_attribute(
-            "mempool.transactions.uncommitted",
-            self.transactions.count() - committed_txs,
-        );
-        span.set_attribute("mempool.transactions.unbatched", self.unbatched_transactions_count());
-        span.set_attribute("mempool.batches.proposed", self.proposed_batches_count());
-        span.set_attribute("mempool.batches.proven", self.proven_batches_count());
-
-        span.set_attribute("mempool.accounts", self.transactions.accounts_count());
-        span.set_attribute("mempool.nullifiers", self.transactions.nullifier_count());
-        span.set_attribute("mempool.output_notes", self.transactions.output_note_count());
+        MempoolTelemetry {
+            uncommitted_transactions: self.transactions.count() - committed_txs,
+            unbatched_transactions: self.unbatched_transactions_count(),
+            proposed_batches: self.proposed_batches_count(),
+            proven_batches: self.proven_batches_count(),
+            accounts: self.transactions.accounts_count(),
+            nullifiers: self.transactions.nullifier_count(),
+            output_notes: self.transactions.output_note_count(),
+        }
     }
 
     /// This includes pruning the block's batches and transactions from their graphs.

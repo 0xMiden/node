@@ -3,15 +3,16 @@ use std::time::Duration;
 use miden_node_proto::clients::{Builder, ValidatorClient};
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated as proto;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::Word;
 use miden_protocol::block::ProposedBlock;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_protocol::utils::serde::Serializable;
 use thiserror::Error;
-use tracing::{info, instrument};
+use tracing::info;
 use url::Url;
 
-use crate::COMPONENT;
+use crate::{COMPONENT, LOG_TARGET};
 
 // VALIDATOR ERROR
 // ================================================================================================
@@ -42,7 +43,7 @@ impl BlockProducerValidatorClient {
     /// connection surfaces as a fast, retryable error instead of hanging on the OS-level TCP
     /// timeout and halting block production.
     pub fn new(validator_url: Url, timeout: Duration) -> anyhow::Result<Self> {
-        info!(target: COMPONENT, validator_endpoint = %validator_url, "Initializing validator client");
+        info!(target: LOG_TARGET, validator_endpoint = %validator_url, "Initializing validator client");
 
         let validator = Builder::new(validator_url)
             .with_tls()?
@@ -57,7 +58,12 @@ impl BlockProducerValidatorClient {
 
     /// Signs the proposed block via the validator, returning the signature and the block commitment
     /// that the validator reports it signed (for cross-checking against the locally built block).
-    #[instrument(target = COMPONENT, name = "validator.client.validate_block", skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "validator.client.validate_block",
+        skip_all,
+        err,
+    )]
     pub async fn sign_block(
         &self,
         proposed_block: ProposedBlock,

@@ -40,6 +40,9 @@ pub use server::{
 /// The name of the block producer component.
 pub const COMPONENT: &str = "miden-block-producer";
 
+/// The tracing target used for stdout-visible events.
+pub const LOG_TARGET: &str = "user::miden-block-producer";
+
 /// The number of transactions per batch.
 pub const DEFAULT_MAX_TXS_PER_BATCH: NonZeroUsize = NonZeroUsize::new(8).unwrap();
 
@@ -102,9 +105,3 @@ const _: () = assert!(
     DEFAULT_MAX_TXS_PER_BATCH.get() <= miden_protocol::MAX_ACCOUNTS_PER_BATCH,
     "Server constraint cannot exceed the protocol's constraint"
 );
-
-/// An extension trait used only locally to implement telemetry injection.
-trait TelemetryInjectorExt {
-    /// Inject [`tracing`] telemetry from self.
-    fn inject_telemetry(&self);
-}

@@ -8,10 +8,11 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 use hex;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
+use miden_node_utils::tracing::miden_instrument;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, info, warn};
 use url::Url;
 
 use crate::COMPONENT;
@@ -191,14 +192,14 @@ impl Service for FaucetService {
 }
 
 /// Fetches the faucet's metadata from the `/get_metadata` endpoint.
-#[instrument(
+#[miden_instrument(
     parent = None,
     target = COMPONENT,
     name = "network_monitor.faucet.fetch_faucet_metadata",
     skip_all,
     level = "info",
     ret(level = "debug"),
-    err
+    err,
 )]
 async fn fetch_faucet_metadata(
     client: &Client,
@@ -225,14 +226,14 @@ async fn fetch_faucet_metadata(
 /// # Returns
 ///
 /// The response from the faucet if successful, or an error if the test fails.
-#[instrument(
+#[miden_instrument(
     parent = None,
     target = COMPONENT,
     name = "network_monitor.faucet.perform_mint_test",
     skip_all,
     level = "info",
     ret(level = "debug"),
-    err
+    err,
 )]
 async fn perform_mint_test(
     client: &Client,
@@ -334,14 +335,14 @@ where
 ///
 /// The nonce that solves the challenge, or an error if no solution is found within the attempt
 /// and time bounds.
-#[instrument(
+#[miden_instrument(
     parent = None,
     target = COMPONENT,
     name = "network_monitor.faucet.solve_pow_challenge",
     skip_all,
     level = "info",
     ret(level = "debug"),
-    err
+    err,
 )]
 fn solve_pow_challenge(challenge: &str, target: u64, timeout: Duration) -> anyhow::Result<u64> {
     let challenge_bytes = hex::decode(challenge).context("Failed to decode challenge from hex")?;

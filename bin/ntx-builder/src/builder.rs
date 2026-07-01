@@ -4,6 +4,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use futures::Stream;
 use miden_node_utils::tasks::Tasks;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
@@ -222,10 +223,13 @@ impl NetworkTransactionBuilder {
     /// Applies a committed block and returns the computed `CommittedBlockEffects` so the
     /// steady-state loop can hand them to the coordinator without re-deriving from the signed
     /// block.
-    #[tracing::instrument(
+    #[miden_instrument(
         name = "ntx.builder.apply_committed_block",
         skip(self, loop_db, block),
-        fields(block_num = %block.header().block_num(), %committed_tip),
+        fields(
+            block_num = %block.header().block_num(),
+            %committed_tip,
+        ),
     )]
     async fn apply_committed_block_with_effects(
         &mut self,

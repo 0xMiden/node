@@ -1,9 +1,10 @@
 use miden_node_proto::generated as proto;
-use miden_node_utils::tracing::OpenTelemetrySpanExt;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::block::BlockNumber;
-use tracing::{Span, debug};
+use tracing::debug;
 
-use super::{COMPONENT, RpcService, database_error_to_status};
+use super::{RpcService, database_error_to_status};
+use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::GetBlockByNumber for RpcService {
@@ -18,9 +19,17 @@ impl proto::server::rpc_api::GetBlockByNumber for RpcService {
         Ok(output)
     }
 
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "get_block_by_number",
+        skip_all,
+        fields(
+            block.number = %request.block_num,
+        ),
+        err,
+    )]
     async fn handle(&self, request: Self::Input) -> tonic::Result<Self::Output> {
-        Span::current().set_attribute("block.number", request.block_num);
-        debug!(target: COMPONENT, ?request);
+        debug!(target: LOG_TARGET, ?request, "Getting block by number");
 
         let block_num = BlockNumber::from(request.block_num);
         let block = self

@@ -26,7 +26,6 @@ miden-node-utils       = { workspace = true }
 miden-protocol         = { features = ["std"], workspace = true }
 miden-tx               = { features = ["concurrent", "std"], workspace = true }
 miden-tx-batch         = { features = ["std"], workspace = true }
-opentelemetry          = { workspace = true }
 tokio                  = { features = ["full"], workspace = true }
 tokio-stream           = { features = ["net"], workspace = true }
 tonic                  = { default-features = false, features = ["codegen", "router", "transport"], workspace = true }

@@ -33,9 +33,3 @@ impl std::fmt::Display for ProofKind {
         f.write_str(self.as_str())
     }
 }
-
-impl miden_node_utils::tracing::ToValue for ProofKind {
-    fn to_value(&self) -> opentelemetry::Value {
-        self.to_string().into()
-    }
-}

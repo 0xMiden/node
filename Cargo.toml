@@ -17,6 +17,7 @@ members = [
   "crates/rpc",
   "crates/store",
   "crates/test-macro",
+  "crates/tracing-macro",
   "crates/utils",
   "proto",
   "xtask",
@@ -53,6 +54,7 @@ miden-node-proto-build          = { path = "proto", version = "0.15.0" }
 miden-node-rpc                  = { path = "crates/rpc", version = "0.15.0" }
 miden-node-store                = { path = "crates/store", version = "0.15.0" }
 miden-node-test-macro           = { path = "crates/test-macro" }
+miden-node-tracing-macro        = { path = "crates/tracing-macro", version = "0.15.0" }
 miden-node-utils                = { path = "crates/utils", version = "0.15.0" }
 miden-remote-prover-client      = { path = "crates/remote-prover-client", version = "0.15.0" }
 # Temporary workaround until <https://github.com/rust-rocksdb/rust-rocksdb/pull/1029>
@@ -94,6 +96,7 @@ lru               = { default-features = false, version = "0.16" }
 miette            = { version = "7.6" }
 opentelemetry     = { version = "0.31" }
 pretty_assertions = { version = "1.4" }
+proc-macro2       = { version = "1.0" }
 # prost and protox are from different authors and are _not_ released in
 # lockstep, nor are they adhering to semver semantics. We keep this
 # to avoid future breakage.
@@ -126,6 +129,7 @@ tower              = { version = "0.5" }
 tower-http         = { features = ["cors", "trace"], version = "0.6" }
 tracing            = { version = "0.1" }
 tracing-subscriber = { features = ["env-filter", "fmt", "json"], version = "0.3" }
+trybuild           = { version = "1.0" }
 url                = { features = ["serde"], version = "2.5" }
 
 [workspace.metadata.cargo-shear]

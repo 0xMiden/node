@@ -25,6 +25,7 @@ use miden_node_utils::limiter::{
     QueryParamAccountIdLimit,
     QueryParamLimiter,
 };
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::Word;
 use miden_protocol::account::{
     Account,
@@ -1225,12 +1226,11 @@ pub(crate) fn select_network_accounts_subset(
 }
 
 /// Attention: Assumes the account details are NOT null! The schema explicitly allows this though!
-#[tracing::instrument(
+#[miden_instrument(
     target = COMPONENT,
     skip_all,
     err,
 )]
-#[expect(clippy::too_many_lines)]
 pub(crate) fn upsert_accounts(
     conn: &mut SqliteConnection,
     accounts: &[BlockAccountUpdate],
@@ -1521,11 +1521,13 @@ pub const HISTORICAL_BLOCK_RETENTION: u32 = 50;
 ///
 /// # Returns
 /// A tuple of `(vault_assets_deleted, storage_map_values_deleted, account_codes_deleted)`
-#[tracing::instrument(
+#[miden_instrument(
     target = COMPONENT,
     skip_all,
     err,
-    fields(cutoff_block),
+    fields(
+        cutoff_block,
+    ),
 )]
 pub(crate) fn prune_history(
     conn: &mut SqliteConnection,
@@ -1540,11 +1542,13 @@ pub(crate) fn prune_history(
     Ok((vault_deleted, storage_deleted, codes_deleted))
 }
 
-#[tracing::instrument(
+#[miden_instrument(
     target = COMPONENT,
     skip_all,
     err,
-    fields(cutoff_block),
+    fields(
+        cutoff_block,
+    ),
 )]
 fn prune_account_vault_assets(
     conn: &mut SqliteConnection,
@@ -1561,11 +1565,13 @@ fn prune_account_vault_assets(
     .map_err(DatabaseError::Diesel)
 }
 
-#[tracing::instrument(
+#[miden_instrument(
     target = COMPONENT,
     skip_all,
     err,
-    fields(cutoff_block),
+    fields(
+        cutoff_block,
+    ),
 )]
 fn prune_account_storage_map_values(
     conn: &mut SqliteConnection,
@@ -1592,11 +1598,13 @@ fn prune_account_storage_map_values(
 /// The `UNION ALL` shape and explicit index selections avoid SQLite choosing
 /// `idx_accounts_code_commitment` for the whole predicate, which is expensive when the account
 /// history table has millions of public rows.
-#[tracing::instrument(
+#[miden_instrument(
     target = COMPONENT,
     skip_all,
     err,
-    fields(cutoff_block),
+    fields(
+        cutoff_block,
+    ),
 )]
 fn prune_account_codes(
     conn: &mut SqliteConnection,

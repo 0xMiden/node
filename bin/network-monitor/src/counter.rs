@@ -12,6 +12,7 @@ use miden_node_proto::clients::RpcClient;
 use miden_node_proto::generated::rpc::BlockHeaderByNumberRequest;
 use miden_node_proto::generated::transaction::ProvenTransaction;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{Account, AccountCode, AccountId, AccountPatch};
 use miden_protocol::asset::AssetVault;
@@ -44,7 +45,7 @@ use miden_tx::{LocalTransactionProver, TransactionExecutor};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use tokio::sync::{Mutex, watch};
-use tracing::{error, info, instrument, warn};
+use tracing::{error, info, warn};
 
 use crate::config::MonitorConfig;
 use crate::deploy::counter::COUNTER_SLOT_NAME;
@@ -227,12 +228,14 @@ impl IncrementService {
     }
 
     /// Re-sync the wallet account from the RPC after repeated failures.
-    #[instrument(
+    #[miden_instrument(
         parent = None,
         target = COMPONENT,
         name = "network_monitor.counter.try_resync_wallet_account",
         skip_all,
-        fields(account.id = %self.tx.wallet_account.id()),
+        fields(
+            account.id = %self.tx.wallet_account.id(),
+        ),
         level = "warn",
         err,
     )]
@@ -257,7 +260,7 @@ impl IncrementService {
     /// Builds a fresh wallet/counter pair in memory, deploys the counter to the network, swaps
     /// the local [`TxBuilder`] state, and publishes the new counter on [`Self::counter_sender`]
     /// so the tracker switches over without polling disk.
-    #[instrument(
+    #[miden_instrument(
         parent = None,
         target = COMPONENT,
         name = "network_monitor.counter.try_regenerate_accounts",
@@ -290,14 +293,14 @@ impl IncrementService {
     }
 
     /// Create and submit a network note that increments the counter account.
-    #[instrument(
+    #[miden_instrument(
         parent = None,
         target = COMPONENT,
         name = "network_monitor.counter.submit_increment",
         skip_all,
         level = "info",
         ret(level = "debug"),
-        err
+        err,
     )]
     async fn submit_increment(&mut self) -> Result<(String, AccountPatch, BlockNumber)> {
         let (network_note, note_recipient) = create_network_note(
