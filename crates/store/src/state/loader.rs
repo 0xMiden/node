@@ -32,11 +32,11 @@ use miden_protocol::{Felt, Word};
 use tracing::info;
 use tracing::instrument;
 
-use crate::COMPONENT;
 use crate::account_state_forest::AccountStateForest;
 use crate::db::Db;
 use crate::db::models::queries::BlockHeaderCommitment;
 use crate::errors::{DatabaseError, StateInitializationError};
+use crate::{COMPONENT, LOG_TARGET};
 
 // CONSTANTS
 // ================================================================================================
@@ -277,6 +277,8 @@ impl TreeStorageLoader for RocksDbStorage {
         db: &mut Db,
     ) -> Result<AccountTree<LargeSmt<Self>>, StateInitializationError> {
         // If RocksDB storage has data, load from it directly
+
+        use crate::LOG_TARGET;
         let has_data = self
             .has_leaves()
             .map_err(|e| StateInitializationError::AccountTreeIoError(e.to_string()))?;
@@ -286,7 +288,7 @@ impl TreeStorageLoader for RocksDbStorage {
                 .map_err(StateInitializationError::FailedToCreateAccountsTree);
         }
 
-        info!(target: COMPONENT, "RocksDB account tree storage is empty, populating from SQLite");
+        info!(target: LOG_TARGET, "RocksDB account tree storage is empty, populating from SQLite");
 
         let mut smt = LargeSmt::with_entries(self, std::iter::empty())
             .map_err(account_tree_large_smt_error_to_init_error)?;
@@ -328,6 +330,7 @@ impl TreeStorageLoader for RocksDbStorage {
         db: &mut Db,
     ) -> Result<NullifierTree<LargeSmt<Self>>, StateInitializationError> {
         // If RocksDB storage has data, load from it directly
+
         let has_data = self
             .has_leaves()
             .map_err(|e| StateInitializationError::NullifierTreeIoError(e.to_string()))?;
@@ -336,7 +339,7 @@ impl TreeStorageLoader for RocksDbStorage {
             return Ok(NullifierTree::new_unchecked(smt));
         }
 
-        info!(target: COMPONENT, "RocksDB nullifier tree storage is empty, populating from SQLite");
+        info!(target: LOG_TARGET, "RocksDB nullifier tree storage is empty, populating from SQLite");
 
         let mut smt = LargeSmt::with_entries(self, std::iter::empty())
             .map_err(account_tree_large_smt_error_to_init_error)?;
@@ -439,7 +442,7 @@ impl AccountForestLoader for ForestPersistentBackend {
         }
 
         info!(
-            target: COMPONENT,
+            target: LOG_TARGET,
             "RocksDB account state forest storage is empty, populating from SQLite"
         );
         rebuild_account_state_forest(&mut forest, db, block_num).await?;

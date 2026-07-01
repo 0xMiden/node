@@ -95,3 +95,4 @@ pub mod test_support {
 // CONSTANTS
 // =================================================================================================
 const COMPONENT: &str = "miden-store";
+const LOG_TARGET: &str = "user::miden-store";

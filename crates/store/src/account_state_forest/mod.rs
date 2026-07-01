@@ -458,7 +458,7 @@ impl<B: Backend> AccountStateForest<B> {
     /// # Errors
     ///
     /// Returns an error if applying a vault delta results in a negative balance.
-    #[instrument(target = COMPONENT, skip_all, fields(block.number = %block_num))]
+    #[instrument(target = COMPONENT, skip_all, fields(block.number = %block_num, num_pruned = tracing::field::Empty))]
     pub(crate) fn apply_block_updates(
         &mut self,
         block_num: BlockNumber,
@@ -467,8 +467,8 @@ impl<B: Backend> AccountStateForest<B> {
         for delta in account_updates {
             self.update_account(block_num, &delta)?;
 
-            tracing::debug!(
-                target: crate::COMPONENT,
+            tracing::trace!(
+                target: crate::LOG_TARGET,
                 account_id = %delta.id(),
                 %block_num,
                 is_full_state = delta.is_full_state(),
@@ -476,7 +476,8 @@ impl<B: Backend> AccountStateForest<B> {
             );
         }
 
-        self.prune(block_num);
+        let number_of_pruned_blocks = self.prune(block_num);
+        tracing::Span::current().record("num_pruned", number_of_pruned_blocks);
 
         Ok(())
     }
@@ -550,8 +551,8 @@ impl<B: Backend> AccountStateForest<B> {
             let lineage = Self::vault_lineage_id(account_id);
             let new_root = self.apply_forest_updates(lineage, block_num, Vec::new());
 
-            tracing::debug!(
-                target: crate::COMPONENT,
+            tracing::trace!(
+                target: crate::LOG_TARGET,
                 %account_id,
                 %block_num,
                 %new_root,
@@ -588,8 +589,8 @@ impl<B: Backend> AccountStateForest<B> {
         let operations = Self::build_forest_operations(entries);
         let new_root = self.apply_forest_updates(lineage, block_num, operations);
 
-        tracing::debug!(
-            target: crate::COMPONENT,
+        tracing::trace!(
+            target: crate::LOG_TARGET,
             %account_id,
             %block_num,
             %new_root,
@@ -639,8 +640,8 @@ impl<B: Backend> AccountStateForest<B> {
 
             let num_entries = raw_map_entries.len();
 
-            tracing::debug!(
-                target: crate::COMPONENT,
+            tracing::trace!(
+                target: crate::LOG_TARGET,
                 %account_id,
                 %block_num,
                 ?slot_name,
@@ -729,8 +730,8 @@ impl<B: Backend> AccountStateForest<B> {
         let operations = Self::build_forest_operations(entries);
         let new_root = self.apply_forest_updates(lineage, block_num, operations);
 
-        tracing::debug!(
-            target: crate::COMPONENT,
+        tracing::trace!(
+            target: crate::LOG_TARGET,
             %account_id,
             %block_num,
             %new_root,
@@ -782,8 +783,8 @@ impl<B: Backend> AccountStateForest<B> {
             let operations = Self::build_forest_operations(hashed_entries);
             let new_root = self.apply_forest_updates(lineage, block_num, operations);
 
-            tracing::debug!(
-                target: crate::COMPONENT,
+            tracing::trace!(
+                target: crate::LOG_TARGET,
                 %account_id,
                 %block_num,
                 ?slot_name,
@@ -802,7 +803,6 @@ impl<B: Backend> AccountStateForest<B> {
     /// The `LargeSmtForest` itself is truncated to drop historical versions beyond the cutoff.
     ///
     /// Returns the number of pruned roots for observability.
-    #[instrument(target = COMPONENT, skip_all, ret, fields(block.number = %chain_tip))]
     pub(crate) fn prune(&mut self, chain_tip: BlockNumber) -> usize {
         let cutoff_block = chain_tip
             .checked_sub(HISTORICAL_BLOCK_RETENTION)

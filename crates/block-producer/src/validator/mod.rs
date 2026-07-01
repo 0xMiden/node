@@ -11,7 +11,7 @@ use thiserror::Error;
 use tracing::{info, instrument};
 use url::Url;
 
-use crate::COMPONENT;
+use crate::{COMPONENT, LOG_TARGET};
 
 // VALIDATOR ERROR
 // ================================================================================================
@@ -42,7 +42,7 @@ impl BlockProducerValidatorClient {
     /// connection surfaces as a fast, retryable error instead of hanging on the OS-level TCP
     /// timeout and halting block production.
     pub fn new(validator_url: Url, timeout: Duration) -> anyhow::Result<Self> {
-        info!(target: COMPONENT, validator_endpoint = %validator_url, "Initializing validator client");
+        info!(target: LOG_TARGET, validator_endpoint = %validator_url, "Initializing validator client");
 
         let validator = Builder::new(validator_url)
             .with_tls()?

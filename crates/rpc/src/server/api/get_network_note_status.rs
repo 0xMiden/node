@@ -1,9 +1,11 @@
 use miden_node_proto::generated as proto;
+use miden_protocol::Word;
 use tonic::Request;
 use tonic::metadata::{Ascii, MetadataValue};
-use tracing::debug;
+use tracing::{Span, debug, field, instrument};
 
-use super::{COMPONENT, RpcMode, RpcService};
+use super::{RpcMode, RpcService};
+use crate::{COMPONENT, LOG_TARGET};
 
 pub struct GetNetworkNoteStatusInput {
     request: proto::note::NoteId,
@@ -32,10 +34,30 @@ impl proto::server::rpc_api::GetNetworkNoteStatus for RpcService {
         Self::encode(output)
     }
 
+    #[instrument(
+        target = COMPONENT,
+        name = "get_network_note_status",
+        skip_all,
+        fields(
+            note.id = field::Empty,
+        ),
+        err,
+    )]
     async fn handle(&self, request: Self::Input) -> tonic::Result<Self::Output> {
         let GetNetworkNoteStatusInput { request, original_accept_header } = request;
 
-        debug!(target: COMPONENT, ?request);
+        tracing::trace!(target: LOG_TARGET, ?request);
+
+        let note_id_digest: Word = request
+            .id
+            .as_ref()
+            .ok_or_else(|| tonic::Status::invalid_argument("missing note ID digest"))?
+            .try_into()
+            .map_err(|_| tonic::Status::invalid_argument("invalid note ID digest"))?;
+        let note_id = miden_protocol::note::NoteId::from_raw(note_id_digest);
+        Span::current().record("note.id", field::display(note_id));
+
+        debug!(target: LOG_TARGET, "Getting network note status");
 
         let mut forwarded_request = Request::new(request);
         if let Some(accept) = original_accept_header {

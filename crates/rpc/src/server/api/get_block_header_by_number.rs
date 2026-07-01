@@ -1,9 +1,9 @@
 use miden_node_proto::generated as proto;
-use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::block::BlockNumber;
-use tracing::{Span, debug};
+use tracing::{debug, instrument};
 
 use super::{COMPONENT, RpcService};
+use crate::LOG_TARGET;
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::GetBlockHeaderByNumber for RpcService {
@@ -18,10 +18,17 @@ impl proto::server::rpc_api::GetBlockHeaderByNumber for RpcService {
         Ok(output)
     }
 
+    #[instrument(
+        target = COMPONENT,
+        name = "get_block_header_by_number",
+        skip_all,
+        fields(
+            block.number = %request.block_num(),
+        ),
+        err,
+    )]
     async fn handle(&self, request: Self::Input) -> tonic::Result<Self::Output> {
-        debug!(target: COMPONENT, ?request);
-
-        Span::current().set_attribute("block.number", request.block_num());
+        debug!(target: LOG_TARGET, ?request, "Getting block header by number");
 
         let block_num = request.block_num.map(BlockNumber::from);
         let (block_header, mmr_proof) = self

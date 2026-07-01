@@ -11,7 +11,7 @@ use opentelemetry_sdk::trace::SdkTracerProvider;
 use tracing::subscriber::Subscriber;
 use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::layer::{Filter, SubscriberExt};
-use tracing_subscriber::{Layer, Registry};
+use tracing_subscriber::{EnvFilter, Layer, Registry};
 
 use crate::tracing::OpenTelemetrySpanExt;
 
@@ -94,6 +94,45 @@ impl OpenTelemetry {
     }
 }
 
+/// Tracing subscriber configuration.
+#[derive(Clone)]
+pub struct TracingConfig {
+    pub open_telemetry: OpenTelemetry,
+    pub stdout_filter: String,
+    pub otel_filter: String,
+}
+
+impl TracingConfig {
+    #[must_use]
+    pub fn from_env(open_telemetry: OpenTelemetry) -> Self {
+        Self {
+            open_telemetry,
+            stdout_filter: filter_env_or_default("MIDEN_STDOUT_FILTER", "info,user=debug"),
+            otel_filter: filter_env_or_default("MIDEN_OTEL_FILTER", "info,axum::rejection=trace"),
+        }
+    }
+}
+
+fn filter_env_or_default(var: &str, default: &str) -> String {
+    std::env::var(var)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            std::env::var(EnvFilter::DEFAULT_ENV)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .unwrap_or_else(|| default.to_owned())
+}
+
+fn filter_from_string<S>(
+    filter: &str,
+) -> anyhow::Result<Box<dyn Filter<S> + Send + Sync + 'static>> {
+    use tracing_subscriber::filter::FilterExt;
+
+    Ok(FilterExt::boxed(EnvFilter::from_str(filter)?))
+}
+
 /// A guard that shuts down the tracer provider when dropped. This ensures that the logs are flushed
 /// to the exporter before the program exits.
 pub struct OtelGuard {
@@ -110,8 +149,9 @@ impl Drop for OtelGuard {
 
 /// Initializes tracing to stdout and optionally an open-telemetry exporter.
 ///
-/// Trace filtering defaults to `INFO` and can be configured using the conventional `RUST_LOG`
-/// environment variable.
+/// Stdout trace filtering is configured with `MIDEN_STDOUT_FILTER`, then `RUST_LOG`, then `info,user=debug`.
+/// OpenTelemetry export filtering is configured with `MIDEN_OTEL_FILTER`, then `RUST_LOG`, then
+/// `info,axum::rejection=trace`.
 ///
 /// The open-telemetry configuration is controlled via environment variables as defined in the
 /// [specification](https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/protocol/exporter.md#opentelemetry-protocol-exporter)
@@ -121,6 +161,20 @@ impl Drop for OtelGuard {
 /// Returns an [`OtelGuard`] if open-telemetry is enabled, otherwise `None`. When this guard is
 /// dropped, the tracer provider is shutdown.
 pub fn setup_tracing(otel: OpenTelemetry) -> anyhow::Result<Option<OtelGuard>> {
+    setup_tracing_with_config(TracingConfig::from_env(otel))
+}
+
+/// Initializes tracing from explicit stdout and OpenTelemetry filter configuration.
+///
+/// Returns an [`OtelGuard`] if open-telemetry is enabled, otherwise `None`. When this guard is
+/// dropped, the tracer provider is shutdown.
+pub fn setup_tracing_with_config(config: TracingConfig) -> anyhow::Result<Option<OtelGuard>> {
+    let TracingConfig {
+        open_telemetry: otel,
+        stdout_filter,
+        otel_filter,
+    } = config;
+
     if otel.is_enabled() {
         opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
     }
@@ -149,8 +203,8 @@ pub fn setup_tracing(otel: OpenTelemetry) -> anyhow::Result<Option<OtelGuard>> {
     });
 
     let subscriber = Registry::default()
-        .with(stdout_layer().with_filter(env_or_default_filter()))
-        .with(otel_layer.with_filter(env_or_default_filter()));
+        .with(stdout_layer().with_filter(filter_from_string(&stdout_filter)?))
+        .with(otel_layer.with_filter(filter_from_string(&otel_filter)?));
     tracing::subscriber::set_global_default(subscriber).map_err(Into::<anyhow::Error>::into)?;
 
     // Register panic hook now that tracing is initialized. This chains with the default panic hook
@@ -270,8 +324,8 @@ pub fn setup_test_tracing() -> anyhow::Result<(
     let otel_layer =
         OpenTelemetryLayer::new(tracer_provider.tracer("tracing-otel-subscriber")).boxed();
     let subscriber = Registry::default()
-        .with(stdout_layer().with_filter(env_or_default_filter()))
-        .with(otel_layer.with_filter(env_or_default_filter()));
+        .with(stdout_layer().with_filter(filter_from_string("debug")?))
+        .with(otel_layer.with_filter(filter_from_string("info,axum::rejection=trace")?));
     tracing::subscriber::set_global_default(subscriber)?;
     Ok((rx_export, rx_shutdown))
 }
@@ -282,16 +336,12 @@ where
     S: Subscriber,
     for<'a> S: tracing_subscriber::registry::LookupSpan<'a>,
 {
-    use tracing_subscriber::fmt::format::FmtSpan;
-
     tracing_subscriber::fmt::layer()
-        .pretty()
         .compact()
         .with_level(true)
-        .with_file(true)
-        .with_line_number(true)
-        .with_target(true)
-        .with_span_events(FmtSpan::CLOSE)
+        .with_file(false)
+        .with_line_number(false)
+        .with_target(false)
         .boxed()
 }
 
@@ -302,35 +352,6 @@ where
     for<'a> S: tracing_subscriber::registry::LookupSpan<'a>,
 {
     tracing_forest::ForestLayer::default().boxed()
-}
-
-/// Creates a filter from the `RUST_LOG` env var with a default of `INFO` if unset.
-///
-/// # Panics
-///
-/// Panics if `RUST_LOG` fails to parse.
-fn env_or_default_filter<S>() -> Box<dyn Filter<S> + Send + Sync + 'static> {
-    use tracing::level_filters::LevelFilter;
-    use tracing_subscriber::EnvFilter;
-    use tracing_subscriber::filter::{FilterExt, Targets};
-
-    // `tracing` does not allow differentiating between invalid and missing env var so we manually
-    // do this instead. The alternative is to silently ignore parsing errors which I think is worse.
-    match std::env::var(EnvFilter::DEFAULT_ENV) {
-        Ok(rust_log) => FilterExt::boxed(
-            EnvFilter::from_str(&rust_log)
-                .expect("RUST_LOG should contain a valid filter configuration"),
-        ),
-        Err(std::env::VarError::NotUnicode(_)) => panic!("RUST_LOG contained non-unicode"),
-        Err(std::env::VarError::NotPresent) => {
-            // Default level is INFO, and additionally enable logs from axum extractor rejections.
-            FilterExt::boxed(
-                Targets::new()
-                    .with_default(LevelFilter::INFO)
-                    .with_target("axum::rejection", LevelFilter::TRACE),
-            )
-        },
-    }
 }
 
 #[cfg(test)]

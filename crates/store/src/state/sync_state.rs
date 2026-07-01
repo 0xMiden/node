@@ -27,7 +27,7 @@ impl State {
     }
 
     /// Returns the chain MMR delta and the `block_to` block header for the specified block range.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn sync_chain_mmr(
         &self,
         block_range: RangeInclusive<BlockNumber>,
@@ -89,7 +89,7 @@ impl State {
     ///
     /// Also returns the last block number checked. If this equals `block_range.end()`, the
     /// sync is complete.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    #[instrument(level = "debug", target = COMPONENT, skip_all, err)]
     pub async fn sync_notes(
         &self,
         note_tags: Vec<u32>,
