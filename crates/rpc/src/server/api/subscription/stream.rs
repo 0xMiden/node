@@ -27,6 +27,27 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 /// greater than the tip.
 const MAX_FUTURE_GAP_IN_SUBSCRIPTIONS: u32 = 100u32;
 
+// STREAM
+// ================================================================================================
+
+pub struct SubscriptionStream {
+    inner: ReceiverStream<tonic::Result<StreamItem>>,
+}
+
+impl tokio_stream::Stream for SubscriptionStream {
+    type Item = tonic::Result<StreamItem>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.get_mut().inner).poll_next(cx)
+    }
+}
+
+pub struct StreamItem {
+    pub data: Vec<u8>,
+    pub block: BlockNumber,
+    pub tip: BlockNumber,
+}
+
 impl SubscriptionStream {
     pub(super) fn blocks(
         rpc: &RpcService,
@@ -66,10 +87,6 @@ impl SubscriptionStream {
                 async move { store.load_proof(block).await }
             },
         )
-    }
-
-    fn new(inner: ReceiverStream<tonic::Result<StreamItem>>) -> Self {
-        Self { inner }
     }
 
     fn create<GetData, Fut>(
@@ -117,9 +134,12 @@ impl SubscriptionStream {
         }
         .spawn();
 
-        Ok(SubscriptionStream::new(ReceiverStream::new(rx)))
+        Ok(Self { inner: ReceiverStream::new(rx) })
     }
 }
+
+// PRODUCER
+// ================================================================================================
 
 struct SubscriptionProducer<GetData> {
     next: BlockNumber,
@@ -147,7 +167,9 @@ where
             Err(err) => err,
         };
 
-        self.on_eos(err);
+        if let (Some(ip), StreamError::SlowSubscriber) = (self.client_ip, err) {
+            self.ban_list.add(ip);
+        }
         let _ = self.tx.try_send(Err(err.into_status()));
     }
 
@@ -216,24 +238,6 @@ where
             SendTimeoutError::Closed(_) => StreamError::ConnectionClosed,
         })
     }
-
-    fn on_eos(&self, err: StreamError) {
-        if let (Some(ip), StreamError::SlowSubscriber) = (self.client_ip, err) {
-            self.ban_list.add(ip);
-        }
-    }
-}
-
-pub struct SubscriptionStream {
-    inner: ReceiverStream<tonic::Result<StreamItem>>,
-}
-
-impl tokio_stream::Stream for SubscriptionStream {
-    type Item = tonic::Result<StreamItem>;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.get_mut().inner).poll_next(cx)
-    }
 }
 
 async fn wait_for_server_shutdown(chain_tip: &mut watch::Receiver<BlockNumber>) {
@@ -259,12 +263,6 @@ impl StreamError {
             StreamError::Internal => tonic::Status::internal("internal error"),
         }
     }
-}
-
-pub struct StreamItem {
-    pub data: Vec<u8>,
-    pub block: BlockNumber,
-    pub tip: BlockNumber,
 }
 
 // LAG TRACKER
