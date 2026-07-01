@@ -8,7 +8,7 @@ use miden_tx::utils::serde::Deserializable;
 use tonic::Status;
 
 use super::ValidatorService;
-use crate::db::insert_transaction;
+use crate::db::{insert_transaction, transaction_exists};
 use crate::tx_validation::validate_transaction;
 
 #[tonic::async_trait]
@@ -17,7 +17,26 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
     type Output = ();
 
     async fn handle(&self, input: Self::Input) -> tonic::Result<Self::Output> {
-        tracing::Span::current().set_attribute("transaction.id", input.tx.id());
+        // Reject requests while a backup subscription is streaming.
+        let _guard = self
+            .serve_lock
+            .try_read()
+            .map_err(|_| Status::resource_exhausted("validator is busy streaming a backup"))?;
+
+        let tx_id = input.tx.id();
+        tracing::Span::current().set_attribute("transaction.id", tx_id);
+
+        // Short-circuit transactions that have already been validated.
+        let already_validated = self
+            .db
+            .query("transaction_exists", move |conn| transaction_exists(conn, tx_id))
+            .await
+            .map_err(|err| {
+                Status::internal(err.as_report_context("Failed to query transaction"))
+            })?;
+        if already_validated {
+            return Ok(());
+        }
 
         // Validate the transaction.
         let tx_info = validate_transaction(input.tx, input.inputs).await.map_err(|err| {

@@ -11,6 +11,7 @@ use miden_protocol::testing::random_secret_key::random_secret_key;
 use url::Url;
 
 use crate::{
+    DEFAULT_BATCH_WORKERS,
     DEFAULT_MAX_BATCHES_PER_BLOCK,
     DEFAULT_MAX_CONCURRENT_PROOFS,
     DEFAULT_MAX_TXS_PER_BATCH,
@@ -36,6 +37,7 @@ async fn block_producer_starts_with_store_state() {
         max_batches_per_block: DEFAULT_MAX_BATCHES_PER_BLOCK,
         max_concurrent_proofs: DEFAULT_MAX_CONCURRENT_PROOFS,
         mempool_tx_capacity: NonZeroUsize::new(100).unwrap(),
+        batch_workers: DEFAULT_BATCH_WORKERS,
     }
     .spawn()
     .await

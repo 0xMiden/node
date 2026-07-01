@@ -21,6 +21,7 @@ pub mod errors;
 mod errors;
 
 pub mod server;
+pub use domain::transaction::AuthenticatedTransaction;
 pub use errors::MempoolSubmissionError;
 pub use proof_scheduler::DEFAULT_MAX_CONCURRENT_PROOFS;
 pub use rpc_sync::{RpcReadiness, RpcSync};
@@ -43,13 +44,18 @@ pub const COMPONENT: &str = "miden-block-producer";
 pub const LOG_TARGET: &str = "user::miden-block-producer";
 
 /// The number of transactions per batch.
-pub const DEFAULT_MAX_TXS_PER_BATCH: usize = 8;
+pub const DEFAULT_MAX_TXS_PER_BATCH: NonZeroUsize = NonZeroUsize::new(8).unwrap();
 
 /// Maximum number of batches per block.
-pub const DEFAULT_MAX_BATCHES_PER_BLOCK: usize = 8;
+pub const DEFAULT_MAX_BATCHES_PER_BLOCK: NonZeroUsize = NonZeroUsize::new(8).unwrap();
 
-/// Size of the batch building worker pool.
-const SERVER_NUM_BATCH_BUILDERS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
+/// Default size of the batch-builder worker pool.
+///
+/// Each worker can prove one batch at a time. Raising this allows more
+/// concurrent batch proofs in-flight, which is the primary lever for lifting
+/// the per-block-producer TPS ceiling once `--max-txs-per-batch` and
+/// `--max-batches-per-block` are pushed up.
+pub const DEFAULT_BATCH_WORKERS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 
 /// The number of blocks of committed state that the mempool retains.
 ///
@@ -69,7 +75,7 @@ const CACHED_MEMPOOL_STATS_UPDATE_INTERVAL: Duration = Duration::from_secs(5);
 /// How often a block is created.
 pub const DEFAULT_BLOCK_INTERVAL: Duration = Duration::from_secs(3);
 
-/// How often a batch is created.
+/// Maximum interval between batch scheduler checks.
 pub const DEFAULT_BATCH_INTERVAL: Duration = Duration::from_secs(1);
 
 /// The request timeout for the sequencer's `sign_block` call to the validator.
@@ -84,19 +90,19 @@ pub const DEFAULT_VALIDATOR_TIMEOUT: Duration = Duration::from_secs(30);
 /// minutes with a block time of 5s.
 #[expect(clippy::cast_sign_loss, reason = "Both durations are positive")]
 pub const DEFAULT_MEMPOOL_TX_CAPACITY: NonZeroUsize = NonZeroUsize::new(
-    DEFAULT_MAX_BATCHES_PER_BLOCK
-        * DEFAULT_MAX_TXS_PER_BATCH
+    DEFAULT_MAX_BATCHES_PER_BLOCK.get()
+        * DEFAULT_MAX_TXS_PER_BATCH.get()
         * (Duration::from_secs(60).div_duration_f32(DEFAULT_BLOCK_INTERVAL)) as usize,
 )
 .unwrap();
 
 const _: () = assert!(
-    DEFAULT_MAX_BATCHES_PER_BLOCK <= miden_protocol::MAX_BATCHES_PER_BLOCK,
+    DEFAULT_MAX_BATCHES_PER_BLOCK.get() <= miden_protocol::MAX_BATCHES_PER_BLOCK,
     "Server constraint cannot exceed the protocol's constraint"
 );
 
 const _: () = assert!(
-    DEFAULT_MAX_TXS_PER_BATCH <= miden_protocol::MAX_ACCOUNTS_PER_BATCH,
+    DEFAULT_MAX_TXS_PER_BATCH.get() <= miden_protocol::MAX_ACCOUNTS_PER_BATCH,
     "Server constraint cannot exceed the protocol's constraint"
 );
 

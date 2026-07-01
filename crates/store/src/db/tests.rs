@@ -1616,6 +1616,52 @@ fn mock_block_transaction(account_id: AccountId, num: u64) -> TransactionHeader 
     )
 }
 
+/// Like [`mock_block_transaction`], but emits `num_output_notes` output notes so the recorded
+/// `size_in_bytes` can be driven above or below the response payload cap in pagination tests.
+fn mock_block_transaction_with_output_notes(
+    account_id: AccountId,
+    num: u64,
+    num_output_notes: usize,
+) -> TransactionHeader {
+    let initial_state_commitment = Word::try_from([num, 0, 0, 0]).unwrap();
+    let final_account_commitment = Word::try_from([0, num, 0, 0]).unwrap();
+    let input_notes_commitment = Word::try_from([0, 0, num, 0]).unwrap();
+    let output_notes_commitment = Word::try_from([0, 0, 0, num]).unwrap();
+
+    let notes = vec![InputNoteCommitment::from(num_to_nullifier(num))];
+    let input_notes = InputNotes::new_unchecked(notes);
+
+    let output_notes: Vec<NoteHeader> = (0..num_output_notes)
+        .map(|i| {
+            NoteHeader::new(
+                NoteDetailsCommitment::from_raw(Word::try_from([num, i as u64, 0, 0]).unwrap()),
+                NoteMetadata::new(
+                    PartialNoteMetadata::new(account_id, NoteType::Public)
+                        .with_tag(NoteTag::new(num as u32)),
+                    &NoteAttachments::default(),
+                ),
+            )
+        })
+        .collect();
+
+    let fee = test_fee();
+    TransactionHeader::new_unchecked(
+        TransactionId::new(
+            initial_state_commitment,
+            final_account_commitment,
+            input_notes_commitment,
+            output_notes_commitment,
+            fee,
+        ),
+        account_id,
+        initial_state_commitment,
+        final_account_commitment,
+        input_notes,
+        output_notes,
+        fee,
+    )
+}
+
 fn insert_transactions(conn: &mut SqliteConnection) -> usize {
     let block_num = 1.into();
     create_block(conn, block_num);
@@ -3466,6 +3512,89 @@ fn db_roundtrip_transactions_filters_missing_output_note_sync_records() {
     };
 
     assert_eq!(*record, expected);
+}
+
+/// Per-output-note contribution to a transaction's recorded `size_in_bytes`, mirroring
+/// `OUTPUT_NOTE_SYNC_RECORD_SIZE_BYTES` in the query module.
+const OUTPUT_NOTE_SIZE_BYTES: usize = 700;
+
+/// When truncation stops mid-range while the accumulated payload is still below the cap, the
+/// response must report the last *complete* block as the cursor, not `block_range.end()`. Reporting
+/// the requested upper bound would tell the client the range was fully covered and silently drop
+/// every transaction after the one that did not fit.
+#[test]
+fn select_transactions_records_reports_truncation_below_payload_cap() {
+    let mut conn = create_db();
+    let bob = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+
+    let block1 = BlockNumber::from(1);
+    let block2 = BlockNumber::from(2);
+    create_block(&mut conn, block1);
+    create_block(&mut conn, block2);
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(bob, 0)], block1).unwrap();
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(bob, 1)], block2).unwrap();
+
+    let cap = miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
+    // `block1` nearly fills the cap on its own, then `block2` pushes the running total past it. The
+    // running total when `block2` is rejected stays below the cap, which is exactly the case the
+    // old `total_size >= cap` check mishandled.
+    let block1_notes = (cap * 9 / 10) / OUTPUT_NOTE_SIZE_BYTES;
+    let block2_notes = (cap / 5) / OUTPUT_NOTE_SIZE_BYTES;
+
+    let tx1 = mock_block_transaction_with_output_notes(bob, 1, block1_notes);
+    let tx2 = mock_block_transaction_with_output_notes(bob, 2, block2_notes);
+    queries::insert_transactions(
+        &mut conn,
+        block1,
+        &OrderedTransactionHeaders::new_unchecked(vec![tx1.clone()]),
+    )
+    .unwrap();
+    queries::insert_transactions(
+        &mut conn,
+        block2,
+        &OrderedTransactionHeaders::new_unchecked(vec![tx2]),
+    )
+    .unwrap();
+
+    let (last_block_included, records) =
+        queries::select_transactions_records(&mut conn, &[bob], BlockNumber::GENESIS..=block2)
+            .unwrap();
+
+    assert_eq!(last_block_included, block1, "cursor must point at the last complete block");
+    assert_eq!(records.len(), 1, "only the complete block's transaction should be returned");
+    assert_eq!(records[0].header.id(), tx1.id());
+}
+
+/// When a single block's transactions exceed the payload cap, no complete block fits. Reporting
+/// `truncation_block - 1` would loop the client forever on a block that can never be returned, so
+/// the query must surface an explicit error instead.
+#[test]
+fn select_transactions_records_errors_when_single_block_exceeds_payload_cap() {
+    let mut conn = create_db();
+    let bob = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+
+    let block1 = BlockNumber::from(1);
+    create_block(&mut conn, block1);
+    queries::upsert_accounts(&mut conn, &[mock_block_account_update(bob, 0)], block1).unwrap();
+
+    let cap = miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
+    let oversized_notes = cap / OUTPUT_NOTE_SIZE_BYTES + 100;
+    let tx = mock_block_transaction_with_output_notes(bob, 1, oversized_notes);
+    queries::insert_transactions(
+        &mut conn,
+        block1,
+        &OrderedTransactionHeaders::new_unchecked(vec![tx]),
+    )
+    .unwrap();
+
+    let result =
+        queries::select_transactions_records(&mut conn, &[bob], BlockNumber::GENESIS..=block1);
+
+    assert_matches!(
+        result,
+        Err(crate::errors::DatabaseError::TransactionPageExceedsPayloadLimit { block_num })
+            if block_num == block1
+    );
 }
 
 #[test]

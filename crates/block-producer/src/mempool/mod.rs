@@ -287,14 +287,29 @@ impl Mempool {
     /// Transactions are returned in a valid execution ordering.
     ///
     /// Returns `None` if no transactions are available.
-    #[instrument(target = COMPONENT, name = "mempool.select_batch", skip_all)]
-    pub fn select_batch(&mut self) -> Option<SelectedBatch> {
-        let batch = self.transactions.select_batch(self.config.batch_budget)?;
+    #[instrument(target = COMPONENT, name = "mempool.select_any_batch", skip_all)]
+    pub fn select_any_batch(&mut self) -> Option<SelectedBatch> {
+        let batch = self.transactions.select_any_batch(self.config.batch_budget)?;
+        Some(self.append_selected_batch(batch))
+    }
+
+    /// Returns a full set of transactions for the next batch.
+    ///
+    /// User batches count as full because they are externally chosen atomic batches.
+    /// Non-user batches are only returned when the selected set saturates the batch budget or when
+    /// another selectable transaction cannot fit into the remaining budget.
+    #[instrument(target = COMPONENT, name = "mempool.select_full_batch", skip_all)]
+    pub fn select_full_batch(&mut self) -> Option<SelectedBatch> {
+        let batch = self.transactions.select_full_batch(self.config.batch_budget)?;
+        Some(self.append_selected_batch(batch))
+    }
+
+    fn append_selected_batch(&mut self, batch: SelectedBatch) -> SelectedBatch {
         if let Err(err) = self.batches.append(batch.clone()) {
             panic!("failed to append batch to dependency graph: {}", err.as_report());
         }
         self.inject_telemetry();
-        Some(batch)
+        batch
     }
 
     /// Drops the proposed batch and all of its descendants.

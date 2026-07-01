@@ -3,6 +3,8 @@ use std::fmt::{Display, Formatter};
 use std::num::NonZeroU32;
 
 use itertools::Itertools;
+use miden_node_proto::errors::ConversionError;
+use miden_node_proto::generated::sequencer;
 use miden_node_store::state::{Finality, State, TransactionInputs as StoreTransactionInputs};
 use miden_node_utils::formatting::format_opt;
 use miden_protocol::Word;
@@ -65,6 +67,73 @@ impl TransactionInputs {
     }
 }
 
+// PROTO CONVERSIONS
+// ------------------------------------------------------------------------------------------------
+
+impl From<TransactionInputs> for sequencer::AuthInputs {
+    fn from(value: TransactionInputs) -> Self {
+        Self {
+            account_id: Some(value.account_id.into()),
+            account_commitment: value.account_commitment.map(Into::into),
+            nullifiers: value
+                .nullifiers
+                .into_iter()
+                .map(|(nullifier, block_num)| sequencer::NullifierRecord {
+                    nullifier: Some(nullifier.into()),
+                    block_num: block_num.map_or(0, NonZeroU32::get),
+                })
+                .collect(),
+            found_unauthenticated_notes: value
+                .found_unauthenticated_notes
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            current_block_height: value.current_block_height.as_u32(),
+        }
+    }
+}
+
+impl TryFrom<sequencer::AuthInputs> for TransactionInputs {
+    type Error = ConversionError;
+
+    fn try_from(value: sequencer::AuthInputs) -> Result<Self, Self::Error> {
+        let account_id = value
+            .account_id
+            .ok_or_else(|| ConversionError::missing_field::<sequencer::AuthInputs>("account_id"))?
+            .try_into()?;
+
+        let account_commitment = value.account_commitment.map(Word::try_from).transpose()?;
+
+        let nullifiers = value
+            .nullifiers
+            .into_iter()
+            .map(|record| {
+                let nullifier = record
+                    .nullifier
+                    .ok_or_else(|| {
+                        ConversionError::missing_field::<sequencer::NullifierRecord>("nullifier")
+                    })?
+                    .try_into()?;
+                Ok((nullifier, NonZeroU32::new(record.block_num)))
+            })
+            .collect::<Result<_, ConversionError>>()?;
+
+        let found_unauthenticated_notes = value
+            .found_unauthenticated_notes
+            .into_iter()
+            .map(Word::try_from)
+            .collect::<Result<_, ConversionError>>()?;
+
+        Ok(Self {
+            account_id,
+            account_commitment,
+            nullifiers,
+            found_unauthenticated_notes,
+            current_block_height: value.current_block_height.into(),
+        })
+    }
+}
+
 impl Display for TransactionInputs {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let nullifiers = self
@@ -91,6 +160,18 @@ impl Display for TransactionInputs {
 // STORE STATE
 // ================================================================================================
 
+/// Authenticates a proven transaction against the store, returning the [`TransactionInputs`]
+/// needed to admit it to the mempool.
+///
+/// This reads the committed state relevant to the transaction: the account's current commitment,
+/// the consumption status of each of the transaction's nullifiers, and which of its unauthenticated
+/// input notes have since been committed. The result is captured at the store's current committed
+/// chain tip.
+///
+/// # Errors
+///
+/// Returns an error if the store query fails, or if the transaction creates a new account whose ID
+/// prefix already exists in the store.
 #[instrument(target = COMPONENT, name = "store.state.get_tx_inputs", skip_all, err, fields(transaction.id = %proven_tx.id().to_hex()))]
 pub async fn get_tx_inputs(
     state: &State,

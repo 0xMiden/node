@@ -1,0 +1,32 @@
+[package]
+authors.workspace      = true
+description            = "A binary to run benchmarks of the Miden network"
+edition.workspace      = true
+exclude.workspace      = true
+homepage.workspace     = true
+keywords               = ["benchmark", "miden", "node"]
+license.workspace      = true
+name                   = "miden-benchmark"
+publish                = true
+readme.workspace       = true
+repository.workspace   = true
+rust-version.workspace = true
+version.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow                     = { workspace = true }
+clap                       = { features = ["env", "string"], workspace = true }
+fs-err                     = { workspace = true }
+miden-node-proto           = { workspace = true }
+miden-protocol             = { features = ["std", "testing"], workspace = true }
+miden-remote-prover-client = { features = ["tx-prover"], workspace = true }
+miden-standards            = { workspace = true }
+miden-tx                   = { features = ["concurrent", "std"], workspace = true }
+rand                       = { workspace = true }
+rayon                      = { workspace = true }
+tokio                      = { features = ["full"], workspace = true }
+tonic                      = { workspace = true }
+url                        = { features = ["serde"], workspace = true }
