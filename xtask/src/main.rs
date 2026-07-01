@@ -1,7 +1,7 @@
 mod changelog;
 mod comment_reflow;
 
-use std::io::ErrorKind;
+use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -32,6 +32,13 @@ enum Changelog {
         #[arg(long)]
         pr_body_file: PathBuf,
     },
+
+    /// Render release notes for a release tag.
+    Render {
+        /// Release tag to render notes for.
+        #[arg(long)]
+        release_tag: String,
+    },
 }
 
 impl Changelog {
@@ -48,6 +55,13 @@ impl Changelog {
                 result.inspect_err(|err| {
                     emit_github_error_annotation("Invalid changelog metadata", err);
                 })
+            },
+            Self::Render { release_tag } => {
+                let notes = changelog::render_release_notes(&release_tag)?;
+                let mut stdout = io::stdout().lock();
+                stdout.write_all(notes.as_bytes())?;
+                stdout.flush()?;
+                Ok(())
             },
         }
     }

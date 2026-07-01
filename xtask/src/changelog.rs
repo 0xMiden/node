@@ -9,6 +9,12 @@ pub fn verify_pr_body(source: &str) -> Result<()> {
     validate_document(&toml_source)
 }
 
+pub fn render_release_notes(release_tag: &str) -> Result<String> {
+    ensure!(!release_tag.trim().is_empty(), "release tag must not be empty");
+
+    Ok(format!("Release {release_tag}\n"))
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct EntriesDocument {

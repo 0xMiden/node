@@ -371,6 +371,16 @@ jobs:
       actions: write
       contents: write
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.preflight.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Rustup
+        run: rustup toolchain install --no-self-update
+
       - name: Re-check GitHub release absence
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -398,11 +408,15 @@ jobs:
             prerelease_flag=(--prerelease)
           fi
 
+          cargo xtask changelog render \
+            --release-tag "${TAG}" \
+            > "${RUNNER_TEMP}/release-notes.md"
+
           gh release create "${TAG}" \
             --repo "${REPO}" \
             --verify-tag \
             --title "${TAG}" \
-            --notes "Release ${TAG}" \
+            --notes-file "${RUNNER_TEMP}/release-notes.md" \
             "${prerelease_flag[@]}"
 
       - name: Trigger post-release publishing workflows
