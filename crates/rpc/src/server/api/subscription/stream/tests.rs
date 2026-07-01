@@ -238,46 +238,48 @@ async fn assert_subscription_start_ok(block_from: u32, chain_tip: u32) {
     wait_for_subscription_exit(&source).await;
 }
 
-fn run(gaps: &[u32]) -> Result<(), ()> {
+fn run(gaps: &[u32]) -> bool {
     let mut lag_tracker = SubscriberLagTracker::default();
     for &gap in gaps {
-        lag_tracker.check(BlockNumber::GENESIS, BlockNumber::from(gap))?;
+        if !lag_tracker.record_and_check(BlockNumber::GENESIS, BlockNumber::from(gap)) {
+            return false;
+        }
     }
-    Ok(())
+    true
 }
 
 #[test]
 fn stable_gap_does_not_accumulate() {
     // Gap stays constant; delta is always 0, growth_run never increments.
-    assert!(run(&[5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]).is_ok());
+    assert!(run(&[5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]));
 }
 
 #[test]
 fn zero_gap_throughout_is_ok() {
-    assert!(run(&[0, 0, 0, 0, 0]).is_ok());
+    assert!(run(&[0, 0, 0, 0, 0]));
 }
 
 #[test]
 fn shrinking_gap_reduces_accumulation() {
     // Accumulate close to the limit, then shrink; running total decreases, no error.
-    assert!(run(&[10, 20, SubscriberLagTracker::MAX_RUNNING_GAP - 1, 5]).is_ok());
+    assert!(run(&[10, 20, SubscriberLagTracker::MAX_RUNNING_GAP - 1, 5]));
 }
 
 #[test]
 fn starting_above_max_growth_is_ok() {
-    assert!(run(&[SubscriberLagTracker::MAX_RUNNING_GAP * 2]).is_ok());
+    assert!(run(&[SubscriberLagTracker::MAX_RUNNING_GAP * 2]));
 }
 
 #[test]
 fn exactly_max_growth_run_is_ok() {
     // A single jump of exactly MAX_RUNNING_GAP is the boundary; still ok.
-    assert!(run(&[0, SubscriberLagTracker::MAX_RUNNING_GAP]).is_ok());
+    assert!(run(&[0, SubscriberLagTracker::MAX_RUNNING_GAP]));
 }
 
 #[test]
 fn exceeding_max_growth_run_returns_too_slow() {
     // One block past the limit triggers TooSlow, even in a single jump.
-    assert!(matches!(run(&[0, SubscriberLagTracker::MAX_RUNNING_GAP + 1]), Err(())));
+    assert!(!run(&[0, SubscriberLagTracker::MAX_RUNNING_GAP + 1]));
 }
 
 #[test]
@@ -286,14 +288,14 @@ fn growth_spread_across_windows_accumulates() {
     // MAX_RUNNING_GAP.
     let step = SubscriberLagTracker::MAX_RUNNING_GAP / 4;
     let gaps: Vec<u32> = (1..=6).map(|i| i * step).collect();
-    assert!(matches!(run(&gaps), Err(())));
+    assert!(!run(&gaps));
 }
 
 #[test]
 fn recovery_reduces_and_allows_fresh_accumulation() {
     // Grow close to the limit, recover most of the way, then grow again; still ok.
     let near_limit = SubscriberLagTracker::MAX_RUNNING_GAP - 1;
-    assert!(run(&[near_limit, 1, near_limit]).is_ok());
+    assert!(run(&[near_limit, 1, near_limit]));
 }
 
 #[test]
@@ -303,5 +305,5 @@ fn token_improvement_does_not_prevent_disconnection() {
     let gaps: Vec<u32> = (0u32..SubscriberLagTracker::MAX_RUNNING_GAP + 10)
         .flat_map(|i| [50 + i, 49 + i])
         .collect();
-    assert!(matches!(run(&gaps), Err(())));
+    assert!(!run(&gaps));
 }

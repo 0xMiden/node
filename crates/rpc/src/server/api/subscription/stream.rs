@@ -101,13 +101,41 @@ impl SubscriptionStream {
         GetData: Fn(BlockNumber) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<Option<Vec<u8>>, DatabaseError>> + Send + 'static,
     {
+        Self::validate_start(from, &chain_tip)?;
+        Self::reject_banned_client(client_ip, &ban_list)?;
+        let subscription_permit = Self::acquire_subscription_permit(subscription_semaphore)?;
+
+        let (tx, rx) = mpsc::channel(SUBSCRIBER_CHANNEL_CAPACITY);
+        let producer = SubscriptionProducer {
+            next: from,
+            chain_tip,
+            tx,
+            client_ip,
+            ban_list,
+            _subscription_permit: subscription_permit,
+            get_data,
+            lag_tracker: SubscriberLagTracker::default(),
+        };
+        producer.spawn();
+
+        Ok(Self { inner: ReceiverStream::new(rx) })
+    }
+
+    fn validate_start(
+        from: BlockNumber,
+        chain_tip: &watch::Receiver<BlockNumber>,
+    ) -> tonic::Result<()> {
         let tip = *chain_tip.borrow();
         if from.as_u32() > tip.as_u32().saturating_add(MAX_FUTURE_GAP_IN_SUBSCRIPTIONS) {
-            return Err(tonic::Status::out_of_range(
+            return Err(Status::out_of_range(
                 "subscription starting block is too far ahead of chain tip",
             ));
         }
 
+        Ok(())
+    }
+
+    fn reject_banned_client(client_ip: Option<IpAddr>, ban_list: &IpBanList) -> tonic::Result<()> {
         if let Some(until) = client_ip.and_then(|ip| ban_list.banned_until(ip)) {
             let remaining = until.saturating_duration_since(Instant::now());
             return Err(Status::resource_exhausted(format!(
@@ -117,24 +145,15 @@ impl SubscriptionStream {
             )));
         }
 
-        let permit = subscription_semaphore
+        Ok(())
+    }
+
+    fn acquire_subscription_permit(
+        subscription_semaphore: Arc<Semaphore>,
+    ) -> tonic::Result<OwnedSemaphorePermit> {
+        subscription_semaphore
             .try_acquire_owned()
-            .map_err(|_| tonic::Status::resource_exhausted("maximum subscriptions reached"))?;
-
-        let (tx, rx) = mpsc::channel(SUBSCRIBER_CHANNEL_CAPACITY);
-        SubscriptionProducer {
-            next: from,
-            chain_tip,
-            tx,
-            client_ip,
-            ban_list,
-            _permit: permit,
-            get_data,
-            lag_tracker: SubscriberLagTracker::default(),
-        }
-        .spawn();
-
-        Ok(Self { inner: ReceiverStream::new(rx) })
+            .map_err(|_| Status::resource_exhausted("maximum subscriptions reached"))
     }
 }
 
@@ -147,7 +166,7 @@ struct SubscriptionProducer<GetData> {
     tx: mpsc::Sender<tonic::Result<StreamItem>>,
     client_ip: Option<IpAddr>,
     ban_list: Arc<IpBanList>,
-    _permit: OwnedSemaphorePermit,
+    _subscription_permit: OwnedSemaphorePermit,
     get_data: GetData,
     lag_tracker: SubscriberLagTracker,
 }
@@ -181,9 +200,9 @@ where
 
     async fn produce_next(&mut self) -> Result<(), StreamError> {
         let tip = self.wait_for_tip().await?;
-        self.lag_tracker
-            .check(self.next, tip)
-            .map_err(|()| StreamError::SlowSubscriber)?;
+        if !self.lag_tracker.record_and_check(self.next, tip) {
+            return Err(StreamError::SlowSubscriber);
+        }
 
         let data = self.load_data().await?;
         let event = StreamItem { data, block: self.next, tip };
@@ -227,7 +246,7 @@ where
 
     async fn send_event(&mut self, event: StreamItem) -> Result<(), StreamError> {
         let send_result = tokio::select! {
-            () = wait_for_server_shutdown(&mut self.chain_tip) => {
+            () = Self::wait_for_server_shutdown(&mut self.chain_tip) => {
                 return Err(StreamError::ServerShutdown);
             },
             result = self.tx.send_timeout(Ok(event), SEND_TIMEOUT) => result,
@@ -238,10 +257,10 @@ where
             SendTimeoutError::Closed(_) => StreamError::ConnectionClosed,
         })
     }
-}
 
-async fn wait_for_server_shutdown(chain_tip: &mut watch::Receiver<BlockNumber>) {
-    while chain_tip.changed().await.is_ok() {}
+    async fn wait_for_server_shutdown(chain_tip: &mut watch::Receiver<BlockNumber>) {
+        while chain_tip.changed().await.is_ok() {}
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -283,7 +302,7 @@ impl SubscriberLagTracker {
     /// Maximum accumulated block-gap allowed before a subscriber is disconnected.
     const MAX_RUNNING_GAP: u32 = 100;
 
-    fn check(&mut self, current: BlockNumber, tip: BlockNumber) -> Result<(), ()> {
+    fn record_and_check(&mut self, current: BlockNumber, tip: BlockNumber) -> bool {
         let gap = tip.saturating_sub(current.as_u32()).as_u32();
 
         self.running_total = if gap > self.previous_gap {
@@ -294,10 +313,6 @@ impl SubscriberLagTracker {
 
         self.previous_gap = gap;
 
-        if self.running_total <= Self::MAX_RUNNING_GAP {
-            Ok(())
-        } else {
-            Err(())
-        }
+        self.running_total <= Self::MAX_RUNNING_GAP
     }
 }
