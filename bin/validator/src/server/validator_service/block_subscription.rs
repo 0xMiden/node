@@ -1,20 +1,18 @@
+use std::pin::Pin;
+
 use miden_node_proto::generated as grpc;
 use miden_node_proto::generated::validator::BlockSubscriptionResponse;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::tracing::OpenTelemetrySpanExt;
 use miden_protocol::block::BlockNumber;
 use tokio_stream::wrappers::ReceiverStream;
+use tonic::codegen::tokio_stream::Stream;
 use tracing::Span;
 
 use super::ValidatorService;
 
-type BlockStream = std::pin::Pin<
-    Box<
-        dyn tonic::codegen::tokio_stream::Stream<Item = tonic::Result<BlockSubscriptionResponse>>
-            + Send
-            + 'static,
-    >,
->;
+type BlockStream =
+    Pin<Box<dyn Stream<Item = tonic::Result<BlockSubscriptionResponse>> + Send + 'static>>;
 
 #[tonic::async_trait]
 impl grpc::server::validator_api::BlockSubscription for ValidatorService {
