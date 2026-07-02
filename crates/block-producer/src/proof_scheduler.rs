@@ -62,8 +62,8 @@ impl ProofTaskJoinSet {
         self.0.len()
     }
 
-    fn is_empty(&self) -> bool {
-        self.0.is_empty()
+    fn abort_all(&mut self) {
+        self.0.abort_all();
     }
 
     /// Spawns a new task to prove a block.
@@ -136,10 +136,7 @@ pub(crate) async fn run(
         // Wait for either a job to complete or the chain tip to advance.
         tokio::select! {
             () = shutdown.cancelled() => {
-                while !proving_tasks.is_empty() {
-                    let (block_num, proof_bytes) = proving_tasks.join_next().await?;
-                    pending.insert(block_num, proof_bytes);
-                }
+                proving_tasks.abort_all();
                 return Ok(());
             },
             // Proving a block has completed - cache and commit the proof.
@@ -296,5 +293,30 @@ impl ProveBlockError {
             },
             _ => Self::Transient(err.into()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::pending;
+    use std::time::Duration;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn abort_all_cancels_inflight_proof_tasks_without_waiting_for_completion() {
+        let mut tasks = ProofTaskJoinSet::new();
+        tasks
+            .0
+            .spawn(async { pending::<anyhow::Result<(BlockNumber, Vec<u8>)>>().await });
+
+        tasks.abort_all();
+
+        let result = tokio::time::timeout(Duration::from_millis(100), tasks.0.join_next())
+            .await
+            .expect("aborted proof task should be joinable immediately")
+            .expect("join set should contain the aborted proof task");
+
+        assert!(result.is_err_and(|err| err.is_cancelled()));
     }
 }
