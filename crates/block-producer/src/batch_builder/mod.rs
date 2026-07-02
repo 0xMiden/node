@@ -114,9 +114,7 @@ impl BatchBuilder {
 
             tokio::select! {
                 () = shutdown.cancelled() => {
-                    while let Some(result) = self.active_jobs.join_next().await {
-                        Self::handle_job_result(result)?;
-                    }
+                    Self::abort_active_jobs(&mut self.active_jobs);
                     return Ok(());
                 },
                 _ = force_at => {
@@ -209,6 +207,10 @@ impl BatchBuilder {
 
     fn has_available_worker(&self) -> bool {
         self.active_jobs.len() < self.num_workers.get()
+    }
+
+    fn abort_active_jobs(active_jobs: &mut JoinSet<Result<(), BuildBatchError>>) {
+        active_jobs.abort_all();
     }
 
     fn handle_job_result(
@@ -483,5 +485,28 @@ fn proposed_batch_telemetry(batch: &ProposedBatch) -> ProposedBatchTelemetry {
         account_updates_count: batch.account_updates().len(),
         input_notes_count: usize::from(batch.input_notes().num_notes()),
         output_notes_count: batch.output_notes().len(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::pending;
+    use std::time::Duration;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn abort_active_jobs_cancels_batch_jobs_without_waiting_for_completion() {
+        let mut active_jobs = JoinSet::new();
+        active_jobs.spawn(async { pending::<Result<(), BuildBatchError>>().await });
+
+        BatchBuilder::abort_active_jobs(&mut active_jobs);
+
+        let result = tokio::time::timeout(Duration::from_millis(100), active_jobs.join_next())
+            .await
+            .expect("aborted batch job should be joinable immediately")
+            .expect("join set should contain the aborted batch job");
+
+        assert!(result.is_err_and(|err| err.is_cancelled()));
     }
 }
