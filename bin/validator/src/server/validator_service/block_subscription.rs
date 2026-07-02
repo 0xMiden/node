@@ -1,37 +1,47 @@
 use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use miden_node_proto::generated as grpc;
-use miden_node_store::BlockStore;
-use miden_node_store::state::{SubscriptionSource, SubscriptionStreamError, run_stream};
+use miden_node_proto::generated::validator::BlockSubscriptionResponse;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::tracing::{miden_instrument, miden_span_record};
 use miden_protocol::block::BlockNumber;
-use tokio_stream::{Stream, StreamExt};
+use tokio::sync::OwnedRwLockWriteGuard;
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::Status;
+use tonic::codegen::tokio_stream::Stream;
 
 use super::ValidatorService;
 use crate::COMPONENT;
 
-type BlockSubscriptionStream = Pin<
-    Box<
-        dyn Stream<Item = tonic::Result<grpc::validator::BlockSubscriptionResponse>>
-            + Send
-            + 'static,
-    >,
->;
+type BlockStream =
+    Pin<Box<dyn Stream<Item = tonic::Result<BlockSubscriptionResponse>> + Send + 'static>>;
+
+struct BackupBlockStream {
+    inner: ReceiverStream<tonic::Result<BlockSubscriptionResponse>>,
+    _guard: OwnedRwLockWriteGuard<()>,
+}
+
+impl Stream for BackupBlockStream {
+    type Item = tonic::Result<BlockSubscriptionResponse>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.get_mut().inner).poll_next(cx)
+    }
+}
 
 #[tonic::async_trait]
 impl grpc::server::validator_api::BlockSubscription for ValidatorService {
     type Input = grpc::validator::BlockSubscriptionRequest;
-    type Item = grpc::validator::BlockSubscriptionResponse;
-    type ItemStream = BlockSubscriptionStream;
+    type Item = BlockSubscriptionResponse;
+    type ItemStream = BlockStream;
 
     fn decode(request: grpc::validator::BlockSubscriptionRequest) -> tonic::Result<Self::Input> {
         Ok(request)
     }
 
-    fn encode(item: Self::Item) -> tonic::Result<grpc::validator::BlockSubscriptionResponse> {
+    fn encode(item: Self::Item) -> tonic::Result<Self::Item> {
         Ok(item)
     }
 
@@ -44,8 +54,8 @@ impl grpc::server::validator_api::BlockSubscription for ValidatorService {
     async fn handle(&self, request: Self::Input) -> tonic::Result<Self::ItemStream> {
         miden_span_record!(block.from = request.block_from,);
 
-        let committed_tip = self.committed_tip.borrow().as_u32();
-        if request.block_from > committed_tip {
+        let committed_tip = *self.committed_tip.borrow();
+        if request.block_from > committed_tip.as_u32() {
             return Err(Status::out_of_range(
                 "subscriber's requested starting block should be <= the committed chain tip",
             ));
@@ -58,77 +68,49 @@ impl grpc::server::validator_api::BlockSubscription for ValidatorService {
         })?;
 
         let from = BlockNumber::from(request.block_from);
-        let source = BlockStoreSource { block_store: self.block_store.clone() };
-        let stream = run_stream(from, self.committed_tip.subscribe(), source).map(move |event| {
-            // Keep the guard alive for as long as the stream is polled.
-            let _guard = &guard;
-            event.map_err(subscription_error_to_status)
+        // The tip should never move since we are in recovery mode and therefore there is no active
+        // sequencer.
+        miden_span_record!(tip.number = %committed_tip);
+
+        let (tx, rx) = tokio::sync::mpsc::channel(32);
+
+        tokio::spawn({
+            let store = self.block_store.clone();
+            async move {
+                for block in from.as_u32()..=committed_tip.as_u32() {
+                    let response = match store.load_block(block.into()).await {
+                        Ok(Some(block)) => Ok(BlockSubscriptionResponse {
+                            block,
+                            committed_chain_tip: committed_tip.as_u32(),
+                        }),
+                        Ok(None) => {
+                            Err(tonic::Status::not_found(format!("block {block} not found")))
+                        }
+                        Err(err) => Err(tonic::Status::internal(
+                            err.as_report_context("failed to load block"),
+                        )),
+                    }.inspect_err(|err| {
+                        tracing::error!(block.number = %block, message = %err.message(), "failed to load block in validator recovery stream");
+                    });
+
+                    // Errors are not recoverable so we abort the stream after informing the client.
+                    //
+                    // Also exit if the client closed the stream.
+                    //
+                    // Note that the condition ordering is deliberate; otherwise `is_err` would short-circuit
+                    // and prevent the sending of the error response.
+                    let is_err = response.is_err();
+                    if tx.send(response).await.is_err() || is_err {
+                        tracing::info!("validator recovery stream closing");
+                        return;
+                    }
+                }
+            }
         });
 
-        Ok(Box::pin(stream))
-    }
-}
-
-// STREAM
-// ================================================================================================
-
-/// Error raised while loading a block from the validator's [`BlockStore`].
-#[derive(Debug, thiserror::Error)]
-enum BlockSubscriptionError {
-    #[error("failed to load block {block_num}")]
-    Load {
-        block_num: BlockNumber,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("block {0} not found")]
-    NotFound(BlockNumber),
-}
-
-/// Streams committed blocks from the validator's [`BlockStore`], emitting each as a
-/// [`grpc::validator::BlockSubscriptionResponse`].
-struct BlockStoreSource {
-    block_store: BlockStore,
-}
-
-impl SubscriptionSource for BlockStoreSource {
-    type Event = grpc::validator::BlockSubscriptionResponse;
-    type Error = BlockSubscriptionError;
-
-    async fn fetch(&self, block_num: BlockNumber) -> Result<Vec<u8>, BlockSubscriptionError> {
-        self.block_store
-            .load_block(block_num)
-            .await
-            .map_err(|source| BlockSubscriptionError::Load { block_num, source })?
-            .ok_or(BlockSubscriptionError::NotFound(block_num))
-    }
-
-    fn build_event(
-        &self,
-        _block_num: BlockNumber,
-        block: Vec<u8>,
-        committed_chain_tip: BlockNumber,
-    ) -> grpc::validator::BlockSubscriptionResponse {
-        grpc::validator::BlockSubscriptionResponse {
-            block,
-            committed_chain_tip: committed_chain_tip.as_u32(),
-        }
-    }
-}
-
-fn subscription_error_to_status(err: SubscriptionStreamError<BlockSubscriptionError>) -> Status {
-    match err {
-        SubscriptionStreamError::TooSlow => {
-            Status::resource_exhausted("subscriber is too slow to keep up with the chain")
-        },
-        SubscriptionStreamError::TooFarAhead => Status::out_of_range(
-            "subscriber's requested starting block is too far ahead of the chain tip",
-        ),
-        SubscriptionStreamError::Source(BlockSubscriptionError::NotFound(block_num)) => {
-            Status::not_found(format!("block {block_num} not found"))
-        },
-        SubscriptionStreamError::Source(BlockSubscriptionError::Load { block_num, source }) => {
-            Status::internal(format!("failed to load block {block_num}: {}", source.as_report()))
-        },
+        Ok(Box::pin(BackupBlockStream {
+            inner: ReceiverStream::new(rx),
+            _guard: guard,
+        }))
     }
 }

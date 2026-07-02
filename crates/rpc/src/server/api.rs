@@ -1,9 +1,7 @@
 use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
-use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
-use std::task::{Context as TaskContext, Poll};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::Context as AnyhowContext;
 use miden_node_block_producer::BlockProducerApi;
@@ -12,15 +10,8 @@ use miden_node_proto::domain::block::InvalidBlockRange;
 use miden_node_proto::generated::rpc::MempoolStats as ProtoMempoolStats;
 use miden_node_proto::generated::rpc::api_server::Api;
 use miden_node_proto::generated::{self as proto};
-use miden_node_store::state::{
-    BlockSubscriptionError,
-    Finality,
-    ProofSubscriptionError,
-    State,
-    SubscriptionStreamError,
-};
+use miden_node_store::state::{Finality, State};
 use miden_node_store::{DatabaseError, GetBlockHeaderError};
-use miden_node_utils::ErrorReport;
 use miden_node_utils::limiter::{
     QueryParamAccountIdLimit,
     QueryParamLimiter,
@@ -36,59 +27,40 @@ use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-use tokio_stream::Stream;
+use tokio::sync::Semaphore;
 use tonic::metadata::MetadataMap;
 use tonic::{IntoRequest, Request, Status};
 
-use crate::server::api::subscription_ban::IpBanList;
+use crate::server::api::subscription::{IpBanList, MAX_REPLICA_SUBSCRIPTIONS};
 use crate::server::{NetworkTxAuth, RpcMode};
 use crate::{COMPONENT, LOG_TARGET};
 
+// API METHODS
+// ================================================================================================
+
+mod get_account;
+mod get_block_by_number;
+mod get_block_header_by_number;
+mod get_limits;
+mod get_network_note_status;
+mod get_note_script_by_root;
+mod get_notes_by_id;
+mod status;
+mod submit_auth_tx;
+mod submit_auth_tx_batch;
+mod submit_proven_tx;
+mod submit_proven_tx_batch;
+mod subscription;
+mod sync_account_storage_maps;
+mod sync_account_vault;
+mod sync_chain_mmr;
+mod sync_notes;
+mod sync_nullifiers;
+mod sync_transactions;
+
+// ================================================================================================
+
 const NETWORK_TX_AUTH_HEADER_NAME: &str = "x-miden-network-tx-auth";
-
-/// Maximum number of concurrent block or proof subscriptions served by this RPC instance.
-const MAX_REPLICA_SUBSCRIPTIONS: usize = 10;
-
-type BlockSubscriptionStream = Pin<
-    Box<
-        dyn tonic::codegen::tokio_stream::Stream<
-                Item = Result<proto::rpc::BlockSubscriptionResponse, Status>,
-            > + Send
-            + 'static,
-    >,
->;
-
-type ProofSubscriptionStream = Pin<
-    Box<
-        dyn tonic::codegen::tokio_stream::Stream<
-                Item = Result<proto::rpc::ProofSubscriptionResponse, Status>,
-            > + Send
-            + 'static,
-    >,
->;
-
-struct GuardedStream<S> {
-    inner: S,
-    _permit: OwnedSemaphorePermit,
-}
-
-impl<S> GuardedStream<S> {
-    fn new(inner: S, permit: OwnedSemaphorePermit) -> Self {
-        Self { inner, _permit: permit }
-    }
-}
-
-impl<S> Stream for GuardedStream<S>
-where
-    S: Stream + Unpin,
-{
-    type Item = S::Item;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.inner).poll_next(cx)
-    }
-}
 
 struct RpcInvalidBlockRange(InvalidBlockRange);
 
@@ -284,31 +256,6 @@ pub(crate) struct SequencerInternalService {
     pub(crate) block_producer: BlockProducerApi,
 }
 
-// API IMPLEMENTATION
-// ================================================================================================
-
-mod block_subscription;
-mod get_account;
-mod get_block_by_number;
-mod get_block_header_by_number;
-mod get_limits;
-mod get_network_note_status;
-mod get_note_script_by_root;
-mod get_notes_by_id;
-mod proof_subscription;
-mod status;
-mod submit_auth_tx;
-mod submit_auth_tx_batch;
-mod submit_proven_tx;
-mod submit_proven_tx_batch;
-mod subscription_ban;
-mod sync_account_storage_maps;
-mod sync_account_vault;
-mod sync_chain_mmr;
-mod sync_notes;
-mod sync_nullifiers;
-mod sync_transactions;
-
 // HELPERS
 // ================================================================================================
 
@@ -328,58 +275,6 @@ fn database_error_to_status(err: &DatabaseError) -> Status {
         DatabaseError::TransactionPageExceedsPayloadLimit { .. } => Status::out_of_range(message),
         _ => Status::internal(message),
     }
-}
-
-fn block_subscription_error_to_status(
-    err: SubscriptionStreamError<BlockSubscriptionError>,
-) -> Status {
-    match err {
-        SubscriptionStreamError::TooSlow => {
-            Status::resource_exhausted("subscriber is too slow to keep up with the chain")
-        },
-        SubscriptionStreamError::TooFarAhead => Status::out_of_range(
-            "subscriber's requested starting block is too far ahead of the chain tip",
-        ),
-        SubscriptionStreamError::Source(BlockSubscriptionError::NotFound(block_num)) => {
-            Status::not_found(format!("block {block_num} not found"))
-        },
-        SubscriptionStreamError::Source(BlockSubscriptionError::Load { block_num, source }) => {
-            Status::internal(format!("failed to load block {block_num}: {}", source.as_report()))
-        },
-    }
-}
-
-fn proof_subscription_error_to_status(
-    err: SubscriptionStreamError<ProofSubscriptionError>,
-) -> Status {
-    match err {
-        SubscriptionStreamError::TooSlow => {
-            Status::resource_exhausted("subscriber is too slow to keep up with the chain")
-        },
-        SubscriptionStreamError::TooFarAhead => Status::out_of_range(
-            "subscriber's requested starting block is too far ahead of the chain tip",
-        ),
-        SubscriptionStreamError::Source(ProofSubscriptionError::NotFound(block_num)) => {
-            Status::not_found(format!("proof for block {block_num} not found"))
-        },
-        SubscriptionStreamError::Source(ProofSubscriptionError::Load { block_num, source }) => {
-            Status::internal(format!(
-                "failed to load proof for block {block_num}: {}",
-                source.as_report()
-            ))
-        },
-    }
-}
-
-/// Builds the status returned to a client that is temporarily banned from subscribing for having
-/// previously been disconnected as too slow.
-fn subscription_ban_status(until: Instant) -> Status {
-    let remaining = until.saturating_duration_since(Instant::now());
-    Status::resource_exhausted(format!(
-        "temporarily banned from subscribing for being too slow; retry in {} seconds",
-        // Round up so the reported wait never undershoots the actual remaining ban.
-        remaining.as_secs() + 1,
-    ))
 }
 
 fn invalid_block_range_to_status(RpcInvalidBlockRange(err): RpcInvalidBlockRange) -> Status {
