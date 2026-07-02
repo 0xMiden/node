@@ -3585,7 +3585,6 @@ dependencies = [
  "miden-testing",
  "miden-tx",
  "miden-tx-batch-prover",
- "opentelemetry",
  "serial_test",
  "tokio",
  "tokio-stream",

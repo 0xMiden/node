@@ -4,6 +4,8 @@ use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::merkle::mmr::PartialMmr;
 use miden_protocol::transaction::PartialBlockchain;
 
+use crate::LOG_TARGET;
+
 // CHAIN STATE
 // ================================================================================================
 
@@ -58,9 +60,10 @@ impl ChainState {
         // startup before receiving the same block from the committed-block subscription.
         if tip.block_num() <= self.chain_tip_header.block_num() {
             tracing::debug!(
+                target: LOG_TARGET,
                 event_block = %tip.block_num(),
                 current_tip = %self.chain_tip_header.block_num(),
-                "skipping committed block already reflected in chain state",
+                "Skipping committed block already reflected in chain state",
             );
             return;
         }

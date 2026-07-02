@@ -4,12 +4,12 @@ use std::sync::Arc;
 use anyhow::Context;
 use futures::Stream;
 use miden_node_utils::tasks::Tasks;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
-use crate::NtxBuilderConfig;
 use crate::actor::ActorRequest;
 use crate::chain_state::SharedChainState;
 use crate::clients::RpcError;
@@ -17,6 +17,7 @@ use crate::committed_block::CommittedBlockEffects;
 use crate::coordinator::Coordinator;
 use crate::db::{Db, LoopDb};
 use crate::server::NtxBuilderRpcServer;
+use crate::{LOG_TARGET, NtxBuilderConfig};
 
 /// Discriminator returned by the steady-state `select!` so the dispatch can run on a fully-owned
 /// `&mut self` instead of three concurrent borrows. The `Block` variant is boxed since a
@@ -133,7 +134,11 @@ impl NetworkTransactionBuilder {
 
             if local_tip == committed_tip {
                 self.is_synced = true;
-                tracing::info!(block.number = %committed_tip, "ntx-builder is now in sync");
+                tracing::info!(
+                    target: LOG_TARGET,
+                    { block.number = %committed_tip },
+                    "ntx-builder is now in sync"
+                );
                 break;
             }
         }
@@ -145,6 +150,7 @@ impl NetworkTransactionBuilder {
             .await
             .context("failed to load accounts with pending notes at catch-up")?;
         tracing::info!(
+            target: LOG_TARGET,
             num_accounts = pending_accounts.len(),
             "spawning actors for accounts with carry-over pending notes",
         );
@@ -187,7 +193,8 @@ impl NetworkTransactionBuilder {
                 SteadyStateAction::Respawn(respawn) => {
                     if let Some(account_id) = respawn {
                         tracing::info!(
-                            account.id = %account_id,
+                            target: LOG_TARGET,
+                            { account.id = %account_id },
                             "respawning actor that shut down with a pending notification",
                         );
                         self.coordinator.spawn_actor(account_id);
@@ -222,10 +229,13 @@ impl NetworkTransactionBuilder {
     /// Applies a committed block and returns the computed `CommittedBlockEffects` so the
     /// steady-state loop can hand them to the coordinator without re-deriving from the signed
     /// block.
-    #[tracing::instrument(
+    #[miden_instrument(
         name = "ntx.builder.apply_committed_block",
         skip(self, loop_db, block),
-        fields(block_num = %block.header().block_num(), %committed_tip),
+        fields(
+            block_num = %block.header().block_num(),
+            %committed_tip,
+        ),
     )]
     async fn apply_committed_block_with_effects(
         &mut self,

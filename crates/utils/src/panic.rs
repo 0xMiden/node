@@ -4,7 +4,7 @@ use http::{Response, StatusCode, header};
 use http_body_util::Full;
 pub use tower_http::catch_panic::CatchPanicLayer;
 
-use crate::tracing::OpenTelemetrySpanExt;
+use crate::tracing::ErrorSpanExt;
 
 /// Custom callback that is used by Tower to fulfill the
 /// [`tower_http::catch_panic::ResponseForPanic`] trait.

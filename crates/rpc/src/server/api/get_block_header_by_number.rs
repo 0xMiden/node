@@ -1,6 +1,7 @@
 use miden_node_proto::generated as proto;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::block::BlockNumber;
-use tracing::{debug, instrument};
+use tracing::debug;
 
 use super::{COMPONENT, RpcService};
 use crate::LOG_TARGET;
@@ -18,7 +19,7 @@ impl proto::server::rpc_api::GetBlockHeaderByNumber for RpcService {
         Ok(output)
     }
 
-    #[instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "get_block_header_by_number",
         skip_all,

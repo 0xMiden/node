@@ -5,15 +5,15 @@ use std::task::{Context, Poll};
 use miden_node_proto::generated as grpc;
 use miden_node_proto::generated::validator::BlockSubscriptionResponse;
 use miden_node_utils::ErrorReport;
-use miden_node_utils::tracing::OpenTelemetrySpanExt;
+use miden_node_utils::tracing::{miden_instrument, miden_span_record};
 use miden_protocol::block::BlockNumber;
 use tokio::sync::OwnedRwLockWriteGuard;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Status;
 use tonic::codegen::tokio_stream::Stream;
-use tracing::Span;
 
 use super::ValidatorService;
+use crate::COMPONENT;
 
 type BlockStream =
     Pin<Box<dyn Stream<Item = tonic::Result<BlockSubscriptionResponse>> + Send + 'static>>;
@@ -45,11 +45,17 @@ impl grpc::server::validator_api::BlockSubscription for ValidatorService {
         Ok(item)
     }
 
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "validator.block_subscription",
+        skip_all,
+        err,
+    )]
     async fn handle(&self, request: Self::Input) -> tonic::Result<Self::ItemStream> {
-        Span::current().set_attribute("block.from", request.block_from);
+        miden_span_record!(block.from = request.block_from,);
 
-        let committed_tip = self.committed_tip.borrow().as_u32();
-        if request.block_from > committed_tip {
+        let committed_tip = *self.committed_tip.borrow();
+        if request.block_from > committed_tip.as_u32() {
             return Err(Status::out_of_range(
                 "subscriber's requested starting block should be <= the committed chain tip",
             ));
@@ -64,19 +70,18 @@ impl grpc::server::validator_api::BlockSubscription for ValidatorService {
         let from = BlockNumber::from(request.block_from);
         // The tip should never move since we are in recovery mode and therefore there is no active
         // sequencer.
-        let tip = *self.committed_tip.subscribe().borrow();
-        Span::current().set_attribute("chain.tip", tip);
+        miden_span_record!(tip.number = %committed_tip);
 
         let (tx, rx) = tokio::sync::mpsc::channel(32);
 
         tokio::spawn({
             let store = self.block_store.clone();
             async move {
-                for block in from.as_u32()..=tip.as_u32() {
+                for block in from.as_u32()..=committed_tip.as_u32() {
                     let response = match store.load_block(block.into()).await {
                         Ok(Some(block)) => Ok(BlockSubscriptionResponse {
                             block,
-                            committed_chain_tip: tip.as_u32(),
+                            committed_chain_tip: committed_tip.as_u32(),
                         }),
                         Ok(None) => {
                             Err(tonic::Status::not_found(format!("block {block} not found")))

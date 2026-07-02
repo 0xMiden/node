@@ -3,11 +3,11 @@ use miden_node_proto::generated as proto;
 use miden_node_proto::generated::note::CommittedNote;
 use miden_node_store::NoteRecord;
 use miden_node_utils::limiter::QueryParamNoteIdLimit;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::Word;
 use miden_protocol::note::NoteId;
 use miden_protocol::utils::serde::Serializable;
 use tonic::Status;
-use tracing::instrument;
 
 use super::{RpcService, check, database_error_to_status};
 use crate::{COMPONENT, LOG_TARGET};
@@ -25,7 +25,7 @@ impl proto::server::rpc_api::GetNotesById for RpcService {
         Ok(proto::note::CommittedNoteList { notes })
     }
 
-    #[instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "get_notes_by_id",
         skip_all,

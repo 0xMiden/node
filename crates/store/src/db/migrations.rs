@@ -1,13 +1,18 @@
 use std::path::Path;
 
 use miden_node_db::DatabaseError;
-use tracing::instrument;
+use miden_node_utils::tracing::miden_instrument;
 
 use crate::{COMPONENT, LOG_TARGET};
 
 include!(concat!(env!("OUT_DIR"), "/db_migrator.rs"));
 
-#[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+#[miden_instrument(
+    level = "debug",
+    target = COMPONENT,
+    skip_all,
+    err,
+)]
 pub fn bootstrap_database(database_filepath: &Path) -> std::result::Result<(), DatabaseError> {
     let migrator = migrator().map_err(DatabaseError::migration)?;
     tracing::info!(
@@ -21,7 +26,12 @@ pub fn bootstrap_database(database_filepath: &Path) -> std::result::Result<(), D
     Ok(())
 }
 
-#[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+#[miden_instrument(
+    level = "debug",
+    target = COMPONENT,
+    skip_all,
+    err,
+)]
 pub fn migrate_database(database_filepath: &Path) -> std::result::Result<(), DatabaseError> {
     let migrator = migrator().map_err(DatabaseError::migration)?;
     tracing::info!(
@@ -35,7 +45,12 @@ pub fn migrate_database(database_filepath: &Path) -> std::result::Result<(), Dat
     Ok(())
 }
 
-#[instrument(level = "debug", target = COMPONENT, skip_all, err)]
+#[miden_instrument(
+    level = "debug",
+    target = COMPONENT,
+    skip_all,
+    err,
+)]
 pub fn verify_latest_schema(database_filepath: &Path) -> std::result::Result<(), DatabaseError> {
     let migrator = migrator().map_err(DatabaseError::migration)?;
     tracing::info!(

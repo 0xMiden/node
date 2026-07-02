@@ -2,9 +2,10 @@ use miden_node_proto::decode::{read_account_ids, read_block_range};
 use miden_node_proto::generated as proto;
 use miden_node_store::{NoteSyncRecord, TransactionRecord};
 use miden_node_utils::limiter::QueryParamAccountIdLimit;
+use miden_node_utils::tracing::{miden_instrument, miden_span_record};
 use miden_protocol::asset::Asset;
 use tonic::Status;
-use tracing::{Span, debug, field, instrument};
+use tracing::debug;
 
 use super::{
     RpcInvalidBlockRange,
@@ -28,16 +29,10 @@ impl proto::server::rpc_api::SyncTransactions for RpcService {
         Ok(output)
     }
 
-    #[instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "sync_transactions",
         skip_all,
-        fields(
-            block_range.from = field::Empty,
-            block_range.to = field::Empty,
-            account.ids = field::Empty,
-            account.ids.count = field::Empty,
-        ),
         err,
     )]
     async fn handle(&self, request: Self::Input) -> tonic::Result<Self::Output> {
@@ -48,11 +43,12 @@ impl proto::server::rpc_api::SyncTransactions for RpcService {
         let account_ids =
             read_account_ids::<Status, _>(request.account_ids.iter().take(10).cloned())?;
 
-        let span = Span::current();
-        span.record("block_range.from", range.block_from);
-        span.record("block_range.to", range.block_to);
-        span.record("account.ids", format!("{account_ids:?}").as_str());
-        span.record("account.ids.count", n_accounts);
+        miden_span_record!(
+            block_range.from = range.block_from,
+            block_range.to = range.block_to,
+            account.ids = ?account_ids,
+            account.ids.count = n_accounts,
+        );
 
         debug!(target: LOG_TARGET, "Syncing transactions");
 

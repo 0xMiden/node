@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use proc_macro::TokenStream;
-use proc_macro2::TokenStream as TokenStream2;
+use proc_macro2::{Delimiter, Group, TokenStream as TokenStream2, TokenTree};
 use quote::{ToTokens, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
@@ -11,14 +11,79 @@ use syn::{Block, Expr, Ident, ItemFn, Macro, Result, Token, parse_macro_input, p
 
 const ALLOWED_FIELD_NAMES: &[&str] = &[
     "account.id",
+    "account.id.network_prefix",
     "account.ids",
     "account.ids.count",
+    "account.updated",
     "batch.id",
+    "batch.account_updates.count",
+    "batch.expires_at",
+    "batch.expiration_height",
+    "batch.input_notes.count",
+    "batch.output_notes.count",
+    "batch.reference_block.commitment",
+    "batch.reference_block.number",
+    "block.batch.ids",
+    "block.batches.count",
+    "block.batches.output_notes.count",
     "block.commitment",
+    "block.commitments.account",
+    "block.commitments.chain",
+    "block.commitments.kernel",
+    "block.commitments.note",
+    "block.commitments.nullifier",
+    "block.commitments.transaction",
+    "block.erased_note_proofs.count",
+    "block.erased_notes.count",
+    "block.from",
+    "block.nullifiers.count",
     "block.number",
+    "block.output_notes.count",
+    "block.prev_block_commitment",
+    "block.protocol.version",
+    "block.sub_commitment",
+    "block.timestamp",
+    "block.transactions.ids",
     "block.transactions.count",
+    "block.updated_accounts.count",
+    "block_range.from",
+    "block_range.to",
+    "db.account_state_forest.size",
+    "db.account_tree.size",
+    "db.block_store.size",
+    "db.nullifier_tree.size",
+    "db.sqlite.size",
+    "db.sqlite.wal.size",
+    "dice_roll",
+    "failure_rate",
+    "mempool.accounts",
+    "mempool.batches.proposed",
+    "mempool.batches.proven",
+    "mempool.nullifiers",
+    "mempool.output_notes",
+    "mempool.transactions.unbatched",
+    "mempool.transactions.uncommitted",
+    "note.id",
+    "notes.count",
+    "prover.kind",
+    "reference_block.number",
+    "request.kind",
+    "script.root",
     "transaction.id",
+    "transaction.expires_at",
+    "transaction.input_notes.count",
+    "transaction.output_notes.count",
+    "transaction.reference_block.commitment",
+    "transaction.reference_block.number",
+    "tip.number",
+    "transactions.count",
     "transactions.ids",
+    "transactions.input_notes.count",
+    "transactions.output_notes.count",
+    "transactions.unauthenticated_notes.count",
+    "workers.active",
+    "workers.capacity",
+    "workers.count",
 ];
 
 #[proc_macro_attribute]
@@ -26,11 +91,7 @@ pub fn miden_instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attr = TokenStream2::from(attr);
     let mut function = parse_macro_input!(item as ItemFn);
     let fields = collect_recorded_fields(&function);
-    let args = if attr.is_empty() {
-        quote! { fields(#(#fields = ::tracing::field::Empty),*) }
-    } else {
-        quote! { #attr, fields(#(#fields = ::tracing::field::Empty),*) }
-    };
+    let args = merge_inferred_fields(attr, &fields);
     let statements = &function.block.stmts;
     let block: Block = parse_quote! {{
         #[allow(unused_macros)]
@@ -48,6 +109,93 @@ pub fn miden_instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     expanded.into()
+}
+
+fn merge_inferred_fields(attr: TokenStream2, fields: &[FieldPath]) -> TokenStream2 {
+    if fields.is_empty() {
+        return attr;
+    }
+
+    let inferred_fields = quote! { #(#fields = ::tracing::field::Empty),* };
+    if attr.is_empty() {
+        return quote! { fields(#inferred_fields) };
+    }
+
+    let mut merged_existing_fields = false;
+    let args = split_top_level_args(attr)
+        .into_iter()
+        .map(|arg| {
+            if let Some(group) = fields_group(&arg) {
+                merged_existing_fields = true;
+                let existing_fields = group.stream();
+                let merged_fields = if existing_fields.is_empty() {
+                    inferred_fields.clone()
+                } else if ends_with_comma(&existing_fields) {
+                    quote! { #existing_fields #inferred_fields }
+                } else {
+                    quote! { #existing_fields, #inferred_fields }
+                };
+                let mut merged_group = Group::new(Delimiter::Parenthesis, merged_fields);
+                merged_group.set_span(group.span());
+                quote! { fields #merged_group }
+            } else {
+                arg
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if merged_existing_fields {
+        quote! { #(#args),* }
+    } else {
+        quote! { #(#args,)* fields(#inferred_fields) }
+    }
+}
+
+fn split_top_level_args(tokens: TokenStream2) -> Vec<TokenStream2> {
+    let mut args = Vec::new();
+    let mut current = TokenStream2::new();
+
+    for token in tokens {
+        match &token {
+            TokenTree::Punct(punct) if punct.as_char() == ',' => {
+                args.push(current);
+                current = TokenStream2::new();
+            },
+            _ => current.extend([token]),
+        }
+    }
+
+    if !current.is_empty() {
+        args.push(current);
+    }
+
+    args
+}
+
+fn fields_group(arg: &TokenStream2) -> Option<Group> {
+    let mut tokens = arg.clone().into_iter();
+    let Some(TokenTree::Ident(ident)) = tokens.next() else {
+        return None;
+    };
+    if ident != "fields" {
+        return None;
+    }
+
+    let Some(TokenTree::Group(group)) = tokens.next() else {
+        return None;
+    };
+    if group.delimiter() != Delimiter::Parenthesis || tokens.next().is_some() {
+        return None;
+    }
+
+    Some(group)
+}
+
+fn ends_with_comma(tokens: &TokenStream2) -> bool {
+    matches!(
+        tokens.clone().into_iter().last(),
+        Some(TokenTree::Punct(punct)) if punct.as_char() == ','
+    )
 }
 
 #[proc_macro]

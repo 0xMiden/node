@@ -23,6 +23,7 @@ use miden_node_utils::limiter::{
 };
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::retry::{self, Retryable};
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockHeader, BlockNumber};
@@ -30,9 +31,9 @@ use tokio::sync::Semaphore;
 use tonic::metadata::MetadataMap;
 use tonic::{IntoRequest, Request, Status};
 
-use crate::COMPONENT;
 use crate::server::api::subscription::{IpBanList, MAX_REPLICA_SUBSCRIPTIONS};
 use crate::server::{NetworkTxAuth, RpcMode};
+use crate::{COMPONENT, LOG_TARGET};
 
 // API METHODS
 // ================================================================================================
@@ -136,6 +137,7 @@ impl RpcService {
         .when(|err| err.code() == tonic::Code::Unavailable)
         .notify(|err, backoff| {
             tracing::warn!(
+                target: LOG_TARGET,
                 ?backoff,
                 %err,
                 "connection failed while fetching genesis header, retrying"
@@ -150,7 +152,14 @@ impl RpcService {
     /// Returns the given block's onchain commitment.
     ///
     /// This is retrieved from the local LRU cache, or otherwise from the store on cache miss.
-    #[tracing::instrument(target = COMPONENT, name = "get_block_commitment", skip_all, fields(block.number = %block))]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "get_block_commitment",
+        skip_all,
+        fields(
+            block.number = %block,
+        ),
+    )]
     async fn get_block_commitment(&self, block: BlockNumber) -> Result<Word, Status> {
         if let Some(commitment) = self.block_commitment_cache.get(&block) {
             return Ok(commitment);

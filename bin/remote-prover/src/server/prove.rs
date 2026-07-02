@@ -1,6 +1,7 @@
 use miden_node_proto::generated as grpc;
-use miden_node_utils::tracing::OpenTelemetrySpanExt;
+use miden_node_utils::tracing::{miden_instrument, miden_span_record};
 
+use crate::COMPONENT;
 use crate::server::proof_kind::ProofKind;
 use crate::server::service::ProverService;
 
@@ -9,8 +10,16 @@ impl grpc::server::remote_prover_api::Prove for ProverService {
     type Input = (ProofKind, grpc::remote_prover::ProofRequest);
     type Output = grpc::remote_prover::Proof;
 
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "remote_prover.prove",
+        skip_all,
+        err,
+    )]
     async fn handle(&self, (proof_kind, request): Self::Input) -> tonic::Result<Self::Output> {
-        tracing::Span::current().set_attribute("request.kind", proof_kind);
+        miden_span_record!(
+            request.kind = %proof_kind,
+        );
 
         // Reject unsupported proof types early so they don't clog the queue.
         if !self.is_supported(proof_kind) {

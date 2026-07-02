@@ -7,12 +7,12 @@ use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::sequencer;
 use miden_node_store::state::{Finality, State, TransactionInputs as StoreTransactionInputs};
 use miden_node_utils::formatting::format_opt;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::ProvenTransaction;
-use tracing::instrument;
 
 use crate::errors::StoreError;
 use crate::{COMPONENT, LOG_TARGET};
@@ -172,7 +172,15 @@ impl Display for TransactionInputs {
 ///
 /// Returns an error if the store query fails, or if the transaction creates a new account whose ID
 /// prefix already exists in the store.
-#[instrument(target = COMPONENT, name = "store.state.get_tx_inputs", skip_all, err, fields(transaction.id = %proven_tx.id().to_hex()))]
+#[miden_instrument(
+    target = COMPONENT,
+    name = "store.state.get_tx_inputs",
+    skip_all,
+    err,
+    fields(
+        transaction.id = %proven_tx.id().to_hex(),
+    ),
+)]
 pub async fn get_tx_inputs(
     state: &State,
     proven_tx: &ProvenTransaction,

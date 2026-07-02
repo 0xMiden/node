@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use miden_node_proto::clients::ValidatorClient;
-use tracing::instrument;
+use miden_node_utils::tracing::miden_instrument;
 use url::Url;
 
 use crate::COMPONENT;
@@ -40,7 +40,12 @@ impl Service for ValidatorService {
         )
     }
 
-    #[instrument(target = COMPONENT, name = "check-status.validator", skip_all, ret(level = "info"))]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "check-status.validator",
+        skip_all,
+        ret(level = "info"),
+    )]
     async fn check(&mut self) -> ServiceStatus {
         match self.client.status(()).await {
             Ok(response) => {

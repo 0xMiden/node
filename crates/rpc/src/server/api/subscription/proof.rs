@@ -4,10 +4,10 @@ use std::pin::Pin;
 use futures::StreamExt;
 use miden_node_proto::generated as proto;
 use miden_node_utils::grpc::ClientIp;
-use miden_node_utils::tracing::OpenTelemetrySpanExt;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::block::BlockNumber;
 use tonic::{Request, Status};
-use tracing::{Span, debug, instrument};
+use tracing::debug;
 
 use super::super::{COMPONENT, RpcService};
 use super::stream::{StreamItem, SubscriptionStream};
@@ -47,7 +47,7 @@ impl proto::server::rpc_api::ProofSubscription for RpcService {
         Ok(Box::pin(stream.map(|item| item.and_then(Self::encode))))
     }
 
-    #[instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "proof_subscription",
         skip_all,
@@ -58,7 +58,6 @@ impl proto::server::rpc_api::ProofSubscription for RpcService {
     )]
     async fn handle(&self, input: Self::Input) -> tonic::Result<Self::ItemStream> {
         let ProofSubscriptionInput { request, client_ip } = input;
-        Span::current().set_attribute("block.from", request.block_from);
 
         debug!(target: LOG_TARGET, "Subscribing to block proofs");
 

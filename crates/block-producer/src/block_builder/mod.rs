@@ -5,17 +5,17 @@ use anyhow::Context;
 use miden_node_store::state::State;
 use miden_node_utils::formatting::format_array;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
-use miden_node_utils::tracing::OpenTelemetrySpanExt;
+use miden_node_utils::tracing::{ErrorSpanExt, miden_instrument, miden_span_record};
 use miden_protocol::batch::{OrderedBatches, ProvenBatch};
-use miden_protocol::block::{BlockInputs, BlockNumber, ProposedBlock, ProvenBlock, SignedBlock};
+use miden_protocol::block::{BlockInputs, BlockNumber, ProposedBlock, SignedBlock};
 use miden_protocol::transaction::TransactionHeader;
 use tokio::time::Duration;
-use tracing::{Span, field, instrument};
+use tracing::Span;
 
 use crate::errors::{BuildBlockError, StoreError};
 use crate::mempool::SharedMempool;
 use crate::validator::BlockProducerValidatorClient;
-use crate::{COMPONENT, LOG_TARGET, TelemetryInjectorExt};
+use crate::{COMPONENT, LOG_TARGET};
 
 // BLOCK BUILDER
 // =================================================================================================
@@ -90,19 +90,43 @@ impl BlockBuilder {
     /// - Each stage has its own child span and are free to add further field data.
     /// - A failed stage will emit an error event, and both its own span and the root span will be
     ///   marked as errors.
-    #[instrument(parent = None, target = COMPONENT, name = "block_builder.build_block", skip_all)]
+    #[miden_instrument(
+        parent = None,
+        target = COMPONENT,
+        name = "block_builder.build_block",
+        skip_all,
+    )]
     async fn build_block(&self, mempool: &SharedMempool) -> Result<(), BuildBlockError> {
         use futures::TryFutureExt;
 
         let selected = Self::select_block(mempool)?;
-        selected.inject_telemetry();
+        let telemetry = selected.telemetry();
+        miden_span_record!(
+            block.number = %telemetry.block_number,
+            block.batches.count = telemetry.batches_count,
+            block.batch.ids = ?telemetry.batch_ids,
+            block.transactions.ids = ?telemetry.transaction_ids,
+            block.transactions.count = telemetry.transactions_count,
+        );
         let block_num = selected.block_number;
 
         self.get_block_inputs(selected)
-            .inspect_ok(BlockBatchesAndInputs::inject_telemetry)
+            .inspect_ok(|inputs| {
+                let telemetry = inputs.telemetry();
+                miden_span_record!(
+                    block.updated_accounts.count = telemetry.updated_accounts_count,
+                    block.erased_note_proofs.count = telemetry.erased_note_proofs_count,
+                );
+            })
             .and_then(|inputs| self.propose_block(inputs))
             .inspect_ok(|proposed_block| {
-                ProposedBlock::inject_telemetry(&proposed_block.proposed_block);
+                let telemetry = proposed_block_telemetry(&proposed_block.proposed_block);
+                miden_span_record!(
+                    block.nullifiers.count = telemetry.nullifiers_count,
+                    block.output_notes.count = telemetry.output_notes_count,
+                    block.batches.output_notes.count = telemetry.batch_output_notes_count,
+                    block.erased_notes.count = telemetry.erased_notes_count,
+                );
             })
             .and_then(|proposed_block| self.build_and_validate_block(proposed_block))
             .and_then(|block_commit| self.commit_block(mempool, block_commit))
@@ -115,7 +139,11 @@ impl BlockBuilder {
             .await
     }
 
-    #[instrument(target = COMPONENT, name = "block_builder.select_block", skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "block_builder.select_block",
+        skip_all,
+    )]
     fn select_block(mempool: &SharedMempool) -> Result<SelectedBlock, BuildBlockError> {
         Ok(mempool.lock().map_err(BuildBlockError::MempoolPoisoned)?.select_block())
     }
@@ -136,7 +164,12 @@ impl BlockBuilder {
     ///     which nullifiers the block will actually create, we fetch witnesses for all nullifiers
     ///     created by batches. If we knew that a certain note will be erased, we would not have to
     ///     supply a nullifier witness for it.
-    #[instrument(target = COMPONENT, name = "block_builder.get_block_inputs", skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "block_builder.get_block_inputs",
+        skip_all,
+        err,
+    )]
     async fn get_block_inputs(
         &self,
         selected_block: SelectedBlock,
@@ -195,7 +228,12 @@ impl BlockBuilder {
         Ok(BlockBatchesAndInputs { batches, inputs })
     }
 
-    #[instrument(target = COMPONENT, name = "block_builder.propose_block", skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "block_builder.propose_block",
+        skip_all,
+        err,
+    )]
     async fn propose_block(
         &self,
         batches_inputs: BlockBatchesAndInputs,
@@ -210,7 +248,12 @@ impl BlockBuilder {
         Ok(ProposedBlockAndInputs { proposed_block, block_inputs })
     }
 
-    #[instrument(target = COMPONENT, name = "block_builder.validate_block", skip_all, err)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "block_builder.validate_block",
+        skip_all,
+        err,
+    )]
     async fn build_and_validate_block(
         &self,
         proposal: ProposedBlockAndInputs,
@@ -261,16 +304,11 @@ impl BlockBuilder {
         })
     }
 
-    #[instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "block_builder.commit_block",
         skip_all,
         err,
-        fields(
-            block_num = field::Empty,
-            block_commitment = field::Empty,
-            num_transactions = field::Empty,
-        )
     )]
     async fn commit_block(
         &self,
@@ -285,10 +323,11 @@ impl BlockBuilder {
         let header = signed_block.header().clone();
         let num_transactions = signed_block.body().transactions().as_slice().len();
 
-        let span = Span::current();
-        span.record("block_num", field::display(header.block_num()));
-        span.record("block_commitment", field::display(header.commitment()));
-        span.record("num_transactions", num_transactions);
+        miden_span_record!(
+            block.number = %header.block_num(),
+            block.commitment = %header.commitment(),
+            block.transactions.count = num_transactions,
+        );
 
         if num_transactions > 0 {
             let transaction_ids =
@@ -307,7 +346,11 @@ impl BlockBuilder {
         Ok(())
     }
 
-    #[instrument(target = COMPONENT, name = "block_builder.rollback_block", skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "block_builder.rollback_block",
+        skip_all,
+    )]
     fn rollback_block(mempool: &SharedMempool, block: BlockNumber) -> Result<(), BuildBlockError> {
         mempool.lock().map_err(BuildBlockError::MempoolPoisoned)?.rollback_block(block);
         Ok(())
@@ -322,11 +365,16 @@ pub struct SelectedBlock {
     pub batches: Vec<Arc<ProvenBatch>>,
 }
 
-impl TelemetryInjectorExt for SelectedBlock {
-    fn inject_telemetry(&self) {
-        let span = Span::current();
-        span.set_attribute("block.number", self.block_number);
-        span.set_attribute("block.batches.count", self.batches.len() as u32);
+struct SelectedBlockTelemetry {
+    block_number: BlockNumber,
+    batches_count: usize,
+    batch_ids: Vec<miden_protocol::batch::BatchId>,
+    transaction_ids: Vec<miden_protocol::transaction::TransactionId>,
+    transactions_count: usize,
+}
+
+impl SelectedBlock {
+    fn telemetry(&self) -> SelectedBlockTelemetry {
         // Accumulate all telemetry based on batches.
         let (batch_ids, tx_ids, tx_count) = self.batches.iter().fold(
             (Vec::new(), Vec::new(), 0),
@@ -337,9 +385,13 @@ impl TelemetryInjectorExt for SelectedBlock {
                 (batch_ids, tx_ids, tx_count)
             },
         );
-        span.set_attribute("block.batch.ids", batch_ids);
-        span.set_attribute("block.transactions.ids", tx_ids);
-        span.set_attribute("block.transactions.count", tx_count);
+        SelectedBlockTelemetry {
+            block_number: self.block_number,
+            batches_count: self.batches.len(),
+            batch_ids,
+            transaction_ids: tx_ids,
+            transactions_count: tx_count,
+        }
     }
 }
 
@@ -363,62 +415,42 @@ struct BlockCommit {
     signed_block: SignedBlock,
 }
 
-impl TelemetryInjectorExt for BlockBatchesAndInputs {
-    fn inject_telemetry(&self) {
-        let span = Span::current();
+struct BlockInputsTelemetry {
+    updated_accounts_count: usize,
+    erased_note_proofs_count: usize,
+}
 
-        // SAFETY: We do not expect to have more than u32::MAX of any count per block.
-        span.set_attribute(
-            "block.updated_accounts.count",
-            i64::try_from(self.inputs.account_witnesses().len())
-                .expect("less than u32::MAX account updates"),
-        );
-        span.set_attribute(
-            "block.erased_note_proofs.count",
-            i64::try_from(self.inputs.unauthenticated_note_proofs().len())
-                .expect("less than u32::MAX unauthenticated notes"),
-        );
+impl BlockBatchesAndInputs {
+    fn telemetry(&self) -> BlockInputsTelemetry {
+        BlockInputsTelemetry {
+            updated_accounts_count: self.inputs.account_witnesses().len(),
+            erased_note_proofs_count: self.inputs.unauthenticated_note_proofs().len(),
+        }
     }
 }
 
-impl TelemetryInjectorExt for ProposedBlock {
-    /// Emit the input and output note related attributes. We do this here since this is the
-    /// earliest point we can set attributes after note erasure was done.
-    fn inject_telemetry(&self) {
-        let span = Span::current();
-
-        span.set_attribute("block.nullifiers.count", self.created_nullifiers().len());
-
-        let num_block_created_notes: usize = self.output_note_batches().iter().map(Vec::len).sum();
-        span.set_attribute("block.output_notes.count", num_block_created_notes);
-
-        let num_batch_created_notes = self.batches().num_created_notes();
-        span.set_attribute("block.batches.output_notes.count", num_batch_created_notes);
-
-        let num_erased_notes = num_batch_created_notes
-            .checked_sub(num_block_created_notes)
-            .expect("all batches in the block should not create fewer notes than the block itself");
-        span.set_attribute("block.erased_notes.count", num_erased_notes);
-    }
+#[expect(clippy::struct_field_names)]
+struct ProposedBlockTelemetry {
+    nullifiers_count: usize,
+    output_notes_count: usize,
+    batch_output_notes_count: usize,
+    erased_notes_count: usize,
 }
 
-impl TelemetryInjectorExt for ProvenBlock {
-    fn inject_telemetry(&self) {
-        let span = Span::current();
-        let header = self.header();
+/// Extract the input and output note related telemetry. We do this here since this is the earliest
+/// point we can observe it after note erasure was done.
+fn proposed_block_telemetry(block: &ProposedBlock) -> ProposedBlockTelemetry {
+    let num_block_created_notes: usize = block.output_note_batches().iter().map(Vec::len).sum();
+    let num_batch_created_notes = block.batches().num_created_notes();
 
-        span.set_attribute("block.commitment", header.commitment());
-        span.set_attribute("block.sub_commitment", header.sub_commitment());
-        span.set_attribute("block.prev_block_commitment", header.prev_block_commitment());
-        span.set_attribute("block.timestamp", header.timestamp());
+    let num_erased_notes = num_batch_created_notes
+        .checked_sub(num_block_created_notes)
+        .expect("all batches in the block should not create fewer notes than the block itself");
 
-        span.set_attribute("block.protocol.version", i64::from(header.version()));
-
-        span.set_attribute("block.commitments.kernel", header.tx_kernel_commitment());
-        span.set_attribute("block.commitments.nullifier", header.nullifier_root());
-        span.set_attribute("block.commitments.account", header.account_root());
-        span.set_attribute("block.commitments.chain", header.chain_commitment());
-        span.set_attribute("block.commitments.note", header.note_root());
-        span.set_attribute("block.commitments.transaction", header.tx_commitment());
+    ProposedBlockTelemetry {
+        nullifiers_count: block.created_nullifiers().len(),
+        output_notes_count: num_block_created_notes,
+        batch_output_notes_count: num_batch_created_notes,
+        erased_notes_count: num_erased_notes,
     }
 }

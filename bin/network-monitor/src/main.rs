@@ -32,6 +32,9 @@ pub use service_status::current_unix_timestamp_secs;
 /// Component identifier for structured logging and tracing
 pub const COMPONENT: &str = "miden-network-monitor";
 
+/// Tracing target used for user-visible log messages.
+pub const LOG_TARGET: &str = "user::miden-network-monitor";
+
 /// Network Monitor main function.
 ///
 /// Parses command-line arguments and runs the `start` subcommand, which launches the network

@@ -11,7 +11,7 @@ use tokio::sync::watch::Receiver;
 use tokio::sync::{Mutex, watch};
 use tracing::{debug, warn};
 
-use crate::COMPONENT;
+use crate::LOG_TARGET;
 use crate::config::MonitorConfig;
 use crate::counter::{CounterTrackingService, IncrementService, LatencyState, TrackedAccounts};
 use crate::deploy::create_and_deploy_accounts;
@@ -146,7 +146,7 @@ impl Tasks {
 
         let config = config.clone();
         self.handles.spawn_infallible("ntx", run_ntx(config, increment_tx, tracking_tx));
-        debug!(target: COMPONENT, service = "ntx", "spawned service");
+        debug!(target: LOG_TARGET, service = "ntx", "Spawned service");
 
         (increment_rx, tracking_rx)
     }
@@ -160,7 +160,7 @@ impl Tasks {
         let service_name = svc.name().to_string();
         self.handles
             .spawn_infallible(service_name.clone(), async move { svc.run(tx).await });
-        debug!(target: COMPONENT, service = %service_name, "spawned service");
+        debug!(target: LOG_TARGET, service = %service_name, "Spawned service");
         rx
     }
 
@@ -213,7 +213,7 @@ async fn run_ntx(
         .retry(backoff)
         .notify(|err: &anyhow::Error, sleep: Duration| {
             warn!(
-                target: COMPONENT,
+                target: LOG_TARGET,
                 err = ?err,
                 sleep_ms = sleep.as_millis() as u64,
                 "NTX bootstrap failed; retrying after backoff",

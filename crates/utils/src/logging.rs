@@ -13,7 +13,7 @@ use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::layer::{Filter, SubscriberExt};
 use tracing_subscriber::{EnvFilter, Layer, Registry};
 
-use crate::tracing::OpenTelemetrySpanExt;
+use crate::tracing::ErrorSpanExt;
 
 /// Global tracer provider for flushing traces on panic.
 ///

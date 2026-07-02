@@ -153,7 +153,7 @@ async fn add_transaction_traces_are_correct() {
         span_data
             .attributes
             .iter()
-            .any(|kv| kv.key == "tx".into() && kv.value.to_string().starts_with("0x"))
+            .any(|kv| kv.key == "transaction.id".into() && kv.value.to_string().starts_with("0x"))
     );
 }
 

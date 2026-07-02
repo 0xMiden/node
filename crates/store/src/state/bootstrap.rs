@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::Context;
-use tracing::instrument;
+use miden_node_utils::tracing::miden_instrument;
 
 use crate::blocks::BlockStore;
 use crate::db::Db;
@@ -12,7 +12,7 @@ use crate::{COMPONENT, DataDirectory, LOG_TARGET};
 impl State {
     /// Bootstraps the store state, creating the database state and inserting the genesis block
     /// data.
-    #[instrument(
+    #[miden_instrument(
         target = COMPONENT,
         name = "store.bootstrap",
         skip_all,
