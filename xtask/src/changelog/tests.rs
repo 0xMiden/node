@@ -47,6 +47,35 @@ description = "Added a bootstrap command."
 }
 
 #[test]
+fn extracts_multiple_entries_from_one_pr_description() {
+    let body = valid_body(
+        r#"[[entry]]
+scope       = "rpc"
+impact      = "changed"
+description = "Changed the RPC response shape."
+
+[[entry]]
+scope       = "node"
+impact      = "added"
+description = "Added a bootstrap command."
+"#,
+    );
+
+    let document = pr::changelog_document_from_pr_body(&body).unwrap();
+    let pr::ChangelogDocument::Entries(entries) = document else {
+        panic!("expected changelog entries");
+    };
+
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].scope, Scope::Rpc);
+    assert_eq!(entries[0].impact, Impact::Changed);
+    assert_eq!(entries[0].description, "Changed the RPC response shape.");
+    assert_eq!(entries[1].scope, Scope::Node);
+    assert_eq!(entries[1].impact, Impact::Added);
+    assert_eq!(entries[1].description, "Added a bootstrap command.");
+}
+
+#[test]
 fn accepts_migration_impact() {
     let body = valid_body(
         r#"[[entry]]
