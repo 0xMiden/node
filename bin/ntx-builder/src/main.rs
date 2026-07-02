@@ -7,5 +7,5 @@ async fn main() -> anyhow::Result<()> {
 
     let _otel_guard = miden_node_utils::logging::setup_tracing(command.open_telemetry())?;
 
-    command.handle().await
+    miden_node_utils::shutdown::run_with_shutdown(|shutdown| command.handle(shutdown)).await
 }

@@ -6,6 +6,7 @@ use std::time::Duration;
 use futures::TryFutureExt;
 use miden_node_proto::domain::batch::BatchInputs;
 use miden_node_store::state::State;
+use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::tracing::{ErrorSpanExt, miden_instrument, miden_span_record};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
@@ -96,7 +97,11 @@ impl BatchBuilder {
     ///
     /// Full batches are spawned on each check and job completion. A batch of any size is attempted
     /// when no batch has been spawned for the maximum batch interval.
-    pub async fn run(mut self, mempool: SharedMempool) -> anyhow::Result<()> {
+    pub async fn run(
+        mut self,
+        mempool: SharedMempool,
+        shutdown: CancellationToken,
+    ) -> anyhow::Result<()> {
         let mut last_spawn = Instant::now();
         let mut full_batch_check = tokio::time::interval(self.intervals.full_batch_check_interval);
         full_batch_check.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -108,6 +113,12 @@ impl BatchBuilder {
             let has_active_job = !self.active_jobs.is_empty();
 
             tokio::select! {
+                () = shutdown.cancelled() => {
+                    while let Some(result) = self.active_jobs.join_next().await {
+                        Self::handle_job_result(result)?;
+                    }
+                    return Ok(());
+                },
                 _ = force_at => {
                     last_spawn = Instant::now();
                     if has_available_worker {

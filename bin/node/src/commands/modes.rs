@@ -14,6 +14,7 @@ use miden_node_proto::clients::{
 use miden_node_rpc::{Rpc, RpcMode, SequencerInternal};
 use miden_node_store::State;
 use miden_node_utils::clap::{GrpcOptionsInternal, duration_to_human_readable_string};
+use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
 use tokio::net::TcpListener;
 use url::Url;
@@ -50,12 +51,12 @@ pub struct SequencerCommand {
 }
 
 impl SequencerCommand {
-    pub async fn handle(self) -> anyhow::Result<()> {
+    pub async fn handle(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         let runtime = self.runtime.runtime_config(&self.store);
         self.block_producer.validate()?;
         let network_tx_auth = self.runtime.rpc.network_tx_auth()?;
         let state = load_state(&runtime).await?;
-        let _disk_monitor = state.spawn_disk_monitor();
+        let _disk_monitor = state.spawn_disk_monitor(shutdown.clone());
 
         let sequencer = Sequencer {
             store: Arc::clone(&state),
@@ -71,7 +72,7 @@ impl SequencerCommand {
             mempool_tx_capacity: self.block_producer.mempool.tx_capacity,
             batch_workers: self.block_producer.batch.workers,
         }
-        .spawn()
+        .spawn(shutdown.clone())
         .await
         .context("failed to spawn sequencer")?;
         let block_producer = sequencer.api();
@@ -89,17 +90,17 @@ impl SequencerCommand {
         };
         let mut tasks = Tasks::new();
         tasks.spawn("sequencer", sequencer.wait());
-        tasks.spawn("RPC server", rpc.serve());
+        tasks.spawn("RPC server", rpc.serve(shutdown.clone()));
         if let Some(internal_listen) = self.internal {
             let sequencer_internal = SequencerInternal {
                 listener: bind_rpc(internal_listen).await?,
                 block_producer,
                 grpc_options: GrpcOptionsInternal::from(runtime.external_grpc_options),
             };
-            tasks.spawn("sequencer internal server", sequencer_internal.serve());
+            tasks.spawn("sequencer internal server", sequencer_internal.serve(shutdown.clone()));
         }
 
-        tasks.join_next_as_error().await
+        tasks.join_next_or_cancelled(shutdown).await
     }
 }
 
@@ -180,14 +181,14 @@ pub struct FullNodeCommand {
 }
 
 impl FullNodeCommand {
-    pub async fn handle(self) -> anyhow::Result<()> {
+    pub async fn handle(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         let runtime = self.runtime.runtime_config(&self.store);
         let source_rpc = self.sync.source_rpc_client()?;
         let validator_client = self.validator_client();
         let sequencer_client = self.sequencer_client();
         let network_tx_auth = self.runtime.rpc.network_tx_auth()?;
         let state = load_state(&runtime).await?;
-        let _disk_monitor = state.spawn_disk_monitor();
+        let _disk_monitor = state.spawn_disk_monitor(shutdown.clone());
 
         let rpc = Rpc {
             listener: bind_rpc(runtime.rpc_listen).await?,
@@ -203,9 +204,9 @@ impl FullNodeCommand {
             network_tx_auth,
         };
         let mut tasks = Tasks::new();
-        tasks.spawn("RPC server", rpc.serve());
+        tasks.spawn("RPC server", rpc.serve(shutdown.clone()));
 
-        tasks.join_next_as_error().await
+        tasks.join_next_or_cancelled(shutdown).await
     }
 
     fn sequencer_client(&self) -> Option<SequencerClient> {

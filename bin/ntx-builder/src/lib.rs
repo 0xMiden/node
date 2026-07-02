@@ -10,6 +10,7 @@ use clients::RpcClient;
 use db::Db;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
+use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use miden_remote_prover_client::RemoteTransactionProver;
 use tokio::sync::mpsc;
@@ -364,7 +365,10 @@ impl NtxBuilderConfig {
     /// - The DB cannot be opened or the schema verification fails
     /// - The DB has not been bootstrapped (no persisted chain state)
     /// - The RPC connection fails (after retries)
-    pub async fn build(self) -> anyhow::Result<NetworkTransactionBuilder> {
+    pub async fn build(
+        self,
+        shutdown: CancellationToken,
+    ) -> anyhow::Result<NetworkTransactionBuilder> {
         // The event loop pins one connection for itself (so block application is never starved by
         // the account actors), leaving the rest of the pool for actors and the gRPC server. That
         // requires at least two connections.
@@ -426,7 +430,7 @@ impl NtxBuilderConfig {
         let chain = Arc::new(SharedChainState::new(header, mmr));
 
         let (coordinator, actor_request_rx) =
-            self.build_coordinator(rpc, db.clone(), chain.clone())?;
+            self.build_coordinator(rpc, db.clone(), chain.clone(), shutdown)?;
 
         Ok(NetworkTransactionBuilder::new(
             self,
@@ -449,6 +453,7 @@ impl NtxBuilderConfig {
         rpc: RpcClient,
         db: Db,
         chain: Arc<SharedChainState>,
+        shutdown: CancellationToken,
     ) -> anyhow::Result<(Coordinator, mpsc::Receiver<actor::ActorRequest>)> {
         let (request_tx, actor_request_rx) = mpsc::channel(self.account_channel_capacity);
         let actor_context = AccountActorContext {
@@ -474,8 +479,12 @@ impl NtxBuilderConfig {
             },
             request_tx,
         };
-        let coordinator =
-            Coordinator::new(self.max_concurrent_txs, self.max_account_crashes, actor_context);
+        let coordinator = Coordinator::new(
+            self.max_concurrent_txs,
+            self.max_account_crashes,
+            actor_context,
+            shutdown,
+        );
 
         Ok((coordinator, actor_request_rx))
     }

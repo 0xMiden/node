@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::tracing::{miden_instrument, miden_span_record};
 
@@ -10,13 +11,16 @@ use crate::state::State;
 impl State {
     /// Spawns a background task that periodically records the on-disk size of every store data path
     /// as `OTel` span attributes.
-    pub fn spawn_disk_monitor(&self) -> tokio::task::JoinHandle<()> {
+    pub fn spawn_disk_monitor(&self, shutdown: CancellationToken) -> tokio::task::JoinHandle<()> {
         let data_directory = self.data_directory.clone();
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_mins(5));
             loop {
-                interval.tick().await;
+                tokio::select! {
+                    () = shutdown.cancelled() => return,
+                    _ = interval.tick() => {},
+                }
                 let _ = measure_disk_space_usage(data_directory.clone()).await;
             }
         })

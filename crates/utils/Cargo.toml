@@ -42,7 +42,8 @@ opentelemetry_sdk        = { features = ["rt-tokio", "testing"], version = "0.31
 rand                     = { workspace = true }
 reqwest                  = { workspace = true }
 thiserror                = { workspace = true }
-tokio                    = { workspace = true }
+tokio                    = { features = ["macros", "rt", "signal", "time"], workspace = true }
+tokio-util               = { workspace = true }
 tonic                    = { default-features = true, workspace = true }
 tower                    = { features = ["limit"], workspace = true }
 tower-http               = { features = ["catch-panic"], workspace = true }

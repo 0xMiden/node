@@ -5,6 +5,7 @@ use miden_node_proto::server::{remote_prover_api, remote_prover_worker_status_ap
 use miden_node_utils::cors::cors_for_grpc_web_layer;
 use miden_node_utils::logging::OpenTelemetry;
 use miden_node_utils::panic::catch_panic_layer_fn;
+use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use proof_kind::ProofKind;
 use tokio::net::TcpListener;
@@ -55,7 +56,10 @@ impl Server {
     }
 
     /// Spawns the prover server, returning its handle and the port it is listening on.
-    pub async fn spawn(&self) -> anyhow::Result<(JoinHandle<anyhow::Result<()>>, u16)> {
+    pub async fn spawn(
+        &self,
+        shutdown: CancellationToken,
+    ) -> anyhow::Result<(JoinHandle<anyhow::Result<()>>, u16)> {
         let listener = TcpListener::bind(format!("0.0.0.0:{}", self.port))
             .await
             .context("failed to bind to gRPC port")?;
@@ -108,7 +112,10 @@ impl Server {
             .add_service(status_service)
             .add_service(health_service)
             .add_service(reflection_service)
-            .serve_with_incoming(TcpListenerStream::new(listener));
+            .serve_with_incoming_shutdown(
+                TcpListenerStream::new(listener),
+                shutdown.cancelled_owned(),
+            );
 
         let server =
             tokio::spawn(async move { server.await.context("failed while serving proof server") });

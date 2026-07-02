@@ -20,6 +20,7 @@ use anyhow::Context;
 use miden_node_proto::BlockProofRequest;
 use miden_node_store::state::{Finality, State};
 use miden_node_utils::retry::{self, Retryable};
+use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::block::{BlockNumber, BlockProof};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
@@ -59,6 +60,10 @@ impl ProofTaskJoinSet {
 
     fn len(&self) -> usize {
         self.0.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 
     /// Spawns a new task to prove a block.
@@ -106,6 +111,7 @@ pub(crate) async fn run(
     state: Arc<State>,
     mut chain_tip_rx: watch::Receiver<BlockNumber>,
     max_concurrent_proofs: NonZeroUsize,
+    shutdown: CancellationToken,
 ) -> anyhow::Result<()> {
     info!(target: LOG_TARGET, "Proof scheduler started");
 
@@ -129,6 +135,13 @@ pub(crate) async fn run(
 
         // Wait for either a job to complete or the chain tip to advance.
         tokio::select! {
+            () = shutdown.cancelled() => {
+                while !proving_tasks.is_empty() {
+                    let (block_num, proof_bytes) = proving_tasks.join_next().await?;
+                    pending.insert(block_num, proof_bytes);
+                }
+                return Ok(());
+            },
             // Proving a block has completed - cache and commit the proof.
             proving_result = proving_tasks.join_next() => {
                 let (block_num, proof_bytes) = proving_result?;

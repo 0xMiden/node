@@ -8,6 +8,7 @@ use anyhow::Context;
 use clap::Parser;
 use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::logging::OpenTelemetry;
+use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::utils::serde::Deserializable;
 use miden_validator::{DataDirectory, ValidatorSigner};
@@ -119,7 +120,7 @@ pub enum ValidatorCommand {
 }
 
 impl ValidatorCommand {
-    pub async fn handle(self) -> anyhow::Result<()> {
+    pub async fn handle(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         match self {
             Self::Bootstrap {
                 genesis_block_directory,
@@ -165,6 +166,7 @@ impl ValidatorCommand {
                         signer,
                         data_directory,
                         sqlite_connection_pool_size,
+                        shutdown,
                     )
                     .await
                 } else {
@@ -176,6 +178,7 @@ impl ValidatorCommand {
                         signer,
                         data_directory,
                         sqlite_connection_pool_size,
+                        shutdown,
                     )
                     .await
                 }

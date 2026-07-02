@@ -14,7 +14,10 @@ async fn main() -> anyhow::Result<()> {
     let _otel_guard = miden_node_utils::logging::setup_tracing(server.open_telemetry())?;
     info!(target: LOG_TARGET, "Tracing initialized");
 
-    let (handle, _port) = server.spawn().await.context("failed to spawn server")?;
+    miden_node_utils::shutdown::run_with_shutdown(|shutdown| async move {
+        let (handle, _port) = server.spawn(shutdown).await.context("failed to spawn server")?;
 
-    handle.await.context("proof server panicked").flatten()
+        handle.await.context("proof server panicked").flatten()
+    })
+    .await
 }

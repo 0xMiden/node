@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use futures::Stream;
+use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
 use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::block::{BlockNumber, SignedBlock};
@@ -26,6 +27,7 @@ enum SteadyStateAction {
     Block(Box<Option<Result<(SignedBlock, BlockNumber), RpcError>>>),
     Request(Option<ActorRequest>),
     Respawn(Option<miden_protocol::account::AccountId>),
+    Shutdown,
 }
 
 // NETWORK TRANSACTION BUILDER
@@ -101,23 +103,31 @@ impl NetworkTransactionBuilder {
     }
 
     /// Runs the network transaction builder event loop until a fatal error occurs.
-    pub async fn run(self, listener: TcpListener) -> anyhow::Result<()> {
+    pub async fn run(
+        self,
+        listener: TcpListener,
+        shutdown: CancellationToken,
+    ) -> anyhow::Result<()> {
         let mut tasks = Tasks::new();
 
         // Start the gRPC server.
         let server = NtxBuilderRpcServer::new(self.db.clone(), self.config.max_note_attempts);
+        let server_shutdown = shutdown.clone();
         tasks.spawn("grpc-server", async move {
-            server.serve(listener).await.context("ntx-builder gRPC server failed")
+            server
+                .serve(listener, server_shutdown)
+                .await
+                .context("ntx-builder gRPC server failed")
         });
 
-        tasks.spawn("event-loop", self.run_event_loop());
+        tasks.spawn("event-loop", self.run_event_loop(shutdown.clone()));
 
         // Wait for either the event loop or the gRPC server to complete. Any completion is treated
         // as fatal.
-        tasks.join_next_as_error().await.context("ntx-builder task failed")
+        tasks.join_next_or_cancelled(shutdown).await.context("ntx-builder task failed")
     }
 
-    async fn run_event_loop(mut self) -> anyhow::Result<()> {
+    async fn run_event_loop(mut self, shutdown: CancellationToken) -> anyhow::Result<()> {
         // Pin a dedicated connection for the loop's DB writes so block application is never starved
         // by the account actors competing for the shared pool.
         let loop_db = self
@@ -128,7 +138,10 @@ impl NetworkTransactionBuilder {
 
         // Phase 1: catch-up.
         loop {
-            let (block, committed_tip) = self.next_block().await?;
+            let (block, committed_tip) = tokio::select! {
+                () = shutdown.cancelled() => return Ok(()),
+                result = self.next_block() => result?,
+            };
             let local_tip = block.header().block_num();
             self.apply_committed_block(&loop_db, block, committed_tip).await?;
 
@@ -169,6 +182,7 @@ impl NetworkTransactionBuilder {
                 let coordinator = &mut self.coordinator;
 
                 tokio::select! {
+                    () = shutdown.cancelled() => SteadyStateAction::Shutdown,
                     block = block_stream.next() => SteadyStateAction::Block(Box::new(block)),
                     request = actor_request_rx.recv() => SteadyStateAction::Request(request),
                     respawn = coordinator.next() => SteadyStateAction::Respawn(respawn?),
@@ -199,6 +213,10 @@ impl NetworkTransactionBuilder {
                         );
                         self.coordinator.spawn_actor(account_id);
                     }
+                },
+                SteadyStateAction::Shutdown => {
+                    self.coordinator.shutdown().await?;
+                    return Ok(());
                 },
             }
         }
