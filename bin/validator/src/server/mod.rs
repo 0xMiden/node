@@ -7,6 +7,7 @@ use miden_node_proto_build::validator_api_descriptor;
 use miden_node_store::BlockStore;
 use miden_node_utils::clap::GrpcOptionsInternal;
 use miden_node_utils::panic::catch_panic_layer_fn;
+use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
@@ -54,7 +55,7 @@ impl ValidatorServer {
     ///
     /// Executes in place (i.e. not spawned) and will run indefinitely until a fatal error is
     /// encountered.
-    pub async fn serve(self) -> anyhow::Result<()> {
+    pub async fn serve(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         tracing::info!(target: LOG_TARGET, endpoint=?self.address, "Initializing server");
 
         // Initialize database connection.
@@ -107,7 +108,10 @@ impl ValidatorServer {
                 .context("failed to initialize validator server")?,
             ))
             .add_service(reflection_service)
-            .serve_with_incoming(TcpListenerStream::new(listener))
+            .serve_with_incoming_shutdown(
+                TcpListenerStream::new(listener),
+                shutdown.cancelled_owned(),
+            )
             .await
             .context("failed to serve validator API")
     }

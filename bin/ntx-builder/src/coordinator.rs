@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::Context;
+use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::account::AccountId;
 use miden_standards::note::AccountTargetNetworkNote;
@@ -102,6 +103,9 @@ pub struct Coordinator {
     /// Their actor spawn is deferred until a committed block carries the account's creation, at
     /// which point [`Coordinator::handle_committed_block`] promotes them to a real actor.
     pending_spawns: HashSet<AccountId>,
+
+    /// Cancellation signal shared by all actors spawned by this coordinator.
+    shutdown: CancellationToken,
 }
 
 impl Coordinator {
@@ -111,6 +115,7 @@ impl Coordinator {
         max_inflight_transactions: usize,
         max_account_crashes: usize,
         actor_context: AccountActorContext,
+        shutdown: CancellationToken,
     ) -> Self {
         Self {
             actor_registry: HashMap::new(),
@@ -120,6 +125,7 @@ impl Coordinator {
             crash_counts: HashMap::new(),
             max_account_crashes,
             pending_spawns: HashSet::new(),
+            shutdown,
         }
     }
 
@@ -158,8 +164,9 @@ impl Coordinator {
         let handle = ActorHandle::new(notify);
 
         let semaphore = self.semaphore.clone();
+        let shutdown = self.shutdown.clone();
         self.actor_join_set
-            .spawn(Box::pin(async move { (account_id, actor.run(semaphore).await) }));
+            .spawn(Box::pin(async move { (account_id, actor.run(semaphore, shutdown).await) }));
 
         self.actor_registry.insert(account_id, handle);
         tracing::debug!(
@@ -276,6 +283,24 @@ impl Coordinator {
             },
         }
     }
+
+    /// Waits for all currently running actors to exit after cancellation.
+    pub async fn shutdown(&mut self) -> anyhow::Result<()> {
+        while let Some(result) = self.actor_join_set.join_next().await {
+            match result {
+                Ok((_account_id, Ok(()))) => {},
+                Ok((account_id, Err(err))) => {
+                    return Err(err).with_context(|| {
+                        format!("account actor {account_id} failed during shutdown")
+                    });
+                },
+                Err(err) if err.is_cancelled() => {},
+                Err(err) => return Err(err).context("account actor failed to join"),
+            }
+        }
+        self.actor_registry.clear();
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -291,7 +316,7 @@ impl Coordinator {
         let (tx, rx) = tokio::sync::mpsc::channel(8);
         let mut actor_context = AccountActorContext::test(&db);
         actor_context.request_tx = tx;
-        (Self::new(4, 10, actor_context), dir, rx)
+        (Self::new(4, 10, actor_context, CancellationToken::new()), dir, rx)
     }
 }
 

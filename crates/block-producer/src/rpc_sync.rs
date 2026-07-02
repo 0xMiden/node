@@ -6,6 +6,7 @@ use miden_node_proto::clients::RpcClient;
 use miden_node_proto::generated::rpc::{BlockSubscriptionRequest, ProofSubscriptionRequest};
 use miden_node_store::state::{Finality, State};
 use miden_node_utils::retry::{self, Retryable};
+use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
 use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::block::{BlockNumber, SignedBlock};
@@ -62,7 +63,7 @@ pub struct RpcSync {
 
 impl RpcSync {
     /// Runs the block and proof synchronization loops until one exits unexpectedly.
-    pub async fn run(self) -> anyhow::Result<()> {
+    pub async fn run(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         let mut tasks = Tasks::new();
         let block_sync = BlockSync {
             state: Arc::clone(&self.state),
@@ -74,10 +75,10 @@ impl RpcSync {
             source_rpc: self.source_rpc,
         };
 
-        tasks.spawn("block-sync", block_sync.run());
-        tasks.spawn("proof-sync", proof_sync.run());
+        tasks.spawn("block-sync", block_sync.run(shutdown.clone()));
+        tasks.spawn("proof-sync", proof_sync.run(shutdown.clone()));
 
-        tasks.join_next_as_error().await
+        tasks.join_next_or_cancelled(shutdown).await
     }
 }
 
@@ -91,9 +92,9 @@ struct BlockSync {
 }
 
 impl BlockSync {
-    async fn run(self) -> anyhow::Result<()> {
-        (|| async {
-            self.sync()
+    async fn run(self, shutdown: CancellationToken) -> anyhow::Result<()> {
+        let retry = (|| async {
+            self.sync(shutdown.clone())
                 .await
                 .and_then(|()| Err(anyhow::anyhow!("unexpected end of stream")))
         })
@@ -105,8 +106,12 @@ impl BlockSync {
                 retry.delay = %RECONNECT_DELAY.as_secs(),
                 "Block sync failed, retrying",
             );
-        })
-        .await
+        });
+
+        tokio::select! {
+            result = retry => result,
+            () = shutdown.cancelled() => Ok(()),
+        }
     }
 
     #[miden_instrument(
@@ -114,7 +119,7 @@ impl BlockSync {
         skip_all,
         err,
     )]
-    async fn sync(&self) -> anyhow::Result<()> {
+    async fn sync(&self, shutdown: CancellationToken) -> anyhow::Result<()> {
         let block_from = self.state.chain_tip(Finality::Committed).await.child().as_u32();
         info!(target: LOG_TARGET, block_from, "Connecting to upstream RPC for blocks");
 
@@ -124,7 +129,14 @@ impl BlockSync {
             .await?
             .into_inner();
 
-        while let Some(result) = stream.next().await {
+        loop {
+            let result = tokio::select! {
+                () = shutdown.cancelled() => return Ok(()),
+                result = stream.next() => result,
+            };
+            let Some(result) = result else {
+                return Ok(());
+            };
             let event = result?;
             let upstream_tip = BlockNumber::from(event.committed_chain_tip);
             let block = SignedBlock::read_from_bytes(&event.block)
@@ -134,8 +146,6 @@ impl BlockSync {
             let local_tip = self.state.chain_tip(Finality::Committed).await;
             self.readiness.update(upstream_tip, local_tip).await;
         }
-
-        Ok(())
     }
 }
 
@@ -151,9 +161,9 @@ impl ProofSync {
     /// once its block has been committed locally. This means proof sync can stall if block sync falls
     /// behind, but that is acceptable — there is no value in streaming proofs for blocks that have not
     /// yet been applied.
-    async fn run(self) -> anyhow::Result<()> {
-        (|| async {
-            self.sync()
+    async fn run(self, shutdown: CancellationToken) -> anyhow::Result<()> {
+        let retry = (|| async {
+            self.sync(shutdown.clone())
                 .await
                 .and_then(|()| Err(anyhow::anyhow!("unexpected end of stream")))
         })
@@ -165,11 +175,15 @@ impl ProofSync {
                 retry.delay = %RECONNECT_DELAY.as_secs(),
                 "Proof sync failed, retrying",
             );
-        })
-        .await
+        });
+
+        tokio::select! {
+            result = retry => result,
+            () = shutdown.cancelled() => Ok(()),
+        }
     }
 
-    async fn sync(&self) -> anyhow::Result<()> {
+    async fn sync(&self, shutdown: CancellationToken) -> anyhow::Result<()> {
         // Subscribe from next proven tip.
         let starting_block = self.state.chain_tip(Finality::Proven).await.child();
         info!(
@@ -185,7 +199,14 @@ impl ProofSync {
 
         let mut expected = starting_block;
         let mut committed_tip_rx = self.state.subscribe_committed_tip();
-        while let Some(result) = stream.next().await {
+        loop {
+            let result = tokio::select! {
+                () = shutdown.cancelled() => return Ok(()),
+                result = stream.next() => result,
+            };
+            let Some(result) = result else {
+                return Ok(());
+            };
             let event = result?;
             let block_num = BlockNumber::from(event.block_num);
 
@@ -196,16 +217,16 @@ impl ProofSync {
 
             // Ensure the block is committed before applying its proof so that proven tip never
             // exceeds committed tip.
-            committed_tip_rx
-                .wait_for(|committed_tip| *committed_tip >= block_num)
-                .await
-                .context("committed tip channel closed")?;
+            tokio::select! {
+                () = shutdown.cancelled() => return Ok(()),
+                result = committed_tip_rx.wait_for(|committed_tip| *committed_tip >= block_num) => {
+                    result.context("committed tip channel closed")?;
+                },
+            }
 
             self.state.apply_proof(block_num, event.proof).await?;
 
             expected = expected.child();
         }
-
-        Ok(())
     }
 }

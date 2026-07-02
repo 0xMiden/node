@@ -17,6 +17,7 @@ use miden_node_utils::clap::{GrpcOptionsExternal, GrpcOptionsInternal};
 use miden_node_utils::cors::cors_for_grpc_web_layer;
 use miden_node_utils::grpc;
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
+use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
 use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use tokio::net::TcpListener;
@@ -108,7 +109,7 @@ impl Rpc {
     ///
     /// Note: Executes in place (i.e. not spawned) and will run indefinitely until
     ///       a fatal error is encountered.
-    pub async fn serve(self) -> anyhow::Result<()> {
+    pub async fn serve(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         let mut api = api::RpcService::new(
             self.store.clone(),
             self.mode.clone(),
@@ -156,7 +157,7 @@ impl Rpc {
                         source_rpc: *source_rpc,
                         readiness,
                     }
-                    .run(),
+                    .run(shutdown.clone()),
                 );
             },
         }
@@ -209,10 +210,13 @@ impl Rpc {
             .add_service(health_service)
             // Enables gRPC reflection service.
             .add_service(reflection_service)
-            .serve_with_incoming(TcpListenerStream::new(self.listener));
+            .serve_with_incoming_shutdown(
+                TcpListenerStream::new(self.listener),
+                shutdown.clone().cancelled_owned(),
+            );
         tasks.spawn("RPC server", async move { rpc.await.map_err(|e| anyhow::anyhow!(e)) });
 
-        tasks.join_next_as_error().await
+        tasks.join_next_or_cancelled(shutdown).await
     }
 }
 
@@ -241,7 +245,7 @@ impl SequencerInternal {
     ///
     /// Executes in place (i.e. not spawned) and will run indefinitely until a fatal error is
     /// encountered.
-    pub async fn serve(self) -> anyhow::Result<()> {
+    pub async fn serve(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         info!(target: COMPONENT, endpoint = ?self.listener, "Internal sequencer server initialized");
 
         let service = SequencerInternalService { block_producer: self.block_producer };
@@ -253,7 +257,10 @@ impl SequencerInternal {
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .timeout(self.grpc_options.request_timeout)
             .add_service(sequencer_api::service(service))
-            .serve_with_incoming(TcpListenerStream::new(self.listener))
+            .serve_with_incoming_shutdown(
+                TcpListenerStream::new(self.listener),
+                shutdown.cancelled_owned(),
+            )
             .await
             .context("failed to serve internal sequencer API")
     }

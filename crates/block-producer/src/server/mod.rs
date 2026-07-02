@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::Result;
 use miden_node_store::state::{Finality, State};
 use miden_node_utils::formatting::{format_input_notes, format_output_notes};
+use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
 use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::batch::ProposedBatch;
@@ -101,7 +102,7 @@ pub struct Sequencer {
 
 impl Sequencer {
     /// Spawns the sequencer tasks and returns its in-process API.
-    pub async fn spawn(self) -> Result<SequencerHandle> {
+    pub async fn spawn(self, shutdown: CancellationToken) -> Result<SequencerHandle> {
         tracing::info!(target: LOG_TARGET, "Initializing sequencer");
         let store = self.store;
         let validator =
@@ -124,7 +125,7 @@ impl Sequencer {
             mempool_tx_capacity: self.mempool_tx_capacity,
         };
         let mempool = Mempool::shared(chain_tip, api_config.mempool_config());
-        let api = BlockProducerApi::from_shared_mempool(mempool.clone(), store);
+        let api = BlockProducerApi::from_shared_mempool(mempool.clone(), store, shutdown.clone());
         let block_prover = if let Some(url) = self.block_prover_url {
             Arc::new(BlockProver::remote(url))
         } else {
@@ -141,20 +142,29 @@ impl Sequencer {
 
         tasks.spawn("batch-builder", {
             let mempool = mempool.clone();
-            async { batch_builder.run(mempool).await }
+            let shutdown = shutdown.clone();
+            async { batch_builder.run(mempool, shutdown).await }
         });
         tasks.spawn("block-builder", {
             let mempool = mempool.clone();
-            async { block_builder.run(mempool).await }
+            let shutdown = shutdown.clone();
+            async { block_builder.run(mempool, shutdown).await }
         });
         tasks.spawn("proof-scheduler", {
             let store = Arc::clone(&api.store);
+            let shutdown = shutdown.clone();
             async move {
-                proof_scheduler::run(block_prover, store, chain_tip_rx, self.max_concurrent_proofs)
-                    .await
+                proof_scheduler::run(
+                    block_prover,
+                    store,
+                    chain_tip_rx,
+                    self.max_concurrent_proofs,
+                    shutdown,
+                )
+                .await
             }
         });
-        let task = tokio::spawn(async move { tasks.join_next_as_error().await });
+        let task = tokio::spawn(async move { tasks.join_next_or_cancelled(shutdown).await });
 
         Ok(SequencerHandle { api, task })
     }
@@ -164,7 +174,7 @@ impl Sequencer {
     /// Executes in place (i.e. not spawned) and will run indefinitely until a fatal error is
     /// encountered.
     pub async fn serve(self) -> anyhow::Result<()> {
-        self.spawn().await?.wait().await
+        self.spawn(CancellationToken::new()).await?.wait().await
     }
 }
 
@@ -229,10 +239,18 @@ pub struct BlockProducerStatus {
 impl BlockProducerApi {
     /// Creates an API backed by a fresh mempool.
     pub fn new(store: Arc<State>, chain_tip: BlockNumber, config: BlockProducerApiConfig) -> Self {
-        Self::from_shared_mempool(Mempool::shared(chain_tip, config.mempool_config()), store)
+        Self::from_shared_mempool(
+            Mempool::shared(chain_tip, config.mempool_config()),
+            store,
+            CancellationToken::new(),
+        )
     }
 
-    fn from_shared_mempool(mempool: SharedMempool, store: Arc<State>) -> Self {
+    fn from_shared_mempool(
+        mempool: SharedMempool,
+        store: Arc<State>,
+        shutdown: CancellationToken,
+    ) -> Self {
         let cached_mempool_stats = mempool
             .lock()
             .map(|mempool| MempoolStats::from_mempool(&mempool))
@@ -242,14 +260,14 @@ impl BlockProducerApi {
             store,
             cached_mempool_stats: Arc::new(RwLock::new(cached_mempool_stats)),
         };
-        api.spawn_mempool_stats_updater();
+        api.spawn_mempool_stats_updater(shutdown);
         api
     }
 
     /// Starts a background task that periodically updates the cached mempool statistics.
     ///
     /// This prevents the need to lock the mempool for each status request.
-    fn spawn_mempool_stats_updater(&self) {
+    fn spawn_mempool_stats_updater(&self, shutdown: CancellationToken) {
         let cached_mempool_stats = Arc::clone(&self.cached_mempool_stats);
         let mempool = Arc::clone(&self.mempool);
 
@@ -262,7 +280,10 @@ impl BlockProducerApi {
             let mut interval = tokio::time::interval(CACHED_MEMPOOL_STATS_UPDATE_INTERVAL);
 
             loop {
-                interval.tick().await;
+                tokio::select! {
+                    () = shutdown.cancelled() => return,
+                    _ = interval.tick() => {},
+                }
 
                 let stats = {
                     let Ok(mempool) = mempool.lock() else {

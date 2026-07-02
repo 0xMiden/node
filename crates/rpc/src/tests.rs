@@ -796,7 +796,7 @@ async fn start_rpc_with_options(
             grpc_options,
             network_tx_auth: None,
         }
-        .serve()
+        .serve(miden_node_utils::shutdown::CancellationToken::new())
         .await
         .expect("Failed to start serving store");
     });

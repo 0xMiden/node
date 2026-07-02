@@ -13,6 +13,7 @@ pub mod logging;
 pub mod lru_cache;
 pub mod panic;
 pub mod retry;
+pub mod shutdown;
 pub mod spawn;
 pub mod tasks;
 pub mod tracing;
