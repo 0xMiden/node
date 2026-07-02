@@ -14,7 +14,7 @@ use miden_node_proto::generated::transaction::ProvenTransaction;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::account::auth::AuthSecretKey;
-use miden_protocol::account::{Account, AccountCode, AccountDelta, AccountId};
+use miden_protocol::account::{Account, AccountCode, AccountId, AccountPatch};
 use miden_protocol::asset::AssetVault;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
@@ -201,15 +201,15 @@ impl IncrementService {
     /// The authoritative `expected` value lives in the wallet's on-chain counter slot (read by
     /// [`CounterTrackingService`]); the returned success count is used purely as a best-effort
     /// latency target — on a fresh wallet/counter pair both start at zero and advance together.
-    fn handle_increment_success(&mut self, account_delta: &AccountDelta, tx_id: String) -> u64 {
+    fn handle_increment_success(&mut self, account_patch: &AccountPatch, tx_id: String) -> u64 {
         let wallet = &self.tx.wallet_account;
         let mut storage = wallet.storage().clone();
-        for (slot_name, value) in account_delta.storage().values() {
+        for (slot_name, value) in account_patch.storage().values() {
             storage
-                .set_item(slot_name, *value)
+                .set_item(slot_name, value.value().unwrap_or_else(Word::empty))
                 .expect("wallet tx only writes existing value slots");
         }
-        let new_nonce = wallet.nonce() + account_delta.nonce_delta();
+        let new_nonce = account_patch.final_nonce().unwrap_or_else(|| wallet.nonce());
         let updated_wallet = Account::new(
             wallet.id(),
             wallet.vault().clone(),
@@ -320,7 +320,7 @@ impl IncrementService {
         ret(level = "debug"),
         err,
     )]
-    async fn submit_increment(&mut self) -> Result<(String, AccountDelta, BlockNumber)> {
+    async fn submit_increment(&mut self) -> Result<(String, AccountPatch, BlockNumber)> {
         let (network_note, note_recipient) = create_network_note(
             &self.tx.wallet_account,
             &self.tx.counter_account,
@@ -341,7 +341,7 @@ impl IncrementService {
         let block_header = self.tx.block_header.clone();
         let secret_key = self.tx.secret_key.clone();
         let handle = tokio::runtime::Handle::current();
-        let (proven_tx, tx_inputs, account_delta) = spawn_blocking_in_current_span(move || {
+        let (proven_tx, tx_inputs, account_patch) = spawn_blocking_in_current_span(move || {
             let account_id = wallet_account.id();
             let block_num = block_header.block_num();
             let mut data_store = MonitorDataStore::new(block_header, PartialBlockchain::default());
@@ -362,14 +362,14 @@ impl IncrementService {
                 .context("Failed to execute transaction")?;
 
             let tx_inputs = executed_tx.tx_inputs().to_bytes();
-            // The delta captures the wallet's nonce bump and counter-slot write; the increment task
+            // The patch captures the wallet's nonce bump and counter-slot write; the increment task
             // applies it to keep its local wallet copy in sync with chain.
-            let account_delta = executed_tx.account_delta().clone();
+            let account_patch = executed_tx.account_patch().clone();
             let proven_tx = handle
                 .block_on(LocalTransactionProver::default().prove(executed_tx))
                 .context("Failed to prove transaction")?;
 
-            Ok::<_, anyhow::Error>((proven_tx, tx_inputs, account_delta))
+            Ok::<_, anyhow::Error>((proven_tx, tx_inputs, account_patch))
         })
         .await
         .context("counter increment task failed")??;
@@ -392,7 +392,7 @@ impl IncrementService {
 
         let tx_id = proven_tx.id().to_hex();
 
-        Ok((tx_id, account_delta, block_height))
+        Ok((tx_id, account_patch, block_height))
     }
 }
 
@@ -416,9 +416,9 @@ impl Service for IncrementService {
         let mut last_error = None;
 
         match self.submit_increment().await {
-            Ok((tx_id, account_delta, block_height)) => {
+            Ok((tx_id, account_patch, block_height)) => {
                 self.failures.reset();
-                let target_value = self.handle_increment_success(&account_delta, tx_id);
+                let target_value = self.handle_increment_success(&account_patch, tx_id);
                 let mut guard = self.latency_state.lock().await;
                 guard.pending = Some(PendingLatencyDetails {
                     submit_height: block_height.as_u32(),

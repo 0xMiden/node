@@ -119,12 +119,10 @@ pub fn mock_genesis_block() -> miden_protocol::block::SignedBlock {
 
 /// Builds a full-state [`AccountUpdateDetails`] for a network account. The returned account passes
 /// `NetworkAccount::new`, so the ntx-builder treats the update as a network-account creation.
-pub fn mock_network_account_update()
--> (Account, miden_protocol::account::delta::AccountUpdateDetails) {
+pub fn mock_network_account_update() -> (Account, miden_protocol::account::AccountUpdateDetails) {
     use std::collections::BTreeSet;
 
-    use miden_protocol::account::AccountDelta;
-    use miden_protocol::account::delta::AccountUpdateDetails;
+    use miden_protocol::account::{AccountPatch, AccountUpdateDetails};
     use miden_standards::account::auth::AuthNetworkAccount;
 
     // The allowlist content is irrelevant here; any non-empty set yields a valid network account.
@@ -133,8 +131,8 @@ pub fn mock_network_account_update()
         AuthNetworkAccount::with_allowed_notes(BTreeSet::from_iter([root]))
             .expect("non-empty allowlist should construct"),
     );
-    let details = AccountUpdateDetails::Delta(
-        AccountDelta::try_from(account.clone()).expect("full-state delta should build"),
+    let details = AccountUpdateDetails::Public(
+        AccountPatch::try_from(account.clone()).expect("full-state patch should build"),
     );
     (account, details)
 }

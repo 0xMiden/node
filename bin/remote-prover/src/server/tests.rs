@@ -12,11 +12,11 @@ use miden_protocol::asset::{Asset, FungibleAsset};
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::note::NoteType;
 use miden_protocol::testing::account_id::{ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET, ACCOUNT_ID_SENDER};
-use miden_protocol::transaction::{ExecutedTransaction, ProvenTransaction};
+use miden_protocol::transaction::{ExecutedTransaction, ProvenTransaction, TransactionVerifier};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_testing::{Auth, MockChainBuilder};
-use miden_tx::{LocalTransactionProver, TransactionVerifier};
-use miden_tx_batch_prover::LocalBatchProver;
+use miden_tx::LocalTransactionProver;
+use miden_tx_batch::BatchVerifier;
 use serial_test::serial;
 
 use crate::server::Server;
@@ -140,6 +140,7 @@ impl ProofRequestExt for ProofRequest {
             mock_chain.latest_block_header(),
             mock_chain.latest_partial_blockchain(),
             BTreeMap::new(),
+            MIN_PROOF_SECURITY_LEVEL,
         )
         .unwrap()
     }
@@ -367,7 +368,7 @@ async fn transaction_proof_is_correct() {
 
 /// Checks that the a batch request results in a correct proof.
 ///
-/// The proof is replicated locally, which ensures that the gRPC codec and server code do the
+/// The proof is verified locally, which ensures that the gRPC codec and server code do the
 /// correct thing.
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
@@ -384,10 +385,8 @@ async fn batch_proof_is_correct() {
     let response = client.submit_request(request).await.unwrap();
     let response = ProvenBatch::read_from_bytes(&response.payload).unwrap();
 
-    let expected = tokio::task::block_in_place(|| {
-        LocalBatchProver::new(MIN_PROOF_SECURITY_LEVEL).prove(batch).unwrap()
-    });
-    assert_eq!(response, expected);
+    assert_eq!(response.id(), batch.id());
+    BatchVerifier::new(MIN_PROOF_SECURITY_LEVEL).verify(&response).unwrap();
 
     server.abort();
 }

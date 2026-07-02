@@ -11,8 +11,8 @@ use miden_node_utils::tracing::{ErrorSpanExt, miden_instrument, miden_span_recor
 use miden_protocol::Word;
 use miden_protocol::account::{
     Account,
-    AccountDelta,
     AccountId,
+    AccountPatch,
     AccountStorageHeader,
     PartialAccount,
     StorageMapKey,
@@ -124,9 +124,9 @@ fn log_transient_retry<E: std::error::Error>(operation: &'static str, err: &E, s
 pub struct NtxExecutionResult {
     /// ID of the submitted transaction.
     pub tx_id: TransactionId,
-    /// The account delta the transaction produced, applied to the actor's in-memory account once
+    /// The account patch the transaction produced, applied to the actor's in-memory account once
     /// the transaction lands.
-    pub account_delta: AccountDelta,
+    pub account_patch: AccountPatch,
     /// Notes that failed during consumability filtering.
     pub failed_notes: Vec<FailedNote>,
     /// Note scripts fetched from the remote RPC service that should be persisted to the local DB
@@ -311,12 +311,11 @@ impl NtxContext {
                     .await
                     .unwrap_or_else(|err| std::panic::resume_unwind(err.into_panic()))?;
 
-                // Capture the account delta before the executed tx is consumed; the actor applies
-                // it to its in-memory account once this transaction lands in a committed block.
-                let account_delta = executed_tx.account_delta().clone();
+                // Destructure the executed tx into its parts; the actor applies the account patch
+                // to its in-memory account once this transaction lands in a committed block.
+                let (tx_inputs, _, account_patch, _) = executed_tx.into_parts();
 
                 // Prove transaction.
-                let tx_inputs: TransactionInputs = executed_tx.into();
                 let proven_tx = Box::pin(self.prove(&tx_inputs)).await?;
 
                 // Submit transaction through the RPC service.
@@ -324,7 +323,7 @@ impl NtxContext {
 
                 Ok(NtxExecutionResult {
                     tx_id: proven_tx.id(),
-                    account_delta,
+                    account_patch,
                     failed_notes,
                     fetched_scripts: scripts_to_cache,
                 })

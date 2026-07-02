@@ -4,7 +4,7 @@ use miden_node_proto::domain::proof_request::BlockProofRequest;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::tracing::{miden_instrument, miden_span_record};
 use miden_protocol::Word;
-use miden_protocol::account::delta::AccountUpdateDetails;
+use miden_protocol::account::AccountUpdateDetails;
 use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::account_tree::AccountMutationSet;
 use miden_protocol::block::nullifier_tree::NullifierMutationSet;
@@ -125,12 +125,12 @@ impl State {
         // Signals the write lock has been acquired, and the transaction can be committed.
         let (inform_acquire_done, acquire_done) = oneshot::channel::<()>();
 
-        // Extract public account updates with deltas before block is moved into async task. Private
-        // accounts are filtered out since they don't expose their state changes.
-        let account_deltas =
+        // Extract public account updates with patches before block is moved into async task.
+        // Private accounts are filtered out since they don't expose their state changes.
+        let account_patches =
             Vec::from_iter(body.updated_accounts().iter().filter_map(
                 |update| match update.details() {
-                    AccountUpdateDetails::Delta(delta) => Some(delta.clone()),
+                    AccountUpdateDetails::Public(patch) => Some(patch.clone()),
                     AccountUpdateDetails::Private => None,
                 },
             ));
@@ -193,8 +193,8 @@ impl State {
         })?;
 
         self.with_forest_write_blocking(|forest| {
-            forest.apply_block_updates(block_num, account_deltas)
-        })?;
+            forest.apply_block_updates(block_num, account_patches);
+        });
 
         // Push to cache and notify replica subscribers.
         self.block_cache

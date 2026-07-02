@@ -26,7 +26,7 @@ use miden_protocol::asset::{Asset, AssetVaultKey, AssetWitness, FungibleAsset, T
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
 use miden_protocol::crypto::rand::RandomCoin;
-use miden_protocol::note::{Note, NoteAttachments, NoteScript, NoteScriptRoot, PartialNote};
+use miden_protocol::note::{Note, NoteScript, NoteScriptRoot, PartialNote};
 use miden_protocol::transaction::{
     AccountInputs,
     ExecutedTransaction,
@@ -38,17 +38,12 @@ use miden_protocol::transaction::{
 };
 use miden_protocol::utils::serde::Serializable;
 use miden_protocol::{Felt, MastForest, Word};
-use miden_standards::account::auth::AuthSingleSig;
+use miden_standards::account::auth::{Approver, AuthSingleSig};
 use miden_standards::account::faucets::{FungibleFaucet, TokenName};
-use miden_standards::account::interface::{AccountInterface, AccountInterfaceExt};
-use miden_standards::account::policies::{
-    BurnPolicyConfig,
-    MintPolicyConfig,
-    PolicyRegistration,
-    TokenPolicyManager,
-};
+use miden_standards::account::policies::{BurnPolicy, MintPolicy, TokenPolicyManager};
 use miden_standards::account::wallets::BasicWallet;
 use miden_standards::note::P2idNote;
+use miden_standards::tx_script::SendNotesTransactionScript;
 use miden_tx::auth::BasicAuthenticator;
 use miden_tx::{
     DataStore,
@@ -274,25 +269,24 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
             .iter()
             .map(|wallet| {
                 let asset = Asset::Fungible(FungibleAsset::new(faucet_id, 10).unwrap());
-                P2idNote::create(
-                    faucet_id,
-                    wallet.id(),
-                    vec![asset],
-                    miden_protocol::note::NoteType::Public,
-                    NoteAttachments::empty(),
-                    &mut seed_rng,
-                )
-                .expect("note creation failed")
+                P2idNote::builder()
+                    .sender(faucet_id)
+                    .target(wallet.id())
+                    .asset(asset)
+                    .note_type(miden_protocol::note::NoteType::Public)
+                    .generate_serial_number(&mut seed_rng)
+                    .build()
+                    .expect("note creation failed")
+                    .into()
             })
             .collect();
 
         let partial_notes: Vec<PartialNote> = notes.iter().map(|n| n.clone().into()).collect();
-        let account_interface = AccountInterface::from_account(&faucet);
-        let script = account_interface
-            .build_send_notes_script(&partial_notes, None)
+        let code_interface = faucet.code_interface();
+        let script = SendNotesTransactionScript::new(&code_interface, &partial_notes)
             .expect("failed to build mint send-notes script");
 
-        let mut tx_args = TransactionArgs::default().with_tx_script(script);
+        let mut tx_args = TransactionArgs::default().with_tx_script(script.into());
         for note in &notes {
             tx_args.add_output_note_recipient(Box::new(note.recipient().clone()));
         }
@@ -311,17 +305,17 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
         mint_exec_total += exec_t0.elapsed();
 
         let tx_inputs_bytes = executed_tx.tx_inputs().to_bytes();
-        let delta = executed_tx.account_delta().clone();
+        let patch = executed_tx.account_patch().clone();
 
         // Evolve the faucet state for the next iteration before we hand the executed tx off for
-        // proving. The first mint of a never-before-seen account produces a full-state delta
-        // (because the delta carries the freshly deployed code); subsequent mints produce
-        // partial-state deltas that can be applied incrementally.
-        if delta.is_full_state() {
-            faucet = Account::try_from(&delta)
-                .expect("failed to materialize faucet from full-state delta");
+        // proving. The first mint tx creates the faucet on-chain and emits a full-state patch
+        // (which carries account code) that must be converted into the account directly, later txs
+        // emit partial-state delta patches that are applied onto the existing faucet.
+        if patch.is_full_state() {
+            faucet =
+                Account::try_from(&patch).expect("failed to build faucet from full-state patch");
         } else {
-            faucet.apply_delta(&delta).expect("failed to apply faucet delta");
+            faucet.apply_patch(&patch).expect("failed to apply faucet patch");
         }
         data_store.add_account(faucet.clone());
 
@@ -429,16 +423,15 @@ fn create_faucet() -> (Account, SecretKey) {
         .account_type(AccountType::Private)
         .with_component(fungible_faucet)
         .with_components(
-            TokenPolicyManager::new()
-                .with_mint_policy(MintPolicyConfig::AllowAll, PolicyRegistration::Active)
-                .unwrap()
-                .with_burn_policy(BurnPolicyConfig::AllowAll, PolicyRegistration::Active)
-                .unwrap(),
+            TokenPolicyManager::builder()
+                .active_mint_policy(MintPolicy::allow_all())
+                .active_burn_policy(BurnPolicy::allow_all())
+                .build(),
         )
-        .with_auth_component(AuthSingleSig::new(
+        .with_auth_component(AuthSingleSig::new(Approver::new(
             key_pair.public_key().into(),
             AuthScheme::Falcon512Poseidon2,
-        ))
+        )))
         .build()
         .unwrap();
     (faucet, key_pair)
@@ -453,10 +446,10 @@ fn create_wallet(
     let init_seed: Vec<_> = index.to_be_bytes().into_iter().chain([0u8; 24]).collect();
     AccountBuilder::new(init_seed.try_into().unwrap())
         .account_type(AccountType::Private)
-        .with_auth_component(AuthSingleSig::new(
+        .with_auth_component(AuthSingleSig::new(Approver::new(
             public_key.clone().into(),
             AuthScheme::Falcon512Poseidon2,
-        ))
+        )))
         .with_component(BasicWallet)
         .build()
         .unwrap()
@@ -553,7 +546,7 @@ impl DataStore for BenchmarkDataStore {
         }
 
         Result::<Vec<_>, _>::from_iter(vault_keys.into_iter().map(|vault_key| {
-            AssetWitness::new(account.vault().open(vault_key).into()).map_err(|err| {
+            AssetWitness::new(account.vault().open(vault_key).into(), [vault_key]).map_err(|err| {
                 DataStoreError::Other {
                     error_msg: "failed to open vault asset tree".into(),
                     source: Some(Box::new(err)),

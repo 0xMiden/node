@@ -142,6 +142,22 @@ impl State {
         })
     }
 
+    /// Returns vault details by reconstructing the vault from the database.
+    async fn reconstruct_vault_details_from_db(
+        &self,
+        account_id: AccountId,
+        block_num: BlockNumber,
+    ) -> Result<AccountVaultDetails, DatabaseError> {
+        let assets = self.db.select_account_vault_at_block(account_id, block_num).await?;
+
+        self.forest
+            .write()
+            .await
+            .cache_vault_keys(assets.iter().map(miden_protocol::asset::Asset::vault_key));
+
+        Ok(AccountVaultDetails::from_assets(assets))
+    }
+
     /// Returns storage map details by reconstructing the storage map from the database.
     async fn reconstruct_storage_map_details_from_db(
         &self,
@@ -231,18 +247,29 @@ impl State {
             None => None,
         };
 
-        // Query account state forest for vault details on commitment mismatch
+        // Query account state forest for vault details on commitment mismatch.
+        //
+        // The forest can only reconstruct the vault if all hashed vault keys are known in the
+        // reverse-key LRU cache. If any hashed key is unknown, the forest returns `None` and we
+        // fall back to reconstructing the vault details from the database.
         let vault_details = match asset_vault_commitment {
             Some(commitment) if commitment == account_header.vault_root() => {
                 AccountVaultDetails::empty()
             },
-            Some(_) => self.with_forest_read_blocking(|forest| {
-                forest.get_vault_details(account_id, block_num).map_err(|err| {
-                    DatabaseError::DataCorrupted(format!(
-                        "failed to reconstruct vault for account {account_id} at block {block_num}: {err}"
-                    ))
-                })
-            })?,
+            Some(_) => {
+                let forest_details = self.with_forest_read_blocking(|forest| {
+                    forest.get_vault_details(account_id, block_num).map_err(|err| {
+                        DatabaseError::DataCorrupted(format!(
+                            "failed to reconstruct vault for account {account_id} at block {block_num}: {err}"
+                        ))
+                    })
+                })?;
+
+                match forest_details {
+                    Some(details) => details,
+                    None => self.reconstruct_vault_details_from_db(account_id, block_num).await?,
+                }
+            },
             None => AccountVaultDetails::empty(),
         };
 

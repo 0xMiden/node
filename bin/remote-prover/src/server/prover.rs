@@ -9,7 +9,7 @@ use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::block::BlockProof;
 use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
 use miden_tx::LocalTransactionProver;
-use miden_tx_batch_prover::LocalBatchProver;
+use miden_tx_batch::{BatchExecutor, LocalBatchProver};
 use tracing::Instrument;
 
 use crate::COMPONENT;
@@ -27,7 +27,7 @@ impl Prover {
     pub fn new(proof_type: ProofKind) -> Self {
         match proof_type {
             ProofKind::Transaction => Self::Transaction(LocalTransactionProver::default()),
-            ProofKind::Batch => Self::Batch(LocalBatchProver::new(MIN_PROOF_SECURITY_LEVEL)),
+            ProofKind::Batch => Self::Batch(LocalBatchProver::new()),
             ProofKind::Block => Self::Block(LocalBlockProver::new(MIN_PROOF_SECURITY_LEVEL)),
         }
     }
@@ -123,8 +123,11 @@ impl ProveRequest for LocalBatchProver {
         let prover = self.clone();
 
         spawn_blocking_in_current_span(move || {
+            let executed_batch = BatchExecutor::new().execute(input).map_err(|e| {
+                tonic::Status::internal(e.as_report_context("failed to execute batch"))
+            })?;
             prover
-                .prove(input)
+                .prove(executed_batch)
                 .map_err(|e| tonic::Status::internal(e.as_report_context("failed to prove batch")))
         })
         .await

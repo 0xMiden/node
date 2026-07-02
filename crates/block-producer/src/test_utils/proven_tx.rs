@@ -2,10 +2,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use itertools::Itertools;
-use miden_node_utils::fee::test_fee;
-use miden_protocol::account::AccountId;
-use miden_protocol::account::delta::AccountUpdateDetails;
-use miden_protocol::asset::FungibleAsset;
+use miden_protocol::account::{AccountId, AccountUpdateDetails};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{Note, NoteAttachments, Nullifier};
 use miden_protocol::transaction::{
@@ -32,7 +29,6 @@ pub struct MockProvenTxBuilder {
     output_notes: Option<Vec<OutputNote>>,
     input_notes: Option<Vec<InputNote>>,
     nullifiers: Option<Vec<Nullifier>>,
-    fee: FungibleAsset,
 }
 
 impl MockProvenTxBuilder {
@@ -74,7 +70,6 @@ impl MockProvenTxBuilder {
             output_notes: None,
             input_notes: None,
             nullifiers: None,
-            fee: test_fee(),
         }
     }
 
@@ -165,7 +160,6 @@ impl MockProvenTxBuilder {
             self.output_notes.unwrap_or_default(),
             BlockNumber::GENESIS,
             Word::empty(),
-            self.fee,
             self.expiration_block_num,
             ExecutionProof::new_dummy(),
         )

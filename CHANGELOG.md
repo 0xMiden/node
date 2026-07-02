@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [BREAKING] Updated `miden-protocol` dependencies to use the `next` branch (v0.16). Block and transaction account updates now use the absolute `AccountPatch` representation instead of the relative `AccountDelta`, and the `miden-tx-batch-prover` crate was renamed to `miden-tx-batch` ([#2282](https://github.com/0xMiden/node/pull/2282)).
+
 ## v0.15.0 (2026-06-10)
 
 - Fixed the store dropping a fungible asset's callback flag when applying partial account deltas ([#2222](https://github.com/0xMiden/node/pull/2222)).

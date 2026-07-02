@@ -146,7 +146,6 @@ CREATE TABLE transactions (
     input_notes                  BLOB   NOT NULL, -- Serialized Vec<InputNoteCommitment> (nullifier + optional NoteHeader).
     output_notes                 BLOB   NOT NULL, -- Serialized Vec<NoteHeader> (NoteId + NoteMetadata).
     size_in_bytes                BIGINT NOT NULL, -- Estimated size of the row in bytes, considering the size of the input and output notes.
-    fee                          BLOB   NOT NULL, -- Serialized FungibleAsset representing the fee paid by the transaction.
 
     PRIMARY KEY (transaction_id)
 ) WITHOUT ROWID;

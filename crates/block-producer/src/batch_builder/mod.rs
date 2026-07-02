@@ -12,7 +12,7 @@ use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{BatchId, ProposedBatch, ProvenBatch};
 use miden_protocol::transaction::TransactionId;
 use miden_remote_prover_client::RemoteBatchProver;
-use miden_tx_batch_prover::LocalBatchProver;
+use miden_tx_batch::{BatchExecutor, LocalBatchProver};
 use tokio::task::{JoinError, JoinSet};
 use tokio::time::{Instant, MissedTickBehavior};
 use tracing::{Instrument, Span};
@@ -80,8 +80,7 @@ impl BatchBuilder {
         batch_prover_url: Option<Url>,
         intervals: BatchIntervals,
     ) -> Self {
-        let batch_prover = batch_prover_url
-            .map_or(BatchProver::local(MIN_PROOF_SECURITY_LEVEL), BatchProver::remote);
+        let batch_prover = batch_prover_url.map_or(BatchProver::local(), BatchProver::remote);
 
         Self {
             active_jobs: JoinSet::new(),
@@ -321,6 +320,7 @@ impl BatchJob {
             inputs.batch_reference_block_header,
             inputs.partial_block_chain,
             inputs.note_proofs,
+            MIN_PROOF_SECURITY_LEVEL,
         )
         .map_err(BuildBatchError::ProposeBatchError)
     }
@@ -345,7 +345,10 @@ impl BatchJob {
             BatchProver::Local(prover) => {
                 let prover = prover.clone();
                 spawn_blocking_in_current_span(move || {
-                    prover.prove(proposed_batch).map_err(BuildBatchError::ProveBatchError)
+                    let executed_batch = BatchExecutor::new()
+                        .execute(proposed_batch)
+                        .map_err(BuildBatchError::ProveBatchError)?;
+                    prover.prove(executed_batch).map_err(BuildBatchError::ProveBatchError)
                 })
                 .await
                 .map_err(BuildBatchError::JoinError)?
@@ -407,8 +410,8 @@ impl BatchProver {
         }
     }
 
-    fn local(security_level: u32) -> Self {
-        Self::Local(LocalBatchProver::new(security_level))
+    fn local() -> Self {
+        Self::Local(LocalBatchProver::new())
     }
 
     fn remote(endpoint: impl Into<String>) -> Self {

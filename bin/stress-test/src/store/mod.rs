@@ -9,7 +9,6 @@ use miden_node_store::state::{Finality, State};
 use miden_node_utils::clap::StorageOptions;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
-use miden_protocol::asset::Asset;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::NoteTag;
 use miden_protocol::utils::serde::Serializable;
@@ -665,7 +664,6 @@ fn transaction_record_to_proto(
             final_state_commitment: Some(record.header.final_state_commitment().into()),
             input_notes: record.header.input_notes().iter().cloned().map(Into::into).collect(),
             output_notes: record.header.output_notes().iter().copied().map(Into::into).collect(),
-            fee: Some(Asset::from(record.header.fee()).into()),
         }),
         block_num: record.block_num.as_u32(),
         output_note_proofs,

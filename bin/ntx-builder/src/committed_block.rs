@@ -1,5 +1,4 @@
-use miden_protocol::account::AccountId;
-use miden_protocol::account::delta::AccountUpdateDetails;
+use miden_protocol::account::{AccountId, AccountUpdateDetails};
 use miden_protocol::block::{BlockHeader, SignedBlock};
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::{OutputNote, TransactionId};

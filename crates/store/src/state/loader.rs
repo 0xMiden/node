@@ -544,7 +544,7 @@ pub async fn rebuild_account_state_forest(
     db: &mut Db,
     block_num: BlockNumber,
 ) -> Result<(), StateInitializationError> {
-    use miden_protocol::account::delta::AccountDelta;
+    use miden_protocol::account::AccountPatch;
 
     let mut cursor = None;
 
@@ -564,12 +564,12 @@ pub async fn rebuild_account_state_forest(
                 .details
                 .ok_or(StateInitializationError::PublicAccountMissingDetails(account_id))?;
 
-            // Convert the full account to a full-state delta
-            let delta = AccountDelta::try_from(account).map_err(|e| {
+            // Convert the full account to a full-state patch
+            let patch = AccountPatch::try_from(account).map_err(|e| {
                 StateInitializationError::AccountToDeltaConversionFailed(e.to_string())
             })?;
 
-            forest.update_account(block_num, &delta)?;
+            forest.update_account(block_num, &patch);
         }
 
         cursor = page.next_cursor;

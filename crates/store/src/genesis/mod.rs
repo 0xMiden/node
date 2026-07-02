@@ -1,6 +1,5 @@
 use miden_protocol::Word;
-use miden_protocol::account::delta::AccountUpdateDetails;
-use miden_protocol::account::{Account, AccountDelta};
+use miden_protocol::account::{Account, AccountPatch, AccountUpdateDetails};
 use miden_protocol::block::account_tree::{AccountIdKey, AccountTree};
 use miden_protocol::block::{
     BlockAccountUpdate,
@@ -115,7 +114,7 @@ impl GenesisState {
                 let account_update_details = if account.id().is_private() {
                     AccountUpdateDetails::Private
                 } else {
-                    AccountUpdateDetails::Delta(AccountDelta::try_from(account.clone())?)
+                    AccountUpdateDetails::Public(AccountPatch::try_from(account.clone())?)
                 };
 
                 Ok(BlockAccountUpdate::new(

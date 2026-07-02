@@ -7,7 +7,7 @@ use miden_node_utils::tracing::{miden_instrument, miden_span_record};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
-use miden_tx_batch_prover::LocalBatchProver;
+use miden_tx_batch::BatchVerifier;
 use tonic::metadata::{Ascii, MetadataValue};
 use tonic::{Request, Status};
 
@@ -210,31 +210,29 @@ impl RpcService {
     }
 }
 
-/// Verifies the batch proof by re-proving the proposed batch and comparing against the submitted
-/// proof.
-///
-/// Need to do this because `ProvenBatch` has no real kernel yet, so we can only really check that
-/// the calculated proof matches the one given in the request.
 async fn verify_batch_proof(
     proven_batch: &ProvenBatch,
     proposed_batch: &ProposedBatch,
 ) -> tonic::Result<()> {
-    let expected_proof = spawn_blocking_in_current_span({
-        let proposed_batch = proposed_batch.clone();
-        move || {
-            LocalBatchProver::new(MIN_PROOF_SECURITY_LEVEL)
-                .prove(proposed_batch)
-                .map_err(|err| {
-                    Status::invalid_argument(err.as_report_context("proposed block proof failed"))
-                })
-        }
+    if proven_batch.id() != proposed_batch.id() {
+        return Err(Status::invalid_argument("batch proof did not match proposed batch"));
+    }
+
+    let proven_batch = proven_batch.clone();
+    let batch_id = proven_batch.id();
+    spawn_blocking_in_current_span(move || {
+        BatchVerifier::new(MIN_PROOF_SECURITY_LEVEL)
+            .verify(&proven_batch)
+            .map_err(|err| {
+                Status::invalid_argument(format!(
+                    "Invalid proof for batch {}: {}",
+                    batch_id,
+                    err.as_report()
+                ))
+            })
     })
     .await
     .map_err(|err| Status::internal(format!("batch proof verification task failed: {err}")))??;
-
-    if &expected_proof != proven_batch {
-        return Err(Status::invalid_argument("batch proof did not match proposed batch"));
-    }
 
     Ok(())
 }

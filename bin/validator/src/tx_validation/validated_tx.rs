@@ -1,6 +1,5 @@
 use miden_protocol::Word;
-use miden_protocol::account::{AccountDelta, AccountId};
-use miden_protocol::asset::FungibleAsset;
+use miden_protocol::account::{AccountId, AccountPatch};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::{
     ExecutedTransaction,
@@ -39,8 +38,8 @@ impl ValidatedTransaction {
     }
 
     /// Returns a description of changes between the initial and final account states.
-    pub fn account_delta(&self) -> &AccountDelta {
-        self.0.account_delta()
+    pub fn account_patch(&self) -> &AccountPatch {
+        self.0.account_patch()
     }
 
     /// Returns the notes consumed in this transaction.
@@ -61,10 +60,5 @@ impl ValidatedTransaction {
     /// Returns the commitment of the final account state.
     pub fn final_account_hash(&self) -> Word {
         self.0.final_account().to_commitment()
-    }
-
-    /// Returns the fee of the transaction.
-    pub fn fee(&self) -> FungibleAsset {
-        self.0.fee()
     }
 }

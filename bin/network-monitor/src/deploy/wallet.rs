@@ -17,7 +17,7 @@ use miden_protocol::account::{
     StorageSlotName,
 };
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
-use miden_standards::account::auth::AuthSingleSig;
+use miden_standards::account::auth::{Approver, AuthSingleSig};
 use miden_standards::account::wallets::BasicWallet;
 use miden_standards::code_builder::CodeBuilder;
 use rand::{Rng, SeedableRng};
@@ -48,8 +48,11 @@ pub static WALLET_COUNTER_SLOT_NAME: LazyLock<StorageSlotName> = LazyLock::new(|
 pub fn create_wallet_account() -> Result<(Account, SecretKey)> {
     let mut rng = ChaCha20Rng::from_seed(rand::random());
     let secret_key = SecretKey::with_rng(&mut get_random_coin(&mut rng));
-    let auth_component: AccountComponent =
-        AuthSingleSig::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2).into();
+    let auth_component: AccountComponent = AuthSingleSig::new(Approver::new(
+        secret_key.public_key().into(),
+        AuthScheme::Falcon512Poseidon2,
+    ))
+    .into();
     let init_seed: [u8; 32] = rng.random();
 
     // The wallet carries its own counter component so it can increment a storage slot in the same
