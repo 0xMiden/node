@@ -55,10 +55,10 @@ use miden_tx::{
 };
 use tracing::Instrument;
 
-use crate::COMPONENT;
 use crate::actor::candidate::TransactionCandidate;
 use crate::clients::{RpcClient, RpcError};
 use crate::db::Db;
+use crate::{COMPONENT, LOG_TARGET};
 
 #[derive(Debug, thiserror::Error)]
 pub enum NtxError {
@@ -379,9 +379,12 @@ impl NtxContext {
                 let (successful, failed) = consumption_info.into_parts();
                 for failed_note in &failed {
                     tracing::info!(
-                        note.id = %failed_note.note().id(),
-                        nullifier = %failed_note.note().nullifier(),
-                        err = %failed_note.error().as_report(),
+                        target: LOG_TARGET,
+                        {
+                            note.id = %failed_note.note().id(),
+                            nullifier = %failed_note.note().nullifier(),
+                            err = %failed_note.error().as_report(),
+                        },
                         "note failed consumability check",
                     );
                 }

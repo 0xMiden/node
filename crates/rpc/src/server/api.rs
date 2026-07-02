@@ -41,9 +41,9 @@ use tokio_stream::Stream;
 use tonic::metadata::MetadataMap;
 use tonic::{IntoRequest, Request, Status};
 
-use crate::COMPONENT;
 use crate::server::api::subscription_ban::IpBanList;
 use crate::server::{NetworkTxAuth, RpcMode};
+use crate::{COMPONENT, LOG_TARGET};
 
 const NETWORK_TX_AUTH_HEADER_NAME: &str = "x-miden-network-tx-auth";
 
@@ -165,6 +165,7 @@ impl RpcService {
         .when(|err| err.code() == tonic::Code::Unavailable)
         .notify(|err, backoff| {
             tracing::warn!(
+                target: LOG_TARGET,
                 ?backoff,
                 %err,
                 "connection failed while fetching genesis header, retrying"

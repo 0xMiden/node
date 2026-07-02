@@ -18,7 +18,7 @@ use tracing::info;
 
 use crate::config::MonitorConfig;
 use crate::status::{NetworkStatus, ServiceStatus};
-use crate::{COMPONENT, view};
+use crate::{COMPONENT, LOG_TARGET, view};
 
 // SERVER STATE
 // ================================================================================================
@@ -48,8 +48,8 @@ pub async fn serve(server_state: ServerState, config: MonitorConfig) {
         .with_state(server_state);
 
     let bind_address = format!("0.0.0.0:{}", config.port);
-    info!("Starting web server on {bind_address}");
-    info!("Dashboard available at: http://localhost:{}/", config.port);
+    info!(target: LOG_TARGET, %bind_address, "Starting web server");
+    info!(target: LOG_TARGET, "Dashboard available at: http://localhost:{}/", config.port);
     let listener = tokio::net::TcpListener::bind(&bind_address)
         .await
         .expect("Failed to bind to address");

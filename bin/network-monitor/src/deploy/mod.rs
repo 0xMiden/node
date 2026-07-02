@@ -39,9 +39,9 @@ use miden_tx::{
 };
 use url::Url;
 
-use crate::COMPONENT;
 use crate::deploy::counter::create_counter_account;
 use crate::deploy::wallet::create_wallet_account;
+use crate::{COMPONENT, LOG_TARGET};
 
 pub mod counter;
 pub mod wallet;
@@ -145,13 +145,13 @@ pub async fn create_genesis_aware_rpc_client(
 /// (e.g., after a network reset) and re-syncing from the RPC is not sufficient. The accounts
 /// are never persisted to disk; the monitor re-creates them on every restart.
 pub async fn create_and_deploy_accounts(rpc_url: &Url) -> Result<(Account, SecretKey, Account)> {
-    tracing::info!("Creating fresh monitor accounts");
+    tracing::info!(target: LOG_TARGET, "Creating fresh monitor accounts");
 
     let (wallet_account, secret_key) = create_wallet_account()?;
     let counter_account = create_counter_account(wallet_account.id())?;
 
     deploy_counter_account(&counter_account, rpc_url).await?;
-    tracing::info!("Successfully created and deployed accounts");
+    tracing::info!(target: LOG_TARGET, "Successfully created and deployed accounts");
 
     Ok((wallet_account, secret_key, counter_account))
 }

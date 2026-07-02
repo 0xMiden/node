@@ -18,11 +18,11 @@ use tokio::time::{Instant, MissedTickBehavior};
 use tracing::{Instrument, Span};
 use url::Url;
 
-use crate::COMPONENT;
 use crate::domain::batch::SelectedBatch;
 use crate::domain::transaction::AuthenticatedTransaction;
 use crate::errors::{BuildBatchError, StoreError};
 use crate::mempool::SharedMempool;
+use crate::{COMPONENT, LOG_TARGET};
 
 // BATCH BUILDER
 // ================================================================================================
@@ -207,7 +207,7 @@ impl BatchBuilder {
             Ok(Ok(())) => Ok(()),
             Ok(Err(err)) => Err(err),
             Err(crash) => {
-                tracing::error!(message=%crash, "Batch worker pool panic'd");
+                tracing::error!(target: LOG_TARGET, message=%crash, "Batch worker pool panic'd");
                 panic!("Batch worker pool panic: {crash}");
             },
         }
