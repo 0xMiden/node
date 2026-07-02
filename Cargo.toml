@@ -120,6 +120,7 @@ tempfile           = { version = "3.12" }
 thiserror          = { default-features = false, version = "2.0" }
 tokio              = { default-features = false, version = "1.46" }
 tokio-stream       = { version = "0.1" }
+tokio-util         = { features = ["rt"], version = "0.7" }
 toml               = { version = "1.0" }
 tonic              = { default-features = false, version = "0.14" }
 tonic-health       = { version = "0.14" }

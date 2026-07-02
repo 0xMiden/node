@@ -6,6 +6,7 @@ use std::time::Duration;
 use assert_matches::assert_matches;
 use miden_node_proto::generated::remote_prover::api_client::ApiClient;
 use miden_node_proto::generated::remote_prover::{Proof, ProofRequest, ProofType};
+use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::asset::{Asset, FungibleAsset};
@@ -190,7 +191,7 @@ impl Server {
 async fn legacy_behaviour_with_capacity_1() {
     let (server, port) = Server::with_arbitrary_port(ProofKind::Transaction)
         .with_capacity(1)
-        .spawn()
+        .spawn(CancellationToken::new())
         .await
         .expect("server should spawn");
 
@@ -225,7 +226,7 @@ async fn legacy_behaviour_with_capacity_1() {
 async fn capacity_is_respected() {
     let (server, port) = Server::with_arbitrary_port(ProofKind::Transaction)
         .with_capacity(2)
-        .spawn()
+        .spawn(CancellationToken::new())
         .await
         .expect("server should spawn");
 
@@ -267,7 +268,7 @@ async fn capacity_is_respected() {
 async fn timeout_is_respected() {
     let (server, port) = Server::with_arbitrary_port(ProofKind::Transaction)
         .with_timeout(Duration::from_nanos(10))
-        .spawn()
+        .spawn(CancellationToken::new())
         .await
         .expect("server should spawn");
 
@@ -298,7 +299,7 @@ async fn timeout_is_respected() {
 #[tokio::test(flavor = "multi_thread")]
 async fn invalid_proof_kind_is_rejected() {
     let (server, port) = Server::with_arbitrary_port(ProofKind::Transaction)
-        .spawn()
+        .spawn(CancellationToken::new())
         .await
         .expect("server should spawn");
 
@@ -325,7 +326,7 @@ async fn invalid_proof_kind_is_rejected() {
 #[tokio::test(flavor = "multi_thread")]
 async fn unsupported_proof_kind_is_rejected() {
     let (server, port) = Server::with_arbitrary_port(ProofKind::Batch)
-        .spawn()
+        .spawn(CancellationToken::new())
         .await
         .expect("server should spawn");
 
@@ -348,7 +349,7 @@ async fn unsupported_proof_kind_is_rejected() {
 #[serial]
 async fn transaction_proof_is_correct() {
     let (server, port) = Server::with_arbitrary_port(ProofKind::Transaction)
-        .spawn()
+        .spawn(CancellationToken::new())
         .await
         .expect("server should spawn");
 
@@ -373,7 +374,7 @@ async fn transaction_proof_is_correct() {
 #[serial]
 async fn batch_proof_is_correct() {
     let (server, port) = Server::with_arbitrary_port(ProofKind::Batch)
-        .spawn()
+        .spawn(CancellationToken::new())
         .await
         .expect("server should spawn");
 

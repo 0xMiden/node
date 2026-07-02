@@ -39,7 +39,7 @@ async fn block_producer_starts_with_store_state() {
         mempool_tx_capacity: NonZeroUsize::new(100).unwrap(),
         batch_workers: DEFAULT_BATCH_WORKERS,
     }
-    .spawn()
+    .spawn(miden_node_utils::shutdown::CancellationToken::new())
     .await
     .unwrap();
 

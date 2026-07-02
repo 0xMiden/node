@@ -20,6 +20,7 @@ use anyhow::Context;
 use miden_node_proto::BlockProofRequest;
 use miden_node_store::state::{Finality, State};
 use miden_node_utils::retry::{self, Retryable};
+use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::block::{BlockNumber, BlockProof};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
@@ -59,6 +60,10 @@ impl ProofTaskJoinSet {
 
     fn len(&self) -> usize {
         self.0.len()
+    }
+
+    fn abort_all(&mut self) {
+        self.0.abort_all();
     }
 
     /// Spawns a new task to prove a block.
@@ -106,6 +111,7 @@ pub(crate) async fn run(
     state: Arc<State>,
     mut chain_tip_rx: watch::Receiver<BlockNumber>,
     max_concurrent_proofs: NonZeroUsize,
+    shutdown: CancellationToken,
 ) -> anyhow::Result<()> {
     info!(target: LOG_TARGET, "Proof scheduler started");
 
@@ -129,6 +135,10 @@ pub(crate) async fn run(
 
         // Wait for either a job to complete or the chain tip to advance.
         tokio::select! {
+            () = shutdown.cancelled() => {
+                proving_tasks.abort_all();
+                return Ok(());
+            },
             // Proving a block has completed - cache and commit the proof.
             proving_result = proving_tasks.join_next() => {
                 let (block_num, proof_bytes) = proving_result?;
@@ -283,5 +293,30 @@ impl ProveBlockError {
             },
             _ => Self::Transient(err.into()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::pending;
+    use std::time::Duration;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn abort_all_cancels_inflight_proof_tasks_without_waiting_for_completion() {
+        let mut tasks = ProofTaskJoinSet::new();
+        tasks
+            .0
+            .spawn(async { pending::<anyhow::Result<(BlockNumber, Vec<u8>)>>().await });
+
+        tasks.abort_all();
+
+        let result = tokio::time::timeout(Duration::from_millis(100), tasks.0.join_next())
+            .await
+            .expect("aborted proof task should be joinable immediately")
+            .expect("join set should contain the aborted proof task");
+
+        assert!(result.is_err_and(|err| err.is_cancelled()));
     }
 }

@@ -12,6 +12,7 @@ use candidate::TransactionCandidate;
 use futures::FutureExt;
 use miden_node_utils::ErrorReport;
 use miden_node_utils::lru_cache::LruCache;
+use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountDelta, AccountId};
@@ -284,7 +285,11 @@ impl AccountActor {
     ///
     /// - `Ok(())`: intentional shutdown (idle timeout).
     /// - `Err(_)`: crash (database error, semaphore failure, or any other bug).
-    pub async fn run(self, semaphore: Arc<Semaphore>) -> anyhow::Result<()> {
+    pub async fn run(
+        self,
+        semaphore: Arc<Semaphore>,
+        shutdown: CancellationToken,
+    ) -> anyhow::Result<()> {
         let account_id = self.account_id;
 
         // Load the account once and keep it in memory for the actor's lifetime, advancing it from
@@ -334,6 +339,7 @@ impl AccountActor {
             };
 
             tokio::select! {
+                () = shutdown.cancelled() => return Ok(()),
                 // A committed block touched this account (or the coordinator woke everyone): the
                 // submission may have landed (advancing the in-memory account by its own delta),
                 // the submission may have expired, or new notes may be available.
@@ -809,7 +815,7 @@ mod tests {
         let notify = Arc::new(Notify::new());
         let actor = AccountActor::new(account_id, &ctx, notify.clone());
         let semaphore = Arc::new(Semaphore::new(1));
-        let handle = tokio::spawn(actor.run(semaphore));
+        let handle = tokio::spawn(actor.run(semaphore, CancellationToken::new()));
 
         // Wake the actor far more often than the idle timeout, and keep doing so for longer than
         // the test's deadline. With a per-iteration `sleep(idle_timeout)` every wake would restart

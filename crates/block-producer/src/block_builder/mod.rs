@@ -4,6 +4,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use miden_node_store::state::State;
 use miden_node_utils::formatting::format_array;
+use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::tracing::{ErrorSpanExt, miden_instrument, miden_span_record};
 use miden_protocol::batch::{OrderedBatches, ProvenBatch};
@@ -52,7 +53,11 @@ impl BlockBuilder {
     ///   2. Compiling these batches into the next block
     ///   3. Proving the block (this is simulated using random sleeps)
     ///   4. Committing the block to the store
-    pub async fn run(self, mempool: SharedMempool) -> anyhow::Result<()> {
+    pub async fn run(
+        self,
+        mempool: SharedMempool,
+        shutdown: CancellationToken,
+    ) -> anyhow::Result<()> {
         let mut interval = tokio::time::interval(self.block_interval);
         // We set the interval's missed tick behaviour to burst. This means we'll catch up missed
         // blocks as fast as possible. In other words, we try our best to keep the desired block
@@ -60,7 +65,10 @@ impl BlockBuilder {
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Burst);
 
         loop {
-            interval.tick().await;
+            tokio::select! {
+                () = shutdown.cancelled() => return Ok(()),
+                _ = interval.tick() => {},
+            }
 
             // Exit if a fatal error occurred.
             //

@@ -10,6 +10,7 @@ mod store;
 use clap::Subcommand;
 pub use lifecycle::{BootstrapCommand, MigrateCommand};
 use miden_node_utils::logging::OpenTelemetry;
+use miden_node_utils::shutdown::CancellationToken;
 pub use modes::{FullNodeCommand, SequencerCommand};
 pub use recover::RecoverCommand;
 
@@ -80,12 +81,12 @@ impl Command {
         }
     }
 
-    pub(crate) async fn execute(self) -> anyhow::Result<()> {
+    pub(crate) async fn execute(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         match self {
             Command::Bootstrap(bootstrap_command) => bootstrap_command.handle().await,
             Command::Migrate(migrate_command) => migrate_command.handle(),
-            Command::Sequencer(sequencer_command) => sequencer_command.handle().await,
-            Command::Full(full_node_command) => full_node_command.handle().await,
+            Command::Sequencer(sequencer_command) => sequencer_command.handle(shutdown).await,
+            Command::Full(full_node_command) => full_node_command.handle(shutdown).await,
             Command::Recover(recover_command) => recover_command.handle().await,
         }
     }

@@ -13,6 +13,7 @@ use miden_node_utils::genesis::{
     read_signed_genesis_block,
 };
 use miden_node_utils::logging::OpenTelemetry;
+use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::block::SignedBlock;
 use tokio::net::TcpListener;
 use tonic::metadata::AsciiMetadataValue;
@@ -162,9 +163,9 @@ pub enum NtxBuilderCommand {
 }
 
 impl NtxBuilderCommand {
-    pub async fn handle(self) -> anyhow::Result<()> {
+    pub async fn handle(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         match self {
-            Self::Start { .. } => self.start().await,
+            Self::Start { .. } => self.start(shutdown).await,
             Self::Bootstrap {
                 data_directory,
                 genesis_block_file,
@@ -185,7 +186,7 @@ impl NtxBuilderCommand {
         }
     }
 
-    async fn start(self) -> anyhow::Result<()> {
+    async fn start(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         let Self::Start {
             listen,
             rpc_url,
@@ -223,10 +224,10 @@ impl NtxBuilderCommand {
         };
 
         config
-            .build()
+            .build(shutdown.clone())
             .await
             .context("failed to initialize ntx builder")?
-            .run(listener)
+            .run(listener, shutdown)
             .await
             .context("failed while running ntx builder component")
     }
