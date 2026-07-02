@@ -657,6 +657,15 @@ fn transaction_record_to_proto(
         })
         .collect();
 
+    let consumed_note_refs = record
+        .consumed_note_refs
+        .into_iter()
+        .map(|(nullifier, note_id)| proto::rpc::ConsumedNoteRef {
+            nullifier: Some(nullifier.into()),
+            note_id: Some((&note_id).into()),
+        })
+        .collect();
+
     proto::rpc::TransactionRecord {
         header: Some(proto::transaction::TransactionHeader {
             transaction_id: Some(record.header.id().into()),
@@ -669,6 +678,7 @@ fn transaction_record_to_proto(
         }),
         block_num: record.block_num.as_u32(),
         output_note_proofs,
+        consumed_note_refs,
     }
 }
 

@@ -672,6 +672,20 @@ message TransactionRecord {
     // within the same batch) can be identified by comparing note IDs here with
     // `header.output_notes`. Any note present in the header but absent here was erased.
     repeated note.NoteInclusionInBlockProof output_note_proofs = 3;
+
+    // Maps a consumed input note's nullifier to its note ID, for the public notes the node can
+    // resolve. Authenticated inputs in `header.input_notes` carry only a nullifier, so this lets a
+    // follower recover the consumed note via `GetNotesById`. Private notes are absent.
+    repeated ConsumedNoteRef consumed_note_refs = 4;
+}
+
+// Maps a consumed input note's nullifier to its note ID.
+message ConsumedNoteRef {
+    // The nullifier of the consumed input note.
+    primitives.Digest nullifier = 1;
+
+    // The ID of the note the nullifier resolves to.
+    note.NoteId note_id = 2;
 }
 
 // GET NETWORK NOTE STATUS

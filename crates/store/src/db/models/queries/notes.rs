@@ -369,6 +369,44 @@ pub(crate) fn select_note_sync_records(
         .collect()
 }
 
+/// Maps each given nullifier to its note ID.
+///
+/// Only public notes have a nullifier stored (`notes.nullifier` is NULL for private notes), so
+/// private notes never match and are absent from the result.
+///
+/// ```sql
+/// SELECT
+///     nullifier,
+///     note_id
+/// FROM
+///     notes
+/// WHERE
+///     nullifier IN (?1)
+/// ```
+pub(crate) fn select_note_ids_by_nullifier(
+    conn: &mut SqliteConnection,
+    nullifiers: &[Nullifier],
+) -> Result<BTreeMap<Nullifier, NoteId>, DatabaseError> {
+    if nullifiers.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    let nullifier_bytes: Vec<Vec<u8>> = nullifiers.iter().map(Nullifier::to_bytes).collect();
+    let pairs =
+        SelectDsl::select(schema::notes::table, (schema::notes::nullifier, schema::notes::note_id))
+            .filter(schema::notes::nullifier.eq_any(nullifier_bytes))
+            .load::<(Option<Vec<u8>>, Vec<u8>)>(conn)?;
+
+    let mut note_ids_by_nullifier = BTreeMap::new();
+    for (nullifier, note_id) in pairs {
+        let Some(nullifier) = nullifier else { continue };
+        let nullifier = Nullifier::read_from_bytes(&nullifier)?;
+        let note_id = NoteId::read_from_bytes(&note_id)?;
+        note_ids_by_nullifier.insert(nullifier, note_id);
+    }
+    Ok(note_ids_by_nullifier)
+}
+
 /// Returns the script for a note by its root.
 ///
 /// ```sql
