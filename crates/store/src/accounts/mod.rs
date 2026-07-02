@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 
 #[cfg(feature = "rocksdb")]
 use miden_large_smt_backend_rocksdb::RocksDbStorage;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::account::{AccountId, AccountIdPrefix};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::block::account_tree::{AccountMutationSet, AccountTree, AccountWitness};
@@ -25,7 +26,6 @@ use miden_protocol::crypto::merkle::{
 };
 use miden_protocol::errors::AccountTreeError;
 use miden_protocol::{EMPTY_WORD, Word};
-use tracing::instrument;
 
 use crate::COMPONENT;
 
@@ -189,7 +189,10 @@ impl<S: SmtStorage> AccountTreeWithHistory<S> {
     }
 
     /// Opens an account at the latest block, returning its witness.
-    #[instrument(target = COMPONENT, skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+    )]
     pub fn open_latest(&self, account_id: AccountId) -> AccountWitness {
         self.latest.open(account_id)
     }
@@ -202,7 +205,10 @@ impl<S: SmtStorage> AccountTreeWithHistory<S> {
     /// 3. Reconstructing the Merkle path with the historical node values
     ///
     /// Returns `None` if the block is in the future or too old (pruned).
-    #[instrument(target = COMPONENT, skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+    )]
     pub fn open_at(
         &self,
         account_id: AccountId,
@@ -252,7 +258,10 @@ impl<S: SmtStorage> AccountTreeWithHistory<S> {
     }
 
     /// Reconstructs a historical account witness by applying reversion overlays.
-    #[instrument(target = COMPONENT, skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+    )]
     fn reconstruct_historical_witness(
         &self,
         account_id: AccountId,
@@ -301,7 +310,10 @@ impl<S: SmtStorage> AccountTreeWithHistory<S> {
     ///
     /// Iterates through overlays from newest to oldest (walking backwards in time),
     /// updating both the path nodes and the leaf value based on reversion mutations.
-    #[instrument(target = COMPONENT, skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+    )]
     fn apply_reversion_overlays<'a>(
         overlays: impl IntoIterator<Item = &'a HistoricalOverlay>,
         mut path_nodes: [Word; SMT_DEPTH as usize],
@@ -373,7 +385,10 @@ impl<S: SmtStorage> AccountTreeWithHistory<S> {
     /// 2. Stores the reversion data as a historical overlay
     /// 3. Advances the block number
     /// 4. Prunes old overlays if exceeding `MAX_HISTORY`
-    #[instrument(target = COMPONENT, skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+    )]
     pub fn apply_mutations(
         &mut self,
         mutations: AccountMutationSet,

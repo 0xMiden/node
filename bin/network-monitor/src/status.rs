@@ -8,7 +8,8 @@
 use std::time::Duration;
 
 use miden_node_proto::clients::RpcClient;
-use tracing::{debug, instrument};
+use miden_node_utils::tracing::miden_instrument;
+use tracing::debug;
 use url::Url;
 
 use crate::COMPONENT;
@@ -117,13 +118,13 @@ impl Service for RpcService {
         )
     }
 
-    #[instrument(
+    #[miden_instrument(
         parent = None,
         target = COMPONENT,
         name = "network_monitor.status.check_rpc",
         skip_all,
         level = "info",
-        ret(level = "debug")
+        ret(level = "debug"),
     )]
     async fn check(&mut self) -> ServiceStatus {
         match self.rpc.status(()).await {

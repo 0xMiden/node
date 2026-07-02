@@ -3364,7 +3364,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "tokio-stream",
  "toml",
  "tracing",
 ]
@@ -3395,6 +3394,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "miden-node-tracing-macro"
+version = "0.15.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "miden-node-utils"
 version = "0.15.0"
 dependencies = [
@@ -3410,6 +3418,7 @@ dependencies = [
  "itertools 0.14.0",
  "lru",
  "miden-large-smt-backend-rocksdb",
+ "miden-node-tracing-macro",
  "miden-protocol",
  "opentelemetry",
  "opentelemetry-otlp",
@@ -3426,6 +3435,7 @@ dependencies = [
  "tracing-forest",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "trybuild",
  "url",
 ]
 
@@ -3575,7 +3585,6 @@ dependencies = [
  "miden-testing",
  "miden-tx",
  "miden-tx-batch-prover",
- "opentelemetry",
  "serial_test",
  "tokio",
  "tokio-stream",

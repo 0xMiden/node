@@ -11,6 +11,7 @@ use std::sync::Arc;
 use miden_node_proto::domain::batch::BatchInputs;
 use miden_node_utils::clap::StorageOptions;
 use miden_node_utils::formatting::format_array;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::account_tree::AccountWitness;
@@ -21,7 +22,7 @@ use miden_protocol::crypto::merkle::smt::{LargeSmt, SmtStorage};
 use miden_protocol::note::{NoteId, NoteScript, Nullifier};
 use miden_protocol::transaction::PartialBlockchain;
 use tokio::sync::{Mutex, RwLock, watch};
-use tracing::{Instrument, Span, info, instrument};
+use tracing::{Instrument, Span};
 
 use crate::account_state_forest::{AccountStateForest, AccountStateForestBackend};
 use crate::accounts::AccountTreeWithHistory;
@@ -60,20 +61,6 @@ mod replica;
 pub use replica::{BlockCache, BlockNotification, ProofCache, ProofNotification};
 
 mod account;
-
-mod subscription;
-pub use subscription::{
-    BlockSubscriptionError,
-    BlockSubscriptionEvent,
-    BlockSubscriptionStream,
-    ProofSubscriptionError,
-    ProofSubscriptionEvent,
-    ProofSubscriptionStream,
-    SUBSCRIBER_CHANNEL_CAPACITY,
-    SubscriptionSource,
-    SubscriptionStreamError,
-    run_stream,
-};
 
 mod apply_block;
 mod apply_proof;
@@ -181,7 +168,10 @@ impl State {
     ///
     /// The loaded state owns all store data structures and exposes subscription methods for
     /// sequencer and replica tasks.
-    #[instrument(target = COMPONENT, skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+    )]
     pub async fn load(
         data_path: &Path,
         storage_options: StorageOptions,
@@ -194,7 +184,10 @@ impl State {
     ///
     /// The loaded state owns all store data structures and exposes subscription methods for
     /// sequencer and replica tasks.
-    #[instrument(target = COMPONENT, skip_all)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+    )]
     pub async fn load_with_database_options(
         data_path: &Path,
         storage_options: StorageOptions,
@@ -296,7 +289,7 @@ impl State {
     }
 
     /// Returns a watch receiver that wakes every time the proven-in-sequence tip advances.
-    pub(crate) fn subscribe_proven_tip(&self) -> watch::Receiver<BlockNumber> {
+    pub fn subscribe_proven_tip(&self) -> watch::Receiver<BlockNumber> {
         self.proven_tip.subscribe()
     }
 
@@ -372,7 +365,12 @@ impl State {
     ///
     /// If [None] is given as the value of `block_num`, the data for the latest [BlockHeader] is
     /// returned.
-    #[instrument(level = "debug", target = COMPONENT, skip_all, ret(level = "debug"), err)]
+    #[miden_instrument(
+        level = "debug",
+        target = COMPONENT,
+        skip_all,
+        err,
+    )]
     pub async fn get_block_header(
         &self,
         block_num: Option<BlockNumber>,
@@ -655,15 +653,20 @@ impl State {
     }
 
     /// Returns data needed by the block producer to verify transactions validity.
-    #[instrument(target = COMPONENT, skip_all, ret)]
+    #[miden_instrument(
+        target = COMPONENT,
+        skip_all,
+        fields(
+            account.id=%account_id,
+            nullifiers = %format_array(nullifiers),
+        ),
+    )]
     pub async fn get_transaction_inputs(
         &self,
         account_id: AccountId,
         nullifiers: &[Nullifier],
         unauthenticated_note_commitments: Vec<Word>,
     ) -> Result<TransactionInputs, DatabaseError> {
-        info!(target: COMPONENT, account_id = %account_id.to_string(), nullifiers = %format_array(nullifiers));
-
         let tree_inputs = self.with_inner_read_blocking(|inner| {
             let account_commitment = inner.account_tree.get_latest_commitment(account_id);
 
@@ -734,7 +737,8 @@ impl State {
         }
     }
 
-    /// Loads a block from the block store. Return `Ok(None)` if the block is not found.
+    /// Loads a block from the in-memory replica cache or block store. Return `Ok(None)` if the
+    /// block is not found.
     pub async fn load_block(
         &self,
         block_num: BlockNumber,
@@ -742,16 +746,23 @@ impl State {
         if block_num > self.chain_tip(Finality::Committed).await {
             return Ok(None);
         }
+        if let Some(block) = self.block_cache.get(block_num) {
+            return Ok(Some(block.block_bytes().to_vec()));
+        }
         self.block_store.load_block(block_num).await.map_err(Into::into)
     }
 
-    /// Loads a block proof from the block store. Returns `Ok(None)` if the proof is not found.
+    /// Loads a block proof from the in-memory replica cache or block store. Returns `Ok(None)` if
+    /// the proof is not found.
     pub async fn load_proof(
         &self,
         block_num: BlockNumber,
     ) -> Result<Option<Vec<u8>>, DatabaseError> {
         if block_num > self.chain_tip(Finality::Proven).await {
             return Ok(None);
+        }
+        if let Some(proof) = self.proof_cache.get(block_num) {
+            return Ok(Some(proof.proof_bytes().to_vec()));
         }
         self.block_store.load_proof(block_num).await.map_err(Into::into)
     }

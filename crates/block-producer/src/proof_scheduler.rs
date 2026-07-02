@@ -20,17 +20,18 @@ use anyhow::Context;
 use miden_node_proto::BlockProofRequest;
 use miden_node_store::state::{Finality, State};
 use miden_node_utils::retry::{self, Retryable};
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::block::{BlockNumber, BlockProof};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_remote_prover_client::RemoteProverClientError;
 use thiserror::Error;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
-use tracing::{Instrument, info, instrument};
+use tracing::{Instrument, debug, info};
 
-use crate::COMPONENT;
 use crate::block_prover::{BlockProver, ProverError};
 use crate::errors::ProofSchedulerError;
+use crate::{COMPONENT, LOG_TARGET};
 
 // CONSTANTS
 // ================================================================================================
@@ -106,7 +107,7 @@ pub(crate) async fn run(
     mut chain_tip_rx: watch::Receiver<BlockNumber>,
     max_concurrent_proofs: NonZeroUsize,
 ) -> anyhow::Result<()> {
-    info!(target: COMPONENT, "Proof scheduler started");
+    info!(target: LOG_TARGET, "Proof scheduler started");
 
     // In-flight proving tasks.
     let mut proving_tasks = ProofTaskJoinSet::new();
@@ -144,7 +145,7 @@ pub(crate) async fn run(
             // New chain tip received - re-enter the scheduling loop on next iteration.
             result = chain_tip_rx.changed() => {
                 if result.is_err() {
-                    info!(target: COMPONENT, "Chain tip channel closed, proof scheduler exiting");
+                    debug!(target: LOG_TARGET, "Chain tip channel closed, proof scheduler exiting");
                     return Ok(());
                 }
             },
@@ -156,8 +157,15 @@ pub(crate) async fn run(
 // ================================================================================================
 
 /// Proves a single block and returns the proof bytes on success.
-#[instrument(target = COMPONENT, name = "prove_block", skip_all,
-    fields(block.number=block_num.as_u32()), err)]
+#[miden_instrument(
+    target = COMPONENT,
+    name = "prove_block",
+    skip_all,
+    fields(
+        block.number=block_num.as_u32(),
+    ),
+    err,
+)]
 async fn prove_block(
     state: &State,
     block_prover: &BlockProver,
@@ -220,7 +228,15 @@ async fn prove_block(
 }
 
 /// Generates a block proof by loading inputs from the block store and invoking the block prover.
-#[instrument(target = COMPONENT, name = "prove_block.generate", skip_all, fields(block.number=block_num.as_u32()), err)]
+#[miden_instrument(
+    target = COMPONENT,
+    name = "prove_block.generate",
+    skip_all,
+    fields(
+        block.number=block_num.as_u32(),
+    ),
+    err,
+)]
 async fn generate_block_proof(
     state: &State,
     block_prover: &BlockProver,

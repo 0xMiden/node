@@ -94,6 +94,9 @@ mod bootstrap_tests {
 
 const COMPONENT: &str = "miden-ntx-builder";
 
+// Tracing target used for user-visible events.
+const LOG_TARGET: &str = "user::miden-ntx-builder";
+
 /// Default maximum number of network notes a network transaction is allowed to consume.
 const DEFAULT_MAX_NOTES_PER_TX: NonZeroUsize = NonZeroUsize::new(20).expect("literal is non-zero");
 const _: () = assert!(DEFAULT_MAX_NOTES_PER_TX.get() <= miden_tx::MAX_NUM_CHECKER_NOTES);
@@ -410,7 +413,8 @@ impl NtxBuilderConfig {
 
         let block_from = last_applied_block.child();
 
-        tracing::info!(
+        tracing::debug!(
+            target: LOG_TARGET,
             %block_from,
             "ntx-builder opening committed-block subscription"
         );

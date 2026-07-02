@@ -18,6 +18,7 @@ use miden_node_utils::limiter::{
     QueryParamLimiter,
     QueryParamNoteCommitmentLimit,
 };
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{NoteHeader, NoteId, Nullifier};
@@ -61,7 +62,7 @@ pub struct TransactionRecordRaw {
 ///
 /// The [`SqliteConnection`] object is not consumed. It's up to the caller to commit or rollback the
 /// transaction.
-#[tracing::instrument(
+#[miden_instrument(
     target = COMPONENT,
     skip_all,
     err,

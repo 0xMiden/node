@@ -13,13 +13,14 @@ use std::time::{Duration, Instant};
 
 use miden_node_proto::clients::{RemoteProverClient, RemoteProverProxyStatusClient};
 use miden_node_proto::generated as proto;
+use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::utils::serde::Serializable;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 use tonic::Request;
-use tracing::{debug, instrument, warn};
+use tracing::{debug, warn};
 use url::Url;
 
 use crate::COMPONENT;
@@ -269,14 +270,16 @@ impl Service for ProverStatusService {
         self.build_status(&ProbeSnapshot::default())
     }
 
-    #[instrument(
+    #[miden_instrument(
         parent = None,
         target = COMPONENT,
         name = "network_monitor.prover.status_check",
         skip_all,
         level = "info",
         ret(level = "debug"),
-        fields(prover = %self.name)
+        fields(
+            prover = %self.name,
+        ),
     )]
     async fn check(&mut self) -> ServiceStatus {
         match self.client.status(()).await {
@@ -349,13 +352,15 @@ const PAYLOAD_RETRY_DELAY: Duration = Duration::from_secs(30);
 /// is unreachable at spawn time delays probing instead of permanently disarming it. Acquisition
 /// failures are published as [`Status::Unknown`] outcomes: they are an RPC problem, not a prover
 /// failure.
-#[instrument(
+#[miden_instrument(
     parent = None,
     target = COMPONENT,
     name = "network_monitor.prover.run_test",
     skip_all,
     level = "info",
-    fields(prover = %name),
+    fields(
+        prover = %name,
+    ),
 )]
 async fn run_prover_test(
     mut client: RemoteProverClient,
@@ -483,14 +488,14 @@ fn tonic_status_to_json(status: &tonic::Status) -> String {
 /// [`crate::deploy::build_probe_transaction_inputs`]); the remote prover re-executes and proves it.
 /// This requires a single RPC read for the genesis block header and is independent of the network
 /// transaction service.
-#[instrument(
+#[miden_instrument(
     parent = None,
     target = COMPONENT,
     name = "network_monitor.remote_prover.generate_prover_test_payload",
     skip_all,
     level = "info",
     ret(level = "debug"),
-    err
+    err,
 )]
 async fn generate_prover_test_payload(
     rpc_url: &Url,

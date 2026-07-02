@@ -13,3 +13,6 @@ pub use signers::{KmsSigner, ValidatorSigner};
 
 /// The name of the validator component.
 pub const COMPONENT: &str = "miden-validator";
+
+/// The target to use for user-visible events.
+pub const LOG_TARGET: &str = "user::miden-validator";
