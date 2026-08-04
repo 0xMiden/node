@@ -40,9 +40,42 @@ This flow supports initial storage-key bootstrap only. The validator loads one s
 shares, and validator-set changes are not yet supported. Keep each operator bundle available for as long as records from
 its epoch may need to be decrypted.
 
-First, each operator creates a DKG identity for the agreed storage-key epoch and sends `registration.toml` to the
-coordinator. The registration proves ownership of the DKG identity secret. The signing key must match one key in
-genesis. Use `--signing-key.hex` instead of KMS only for local or private deployments.
+For the normal ceremony, one operator starts the durable Iroh bulletin board:
+
+```bash
+miden-validator golden-dkg board \
+  --data-directory golden-board \
+  --genesis genesis.dat \
+  --threshold 2 \
+  --epoch <32-byte-hex-epoch> \
+  --ticket-output golden-board-ticket
+```
+
+The command writes one board ticket. Send the file to each genesis validator through the authenticated bootstrap
+channel. The ticket grants read access and permission to upload bounded ceremony artifacts. Do not publish it. Keep the
+board running until every validator reports ceremony completion, then stop it with Ctrl-C.
+
+Each validator then runs the full ceremony with its own signing key and private work directory:
+
+```bash
+miden-validator golden-dkg run \
+  --board-file <board-ticket-file> \
+  --genesis genesis.dat \
+  --signing-key.kms-id <validator-kms-key-id> \
+  --work-directory golden-work \
+  --output-directory storage-key
+```
+
+Both commands can restart with the same data and work directories. Give `--ticket-output` a new path when restarting the
+board because it will not overwrite a ticket file. The board prepares the common files after all signed registrations
+arrive. Each validator checks every artifact, writes its own storage key bundle, and confirms that all validators
+produced the same public output. A board directory from an older format cannot be reopened; start that ceremony again in
+a new directory.
+
+The commands below provide a manual recovery path. First, each operator creates a DKG identity for the agreed storage-key
+epoch and sends `registration.toml` to the coordinator. The registration proves ownership of the DKG identity secret.
+The signing key must match one key in genesis. Use `--signing-key.hex` instead of KMS only for local or private
+deployments.
 
 ```bash
 miden-validator dkg identity \
