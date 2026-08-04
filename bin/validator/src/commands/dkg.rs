@@ -49,6 +49,8 @@ use super::ValidatorSigningKey;
 
 #[cfg(test)]
 mod tests;
+mod board;
+mod runner;
 
 type StorageGroup = Secp256k1GoldenGroup;
 type StorageScalar = <StorageGroup as GoldenGroup>::Scalar;
@@ -92,6 +94,12 @@ pub struct DkgOptions {
 /// DKG ceremony commands.
 #[derive(clap::Subcommand)]
 enum DkgCommand {
+    /// Runs the shared Iroh bulletin board for a ceremony.
+    Board(runner::GoldenDkgBoardServeOptions),
+
+    /// Runs every ceremony stage for one validator through an Iroh board.
+    Run(runner::GoldenDkgRunOptions),
+
     /// Generates this validator's DKG identity and public registration.
     Identity {
         /// Trusted genesis block for the network.
@@ -339,6 +347,8 @@ struct DealingSet {
 /// Runs one DKG ceremony command.
 pub async fn run(options: DkgOptions) -> anyhow::Result<()> {
     match options.command {
+        DkgCommand::Board(options) => runner::serve_board(options).await,
+        DkgCommand::Run(options) => runner::run_validator(options).await,
         DkgCommand::Identity {
             genesis,
             epoch,
