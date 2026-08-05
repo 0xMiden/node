@@ -205,15 +205,16 @@ starting the network. This can take several minutes. For a faster local start, s
 `MIDEN_VALIDATOR_USE_STORAGE_KEY_FIXTURE=true` to use the committed insecure fixture instead. The fixture is public test
 data and must never be used outside local development.
 
-To exercise the production ceremony and Iroh document locally, build the validator image and run the opt-in check:
+To exercise the production ceremony through an Iroh document, build the validator image and run the opt-in check. The
+fixture flag skips the separate bootstrap ceremony, so the command runs only the Iroh ceremony under test.
 
 ```bash
 make docker-build-validator
-docker compose --profile golden-dkg run --rm golden-dkg-check
+MIDEN_VALIDATOR_USE_STORAGE_KEY_FIXTURE=true \
+docker compose --profile storage-key-dkg run --rm storage-key-dkg-check
 ```
 
-This runs the production proof backend and can take several minutes. It does not replace the fixture used by normal
-local startup.
+This runs the production proof backend and can take several minutes.
 
 ## Check the RPC API
 

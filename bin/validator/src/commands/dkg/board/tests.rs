@@ -12,7 +12,7 @@ impl BoardNode {
     fn local_writer_for_test(&self) -> &BoardWriter {
         match &self.publisher {
             Publisher::Local(writer) => writer,
-            Publisher::Remote { .. } => panic!("expected local Golden board writer"),
+            Publisher::Remote { .. } => panic!("expected local DKG board writer"),
         }
     }
 
@@ -36,7 +36,7 @@ impl BoardNode {
                 )
                 .await
             },
-            Publisher::Local(_) => anyhow::bail!("expected remote Golden board publisher"),
+            Publisher::Local(_) => anyhow::bail!("expected remote DKG board publisher"),
         }
     }
 
@@ -168,7 +168,7 @@ async fn invalid_upload_secret_is_rejected_before_storage() -> anyhow::Result<()
         .publish(&ArtifactSlot::Registration(1), b"signed registration")
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("invalid Golden board upload secret"));
+    assert!(error.to_string().contains("invalid DKG board upload secret"));
     assert!(host.read_unique(&ArtifactSlot::Registration(1)).await?.is_none());
 
     client.shutdown().await?;

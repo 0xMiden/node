@@ -62,10 +62,10 @@ const ACCEPTANCE_DIRECTORY: &str = "acceptance";
 const PUBLIC_ACCEPTANCES_DIRECTORY: &str = "public-acceptances";
 const BOARD_DIRECTORY: &str = "board";
 const CEREMONY_WAIT_TIMEOUT: Duration = Duration::from_hours(24);
-const PUBLIC_OUTPUT_DIGEST_DOMAIN: &[u8] = b"miden-golden-dkg-public-output-v1";
-const FINAL_CONFIRMATION_VERSION: &str = "miden-golden-dkg-final-confirmation-v1";
+const PUBLIC_OUTPUT_DIGEST_DOMAIN: &[u8] = b"miden-storage-key-dkg-public-output-v1";
+const FINAL_CONFIRMATION_VERSION: &str = "miden-storage-key-dkg-final-confirmation-v1";
 const FINAL_CONFIRMATION_SIGNATURE_DOMAIN: &[u8] =
-    b"miden-golden-dkg-final-confirmation-signature-v1";
+    b"miden-storage-key-dkg-final-confirmation-signature-v1";
 
 #[derive(Deserialize, Serialize)]
 struct FinalConfirmation {
@@ -75,10 +75,10 @@ struct FinalConfirmation {
     validator_signature: String,
 }
 
-/// Inputs for the shared Golden DKG board.
+/// Inputs for the shared storage key DKG board.
 #[derive(clap::Args)]
-pub(super) struct GoldenDkgBoardServeOptions {
-    /// Durable directory for the Iroh endpoint, document, and common ceremony files.
+pub(super) struct DkgBoardServeOptions {
+    /// This directory stores Iroh data and common ceremony files.
     #[arg(long, value_name = "DIR")]
     data_directory: PathBuf,
 
@@ -99,10 +99,10 @@ pub(super) struct GoldenDkgBoardServeOptions {
     ticket_output: Option<PathBuf>,
 }
 
-/// Inputs for one validator's automatic Golden DKG ceremony runner.
+/// Inputs for one validator's automatic storage key DKG ceremony runner.
 #[derive(clap::Args)]
-pub(super) struct GoldenDkgRunOptions {
-    /// Read and upload ticket printed by `golden-dkg board`.
+pub(super) struct DkgRunOptions {
+    /// Read and upload ticket printed by `dkg board`.
     #[arg(long, value_name = "BOARD_TICKET", required_unless_present = "board_file")]
     board: Option<String>,
 
@@ -128,17 +128,19 @@ pub(super) struct GoldenDkgRunOptions {
 }
 
 /// Runs one validator through every DKG phase.
-pub(super) async fn run_validator(options: GoldenDkgRunOptions) -> anyhow::Result<()> {
+pub(super) async fn run_validator(options: DkgRunOptions) -> anyhow::Result<()> {
     let board = if let Some(ticket) = options.board {
         ticket
     } else {
         let path = options.board_file.context("a board ticket or board ticket file is required")?;
         fs_err::read_to_string(&path)
-            .with_context(|| format!("failed to read Golden DKG board ticket {}", path.display()))?
+            .with_context(|| {
+                format!("failed to read storage key DKG board ticket {}", path.display())
+            })?
             .trim()
             .to_owned()
     };
-    ensure!(!board.is_empty(), "Golden DKG board ticket must not be empty");
+    ensure!(!board.is_empty(), "storage key DKG board ticket must not be empty");
     let signer = options.signing_key.into_signer().await?;
     run_validator_with_network::<SecpSecqBackend>(
         &board,
@@ -152,15 +154,15 @@ pub(super) async fn run_validator(options: GoldenDkgRunOptions) -> anyhow::Resul
     .await
 }
 
-pub(super) async fn serve_board(options: GoldenDkgBoardServeOptions) -> anyhow::Result<()> {
+pub(super) async fn serve_board(options: DkgBoardServeOptions) -> anyhow::Result<()> {
     let genesis = read_trusted_genesis(&options.genesis)?;
     let participant_count = genesis.inner().header().validator_keys().as_keys().len();
     let (board, ticket) = BoardNode::create(&options.data_directory, participant_count).await?;
     if let Some(path) = &options.ticket_output {
         write_new_file(path, ticket.to_string().as_bytes(), true)?;
-        println!("Golden DKG board ticket written to {}", path.display());
+        println!("storage key DKG board ticket written to {}", path.display());
     } else {
-        println!("Golden DKG board ticket:\n{ticket}");
+        println!("storage key DKG board ticket:\n{ticket}");
     }
 
     let result = async {
@@ -173,7 +175,7 @@ pub(super) async fn serve_board(options: GoldenDkgBoardServeOptions) -> anyhow::
             CEREMONY_WAIT_TIMEOUT,
         )
         .await?;
-        println!("Golden DKG board is ready. Press Ctrl-C to stop it.");
+        println!("storage key DKG board is ready. Press Ctrl-C to stop it.");
         tokio::signal::ctrl_c().await.context("failed to wait for Ctrl-C")
     }
     .await;
@@ -461,7 +463,7 @@ where
             digest,
         )?;
     }
-    println!("Golden DKG completed for participant {}.", participant.get());
+    println!("storage key DKG completed for participant {}.", participant.get());
     Ok(())
 }
 
@@ -497,7 +499,7 @@ fn participant_for_validator(
 }
 
 fn participant_at(position: usize) -> anyhow::Result<ParticipantIndex> {
-    ParticipantIndex::new(u32::try_from(position + 1).context("too many Golden participants")?)
+    ParticipantIndex::new(u32::try_from(position + 1).context("too many DKG participants")?)
         .map_err(Into::into)
 }
 
@@ -637,7 +639,7 @@ async fn sign_final_confirmation(
     let signature = signer
         .sign_commitment(final_confirmation_commitment(genesis_commitment, public_output_sha256))
         .await
-        .context("failed to sign Golden final confirmation")?;
+        .context("failed to sign DKG final confirmation")?;
     let confirmation = FinalConfirmation {
         version: FINAL_CONFIRMATION_VERSION.to_owned(),
         validator_public_key: hex::encode(validator_public_key.to_bytes()),
@@ -645,7 +647,7 @@ async fn sign_final_confirmation(
         validator_signature: hex::encode(signature.to_bytes()),
     };
     toml::to_string_pretty(&confirmation)
-        .context("failed to encode Golden final confirmation")
+        .context("failed to encode DKG final confirmation")
         .map(String::into_bytes)
 }
 
@@ -656,18 +658,18 @@ fn validate_final_confirmation(
     expected_public_output_sha256: [u8; 32],
 ) -> anyhow::Result<()> {
     let confirmation: FinalConfirmation =
-        toml::from_slice(bytes).context("invalid Golden final confirmation")?;
+        toml::from_slice(bytes).context("invalid DKG final confirmation")?;
     ensure!(
         confirmation.version == FINAL_CONFIRMATION_VERSION,
-        "unsupported Golden final confirmation version"
+        "unsupported DKG final confirmation version"
     );
     ensure!(
         confirmation.validator_public_key == expected_validator_public_key,
-        "Golden final confirmation belongs to another validator"
+        "DKG final confirmation belongs to another validator"
     );
     ensure!(
         confirmation.public_output_sha256 == hex::encode(expected_public_output_sha256),
-        "validators produced different Golden public outputs"
+        "validators produced different storage key outputs"
     );
     let validator_public_key = decode_validator_public_key(&confirmation.validator_public_key)?;
     let signature = decode_validator_signature(&confirmation.validator_signature)?;
@@ -676,7 +678,7 @@ fn validate_final_confirmation(
             final_confirmation_commitment(genesis_commitment, expected_public_output_sha256),
             &validator_public_key,
         ),
-        "invalid Golden final confirmation signature"
+        "invalid DKG final confirmation signature"
     );
     Ok(())
 }

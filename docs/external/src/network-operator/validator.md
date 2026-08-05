@@ -43,12 +43,12 @@ its epoch may need to be decrypted.
 For the normal ceremony, one operator starts the durable Iroh bulletin board:
 
 ```bash
-miden-validator golden-dkg board \
-  --data-directory golden-board \
+miden-validator dkg board \
+  --data-directory storage-key-board \
   --genesis genesis.dat \
   --threshold 2 \
   --epoch <32-byte-hex-epoch> \
-  --ticket-output golden-board-ticket
+  --ticket-output storage-key-board-ticket
 ```
 
 The command writes one board ticket. Send the file to each genesis validator through the authenticated bootstrap
@@ -58,11 +58,11 @@ board running until every validator reports ceremony completion, then stop it wi
 Each validator then runs the full ceremony with its own signing key and private work directory:
 
 ```bash
-miden-validator golden-dkg run \
+miden-validator dkg run \
   --board-file <board-ticket-file> \
   --genesis genesis.dat \
   --signing-key.kms-id <validator-kms-key-id> \
-  --work-directory golden-work \
+  --work-directory storage-key-work \
   --output-directory storage-key
 ```
 

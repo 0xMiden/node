@@ -15,8 +15,8 @@ x-validator: &validator
     - --admin.listen=0.0.0.0:50102
 
 services:
-  golden-dkg-check:
-    profiles: ["golden-dkg"]
+  storage-key-dkg-check:
+    profiles: ["storage-key-dkg"]
     image: ${MIDEN_VALIDATOR_IMAGE:-miden-validator}
     pull_policy: missing
     volumes:
@@ -30,14 +30,14 @@ services:
     command:
       - |
         set -eu
-        ROOT=/data/golden-dkg-check
+        ROOT=/data/storage-key-dkg-check
         TICKET="$${ROOT}/board-ticket"
         GENESIS=/data/genesis/genesis.dat
         EPOCH="$${MIDEN_VALIDATOR_STORAGE_KEY_EPOCH}"
         rm -rf "$${ROOT}"
         mkdir -p "$${ROOT}"
 
-        miden-validator golden-dkg board \
+        miden-validator dkg board \
           --data-directory "$${ROOT}/board" \
           --genesis "$${GENESIS}" \
           --threshold 2 \
@@ -64,7 +64,7 @@ services:
         run_validator() {
           PARTICIPANT="$$1"
           SIGNING_KEY="$$2"
-          exec miden-validator golden-dkg run \
+          exec miden-validator dkg run \
             --board-file "$${TICKET}" \
             --genesis "$${GENESIS}" \
             --signing-key.hex "$${SIGNING_KEY}" \
@@ -128,7 +128,7 @@ services:
           ! cmp -s "$${ROOT}/validator-1/bundle/secret-share.wire" \
             "$${ROOT}/validator-$${PARTICIPANT}/bundle/secret-share.wire"
         done
-        echo "Golden DKG completed over the Iroh document."
+        echo "storage key DKG completed over the Iroh document."
 
   validator-1:
     <<: *validator

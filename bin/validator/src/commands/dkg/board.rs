@@ -28,8 +28,8 @@ const DOCUMENT_ID_FILE: &str = "document-id.hex";
 const BOARD_FORMAT_FILE: &str = "board-format";
 const BOARD_FORMAT: &[u8] = b"bounded-upload-v1\n";
 const UPLOAD_SECRET_FILE: &str = "upload-secret.hex";
-const BOARD_TICKET_PREFIX: &str = "miden-golden-board-v1";
-const UPLOAD_ALPN: &[u8] = b"/miden/golden-dkg-board-upload/1";
+const BOARD_TICKET_PREFIX: &str = "miden-storage-key-dkg-board-v1";
+const UPLOAD_ALPN: &[u8] = b"/miden/storage-key-dkg-board-upload/1";
 const UPLOAD_HEADER_BYTES: usize = 32 + 1 + 4 + 8;
 const UPLOAD_RESPONSE_BYTES: usize = 1 + 32;
 const MAX_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
@@ -64,21 +64,20 @@ impl FromStr for BoardTicket {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let mut parts = value.splitn(3, ':');
-        ensure!(parts.next() == Some(BOARD_TICKET_PREFIX), "invalid Golden board ticket prefix");
-        let secret = parts.next().context("Golden board ticket is missing its upload secret")?;
-        let document =
-            parts.next().context("Golden board ticket is missing its document ticket")?;
-        let upload_secret = decode_fixed_hex::<32>(secret, "Golden board upload secret")?;
+        ensure!(parts.next() == Some(BOARD_TICKET_PREFIX), "invalid DKG board ticket prefix");
+        let secret = parts.next().context("DKG board ticket is missing its upload secret")?;
+        let document = parts.next().context("DKG board ticket is missing its document ticket")?;
+        let upload_secret = decode_fixed_hex::<32>(secret, "DKG board upload secret")?;
         let document = DocTicket::from_str(document).context("invalid Iroh document ticket")?;
         ensure!(
             matches!(document.capability, iroh_docs::Capability::Read(_)),
-            "Golden board document ticket must be read-only"
+            "DKG board document ticket must be read-only"
         );
         Ok(Self { document, upload_secret })
     }
 }
 
-/// One immutable location in a Golden ceremony document.
+/// One immutable location in a DKG ceremony document.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum ArtifactSlot {
     Registration(u32),
@@ -126,14 +125,14 @@ impl ArtifactSlot {
             Self::TranscriptAcceptance(participant) => (5, *participant),
             Self::FinalConfirmation(participant) => (6, *participant),
             Self::Manifest | Self::DecryptionConfig | Self::ContextConfig => {
-                anyhow::bail!("only the Golden board may publish common ceremony artifacts")
+                anyhow::bail!("only the DKG board may publish common ceremony artifacts")
             },
         };
         Ok(fields)
     }
 
     fn from_upload_fields(kind: u8, participant: u32) -> anyhow::Result<Self> {
-        ensure!(participant > 0, "Golden board participant index must be nonzero");
+        ensure!(participant > 0, "DKG board participant index must be nonzero");
         match kind {
             1 => Ok(Self::Registration(participant)),
             2 => Ok(Self::DecryptionDealing(participant)),
@@ -141,7 +140,7 @@ impl ArtifactSlot {
             4 => Ok(Self::Transcript(participant)),
             5 => Ok(Self::TranscriptAcceptance(participant)),
             6 => Ok(Self::FinalConfirmation(participant)),
-            _ => anyhow::bail!("Golden board upload contains an unknown artifact kind"),
+            _ => anyhow::bail!("DKG board upload contains an unknown artifact kind"),
         }
     }
 }
@@ -254,7 +253,7 @@ impl BoardNode {
         document
             .set_download_policy(DownloadPolicy::NothingExcept(Vec::new()))
             .await
-            .context("failed to restrict Golden board downloads")?;
+            .context("failed to restrict DKG board downloads")?;
         let mut document_ticket = document
             .share(
                 ShareMode::Read,
@@ -287,7 +286,7 @@ impl BoardNode {
             .document
             .start_sync(Vec::new())
             .await
-            .context("failed to start Golden board synchronization")?;
+            .context("failed to start DKG board synchronization")?;
         Ok((board, ticket))
     }
 
@@ -310,7 +309,7 @@ impl BoardNode {
         let runtime = BoardRuntime::start(data_directory, use_network_services).await?;
         let BoardTicket { document, upload_secret } = ticket;
         let DocTicket { capability, nodes } = document;
-        let target = nodes.first().cloned().context("Golden board ticket has no endpoint")?;
+        let target = nodes.first().cloned().context("DKG board ticket has no endpoint")?;
         let document = runtime
             .docs
             .import_namespace(capability)
@@ -319,7 +318,7 @@ impl BoardNode {
         document
             .set_download_policy(DownloadPolicy::NothingExcept(Vec::new()))
             .await
-            .context("failed to restrict Golden board downloads")?;
+            .context("failed to restrict DKG board downloads")?;
         let mut board = runtime
             .attach(document, participant_count, nodes.clone(), None, Some((target, upload_secret)))
             .await?;
@@ -327,7 +326,7 @@ impl BoardNode {
             .document
             .start_sync(nodes)
             .await
-            .context("failed to start Golden board synchronization")?;
+            .context("failed to start DKG board synchronization")?;
         board.wait_for_peer().await?;
         Ok(board)
     }
@@ -348,7 +347,7 @@ impl BoardNode {
         self.document
             .start_sync(self.sync_targets.clone())
             .await
-            .context("failed to synchronize Golden board artifact")?;
+            .context("failed to synchronize DKG board artifact")?;
         if !self.sync_targets.is_empty() || *self.peer_ready.borrow() {
             let mut completed = self.sync_generation.clone();
             tokio::time::timeout(
@@ -356,8 +355,8 @@ impl BoardNode {
                 completed.wait_for(|generation| *generation > sync_generation),
             )
             .await
-            .context("timed out synchronizing Golden board artifact")?
-            .context("Golden board synchronization monitor stopped")?;
+            .context("timed out synchronizing DKG board artifact")?
+            .context("DKG board synchronization monitor stopped")?;
         }
         Ok(stored_hash)
     }
@@ -370,19 +369,19 @@ impl BoardNode {
             .document
             .get_many(Query::key_prefix(prefix.as_bytes()))
             .await
-            .context("failed to query Golden board artifacts")?;
+            .context("failed to query DKG board artifacts")?;
         futures::pin_mut!(entries);
         let mut values = BTreeMap::new();
         while let Some(entry) = entries.next().await {
-            let entry = entry.context("failed to read Golden board entry")?;
+            let entry = entry.context("failed to read DKG board entry")?;
             ensure!(
                 entry.content_len() > 0 && entry.content_len() <= MAX_ARTIFACT_BYTES,
-                "Golden board artifact exceeds {MAX_ARTIFACT_BYTES} bytes",
+                "DKG board artifact exceeds {MAX_ARTIFACT_BYTES} bytes",
             );
             let expected_key = slot.key(entry.content_hash());
             ensure!(
                 entry.key() == expected_key.as_bytes(),
-                "Golden board key does not match its content hash"
+                "DKG board key does not match its content hash"
             );
             let hash = entry.content_hash();
             if self.blobs.blobs().get_bytes(hash).await.is_err() {
@@ -392,10 +391,10 @@ impl BoardNode {
                     .document
                     .get_sync_peers()
                     .await
-                    .context("failed to list Golden board peers")?
+                    .context("failed to list DKG board peers")?
                     .unwrap_or_default()
                     .into_iter()
-                    .map(|id| EndpointId::from_bytes(&id).context("invalid Golden board peer ID"))
+                    .map(|id| EndpointId::from_bytes(&id).context("invalid DKG board peer ID"))
                     .collect::<anyhow::Result<Vec<_>>>()?;
                 for peer in sync_peers {
                     if !providers.contains(&peer) {
@@ -413,7 +412,7 @@ impl BoardNode {
                     match item {
                         DownloadProgressItem::Progress(downloaded) => ensure!(
                             downloaded <= MAX_ARTIFACT_BYTES,
-                            "Golden board artifact exceeds {MAX_ARTIFACT_BYTES} bytes",
+                            "DKG board artifact exceeds {MAX_ARTIFACT_BYTES} bytes",
                         ),
                         DownloadProgressItem::Error(_) | DownloadProgressItem::DownloadError => {
                             return Ok(None);
@@ -429,15 +428,15 @@ impl BoardNode {
                 .blobs()
                 .get_bytes(hash)
                 .await
-                .context("downloaded Golden board artifact is missing")?;
+                .context("downloaded DKG board artifact is missing")?;
             ensure!(
                 u64::try_from(bytes.len()).context("artifact length does not fit u64")?
                     == entry.content_len(),
-                "Golden board artifact length does not match its entry"
+                "DKG board artifact length does not match its entry"
             );
             values.entry(hash).or_insert_with(|| bytes.to_vec());
         }
-        ensure!(values.len() <= 1, "Golden board contains conflicting artifacts for {prefix}");
+        ensure!(values.len() <= 1, "DKG board contains conflicting artifacts for {prefix}");
         Ok(values.into_values().next())
     }
 
@@ -449,7 +448,7 @@ impl BoardNode {
 
     fn ensure_admitted(&self) -> anyhow::Result<()> {
         if let Some(error) = self.event_error.borrow().as_ref() {
-            anyhow::bail!("Golden board synchronization stopped: {error}");
+            anyhow::bail!("DKG board synchronization stopped: {error}");
         }
         Ok(())
     }
@@ -460,8 +459,8 @@ impl BoardNode {
         }
         tokio::time::timeout(PEER_READY_TIMEOUT, self.peer_ready.wait_for(|ready| *ready))
             .await
-            .context("timed out waiting for the Golden board peer")?
-            .context("Golden board peer monitor stopped")?;
+            .context("timed out waiting for the DKG board peer")?
+            .context("DKG board peer monitor stopped")?;
         Ok(())
     }
 
@@ -475,7 +474,7 @@ impl BoardNode {
             .document
             .subscribe()
             .await
-            .context("failed to subscribe to Golden board updates")?;
+            .context("failed to subscribe to DKG board updates")?;
         tokio::time::timeout(timeout, async {
             loop {
                 if let Some(value) = self.read_unique(slot).await? {
@@ -483,14 +482,14 @@ impl BoardNode {
                 }
                 tokio::select! {
                     event = events.next() => {
-                        event.transpose()?.context("Golden board update stream ended")?;
+                        event.transpose()?.context("DKG board update stream ended")?;
                     },
                     () = tokio::time::sleep(Duration::from_millis(250)) => {},
                 }
             }
         })
         .await
-        .with_context(|| format!("timed out waiting for Golden board slot {}", slot.prefix()))?
+        .with_context(|| format!("timed out waiting for DKG board slot {}", slot.prefix()))?
     }
 
     /// Stops the board node and flushes its persistent stores.
@@ -502,10 +501,10 @@ impl BoardNode {
 }
 
 fn validate_artifact_length(length: usize) -> anyhow::Result<()> {
-    ensure!(length > 0, "Golden board artifact must not be empty");
+    ensure!(length > 0, "DKG board artifact must not be empty");
     ensure!(
         u64::try_from(length).context("artifact length does not fit u64")? <= MAX_ARTIFACT_BYTES,
-        "Golden board artifact exceeds {MAX_ARTIFACT_BYTES} bytes",
+        "DKG board artifact exceeds {MAX_ARTIFACT_BYTES} bytes",
     );
     Ok(())
 }
@@ -514,7 +513,7 @@ impl BoardWriter {
     fn validate_slot(&self, slot: &ArtifactSlot) -> anyhow::Result<()> {
         ensure!(
             self.allowed_prefixes.contains(&slot.prefix()),
-            "Golden board upload targets an unknown participant or artifact slot"
+            "DKG board upload targets an unknown participant or artifact slot"
         );
         Ok(())
     }
@@ -529,18 +528,18 @@ impl BoardWriter {
             .document
             .get_many(Query::key_prefix(prefix.as_bytes()))
             .await
-            .context("failed to inspect Golden board artifact slot")?;
+            .context("failed to inspect DKG board artifact slot")?;
         futures::pin_mut!(entries);
         let mut hashes = Vec::new();
         while let Some(entry) = entries.next().await {
-            let entry = entry.context("failed to read Golden board artifact slot")?;
+            let entry = entry.context("failed to read DKG board artifact slot")?;
             if entry.content_hash() == expected_hash {
                 return Ok(expected_hash);
             }
             hashes.push(entry.content_hash());
             ensure!(
                 hashes.len() < MAX_VALUES_PER_SLOT,
-                "Golden board artifact slot already contains conflicting values"
+                "DKG board artifact slot already contains conflicting values"
             );
         }
 
@@ -548,7 +547,7 @@ impl BoardWriter {
             .document
             .set_bytes(self.author, slot.key(expected_hash), value.to_vec())
             .await
-            .context("failed to publish Golden board artifact")?;
+            .context("failed to publish DKG board artifact")?;
         ensure!(stored_hash == expected_hash, "Iroh stored artifact under an unexpected hash");
         Ok(stored_hash)
     }
@@ -559,27 +558,26 @@ impl UploadProtocol {
         let mut header = [0u8; UPLOAD_HEADER_BYTES];
         recv.read_exact(&mut header)
             .await
-            .context("failed to read Golden board upload header")?;
+            .context("failed to read DKG board upload header")?;
         ensure!(
             secrets_match(&header[..32], &self.upload_secret),
-            "invalid Golden board upload secret"
+            "invalid DKG board upload secret"
         );
         let kind = header[32];
         let participant = u32::from_be_bytes(header[33..37].try_into().expect("fixed slice"));
         let length = u64::from_be_bytes(header[37..45].try_into().expect("fixed slice"));
         ensure!(
             length > 0 && length <= MAX_ARTIFACT_BYTES,
-            "Golden board artifact exceeds {MAX_ARTIFACT_BYTES} bytes"
+            "DKG board artifact exceeds {MAX_ARTIFACT_BYTES} bytes"
         );
         let slot = ArtifactSlot::from_upload_fields(kind, participant)?;
         self.writer.validate_slot(&slot)?;
-        let length =
-            usize::try_from(length).context("Golden board artifact length is too large")?;
+        let length = usize::try_from(length).context("DKG board artifact length is too large")?;
         let mut value = vec![0u8; length];
         recv.read_exact(&mut value)
             .await
-            .context("failed to read Golden board upload body")?;
-        recv.read_to_end(0).await.context("Golden board upload has trailing bytes")?;
+            .context("failed to read DKG board upload body")?;
+        recv.read_to_end(0).await.context("DKG board upload has trailing bytes")?;
         self.writer.store(&slot, &value).await
     }
 }
@@ -591,7 +589,7 @@ impl ProtocolHandler for UploadProtocol {
         {
             result
         } else {
-            connection.close(1u32.into(), b"Golden board upload timed out");
+            connection.close(1u32.into(), b"DKG board upload timed out");
             Ok(())
         }
     }
@@ -650,11 +648,9 @@ async fn upload_artifact_request(
     let connection = endpoint
         .connect(target.clone(), UPLOAD_ALPN)
         .await
-        .context("failed to connect to the Golden board upload service")?;
-    let (mut send, mut recv) = connection
-        .open_bi()
-        .await
-        .context("failed to open a Golden board upload stream")?;
+        .context("failed to connect to the DKG board upload service")?;
+    let (mut send, mut recv) =
+        connection.open_bi().await.context("failed to open a DKG board upload stream")?;
     let mut header = [0u8; UPLOAD_HEADER_BYTES];
     header[..32].copy_from_slice(upload_secret);
     header[32] = kind;
@@ -662,28 +658,26 @@ async fn upload_artifact_request(
     header[37..45].copy_from_slice(&declared_length.to_be_bytes());
     send.write_all(&header)
         .await
-        .context("failed to write Golden board upload header")?;
-    send.write_all(value)
-        .await
-        .context("failed to write Golden board upload body")?;
-    send.finish().context("failed to finish Golden board upload")?;
+        .context("failed to write DKG board upload header")?;
+    send.write_all(value).await.context("failed to write DKG board upload body")?;
+    send.finish().context("failed to finish DKG board upload")?;
     let response = tokio::time::timeout(
         UPLOAD_TIMEOUT,
         recv.read_to_end(UPLOAD_RESPONSE_BYTES + MAX_UPLOAD_ERROR_BYTES),
     )
     .await
-    .context("timed out waiting for the Golden board upload response")?
-    .context("failed to read Golden board upload response")?;
+    .context("timed out waiting for the DKG board upload response")?
+    .context("failed to read DKG board upload response")?;
     connection.close(0u32.into(), b"upload complete");
-    ensure!(!response.is_empty(), "Golden board returned an empty upload response");
+    ensure!(!response.is_empty(), "DKG board returned an empty upload response");
     if response[0] != 0 {
         let message = std::str::from_utf8(&response[1..])
-            .context("Golden board returned a non-UTF-8 upload error")?;
-        anyhow::bail!("Golden board rejected the artifact: {message}");
+            .context("DKG board returned a non-UTF-8 upload error")?;
+        anyhow::bail!("DKG board rejected the artifact: {message}");
     }
     ensure!(
         response.len() == UPLOAD_RESPONSE_BYTES,
-        "Golden board returned an invalid upload response"
+        "DKG board returned an invalid upload response"
     );
     Ok(Hash::from_bytes(response[1..].try_into().expect("validated response length")))
 }
@@ -759,18 +753,18 @@ impl BoardRuntime {
         served_upload_secret: Option<[u8; 32]>,
         remote_upload: Option<(EndpointAddr, [u8; 32])>,
     ) -> anyhow::Result<BoardNode> {
-        ensure!(participant_count > 0, "Golden board requires at least one participant");
+        ensure!(participant_count > 0, "DKG board requires at least one participant");
         ensure!(
             served_upload_secret.is_some() ^ remote_upload.is_some(),
-            "Golden board must either serve or submit uploads"
+            "DKG board must either serve or submit uploads"
         );
         let artifact_slot_count = participant_count
             .checked_mul(ARTIFACTS_PER_PARTICIPANT)
             .and_then(|count| count.checked_add(COMMON_ARTIFACT_COUNT))
-            .context("Golden board participant count is too large")?;
+            .context("DKG board participant count is too large")?;
         let max_document_entries = artifact_slot_count
             .checked_mul(MAX_VALUES_PER_SLOT)
-            .context("Golden board participant count is too large")?;
+            .context("DKG board participant count is too large")?;
         let allowed_prefixes = Arc::new(allowed_slot_prefixes(participant_count)?);
         inspect_document_metadata(&document, &allowed_prefixes, max_document_entries).await?;
         let writer = BoardWriter {
@@ -823,10 +817,8 @@ impl BoardRuntime {
 
 impl BoardEvents {
     async fn start(document: &Doc) -> anyhow::Result<Self> {
-        let mut events = document
-            .subscribe()
-            .await
-            .context("failed to start Golden board event monitor")?;
+        let mut events =
+            document.subscribe().await.context("failed to start DKG board event monitor")?;
         let (event_tx, error) = tokio::sync::watch::channel(None);
         let (peer_ready_tx, peer_ready) = tokio::sync::watch::channel(false);
         let (sync_generation_tx, sync_generation) = tokio::sync::watch::channel(0u64);
@@ -891,7 +883,7 @@ fn allowed_slot_prefixes(participant_count: usize) -> anyhow::Result<Vec<String>
         ArtifactSlot::ContextConfig.prefix(),
     ];
     for position in 0..participant_count {
-        let participant = u32::try_from(position + 1).context("too many Golden participants")?;
+        let participant = u32::try_from(position + 1).context("too many DKG participants")?;
         prefixes.extend([
             ArtifactSlot::Registration(participant).prefix(),
             ArtifactSlot::DecryptionDealing(participant).prefix(),
@@ -909,32 +901,29 @@ async fn inspect_document_metadata(
     allowed_prefixes: &[String],
     max_document_entries: usize,
 ) -> anyhow::Result<()> {
-    let entries = document
-        .get_many(Query::all())
-        .await
-        .context("failed to inspect Golden board")?;
+    let entries = document.get_many(Query::all()).await.context("failed to inspect DKG board")?;
     futures::pin_mut!(entries);
     let mut slots = BTreeMap::new();
     let mut count = 0usize;
     while let Some(entry) = entries.next().await {
-        let entry = entry.context("failed to read Golden board entry")?;
+        let entry = entry.context("failed to read DKG board entry")?;
         count += 1;
-        ensure!(count <= max_document_entries, "Golden board contains too many entries");
+        ensure!(count <= max_document_entries, "DKG board contains too many entries");
         ensure!(
             entry.content_len() > 0 && entry.content_len() <= MAX_ARTIFACT_BYTES,
-            "Golden board artifact exceeds {MAX_ARTIFACT_BYTES} bytes",
+            "DKG board artifact exceeds {MAX_ARTIFACT_BYTES} bytes",
         );
-        let key = std::str::from_utf8(entry.key()).context("Golden board key is not UTF-8")?;
+        let key = std::str::from_utf8(entry.key()).context("DKG board key is not UTF-8")?;
         let (prefix, hash) = allowed_prefixes
             .iter()
             .find_map(|prefix| key.strip_prefix(prefix).map(|hash| (prefix, hash)))
-            .context("Golden board contains an unrecognized artifact slot")?;
+            .context("DKG board contains an unrecognized artifact slot")?;
         ensure!(
             hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()),
-            "Golden board key has an invalid content hash"
+            "DKG board key has an invalid content hash"
         );
         if let Some(previous) = slots.insert(prefix.clone(), hash.to_owned()) {
-            ensure!(previous == hash, "Golden board contains conflicting artifacts for {prefix}");
+            ensure!(previous == hash, "DKG board contains conflicting artifacts for {prefix}");
         }
     }
     Ok(())
@@ -961,13 +950,13 @@ fn load_or_create_upload_secret(
     let path = data_directory.join(UPLOAD_SECRET_FILE);
     if path.exists() {
         let bytes = fs_err::read_to_string(&path).with_context(|| {
-            format!("failed to read Golden board upload secret {}", path.display())
+            format!("failed to read DKG board upload secret {}", path.display())
         })?;
-        return decode_fixed_hex::<32>(bytes.trim(), "Golden board upload secret");
+        return decode_fixed_hex::<32>(bytes.trim(), "DKG board upload secret");
     }
     ensure!(
         allow_create,
-        "this Golden board predates bounded uploads; start a new ceremony in a new data directory"
+        "this DKG board predates bounded uploads; start a new ceremony in a new data directory"
     );
 
     let secret = SecretKey::generate().to_bytes();
@@ -979,13 +968,13 @@ fn require_current_board_format(data_directory: &Path) -> anyhow::Result<()> {
     let path = data_directory.join(BOARD_FORMAT_FILE);
     let format = fs_err::read(&path).with_context(|| {
         format!(
-            "this Golden board predates bounded uploads; start a new ceremony in a new data directory ({})",
+            "this DKG board predates bounded uploads; start a new ceremony in a new data directory ({})",
             path.display()
         )
     })?;
     ensure!(
         format == BOARD_FORMAT,
-        "unsupported Golden board format; start a new ceremony in a new data directory"
+        "unsupported DKG board format; start a new ceremony in a new data directory"
     );
     Ok(())
 }
