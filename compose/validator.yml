@@ -15,6 +15,7 @@ x-validator: &validator
     - --admin.listen=0.0.0.0:50102
 
 services:
+  # This profile checks the full DKG exchange over Iroh. node.yml defines validator bootstrap.
   storage-key-dkg-check:
     profiles: ["storage-key-dkg"]
     image: ${MIDEN_VALIDATOR_IMAGE:-miden-validator}

@@ -51,9 +51,10 @@ miden-validator dkg board \
   --ticket-output storage-key-board-ticket
 ```
 
-The command writes one board ticket. Send the file to each genesis validator through the authenticated bootstrap
-channel. The ticket grants read access and permission to upload bounded ceremony artifacts. Do not publish it. Keep the
-board running until every validator reports ceremony completion, then stop it with Ctrl-C.
+The command writes one board ticket. It contains the board's Iroh address, a read-only document capability, and a bearer
+secret for bounded uploads. It contains no private DKG share. Send the file to each genesis validator through the
+authenticated bootstrap channel. Anyone with the ticket can read ceremony artifacts and fill empty upload slots, so do
+not publish it. Keep the board running until every validator reports ceremony completion, then stop it with Ctrl-C.
 
 Each validator then runs the full ceremony with its own signing key and private work directory:
 

@@ -956,7 +956,8 @@ async fn deal_rejects_unknown_identity_and_existing_output() -> TestResult {
     Ok(())
 }
 #[tokio::test]
-async fn iroh_board_restarts_a_runner_and_completes_three_validator_ceremony() -> TestResult {
+/// Proves a validator can resume from its saved identity after its ceremony process stops.
+async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
     let root = tempfile::tempdir()?;
     let genesis = write_genesis(root.path())?;
     let board_directory = root.path().join("board");

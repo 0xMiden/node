@@ -1,3 +1,4 @@
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -88,7 +89,7 @@ pub(super) struct DkgBoardServeOptions {
 
     /// Number of shares needed to decrypt a private record.
     #[arg(long, value_name = "NUM")]
-    threshold: usize,
+    threshold: NonZeroUsize,
 
     /// Hex-encoded 32-byte storage-key epoch.
     #[arg(long, value_name = "HEX")]
@@ -170,7 +171,7 @@ pub(super) async fn serve_board(options: DkgBoardServeOptions) -> anyhow::Result
             &board,
             &options.data_directory,
             &options.genesis,
-            options.threshold,
+            options.threshold.get(),
             &options.epoch,
             CEREMONY_WAIT_TIMEOUT,
         )

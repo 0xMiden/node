@@ -3,6 +3,7 @@ use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use super::*;
 
 #[tokio::test]
+/// Guards the final agreement step against copying one validator's signature into another slot.
 async fn final_confirmation_cannot_be_copied_between_validator_slots() -> anyhow::Result<()> {
     let first = ValidatorSigner::new_local(SigningKey::new());
     let second = ValidatorSigner::new_local(SigningKey::new());
