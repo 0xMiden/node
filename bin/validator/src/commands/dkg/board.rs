@@ -2,9 +2,9 @@
 //!
 //! The board process is the only writer to the Iroh document. Validators receive a read-only
 //! document ticket plus a bearer secret for the board's bounded upload protocol. Each
-//! [`ArtifactSlot`] starts empty and may hold one content-addressed value; a conflicting value is
-//! an error. This module only moves and stores artifacts. The ceremony phases that use those
-//! artifacts are ordered in `runner`.
+//! [`ArtifactSlot`] is valid only while it holds at most one content-addressed value. A second
+//! distinct value poisons that slot and stops the ceremony. This module only moves and stores
+//! artifacts. The ceremony phases that use those artifacts are ordered in `runner`.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -52,7 +52,7 @@ const MAX_VALUES_PER_SLOT: usize = 2;
 /// The board address and read capability, paired with permission to upload bounded artifacts.
 ///
 /// This bearer credential contains no DKG private material. Anyone who has it can read ceremony
-/// artifacts and submit values to empty participant slots, so operators must share it through an
+/// artifacts and poison any slot with a conflicting value, so operators must share it through an
 /// authenticated private channel.
 #[derive(Clone, Debug)]
 pub(super) struct BoardTicket {
