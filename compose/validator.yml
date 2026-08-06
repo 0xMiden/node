@@ -68,6 +68,8 @@ services:
           exec miden-validator dkg run \
             --board-file "$${TICKET}" \
             --genesis "$${GENESIS}" \
+            --threshold 2 \
+            --epoch "$${EPOCH}" \
             --signing-key.hex "$${SIGNING_KEY}" \
             --work-directory "$${ROOT}/validator-$${PARTICIPANT}/work" \
             --output-directory "$${ROOT}/validator-$${PARTICIPANT}/bundle"

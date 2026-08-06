@@ -56,6 +56,7 @@ use super::{
 };
 
 const IDENTITY_DIRECTORY: &str = "identity";
+const REGISTRATIONS_DIRECTORY: &str = "registrations";
 const CEREMONY_DIRECTORY: &str = "ceremony";
 const DEALINGS_DIRECTORY: &str = "dealings";
 const PUBLIC_DEALINGS_DIRECTORY: &str = "public-dealings";
@@ -115,6 +116,14 @@ pub(super) struct DkgRunOptions {
     #[arg(long, value_name = "FILE")]
     genesis: PathBuf,
 
+    /// Expected number of shares needed to decrypt a private record.
+    #[arg(long, value_name = "NUM")]
+    threshold: NonZeroUsize,
+
+    /// Expected hex-encoded 32-byte storage-key epoch.
+    #[arg(long, value_name = "HEX")]
+    epoch: String,
+
     /// Validator signing key committed by genesis.
     #[command(flatten)]
     signing_key: ValidatorSigningKey,
@@ -147,6 +156,8 @@ pub(super) async fn run_validator(options: DkgRunOptions) -> anyhow::Result<()> 
         &board,
         &options.genesis,
         &signer,
+        options.threshold.get(),
+        &options.epoch,
         &options.work_directory,
         &options.output_directory,
         true,
@@ -205,7 +216,7 @@ pub(super) async fn coordinate_common_files(
     let ceremony_directory = data_directory.join(CEREMONY_DIRECTORY);
     if !ceremony_directory.exists() {
         let registrations = wait_for_registrations(board, validator_keys, timeout).await?;
-        let registration_directory = data_directory.join("registrations");
+        let registration_directory = data_directory.join(REGISTRATIONS_DIRECTORY);
         materialize_or_compare(&registration_directory, &registrations)?;
         let paths = registrations
             .iter()
@@ -262,10 +273,16 @@ async fn wait_for_registrations(
 }
 
 /// Runs the restartable validator state machine over one board.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the inputs separate ceremony policy, durable paths, and test networking"
+)]
 pub(super) async fn run_validator_with_network<B>(
     ticket: &str,
     genesis_path: &Path,
     signer: &ValidatorSigner,
+    threshold: usize,
+    epoch: &str,
     work_directory: &Path,
     output_directory: &Path,
     use_network_services: bool,
@@ -279,8 +296,14 @@ where
         format!("failed to create DKG work directory {}", work_directory.display())
     })?;
     let genesis = read_trusted_genesis(genesis_path)?;
-    let participant_count = genesis.inner().header().validator_keys().as_keys().len();
-    let participant = prepare_local_identity(genesis_path, signer, work_directory).await?;
+    let validator_keys = genesis.inner().header().validator_keys().as_keys();
+    let participant_count = validator_keys.len();
+    ensure!(
+        threshold > 0 && threshold <= participant_count,
+        "threshold must be between 1 and {participant_count}",
+    );
+    decode_fixed_hex::<32>(epoch, "storage-key epoch")?;
+    let participant = prepare_local_identity(genesis_path, epoch, signer, work_directory).await?;
     let board_directory = work_directory.join(BOARD_DIRECTORY);
     let board = if use_network_services {
         BoardNode::join(&board_directory, ticket, participant_count).await?
@@ -292,6 +315,8 @@ where
         genesis_path,
         signer,
         participant,
+        threshold,
+        epoch,
         work_directory,
         output_directory,
         timeout,
@@ -302,14 +327,17 @@ where
 }
 
 #[expect(
+    clippy::too_many_arguments,
     clippy::too_many_lines,
-    reason = "the linear body mirrors the ceremony phase order"
+    reason = "the inputs and linear body mirror the ceremony policy and phase order"
 )]
 async fn run_validator_on_board<B>(
     board: &BoardNode,
     genesis_path: &Path,
     signer: &ValidatorSigner,
     participant: ParticipantIndex,
+    threshold: usize,
+    epoch: &str,
     work_directory: &Path,
     output_directory: &Path,
     timeout: Duration,
@@ -326,7 +354,20 @@ where
     )
     .await?;
 
+    let genesis = read_trusted_genesis(genesis_path)?;
+    let registrations =
+        wait_for_registrations(board, genesis.inner().header().validator_keys().as_keys(), timeout)
+            .await?;
+    let registration_directory = work_directory.join(REGISTRATIONS_DIRECTORY);
+    materialize_or_compare(&registration_directory, &registrations)?;
+    let registration_paths = registrations
+        .iter()
+        .map(|(name, _)| registration_directory.join(name))
+        .collect::<Vec<_>>();
     let ceremony_directory = work_directory.join(CEREMONY_DIRECTORY);
+    if !ceremony_directory.exists() {
+        prepare(genesis_path, threshold, epoch, &registration_paths, &ceremony_directory)?;
+    }
     let common = vec![
         (
             MANIFEST_FILE.to_owned(),
@@ -343,6 +384,14 @@ where
     ];
     materialize_or_compare(&ceremony_directory, &common)?;
     let ceremony = read_ceremony(genesis_path, &ceremony_directory)?;
+    ensure!(
+        ceremony.manifest.threshold == threshold,
+        "board threshold does not match the validator's expected threshold"
+    );
+    ensure!(
+        ceremony.manifest.epoch == epoch,
+        "board epoch does not match the validator's expected epoch"
+    );
     ensure!(
         ceremony.manifest.participants[participant.get() as usize - 1].validator_public_key
             == hex::encode(signer.public_key().to_bytes()),
@@ -470,6 +519,7 @@ where
 
 pub(super) async fn prepare_local_identity(
     genesis_path: &Path,
+    epoch: &str,
     signer: &ValidatorSigner,
     work_directory: &Path,
 ) -> anyhow::Result<ParticipantIndex> {
@@ -477,9 +527,9 @@ pub(super) async fn prepare_local_identity(
     let participant = participant_for_validator(genesis_path, &validator_key)?;
     let identity_directory = work_directory.join(IDENTITY_DIRECTORY);
     if !identity_directory.exists() {
-        generate_identity(genesis_path, signer, &identity_directory).await?;
+        generate_identity(genesis_path, epoch, signer, &identity_directory).await?;
     }
-    validate_local_identity(genesis_path, &validator_key, &identity_directory)?;
+    validate_local_identity(genesis_path, epoch, &validator_key, &identity_directory)?;
     Ok(participant)
 }
 
@@ -506,6 +556,7 @@ fn participant_at(position: usize) -> anyhow::Result<ParticipantIndex> {
 
 fn validate_local_identity(
     genesis_path: &Path,
+    epoch: &str,
     validator_key: &PublicKey,
     identity_directory: &Path,
 ) -> anyhow::Result<()> {
@@ -516,7 +567,12 @@ fn validate_local_identity(
         "stored DKG identity belongs to another validator",
     );
     let genesis = read_trusted_genesis(genesis_path)?;
-    read_validated_registrations(&[registration_path], genesis.inner().header().commitment())?;
+    let expected_epoch = decode_fixed_hex::<32>(epoch, "storage-key epoch")?;
+    read_validated_registrations(
+        &[registration_path],
+        genesis.inner().header().commitment(),
+        &expected_epoch,
+    )?;
     let secret = Zeroizing::new(fs_err::read(identity_directory.join(IDENTITY_SECRET_FILE))?);
     let secret = decode_identity_secret(&secret)?;
     ensure!(

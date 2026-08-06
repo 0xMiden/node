@@ -957,6 +957,10 @@ async fn deal_rejects_unknown_identity_and_existing_output() -> TestResult {
 }
 #[tokio::test]
 /// Proves a validator can resume from its saved identity after its ceremony process stops.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the test runs every ceremony phase for three validators"
+)]
 async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
     let root = tempfile::tempdir()?;
     let genesis = write_genesis(root.path())?;
@@ -965,6 +969,7 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
     let ticket = ticket.to_string();
     let timeout = Duration::from_mins(2);
     let restart_checkpoint_timeout = Duration::from_secs(10);
+    let epoch = "66".repeat(32);
     let first_work = root.path().join("work-1");
     fs_err::create_dir(&first_work)?;
     let first_signer = ValidatorSigner::new_local(genesis.signing_keys[0].clone());
@@ -972,8 +977,10 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
     let interrupted = tokio::spawn({
         let genesis_path = genesis.path.clone();
         let first_work = first_work.clone();
+        let epoch = epoch.clone();
         async move {
-            runner::prepare_local_identity(&genesis_path, &first_signer, &first_work).await?;
+            runner::prepare_local_identity(&genesis_path, &epoch, &first_signer, &first_work)
+                .await?;
             std::future::pending::<anyhow::Result<()>>().await
         }
     });
@@ -1000,7 +1007,6 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
     let bundle_directories = (1..=3)
         .map(|participant| root.path().join(format!("bundle-{participant}")))
         .collect::<Vec<_>>();
-    let epoch = "66".repeat(32);
     let coordinate = runner::coordinate_common_files(
         &board,
         &board_directory,
@@ -1013,6 +1019,8 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
         &ticket,
         &genesis.path,
         &signers[0],
+        2,
+        &epoch,
         &work_directories[0],
         &bundle_directories[0],
         false,
@@ -1022,6 +1030,8 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
         &ticket,
         &genesis.path,
         &signers[1],
+        2,
+        &epoch,
         &work_directories[1],
         &bundle_directories[1],
         false,
@@ -1031,6 +1041,8 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
         &ticket,
         &genesis.path,
         &signers[2],
+        2,
+        &epoch,
         &work_directories[2],
         &bundle_directories[2],
         false,
@@ -1051,6 +1063,13 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
     assert_ne!(secret_shares[0], secret_shares[1]);
     assert_ne!(secret_shares[1], secret_shares[2]);
     assert_ne!(secret_shares[0], secret_shares[2]);
+    let common_files = [MANIFEST_FILE, DECRYPTION_CONFIG_FILE, CONTEXT_CONFIG_FILE];
+    assert!(common_files.iter().all(|name| {
+        let expected = fs_err::read(board_directory.join("ceremony").join(name)).unwrap();
+        work_directories
+            .iter()
+            .all(|work| fs_err::read(work.join("ceremony").join(name)).unwrap() == expected)
+    }));
 
     board.shutdown().await?;
     Ok(())
