@@ -96,9 +96,9 @@ pub(super) struct DkgBoardServeOptions {
     #[arg(long, value_name = "HEX")]
     epoch: String,
 
-    /// New private file that receives the board ticket for automation.
-    #[arg(long, value_name = "FILE")]
-    ticket_output: Option<PathBuf>,
+    /// New private directory that receives one board ticket per genesis validator.
+    #[arg(long, value_name = "DIR")]
+    ticket_directory: Option<PathBuf>,
 }
 
 /// Inputs for one validator's automatic storage key DKG ceremony runner.
@@ -169,12 +169,26 @@ pub(super) async fn run_validator(options: DkgRunOptions) -> anyhow::Result<()> 
 pub(super) async fn serve_board(options: DkgBoardServeOptions) -> anyhow::Result<()> {
     let genesis = read_trusted_genesis(&options.genesis)?;
     let participant_count = genesis.inner().header().validator_keys().as_keys().len();
-    let (board, ticket) = BoardNode::create(&options.data_directory, participant_count).await?;
-    if let Some(path) = &options.ticket_output {
-        write_new_file(path, ticket.to_string().as_bytes(), true)?;
-        println!("storage key DKG board ticket written to {}", path.display());
+    let (board, tickets) = BoardNode::create(&options.data_directory, participant_count).await?;
+    if let Some(path) = &options.ticket_directory {
+        publish_directory(path, |temporary| {
+            for ticket in &tickets {
+                write_new_file(
+                    &temporary.join(format!("participant-{}.ticket", ticket.participant)),
+                    ticket.to_string().as_bytes(),
+                    true,
+                )?;
+            }
+            Ok(())
+        })?;
+        println!("storage key DKG board tickets written to {}", path.display());
     } else {
-        println!("storage key DKG board ticket:\n{ticket}");
+        for ticket in &tickets {
+            println!(
+                "storage key DKG board ticket for participant {}:\n{ticket}",
+                ticket.participant
+            );
+        }
     }
 
     let result = async {

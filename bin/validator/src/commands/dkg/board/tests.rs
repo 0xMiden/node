@@ -1,7 +1,7 @@
 use super::*;
 
 impl BoardNode {
-    async fn create_for_test(data_directory: &Path) -> anyhow::Result<(Self, BoardTicket)> {
+    async fn create_for_test(data_directory: &Path) -> anyhow::Result<(Self, Vec<BoardTicket>)> {
         Self::create_with_network(data_directory, 3, false).await
     }
 
@@ -24,7 +24,7 @@ impl BoardNode {
         value: &[u8],
     ) -> anyhow::Result<Hash> {
         match &self.publisher {
-            Publisher::Remote { endpoint, target, upload_secret } => {
+            Publisher::Remote { endpoint, target, upload_secret, .. } => {
                 upload_artifact_request(
                     endpoint,
                     target,
@@ -54,10 +54,19 @@ impl BoardNode {
     }
 }
 
+fn ticket_for(tickets: &[BoardTicket], participant: u32) -> BoardTicket {
+    tickets
+        .iter()
+        .find(|ticket| ticket.participant == participant)
+        .expect("participant ticket must exist")
+        .clone()
+}
+
 #[tokio::test]
 async fn artifact_syncs_between_board_nodes() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
-    let (host, ticket) = BoardNode::create_for_test(&root.path().join("host")).await?;
+    let (host, tickets) = BoardNode::create_for_test(&root.path().join("host")).await?;
+    let ticket = ticket_for(&tickets, 1);
     assert!(matches!(ticket.document.capability, iroh_docs::Capability::Read(_)));
     let client = BoardNode::join_for_test(&root.path().join("client"), ticket).await?;
     let slot = ArtifactSlot::Registration(1);
@@ -90,13 +99,17 @@ async fn conflicting_artifacts_are_rejected() -> anyhow::Result<()> {
 async fn board_reopens_the_same_document_after_restart() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     let data_directory = root.path().join("host");
-    let (host, first_ticket) = BoardNode::create_for_test(&data_directory).await?;
+    let (host, first_tickets) = BoardNode::create_for_test(&data_directory).await?;
     host.publish(&ArtifactSlot::Manifest, b"manifest").await?;
     host.shutdown().await?;
 
-    let (host, second_ticket) = BoardNode::create_for_test(&data_directory).await?;
-    assert_eq!(first_ticket.document.capability.id(), second_ticket.document.capability.id());
-    assert_eq!(first_ticket.upload_secret, second_ticket.upload_secret);
+    let (host, second_tickets) = BoardNode::create_for_test(&data_directory).await?;
+    assert_eq!(first_tickets.len(), second_tickets.len());
+    for (first, second) in first_tickets.iter().zip(&second_tickets) {
+        assert_eq!(first.participant, second.participant);
+        assert_eq!(first.document.capability.id(), second.document.capability.id());
+        assert_eq!(first.upload_secret, second.upload_secret);
+    }
     assert_eq!(host.read_unique(&ArtifactSlot::Manifest).await?, Some(b"manifest".to_vec()));
 
     host.shutdown().await?;
@@ -104,7 +117,7 @@ async fn board_reopens_the_same_document_after_restart() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn unmarked_board_is_not_reopened_even_with_an_upload_secret() -> anyhow::Result<()> {
+async fn unmarked_board_is_not_reopened_even_with_upload_secrets() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     let data_directory = root.path().join("host");
     let (host, _) = BoardNode::create_for_test(&data_directory).await?;
@@ -115,7 +128,7 @@ async fn unmarked_board_is_not_reopened_even_with_an_upload_secret() -> anyhow::
         .await
         .err()
         .context("legacy board unexpectedly reopened")?;
-    assert!(error.to_string().contains("predates bounded uploads"));
+    assert!(error.to_string().contains("predates participant-scoped uploads"));
     Ok(())
 }
 
@@ -123,11 +136,12 @@ async fn unmarked_board_is_not_reopened_even_with_an_upload_secret() -> anyhow::
 async fn unknown_participants_and_artifact_kinds_are_rejected_before_body_allocation()
 -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
-    let (host, ticket) = BoardNode::create_for_test(&root.path().join("host")).await?;
+    let (host, tickets) = BoardNode::create_for_test(&root.path().join("host")).await?;
+    let ticket = ticket_for(&tickets, 1);
     let client = BoardNode::join_for_test(&root.path().join("client"), ticket).await?;
 
     let error = client.upload_raw_for_test(1, 99, MAX_ARTIFACT_BYTES, &[]).await.unwrap_err();
-    assert!(error.to_string().contains("unknown participant or artifact slot"));
+    assert!(error.to_string().contains("unknown participant"));
     let error = client.upload_raw_for_test(255, 1, 16, b"private artifact").await.unwrap_err();
     assert!(error.to_string().contains("unknown artifact kind"));
     assert!(host.read_unique(&ArtifactSlot::Registration(1)).await?.is_none());
@@ -146,7 +160,8 @@ fn oversized_artifacts_are_rejected_before_allocation() {
 #[tokio::test]
 async fn oversized_upload_is_rejected_before_body_allocation() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
-    let (host, ticket) = BoardNode::create_for_test(&root.path().join("host")).await?;
+    let (host, tickets) = BoardNode::create_for_test(&root.path().join("host")).await?;
+    let ticket = ticket_for(&tickets, 1);
     let client = BoardNode::join_for_test(&root.path().join("client"), ticket).await?;
     let error = client.upload_raw_for_test(1, 1, MAX_ARTIFACT_BYTES + 1, &[]).await.unwrap_err();
     assert!(error.to_string().contains("exceeds"));
@@ -160,7 +175,8 @@ async fn oversized_upload_is_rejected_before_body_allocation() -> anyhow::Result
 #[tokio::test]
 async fn invalid_upload_secret_is_rejected_before_storage() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
-    let (host, mut ticket) = BoardNode::create_for_test(&root.path().join("host")).await?;
+    let (host, tickets) = BoardNode::create_for_test(&root.path().join("host")).await?;
+    let mut ticket = ticket_for(&tickets, 1);
     ticket.upload_secret[0] ^= 1;
     let client = BoardNode::join_for_test(&root.path().join("client"), ticket).await?;
 
@@ -168,10 +184,44 @@ async fn invalid_upload_secret_is_rejected_before_storage() -> anyhow::Result<()
         .publish(&ArtifactSlot::Registration(1), b"signed registration")
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("invalid DKG board upload secret"));
+    assert!(error.to_string().contains("does not authorize this participant"));
     assert!(host.read_unique(&ArtifactSlot::Registration(1)).await?.is_none());
 
     client.shutdown().await?;
+    host.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn participant_ticket_cannot_publish_another_participants_slot() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (host, tickets) = BoardNode::create_for_test(&root.path().join("host")).await?;
+    let first =
+        BoardNode::join_for_test(&root.path().join("first"), ticket_for(&tickets, 1)).await?;
+
+    let error = first
+        .upload_raw_for_test(
+            1,
+            2,
+            u64::try_from(b"wrong registration".len())?,
+            b"wrong registration",
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("does not authorize this participant"));
+    assert!(host.read_unique(&ArtifactSlot::Registration(2)).await?.is_none());
+
+    let second =
+        BoardNode::join_for_test(&root.path().join("second"), ticket_for(&tickets, 2)).await?;
+    second.publish(&ArtifactSlot::Registration(2), b"signed registration").await?;
+    assert_eq!(
+        host.wait_unique(&ArtifactSlot::Registration(2), Duration::from_secs(10))
+            .await?,
+        b"signed registration"
+    );
+
+    first.shutdown().await?;
+    second.shutdown().await?;
     host.shutdown().await?;
     Ok(())
 }

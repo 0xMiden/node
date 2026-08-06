@@ -1,7 +1,7 @@
 //! A bounded, append-only exchange for storage key DKG artifacts.
 //!
 //! The board process is the only writer to the Iroh document. Validators receive a read-only
-//! document ticket plus a bearer secret for the board's bounded upload protocol. Each
+//! document ticket plus a participant-scoped secret for the board's bounded upload protocol. Each
 //! [`ArtifactSlot`] is valid only while it holds at most one content-addressed value. A second
 //! distinct value poisons that slot and stops the ceremony. This module only moves and stores
 //! artifacts. The ceremony phases that use those artifacts are ordered in `runner`.
@@ -29,15 +29,15 @@ use iroh_docs::protocol::Docs;
 use iroh_docs::store::{DownloadPolicy, Query};
 use iroh_gossip::net::Gossip;
 
-use super::{decode_fixed_hex, write_new_file};
+use super::{decode_fixed_hex, publish_directory, write_new_file};
 
 const ENDPOINT_SECRET_FILE: &str = "endpoint-secret.hex";
 const DOCUMENT_ID_FILE: &str = "document-id.hex";
 const BOARD_FORMAT_FILE: &str = "board-format";
-const BOARD_FORMAT: &[u8] = b"bounded-upload-v1\n";
-const UPLOAD_SECRET_FILE: &str = "upload-secret.hex";
-const BOARD_TICKET_PREFIX: &str = "miden-storage-key-dkg-board-v1";
-const UPLOAD_ALPN: &[u8] = b"/miden/storage-key-dkg-board-upload/1";
+const BOARD_FORMAT: &[u8] = b"participant-upload-v2\n";
+const UPLOAD_SECRETS_DIRECTORY: &str = "upload-secrets";
+const BOARD_TICKET_PREFIX: &str = "miden-storage-key-dkg-board-v2";
+const UPLOAD_ALPN: &[u8] = b"/miden/storage-key-dkg-board-upload/2";
 const UPLOAD_HEADER_BYTES: usize = 32 + 1 + 4 + 8;
 const UPLOAD_RESPONSE_BYTES: usize = 1 + 32;
 const MAX_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
@@ -49,14 +49,14 @@ const COMMON_ARTIFACT_COUNT: usize = 3;
 const ARTIFACTS_PER_PARTICIPANT: usize = 6;
 const MAX_VALUES_PER_SLOT: usize = 2;
 
-/// The board address and read capability, paired with permission to upload bounded artifacts.
+/// The board address and read capability, paired with one participant's upload permission.
 ///
-/// This bearer credential contains no DKG private material. Anyone who has it can read ceremony
-/// artifacts and poison any slot with a conflicting value, so operators must share it through an
-/// authenticated private channel.
+/// This credential contains no DKG private material. Its holder can read public ceremony artifacts
+/// and upload only to the named participant's slots.
 #[derive(Clone, Debug)]
 pub(super) struct BoardTicket {
     document: DocTicket,
+    pub(super) participant: u32,
     upload_secret: [u8; 32],
 }
 
@@ -64,7 +64,8 @@ impl fmt::Display for BoardTicket {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "{BOARD_TICKET_PREFIX}:{}:{}",
+            "{BOARD_TICKET_PREFIX}:{}:{}:{}",
+            self.participant,
             hex::encode(self.upload_secret),
             self.document
         )
@@ -75,8 +76,14 @@ impl FromStr for BoardTicket {
     type Err = anyhow::Error;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let mut parts = value.splitn(3, ':');
+        let mut parts = value.splitn(4, ':');
         ensure!(parts.next() == Some(BOARD_TICKET_PREFIX), "invalid DKG board ticket prefix");
+        let participant = parts
+            .next()
+            .context("DKG board ticket is missing its participant index")?
+            .parse::<u32>()
+            .context("invalid DKG board participant index")?;
+        ensure!(participant > 0, "DKG board participant index must be nonzero");
         let secret = parts.next().context("DKG board ticket is missing its upload secret")?;
         let document = parts.next().context("DKG board ticket is missing its document ticket")?;
         let upload_secret = decode_fixed_hex::<32>(secret, "DKG board upload secret")?;
@@ -85,7 +92,7 @@ impl FromStr for BoardTicket {
             matches!(document.capability, iroh_docs::Capability::Read(_)),
             "DKG board document ticket must be read-only"
         );
-        Ok(Self { document, upload_secret })
+        Ok(Self { document, participant, upload_secret })
     }
 }
 
@@ -170,6 +177,7 @@ enum Publisher {
     Local(BoardWriter),
     Remote {
         endpoint: Endpoint,
+        participant: u32,
         target: EndpointAddr,
         upload_secret: [u8; 32],
     },
@@ -178,7 +186,7 @@ enum Publisher {
 #[derive(Clone, Debug)]
 struct UploadProtocol {
     permits: Arc<tokio::sync::Semaphore>,
-    upload_secret: [u8; 32],
+    upload_secrets: Arc<Vec<[u8; 32]>>,
     writer: BoardWriter,
 }
 
@@ -223,11 +231,11 @@ impl Drop for BoardNode {
 }
 
 impl BoardNode {
-    /// Creates a new ceremony document and returns its read and upload ticket.
+    /// Creates a new ceremony document and returns one scoped ticket per participant.
     pub(super) async fn create(
         data_directory: &Path,
         participant_count: usize,
-    ) -> anyhow::Result<(Self, BoardTicket)> {
+    ) -> anyhow::Result<(Self, Vec<BoardTicket>)> {
         Self::create_with_network(data_directory, participant_count, true).await
     }
 
@@ -235,7 +243,7 @@ impl BoardNode {
         data_directory: &Path,
         participant_count: usize,
         use_network_services: bool,
-    ) -> anyhow::Result<(Self, BoardTicket)> {
+    ) -> anyhow::Result<(Self, Vec<BoardTicket>)> {
         let runtime = BoardRuntime::start(data_directory, use_network_services).await?;
         let document_id_path = data_directory.join(DOCUMENT_ID_FILE);
         let existing_document = document_id_path.exists();
@@ -261,7 +269,8 @@ impl BoardNode {
             write_new_file(&data_directory.join(BOARD_FORMAT_FILE), BOARD_FORMAT, true)?;
             document
         };
-        let upload_secret = load_or_create_upload_secret(data_directory, !existing_document)?;
+        let upload_secrets =
+            load_or_create_upload_secrets(data_directory, participant_count, !existing_document)?;
         document
             .set_download_policy(DownloadPolicy::NothingExcept(Vec::new()))
             .await
@@ -290,16 +299,27 @@ impl BoardNode {
                 [iroh::TransportAddr::Ip(socket)],
             )];
         }
-        let ticket = BoardTicket { document: document_ticket, upload_secret };
+        let tickets = upload_secrets
+            .iter()
+            .enumerate()
+            .map(|(position, upload_secret)| {
+                Ok(BoardTicket {
+                    document: document_ticket.clone(),
+                    participant: u32::try_from(position + 1)
+                        .context("too many DKG participants")?,
+                    upload_secret: *upload_secret,
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
         let board = runtime
-            .attach(document, participant_count, Vec::new(), Some(upload_secret), None)
+            .attach(document, participant_count, Vec::new(), Some(upload_secrets), None)
             .await?;
         board
             .document
             .start_sync(Vec::new())
             .await
             .context("failed to start DKG board synchronization")?;
-        Ok((board, ticket))
+        Ok((board, tickets))
     }
 
     /// Joins an existing ceremony document through its read and upload ticket.
@@ -319,7 +339,12 @@ impl BoardNode {
     ) -> anyhow::Result<Self> {
         let ticket = BoardTicket::from_str(ticket)?;
         let runtime = BoardRuntime::start(data_directory, use_network_services).await?;
-        let BoardTicket { document, upload_secret } = ticket;
+        let BoardTicket { document, participant, upload_secret } = ticket;
+        ensure!(
+            usize::try_from(participant).context("participant index does not fit usize")?
+                <= participant_count,
+            "DKG board ticket names an unknown participant"
+        );
         let DocTicket { capability, nodes } = document;
         let target = nodes.first().cloned().context("DKG board ticket has no endpoint")?;
         let document = runtime
@@ -332,7 +357,13 @@ impl BoardNode {
             .await
             .context("failed to restrict DKG board downloads")?;
         let mut board = runtime
-            .attach(document, participant_count, nodes.clone(), None, Some((target, upload_secret)))
+            .attach(
+                document,
+                participant_count,
+                nodes.clone(),
+                None,
+                Some((target, participant, upload_secret)),
+            )
             .await?;
         board
             .document
@@ -351,8 +382,13 @@ impl BoardNode {
         let sync_generation = *self.sync_generation.borrow();
         let stored_hash = match &self.publisher {
             Publisher::Local(writer) => writer.store(slot, value).await?,
-            Publisher::Remote { endpoint, target, upload_secret } => {
-                upload_artifact(endpoint, target, upload_secret, slot, value).await?
+            Publisher::Remote {
+                endpoint,
+                participant,
+                target,
+                upload_secret,
+            } => {
+                upload_artifact(endpoint, target, *participant, upload_secret, slot, value).await?
             },
         };
         ensure!(stored_hash == expected_hash, "Iroh stored artifact under an unexpected hash");
@@ -571,12 +607,20 @@ impl UploadProtocol {
         recv.read_exact(&mut header)
             .await
             .context("failed to read DKG board upload header")?;
-        ensure!(
-            secrets_match(&header[..32], &self.upload_secret),
-            "invalid DKG board upload secret"
-        );
         let kind = header[32];
         let participant = u32::from_be_bytes(header[33..37].try_into().expect("fixed slice"));
+        let secret_position = usize::try_from(participant)
+            .context("participant index does not fit usize")?
+            .checked_sub(1)
+            .context("DKG board participant index must be nonzero")?;
+        let expected_secret = self
+            .upload_secrets
+            .get(secret_position)
+            .context("DKG board upload targets an unknown participant")?;
+        ensure!(
+            secrets_match(&header[..32], expected_secret),
+            "DKG board ticket does not authorize this participant"
+        );
         let length = u64::from_be_bytes(header[37..45].try_into().expect("fixed slice"));
         ensure!(
             length > 0 && length <= MAX_ARTIFACT_BYTES,
@@ -630,12 +674,17 @@ impl UploadProtocol {
 async fn upload_artifact(
     endpoint: &Endpoint,
     target: &EndpointAddr,
+    authorized_participant: u32,
     upload_secret: &[u8; 32],
     slot: &ArtifactSlot,
     value: &[u8],
 ) -> anyhow::Result<Hash> {
     validate_artifact_length(value.len())?;
     let (kind, participant) = slot.upload_fields()?;
+    ensure!(
+        participant == authorized_participant,
+        "DKG board ticket does not authorize participant {participant}"
+    );
     upload_artifact_request(
         endpoint,
         target,
@@ -762,12 +811,12 @@ impl BoardRuntime {
         document: Doc,
         participant_count: usize,
         sync_targets: Vec<iroh::EndpointAddr>,
-        served_upload_secret: Option<[u8; 32]>,
-        remote_upload: Option<(EndpointAddr, [u8; 32])>,
+        served_upload_secrets: Option<Vec<[u8; 32]>>,
+        remote_upload: Option<(EndpointAddr, u32, [u8; 32])>,
     ) -> anyhow::Result<BoardNode> {
         ensure!(participant_count > 0, "DKG board requires at least one participant");
         ensure!(
-            served_upload_secret.is_some() ^ remote_upload.is_some(),
+            served_upload_secrets.is_some() ^ remote_upload.is_some(),
             "DKG board must either serve or submit uploads"
         );
         let artifact_slot_count = participant_count
@@ -786,8 +835,9 @@ impl BoardRuntime {
             lock: Arc::new(tokio::sync::Mutex::new(())),
         };
         let publisher = match remote_upload {
-            Some((target, upload_secret)) => Publisher::Remote {
+            Some((target, participant, upload_secret)) => Publisher::Remote {
                 endpoint: self.endpoint.clone(),
+                participant,
                 target,
                 upload_secret,
             },
@@ -797,12 +847,16 @@ impl BoardRuntime {
             .accept(iroh_blobs::ALPN, BlobsProtocol::new(self.blobs.as_ref(), None))
             .accept(iroh_gossip::ALPN, self.gossip)
             .accept(iroh_docs::ALPN, self.docs.clone());
-        if let Some(upload_secret) = served_upload_secret {
+        if let Some(upload_secrets) = served_upload_secrets {
+            ensure!(
+                upload_secrets.len() == participant_count,
+                "DKG board requires one upload secret per participant"
+            );
             router = router.accept(
                 UPLOAD_ALPN,
                 UploadProtocol {
                     permits: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_UPLOADS)),
-                    upload_secret,
+                    upload_secrets: Arc::new(upload_secrets),
                     writer,
                 },
             );
@@ -955,32 +1009,57 @@ fn load_or_create_endpoint_secret(data_directory: &Path) -> anyhow::Result<Secre
     Ok(secret)
 }
 
-fn load_or_create_upload_secret(
+fn load_or_create_upload_secrets(
     data_directory: &Path,
+    participant_count: usize,
     allow_create: bool,
-) -> anyhow::Result<[u8; 32]> {
-    let path = data_directory.join(UPLOAD_SECRET_FILE);
+) -> anyhow::Result<Vec<[u8; 32]>> {
+    let path = data_directory.join(UPLOAD_SECRETS_DIRECTORY);
     if path.exists() {
-        let bytes = fs_err::read_to_string(&path).with_context(|| {
-            format!("failed to read DKG board upload secret {}", path.display())
-        })?;
-        return decode_fixed_hex::<32>(bytes.trim(), "DKG board upload secret");
+        let entry_count = fs_err::read_dir(&path)
+            .with_context(|| format!("failed to read DKG board upload secrets {}", path.display()))?
+            .collect::<Result<Vec<_>, _>>()?
+            .len();
+        ensure!(
+            entry_count == participant_count,
+            "DKG board upload secret count does not match the participant count"
+        );
+        return (1..=participant_count)
+            .map(|participant| {
+                let secret_path = path.join(format!("participant-{participant}.hex"));
+                let bytes = fs_err::read_to_string(&secret_path).with_context(|| {
+                    format!("failed to read DKG board upload secret {}", secret_path.display())
+                })?;
+                decode_fixed_hex::<32>(bytes.trim(), "DKG board upload secret")
+            })
+            .collect();
     }
     ensure!(
         allow_create,
-        "this DKG board predates bounded uploads; start a new ceremony in a new data directory"
+        "this DKG board predates participant-scoped uploads; start a new ceremony in a new data directory"
     );
 
-    let secret = SecretKey::generate().to_bytes();
-    write_new_file(&path, hex::encode(secret).as_bytes(), true)?;
-    Ok(secret)
+    let secrets = (0..participant_count)
+        .map(|_| SecretKey::generate().to_bytes())
+        .collect::<Vec<_>>();
+    publish_directory(&path, |temporary| {
+        for (position, secret) in secrets.iter().enumerate() {
+            write_new_file(
+                &temporary.join(format!("participant-{}.hex", position + 1)),
+                hex::encode(secret).as_bytes(),
+                true,
+            )?;
+        }
+        Ok(())
+    })?;
+    Ok(secrets)
 }
 
 fn require_current_board_format(data_directory: &Path) -> anyhow::Result<()> {
     let path = data_directory.join(BOARD_FORMAT_FILE);
     let format = fs_err::read(&path).with_context(|| {
         format!(
-            "this DKG board predates bounded uploads; start a new ceremony in a new data directory ({})",
+            "this DKG board predates participant-scoped uploads; start a new ceremony in a new data directory ({})",
             path.display()
         )
     })?;

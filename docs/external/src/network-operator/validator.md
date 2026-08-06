@@ -48,14 +48,13 @@ miden-validator dkg board \
   --genesis genesis.dat \
   --threshold 2 \
   --epoch <32-byte-hex-epoch> \
-  --ticket-output storage-key-board-ticket
+  --ticket-directory storage-key-board-tickets
 ```
 
-The command writes one board ticket. It contains the board's Iroh address, a read-only document capability, and a bearer
-secret for bounded uploads. It contains no private DKG share. Send the file to each genesis validator through the
-authenticated bootstrap channel. Anyone with the ticket can read ceremony artifacts or stop the ceremony by uploading a
-conflicting value, so do not publish it. Keep the board running until every validator reports ceremony completion, then
-stop it with Ctrl-C.
+The command writes one ticket per genesis validator. Each ticket contains the board's Iroh address, a shared read-only
+document capability, and permission to upload only to that participant's slots. It contains no private DKG share. Send
+each file to its validator through the authenticated bootstrap channel. Keep the board running until every validator
+reports ceremony completion, then stop it with Ctrl-C.
 
 Each validator then runs the full ceremony with its own signing key and private work directory:
 
@@ -70,9 +69,9 @@ miden-validator dkg run \
   --output-directory storage-key
 ```
 
-Both commands can restart with the same data and work directories. Give `--ticket-output` a new path when restarting the
-board because it will not overwrite a ticket file. Each validator collects the signed registrations and derives the
-common files from its expected threshold and epoch. It rejects different board copies, checks every later artifact,
+Both commands can restart with the same data and work directories. Give `--ticket-directory` a new path when restarting
+the board because it will not overwrite a ticket directory. Each validator collects the signed registrations and derives
+the common files from its expected threshold and epoch. It rejects different board copies, checks every later artifact,
 writes its own storage key bundle, and confirms that all validators produced the same public output. A board directory
 from an older format cannot be reopened; start that ceremony again in a new directory.
 

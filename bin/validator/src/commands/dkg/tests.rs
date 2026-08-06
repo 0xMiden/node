@@ -965,8 +965,8 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
     let root = tempfile::tempdir()?;
     let genesis = write_genesis(root.path())?;
     let board_directory = root.path().join("board");
-    let (board, ticket) = board::BoardNode::create_with_network(&board_directory, 3, false).await?;
-    let ticket = ticket.to_string();
+    let (board, tickets) =
+        board::BoardNode::create_with_network(&board_directory, 3, false).await?;
     let timeout = Duration::from_mins(2);
     let restart_checkpoint_timeout = Duration::from_secs(10);
     let epoch = "66".repeat(32);
@@ -1001,6 +1001,18 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
         .cloned()
         .map(ValidatorSigner::new_local)
         .collect::<Vec<_>>();
+    let trusted_genesis = read_trusted_genesis(&genesis.path)?;
+    let validator_keys = trusted_genesis.inner().header().validator_keys().as_keys();
+    let tickets = signers
+        .iter()
+        .map(|signer| {
+            let position = validator_keys
+                .iter()
+                .position(|key| *key == signer.public_key())
+                .context("test signer is missing from genesis")?;
+            Ok(tickets[position].to_string())
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
     let work_directories = (1..=3)
         .map(|participant| root.path().join(format!("work-{participant}")))
         .collect::<Vec<_>>();
@@ -1016,7 +1028,7 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
         timeout,
     );
     let first = runner::run_validator_with_network::<ShareOpeningBackend>(
-        &ticket,
+        &tickets[0],
         &genesis.path,
         &signers[0],
         2,
@@ -1027,7 +1039,7 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
         timeout,
     );
     let second = runner::run_validator_with_network::<ShareOpeningBackend>(
-        &ticket,
+        &tickets[1],
         &genesis.path,
         &signers[1],
         2,
@@ -1038,7 +1050,7 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
         timeout,
     );
     let third = runner::run_validator_with_network::<ShareOpeningBackend>(
-        &ticket,
+        &tickets[2],
         &genesis.path,
         &signers[2],
         2,

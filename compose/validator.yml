@@ -32,7 +32,7 @@ services:
       - |
         set -eu
         ROOT=/data/storage-key-dkg-check
-        TICKET="$${ROOT}/board-ticket"
+        TICKETS="$${ROOT}/board-tickets"
         GENESIS=/data/genesis/genesis.dat
         EPOCH="$${MIDEN_VALIDATOR_STORAGE_KEY_EPOCH}"
         rm -rf "$${ROOT}"
@@ -43,7 +43,7 @@ services:
           --genesis "$${GENESIS}" \
           --threshold 2 \
           --epoch "$${EPOCH}" \
-          --ticket-output "$${TICKET}" &
+          --ticket-directory "$${TICKETS}" &
         BOARD_PID=$$!
         RUNNER_PIDS=""
         cleanup() {
@@ -58,7 +58,7 @@ services:
         }
         trap cleanup EXIT INT TERM
 
-        while [ ! -s "$${TICKET}" ]; do
+        while [ ! -s "$${TICKETS}/participant-1.ticket" ]; do
           kill -0 "$${BOARD_PID}" 2>/dev/null
           sleep 1
         done
@@ -66,7 +66,7 @@ services:
           PARTICIPANT="$$1"
           SIGNING_KEY="$$2"
           exec miden-validator dkg run \
-            --board-file "$${TICKET}" \
+            --board-file "$${TICKETS}/participant-$${PARTICIPANT}.ticket" \
             --genesis "$${GENESIS}" \
             --threshold 2 \
             --epoch "$${EPOCH}" \
