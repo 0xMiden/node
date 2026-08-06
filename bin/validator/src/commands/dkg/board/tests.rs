@@ -133,6 +133,29 @@ async fn unmarked_board_is_not_reopened_even_with_upload_secrets() -> anyhow::Re
 }
 
 #[tokio::test]
+async fn previous_board_format_is_not_reopened() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let data_directory = root.path().join("host");
+    let (host, _) = BoardNode::create_for_test(&data_directory).await?;
+    host.shutdown().await?;
+    fs_err::write(data_directory.join(BOARD_FORMAT_FILE), b"participant-upload-v2\n")?;
+
+    let error = BoardNode::create_for_test(&data_directory)
+        .await
+        .err()
+        .context("old board format unexpectedly reopened")?;
+    assert!(error.to_string().contains("unsupported DKG board format"));
+    Ok(())
+}
+
+#[test]
+fn previous_board_ticket_version_is_rejected() {
+    let error = BoardTicket::from_str("miden-storage-key-dkg-board-v2:1:00:invalid")
+        .expect_err("old board ticket unexpectedly parsed");
+    assert!(error.to_string().contains("ticket prefix"));
+}
+
+#[tokio::test]
 async fn unknown_participants_and_artifact_kinds_are_rejected_before_body_allocation()
 -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
