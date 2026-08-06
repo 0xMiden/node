@@ -53,9 +53,12 @@ miden-validator dkg board \
 
 The command writes one ticket per genesis validator. Each ticket contains the board's Iroh address, a shared read-only
 document capability, and permission to upload only to that participant's slots. It contains no private DKG share. Send
-each file to its validator through the authenticated bootstrap channel, and keep it private. A ticket holder can stop
-the ceremony by uploading a conflicting value to that participant's slot. Keep the board running until every validator
-reports ceremony completion, then stop it with Ctrl-C.
+each file through an authenticated and confidential bootstrap channel. A ticket holder can stop the ceremony by
+uploading a conflicting value to that participant's slot. Keep the board running until every validator reports ceremony
+completion, then stop it with Ctrl-C.
+
+The current command uses Iroh's public discovery and relay services. The board and validators need outbound network
+access. This is a setup flow run before validator startup, not an isolated network transport.
 
 Each validator then runs the full ceremony with its own signing key and private work directory:
 
@@ -73,8 +76,8 @@ miden-validator dkg run \
 Both commands can restart with the same data and work directories. Give `--ticket-directory` a new path when restarting
 the board because it will not overwrite a ticket directory. Each validator collects the signed registrations and derives
 the common files from its expected threshold and epoch. It rejects different board copies, checks every later artifact,
-writes its own storage key bundle, and confirms that all validators produced the same public output. A board directory
-from an older format cannot be reopened; start that ceremony again in a new directory.
+and validates its storage key bundle against the transcript accepted by every validator. A board directory from an older
+format cannot be reopened; start that ceremony again in a new directory.
 
 The commands below provide a manual recovery path. First, each operator creates a DKG identity for the agreed
 storage-key epoch and sends `registration.toml` to the coordinator. The registration proves ownership of the DKG

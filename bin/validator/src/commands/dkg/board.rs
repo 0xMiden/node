@@ -46,7 +46,7 @@ const MAX_UPLOAD_ERROR_BYTES: usize = 1024;
 const UPLOAD_TIMEOUT: Duration = Duration::from_secs(30);
 const PEER_READY_TIMEOUT: Duration = Duration::from_secs(30);
 const COMMON_ARTIFACT_COUNT: usize = 3;
-const ARTIFACTS_PER_PARTICIPANT: usize = 6;
+const ARTIFACTS_PER_PARTICIPANT: usize = 4;
 const MAX_VALUES_PER_SLOT: usize = 2;
 
 /// The board address and read capability, paired with one participant's upload permission.
@@ -105,9 +105,7 @@ pub(super) enum ArtifactSlot {
     ContextConfig,
     DecryptionDealing(u32),
     ContextDealing(u32),
-    Transcript(u32),
     TranscriptAcceptance(u32),
-    FinalConfirmation(u32),
 }
 
 impl ArtifactSlot {
@@ -121,12 +119,8 @@ impl ArtifactSlot {
                 format!("dealing/{participant}/decryption/")
             },
             Self::ContextDealing(participant) => format!("dealing/{participant}/context/"),
-            Self::Transcript(participant) => format!("acceptance/{participant}/transcript/"),
             Self::TranscriptAcceptance(participant) => {
                 format!("acceptance/{participant}/signature/")
-            },
-            Self::FinalConfirmation(participant) => {
-                format!("final/{participant}/confirmation/")
             },
         }
     }
@@ -140,9 +134,7 @@ impl ArtifactSlot {
             Self::Registration(participant) => (1, *participant),
             Self::DecryptionDealing(participant) => (2, *participant),
             Self::ContextDealing(participant) => (3, *participant),
-            Self::Transcript(participant) => (4, *participant),
-            Self::TranscriptAcceptance(participant) => (5, *participant),
-            Self::FinalConfirmation(participant) => (6, *participant),
+            Self::TranscriptAcceptance(participant) => (4, *participant),
             Self::Manifest | Self::DecryptionConfig | Self::ContextConfig => {
                 anyhow::bail!("only the DKG board may publish common ceremony artifacts")
             },
@@ -156,9 +148,7 @@ impl ArtifactSlot {
             1 => Ok(Self::Registration(participant)),
             2 => Ok(Self::DecryptionDealing(participant)),
             3 => Ok(Self::ContextDealing(participant)),
-            4 => Ok(Self::Transcript(participant)),
-            5 => Ok(Self::TranscriptAcceptance(participant)),
-            6 => Ok(Self::FinalConfirmation(participant)),
+            4 => Ok(Self::TranscriptAcceptance(participant)),
             _ => anyhow::bail!("DKG board upload contains an unknown artifact kind"),
         }
     }
@@ -954,9 +944,7 @@ fn allowed_slot_prefixes(participant_count: usize) -> anyhow::Result<Vec<String>
             ArtifactSlot::Registration(participant).prefix(),
             ArtifactSlot::DecryptionDealing(participant).prefix(),
             ArtifactSlot::ContextDealing(participant).prefix(),
-            ArtifactSlot::Transcript(participant).prefix(),
             ArtifactSlot::TranscriptAcceptance(participant).prefix(),
-            ArtifactSlot::FinalConfirmation(participant).prefix(),
         ]);
     }
     Ok(prefixes)

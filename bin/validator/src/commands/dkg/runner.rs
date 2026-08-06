@@ -13,36 +13,25 @@ use super::{
     CONTEXT_DEALING_FILE,
     DECRYPTION_CONFIG_FILE,
     DECRYPTION_DEALING_FILE,
-    Deserialize,
-    Digest,
-    EPOCH_FILE,
     GoldenGroup,
     IDENTITY_SECRET_FILE,
     MANIFEST_FILE,
     OsRng,
     PRIVATE_STATE_FILE,
-    PUBLIC_KEY_SET_FILE,
     REGISTRATION_FILE,
     Registration,
-    Rpo256,
-    SETUP_CONTEXT_FILE,
     SecpSecqBackend,
     Serializable,
-    Serialize,
-    Sha256,
     StorageGroup,
     TRANSCRIPT_ACCEPTANCE_FILE,
     TRANSCRIPT_FILE,
     ValidatorSigningKey,
     WireMessage,
-    Word,
     Zeroizing,
     accept_transcript,
     deal,
     decode_fixed_hex,
     decode_identity_secret,
-    decode_validator_public_key,
-    decode_validator_signature,
     finalize,
     generate_identity,
     prepare,
@@ -64,19 +53,6 @@ const ACCEPTANCE_DIRECTORY: &str = "acceptance";
 const PUBLIC_ACCEPTANCES_DIRECTORY: &str = "public-acceptances";
 const BOARD_DIRECTORY: &str = "board";
 const CEREMONY_WAIT_TIMEOUT: Duration = Duration::from_hours(24);
-const PUBLIC_OUTPUT_DIGEST_DOMAIN: &[u8] = b"miden-storage-key-dkg-public-output-v1";
-const FINAL_CONFIRMATION_VERSION: &str = "miden-storage-key-dkg-final-confirmation-v1";
-const FINAL_CONFIRMATION_SIGNATURE_DOMAIN: &[u8] =
-    b"miden-storage-key-dkg-final-confirmation-signature-v1";
-
-#[derive(Deserialize, Serialize)]
-struct FinalConfirmation {
-    version: String,
-    validator_public_key: String,
-    public_output_sha256: String,
-    validator_signature: String,
-}
-
 /// Inputs for the shared storage key DKG board.
 #[derive(clap::Args)]
 pub(super) struct DkgBoardServeOptions {
@@ -98,19 +74,15 @@ pub(super) struct DkgBoardServeOptions {
 
     /// New private directory that receives one board ticket per genesis validator.
     #[arg(long, value_name = "DIR")]
-    ticket_directory: Option<PathBuf>,
+    ticket_directory: PathBuf,
 }
 
 /// Inputs for one validator's automatic storage key DKG ceremony runner.
 #[derive(clap::Args)]
 pub(super) struct DkgRunOptions {
-    /// Read and upload ticket printed by `dkg board`.
-    #[arg(long, value_name = "BOARD_TICKET", required_unless_present = "board_file")]
-    board: Option<String>,
-
     /// Private file containing the read and upload board ticket.
-    #[arg(long, value_name = "FILE", conflicts_with = "board")]
-    board_file: Option<PathBuf>,
+    #[arg(long, value_name = "FILE")]
+    board_file: PathBuf,
 
     /// Trusted genesis block for the network.
     #[arg(long, value_name = "FILE")]
@@ -139,17 +111,12 @@ pub(super) struct DkgRunOptions {
 
 /// Runs one validator through every DKG phase.
 pub(super) async fn run_validator(options: DkgRunOptions) -> anyhow::Result<()> {
-    let board = if let Some(ticket) = options.board {
-        ticket
-    } else {
-        let path = options.board_file.context("a board ticket or board ticket file is required")?;
-        fs_err::read_to_string(&path)
-            .with_context(|| {
-                format!("failed to read storage key DKG board ticket {}", path.display())
-            })?
-            .trim()
-            .to_owned()
-    };
+    let board = fs_err::read_to_string(&options.board_file)
+        .with_context(|| {
+            format!("failed to read storage key DKG board ticket {}", options.board_file.display())
+        })?
+        .trim()
+        .to_owned();
     ensure!(!board.is_empty(), "storage key DKG board ticket must not be empty");
     let signer = options.signing_key.into_signer().await?;
     run_validator_with_network::<SecpSecqBackend>(
@@ -170,26 +137,20 @@ pub(super) async fn serve_board(options: DkgBoardServeOptions) -> anyhow::Result
     let genesis = read_trusted_genesis(&options.genesis)?;
     let participant_count = genesis.inner().header().validator_keys().as_keys().len();
     let (board, tickets) = BoardNode::create(&options.data_directory, participant_count).await?;
-    if let Some(path) = &options.ticket_directory {
-        publish_directory(path, |temporary| {
-            for ticket in &tickets {
-                write_new_file(
-                    &temporary.join(format!("participant-{}.ticket", ticket.participant)),
-                    ticket.to_string().as_bytes(),
-                    true,
-                )?;
-            }
-            Ok(())
-        })?;
-        println!("storage key DKG board tickets written to {}", path.display());
-    } else {
+    publish_directory(&options.ticket_directory, |temporary| {
         for ticket in &tickets {
-            println!(
-                "storage key DKG board ticket for participant {}:\n{ticket}",
-                ticket.participant
-            );
+            write_new_file(
+                &temporary.join(format!("participant-{}.ticket", ticket.participant)),
+                ticket.to_string().as_bytes(),
+                true,
+            )?;
         }
-    }
+        Ok(())
+    })?;
+    println!(
+        "storage key DKG board tickets written to {}",
+        options.ticket_directory.display()
+    );
 
     let result = async {
         coordinate_common_files(
@@ -466,23 +427,15 @@ where
     }
     publish_named_file(
         board,
-        &ArtifactSlot::Transcript(participant.get()),
-        &acceptance_directory.join(TRANSCRIPT_FILE),
-    )
-    .await?;
-    publish_named_file(
-        board,
         &ArtifactSlot::TranscriptAcceptance(participant.get()),
         &acceptance_directory.join(TRANSCRIPT_ACCEPTANCE_FILE),
     )
     .await?;
 
-    let (transcript, acceptances) = wait_for_acceptances(board, participant_count, timeout).await?;
+    let acceptances = wait_for_acceptances(board, participant_count, timeout).await?;
     let public_acceptances_directory = work_directory.join(PUBLIC_ACCEPTANCES_DIRECTORY);
-    let mut acceptance_files = vec![(TRANSCRIPT_FILE.to_owned(), transcript)];
-    acceptance_files.extend(acceptances);
-    materialize_or_compare(&public_acceptances_directory, &acceptance_files)?;
-    let transcript_path = public_acceptances_directory.join(TRANSCRIPT_FILE);
+    materialize_or_compare(&public_acceptances_directory, &acceptances)?;
+    let transcript_path = acceptance_directory.join(TRANSCRIPT_FILE);
     let transcript_acceptances = participant_files(
         &public_acceptances_directory,
         "transcript-acceptance",
@@ -510,23 +463,6 @@ where
         output_directory,
     )?;
 
-    let digest = public_output_digest(output_directory)?;
-    let confirmation = sign_final_confirmation(signer, ceremony.genesis_commitment, digest).await?;
-    board
-        .publish(&ArtifactSlot::FinalConfirmation(participant.get()), &confirmation)
-        .await?;
-    for position in 0..participant_count {
-        let other = participant_at(position)?;
-        let other_confirmation = board
-            .wait_unique(&ArtifactSlot::FinalConfirmation(other.get()), timeout)
-            .await?;
-        validate_final_confirmation(
-            &other_confirmation,
-            &ceremony.manifest.participants[position].validator_public_key,
-            ceremony.genesis_commitment,
-            digest,
-        )?;
-    }
     println!("storage key DKG completed for participant {}.", participant.get());
     Ok(())
 }
@@ -625,18 +561,10 @@ async fn wait_for_acceptances(
     board: &BoardNode,
     participant_count: usize,
     timeout: Duration,
-) -> anyhow::Result<(Vec<u8>, Vec<(String, Vec<u8>)>)> {
-    let mut transcript = None;
+) -> anyhow::Result<Vec<(String, Vec<u8>)>> {
     let mut acceptances = Vec::with_capacity(participant_count);
     for position in 0..participant_count {
         let participant = participant_at(position)?;
-        let candidate =
-            board.wait_unique(&ArtifactSlot::Transcript(participant.get()), timeout).await?;
-        if let Some(expected) = &transcript {
-            ensure!(candidate == *expected, "validators accepted different DKG transcripts");
-        } else {
-            transcript = Some(candidate);
-        }
         acceptances.push((
             format!("transcript-acceptance-{}.toml", participant.get()),
             board
@@ -644,7 +572,7 @@ async fn wait_for_acceptances(
                 .await?,
         ));
     }
-    Ok((transcript.context("ceremony has no participants")?, acceptances))
+    Ok(acceptances)
 }
 
 async fn publish_named_file(
@@ -689,82 +617,3 @@ fn participant_files(
         })
         .collect()
 }
-
-fn public_output_digest(bundle_directory: &Path) -> anyhow::Result<[u8; 32]> {
-    let mut digest = Sha256::new();
-    digest.update(PUBLIC_OUTPUT_DIGEST_DOMAIN);
-    for name in [EPOCH_FILE, SETUP_CONTEXT_FILE, PUBLIC_KEY_SET_FILE] {
-        let bytes = fs_err::read(bundle_directory.join(name))?;
-        digest.update(u64::try_from(bytes.len())?.to_be_bytes());
-        digest.update(bytes);
-    }
-    Ok(digest.finalize().into())
-}
-
-async fn sign_final_confirmation(
-    signer: &ValidatorSigner,
-    genesis_commitment: Word,
-    public_output_sha256: [u8; 32],
-) -> anyhow::Result<Vec<u8>> {
-    let validator_public_key = signer.public_key();
-    let signature = signer
-        .sign_commitment(final_confirmation_commitment(genesis_commitment, public_output_sha256))
-        .await
-        .context("failed to sign DKG final confirmation")?;
-    let confirmation = FinalConfirmation {
-        version: FINAL_CONFIRMATION_VERSION.to_owned(),
-        validator_public_key: hex::encode(validator_public_key.to_bytes()),
-        public_output_sha256: hex::encode(public_output_sha256),
-        validator_signature: hex::encode(signature.to_bytes()),
-    };
-    toml::to_string_pretty(&confirmation)
-        .context("failed to encode DKG final confirmation")
-        .map(String::into_bytes)
-}
-
-fn validate_final_confirmation(
-    bytes: &[u8],
-    expected_validator_public_key: &str,
-    genesis_commitment: Word,
-    expected_public_output_sha256: [u8; 32],
-) -> anyhow::Result<()> {
-    let confirmation: FinalConfirmation =
-        toml::from_slice(bytes).context("invalid DKG final confirmation")?;
-    ensure!(
-        confirmation.version == FINAL_CONFIRMATION_VERSION,
-        "unsupported DKG final confirmation version"
-    );
-    ensure!(
-        confirmation.validator_public_key == expected_validator_public_key,
-        "DKG final confirmation belongs to another validator"
-    );
-    ensure!(
-        confirmation.public_output_sha256 == hex::encode(expected_public_output_sha256),
-        "validators produced different storage key outputs"
-    );
-    let validator_public_key = decode_validator_public_key(&confirmation.validator_public_key)?;
-    let signature = decode_validator_signature(&confirmation.validator_signature)?;
-    ensure!(
-        signature.verify(
-            final_confirmation_commitment(genesis_commitment, expected_public_output_sha256),
-            &validator_public_key,
-        ),
-        "invalid DKG final confirmation signature"
-    );
-    Ok(())
-}
-
-fn final_confirmation_commitment(genesis_commitment: Word, public_output_sha256: [u8; 32]) -> Word {
-    let mut bytes = Vec::with_capacity(
-        FINAL_CONFIRMATION_SIGNATURE_DOMAIN.len()
-            + Word::SERIALIZED_SIZE
-            + public_output_sha256.len(),
-    );
-    bytes.extend_from_slice(FINAL_CONFIRMATION_SIGNATURE_DOMAIN);
-    bytes.extend_from_slice(&genesis_commitment.to_bytes());
-    bytes.extend_from_slice(&public_output_sha256);
-    Rpo256::hash(&bytes)
-}
-
-#[cfg(test)]
-mod tests;
