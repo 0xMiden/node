@@ -53,7 +53,8 @@ miden-validator dkg board \
 
 The command writes one ticket per genesis validator. Each ticket contains the board's Iroh address, a shared read-only
 document capability, and permission to upload only to that participant's slots. It contains no private DKG share. Send
-each file to its validator through the authenticated bootstrap channel. Keep the board running until every validator
+each file to its validator through the authenticated bootstrap channel, and keep it private. A ticket holder can stop
+the ceremony by uploading a conflicting value to that participant's slot. Keep the board running until every validator
 reports ceremony completion, then stop it with Ctrl-C.
 
 Each validator then runs the full ceremony with its own signing key and private work directory:
