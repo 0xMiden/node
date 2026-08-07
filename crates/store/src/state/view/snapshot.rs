@@ -41,16 +41,30 @@ const SNAPSHOT_SUPERSEDED_WARN_THRESHOLD: Duration = Duration::from_secs(10);
 /// Steady state is 1-2 generations: the just-published snapshot plus predecessors briefly pinned
 /// by in-flight requests. A sustained higher count means slow or leaked readers are holding old
 /// generations alive (see [`SnapshotGuard`]).
-pub(in crate::state) const SNAPSHOTS_LIVE_WARN_THRESHOLD: u64 = 4;
+pub(in crate::state) const SNAPSHOTS_LIVE_WARN_THRESHOLD: u64 = 3;
+
+/// Snapshot lag (in blocks) above which the block writer logs a warning on each applied block.
+///
+/// The lag is the distance between the chain tip and the oldest still-pinned snapshot generation
+/// (see [`GenerationsStatus::oldest_pinned`]), uncapped: unlike the prune tip, the reported lag
+/// keeps growing past [`SNAPSHOT_PRUNE_LAG_CAP`], so a leaked reader keeps warning for as long as
+/// it pins its generation. Steady state is 1-2 blocks: readers are request-scoped, so old
+/// generations are released within a block interval or two. A sustained higher lag means a slow or
+/// leaked reader is pinning an old generation, holding back SQLite history pruning and retaining
+/// `RocksDB` garbage. Unlike the release-time lifetime warning (see [`SnapshotGuard`]), this fires
+/// while the offending reader is still alive, repeating on every applied block until the
+/// generation is released.
+pub(in crate::state) const SNAPSHOT_LAG_WARN_THRESHOLD: u32 = 3;
 
 /// Upper bound on how far the snapshot-aware pruning tip may lag the chain tip.
 ///
 /// History pruning keys off the oldest live snapshot generation (see
-/// [`PublishedGenerations::prune_tip`]), so a leaked or pathologically slow reader would
+/// [`PublishedGenerations::advance`]), so a leaked or pathologically slow reader would
 /// otherwise stall pruning indefinitely. Beyond this
 /// many blocks of lag the writer prunes anyway, accepting the historical-read race for that reader
-/// (which the snapshot-lifetime warnings have long since reported). One full retention window, so
-/// worst-case retained history is bounded at twice the window.
+/// (which the per-block snapshot-lag warnings have long since reported and keep reporting; see
+/// [`SNAPSHOT_LAG_WARN_THRESHOLD`]). One full retention window, so worst-case retained
+/// history is bounded at twice the window.
 const SNAPSHOT_PRUNE_LAG_CAP: u32 = HISTORICAL_BLOCK_RETENTION;
 
 // PUBLISHED GENERATIONS
@@ -61,9 +75,11 @@ const SNAPSHOT_PRUNE_LAG_CAP: u32 = HISTORICAL_BLOCK_RETENTION;
 ///
 /// Owned exclusively by the writer — no locks or shared state. Liveness is not tracked
 /// separately: a [`Weak`] per generation asks the snapshot's own [`Arc`] refcount, which is the
-/// ground truth for "some reader can still see this height". Dead and no-longer-relevant entries
-/// are discarded on each [`Self::prune_tip`] call (once per applied block), which bounds the
-/// deque to roughly [`SNAPSHOT_PRUNE_LAG_CAP`] entries even when a reader leaks its snapshot.
+/// ground truth for "some reader can still see this height". Dead entries are discarded on each
+/// [`Self::advance`] call (once per applied block); pinned entries are kept regardless of age so
+/// the true oldest pinned height stays observable, which bounds the deque to one entry per live
+/// snapshot generation (each a height and a [`Weak`], negligible next to the pinned snapshot
+/// itself).
 ///
 /// Generic over the pinned type for testability; the writer uses `T = StateSnapshot`.
 pub(in crate::state) struct PublishedGenerations<T = StateSnapshot> {
@@ -85,28 +101,40 @@ impl<T> PublishedGenerations<T> {
         self.entries.push_back((height, Arc::downgrade(pinned)));
     }
 
-    /// Returns the effective chain tip for history pruning.
+    /// Discards generations no longer pinned by any reader and reports on those that remain.
     ///
-    /// The store's SQLite reads are scoped only by an upper block bound, with no point-in-time
-    /// protection equivalent to the `RocksDB` snapshots backing the trees. Pruning therefore
-    /// treats the oldest still-pinned generation as the tip: a generation pinned at height `H`
-    /// keeps the same retention window it had when `H` was the tip, and pruning simply lags until
-    /// it is released. The lag is capped at [`SNAPSHOT_PRUNE_LAG_CAP`] blocks so a leaked reader
-    /// cannot stall pruning indefinitely: entries below the cap's floor are discarded despite
-    /// still being pinned, as are entries that are no longer pinned.
-    pub(in crate::state) fn prune_tip(&mut self, chain_tip: BlockNumber) -> BlockNumber {
+    /// The prune tip is the effective chain tip for history pruning. The store's SQLite reads are
+    /// scoped only by an upper block bound, with no point-in-time protection equivalent to the
+    /// `RocksDB` snapshots backing the trees. Pruning therefore treats the oldest still-pinned
+    /// generation as the tip: a generation pinned at height `H` keeps the same retention window it
+    /// had when `H` was the tip, and pruning simply lags until it is released. The lag is capped
+    /// at [`SNAPSHOT_PRUNE_LAG_CAP`] blocks so a leaked reader cannot stall pruning indefinitely:
+    /// generations below the cap's floor no longer hold pruning back, but stay recorded so
+    /// [`GenerationsStatus::oldest_pinned`] keeps reporting them for as long as they are pinned.
+    pub(in crate::state) fn advance(&mut self, chain_tip: BlockNumber) -> GenerationsStatus {
+        self.entries.retain(|(_, pinned)| pinned.strong_count() > 0);
+        let oldest_pinned = self.entries.front().map(|(height, _)| *height);
+        // The prune tip is the oldest pinned generation within the lag cap, or the chain tip.
         let lag_floor = chain_tip.as_u32().saturating_sub(SNAPSHOT_PRUNE_LAG_CAP);
-        while let Some((height, pinned)) = self.entries.front() {
-            // Drop entries below the lag floor or that are no longer pinned.
-            if height.as_u32() < lag_floor || pinned.strong_count() == 0 {
-                self.entries.pop_front();
-            } else {
-                break;
-            }
-        }
-        // Return the prune tip, which is the oldest pinned generation or the chain tip.
-        self.entries.front().map_or(chain_tip, |(height, _)| (*height).min(chain_tip))
+        let prune_tip = self
+            .entries
+            .iter()
+            .map(|(height, _)| *height)
+            .find(|height| height.as_u32() >= lag_floor)
+            .map_or(chain_tip, |height| height.min(chain_tip));
+        GenerationsStatus { prune_tip, oldest_pinned }
     }
+}
+
+/// Per-block report on the still-pinned snapshot generations; see
+/// [`PublishedGenerations::advance`].
+pub(in crate::state) struct GenerationsStatus {
+    /// The effective chain tip for history pruning: the oldest still-pinned generation within
+    /// [`SNAPSHOT_PRUNE_LAG_CAP`], or the chain tip when none is pinned.
+    pub(in crate::state) prune_tip: BlockNumber,
+    /// The oldest generation still pinned by any reader, regardless of the lag cap. `None` when no
+    /// generation is pinned.
+    pub(in crate::state) oldest_pinned: Option<BlockNumber>,
 }
 
 // SNAPSHOT GUARD
@@ -120,7 +148,7 @@ impl<T> PublishedGenerations<T> {
 /// generation pins a `RocksDB` snapshot, which delays garbage collection of superseded key
 /// versions during compaction (compaction itself keeps running); the retained garbage grows with
 /// write churn for as long as the snapshot is held and is reclaimed once it is released. A held
-/// generation also holds back SQLite history pruning (see [`PublishedGenerations::prune_tip`]).
+/// generation also holds back SQLite history pruning (see [`PublishedGenerations::advance`]).
 ///
 /// Readers are expected to be request-scoped, so a superseded generation should be released well
 /// within a block interval. Outliving supersession by more than
@@ -240,12 +268,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn prune_tip_tracks_oldest_pinned_height_across_out_of_order_drops() {
+    fn advance_tracks_oldest_pinned_height_across_out_of_order_drops() {
         let mut published = PublishedGenerations::<u32>::new();
         let tip = BlockNumber::from(100);
 
         // No live generations: prune at the tip.
-        assert_eq!(published.prune_tip(tip), tip);
+        let status = published.advance(tip);
+        assert_eq!(status.prune_tip, tip);
+        assert_eq!(status.oldest_pinned, None);
 
         let gen_97 = Arc::new(97);
         let gen_98 = Arc::new(98);
@@ -253,24 +283,28 @@ mod tests {
         published.record(BlockNumber::from(97), &gen_97);
         published.record(BlockNumber::from(98), &gen_98);
         published.record(BlockNumber::from(99), &gen_99);
-        assert_eq!(published.prune_tip(tip), BlockNumber::from(97));
+        let status = published.advance(tip);
+        assert_eq!(status.prune_tip, BlockNumber::from(97));
+        assert_eq!(status.oldest_pinned, Some(BlockNumber::from(97)));
 
         // Dropping a middle generation leaves the oldest unchanged.
         drop(gen_98);
-        assert_eq!(published.prune_tip(tip), BlockNumber::from(97));
+        assert_eq!(published.advance(tip).prune_tip, BlockNumber::from(97));
 
         drop(gen_97);
-        assert_eq!(published.prune_tip(tip), BlockNumber::from(99));
+        assert_eq!(published.advance(tip).prune_tip, BlockNumber::from(99));
 
         // A pinned generation never advances pruning past the tip.
-        assert_eq!(published.prune_tip(BlockNumber::from(98)), BlockNumber::from(98));
+        assert_eq!(published.advance(BlockNumber::from(98)).prune_tip, BlockNumber::from(98));
 
         drop(gen_99);
-        assert_eq!(published.prune_tip(tip), tip);
+        let status = published.advance(tip);
+        assert_eq!(status.prune_tip, tip);
+        assert_eq!(status.oldest_pinned, None);
     }
 
     #[test]
-    fn prune_tip_discards_leaked_entries_below_the_lag_floor() {
+    fn advance_caps_prune_lag_but_keeps_reporting_the_leaked_oldest() {
         let mut published = PublishedGenerations::<u32>::new();
         let leaked = Arc::new(1);
         published.record(BlockNumber::from(1), &leaked);
@@ -278,11 +312,28 @@ mod tests {
         // While the leaked generation is within the lag cap it holds pruning back; near genesis the
         // lag floor saturates to zero.
         let tip = BlockNumber::from(SNAPSHOT_PRUNE_LAG_CAP);
-        assert_eq!(published.prune_tip(tip), BlockNumber::from(1));
+        let status = published.advance(tip);
+        assert_eq!(status.prune_tip, BlockNumber::from(1));
+        assert_eq!(status.oldest_pinned, Some(BlockNumber::from(1)));
 
-        // Once the tip advances past the cap it is discarded despite still being pinned, and no
-        // longer holds pruning back.
+        // Once the tip advances past the cap it no longer holds pruning back, but is still reported
+        // as the oldest pinned generation for as long as it is pinned.
         let tip = BlockNumber::from(SNAPSHOT_PRUNE_LAG_CAP + 2);
-        assert_eq!(published.prune_tip(tip), tip);
+        let status = published.advance(tip);
+        assert_eq!(status.prune_tip, tip);
+        assert_eq!(status.oldest_pinned, Some(BlockNumber::from(1)));
+
+        // A newer pinned generation above the floor becomes the prune tip while the leaked one
+        // still drives the reported lag.
+        let gen_recent = Arc::new(2);
+        let recent_height = BlockNumber::from(SNAPSHOT_PRUNE_LAG_CAP + 1);
+        published.record(recent_height, &gen_recent);
+        let status = published.advance(tip);
+        assert_eq!(status.prune_tip, recent_height);
+        assert_eq!(status.oldest_pinned, Some(BlockNumber::from(1)));
+
+        drop(leaked);
+        let status = published.advance(tip);
+        assert_eq!(status.oldest_pinned, Some(recent_height));
     }
 }
