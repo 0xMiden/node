@@ -79,6 +79,7 @@ const NUMBER_FIELD_NAMES: &[&str] = &[
     "snapshot.block_num",
     "snapshot.lifetime_ms",
     "snapshot.superseded_for_ms",
+    "snapshots.lag_blocks",
     "snapshots.live",
     "subscription.idle_ms",
     "subscription.stall_timeout_ms",

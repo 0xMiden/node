@@ -40,6 +40,7 @@ use crate::state::block_lifecycle::{BlockLifecycle, lifecycle_events_enabled};
 use crate::state::loader::TreeStorage;
 use crate::state::view::{
     PublishedGenerations,
+    SNAPSHOT_LAG_WARN_THRESHOLD,
     SNAPSHOTS_LIVE_WARN_THRESHOLD,
     SnapshotGuard,
     StateSnapshot,
@@ -232,7 +233,22 @@ impl WriteWorker {
         // generation rather than the actual tip: unlike the `RocksDB`-backed trees, SQLite reads
         // have no point-in-time protection, so pruning lags while pinned views can still reach
         // the history and catches up once they are released.
-        let prune_tip = self.published_generations.prune_tip(block_num);
+        let generations = self.published_generations.advance(block_num);
+        let snapshot_lag = generations
+            .oldest_pinned
+            .map_or(0, |oldest| block_num.as_u32() - oldest.as_u32());
+        miden_span_record!(snapshots.lag_blocks = snapshot_lag);
+        if snapshot_lag > SNAPSHOT_LAG_WARN_THRESHOLD {
+            tracing::warn!(
+                target: COMPONENT,
+                block_num = block_num.as_u32(),
+                prune_tip = generations.prune_tip.as_u32(),
+                snapshots.lag_blocks = snapshot_lag,
+                "a state snapshot is pinned far behind the chain tip; a slow or leaked reader is \
+                 retaining RocksDB garbage and holding back history pruning",
+            );
+        }
+        let prune_tip = generations.prune_tip;
         let resolved_note_ids = self
             .db
             .apply_block(

@@ -29,6 +29,7 @@ pub use scoped::{ScopedBlockNum, ScopedBlockRange};
 mod snapshot;
 pub(in crate::state) use snapshot::{
     PublishedGenerations,
+    SNAPSHOT_LAG_WARN_THRESHOLD,
     SNAPSHOTS_LIVE_WARN_THRESHOLD,
     SnapshotGuard,
     StateSnapshot,
