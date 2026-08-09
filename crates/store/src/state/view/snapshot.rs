@@ -6,6 +6,10 @@
 //! additionally remembers each published generation in [`PublishedGenerations`], whose oldest
 //! still-pinned height feeds snapshot-aware history pruning, since SQLite reads have no
 //! point-in-time protection equivalent to the `RocksDB` snapshots backing the trees.
+//!
+//! Everything here operates on whole generations; per-reader attribution (which call site pinned
+//! a generation, and for how long) lives on [`StateView`](super::StateView), the request-scoped
+//! handle through which readers acquire a snapshot.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -52,9 +56,9 @@ pub(in crate::state) const SNAPSHOTS_LIVE_WARN_THRESHOLD: u64 = 3;
 /// generations are released within a block interval or two. A sustained higher lag means a slow or
 /// leaked reader is pinning an old generation, holding back SQLite history pruning and retaining
 /// `RocksDB` garbage. Unlike the release-time warnings, this fires while the offending reader is
-/// still alive, repeating on every applied block until the generation is released — at which point
-/// the [`StateView`](super::StateView) drop warning attributes the call site that held it (and
-/// [`SnapshotGuard`] reports the generation's lifetime).
+/// still alive, repeating on every applied block until the generation is released — once it is,
+/// the [`StateView`](super::StateView) drop warning attributes the call site that held it (its
+/// own lifetime threshold permitting), and [`SnapshotGuard`] reports the generation's lifetime.
 pub(in crate::state) const SNAPSHOT_LAG_WARN_THRESHOLD: u32 = 3;
 
 /// Upper bound on how far the snapshot-aware pruning tip may lag the chain tip.
