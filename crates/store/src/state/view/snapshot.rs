@@ -51,9 +51,10 @@ pub(in crate::state) const SNAPSHOTS_LIVE_WARN_THRESHOLD: u64 = 3;
 /// it pins its generation. Steady state is 1-2 blocks: readers are request-scoped, so old
 /// generations are released within a block interval or two. A sustained higher lag means a slow or
 /// leaked reader is pinning an old generation, holding back SQLite history pruning and retaining
-/// `RocksDB` garbage. Unlike the release-time lifetime warning (see [`SnapshotGuard`]), this fires
-/// while the offending reader is still alive, repeating on every applied block until the
-/// generation is released.
+/// `RocksDB` garbage. Unlike the release-time warnings, this fires while the offending reader is
+/// still alive, repeating on every applied block until the generation is released — at which point
+/// the [`StateView`](super::StateView) drop warning attributes the call site that held it (and
+/// [`SnapshotGuard`] reports the generation's lifetime).
 pub(in crate::state) const SNAPSHOT_LAG_WARN_THRESHOLD: u32 = 3;
 
 /// Upper bound on how far the snapshot-aware pruning tip may lag the chain tip.
