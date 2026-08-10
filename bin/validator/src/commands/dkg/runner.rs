@@ -26,7 +26,6 @@ use super::{
     TRANSCRIPT_ACCEPTANCE_FILE,
     TRANSCRIPT_FILE,
     ValidatorSigningKey,
-    WireMessage,
     Zeroizing,
     accept_transcript,
     deal,
@@ -265,7 +264,6 @@ pub(super) async fn run_validator_with_network<B>(
 ) -> anyhow::Result<()>
 where
     B: EvrfProofBackend<StorageGroup>,
-    B::Proof: WireMessage,
 {
     fs_err::create_dir_all(work_directory).with_context(|| {
         format!("failed to create DKG work directory {}", work_directory.display())
@@ -319,7 +317,6 @@ async fn run_validator_on_board<B>(
 ) -> anyhow::Result<()>
 where
     B: EvrfProofBackend<StorageGroup>,
-    B::Proof: WireMessage,
 {
     let identity_directory = work_directory.join(IDENTITY_DIRECTORY);
     publish_named_file(
