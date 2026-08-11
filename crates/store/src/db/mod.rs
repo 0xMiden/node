@@ -448,6 +448,24 @@ impl Db {
             .await
     }
 
+    /// Returns the block header commitments starting at `from` (inclusive), ordered by block
+    /// number.
+    #[miden_instrument(
+        level = "debug",
+        target = COMPONENT,
+        err,
+    )]
+    pub async fn select_block_header_commitments_from(
+        &self,
+        from: BlockNumber,
+    ) -> Result<Vec<BlockHeaderCommitment>> {
+        self.reader
+            .read("block header commitments from", move |tx| {
+                queries::select_block_header_commitments_from(tx, from)
+            })
+            .await
+    }
+
     /// Returns a page of account commitments for tree rebuilding.
     #[miden_instrument(
         level = "debug",

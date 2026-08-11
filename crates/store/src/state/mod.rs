@@ -5,6 +5,7 @@
 
 mod block_lifecycle;
 mod bootstrap;
+mod chain_mmr_checkpoint;
 mod disk_monitor;
 mod lifecycle;
 mod loader;

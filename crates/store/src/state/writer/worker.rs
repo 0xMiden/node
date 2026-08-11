@@ -38,6 +38,7 @@ use crate::blocks::BlockStore;
 use crate::db::{Db, NoteRecord};
 use crate::errors::{ApplyBlockError, InvalidBlockError};
 use crate::state::block_lifecycle::{BlockLifecycle, lifecycle_events_enabled};
+use crate::state::chain_mmr_checkpoint::ChainMmrCheckpoint;
 use crate::state::loader::TreeStorage;
 use crate::state::view::{
     PublishedGenerations,
@@ -70,6 +71,11 @@ pub(in crate::state) struct WriteWorker {
     account_tree: AccountTreeWithHistory<TreeStorage>,
     /// The blockchain MMR owned by this writer.
     blockchain: Blockchain,
+    /// On-disk checkpoint of the chain MMR, refreshed on shutdown so the next startup only tops up
+    /// the blocks committed after that.
+    chain_mmr_checkpoint: ChainMmrCheckpoint,
+    /// Number of blocks in the chain MMR when the on-disk checkpoint was last written.
+    chain_mmr_checkpoint_blocks: u32,
     /// The mutable account state forest owned by this writer.
     forest: AccountStateForest<AccountStateForestBackend>,
     /// Shared counter of live snapshot generations, for observability.
@@ -113,6 +119,7 @@ impl WriteWorker {
         nullifier_tree: NullifierTree<LargeSmt<TreeStorage>>,
         account_tree: AccountTreeWithHistory<TreeStorage>,
         blockchain: Blockchain,
+        chain_mmr_checkpoint: ChainMmrCheckpoint,
         forest: AccountStateForest<AccountStateForestBackend>,
         snapshots_live: Arc<AtomicUsize>,
         apply_block_thread_priority: bool,
@@ -131,6 +138,7 @@ impl WriteWorker {
         let apply_pool =
             Arc::new(pool_builder.build().expect("apply_block thread pool should build"));
 
+        let chain_mmr_checkpoint_blocks = blockchain.num_blocks();
         Self {
             db,
             block_store,
@@ -141,6 +149,8 @@ impl WriteWorker {
             nullifier_tree,
             account_tree,
             blockchain,
+            chain_mmr_checkpoint,
+            chain_mmr_checkpoint_blocks,
             forest,
             snapshots_live,
             published_generations,
@@ -169,6 +179,12 @@ impl WriteWorker {
                 .instrument(req.span)
                 .await;
             let _ = req.result_tx.send(result);
+        }
+
+        // Refresh the on-disk chain MMR checkpoint so the next startup only tops up the blocks
+        // committed after this point. Skipped when no block was applied since the last write.
+        if self.blockchain.num_blocks() > self.chain_mmr_checkpoint_blocks {
+            self.chain_mmr_checkpoint.write(&self.blockchain);
         }
     }
 

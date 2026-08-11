@@ -65,6 +65,9 @@ pub(crate) use insert_block_header::insert_block_header;
 mod select_all_block_header_commitments;
 pub(crate) use select_all_block_header_commitments::select_all_block_header_commitments;
 
+mod select_block_header_commitments_from;
+pub(crate) use select_block_header_commitments_from::select_block_header_commitments_from;
+
 mod select_block_header_and_signatures_by_block_num;
 pub(crate) use select_block_header_and_signatures_by_block_num::select_block_header_and_signatures_by_block_num;
 

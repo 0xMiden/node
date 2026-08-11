@@ -21,9 +21,7 @@ use miden_crypto::merkle::smt::{
     RocksDbStorage,
     SmtStorageReader,
 };
-#[cfg(feature = "rocksdb")]
-use miden_node_tracing::info;
-use miden_node_tracing::miden_instrument;
+use miden_node_tracing::{info, miden_instrument, warn};
 #[cfg(feature = "rocksdb")]
 use miden_node_utils::clap::RocksDbOptions;
 use miden_protocol::account::{AccountId, AccountStorageHeader, StorageSlotType};
@@ -35,12 +33,11 @@ use miden_protocol::crypto::merkle::smt::MemoryStorage;
 use miden_protocol::crypto::merkle::smt::{LargeSmt, LargeSmtError, SmtStorage};
 use miden_protocol::{Felt, Word};
 
-use crate::COMPONENT;
-#[cfg(feature = "rocksdb")]
-use crate::LOG_TARGET;
 use crate::account_state_forest::AccountStateForest;
 use crate::db::{BlockHeaderCommitment, Db};
 use crate::errors::{DatabaseError, StateInitializationError};
+use crate::state::chain_mmr_checkpoint::ChainMmrCheckpoint;
+use crate::{COMPONENT, LOG_TARGET};
 
 // CONSTANTS
 // ================================================================================================
@@ -500,12 +497,98 @@ pub fn load_smt<S: SmtStorage>(storage: S) -> Result<LargeSmt<S>, StateInitializ
 // TREE LOADING FUNCTIONS
 // ================================================================================================
 
-/// Loads the blockchain MMR from all block headers in the database.
+/// Loads the blockchain MMR, either by restoring the on-disk checkpoint or by rebuilding from all
+/// block headers in the database.
+///
+/// The checkpoint is a cache of the derived MMR structure; the MMR is append-only, so a stale
+/// checkpoint is a valid prefix and is topped up with the block commitments it is missing. A
+/// missing, corrupt, or divergent checkpoint falls back to a full rebuild. Either path is verified
+/// against the latest header's chain commitment, and the checkpoint is refreshed whenever it was
+/// behind the database.
 #[miden_instrument(
     target = COMPONENT,
 )]
-pub async fn load_mmr(db: &Db) -> Result<Blockchain, StateInitializationError> {
+pub async fn load_mmr(
+    db: &Db,
+    checkpoint: &ChainMmrCheckpoint,
+) -> Result<Blockchain, StateInitializationError> {
     let latest_header = db.select_block_header_by_block_num(None).await?;
+
+    // Fast path: restore the checkpoint and top it up. Falls through to a full rebuild if there is
+    // no usable checkpoint, or if the topped-up result doesn't match the database.
+    if let Some(chain_mmr) =
+        try_restore_mmr_from_checkpoint(db, checkpoint, latest_header.as_ref()).await?
+    {
+        return Ok(chain_mmr);
+    }
+
+    rebuild_mmr_from_database(db, checkpoint, latest_header.as_ref()).await
+}
+
+/// Attempts to restore the chain MMR from the on-disk checkpoint.
+///
+/// Returns `Ok(None)` — never an error — when the checkpoint can't be used, so the caller falls
+/// back to a full rebuild:
+/// - there is no genesis block yet (nothing to restore against);
+/// - the checkpoint file is missing, unreadable, or was left ahead of the database (see
+///   [`ChainMmrCheckpoint::read`]);
+/// - the checkpoint, topped up with the blocks committed since it was taken, does not reproduce
+///   the latest header's chain commitment (e.g. the file diverged from the database).
+async fn try_restore_mmr_from_checkpoint(
+    db: &Db,
+    checkpoint: &ChainMmrCheckpoint,
+    latest_header: Option<&BlockHeader>,
+) -> Result<Option<Blockchain>, StateInitializationError> {
+    let Some(header) = latest_header else {
+        return Ok(None);
+    };
+
+    let chain_length = header.block_num().as_u32() + 1;
+    let Some(mut chain_mmr) = checkpoint.read(chain_length) else {
+        return Ok(None);
+    };
+
+    // The MMR is append-only, so the checkpoint is a valid prefix of the chain; append the
+    // commitments for the blocks committed after it was taken.
+    let checkpoint_blocks = chain_mmr.num_blocks();
+    let missing_commitments = db
+        .select_block_header_commitments_from(BlockNumber::from(checkpoint_blocks))
+        .await?;
+    for commitment in missing_commitments {
+        chain_mmr.push(commitment.word());
+    }
+
+    if let Err(err) = verify_chain_mmr_consistency(&chain_mmr, Some(header)) {
+        warn!(
+            target: LOG_TARGET,
+            err = %miden_node_utils::ErrorReport::as_report(&err),
+            "Chain MMR checkpoint diverged from the database; rebuilding"
+        );
+        return Ok(None);
+    }
+
+    info!(
+        target: LOG_TARGET,
+        checkpoint_blocks,
+        appended_blocks = chain_length - checkpoint_blocks,
+        "Loaded chain MMR from checkpoint"
+    );
+
+    // Keep the on-disk checkpoint caught up so the next startup has fewer blocks to append.
+    if checkpoint_blocks < chain_length {
+        checkpoint.write(&chain_mmr);
+    }
+
+    Ok(Some(chain_mmr))
+}
+
+/// Rebuilds the chain MMR from every block header commitment in the database, then writes it to the
+/// checkpoint so the next startup can restore it instead of rebuilding.
+async fn rebuild_mmr_from_database(
+    db: &Db,
+    checkpoint: &ChainMmrCheckpoint,
+    latest_header: Option<&BlockHeader>,
+) -> Result<Blockchain, StateInitializationError> {
     let block_commitments = db.select_all_block_header_commitments().await?;
 
     // SAFETY: We assume the loaded MMR is valid and does not have more than u32::MAX entries.
@@ -513,7 +596,9 @@ pub async fn load_mmr(db: &Db) -> Result<Blockchain, StateInitializationError> {
         .expect("loaded MMR exceeds maximum allowed size");
     let chain_mmr = Blockchain::from_mmr_unchecked(mmr);
 
-    verify_chain_mmr_consistency(&chain_mmr, latest_header.as_ref())?;
+    verify_chain_mmr_consistency(&chain_mmr, latest_header)?;
+
+    checkpoint.write(&chain_mmr);
 
     Ok(chain_mmr)
 }
@@ -829,7 +914,7 @@ mod tests {
             .await
             .expect("test block headers should be inserted");
 
-        let error = load_mmr(&db)
+        let error = load_mmr(&db, &ChainMmrCheckpoint::new(temp_dir.path()))
             .await
             .expect_err("startup MMR load should reject inconsistent block headers");
 
@@ -837,6 +922,90 @@ mod tests {
             error,
             StateInitializationError::ChainMmrStorageDiverged { .. }
         );
+    }
+
+    /// Bootstraps a test database at `db_path` and inserts `count` consistent block headers.
+    async fn seed_headers(db_path: &Path, count: u32) -> (Vec<BlockHeader>, crate::db::Db) {
+        crate::db::bootstrap_database(db_path).expect("test database should bootstrap");
+        let headers = build_headers(count);
+        let db = crate::db::Db::load(db_path.to_path_buf())
+            .await
+            .expect("test database should load");
+
+        let headers_to_insert = headers.clone();
+        let signing_key = SigningKey::new();
+        db.query("insert block headers", move |conn| {
+            for header in &headers_to_insert {
+                let signatures = miden_protocol::block::BlockSignatures::new(vec![
+                    signing_key.sign(header.commitment()),
+                ])
+                .expect("one signature is within bounds");
+                crate::db::models::queries::insert_block_header(conn, header, &signatures)?;
+            }
+            Ok::<_, DatabaseError>(())
+        })
+        .await
+        .expect("test block headers should be inserted");
+
+        (headers, db)
+    }
+
+    #[tokio::test]
+    #[miden_node_test_macro::enable_logging]
+    async fn load_mmr_writes_and_restores_checkpoint() {
+        let temp_dir = tempfile::tempdir().expect("temp directory should be created");
+        let (_headers, db) = seed_headers(&temp_dir.path().join("store.sqlite"), 5).await;
+        let checkpoint = ChainMmrCheckpoint::new(temp_dir.path());
+
+        // The first load rebuilds from the database and writes the checkpoint.
+        let rebuilt = load_mmr(&db, &checkpoint).await.expect("MMR should rebuild from database");
+        let written = checkpoint.read(5).expect("checkpoint should have been written");
+        assert_eq!(written.num_blocks(), 5);
+        assert_eq!(written.commitment(), rebuilt.commitment());
+
+        // The second load restores the checkpoint and yields the same chain.
+        let restored =
+            load_mmr(&db, &checkpoint).await.expect("MMR should restore from checkpoint");
+        assert_eq!(restored.commitment(), rebuilt.commitment());
+    }
+
+    #[tokio::test]
+    #[miden_node_test_macro::enable_logging]
+    async fn load_mmr_tops_up_stale_checkpoint() {
+        let temp_dir = tempfile::tempdir().expect("temp directory should be created");
+        let (headers, db) = seed_headers(&temp_dir.path().join("store.sqlite"), 5).await;
+        let checkpoint = ChainMmrCheckpoint::new(temp_dir.path());
+
+        // Checkpoint the chain as of block 2; the database is 2 blocks ahead.
+        let stale_mmr = Mmr::try_from_iter(headers[..3].iter().map(BlockHeader::commitment))
+            .expect("test MMR should build");
+        checkpoint.write(&Blockchain::from_mmr_unchecked(stale_mmr));
+
+        let chain = load_mmr(&db, &checkpoint).await.expect("stale checkpoint should be topped up");
+        assert_eq!(chain.num_blocks(), 5);
+
+        // The topped-up chain replaces the stale checkpoint.
+        let refreshed = checkpoint.read(5).expect("refreshed checkpoint should exist");
+        assert_eq!(refreshed.num_blocks(), 5);
+        assert_eq!(refreshed.commitment(), chain.commitment());
+    }
+
+    #[tokio::test]
+    #[miden_node_test_macro::enable_logging]
+    async fn load_mmr_recovers_from_corrupt_checkpoint() {
+        use crate::state::chain_mmr_checkpoint::CHAIN_MMR_CHECKPOINT_FILENAME;
+
+        let temp_dir = tempfile::tempdir().expect("temp directory should be created");
+        let (_headers, db) = seed_headers(&temp_dir.path().join("store.sqlite"), 5).await;
+        let checkpoint = ChainMmrCheckpoint::new(temp_dir.path());
+
+        fs_err::write(temp_dir.path().join(CHAIN_MMR_CHECKPOINT_FILENAME), b"garbage")
+            .expect("corrupt checkpoint should be written");
+
+        let chain = load_mmr(&db, &checkpoint)
+            .await
+            .expect("corrupt checkpoint should fall back to a database rebuild");
+        assert_eq!(chain.num_blocks(), 5);
     }
 
     #[test]
