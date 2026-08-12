@@ -74,8 +74,6 @@ pub(in crate::state) struct WriteWorker {
     /// On-disk checkpoint of the chain MMR, refreshed on shutdown so the next startup only tops up
     /// the blocks committed after that.
     chain_mmr_checkpoint: ChainMmrCheckpoint,
-    /// Number of blocks in the chain MMR when the on-disk checkpoint was last written.
-    chain_mmr_checkpoint_blocks: u32,
     /// The mutable account state forest owned by this writer.
     forest: AccountStateForest<AccountStateForestBackend>,
     /// Shared counter of live snapshot generations, for observability.
@@ -138,7 +136,6 @@ impl WriteWorker {
         let apply_pool =
             Arc::new(pool_builder.build().expect("apply_block thread pool should build"));
 
-        let chain_mmr_checkpoint_blocks = blockchain.num_blocks();
         Self {
             db,
             block_store,
@@ -150,7 +147,6 @@ impl WriteWorker {
             account_tree,
             blockchain,
             chain_mmr_checkpoint,
-            chain_mmr_checkpoint_blocks,
             forest,
             snapshots_live,
             published_generations,
@@ -182,10 +178,8 @@ impl WriteWorker {
         }
 
         // Refresh the on-disk chain MMR checkpoint so the next startup only tops up the blocks
-        // committed after this point. Skipped when no block was applied since the last write.
-        if self.blockchain.num_blocks() > self.chain_mmr_checkpoint_blocks {
-            self.chain_mmr_checkpoint.write(&self.blockchain);
-        }
+        // committed after this point.
+        self.chain_mmr_checkpoint.write(&self.blockchain);
     }
 
     /// Validates and commits a signed block to all persistent and in-memory stores.
