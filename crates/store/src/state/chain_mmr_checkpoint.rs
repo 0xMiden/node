@@ -21,10 +21,6 @@ use crate::LOG_TARGET;
 /// File name of the chain MMR checkpoint within the data directory.
 pub(crate) const CHAIN_MMR_CHECKPOINT_FILENAME: &str = "chainmmr.bin";
 
-/// Version tag prefixed to the checkpoint file. Bump when the encoding changes; a mismatch discards
-/// the checkpoint and falls back to a full rebuild.
-const CHECKPOINT_VERSION: u8 = 1;
-
 /// Handle to the chain MMR checkpoint file within the data directory.
 ///
 /// Reads and writes are best-effort: any failure is logged and treated as "no checkpoint", never
@@ -41,9 +37,9 @@ impl ChainMmrCheckpoint {
         }
     }
 
-    /// Reads the checkpoint, returning `None` if it is missing, unreadable, encoded with a
-    /// different version, or contains more blocks than `chain_length` (e.g. the database was
-    /// restored from an older backup, so the checkpoint is not a prefix and cannot be topped up).
+    /// Reads the checkpoint, returning `None` if it is missing, unreadable, or contains more blocks
+    /// than `chain_length` (e.g. the database was restored from an older backup, so the checkpoint
+    /// is not a prefix and cannot be topped up).
     pub fn read(&self, chain_length: u32) -> Option<Blockchain> {
         let bytes = match fs_err::read(&self.path) {
             Ok(bytes) => bytes,
@@ -54,12 +50,7 @@ impl ChainMmrCheckpoint {
             },
         };
 
-        let Some((&CHECKPOINT_VERSION, encoded)) = bytes.split_first() else {
-            warn!(target: LOG_TARGET, "Unknown chain MMR checkpoint version; rebuilding from the database");
-            return None;
-        };
-
-        let blockchain = match Blockchain::read_from_bytes(encoded) {
+        let blockchain = match Blockchain::read_from_bytes(&bytes) {
             Ok(blockchain) => blockchain,
             Err(err) => {
                 warn!(target: LOG_TARGET, %err, "Failed to decode the chain MMR checkpoint; rebuilding from the database");
@@ -82,8 +73,7 @@ impl ChainMmrCheckpoint {
 
     /// Atomically replaces the checkpoint with the given blockchain.
     pub fn write(&self, blockchain: &Blockchain) {
-        let mut bytes = Vec::with_capacity(1 + blockchain.as_mmr().forest().num_nodes() * 32);
-        bytes.push(CHECKPOINT_VERSION);
+        let mut bytes = Vec::with_capacity(blockchain.as_mmr().forest().num_nodes() * 32);
         blockchain.write_into(&mut bytes);
 
         let tmp_path = self.path.with_extension("tmp");
@@ -138,18 +128,5 @@ mod tests {
         assert!(checkpoint.read(3).is_none());
         assert!(checkpoint.read(5).is_some());
         assert!(checkpoint.read(10).is_some());
-    }
-
-    #[test]
-    fn read_discards_unknown_version() {
-        let dir = tempfile::tempdir().expect("temp directory should be created");
-        let checkpoint = ChainMmrCheckpoint::new(dir.path());
-
-        let mut bytes = vec![CHECKPOINT_VERSION + 1];
-        chain(5).write_into(&mut bytes);
-        fs_err::write(dir.path().join(CHAIN_MMR_CHECKPOINT_FILENAME), &bytes)
-            .expect("versioned checkpoint bytes should be written");
-
-        assert!(checkpoint.read(5).is_none());
     }
 }
