@@ -12,6 +12,7 @@
 
 use std::path::{Path, PathBuf};
 
+use miden_node_utils::ErrorReport;
 use miden_protocol::block::Blockchain;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_node_tracing::warn;
@@ -45,7 +46,7 @@ impl ChainMmrCheckpoint {
             Ok(bytes) => bytes,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
             Err(err) => {
-                warn!(target: LOG_TARGET, %err, "Failed to read the chain MMR checkpoint; rebuilding from the database");
+                warn!(target: LOG_TARGET, err = %err.as_report(), "Failed to read the chain MMR checkpoint; rebuilding from the database");
                 return None;
             },
         };
@@ -53,7 +54,7 @@ impl ChainMmrCheckpoint {
         let blockchain = match Blockchain::read_from_bytes(&bytes) {
             Ok(blockchain) => blockchain,
             Err(err) => {
-                warn!(target: LOG_TARGET, %err, "Failed to decode the chain MMR checkpoint; rebuilding from the database");
+                warn!(target: LOG_TARGET, err = %err.as_report(), "Failed to decode the chain MMR checkpoint; rebuilding from the database");
                 return None;
             },
         };
@@ -80,7 +81,7 @@ impl ChainMmrCheckpoint {
         let result =
             fs_err::write(&tmp_path, &bytes).and_then(|()| fs_err::rename(&tmp_path, &self.path));
         if let Err(err) = result {
-            warn!(target: LOG_TARGET, %err, "Failed to write the chain MMR checkpoint");
+            warn!(target: LOG_TARGET, err = %err.as_report(), "Failed to write the chain MMR checkpoint");
         }
     }
 }
