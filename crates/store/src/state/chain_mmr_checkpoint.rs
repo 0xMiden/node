@@ -55,14 +55,13 @@ impl ChainMmrCheckpoint {
     /// the database was restored from an older backup) is cut back to the database's chain length.
     /// Returns `None` if the file is missing, unreadable, undecodable, or holds no complete block.
     pub fn read(&self, chain_length: u32) -> Option<Blockchain> {
-        let bytes = match fs_err::read(&self.path) {
-            Ok(bytes) => bytes,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
-            Err(err) => {
-                warn!(target: LOG_TARGET, err = %err.as_report(), "Failed to read the chain MMR checkpoint; rebuilding from the database");
-                return None;
-            },
-        };
+        let bytes = fs_err::read(&self.path)
+            .inspect_err(|err|
+                if err.kind() != std::io::ErrorKind::NotFound {
+                    warn!(target: LOG_TARGET, err = %err.as_report(), "Failed to read the chain MMR checkpoint; rebuilding from the database");
+                }
+            )
+            .ok()?;
 
         let num_blocks = largest_chain_prefix(bytes.len() / NODE_SIZE, chain_length);
         if num_blocks == 0 {
