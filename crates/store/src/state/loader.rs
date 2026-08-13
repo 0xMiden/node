@@ -503,8 +503,8 @@ pub fn load_smt<S: SmtStorage>(storage: S) -> Result<LargeSmt<S>, StateInitializ
 /// The checkpoint is a cache of the derived MMR structure; the MMR is append-only, so a stale
 /// checkpoint is a valid prefix and is topped up with the block commitments it is missing. A
 /// missing, corrupt, or divergent checkpoint falls back to a full rebuild. Either path is verified
-/// against the latest header's chain commitment, and the checkpoint is refreshed whenever it was
-/// behind the database.
+/// against the latest header's chain commitment, and the topped-up blocks are appended to the
+/// checkpoint whenever it was behind the database.
 #[miden_instrument(
     target = COMPONENT,
 )]
@@ -530,7 +530,7 @@ pub async fn load_mmr(
 /// Returns `Ok(None)` — never an error — when the checkpoint can't be used, so the caller falls
 /// back to a full rebuild:
 /// - there is no genesis block yet (nothing to restore against);
-/// - the checkpoint file is missing, unreadable, or was left ahead of the database (see
+/// - the checkpoint file is missing, unreadable, or holds no usable prefix (see
 ///   [`ChainMmrCheckpoint::read`]);
 /// - the checkpoint, topped up with the blocks committed since it was taken, does not reproduce
 ///   the latest header's chain commitment (e.g. the file diverged from the database).
@@ -574,8 +574,10 @@ async fn try_restore_mmr_from_checkpoint(
         "Loaded chain MMR from checkpoint"
     );
 
-    // Keep the on-disk checkpoint caught up so the next startup has fewer blocks to append.
-    if checkpoint_blocks < chain_length {
+    // Keep the on-disk checkpoint caught up so the next startup has fewer blocks to append. Startup
+    // is off the block-apply path, so a file the append cannot extend (e.g. one whose torn tail
+    // `read` skipped over) is healed here with a full rewrite.
+    if !checkpoint.append(&chain_mmr, checkpoint_blocks) {
         checkpoint.write(&chain_mmr);
     }
 
