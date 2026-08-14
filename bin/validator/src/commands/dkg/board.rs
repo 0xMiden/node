@@ -32,9 +32,10 @@ use iroh_gossip::net::Gossip;
 use super::{decode_fixed_hex, publish_directory, write_new_file};
 
 const ENDPOINT_SECRET_FILE: &str = "endpoint-secret.hex";
+const BOARD_METADATA_DIRECTORY: &str = "board-meta";
 const DOCUMENT_ID_FILE: &str = "document-id.hex";
 const BOARD_FORMAT_FILE: &str = "board-format";
-const BOARD_FORMAT: &[u8] = b"participant-upload-v3\n";
+const BOARD_FORMAT: &[u8] = b"participant-upload-v4\n";
 const UPLOAD_SECRETS_DIRECTORY: &str = "upload-secrets";
 const BOARD_TICKET_PREFIX: &str = "miden-storage-key-dkg-board-v3";
 const UPLOAD_ALPN: &[u8] = b"/miden/storage-key-dkg-board-upload/3";
@@ -235,32 +236,30 @@ impl BoardNode {
         use_network_services: bool,
     ) -> anyhow::Result<(Self, Vec<BoardTicket>)> {
         let runtime = BoardRuntime::start(data_directory, use_network_services).await?;
-        let document_id_path = data_directory.join(DOCUMENT_ID_FILE);
-        let existing_document = document_id_path.exists();
-        let document = if existing_document {
-            require_current_board_format(data_directory)?;
+        let metadata_directory = data_directory.join(BOARD_METADATA_DIRECTORY);
+        let (document, upload_secrets) = if metadata_directory.exists() {
+            require_current_board_format(&metadata_directory)?;
+            let document_id_path = metadata_directory.join(DOCUMENT_ID_FILE);
             let id = fs_err::read_to_string(&document_id_path).with_context(|| {
                 format!("failed to read Iroh document ID {}", document_id_path.display())
             })?;
             let id = decode_fixed_hex::<32>(id.trim(), "Iroh document ID")?;
-            runtime
+            let document = runtime
                 .docs
                 .open(iroh_docs::NamespaceId::from(&id))
                 .await
                 .context("failed to open Iroh document")?
-                .context("persisted Iroh document is missing")?
+                .context("persisted Iroh document is missing")?;
+            let upload_secrets = load_upload_secrets(&metadata_directory, participant_count)?;
+            (document, upload_secrets)
         } else {
             let document = runtime.docs.create().await.context("failed to create Iroh document")?;
-            write_new_file(
-                &document_id_path,
-                hex::encode(document.id().to_bytes()).as_bytes(),
-                true,
-            )?;
-            write_new_file(&data_directory.join(BOARD_FORMAT_FILE), BOARD_FORMAT, true)?;
-            document
+            let upload_secrets = (0..participant_count)
+                .map(|_| SecretKey::generate().to_bytes())
+                .collect::<Vec<_>>();
+            publish_board_metadata(&metadata_directory, &document, &upload_secrets)?;
+            (document, upload_secrets)
         };
-        let upload_secrets =
-            load_or_create_upload_secrets(data_directory, participant_count, !existing_document)?;
         document
             .set_download_policy(DownloadPolicy::NothingExcept(Vec::new()))
             .await
@@ -997,60 +996,64 @@ fn load_or_create_endpoint_secret(data_directory: &Path) -> anyhow::Result<Secre
     Ok(secret)
 }
 
-fn load_or_create_upload_secrets(
-    data_directory: &Path,
-    participant_count: usize,
-    allow_create: bool,
-) -> anyhow::Result<Vec<[u8; 32]>> {
-    let path = data_directory.join(UPLOAD_SECRETS_DIRECTORY);
-    if path.exists() {
-        let entry_count = fs_err::read_dir(&path)
-            .with_context(|| format!("failed to read DKG board upload secrets {}", path.display()))?
-            .collect::<Result<Vec<_>, _>>()?
-            .len();
-        ensure!(
-            entry_count == participant_count,
-            "DKG board upload secret count does not match the participant count"
-        );
-        return (1..=participant_count)
-            .map(|participant| {
-                let secret_path = path.join(format!("participant-{participant}.hex"));
-                let bytes = fs_err::read_to_string(&secret_path).with_context(|| {
-                    format!("failed to read DKG board upload secret {}", secret_path.display())
-                })?;
-                decode_fixed_hex::<32>(bytes.trim(), "DKG board upload secret")
-            })
-            .collect();
-    }
-    ensure!(
-        allow_create,
-        "this DKG board predates participant-scoped uploads; start a new ceremony in a new data directory"
-    );
-
-    let secrets = (0..participant_count)
-        .map(|_| SecretKey::generate().to_bytes())
-        .collect::<Vec<_>>();
-    publish_directory(&path, |temporary| {
-        for (position, secret) in secrets.iter().enumerate() {
+fn publish_board_metadata(
+    path: &Path,
+    document: &Doc,
+    upload_secrets: &[[u8; 32]],
+) -> anyhow::Result<()> {
+    publish_directory(path, |temporary| {
+        write_new_file(
+            &temporary.join(DOCUMENT_ID_FILE),
+            hex::encode(document.id().to_bytes()).as_bytes(),
+            true,
+        )?;
+        write_new_file(&temporary.join(BOARD_FORMAT_FILE), BOARD_FORMAT, true)?;
+        let upload_secrets_directory = temporary.join(UPLOAD_SECRETS_DIRECTORY);
+        fs_err::create_dir(&upload_secrets_directory).with_context(|| {
+            format!(
+                "failed to create DKG board upload secrets {}",
+                upload_secrets_directory.display()
+            )
+        })?;
+        for (position, secret) in upload_secrets.iter().enumerate() {
             write_new_file(
-                &temporary.join(format!("participant-{}.hex", position + 1)),
+                &upload_secrets_directory.join(format!("participant-{}.hex", position + 1)),
                 hex::encode(secret).as_bytes(),
                 true,
             )?;
         }
         Ok(())
-    })?;
-    Ok(secrets)
+    })
 }
 
-fn require_current_board_format(data_directory: &Path) -> anyhow::Result<()> {
-    let path = data_directory.join(BOARD_FORMAT_FILE);
-    let format = fs_err::read(&path).with_context(|| {
-        format!(
-            "this DKG board predates participant-scoped uploads; start a new ceremony in a new data directory ({})",
-            path.display()
-        )
-    })?;
+fn load_upload_secrets(
+    metadata_directory: &Path,
+    participant_count: usize,
+) -> anyhow::Result<Vec<[u8; 32]>> {
+    let path = metadata_directory.join(UPLOAD_SECRETS_DIRECTORY);
+    let entry_count = fs_err::read_dir(&path)
+        .with_context(|| format!("failed to read DKG board upload secrets {}", path.display()))?
+        .collect::<Result<Vec<_>, _>>()?
+        .len();
+    ensure!(
+        entry_count == participant_count,
+        "DKG board upload secret count does not match the participant count"
+    );
+    (1..=participant_count)
+        .map(|participant| {
+            let secret_path = path.join(format!("participant-{participant}.hex"));
+            let bytes = fs_err::read_to_string(&secret_path).with_context(|| {
+                format!("failed to read DKG board upload secret {}", secret_path.display())
+            })?;
+            decode_fixed_hex::<32>(bytes.trim(), "DKG board upload secret")
+        })
+        .collect()
+}
+
+fn require_current_board_format(metadata_directory: &Path) -> anyhow::Result<()> {
+    let path = metadata_directory.join(BOARD_FORMAT_FILE);
+    let format = fs_err::read(&path)
+        .with_context(|| format!("failed to read DKG board format {}", path.display()))?;
     ensure!(
         format == BOARD_FORMAT,
         "unsupported DKG board format; start a new ceremony in a new data directory"

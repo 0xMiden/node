@@ -117,18 +117,36 @@ async fn board_reopens_the_same_document_after_restart() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn unmarked_board_is_not_reopened_even_with_upload_secrets() -> anyhow::Result<()> {
+async fn board_metadata_is_published_as_one_directory() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let data_directory = root.path().join("host");
+    let (host, _) = BoardNode::create_for_test(&data_directory).await?;
+
+    let metadata_directory = data_directory.join(BOARD_METADATA_DIRECTORY);
+    assert!(metadata_directory.join(DOCUMENT_ID_FILE).is_file());
+    assert!(metadata_directory.join(BOARD_FORMAT_FILE).is_file());
+    assert!(metadata_directory.join(UPLOAD_SECRETS_DIRECTORY).is_dir());
+    assert!(!data_directory.join(DOCUMENT_ID_FILE).exists());
+    assert!(!data_directory.join(BOARD_FORMAT_FILE).exists());
+    assert!(!data_directory.join(UPLOAD_SECRETS_DIRECTORY).exists());
+
+    host.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn incomplete_board_metadata_is_rejected() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     let data_directory = root.path().join("host");
     let (host, _) = BoardNode::create_for_test(&data_directory).await?;
     host.shutdown().await?;
-    fs_err::remove_file(data_directory.join(BOARD_FORMAT_FILE))?;
+    fs_err::remove_file(data_directory.join(BOARD_METADATA_DIRECTORY).join(BOARD_FORMAT_FILE))?;
 
     let error = BoardNode::create_for_test(&data_directory)
         .await
         .err()
-        .context("legacy board unexpectedly reopened")?;
-    assert!(error.to_string().contains("predates participant-scoped uploads"));
+        .context("incomplete board metadata unexpectedly reopened")?;
+    assert!(error.to_string().contains("failed to read DKG board format"));
     Ok(())
 }
 
@@ -138,7 +156,10 @@ async fn previous_board_format_is_not_reopened() -> anyhow::Result<()> {
     let data_directory = root.path().join("host");
     let (host, _) = BoardNode::create_for_test(&data_directory).await?;
     host.shutdown().await?;
-    fs_err::write(data_directory.join(BOARD_FORMAT_FILE), b"participant-upload-v2\n")?;
+    fs_err::write(
+        data_directory.join(BOARD_METADATA_DIRECTORY).join(BOARD_FORMAT_FILE),
+        b"participant-upload-v3\n",
+    )?;
 
     let error = BoardNode::create_for_test(&data_directory)
         .await
