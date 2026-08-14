@@ -30,7 +30,7 @@ use iroh_docs::protocol::Docs;
 use iroh_docs::store::{DownloadPolicy, Query};
 use iroh_gossip::net::Gossip;
 
-use super::{decode_fixed_hex, publish_directory, write_new_file};
+use super::{decode_fixed_hex, publish_directory, sync_directory, write_new_file};
 
 const ENDPOINT_SECRET_FILE: &str = "endpoint-secret.hex";
 const BOARD_METADATA_DIRECTORY: &str = "board-meta";
@@ -1013,6 +1013,7 @@ fn load_or_create_endpoint_secret(data_directory: &Path) -> anyhow::Result<Secre
         .persist_noclobber(&path)
         .map_err(|error| error.error)
         .with_context(|| format!("failed to publish Iroh endpoint secret {}", path.display()))?;
+    sync_directory(data_directory)?;
     Ok(secret)
 }
 

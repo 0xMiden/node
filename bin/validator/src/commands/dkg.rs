@@ -1767,6 +1767,20 @@ fn publish_directory(
     write(temporary.path())?;
     fs_err::rename(temporary.path(), output_directory)
         .context("failed to publish output directory")?;
+    sync_directory(parent)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_directory(directory: &Path) -> anyhow::Result<()> {
+    std::fs::File::open(directory)
+        .with_context(|| format!("failed to open directory {}", directory.display()))?
+        .sync_all()
+        .with_context(|| format!("failed to sync directory {}", directory.display()))
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_directory: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
