@@ -764,10 +764,23 @@ fn secrets_match(candidate: &[u8], expected: &[u8; 32]) -> bool {
 
 impl BoardRuntime {
     async fn start(data_directory: &Path, use_network_services: bool) -> anyhow::Result<Self> {
+        let absolute_data_directory = if data_directory.is_absolute() {
+            data_directory.to_owned()
+        } else {
+            std::env::current_dir()
+                .context("failed to determine current directory")?
+                .join(data_directory)
+        };
+        let existing_ancestor = absolute_data_directory
+            .ancestors()
+            .find(|ancestor| ancestor.exists())
+            .context("Iroh data directory has no existing ancestor")?
+            .to_owned();
         fs_err::create_dir_all(data_directory).with_context(|| {
             format!("failed to create Iroh data directory {}", data_directory.display())
         })?;
         let secret = load_or_create_endpoint_secret(data_directory)?;
+        sync_created_directory_parents(&absolute_data_directory, &existing_ancestor)?;
         let builder = if use_network_services {
             Endpoint::builder(presets::N0)
         } else {
@@ -1015,6 +1028,18 @@ fn load_or_create_endpoint_secret(data_directory: &Path) -> anyhow::Result<Secre
         .with_context(|| format!("failed to publish Iroh endpoint secret {}", path.display()))?;
     sync_directory(data_directory)?;
     Ok(secret)
+}
+
+fn sync_created_directory_parents(
+    directory: &Path,
+    existing_ancestor: &Path,
+) -> anyhow::Result<()> {
+    let mut current = directory;
+    while current != existing_ancestor {
+        current = current.parent().context("Iroh data directory escaped its ancestor")?;
+        sync_directory(current)?;
+    }
+    Ok(())
 }
 
 fn publish_board_metadata(

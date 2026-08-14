@@ -1765,6 +1765,7 @@ fn publish_directory(
         .tempdir_in(parent)
         .context("failed to create temporary output directory")?;
     write(temporary.path())?;
+    sync_directory_tree(temporary.path())?;
     fs_err::rename(temporary.path(), output_directory)
         .context("failed to publish output directory")?;
     sync_directory(parent)?;
@@ -1781,6 +1782,30 @@ fn sync_directory(directory: &Path) -> anyhow::Result<()> {
 
 #[cfg(not(unix))]
 fn sync_directory(_directory: &Path) -> anyhow::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_directory_tree(directory: &Path) -> anyhow::Result<()> {
+    for entry in fs_err::read_dir(directory)
+        .with_context(|| format!("failed to read directory {}", directory.display()))?
+    {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            sync_directory_tree(&entry.path())?;
+        } else if file_type.is_file() {
+            std::fs::File::open(entry.path())
+                .with_context(|| format!("failed to open file {}", entry.path().display()))?
+                .sync_all()
+                .with_context(|| format!("failed to sync file {}", entry.path().display()))?;
+        }
+    }
+    sync_directory(directory)
+}
+
+#[cfg(not(unix))]
+fn sync_directory_tree(_directory: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
