@@ -6,7 +6,7 @@ impl BoardNode {
     }
 
     async fn join_for_test(data_directory: &Path, ticket: BoardTicket) -> anyhow::Result<Self> {
-        Self::join_with_network(data_directory, &ticket.to_string(), 3, false).await
+        Self::join_with_network(data_directory, ticket, 3, false).await
     }
 
     fn local_writer_for_test(&self) -> &BoardWriter {

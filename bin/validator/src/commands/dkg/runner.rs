@@ -7,7 +7,7 @@ use golden_core::{EvrfProofBackend, ParticipantIndex};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_validator::ValidatorSigner;
 
-use super::board::{ArtifactSlot, BoardNode};
+use super::board::{ArtifactSlot, BoardNode, BoardTicket};
 use super::{
     CONTEXT_CONFIG_FILE,
     CONTEXT_DEALING_FILE,
@@ -118,9 +118,10 @@ pub(super) async fn run_validator(options: DkgRunOptions) -> anyhow::Result<()> 
         .trim()
         .to_owned();
     ensure!(!board.is_empty(), "storage key DKG board ticket must not be empty");
+    let board = board.parse::<BoardTicket>().context("invalid storage key DKG board ticket")?;
     let signer = options.signing_key.into_signer().await?;
     run_validator_with_network::<SecpSecqBackend>(
-        &board,
+        board,
         &options.genesis,
         &signer,
         options.threshold.get(),
@@ -253,7 +254,7 @@ async fn wait_for_registrations(
     reason = "the inputs separate ceremony policy, durable paths, and test networking"
 )]
 pub(super) async fn run_validator_with_network<B>(
-    ticket: &str,
+    ticket: BoardTicket,
     genesis_path: &Path,
     signer: &ValidatorSigner,
     threshold: usize,

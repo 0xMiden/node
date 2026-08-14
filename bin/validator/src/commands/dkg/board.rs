@@ -340,7 +340,7 @@ impl BoardNode {
     /// Joins an existing ceremony document through its read and upload ticket.
     pub(super) async fn join(
         data_directory: &Path,
-        ticket: &str,
+        ticket: BoardTicket,
         participant_count: usize,
     ) -> anyhow::Result<Self> {
         Self::join_with_network(data_directory, ticket, participant_count, true).await
@@ -348,11 +348,10 @@ impl BoardNode {
 
     pub(super) async fn join_with_network(
         data_directory: &Path,
-        ticket: &str,
+        ticket: BoardTicket,
         participant_count: usize,
         use_network_services: bool,
     ) -> anyhow::Result<Self> {
-        let ticket = BoardTicket::from_str(ticket)?;
         let runtime = BoardRuntime::start(data_directory, use_network_services).await?;
         let BoardTicket { document, participant, upload_secret } = ticket;
         ensure!(

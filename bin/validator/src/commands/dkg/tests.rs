@@ -1010,7 +1010,7 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
                 .iter()
                 .position(|key| *key == signer.public_key())
                 .context("test signer is missing from genesis")?;
-            Ok(tickets[position].to_string())
+            Ok(tickets[position].clone())
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
     let work_directories = (1..=3)
@@ -1028,7 +1028,7 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
         timeout,
     );
     let first = runner::run_validator_with_network::<ShareOpeningBackend>(
-        &tickets[0],
+        tickets[0].clone(),
         &genesis.path,
         &signers[0],
         2,
@@ -1039,7 +1039,7 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
         timeout,
     );
     let second = runner::run_validator_with_network::<ShareOpeningBackend>(
-        &tickets[1],
+        tickets[1].clone(),
         &genesis.path,
         &signers[1],
         2,
@@ -1050,7 +1050,7 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
         timeout,
     );
     let third = runner::run_validator_with_network::<ShareOpeningBackend>(
-        &tickets[2],
+        tickets[2].clone(),
         &genesis.path,
         &signers[2],
         2,
