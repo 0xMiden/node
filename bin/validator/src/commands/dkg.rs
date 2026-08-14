@@ -1759,7 +1759,7 @@ fn publish_directory(
 ) -> anyhow::Result<()> {
     ensure!(!output_directory.exists(), "output directory already exists");
     let parent = output_directory.parent().unwrap_or_else(|| Path::new("."));
-    fs_err::create_dir_all(parent).context("failed to create output parent directory")?;
+    durably_create_directory_all(parent).context("failed to create output parent directory")?;
     let temporary = tempfile::Builder::new()
         .prefix(".storage-key-dkg-")
         .tempdir_in(parent)
@@ -1782,6 +1782,29 @@ fn sync_directory(directory: &Path) -> anyhow::Result<()> {
 
 #[cfg(not(unix))]
 fn sync_directory(_directory: &Path) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn durably_create_directory_all(directory: &Path) -> anyhow::Result<()> {
+    let absolute_directory = if directory.is_absolute() {
+        directory.to_owned()
+    } else {
+        std::env::current_dir()
+            .context("failed to determine current directory")?
+            .join(directory)
+    };
+    let existing_ancestor = absolute_directory
+        .ancestors()
+        .find(|ancestor| ancestor.exists())
+        .context("directory has no existing ancestor")?
+        .to_owned();
+    fs_err::create_dir_all(directory)?;
+
+    let mut current = absolute_directory.as_path();
+    while current != existing_ancestor {
+        current = current.parent().context("directory escaped its existing ancestor")?;
+        sync_directory(current)?;
+    }
     Ok(())
 }
 

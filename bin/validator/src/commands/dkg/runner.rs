@@ -31,6 +31,7 @@ use super::{
     deal,
     decode_fixed_hex,
     decode_identity_secret,
+    durably_create_directory_all,
     finalize,
     generate_identity,
     prepare,
@@ -265,7 +266,7 @@ pub(super) async fn run_validator_with_network<B>(
 where
     B: EvrfProofBackend<StorageGroup>,
 {
-    fs_err::create_dir_all(work_directory).with_context(|| {
+    durably_create_directory_all(work_directory).with_context(|| {
         format!("failed to create DKG work directory {}", work_directory.display())
     })?;
     let genesis = read_trusted_genesis(genesis_path)?;
