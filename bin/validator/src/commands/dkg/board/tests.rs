@@ -62,6 +62,25 @@ fn ticket_for(tickets: &[BoardTicket], participant: u32) -> BoardTicket {
         .clone()
 }
 
+#[test]
+fn endpoint_secret_is_persisted_privately() -> anyhow::Result<()> {
+    let data_directory = tempfile::tempdir()?;
+    let first = load_or_create_endpoint_secret(data_directory.path())?;
+    let second = load_or_create_endpoint_secret(data_directory.path())?;
+    assert_eq!(first.to_bytes(), second.to_bytes());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mode = fs_err::metadata(data_directory.path().join(ENDPOINT_SECRET_FILE))?
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn artifact_syncs_between_board_nodes() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;

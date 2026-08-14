@@ -8,6 +8,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::io::Write;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -991,14 +992,27 @@ async fn inspect_document_metadata(
 fn load_or_create_endpoint_secret(data_directory: &Path) -> anyhow::Result<SecretKey> {
     let path = data_directory.join(ENDPOINT_SECRET_FILE);
     if path.exists() {
-        let bytes = fs_err::read_to_string(&path)
+        let encoded = fs_err::read_to_string(&path)
             .with_context(|| format!("failed to read Iroh endpoint secret {}", path.display()))?;
-        let bytes = decode_fixed_hex::<32>(bytes.trim(), "Iroh endpoint secret")?;
-        return Ok(SecretKey::from_bytes(&bytes));
+        return SecretKey::from_str(encoded.trim()).context("invalid Iroh endpoint secret");
     }
 
     let secret = SecretKey::generate();
-    write_new_file(&path, hex::encode(secret.to_bytes()).as_bytes(), true)?;
+    let mut temporary = tempfile::Builder::new()
+        .prefix(".endpoint-secret-")
+        .tempfile_in(data_directory)
+        .context("failed to create temporary Iroh endpoint secret")?;
+    temporary
+        .write_all(hex::encode(secret.to_bytes()).as_bytes())
+        .context("failed to write temporary Iroh endpoint secret")?;
+    temporary
+        .as_file()
+        .sync_all()
+        .context("failed to sync temporary Iroh endpoint secret")?;
+    temporary
+        .persist_noclobber(&path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("failed to publish Iroh endpoint secret {}", path.display()))?;
     Ok(secret)
 }
 
