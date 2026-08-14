@@ -29,6 +29,8 @@ use iroh_docs::engine::LiveEvent;
 use iroh_docs::protocol::Docs;
 use iroh_docs::store::{DownloadPolicy, Query};
 use iroh_gossip::net::Gossip;
+use iroh_tickets::{ParseError, Ticket};
+use serde::{Deserialize, Serialize};
 
 use super::{
     decode_fixed_hex,
@@ -44,7 +46,6 @@ const DOCUMENT_ID_FILE: &str = "document-id.hex";
 const BOARD_FORMAT_FILE: &str = "board-format";
 const BOARD_FORMAT: &[u8] = b"participant-upload-v4\n";
 const UPLOAD_SECRETS_DIRECTORY: &str = "upload-secrets";
-const BOARD_TICKET_PREFIX: &str = "miden-storage-key-dkg-board-v3";
 const UPLOAD_ALPN: &[u8] = b"/miden/storage-key-dkg-board-upload/3";
 const UPLOAD_HEADER_BYTES: usize = 32 + 1 + 4 + 8;
 const UPLOAD_RESPONSE_BYTES: usize = 1 + 32;
@@ -61,46 +62,58 @@ const MAX_VALUES_PER_SLOT: usize = 2;
 ///
 /// This credential contains no DKG private material. Its holder can read public ceremony artifacts
 /// and upload only to the named participant's slots.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct BoardTicket {
     document: DocTicket,
     pub(super) participant: u32,
     upload_secret: [u8; 32],
 }
 
+#[derive(Deserialize, Serialize)]
+enum BoardTicketWireFormat {
+    Variant0(BoardTicket),
+}
+
+impl Ticket for BoardTicket {
+    const KIND: &'static str = "miden-storage-key-dkg-board";
+
+    fn encode_bytes(&self) -> Vec<u8> {
+        postcard::to_stdvec(&BoardTicketWireFormat::Variant0(self.clone()))
+            .expect("postcard serialization failed")
+    }
+
+    fn decode_bytes(bytes: &[u8]) -> Result<Self, ParseError> {
+        let BoardTicketWireFormat::Variant0(ticket) = postcard::from_bytes(bytes)?;
+        if ticket.participant == 0 {
+            return Err(ParseError::verification_failed(
+                "DKG board participant index must be nonzero",
+            ));
+        }
+        if !matches!(ticket.document.capability, iroh_docs::Capability::Read(_)) {
+            return Err(ParseError::verification_failed(
+                "DKG board document ticket must be read-only",
+            ));
+        }
+        if ticket.document.nodes.is_empty() {
+            return Err(ParseError::verification_failed(
+                "DKG board document addressing info cannot be empty",
+            ));
+        }
+        Ok(ticket)
+    }
+}
+
 impl fmt::Display for BoardTicket {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "{BOARD_TICKET_PREFIX}:{}:{}:{}",
-            self.participant,
-            hex::encode(self.upload_secret),
-            self.document
-        )
+        formatter.write_str(&Ticket::encode_string(self))
     }
 }
 
 impl FromStr for BoardTicket {
-    type Err = anyhow::Error;
+    type Err = ParseError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let mut parts = value.splitn(4, ':');
-        ensure!(parts.next() == Some(BOARD_TICKET_PREFIX), "invalid DKG board ticket prefix");
-        let participant = parts
-            .next()
-            .context("DKG board ticket is missing its participant index")?
-            .parse::<u32>()
-            .context("invalid DKG board participant index")?;
-        ensure!(participant > 0, "DKG board participant index must be nonzero");
-        let secret = parts.next().context("DKG board ticket is missing its upload secret")?;
-        let document = parts.next().context("DKG board ticket is missing its document ticket")?;
-        let upload_secret = decode_fixed_hex::<32>(secret, "DKG board upload secret")?;
-        let document = DocTicket::from_str(document).context("invalid Iroh document ticket")?;
-        ensure!(
-            matches!(document.capability, iroh_docs::Capability::Read(_)),
-            "DKG board document ticket must be read-only"
-        );
-        Ok(Self { document, participant, upload_secret })
+        Ticket::decode_string(value)
     }
 }
 

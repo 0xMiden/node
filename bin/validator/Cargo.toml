@@ -39,6 +39,7 @@ iroh                   = { workspace = true }
 iroh-blobs             = { workspace = true }
 iroh-docs              = { workspace = true }
 iroh-gossip            = { workspace = true }
+iroh-tickets           = { workspace = true }
 miden-node-db          = { workspace = true }
 miden-node-persistence = { workspace = true }
 miden-node-proto       = { workspace = true }
@@ -49,6 +50,7 @@ miden-node-utils       = { features = ["testing"], workspace = true }
 miden-objects          = { workspace = true }
 miden-protocol         = { workspace = true }
 miden-tx               = { features = ["concurrent"], workspace = true }
+postcard               = { workspace = true }
 rand_core_06           = { workspace = true }
 serde                  = { workspace = true }
 sha2                   = { workspace = true }

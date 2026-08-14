@@ -213,10 +213,34 @@ async fn previous_board_format_is_not_reopened() -> anyhow::Result<()> {
 }
 
 #[test]
-fn previous_board_ticket_version_is_rejected() {
-    let error = BoardTicket::from_str("miden-storage-key-dkg-board-v2:1:00:invalid")
+fn legacy_board_ticket_is_rejected() {
+    BoardTicket::from_str("miden-storage-key-dkg-board-v3:1:00:invalid")
         .expect_err("old board ticket unexpectedly parsed");
-    assert!(error.to_string().contains("ticket prefix"));
+}
+
+#[tokio::test]
+async fn board_ticket_round_trips_and_validates_fields() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (host, mut tickets) = BoardNode::create_for_test(root.path()).await?;
+    let ticket = tickets.remove(0);
+    let encoded = ticket.to_string();
+    let decoded = BoardTicket::from_str(&encoded)?;
+    assert_eq!(decoded.to_string(), encoded);
+
+    let mut invalid = ticket.clone();
+    invalid.participant = 0;
+    let error = BoardTicket::from_str(&invalid.to_string())
+        .expect_err("zero participant ticket unexpectedly parsed");
+    assert!(error.to_string().contains("must be nonzero"));
+
+    invalid = ticket;
+    invalid.document.nodes.clear();
+    let error = BoardTicket::from_str(&invalid.to_string())
+        .expect_err("ticket without addressing info unexpectedly parsed");
+    assert!(error.to_string().contains("addressing info cannot be empty"));
+
+    host.shutdown().await?;
+    Ok(())
 }
 
 #[tokio::test]
