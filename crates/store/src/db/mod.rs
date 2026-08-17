@@ -48,7 +48,7 @@ pub use crate::db::queries::{
 };
 use crate::errors::DatabaseError;
 use crate::genesis::GenesisBlock;
-use crate::state::ScopedBlockNum;
+use crate::state::{ScopedBlockNum, ScopedBlockRange};
 use crate::{COMPONENT, LOG_TARGET};
 
 const STORAGE_MAP_VALUE_PER_ROW_BYTES: usize =
@@ -145,12 +145,26 @@ impl BlockHeaderCommitment {
 /// Describes the value of an asset for an account ID at `block_num` specifically.
 ///
 /// If `asset` is `None`, the asset was removed.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountVaultValue {
     pub block_num: BlockNumber,
     pub vault_key: AssetId,
     /// None if the asset was removed
     pub asset: Option<Asset>,
+}
+
+/// Stable cursor used to read a squashed account-vault delta in bounded database pages.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountVaultCursor {
+    pub(crate) block_num: BlockNumber,
+    pub(crate) vault_key: AssetId,
+}
+
+/// A bounded page of squashed account-vault updates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountVaultValuesPage {
+    pub values: Vec<AccountVaultValue>,
+    pub next_cursor: Option<AccountVaultCursor>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -746,6 +760,26 @@ impl Db {
             .await
     }
 
+    /// Selects one final update per vault key changed in `block_range`.
+    pub async fn select_account_vault_updates_v2(
+        &self,
+        account_id: AccountId,
+        block_range: ScopedBlockRange,
+        cursor: Option<AccountVaultCursor>,
+        page_size: NonZeroUsize,
+    ) -> Result<AccountVaultValuesPage> {
+        let block_range = block_range.into_inner();
+        self.reader.read("account vault sync v2", move |tx| {
+            queries::select_account_vault_updates_v2(
+                tx,
+                account_id,
+                block_range,
+                cursor,
+                page_size,
+            )
+        })
+        .await
+    }
     /// Returns the script for a note by its root.
     pub async fn select_note_script_by_root(&self, root: Word) -> Result<Option<NoteScript>> {
         self.reader
