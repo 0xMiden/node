@@ -65,6 +65,7 @@ use miden_protocol::account::{
 use miden_protocol::asset::{Asset, AssetId, FungibleAsset};
 use miden_protocol::batch::ProposedBatch;
 use miden_protocol::block::{
+    BlockNumber,
     BlockSignatures,
     FeeParameters,
     ProvenBlock,
@@ -73,7 +74,7 @@ use miden_protocol::block::{
 };
 use miden_protocol::note::NoteType;
 use miden_protocol::protocol_config::ProtocolConfig;
-use miden_protocol::testing::account_id::{ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET, ACCOUNT_ID_SENDER};
+use miden_protocol::testing::account_id::{ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET, ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1, ACCOUNT_ID_SENDER};
 use miden_protocol::testing::noop_auth_component::NoopAuthComponent;
 use miden_protocol::transaction::{
     OutputNote,
@@ -2235,11 +2236,15 @@ async fn get_limits_endpoint() {
         QueryParamNoteTagLimit::LIMIT
     );
 
-    // SyncAccountVault and SyncAccountStorageMaps accept a singular account_id, not a repeated
+    // The account vault and storage-map endpoints accept a singular account_id, not a repeated
     // list, so they do not have list parameter limits.
     assert!(
         !limits.endpoints.contains_key("SyncAccountVault"),
         "SyncAccountVault should not have list parameter limits"
+    );
+    assert!(
+        !limits.endpoints.contains_key("SyncAccountVaultV2"),
+        "SyncAccountVaultV2 should not have list parameter limits"
     );
     assert!(
         !limits.endpoints.contains_key("SyncAccountStorageMaps"),
@@ -2752,6 +2757,15 @@ async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
     assert_eq!(status.details(), &[4]);
 
     let status = rpc_client
+        .sync_account_vault_v2(proto::miden::node::v1::SyncAccountVaultV2Request {
+            block_range: block_range(),
+            account_id: account_id(),
+        })
+        .await
+        .expect_err("sync_account_vault_v2 should reject block_to beyond chain tip");
+    assert_beyond_tip(&status, "sync_account_vault_v2");
+
+    let status = rpc_client
         .sync_transactions(proto::miden::node::v1::SyncTransactionsRequest {
             block_range: block_range(),
             account_ids: vec![],
@@ -2760,4 +2774,85 @@ async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
         .expect_err("sync_transactions should reject block_to beyond chain tip");
     assert_beyond_tip(&status, "sync_transactions");
     assert_eq!(status.details(), &[5]);
+}
+
+#[tokio::test]
+async fn sync_account_vault_v2_validates_requests_and_completes_empty_stream() {
+    let (mut rpc_client, _rpc_addr, _store) = start_rpc().await;
+    let public_account = AccountId::dummy(
+        [0; 15],
+        AccountIdVersion::Version1,
+        AccountType::Public,
+        AssetCallbackFlag::Disabled,
+    );
+
+    let status = rpc_client
+        .sync_account_vault_v2(proto::miden::node::v1::SyncAccountVaultV2Request {
+            block_range: None,
+            account_id: Some(public_account.into()),
+        })
+        .await
+        .expect_err("sync_account_vault_v2 should require a block range");
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+
+    let private_account = AccountId::dummy(
+        [1; 15],
+        AccountIdVersion::Version1,
+        AccountType::Private,
+        AssetCallbackFlag::Disabled,
+    );
+    let status = rpc_client
+        .sync_account_vault_v2(proto::miden::node::v1::SyncAccountVaultV2Request {
+            block_range: Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 }),
+            account_id: Some(private_account.into()),
+        })
+        .await
+        .expect_err("sync_account_vault_v2 should reject private accounts");
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+
+    let mut stream = rpc_client
+        .sync_account_vault_v2(proto::miden::node::v1::SyncAccountVaultV2Request {
+            block_range: Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 }),
+            account_id: Some(public_account.into()),
+        })
+        .await
+        .expect("sync_account_vault_v2 should accept a public account at the chain tip")
+        .into_inner();
+    assert_eq!(stream.message().await.expect("stream should complete successfully"), None);
+}
+
+#[tokio::test]
+async fn sync_account_vault_v2_streams_squashed_updates() {
+    let (mut rpc_client, _rpc_addr, store) = start_rpc().await;
+    let account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let other_faucet = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap();
+    let asset_a = Asset::Fungible(FungibleAsset::new(account_id, 100).unwrap());
+    let asset_b = Asset::Fungible(FungibleAsset::new(other_faucet, 200).unwrap());
+    miden_node_store::test_support::seed_account_vault(
+        &store.data_directory_path().join("miden-store.sqlite3"),
+        account_id,
+        BlockNumber::GENESIS,
+        &[(asset_a.id(), Some(asset_a)), (asset_b.id(), Some(asset_b))],
+    )
+    .await;
+
+    let mut stream = rpc_client
+        .sync_account_vault_v2(proto::miden::node::v1::SyncAccountVaultV2Request {
+            block_range: Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 }),
+            account_id: Some(account_id.into()),
+        })
+        .await
+        .expect("sync_account_vault_v2 should return a stream")
+        .into_inner();
+
+    let mut assets = Vec::new();
+    while let Some(update) = stream.message().await.expect("stream should complete successfully") {
+        assert_eq!(update.block_num, 0);
+        assets.push(Asset::try_from(update.asset.expect("seeded values are additions")).unwrap());
+    }
+    assets.sort_by_key(Asset::id);
+
+    let mut expected = vec![asset_a, asset_b];
+    expected.sort_by_key(Asset::id);
+    assert_eq!(assets, expected);
 }

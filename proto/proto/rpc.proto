@@ -107,6 +107,9 @@ service NodeService {
     // Returns account vault updates for specified account within a block range.
     rpc SyncAccountVault(SyncAccountVaultRequest) returns (SyncAccountVaultResponse) {}
 
+    // Streams the final account vault value for every key changed within a block range.
+    rpc SyncAccountVaultV2(SyncAccountVaultV2Request) returns (stream AccountVaultUpdate) {}
+
     // Returns storage map updates for specified account and storage slots within a block range.
     rpc SyncAccountStorageMaps(SyncAccountStorageMapsRequest) returns (SyncAccountStorageMapsResponse) {}
 
@@ -550,6 +553,19 @@ message SyncAccountVaultRequest {
     BlockRange block_range = 1;
 
     // Account for which we want to sync asset vault.
+    account.AccountId account_id = 2;
+}
+
+// Account vault synchronization request with squashed, server-streaming responses.
+message SyncAccountVaultV2Request {
+    // Inclusive range of vault updates to consider.
+    //
+    // A client whose state includes block C and which is synchronizing to block N should request
+    // [C + 1, N]. The server emits at most one update per vault key: the value of that key at
+    // `block_to`, provided the key changed within this range.
+    BlockRange block_range = 1;
+
+    // Public account whose asset vault should be synchronized.
     account.AccountId account_id = 2;
 }
 

@@ -1,4 +1,5 @@
 use std::collections::{BTreeSet, HashSet};
+use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
 use std::sync::{Arc, LazyLock, Mutex};
 
@@ -167,6 +168,18 @@ fn upsert_accounts(
             &precomputed_public_states,
             &new_account_ids,
         )
+    })
+}
+
+fn select_account_vault_updates_v2(
+    db: &TestDb,
+    account_id: AccountId,
+    block_range: RangeInclusive<BlockNumber>,
+    cursor: Option<super::AccountVaultCursor>,
+    page_size: NonZeroUsize,
+) -> Result<super::AccountVaultValuesPage> {
+    db.read(move |tx| {
+        queries::select_account_vault_updates_v2(tx, account_id, block_range, cursor, page_size)
     })
 }
 
@@ -723,6 +736,115 @@ fn sync_account_vault_basic_validation() {
         values.iter().find(|v| v.vault_key == vault_key_1 && v.block_num == block_to);
     assert!(vault_key_1_asset.is_some(), "should find updated vault asset");
     assert_eq!(vault_key_1_asset.unwrap().asset, Some(updated_fungible_asset_1));
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn sync_account_vault_v2_returns_one_target_value_per_changed_key() {
+    let db = &TestDb::new();
+    let account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let blocks: Vec<BlockNumber> = (1..=6).map(BlockNumber::from).collect();
+
+    for block in &blocks {
+        create_block(db, *block);
+        upsert_accounts(
+            db,
+            &[mock_block_account_update(account_id, 0)],
+            *block,
+            &PrecomputedPublicAccountStates::new(),
+            &BTreeSet::from([account_id]),
+        )
+        .unwrap();
+    }
+
+    let faucet_a = account_id;
+    let faucet_b = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap();
+    let faucet_c = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_2).unwrap();
+    let faucet_d = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_3).unwrap();
+
+    let asset_a_1 = Asset::Fungible(FungibleAsset::new(faucet_a, 100).unwrap());
+    let asset_a_3 = Asset::Fungible(FungibleAsset::new(faucet_a, 300).unwrap());
+    let asset_a_6 = Asset::Fungible(FungibleAsset::new(faucet_a, 600).unwrap());
+    let asset_b_2 = Asset::Fungible(FungibleAsset::new(faucet_b, 200).unwrap());
+    let asset_c_1 = Asset::Fungible(FungibleAsset::new(faucet_c, 100).unwrap());
+    let asset_d_4 = Asset::Fungible(FungibleAsset::new(faucet_d, 400).unwrap());
+
+    for (block, asset) in [
+        (blocks[0], asset_a_1),
+        (blocks[0], asset_c_1),
+        (blocks[1], asset_b_2),
+        (blocks[2], asset_a_3),
+        (blocks[3], asset_d_4),
+    ] {
+        insert_vault_asset(db, account_id, block, asset.id(), Some(asset))
+            .unwrap();
+    }
+
+    // Remove D at the inclusive target and update A after the target. The V2 query must return D's
+    // tombstone and A's block-3 value, whose validity interval is finite but covers block 5.
+    insert_vault_asset(db, account_id, blocks[4], asset_d_4.id(), None)
+        .unwrap();
+    insert_vault_asset(
+        db,
+        account_id,
+        blocks[5],
+        asset_a_6.id(),
+        Some(asset_a_6),
+    )
+    .unwrap();
+
+    let range = blocks[1]..=blocks[4];
+    let page_size = NonZeroUsize::new(1).unwrap();
+    let mut cursor = None;
+    let mut values = Vec::new();
+    loop {
+        let page = select_account_vault_updates_v2(
+            db,
+            account_id,
+            range.clone(),
+            cursor,
+            page_size,
+        )
+        .unwrap();
+        values.extend(page.values);
+        let Some(next_cursor) = page.next_cursor else {
+            break;
+        };
+        cursor = Some(next_cursor);
+    }
+
+    assert_eq!(values.len(), 3);
+    assert_eq!(values[0].block_num, blocks[1]);
+    assert_eq!(values[0].vault_key, asset_b_2.id());
+    assert_eq!(values[0].asset, Some(asset_b_2));
+    assert_eq!(values[1].block_num, blocks[2]);
+    assert_eq!(values[1].vault_key, asset_a_3.id());
+    assert_eq!(values[1].asset, Some(asset_a_3));
+    assert_eq!(values[2].block_num, blocks[4]);
+    assert_eq!(values[2].vault_key, asset_d_4.id());
+    assert_eq!(values[2].asset, None);
+
+    // C changed before the inclusive range and A's block-1/block-6 values lie outside it.
+    assert!(values.iter().all(|value| value.vault_key != asset_c_1.id()));
+
+    let invalid = select_account_vault_updates_v2(
+        db,
+        account_id,
+        blocks[4]..=blocks[1],
+        None,
+        page_size,
+    );
+    assert_matches!(invalid, Err(DatabaseError::InvalidBlockRange { .. }));
+
+    let private_account = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    let private = select_account_vault_updates_v2(
+        db,
+        private_account,
+        range,
+        None,
+        page_size,
+    );
+    assert_matches!(private, Err(DatabaseError::AccountNotPublic(id)) if id == private_account);
 }
 
 #[test]

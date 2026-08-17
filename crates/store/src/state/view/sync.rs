@@ -1,3 +1,4 @@
+use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
 
 use miden_node_tracing::miden_instrument;
@@ -8,7 +9,13 @@ use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta, MmrProof};
 use super::StateView;
 use crate::COMPONENT;
 use crate::db::queries::StorageMapValuesPage;
-use crate::db::{AccountVaultValue, NoteSyncUpdate, NullifierInfo};
+use crate::db::{
+    AccountVaultCursor,
+    AccountVaultValue,
+    AccountVaultValuesPage,
+    NoteSyncUpdate,
+    NullifierInfo,
+};
 use crate::errors::{DatabaseError, NoteSyncError, StateSyncError};
 
 // STATE SYNCHRONIZATION ENDPOINTS
@@ -167,6 +174,23 @@ impl StateView {
     ) -> Result<(BlockNumber, Vec<AccountVaultValue>), DatabaseError> {
         let block_range = self.scope_range(block_range)?;
         self.db.get_account_vault_sync(account_id, block_range).await
+    }
+
+    /// Returns a bounded page with one final update per vault key changed in a block range.
+    ///
+    /// Returns [`RangeBeyondTip`](crate::errors::RangeBeyondTip) if the range extends beyond this
+    /// view's chain tip.
+    pub async fn sync_account_vault_v2_page(
+        &self,
+        account_id: AccountId,
+        block_range: RangeInclusive<BlockNumber>,
+        cursor: Option<AccountVaultCursor>,
+        page_size: NonZeroUsize,
+    ) -> Result<AccountVaultValuesPage, DatabaseError> {
+        let block_range = self.scope_range(block_range)?;
+        self.db
+            .select_account_vault_updates_v2(account_id, block_range, cursor, page_size)
+            .await
     }
 
     /// Returns storage map values for syncing within a block range.

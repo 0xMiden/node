@@ -19,7 +19,9 @@ pub use blocks::BlockStore;
 pub use data_directory::DataDirectory;
 pub use db::queries::StorageMapValuesPage;
 pub use db::{
+    AccountVaultCursor,
     AccountVaultValue,
+    AccountVaultValuesPage,
     DatabaseOptions,
     Db,
     NoteRecord,
@@ -76,9 +78,10 @@ pub mod test_support {
 
     use miden_protocol::Word;
     use miden_protocol::account::AccountId;
+    use miden_protocol::asset::{Asset, AssetId};
     use miden_protocol::block::BlockNumber;
 
-    use crate::db::queries::{AccountRow, NetworkAccountType};
+    use crate::db::queries::{AccountRow, NetworkAccountType, insert_vault_asset};
     use crate::errors::DatabaseError;
 
     /// Opens a fresh connection to the store's SQLite database and inserts a private
@@ -106,8 +109,36 @@ pub mod test_support {
             .await
             .expect("insert network account row");
     }
-}
 
+    /// Inserts a public account row and vault values for downstream RPC integration tests.
+    pub async fn seed_account_vault(
+        db_path: &Path,
+        account_id: AccountId,
+        block_num: BlockNumber,
+        values: &[(AssetId, Option<Asset>)],
+    ) {
+        let (writer, _reader) =
+            miden_node_db::sqlite::open(db_path).expect("connect to store sqlite");
+        let values = values.to_vec();
+        writer
+            .write::<_, DatabaseError, _>("seed account vault", move |tx| {
+                AccountRow::new_private(
+                    account_id,
+                    NetworkAccountType::None,
+                    Word::default(),
+                    block_num,
+                    block_num,
+                )
+                .upsert(tx)?;
+                for (vault_key, asset) in values {
+                    insert_vault_asset(tx, account_id, block_num, vault_key, asset)?;
+                }
+                Ok(())
+            })
+            .await
+            .expect("insert test account vault values");
+    }
+}
 // CONSTANTS
 // =================================================================================================
 const COMPONENT: &str = "miden-store";

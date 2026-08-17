@@ -55,7 +55,7 @@ The RPC server supports:
 | State queries          | `GetAccount`, `GetBlockByNumber`, `GetBlockHeaderByNumber`, `GetNotesById`, `GetNoteScriptByRoot`               |
 | Transaction submission | `GetTransactionEncryptionKey`, `SubmitProvenTx`, `SubmitProvenTxBatch`                                          |
 | Account registration   | `RegisterAccount`                                                                                               |
-| State synchronization  | `SyncTransactions`, `SyncNotes`, `SyncNullifiers`, `SyncAccountVault`, `SyncAccountStorageMaps`, `SyncChainMmr` |
+| State synchronization  | `SyncTransactions`, `SyncNotes`, `SyncNullifiers`, `SyncAccountVault`, `SyncAccountVaultV2`, `SyncAccountStorageMaps`, `SyncChainMmr` |
 | Block streaming        | `BlockSubscription`, `ProofSubscription`                                                                        |
 | Network note debugging | `GetNetworkNoteStatus`                                                                                          |
 

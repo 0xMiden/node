@@ -101,7 +101,8 @@ codes returned in gRPC status details.
 | `SyncTransactions`       | Returns transaction records for specified accounts within a block range.                |
 | `SyncNotes`              | Returns note metadata and inclusion proofs for matching note tags within a block range. |
 | `SyncNullifiers`         | Returns nullifiers matching specified 16-bit prefixes within a block range.             |
-| `SyncAccountVault`       | Returns public account vault updates within a block range.                              |
+| `SyncAccountVault`       | Returns historical public account vault updates within a block range.                   |
+| `SyncAccountVaultV2`     | Streams one target-state vault update per key changed within an inclusive block range.  |
 | `SyncAccountStorageMaps` | Returns public account storage map updates within a block range.                        |
 | `SyncChainMmr`           | Returns the chain MMR delta, target header, and protocol config when required.          |
 
@@ -113,6 +114,10 @@ Use `GetLimits` to discover the maximum request sizes accepted by the node befor
 | ------------------- | ------------------------------------------------------------------------------------- |
 | `BlockSubscription` | Streams committed blocks from `block_from`, replaying history before live blocks.     |
 | `ProofSubscription` | Streams block proofs from `block_from`, replaying existing proofs before live proofs. |
+
+`SyncAccountVaultV2` is a finite server stream. A client whose state includes block `C` and which is synchronizing to
+block `N` requests the inclusive range `[C + 1, N]`. An OK end-of-stream marks the result complete; a non-OK termination
+must be discarded and retried.
 
 These streams are the primary mechanism full nodes use to replicate chain data from an upstream source. They are also
 useful for indexers, explorers, and other services that need an append-only view of network progress.
