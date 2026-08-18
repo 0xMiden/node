@@ -179,7 +179,8 @@ impl StateView {
     /// Returns a bounded page with one final update per vault key changed in a block range.
     ///
     /// Returns [`RangeBeyondTip`](crate::errors::RangeBeyondTip) if the range extends beyond this
-    /// view's chain tip.
+    /// view's chain tip. Returns [`DatabaseError::BlockPruned`] if the range targets a block older
+    /// than the retained account history.
     pub async fn sync_account_vault_v2_page(
         &self,
         account_id: AccountId,

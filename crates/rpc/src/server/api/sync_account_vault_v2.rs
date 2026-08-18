@@ -1,11 +1,12 @@
 use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
+use std::sync::Arc;
 use std::time::Duration;
 
-use miden_node_proto::decode::{read_account_id, read_block_range};
+use miden_node_proto::{DecodeMessage, Verify};
 use miden_node_proto::generated as proto;
-use miden_node_store::{AccountVaultValue, AccountVaultValuesPage, StateView};
-use miden_node_utils::tracing::{miden_instrument, miden_span_record};
+use miden_node_store::{AccountVaultValue, AccountVaultValuesPage, State};
+use miden_node_tracing::{miden_instrument, miden_span_record};
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
@@ -16,7 +17,6 @@ use tonic::Status;
 use tracing::Instrument;
 
 use super::{
-    RpcInvalidBlockRange,
     RpcService,
     database_error_to_status,
     invalid_block_range_to_status,
@@ -30,28 +30,25 @@ const STREAM_BUFFER_SIZE: usize = 32;
 /// Maximum time a stream producer waits for a stalled client to accept one update.
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 
-type Input = (AccountId, RangeInclusive<BlockNumber>);
+type RequestInput = (AccountId, RangeInclusive<BlockNumber>);
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::SyncAccountVaultV2 for RpcService {
-    type Input = Input;
+impl proto::server::miden_node_v1_node_service::SyncAccountVaultV2 for RpcService {
+    type Input = RequestInput;
     type Item = AccountVaultValue;
     type ItemStream = ReceiverStream<tonic::Result<Self::Item>>;
 
-    fn decode(request: proto::rpc::SyncAccountVaultV2Request) -> tonic::Result<Self::Input> {
-        let account_id =
-            read_account_id::<proto::rpc::SyncAccountVaultV2Request, Status>(request.account_id)?;
-        let range = read_block_range::<Status>(request.block_range, "SyncAccountVaultV2Request")?;
-        let block_range = range
-            .into_inclusive_range::<RpcInvalidBlockRange>()
-            .map_err(invalid_block_range_to_status)?;
+    fn decode(request: proto::miden::node::v1::SyncAccountVaultV2Request) -> tonic::Result<Self::Input> {
+        let request = request.decode_fields().map_err(|err| Status::invalid_argument(err.to_string()))?;
+        let account_id = request.account_id.verify().map_err(|err| Status::invalid_argument(err.to_string()))?;
+        let block_range = request.block_range.verify().map_err(invalid_block_range_to_status)?;
 
         Ok((account_id, block_range))
     }
 
-    fn encode(item: Self::Item) -> tonic::Result<proto::rpc::AccountVaultUpdate> {
+    fn encode(item: Self::Item) -> tonic::Result<proto::miden::node::v1::AccountVaultUpdate> {
         let vault_key: Word = item.vault_key.into();
-        Ok(proto::rpc::AccountVaultUpdate {
+        Ok(proto::miden::node::v1::AccountVaultUpdate {
             vault_key: Some(vault_key.into()),
             asset: item.asset.map(Into::into),
             block_num: item.block_num.as_u32(),
@@ -81,12 +78,12 @@ impl proto::server::rpc_api::SyncAccountVaultV2 for RpcService {
             return Err(Status::invalid_argument(format!("account {account_id} is not public")));
         }
 
-        // Keep this view for the finite stream's lifetime. Besides fixing the chain-tip view used
-        // for validation, this pins the history generation so pruning cannot remove rows between
-        // internal database pages. Cancellation and the bounded send timeout release the view if
-        // the client stops consuming the stream.
-        let view = self.state.view();
-        let first_page = view
+        // Fetch the first page before establishing the stream so request validation failures are
+        // returned as the initial RPC status. Each page uses its own short-lived state view; the
+        // stream must not let a client pin a snapshot generation for its entire lifetime.
+        let first_page = self
+            .state
+            .view()
             .sync_account_vault_v2_page(account_id, block_range.clone(), None, DB_PAGE_SIZE)
             .await
             .map_err(|err| database_error_to_status(&err))?;
@@ -99,7 +96,7 @@ impl proto::server::rpc_api::SyncAccountVaultV2 for RpcService {
             .try_reserve_owned()
             .expect("a newly created vault sync channel must have capacity");
         VaultSyncProducer {
-            view,
+            state: Arc::clone(&self.state),
             account_id,
             block_range,
             page: first_page,
@@ -113,7 +110,7 @@ impl proto::server::rpc_api::SyncAccountVaultV2 for RpcService {
 }
 
 struct VaultSyncProducer {
-    view: StateView,
+    state: Arc<State>,
     account_id: AccountId,
     block_range: RangeInclusive<BlockNumber>,
     page: AccountVaultValuesPage,
@@ -147,7 +144,8 @@ impl VaultSyncProducer {
             };
 
             self.page = match self
-                .view
+                .state
+                .view()
                 .sync_account_vault_v2_page(
                     self.account_id,
                     self.block_range.clone(),

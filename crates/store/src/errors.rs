@@ -102,6 +102,11 @@ pub enum DatabaseError {
     AccountNotPublic(AccountId),
     #[error("invalid block parameters: block_from ({from}) > block_to ({to})")]
     InvalidBlockRange { from: BlockNumber, to: BlockNumber },
+    #[error("block {block_num} has been pruned; the oldest available block is {oldest_available}")]
+    BlockPruned {
+        block_num: BlockNumber,
+        oldest_available: BlockNumber,
+    },
     #[error(
         "transactions for block {block_num} would exceed maximum response size, \
          use a stricter filter to reduce the number of transactions returned"

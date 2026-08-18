@@ -117,7 +117,9 @@ Use `GetLimits` to discover the maximum request sizes accepted by the node befor
 
 `SyncAccountVaultV2` is a finite server stream. A client whose state includes block `C` and which is synchronizing to
 block `N` requests the inclusive range `[C + 1, N]`. An OK end-of-stream marks the result complete; a non-OK termination
-must be discarded and retried.
+must be discarded and retried. The target `N` must remain within the server's retained account-history window, but `C`
+may be older. If the target crosses the pruning horizon before all pages are read, the server terminates the stream with
+`INVALID_ARGUMENT`; retry against a newer target.
 
 These streams are the primary mechanism full nodes use to replicate chain data from an upstream source. They are also
 useful for indexers, explorers, and other services that need an append-only view of network progress.

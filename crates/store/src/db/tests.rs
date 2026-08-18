@@ -849,6 +849,113 @@ fn sync_account_vault_v2_returns_one_target_value_per_changed_key() {
 
 #[test]
 #[miden_node_test_macro::enable_logging]
+fn sync_account_vault_v2_rejects_targets_below_pruning_horizon_between_pages() {
+    let db = &TestDb::new();
+    let account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let other_faucet = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap();
+    let target = BlockNumber::from(5);
+
+    for block in 1..=target.as_u32() {
+        let block = BlockNumber::from(block);
+        create_block(db, block);
+        upsert_accounts(
+            db,
+            &[mock_block_account_update(account_id, 0)],
+            block,
+            &PrecomputedPublicAccountStates::new(),
+            &BTreeSet::from([account_id]),
+        )
+        .unwrap();
+    }
+
+    let asset_a_at_target = Asset::Fungible(FungibleAsset::new(account_id, 300).unwrap());
+    let asset_b = Asset::Fungible(FungibleAsset::new(other_faucet, 200).unwrap());
+    insert_vault_asset(
+        db,
+        account_id,
+        BlockNumber::from(2),
+        asset_b.id(),
+        Some(asset_b),
+    )
+    .unwrap();
+    insert_vault_asset(
+        db,
+        account_id,
+        BlockNumber::from(3),
+        asset_a_at_target.id(),
+        Some(asset_a_at_target),
+    )
+    .unwrap();
+
+    let page_size = NonZeroUsize::new(1).unwrap();
+    let first_page = select_account_vault_updates_v2(
+        db,
+        account_id,
+        BlockNumber::from(1)..=target,
+        None,
+        page_size,
+    )
+    .unwrap();
+    assert_eq!(first_page.values.len(), 1);
+    let cursor = first_page.next_cursor.expect("two updates require another page");
+
+    // Supersede A immediately after the target, then advance far enough that the target falls one
+    // block below the pruning horizon. Pruning removes A's value at the target, so the next page
+    // must fail instead of silently omitting it.
+    let oldest_available = target + 1;
+    let chain_tip = oldest_available + HISTORICAL_BLOCK_RETENTION;
+    for block in oldest_available.as_u32()..=chain_tip.as_u32() {
+        let block = BlockNumber::from(block);
+        create_block(db, block);
+        upsert_accounts(
+            db,
+            &[mock_block_account_update(account_id, 0)],
+            block,
+            &PrecomputedPublicAccountStates::new(),
+            &BTreeSet::from([account_id]),
+        )
+        .unwrap();
+    }
+    let asset_a_after_target = Asset::Fungible(FungibleAsset::new(account_id, 600).unwrap());
+    insert_vault_asset(
+        db,
+        account_id,
+        oldest_available,
+        asset_a_after_target.id(),
+        Some(asset_a_after_target),
+    )
+    .unwrap();
+    prune_history(db, chain_tip).unwrap();
+
+    let next_page = select_account_vault_updates_v2(
+        db,
+        account_id,
+        BlockNumber::from(1)..=target,
+        Some(cursor),
+        page_size,
+    );
+    assert_matches!(
+        next_page,
+        Err(DatabaseError::BlockPruned {
+            block_num,
+            oldest_available: cutoff,
+        }) if block_num == target && cutoff == oldest_available
+    );
+
+    // The cutoff block itself remains queryable because pruning keeps rows whose validity extends
+    // beyond it.
+    let boundary = select_account_vault_updates_v2(
+        db,
+        account_id,
+        BlockNumber::from(1)..=oldest_available,
+        None,
+        page_size,
+    );
+    assert!(boundary.is_ok(), "the pruning cutoff should remain queryable");
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
 fn select_nullifiers_by_prefix_works() {
     const PREFIX_LEN: u8 = 16;
     let db = &TestDb::new();

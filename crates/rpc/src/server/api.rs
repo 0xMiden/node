@@ -278,6 +278,9 @@ fn database_error_to_status(err: &DatabaseError) -> Status {
         DatabaseError::InvalidBlockRange { .. } => {
             SyncErrorCode::InvalidBlockRange.invalid_argument(message)
         },
+        DatabaseError::RangeBeyondTip(_) | DatabaseError::BlockPruned { .. } => {
+            Status::invalid_argument(message)
+        },
         _ => internal_error(message),
     }
 }
@@ -354,6 +357,7 @@ static RPC_LIMITS: LazyLock<proto::miden::node::v1::GetLimitsResponse> = LazyLoc
 #[cfg(test)]
 mod tests {
     use miden_node_proto::generated::server::miden_node_v1_node_service::GetLimits;
+    use miden_protocol::block::BlockNumber;
 
     use super::*;
 
@@ -403,5 +407,15 @@ mod tests {
         let status = get_block_header_error_to_status(GetBlockHeaderError::DatabaseError(error));
         assert_eq!(status.code(), tonic::Code::Internal);
         assert_eq!(status.details(), &[0]);
+    }
+
+    #[test]
+    fn block_pruned_database_error_is_invalid_argument() {
+        let status = database_error_to_status(&DatabaseError::BlockPruned {
+            block_num: BlockNumber::from(49),
+            oldest_available: BlockNumber::from(50),
+        });
+
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
     }
 }

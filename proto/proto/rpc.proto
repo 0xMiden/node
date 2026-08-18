@@ -562,7 +562,8 @@ message SyncAccountVaultV2Request {
     //
     // A client whose state includes block C and which is synchronizing to block N should request
     // [C + 1, N]. The server emits at most one update per vault key: the value of that key at
-    // `block_to`, provided the key changed within this range.
+    // `block_to`, provided the key changed within this range. `block_to` must be within the
+    // server's retained account-history window; `block_from` may be older.
     BlockRange block_range = 1;
 
     // Public account whose asset vault should be synchronized.

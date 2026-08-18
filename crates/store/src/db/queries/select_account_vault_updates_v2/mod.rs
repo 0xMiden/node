@@ -9,9 +9,11 @@ use miden_protocol::account::AccountId;
 use miden_protocol::asset::{Asset, AssetId};
 use miden_protocol::block::BlockNumber;
 
+use crate::db::queries::HISTORICAL_BLOCK_RETENTION;
 use crate::db::{AccountVaultCursor, AccountVaultValue, AccountVaultValuesPage};
 use crate::errors::DatabaseError;
 
+const SQL_CHAIN_TIP: &str = include_str!("select_chain_tip.sql");
 const SQL_PAGE: &str = include_str!("select_account_vault_updates_v2.sql");
 const SQL_PAGE_AFTER: &str = include_str!("select_account_vault_updates_v2_after.sql");
 
@@ -64,6 +66,22 @@ pub(crate) fn select_account_vault_updates_v2(
             map_row,
         )?,
     };
+    // Check the retention horizon within the page's transaction, so the chain tip and vault
+    // values come from the same SQLite snapshot.
+    let chain_tip = tx.query(SQL_CHAIN_TIP, &[], |row| row.get::<BlockNumber>(0))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| DatabaseError::DataCorrupted("block headers table is empty".to_owned()))?;
+    let oldest_available = chain_tip
+        .checked_sub(HISTORICAL_BLOCK_RETENTION)
+        .unwrap_or(BlockNumber::GENESIS);
+    if *block_range.end() < oldest_available {
+        return Err(DatabaseError::BlockPruned {
+            block_num: *block_range.end(),
+            oldest_available,
+        });
+    }
+
     let has_more = rows.len() > limit;
     rows.truncate(limit);
     let values = rows
