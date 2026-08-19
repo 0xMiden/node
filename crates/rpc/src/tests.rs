@@ -74,7 +74,11 @@ use miden_protocol::block::{
 };
 use miden_protocol::note::NoteType;
 use miden_protocol::protocol_config::ProtocolConfig;
-use miden_protocol::testing::account_id::{ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET, ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1, ACCOUNT_ID_SENDER};
+use miden_protocol::testing::account_id::{
+    ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
+    ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1,
+    ACCOUNT_ID_SENDER,
+};
 use miden_protocol::testing::noop_auth_component::NoopAuthComponent;
 use miden_protocol::transaction::{
     OutputNote,
@@ -2778,7 +2782,7 @@ async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
 
 #[tokio::test]
 async fn sync_account_vault_v2_validates_requests_and_completes_empty_stream() {
-    let (mut rpc_client, _rpc_addr, _store) = start_rpc().await;
+    let (mut rpc_client, _rpc_addr, _store, _guard) = start_rpc().await;
     let public_account = AccountId::dummy(
         [0; 15],
         AccountIdVersion::Version1,
@@ -2823,11 +2827,11 @@ async fn sync_account_vault_v2_validates_requests_and_completes_empty_stream() {
 
 #[tokio::test]
 async fn sync_account_vault_v2_streams_squashed_updates() {
-    let (mut rpc_client, _rpc_addr, store) = start_rpc().await;
+    let (mut rpc_client, _rpc_addr, store, _guard) = start_rpc().await;
     let account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
     let other_faucet = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap();
-    let asset_a = Asset::Fungible(FungibleAsset::new(account_id, 100).unwrap());
-    let asset_b = Asset::Fungible(FungibleAsset::new(other_faucet, 200).unwrap());
+    let asset_a = Asset::from(FungibleAsset::new(account_id, 100).unwrap());
+    let asset_b = Asset::from(FungibleAsset::new(other_faucet, 200).unwrap());
     miden_node_store::test_support::seed_account_vault(
         &store.data_directory_path().join("miden-store.sqlite3"),
         account_id,
@@ -2848,7 +2852,15 @@ async fn sync_account_vault_v2_streams_squashed_updates() {
     let mut assets = Vec::new();
     while let Some(update) = stream.message().await.expect("stream should complete successfully") {
         assert_eq!(update.block_num, 0);
-        assets.push(Asset::try_from(update.asset.expect("seeded values are additions")).unwrap());
+        assets.push(
+            update
+                .asset
+                .expect("seeded values are additions")
+                .decode_fields()
+                .unwrap()
+                .verify()
+                .unwrap(),
+        );
     }
     assets.sort_by_key(Asset::id);
 

@@ -42,6 +42,24 @@ pub(crate) fn select_account_vault_updates_v2(
         });
     }
 
+    // Check the retention horizon before loading the page. This read establishes the SQLite
+    // transaction's snapshot, so the page query below observes the same chain tip and pruning
+    // state. Rejecting here avoids loading a page that would be discarded as incomplete.
+    let chain_tip = tx
+        .query(SQL_CHAIN_TIP, &[], |row| row.get::<BlockNumber>(0))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| DatabaseError::DataCorrupted("block headers table is empty".to_owned()))?;
+    let oldest_available = chain_tip
+        .checked_sub(HISTORICAL_BLOCK_RETENTION)
+        .unwrap_or(BlockNumber::GENESIS);
+    if *block_range.end() < oldest_available {
+        return Err(DatabaseError::BlockPruned {
+            block_num: *block_range.end(),
+            oldest_available,
+        });
+    }
+
     let limit = page_size.get();
     let query_limit = i64::try_from(limit.saturating_add(1)).expect("page size fits within i64");
     let map_row = |row: &miden_node_db::sqlite::Row<'_>| {
@@ -66,22 +84,6 @@ pub(crate) fn select_account_vault_updates_v2(
             map_row,
         )?,
     };
-    // Check the retention horizon within the page's transaction, so the chain tip and vault
-    // values come from the same SQLite snapshot.
-    let chain_tip = tx.query(SQL_CHAIN_TIP, &[], |row| row.get::<BlockNumber>(0))?
-        .into_iter()
-        .next()
-        .ok_or_else(|| DatabaseError::DataCorrupted("block headers table is empty".to_owned()))?;
-    let oldest_available = chain_tip
-        .checked_sub(HISTORICAL_BLOCK_RETENTION)
-        .unwrap_or(BlockNumber::GENESIS);
-    if *block_range.end() < oldest_available {
-        return Err(DatabaseError::BlockPruned {
-            block_num: *block_range.end(),
-            oldest_available,
-        });
-    }
-
     let has_more = rows.len() > limit;
     rows.truncate(limit);
     let values = rows

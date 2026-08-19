@@ -108,7 +108,7 @@ service NodeService {
     rpc SyncAccountVault(SyncAccountVaultRequest) returns (SyncAccountVaultResponse) {}
 
     // Streams the final account vault value for every key changed within a block range.
-    rpc SyncAccountVaultV2(SyncAccountVaultV2Request) returns (stream AccountVaultUpdate) {}
+    rpc SyncAccountVaultV2(SyncAccountVaultV2Request) returns (stream SyncAccountVaultV2Response) {}
 
     // Returns storage map updates for specified account and storage slots within a block range.
     rpc SyncAccountStorageMaps(SyncAccountStorageMapsRequest) returns (SyncAccountStorageMapsResponse) {}
@@ -579,6 +579,19 @@ message SyncAccountVaultResponse {
     // Multiple updates can be returned for a single asset, and the one with a higher `block_num`
     // is expected to be retained by the caller.
     repeated AccountVaultUpdate updates = 2;
+}
+
+// One final vault value emitted by the streaming account vault sync endpoint.
+message SyncAccountVaultV2Response {
+    // Vault key associated with the asset.
+    primitives.Word vault_key = 1;
+
+    // Asset value related to the vault key.
+    // If not present, the asset was removed from the vault.
+    optional asset.Asset asset = 2;
+
+    // Block number at which the above asset was updated in the account vault.
+    fixed32 block_num = 3;
 }
 
 message AccountVaultUpdate {

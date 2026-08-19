@@ -917,16 +917,17 @@ impl Db {
         page_size: NonZeroUsize,
     ) -> Result<AccountVaultValuesPage> {
         let block_range = block_range.into_inner();
-        self.reader.read("account vault sync v2", move |tx| {
-            queries::select_account_vault_updates_v2(
-                tx,
-                account_id,
-                block_range,
-                cursor,
-                page_size,
-            )
-        })
-        .await
+        self.reader
+            .read("account vault sync v2", move |tx| {
+                queries::select_account_vault_updates_v2(
+                    tx,
+                    account_id,
+                    block_range,
+                    cursor,
+                    page_size,
+                )
+            })
+            .await
     }
 
     /// Returns the script for a note by its root.

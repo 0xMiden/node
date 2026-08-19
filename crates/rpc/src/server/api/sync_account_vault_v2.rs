@@ -3,8 +3,7 @@ use std::ops::RangeInclusive;
 use std::sync::Arc;
 use std::time::Duration;
 
-use miden_node_proto::{DecodeMessage, Verify};
-use miden_node_proto::generated as proto;
+use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_node_store::{AccountVaultValue, AccountVaultValuesPage, State};
 use miden_node_tracing::{miden_instrument, miden_span_record};
 use miden_protocol::Word;
@@ -16,11 +15,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::Status;
 use tracing::Instrument;
 
-use super::{
-    RpcService,
-    database_error_to_status,
-    invalid_block_range_to_status,
-};
+use super::{RpcService, database_error_to_status, invalid_block_range_to_status};
 use crate::{COMPONENT, LOG_TARGET};
 
 /// Database rows fetched per page. This bounds internal work and memory, not encoded response size.
@@ -38,17 +33,26 @@ impl proto::server::miden_node_v1_node_service::SyncAccountVaultV2 for RpcServic
     type Item = AccountVaultValue;
     type ItemStream = ReceiverStream<tonic::Result<Self::Item>>;
 
-    fn decode(request: proto::miden::node::v1::SyncAccountVaultV2Request) -> tonic::Result<Self::Input> {
-        let request = request.decode_fields().map_err(|err| Status::invalid_argument(err.to_string()))?;
-        let account_id = request.account_id.verify().map_err(|err| Status::invalid_argument(err.to_string()))?;
+    fn decode(
+        request: proto::miden::node::v1::SyncAccountVaultV2Request,
+    ) -> tonic::Result<Self::Input> {
+        let request = request
+            .decode_fields()
+            .map_err(|err| Status::invalid_argument(err.to_string()))?;
+        let account_id = request
+            .account_id
+            .verify()
+            .map_err(|err| Status::invalid_argument(err.to_string()))?;
         let block_range = request.block_range.verify().map_err(invalid_block_range_to_status)?;
 
         Ok((account_id, block_range))
     }
 
-    fn encode(item: Self::Item) -> tonic::Result<proto::miden::node::v1::AccountVaultUpdate> {
+    fn encode(
+        item: Self::Item,
+    ) -> tonic::Result<proto::miden::node::v1::SyncAccountVaultV2Response> {
         let vault_key: Word = item.vault_key.into();
-        Ok(proto::miden::node::v1::AccountVaultUpdate {
+        Ok(proto::miden::node::v1::SyncAccountVaultV2Response {
             vault_key: Some(vault_key.into()),
             asset: item.asset.map(Into::into),
             block_num: item.block_num.as_u32(),
@@ -67,9 +71,9 @@ impl proto::server::miden_node_v1_node_service::SyncAccountVaultV2 for RpcServic
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::ItemStream> {
         miden_span_record!(
-            account.id = %account_id,
-            block_range.from = %block_range.start(),
-            block_range.to = %block_range.end(),
+            account.id = account_id,
+            block_range.from = block_range.start(),
+            block_range.to = block_range.end(),
         );
 
         tracing::debug!(target: LOG_TARGET, "Streaming account vault updates");

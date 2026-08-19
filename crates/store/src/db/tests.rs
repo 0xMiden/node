@@ -747,14 +747,7 @@ fn sync_account_vault_v2_returns_one_target_value_per_changed_key() {
 
     for block in &blocks {
         create_block(db, *block);
-        upsert_accounts(
-            db,
-            &[mock_block_account_update(account_id, 0)],
-            *block,
-            &PrecomputedPublicAccountStates::new(),
-            &BTreeSet::from([account_id]),
-        )
-        .unwrap();
+        upsert_mock_account(db, account_id, 0, *block).unwrap();
     }
 
     let faucet_a = account_id;
@@ -762,12 +755,12 @@ fn sync_account_vault_v2_returns_one_target_value_per_changed_key() {
     let faucet_c = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_2).unwrap();
     let faucet_d = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_3).unwrap();
 
-    let asset_a_1 = Asset::Fungible(FungibleAsset::new(faucet_a, 100).unwrap());
-    let asset_a_3 = Asset::Fungible(FungibleAsset::new(faucet_a, 300).unwrap());
-    let asset_a_6 = Asset::Fungible(FungibleAsset::new(faucet_a, 600).unwrap());
-    let asset_b_2 = Asset::Fungible(FungibleAsset::new(faucet_b, 200).unwrap());
-    let asset_c_1 = Asset::Fungible(FungibleAsset::new(faucet_c, 100).unwrap());
-    let asset_d_4 = Asset::Fungible(FungibleAsset::new(faucet_d, 400).unwrap());
+    let asset_a_1 = Asset::from(FungibleAsset::new(faucet_a, 100).unwrap());
+    let asset_a_3 = Asset::from(FungibleAsset::new(faucet_a, 300).unwrap());
+    let asset_a_6 = Asset::from(FungibleAsset::new(faucet_a, 600).unwrap());
+    let asset_b_2 = Asset::from(FungibleAsset::new(faucet_b, 200).unwrap());
+    let asset_c_1 = Asset::from(FungibleAsset::new(faucet_c, 100).unwrap());
+    let asset_d_4 = Asset::from(FungibleAsset::new(faucet_d, 400).unwrap());
 
     for (block, asset) in [
         (blocks[0], asset_a_1),
@@ -776,36 +769,22 @@ fn sync_account_vault_v2_returns_one_target_value_per_changed_key() {
         (blocks[2], asset_a_3),
         (blocks[3], asset_d_4),
     ] {
-        insert_vault_asset(db, account_id, block, asset.id(), Some(asset))
-            .unwrap();
+        insert_vault_asset(db, account_id, block, asset.id(), Some(asset)).unwrap();
     }
 
     // Remove D at the inclusive target and update A after the target. The V2 query must return D's
     // tombstone and A's block-3 value, whose validity interval is finite but covers block 5.
-    insert_vault_asset(db, account_id, blocks[4], asset_d_4.id(), None)
-        .unwrap();
-    insert_vault_asset(
-        db,
-        account_id,
-        blocks[5],
-        asset_a_6.id(),
-        Some(asset_a_6),
-    )
-    .unwrap();
+    insert_vault_asset(db, account_id, blocks[4], asset_d_4.id(), None).unwrap();
+    insert_vault_asset(db, account_id, blocks[5], asset_a_6.id(), Some(asset_a_6)).unwrap();
 
     let range = blocks[1]..=blocks[4];
     let page_size = NonZeroUsize::new(1).unwrap();
     let mut cursor = None;
     let mut values = Vec::new();
     loop {
-        let page = select_account_vault_updates_v2(
-            db,
-            account_id,
-            range.clone(),
-            cursor,
-            page_size,
-        )
-        .unwrap();
+        let page =
+            select_account_vault_updates_v2(db, account_id, range.clone(), cursor, page_size)
+                .unwrap();
         values.extend(page.values);
         let Some(next_cursor) = page.next_cursor else {
             break;
@@ -827,23 +806,12 @@ fn sync_account_vault_v2_returns_one_target_value_per_changed_key() {
     // C changed before the inclusive range and A's block-1/block-6 values lie outside it.
     assert!(values.iter().all(|value| value.vault_key != asset_c_1.id()));
 
-    let invalid = select_account_vault_updates_v2(
-        db,
-        account_id,
-        blocks[4]..=blocks[1],
-        None,
-        page_size,
-    );
+    let invalid =
+        select_account_vault_updates_v2(db, account_id, blocks[4]..=blocks[1], None, page_size);
     assert_matches!(invalid, Err(DatabaseError::InvalidBlockRange { .. }));
 
     let private_account = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
-    let private = select_account_vault_updates_v2(
-        db,
-        private_account,
-        range,
-        None,
-        page_size,
-    );
+    let private = select_account_vault_updates_v2(db, private_account, range, None, page_size);
     assert_matches!(private, Err(DatabaseError::AccountNotPublic(id)) if id == private_account);
 }
 
@@ -858,26 +826,12 @@ fn sync_account_vault_v2_rejects_targets_below_pruning_horizon_between_pages() {
     for block in 1..=target.as_u32() {
         let block = BlockNumber::from(block);
         create_block(db, block);
-        upsert_accounts(
-            db,
-            &[mock_block_account_update(account_id, 0)],
-            block,
-            &PrecomputedPublicAccountStates::new(),
-            &BTreeSet::from([account_id]),
-        )
-        .unwrap();
+        upsert_mock_account(db, account_id, 0, block).unwrap();
     }
 
-    let asset_a_at_target = Asset::Fungible(FungibleAsset::new(account_id, 300).unwrap());
-    let asset_b = Asset::Fungible(FungibleAsset::new(other_faucet, 200).unwrap());
-    insert_vault_asset(
-        db,
-        account_id,
-        BlockNumber::from(2),
-        asset_b.id(),
-        Some(asset_b),
-    )
-    .unwrap();
+    let asset_a_at_target = Asset::from(FungibleAsset::new(account_id, 300).unwrap());
+    let asset_b = Asset::from(FungibleAsset::new(other_faucet, 200).unwrap());
+    insert_vault_asset(db, account_id, BlockNumber::from(2), asset_b.id(), Some(asset_b)).unwrap();
     insert_vault_asset(
         db,
         account_id,
@@ -907,16 +861,9 @@ fn sync_account_vault_v2_rejects_targets_below_pruning_horizon_between_pages() {
     for block in oldest_available.as_u32()..=chain_tip.as_u32() {
         let block = BlockNumber::from(block);
         create_block(db, block);
-        upsert_accounts(
-            db,
-            &[mock_block_account_update(account_id, 0)],
-            block,
-            &PrecomputedPublicAccountStates::new(),
-            &BTreeSet::from([account_id]),
-        )
-        .unwrap();
+        upsert_mock_account(db, account_id, 0, block).unwrap();
     }
-    let asset_a_after_target = Asset::Fungible(FungibleAsset::new(account_id, 600).unwrap());
+    let asset_a_after_target = Asset::from(FungibleAsset::new(account_id, 600).unwrap());
     insert_vault_asset(
         db,
         account_id,
