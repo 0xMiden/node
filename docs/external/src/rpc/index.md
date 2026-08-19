@@ -56,8 +56,8 @@ The RPC server supports:
 | Transaction submission | `GetTransactionEncryptionKey`, `SubmitProvenTx`, `SubmitProvenTxBatch`                                          |
 | Account registration   | `RegisterAccount`, `IsAccountAllowed`, `IsInvitationCodeValid`                                                  |
 | State synchronization  | `SyncTransactions`, `SyncNotes`, `SyncNullifiers`, `SyncAccountVault`, `SyncAccountVaultV2`, `SyncAccountStorageMaps`, `SyncChainMmr` |
-| Block streaming        | `BlockSubscription`, `ProofSubscription`                                                                        |
-| Network note debugging | `GetNetworkNoteStatus`                                                                                          |
+| Block streaming        | `BlockSubscription`, `ProofSubscription`                                                                                              |
+| Network note debugging | `GetNetworkNoteStatus`                                                                                                                |
 
 See [Public RPC](/rpc/public-api) for endpoint summaries, [Subscriptions](/rpc/subscriptions) for stream semantics, and
 [Errors and Limits](/rpc/errors-and-limits) for request limits, content negotiation, and method-specific error codes.
