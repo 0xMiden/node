@@ -128,7 +128,7 @@ pub(super) async fn run_validator(options: DkgRunOptions) -> anyhow::Result<()> 
     ensure!(!board.is_empty(), "storage key DKG board ticket must not be empty");
     let board = board.parse::<BoardTicket>().context("invalid storage key DKG board ticket")?;
     let signer = options.signing_key.into_signer().await?;
-    run_validator_with_network::<SecpSecqBackend>(
+    run_validator_with_ticket::<SecpSecqBackend>(
         board,
         &options.genesis,
         &signer,
@@ -136,7 +136,6 @@ pub(super) async fn run_validator(options: DkgRunOptions) -> anyhow::Result<()> 
         &options.epoch,
         &options.work_directory,
         &options.output_directory,
-        true,
         CEREMONY_WAIT_TIMEOUT,
     )
     .await
@@ -260,9 +259,9 @@ async fn wait_for_registrations(
 /// Runs the restartable validator state machine over one board.
 #[expect(
     clippy::too_many_arguments,
-    reason = "the inputs separate ceremony policy, durable paths, and test networking"
+    reason = "the inputs separate ceremony policy from durable paths"
 )]
-pub(super) async fn run_validator_with_network<B>(
+pub(super) async fn run_validator_with_ticket<B>(
     ticket: BoardTicket,
     genesis_path: &Path,
     signer: &ValidatorSigner,
@@ -270,7 +269,6 @@ pub(super) async fn run_validator_with_network<B>(
     epoch: &str,
     work_directory: &Path,
     output_directory: &Path,
-    use_network_services: bool,
     timeout: Duration,
 ) -> anyhow::Result<()>
 where
@@ -295,12 +293,7 @@ where
         participant.get(),
     );
     let board_directory = work_directory.join(BOARD_DIRECTORY);
-    let board = if use_network_services {
-        ParticipantBoard::join(&board_directory, ticket, participant_count).await?
-    } else {
-        ParticipantBoard::join_with_network(&board_directory, ticket, participant_count, false)
-            .await?
-    };
+    let board = ParticipantBoard::join(&board_directory, ticket, participant_count).await?;
     let result = run_validator_on_board::<B>(
         &board,
         genesis_path,
@@ -322,7 +315,7 @@ where
     clippy::too_many_lines,
     reason = "the inputs and linear body mirror the ceremony policy and phase order"
 )]
-async fn run_validator_on_board<B>(
+pub(super) async fn run_validator_on_board<B>(
     board: &ParticipantBoard,
     genesis_path: &Path,
     signer: &ValidatorSigner,

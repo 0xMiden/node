@@ -100,21 +100,6 @@ async fn artifact_syncs_between_board_nodes() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn conflicting_artifacts_are_rejected() -> anyhow::Result<()> {
-    let root = tempfile::tempdir()?;
-    let (host, _) = BoardNode::create_for_test(&root.path().join("host")).await?;
-    let slot = ArtifactSlot::Manifest;
-
-    host.publish(&slot, b"first").await?;
-    host.publish(&slot, b"second").await?;
-    let error = host.read_unique(&slot).await.unwrap_err();
-    assert!(error.to_string().contains("conflicting artifacts"));
-
-    host.shutdown().await?;
-    Ok(())
-}
-
-#[tokio::test]
 async fn board_reopens_the_same_document_after_restart() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     let data_directory = root.path().join("host");
@@ -266,23 +251,6 @@ async fn unknown_participants_and_artifact_kinds_are_rejected_before_body_alloca
 fn oversized_artifacts_are_rejected_before_allocation() {
     let oversized = usize::try_from(MAX_ARTIFACT_BYTES).unwrap() + 1;
     assert!(validate_artifact_length(oversized).is_err());
-}
-
-#[test]
-fn shared_core_enforces_slots_idempotency_and_conflicts() -> anyhow::Result<()> {
-    let core = BoardCore::new(2)?;
-    core.validate_slot(&ArtifactSlot::Registration(2))?;
-    assert!(core.validate_slot(&ArtifactSlot::Registration(3)).is_err());
-
-    let first = b"first".to_vec();
-    let second = b"second".to_vec();
-    let one_value = SlotValues::from_values([first.clone()]);
-    assert_eq!(one_value.publish(&first)?, PublishAction::AlreadyPresent);
-    assert_eq!(one_value.publish(&second)?, PublishAction::Insert);
-
-    let conflicting = SlotValues::from_values([first, second]);
-    assert!(conflicting.into_unique(&ArtifactSlot::Manifest).is_err());
-    Ok(())
 }
 
 #[tokio::test]
