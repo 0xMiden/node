@@ -8,15 +8,17 @@ async fn assert_board_contract(
     coordinator: &CoordinatorBoard,
     participants: &[ParticipantBoard],
 ) -> anyhow::Result<()> {
+    let wait_for_manifest =
+        participants[0].reader().wait_unique(&ArtifactSlot::Manifest, WAIT_TIMEOUT);
+    let publish_manifest = async {
+        tokio::task::yield_now().await;
+        coordinator.publish(CommonArtifact::Manifest, b"manifest").await
+    };
+    let (manifest, publish_result) = tokio::join!(wait_for_manifest, publish_manifest);
+    publish_result?;
+    assert_eq!(manifest?, b"manifest");
+
     coordinator.publish(CommonArtifact::Manifest, b"manifest").await?;
-    coordinator.publish(CommonArtifact::Manifest, b"manifest").await?;
-    assert_eq!(
-        participants[0]
-            .reader()
-            .wait_unique(&ArtifactSlot::Manifest, WAIT_TIMEOUT)
-            .await?,
-        b"manifest"
-    );
 
     participants[0]
         .publish(ParticipantArtifact::Registration, b"registration")
