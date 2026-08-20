@@ -268,6 +268,23 @@ fn oversized_artifacts_are_rejected_before_allocation() {
     assert!(validate_artifact_length(oversized).is_err());
 }
 
+#[test]
+fn shared_core_enforces_slots_idempotency_and_conflicts() -> anyhow::Result<()> {
+    let core = BoardCore::new(2)?;
+    core.validate_slot(&ArtifactSlot::Registration(2))?;
+    assert!(core.validate_slot(&ArtifactSlot::Registration(3)).is_err());
+
+    let first = b"first".to_vec();
+    let second = b"second".to_vec();
+    let one_value = SlotValues::from_values([first.clone()]);
+    assert_eq!(one_value.publish(&first)?, PublishAction::AlreadyPresent);
+    assert_eq!(one_value.publish(&second)?, PublishAction::Insert);
+
+    let conflicting = SlotValues::from_values([first, second]);
+    assert!(conflicting.into_unique(&ArtifactSlot::Manifest).is_err());
+    Ok(())
+}
+
 #[tokio::test]
 async fn oversized_upload_is_rejected_before_body_allocation() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;

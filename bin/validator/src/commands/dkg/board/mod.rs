@@ -31,10 +31,14 @@ use iroh_gossip::net::Gossip;
 use iroh_tickets::{ParseError, Ticket};
 use serde::{Deserialize, Serialize};
 
+mod core;
 #[path = "iroh/persistence.rs"]
 mod persistence;
 #[path = "iroh/upload.rs"]
 mod upload;
+
+pub(super) use core::ArtifactSlot;
+use core::{BoardCore, MAX_ARTIFACT_BYTES, PublishAction, SlotValues, validate_artifact_length};
 
 #[cfg(test)]
 use persistence::ENDPOINT_SECRET_FILE;
@@ -54,11 +58,7 @@ use upload::{UPLOAD_ALPN, UploadProtocol, upload_artifact};
 
 use super::{decode_fixed_hex, durably_create_directory_all};
 
-const MAX_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
 const PEER_READY_TIMEOUT: Duration = Duration::from_secs(30);
-const COMMON_ARTIFACT_COUNT: usize = 3;
-const ARTIFACTS_PER_PARTICIPANT: usize = 4;
-const MAX_VALUES_PER_SLOT: usize = 2;
 
 /// The board address and read capability, paired with one participant's upload permission.
 ///
@@ -125,34 +125,12 @@ impl FromStr for BoardTicket {
     }
 }
 
-/// One immutable location in a DKG ceremony document.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) enum ArtifactSlot {
-    Registration(u32),
-    Manifest,
-    DecryptionConfig,
-    ContextConfig,
-    DecryptionDealing(u32),
-    ContextDealing(u32),
-    TranscriptAcceptance(u32),
-}
-
 /// An artifact published by the ceremony coordinator.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CommonArtifact {
     Manifest,
     DecryptionConfig,
     ContextConfig,
-}
-
-impl CommonArtifact {
-    fn slot(self) -> ArtifactSlot {
-        match self {
-            Self::Manifest => ArtifactSlot::Manifest,
-            Self::DecryptionConfig => ArtifactSlot::DecryptionConfig,
-            Self::ContextConfig => ArtifactSlot::ContextConfig,
-        }
-    }
 }
 
 /// An artifact published by one ceremony participant.
@@ -164,34 +142,7 @@ pub(super) enum ParticipantArtifact {
     TranscriptAcceptance,
 }
 
-impl ParticipantArtifact {
-    fn slot(self, participant: u32) -> ArtifactSlot {
-        match self {
-            Self::Registration => ArtifactSlot::Registration(participant),
-            Self::DecryptionDealing => ArtifactSlot::DecryptionDealing(participant),
-            Self::ContextDealing => ArtifactSlot::ContextDealing(participant),
-            Self::TranscriptAcceptance => ArtifactSlot::TranscriptAcceptance(participant),
-        }
-    }
-}
-
 impl ArtifactSlot {
-    fn prefix(&self) -> String {
-        match self {
-            Self::Registration(participant) => format!("registration/{participant}/"),
-            Self::Manifest => "common/manifest/".to_owned(),
-            Self::DecryptionConfig => "common/decryption-config/".to_owned(),
-            Self::ContextConfig => "common/context-config/".to_owned(),
-            Self::DecryptionDealing(participant) => {
-                format!("dealing/{participant}/decryption/")
-            },
-            Self::ContextDealing(participant) => format!("dealing/{participant}/context/"),
-            Self::TranscriptAcceptance(participant) => {
-                format!("acceptance/{participant}/signature/")
-            },
-        }
-    }
-
     fn key(&self, hash: Hash) -> String {
         format!("{}{}", self.prefix(), hash.to_hex())
     }
@@ -200,8 +151,8 @@ impl ArtifactSlot {
 #[derive(Clone, Debug)]
 struct BoardWriter {
     author: iroh_docs::AuthorId,
+    core: Arc<BoardCore>,
     document: Doc,
-    allowed_prefixes: Arc<Vec<String>>,
     lock: Arc<tokio::sync::Mutex<()>>,
 }
 
@@ -235,12 +186,11 @@ pub(super) struct ParticipantBoard {
 /// A persistent Iroh node joined to one ceremony document.
 struct BoardNode {
     blobs: FsStore,
+    core: Arc<BoardCore>,
     document: Doc,
     downloader: Downloader,
     event_error: tokio::sync::watch::Receiver<Option<String>>,
     event_task: tokio::task::JoinHandle<()>,
-    allowed_prefixes: Arc<Vec<String>>,
-    max_document_entries: usize,
     peer_ready: tokio::sync::watch::Receiver<bool>,
     publisher: Publisher,
     remote_providers: std::sync::Arc<tokio::sync::RwLock<BTreeMap<Hash, Vec<EndpointId>>>>,
@@ -643,14 +593,17 @@ impl BoardNode {
             );
             values.entry(hash).or_insert_with(|| bytes.to_vec());
         }
-        ensure!(values.len() <= 1, "DKG board contains conflicting artifacts for {prefix}");
-        Ok(values.into_values().next())
+        SlotValues::from_values(values.into_values()).into_unique(slot)
     }
 
     async fn validate_document_metadata(&self) -> anyhow::Result<()> {
         self.ensure_admitted()?;
-        inspect_document_metadata(&self.document, &self.allowed_prefixes, self.max_document_entries)
-            .await
+        inspect_document_metadata(
+            &self.document,
+            self.core.allowed_prefixes(),
+            self.core.max_document_entries(),
+        )
+        .await
     }
 
     fn ensure_admitted(&self) -> anyhow::Result<()> {
@@ -707,22 +660,9 @@ impl BoardNode {
     }
 }
 
-fn validate_artifact_length(length: usize) -> anyhow::Result<()> {
-    ensure!(length > 0, "DKG board artifact must not be empty");
-    ensure!(
-        u64::try_from(length).context("artifact length does not fit u64")? <= MAX_ARTIFACT_BYTES,
-        "DKG board artifact exceeds {MAX_ARTIFACT_BYTES} bytes",
-    );
-    Ok(())
-}
-
 impl BoardWriter {
     fn validate_slot(&self, slot: &ArtifactSlot) -> anyhow::Result<()> {
-        ensure!(
-            self.allowed_prefixes.contains(&slot.prefix()),
-            "DKG board upload targets an unknown participant or artifact slot"
-        );
-        Ok(())
+        self.core.validate_slot(slot)
     }
 
     async fn store(&self, slot: &ArtifactSlot, value: &[u8]) -> anyhow::Result<Hash> {
@@ -740,14 +680,11 @@ impl BoardWriter {
         let mut hashes = Vec::new();
         while let Some(entry) = entries.next().await {
             let entry = entry.context("failed to read DKG board artifact slot")?;
-            if entry.content_hash() == expected_hash {
-                return Ok(expected_hash);
-            }
             hashes.push(entry.content_hash());
-            ensure!(
-                hashes.len() < MAX_VALUES_PER_SLOT,
-                "DKG board artifact slot already contains conflicting values"
-            );
+        }
+        match SlotValues::from_values(hashes).publish(&expected_hash)? {
+            PublishAction::AlreadyPresent => return Ok(expected_hash),
+            PublishAction::Insert => {},
         }
 
         let stored_hash = self
@@ -808,24 +745,17 @@ impl BoardRuntime {
         served_upload_secrets: Option<Vec<[u8; 32]>>,
         remote_upload: Option<(EndpointAddr, u32, [u8; 32])>,
     ) -> anyhow::Result<BoardNode> {
-        ensure!(participant_count > 0, "DKG board requires at least one participant");
         ensure!(
             served_upload_secrets.is_some() ^ remote_upload.is_some(),
             "DKG board must either serve or submit uploads"
         );
-        let artifact_slot_count = participant_count
-            .checked_mul(ARTIFACTS_PER_PARTICIPANT)
-            .and_then(|count| count.checked_add(COMMON_ARTIFACT_COUNT))
-            .context("DKG board participant count is too large")?;
-        let max_document_entries = artifact_slot_count
-            .checked_mul(MAX_VALUES_PER_SLOT)
-            .context("DKG board participant count is too large")?;
-        let allowed_prefixes = Arc::new(allowed_slot_prefixes(participant_count)?);
-        inspect_document_metadata(&document, &allowed_prefixes, max_document_entries).await?;
+        let core = Arc::new(BoardCore::new(participant_count)?);
+        inspect_document_metadata(&document, core.allowed_prefixes(), core.max_document_entries())
+            .await?;
         let writer = BoardWriter {
             author: self.author,
+            core: core.clone(),
             document: document.clone(),
-            allowed_prefixes: allowed_prefixes.clone(),
             lock: Arc::new(tokio::sync::Mutex::new(())),
         };
         let publisher = match remote_upload {
@@ -852,12 +782,11 @@ impl BoardRuntime {
         let events = BoardEvents::start(&document).await?;
         Ok(BoardNode {
             blobs: self.blobs,
+            core,
             document,
             downloader: self.downloader,
             event_error: events.error,
             event_task: events.task,
-            allowed_prefixes,
-            max_document_entries,
             peer_ready: events.peer_ready,
             publisher,
             remote_providers: events.remote_providers,
@@ -927,24 +856,6 @@ impl BoardEvents {
             task,
         })
     }
-}
-
-fn allowed_slot_prefixes(participant_count: usize) -> anyhow::Result<Vec<String>> {
-    let mut prefixes = vec![
-        ArtifactSlot::Manifest.prefix(),
-        ArtifactSlot::DecryptionConfig.prefix(),
-        ArtifactSlot::ContextConfig.prefix(),
-    ];
-    for position in 0..participant_count {
-        let participant = u32::try_from(position + 1).context("too many DKG participants")?;
-        prefixes.extend([
-            ArtifactSlot::Registration(participant).prefix(),
-            ArtifactSlot::DecryptionDealing(participant).prefix(),
-            ArtifactSlot::ContextDealing(participant).prefix(),
-            ArtifactSlot::TranscriptAcceptance(participant).prefix(),
-        ]);
-    }
-    Ok(prefixes)
 }
 
 async fn inspect_document_metadata(
