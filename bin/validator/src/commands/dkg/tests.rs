@@ -964,13 +964,23 @@ async fn runner_rejects_another_participants_ticket_before_publishing() -> TestR
     let (board, tickets) =
         board::CoordinatorBoard::create_with_network(&board_directory, 3, false).await?;
     let signer = ValidatorSigner::new_local(genesis.signing_keys[0].clone());
+    let epoch = "66".repeat(32);
+    let work_directory = root.path().join("work");
+    let participant =
+        runner::prepare_local_identity(&genesis.path, &epoch, &signer, &work_directory).await?;
+    let ticket = tickets
+        .iter()
+        .find(|ticket| ticket.participant() != participant.get())
+        .expect("a three-participant ceremony has another participant")
+        .clone();
+    let ticket_participant = ticket.participant();
     let error = runner::run_validator_with_network::<ShareOpeningBackend>(
-        tickets[1].clone(),
+        ticket,
         &genesis.path,
         &signer,
         2,
-        &"66".repeat(32),
-        &root.path().join("work"),
+        &epoch,
+        &work_directory,
         &root.path().join("bundle"),
         false,
         Duration::from_secs(1),
@@ -978,11 +988,16 @@ async fn runner_rejects_another_participants_ticket_before_publishing() -> TestR
     .await
     .unwrap_err();
 
-    assert!(error.to_string().contains("ticket belongs to participant 2"));
+    assert!(
+        error
+            .to_string()
+            .contains(&format!("ticket belongs to participant {ticket_participant}")),
+        "unexpected error: {error:#}"
+    );
     assert!(
         board
             .reader()
-            .read_unique(&board::ArtifactSlot::Registration(2))
+            .read_unique(&board::ArtifactSlot::Registration(ticket_participant))
             .await?
             .is_none()
     );
