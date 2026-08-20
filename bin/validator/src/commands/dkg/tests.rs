@@ -966,7 +966,7 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
     let genesis = write_genesis(root.path())?;
     let board_directory = root.path().join("board");
     let (board, tickets) =
-        board::BoardNode::create_with_network(&board_directory, 3, false).await?;
+        board::CoordinatorBoard::create_with_network(&board_directory, 3, false).await?;
     let timeout = Duration::from_mins(2);
     let restart_checkpoint_timeout = Duration::from_secs(10);
     let epoch = "66".repeat(32);

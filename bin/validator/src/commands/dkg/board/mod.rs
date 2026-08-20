@@ -1,4 +1,4 @@
-//! A bounded, append-only exchange for storage key DKG artifacts.
+//! This module defines the artifact slots and board roles for storage key DKG.
 //!
 //! The board process is the only writer to the Iroh document. Validators receive a read-only
 //! document ticket plus a participant-scoped secret for the board's bounded upload protocol. Each
@@ -65,8 +65,14 @@ const MAX_VALUES_PER_SLOT: usize = 2;
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct BoardTicket {
     document: DocTicket,
-    pub(super) participant: u32,
+    participant: u32,
     upload_secret: [u8; 32],
+}
+
+impl BoardTicket {
+    pub(super) fn participant(&self) -> u32 {
+        self.participant
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -127,6 +133,44 @@ pub(super) enum ArtifactSlot {
     DecryptionDealing(u32),
     ContextDealing(u32),
     TranscriptAcceptance(u32),
+}
+
+/// An artifact published by the ceremony coordinator.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CommonArtifact {
+    Manifest,
+    DecryptionConfig,
+    ContextConfig,
+}
+
+impl CommonArtifact {
+    fn slot(self) -> ArtifactSlot {
+        match self {
+            Self::Manifest => ArtifactSlot::Manifest,
+            Self::DecryptionConfig => ArtifactSlot::DecryptionConfig,
+            Self::ContextConfig => ArtifactSlot::ContextConfig,
+        }
+    }
+}
+
+/// An artifact published by one ceremony participant.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ParticipantArtifact {
+    Registration,
+    DecryptionDealing,
+    ContextDealing,
+    TranscriptAcceptance,
+}
+
+impl ParticipantArtifact {
+    fn slot(self, participant: u32) -> ArtifactSlot {
+        match self {
+            Self::Registration => ArtifactSlot::Registration(participant),
+            Self::DecryptionDealing => ArtifactSlot::DecryptionDealing(participant),
+            Self::ContextDealing => ArtifactSlot::ContextDealing(participant),
+            Self::TranscriptAcceptance => ArtifactSlot::TranscriptAcceptance(participant),
+        }
+    }
 }
 
 impl ArtifactSlot {
@@ -201,8 +245,24 @@ struct UploadProtocol {
     writer: BoardWriter,
 }
 
+/// The read-only view shared by both board roles.
+pub(super) struct BoardReader {
+    node: BoardNode,
+}
+
+/// The board role that coordinates and publishes common ceremony artifacts.
+pub(super) struct CoordinatorBoard {
+    reader: BoardReader,
+}
+
+/// The board role held by one ceremony participant.
+pub(super) struct ParticipantBoard {
+    participant: u32,
+    reader: BoardReader,
+}
+
 /// A persistent Iroh node joined to one ceremony document.
-pub(super) struct BoardNode {
+struct BoardNode {
     blobs: FsStore,
     document: Doc,
     downloader: Downloader,
@@ -233,6 +293,114 @@ struct BoardEvents {
     remote_providers: Arc<tokio::sync::RwLock<BTreeMap<Hash, Vec<EndpointId>>>>,
     sync_generation: tokio::sync::watch::Receiver<u64>,
     task: tokio::task::JoinHandle<()>,
+}
+
+impl BoardReader {
+    /// Waits until one unique artifact has synchronized locally.
+    pub(super) async fn wait_unique(
+        &self,
+        slot: &ArtifactSlot,
+        timeout: Duration,
+    ) -> anyhow::Result<Vec<u8>> {
+        self.node.wait_unique(slot, timeout).await
+    }
+}
+
+impl CoordinatorBoard {
+    /// Creates or resumes a ceremony board and returns one scoped ticket per participant.
+    pub(super) async fn create(
+        data_directory: &Path,
+        participant_count: usize,
+    ) -> anyhow::Result<(Self, Vec<BoardTicket>)> {
+        let (node, tickets) = BoardNode::create(data_directory, participant_count).await?;
+        Ok((Self { reader: BoardReader { node } }, tickets))
+    }
+
+    #[cfg(test)]
+    pub(super) async fn create_with_network(
+        data_directory: &Path,
+        participant_count: usize,
+        use_network_services: bool,
+    ) -> anyhow::Result<(Self, Vec<BoardTicket>)> {
+        let (node, tickets) =
+            BoardNode::create_with_network(data_directory, participant_count, use_network_services)
+                .await?;
+        Ok((Self { reader: BoardReader { node } }, tickets))
+    }
+
+    pub(super) fn reader(&self) -> &BoardReader {
+        &self.reader
+    }
+
+    /// Publishes one common artifact without replacing another value in the same slot.
+    pub(super) async fn publish(
+        &self,
+        artifact: CommonArtifact,
+        value: &[u8],
+    ) -> anyhow::Result<()> {
+        self.reader.node.publish(&artifact.slot(), value).await?;
+        Ok(())
+    }
+
+    /// Stops the board and flushes its persistent stores.
+    pub(super) async fn shutdown(self) -> anyhow::Result<()> {
+        self.reader.node.shutdown().await
+    }
+}
+
+impl ParticipantBoard {
+    /// Joins or resumes a ceremony board through a read and upload ticket.
+    pub(super) async fn join(
+        data_directory: &Path,
+        ticket: BoardTicket,
+        participant_count: usize,
+    ) -> anyhow::Result<Self> {
+        let participant = ticket.participant();
+        let node = BoardNode::join(data_directory, ticket, participant_count).await?;
+        Ok(Self {
+            participant,
+            reader: BoardReader { node },
+        })
+    }
+
+    pub(super) async fn join_with_network(
+        data_directory: &Path,
+        ticket: BoardTicket,
+        participant_count: usize,
+        use_network_services: bool,
+    ) -> anyhow::Result<Self> {
+        let participant = ticket.participant();
+        let node = BoardNode::join_with_network(
+            data_directory,
+            ticket,
+            participant_count,
+            use_network_services,
+        )
+        .await?;
+        Ok(Self {
+            participant,
+            reader: BoardReader { node },
+        })
+    }
+
+    pub(super) fn reader(&self) -> &BoardReader {
+        &self.reader
+    }
+
+    /// Publishes one artifact for the participant named by this board's ticket.
+    pub(super) async fn publish(
+        &self,
+        artifact: ParticipantArtifact,
+        value: &[u8],
+    ) -> anyhow::Result<()> {
+        self.reader.node.publish(&artifact.slot(self.participant), value).await?;
+        Ok(())
+    }
+
+    /// Stops the board and flushes its persistent stores.
+    pub(super) async fn shutdown(self) -> anyhow::Result<()> {
+        self.reader.node.shutdown().await
+    }
 }
 
 impl Drop for BoardNode {
