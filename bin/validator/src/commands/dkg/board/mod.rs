@@ -10,6 +10,10 @@ use std::time::Duration;
 
 mod core;
 mod iroh;
+#[cfg(test)]
+mod memory;
+#[cfg(test)]
+mod tests;
 
 pub(super) use core::ArtifactSlot;
 
@@ -77,7 +81,50 @@ pub(super) enum ParticipantArtifact {
 
 /// The read-only view shared by both board roles.
 pub(super) struct BoardReader {
-    node: iroh::BoardNode,
+    node: Transport,
+}
+
+enum Transport {
+    Iroh(Box<iroh::BoardNode>),
+    #[cfg(test)]
+    Memory(memory::BoardNode),
+}
+
+impl Transport {
+    async fn publish(&self, slot: &ArtifactSlot, value: &[u8]) -> anyhow::Result<()> {
+        match self {
+            Self::Iroh(node) => {
+                node.publish(slot, value).await?;
+                Ok(())
+            },
+            #[cfg(test)]
+            Self::Memory(node) => node.publish(slot, value).await,
+        }
+    }
+
+    #[cfg(test)]
+    async fn read_unique(&self, slot: &ArtifactSlot) -> anyhow::Result<Option<Vec<u8>>> {
+        match self {
+            Self::Iroh(node) => node.read_unique(slot).await,
+            Self::Memory(node) => node.read_unique(slot).await,
+        }
+    }
+
+    async fn wait_unique(&self, slot: &ArtifactSlot, timeout: Duration) -> anyhow::Result<Vec<u8>> {
+        match self {
+            Self::Iroh(node) => node.wait_unique(slot, timeout).await,
+            #[cfg(test)]
+            Self::Memory(node) => node.wait_unique(slot, timeout).await,
+        }
+    }
+
+    async fn shutdown(self) -> anyhow::Result<()> {
+        match self {
+            Self::Iroh(node) => (*node).shutdown().await,
+            #[cfg(test)]
+            Self::Memory(_) => Ok(()),
+        }
+    }
 }
 
 impl BoardReader {
@@ -122,7 +169,34 @@ impl CoordinatorBoard {
             .into_iter()
             .map(|(encoded, participant)| BoardTicket::new(encoded, participant))
             .collect();
-        Ok((Self { reader: BoardReader { node } }, tickets))
+        Ok((
+            Self {
+                reader: BoardReader { node: Transport::Iroh(Box::new(node)) },
+            },
+            tickets,
+        ))
+    }
+
+    #[cfg(test)]
+    pub(super) fn create_memory(
+        participant_count: usize,
+    ) -> anyhow::Result<(Self, Vec<ParticipantBoard>)> {
+        let mut nodes = memory::create(participant_count)?.into_iter();
+        let coordinator = Self {
+            reader: BoardReader {
+                node: Transport::Memory(nodes.next().expect("memory board includes a coordinator")),
+            },
+        };
+        let participants = nodes
+            .enumerate()
+            .map(|(position, node)| {
+                Ok(ParticipantBoard {
+                    participant: u32::try_from(position + 1)?,
+                    reader: BoardReader { node: Transport::Memory(node) },
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        Ok((coordinator, participants))
     }
 
     pub(super) fn reader(&self) -> &BoardReader {
@@ -135,8 +209,7 @@ impl CoordinatorBoard {
         artifact: CommonArtifact,
         value: &[u8],
     ) -> anyhow::Result<()> {
-        self.reader.node.publish(&artifact.slot(), value).await?;
-        Ok(())
+        self.reader.node.publish(&artifact.slot(), value).await
     }
 
     /// Stops the board and flushes its persistent stores.
@@ -177,7 +250,7 @@ impl ParticipantBoard {
         .await?;
         Ok(Self {
             participant,
-            reader: BoardReader { node },
+            reader: BoardReader { node: Transport::Iroh(Box::new(node)) },
         })
     }
 
@@ -191,8 +264,7 @@ impl ParticipantBoard {
         artifact: ParticipantArtifact,
         value: &[u8],
     ) -> anyhow::Result<()> {
-        self.reader.node.publish(&artifact.slot(self.participant), value).await?;
-        Ok(())
+        self.reader.node.publish(&artifact.slot(self.participant), value).await
     }
 
     /// Stops the board and flushes its persistent stores.

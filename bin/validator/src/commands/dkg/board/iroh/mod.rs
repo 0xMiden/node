@@ -390,6 +390,7 @@ impl BoardNode {
 
     /// Reads the unique content value published for one artifact slot.
     pub(super) async fn read_unique(&self, slot: &ArtifactSlot) -> anyhow::Result<Option<Vec<u8>>> {
+        self.core.validate_slot(slot)?;
         self.validate_document_metadata().await?;
         let prefix = slot.prefix();
         let entries = self
