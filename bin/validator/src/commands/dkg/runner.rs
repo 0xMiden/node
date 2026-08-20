@@ -288,6 +288,12 @@ where
     );
     decode_fixed_hex::<32>(epoch, "storage-key epoch")?;
     let participant = prepare_local_identity(genesis_path, epoch, signer, work_directory).await?;
+    ensure!(
+        ticket.participant() == participant.get(),
+        "storage key DKG board ticket belongs to participant {}, but the signing key belongs to participant {}",
+        ticket.participant(),
+        participant.get(),
+    );
     let board_directory = work_directory.join(BOARD_DIRECTORY);
     let board = if use_network_services {
         ParticipantBoard::join(&board_directory, ticket, participant_count).await?

@@ -955,6 +955,41 @@ async fn deal_rejects_unknown_identity_and_existing_output() -> TestResult {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn runner_rejects_another_participants_ticket_before_publishing() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let genesis = write_genesis(root.path())?;
+    let board_directory = root.path().join("board");
+    let (board, tickets) =
+        board::CoordinatorBoard::create_with_network(&board_directory, 3, false).await?;
+    let signer = ValidatorSigner::new_local(genesis.signing_keys[0].clone());
+    let error = runner::run_validator_with_network::<ShareOpeningBackend>(
+        tickets[1].clone(),
+        &genesis.path,
+        &signer,
+        2,
+        &"66".repeat(32),
+        &root.path().join("work"),
+        &root.path().join("bundle"),
+        false,
+        Duration::from_secs(1),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(error.to_string().contains("ticket belongs to participant 2"));
+    assert!(
+        board
+            .reader()
+            .read_unique(&board::ArtifactSlot::Registration(2))
+            .await?
+            .is_none()
+    );
+    board.shutdown().await?;
+    Ok(())
+}
+
 #[tokio::test]
 /// Proves a validator can resume from its saved identity after its ceremony process stops.
 #[expect(

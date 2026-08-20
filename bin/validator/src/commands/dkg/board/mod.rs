@@ -296,6 +296,12 @@ struct BoardEvents {
 }
 
 impl BoardReader {
+    /// Reads the unique content value published for one artifact slot.
+    #[cfg(test)]
+    pub(super) async fn read_unique(&self, slot: &ArtifactSlot) -> anyhow::Result<Option<Vec<u8>>> {
+        self.node.read_unique(slot).await
+    }
+
     /// Waits until one unique artifact has synchronized locally.
     pub(super) async fn wait_unique(
         &self,
