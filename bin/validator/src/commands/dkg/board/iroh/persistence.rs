@@ -6,7 +6,7 @@ use anyhow::{Context, ensure};
 use iroh::SecretKey;
 use iroh_docs::api::Doc;
 
-use super::super::{decode_fixed_hex, publish_directory, sync_directory, write_new_file};
+use super::super::super::{decode_fixed_hex, publish_directory, sync_directory, write_new_file};
 
 pub(super) const ENDPOINT_SECRET_FILE: &str = "endpoint-secret.hex";
 pub(super) const BOARD_METADATA_DIRECTORY: &str = "board-meta";

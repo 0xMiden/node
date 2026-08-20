@@ -7,7 +7,8 @@ use iroh::protocol::{AcceptError, ProtocolHandler};
 use iroh::{Endpoint, EndpointAddr};
 use iroh_blobs::Hash;
 
-use super::{ArtifactSlot, BoardWriter, MAX_ARTIFACT_BYTES, validate_artifact_length};
+use super::super::core::{ArtifactSlot, MAX_ARTIFACT_BYTES, validate_artifact_length};
+use super::BoardWriter;
 
 pub(super) const UPLOAD_ALPN: &[u8] = b"/miden/storage-key-dkg-board-upload/3";
 const UPLOAD_HEADER_BYTES: usize = 32 + 1 + 4 + 8;
