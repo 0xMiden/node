@@ -280,7 +280,7 @@ impl ValidatorCommand {
                 Ok(())
             },
             Self::Dkg(options) => dkg::run(options).await,
-            Self::DkgP2p(options) => options.handle(),
+            Self::DkgP2p(options) => options.handle().await,
             Self::IssuePrivateRecordShare(options) => {
                 issue_private_record_share::issue_from_options(options)
             },
