@@ -1,14 +1,15 @@
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
-use iroh_base::{EndpointId, SecretKey as IrohSecretKey};
+use iroh::{EndpointId, SecretKey as IrohSecretKey};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::utils::serde::Serializable;
 
-use super::super::ValidatorSigningKey;
-use super::*;
+use super::super::super::ValidatorSigningKey;
+use super::super::ParticipateOptions;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
+type TestResultWith<T> = Result<T, Box<dyn std::error::Error>>;
 
 struct TestGenesis {
     path: PathBuf,
@@ -27,7 +28,7 @@ fn write_genesis(root: &Path, validator_count: usize) -> TestResultWith<TestGene
     let config_path = root.join("genesis.toml");
     fs_err::write(&config_path, config)?;
     let genesis_directory = root.join("genesis");
-    super::super::genesis::generate(
+    super::super::super::genesis::generate(
         &genesis_directory,
         &root.join("accounts"),
         Some(&config_path),
@@ -53,18 +54,16 @@ fn participate_options(
     endpoint_secret: &Path,
     peer_endpoints: Vec<EndpointId>,
     threshold: usize,
-) -> DkgP2pOptions {
-    DkgP2pOptions {
-        command: DkgP2pCommand::Participate {
-            genesis: genesis.to_path_buf(),
-            endpoint_secret: endpoint_secret.to_path_buf(),
-            peer_endpoints,
-            threshold: NonZeroUsize::new(threshold).expect("test threshold must be nonzero"),
-            epoch: "09".repeat(32),
-            signing_key: ValidatorSigningKey {
-                signing_key: Some(hex::encode(signing_key.to_bytes())),
-                signing_key_kms_id: None,
-            },
+) -> ParticipateOptions {
+    ParticipateOptions {
+        genesis: genesis.to_path_buf(),
+        endpoint_secret: endpoint_secret.to_path_buf(),
+        peer_endpoints,
+        threshold: NonZeroUsize::new(threshold).expect("test threshold must be nonzero"),
+        epoch: "09".repeat(32),
+        signing_key: ValidatorSigningKey {
+            signing_key: Some(hex::encode(signing_key.to_bytes())),
+            signing_key_kms_id: None,
         },
     }
 }
@@ -84,8 +83,29 @@ async fn participate_accepts_the_complete_offline_configuration() -> TestResult 
         vec![peer_one, peer_two],
         2,
     )
-    .handle()
+    .validate()
     .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn one_validator_ceremony_completes_handshake_without_peers() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let genesis = write_genesis(root.path(), 1)?;
+    let (endpoint_secret, _) = write_endpoint_secret(root.path(), 1)?;
+
+    let ceremony = participate_options(
+        &genesis.path,
+        &genesis.signing_keys[0],
+        &endpoint_secret,
+        Vec::new(),
+        1,
+    )
+    .validate()
+    .await?;
+    let session = ceremony.handshake().await?;
+    session.close().await;
 
     Ok(())
 }
@@ -106,9 +126,10 @@ async fn participate_rejects_a_signer_outside_genesis() -> TestResult {
         vec![peer_one, peer_two],
         2,
     )
-    .handle()
+    .validate()
     .await
-    .unwrap_err();
+    .err()
+    .expect("validation should fail");
 
     assert!(format!("{error:#}").contains("validator signing key is not committed by genesis"));
     Ok(())
@@ -134,9 +155,10 @@ async fn participate_rejects_an_invalid_peer_endpoint_set() -> TestResult {
             peer_endpoints,
             2,
         )
-        .handle()
+        .validate()
         .await
-        .unwrap_err();
+        .err()
+        .expect("validation should fail");
         let error = format!("{error:#}");
         assert!(error.contains(expected), "expected {expected:?} in {error:?}");
     }
@@ -158,12 +180,11 @@ async fn participate_rejects_a_threshold_exceeding_the_genesis_validator_set() -
         vec![peer_one, peer_two],
         4,
     )
-    .handle()
+    .validate()
     .await
-    .unwrap_err();
+    .err()
+    .expect("validation should fail");
     assert!(format!("{error:#}").contains("threshold must not exceed the 3 genesis validators"));
 
     Ok(())
 }
-
-type TestResultWith<T> = Result<T, Box<dyn std::error::Error>>;
