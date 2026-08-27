@@ -7,7 +7,7 @@ use iroh::{Endpoint, EndpointId, SecretKey as IrohSecretKey};
 use miden_protocol::block::ValidatorKeys;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, SigningKey};
 use miden_protocol::crypto::hash::rpo::Rpo256;
-use miden_protocol::utils::serde::Deserializable;
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_validator::{StorageKeyEpoch, ValidatorSigner};
 
 use super::{CeremonyNonce, Handshake, HandshakeMessage, HandshakeTranscript};
@@ -19,14 +19,19 @@ fn test_signing_key(seed: u8) -> SigningKey {
     SigningKey::read_from_bytes(&[seed; 32]).expect("test signing key must decode")
 }
 
-fn test_message(signing_key: &SigningKey, nonce: u8) -> HandshakeMessage {
-    HandshakeMessage {
+#[test]
+fn handshake_codec_roundtrip() {
+    let expected = HandshakeMessage {
         genesis_commitment: Rpo256::hash(b"test genesis"),
         threshold: 2,
         epoch: StorageKeyEpoch::new([9; 32]),
-        validator_public_key: signing_key.public_key(),
-        nonce: CeremonyNonce([nonce; 32]),
-    }
+        validator_public_key: SigningKey::new().public_key(),
+        nonce: CeremonyNonce([2; 32]),
+    };
+    let encoded = expected.to_bytes();
+    let decoded = HandshakeMessage::read_from_bytes(&encoded).unwrap();
+
+    assert_eq!(decoded, expected);
 }
 
 fn test_handshake(
@@ -96,7 +101,7 @@ async fn three_validators_authenticate_their_endpoint_bindings() -> TestResult {
     {
         let mut actual = authenticated
             .iter()
-            .map(|peer| (peer.endpoint_id, peer.validator_public_key.clone()))
+            .map(|peer| (peer.endpoint_id(), peer.validator_public_key.clone()))
             .collect::<Vec<_>>();
         actual.sort_by_key(|(endpoint_id, _)| *endpoint_id);
         let mut expected = endpoint_ids
@@ -152,8 +157,20 @@ fn handshake_commits_to_dialer_endpoint() {
     let acceptor_signing_key = test_signing_key(42);
     let dialer_endpoint = IrohSecretKey::from_bytes(&[51; 32]).public();
     let acceptor_endpoint = IrohSecretKey::from_bytes(&[52; 32]).public();
-    let dialer_message = test_message(&dialer_signing_key, 61);
-    let acceptor_message = test_message(&acceptor_signing_key, 62);
+    let dialer_message = HandshakeMessage {
+        genesis_commitment: Rpo256::hash(b"test genesis"),
+        threshold: 2,
+        epoch: StorageKeyEpoch::new([9; 32]),
+        validator_public_key: dialer_signing_key.public_key(),
+        nonce: CeremonyNonce([61; 32]),
+    };
+    let acceptor_message = HandshakeMessage {
+        genesis_commitment: Rpo256::hash(b"test genesis"),
+        threshold: 2,
+        epoch: StorageKeyEpoch::new([9; 32]),
+        validator_public_key: acceptor_signing_key.public_key(),
+        nonce: CeremonyNonce([62; 32]),
+    };
     let commitment = HandshakeTranscript {
         dialer_endpoint,
         dialer_message: dialer_message.clone(),
@@ -179,8 +196,20 @@ fn handshake_commits_to_acceptor_endpoint() {
     let acceptor_signing_key = test_signing_key(42);
     let dialer_endpoint = IrohSecretKey::from_bytes(&[51; 32]).public();
     let acceptor_endpoint = IrohSecretKey::from_bytes(&[52; 32]).public();
-    let dialer_message = test_message(&dialer_signing_key, 61);
-    let acceptor_message = test_message(&acceptor_signing_key, 62);
+    let dialer_message = HandshakeMessage {
+        genesis_commitment: Rpo256::hash(b"test genesis"),
+        threshold: 2,
+        epoch: StorageKeyEpoch::new([9; 32]),
+        validator_public_key: dialer_signing_key.public_key(),
+        nonce: CeremonyNonce([61; 32]),
+    };
+    let acceptor_message = HandshakeMessage {
+        genesis_commitment: Rpo256::hash(b"test genesis"),
+        threshold: 2,
+        epoch: StorageKeyEpoch::new([9; 32]),
+        validator_public_key: acceptor_signing_key.public_key(),
+        nonce: CeremonyNonce([62; 32]),
+    };
     let commitment = HandshakeTranscript {
         dialer_endpoint,
         dialer_message: dialer_message.clone(),
@@ -203,7 +232,13 @@ fn handshake_commits_to_acceptor_endpoint() {
 #[test]
 fn handshake_requires_matching_storage_key_epoch() {
     let signing_key = test_signing_key(71);
-    let local = test_message(&signing_key, 72);
+    let local = HandshakeMessage {
+        genesis_commitment: Rpo256::hash(b"test genesis"),
+        threshold: 2,
+        epoch: StorageKeyEpoch::new([9; 32]),
+        validator_public_key: signing_key.public_key(),
+        nonce: CeremonyNonce([72; 32]),
+    };
     let mut peer = local.clone();
     peer.epoch = StorageKeyEpoch::new([10; 32]);
 

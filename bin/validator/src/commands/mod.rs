@@ -444,13 +444,10 @@ pub struct ValidatorStorageKey {
 
 impl ValidatorStorageKey {
     fn load(self) -> anyhow::Result<GoldenOperatorKey> {
-        let key_epoch =
-            hex::decode(self.key_epoch).context("failed to decode storage key epoch")?;
-        let key_epoch = key_epoch.try_into().map_err(|bytes: Vec<u8>| {
-            anyhow::anyhow!("storage key epoch has {} bytes, expected 32", bytes.len())
-        })?;
+        let key_epoch = StorageKeyEpoch::from_hex(self.key_epoch)
+            .context("failed to decode storage key epoch")?;
         let operator_key = EncodedGoldenOperatorKey::new(
-            StorageKeyEpoch::new(key_epoch),
+            key_epoch,
             fs_err::read(&self.setup_context).with_context(|| {
                 format!(
                     "failed to read storage key setup context from {}",

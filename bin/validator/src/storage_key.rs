@@ -12,6 +12,13 @@ use golden_ehtdh1::{
     derive_context_session_id,
 };
 use golden_halo2curves::golden_group::Secp256k1GoldenGroup;
+use miden_protocol::utils::serde::{
+    ByteReader,
+    ByteWriter,
+    Deserializable,
+    DeserializationError,
+    Serializable,
+};
 use rand_core_06::{CryptoRng, RngCore};
 use zeroize::Zeroizing;
 
@@ -31,9 +38,28 @@ impl StorageKeyEpoch {
         Self(bytes)
     }
 
+    /// Parses a storage key epoch from its hex encoding.
+    pub fn from_hex(encoded: impl AsRef<[u8]>) -> Result<Self, hex::FromHexError> {
+        let mut bytes = [0; 32];
+        hex::decode_to_slice(encoded, &mut bytes)?;
+        Ok(Self(bytes))
+    }
+
     /// Returns the canonical epoch bytes.
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+}
+
+impl Serializable for StorageKeyEpoch {
+    fn write_into<W: ByteWriter>(&self, target: &mut W) {
+        target.write_bytes(&self.0);
+    }
+}
+
+impl Deserializable for StorageKeyEpoch {
+    fn read_from<R: ByteReader>(source: &mut R) -> Result<Self, DeserializationError> {
+        Ok(Self(source.read_array()?))
     }
 }
 
