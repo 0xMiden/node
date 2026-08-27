@@ -9,44 +9,14 @@ use miden_node_store::genesis::GenesisBlock;
 use miden_node_utils::genesis::read_genesis_block;
 use miden_protocol::Word;
 use miden_protocol::block::ValidatorKeys;
-use miden_protocol::utils::serde::{
-    ByteReader,
-    ByteWriter,
-    Deserializable,
-    DeserializationError,
-    Serializable,
-};
 use miden_validator::{StorageKeyEpoch, ValidatorSigner};
-use rand_core_06::{CryptoRngCore, OsRng};
+use rand_core_06::OsRng;
 use zeroize::Zeroizing;
 
-use self::handshake::{AuthenticatedPeer, Handshake};
+use self::handshake::{AuthenticatedPeer, Challenge, Handshake};
 use super::ParticipateOptions;
 
 mod handshake;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct CeremonyNonce([u8; 32]);
-
-impl CeremonyNonce {
-    fn random(rng: &mut impl CryptoRngCore) -> Self {
-        let mut nonce = [0; 32];
-        rng.fill_bytes(&mut nonce);
-        Self(nonce)
-    }
-}
-
-impl Serializable for CeremonyNonce {
-    fn write_into<W: ByteWriter>(&self, target: &mut W) {
-        target.write_bytes(&self.0);
-    }
-}
-
-impl Deserializable for CeremonyNonce {
-    fn read_from<R: ByteReader>(source: &mut R) -> Result<Self, DeserializationError> {
-        Ok(Self(source.read_array()?))
-    }
-}
 
 pub struct Session {
     endpoint: Endpoint,
@@ -83,14 +53,14 @@ impl Ceremony {
             .bind()
             .await
             .context("failed to bind Iroh endpoint")?;
-        let nonce = CeremonyNonce::random(&mut OsRng);
+        let challenge = Challenge::random(&mut OsRng);
         let threshold = u32::try_from(self.threshold.get())
             .context("threshold does not fit in the handshake format")?;
         let authenticated_peers = Handshake::new(
             self.genesis_commitment,
             threshold,
             self.epoch,
-            nonce,
+            challenge,
             self.validator_set.clone(),
             Arc::clone(&self.signer),
         )

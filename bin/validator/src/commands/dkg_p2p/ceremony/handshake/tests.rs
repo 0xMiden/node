@@ -9,8 +9,9 @@ use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, SigningKey};
 use miden_protocol::crypto::hash::rpo::Rpo256;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_validator::{StorageKeyEpoch, ValidatorSigner};
+use rand_core_06::OsRng;
 
-use super::{CeremonyNonce, Handshake, HandshakeMessage};
+use super::{Challenge, Handshake, HandshakeMessage};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 type TestResultWith<T> = Result<T, Box<dyn std::error::Error>>;
@@ -26,7 +27,7 @@ fn handshake_codec_roundtrip() {
         threshold: 2,
         epoch: StorageKeyEpoch::new([9; 32]),
         validator_public_key: SigningKey::new().public_key(),
-        nonce: CeremonyNonce([2; 32]),
+        challenge: Challenge::random(&mut OsRng),
     };
     let encoded = expected.to_bytes();
     let decoded = HandshakeMessage::read_from_bytes(&encoded).unwrap();
@@ -34,18 +35,14 @@ fn handshake_codec_roundtrip() {
     assert_eq!(decoded, expected);
 }
 
-fn test_handshake(
-    signing_key: &SigningKey,
-    validator_keys: Vec<PublicKey>,
-    nonce: u8,
-) -> Handshake {
+fn test_handshake(signing_key: &SigningKey, validator_keys: Vec<PublicKey>) -> Handshake {
     let validator_set =
         ValidatorKeys::new(validator_keys).expect("test validator set must be valid");
     Handshake::new(
         Rpo256::hash(b"test genesis"),
         2,
         StorageKeyEpoch::new([9; 32]),
-        CeremonyNonce([nonce; 32]),
+        Challenge::random(&mut OsRng),
         validator_set,
         Arc::new(ValidatorSigner::new_local(signing_key.clone())),
     )
@@ -87,11 +84,11 @@ async fn three_validators_authenticate_their_endpoint_bindings() -> TestResult {
             .collect::<BTreeSet<_>>()
     };
 
-    let authentication_for_a = test_handshake(&signing_keys[0], validator_keys.clone(), 31)
+    let authentication_for_a = test_handshake(&signing_keys[0], validator_keys.clone())
         .connect_and_authenticate_peers(endpoint_a.clone(), peers(endpoint_a.id()));
-    let authentication_for_b = test_handshake(&signing_keys[1], validator_keys.clone(), 32)
+    let authentication_for_b = test_handshake(&signing_keys[1], validator_keys.clone())
         .connect_and_authenticate_peers(endpoint_b.clone(), peers(endpoint_b.id()));
-    let authentication_for_c = test_handshake(&signing_keys[2], validator_keys, 33)
+    let authentication_for_c = test_handshake(&signing_keys[2], validator_keys)
         .connect_and_authenticate_peers(endpoint_c.clone(), peers(endpoint_c.id()));
     let (peers_seen_by_a, peers_seen_by_b, peers_seen_by_c) =
         tokio::try_join!(authentication_for_a, authentication_for_b, authentication_for_c,)?;
@@ -120,7 +117,7 @@ async fn three_validators_authenticate_their_endpoint_bindings() -> TestResult {
 }
 
 #[tokio::test]
-async fn every_validator_dials_every_peer() -> TestResult {
+async fn lower_endpoint_id_dials_peer() -> TestResult {
     let (endpoint_a, lookup_a) = bind_test_endpoint(IrohSecretKey::from_bytes(&[14; 32])).await?;
     let (endpoint_b, lookup_b) = bind_test_endpoint(IrohSecretKey::from_bytes(&[15; 32])).await?;
     lookup_a.add_endpoint_info(endpoint_b.addr());
@@ -129,17 +126,23 @@ async fn every_validator_dials_every_peer() -> TestResult {
     let signing_key_a = test_signing_key(24);
     let signing_key_b = test_signing_key(25);
     let validator_keys = vec![signing_key_a.public_key(), signing_key_b.public_key()];
-    let authentication_for_a = test_handshake(&signing_key_a, validator_keys.clone(), 34)
+    let authentication_for_a = test_handshake(&signing_key_a, validator_keys.clone())
         .connect_and_authenticate_peers(endpoint_a.clone(), BTreeSet::from([endpoint_b.id()]));
-    let authentication_for_b = test_handshake(&signing_key_b, validator_keys, 35)
+    let authentication_for_b = test_handshake(&signing_key_b, validator_keys)
         .connect_and_authenticate_peers(endpoint_b.clone(), BTreeSet::from([endpoint_a.id()]));
 
     let (peers_seen_by_a, peers_seen_by_b) =
         tokio::try_join!(authentication_for_a, authentication_for_b)?;
-    for peer in peers_seen_by_a.iter().chain(&peers_seen_by_b) {
-        assert_eq!(peer.outgoing_connection.side(), Side::Client);
-        assert_eq!(peer.incoming_connection.side(), Side::Server);
-    }
+    assert_eq!(peers_seen_by_a.len(), 1);
+    assert_eq!(peers_seen_by_b.len(), 1);
+
+    let (lower_peer, higher_peer) = if endpoint_a.id() < endpoint_b.id() {
+        (&peers_seen_by_a[0], &peers_seen_by_b[0])
+    } else {
+        (&peers_seen_by_b[0], &peers_seen_by_a[0])
+    };
+    assert_eq!(lower_peer.connection.side(), Side::Client);
+    assert_eq!(higher_peer.connection.side(), Side::Server);
 
     endpoint_a.close().await;
     endpoint_b.close().await;
@@ -159,13 +162,11 @@ async fn handshake_rejects_validator_key_outside_genesis() -> TestResult {
     let authentication_for_a = test_handshake(
         &signing_key_a,
         vec![signing_key_a.public_key(), expected_signing_key_b.public_key()],
-        34,
     )
     .connect_and_authenticate_peers(endpoint_a.clone(), BTreeSet::from([endpoint_b.id()]));
     let authentication_for_outsider = test_handshake(
         &outsider_signing_key,
         vec![signing_key_a.public_key(), outsider_signing_key.public_key()],
-        35,
     )
     .connect_and_authenticate_peers(endpoint_b.clone(), BTreeSet::from([endpoint_a.id()]));
 
@@ -178,44 +179,75 @@ async fn handshake_rejects_validator_key_outside_genesis() -> TestResult {
     Ok(())
 }
 
-#[test]
-fn handshake_commits_to_sender_endpoint() {
-    let signing_key = test_signing_key(41);
-    let sender_endpoint = IrohSecretKey::from_bytes(&[51; 32]).public();
-    let receiver_endpoint = IrohSecretKey::from_bytes(&[52; 32]).public();
-    let message = HandshakeMessage {
-        genesis_commitment: Rpo256::hash(b"test genesis"),
-        threshold: 2,
-        epoch: StorageKeyEpoch::new([9; 32]),
-        validator_public_key: signing_key.public_key(),
-        nonce: CeremonyNonce([61; 32]),
+#[tokio::test]
+async fn handshake_rejects_signature_from_different_domain() -> TestResult {
+    let (endpoint_a, lookup_a) = bind_test_endpoint(IrohSecretKey::from_bytes(&[16; 32])).await?;
+    let (endpoint_b, lookup_b) = bind_test_endpoint(IrohSecretKey::from_bytes(&[17; 32])).await?;
+    let (local_endpoint, local_lookup, peer_endpoint) = if endpoint_a.id() < endpoint_b.id() {
+        (&endpoint_a, &lookup_a, &endpoint_b)
+    } else {
+        (&endpoint_b, &lookup_b, &endpoint_a)
     };
-    let commitment = message.signature_commitment(sender_endpoint, receiver_endpoint);
+    local_lookup.add_endpoint_info(peer_endpoint.addr());
 
-    let substituted_endpoint = IrohSecretKey::from_bytes(&[53; 32]).public();
-    let substituted_commitment =
-        message.signature_commitment(substituted_endpoint, receiver_endpoint);
-    assert_ne!(commitment, substituted_commitment);
+    let local_signing_key = test_signing_key(27);
+    let peer_signing_key = test_signing_key(28);
+    let authentication = test_handshake(
+        &local_signing_key,
+        vec![local_signing_key.public_key(), peer_signing_key.public_key()],
+    )
+    .connect_and_authenticate_peers(local_endpoint.clone(), BTreeSet::from([peer_endpoint.id()]));
+    let respond_from_different_domain = async {
+        let incoming = peer_endpoint
+            .accept()
+            .await
+            .expect("peer should receive the handshake connection");
+        let connection = incoming.accept()?.await?;
+        let (mut send, mut receive) = connection.accept_bi().await?;
+
+        let mut challenge_bytes = [0; super::HANDSHAKE_MESSAGE_BYTES];
+        receive.read_exact(&mut challenge_bytes).await?;
+        let request = HandshakeMessage::read_from_bytes(&challenge_bytes)?;
+        let response = HandshakeMessage {
+            genesis_commitment: Rpo256::hash(b"test genesis"),
+            threshold: 2,
+            epoch: StorageKeyEpoch::new([9; 32]),
+            validator_public_key: peer_signing_key.public_key(),
+            challenge: Challenge::random(&mut OsRng),
+        };
+        let mut commitment = b"different-protocol-domain".to_vec();
+        commitment.extend_from_slice(&request.challenge.to_bytes());
+        let signature = peer_signing_key.sign(Rpo256::hash(&commitment));
+        send.write_all(&response.to_bytes()).await?;
+        send.write_all(&signature.to_bytes()).await?;
+        send.finish()?;
+        let _ = connection.closed().await;
+        Ok::<_, Box<dyn std::error::Error>>(())
+    };
+
+    let (authentication, response) = tokio::join!(authentication, respond_from_different_domain);
+    response?;
+    let error = authentication.err().expect("different signature domain should be rejected");
+    assert!(format!("{error:#}").contains("peer handshake signature is invalid"));
+
+    endpoint_a.close().await;
+    endpoint_b.close().await;
+    Ok(())
 }
 
 #[test]
-fn handshake_commits_to_receiver_endpoint() {
-    let signing_key = test_signing_key(41);
-    let sender_endpoint = IrohSecretKey::from_bytes(&[51; 32]).public();
-    let receiver_endpoint = IrohSecretKey::from_bytes(&[52; 32]).public();
-    let message = HandshakeMessage {
+fn handshake_signature_commits_to_challenge() {
+    let first = HandshakeMessage {
         genesis_commitment: Rpo256::hash(b"test genesis"),
         threshold: 2,
         epoch: StorageKeyEpoch::new([9; 32]),
-        validator_public_key: signing_key.public_key(),
-        nonce: CeremonyNonce([61; 32]),
+        validator_public_key: SigningKey::new().public_key(),
+        challenge: Challenge::random(&mut OsRng),
     };
-    let commitment = message.signature_commitment(sender_endpoint, receiver_endpoint);
+    let mut second = first.clone();
+    second.challenge = Challenge::random(&mut OsRng);
 
-    let substituted_endpoint = IrohSecretKey::from_bytes(&[53; 32]).public();
-    let substituted_commitment =
-        message.signature_commitment(sender_endpoint, substituted_endpoint);
-    assert_ne!(commitment, substituted_commitment);
+    assert_ne!(first.challenge.commitment(), second.challenge.commitment());
 }
 
 #[test]
@@ -226,7 +258,7 @@ fn handshake_requires_matching_storage_key_epoch() {
         threshold: 2,
         epoch: StorageKeyEpoch::new([9; 32]),
         validator_public_key: signing_key.public_key(),
-        nonce: CeremonyNonce([72; 32]),
+        challenge: Challenge::random(&mut OsRng),
     };
     let mut peer = local.clone();
     peer.epoch = StorageKeyEpoch::new([10; 32]);

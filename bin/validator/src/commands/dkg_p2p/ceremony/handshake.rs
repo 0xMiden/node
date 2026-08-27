@@ -1,13 +1,12 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use anyhow::{Context, ensure};
-use iroh::endpoint::{Connection, RecvStream, SendStream};
+use iroh::endpoint::Connection;
 use iroh::{Endpoint, EndpointId};
 use miden_protocol::Word;
 use miden_protocol::block::ValidatorKeys;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
-use miden_protocol::crypto::hash::rpo::Rpo256;
 use miden_protocol::utils::serde::{
     ByteReader,
     ByteWriter,
@@ -18,12 +17,12 @@ use miden_protocol::utils::serde::{
 use miden_validator::{StorageKeyEpoch, ValidatorSigner};
 use tokio::task::JoinSet;
 
-use super::CeremonyNonce;
-
+mod challenge;
 #[cfg(test)]
 mod tests;
 
-const HANDSHAKE_SIGNATURE_DOMAIN: &[u8] = b"miden-validator-dkg-p2p-handshake-signature-v1";
+pub use challenge::Challenge;
+
 const HANDSHAKE_MESSAGE_BYTES: usize = 32 + 4 + 32 + 33 + 32;
 const VALIDATOR_SIGNATURE_BYTES: usize = 65;
 
@@ -33,7 +32,7 @@ struct HandshakeMessage {
     threshold: u32,
     epoch: StorageKeyEpoch,
     validator_public_key: PublicKey,
-    nonce: CeremonyNonce,
+    challenge: Challenge,
 }
 
 impl HandshakeMessage {
@@ -46,19 +45,6 @@ impl HandshakeMessage {
         ensure!(self.epoch == peer.epoch, "peer storage key epoch does not match");
         Ok(())
     }
-
-    fn signature_commitment(
-        &self,
-        sender_endpoint: EndpointId,
-        receiver_endpoint: EndpointId,
-    ) -> Word {
-        let mut transcript = Vec::new();
-        transcript.extend_from_slice(HANDSHAKE_SIGNATURE_DOMAIN);
-        transcript.extend_from_slice(sender_endpoint.as_bytes());
-        transcript.extend_from_slice(receiver_endpoint.as_bytes());
-        transcript.extend_from_slice(&self.to_bytes());
-        Rpo256::hash(&transcript)
-    }
 }
 
 impl Serializable for HandshakeMessage {
@@ -67,7 +53,7 @@ impl Serializable for HandshakeMessage {
         target.write_u32(self.threshold);
         self.epoch.write_into(target);
         self.validator_public_key.write_into(target);
-        self.nonce.write_into(target);
+        self.challenge.write_into(target);
     }
 }
 
@@ -78,7 +64,7 @@ impl Deserializable for HandshakeMessage {
             threshold: source.read_u32()?,
             epoch: StorageKeyEpoch::read_from(source)?,
             validator_public_key: PublicKey::read_from(source)?,
-            nonce: CeremonyNonce::read_from(source)?,
+            challenge: Challenge::read_from(source)?,
         })
     }
 }
@@ -97,7 +83,7 @@ impl Handshake {
         genesis_commitment: Word,
         threshold: u32,
         epoch: StorageKeyEpoch,
-        nonce: CeremonyNonce,
+        challenge: Challenge,
         validator_set: ValidatorKeys,
         signer: Arc<ValidatorSigner>,
     ) -> Self {
@@ -109,7 +95,7 @@ impl Handshake {
                 threshold,
                 epoch,
                 validator_public_key,
-                nonce,
+                challenge,
             },
             validator_set: Arc::new(validator_set),
             signer,
@@ -122,17 +108,24 @@ impl Handshake {
         peer_endpoints: BTreeSet<EndpointId>,
     ) -> anyhow::Result<Vec<AuthenticatedPeer>> {
         let local_endpoint = endpoint.id();
-        let mut outgoing_peers = JoinSet::new();
-        for peer_endpoint in peer_endpoints.iter().copied() {
+        let mut authentications = JoinSet::new();
+        for peer_endpoint in peer_endpoints.iter().copied().filter(|peer| local_endpoint < *peer) {
             let endpoint = endpoint.clone();
             let handshake = self.clone();
-            outgoing_peers.spawn(async move {
-                handshake.connect_to_peer(endpoint, local_endpoint, peer_endpoint).await
+            authentications.spawn(async move {
+                let connection =
+                    endpoint.connect(peer_endpoint, Self::ALPN).await.with_context(|| {
+                        format!("failed to connect to peer endpoint {peer_endpoint}")
+                    })?;
+                handshake.authenticate(connection, local_endpoint).await
             });
         }
 
-        let mut expected_incoming = peer_endpoints.clone();
-        let mut incoming_peers = JoinSet::new();
+        let mut expected_incoming = peer_endpoints
+            .iter()
+            .copied()
+            .filter(|peer| *peer < local_endpoint)
+            .collect::<BTreeSet<_>>();
         while !expected_incoming.is_empty() {
             let incoming = endpoint
                 .accept()
@@ -150,43 +143,17 @@ impl Handshake {
             }
             ensure!(
                 expected_incoming.remove(&peer_endpoint),
-                "duplicate connection from peer endpoint {peer_endpoint}",
+                "unexpected connection from peer endpoint {peer_endpoint}",
             );
             let handshake = self.clone();
-            incoming_peers.spawn(async move {
-                handshake.authenticate_incoming(connection, local_endpoint).await
-            });
+            authentications
+                .spawn(async move { handshake.authenticate(connection, local_endpoint).await });
         }
 
-        let mut outgoing_by_endpoint = BTreeMap::new();
-        while let Some(result) = outgoing_peers.join_next().await {
-            let (peer_endpoint, connection, send) =
-                result.context("outgoing peer task failed")??;
-            outgoing_by_endpoint.insert(peer_endpoint, (connection, send));
+        let mut authenticated = Vec::with_capacity(peer_endpoints.len());
+        while let Some(result) = authentications.join_next().await {
+            authenticated.push(result.context("peer authentication task failed")??);
         }
-
-        let mut incoming_by_endpoint = BTreeMap::new();
-        while let Some(result) = incoming_peers.join_next().await {
-            let (peer_endpoint, validator_public_key, connection, receive) =
-                result.context("incoming peer authentication task failed")??;
-            incoming_by_endpoint.insert(peer_endpoint, (validator_public_key, connection, receive));
-        }
-
-        let mut authenticated = incoming_by_endpoint
-            .into_iter()
-            .map(|(peer_endpoint, (validator_public_key, incoming_connection, receive))| {
-                let (outgoing_connection, send) = outgoing_by_endpoint
-                    .remove(&peer_endpoint)
-                    .context("missing outgoing connection to authenticated peer")?;
-                Ok(AuthenticatedPeer {
-                    validator_public_key,
-                    outgoing_connection,
-                    incoming_connection,
-                    send,
-                    receive,
-                })
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
         authenticated.sort_by_key(AuthenticatedPeer::endpoint_id);
 
         let mut authenticated_validator_keys = authenticated
@@ -203,43 +170,25 @@ impl Handshake {
         Ok(authenticated)
     }
 
-    async fn connect_to_peer(
-        self,
-        endpoint: Endpoint,
-        local_endpoint: EndpointId,
-        peer_endpoint: EndpointId,
-    ) -> anyhow::Result<(EndpointId, Connection, SendStream)> {
-        let connection = endpoint
-            .connect(peer_endpoint, Self::ALPN)
-            .await
-            .with_context(|| format!("failed to connect to peer endpoint {peer_endpoint}"))?;
-        let mut send = connection
-            .open_uni()
-            .await
-            .context("failed to open outgoing handshake stream")?;
-        let signature = self
-            .signer
-            .sign_commitment(self.message.signature_commitment(local_endpoint, peer_endpoint))
-            .await?;
-        send.write_all(&self.message.to_bytes())
-            .await
-            .context("failed to send handshake message")?;
-        send.write_all(&signature.to_bytes())
-            .await
-            .context("failed to send handshake signature")?;
-        Ok((peer_endpoint, connection, send))
-    }
-
-    async fn authenticate_incoming(
+    async fn authenticate(
         self,
         connection: Connection,
         local_endpoint: EndpointId,
-    ) -> anyhow::Result<(EndpointId, PublicKey, Connection, RecvStream)> {
+    ) -> anyhow::Result<AuthenticatedPeer> {
         let peer_endpoint = connection.remote_id();
-        let mut receive = connection
-            .accept_uni()
-            .await
-            .context("failed to accept incoming handshake stream")?;
+        let is_dialer = local_endpoint < peer_endpoint;
+        let (mut send, mut receive) = if is_dialer {
+            connection.open_bi().await.context("failed to open handshake stream")?
+        } else {
+            connection.accept_bi().await.context("failed to accept handshake stream")?
+        };
+
+        if is_dialer {
+            send.write_all(&self.message.to_bytes())
+                .await
+                .context("failed to send handshake challenge")?;
+        }
+
         let mut peer_message_bytes = [0; HANDSHAKE_MESSAGE_BYTES];
         receive
             .read_exact(&mut peer_message_bytes)
@@ -249,6 +198,17 @@ impl Handshake {
             .context("failed to decode handshake message")?;
         self.message.validate_peer_configuration(&peer_message)?;
 
+        if !is_dialer {
+            send.write_all(&self.message.to_bytes())
+                .await
+                .context("failed to send handshake challenge")?;
+        }
+
+        let signature = self.signer.sign_commitment(peer_message.challenge.commitment()).await?;
+        send.write_all(&signature.to_bytes())
+            .await
+            .context("failed to send handshake response")?;
+
         let mut peer_signature_bytes = [0; VALIDATOR_SIGNATURE_BYTES];
         receive
             .read_exact(&mut peer_signature_bytes)
@@ -257,40 +217,31 @@ impl Handshake {
         let peer_signature = Signature::read_from_bytes(&peer_signature_bytes)
             .context("failed to decode handshake signature")?;
         ensure!(
-            peer_message.validator_public_key.verify(
-                peer_message.signature_commitment(peer_endpoint, local_endpoint),
-                &peer_signature,
-            ),
+            peer_message
+                .validator_public_key
+                .verify(self.message.challenge.commitment(), &peer_signature),
             "peer handshake signature is invalid",
         );
+        send.finish().context("failed to finish handshake stream")?;
 
-        Ok((peer_endpoint, peer_message.validator_public_key, connection, receive))
+        Ok(AuthenticatedPeer {
+            validator_public_key: peer_message.validator_public_key,
+            connection,
+        })
     }
 }
 
 pub struct AuthenticatedPeer {
     validator_public_key: PublicKey,
-    outgoing_connection: Connection,
-    incoming_connection: Connection,
-    send: SendStream,
-    receive: RecvStream,
+    connection: Connection,
 }
 
 impl AuthenticatedPeer {
     fn endpoint_id(&self) -> EndpointId {
-        self.outgoing_connection.remote_id()
+        self.connection.remote_id()
     }
 
     pub fn close(self) {
-        let Self {
-            outgoing_connection,
-            incoming_connection,
-            send,
-            receive,
-            ..
-        } = self;
-        drop((send, receive));
-        outgoing_connection.close(0u8.into(), b"connection check complete");
-        incoming_connection.close(0u8.into(), b"connection check complete");
+        self.connection.close(0u8.into(), b"connection check complete");
     }
 }
