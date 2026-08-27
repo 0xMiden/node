@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use iroh::address_lookup::memory::MemoryLookup;
-use iroh::endpoint::presets;
+use iroh::endpoint::{Side, presets};
 use iroh::{Endpoint, EndpointId, SecretKey as IrohSecretKey};
 use miden_protocol::block::ValidatorKeys;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, SigningKey};
@@ -10,7 +10,7 @@ use miden_protocol::crypto::hash::rpo::Rpo256;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_validator::{StorageKeyEpoch, ValidatorSigner};
 
-use super::{CeremonyNonce, Handshake, HandshakeMessage, HandshakeTranscript};
+use super::{CeremonyNonce, Handshake, HandshakeMessage};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 type TestResultWith<T> = Result<T, Box<dyn std::error::Error>>;
@@ -120,6 +120,33 @@ async fn three_validators_authenticate_their_endpoint_bindings() -> TestResult {
 }
 
 #[tokio::test]
+async fn every_validator_dials_every_peer() -> TestResult {
+    let (endpoint_a, lookup_a) = bind_test_endpoint(IrohSecretKey::from_bytes(&[14; 32])).await?;
+    let (endpoint_b, lookup_b) = bind_test_endpoint(IrohSecretKey::from_bytes(&[15; 32])).await?;
+    lookup_a.add_endpoint_info(endpoint_b.addr());
+    lookup_b.add_endpoint_info(endpoint_a.addr());
+
+    let signing_key_a = test_signing_key(24);
+    let signing_key_b = test_signing_key(25);
+    let validator_keys = vec![signing_key_a.public_key(), signing_key_b.public_key()];
+    let authentication_for_a = test_handshake(&signing_key_a, validator_keys.clone(), 34)
+        .connect_and_authenticate_peers(endpoint_a.clone(), BTreeSet::from([endpoint_b.id()]));
+    let authentication_for_b = test_handshake(&signing_key_b, validator_keys, 35)
+        .connect_and_authenticate_peers(endpoint_b.clone(), BTreeSet::from([endpoint_a.id()]));
+
+    let (peers_seen_by_a, peers_seen_by_b) =
+        tokio::try_join!(authentication_for_a, authentication_for_b)?;
+    for peer in peers_seen_by_a.iter().chain(&peers_seen_by_b) {
+        assert_eq!(peer.outgoing_connection.side(), Side::Client);
+        assert_eq!(peer.incoming_connection.side(), Side::Server);
+    }
+
+    endpoint_a.close().await;
+    endpoint_b.close().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn handshake_rejects_validator_key_outside_genesis() -> TestResult {
     let (endpoint_a, lookup_a) = bind_test_endpoint(IrohSecretKey::from_bytes(&[14; 32])).await?;
     let (endpoint_b, lookup_b) = bind_test_endpoint(IrohSecretKey::from_bytes(&[15; 32])).await?;
@@ -152,80 +179,42 @@ async fn handshake_rejects_validator_key_outside_genesis() -> TestResult {
 }
 
 #[test]
-fn handshake_commits_to_dialer_endpoint() {
-    let dialer_signing_key = test_signing_key(41);
-    let acceptor_signing_key = test_signing_key(42);
-    let dialer_endpoint = IrohSecretKey::from_bytes(&[51; 32]).public();
-    let acceptor_endpoint = IrohSecretKey::from_bytes(&[52; 32]).public();
-    let dialer_message = HandshakeMessage {
+fn handshake_commits_to_sender_endpoint() {
+    let signing_key = test_signing_key(41);
+    let sender_endpoint = IrohSecretKey::from_bytes(&[51; 32]).public();
+    let receiver_endpoint = IrohSecretKey::from_bytes(&[52; 32]).public();
+    let message = HandshakeMessage {
         genesis_commitment: Rpo256::hash(b"test genesis"),
         threshold: 2,
         epoch: StorageKeyEpoch::new([9; 32]),
-        validator_public_key: dialer_signing_key.public_key(),
+        validator_public_key: signing_key.public_key(),
         nonce: CeremonyNonce([61; 32]),
     };
-    let acceptor_message = HandshakeMessage {
-        genesis_commitment: Rpo256::hash(b"test genesis"),
-        threshold: 2,
-        epoch: StorageKeyEpoch::new([9; 32]),
-        validator_public_key: acceptor_signing_key.public_key(),
-        nonce: CeremonyNonce([62; 32]),
-    };
-    let commitment = HandshakeTranscript {
-        dialer_endpoint,
-        dialer_message: dialer_message.clone(),
-        acceptor_endpoint,
-        acceptor_message: acceptor_message.clone(),
-    }
-    .signature_commitment();
+    let commitment = message.signature_commitment(sender_endpoint, receiver_endpoint);
 
     let substituted_endpoint = IrohSecretKey::from_bytes(&[53; 32]).public();
-    let substituted_commitment = HandshakeTranscript {
-        dialer_endpoint: substituted_endpoint,
-        dialer_message,
-        acceptor_endpoint,
-        acceptor_message,
-    }
-    .signature_commitment();
+    let substituted_commitment =
+        message.signature_commitment(substituted_endpoint, receiver_endpoint);
     assert_ne!(commitment, substituted_commitment);
 }
 
 #[test]
-fn handshake_commits_to_acceptor_endpoint() {
-    let dialer_signing_key = test_signing_key(41);
-    let acceptor_signing_key = test_signing_key(42);
-    let dialer_endpoint = IrohSecretKey::from_bytes(&[51; 32]).public();
-    let acceptor_endpoint = IrohSecretKey::from_bytes(&[52; 32]).public();
-    let dialer_message = HandshakeMessage {
+fn handshake_commits_to_receiver_endpoint() {
+    let signing_key = test_signing_key(41);
+    let sender_endpoint = IrohSecretKey::from_bytes(&[51; 32]).public();
+    let receiver_endpoint = IrohSecretKey::from_bytes(&[52; 32]).public();
+    let message = HandshakeMessage {
         genesis_commitment: Rpo256::hash(b"test genesis"),
         threshold: 2,
         epoch: StorageKeyEpoch::new([9; 32]),
-        validator_public_key: dialer_signing_key.public_key(),
+        validator_public_key: signing_key.public_key(),
         nonce: CeremonyNonce([61; 32]),
     };
-    let acceptor_message = HandshakeMessage {
-        genesis_commitment: Rpo256::hash(b"test genesis"),
-        threshold: 2,
-        epoch: StorageKeyEpoch::new([9; 32]),
-        validator_public_key: acceptor_signing_key.public_key(),
-        nonce: CeremonyNonce([62; 32]),
-    };
-    let commitment = HandshakeTranscript {
-        dialer_endpoint,
-        dialer_message: dialer_message.clone(),
-        acceptor_endpoint,
-        acceptor_message: acceptor_message.clone(),
-    }
-    .signature_commitment();
+    let commitment = message.signature_commitment(sender_endpoint, receiver_endpoint);
 
     let substituted_endpoint = IrohSecretKey::from_bytes(&[53; 32]).public();
-    let substituted_commitment = HandshakeTranscript {
-        dialer_endpoint,
-        dialer_message,
-        acceptor_endpoint: substituted_endpoint,
-        acceptor_message,
-    }
-    .signature_commitment();
+    let substituted_commitment =
+        message.signature_commitment(sender_endpoint, substituted_endpoint);
     assert_ne!(commitment, substituted_commitment);
 }
 
