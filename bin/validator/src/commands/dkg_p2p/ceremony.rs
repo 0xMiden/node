@@ -10,13 +10,18 @@ use miden_node_utils::genesis::read_genesis_block;
 use miden_protocol::Word;
 use miden_protocol::block::ValidatorKeys;
 use miden_validator::{StorageKeyEpoch, ValidatorSigner};
-use rand_core_06::OsRng;
+use tokio::task::JoinSet;
 use zeroize::Zeroizing;
 
-use self::handshake::{AuthenticatedPeer, Challenge, Handshake};
+use self::ceremony_config::CeremonyConfig;
+use self::peer::{AuthenticatedPeer, ConnectedPeer};
 use super::ParticipateOptions;
 
-mod handshake;
+mod ceremony_config;
+mod challenge;
+mod peer;
+#[cfg(test)]
+mod tests;
 
 pub struct Session {
     endpoint: Endpoint,
@@ -33,11 +38,11 @@ pub struct Session {
 /// - `endpoint_secret` is a valid persistent Iroh endpoint identity.
 /// - `peer_endpoints` contains one distinct, non-local endpoint per other genesis validator.
 ///
-/// Peer endpoints are not yet bound to individual validator keys. [`Ceremony::handshake`] performs
-/// that authentication.
+/// Peer endpoints are not yet bound to individual validator keys.
+/// [`Ceremony::authenticate_peers`] performs that authentication.
 pub(super) struct Ceremony {
     genesis_commitment: Word,
-    validator_set: ValidatorKeys,
+    validator_set: Arc<ValidatorKeys>,
     endpoint_secret: IrohSecretKey,
     peer_endpoints: BTreeSet<EndpointId>,
     threshold: NonZeroUsize,
@@ -46,26 +51,97 @@ pub(super) struct Ceremony {
 }
 
 impl Ceremony {
-    pub async fn handshake(&self) -> anyhow::Result<Session> {
+    const ALPN: &'static [u8] = b"/miden/validator-dkg-p2p/1";
+
+    pub async fn authenticate_peers(&self) -> anyhow::Result<Session> {
         let endpoint = Endpoint::builder(presets::N0)
             .secret_key(self.endpoint_secret.clone())
-            .alpns(vec![Handshake::ALPN.to_vec()])
+            .alpns(vec![Self::ALPN.to_vec()])
             .bind()
             .await
             .context("failed to bind Iroh endpoint")?;
-        let challenge = Challenge::random(&mut OsRng);
+        self.authenticate_peers_on(endpoint).await
+    }
+
+    async fn authenticate_peers_on(&self, endpoint: Endpoint) -> anyhow::Result<Session> {
+        let local_endpoint = endpoint.id();
+        let mut authentications = JoinSet::new();
+        for peer_endpoint in
+            self.peer_endpoints.iter().copied().filter(|peer| local_endpoint < *peer)
+        {
+            let endpoint = endpoint.clone();
+            let validator_set = Arc::clone(&self.validator_set);
+            let signer = Arc::clone(&self.signer);
+            authentications.spawn(async move {
+                ConnectedPeer::connect(&endpoint, peer_endpoint)
+                    .await?
+                    .authenticate(&validator_set, &signer)
+                    .await
+            });
+        }
+
+        let mut expected_incoming = self
+            .peer_endpoints
+            .iter()
+            .copied()
+            .filter(|peer| *peer < local_endpoint)
+            .collect::<BTreeSet<_>>();
+        while !expected_incoming.is_empty() {
+            let connected_peer = ConnectedPeer::accept(&endpoint).await?;
+            let peer_endpoint = connected_peer.endpoint_id();
+            if !self.peer_endpoints.contains(&peer_endpoint) {
+                connected_peer.close(b"endpoint is not a configured DKG peer");
+                continue;
+            }
+            ensure!(
+                expected_incoming.remove(&peer_endpoint),
+                "unexpected connection from peer endpoint {peer_endpoint}",
+            );
+            let validator_set = Arc::clone(&self.validator_set);
+            let signer = Arc::clone(&self.signer);
+            authentications
+                .spawn(async move { connected_peer.authenticate(&validator_set, &signer).await });
+        }
+
+        let mut authenticated_peers = Vec::with_capacity(self.peer_endpoints.len());
+        while let Some(result) = authentications.join_next().await {
+            authenticated_peers.push(result.context("peer authentication task failed")??);
+        }
+
+        let mut authenticated_validator_keys = authenticated_peers
+            .iter()
+            .map(|peer| peer.validator_public_key().clone())
+            .collect::<Vec<_>>();
+        authenticated_validator_keys.push(self.signer.public_key());
+        let authenticated_validator_set = ValidatorKeys::new(authenticated_validator_keys)
+            .context("authenticated validator keys do not form a valid validator set")?;
+        ensure!(
+            authenticated_validator_set == *self.validator_set,
+            "authenticated validator set does not match genesis",
+        );
+
+        Ok(Session { endpoint, authenticated_peers })
+    }
+
+    pub async fn exchange_configs(&self, session: Session) -> anyhow::Result<Session> {
         let threshold = u32::try_from(self.threshold.get())
-            .context("threshold does not fit in the handshake format")?;
-        let authenticated_peers = Handshake::new(
-            self.genesis_commitment,
-            threshold,
-            self.epoch,
-            challenge,
-            self.validator_set.clone(),
-            Arc::clone(&self.signer),
-        )
-        .connect_and_authenticate_peers(endpoint.clone(), self.peer_endpoints.clone())
-        .await?;
+            .context("threshold does not fit in the ceremony config format")?;
+        let config = CeremonyConfig::new(self.genesis_commitment, threshold, self.epoch);
+        let Session { endpoint, authenticated_peers } = session;
+        let peer_count = authenticated_peers.len();
+        let mut exchanges = JoinSet::new();
+        for peer in authenticated_peers {
+            let config = config.clone();
+            exchanges.spawn(async move {
+                peer.exchange_ceremony_config(&config).await?;
+                Ok::<_, anyhow::Error>(peer)
+            });
+        }
+
+        let mut authenticated_peers = Vec::with_capacity(peer_count);
+        while let Some(result) = exchanges.join_next().await {
+            authenticated_peers.push(result.context("ceremony config exchange task failed")??);
+        }
 
         Ok(Session { endpoint, authenticated_peers })
     }
@@ -128,7 +204,7 @@ impl ParticipateOptions {
 
         Ok(Ceremony {
             genesis_commitment,
-            validator_set,
+            validator_set: Arc::new(validator_set),
             endpoint_secret,
             peer_endpoints,
             threshold: self.threshold,

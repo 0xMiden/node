@@ -8,6 +8,7 @@ use zeroize::Zeroizing;
 use super::ValidatorSigningKey;
 
 mod ceremony;
+mod wire;
 
 #[cfg(test)]
 mod tests;
@@ -82,7 +83,8 @@ impl DkgP2pOptions {
 impl ParticipateOptions {
     async fn handle(self) -> anyhow::Result<()> {
         let ceremony = self.validate().await?;
-        let session = ceremony.handshake().await?;
+        let session = ceremony.authenticate_peers().await?;
+        let session = ceremony.exchange_configs(session).await?;
 
         session.close().await;
         Ok(())

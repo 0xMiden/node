@@ -90,7 +90,7 @@ async fn participate_accepts_the_complete_offline_configuration() -> TestResult 
 }
 
 #[tokio::test]
-async fn one_validator_ceremony_completes_handshake_without_peers() -> TestResult {
+async fn one_validator_ceremony_completes_peer_setup_without_peers() -> TestResult {
     let root = tempfile::tempdir()?;
     let genesis = write_genesis(root.path(), 1)?;
     let (endpoint_secret, _) = write_endpoint_secret(root.path(), 1)?;
@@ -104,7 +104,8 @@ async fn one_validator_ceremony_completes_handshake_without_peers() -> TestResul
     )
     .validate()
     .await?;
-    let session = ceremony.handshake().await?;
+    let session = ceremony.authenticate_peers().await?;
+    let session = ceremony.exchange_configs(session).await?;
     session.close().await;
 
     Ok(())
