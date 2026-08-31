@@ -147,7 +147,9 @@ pub(super) async fn list_validated_private_transactions(
             include_records: query.include_records,
         })
         .await
-        .map_err(|_error| ApiError::internal("failed to list validated private transactions"))?;
+        .map_err(|error| {
+            ApiError::internal("failed to list validated private transactions", &error)
+        })?;
 
     let chain_tip = page.chain_tip.as_u32();
     let block_num = page.transactions.last().map(|item| item.block_num.as_u32());
