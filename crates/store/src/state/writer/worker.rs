@@ -1,6 +1,5 @@
 //! The write worker: single-task owner of the store's mutable trees.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Once};
 
 use arc_swap::ArcSwap;
@@ -38,13 +37,7 @@ use crate::db::{Db, NoteRecord};
 use crate::errors::{ApplyBlockError, InvalidBlockError};
 use crate::state::block_lifecycle::{BlockLifecycle, lifecycle_events_enabled};
 use crate::state::loader::TreeStorage;
-use crate::state::view::{
-    PublishedGenerations,
-    SNAPSHOT_LAG_WARN_THRESHOLD,
-    SNAPSHOTS_LIVE_WARN_THRESHOLD,
-    SnapshotGuard,
-    StateSnapshot,
-};
+use crate::state::view::{PublishedGenerations, StateSnapshot};
 use crate::state::{BlockCache, BlockNotification};
 use crate::{COMPONENT, HistoricalError, LOG_TARGET};
 
@@ -72,8 +65,6 @@ pub(in crate::state) struct WriteWorker {
     blockchain: Blockchain,
     /// The mutable account state forest owned by this writer.
     forest: AccountStateForest<AccountStateForestBackend>,
-    /// Shared counter of live snapshot generations, for observability.
-    snapshots_live: Arc<AtomicUsize>,
     /// Writer-local log of published generations; its oldest still-pinned height feeds the
     /// snapshot-aware history-pruning tip.
     published_generations: PublishedGenerations,
@@ -111,7 +102,6 @@ impl WriteWorker {
         account_tree: AccountTreeWithHistory<TreeStorage>,
         blockchain: Blockchain,
         forest: AccountStateForest<AccountStateForestBackend>,
-        snapshots_live: Arc<AtomicUsize>,
         apply_block_thread_priority: bool,
     ) -> Self {
         // Seed the generation log with the initial snapshot so its readers hold back pruning
@@ -139,7 +129,6 @@ impl WriteWorker {
             account_tree,
             blockchain,
             forest,
-            snapshots_live,
             published_generations,
             apply_pool,
         }
@@ -237,17 +226,13 @@ impl WriteWorker {
         let snapshot_lag = generations
             .oldest_pinned
             .map_or(0, |oldest| block_num.as_u32() - oldest.as_u32());
-        miden_span_record!(snapshots.lag_blocks = snapshot_lag);
-        if snapshot_lag > SNAPSHOT_LAG_WARN_THRESHOLD {
-            tracing::warn!(
-                target: COMPONENT,
-                block_num = block_num.as_u32(),
-                prune_tip = generations.prune_tip.as_u32(),
-                snapshots.lag_blocks = snapshot_lag,
-                "a state snapshot is pinned far behind the chain tip; a slow or leaked reader is \
-                 retaining RocksDB garbage and holding back history pruning",
-            );
-        }
+        let oldest_superseded_for_ms = generations
+            .oldest_superseded_for
+            .map_or(0, |superseded| u64::try_from(superseded.as_millis()).unwrap_or(u64::MAX));
+        miden_span_record!(
+            snapshots.lag_blocks = snapshot_lag,
+            snapshots.oldest_superseded_for_ms = oldest_superseded_for_ms
+        );
         let prune_tip = generations.prune_tip;
         let resolved_note_ids = self
             .db
@@ -272,13 +257,13 @@ impl WriteWorker {
         );
 
         // Atomically publish the new state. Readers that call `snapshot()` after this point will
-        // see the updated state. Readers holding the old snapshot continue unaffected, but are on
-        // the clock: a superseded generation held too long is reported on release.
+        // see the updated state. Readers that hold the old snapshot are not affected. `record`
+        // marks the old generation as superseded. The `snapshots.oldest_superseded_for_ms` span
+        // field reports how long that generation stays pinned after supersession.
         self.published_generations.record(block_num, &snapshot);
-        self.latest_snapshot.swap(snapshot).mark_superseded();
+        self.latest_snapshot.swap(snapshot);
 
-        let snapshots_live = self.check_live_snapshots(block_num);
-        miden_span_record!(snapshots.live = snapshots_live);
+        miden_span_record!(snapshots.live = self.published_generations.live());
 
         // Push to cache and notify replica subscribers.
         self.block_cache
@@ -295,24 +280,6 @@ impl WriteWorker {
         debug!(target: LOG_TARGET, "Block applied");
 
         Ok(())
-    }
-
-    /// Returns the number of live snapshot generations, warning when slow readers are pinning too
-    /// many old generations in memory.
-    ///
-    /// The count is returned rather than recorded here because `miden_span_record!` must be used
-    /// within a `#[miden_instrument]` function.
-    fn check_live_snapshots(&self, block_num: BlockNumber) -> u64 {
-        let snapshots_live = self.snapshots_live.load(Ordering::Relaxed) as u64;
-        if snapshots_live > SNAPSHOTS_LIVE_WARN_THRESHOLD {
-            warn!(
-                target: COMPONENT,
-                "too many live state snapshots; slow readers are pinning old generations",
-                block.number = block_num,
-                snapshots.live = snapshots_live
-            );
-        }
-        snapshots_live
     }
 
     /// Computes the note records and all tree and forest mutations for a block, without mutating
@@ -420,7 +387,6 @@ impl WriteWorker {
                 self.blockchain.clone(),
                 self.account_tree.reader(),
                 self.forest.reader().expect("forest snapshot creation should not fail"),
-                SnapshotGuard::new(Arc::clone(&self.snapshots_live), block_num),
             ))
         })
     }

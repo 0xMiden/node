@@ -13,14 +13,11 @@
 //! can reach the trees directly.
 
 use std::ops::RangeInclusive;
-use std::panic::Location;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use miden_node_tracing::Span;
 use miden_protocol::block::{BlockNumber, Blockchain};
 
-use crate::COMPONENT;
 use crate::account_state_forest::{AccountStateForest, AccountStateForestBackendReader};
 use crate::db::Db;
 use crate::errors::RangeBeyondTip;
@@ -30,13 +27,7 @@ mod scoped;
 pub use scoped::{ScopedBlockNum, ScopedBlockRange};
 
 mod snapshot;
-pub(in crate::state) use snapshot::{
-    PublishedGenerations,
-    SNAPSHOT_LAG_WARN_THRESHOLD,
-    SNAPSHOTS_LIVE_WARN_THRESHOLD,
-    SnapshotGuard,
-    StateSnapshot,
-};
+pub(in crate::state) use snapshot::{PublishedGenerations, StateSnapshot};
 
 mod account;
 mod block;
@@ -53,34 +44,21 @@ pub use transaction_inputs::TransactionInputs;
 // STATE VIEW
 // ================================================================================================
 
-/// View lifetime above which [`StateView`] logs a warning on drop, attributing the acquiring call
-/// site.
-///
-/// Views are request-scoped, so one should live for milliseconds; several seconds means a slow or
-/// stuck reader pinned a snapshot generation for that long. Unlike [`SnapshotGuard`]'s clock this
-/// one starts at acquisition, not supersession — a view cannot observe supersession without
-/// shared state, and a request holding a view for seconds is abnormal regardless of whether the
-/// chain advanced under it. This is the attribution half of the reader diagnostics: the per-block
-/// lag warning (see [`SNAPSHOT_LAG_WARN_THRESHOLD`]) fires while an offender is still alive but
-/// cannot name it; this one fires only once the view is released, but says who held it.
-const VIEW_LIFETIME_WARN_THRESHOLD: Duration = Duration::from_secs(2);
-
 /// A consistent read view of the store, pinned at its snapshot's block height.
 ///
 /// Obtained from [`State::view`]; create one per request and drop it when the request completes.
 /// Holding a view pins a snapshot generation (and thereby the `RocksDB` snapshots backing the
-/// trees), so it must not be stored in long-lived structs; leaked or slow readers are reported by
-/// the store's snapshot-lifetime warnings, and a view held past
-/// [`VIEW_LIFETIME_WARN_THRESHOLD`] reports the call site that acquired it when dropped.
+/// trees), so it must not be stored in long-lived structs. The block writer records the span
+/// fields `snapshots.lag_blocks`, `snapshots.oldest_superseded_for_ms`, and `snapshots.live` on
+/// each applied block. Those fields show that some reader pins an old generation. Views are
+/// acquired inside instrumented request spans, so the span durations bound the hold time and
+/// identify the reader.
 ///
 /// Reads that are technically not block-scoped (for example, immutable content-addressed data)
 /// also live here so that every read path flows through one type.
 pub struct StateView {
     snapshot: Arc<StateSnapshot>,
     db: Arc<Db>,
-    /// The call site that acquired this view, captured via `#[track_caller]` on [`State::view`].
-    caller: &'static Location<'static>,
-    created_at: Instant,
 }
 
 impl State {
@@ -95,13 +73,10 @@ impl State {
     /// be mutually consistent (e.g. a query and the tip it was served at) must share one view via
     /// [`Self::with_view`]. Binding a view to a variable is also discouraged: it keeps the
     /// snapshot generation pinned until the end of the scope.
-    #[track_caller]
     pub fn view(&self) -> StateView {
         StateView {
             snapshot: self.latest_snapshot.load_full(),
             db: Arc::clone(&self.db),
-            caller: Location::caller(),
-            created_at: Instant::now(),
         }
     }
 
@@ -120,16 +95,11 @@ impl State {
     ///
     /// Work in the closure should be kept to low-complexity compute over the view, ideally with no
     /// I/O and no other `.await` points. Anything slower holds the pinned snapshot, and therefore
-    /// its underlying `RocksDB` snapshot, for as long as it runs. The snapshot's lifetime is logged
-    /// as a warning if held too long, but that is a backstop, not a substitute for keeping closures
-    /// short.
-    ///
-    /// Not an `async fn` so that the view — and with it the caller location — is captured when
-    /// `with_view` is called: `#[track_caller]` does not reach into an async body on stable.
-    #[track_caller]
-    pub fn with_view<R>(&self, f: impl AsyncFnOnce(&StateView) -> R) -> impl Future<Output = R> {
+    /// its underlying `RocksDB` snapshot, for as long as it runs. The block writer's per-block
+    /// snapshot span fields expose generations that stay pinned too long.
+    pub async fn with_view<R>(&self, f: impl AsyncFnOnce(&StateView) -> R) -> R {
         let view = self.view();
-        async move { f(&view).await }
+        f(&view).await
     }
 }
 
@@ -191,20 +161,5 @@ impl StateView {
         f: impl FnOnce(&AccountStateForest<AccountStateForestBackendReader>) -> R,
     ) -> R {
         self.with_inner_read_blocking(|snapshot| f(&snapshot.forest))
-    }
-}
-
-impl Drop for StateView {
-    fn drop(&mut self) {
-        let held = self.created_at.elapsed();
-        if held > VIEW_LIFETIME_WARN_THRESHOLD {
-            tracing::warn!(
-                target: COMPONENT,
-                caller = %self.caller,
-                block_num = self.snapshot.latest_block_num().as_u32(),
-                view.lifetime_ms = u64::try_from(held.as_millis()).unwrap_or(u64::MAX),
-                "state view held for excessive time, pinning its snapshot generation",
-            );
-        }
     }
 }
