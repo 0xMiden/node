@@ -92,8 +92,17 @@ impl ParticipateOptions {
             { dkg.session_id = %session.id() },
             "DKG peer session established",
         );
+        let participants = ceremony.exchange_dkg_public_keys(session).await?;
+        tracing::info!(
+            target: miden_validator::LOG_TARGET,
+            {
+                dkg.local_index = participants.local_index().get(),
+                dkg.registry_root = %hex::encode(participants.registry_root()),
+            },
+            "DKG participant registry established",
+        );
 
-        session.close().await;
+        participants.close().await;
         Ok(())
     }
 }

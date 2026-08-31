@@ -68,7 +68,7 @@ async fn bind_test_endpoint(secret_key: IrohSecretKey) -> TestResultWith<(Endpoi
 }
 
 #[tokio::test]
-async fn three_validators_confirm_the_same_session_id() -> TestResult {
+async fn three_validators_build_the_same_dkg_registry() -> TestResult {
     let endpoint_secrets = [11u8, 12, 13].map(|seed| IrohSecretKey::from_bytes(&[seed; 32]));
     let (endpoint_a, lookup_a) = bind_test_endpoint(endpoint_secrets[0].clone()).await?;
     let (endpoint_b, lookup_b) = bind_test_endpoint(endpoint_secrets[1].clone()).await?;
@@ -130,9 +130,33 @@ async fn three_validators_confirm_the_same_session_id() -> TestResult {
         ceremony_b.confirm_session(session_b),
         ceremony_c.confirm_session(session_c),
     )?;
+    let (participants_a, participants_b, participants_c) = tokio::try_join!(
+        ceremony_a.exchange_dkg_public_keys(session_a),
+        ceremony_b.exchange_dkg_public_keys(session_b),
+        ceremony_c.exchange_dkg_public_keys(session_c),
+    )?;
+    assert_eq!(participants_a.registry_root(), participants_b.registry_root());
+    assert_eq!(participants_a.registry_root(), participants_c.registry_root());
 
-    for (local_index, session) in [&session_a, &session_b, &session_c].into_iter().enumerate() {
-        let mut actual = session
+    for (local_index, (ceremony, participants, signing_key)) in [
+        (&ceremony_a, &participants_a, &signing_keys[0]),
+        (&ceremony_b, &participants_b, &signing_keys[1]),
+        (&ceremony_c, &participants_c, &signing_keys[2]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let expected_local_index = ceremony
+            .validator_set
+            .as_keys()
+            .iter()
+            .position(|validator_key| validator_key == &signing_key.public_key())
+            .expect("local validator must be in the validator set")
+            + 1;
+        assert_eq!(participants.local_index().get() as usize, expected_local_index);
+
+        let mut actual = participants
+            .session
             .authenticated_peers
             .iter()
             .map(|peer| (peer.connection().remote_id(), peer.validator_public_key().clone()))
@@ -147,7 +171,7 @@ async fn three_validators_confirm_the_same_session_id() -> TestResult {
         assert_eq!(actual, expected);
     }
 
-    tokio::join!(session_a.close(), session_b.close(), session_c.close());
+    tokio::join!(participants_a.close(), participants_b.close(), participants_c.close());
     Ok(())
 }
 

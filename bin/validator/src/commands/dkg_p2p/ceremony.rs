@@ -3,24 +3,28 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use anyhow::{Context, ensure};
+use golden_core::{ParticipantIndex, ParticipantRegistry};
 use iroh::endpoint::presets;
 use iroh::{Endpoint, EndpointId, SecretKey as IrohSecretKey};
 use miden_node_store::genesis::GenesisBlock;
 use miden_node_utils::genesis::read_genesis_block;
 use miden_protocol::Word;
 use miden_protocol::block::ValidatorKeys;
+use miden_protocol::utils::serde::Serializable;
 use miden_validator::{StorageKeyEpoch, ValidatorSigner};
 use rand_core_06::OsRng;
 use tokio::task::JoinSet;
 use zeroize::Zeroizing;
 
 use self::ceremony_config::CeremonyConfig;
+use self::dkg::{DkgSecretKey, StorageGroup};
 use self::peer::{AuthenticatedPeer, ConnectedPeer};
 use self::session::{CeremonyNonce, SessionId};
 use super::ParticipateOptions;
 
 mod ceremony_config;
 mod challenge;
+mod dkg;
 mod peer;
 mod session;
 #[cfg(test)]
@@ -41,6 +45,13 @@ pub struct Session {
     id: SessionId,
     endpoint: Endpoint,
     authenticated_peers: Vec<AuthenticatedPeer>,
+}
+
+pub struct DkgParticipants {
+    session: Session,
+    local_index: ParticipantIndex,
+    secret_key: DkgSecretKey,
+    registry: ParticipantRegistry<StorageGroup>,
 }
 
 /// Validated inputs for one peer-to-peer DKG ceremony.
@@ -217,6 +228,61 @@ impl Ceremony {
         Ok(Session { id, endpoint, authenticated_peers })
     }
 
+    pub async fn exchange_dkg_public_keys(
+        &self,
+        session: Session,
+    ) -> anyhow::Result<DkgParticipants> {
+        let secret_key = DkgSecretKey::random(&mut OsRng);
+        let local_dkg_public_key = secret_key.public_key();
+        let Session { authenticated_peers, .. } = &session;
+        let mut exchanges = JoinSet::new();
+        for peer in authenticated_peers.clone() {
+            exchanges.spawn({
+                let local_dkg_public_key = local_dkg_public_key.clone();
+                async move {
+                    let peer_dkg_public_key =
+                        peer.exchange_dkg_public_key(&local_dkg_public_key).await?;
+                    Ok::<_, anyhow::Error>((
+                        peer.validator_public_key().clone(),
+                        peer_dkg_public_key,
+                    ))
+                }
+            });
+        }
+
+        let local_validator_key = self.signer.public_key();
+        let mut dkg_public_keys = vec![(local_validator_key.clone(), local_dkg_public_key)];
+        while let Some(result) = exchanges.join_next().await {
+            let (validator_public_key, dkg_public_key) =
+                result.context("DKG public key exchange task failed")??;
+            dkg_public_keys.push((validator_public_key, dkg_public_key));
+        }
+        dkg_public_keys.sort_by_key(|(validator_key, _)| validator_key.to_bytes());
+
+        let mut local_index = None;
+        let mut registry_entries = Vec::with_capacity(dkg_public_keys.len());
+        for (offset, (validator_key, dkg_public_key)) in dkg_public_keys.into_iter().enumerate() {
+            let index = ParticipantIndex::new(
+                u32::try_from(offset + 1).context("too many DKG participants")?,
+            )?;
+            if validator_key == local_validator_key {
+                local_index = Some(index);
+            }
+            registry_entries.push((index, dkg_public_key.into_element()));
+        }
+        let local_index =
+            local_index.context("local validator is missing from DKG participants")?;
+        let registry = ParticipantRegistry::new(registry_entries)
+            .context("failed to build DKG participant registry")?;
+
+        Ok(DkgParticipants {
+            session,
+            local_index,
+            secret_key,
+            registry,
+        })
+    }
+
     fn config(&self) -> anyhow::Result<CeremonyConfig> {
         let threshold = u32::try_from(self.threshold.get())
             .context("threshold does not fit in the ceremony config format")?;
@@ -234,6 +300,21 @@ impl Session {
             peer.close();
         }
         self.endpoint.close().await;
+    }
+}
+
+impl DkgParticipants {
+    pub fn local_index(&self) -> ParticipantIndex {
+        self.local_index
+    }
+
+    pub fn registry_root(&self) -> [u8; 32] {
+        self.registry.root()
+    }
+
+    pub async fn close(self) {
+        let Self { session, secret_key: _secret_key, .. } = self;
+        session.close().await;
     }
 }
 

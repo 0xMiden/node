@@ -10,8 +10,10 @@ use super::super::wire::{RecvStream, SendStream};
 use super::Ceremony;
 use super::ceremony_config::CeremonyConfig;
 use super::challenge::{Challenge, ChallengeResponse};
+use super::dkg::DkgPublicKey;
 use super::session::{CeremonyNonce, SessionId};
 
+#[derive(Clone)]
 pub struct ConnectedPeer {
     connection: Connection,
 }
@@ -93,6 +95,7 @@ impl ConnectedPeer {
     }
 }
 
+#[derive(Clone)]
 pub struct AuthenticatedPeer {
     validator_public_key: PublicKey,
     connection: ConnectedPeer,
@@ -151,6 +154,25 @@ impl AuthenticatedPeer {
             receive.read_exact::<SessionId>().await.context("failed to read session ID")?;
         send.finish().context("failed to finish session confirmation stream")?;
         Ok(peer_session_id)
+    }
+
+    pub async fn exchange_dkg_public_key(
+        &self,
+        local: &DkgPublicKey,
+    ) -> anyhow::Result<DkgPublicKey> {
+        let (mut send, mut receive) = self
+            .connection
+            .bi_stream()
+            .await
+            .context("failed to establish DKG public key stream")?;
+
+        send.write(local).await.context("failed to send DKG public key")?;
+        let peer_dkg_public_key = receive
+            .read_exact::<DkgPublicKey>()
+            .await
+            .context("failed to read DKG public key")?;
+        send.finish().context("failed to finish DKG public key stream")?;
+        Ok(peer_dkg_public_key)
     }
 
     pub fn validator_public_key(&self) -> &PublicKey {
