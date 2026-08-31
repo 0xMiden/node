@@ -132,6 +132,29 @@ impl PrivateRecordContext {
         context.extend_from_slice(&PRIVATE_RECORD_FORMAT_V1.to_be_bytes());
         context
     }
+
+    /// Parses a canonical schema version 1 context produced by [`Self::to_bytes`].
+    ///
+    /// Rejects any input whose domain tag, length, or format version differ from schema
+    /// version 1, or whose transaction id is not canonical.
+    pub fn try_from_bytes(bytes: &[u8]) -> Result<Self, PrivateRecordError> {
+        let malformed = || PrivateRecordError::MalformedDecryptionContext;
+        let (domain, rest) =
+            bytes.split_at_checked(CONTEXT_DOMAIN_V1.len()).ok_or_else(malformed)?;
+        let (chain_id, rest) = rest.split_at_checked(32).ok_or_else(malformed)?;
+        let (key_epoch, rest) = rest.split_at_checked(32).ok_or_else(malformed)?;
+        let (transaction_id, version) = rest.split_at_checked(32).ok_or_else(malformed)?;
+        if domain != CONTEXT_DOMAIN_V1 || version != PRIVATE_RECORD_FORMAT_V1.to_be_bytes() {
+            return Err(malformed());
+        }
+        let transaction_id =
+            TransactionId::read_from_bytes(transaction_id).map_err(|_error| malformed())?;
+        Ok(Self::new(
+            PrivateRecordChainId::new(chain_id.try_into().expect("split yields 32 bytes")),
+            StorageKeyEpoch::new(key_epoch.try_into().expect("split yields 32 bytes")),
+            transaction_id,
+        ))
+    }
 }
 
 /// Exact record values that an operator must approve before issuing a share.
@@ -555,6 +578,9 @@ pub enum PrivateRecordError {
     /// The request does not carry the record's exact canonical context.
     #[error("private record decryption context does not match the record")]
     DecryptionContextMismatch,
+    /// The decryption context bytes are not a canonical schema version 1 context.
+    #[error("private record decryption context is malformed")]
+    MalformedDecryptionContext,
     /// The authenticated record cipher failed.
     #[error("failed to encrypt private record")]
     RecordEncryption,
@@ -687,6 +713,57 @@ mod tests {
             transaction_id,
         );
         assert_eq!(&bytes[CONTEXT_DOMAIN_V1.len() + 96..], &PRIVATE_RECORD_FORMAT_V1.to_be_bytes(),);
+    }
+
+    #[test]
+    fn context_parses_its_canonical_encoding_and_rejects_others() {
+        let bytes = context().to_bytes();
+
+        assert_eq!(PrivateRecordContext::try_from_bytes(&bytes).unwrap(), context());
+
+        // Truncated, extended, wrong-domain, and wrong-version encodings are all rejected.
+        let mut extended = bytes.clone();
+        extended.push(0);
+        let mut wrong_domain = bytes.clone();
+        wrong_domain[0] ^= 1;
+        let mut wrong_version = bytes.clone();
+        *wrong_version.last_mut().unwrap() ^= 1;
+        // A transaction id that is the right length but not canonical: an all-ones field element
+        // exceeds the modulus.
+        let mut wrong_transaction_id = bytes.clone();
+        wrong_transaction_id[CONTEXT_DOMAIN_V1.len() + 64..CONTEXT_DOMAIN_V1.len() + 96].fill(0xff);
+
+        let mut candidates = vec![
+            bytes[..bytes.len() - 1].to_vec(),
+            extended,
+            wrong_domain,
+            wrong_version,
+            wrong_transaction_id,
+        ];
+        // Inputs too short for each successive field, so that every length check is exercised and
+        // not just the trailing version comparison: nothing at all, then a partial domain tag,
+        // chain id, key epoch, and transaction id.
+        candidates.extend(
+            [
+                0,
+                CONTEXT_DOMAIN_V1.len() - 1,
+                CONTEXT_DOMAIN_V1.len() + 16,
+                CONTEXT_DOMAIN_V1.len() + 48,
+                CONTEXT_DOMAIN_V1.len() + 80,
+            ]
+            .map(|len| bytes[..len].to_vec()),
+        );
+
+        for candidate in candidates {
+            assert!(
+                matches!(
+                    PrivateRecordContext::try_from_bytes(&candidate),
+                    Err(PrivateRecordError::MalformedDecryptionContext),
+                ),
+                "a {}-byte context should not parse",
+                candidate.len(),
+            );
+        }
     }
 
     #[test]
