@@ -7,6 +7,7 @@ use miden_protocol::Word;
 use miden_protocol::block::{BlockHeader, BlockNumber, ProposedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
 use miden_protocol::protocol_config::ProtocolConfig;
+use miden_protocol::transaction::{TransactionHeader, TransactionId};
 
 use super::ValidatorService;
 use crate::COMPONENT;
@@ -106,6 +107,11 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
             })?
             .ok_or_else(|| tonic::Status::internal("Chain tip not found in database"))?;
 
+        // Capture the block's transactions in block order before the proposed block is consumed, so
+        // their positions can be persisted alongside the signed header.
+        let block_transactions: Vec<TransactionId> =
+            proposed_block.transactions().map(TransactionHeader::id).collect();
+
         // Validate the block against the current chain tip.
         let (signature, header) =
             self.validate_block(proposed_block, chain_tip).await.map_err(|err| {
@@ -119,9 +125,10 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
         // closure, so it can be returned to the block producer for cross-checking.
         let block_commitment = header.commitment();
 
-        // Persist the signed header.
+        // Persist the signed header together with the block position of each of its transactions.
         let new_block_num = header.block_num().as_u32();
-        self.persist_signed_header(header, protocol_config, previous_backup).await?;
+        self.persist_signed_block(header, protocol_config, block_transactions, previous_backup)
+            .await?;
 
         // Update the in-memory counters after successful persistence. The block has already been
         // backed up to the block store by `validate_block`, so it is available to subscribers by
@@ -156,18 +163,16 @@ impl ValidatorService {
         }
     }
 
-    /// Persists the signed header and restores an existing backup if persistence fails.
-    async fn persist_signed_header(
+    /// Persists the signed block and restores an existing backup if persistence fails.
+    async fn persist_signed_block(
         &self,
         header: BlockHeader,
         protocol_config: ProtocolConfig,
+        transactions: Vec<TransactionId>,
         previous_backup: Option<Vec<u8>>,
     ) -> tonic::Result<()> {
         let block_num = header.block_num();
-        let Err(err) = self
-            .db
-            .upsert_block_header_with_protocol_config(header, Some(protocol_config))
-            .await
+        let Err(err) = self.db.upsert_signed_block(header, protocol_config, transactions).await
         else {
             return Ok(());
         };

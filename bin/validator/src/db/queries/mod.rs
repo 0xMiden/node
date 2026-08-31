@@ -15,6 +15,9 @@ pub use protocol_config::{
     load_before as load_protocol_config_commitment_before,
 };
 
+mod clear_block_transaction_links;
+pub use clear_block_transaction_links::clear_block_transaction_links;
+
 mod count_signed_blocks;
 pub use count_signed_blocks::count_signed_blocks;
 
@@ -26,6 +29,16 @@ pub use find_unvalidated_transactions::find_unvalidated_transactions;
 
 mod insert_validated_private_transaction;
 pub use insert_validated_private_transaction::insert_validated_private_transaction;
+
+mod link_block_transactions;
+pub use link_block_transactions::link_block_transactions;
+
+mod list_validated_transactions;
+pub use list_validated_transactions::{
+    ListTransactionsParams,
+    ListedTransaction,
+    list_validated_transactions,
+};
 
 mod load_all_transactions;
 pub use load_all_transactions::load_all_transactions;
