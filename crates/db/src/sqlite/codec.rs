@@ -351,7 +351,6 @@ macro_rules! impl_blob_codec {
 impl_blob_codec!(
     miden_protocol::block::BlockHeader,
     miden_protocol::block::BlockSignatures,
-    miden_protocol::block::ValidatorKeys,
     miden_protocol::account::Account,
     miden_protocol::account::AccountCode,
     miden_protocol::account::AccountId,

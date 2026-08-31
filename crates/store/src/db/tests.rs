@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use assert_matches::assert_matches;
 use diesel::{Connection, SqliteConnection};
 use miden_node_proto::domain::account::{AccountSummary, StorageMapEntries};
-use miden_node_utils::fee::test_fee_params;
+use miden_node_utils::fee::{test_fee_params, test_protocol_config};
 use miden_protocol::account::auth::{AuthScheme, PublicKeyCommitment};
 use miden_protocol::account::component::AccountComponentMetadata;
 use miden_protocol::account::{
@@ -34,7 +34,7 @@ use miden_protocol::block::{
     BlockNoteTree,
     BlockNumber,
     BlockSignatures,
-    ValidatorKeys,
+    ValidatorConfig,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::crypto::merkle::SparseMerklePath;
@@ -112,7 +112,7 @@ fn create_block(conn: &mut SqliteConnection, block_num: BlockNumber) {
         num_to_word(7),
         num_to_word(8),
         num_to_word(9),
-        ValidatorKeys::new(vec![SigningKey::new().public_key()]).unwrap(),
+        ValidatorConfig::new(vec![SigningKey::new().public_key()], 1).unwrap(),
         test_fee_params(),
         11_u8.into(),
     );
@@ -648,7 +648,7 @@ fn db_block_header() {
         num_to_word(7),
         num_to_word(8),
         num_to_word(9),
-        ValidatorKeys::new(vec![SigningKey::new().public_key()]).unwrap(),
+        ValidatorConfig::new(vec![SigningKey::new().public_key()], 1).unwrap(),
         test_fee_params(),
         11_u8.into(),
     );
@@ -682,7 +682,7 @@ fn db_block_header() {
         num_to_word(17),
         num_to_word(18),
         num_to_word(19),
-        ValidatorKeys::new(vec![SigningKey::new().public_key()]).unwrap(),
+        ValidatorConfig::new(vec![SigningKey::new().public_key()], 1).unwrap(),
         test_fee_params(),
         21_u8.into(),
     );
@@ -2080,7 +2080,8 @@ async fn genesis_with_account_assets() {
         test_fee_params(),
         1,
         0,
-        ValidatorKeys::new(vec![signer.public_key()]).unwrap(),
+        ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
+        test_protocol_config(),
     );
     let genesis_block = genesis_state.into_block().unwrap();
 
@@ -2152,7 +2153,8 @@ async fn genesis_with_account_storage_map() {
         test_fee_params(),
         1,
         0,
-        ValidatorKeys::new(vec![signer.public_key()]).unwrap(),
+        ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
+        test_protocol_config(),
     );
     let genesis_block = genesis_state.into_block().unwrap();
 
@@ -2217,7 +2219,8 @@ async fn genesis_with_account_assets_and_storage() {
         test_fee_params(),
         1,
         0,
-        ValidatorKeys::new(vec![signer.public_key()]).unwrap(),
+        ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
+        test_protocol_config(),
     );
     let genesis_block = genesis_state.into_block().unwrap();
 
@@ -2318,7 +2321,8 @@ async fn genesis_with_multiple_accounts() {
         test_fee_params(),
         1,
         0,
-        ValidatorKeys::new(vec![signer.public_key()]).unwrap(),
+        ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
+        test_protocol_config(),
     );
     let genesis_block = genesis_state.into_block().unwrap();
 
@@ -2429,7 +2433,7 @@ fn serialization_symmetry_block_header() {
         num_to_word(7),
         num_to_word(8),
         num_to_word(9),
-        ValidatorKeys::new(vec![SigningKey::new().public_key()]).unwrap(),
+        ValidatorConfig::new(vec![SigningKey::new().public_key()], 1).unwrap(),
         test_fee_params(),
         11_u8.into(),
     );
@@ -2516,7 +2520,7 @@ fn db_roundtrip_block_header() {
         num_to_word(7),
         num_to_word(8),
         num_to_word(9),
-        ValidatorKeys::new(vec![SigningKey::new().public_key()]).unwrap(),
+        ValidatorConfig::new(vec![SigningKey::new().public_key()], 1).unwrap(),
         test_fee_params(),
         11_u8.into(),
     );

@@ -23,7 +23,7 @@ use miden_node_tracing::{Instrument, debug, info, miden_instrument};
 use miden_node_utils::retry::{self, Retryable};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::utils::serde::Deserializable;
 use miden_protocol::vm::ExecutionProof;
 use thiserror::Error;
 use tokio::sync::watch;

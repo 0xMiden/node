@@ -84,7 +84,7 @@ fn write_genesis_with_validator_count(
     Ok(TestGenesis {
         path: genesis_directory.join("genesis.dat"),
         signing_keys,
-        validator_keys: genesis.inner().header().validator_keys().as_keys().to_vec(),
+        validator_keys: genesis.inner().header().validator_config().keys().to_vec(),
     })
 }
 

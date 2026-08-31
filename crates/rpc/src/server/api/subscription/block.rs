@@ -1,7 +1,8 @@
 use miden_node_proto::generated as proto;
 use miden_node_tracing::{debug, miden_instrument};
 use miden_node_utils::grpc::ClientIp;
-use miden_protocol::block::BlockNumber;
+use miden_protocol::block::{BlockNumber, SignedBlock};
+use miden_protocol::utils::serde::Deserializable;
 
 use super::super::{COMPONENT, RpcService};
 use super::stream::{StreamItem, SubscriptionStream};
@@ -18,8 +19,10 @@ impl proto::server::rpc_api::BlockSubscription for RpcService {
     }
 
     fn encode(event: Self::Item) -> tonic::Result<proto::rpc::BlockSubscriptionResponse> {
+        let block = SignedBlock::read_from_bytes(&event.data)
+            .map_err(|err| tonic::Status::internal(format!("invalid stored block: {err}")))?;
         Ok(proto::rpc::BlockSubscriptionResponse {
-            block: event.data,
+            block: Some(block.into()),
             committed_chain_tip: event.tip.as_u32(),
         })
     }

@@ -45,7 +45,7 @@ use miden_protocol::account::{
 };
 use miden_protocol::testing::noop_auth_component::NoopAuthComponent;
 use miden_protocol::transaction::{ProvenTransaction, TxAccountUpdate};
-use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::utils::serde::Deserializable;
 use miden_protocol::vm::ExecutionProof;
 use miden_standards::account::wallets::BasicWallet;
 use tempfile::TempDir;
@@ -117,9 +117,9 @@ impl TestStore {
             miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey::read_from_bytes(&[7; 32])
                 .expect("test signing key should decode")
                 .public_key();
-        let validator_keys =
-            miden_protocol::block::ValidatorKeys::new(vec![validator_key]).unwrap();
-        let (genesis_state, _) = config.into_state(validator_keys).unwrap();
+        let validator_config =
+            miden_protocol::block::ValidatorConfig::new(vec![validator_key], 1).unwrap();
+        let (genesis_state, _) = config.into_state(validator_config).unwrap();
         let genesis_block =
             genesis_state.clone().into_block().expect("genesis block should be created");
         let genesis_commitment = genesis_block.inner().header().commitment();
@@ -130,9 +130,6 @@ impl TestStore {
     }
 }
 
-/// Byte offset of the account delta commitment in serialized `ProvenTransaction`. Layout:
-/// `AccountId` (15) + `initial_commitment` (32) + `final_commitment` (32) = 79
-const DELTA_COMMITMENT_BYTE_OFFSET: usize = 15 + 32 + 32;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Creates a minimal account and its patch for testing proven transaction building.
@@ -363,15 +360,15 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
     // Create an incorrect patch commitment from a different account
     let (other_account, _) = build_test_account([1; 32]);
     let incorrect_patch: AccountPatch = AccountPatch::try_from(other_account).unwrap();
-    let incorrect_commitment_bytes = incorrect_patch.to_commitment().as_bytes();
+    let incorrect_commitment = incorrect_patch.to_commitment();
 
-    // Corrupt the transaction bytes with the incorrect patch commitment
-    let mut tx_bytes = tx.to_bytes();
-    tx_bytes[DELTA_COMMITMENT_BYTE_OFFSET..DELTA_COMMITMENT_BYTE_OFFSET + 32]
-        .copy_from_slice(&incorrect_commitment_bytes);
+    // Corrupt the structured account update with the incorrect patch commitment.
+    let mut transaction: proto::transaction::ProvenTransactionData = (&tx).into();
+    transaction.account_update.as_mut().unwrap().account_patch_commitment =
+        Some(incorrect_commitment.into());
 
-    let request = proto::transaction::ProvenTransaction {
-        transaction: tx_bytes,
+    let request = proto::submission::ProvenTransactionSubmission {
+        transaction: Some(transaction),
         sealed_transaction_inputs: None,
     };
 
@@ -409,8 +406,8 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_reference_block() {
     let (account, account_patch) = build_test_account([0; 32]);
     let tx = build_test_proven_tx(&account, &account_patch, invalid);
 
-    let request = proto::transaction::ProvenTransaction {
-        transaction: tx.to_bytes(),
+    let request = proto::submission::ProvenTransactionSubmission {
+        transaction: Some((&tx).into()),
         sealed_transaction_inputs: None,
     };
 
@@ -448,8 +445,8 @@ async fn rpc_rejects_post_deployment_network_account_tx() {
     // Build a non-deployment tx for that account.
     let (account, _) = build_test_account([0; 32]);
     let tx = build_test_proven_tx_with_id(network_account_id, &account, genesis);
-    let request = proto::transaction::ProvenTransaction {
-        transaction: tx.to_bytes(),
+    let request = proto::submission::ProvenTransactionSubmission {
+        transaction: Some((&tx).into()),
         sealed_transaction_inputs: None,
     };
 
@@ -631,7 +628,7 @@ async fn start_source_rpc(
 /// other RPC.
 #[derive(Clone)]
 struct FixedValidator {
-    encryption_key: proto::transaction::TransactionEncryptionKey,
+    encryption_key: proto::submission::TransactionEncryptionKey,
     call_count: Arc<AtomicUsize>,
     last_accept: Arc<std::sync::Mutex<Option<String>>>,
 }
@@ -639,13 +636,13 @@ struct FixedValidator {
 #[tonic::async_trait]
 impl validator_api::GetTransactionEncryptionKey for FixedValidator {
     type Input = ();
-    type Output = proto::transaction::TransactionEncryptionKey;
+    type Output = proto::submission::TransactionEncryptionKey;
 
     fn decode(request: ()) -> tonic::Result<Self::Input> {
         Ok(request)
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::transaction::TransactionEncryptionKey> {
+    fn encode(output: Self::Output) -> tonic::Result<proto::submission::TransactionEncryptionKey> {
         Ok(output)
     }
 
@@ -694,7 +691,9 @@ impl validator_api::SubmitProvenTransaction for FixedValidator {
     type Input = ();
     type Output = ();
 
-    fn decode(_request: proto::transaction::ProvenTransaction) -> tonic::Result<Self::Input> {
+    fn decode(
+        _request: proto::submission::ProvenTransactionSubmission,
+    ) -> tonic::Result<Self::Input> {
         Ok(())
     }
 
@@ -715,13 +714,13 @@ impl validator_api::SubmitProvenTransaction for FixedValidator {
 #[tonic::async_trait]
 impl validator_api::SignBlock for FixedValidator {
     type Input = ();
-    type Output = proto::blockchain::SignBlockResponse;
+    type Output = proto::blockchain::SignedBlock;
 
-    fn decode(_request: proto::blockchain::ProposedBlock) -> tonic::Result<Self::Input> {
+    fn decode(_request: proto::block_proving::BlockProofRequest) -> tonic::Result<Self::Input> {
         Ok(())
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::blockchain::SignBlockResponse> {
+    fn encode(output: Self::Output) -> tonic::Result<proto::blockchain::SignedBlock> {
         Ok(output)
     }
 
@@ -762,7 +761,7 @@ impl validator_api::BlockSubscription for FixedValidator {
 /// Serves a [`FixedValidator`] on an ephemeral port and returns a connected client together with
 /// the stub's call counter and the last ACCEPT header it observed.
 async fn start_validator(
-    encryption_key: proto::transaction::TransactionEncryptionKey,
+    encryption_key: proto::submission::TransactionEncryptionKey,
 ) -> (
     ValidatorClient,
     Arc<AtomicUsize>,
@@ -807,17 +806,17 @@ async fn start_validator(
 
 /// A fixed transaction encryption key response for forwarding tests. The values only need to
 /// survive the passthrough unchanged.
-fn test_encryption_key() -> proto::transaction::TransactionEncryptionKey {
-    proto::transaction::TransactionEncryptionKey {
-        scheme: proto::transaction::IesScheme::X25519Xchacha20Poly1305 as i32,
+fn test_encryption_key() -> proto::submission::TransactionEncryptionKey {
+    proto::submission::TransactionEncryptionKey {
+        scheme: proto::submission::IesScheme::X25519Xchacha20Poly1305 as i32,
         key_id: vec![0xDE, 0xAD, 0xBE, 0xEF],
         public_key: vec![7; 32],
-        attestations: vec![proto::transaction::ValidatorKeyAttestation {
-            validator_public_key: vec![8; 33],
-            signature: vec![9; 65],
+        attestations: vec![proto::submission::ValidatorKeyAttestation {
+            validator_public_key: Some(proto::primitives::PublicKey { encoded: vec![8; 33] }),
+            signature: Some(proto::primitives::Signature { encoded: vec![9; 65] }),
         }],
-        next_key: Some(proto::transaction::NextTransactionEncryptionKey {
-            scheme: proto::transaction::IesScheme::X25519Xchacha20Poly1305 as i32,
+        next_key: Some(proto::submission::NextTransactionEncryptionKey {
+            scheme: proto::submission::IesScheme::X25519Xchacha20Poly1305 as i32,
             key_id: vec![0xFE, 0xED],
             public_key: vec![6; 32],
             rotation_block_num: 42,
@@ -1025,8 +1024,8 @@ async fn rpc_server_rejects_tx_submissions_without_genesis() {
     let (account, account_patch) = build_test_account([0; 32]);
     let tx = build_test_proven_tx(&account, &account_patch, genesis);
 
-    let request = proto::transaction::ProvenTransaction {
-        transaction: tx.to_bytes(),
+    let request = proto::submission::ProvenTransactionSubmission {
+        transaction: Some((&tx).into()),
         sealed_transaction_inputs: None,
     };
 
@@ -1216,7 +1215,7 @@ async fn sync_chain_mmr_returns_delta() {
 
     let mmr_delta = response.mmr_delta.expect("mmr_delta should exist");
     assert_eq!(mmr_delta.forest, 0);
-    assert!(mmr_delta.data.is_empty());
+    assert!(mmr_delta.update_data.is_empty());
 }
 
 #[test]
@@ -1229,7 +1228,7 @@ fn sync_chain_mmr_block_header_matches_chain_commitment() {
     let mut headers = Vec::new();
     for i in 0..5u32 {
         let chain_commitment = server_mmr.peaks().hash_peaks();
-        let header = BlockHeader::mock(i, Some(chain_commitment), None, &[], Word::default());
+        let header = BlockHeader::mock(i, Some(chain_commitment), None, &[]);
         server_mmr.add(header.commitment()).unwrap();
         headers.push(header);
     }

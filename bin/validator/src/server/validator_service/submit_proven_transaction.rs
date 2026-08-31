@@ -96,8 +96,13 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
         Ok(())
     }
 
-    fn decode(request: grpc::transaction::ProvenTransaction) -> tonic::Result<Self::Input> {
-        let tx = ProvenTransaction::read_from_bytes(&request.transaction).map_err(|err| {
+    fn decode(
+        request: grpc::submission::ProvenTransactionSubmission,
+    ) -> tonic::Result<Self::Input> {
+        let transaction = request
+            .transaction
+            .ok_or_else(|| Status::invalid_argument("Missing proven transaction"))?;
+        let tx = ProvenTransaction::try_from(transaction).map_err(|err| {
             Status::invalid_argument(err.as_report_context("Invalid proven transaction"))
         })?;
         let sealed = request.sealed_transaction_inputs.ok_or_else(|| {
@@ -120,14 +125,14 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
 
 pub struct Input {
     tx: ProvenTransaction,
-    sealed: grpc::transaction::SealedTransactionInputs,
+    sealed: grpc::submission::SealedTransactionInputs,
 }
 
 impl ValidatorService {
     /// Unseals transaction inputs submitted for `tx_id`.
     async fn unseal_transaction_inputs(
         &self,
-        sealed: &grpc::transaction::SealedTransactionInputs,
+        sealed: &grpc::submission::SealedTransactionInputs,
         tx_id: TransactionId,
     ) -> tonic::Result<TransactionInputs> {
         // Checked ahead of the unseal purely to turn what would otherwise be an indistinguishable

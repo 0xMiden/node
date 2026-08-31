@@ -1,11 +1,9 @@
 use std::sync::atomic::Ordering;
 
+use miden_node_proto::domain::proof_request::BlockProofRequest;
 use miden_node_proto::generated as grpc;
 use miden_node_tracing::{ErrorReport, Instrument, info_span, miden_instrument};
-use miden_protocol::Word;
-use miden_protocol::block::{BlockNumber, ProposedBlock};
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
-use miden_tx::utils::serde::{Deserializable, Serializable};
+use miden_protocol::block::{BlockNumber, ProposedBlock, SignedBlock};
 
 use super::ValidatorService;
 use crate::COMPONENT;
@@ -13,17 +11,32 @@ use crate::COMPONENT;
 #[tonic::async_trait]
 impl grpc::server::validator_api::SignBlock for ValidatorService {
     type Input = ProposedBlock;
-    type Output = (Signature, Word, PublicKey);
+    type Output = SignedBlock;
 
     #[miden_instrument(
         target = COMPONENT,
         err,
     )]
-    fn decode(request: grpc::blockchain::ProposedBlock) -> tonic::Result<Self::Input> {
-        ProposedBlock::read_from_bytes(&request.proposed_block).map_err(|err| {
+    fn decode(request: grpc::block_proving::BlockProofRequest) -> tonic::Result<Self::Input> {
+        let request = BlockProofRequest::try_from(request).map_err(|err| {
             tonic::Status::invalid_argument(
-                err.as_report_context("Failed to deserialize proposed block"),
+                err.as_report_context("Failed to decode proposed block inputs"),
             )
+        })?;
+        let header = request.block_header;
+
+        ProposedBlock::new_at(
+            request.block_inputs,
+            request.tx_batches.into_vec(),
+            header.timestamp(),
+        )
+        .map_err(|err| {
+            tonic::Status::invalid_argument(err.as_report_context("Failed to build proposed block"))
+        })
+        .map(|block| {
+            block
+                .with_next_validator_config(header.validator_config().clone())
+                .with_next_protocol_config(header.next_protocol_config().cloned())
         })
     }
 
@@ -31,13 +44,8 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
         target = COMPONENT,
         err,
     )]
-    fn encode(output: Self::Output) -> tonic::Result<grpc::blockchain::SignBlockResponse> {
-        let (signature, block_commitment, public_key) = output;
-        Ok(grpc::blockchain::SignBlockResponse {
-            signature: Some(grpc::blockchain::BlockSignature { signature: signature.to_bytes() }),
-            block_commitment: Some(block_commitment.into()),
-            public_key: Some((&public_key).into()),
-        })
+    fn encode(output: Self::Output) -> tonic::Result<grpc::blockchain::SignedBlock> {
+        Ok(output.into())
     }
 
     async fn handle(
@@ -73,17 +81,13 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
             .ok_or_else(|| tonic::Status::internal("Chain tip not found in database"))?;
 
         // Validate the block against the current chain tip.
-        let (signature, header) =
-            self.validate_block(proposed_block, chain_tip).await.map_err(|err| {
-                tonic::Status::invalid_argument(format!(
-                    "Failed to validate block: {}",
-                    err.as_report()
-                ))
-            })?;
-
-        // Capture the commitment that was signed before `header` is moved into the persistence
-        // closure, so it can be returned to the block producer for cross-checking.
-        let block_commitment = header.commitment();
+        let signed_block = self.validate_block(proposed_block, chain_tip).await.map_err(|err| {
+            tonic::Status::invalid_argument(format!(
+                "Failed to validate block: {}",
+                err.as_report()
+            ))
+        })?;
+        let header = signed_block.header().clone();
 
         // Persist the signed header.
         let new_block_num = header.block_num().as_u32();
@@ -97,6 +101,6 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
         self.committed_tip.send_replace(BlockNumber::from(new_block_num));
         self.signed_blocks_count.fetch_add(1, Ordering::Relaxed);
 
-        Ok((signature, block_commitment, self.signer.public_key()))
+        Ok(signed_block)
     }
 }

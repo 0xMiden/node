@@ -3,7 +3,6 @@ use miden_node_proto::generated as proto;
 use miden_node_proto::generated::server::sequencer_api;
 use miden_node_tracing::ErrorReport;
 use miden_protocol::batch::ProposedBatch;
-use miden_protocol::utils::serde::Deserializable;
 use tonic::Status;
 
 use super::SequencerInternalService;
@@ -16,9 +15,14 @@ impl sequencer_api::SubmitAuthenticatedTxBatch for SequencerInternalService {
     fn decode(
         request: proto::sequencer::AuthenticatedTransactionBatch,
     ) -> tonic::Result<Self::Input> {
-        let batch = ProposedBatch::read_from_bytes(&request.proposed_batch).map_err(|err| {
-            Status::invalid_argument(err.as_report_context("invalid proposed_batch"))
-        })?;
+        let proposed_batch = request
+            .proposed_batch
+            .ok_or_else(|| Status::invalid_argument("missing `proposed_batch` field"))?;
+        let batch = miden_objects::conversion::decode_proposed_batch(
+            proposed_batch,
+            miden_protocol::MIN_PROOF_SECURITY_LEVEL,
+        )
+        .map_err(|err| Status::invalid_argument(format!("invalid proposed_batch: {err}")))?;
 
         if batch.transactions().len() != request.auth_inputs.len() {
             return Err(Status::invalid_argument(format!(

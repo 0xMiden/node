@@ -6,15 +6,24 @@ use miden_node_proto::domain::encryption::{
     transaction_inputs_associated_data,
     verify_transaction_encryption_key,
 };
+use miden_node_proto::domain::proof_request::BlockProofRequest;
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto::server::validator_api;
 use miden_node_store::{BlockStore, GenesisState};
-use miden_node_utils::fee::test_fee_params;
+use miden_node_utils::fee::{test_fee_params, test_protocol_config};
 use miden_protocol::Word;
 use miden_protocol::account::AccountUpdateDetails;
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::asset::{Asset, FungibleAsset};
-use miden_protocol::block::{BlockHeader, BlockInputs, BlockNumber, ProposedBlock, ValidatorKeys};
+use miden_protocol::batch::OrderedBatches;
+use miden_protocol::block::{
+    BlockHeader,
+    BlockInputs,
+    BlockNumber,
+    ProposedBlock,
+    SignedBlock,
+    ValidatorConfig,
+};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::crypto::dsa::eddsa_25519_sha512::KeyExchangeKey;
 use miden_protocol::note::NoteType;
@@ -105,10 +114,10 @@ impl TestValidator {
     async fn call_submit_proven_transaction(
         &self,
         tx: &ProvenTransaction,
-        sealed: proto::transaction::SealedTransactionInputs,
+        sealed: proto::submission::SealedTransactionInputs,
     ) -> Result<(), tonic::Status> {
-        let request = tonic::Request::new(proto::transaction::ProvenTransaction {
-            transaction: tx.to_bytes(),
+        let request = tonic::Request::new(proto::submission::ProvenTransactionSubmission {
+            transaction: Some(tx.into()),
             sealed_transaction_inputs: Some(sealed),
         });
         validator_api::SubmitProvenTransaction::full(&self.server, request).await
@@ -120,7 +129,7 @@ impl TestValidator {
         &self,
         tx_id: TransactionId,
         plaintext: &[u8],
-    ) -> proto::transaction::SealedTransactionInputs {
+    ) -> proto::submission::SealedTransactionInputs {
         let key = &self.server.encryption_key_info;
         let associated_data = transaction_inputs_associated_data(
             key.scheme.as_u32(),
@@ -133,7 +142,7 @@ impl TestValidator {
             .seal_bytes_with_associated_data(&mut rand::rng(), plaintext, &associated_data)
             .expect("sealing should succeed");
 
-        proto::transaction::SealedTransactionInputs {
+        proto::submission::SealedTransactionInputs {
             key_id: key.key_id.clone(),
             ciphertext: sealed.to_bytes(),
         }
@@ -143,10 +152,23 @@ impl TestValidator {
     async fn call_sign_block(
         &self,
         proposed_block: &ProposedBlock,
-    ) -> Result<proto::blockchain::SignBlockResponse, tonic::Status> {
-        let request = tonic::Request::new(proto::blockchain::ProposedBlock {
-            proposed_block: proposed_block.to_bytes(),
-        });
+    ) -> Result<proto::blockchain::SignedBlock, tonic::Status> {
+        let block_inputs = BlockInputs::new(
+            proposed_block.prev_block_header().clone(),
+            proposed_block.partial_blockchain().clone(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+        );
+        let (block_header, _) = proposed_block.clone().into_header_and_body().unwrap();
+        let request = tonic::Request::new(
+            BlockProofRequest {
+                tx_batches: OrderedBatches::new(proposed_block.batches().as_slice().to_vec()),
+                block_header,
+                block_inputs,
+            }
+            .into(),
+        );
         validator_api::SignBlock::full(&self.server, request).await
     }
 
@@ -204,7 +226,7 @@ impl TestValidator {
     /// Calls the `get_transaction_encryption_key` endpoint on the validator server.
     async fn call_get_transaction_encryption_key(
         &self,
-    ) -> proto::transaction::TransactionEncryptionKey {
+    ) -> proto::submission::TransactionEncryptionKey {
         validator_api::GetTransactionEncryptionKey::full(&self.server, tonic::Request::new(()))
             .await
             .expect("encryption key should always be available")
@@ -249,7 +271,8 @@ async fn setup_db_with_genesis(
         test_fee_params(),
         1,
         0,
-        ValidatorKeys::new(vec![key.public_key()]).unwrap(),
+        ValidatorConfig::new(vec![key.public_key()], 1).unwrap(),
+        test_protocol_config(),
     );
     let genesis_block = genesis_state.into_block().unwrap();
     let genesis_header = genesis_block.inner().header().clone();
@@ -391,7 +414,7 @@ async fn signing_key_mismatch_rejected() {
     // Start a validator with a different key, modelling a validator configured with the wrong key.
     let rogue_signer = ValidatorSigner::new_local(random_secret_key());
     assert!(
-        !genesis_header.validator_keys().as_keys().contains(&rogue_signer.public_key()),
+        !genesis_header.validator_config().keys().contains(&rogue_signer.public_key()),
         "test requires a signing key that is not a member of the genesis validator set",
     );
 
@@ -421,15 +444,18 @@ async fn sign_block_returns_signed_commitment() {
     let response = tv.call_sign_block(&proposed).await.expect("block should be signed");
 
     let (header, _) = proposed.into_header_and_body().unwrap();
-    let returned: Word = response
-        .block_commitment
-        .expect("response should carry the signed commitment")
-        .try_into()
-        .unwrap();
+    let returned = SignedBlock::try_from(response).expect("response should carry a signed block");
     assert_eq!(
-        returned,
+        returned.header().commitment(),
         header.commitment(),
         "returned commitment must match the proposed block's commitment",
+    );
+    let [signature] = returned.signatures().as_signatures() else {
+        panic!("response must carry exactly the serving validator's signature");
+    };
+    assert!(
+        signature.verify(header.commitment(), &tv.server.signer.public_key()),
+        "returned canonical signature must authenticate the proposed block",
     );
 }
 
@@ -558,7 +584,8 @@ async fn commitment_mismatch_rejected() {
         test_fee_params(),
         1,
         1,
-        ValidatorKeys::new(vec![other_genesis_signer.public_key()]).unwrap(),
+        ValidatorConfig::new(vec![other_genesis_signer.public_key()], 1).unwrap(),
+        test_protocol_config(),
     );
     let other_genesis_block = other_genesis_state.into_block().unwrap();
     let other_genesis_header = other_genesis_block.inner().header().clone();
@@ -591,7 +618,8 @@ async fn replacement_commitment_mismatch_rejected() {
         test_fee_params(),
         1,
         1,
-        ValidatorKeys::new(vec![other_genesis_signer.public_key()]).unwrap(),
+        ValidatorConfig::new(vec![other_genesis_signer.public_key()], 1).unwrap(),
+        test_protocol_config(),
     );
     let other_genesis_block = other_genesis_state.into_block().unwrap();
     let other_genesis_header = other_genesis_block.inner().header().clone();
@@ -646,7 +674,8 @@ async fn unknown_transactions_rejected() {
         Word::default(),
         InputNotes::<InputNoteCommitment>::default(),
         vec![],
-    );
+    )
+    .unwrap();
     let tx_id = tx_header.id();
 
     // Build a ProvenBatch containing this transaction.
@@ -772,7 +801,6 @@ async fn block_subscription_replays_then_freezes_signing() {
     use std::time::Duration;
 
     use miden_protocol::block::SignedBlock;
-    use miden_tx::utils::serde::Deserializable;
     use tokio_stream::StreamExt;
 
     let mut tv = TestValidator::new().await;
@@ -789,7 +817,8 @@ async fn block_subscription_replays_then_freezes_signing() {
             .expect("replayed block should arrive promptly")
             .expect("stream should not end")
             .expect("stream item should not be an error");
-        let block = SignedBlock::read_from_bytes(&response.block).expect("valid signed block");
+        let block = SignedBlock::try_from(response.block.expect("response should carry a block"))
+            .expect("valid signed block");
         assert_eq!(block.header().block_num().as_u32(), expected);
         assert_eq!(response.committed_chain_tip, 2);
     }
@@ -945,7 +974,7 @@ async fn transaction_encryption_key_is_attested() {
     };
     assert_eq!(
         attestation.validator_public_key,
-        tv.server.signer.public_key().to_bytes(),
+        Some((&tv.server.signer.public_key()).into()),
         "attestation must identify the serving validator",
     );
     let trusted_keys = [tv.server.signer.public_key()];
@@ -994,7 +1023,7 @@ async fn tampered_attestation_fails_verification() {
     changed_public_key.public_key =
         KeyExchangeKey::read_from_bytes(&[4u8; 32]).unwrap().public_key().to_bytes();
     let mut injected_next_key = response.clone();
-    injected_next_key.next_key = Some(proto::transaction::NextTransactionEncryptionKey {
+    injected_next_key.next_key = Some(proto::submission::NextTransactionEncryptionKey {
         scheme: response.scheme,
         key_id: response.key_id.clone(),
         public_key: response.public_key.clone(),
@@ -1082,8 +1111,8 @@ async fn encryption_key_available_during_backup() {
 async fn submit_rejects_missing_encrypted_inputs() {
     let tv = TestValidator::new().await;
     let tx = dummy_proven_tx(2);
-    let request = tonic::Request::new(proto::transaction::ProvenTransaction {
-        transaction: tx.to_bytes(),
+    let request = tonic::Request::new(proto::submission::ProvenTransactionSubmission {
+        transaction: Some((&tx).into()),
         sealed_transaction_inputs: None,
     });
 
@@ -1102,7 +1131,7 @@ async fn submit_rejects_missing_encrypted_inputs() {
 async fn submit_rejects_plaintext_inputs() {
     let tv = TestValidator::new().await;
     let tx = dummy_proven_tx(3);
-    let sealed = proto::transaction::SealedTransactionInputs {
+    let sealed = proto::submission::SealedTransactionInputs {
         key_id: tv.server.encryption_key_info.key_id.clone(),
         ciphertext: b"not a sealed message, just bytes".to_vec(),
     };

@@ -29,7 +29,7 @@ use miden_protocol::account::{
     StorageValuePatch,
 };
 use miden_protocol::asset::{Asset, FungibleAsset};
-use miden_protocol::block::{BlockAccountUpdate, BlockHeader, BlockNumber, ValidatorKeys};
+use miden_protocol::block::{BlockAccountUpdate, BlockHeader, BlockNumber, ValidatorConfig};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::testing::account_id::{
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
@@ -70,7 +70,7 @@ fn insert_block_header(conn: &mut SqliteConnection, block_num: BlockNumber) {
         Word::default(),
         Word::default(),
         Word::default(),
-        ValidatorKeys::new(vec![secret_key.public_key()]).unwrap(),
+        ValidatorConfig::new(vec![secret_key.public_key()], 1).unwrap(),
         test_fee_params(),
         0_u8.into(),
     );

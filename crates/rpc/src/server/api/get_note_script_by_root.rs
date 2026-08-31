@@ -1,6 +1,6 @@
-use miden_node_proto::decode::read_root;
 use miden_node_proto::generated as proto;
 use miden_node_tracing::{debug, miden_instrument, miden_span_record};
+use miden_protocol::Word;
 use miden_protocol::note::NoteScript;
 use tonic::Status;
 
@@ -9,10 +9,10 @@ use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::GetNoteScriptByRoot for RpcService {
-    type Input = proto::note::NoteScriptRoot;
+    type Input = proto::primitives::Word;
     type Output = Option<NoteScript>;
 
-    fn decode(request: proto::note::NoteScriptRoot) -> tonic::Result<Self::Input> {
+    fn decode(request: proto::primitives::Word) -> tonic::Result<Self::Input> {
         Ok(request)
     }
 
@@ -31,7 +31,8 @@ impl proto::server::rpc_api::GetNoteScriptByRoot for RpcService {
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        let root = read_root::<Status>(request.root, "NoteScriptRoot")?;
+        let root = Word::try_from(request)
+            .map_err(|err| Status::invalid_argument(format!("invalid note script root: {err}")))?;
         miden_span_record!(script.root = root);
 
         debug!(
