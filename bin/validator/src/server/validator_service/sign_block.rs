@@ -6,6 +6,7 @@ use miden_node_tracing::{ErrorReport, Instrument, info_span, miden_instrument};
 use miden_protocol::Word;
 use miden_protocol::block::{BlockNumber, ProposedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
+use miden_protocol::transaction::{TransactionHeader, TransactionId};
 
 use super::ValidatorService;
 use crate::COMPONENT;
@@ -87,6 +88,11 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
             })?
             .ok_or_else(|| tonic::Status::internal("Chain tip not found in database"))?;
 
+        // Capture the block's transactions in block order before the proposed block is consumed, so
+        // their positions can be persisted alongside the signed header.
+        let block_transactions: Vec<TransactionId> =
+            proposed_block.transactions().map(TransactionHeader::id).collect();
+
         // Validate the block against the current chain tip.
         let (signature, header) =
             self.validate_block(proposed_block, chain_tip).await.map_err(|err| {
@@ -100,9 +106,9 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
         // closure, so it can be returned to the block producer for cross-checking.
         let block_commitment = header.commitment();
 
-        // Persist the signed header.
+        // Persist the signed header together with the block position of each of its transactions.
         let new_block_num = header.block_num().as_u32();
-        self.db.upsert_block_header(header).await.map_err(|err| {
+        self.db.upsert_signed_block(header, block_transactions).await.map_err(|err| {
             tonic::Status::internal(format!("Failed to persist block header: {}", err.as_report()))
         })?;
 
