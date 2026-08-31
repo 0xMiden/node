@@ -39,6 +39,8 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
         let mut request = input;
         let is_authorized_network_tx = self.is_authorized_network_tx(metadata);
         let original_accept_header = metadata.get(http::header::ACCEPT.as_str()).cloned();
+        let preserve_batch_fields =
+            matches!(&self.backend, RpcBackend::FullNode { pre_auth: None, .. });
 
         trace!(
             target: LOG_TARGET,
@@ -46,10 +48,12 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
             batch.size = request.sealed_transaction_inputs.len()
         );
 
-        let proposed_batch_message = request
-            .proposed_batch
-            .take()
-            .ok_or_else(|| Status::invalid_argument("missing `proposed_batch` field"))?;
+        let proposed_batch_message = (if preserve_batch_fields {
+            request.proposed_batch.clone()
+        } else {
+            request.proposed_batch.take()
+        })
+        .ok_or_else(|| Status::invalid_argument("missing `proposed_batch` field"))?;
         let proposed_batch = spawn_blocking_in_current_span(move || {
             decode_proposed_batch(proposed_batch_message, MIN_PROOF_SECURITY_LEVEL)
         })
@@ -57,10 +61,12 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
         .map_err(|err| Status::internal(format!("proposed batch decoding task failed: {err}")))?
         .map_err(|err| Status::invalid_argument(format!("invalid proposed_batch: {err}")))?;
 
-        let proven_batch_message = request
-            .batch
-            .take()
-            .ok_or_else(|| Status::invalid_argument("missing `batch` field"))?;
+        let proven_batch_message = (if preserve_batch_fields {
+            request.batch.clone()
+        } else {
+            request.batch.take()
+        })
+        .ok_or_else(|| Status::invalid_argument("missing `batch` field"))?;
         let proven_batch = decode_proven_batch(proven_batch_message, &proposed_batch)
             .map_err(|err| Status::invalid_argument(format!("invalid proven_batch: {err}")))?;
 
