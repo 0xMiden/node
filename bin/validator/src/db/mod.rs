@@ -14,8 +14,7 @@ use crate::{COMPONENT, LOG_TARGET, StorageKeyEpoch, StoredPrivateRecord};
 mod migrations;
 mod queries;
 
-#[cfg(test)]
-pub(crate) use queries::ListTransactionsParams;
+pub(crate) use queries::{ListTransactionsParams, ListedTransaction};
 
 // VALIDATOR DATABASE
 // ================================================================================================
@@ -140,18 +139,8 @@ impl ValidatorDbReader {
             .await
     }
 
-    /// Loads all validated private transactions in insertion order.
-    pub(crate) async fn load_all_transactions(
-        &self,
-    ) -> Result<Vec<StoredPrivateRecord>, DatabaseError> {
-        self.reader.read("load_all_transactions", queries::load_all_transactions).await
-    }
-
     /// Loads one page of committed transactions in chronological order i.e. `(block_num,
     /// block_tx_index)`.
-    // `expect(dead_code)` is gated to non-test builds because tests do call this, which would leave
-    // the expectation unfulfilled.
-    #[cfg_attr(not(test), expect(dead_code, reason = "used in follow-up PR"))]
     pub(crate) async fn list_validated_transactions(
         &self,
         params: queries::ListTransactionsParams,
@@ -498,30 +487,6 @@ mod tests {
 
         let by_setup = db.load_private_records_by_setup_context(SETUP_CONTEXT_ID).await.unwrap();
         assert_eq!(by_setup, vec![expected.clone()]);
-    }
-
-    #[tokio::test]
-    async fn validated_private_transactions_are_loaded_in_insertion_order() {
-        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
-        let db = setup(temp_dir.path().join("validator.sqlite3")).await.unwrap();
-        let transaction_ids = [
-            TransactionId::from_raw(Word::from([9u32, 0, 0, 0])),
-            TransactionId::from_raw(Word::from([1u32, 0, 0, 0])),
-            TransactionId::from_raw(Word::from([5u32, 0, 0, 0])),
-        ];
-        let records = transaction_ids
-            .into_iter()
-            .zip([1u8, 2, 3])
-            .map(|(transaction_id, seed)| private_record(transaction_id, seed))
-            .collect::<Vec<_>>();
-
-        for record in records.clone() {
-            db.insert_validated_private_transaction(record).await.unwrap();
-        }
-
-        let loaded = db.load_all_transactions().await.unwrap();
-
-        assert_eq!(loaded, records);
     }
 
     /// Validated transactions that are not part of a signed block have no position in the committed
