@@ -34,6 +34,11 @@ use crate::service_status::{
     Status,
 };
 
+const MISSING_FEE_FAUCET_GUIDANCE: &str = concat!(
+    "transaction prover probe requires --fee-faucet-id ",
+    "after transaction capability discovery",
+);
+
 // PROOF TYPE
 // ================================================================================================
 
@@ -179,26 +184,6 @@ impl ProverStatusService {
             return;
         }
         let Some(fee_faucet_id) = self.fee_faucet_id else {
-            let should_report = self.probe_spawner.probe_tx.borrow().latest.is_none();
-            if should_report {
-                self.probe_spawner.probe_tx.send_modify(|snapshot| {
-                    snapshot.latest = Some(ProverTestOutcome {
-                        details: ProverTestDetails {
-                            test_duration_ms: 0,
-                            proof_size_bytes: 0,
-                            success_count: snapshot.success_count,
-                            failure_count: snapshot.failure_count,
-                            proof_type: ProofType::Transaction,
-                        },
-                        status: Status::Unknown,
-                        error: Some(
-                            "transaction prover probe requires --fee-faucet-id after transaction \
-                             capability discovery"
-                                .to_string(),
-                        ),
-                    });
-                });
-            }
             return;
         };
         match &self.probe_handle {
@@ -252,18 +237,6 @@ impl ProverStatusService {
             test: test_outcome.clone(),
         });
 
-        // Most recent status poll failed; report unhealthy but keep last known status details.
-        if let Some(err) = &self.last_status_err {
-            return ServiceStatus::unhealthy(&self.name, err.clone(), details);
-        }
-
-        if let Some(outcome) = &test_outcome {
-            if outcome.status == Status::Unhealthy {
-                let msg = outcome.error.clone().unwrap_or_else(|| "prover test failed".to_string());
-                return ServiceStatus::unhealthy(&self.name, msg, details);
-            }
-        }
-
         let unhealthy_workers: Vec<_> = status_details
             .workers
             .iter()
@@ -271,17 +244,43 @@ impl ProverStatusService {
             .map(|w| w.name.clone())
             .collect();
 
-        if status_details.workers.is_empty() {
-            ServiceStatus::unknown(&self.name, details)
+        let mut service_status = if status_details.workers.is_empty() {
+            ServiceStatus::unknown(&self.name, details.clone())
         } else if !unhealthy_workers.is_empty() {
             ServiceStatus::unhealthy(
                 &self.name,
                 format!("unhealthy workers: {}", unhealthy_workers.join(", ")),
-                details,
+                details.clone(),
             )
         } else {
-            ServiceStatus::healthy(&self.name, details)
+            ServiceStatus::healthy(&self.name, details.clone())
+        };
+
+        if let Some(outcome) = &test_outcome {
+            if outcome.status == Status::Unhealthy {
+                let msg = outcome.error.clone().unwrap_or_else(|| "prover test failed".to_string());
+                service_status = ServiceStatus::unhealthy(&self.name, msg, details.clone());
+            }
         }
+
+        // Most recent status poll failure takes precedence, while retaining the last known details.
+        if let Some(err) = &self.last_status_err {
+            service_status = ServiceStatus::unhealthy(&self.name, err.clone(), details);
+        }
+
+        if self.fee_faucet_id.is_none()
+            && matches!(status_details.supported_proof_type, ProofType::Transaction)
+        {
+            service_status.error = Some(match service_status.error {
+                Some(error) => format!("{error}; {MISSING_FEE_FAUCET_GUIDANCE}"),
+                None => MISSING_FEE_FAUCET_GUIDANCE.to_string(),
+            });
+            if service_status.status == Status::Healthy {
+                service_status.status = Status::Unknown;
+            }
+        }
+
+        service_status
     }
 }
 
@@ -569,9 +568,11 @@ fn transaction_proof_size(response: proto::remote_prover::Proof) -> Result<usize
 
 #[cfg(test)]
 mod tests {
+    use miden_protocol::asset::FungibleAsset;
     use proto::remote_prover::proof::Proof as ProofVariant;
 
     use super::*;
+    use crate::service_status::{NetworkStatus, WorkerStatusDetails};
 
     #[test]
     fn missing_probe_response_variant_is_a_protocol_error() {
@@ -621,7 +622,11 @@ mod tests {
             url: "http://127.0.0.1:50051/".to_string(),
             version: "test".to_string(),
             supported_proof_type: proof_type,
-            workers: Vec::new(),
+            workers: vec![WorkerStatusDetails {
+                name: "worker-1".to_string(),
+                version: "test".to_string(),
+                status: Status::Healthy,
+            }],
         });
         service
     }
@@ -639,23 +644,71 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn transaction_capability_reports_missing_fee_faucet_without_panicking() {
+    async fn missing_fee_faucet_guidance_remains_visible_after_the_probe_staleness_window() {
         let mut service = service_without_fee_faucet(ProofType::Transaction);
 
         service.ensure_probe_running();
-
-        assert!(service.probe_handle.is_none());
-        let outcome = service
-            .probe_rx
-            .borrow()
-            .latest
-            .clone()
-            .expect("transaction capability should report the missing probe configuration");
-        assert_eq!(outcome.status, Status::Unknown);
-        assert!(
-            outcome.error.as_deref().is_some_and(|error| error.contains("--fee-faucet-id")),
-            "the diagnostic should name the required transaction-probe option"
+        let staleness_window =
+            probe_staleness_window(service.probe_spawner.interval, service.request_timeout);
+        service.last_probe_change = Some(
+            Instant::now()
+                .checked_sub(staleness_window + Duration::from_secs(1))
+                .expect("the test staleness window should fit before now"),
         );
+        let probe = service.probe_rx.borrow().clone();
+        let status = service.build_status(&probe);
+
+        let dashboard = crate::view::status_fragment(&NetworkStatus {
+            services: vec![status.clone()],
+            last_updated: 1_609_459_200,
+            monitor_version: "test".to_string(),
+            network_name: "Test".to_string(),
+        })
+        .into_string();
+        assert!(
+            dashboard.contains("--fee-faucet-id"),
+            "the rendered prover card must expose actionable probe configuration guidance"
+        );
+
+        assert_eq!(status.status, Status::Unknown);
+        assert!(
+            status.error.as_deref().is_some_and(|error| error.contains("--fee-faucet-id")),
+            "the public service status must expose the missing transaction-probe option"
+        );
+        let json = serde_json::to_string(&status).expect("service status should serialize");
+        assert!(
+            json.contains("--fee-faucet-id"),
+            "the JSON status must expose actionable probe configuration guidance"
+        );
+    }
+
+    #[tokio::test]
+    async fn transient_probe_staleness_keeps_its_existing_status_semantics() {
+        let mut service = service_without_fee_faucet(ProofType::Transaction);
+        service.fee_faucet_id = Some(FungibleAsset::mock_issuer());
+        let staleness_window =
+            probe_staleness_window(service.probe_spawner.interval, service.request_timeout);
+        service.last_probe_change = Some(
+            Instant::now()
+                .checked_sub(staleness_window + Duration::from_secs(1))
+                .expect("the test staleness window should fit before now"),
+        );
+        let probe = ProbeSnapshot {
+            latest: Some(outcome(Status::Healthy, None)),
+            success_count: 3,
+            failure_count: 1,
+        };
+
+        let status = service.build_status(&probe);
+
+        assert_eq!(status.status, Status::Healthy);
+        assert!(status.error.is_none());
+        let ServiceDetails::RemoteProverStatus(details) = status.details else {
+            panic!("expected remote prover details");
+        };
+        let stale_probe = details.test.expect("the last probe outcome should be retained");
+        assert_eq!(stale_probe.status, Status::Unknown);
+        assert!(stale_probe.error.as_deref().is_some_and(|error| error.contains("stale")));
     }
 
     #[test]
