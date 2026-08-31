@@ -90,7 +90,6 @@ pub struct ProbeSnapshot {
 struct ProbeSpawner {
     client: RemoteProverClient,
     rpc_url: Url,
-    fee_faucet_id: AccountId,
     interval: Duration,
     probe_tx: watch::Sender<ProbeSnapshot>,
     name: String,
@@ -98,11 +97,11 @@ struct ProbeSpawner {
 
 impl ProbeSpawner {
     /// Spawns a probe task and returns its handle.
-    fn spawn(&self) -> JoinHandle<()> {
+    fn spawn(&self, fee_faucet_id: AccountId) -> JoinHandle<()> {
         tokio::spawn(run_prover_test(
             self.client.clone(),
             self.rpc_url.clone(),
-            self.fee_faucet_id,
+            fee_faucet_id,
             self.interval,
             self.probe_tx.clone(),
             self.name.clone(),
@@ -121,6 +120,7 @@ pub struct ProverStatusService {
     request_timeout: Duration,
     last_status: Option<RemoteProverStatusDetails>,
     last_status_err: Option<String>,
+    fee_faucet_id: Option<AccountId>,
     probe_rx: watch::Receiver<ProbeSnapshot>,
     probe_spawner: ProbeSpawner,
     probe_handle: Option<JoinHandle<()>>,
@@ -133,7 +133,7 @@ impl ProverStatusService {
         name: String,
         prover_url: Url,
         rpc_url: Url,
-        fee_faucet_id: AccountId,
+        fee_faucet_id: Option<AccountId>,
         interval: Duration,
         request_timeout: Duration,
         probe_interval: Duration,
@@ -146,7 +146,6 @@ impl ProverStatusService {
         let probe_spawner = ProbeSpawner {
             client: test_client,
             rpc_url,
-            fee_faucet_id,
             interval: probe_interval,
             probe_tx,
             name: name.clone(),
@@ -159,6 +158,7 @@ impl ProverStatusService {
             request_timeout,
             last_status: None,
             last_status_err: None,
+            fee_faucet_id,
             probe_rx,
             probe_spawner,
             probe_handle: None,
@@ -178,10 +178,33 @@ impl ProverStatusService {
         if !matches!(status.supported_proof_type, ProofType::Transaction) {
             return;
         }
+        let Some(fee_faucet_id) = self.fee_faucet_id else {
+            let should_report = self.probe_spawner.probe_tx.borrow().latest.is_none();
+            if should_report {
+                self.probe_spawner.probe_tx.send_modify(|snapshot| {
+                    snapshot.latest = Some(ProverTestOutcome {
+                        details: ProverTestDetails {
+                            test_duration_ms: 0,
+                            proof_size_bytes: 0,
+                            success_count: snapshot.success_count,
+                            failure_count: snapshot.failure_count,
+                            proof_type: ProofType::Transaction,
+                        },
+                        status: Status::Unknown,
+                        error: Some(
+                            "transaction prover probe requires --fee-faucet-id after transaction \
+                             capability discovery"
+                                .to_string(),
+                        ),
+                    });
+                });
+            }
+            return;
+        };
         match &self.probe_handle {
             None => {
                 debug!(target: COMPONENT, "spawning probe task", prover = self.name);
-                self.probe_handle = Some(self.probe_spawner.spawn());
+                self.probe_handle = Some(self.probe_spawner.spawn(fee_faucet_id));
             },
             Some(handle) if handle.is_finished() => {
                 warn!(
@@ -203,7 +226,7 @@ impl ProverStatusService {
                         error: Some("probe task terminated unexpectedly; respawning".to_string()),
                     });
                 });
-                self.probe_handle = Some(self.probe_spawner.spawn());
+                self.probe_handle = Some(self.probe_spawner.spawn(fee_faucet_id));
             },
             Some(_) => {},
         }
@@ -583,6 +606,57 @@ mod tests {
     }
 
     const WINDOW: Duration = Duration::from_secs(100);
+
+    fn service_without_fee_faucet(proof_type: ProofType) -> ProverStatusService {
+        let mut service = ProverStatusService::new(
+            "Remote Prover".to_string(),
+            Url::parse("http://127.0.0.1:50051").unwrap(),
+            Url::parse("http://127.0.0.1:57291").unwrap(),
+            None,
+            Duration::from_secs(3),
+            Duration::from_secs(10),
+            Duration::from_mins(2),
+        );
+        service.last_status = Some(RemoteProverStatusDetails {
+            url: "http://127.0.0.1:50051/".to_string(),
+            version: "test".to_string(),
+            supported_proof_type: proof_type,
+            workers: Vec::new(),
+        });
+        service
+    }
+
+    #[tokio::test]
+    async fn batch_and_block_status_discovery_do_not_report_a_missing_fee_faucet() {
+        for proof_type in [ProofType::Batch, ProofType::Block] {
+            let mut service = service_without_fee_faucet(proof_type);
+
+            service.ensure_probe_running();
+
+            assert!(service.probe_handle.is_none());
+            assert!(service.probe_rx.borrow().latest.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn transaction_capability_reports_missing_fee_faucet_without_panicking() {
+        let mut service = service_without_fee_faucet(ProofType::Transaction);
+
+        service.ensure_probe_running();
+
+        assert!(service.probe_handle.is_none());
+        let outcome = service
+            .probe_rx
+            .borrow()
+            .latest
+            .clone()
+            .expect("transaction capability should report the missing probe configuration");
+        assert_eq!(outcome.status, Status::Unknown);
+        assert!(
+            outcome.error.as_deref().is_some_and(|error| error.contains("--fee-faucet-id")),
+            "the diagnostic should name the required transaction-probe option"
+        );
+    }
 
     #[test]
     fn fresh_outcome_passes_through() {

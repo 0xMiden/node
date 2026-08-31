@@ -467,6 +467,7 @@ async fn try_resolve_counter_anchor(
     protocol_config: &ProtocolConfig,
 ) -> Result<Option<CounterAnchor>> {
     let (block_header, blockchain) = fetch_tip_chain_state(rpc_client, genesis_commitment).await?;
+    ensure_anchor_protocol_config_matches(&block_header, protocol_config)?;
     let block_num = block_header.block_num();
 
     let witness = fetch_account_witness(rpc_client, committed_counter.id(), block_num).await?;
@@ -494,6 +495,22 @@ async fn try_resolve_counter_anchor(
         counter_account: committed_counter.clone(),
         witness,
     }))
+}
+
+/// Ensures a transaction anchor and its protocol configuration describe the same protocol state.
+fn ensure_anchor_protocol_config_matches(
+    block_header: &BlockHeader,
+    protocol_config: &ProtocolConfig,
+) -> Result<()> {
+    let provided_commitment = protocol_config.to_commitment();
+    let expected_commitment = block_header.protocol_config_commitment();
+    anyhow::ensure!(
+        provided_commitment == expected_commitment,
+        "protocol configuration commitment {provided_commitment} does not match anchor block {} \
+         commitment {expected_commitment}",
+        block_header.block_num(),
+    );
+    Ok(())
 }
 
 /// Fetch the chain tip header together with a [`PartialBlockchain`] whose peaks hash to that
@@ -749,6 +766,12 @@ impl DataStore for MonitorDataStore {
         mut _block_refs: BTreeSet<BlockNumber>,
     ) -> Result<(PartialAccount, BlockHeader, ProtocolConfig, PartialBlockchain), DataStoreError>
     {
+        ensure_anchor_protocol_config_matches(&self.block_header, &self.protocol_config).map_err(
+            |err| DataStoreError::Other {
+                error_msg: err.to_string().into(),
+                source: None,
+            },
+        )?;
         let account = self.get_account(account_id)?;
         let partial_account = PartialAccount::from(account);
 
@@ -851,9 +874,20 @@ impl MastForestStore for MonitorDataStore {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
+    use miden_protocol::asset::{AssetId, FungibleAsset};
+    use miden_protocol::crypto::merkle::mmr::{MmrPeaks, PartialMmr};
+    use miden_protocol::protocol_config::ProtocolConfig;
+    use miden_protocol::transaction::PartialBlockchain;
     use miden_testing::MockChain;
 
-    use super::ensure_monitor_supported_fee_parameters;
+    use super::{
+        DataStore,
+        MonitorDataStore,
+        create_wallet_account,
+        ensure_monitor_supported_fee_parameters,
+    };
 
     /// A zero verification base fee is the only configuration the monitor's asset-less accounts can
     /// operate under, and the guard must say so at startup instead of letting every increment abort
@@ -874,6 +908,45 @@ mod tests {
         assert!(
             format!("{err:#}").contains("500"),
             "the error should name the offending base fee, got: {err:#}"
+        );
+    }
+
+    /// A transaction data store must not return a protocol configuration whose commitment differs
+    /// from the reference header, even if an inconsistent pair reaches it from an anchor caller.
+    #[tokio::test]
+    async fn data_store_rejects_a_protocol_config_mismatched_with_its_anchor_header() {
+        let chain = MockChain::builder().build().expect("chain should build");
+        let mismatched_fee_faucet = FungibleAsset::mock_issuer();
+        assert_ne!(
+            mismatched_fee_faucet,
+            chain.fee_faucet_id(),
+            "the fixture must use a different protocol configuration"
+        );
+        let mismatched_protocol_config =
+            ProtocolConfig::current(AssetId::new_fungible(mismatched_fee_faucet))
+                .expect("protocol config should build");
+        let anchor_header = chain.genesis_block_header();
+        assert_ne!(
+            mismatched_protocol_config.to_commitment(),
+            anchor_header.protocol_config_commitment(),
+            "the fixture must disagree with the anchor header"
+        );
+
+        let blockchain =
+            PartialBlockchain::new(PartialMmr::from_peaks(MmrPeaks::default()), Vec::new())
+                .expect("empty genesis blockchain should build");
+        let (account, _) = create_wallet_account().expect("wallet should build");
+        let mut data_store =
+            MonitorDataStore::new(anchor_header, mismatched_protocol_config, blockchain);
+        data_store.add_account(account.clone());
+
+        let error = data_store
+            .get_transaction_inputs(account.id(), BTreeSet::new())
+            .await
+            .expect_err("an inconsistent header/config pair must never be served");
+        assert!(
+            error.to_string().contains("protocol configuration commitment"),
+            "the error should identify the inconsistent commitment, got: {error}"
         );
     }
 }

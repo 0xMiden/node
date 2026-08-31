@@ -99,16 +99,13 @@ impl Tasks {
     pub fn spawn_prover_tasks(&mut self, config: &MonitorConfig) -> Vec<Receiver<ServiceStatus>> {
         let mut prover_rxs = Vec::new();
         for (i, prover_url) in config.remote_prover_urls.iter().enumerate() {
-            let fee_faucet_id = config
-                .fee_faucet_id()
-                .expect("fee faucet was validated before prover tasks were spawned");
             let name = format!("Remote Prover ({})", i + 1);
 
             let status_svc = ProverStatusService::new(
                 name,
                 prover_url.clone(),
                 config.rpc_url.clone(),
-                fee_faucet_id,
+                config.fee_faucet_id,
                 config.status_check_interval,
                 config.request_timeout,
                 config.remote_prover_test_interval,
@@ -282,4 +279,32 @@ async fn bootstrap_ntx(
         CounterTrackingService::new(config.clone(), accounts_rx, latency_state).await?;
 
     Ok((increment_svc, tracking_svc))
+}
+
+// TESTS
+// ================================================================================================
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    /// Batch/block prover monitoring only polls status and must start without transaction-probe
+    /// configuration. Capability discovery decides later whether a transaction probe is possible.
+    #[tokio::test]
+    async fn status_only_prover_tasks_do_not_require_a_fee_faucet() {
+        let mut config = MonitorConfig::parse_from([
+            "network-monitor",
+            "--disable-ntx-service",
+            "--remote-prover-urls",
+            "http://127.0.0.1:50051,http://127.0.0.1:50052",
+        ]);
+        config.fee_faucet_id = None;
+
+        let mut tasks = Tasks::new();
+        let status_receivers = tasks.spawn_prover_tasks(&config);
+
+        assert_eq!(status_receivers.len(), 2);
+    }
 }
