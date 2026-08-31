@@ -1,9 +1,12 @@
 use anyhow::{Context, ensure};
 use iroh::endpoint::{RecvStream as IrohRecvStream, SendStream as IrohSendStream};
-use miden_protocol::utils::serde::{Deserializable, Serializable};
 
-pub trait WireCodec: Serializable + Deserializable {
+pub trait WireCodec: Sized {
     const BYTES: usize;
+
+    fn encode(&self) -> Vec<u8>;
+
+    fn decode(bytes: &[u8]) -> anyhow::Result<Self>;
 }
 
 pub struct SendStream {
@@ -12,7 +15,7 @@ pub struct SendStream {
 
 impl SendStream {
     pub async fn write<T: WireCodec>(&mut self, value: &T) -> anyhow::Result<()> {
-        let bytes = value.to_bytes();
+        let bytes = value.encode();
         ensure!(bytes.len() == T::BYTES, "wire codec byte length does not match");
         self.inner.write_all(&bytes).await.context("failed to write wire message")?;
         Ok(())
@@ -37,7 +40,7 @@ impl RecvStream {
     pub async fn read_exact<T: WireCodec>(&mut self) -> anyhow::Result<T> {
         let mut bytes = vec![0; T::BYTES];
         self.inner.read_exact(&mut bytes).await.context("failed to read wire message")?;
-        T::read_from_bytes(&bytes).context("failed to decode wire message")
+        T::decode(&bytes).context("failed to decode wire message")
     }
 }
 

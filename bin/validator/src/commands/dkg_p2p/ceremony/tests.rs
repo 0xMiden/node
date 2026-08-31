@@ -28,8 +28,8 @@ fn test_signing_key(seed: u8) -> SigningKey {
 fn ceremony_config_codec_roundtrip() {
     let expected =
         CeremonyConfig::new(Rpo256::hash(b"test genesis"), 2, StorageKeyEpoch::new([9; 32]));
-    let encoded = expected.to_bytes();
-    let decoded = CeremonyConfig::read_from_bytes(&encoded).unwrap();
+    let encoded = expected.encode();
+    let decoded = CeremonyConfig::decode(&encoded).unwrap();
 
     assert_eq!(decoded, expected);
 }
@@ -258,12 +258,12 @@ async fn authentication_rejects_signature_from_different_domain() -> TestResult 
 
         let mut challenge_bytes = [0; Challenge::BYTES];
         receive.read_exact(&mut challenge_bytes).await?;
-        let challenge = Challenge::read_from_bytes(&challenge_bytes)?;
+        let challenge = Challenge::decode(&challenge_bytes)?;
         let peer_challenge = Challenge::random(&mut OsRng);
-        send.write_all(&peer_challenge.to_bytes()).await?;
+        send.write_all(&peer_challenge.encode()).await?;
 
         let mut commitment = b"different-protocol-domain".to_vec();
-        commitment.extend_from_slice(&challenge.to_bytes());
+        commitment.extend_from_slice(&challenge.encode());
         let signature = peer_signing_key.sign(Rpo256::hash(&commitment));
         send.write_all(&peer_signing_key.public_key().to_bytes()).await?;
         send.write_all(&signature.to_bytes()).await?;

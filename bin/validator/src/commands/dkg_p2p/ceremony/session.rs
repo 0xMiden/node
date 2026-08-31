@@ -1,15 +1,10 @@
 use std::fmt;
 
+use anyhow::Context;
 use miden_protocol::Word;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_protocol::crypto::hash::rpo::Rpo256;
-use miden_protocol::utils::serde::{
-    ByteReader,
-    ByteWriter,
-    Deserializable,
-    DeserializationError,
-    Serializable,
-};
+use miden_protocol::utils::serde::Serializable;
 use rand_core_06::CryptoRngCore;
 
 use super::super::wire::WireCodec;
@@ -28,17 +23,14 @@ impl CeremonyNonce {
 
 impl WireCodec for CeremonyNonce {
     const BYTES: usize = 32;
-}
 
-impl Serializable for CeremonyNonce {
-    fn write_into<W: ByteWriter>(&self, target: &mut W) {
-        target.write_bytes(&self.0);
+    fn encode(&self) -> Vec<u8> {
+        self.0.to_vec()
     }
-}
 
-impl Deserializable for CeremonyNonce {
-    fn read_from<R: ByteReader>(source: &mut R) -> Result<Self, DeserializationError> {
-        Ok(Self(source.read_array()?))
+    fn decode(bytes: &[u8]) -> anyhow::Result<Self> {
+        let bytes = bytes.try_into().context("ceremony nonce must contain exactly 32 bytes")?;
+        Ok(Self(bytes))
     }
 }
 
@@ -55,10 +47,10 @@ impl SessionId {
         contributions.sort_by_key(|(validator_key, _)| validator_key.to_bytes());
         let mut transcript = Vec::new();
         transcript.extend_from_slice(Self::DOMAIN);
-        transcript.extend_from_slice(&config.to_bytes());
+        transcript.extend_from_slice(&config.encode());
         for (validator_key, nonce) in contributions {
             transcript.extend_from_slice(&validator_key.to_bytes());
-            transcript.extend_from_slice(&nonce.to_bytes());
+            transcript.extend_from_slice(&nonce.encode());
         }
         Self(Rpo256::hash(&transcript))
     }

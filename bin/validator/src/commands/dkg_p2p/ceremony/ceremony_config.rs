@@ -1,11 +1,6 @@
+use anyhow::{Context, ensure};
 use miden_protocol::Word;
-use miden_protocol::utils::serde::{
-    ByteReader,
-    ByteWriter,
-    Deserializable,
-    DeserializationError,
-    Serializable,
-};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_validator::StorageKeyEpoch;
 
 use super::super::wire::WireCodec;
@@ -25,22 +20,26 @@ impl CeremonyConfig {
 
 impl WireCodec for CeremonyConfig {
     const BYTES: usize = 32 + 4 + 32;
-}
 
-impl Serializable for CeremonyConfig {
-    fn write_into<W: ByteWriter>(&self, target: &mut W) {
-        self.genesis_commitment.write_into(target);
-        target.write_u32(self.threshold);
-        self.epoch.write_into(target);
+    fn encode(&self) -> Vec<u8> {
+        let mut bytes = self.genesis_commitment.to_bytes();
+        bytes.extend_from_slice(&self.threshold.to_le_bytes());
+        bytes.extend_from_slice(self.epoch.as_bytes());
+        bytes
     }
-}
 
-impl Deserializable for CeremonyConfig {
-    fn read_from<R: ByteReader>(source: &mut R) -> Result<Self, DeserializationError> {
+    fn decode(bytes: &[u8]) -> anyhow::Result<Self> {
+        ensure!(bytes.len() == Self::BYTES, "ceremony config must contain 68 bytes");
+        let threshold = bytes[32..36]
+            .try_into()
+            .context("ceremony config threshold must contain 4 bytes")?;
+        let epoch =
+            bytes[36..].try_into().context("ceremony config epoch must contain 32 bytes")?;
         Ok(Self {
-            genesis_commitment: Word::read_from(source)?,
-            threshold: source.read_u32()?,
-            epoch: StorageKeyEpoch::read_from(source)?,
+            genesis_commitment: Word::read_from_bytes(&bytes[..32])
+                .context("failed to decode genesis commitment")?,
+            threshold: u32::from_le_bytes(threshold),
+            epoch: StorageKeyEpoch::new(epoch),
         })
     }
 }

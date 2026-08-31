@@ -1,14 +1,8 @@
-use anyhow::ensure;
+use anyhow::{Context, ensure};
 use miden_protocol::Word;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
 use miden_protocol::crypto::hash::rpo::Rpo256;
-use miden_protocol::utils::serde::{
-    ByteReader,
-    ByteWriter,
-    Deserializable,
-    DeserializationError,
-    Serializable,
-};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_validator::ValidatorSigner;
 use rand_core_06::CryptoRngCore;
 
@@ -30,7 +24,7 @@ impl Challenge {
     pub fn commitment(&self) -> Word {
         let mut transcript = Vec::new();
         transcript.extend_from_slice(Self::SIGNATURE_DOMAIN);
-        transcript.extend_from_slice(&self.to_bytes());
+        transcript.extend_from_slice(&self.encode());
         Rpo256::hash(&transcript)
     }
 
@@ -44,17 +38,14 @@ impl Challenge {
 
 impl WireCodec for Challenge {
     const BYTES: usize = 32;
-}
 
-impl Serializable for Challenge {
-    fn write_into<W: ByteWriter>(&self, target: &mut W) {
-        target.write_bytes(&self.0);
+    fn encode(&self) -> Vec<u8> {
+        self.0.to_vec()
     }
-}
 
-impl Deserializable for Challenge {
-    fn read_from<R: ByteReader>(source: &mut R) -> Result<Self, DeserializationError> {
-        Ok(Self(source.read_array()?))
+    fn decode(bytes: &[u8]) -> anyhow::Result<Self> {
+        let bytes = bytes.try_into().context("challenge must contain exactly 32 bytes")?;
+        Ok(Self(bytes))
     }
 }
 
@@ -76,20 +67,20 @@ impl ChallengeResponse {
 
 impl WireCodec for ChallengeResponse {
     const BYTES: usize = 33 + 65;
-}
 
-impl Serializable for ChallengeResponse {
-    fn write_into<W: ByteWriter>(&self, target: &mut W) {
-        self.validator_public_key.write_into(target);
-        self.signature.write_into(target);
+    fn encode(&self) -> Vec<u8> {
+        let mut bytes = self.validator_public_key.to_bytes();
+        bytes.extend_from_slice(&self.signature.to_bytes());
+        bytes
     }
-}
 
-impl Deserializable for ChallengeResponse {
-    fn read_from<R: ByteReader>(source: &mut R) -> Result<Self, DeserializationError> {
+    fn decode(bytes: &[u8]) -> anyhow::Result<Self> {
+        ensure!(bytes.len() == Self::BYTES, "challenge response must contain 98 bytes");
         Ok(Self {
-            validator_public_key: PublicKey::read_from(source)?,
-            signature: Signature::read_from(source)?,
+            validator_public_key: PublicKey::read_from_bytes(&bytes[..33])
+                .context("failed to decode validator public key")?,
+            signature: Signature::read_from_bytes(&bytes[33..])
+                .context("failed to decode validator signature")?,
         })
     }
 }
