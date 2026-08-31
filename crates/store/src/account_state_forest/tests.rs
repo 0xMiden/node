@@ -209,7 +209,7 @@ fn vault_details_limit_exceeded_for_large_vault() {
     let assets = (0..=AccountVaultDetails::MAX_RETURN_ENTRIES)
         .map(|i| {
             let details = NonFungibleAssetDetails::new(faucet_id, vec![i as u8, (i >> 8) as u8]);
-            Asset::NonFungible(NonFungibleAsset::new(&details))
+            Asset::from(NonFungibleAsset::new(&details))
         })
         .collect::<Vec<_>>();
 

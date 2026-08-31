@@ -26,6 +26,10 @@ use crate::{COMPONENT, LOG_TARGET};
     err,
 )]
 pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
+    if !config.disable_ntx_service || !config.remote_prover_urls.is_empty() {
+        config.fee_faucet_id()?;
+    }
+
     info!(target: LOG_TARGET, "Loaded configuration", port = config.port);
 
     let _otel_guard =

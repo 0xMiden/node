@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use miden_node_proto::clients::{RemoteProverClient, RemoteProverProxyStatusClient};
 use miden_node_proto::generated as proto;
 use miden_node_tracing::{debug, miden_instrument, warn};
+use miden_protocol::account::AccountId;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
@@ -89,6 +90,7 @@ pub struct ProbeSnapshot {
 struct ProbeSpawner {
     client: RemoteProverClient,
     rpc_url: Url,
+    fee_faucet_id: AccountId,
     interval: Duration,
     probe_tx: watch::Sender<ProbeSnapshot>,
     name: String,
@@ -100,6 +102,7 @@ impl ProbeSpawner {
         tokio::spawn(run_prover_test(
             self.client.clone(),
             self.rpc_url.clone(),
+            self.fee_faucet_id,
             self.interval,
             self.probe_tx.clone(),
             self.name.clone(),
@@ -130,17 +133,20 @@ impl ProverStatusService {
         name: String,
         prover_url: Url,
         rpc_url: Url,
+        fee_faucet_id: AccountId,
         interval: Duration,
         request_timeout: Duration,
         probe_interval: Duration,
-        test_client: RemoteProverClient,
     ) -> Self {
         let url = prover_url.to_string();
-        let client = build_tls_client::<RemoteProverProxyStatusClient>(prover_url, request_timeout);
+        let client =
+            build_tls_client::<RemoteProverProxyStatusClient>(prover_url.clone(), request_timeout);
+        let test_client = build_tls_client::<RemoteProverClient>(prover_url, request_timeout);
         let (probe_tx, probe_rx) = watch::channel(ProbeSnapshot::default());
         let probe_spawner = ProbeSpawner {
             client: test_client,
             rpc_url,
+            fee_faucet_id,
             interval: probe_interval,
             probe_tx,
             name: name.clone(),
@@ -367,6 +373,7 @@ const PAYLOAD_RETRY_DELAY: Duration = Duration::from_secs(30);
 async fn run_prover_test(
     mut client: RemoteProverClient,
     rpc_url: Url,
+    fee_faucet_id: AccountId,
     interval: Duration,
     probe_tx: watch::Sender<ProbeSnapshot>,
     name: String,
@@ -380,7 +387,7 @@ async fn run_prover_test(
             );
             return;
         }
-        match generate_prover_test_payload(&rpc_url).await {
+        match generate_prover_test_payload(&rpc_url, fee_faucet_id).await {
             Ok(payload) => break payload,
             Err(e) => {
                 warn!(
@@ -512,10 +519,11 @@ fn tonic_status_to_json(status: &tonic::Status) -> String {
 )]
 async fn generate_prover_test_payload(
     rpc_url: &Url,
+    fee_faucet_id: AccountId,
 ) -> anyhow::Result<proto::remote_prover::ProofRequest> {
     use proto::remote_prover::proof_request::Request;
 
-    let tx_inputs = crate::deploy::build_probe_transaction_inputs(rpc_url).await?;
+    let tx_inputs = crate::deploy::build_probe_transaction_inputs(rpc_url, fee_faucet_id).await?;
     Ok(proto::remote_prover::ProofRequest {
         request: Some(Request::Transaction(tx_inputs.into())),
     })

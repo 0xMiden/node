@@ -226,9 +226,10 @@ fn decode_transaction_proof(response: Proof) -> Result<ProvenTransaction, Transa
         },
     };
 
-    ProvenTransaction::try_from(proof).map_err(|_| {
-        TransactionProverError::other(
+    ProvenTransaction::try_from(proof).map_err(|error| {
+        TransactionProverError::other_with_source(
             "failed to decode received response from remote transaction prover",
+            error,
         )
     })
 }
@@ -337,6 +338,18 @@ mod tests {
         let error = decode_transaction_proof(response).unwrap_err();
 
         assert!(error.to_string().contains("does not match transaction request"));
+    }
+
+    #[test]
+    fn invalid_transaction_response_preserves_conversion_error_source() {
+        let response = Proof {
+            proof: Some(ProofVariant::Transaction(
+                miden_node_proto::generated::transaction::ProvenTransactionData::default(),
+            )),
+        };
+
+        let error = decode_transaction_proof(response).unwrap_err();
+        assert!(error.source().is_some(), "conversion error source must be preserved");
     }
 
     #[test]

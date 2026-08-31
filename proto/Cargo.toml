@@ -23,12 +23,12 @@ protox            = { workspace = true }
 tonic-prost-build = { workspace = true }
 
 [build-dependencies]
-build-rs = { workspace = true }
-codegen  = { workspace = true }
-fs-err   = { workspace = true }
+build-rs      = { workspace = true }
+codegen       = { workspace = true }
+fs-err        = { workspace = true }
 miden-objects = { workspace = true }
-miette   = { workspace = true }
-protox   = { workspace = true }
+miette        = { workspace = true }
+protox        = { workspace = true }
 
 [dev-dependencies]
 prost-types = { workspace = true }

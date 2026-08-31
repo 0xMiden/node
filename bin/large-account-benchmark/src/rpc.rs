@@ -14,14 +14,14 @@ use miden_node_proto::domain::encryption::{
 use miden_node_proto::generated::account::AccountId as ProtoAccountId;
 use miden_node_proto::generated::rpc::account_request::AccountDetailRequest;
 use miden_node_proto::generated::rpc::{AccountRequest, BlockHeaderByNumberRequest};
-use miden_node_proto::generated::transaction::ProvenTransaction as ProtoProvenTransaction;
+use miden_node_proto::generated::submission::ProvenTransactionSubmission as ProtoProvenTransaction;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
 use miden_protocol::transaction::ProvenTransaction;
-use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::utils::serde::Deserializable;
 use tokio::sync::Mutex;
 use url::Url;
 
@@ -296,7 +296,7 @@ impl SubmissionClient {
             .rpc
             .clone()
             .submit_proven_tx(ProtoProvenTransaction {
-                transaction: proven_tx.to_bytes(),
+                transaction: Some(proven_tx.into()),
                 sealed_transaction_inputs: Some(sealed),
             })
             .await

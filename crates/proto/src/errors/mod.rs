@@ -55,14 +55,6 @@ impl ConversionError {
         }
     }
 
-    /// Create a deserialization error for a named entity.
-    pub fn deserialization(entity: &'static str, source: DeserializationError) -> Self {
-        Self {
-            path: Vec::new(),
-            source: Box::new(DeserializationErrorWrapper { entity, source }),
-        }
-    }
-
     /// Create a `ConversionError` from an ad-hoc error message.
     pub fn message(msg: impl Into<String>) -> Self {
         Self {
@@ -122,24 +114,6 @@ impl fmt::Display for MissingFieldError {
 }
 
 impl std::error::Error for MissingFieldError {}
-
-#[derive(Debug)]
-struct DeserializationErrorWrapper {
-    entity: &'static str,
-    source: DeserializationError,
-}
-
-impl fmt::Display for DeserializationErrorWrapper {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "failed to deserialize {}: {}", self.entity, self.source)
-    }
-}
-
-impl std::error::Error for DeserializationErrorWrapper {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.source)
-    }
-}
 
 #[derive(Debug)]
 struct StringError(String);

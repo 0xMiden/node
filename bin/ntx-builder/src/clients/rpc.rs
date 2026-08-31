@@ -346,7 +346,7 @@ impl RpcClient {
         proven_tx: &ProvenTransaction,
         tx_inputs: &TransactionInputs,
     ) -> Result<(), Status> {
-        let transaction = proven_tx.to_bytes();
+        let transaction: proto::transaction::ProvenTransactionData = proven_tx.into();
         let transaction_inputs = tx_inputs.to_bytes();
         let tx_id = proven_tx.id();
         let stale_key = AtomicBool::new(false);
@@ -368,8 +368,8 @@ impl RpcClient {
                     )
                 })?;
                 client
-                    .submit_proven_tx(proto::transaction::ProvenTransaction {
-                        transaction,
+                    .submit_proven_tx(proto::submission::ProvenTransactionSubmission {
+                        transaction: Some(transaction),
                         sealed_transaction_inputs: Some(sealed),
                     })
                     .await
@@ -394,7 +394,15 @@ impl RpcClient {
 fn decode_block_subscription_response(
     response: &BlockSubscriptionResponse,
 ) -> Result<(SignedBlock, BlockNumber), RpcError> {
-    let block = SignedBlock::read_from_bytes(&response.block).map_err(RpcError::Deserialize)?;
+    let block = response
+        .block
+        .clone()
+        .ok_or_else(|| {
+            RpcError::InvalidResponse("block subscription response is missing block".into())
+        })?
+        .try_into()
+        .map_err(ConversionError::from)
+        .map_err(RpcError::Conversion)?;
     let committed_tip = BlockNumber::from(response.committed_chain_tip);
     Ok((block, committed_tip))
 }
@@ -493,7 +501,7 @@ impl RpcClient {
                     storage_maps: vec![StorageMapDetailRequest {
                         slot_name: slot_name.to_string(),
                         slot_data: Some(storage_map_detail_request::SlotData::MapKeys(MapKeys {
-                            map_keys: vec![map_key.into()],
+                            map_keys: vec![map_key.as_word().into()],
                         })),
                     }],
                 })),
@@ -548,7 +556,7 @@ impl RpcClient {
         &self,
         script_root: Word,
     ) -> Result<Option<NoteScript>, RpcError> {
-        let request = proto::note::NoteScriptRoot { root: Some(script_root.into()) };
+        let request: proto::primitives::Word = script_root.into();
 
         let script = self
             .inner
@@ -559,7 +567,10 @@ impl RpcClient {
             .into_inner()
             .script;
 
-        script.map(NoteScript::try_from).transpose().map_err(RpcError::Conversion)
+        script
+            .map(NoteScript::try_from)
+            .transpose()
+            .map_err(|err| RpcError::Conversion(err.into()))
     }
 
     /// Issues a `GetAccount` request and decodes the response into the domain [`AccountResponse`].

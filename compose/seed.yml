@@ -10,6 +10,7 @@ services:
     environment:
       MIDEN_SEED_RPC_URL: ${MIDEN_SEED_RPC_URL:-http://sequencer:57291}
       MIDEN_SEED_REMOTE_PROVER_URL: ${MIDEN_REMOTE_PROVER_URL:-http://tx-prover:50051}
+      MIDEN_SEED_FEE_FAUCET_ID: ${MIDEN_SEED_FEE_FAUCET_ID:-}
       MIDEN_SEED_VALIDATOR_1_SIGNING_PUBLIC_KEY: ${MIDEN_SEED_VALIDATOR_1_SIGNING_PUBLIC_KEY:-031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f}
       MIDEN_SEED_VALIDATOR_2_SIGNING_PUBLIC_KEY: ${MIDEN_SEED_VALIDATOR_2_SIGNING_PUBLIC_KEY:-02531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337}
       MIDEN_SEED_VALIDATOR_3_SIGNING_PUBLIC_KEY: ${MIDEN_SEED_VALIDATOR_3_SIGNING_PUBLIC_KEY:-03462779ad4aad39514614751a71085f2f10e1c7a593e4e030efb5b8721ce55b0b}
@@ -25,10 +26,13 @@ services:
             ;;
         esac
 
+        fee_faucet_id="$${MIDEN_SEED_FEE_FAUCET_ID:-$$(cat /data/genesis/native-faucet-id)}"
+
         echo "Generating proofs for $${count} consume transactions plus supporting mints..."
         miden-benchmark create-proofs \
           --rpc-url "$${MIDEN_SEED_RPC_URL}" \
           --num-transactions "$${count}" \
+          --fee-faucet-id "$${fee_faucet_id}" \
           --remote-prover-url "$${MIDEN_SEED_REMOTE_PROVER_URL}"
 
         echo "Submitting generated transactions..."
@@ -56,3 +60,5 @@ services:
         exit 1
       - seed
     command: []
+    volumes:
+      - node-data:/data:ro

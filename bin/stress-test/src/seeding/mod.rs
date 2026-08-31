@@ -29,7 +29,7 @@ use miden_protocol::account::{
     StorageSlotName,
     StorageSlotPatch,
 };
-use miden_protocol::asset::{Asset, FungibleAsset, TokenSymbol};
+use miden_protocol::asset::{Asset, AssetId, FungibleAsset, TokenSymbol};
 use miden_protocol::batch::{BatchAccountUpdate, BatchId, ProvenBatch};
 use miden_protocol::block::{
     BlockHeader,
@@ -39,12 +39,13 @@ use miden_protocol::block::{
     FeeParameters,
     ProposedBlock,
     SignedBlock,
-    ValidatorKeys,
+    ValidatorConfig,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey as EcdsaSecretKey;
 use miden_protocol::crypto::dsa::falcon512_poseidon2::{PublicKey, SecretKey};
 use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::note::{Note, NoteAssets, NoteId, NoteInclusionProof};
+use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{
     InputNote,
     InputNoteCommitment,
@@ -223,14 +224,17 @@ pub async fn seed_store_with_readers(
         });
     let mut genesis_accounts = benchmark_faucets;
     genesis_accounts.extend(genesis_benchmark_accounts);
-    let fee_params = FeeParameters::new(faucet.id(), 0);
+    let fee_params = FeeParameters::new(0);
     let signer = EcdsaSecretKey::new();
+    let protocol_config = ProtocolConfig::current(AssetId::new_fungible(faucet.id()))
+        .expect("benchmark faucet should define a valid protocol configuration");
     let genesis_state = GenesisState::new(
         genesis_accounts,
         fee_params,
         1,
         1,
-        ValidatorKeys::new(vec![signer.public_key()]).unwrap(),
+        ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
+        protocol_config,
     );
     let genesis_block = genesis_state.into_block().expect("genesis block should be created");
     let genesis_header = genesis_block.inner().header().clone();
@@ -686,7 +690,7 @@ fn create_accounts_and_notes(
 fn create_note(faucet_ids: &[AccountId], target_id: AccountId, rng: &mut RandomCoin) -> Note {
     let assets: Vec<Asset> = faucet_ids
         .iter()
-        .map(|faucet_id| Asset::Fungible(FungibleAsset::new(*faucet_id, 10).unwrap()))
+        .map(|faucet_id| Asset::from(FungibleAsset::new(*faucet_id, 10).unwrap()))
         .collect();
     let sender = faucet_ids.first().copied().unwrap_or(target_id);
     P2idNote::builder()

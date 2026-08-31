@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use anyhow::Result;
 use backon::{ExponentialBuilder, Retryable};
-use miden_node_proto::clients::RemoteProverClient;
 use miden_node_tracing::{debug, warn};
 use miden_node_utils::tasks::Tasks as SupervisedTasks;
 use miden_tx::LocalTransactionProver;
@@ -21,7 +20,7 @@ use crate::faucet::FaucetService;
 use crate::frontend::{ServerState, serve};
 use crate::note_transport::NoteTransportService;
 use crate::remote_prover::ProverStatusService;
-use crate::service::{Service, build_tls_client};
+use crate::service::Service;
 use crate::status::{
     CounterTrackingDetails,
     IncrementDetails,
@@ -100,18 +99,19 @@ impl Tasks {
     pub fn spawn_prover_tasks(&mut self, config: &MonitorConfig) -> Vec<Receiver<ServiceStatus>> {
         let mut prover_rxs = Vec::new();
         for (i, prover_url) in config.remote_prover_urls.iter().enumerate() {
+            let fee_faucet_id = config
+                .fee_faucet_id()
+                .expect("fee faucet was validated before prover tasks were spawned");
             let name = format!("Remote Prover ({})", i + 1);
-            let test_client =
-                build_tls_client::<RemoteProverClient>(prover_url.clone(), config.request_timeout);
 
             let status_svc = ProverStatusService::new(
                 name,
                 prover_url.clone(),
                 config.rpc_url.clone(),
+                fee_faucet_id,
                 config.status_check_interval,
                 config.request_timeout,
                 config.remote_prover_test_interval,
-                test_client,
             );
             prover_rxs.push(self.spawn_service(status_svc));
         }
@@ -260,7 +260,8 @@ async fn bootstrap_ntx(
         trusted_validator_signing_key,
     )
     .await?;
-    let accounts = create_and_deploy_accounts(&submission_client, &prover).await?;
+    let accounts =
+        create_and_deploy_accounts(&submission_client, &prover, config.fee_faucet_id()?).await?;
 
     let (accounts_tx, accounts_rx) = watch::channel(TrackedAccounts {
         wallet: accounts.wallet.clone(),
