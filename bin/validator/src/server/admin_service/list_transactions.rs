@@ -140,7 +140,9 @@ pub(super) async fn list_validated_private_transactions(
             limit,
         })
         .await
-        .map_err(|_error| ApiError::internal("failed to list validated private transactions"))?;
+        .map_err(|error| {
+            ApiError::internal("failed to list validated private transactions", &error)
+        })?;
 
     // Read the tip after the page, so it can never come back older than a block the page lists. A
     // validator that has signed nothing reports 0, matching how `load_initial_metrics` treats it.
@@ -148,7 +150,7 @@ pub(super) async fn list_validated_private_transactions(
         .reader
         .load_chain_tip()
         .await
-        .map_err(|_error| ApiError::internal("failed to load the chain tip"))?
+        .map_err(|error| ApiError::internal("failed to load the chain tip", &error))?
         .map_or(0, |header| header.block_num().as_u32());
     // The position of the last row is exactly what the next page resumes one past.
     let block_num = transactions.last().map(|item| item.block_num.as_u32());
@@ -165,9 +167,13 @@ pub(super) async fn list_validated_private_transactions(
                 .reader
                 .load_private_record(transaction_id)
                 .await
-                .map_err(|_error| ApiError::internal("failed to load a private record"))?
+                .map_err(|error| ApiError::internal("failed to load a private record", &error))?
                 .ok_or_else(|| {
-                    ApiError::internal("a listed transaction's private record is missing")
+                    let cause = std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!("listed transaction {transaction_id} has no stored record"),
+                    );
+                    ApiError::internal("a listed transaction's private record is missing", &cause)
                 })?;
             listed_item.record = Some(record.into());
         }
