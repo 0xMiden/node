@@ -22,8 +22,9 @@ use miden_node_store::state::{ProofWriter, State};
 use miden_node_tracing::{Instrument, debug, info, miden_instrument};
 use miden_node_utils::retry::{self, Retryable};
 use miden_node_utils::shutdown::CancellationToken;
-use miden_protocol::block::{BlockNumber, BlockProof};
+use miden_protocol::block::BlockNumber;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::vm::ExecutionProof;
 use thiserror::Error;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
@@ -250,7 +251,7 @@ async fn generate_block_proof(
     state: &State,
     block_prover: &BlockProver,
     block_num: BlockNumber,
-) -> Result<BlockProof, ProveBlockError> {
+) -> Result<ExecutionProof, ProveBlockError> {
     let bytes = state
         .load_proving_inputs(block_num)
         .await

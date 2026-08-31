@@ -48,13 +48,16 @@ impl grpc::server::remote_prover_api::Prove for ProverService {
     }
 
     fn decode(request: grpc::remote_prover::ProofRequest) -> tonic::Result<Self::Input> {
-        // Check that the proof type is supported. Protobuf enums return a default value if the enum
-        // is set to an unknown value. This round trip checks that the value is valid.
-        if request.proof_type() as i32 != request.proof_type {
-            return Err(tonic::Status::invalid_argument("unknown proof_type value"));
-        }
+        use grpc::remote_prover::proof_request::Request;
 
-        Ok((ProofKind::from(request.proof_type()), request))
+        let proof_kind = match request.request.as_ref() {
+            Some(Request::Transaction(_)) => ProofKind::Transaction,
+            Some(Request::Batch(_)) => ProofKind::Batch,
+            Some(Request::Block(_)) => ProofKind::Block,
+            None => return Err(tonic::Status::invalid_argument("missing proof request")),
+        };
+
+        Ok((proof_kind, request))
     }
 
     fn encode(output: Self::Output) -> tonic::Result<grpc::remote_prover::Proof> {
