@@ -100,6 +100,12 @@ impl From<ConversionError> for tonic::Status {
     }
 }
 
+impl From<miden_objects::ConversionError> for ConversionError {
+    fn from(value: miden_objects::ConversionError) -> Self {
+        Self::new(value)
+    }
+}
+
 // INTERNAL HELPER ERROR TYPES
 // ================================================================================================
 
@@ -198,7 +204,6 @@ impl_from_for_conversion_error!(
     miden_protocol::crypto::merkle::MerkleError,
     miden_protocol::crypto::merkle::smt::SmtLeafError,
     miden_protocol::crypto::merkle::smt::SmtProofError,
-    miden_standards::note::NetworkAccountTargetError,
     std::num::TryFromIntError,
     // Lets `GrpcStructDecoder::decode_field` extract required fields whose proto type is already
     // the target type (reflexive `TryInto`, which cannot fail).

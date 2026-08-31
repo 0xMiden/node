@@ -132,10 +132,10 @@ impl<T: Deserializable> DecodeBytesExt for T {}
 
 #[cfg(test)]
 mod tests {
-    use miden_protocol::Felt;
+    use miden_protocol::Word;
 
     use super::*;
-    use crate::generated::primitives::Digest;
+    use crate::generated::primitives::Word as ProtoWord;
 
     /// Simulates a deeply nested conversion where each layer adds its field context.
     fn inner_conversion() -> Result<(), ConversionError> {
@@ -183,8 +183,8 @@ mod tests {
     #[test]
     fn test_decode_field_missing() {
         let decoder = GrpcStructDecoder::<crate::generated::blockchain::BlockHeader>::default();
-        let account_root: Option<Digest> = None;
-        let result: Result<[Felt; 4], _> = decode!(decoder, account_root);
+        let account_root: Option<ProtoWord> = None;
+        let result: Result<Word, _> = decode!(decoder, account_root);
         let err = result.unwrap_err();
         assert!(
             err.to_string().contains("account_root") && err.to_string().contains("missing"),
@@ -195,9 +195,8 @@ mod tests {
     #[test]
     fn test_decode_field_conversion_error() {
         let decoder = GrpcStructDecoder::<crate::generated::blockchain::BlockHeader>::default();
-        // Create a digest with an out-of-range value.
-        let account_root = Some(Digest { d0: u64::MAX, d1: 0, d2: 0, d3: 0 });
-        let result: Result<[Felt; 4], _> = decode!(decoder, account_root);
+        let account_root = Some(ProtoWord { encoded: vec![0xff; 32] });
+        let result: Result<Word, _> = decode!(decoder, account_root);
         let err = result.unwrap_err();
         assert!(
             err.to_string().starts_with("account_root: "),
