@@ -83,8 +83,14 @@ impl DkgP2pOptions {
 impl ParticipateOptions {
     async fn handle(self) -> anyhow::Result<()> {
         let ceremony = self.validate().await?;
-        let session = ceremony.authenticate_peers().await?;
-        let session = ceremony.exchange_configs(session).await?;
+        let peers = ceremony.authenticate_peers().await?;
+        let peers = ceremony.exchange_configs(peers).await?;
+        let session = ceremony.exchange_nonces(peers).await?;
+        tracing::info!(
+            target: miden_validator::LOG_TARGET,
+            { dkg.session_id = %session.id() },
+            "DKG peer session established",
+        );
 
         session.close().await;
         Ok(())

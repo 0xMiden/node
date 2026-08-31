@@ -67,7 +67,7 @@ async fn bind_test_endpoint(secret_key: IrohSecretKey) -> TestResultWith<(Endpoi
 }
 
 #[tokio::test]
-async fn three_validators_authenticate_before_exchanging_configs() -> TestResult {
+async fn three_validators_derive_the_same_session_id() -> TestResult {
     let endpoint_secrets = [11u8, 12, 13].map(|seed| IrohSecretKey::from_bytes(&[seed; 32]));
     let (endpoint_a, lookup_a) = bind_test_endpoint(endpoint_secrets[0].clone()).await?;
     let (endpoint_b, lookup_b) = bind_test_endpoint(endpoint_secrets[1].clone()).await?;
@@ -110,13 +110,20 @@ async fn three_validators_authenticate_before_exchanging_configs() -> TestResult
     let authentication_for_a = ceremony_a.authenticate_peers_on(endpoint_a.clone());
     let authentication_for_b = ceremony_b.authenticate_peers_on(endpoint_b.clone());
     let authentication_for_c = ceremony_c.authenticate_peers_on(endpoint_c.clone());
-    let (session_a, session_b, session_c) =
+    let (peers_a, peers_b, peers_c) =
         tokio::try_join!(authentication_for_a, authentication_for_b, authentication_for_c,)?;
-    let (session_a, session_b, session_c) = tokio::try_join!(
-        ceremony_a.exchange_configs(session_a),
-        ceremony_b.exchange_configs(session_b),
-        ceremony_c.exchange_configs(session_c),
+    let (peers_a, peers_b, peers_c) = tokio::try_join!(
+        ceremony_a.exchange_configs(peers_a),
+        ceremony_b.exchange_configs(peers_b),
+        ceremony_c.exchange_configs(peers_c),
     )?;
+    let (session_a, session_b, session_c) = tokio::try_join!(
+        ceremony_a.exchange_nonces(peers_a),
+        ceremony_b.exchange_nonces(peers_b),
+        ceremony_c.exchange_nonces(peers_c),
+    )?;
+    assert_eq!(session_a.id(), session_b.id());
+    assert_eq!(session_a.id(), session_c.id());
 
     for (local_index, session) in [&session_a, &session_b, &session_c].into_iter().enumerate() {
         let mut actual = session
@@ -165,19 +172,20 @@ async fn lower_endpoint_id_dials_peer() -> TestResult {
     let authentication_for_a = ceremony_a.authenticate_peers_on(endpoint_a.clone());
     let authentication_for_b = ceremony_b.authenticate_peers_on(endpoint_b.clone());
 
-    let (session_a, session_b) = tokio::try_join!(authentication_for_a, authentication_for_b)?;
-    assert_eq!(session_a.authenticated_peers.len(), 1);
-    assert_eq!(session_b.authenticated_peers.len(), 1);
+    let (peers_a, peers_b) = tokio::try_join!(authentication_for_a, authentication_for_b)?;
+    assert_eq!(peers_a.authenticated_peers.len(), 1);
+    assert_eq!(peers_b.authenticated_peers.len(), 1);
 
     let (lower_peer, higher_peer) = if endpoint_a.id() < endpoint_b.id() {
-        (&session_a.authenticated_peers[0], &session_b.authenticated_peers[0])
+        (&peers_a.authenticated_peers[0], &peers_b.authenticated_peers[0])
     } else {
-        (&session_b.authenticated_peers[0], &session_a.authenticated_peers[0])
+        (&peers_b.authenticated_peers[0], &peers_a.authenticated_peers[0])
     };
     assert_eq!(lower_peer.connection().side(), Side::Client);
     assert_eq!(higher_peer.connection().side(), Side::Server);
 
-    tokio::join!(session_a.close(), session_b.close());
+    endpoint_a.close().await;
+    endpoint_b.close().await;
     Ok(())
 }
 

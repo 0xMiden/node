@@ -10,20 +10,29 @@ use miden_node_utils::genesis::read_genesis_block;
 use miden_protocol::Word;
 use miden_protocol::block::ValidatorKeys;
 use miden_validator::{StorageKeyEpoch, ValidatorSigner};
+use rand_core_06::OsRng;
 use tokio::task::JoinSet;
 use zeroize::Zeroizing;
 
 use self::ceremony_config::CeremonyConfig;
 use self::peer::{AuthenticatedPeer, ConnectedPeer};
+use self::session::{CeremonyNonce, SessionId};
 use super::ParticipateOptions;
 
 mod ceremony_config;
 mod challenge;
 mod peer;
+mod session;
 #[cfg(test)]
 mod tests;
 
+pub struct AuthenticatedPeers {
+    endpoint: Endpoint,
+    authenticated_peers: Vec<AuthenticatedPeer>,
+}
+
 pub struct Session {
+    id: SessionId,
     endpoint: Endpoint,
     authenticated_peers: Vec<AuthenticatedPeer>,
 }
@@ -53,7 +62,7 @@ pub(super) struct Ceremony {
 impl Ceremony {
     const ALPN: &'static [u8] = b"/miden/validator-dkg-p2p/1";
 
-    pub async fn authenticate_peers(&self) -> anyhow::Result<Session> {
+    pub async fn authenticate_peers(&self) -> anyhow::Result<AuthenticatedPeers> {
         let endpoint = Endpoint::builder(presets::N0)
             .secret_key(self.endpoint_secret.clone())
             .alpns(vec![Self::ALPN.to_vec()])
@@ -63,7 +72,10 @@ impl Ceremony {
         self.authenticate_peers_on(endpoint).await
     }
 
-    async fn authenticate_peers_on(&self, endpoint: Endpoint) -> anyhow::Result<Session> {
+    async fn authenticate_peers_on(
+        &self,
+        endpoint: Endpoint,
+    ) -> anyhow::Result<AuthenticatedPeers> {
         let local_endpoint = endpoint.id();
         let mut authentications = JoinSet::new();
         for peer_endpoint in
@@ -120,14 +132,15 @@ impl Ceremony {
             "authenticated validator set does not match genesis",
         );
 
-        Ok(Session { endpoint, authenticated_peers })
+        Ok(AuthenticatedPeers { endpoint, authenticated_peers })
     }
 
-    pub async fn exchange_configs(&self, session: Session) -> anyhow::Result<Session> {
-        let threshold = u32::try_from(self.threshold.get())
-            .context("threshold does not fit in the ceremony config format")?;
-        let config = CeremonyConfig::new(self.genesis_commitment, threshold, self.epoch);
-        let Session { endpoint, authenticated_peers } = session;
+    pub async fn exchange_configs(
+        &self,
+        peers: AuthenticatedPeers,
+    ) -> anyhow::Result<AuthenticatedPeers> {
+        let config = self.config()?;
+        let AuthenticatedPeers { endpoint, authenticated_peers } = peers;
         let peer_count = authenticated_peers.len();
         let mut exchanges = JoinSet::new();
         for peer in authenticated_peers {
@@ -143,11 +156,46 @@ impl Ceremony {
             authenticated_peers.push(result.context("ceremony config exchange task failed")??);
         }
 
-        Ok(Session { endpoint, authenticated_peers })
+        Ok(AuthenticatedPeers { endpoint, authenticated_peers })
+    }
+
+    pub async fn exchange_nonces(&self, peers: AuthenticatedPeers) -> anyhow::Result<Session> {
+        let config = self.config()?;
+        let local_nonce = CeremonyNonce::random(&mut OsRng);
+        let AuthenticatedPeers { endpoint, authenticated_peers } = peers;
+        let peer_count = authenticated_peers.len();
+        let mut exchanges = JoinSet::new();
+        for peer in authenticated_peers {
+            exchanges.spawn(async move {
+                let peer_nonce = peer.exchange_ceremony_nonce(&local_nonce).await?;
+                Ok::<_, anyhow::Error>((peer, peer_nonce))
+            });
+        }
+
+        let mut contributions = vec![(self.signer.public_key(), local_nonce)];
+        let mut authenticated_peers = Vec::with_capacity(peer_count);
+        while let Some(result) = exchanges.join_next().await {
+            let (peer, nonce) = result.context("ceremony nonce exchange task failed")??;
+            contributions.push((peer.validator_public_key().clone(), nonce));
+            authenticated_peers.push(peer);
+        }
+        let id = SessionId::derive(&config, contributions);
+
+        Ok(Session { id, endpoint, authenticated_peers })
+    }
+
+    fn config(&self) -> anyhow::Result<CeremonyConfig> {
+        let threshold = u32::try_from(self.threshold.get())
+            .context("threshold does not fit in the ceremony config format")?;
+        Ok(CeremonyConfig::new(self.genesis_commitment, threshold, self.epoch))
     }
 }
 
 impl Session {
+    pub fn id(&self) -> SessionId {
+        self.id
+    }
+
     pub async fn close(self) {
         for peer in self.authenticated_peers {
             peer.close();

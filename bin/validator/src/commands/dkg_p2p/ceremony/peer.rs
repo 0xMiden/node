@@ -10,6 +10,7 @@ use super::super::wire::{RecvStream, SendStream};
 use super::Ceremony;
 use super::ceremony_config::CeremonyConfig;
 use super::challenge::{Challenge, ChallengeResponse};
+use super::session::CeremonyNonce;
 
 pub struct ConnectedPeer {
     connection: Connection,
@@ -117,6 +118,25 @@ impl AuthenticatedPeer {
         );
         send.finish().context("failed to finish ceremony config stream")?;
         Ok(())
+    }
+
+    pub async fn exchange_ceremony_nonce(
+        &self,
+        local: &CeremonyNonce,
+    ) -> anyhow::Result<CeremonyNonce> {
+        let (mut send, mut receive) = self
+            .connection
+            .bi_stream()
+            .await
+            .context("failed to establish ceremony nonce stream")?;
+
+        send.write(local).await.context("failed to send ceremony nonce")?;
+        let peer_nonce = receive
+            .read_exact::<CeremonyNonce>()
+            .await
+            .context("failed to read ceremony nonce")?;
+        send.finish().context("failed to finish ceremony nonce stream")?;
+        Ok(peer_nonce)
     }
 
     pub fn validator_public_key(&self) -> &PublicKey {
