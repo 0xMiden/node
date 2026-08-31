@@ -16,6 +16,7 @@ use super::super::wire::WireCodec;
 use super::Ceremony;
 use super::ceremony_config::CeremonyConfig;
 use super::challenge::Challenge;
+use super::session::{CeremonyNonce, SessionId};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 type TestResultWith<T> = Result<T, Box<dyn std::error::Error>>;
@@ -67,7 +68,7 @@ async fn bind_test_endpoint(secret_key: IrohSecretKey) -> TestResultWith<(Endpoi
 }
 
 #[tokio::test]
-async fn three_validators_derive_the_same_session_id() -> TestResult {
+async fn three_validators_confirm_the_same_session_id() -> TestResult {
     let endpoint_secrets = [11u8, 12, 13].map(|seed| IrohSecretKey::from_bytes(&[seed; 32]));
     let (endpoint_a, lookup_a) = bind_test_endpoint(endpoint_secrets[0].clone()).await?;
     let (endpoint_b, lookup_b) = bind_test_endpoint(endpoint_secrets[1].clone()).await?;
@@ -122,8 +123,13 @@ async fn three_validators_derive_the_same_session_id() -> TestResult {
         ceremony_b.exchange_nonces(peers_b),
         ceremony_c.exchange_nonces(peers_c),
     )?;
-    assert_eq!(session_a.id(), session_b.id());
-    assert_eq!(session_a.id(), session_c.id());
+    assert_eq!(session_a.id, session_b.id);
+    assert_eq!(session_a.id, session_c.id);
+    let (session_a, session_b, session_c) = tokio::try_join!(
+        ceremony_a.confirm_session(session_a),
+        ceremony_b.confirm_session(session_b),
+        ceremony_c.confirm_session(session_c),
+    )?;
 
     for (local_index, session) in [&session_a, &session_b, &session_c].into_iter().enumerate() {
         let mut actual = session
@@ -142,6 +148,70 @@ async fn three_validators_derive_the_same_session_id() -> TestResult {
     }
 
     tokio::join!(session_a.close(), session_b.close(), session_c.close());
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_confirmation_rejects_different_session_ids() -> TestResult {
+    let endpoint_secret_a = IrohSecretKey::from_bytes(&[18; 32]);
+    let endpoint_secret_b = IrohSecretKey::from_bytes(&[19; 32]);
+    let (endpoint_a, lookup_a) = bind_test_endpoint(endpoint_secret_a.clone()).await?;
+    let (endpoint_b, lookup_b) = bind_test_endpoint(endpoint_secret_b.clone()).await?;
+    lookup_a.add_endpoint_info(endpoint_b.addr());
+    lookup_b.add_endpoint_info(endpoint_a.addr());
+
+    let signing_key_a = test_signing_key(29);
+    let signing_key_b = test_signing_key(30);
+    let validator_keys = vec![signing_key_a.public_key(), signing_key_b.public_key()];
+    let ceremony_a = test_ceremony(
+        &signing_key_a,
+        validator_keys.clone(),
+        endpoint_secret_a,
+        BTreeSet::from([endpoint_b.id()]),
+    );
+    let ceremony_b = test_ceremony(
+        &signing_key_b,
+        validator_keys,
+        endpoint_secret_b,
+        BTreeSet::from([endpoint_a.id()]),
+    );
+
+    let (peers_a, peers_b) = tokio::try_join!(
+        ceremony_a.authenticate_peers_on(endpoint_a.clone()),
+        ceremony_b.authenticate_peers_on(endpoint_b.clone()),
+    )?;
+    let (peers_a, peers_b) = tokio::try_join!(
+        ceremony_a.exchange_configs(peers_a),
+        ceremony_b.exchange_configs(peers_b),
+    )?;
+    let (session_a, mut session_b) = tokio::try_join!(
+        ceremony_a.exchange_nonces(peers_a),
+        ceremony_b.exchange_nonces(peers_b),
+    )?;
+    assert_eq!(session_a.id, session_b.id);
+
+    session_b.id = SessionId::derive(
+        &ceremony_b.config()?,
+        vec![
+            (signing_key_a.public_key(), CeremonyNonce::random(&mut OsRng)),
+            (signing_key_b.public_key(), CeremonyNonce::random(&mut OsRng)),
+        ],
+    );
+    assert_ne!(session_a.id, session_b.id);
+
+    let (result_a, result_b) =
+        tokio::join!(ceremony_a.confirm_session(session_a), ceremony_b.confirm_session(session_b),);
+    let errors = [result_a, result_b].map(|result| {
+        let error = result.err().expect("different session IDs must be rejected");
+        format!("{error:#}")
+    });
+    assert!(
+        errors.iter().any(|error| error.contains("derived a different session ID")),
+        "expected a session ID mismatch in {errors:?}",
+    );
+
+    endpoint_a.close().await;
+    endpoint_b.close().await;
     Ok(())
 }
 

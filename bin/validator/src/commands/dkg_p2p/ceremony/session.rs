@@ -1,10 +1,10 @@
 use std::fmt;
 
-use anyhow::Context;
+use anyhow::{Context, ensure};
 use miden_protocol::Word;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_protocol::crypto::hash::rpo::Rpo256;
-use miden_protocol::utils::serde::Serializable;
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 use rand_core_06::CryptoRngCore;
 
 use super::super::wire::WireCodec;
@@ -53,6 +53,19 @@ impl SessionId {
             transcript.extend_from_slice(&nonce.encode());
         }
         Self(Rpo256::hash(&transcript))
+    }
+}
+
+impl WireCodec for SessionId {
+    const BYTES: usize = 32;
+
+    fn encode(&self) -> Vec<u8> {
+        self.0.to_bytes()
+    }
+
+    fn decode(bytes: &[u8]) -> anyhow::Result<Self> {
+        ensure!(bytes.len() == Self::BYTES, "session ID must contain 32 bytes");
+        Ok(Self(Word::read_from_bytes(bytes).context("failed to decode session ID")?))
     }
 }
 

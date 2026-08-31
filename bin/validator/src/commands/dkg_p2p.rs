@@ -86,6 +86,7 @@ impl ParticipateOptions {
         let peers = ceremony.authenticate_peers().await?;
         let peers = ceremony.exchange_configs(peers).await?;
         let session = ceremony.exchange_nonces(peers).await?;
+        let session = ceremony.confirm_session(session).await?;
         tracing::info!(
             target: miden_validator::LOG_TARGET,
             { dkg.session_id = %session.id() },

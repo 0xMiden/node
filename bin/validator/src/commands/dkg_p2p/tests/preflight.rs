@@ -107,6 +107,7 @@ async fn one_validator_ceremony_completes_peer_setup_without_peers() -> TestResu
     let peers = ceremony.authenticate_peers().await?;
     let peers = ceremony.exchange_configs(peers).await?;
     let session = ceremony.exchange_nonces(peers).await?;
+    let session = ceremony.confirm_session(session).await?;
     session.close().await;
 
     Ok(())

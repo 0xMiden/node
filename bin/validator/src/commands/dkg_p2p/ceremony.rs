@@ -31,6 +31,12 @@ pub struct AuthenticatedPeers {
     authenticated_peers: Vec<AuthenticatedPeer>,
 }
 
+pub struct UnconfirmedSession {
+    id: SessionId,
+    endpoint: Endpoint,
+    authenticated_peers: Vec<AuthenticatedPeer>,
+}
+
 pub struct Session {
     id: SessionId,
     endpoint: Endpoint,
@@ -159,7 +165,10 @@ impl Ceremony {
         Ok(AuthenticatedPeers { endpoint, authenticated_peers })
     }
 
-    pub async fn exchange_nonces(&self, peers: AuthenticatedPeers) -> anyhow::Result<Session> {
+    pub async fn exchange_nonces(
+        &self,
+        peers: AuthenticatedPeers,
+    ) -> anyhow::Result<UnconfirmedSession> {
         let config = self.config()?;
         let local_nonce = CeremonyNonce::random(&mut OsRng);
         let AuthenticatedPeers { endpoint, authenticated_peers } = peers;
@@ -180,6 +189,30 @@ impl Ceremony {
             authenticated_peers.push(peer);
         }
         let id = SessionId::derive(&config, contributions);
+
+        Ok(UnconfirmedSession { id, endpoint, authenticated_peers })
+    }
+
+    pub async fn confirm_session(&self, session: UnconfirmedSession) -> anyhow::Result<Session> {
+        let UnconfirmedSession { id, endpoint, authenticated_peers } = session;
+        let peer_count = authenticated_peers.len();
+        let mut confirmations = JoinSet::new();
+        for peer in authenticated_peers {
+            confirmations.spawn(async move {
+                let peer_session_id = peer.exchange_session_id(&id).await?;
+                ensure!(
+                    peer_session_id == id,
+                    "validator {:?} derived a different session ID: local {id}, peer {peer_session_id}",
+                    peer.validator_public_key(),
+                );
+                Ok::<_, anyhow::Error>(peer)
+            });
+        }
+
+        let mut authenticated_peers = Vec::with_capacity(peer_count);
+        while let Some(result) = confirmations.join_next().await {
+            authenticated_peers.push(result.context("session confirmation task failed")??);
+        }
 
         Ok(Session { id, endpoint, authenticated_peers })
     }
