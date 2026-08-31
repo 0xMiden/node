@@ -1,0 +1,53 @@
+syntax = "proto3";
+package submission;
+
+import "primitives.proto";
+import "transaction.proto";
+import "batch.proto";
+
+// A proven transaction together with the sealed inputs validators require for re-execution.
+message ProvenTransactionSubmission {
+  transaction.ProvenTransactionData transaction = 1;
+  SealedTransactionInputs sealed_transaction_inputs = 2;
+}
+
+// Transaction inputs sealed against the validator set's shared encryption key.
+message SealedTransactionInputs {
+  bytes key_id = 1;
+  bytes ciphertext = 2;
+}
+
+// A proven transaction batch and the independently sealed inputs for its transactions.
+message TransactionBatch {
+  transaction.ProvenBatch batch = 1;
+  transaction.ProposedBatch proposed_batch = 2;
+  repeated SealedTransactionInputs sealed_transaction_inputs = 3;
+}
+
+enum IesScheme {
+  IES_SCHEME_UNSPECIFIED = 0;
+  IES_SCHEME_X25519_XCHACHA20_POLY1305 = 1;
+}
+
+// A validator's attestation of the shared transaction encryption key.
+message ValidatorKeyAttestation {
+  primitives.PublicKey validator_public_key = 1;
+  primitives.Signature signature = 2;
+}
+
+// A transaction encryption key scheduled to replace the current key.
+message NextTransactionEncryptionKey {
+  IesScheme scheme = 1;
+  bytes key_id = 2;
+  bytes public_key = 3;
+  fixed32 rotation_block_num = 4;
+}
+
+// The validator-set encryption key used to seal transaction inputs.
+message TransactionEncryptionKey {
+  IesScheme scheme = 1;
+  bytes key_id = 2;
+  bytes public_key = 3;
+  repeated ValidatorKeyAttestation attestations = 4;
+  optional NextTransactionEncryptionKey next_key = 5;
+}

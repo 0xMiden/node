@@ -3,11 +3,14 @@ syntax = "proto3";
 package rpc;
 
 import "google/protobuf/empty.proto";
-import "types/account.proto";
-import "types/blockchain.proto";
-import "types/note.proto";
-import "types/primitives.proto";
-import "types/transaction.proto";
+import "account.proto";
+import "batch.proto";
+import "block.proto";
+import "block_number.proto";
+import "note.proto";
+import "primitives.proto";
+import "transaction.proto";
+import "types/submission.proto";
 
 // RPC API
 // ================================================================================================
@@ -27,18 +30,18 @@ service Api {
     // Returns the latest details of the specified account.
     rpc GetAccount(AccountRequest) returns (AccountResponse) {}
 
-    // Returns raw block data for the specified block number, optionally including the block proof.
-    rpc GetBlockByNumber(blockchain.BlockRequest) returns (blockchain.MaybeBlock) {}
+    // Returns block data for the specified block number, optionally including the block proof.
+    rpc GetBlockByNumber(BlockRequest) returns (MaybeBlock) {}
 
     // Retrieves block header by given block number. Optionally, it also returns the MMR path
     // and current chain length to authenticate the block's inclusion.
     rpc GetBlockHeaderByNumber(BlockHeaderByNumberRequest) returns (BlockHeaderByNumberResponse) {}
 
     // Returns a list of notes matching the provided note IDs.
-    rpc GetNotesById(note.NoteIdList) returns (note.CommittedNoteList) {}
+    rpc GetNotesById(NotesByIdRequest) returns (NotesByIdResponse) {}
 
     // Returns the script for a note by its root.
-    rpc GetNoteScriptByRoot(note.NoteScriptRoot) returns (MaybeNoteScript) {}
+    rpc GetNoteScriptByRoot(primitives.Word) returns (MaybeNoteScript) {}
 
     // TRANSACTION SUBMISSION ENDPOINTS
     // --------------------------------------------------------------------------------------------
@@ -51,17 +54,17 @@ service Api {
     // validator attestations, currently containing a single one. Since all validators vouch for
     // the same key, an attestation verifiable against any chain-recognized validator signing key
     // is sufficient.
-    rpc GetTransactionEncryptionKey(google.protobuf.Empty) returns (transaction.TransactionEncryptionKey) {}
+    rpc GetTransactionEncryptionKey(google.protobuf.Empty) returns (submission.TransactionEncryptionKey) {}
 
     // Submits proven transaction to the Miden network. Returns the node's current block height.
-    rpc SubmitProvenTx(transaction.ProvenTransaction) returns (blockchain.BlockNumber) {}
+    rpc SubmitProvenTx(submission.ProvenTransactionSubmission) returns (blockchain.BlockNumber) {}
 
     // Submits a batch of transactions to the Miden network.
     //
     // All transactions in this batch will be considered atomic, and be committed together or not all.
     //
     // Returns the node's current block height.
-    rpc SubmitProvenTxBatch(transaction.TransactionBatch) returns (blockchain.BlockNumber) {}
+    rpc SubmitProvenTxBatch(submission.TransactionBatch) returns (blockchain.BlockNumber) {}
 
     // STATE SYNCHRONIZATION ENDPOINTS
     // --------------------------------------------------------------------------------------------
@@ -131,9 +134,8 @@ message BlockSubscriptionRequest {
 
 // A committed block streamed to a replica.
 message BlockSubscriptionResponse {
-    // The block encoded using [miden_serde_utils::Serializable] implementation for
-    // [miden_protocol::block::SignedBlock].
-    bytes block = 1;
+    // The signed block.
+    blockchain.SignedBlock block = 1;
 
     // The committed chain tip when this item was emitted.
     fixed32 committed_chain_tip = 2;
@@ -153,9 +155,8 @@ message ProofSubscriptionResponse {
     // The block number this proof corresponds to.
     fixed32 block_num = 1;
 
-    // The block proof encoded using [miden_serde_utils::Serializable] implementation for
-    // [miden_protocol::block::BlockProof].
-    bytes proof = 2;
+    // The execution proof for the block.
+    primitives.ExecutionProof proof = 2;
 
     // The proven chain tip when this item was emitted.
     fixed32 proven_chain_tip = 3;
@@ -170,7 +171,7 @@ message RpcStatus {
     string version = 1;
 
     // The genesis commitment.
-    primitives.Digest genesis_commitment = 2;
+    primitives.Word genesis_commitment = 2;
 
     // Number of the latest block in the chain.
     fixed32 chain_tip = 3;
@@ -244,6 +245,34 @@ message BlockHeaderByNumberResponse {
 // GET NOTE SCRIPT BY ROOT
 // ================================================================================================
 
+// Request for a block, with an optional execution proof.
+message BlockRequest {
+    fixed32 block_num = 1;
+    optional bool include_proof = 2;
+}
+
+// A block and, when requested and available, its execution proof.
+message MaybeBlock {
+    optional blockchain.SignedBlock block = 1;
+    optional primitives.ExecutionProof proof = 2;
+}
+
+// A list of note IDs to retrieve.
+message NotesByIdRequest {
+    repeated note.NoteId note_ids = 1;
+}
+
+// A committed note and its inclusion proof.
+message CommittedNote {
+    note.Note note = 1;
+    note.NoteInclusionProof inclusion_proof = 2;
+}
+
+// Notes returned from a note ID query.
+message NotesByIdResponse {
+    repeated CommittedNote notes = 1;
+}
+
 // Represents a note script or nothing.
 message MaybeNoteScript {
     // The script for a note by its root.
@@ -262,7 +291,7 @@ message AccountRequest {
             // Indirection required for use in `oneof {..}` block.
             message MapKeys {
                 // A list of map keys associated with this storage slot.
-                repeated primitives.Digest map_keys = 1;
+                repeated primitives.Word map_keys = 1;
             }
             // Storage slot name.
             string slot_name = 1;
@@ -281,14 +310,14 @@ message AccountRequest {
         // only if its commitment is different from this value.
         //
         // If the field is ommiteed, the response will not include the account code.
-        optional primitives.Digest code_commitment = 1;
+        optional primitives.Word code_commitment = 1;
 
         // Last known asset vault commitment to the requester. The response will include asset vault data
         // only if its commitment is different from this value. If the value is not present in the
         // request, the response will not contain one either.
         // If the number of to-be-returned asset entries exceed a threshold, they have to be requested
         // separately, which is signaled in the response message with dedicated flag.
-        optional primitives.Digest asset_vault_commitment = 2;
+        optional primitives.Word asset_vault_commitment = 2;
 
         // Wrapper required because protobuf `oneof` fields cannot be `repeated`.
         message StorageMapDetailRequests {
@@ -331,7 +360,7 @@ message AccountResponse {
         AccountStorageDetails storage_details = 2;
 
         // Account code; empty if code commitments matched or none was requested.
-        optional bytes code = 3;
+        optional account.AccountCode code = 3;
 
         // Account asset vault data; empty if vault commitments matched or the requester
         // omitted it in the request.
@@ -368,8 +397,8 @@ message AccountStorageDetails {
         message AllMapEntries {
             // Definition of individual storage entries.
             message StorageMapEntry {
-                primitives.Digest key = 1;
-                primitives.Digest value = 2;
+                primitives.Word key = 1;
+                primitives.Word value = 2;
             }
 
             repeated StorageMapEntry entries = 1;
@@ -378,7 +407,7 @@ message AccountStorageDetails {
         // A partial storage map containing one compact SMT proof shared by all requested keys.
         message PartialStorageMap {
             // Original, unhashed storage map keys covered by `partial_smt`.
-            repeated primitives.Digest map_keys = 1;
+            repeated primitives.Word map_keys = 1;
 
             // Compact partial SMT tracking all requested keys.
             primitives.PartialSmt partial_smt = 2;
@@ -431,7 +460,7 @@ message SyncNullifiersResponse {
     // Represents a single nullifier update.
     message NullifierUpdate {
         // Nullifier ID.
-        primitives.Digest nullifier = 1;
+        primitives.Word nullifier = 1;
 
         // Block number.
         fixed32 block_num = 2;
@@ -474,7 +503,7 @@ message SyncAccountVaultResponse {
 
 message AccountVaultUpdate {
     // Vault key associated with the asset.
-    primitives.Digest vault_key = 1;
+    primitives.Word vault_key = 1;
 
     // Asset value related to the vault key.
     // If not present, the asset was removed from the vault.
@@ -486,6 +515,12 @@ message AccountVaultUpdate {
 
 // SYNC NOTES
 // ================================================================================================
+
+// A note matched by a sync query together with its inclusion proof.
+message NoteSyncRecord {
+    note.Note note = 1;
+    note.NoteInclusionProof inclusion_proof = 2;
+}
 
 // Note synchronization request.
 //
@@ -515,7 +550,7 @@ message SyncNotesResponse {
 
         // List of notes matching the specified criteria in this block, together with the
         // Merkle paths from `block_header.note_root`.
-        repeated note.NoteSyncRecord notes = 3;
+        repeated NoteSyncRecord notes = 3;
     }
 
     // Pagination information.
@@ -567,7 +602,7 @@ message SyncChainMmrResponse {
 
     // Validator signatures for the sync target, ordered positionally with respect to the
     // validator set committed to by the parent block's header.
-    repeated blockchain.BlockSignature block_signatures = 4;
+    repeated primitives.Signature block_signatures = 4;
 }
 
 // SYNC ACCOUNT STORAGE MAP
@@ -608,10 +643,10 @@ message StorageMapUpdate {
     string slot_name = 2;
 
     // The storage map key.
-    primitives.Digest key = 3;
+    primitives.Word key = 3;
 
     // The storage map value.
-    primitives.Digest value = 4;
+    primitives.Word value = 4;
 }
 
 // BLOCK RANGE
@@ -683,7 +718,7 @@ message TransactionRecord {
     // Inclusion proofs for committed output notes. Erased notes (created and consumed
     // within the same batch) can be identified by comparing note IDs here with
     // `header.output_notes`. Any note present in the header but absent here was erased.
-    repeated note.NoteInclusionInBlockProof output_note_proofs = 3;
+    repeated note.NoteInclusionProof output_note_proofs = 3;
 
     // Maps a consumed input note's nullifier to its note ID, for the public notes the node can
     // resolve. Authenticated inputs in `header.input_notes` carry only a nullifier, so this lets a
@@ -694,7 +729,7 @@ message TransactionRecord {
 // Maps a consumed input note's nullifier to its note ID.
 message ConsumedNoteRef {
     // The nullifier of the consumed input note.
-    primitives.Digest nullifier = 1;
+    primitives.Word nullifier = 1;
 
     // The ID of the note the nullifier resolves to.
     note.NoteId note_id = 2;

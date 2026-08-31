@@ -26,8 +26,12 @@ tonic-prost-build = { workspace = true }
 build-rs = { workspace = true }
 codegen  = { workspace = true }
 fs-err   = { workspace = true }
+miden-objects = { workspace = true }
 miette   = { workspace = true }
 protox   = { workspace = true }
+
+[dev-dependencies]
+prost-types = { workspace = true }
 
 [lib]
 doctest = false
