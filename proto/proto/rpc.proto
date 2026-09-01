@@ -242,7 +242,7 @@ message BlockHeaderByNumberResponse {
     optional fixed32 chain_length = 3;
 }
 
-// GET NOTE SCRIPT BY ROOT
+// GET BLOCK BY NUMBER
 // ================================================================================================
 
 // Request for a block, with an optional execution proof.
@@ -256,6 +256,9 @@ message MaybeBlock {
     optional blockchain.SignedBlock block = 1;
     optional primitives.ExecutionProof proof = 2;
 }
+
+// GET NOTES BY ID
+// ================================================================================================
 
 // A list of note IDs to retrieve.
 message NotesByIdRequest {
@@ -272,6 +275,9 @@ message CommittedNote {
 message NotesByIdResponse {
     repeated CommittedNote notes = 1;
 }
+
+// GET NOTE SCRIPT BY ROOT
+// ================================================================================================
 
 // Represents a note script or nothing.
 message MaybeNoteScript {
