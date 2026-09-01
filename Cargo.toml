@@ -57,13 +57,13 @@ miden-node-tracing-macro    = { path = "crates/tracing-macro", version = "0.16.0
 miden-node-utils            = { path = "crates/utils", version = "0.16.0-rc.3" }
 
 # miden-protocol dependencies. These should be updated in sync.
-miden-block-prover = { path = "../protocol/crates/miden-block-prover", version = "0.17" }
-miden-objects      = { path = "../protocol/crates/miden-objects", version = "0.17" }
-miden-protocol     = { default-features = false, path = "../protocol/crates/miden-protocol", version = "0.17" }
-miden-standards    = { path = "../protocol/crates/miden-standards", version = "0.17" }
-miden-testing      = { path = "../protocol/crates/miden-testing", version = "0.17" }
-miden-tx           = { default-features = false, path = "../protocol/crates/miden-tx", version = "0.17" }
-miden-tx-batch     = { path = "../protocol/crates/miden-tx-batch", version = "0.17" }
+miden-block-prover = { git = "https://github.com/0xMiden/protocol", rev = "a726ce4ce7f6f4ae0e627cbb5b2cddb225f28c6a", version = "0.17" }
+miden-objects      = { git = "https://github.com/0xMiden/protocol", rev = "a726ce4ce7f6f4ae0e627cbb5b2cddb225f28c6a", version = "0.17" }
+miden-protocol     = { default-features = false, git = "https://github.com/0xMiden/protocol", rev = "a726ce4ce7f6f4ae0e627cbb5b2cddb225f28c6a", version = "0.17" }
+miden-standards    = { git = "https://github.com/0xMiden/protocol", rev = "a726ce4ce7f6f4ae0e627cbb5b2cddb225f28c6a", version = "0.17" }
+miden-testing      = { git = "https://github.com/0xMiden/protocol", rev = "a726ce4ce7f6f4ae0e627cbb5b2cddb225f28c6a", version = "0.17" }
+miden-tx           = { default-features = false, git = "https://github.com/0xMiden/protocol", rev = "a726ce4ce7f6f4ae0e627cbb5b2cddb225f28c6a", version = "0.17" }
+miden-tx-batch     = { git = "https://github.com/0xMiden/protocol", rev = "a726ce4ce7f6f4ae0e627cbb5b2cddb225f28c6a", version = "0.17" }
 
 # Other miden dependencies. These should align with those expected by miden-protocol.
 miden-crypto               = { version = "0.29.1" }
