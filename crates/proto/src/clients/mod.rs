@@ -639,7 +639,7 @@ impl Builder<WantsConnection> {
                         "Configured service connection timed out",
                         dependency.name = dependency_name,
                         dependency.endpoint = endpoint.as_str(),
-                        timeout.ms = CONNECT_TIMEOUT.as_millis() as u64
+                        timeout.ms = CONNECT_TIMEOUT
                     );
                 },
                 Ok(Err(err)) => {
@@ -655,7 +655,7 @@ impl Builder<WantsConnection> {
                         "Configured service connection still timing out",
                         dependency.name = dependency_name,
                         dependency.endpoint = endpoint.as_str(),
-                        timeout.ms = CONNECT_TIMEOUT.as_millis() as u64
+                        timeout.ms = CONNECT_TIMEOUT
                     );
                 },
             }
