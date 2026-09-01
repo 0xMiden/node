@@ -48,11 +48,7 @@ pub use transaction_inputs::TransactionInputs;
 ///
 /// Obtained from [`State::view`]; create one per request and drop it when the request completes.
 /// Holding a view pins a snapshot generation (and thereby the `RocksDB` snapshots backing the
-/// trees), so it must not be stored in long-lived structs. The block writer records the span
-/// fields `snapshots.lag_blocks`, `snapshots.oldest_superseded_for_ms`, and `snapshots.live` on
-/// each applied block. Those fields show that some reader pins an old generation. Views are
-/// acquired inside instrumented request spans, so the span durations bound the hold time and
-/// identify the reader.
+/// trees), so it must not be stored in long-lived structs.
 ///
 /// Reads that are technically not block-scoped (for example, immutable content-addressed data)
 /// also live here so that every read path flows through one type.
