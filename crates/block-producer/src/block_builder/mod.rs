@@ -294,7 +294,7 @@ impl BlockBuilder {
         });
         let responses = self
             .validator
-            .sign_block(proposed_block.clone())
+            .sign_block(&proposed_block, &block_inputs)
             .await
             .map_err(|err| BuildBlockError::ValidateBlockFailed(err.into()))?;
         let (header, body) = build_result
@@ -306,9 +306,10 @@ impl BlockBuilder {
         // block. Comparing the commitment each validator signed against the locally built one
         // isolates a block-hash mismatch from a key/algorithm problem in the signature check below.
         for response in &responses {
-            if response.block_commitment != header.commitment() {
+            let validator_commitment = response.signed_block.header().commitment();
+            if validator_commitment != header.commitment() {
                 return Err(BuildBlockError::BlockCommitmentMismatch {
-                    validator: response.block_commitment,
+                    validator: validator_commitment,
                     sequencer: header.commitment(),
                 });
             }
@@ -319,15 +320,16 @@ impl BlockBuilder {
         // committed to by the parent block's header.
         let parent_header = block_inputs.prev_block_header();
         let signatures = parent_header
-            .validator_keys()
-            .as_keys()
+            .validator_config()
+            .keys()
             .iter()
             .enumerate()
             .map(|(position, key)| {
                 responses
                     .iter()
-                    .find(|response| &response.public_key == key)
-                    .map(|response| response.signature.clone())
+                    .flat_map(|response| response.signed_block.signatures().as_signatures())
+                    .find(|signature| signature.verify(header.commitment(), key))
+                    .cloned()
                     .ok_or(BuildBlockError::MissingValidatorSignature { position })
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -337,7 +339,7 @@ impl BlockBuilder {
         // Verify the signatures against the built block to ensure that every validator has provided
         // a valid signature for the relevant block.
         signatures
-            .verify_against(header.commitment(), parent_header.validator_keys())
+            .verify_against(header.commitment(), parent_header.validator_config())
             .map_err(|_| BuildBlockError::InvalidSignature)?;
 
         let (ordered_batches, ..) = proposed_block.into_parts();

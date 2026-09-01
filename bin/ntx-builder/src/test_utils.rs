@@ -196,7 +196,7 @@ pub fn mock_network_account(
 
 /// Creates a mock `BlockHeader` for the given block number.
 pub fn mock_block_header(block_num: BlockNumber) -> miden_protocol::block::BlockHeader {
-    miden_protocol::block::BlockHeader::mock(block_num, None, None, &[], Word::default())
+    miden_protocol::block::BlockHeader::mock(block_num, None, None, &[])
 }
 
 /// Creates a mock genesis [`SignedBlock`] with an empty body.
@@ -242,7 +242,8 @@ pub fn mock_genesis_block_with_network_account() -> (miden_protocol::block::Sign
 
     let (account, details) = mock_network_account_update();
     let account_id = account.id();
-    let update = BlockAccountUpdate::new(account_id, account.to_commitment(), details);
+    let update = BlockAccountUpdate::new(account_id, account.to_commitment(), details)
+        .expect("test account update should be valid");
 
     let header = mock_block_header(BlockNumber::GENESIS);
     let body = BlockBody::new_unchecked(

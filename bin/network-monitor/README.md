@@ -24,9 +24,11 @@ configured.
 The monitor is an observer and test client, not a node component required for block production. Its network transaction
 checks create fresh in-memory accounts on startup and do not persist account state to disk.
 
-Network transaction checks also require `MIDEN_MONITOR_VALIDATOR_SIGNING_PUBLIC_KEY`. It must contain the hex-encoded
-validator key that signs transaction encryption key attestations. The monitor will not submit a transaction unless it
-can verify the advertised encryption key.
+Network transaction checks also require `MIDEN_MONITOR_FEE_FAUCET_ID` and `MIDEN_MONITOR_VALIDATOR_SIGNING_PUBLIC_KEY`.
+The faucet ID is the account whose asset the network uses for fees; `miden-validator genesis` prints it when creating
+the network. The signing key must contain the hex-encoded validator key that signs transaction encryption key
+attestations. The monitor will not submit a transaction unless it can verify the advertised encryption key. The fee
+faucet is also required when transaction remote-prover probes are configured.
 
 Use the binary help output for the current command and configuration surface. The help output is the source of truth for
 flags and environment variables.

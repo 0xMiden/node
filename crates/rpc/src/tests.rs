@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -18,9 +19,11 @@ use miden_node_proto::clients::{
 use miden_node_proto::generated::rpc::api_client::ApiClient as ProtoClient;
 use miden_node_proto::generated::rpc::api_server::Api;
 use miden_node_proto::generated::{self as proto};
-use miden_node_proto::server::{ntx_builder_api, rpc_api, validator_api};
+use miden_node_proto::server::{ntx_builder_api, rpc_api, sequencer_api, validator_api};
+use miden_node_store::genesis::GenesisBlock;
 use miden_node_store::genesis::config::GenesisConfig;
 use miden_node_store::state::State;
+use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::limiter::{
     QueryParamAccountIdLimit,
@@ -33,6 +36,7 @@ use miden_node_utils::limiter::{
 };
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::Word;
+use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::account::{
     Account,
     AccountBuilder,
@@ -43,11 +47,19 @@ use miden_protocol::account::{
     AccountUpdateDetails,
     AssetCallbackFlag,
 };
+use miden_protocol::asset::{Asset, FungibleAsset};
+use miden_protocol::batch::ProposedBatch;
+use miden_protocol::block::{BlockSignatures, ProvenBlock, SignedBlock};
+use miden_protocol::note::NoteType;
+use miden_protocol::testing::account_id::{ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET, ACCOUNT_ID_SENDER};
 use miden_protocol::testing::noop_auth_component::NoopAuthComponent;
 use miden_protocol::transaction::{ProvenTransaction, TxAccountUpdate};
-use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::utils::serde::Deserializable;
 use miden_protocol::vm::ExecutionProof;
 use miden_standards::account::wallets::BasicWallet;
+use miden_testing::{Auth, MockChainBuilder};
+use miden_tx::LocalTransactionProver;
+use miden_tx_batch::{BatchExecutor, LocalBatchProver};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::task;
@@ -57,7 +69,7 @@ use tonic::metadata::MetadataMap;
 use url::Url;
 
 use crate::server::RpcBackend;
-use crate::server::api::RpcService;
+use crate::server::api::{RpcService, SequencerInternalService};
 use crate::{PreAuthSubmission, Rpc, RpcMode, ValidatorClients};
 
 /// Global registry of temp directories. Held for the lifetime of the test binary so that `RocksDB`
@@ -111,15 +123,26 @@ impl TestStore {
         }
     }
 
+    async fn start_from_mock_genesis(genesis_block: &ProvenBlock) -> Self {
+        let data_directory = new_tempdir();
+        let genesis_commitment = Self::bootstrap_from_mock_genesis(&data_directory, genesis_block);
+        let (state, ..) = State::for_tests(&data_directory).await;
+        Self {
+            state,
+            genesis_commitment,
+            data_directory,
+        }
+    }
+
     fn bootstrap(path: &std::path::Path) -> Word {
         let config = GenesisConfig::default();
         let validator_key =
             miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey::read_from_bytes(&[7; 32])
                 .expect("test signing key should decode")
                 .public_key();
-        let validator_keys =
-            miden_protocol::block::ValidatorKeys::new(vec![validator_key]).unwrap();
-        let (genesis_state, _) = config.into_state(validator_keys).unwrap();
+        let validator_config =
+            miden_protocol::block::ValidatorConfig::new(vec![validator_key], 1).unwrap();
+        let (genesis_state, _) = config.into_state(validator_config).unwrap();
         let genesis_block =
             genesis_state.clone().into_block().expect("genesis block should be created");
         let genesis_commitment = genesis_block.inner().header().commitment();
@@ -128,11 +151,25 @@ impl TestStore {
 
         genesis_commitment
     }
+
+    fn bootstrap_from_mock_genesis(path: &std::path::Path, genesis_block: &ProvenBlock) -> Word {
+        let signatures = BlockSignatures::new(Vec::new()).unwrap();
+        let signed_block = SignedBlock::new(
+            genesis_block.header().clone(),
+            genesis_block.body().clone(),
+            signatures,
+        )
+        .expect("mock genesis header and body should be consistent");
+        let genesis_block = GenesisBlock::try_from(signed_block)
+            .expect("mock genesis should become a store genesis block after stripping signatures");
+        let genesis_commitment = genesis_block.inner().header().commitment();
+
+        State::bootstrap(genesis_block, path).expect("store should bootstrap from mock genesis");
+
+        genesis_commitment
+    }
 }
 
-/// Byte offset of the account delta commitment in serialized `ProvenTransaction`. Layout:
-/// `AccountId` (15) + `initial_commitment` (32) + `final_commitment` (32) = 79
-const DELTA_COMMITMENT_BYTE_OFFSET: usize = 15 + 32 + 32;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Creates a minimal account and its patch for testing proven transaction building.
@@ -213,6 +250,74 @@ fn build_test_proven_tx_with_id(
         ExecutionProof::new_dummy(),
     )
     .unwrap()
+}
+
+struct ValidBatchFixture {
+    request: proto::submission::TransactionBatch,
+    genesis_block: ProvenBlock,
+}
+
+async fn build_valid_batch_fixture() -> ValidBatchFixture {
+    let mut mock_chain_builder = MockChainBuilder::new();
+    let account = mock_chain_builder
+        .add_existing_wallet(Auth::BasicAuth {
+            auth_scheme: AuthScheme::Falcon512Poseidon2,
+        })
+        .unwrap();
+    let asset: Asset =
+        FungibleAsset::new(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap(), 100)
+            .unwrap()
+            .into();
+    let note = mock_chain_builder
+        .add_p2id_note(
+            ACCOUNT_ID_SENDER.try_into().unwrap(),
+            account.id(),
+            &[asset],
+            NoteType::Private,
+        )
+        .unwrap();
+    let mock_chain = mock_chain_builder.build().unwrap();
+    let genesis_block = mock_chain.latest_block();
+
+    let tx_context = mock_chain
+        .build_transaction(account.id())
+        .authenticated_input_note(note.id())
+        .build()
+        .unwrap();
+    let executed_tx = Box::pin(tx_context.execute()).await.unwrap();
+    let tx_inputs = executed_tx.tx_inputs().clone();
+    let proven_tx =
+        spawn_blocking_in_current_span(move || LocalTransactionProver::default().prove(tx_inputs))
+            .await
+            .unwrap()
+            .unwrap();
+
+    let proposed_batch = ProposedBatch::new(
+        vec![Arc::new(proven_tx)],
+        mock_chain.latest_block_header(),
+        mock_chain.latest_partial_blockchain(),
+        BTreeMap::new(),
+        miden_protocol::MIN_PROOF_SECURITY_LEVEL,
+    )
+    .unwrap();
+    let proven_batch = spawn_blocking_in_current_span({
+        let proposed_batch = proposed_batch.clone();
+        move || {
+            let executed_batch = BatchExecutor::new().execute(proposed_batch)?;
+            LocalBatchProver::new().prove(executed_batch)
+        }
+    })
+    .await
+    .unwrap()
+    .unwrap();
+
+    let request = proto::submission::TransactionBatch {
+        batch: Some((&proven_batch).into()),
+        proposed_batch: Some((&proposed_batch).into()),
+        sealed_transaction_inputs: vec![proto::submission::SealedTransactionInputs::default()],
+    };
+
+    ValidBatchFixture { request, genesis_block }
 }
 
 fn assert_beyond_tip(status: &tonic::Status, endpoint: &str) {
@@ -363,15 +468,15 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
     // Create an incorrect patch commitment from a different account
     let (other_account, _) = build_test_account([1; 32]);
     let incorrect_patch: AccountPatch = AccountPatch::try_from(other_account).unwrap();
-    let incorrect_commitment_bytes = incorrect_patch.to_commitment().as_bytes();
+    let incorrect_commitment = incorrect_patch.to_commitment();
 
-    // Corrupt the transaction bytes with the incorrect patch commitment
-    let mut tx_bytes = tx.to_bytes();
-    tx_bytes[DELTA_COMMITMENT_BYTE_OFFSET..DELTA_COMMITMENT_BYTE_OFFSET + 32]
-        .copy_from_slice(&incorrect_commitment_bytes);
+    // Corrupt the structured account update with the incorrect patch commitment.
+    let mut transaction: proto::transaction::ProvenTransactionData = (&tx).into();
+    transaction.account_update.as_mut().unwrap().account_patch_commitment =
+        Some(incorrect_commitment.into());
 
-    let request = proto::transaction::ProvenTransaction {
-        transaction: tx_bytes,
+    let request = proto::submission::ProvenTransactionSubmission {
+        transaction: Some(transaction),
         sealed_transaction_inputs: None,
     };
 
@@ -409,8 +514,8 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_reference_block() {
     let (account, account_patch) = build_test_account([0; 32]);
     let tx = build_test_proven_tx(&account, &account_patch, invalid);
 
-    let request = proto::transaction::ProvenTransaction {
-        transaction: tx.to_bytes(),
+    let request = proto::submission::ProvenTransactionSubmission {
+        transaction: Some((&tx).into()),
         sealed_transaction_inputs: None,
     };
 
@@ -448,8 +553,8 @@ async fn rpc_rejects_post_deployment_network_account_tx() {
     // Build a non-deployment tx for that account.
     let (account, _) = build_test_account([0; 32]);
     let tx = build_test_proven_tx_with_id(network_account_id, &account, genesis);
-    let request = proto::transaction::ProvenTransaction {
-        transaction: tx.to_bytes(),
+    let request = proto::submission::ProvenTransactionSubmission {
+        transaction: Some((&tx).into()),
         sealed_transaction_inputs: None,
     };
 
@@ -575,9 +680,27 @@ async fn start_source_rpc(
     ntx_builder: NtxBuilderClient,
     validator: ValidatorClient,
 ) -> (RpcClient, TestStore, TestServerGuard) {
-    let store = TestStore::start().await;
+    start_source_rpc_with_genesis(ntx_builder, validator, None).await
+}
+
+async fn start_source_rpc_with_genesis(
+    ntx_builder: NtxBuilderClient,
+    validator: ValidatorClient,
+    genesis_block: Option<&ProvenBlock>,
+) -> (RpcClient, TestStore, TestServerGuard) {
+    let store = match genesis_block {
+        Some(genesis_block) => TestStore::start_from_mock_genesis(genesis_block).await,
+        None => TestStore::start().await,
+    };
     let block_producer_dir = new_tempdir();
-    TestStore::bootstrap(&block_producer_dir);
+    match genesis_block {
+        Some(genesis_block) => {
+            TestStore::bootstrap_from_mock_genesis(&block_producer_dir, genesis_block);
+        },
+        None => {
+            TestStore::bootstrap(&block_producer_dir);
+        },
+    }
     let (block_producer_state, ..) = State::for_tests(&block_producer_dir).await;
     let state = Arc::clone(&store.state);
 
@@ -627,11 +750,11 @@ async fn start_source_rpc(
     (client, store, TestServerGuard(shutdown))
 }
 
-/// Stub validator gRPC service that serves a fixed transaction encryption key and rejects every
-/// other RPC.
+/// Stub validator gRPC service that serves a fixed transaction encryption key, accepts transaction
+/// validation requests, and rejects every other RPC.
 #[derive(Clone)]
 struct FixedValidator {
-    encryption_key: proto::transaction::TransactionEncryptionKey,
+    encryption_key: proto::submission::TransactionEncryptionKey,
     call_count: Arc<AtomicUsize>,
     last_accept: Arc<std::sync::Mutex<Option<String>>>,
 }
@@ -639,13 +762,13 @@ struct FixedValidator {
 #[tonic::async_trait]
 impl validator_api::GetTransactionEncryptionKey for FixedValidator {
     type Input = ();
-    type Output = proto::transaction::TransactionEncryptionKey;
+    type Output = proto::submission::TransactionEncryptionKey;
 
     fn decode(request: ()) -> tonic::Result<Self::Input> {
         Ok(request)
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::transaction::TransactionEncryptionKey> {
+    fn encode(output: Self::Output) -> tonic::Result<proto::submission::TransactionEncryptionKey> {
         Ok(output)
     }
 
@@ -694,7 +817,9 @@ impl validator_api::SubmitProvenTransaction for FixedValidator {
     type Input = ();
     type Output = ();
 
-    fn decode(_request: proto::transaction::ProvenTransaction) -> tonic::Result<Self::Input> {
+    fn decode(
+        _request: proto::submission::ProvenTransactionSubmission,
+    ) -> tonic::Result<Self::Input> {
         Ok(())
     }
 
@@ -708,20 +833,20 @@ impl validator_api::SubmitProvenTransaction for FixedValidator {
         _metadata: &MetadataMap,
         _extensions: &Extensions,
     ) -> tonic::Result<Self::Output> {
-        Err(tonic::Status::unimplemented("not supported by the stub validator"))
+        Ok(())
     }
 }
 
 #[tonic::async_trait]
 impl validator_api::SignBlock for FixedValidator {
     type Input = ();
-    type Output = proto::blockchain::SignBlockResponse;
+    type Output = proto::blockchain::SignedBlock;
 
-    fn decode(_request: proto::blockchain::ProposedBlock) -> tonic::Result<Self::Input> {
+    fn decode(_request: proto::block_proving::BlockProofRequest) -> tonic::Result<Self::Input> {
         Ok(())
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::blockchain::SignBlockResponse> {
+    fn encode(output: Self::Output) -> tonic::Result<proto::blockchain::SignedBlock> {
         Ok(output)
     }
 
@@ -762,7 +887,7 @@ impl validator_api::BlockSubscription for FixedValidator {
 /// Serves a [`FixedValidator`] on an ephemeral port and returns a connected client together with
 /// the stub's call counter and the last ACCEPT header it observed.
 async fn start_validator(
-    encryption_key: proto::transaction::TransactionEncryptionKey,
+    encryption_key: proto::submission::TransactionEncryptionKey,
 ) -> (
     ValidatorClient,
     Arc<AtomicUsize>,
@@ -807,17 +932,17 @@ async fn start_validator(
 
 /// A fixed transaction encryption key response for forwarding tests. The values only need to
 /// survive the passthrough unchanged.
-fn test_encryption_key() -> proto::transaction::TransactionEncryptionKey {
-    proto::transaction::TransactionEncryptionKey {
-        scheme: proto::transaction::IesScheme::X25519Xchacha20Poly1305 as i32,
+fn test_encryption_key() -> proto::submission::TransactionEncryptionKey {
+    proto::submission::TransactionEncryptionKey {
+        scheme: proto::submission::IesScheme::X25519Xchacha20Poly1305 as i32,
         key_id: vec![0xDE, 0xAD, 0xBE, 0xEF],
         public_key: vec![7; 32],
-        attestations: vec![proto::transaction::ValidatorKeyAttestation {
-            validator_public_key: vec![8; 33],
-            signature: vec![9; 65],
+        attestations: vec![proto::submission::ValidatorKeyAttestation {
+            validator_public_key: Some(proto::primitives::PublicKey { encoded: vec![8; 33] }),
+            signature: Some(proto::primitives::Signature { encoded: vec![9; 65] }),
         }],
-        next_key: Some(proto::transaction::NextTransactionEncryptionKey {
-            scheme: proto::transaction::IesScheme::X25519Xchacha20Poly1305 as i32,
+        next_key: Some(proto::submission::NextTransactionEncryptionKey {
+            scheme: proto::submission::IesScheme::X25519Xchacha20Poly1305 as i32,
             key_id: vec![0xFE, 0xED],
             public_key: vec![6; 32],
             rotation_block_num: 42,
@@ -1001,10 +1126,72 @@ async fn full_node_preserves_original_accept_metadata_when_forwarding() {
     );
 }
 
-// Batch-path coverage for the network-account gate is provided manually. Building a valid
-// `ProposedBatch` + `ProvenBatch` in this test harness would require duplicating LocalBatchProver
-// setup. The query layer is covered by the unit test in store::db::tests, and the RPC handler gate
-// is covered by `rpc_rejects_post_deployment_network_account_tx`.
+#[tokio::test(flavor = "multi_thread")]
+async fn full_node_forwards_complete_transaction_batch_to_source_rpc() {
+    let fixture = build_valid_batch_fixture().await;
+    let (validator, _validator_call_count, _last_accept, _validator_server) =
+        start_validator(test_encryption_key()).await;
+    let (source_rpc, _source_store, _source_server) = start_source_rpc_with_genesis(
+        dummy_client::<NtxBuilderClient>(),
+        validator,
+        Some(&fixture.genesis_block),
+    )
+    .await;
+    let local_store = TestStore::start_from_mock_genesis(&fixture.genesis_block).await;
+    let full_node = RpcService::new(
+        Arc::clone(&local_store.state),
+        RpcBackend::full_node(source_rpc, None),
+        None,
+        NonZeroUsize::new(1_000_000).unwrap(),
+        None,
+    );
+
+    let response = full_node
+        .submit_proven_tx_batch(Request::new(fixture.request))
+        .await
+        .expect("full-node RPC should forward both structured batch fields to its source")
+        .into_inner();
+
+    assert_eq!(response.block_num, 0);
+}
+
+#[tokio::test]
+async fn authenticated_batch_defers_validation_to_async_handler() {
+    let request = proto::sequencer::AuthenticatedTransactionBatch {
+        proposed_batch: Some(proto::transaction::ProposedBatch::default()),
+        auth_inputs: Vec::new(),
+    };
+    let input =
+        <SequencerInternalService as sequencer_api::SubmitAuthenticatedTxBatch>::decode(request)
+            .expect(
+                "wire decoding should defer proof-bearing batch conversion to the async handler",
+            );
+
+    let store = TestStore::start().await;
+    let shutdown = CancellationToken::new();
+    let block_producer = BlockProducerApi::new(
+        Arc::clone(&store.state),
+        0.into(),
+        BlockProducerApiConfig::default(),
+        shutdown,
+    );
+    let service = SequencerInternalService { block_producer };
+    let error = <SequencerInternalService as sequencer_api::SubmitAuthenticatedTxBatch>::handle(
+        &service,
+        input,
+        &MetadataMap::new(),
+        &Extensions::new(),
+    )
+    .await
+    .expect_err("the async handler should reject the malformed proposed batch");
+
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    assert!(error.message().contains("invalid proposed_batch"));
+}
+
+// Batch-path coverage for the network-account gate is provided manually. The query layer is covered
+// by the unit test in store::db::tests, and the RPC handler gate is covered by
+// `rpc_rejects_post_deployment_network_account_tx`.
 
 #[tokio::test]
 async fn rpc_server_rejects_tx_submissions_without_genesis() {
@@ -1025,8 +1212,8 @@ async fn rpc_server_rejects_tx_submissions_without_genesis() {
     let (account, account_patch) = build_test_account([0; 32]);
     let tx = build_test_proven_tx(&account, &account_patch, genesis);
 
-    let request = proto::transaction::ProvenTransaction {
-        transaction: tx.to_bytes(),
+    let request = proto::submission::ProvenTransactionSubmission {
+        transaction: Some((&tx).into()),
         sealed_transaction_inputs: None,
     };
 
@@ -1216,7 +1403,7 @@ async fn sync_chain_mmr_returns_delta() {
 
     let mmr_delta = response.mmr_delta.expect("mmr_delta should exist");
     assert_eq!(mmr_delta.forest, 0);
-    assert!(mmr_delta.data.is_empty());
+    assert!(mmr_delta.update_data.is_empty());
 }
 
 #[test]
@@ -1229,7 +1416,7 @@ fn sync_chain_mmr_block_header_matches_chain_commitment() {
     let mut headers = Vec::new();
     for i in 0..5u32 {
         let chain_commitment = server_mmr.peaks().hash_peaks();
-        let header = BlockHeader::mock(i, Some(chain_commitment), None, &[], Word::default());
+        let header = BlockHeader::mock(i, Some(chain_commitment), None, &[]);
         server_mmr.add(header.commitment()).unwrap();
         headers.push(header);
     }

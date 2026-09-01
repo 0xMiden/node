@@ -44,7 +44,7 @@ use crate::{COMPONENT, LOG_TARGET};
 /// call.
 pub(crate) async fn submit_tx_to_validators(
     validators: &[miden_node_proto::clients::ValidatorClient],
-    request: &proto::transaction::ProvenTransaction,
+    request: &proto::submission::ProvenTransactionSubmission,
 ) -> tonic::Result<()> {
     futures::future::try_join_all(validators.iter().map(|validator| {
         let mut validator = validator.clone();
@@ -61,7 +61,7 @@ pub(crate) async fn submit_tx_to_validators(
 pub(crate) async fn submit_batch_to_validators(
     validators: &[miden_node_proto::clients::ValidatorClient],
     proposed_batch: &miden_protocol::batch::ProposedBatch,
-    sealed_transaction_inputs: &[proto::transaction::SealedTransactionInputs],
+    sealed_transaction_inputs: &[proto::submission::SealedTransactionInputs],
 ) -> tonic::Result<()> {
     futures::future::try_join_all(validators.iter().map(|validator| {
         let mut validator = validator.clone();

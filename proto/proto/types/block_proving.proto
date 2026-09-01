@@ -1,0 +1,39 @@
+syntax = "proto3";
+package block_proving;
+
+import "account.proto";
+import "batch.proto";
+import "block.proto";
+import "note.proto";
+import "partial_blockchain.proto";
+import "primitives.proto";
+
+// The requested account ID paired with the canonical account-tree witness.
+message AccountWitnessRecord {
+  account.AccountId account_id = 1;
+  account.AccountWitness witness = 2;
+}
+
+// A nullifier and its canonical SMT opening.
+message NullifierWitness {
+  primitives.Word nullifier = 1;
+  primitives.SmtOpening opening = 2;
+}
+
+// The state required to propose a block.
+message BlockInputs {
+  blockchain.BlockHeader prev_block_header = 1;
+  blockchain.PartialBlockchain partial_blockchain = 2;
+  repeated AccountWitnessRecord account_witnesses = 3;
+  repeated NullifierWitness nullifier_witnesses = 4;
+  repeated note.NoteInclusionProof unauthenticated_note_proofs = 5;
+}
+
+// The structured inputs required to reconstruct and prove a protocol 0.17 proposed block.
+message BlockProofRequest {
+  repeated transaction.ProvenBatch batches = 1;
+  BlockInputs block_inputs = 2;
+  fixed32 timestamp = 3;
+  blockchain.ValidatorConfig next_validator_config = 4;
+  optional blockchain.NextProtocolConfig next_protocol_config = 5;
+}

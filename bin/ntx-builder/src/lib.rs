@@ -428,7 +428,7 @@ impl NtxBuilderConfig {
             .await
             .context("failed to read genesis validator keys")?
             .context("genesis validator keys are missing; re-bootstrap the NTX builder database")?;
-        let trusted_validator_signing_keys = genesis_validator_keys.as_keys().to_vec();
+        let trusted_validator_signing_keys = genesis_validator_keys.keys().to_vec();
 
         let rpc = match self.rpc_auth_header.clone() {
             Some(rpc_auth_header_value) => RpcClient::new_with_auth(

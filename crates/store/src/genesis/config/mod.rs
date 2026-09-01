@@ -8,10 +8,11 @@ use indexmap::IndexMap;
 use miden_node_tracing::debug;
 use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
 use miden_protocol::account::{Account, AccountBuilder, AccountFile, AccountId, AccountType};
-use miden_protocol::asset::{Asset, AssetAmount, FungibleAsset, TokenSymbol};
-use miden_protocol::block::{FeeParameters, ValidatorKeys};
+use miden_protocol::asset::{Asset, AssetAmount, AssetId, FungibleAsset, TokenSymbol};
+use miden_protocol::block::{FeeParameters, ValidatorConfig};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey as RpoSecretKey;
 use miden_protocol::errors::TokenSymbolError;
+use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::{Felt, ONE};
 use miden_standards::account::access::AccessControl;
 use miden_standards::account::auth::{Approver, AuthSingleSig};
@@ -149,7 +150,7 @@ impl GenesisConfig {
 
     /// Convert the in memory representation into the new genesis state
     ///
-    /// The given `validator_keys` are the genesis validator set committed to by the genesis
+    /// The given `validator_config` is the genesis validator set committed to by the genesis
     /// header. The genesis block is not signed; the committed set is required to sign every block
     /// after genesis.
     ///
@@ -157,7 +158,7 @@ impl GenesisConfig {
     #[expect(clippy::too_many_lines)]
     pub fn into_state(
         self,
-        validator_keys: ValidatorKeys,
+        validator_config: ValidatorConfig,
     ) -> Result<(GenesisState, AccountSecrets), GenesisConfigError> {
         let GenesisConfig {
             version,
@@ -245,8 +246,9 @@ impl GenesisConfig {
             // remaining supply in the faucets.
         }
 
-        let fee_parameters =
-            FeeParameters::new(native_faucet_account_id, fee_parameters.verification_base_fee);
+        let fee_parameters = FeeParameters::new(fee_parameters.verification_base_fee);
+        let protocol_config =
+            ProtocolConfig::current(AssetId::new_fungible(native_faucet_account_id))?;
 
         let zero_padding_width = usize::ilog10(std::cmp::max(10, wallet_configs.len())) as usize;
 
@@ -366,7 +368,8 @@ impl GenesisConfig {
                 accounts: all_accounts,
                 version,
                 timestamp,
-                validator_keys,
+                validator_config,
+                protocol_config,
             },
             AccountSecrets { secrets },
         ))
@@ -704,7 +707,7 @@ fn prepare_fungible_asset_update(
                 .checked_add_assign(&amount)
                 .map_err(|_| GenesisConfigError::IssuanceOverflow)?;
 
-            Ok(Asset::Fungible(FungibleAsset::new(faucet_id, amount)?))
+            Ok(FungibleAsset::new(faucet_id, amount)?.into())
         })
         .collect()
 }

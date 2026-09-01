@@ -101,7 +101,7 @@ fn transaction_record_to_proto(record: TransactionRecord) -> proto::rpc::Transac
         .consumed_note_refs
         .into_iter()
         .map(|(nullifier, note_id)| proto::rpc::ConsumedNoteRef {
-            nullifier: Some(nullifier.into()),
+            nullifier: Some(nullifier.as_word().into()),
             note_id: Some((&note_id).into()),
         })
         .collect();
@@ -121,10 +121,10 @@ fn transaction_record_to_proto(record: TransactionRecord) -> proto::rpc::Transac
     }
 }
 
-fn note_sync_record_to_proof_proto(note: NoteSyncRecord) -> proto::note::NoteInclusionInBlockProof {
-    proto::note::NoteInclusionInBlockProof {
+fn note_sync_record_to_proof_proto(note: NoteSyncRecord) -> proto::note::NoteInclusionProof {
+    proto::note::NoteInclusionProof {
         note_id: Some((&note.note_id).into()),
-        block_num: note.block_num.as_u32(),
+        block_num: Some(note.block_num.into()),
         note_index_in_block: note.note_index.leaf_index_value().into(),
         inclusion_path: Some(note.inclusion_path.into()),
     }

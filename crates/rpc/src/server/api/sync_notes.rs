@@ -86,40 +86,19 @@ impl proto::server::rpc_api::SyncNotes for RpcService {
 // HELPERS
 // ================================================================================================
 
-fn note_sync_record_to_proto(note: NoteSyncRecord) -> proto::note::NoteSyncRecord {
-    let attachments = note
-        .attachments
-        .iter()
-        .map(|attachment| {
-            let payload = if attachment.num_words() == 1 {
-                proto::note::note_sync_attachment::Payload::Value(
-                    attachment.content().as_words()[0].into(),
-                )
-            } else {
-                proto::note::note_sync_attachment::Payload::Commitment(
-                    attachment.to_commitment().into(),
-                )
-            };
-
-            proto::note::NoteSyncAttachment {
-                scheme: attachment.attachment_scheme().as_u16().into(),
-                payload: Some(payload),
-            }
-        })
-        .collect();
-    let metadata = Some(proto::note::NoteSyncMetadata {
-        sender: Some(note.metadata.sender().into()),
-        note_type: proto::note::NoteType::from(note.metadata.note_type()) as i32,
-        tag: note.metadata.tag().as_u32(),
-        attachments,
-    });
-    let inclusion_proof = Some(proto::note::NoteInclusionInBlockProof {
+fn note_sync_record_to_proto(note: NoteSyncRecord) -> proto::rpc::NoteSyncRecord {
+    let inclusion_proof = Some(proto::note::NoteInclusionProof {
         note_id: Some((&note.note_id).into()),
-        block_num: note.block_num.as_u32(),
+        block_num: Some(note.block_num.into()),
         note_index_in_block: note.note_index.leaf_index_value().into(),
         inclusion_path: Some(note.inclusion_path.into()),
     });
-    proto::note::NoteSyncRecord { metadata, inclusion_proof }
+    let note = Some(proto::note::Note {
+        metadata: Some(note.metadata.into()),
+        note_details: None,
+        note_attachments: Some(note.attachments.into()),
+    });
+    proto::rpc::NoteSyncRecord { note, inclusion_proof }
 }
 
 fn note_sync_error_to_status(err: NoteSyncError) -> Status {
@@ -137,6 +116,7 @@ fn note_sync_error_to_status(err: NoteSyncError) -> Status {
 
 #[cfg(test)]
 mod tests {
+    use miden_protocol::Word;
     use miden_protocol::account::{AccountId, AccountIdVersion, AccountType, AssetCallbackFlag};
     use miden_protocol::block::{BlockNoteIndex, BlockNumber};
     use miden_protocol::crypto::merkle::SparseMerklePath;
@@ -150,12 +130,11 @@ mod tests {
         NoteType,
         PartialNoteMetadata,
     };
-    use miden_protocol::{Hasher, Word};
 
     use super::*;
 
     #[test]
-    fn sync_note_encodes_attachment_values_and_commitments() {
+    fn sync_note_encodes_canonical_metadata_and_attachments() {
         let single_word = Word::from([1, 2, 3, 4u32]);
         let single_word_scheme = NoteAttachmentScheme::new(42).unwrap();
         let multi_word_scheme = NoteAttachmentScheme::new(100).unwrap();
@@ -164,7 +143,6 @@ mod tests {
             vec![Word::from([5, 6, 7, 8u32]), Word::from([9, 10, 11, 12u32])],
         )
         .unwrap();
-        let multi_word_commitment = multi_word_attachment.to_commitment();
         let attachments = NoteAttachments::new(vec![
             NoteAttachment::with_word(single_word_scheme, single_word),
             multi_word_attachment,
@@ -191,44 +169,12 @@ mod tests {
         };
 
         let proto_record = note_sync_record_to_proto(record);
-        let proto_metadata = proto_record.metadata.unwrap();
-        assert_eq!(proto_metadata.sender, Some(sender.into()));
-        assert_eq!(proto_metadata.note_type, proto::note::NoteType::Private as i32);
-        assert_eq!(proto_metadata.tag, 7);
-        assert_eq!(proto_metadata.attachments.len(), 2);
-
-        let first = &proto_metadata.attachments[0];
-        assert_eq!(first.scheme, u32::from(single_word_scheme.as_u16()));
-        assert_eq!(
-            first.payload,
-            Some(proto::note::note_sync_attachment::Payload::Value(single_word.into()))
-        );
-
-        let second = &proto_metadata.attachments[1];
-        assert_eq!(second.scheme, u32::from(multi_word_scheme.as_u16()));
-        assert_eq!(
-            second.payload,
-            Some(proto::note::note_sync_attachment::Payload::Commitment(
-                multi_word_commitment.into()
-            ))
-        );
-
-        let attachment_commitments: Vec<Word> = proto_metadata
-            .attachments
-            .iter()
-            .map(|attachment| match attachment.payload.as_ref().unwrap() {
-                proto::note::note_sync_attachment::Payload::Value(value) => {
-                    let value = Word::try_from(value).unwrap();
-                    Hasher::hash_elements(value.as_elements())
-                },
-                proto::note::note_sync_attachment::Payload::Commitment(commitment) => {
-                    Word::try_from(commitment).unwrap()
-                },
-            })
-            .collect();
-        let commitment_elements: Vec<_> =
-            attachment_commitments.iter().flat_map(Word::as_elements).copied().collect();
-        assert_eq!(Hasher::hash_elements(&commitment_elements), attachments.to_commitment());
+        let proto_note = proto_record.note.unwrap();
+        let decoded_metadata = NoteMetadata::try_from(proto_note.metadata.unwrap()).unwrap();
+        let decoded_attachments =
+            NoteAttachments::try_from(proto_note.note_attachments.unwrap()).unwrap();
+        assert_eq!(decoded_metadata, metadata);
+        assert_eq!(decoded_attachments, attachments);
     }
 
     #[test]
@@ -253,6 +199,6 @@ mod tests {
         };
 
         let proto_record = note_sync_record_to_proto(record);
-        assert!(proto_record.metadata.unwrap().attachments.is_empty());
+        assert!(proto_record.note.unwrap().note_attachments.unwrap().attachments.is_empty());
     }
 }

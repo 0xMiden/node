@@ -143,7 +143,7 @@ impl ValidatorService {
             .map_err(ValidatorError::DatabaseError)?
             .ok_or(ValidatorError::NoChainTip)?;
         let signing_key = signer.public_key();
-        if !chain_tip.validator_keys().as_keys().contains(&signing_key) {
+        if !chain_tip.validator_config().keys().contains(&signing_key) {
             return Err(ValidatorError::ValidatorKeyNotInSet { actual: signing_key });
         }
 
@@ -195,7 +195,7 @@ impl ValidatorService {
     ///    previous block commitment), or b. A replacement block at the same height as the current chain
     ///    tip, validated against the previous block header.
     ///
-    /// On success, returns the signature and the validated block header.
+    /// On success, returns the signed block carrying this validator's signature.
     #[miden_instrument(
         target = COMPONENT,
         err,
@@ -204,7 +204,7 @@ impl ValidatorService {
         &self,
         proposed_block: ProposedBlock,
         chain_tip: BlockHeader,
-    ) -> Result<(Signature, BlockHeader), ValidatorError> {
+    ) -> Result<SignedBlock, ValidatorError> {
         miden_span_record!(tip.number = chain_tip.block_num());
 
         // Search for any proposed transactions that have not previously been validated.
@@ -270,7 +270,7 @@ impl ValidatorService {
         // Otherwise we would be producing a signature that cannot be placed in the block's
         // signature set.
         let signing_key = self.signer.public_key();
-        if !prev.validator_keys().as_keys().contains(&signing_key) {
+        if !prev.validator_config().keys().contains(&signing_key) {
             return Err(ValidatorError::ValidatorKeyNotInSet { actual: signing_key });
         }
 
@@ -298,8 +298,7 @@ impl ValidatorService {
             .await
             .map_err(ValidatorError::BlockBackupFailed)?;
 
-        let (header, ..) = signed_block.into_parts();
-        Ok((signature, header))
+        Ok(signed_block)
     }
 
     /// Signs a block header using the validator's signer.

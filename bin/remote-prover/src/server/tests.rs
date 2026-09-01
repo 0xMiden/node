@@ -4,17 +4,26 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use assert_matches::assert_matches;
+use miden_node_proto::BlockProofRequest;
 use miden_node_proto::generated::remote_prover::api_client::ApiClient;
-use miden_node_proto::generated::remote_prover::{Proof, ProofRequest, ProofType};
+use miden_node_proto::generated::remote_prover::proof::Proof as ProofVariant;
+use miden_node_proto::generated::remote_prover::proof_request::Request;
+use miden_node_proto::generated::remote_prover::{Proof, ProofRequest};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::asset::{Asset, FungibleAsset};
-use miden_protocol::batch::{ProposedBatch, ProvenBatch};
+use miden_protocol::batch::{OrderedBatches, ProposedBatch};
+use miden_protocol::block::{BlockHeader, BlockInputs, ProposedBlock};
 use miden_protocol::note::NoteType;
 use miden_protocol::testing::account_id::{ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET, ACCOUNT_ID_SENDER};
-use miden_protocol::transaction::{ExecutedTransaction, ProvenTransaction, TransactionVerifier};
-use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::transaction::{
+    ExecutedTransaction,
+    PartialBlockchain,
+    ProvenTransaction,
+    TransactionVerifier,
+};
+use miden_protocol::vm::ExecutionProof;
 use miden_testing::{Auth, MockChainBuilder};
 use miden_tx::LocalTransactionProver;
 use miden_tx_batch::BatchVerifier;
@@ -47,6 +56,7 @@ trait ProofRequestExt {
     /// Generates a proof request for a transaction using [`MockChain`].
     fn from_tx(tx: &ExecutedTransaction) -> ProofRequest;
     fn from_batch(batch: &ProposedBatch) -> ProofRequest;
+    fn for_empty_block() -> ProofRequest;
     async fn mock_tx() -> ExecutedTransaction;
     async fn mock_batch() -> ProposedBatch;
 }
@@ -56,15 +66,40 @@ impl ProofRequestExt for ProofRequest {
         let tx_inputs = tx.tx_inputs().clone();
 
         ProofRequest {
-            proof_type: ProofType::Transaction as i32,
-            payload: tx_inputs.to_bytes(),
+            request: Some(Request::Transaction(tx_inputs.into())),
         }
     }
 
     fn from_batch(batch: &ProposedBatch) -> ProofRequest {
         ProofRequest {
-            proof_type: ProofType::Batch as i32,
-            payload: batch.to_bytes(),
+            request: Some(Request::Batch(batch.into())),
+        }
+    }
+
+    fn for_empty_block() -> ProofRequest {
+        let partial_blockchain = PartialBlockchain::default();
+        let block_inputs = BlockInputs::new(
+            BlockHeader::mock(0, Some(partial_blockchain.peaks().hash_peaks()), None, &[]),
+            partial_blockchain,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+        );
+        let proposed_block = ProposedBlock::new_at(
+            block_inputs.clone(),
+            Vec::new(),
+            block_inputs.prev_block_header().timestamp() + 1,
+        )
+        .unwrap();
+        let (block_header, _) = proposed_block.into_header_and_body().unwrap();
+        let request = BlockProofRequest {
+            tx_batches: OrderedBatches::new(Vec::new()),
+            block_header,
+            block_inputs,
+        };
+
+        ProofRequest {
+            request: Some(Request::Block(request.into())),
         }
     }
 
@@ -283,25 +318,88 @@ async fn timeout_is_respected() {
     server.abort();
 }
 
-/// Ensures that an invalid proof kind is rejected.
+/// Ensures that the server rejects a request with no oneof variant.
 ///
-/// Checks the status code and message because the status code covers multiple validation errors.
+/// The test checks the status code and message because the status code covers multiple errors.
 #[tokio::test(flavor = "multi_thread")]
-async fn invalid_proof_kind_is_rejected() {
+async fn missing_request_variant_is_rejected() {
     let (server, port) = Server::with_arbitrary_port(ProofKind::Transaction)
         .spawn(CancellationToken::new())
         .await
         .expect("server should spawn");
 
-    let mut request = ProofRequest::from_tx(&ProofRequest::mock_tx().await);
-    request.proof_type = i32::MAX;
-
     let mut client = Client::connect(port).await;
-    let response = client.submit_request(request).await;
+    let response = client.submit_request(ProofRequest { request: None }).await;
     let err = response.unwrap_err();
 
     assert_eq!(err.code(), tonic::Code::InvalidArgument);
-    assert!(err.message().contains("unknown proof_type value"));
+    assert!(err.message().contains("missing proof request"));
+
+    server.abort();
+}
+
+/// Ensures that malformed canonical transaction inputs are rejected as client input.
+#[tokio::test(flavor = "multi_thread")]
+async fn malformed_transaction_inputs_are_rejected() {
+    let (server, port) = Server::with_arbitrary_port(ProofKind::Transaction)
+        .spawn(CancellationToken::new())
+        .await
+        .expect("server should spawn");
+
+    let request = ProofRequest {
+        request: Some(Request::Transaction(
+            miden_node_proto::generated::transaction::TransactionInputs::default(),
+        )),
+    };
+    let mut client = Client::connect(port).await;
+    let err = client.submit_request(request).await.unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(err.message().contains("transaction inputs"));
+
+    server.abort();
+}
+
+/// Ensures that malformed canonical batch inputs are rejected as client input.
+#[tokio::test(flavor = "multi_thread")]
+async fn malformed_batch_inputs_are_rejected() {
+    let (server, port) = Server::with_arbitrary_port(ProofKind::Batch)
+        .spawn(CancellationToken::new())
+        .await
+        .expect("server should spawn");
+
+    let request = ProofRequest {
+        request: Some(Request::Batch(
+            miden_node_proto::generated::transaction::ProposedBatch::default(),
+        )),
+    };
+    let mut client = Client::connect(port).await;
+    let err = client.submit_request(request).await.unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(err.message().contains("proposed batch"));
+
+    server.abort();
+}
+
+/// Ensures that malformed canonical block inputs are rejected as client input.
+#[tokio::test(flavor = "multi_thread")]
+async fn malformed_block_inputs_are_rejected() {
+    let (server, port) = Server::with_arbitrary_port(ProofKind::Block)
+        .spawn(CancellationToken::new())
+        .await
+        .expect("server should spawn");
+
+    let request = ProofRequest {
+        request: Some(Request::Block(
+            miden_node_proto::generated::block_proving::BlockProofRequest::default(),
+        )),
+    };
+    let mut client = Client::connect(port).await;
+    let err = client.submit_request(request).await.unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(err.message().contains("block proving inputs"));
 
     server.abort();
 }
@@ -345,7 +443,10 @@ async fn transaction_proof_is_correct() {
 
     let mut client = Client::connect(port).await;
     let response = client.submit_request(request).await.unwrap();
-    let response = ProvenTransaction::read_from_bytes(&response.payload).unwrap();
+    let response = match response.proof.unwrap() {
+        ProofVariant::Transaction(transaction) => ProvenTransaction::try_from(transaction).unwrap(),
+        other => panic!("expected transaction proof response, got {other:?}"),
+    };
 
     assert_eq!(response.id(), tx.id());
     TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL).verify(&response).unwrap();
@@ -370,10 +471,37 @@ async fn batch_proof_is_correct() {
 
     let mut client = Client::connect(port).await;
     let response = client.submit_request(request).await.unwrap();
-    let response = ProvenBatch::read_from_bytes(&response.payload).unwrap();
+    let response = match response.proof.unwrap() {
+        ProofVariant::Batch(proof) => {
+            miden_objects::conversion::decode_proven_batch(proof, &batch).unwrap()
+        },
+        other => panic!("expected batch proof response, got {other:?}"),
+    };
 
     assert_eq!(response.id(), batch.id());
     BatchVerifier::new(MIN_PROOF_SECURITY_LEVEL).verify(&response).unwrap();
+
+    server.abort();
+}
+
+/// Checks that a block request is executed and returns a canonical execution proof.
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn block_proof_is_canonical_execution_proof() {
+    let (server, port) = Server::with_arbitrary_port(ProofKind::Block)
+        .spawn(CancellationToken::new())
+        .await
+        .expect("server should spawn");
+
+    let request = ProofRequest::for_empty_block();
+    let mut client = Client::connect(port).await;
+    let response = client.submit_request(request).await.unwrap();
+    let proof = match response.proof.unwrap() {
+        ProofVariant::Block(proof) => ExecutionProof::try_from(proof).unwrap(),
+        other => panic!("expected block proof response, got {other:?}"),
+    };
+
+    assert!(!proof.to_bytes().is_empty());
 
     server.abort();
 }

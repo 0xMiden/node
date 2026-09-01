@@ -4,10 +4,11 @@
 syntax = "proto3";
 package sequencer;
 
-import "types/account.proto";
-import "types/blockchain.proto";
-import "types/primitives.proto";
-import "types/transaction.proto";
+import "account.proto";
+import "block_number.proto";
+import "primitives.proto";
+import "transaction.proto";
+import "batch.proto";
 
 // INTERNAL SEQUENCER API
 // ================================================================================================
@@ -29,14 +30,13 @@ service Api {
 message AuthenticatedTransaction {
     // The proven transaction.
     //
-    // Encoded using [miden_protocol::transaction::ProvenTransaction::to_bytes].
-    bytes transaction = 1;
+    transaction.ProvenTransactionData transaction = 1;
 
     // The account state provided by the store inputs, if any.
-    optional primitives.Digest store_account_state = 2;
+    optional primitives.Word store_account_state = 2;
 
     // Unauthenticated input note commitments that have since been committed to, and authenticated.
-    repeated primitives.Digest notes_authenticated_by_store = 3;
+    repeated primitives.Word notes_authenticated_by_store = 3;
 
     // The chain height at which authentication took place.
     fixed32 authentication_height = 4;
@@ -46,8 +46,7 @@ message AuthenticatedTransaction {
 message AuthenticatedTransactionBatch {
     // The proposed batch.
     //
-    // Encoded using [miden_protocol::batch::ProposedBatch::to_bytes].
-    bytes proposed_batch = 1;
+    transaction.ProposedBatch proposed_batch = 1;
 
     // The store inputs for each transaction in the batch.
     //
@@ -65,13 +64,13 @@ message AuthInputs {
     account.AccountId account_id = 1;
 
     // The transaction account's current onchain commitment, if any.
-    optional primitives.Digest account_commitment = 2;
+    optional primitives.Word account_commitment = 2;
 
     // The transaction's nullifiers and the block in which each was consumed, if any.
     repeated NullifierRecord nullifiers = 3;
 
     // Unauthenticated input note commitments which were found committed in the store.
-    repeated primitives.Digest found_unauthenticated_notes = 4;
+    repeated primitives.Word found_unauthenticated_notes = 4;
 
     // The current chain tip.
     fixed32 current_block_height = 5;
@@ -80,7 +79,7 @@ message AuthInputs {
 // A nullifier together with the block in which it was consumed.
 message NullifierRecord {
     // The nullifier.
-    primitives.Digest nullifier = 1;
+    primitives.Word nullifier = 1;
 
     // The block number in which the nullifier was consumed; 0 if it is unspent.
     fixed32 block_num = 2;

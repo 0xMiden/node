@@ -8,7 +8,6 @@ use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::{ProvenTransaction, TransactionId, TxAccountUpdate};
-use miden_protocol::utils::serde::{Deserializable, Serializable};
 
 use crate::errors::StateConflict;
 use crate::store::TransactionInputs;
@@ -141,7 +140,7 @@ impl AuthenticatedTransaction {
 impl From<AuthenticatedTransaction> for sequencer::AuthenticatedTransaction {
     fn from(value: AuthenticatedTransaction) -> Self {
         Self {
-            transaction: value.inner.to_bytes(),
+            transaction: Some(value.inner.as_ref().into()),
             store_account_state: value.store_account_state.map(Into::into),
             notes_authenticated_by_store: value
                 .notes_authenticated_by_store
@@ -157,8 +156,13 @@ impl TryFrom<sequencer::AuthenticatedTransaction> for AuthenticatedTransaction {
     type Error = ConversionError;
 
     fn try_from(value: sequencer::AuthenticatedTransaction) -> Result<Self, Self::Error> {
-        let inner = ProvenTransaction::read_from_bytes(&value.transaction)
-            .map_err(|err| ConversionError::deserialization("ProvenTransaction", err))?;
+        let inner = value
+            .transaction
+            .ok_or_else(|| {
+                ConversionError::missing_field::<sequencer::AuthenticatedTransaction>("transaction")
+            })?
+            .try_into()
+            .map_err(ConversionError::from)?;
 
         let store_account_state = value.store_account_state.map(Word::try_from).transpose()?;
 

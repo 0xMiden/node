@@ -1,14 +1,10 @@
 use std::time::Duration;
 
 use miden_node_proto::clients::{Builder, ValidatorClient};
-use miden_node_proto::decode::GrpcDecodeExt;
 use miden_node_proto::errors::ConversionError;
-use miden_node_proto::{decode, generated as proto};
+use miden_node_proto::generated as proto;
 use miden_node_tracing::{info, miden_instrument};
-use miden_protocol::Word;
-use miden_protocol::block::ProposedBlock;
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
-use miden_protocol::utils::serde::Serializable;
+use miden_protocol::block::{BlockInputs, ProposedBlock, SignedBlock};
 use thiserror::Error;
 use url::Url;
 
@@ -31,9 +27,7 @@ pub enum ValidatorError {
 /// A single validator's response to a `sign_block` request.
 #[derive(Debug, Clone)]
 pub struct SignBlockResponse {
-    pub signature: Signature,
-    pub block_commitment: Word,
-    pub public_key: PublicKey,
+    pub signed_block: SignedBlock,
 }
 
 // VALIDATOR CLIENT
@@ -78,9 +72,7 @@ impl BlockProducerValidatorClient {
     }
 
     /// Signs the proposed block via every validator concurrently, returning each validator's
-    /// signature, the block commitment it reports having signed (for cross-checking against the
-    /// locally built block), and its public key (so the caller can place the signature at the
-    /// correct position in the block's signature set).
+    /// canonical signed block response.
     ///
     /// Fails if any validator fails to respond, since every validator in the parent's set must
     /// sign for the block to reach quorum.
@@ -91,10 +83,15 @@ impl BlockProducerValidatorClient {
     )]
     pub async fn sign_block(
         &self,
-        proposed_block: ProposedBlock,
+        proposed_block: &ProposedBlock,
+        block_inputs: &BlockInputs,
     ) -> Result<Vec<SignBlockResponse>, ValidatorError> {
-        let message = proto::blockchain::ProposedBlock {
-            proposed_block: proposed_block.to_bytes(),
+        let message = proto::block_proving::BlockProofRequest {
+            batches: proposed_block.batches().as_slice().iter().map(Into::into).collect(),
+            block_inputs: Some(block_inputs.into()),
+            timestamp: proposed_block.timestamp(),
+            next_validator_config: Some(proposed_block.next_validator_config().into()),
+            next_protocol_config: proposed_block.next_protocol_config().map(Into::into),
         };
 
         let responses = futures::future::try_join_all(self.clients.iter().map(|client| {
@@ -113,13 +110,9 @@ impl BlockProducerValidatorClient {
 
     /// Decodes a single validator's `sign_block` response.
     fn decode_response(
-        response: proto::blockchain::SignBlockResponse,
+        response: proto::blockchain::SignedBlock,
     ) -> Result<SignBlockResponse, ValidatorError> {
-        let decoder = response.decoder();
-        let signature: Signature = decode!(decoder, response.signature)?;
-        let block_commitment = decode!(decoder, response.block_commitment)?;
-        let public_key = decode!(decoder, response.public_key)?;
-
-        Ok(SignBlockResponse { signature, block_commitment, public_key })
+        let signed_block = response.try_into().map_err(ConversionError::from)?;
+        Ok(SignBlockResponse { signed_block })
     }
 }

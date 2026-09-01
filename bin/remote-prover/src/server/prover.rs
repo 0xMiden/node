@@ -1,11 +1,13 @@
-use miden_block_prover::LocalBlockProver;
+use miden_block_prover::{BlockExecutor, LocalBlockProver};
 use miden_node_proto::BlockProofRequest;
 use miden_node_proto::generated::remote_prover as proto;
+use miden_node_proto::generated::remote_prover::proof::Proof as ProofVariant;
+use miden_node_proto::generated::remote_prover::proof_request::Request;
 use miden_node_tracing::{ErrorReport, miden_instrument};
+use miden_objects::conversion::decode_proposed_batch;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
-use miden_protocol::batch::{ProposedBatch, ProvenBatch};
-use miden_protocol::block::BlockProof;
-use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
+use miden_protocol::block::ProposedBlock;
+use miden_protocol::transaction::TransactionInputs;
 use miden_tx::LocalTransactionProver;
 use miden_tx_batch::{BatchExecutor, LocalBatchProver};
 
@@ -29,13 +31,80 @@ impl Prover {
         }
     }
 
-    /// Proves a [`proto::ProofRequest`] using the appropriate prover implementation as specified
-    /// during construction.
+    /// Proves the structured request matching this worker's configured capability.
+    #[miden_instrument(
+        target=COMPONENT,
+        name="prove",
+        err,
+    )]
     pub fn prove(&self, request: proto::ProofRequest) -> Result<proto::Proof, tonic::Status> {
-        match self {
-            Prover::Transaction(prover) => prover.prove_request(request),
-            Prover::Batch(prover) => prover.prove_request(request),
-            Prover::Block(prover) => prover.prove_request(request),
+        match (self, request.request) {
+            (Self::Transaction(prover), Some(Request::Transaction(input))) => {
+                let input = TransactionInputs::try_from(input).map_err(|error| {
+                    tonic::Status::invalid_argument(
+                        error.as_report_context("failed to decode transaction inputs"),
+                    )
+                })?;
+                let transaction = prover.prove(input).map_err(|error| {
+                    tonic::Status::internal(error.as_report_context("failed to prove transaction"))
+                })?;
+
+                Ok(proto::Proof {
+                    proof: Some(ProofVariant::Transaction(transaction.into())),
+                })
+            },
+            (Self::Batch(prover), Some(Request::Batch(input))) => {
+                let input =
+                    decode_proposed_batch(input, MIN_PROOF_SECURITY_LEVEL).map_err(|error| {
+                        tonic::Status::invalid_argument(
+                            error.as_report_context("failed to decode proposed batch"),
+                        )
+                    })?;
+                let executed_batch = BatchExecutor::new().execute(input).map_err(|error| {
+                    tonic::Status::internal(error.as_report_context("failed to execute batch"))
+                })?;
+                let batch = prover.prove(executed_batch).map_err(|error| {
+                    tonic::Status::internal(error.as_report_context("failed to prove batch"))
+                })?;
+
+                Ok(proto::Proof {
+                    proof: Some(ProofVariant::Batch(batch.into())),
+                })
+            },
+            (Self::Block(prover), Some(Request::Block(input))) => {
+                let BlockProofRequest { tx_batches, block_header, block_inputs } = input
+                    .try_into()
+                    .map_err(|error: miden_node_proto::errors::ConversionError| {
+                        tonic::Status::invalid_argument(
+                            error.as_report_context("failed to decode block proving inputs"),
+                        )
+                    })?;
+                let proposed_block = ProposedBlock::new_at(
+                    block_inputs,
+                    tx_batches.into_vec(),
+                    block_header.timestamp(),
+                )
+                .map_err(|error| {
+                    tonic::Status::invalid_argument(
+                        error.as_report_context("failed to construct proposed block"),
+                    )
+                })?
+                .with_next_validator_config(block_header.validator_config().clone())
+                .with_next_protocol_config(block_header.next_protocol_config().cloned());
+                let executed_block =
+                    BlockExecutor::new().execute(proposed_block).map_err(|error| {
+                        tonic::Status::internal(error.as_report_context("failed to execute block"))
+                    })?;
+                let proof = prover.prove(executed_block).map_err(|error| {
+                    tonic::Status::internal(error.as_report_context("failed to prove block"))
+                })?;
+
+                Ok(proto::Proof {
+                    proof: Some(ProofVariant::Block(proof.into())),
+                })
+            },
+            (_, None) => Err(tonic::Status::invalid_argument("missing proof request")),
+            _ => Err(tonic::Status::invalid_argument("unsupported proof type")),
         }
     }
 
@@ -46,91 +115,5 @@ impl Prover {
             Prover::Batch(_) => "batch prover task panicked",
             Prover::Block(_) => "block prover task panicked",
         }
-    }
-}
-
-/// This trait abstracts over proof request handling by providing a common interface for our
-/// different provers.
-///
-/// It standardizes the proving process by providing default implementations for the decoding of
-/// requests, and encoding of response. Notably it also standardizes the instrumentation, though
-/// implementations should still add attributes that can only be known post-decoding of the request.
-///
-/// Implementations of this trait only need to provide the input and outputs types, as well as the
-/// proof implementation.
-trait ProveRequest: Send + Sync {
-    type Input: miden_protocol::utils::serde::Deserializable + Send;
-    type Output: miden_protocol::utils::serde::Serializable + Send;
-
-    fn prove(&self, input: Self::Input) -> Result<Self::Output, tonic::Status>;
-
-    /// Entry-point to the proof request handling.
-    ///
-    /// Decodes the request, proves it, and encodes the response.
-    #[miden_instrument(
-        target=COMPONENT,
-        name="prove",
-        err,
-    )]
-    fn prove_request(&self, request: proto::ProofRequest) -> Result<proto::Proof, tonic::Status> {
-        let input = Self::decode_request(request)?;
-        self.prove(input).map(|output| Self::encode_response(output))
-    }
-
-    #[miden_instrument(
-        target=COMPONENT,
-        err,
-    )]
-    fn decode_request(request: proto::ProofRequest) -> Result<Self::Input, tonic::Status> {
-        use miden_protocol::utils::serde::Deserializable;
-
-        Self::Input::read_from_bytes(&request.payload).map_err(|e| {
-            tonic::Status::invalid_argument(e.as_report_context("failed to decode request"))
-        })
-    }
-
-    #[miden_instrument(
-        target=COMPONENT,
-    )]
-    fn encode_response(output: Self::Output) -> proto::Proof {
-        use miden_protocol::utils::serde::Serializable;
-
-        proto::Proof { payload: output.to_bytes() }
-    }
-}
-
-impl ProveRequest for LocalTransactionProver {
-    type Input = TransactionInputs;
-    type Output = ProvenTransaction;
-
-    fn prove(&self, input: Self::Input) -> Result<Self::Output, tonic::Status> {
-        self.prove(input).map_err(|e| {
-            tonic::Status::internal(e.as_report_context("failed to prove transaction"))
-        })
-    }
-}
-
-impl ProveRequest for LocalBatchProver {
-    type Input = ProposedBatch;
-    type Output = ProvenBatch;
-
-    fn prove(&self, input: Self::Input) -> Result<Self::Output, tonic::Status> {
-        let executed_batch = BatchExecutor::new()
-            .execute(input)
-            .map_err(|e| tonic::Status::internal(e.as_report_context("failed to execute batch")))?;
-        self.prove(executed_batch)
-            .map_err(|e| tonic::Status::internal(e.as_report_context("failed to prove batch")))
-    }
-}
-
-impl ProveRequest for LocalBlockProver {
-    type Input = BlockProofRequest;
-    type Output = BlockProof;
-
-    fn prove(&self, input: Self::Input) -> Result<Self::Output, tonic::Status> {
-        let BlockProofRequest { tx_batches, block_header, block_inputs } = input;
-
-        self.prove(tx_batches, &block_header, block_inputs)
-            .map_err(|e| tonic::Status::internal(e.as_report_context("failed to prove block")))
     }
 }

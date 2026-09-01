@@ -2,9 +2,9 @@
 syntax = "proto3";
 package validator;
 
-import "types/transaction.proto";
-import "types/blockchain.proto";
-import "types/primitives.proto";
+import "block.proto";
+import "types/block_proving.proto";
+import "types/submission.proto";
 import "google/protobuf/empty.proto";
 
 // VALIDATOR API
@@ -16,10 +16,10 @@ service Api {
    rpc Status(google.protobuf.Empty) returns (ValidatorStatus) {}
 
    // Submits a transaction to the validator.
-   rpc SubmitProvenTransaction(transaction.ProvenTransaction) returns (google.protobuf.Empty) {}
+   rpc SubmitProvenTransaction(submission.ProvenTransactionSubmission) returns (google.protobuf.Empty) {}
 
-   // Validates and signs a proposed block, returning the signature and the signed block commitment.
-   rpc SignBlock(blockchain.ProposedBlock) returns (blockchain.SignBlockResponse) {}
+   // Validates and signs a proposed block.
+   rpc SignBlock(block_proving.BlockProofRequest) returns (blockchain.SignedBlock) {}
 
    // Streams signed blocks starting from the given block number (inclusive).
    //
@@ -34,7 +34,7 @@ service Api {
    // The encryption key is shared across the whole validator set, so the returned public key is
    // identical regardless of which validator serves the request. The attestation carried in the
    // response is specific to this validator.
-   rpc GetTransactionEncryptionKey(google.protobuf.Empty) returns (transaction.TransactionEncryptionKey) {}
+   rpc GetTransactionEncryptionKey(google.protobuf.Empty) returns (submission.TransactionEncryptionKey) {}
 }
 
 // BLOCK SUBSCRIPTION
@@ -48,9 +48,7 @@ message BlockSubscriptionRequest {
 
 // A signed block streamed to a subscriber.
 message BlockSubscriptionResponse {
-    // The block encoded using [miden_serde_utils::Serializable] implementation for
-    // [miden_protocol::block::SignedBlock].
-    bytes block = 1;
+    blockchain.SignedBlock block = 1;
 
     // The signed chain tip when this item was emitted.
     fixed32 committed_chain_tip = 2;

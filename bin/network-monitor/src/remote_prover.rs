@@ -14,7 +14,8 @@ use std::time::{Duration, Instant};
 use miden_node_proto::clients::{RemoteProverClient, RemoteProverProxyStatusClient};
 use miden_node_proto::generated as proto;
 use miden_node_tracing::{debug, miden_instrument, warn};
-use miden_protocol::utils::serde::Serializable;
+use miden_protocol::account::AccountId;
+use prost::Message;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -32,6 +33,11 @@ use crate::service_status::{
     ServiceStatus,
     Status,
 };
+
+const MISSING_FEE_FAUCET_GUIDANCE: &str = concat!(
+    "transaction prover probe requires --fee-faucet-id ",
+    "after transaction capability discovery",
+);
 
 // PROOF TYPE
 // ================================================================================================
@@ -96,10 +102,11 @@ struct ProbeSpawner {
 
 impl ProbeSpawner {
     /// Spawns a probe task and returns its handle.
-    fn spawn(&self) -> JoinHandle<()> {
+    fn spawn(&self, fee_faucet_id: AccountId) -> JoinHandle<()> {
         tokio::spawn(run_prover_test(
             self.client.clone(),
             self.rpc_url.clone(),
+            fee_faucet_id,
             self.interval,
             self.probe_tx.clone(),
             self.name.clone(),
@@ -118,6 +125,7 @@ pub struct ProverStatusService {
     request_timeout: Duration,
     last_status: Option<RemoteProverStatusDetails>,
     last_status_err: Option<String>,
+    fee_faucet_id: Option<AccountId>,
     probe_rx: watch::Receiver<ProbeSnapshot>,
     probe_spawner: ProbeSpawner,
     probe_handle: Option<JoinHandle<()>>,
@@ -130,13 +138,15 @@ impl ProverStatusService {
         name: String,
         prover_url: Url,
         rpc_url: Url,
+        fee_faucet_id: Option<AccountId>,
         interval: Duration,
         request_timeout: Duration,
         probe_interval: Duration,
-        test_client: RemoteProverClient,
     ) -> Self {
         let url = prover_url.to_string();
-        let client = build_tls_client::<RemoteProverProxyStatusClient>(prover_url, request_timeout);
+        let client =
+            build_tls_client::<RemoteProverProxyStatusClient>(prover_url.clone(), request_timeout);
+        let test_client = build_tls_client::<RemoteProverClient>(prover_url, request_timeout);
         let (probe_tx, probe_rx) = watch::channel(ProbeSnapshot::default());
         let probe_spawner = ProbeSpawner {
             client: test_client,
@@ -153,6 +163,7 @@ impl ProverStatusService {
             request_timeout,
             last_status: None,
             last_status_err: None,
+            fee_faucet_id,
             probe_rx,
             probe_spawner,
             probe_handle: None,
@@ -172,10 +183,13 @@ impl ProverStatusService {
         if !matches!(status.supported_proof_type, ProofType::Transaction) {
             return;
         }
+        let Some(fee_faucet_id) = self.fee_faucet_id else {
+            return;
+        };
         match &self.probe_handle {
             None => {
                 debug!(target: COMPONENT, "spawning probe task", prover = self.name);
-                self.probe_handle = Some(self.probe_spawner.spawn());
+                self.probe_handle = Some(self.probe_spawner.spawn(fee_faucet_id));
             },
             Some(handle) if handle.is_finished() => {
                 warn!(
@@ -197,7 +211,7 @@ impl ProverStatusService {
                         error: Some("probe task terminated unexpectedly; respawning".to_string()),
                     });
                 });
-                self.probe_handle = Some(self.probe_spawner.spawn());
+                self.probe_handle = Some(self.probe_spawner.spawn(fee_faucet_id));
             },
             Some(_) => {},
         }
@@ -223,18 +237,6 @@ impl ProverStatusService {
             test: test_outcome.clone(),
         });
 
-        // Most recent status poll failed; report unhealthy but keep last known status details.
-        if let Some(err) = &self.last_status_err {
-            return ServiceStatus::unhealthy(&self.name, err.clone(), details);
-        }
-
-        if let Some(outcome) = &test_outcome {
-            if outcome.status == Status::Unhealthy {
-                let msg = outcome.error.clone().unwrap_or_else(|| "prover test failed".to_string());
-                return ServiceStatus::unhealthy(&self.name, msg, details);
-            }
-        }
-
         let unhealthy_workers: Vec<_> = status_details
             .workers
             .iter()
@@ -242,17 +244,43 @@ impl ProverStatusService {
             .map(|w| w.name.clone())
             .collect();
 
-        if status_details.workers.is_empty() {
-            ServiceStatus::unknown(&self.name, details)
+        let mut service_status = if status_details.workers.is_empty() {
+            ServiceStatus::unknown(&self.name, details.clone())
         } else if !unhealthy_workers.is_empty() {
             ServiceStatus::unhealthy(
                 &self.name,
                 format!("unhealthy workers: {}", unhealthy_workers.join(", ")),
-                details,
+                details.clone(),
             )
         } else {
-            ServiceStatus::healthy(&self.name, details)
+            ServiceStatus::healthy(&self.name, details.clone())
+        };
+
+        if let Some(outcome) = &test_outcome {
+            if outcome.status == Status::Unhealthy {
+                let msg = outcome.error.clone().unwrap_or_else(|| "prover test failed".to_string());
+                service_status = ServiceStatus::unhealthy(&self.name, msg, details.clone());
+            }
         }
+
+        // Most recent status poll failure takes precedence, while retaining the last known details.
+        if let Some(err) = &self.last_status_err {
+            service_status = ServiceStatus::unhealthy(&self.name, err.clone(), details);
+        }
+
+        if self.fee_faucet_id.is_none()
+            && matches!(status_details.supported_proof_type, ProofType::Transaction)
+        {
+            service_status.error = Some(match service_status.error {
+                Some(error) => format!("{error}; {MISSING_FEE_FAUCET_GUIDANCE}"),
+                None => MISSING_FEE_FAUCET_GUIDANCE.to_string(),
+            });
+            if service_status.status == Status::Healthy {
+                service_status.status = Status::Unknown;
+            }
+        }
+
+        service_status
     }
 }
 
@@ -367,6 +395,7 @@ const PAYLOAD_RETRY_DELAY: Duration = Duration::from_secs(30);
 async fn run_prover_test(
     mut client: RemoteProverClient,
     rpc_url: Url,
+    fee_faucet_id: AccountId,
     interval: Duration,
     probe_tx: watch::Sender<ProbeSnapshot>,
     name: String,
@@ -380,7 +409,7 @@ async fn run_prover_test(
             );
             return;
         }
-        match generate_prover_test_payload(&rpc_url).await {
+        match generate_prover_test_payload(&rpc_url, fee_faucet_id).await {
             Ok(payload) => break payload,
             Err(e) => {
                 warn!(
@@ -417,13 +446,17 @@ async fn run_prover_test(
 
         let start = Instant::now();
         let request = Request::new(payload.clone());
-        match client.prove(request).await {
-            Ok(response) => {
+        match client
+            .prove(request)
+            .await
+            .and_then(|response| transaction_proof_size(response.into_inner()))
+        {
+            Ok(proof_size_bytes) => {
                 state.success_count += 1;
                 state.latest = Some(ProverTestOutcome {
                     details: ProverTestDetails {
                         test_duration_ms: start.elapsed().as_millis() as u64,
-                        proof_size_bytes: response.into_inner().payload.len(),
+                        proof_size_bytes,
                         success_count: state.success_count,
                         failure_count: state.failure_count,
                         proof_type: ProofType::Transaction,
@@ -508,12 +541,26 @@ fn tonic_status_to_json(status: &tonic::Status) -> String {
 )]
 async fn generate_prover_test_payload(
     rpc_url: &Url,
+    fee_faucet_id: AccountId,
 ) -> anyhow::Result<proto::remote_prover::ProofRequest> {
-    let tx_inputs = crate::deploy::build_probe_transaction_inputs(rpc_url).await?;
+    use proto::remote_prover::proof_request::Request;
+
+    let tx_inputs = crate::deploy::build_probe_transaction_inputs(rpc_url, fee_faucet_id).await?;
     Ok(proto::remote_prover::ProofRequest {
-        proof_type: proto::remote_prover::ProofType::Transaction.into(),
-        payload: tx_inputs.to_bytes(),
+        request: Some(Request::Transaction(tx_inputs.into())),
     })
+}
+
+fn transaction_proof_size(response: proto::remote_prover::Proof) -> Result<usize, tonic::Status> {
+    use proto::remote_prover::proof::Proof;
+
+    match response.proof {
+        Some(Proof::Transaction(proof)) => Ok(proof.encoded_len()),
+        Some(_) => Err(tonic::Status::internal(
+            "remote prover response variant does not match transaction request",
+        )),
+        None => Err(tonic::Status::internal("remote prover response is missing proof variant")),
+    }
 }
 
 // TESTS
@@ -521,7 +568,29 @@ async fn generate_prover_test_payload(
 
 #[cfg(test)]
 mod tests {
+    use miden_protocol::asset::FungibleAsset;
+    use proto::remote_prover::proof::Proof as ProofVariant;
+
     use super::*;
+    use crate::service_status::{NetworkStatus, WorkerStatusDetails};
+
+    #[test]
+    fn missing_probe_response_variant_is_a_protocol_error() {
+        let error =
+            transaction_proof_size(proto::remote_prover::Proof { proof: None }).unwrap_err();
+
+        assert_eq!(error.code(), tonic::Code::Internal);
+    }
+
+    #[test]
+    fn mismatched_probe_response_variant_is_a_protocol_error() {
+        let response = proto::remote_prover::Proof {
+            proof: Some(ProofVariant::Block(proto::primitives::ExecutionProof::default())),
+        };
+        let error = transaction_proof_size(response).unwrap_err();
+
+        assert_eq!(error.code(), tonic::Code::Internal);
+    }
 
     fn outcome(status: Status, error: Option<&str>) -> ProverTestOutcome {
         ProverTestOutcome {
@@ -538,6 +607,109 @@ mod tests {
     }
 
     const WINDOW: Duration = Duration::from_secs(100);
+
+    fn service_without_fee_faucet(proof_type: ProofType) -> ProverStatusService {
+        let mut service = ProverStatusService::new(
+            "Remote Prover".to_string(),
+            Url::parse("http://127.0.0.1:50051").unwrap(),
+            Url::parse("http://127.0.0.1:57291").unwrap(),
+            None,
+            Duration::from_secs(3),
+            Duration::from_secs(10),
+            Duration::from_mins(2),
+        );
+        service.last_status = Some(RemoteProverStatusDetails {
+            url: "http://127.0.0.1:50051/".to_string(),
+            version: "test".to_string(),
+            supported_proof_type: proof_type,
+            workers: vec![WorkerStatusDetails {
+                name: "worker-1".to_string(),
+                version: "test".to_string(),
+                status: Status::Healthy,
+            }],
+        });
+        service
+    }
+
+    #[tokio::test]
+    async fn batch_and_block_status_discovery_do_not_report_a_missing_fee_faucet() {
+        for proof_type in [ProofType::Batch, ProofType::Block] {
+            let mut service = service_without_fee_faucet(proof_type);
+
+            service.ensure_probe_running();
+
+            assert!(service.probe_handle.is_none());
+            assert!(service.probe_rx.borrow().latest.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_fee_faucet_guidance_remains_visible_after_the_probe_staleness_window() {
+        let mut service = service_without_fee_faucet(ProofType::Transaction);
+
+        service.ensure_probe_running();
+        let staleness_window =
+            probe_staleness_window(service.probe_spawner.interval, service.request_timeout);
+        service.last_probe_change = Some(
+            Instant::now()
+                .checked_sub(staleness_window + Duration::from_secs(1))
+                .expect("the test staleness window should fit before now"),
+        );
+        let probe = service.probe_rx.borrow().clone();
+        let status = service.build_status(&probe);
+
+        let dashboard = crate::view::status_fragment(&NetworkStatus {
+            services: vec![status.clone()],
+            last_updated: 1_609_459_200,
+            monitor_version: "test".to_string(),
+            network_name: "Test".to_string(),
+        })
+        .into_string();
+        assert!(
+            dashboard.contains("--fee-faucet-id"),
+            "the rendered prover card must expose actionable probe configuration guidance"
+        );
+
+        assert_eq!(status.status, Status::Unknown);
+        assert!(
+            status.error.as_deref().is_some_and(|error| error.contains("--fee-faucet-id")),
+            "the public service status must expose the missing transaction-probe option"
+        );
+        let json = serde_json::to_string(&status).expect("service status should serialize");
+        assert!(
+            json.contains("--fee-faucet-id"),
+            "the JSON status must expose actionable probe configuration guidance"
+        );
+    }
+
+    #[tokio::test]
+    async fn transient_probe_staleness_keeps_its_existing_status_semantics() {
+        let mut service = service_without_fee_faucet(ProofType::Transaction);
+        service.fee_faucet_id = Some(FungibleAsset::mock_issuer());
+        let staleness_window =
+            probe_staleness_window(service.probe_spawner.interval, service.request_timeout);
+        service.last_probe_change = Some(
+            Instant::now()
+                .checked_sub(staleness_window + Duration::from_secs(1))
+                .expect("the test staleness window should fit before now"),
+        );
+        let probe = ProbeSnapshot {
+            latest: Some(outcome(Status::Healthy, None)),
+            success_count: 3,
+            failure_count: 1,
+        };
+
+        let status = service.build_status(&probe);
+
+        assert_eq!(status.status, Status::Healthy);
+        assert!(status.error.is_none());
+        let ServiceDetails::RemoteProverStatus(details) = status.details else {
+            panic!("expected remote prover details");
+        };
+        let stale_probe = details.test.expect("the last probe outcome should be retained");
+        assert_eq!(stale_probe.status, Status::Unknown);
+        assert!(stale_probe.error.as_deref().is_some_and(|error| error.contains("stale")));
+    }
 
     #[test]
     fn fresh_outcome_passes_through() {

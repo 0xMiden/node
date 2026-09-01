@@ -22,7 +22,7 @@ use miden_node_proto::generated::rpc::{
     FinalityLevel,
     SyncChainMmrRequest,
 };
-use miden_node_proto::generated::transaction::ProvenTransaction as ProtoProvenTransaction;
+use miden_node_proto::generated::submission::ProvenTransactionSubmission as ProtoProvenTransaction;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{debug, info, miden_instrument, warn};
 use miden_node_utils::retry;
@@ -42,6 +42,7 @@ use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublic
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta, MmrPeaks, PartialMmr};
 use miden_protocol::note::{NoteScript, NoteScriptRoot};
+use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{
     AccountInputs,
     ExecutedTransaction,
@@ -150,31 +151,27 @@ impl TransactionSubmissionClient {
         proven_tx: &ProvenTransaction,
         transaction_inputs: &[u8],
     ) -> Result<BlockNumber> {
-        let transaction = proven_tx.to_bytes();
         let tx_id = proven_tx.id();
         let stale_key = AtomicBool::new(false);
 
-        let result = (|| {
-            let transaction = transaction.clone();
-            async {
-                if stale_key.swap(false, Ordering::Relaxed) {
-                    *self.sealer.lock().await = None;
-                }
-
-                let sealed = self
-                    .sealer()
-                    .await?
-                    .seal(tx_id, transaction_inputs)
-                    .context("Failed to seal the transaction inputs")?;
-                self.rpc_client
-                    .clone()
-                    .submit_proven_tx(ProtoProvenTransaction {
-                        transaction,
-                        sealed_transaction_inputs: Some(sealed),
-                    })
-                    .await
-                    .context("Failed to submit proven transaction to RPC")
+        let result = (|| async {
+            if stale_key.swap(false, Ordering::Relaxed) {
+                *self.sealer.lock().await = None;
             }
+
+            let sealed = self
+                .sealer()
+                .await?
+                .seal(tx_id, transaction_inputs)
+                .context("Failed to seal the transaction inputs")?;
+            self.rpc_client
+                .clone()
+                .submit_proven_tx(ProtoProvenTransaction {
+                    transaction: Some(proven_tx.into()),
+                    sealed_transaction_inputs: Some(sealed),
+                })
+                .await
+                .context("Failed to submit proven transaction to RPC")
         })
         .retry(retry::constant(Duration::ZERO, Some(1)))
         .when(|err: &anyhow::Error| {
@@ -295,6 +292,7 @@ pub async fn create_genesis_aware_rpc_client(
 pub async fn create_and_deploy_accounts(
     submission_client: &TransactionSubmissionClient,
     prover: &LocalTransactionProver,
+    fee_faucet_id: AccountId,
 ) -> Result<DeployedMonitorAccounts> {
     info!(target: LOG_TARGET, "Creating fresh monitor accounts");
 
@@ -303,16 +301,31 @@ pub async fn create_and_deploy_accounts(
     // The genesis header is immutable, so it is fetched once and reused by every step below.
     let genesis_header = fetch_genesis_block_header(&mut rpc_client).await?;
     ensure_monitor_supported_fee_parameters(&genesis_header)?;
+    let protocol_config = ProtocolConfig::current(AssetId::new_fungible(fee_faucet_id))
+        .context("failed to construct the target protocol configuration")?;
+    anyhow::ensure!(
+        protocol_config.to_commitment() == genesis_header.protocol_config_commitment(),
+        "configured fee faucet does not match the chain's protocol configuration",
+    );
 
     let (wallet_account, secret_key) = create_wallet_account()?;
-    let fee_faucet_id = genesis_header.fee_parameters().fee_faucet_id();
     let counter_account = create_counter_account(wallet_account.id(), fee_faucet_id)?;
 
-    let committed_counter =
-        deploy_counter_account(&counter_account, &genesis_header, submission_client, prover)
-            .await?;
-    let counter_anchor =
-        resolve_counter_anchor(&mut rpc_client, &genesis_header, &committed_counter).await?;
+    let committed_counter = deploy_counter_account(
+        &counter_account,
+        &genesis_header,
+        &protocol_config,
+        submission_client,
+        prover,
+    )
+    .await?;
+    let counter_anchor = resolve_counter_anchor(
+        &mut rpc_client,
+        &genesis_header,
+        &protocol_config,
+        &committed_counter,
+    )
+    .await?;
 
     info!(
         target: LOG_TARGET,
@@ -361,6 +374,8 @@ pub struct CounterAnchor {
     pub block_header: BlockHeader,
     /// Chain MMR whose peaks hash to `block_header.chain_commitment()`.
     pub blockchain: PartialBlockchain,
+    /// Protocol configuration whose commitment is carried by `block_header`.
+    pub protocol_config: ProtocolConfig,
     /// The counter account exactly as committed in `block_header`.
     pub counter_account: Account,
     /// Witness proving `counter_account`'s inclusion in `block_header`'s account tree.
@@ -380,6 +395,7 @@ const ANCHOR_RESOLUTION_DELAY: Duration = Duration::from_secs(1);
 async fn resolve_counter_anchor(
     rpc_client: &mut RpcClient,
     genesis_header: &BlockHeader,
+    protocol_config: &ProtocolConfig,
     committed_counter: &Account,
 ) -> Result<CounterAnchor> {
     let genesis_commitment = genesis_header.commitment();
@@ -396,6 +412,7 @@ async fn resolve_counter_anchor(
             committed_counter,
             expected_state,
             genesis_commitment,
+            protocol_config,
         )
         .await
         {
@@ -447,8 +464,10 @@ async fn try_resolve_counter_anchor(
     committed_counter: &Account,
     expected_state: Word,
     genesis_commitment: Word,
+    protocol_config: &ProtocolConfig,
 ) -> Result<Option<CounterAnchor>> {
     let (block_header, blockchain) = fetch_tip_chain_state(rpc_client, genesis_commitment).await?;
+    ensure_anchor_protocol_config_matches(&block_header, protocol_config)?;
     let block_num = block_header.block_num();
 
     let witness = fetch_account_witness(rpc_client, committed_counter.id(), block_num).await?;
@@ -472,9 +491,26 @@ async fn try_resolve_counter_anchor(
     Ok(Some(CounterAnchor {
         block_header,
         blockchain,
+        protocol_config: protocol_config.clone(),
         counter_account: committed_counter.clone(),
         witness,
     }))
+}
+
+/// Ensures a transaction anchor and its protocol configuration describe the same protocol state.
+fn ensure_anchor_protocol_config_matches(
+    block_header: &BlockHeader,
+    protocol_config: &ProtocolConfig,
+) -> Result<()> {
+    let provided_commitment = protocol_config.to_commitment();
+    let expected_commitment = block_header.protocol_config_commitment();
+    anyhow::ensure!(
+        provided_commitment == expected_commitment,
+        "protocol configuration commitment {provided_commitment} does not match anchor block {} \
+         commitment {expected_commitment}",
+        block_header.block_num(),
+    );
+    Ok(())
 }
 
 /// Fetch the chain tip header together with a [`PartialBlockchain`] whose peaks hash to that
@@ -579,6 +615,7 @@ async fn fetch_genesis_block_header(rpc_client: &mut RpcClient) -> Result<BlockH
 pub(crate) async fn execute_counter_genesis_tx(
     counter_account: &Account,
     genesis_header: &BlockHeader,
+    protocol_config: &ProtocolConfig,
 ) -> Result<ExecutedTransaction> {
     let genesis_header = genesis_header.clone();
 
@@ -586,7 +623,8 @@ pub(crate) async fn execute_counter_genesis_tx(
         PartialBlockchain::new(PartialMmr::from_peaks(MmrPeaks::default()), Vec::new())
             .context("Failed to create empty ChainMmr")?;
 
-    let mut data_store = MonitorDataStore::new(genesis_header, genesis_chain_mmr);
+    let mut data_store =
+        MonitorDataStore::new(genesis_header, protocol_config.clone(), genesis_chain_mmr);
     data_store.add_account(counter_account.clone());
 
     let executor: TransactionExecutor<'_, '_, _, BasicAuthenticator> =
@@ -615,16 +653,25 @@ pub(crate) async fn execute_counter_genesis_tx(
 /// handshake plus a single read of the genesis block header, which supplies both the reference block
 /// and the fee faucet the counter's fee policy is denominated in. Nothing is proven or submitted
 /// here.
-pub async fn build_probe_transaction_inputs(rpc_url: &Url) -> Result<TransactionInputs> {
+pub async fn build_probe_transaction_inputs(
+    rpc_url: &Url,
+    fee_faucet_id: AccountId,
+) -> Result<TransactionInputs> {
     let (wallet_account, _secret_key) = create_wallet_account()?;
 
     let (mut rpc_client, _) =
         create_genesis_aware_rpc_client(rpc_url, Duration::from_secs(10)).await?;
     let genesis_header = fetch_genesis_block_header(&mut rpc_client).await?;
     ensure_monitor_supported_fee_parameters(&genesis_header)?;
-    let fee_faucet_id = genesis_header.fee_parameters().fee_faucet_id();
+    let protocol_config = ProtocolConfig::current(AssetId::new_fungible(fee_faucet_id))
+        .context("failed to construct the target protocol configuration")?;
+    anyhow::ensure!(
+        protocol_config.to_commitment() == genesis_header.protocol_config_commitment(),
+        "configured fee faucet does not match the chain's protocol configuration",
+    );
     let counter_account = create_counter_account(wallet_account.id(), fee_faucet_id)?;
-    let executed_tx = execute_counter_genesis_tx(&counter_account, &genesis_header).await?;
+    let executed_tx =
+        execute_counter_genesis_tx(&counter_account, &genesis_header, &protocol_config).await?;
 
     Ok(executed_tx.tx_inputs().clone())
 }
@@ -638,10 +685,12 @@ pub async fn build_probe_transaction_inputs(rpc_url: &Url) -> Result<Transaction
 pub async fn deploy_counter_account(
     counter_account: &Account,
     genesis_header: &BlockHeader,
+    protocol_config: &ProtocolConfig,
     submission_client: &TransactionSubmissionClient,
     prover: &LocalTransactionProver,
 ) -> Result<Account> {
-    let executed_tx = execute_counter_genesis_tx(counter_account, genesis_header).await?;
+    let executed_tx =
+        execute_counter_genesis_tx(counter_account, genesis_header, protocol_config).await?;
 
     let transaction_inputs = executed_tx.tx_inputs().to_bytes();
 
@@ -667,16 +716,22 @@ pub struct MonitorDataStore {
     accounts: HashMap<AccountId, Account>,
     account_witnesses: HashMap<AccountId, AccountWitness>,
     block_header: BlockHeader,
+    protocol_config: ProtocolConfig,
     partial_block_chain: PartialBlockchain,
     mast_store: TransactionMastStore,
 }
 
 impl MonitorDataStore {
-    pub fn new(block_header: BlockHeader, partial_block_chain: PartialBlockchain) -> Self {
+    pub fn new(
+        block_header: BlockHeader,
+        protocol_config: ProtocolConfig,
+        partial_block_chain: PartialBlockchain,
+    ) -> Self {
         Self {
             accounts: HashMap::new(),
             account_witnesses: HashMap::new(),
             block_header,
+            protocol_config,
             partial_block_chain,
             mast_store: TransactionMastStore::new(),
         }
@@ -709,11 +764,23 @@ impl DataStore for MonitorDataStore {
         &self,
         account_id: AccountId,
         mut _block_refs: BTreeSet<BlockNumber>,
-    ) -> Result<(PartialAccount, BlockHeader, PartialBlockchain), DataStoreError> {
+    ) -> Result<(PartialAccount, BlockHeader, ProtocolConfig, PartialBlockchain), DataStoreError>
+    {
+        ensure_anchor_protocol_config_matches(&self.block_header, &self.protocol_config).map_err(
+            |err| DataStoreError::Other {
+                error_msg: err.to_string().into(),
+                source: None,
+            },
+        )?;
         let account = self.get_account(account_id)?;
         let partial_account = PartialAccount::from(account);
 
-        Ok((partial_account, self.block_header.clone(), self.partial_block_chain.clone()))
+        Ok((
+            partial_account,
+            self.block_header.clone(),
+            self.protocol_config.clone(),
+            self.partial_block_chain.clone(),
+        ))
     }
 
     async fn get_storage_map_witness(
@@ -807,9 +874,20 @@ impl MastForestStore for MonitorDataStore {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
+    use miden_protocol::asset::{AssetId, FungibleAsset};
+    use miden_protocol::crypto::merkle::mmr::{MmrPeaks, PartialMmr};
+    use miden_protocol::protocol_config::ProtocolConfig;
+    use miden_protocol::transaction::PartialBlockchain;
     use miden_testing::MockChain;
 
-    use super::ensure_monitor_supported_fee_parameters;
+    use super::{
+        DataStore,
+        MonitorDataStore,
+        create_wallet_account,
+        ensure_monitor_supported_fee_parameters,
+    };
 
     /// A zero verification base fee is the only configuration the monitor's asset-less accounts can
     /// operate under, and the guard must say so at startup instead of letting every increment abort
@@ -830,6 +908,45 @@ mod tests {
         assert!(
             format!("{err:#}").contains("500"),
             "the error should name the offending base fee, got: {err:#}"
+        );
+    }
+
+    /// A transaction data store must not return a protocol configuration whose commitment differs
+    /// from the reference header, even if an inconsistent pair reaches it from an anchor caller.
+    #[tokio::test]
+    async fn data_store_rejects_a_protocol_config_mismatched_with_its_anchor_header() {
+        let chain = MockChain::builder().build().expect("chain should build");
+        let mismatched_fee_faucet = FungibleAsset::mock_issuer();
+        assert_ne!(
+            mismatched_fee_faucet,
+            chain.fee_faucet_id(),
+            "the fixture must use a different protocol configuration"
+        );
+        let mismatched_protocol_config =
+            ProtocolConfig::current(AssetId::new_fungible(mismatched_fee_faucet))
+                .expect("protocol config should build");
+        let anchor_header = chain.genesis_block_header();
+        assert_ne!(
+            mismatched_protocol_config.to_commitment(),
+            anchor_header.protocol_config_commitment(),
+            "the fixture must disagree with the anchor header"
+        );
+
+        let blockchain =
+            PartialBlockchain::new(PartialMmr::from_peaks(MmrPeaks::default()), Vec::new())
+                .expect("empty genesis blockchain should build");
+        let (account, _) = create_wallet_account().expect("wallet should build");
+        let mut data_store =
+            MonitorDataStore::new(anchor_header, mismatched_protocol_config, blockchain);
+        data_store.add_account(account.clone());
+
+        let error = data_store
+            .get_transaction_inputs(account.id(), BTreeSet::new())
+            .await
+            .expect_err("an inconsistent header/config pair must never be served");
+        assert!(
+            error.to_string().contains("protocol configuration commitment"),
+            "the error should identify the inconsistent commitment, got: {error}"
         );
     }
 }

@@ -78,7 +78,7 @@ impl proto::server::rpc_api::SyncNullifiers for RpcService {
         let nullifiers = nullifiers
             .into_iter()
             .map(|nullifier_info| proto::rpc::sync_nullifiers_response::NullifierUpdate {
-                nullifier: Some(nullifier_info.nullifier.into()),
+                nullifier: Some(nullifier_info.nullifier.as_word().into()),
                 block_num: nullifier_info.block_num.as_u32(),
             })
             .collect();
