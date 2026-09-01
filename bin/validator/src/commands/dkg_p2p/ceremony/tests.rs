@@ -13,10 +13,10 @@ use miden_validator::{StorageKeyEpoch, ValidatorSigner};
 use rand_core_06::OsRng;
 
 use super::super::wire::WireCodec;
-use super::Ceremony;
 use super::ceremony_config::CeremonyConfig;
 use super::challenge::Challenge;
 use super::session::{CeremonyNonce, SessionId};
+use super::{Ceremony, ParticipantRegistry};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 type TestResultWith<T> = Result<T, Box<dyn std::error::Error>>;
@@ -68,7 +68,7 @@ async fn bind_test_endpoint(secret_key: IrohSecretKey) -> TestResultWith<(Endpoi
 }
 
 #[tokio::test]
-async fn three_validators_build_the_same_dkg_registry() -> TestResult {
+async fn three_validators_confirm_the_same_dkg_registry() -> TestResult {
     let endpoint_secrets = [11u8, 12, 13].map(|seed| IrohSecretKey::from_bytes(&[seed; 32]));
     let (endpoint_a, lookup_a) = bind_test_endpoint(endpoint_secrets[0].clone()).await?;
     let (endpoint_b, lookup_b) = bind_test_endpoint(endpoint_secrets[1].clone()).await?;
@@ -123,8 +123,6 @@ async fn three_validators_build_the_same_dkg_registry() -> TestResult {
         ceremony_b.exchange_nonces(peers_b),
         ceremony_c.exchange_nonces(peers_c),
     )?;
-    assert_eq!(session_a.id, session_b.id);
-    assert_eq!(session_a.id, session_c.id);
     let (session_a, session_b, session_c) = tokio::try_join!(
         ceremony_a.confirm_session(session_a),
         ceremony_b.confirm_session(session_b),
@@ -135,9 +133,11 @@ async fn three_validators_build_the_same_dkg_registry() -> TestResult {
         ceremony_b.exchange_dkg_public_keys(session_b),
         ceremony_c.exchange_dkg_public_keys(session_c),
     )?;
-    assert_eq!(participants_a.registry_root(), participants_b.registry_root());
-    assert_eq!(participants_a.registry_root(), participants_c.registry_root());
-
+    let (participants_a, participants_b, participants_c) = tokio::try_join!(
+        ceremony_a.confirm_dkg_registry(participants_a),
+        ceremony_b.confirm_dkg_registry(participants_b),
+        ceremony_c.confirm_dkg_registry(participants_c),
+    )?;
     for (local_index, (ceremony, participants, signing_key)) in [
         (&ceremony_a, &participants_a, &signing_keys[0]),
         (&ceremony_b, &participants_b, &signing_keys[1]),
@@ -172,6 +172,76 @@ async fn three_validators_build_the_same_dkg_registry() -> TestResult {
     }
 
     tokio::join!(participants_a.close(), participants_b.close(), participants_c.close());
+    Ok(())
+}
+
+#[tokio::test]
+async fn registry_confirmation_rejects_different_registry_roots() -> TestResult {
+    let endpoint_secret_a = IrohSecretKey::from_bytes(&[31; 32]);
+    let endpoint_secret_b = IrohSecretKey::from_bytes(&[32; 32]);
+    let (endpoint_a, lookup_a) = bind_test_endpoint(endpoint_secret_a.clone()).await?;
+    let (endpoint_b, lookup_b) = bind_test_endpoint(endpoint_secret_b.clone()).await?;
+    lookup_a.add_endpoint_info(endpoint_b.addr());
+    lookup_b.add_endpoint_info(endpoint_a.addr());
+
+    let signing_key_a = test_signing_key(33);
+    let signing_key_b = test_signing_key(34);
+    let validator_keys = vec![signing_key_a.public_key(), signing_key_b.public_key()];
+    let ceremony_a = test_ceremony(
+        &signing_key_a,
+        validator_keys.clone(),
+        endpoint_secret_a,
+        BTreeSet::from([endpoint_b.id()]),
+    );
+    let ceremony_b = test_ceremony(
+        &signing_key_b,
+        validator_keys,
+        endpoint_secret_b,
+        BTreeSet::from([endpoint_a.id()]),
+    );
+
+    let (peers_a, peers_b) = tokio::try_join!(
+        ceremony_a.authenticate_peers_on(endpoint_a.clone()),
+        ceremony_b.authenticate_peers_on(endpoint_b.clone()),
+    )?;
+    let (peers_a, peers_b) = tokio::try_join!(
+        ceremony_a.exchange_configs(peers_a),
+        ceremony_b.exchange_configs(peers_b),
+    )?;
+    let (session_a, session_b) = tokio::try_join!(
+        ceremony_a.exchange_nonces(peers_a),
+        ceremony_b.exchange_nonces(peers_b),
+    )?;
+    let (session_a, session_b) = tokio::try_join!(
+        ceremony_a.confirm_session(session_a),
+        ceremony_b.confirm_session(session_b),
+    )?;
+    let (participants_a, mut participants_b) = tokio::try_join!(
+        ceremony_a.exchange_dkg_public_keys(session_a),
+        ceremony_b.exchange_dkg_public_keys(session_b),
+    )?;
+
+    let mut entries = participants_b
+        .registry
+        .entries()
+        .map(|(index, public_key)| (index, *public_key))
+        .collect::<Vec<_>>();
+    let first_public_key = entries[0].1;
+    entries[0].1 = entries[1].1;
+    entries[1].1 = first_public_key;
+    participants_b.registry = ParticipantRegistry::new(entries)?;
+
+    let (result_a, result_b) = tokio::join!(
+        ceremony_a.confirm_dkg_registry(participants_a),
+        ceremony_b.confirm_dkg_registry(participants_b),
+    );
+    for result in [result_a, result_b] {
+        let error = result.err().expect("different DKG registry roots must be rejected");
+        assert!(format!("{error:#}").contains("built a different DKG registry"));
+    }
+
+    endpoint_a.close().await;
+    endpoint_b.close().await;
     Ok(())
 }
 

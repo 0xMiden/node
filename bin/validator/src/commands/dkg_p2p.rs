@@ -93,6 +93,7 @@ impl ParticipateOptions {
             "DKG peer session established",
         );
         let participants = ceremony.exchange_dkg_public_keys(session).await?;
+        let participants = ceremony.confirm_dkg_registry(participants).await?;
         tracing::info!(
             target: miden_validator::LOG_TARGET,
             {

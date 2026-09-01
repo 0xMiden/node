@@ -17,7 +17,7 @@ use tokio::task::JoinSet;
 use zeroize::Zeroizing;
 
 use self::ceremony_config::CeremonyConfig;
-use self::dkg::{DkgSecretKey, StorageGroup};
+use self::dkg::{DkgRegistryRoot, DkgSecretKey, StorageGroup};
 use self::peer::{AuthenticatedPeer, ConnectedPeer};
 use self::session::{CeremonyNonce, SessionId};
 use super::ParticipateOptions;
@@ -45,6 +45,13 @@ pub struct Session {
     id: SessionId,
     endpoint: Endpoint,
     authenticated_peers: Vec<AuthenticatedPeer>,
+}
+
+pub struct UnconfirmedDkgParticipants {
+    session: Session,
+    local_index: ParticipantIndex,
+    secret_key: DkgSecretKey,
+    registry: ParticipantRegistry<StorageGroup>,
 }
 
 pub struct DkgParticipants {
@@ -231,7 +238,7 @@ impl Ceremony {
     pub async fn exchange_dkg_public_keys(
         &self,
         session: Session,
-    ) -> anyhow::Result<DkgParticipants> {
+    ) -> anyhow::Result<UnconfirmedDkgParticipants> {
         let secret_key = DkgSecretKey::random(&mut OsRng);
         let local_dkg_public_key = secret_key.public_key();
         let Session { authenticated_peers, .. } = &session;
@@ -275,6 +282,43 @@ impl Ceremony {
         let registry = ParticipantRegistry::new(registry_entries)
             .context("failed to build DKG participant registry")?;
 
+        Ok(UnconfirmedDkgParticipants {
+            session,
+            local_index,
+            secret_key,
+            registry,
+        })
+    }
+
+    pub async fn confirm_dkg_registry(
+        &self,
+        participants: UnconfirmedDkgParticipants,
+    ) -> anyhow::Result<DkgParticipants> {
+        let registry_root = DkgRegistryRoot::from_registry(&participants.registry);
+        let Session { authenticated_peers, .. } = &participants.session;
+        let mut confirmations = JoinSet::new();
+        for peer in authenticated_peers.clone() {
+            confirmations.spawn(async move {
+                let peer_registry_root = peer.exchange_dkg_registry_root(&registry_root).await?;
+                ensure!(
+                    peer_registry_root == registry_root,
+                    "validator {:?} built a different DKG registry: local {registry_root}, peer {peer_registry_root}",
+                    peer.validator_public_key(),
+                );
+                Ok::<_, anyhow::Error>(())
+            });
+        }
+
+        while let Some(result) = confirmations.join_next().await {
+            result.context("DKG registry confirmation task failed")??;
+        }
+
+        let UnconfirmedDkgParticipants {
+            session,
+            local_index,
+            secret_key,
+            registry,
+        } = participants;
         Ok(DkgParticipants {
             session,
             local_index,

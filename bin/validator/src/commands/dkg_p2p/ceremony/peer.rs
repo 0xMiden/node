@@ -10,7 +10,7 @@ use super::super::wire::{RecvStream, SendStream};
 use super::Ceremony;
 use super::ceremony_config::CeremonyConfig;
 use super::challenge::{Challenge, ChallengeResponse};
-use super::dkg::DkgPublicKey;
+use super::dkg::{DkgPublicKey, DkgRegistryRoot};
 use super::session::{CeremonyNonce, SessionId};
 
 #[derive(Clone)]
@@ -173,6 +173,25 @@ impl AuthenticatedPeer {
             .context("failed to read DKG public key")?;
         send.finish().context("failed to finish DKG public key stream")?;
         Ok(peer_dkg_public_key)
+    }
+
+    pub async fn exchange_dkg_registry_root(
+        &self,
+        local: &DkgRegistryRoot,
+    ) -> anyhow::Result<DkgRegistryRoot> {
+        let (mut send, mut receive) = self
+            .connection
+            .bi_stream()
+            .await
+            .context("failed to establish DKG registry confirmation stream")?;
+
+        send.write(local).await.context("failed to send DKG registry root")?;
+        let peer_registry_root = receive
+            .read_exact::<DkgRegistryRoot>()
+            .await
+            .context("failed to read DKG registry root")?;
+        send.finish().context("failed to finish DKG registry confirmation stream")?;
+        Ok(peer_registry_root)
     }
 
     pub fn validator_public_key(&self) -> &PublicKey {

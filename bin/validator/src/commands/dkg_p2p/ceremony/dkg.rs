@@ -1,5 +1,7 @@
+use std::fmt;
+
 use anyhow::{Context, ensure};
-use golden_core::{GoldenGroup, GoldenScalar};
+use golden_core::{GoldenGroup, GoldenScalar, ParticipantRegistry};
 use golden_halo2curves::golden_group::Secp256k1GoldenGroup;
 use rand_core_06::CryptoRngCore;
 
@@ -8,6 +10,34 @@ use super::super::wire::WireCodec;
 pub type StorageGroup = Secp256k1GoldenGroup;
 type StorageScalar = <StorageGroup as GoldenGroup>::Scalar;
 type StorageElement = <StorageGroup as GoldenGroup>::Element;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DkgRegistryRoot([u8; 32]);
+
+impl DkgRegistryRoot {
+    pub fn from_registry(registry: &ParticipantRegistry<StorageGroup>) -> Self {
+        Self(registry.root())
+    }
+}
+
+impl WireCodec for DkgRegistryRoot {
+    const BYTES: usize = 32;
+
+    fn encode(&self) -> Vec<u8> {
+        self.0.to_vec()
+    }
+
+    fn decode(bytes: &[u8]) -> anyhow::Result<Self> {
+        let bytes = bytes.try_into().context("DKG registry root must contain exactly 32 bytes")?;
+        Ok(Self(bytes))
+    }
+}
+
+impl fmt::Display for DkgRegistryRoot {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&hex::encode(self.0))
+    }
+}
 
 pub struct DkgSecretKey(StorageScalar);
 

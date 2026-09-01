@@ -109,6 +109,7 @@ async fn one_validator_ceremony_completes_peer_setup_without_peers() -> TestResu
     let session = ceremony.exchange_nonces(peers).await?;
     let session = ceremony.confirm_session(session).await?;
     let participants = ceremony.exchange_dkg_public_keys(session).await?;
+    let participants = ceremony.confirm_dkg_registry(participants).await?;
     participants.close().await;
 
     Ok(())
