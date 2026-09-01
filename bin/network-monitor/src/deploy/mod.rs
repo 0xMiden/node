@@ -303,7 +303,7 @@ pub async fn create_genesis_aware_rpc_client(
             err,
             target: COMPONENT,
             "RPC genesis discovery failed; retrying after backoff",
-            retry.delay_ms = sleep.as_millis() as u64
+            retry.delay_ms = sleep
         );
     })
     .await
