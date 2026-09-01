@@ -4,8 +4,7 @@
 //! by the block writer after each committed block. The writer remembers each published generation
 //! in [`PublishedGenerations`]. The oldest still-pinned height feeds snapshot-aware history
 //! pruning, since SQLite reads have no point-in-time protection equivalent to the `RocksDB`
-//! snapshots backing the trees. The same log supplies the per-block snapshot span fields that
-//! expose slow or leaked readers.
+//! snapshots backing the trees.
 //!
 //! Everything here operates on whole generations. Readers acquire a snapshot through
 //! [`StateView`](super::StateView), the request-scoped handle.
@@ -26,14 +25,16 @@ use crate::account_state_forest::{
 use crate::accounts::AccountTreeWithHistory;
 use crate::state::loader::TreeStorageReader;
 
-/// Upper bound on how far the snapshot-aware pruning tip may lag the chain tip.
+/// Upper bound, in blocks, on how far history pruning may trail the chain tip.
 ///
-/// History pruning keys off the oldest live snapshot generation (see
-/// [`PublishedGenerations::advance`]), so a leaked or pathologically slow reader would
-/// otherwise stall pruning indefinitely. Beyond this many blocks of lag the writer prunes anyway
-/// and accepts the historical-read race for that reader. The `snapshots.lag_blocks` span field
-/// reports the lag on each applied block (see [`GenerationsStatus::oldest_pinned`]). The cap is
-/// one full retention window, so worst-case retained history is bounded at twice the window.
+/// Pruning normally waits for the oldest live snapshot generation, so SQLite history that a
+/// pinned generation can still read is not deleted (see [`PublishedGenerations::advance`]).
+/// Without a bound, one leaked reader would block pruning forever. Once a generation falls more
+/// than this many blocks behind the tip, pruning stops waiting for it. Rows inside that reader's
+/// retention window may then be deleted while it still holds the generation, so its historical
+/// SQLite reads may observe missing data. Its tree reads are unaffected: the generation still
+/// pins the `RocksDB` snapshots backing the trees. The cap equals one retention window, so
+/// retained history never exceeds two windows.
 const SNAPSHOT_PRUNE_LAG_CAP: u32 = HISTORICAL_BLOCK_RETENTION;
 
 // PUBLISHED GENERATIONS
@@ -61,10 +62,11 @@ struct Generation<T> {
     /// The time when a successor generation was published. `None` while this is the latest
     /// generation.
     ///
-    /// [`PublishedGenerations::record`] sets this field on the previous back entry. Reader
-    /// behaviour is measured from supersession, not from publication: the published pointer
-    /// always pins the latest generation, so time spent as the latest generation gives no
-    /// information about readers.
+    /// [`PublishedGenerations::record`] sets this field on the previous back entry. A
+    /// generation's age is measured from this point rather than from its publication, because
+    /// the writer itself keeps the latest generation alive through the published pointer: on an
+    /// idle chain the latest generation can stay alive for hours with no reader holding it. Only
+    /// time spent alive after a successor exists is evidence that a reader holds the generation.
     superseded_at: Option<Instant>,
     pinned: Weak<T>,
 }
