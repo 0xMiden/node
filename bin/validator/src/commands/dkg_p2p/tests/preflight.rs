@@ -90,7 +90,7 @@ async fn participate_accepts_the_complete_offline_configuration() -> TestResult 
 }
 
 #[tokio::test]
-async fn one_validator_ceremony_completes_peer_setup_without_peers() -> TestResult {
+async fn one_validator_ceremony_creates_local_dealings_without_peers() -> TestResult {
     let root = tempfile::tempdir()?;
     let genesis = write_genesis(root.path(), 1)?;
     let (endpoint_secret, _) = write_endpoint_secret(root.path(), 1)?;
@@ -104,13 +104,14 @@ async fn one_validator_ceremony_completes_peer_setup_without_peers() -> TestResu
     )
     .validate()
     .await?;
-    let peers = ceremony.authenticate_peers().await?;
+    let (endpoint, peers) = ceremony.authenticate_peers().await?;
     let peers = ceremony.exchange_configs(peers).await?;
     let session = ceremony.exchange_nonces(peers).await?;
     let session = ceremony.confirm_session(session).await?;
     let participants = ceremony.exchange_dkg_public_keys(session).await?;
     let participants = ceremony.confirm_dkg_registry(participants).await?;
-    participants.close().await;
+    let _dealings = ceremony.create_dealings(&participants)?;
+    endpoint.close().await;
 
     Ok(())
 }

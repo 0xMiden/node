@@ -83,7 +83,7 @@ impl DkgP2pOptions {
 impl ParticipateOptions {
     async fn handle(self) -> anyhow::Result<()> {
         let ceremony = self.validate().await?;
-        let peers = ceremony.authenticate_peers().await?;
+        let (endpoint, peers) = ceremony.authenticate_peers().await?;
         let peers = ceremony.exchange_configs(peers).await?;
         let session = ceremony.exchange_nonces(peers).await?;
         let session = ceremony.confirm_session(session).await?;
@@ -103,7 +103,17 @@ impl ParticipateOptions {
             "DKG participant registry established",
         );
 
-        participants.close().await;
+        let dealings = ceremony.create_dealings(&participants)?;
+        tracing::info!(
+            target: miden_validator::LOG_TARGET,
+            {
+                dkg.decryption_dealing_root = %hex::encode(dealings.decryption_dealing_root()),
+                dkg.context_dealing_root = %hex::encode(dealings.context_dealing_root()),
+            },
+            "Local DKG dealings created",
+        );
+
+        endpoint.close().await;
         Ok(())
     }
 }

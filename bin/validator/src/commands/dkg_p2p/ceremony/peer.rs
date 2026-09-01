@@ -202,8 +202,4 @@ impl AuthenticatedPeer {
     pub fn connection(&self) -> &Connection {
         &self.connection.connection
     }
-
-    pub fn close(self) {
-        self.connection.close(b"connection check complete");
-    }
 }

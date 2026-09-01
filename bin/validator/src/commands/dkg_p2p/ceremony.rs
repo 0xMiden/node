@@ -31,19 +31,16 @@ mod session;
 mod tests;
 
 pub struct AuthenticatedPeers {
-    endpoint: Endpoint,
     authenticated_peers: Vec<AuthenticatedPeer>,
 }
 
 pub struct UnconfirmedSession {
     id: SessionId,
-    endpoint: Endpoint,
     authenticated_peers: Vec<AuthenticatedPeer>,
 }
 
 pub struct Session {
     id: SessionId,
-    endpoint: Endpoint,
     authenticated_peers: Vec<AuthenticatedPeer>,
 }
 
@@ -86,19 +83,20 @@ pub(super) struct Ceremony {
 impl Ceremony {
     const ALPN: &'static [u8] = b"/miden/validator-dkg-p2p/1";
 
-    pub async fn authenticate_peers(&self) -> anyhow::Result<AuthenticatedPeers> {
+    pub async fn authenticate_peers(&self) -> anyhow::Result<(Endpoint, AuthenticatedPeers)> {
         let endpoint = Endpoint::builder(presets::N0)
             .secret_key(self.endpoint_secret.clone())
             .alpns(vec![Self::ALPN.to_vec()])
             .bind()
             .await
             .context("failed to bind Iroh endpoint")?;
-        self.authenticate_peers_on(endpoint).await
+        let peers = self.authenticate_peers_on(&endpoint).await?;
+        Ok((endpoint, peers))
     }
 
     async fn authenticate_peers_on(
         &self,
-        endpoint: Endpoint,
+        endpoint: &Endpoint,
     ) -> anyhow::Result<AuthenticatedPeers> {
         let local_endpoint = endpoint.id();
         let mut authentications = JoinSet::new();
@@ -123,7 +121,7 @@ impl Ceremony {
             .filter(|peer| *peer < local_endpoint)
             .collect::<BTreeSet<_>>();
         while !expected_incoming.is_empty() {
-            let connected_peer = ConnectedPeer::accept(&endpoint).await?;
+            let connected_peer = ConnectedPeer::accept(endpoint).await?;
             let peer_endpoint = connected_peer.endpoint_id();
             if !self.peer_endpoints.contains(&peer_endpoint) {
                 connected_peer.close(b"endpoint is not a configured DKG peer");
@@ -156,7 +154,7 @@ impl Ceremony {
             "authenticated validator set does not match genesis",
         );
 
-        Ok(AuthenticatedPeers { endpoint, authenticated_peers })
+        Ok(AuthenticatedPeers { authenticated_peers })
     }
 
     pub async fn exchange_configs(
@@ -164,7 +162,7 @@ impl Ceremony {
         peers: AuthenticatedPeers,
     ) -> anyhow::Result<AuthenticatedPeers> {
         let config = self.config()?;
-        let AuthenticatedPeers { endpoint, authenticated_peers } = peers;
+        let AuthenticatedPeers { authenticated_peers } = peers;
         let peer_count = authenticated_peers.len();
         let mut exchanges = JoinSet::new();
         for peer in authenticated_peers {
@@ -180,7 +178,7 @@ impl Ceremony {
             authenticated_peers.push(result.context("ceremony config exchange task failed")??);
         }
 
-        Ok(AuthenticatedPeers { endpoint, authenticated_peers })
+        Ok(AuthenticatedPeers { authenticated_peers })
     }
 
     pub async fn exchange_nonces(
@@ -189,7 +187,7 @@ impl Ceremony {
     ) -> anyhow::Result<UnconfirmedSession> {
         let config = self.config()?;
         let local_nonce = CeremonyNonce::random(&mut OsRng);
-        let AuthenticatedPeers { endpoint, authenticated_peers } = peers;
+        let AuthenticatedPeers { authenticated_peers } = peers;
         let peer_count = authenticated_peers.len();
         let mut exchanges = JoinSet::new();
         for peer in authenticated_peers {
@@ -208,11 +206,11 @@ impl Ceremony {
         }
         let id = SessionId::derive(&config, contributions);
 
-        Ok(UnconfirmedSession { id, endpoint, authenticated_peers })
+        Ok(UnconfirmedSession { id, authenticated_peers })
     }
 
     pub async fn confirm_session(&self, session: UnconfirmedSession) -> anyhow::Result<Session> {
-        let UnconfirmedSession { id, endpoint, authenticated_peers } = session;
+        let UnconfirmedSession { id, authenticated_peers } = session;
         let peer_count = authenticated_peers.len();
         let mut confirmations = JoinSet::new();
         for peer in authenticated_peers {
@@ -232,7 +230,7 @@ impl Ceremony {
             authenticated_peers.push(result.context("session confirmation task failed")??);
         }
 
-        Ok(Session { id, endpoint, authenticated_peers })
+        Ok(Session { id, authenticated_peers })
     }
 
     pub async fn exchange_dkg_public_keys(
@@ -338,13 +336,6 @@ impl Session {
     pub fn id(&self) -> SessionId {
         self.id
     }
-
-    pub async fn close(self) {
-        for peer in self.authenticated_peers {
-            peer.close();
-        }
-        self.endpoint.close().await;
-    }
 }
 
 impl DkgParticipants {
@@ -354,11 +345,6 @@ impl DkgParticipants {
 
     pub fn registry_root(&self) -> [u8; 32] {
         self.registry.root()
-    }
-
-    pub async fn close(self) {
-        let Self { session, secret_key: _secret_key, .. } = self;
-        session.close().await;
     }
 }
 
