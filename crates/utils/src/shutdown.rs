@@ -69,7 +69,7 @@ where
                     anyhow::anyhow!("graceful shutdown timed out"),
                     "Graceful shutdown timed out; exiting process",
                     service.name = service_name,
-                    shutdown.grace_period_ms = GRACE_PERIOD.as_millis() as u64
+                    shutdown.grace_period_ms = GRACE_PERIOD
                 );
                 std::process::exit(1);
             };

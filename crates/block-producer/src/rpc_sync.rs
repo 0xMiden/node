@@ -188,7 +188,7 @@ impl BlockSync {
                 err,
                 target: LOG_TARGET,
                 "Block sync failed, retrying",
-                retry.delay_ms = RECONNECT_DELAY.as_millis() as u64
+                retry.delay_ms = RECONNECT_DELAY
             );
         });
 
@@ -287,7 +287,7 @@ impl ProofSync {
                 err,
                 target: LOG_TARGET,
                 "Proof sync failed, retrying",
-                retry.delay_ms = RECONNECT_DELAY.as_millis() as u64
+                retry.delay_ms = RECONNECT_DELAY
             );
         });
 

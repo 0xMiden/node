@@ -177,7 +177,7 @@ impl RpcService {
                 err,
                 target: LOG_TARGET,
                 "connection failed while fetching genesis header, retrying",
-                retry.delay_ms = backoff.as_millis() as u64
+                retry.delay_ms = backoff
             );
         })
         .await?;

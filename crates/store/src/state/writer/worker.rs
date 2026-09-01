@@ -226,12 +226,12 @@ impl WriteWorker {
         let snapshot_lag = generations
             .oldest_pinned
             .map_or(0, |oldest| block_num.as_u32() - oldest.as_u32());
-        let oldest_superseded_for_ms = generations
-            .oldest_superseded_for
-            .map_or(0, |superseded| u64::try_from(superseded.as_millis()).unwrap_or(u64::MAX));
+        // `unwrap_or_default` keeps the field present with a zero value when the oldest pinned
+        // generation is not superseded; a `None` value would omit the field from the span.
         miden_span_record!(
             snapshots.lag_blocks = snapshot_lag,
-            snapshots.oldest_superseded_for_ms = oldest_superseded_for_ms
+            snapshots.oldest_superseded_for_ms =
+                generations.oldest_superseded_for.unwrap_or_default()
         );
         let prune_tip = generations.prune_tip;
         let resolved_note_ids = self
