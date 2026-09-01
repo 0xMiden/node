@@ -257,9 +257,7 @@ impl WriteWorker {
         );
 
         // Atomically publish the new state. Readers that call `snapshot()` after this point will
-        // see the updated state. Readers that hold the old snapshot are not affected. `record`
-        // marks the old generation as superseded. The `snapshots.oldest_superseded_for_ms` span
-        // field reports how long that generation stays pinned after supersession.
+        // see the updated state. Readers that hold the old snapshot are not affected.
         self.published_generations.record(block_num, &snapshot);
         self.latest_snapshot.swap(snapshot);
 

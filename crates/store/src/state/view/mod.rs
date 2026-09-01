@@ -91,8 +91,7 @@ impl State {
     ///
     /// Work in the closure should be kept to low-complexity compute over the view, ideally with no
     /// I/O and no other `.await` points. Anything slower holds the pinned snapshot, and therefore
-    /// its underlying `RocksDB` snapshot, for as long as it runs. The block writer's per-block
-    /// snapshot span fields expose generations that stay pinned too long.
+    /// its underlying `RocksDB` snapshot, for as long as it runs.
     pub async fn with_view<R>(&self, f: impl AsyncFnOnce(&StateView) -> R) -> R {
         let view = self.view();
         f(&view).await
