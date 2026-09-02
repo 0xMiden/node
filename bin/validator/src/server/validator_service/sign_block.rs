@@ -111,6 +111,10 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
         // their positions can be persisted alongside the signed header.
         let block_transactions: Vec<TransactionId> =
             proposed_block.transactions().map(TransactionHeader::id).collect();
+        // Capture the tip height before the tip is consumed: a validated block at the same height
+        // replaces the current tip, and the replaced block must be deleted before the new one is
+        // persisted. The semaphore held above guarantees the tip cannot change in between.
+        let chain_tip_num = chain_tip.block_num();
 
         // Validate the block against the current chain tip.
         let (signature, header) =
@@ -127,8 +131,15 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
 
         // Persist the signed header together with the block position of each of its transactions.
         let new_block_num = header.block_num().as_u32();
-        self.persist_signed_block(header, protocol_config, block_transactions, previous_backup)
-            .await?;
+        let is_replacement = header.block_num() == chain_tip_num;
+        self.persist_signed_block(
+            header,
+            protocol_config,
+            block_transactions,
+            is_replacement,
+            previous_backup,
+        )
+        .await?;
 
         // Update the in-memory counters after successful persistence. The block has already been
         // backed up to the block store by `validate_block`, so it is available to subscribers by
@@ -169,10 +180,14 @@ impl ValidatorService {
         header: BlockHeader,
         protocol_config: ProtocolConfig,
         transactions: Vec<TransactionId>,
+        is_replacement: bool,
         previous_backup: Option<Vec<u8>>,
     ) -> tonic::Result<()> {
         let block_num = header.block_num();
-        let Err(err) = self.db.upsert_signed_block(header, protocol_config, transactions).await
+        let Err(err) = self
+            .db
+            .insert_signed_block(header, protocol_config, transactions, is_replacement)
+            .await
         else {
             return Ok(());
         };
