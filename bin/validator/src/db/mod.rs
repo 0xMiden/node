@@ -237,13 +237,26 @@ impl ValidatorDbWriter {
             .await
     }
 
+    /// Deletes the block signed at the given height, unlinking the block's transactions along with
+    /// it via the `ON DELETE CASCADE` on `block_transactions`.
+    ///
+    /// Called before [`Self::insert_signed_block`] when a block replaces one already signed at the
+    /// same height, so transactions dropped by the replacement do not keep a stale link.
+    #[miden_instrument(
+        target = COMPONENT,
+    )]
+    pub(crate) async fn delete_block(&self, block_num: BlockNumber) -> Result<(), DatabaseError> {
+        self.writer
+            .write("delete_block", move |tx| queries::delete_block(tx, block_num))
+            .await
+    }
+
     /// Persists a signed block's header, its configuration activation, and the links from the
     /// block's transactions to their in-block positions, all in one database transaction so the
     /// three stay consistent.
     ///
-    /// When the block replaces one already signed at the same height, the caller sets
-    /// `is_replacement` and the replaced block is deleted first, unlinking its transactions, so
-    /// transactions dropped by the replacement do not keep a stale link.
+    /// The height must not already hold a block; when replacing one, the caller runs
+    /// [`Self::delete_block`] first.
     #[miden_instrument(
         target = COMPONENT,
     )]
@@ -252,19 +265,12 @@ impl ValidatorDbWriter {
         header: BlockHeader,
         protocol_config: ProtocolConfig,
         transactions: Vec<TransactionId>,
-        is_replacement: bool,
     ) -> Result<(), DatabaseError> {
         self.writer
             .write("insert_signed_block", move |tx| {
-                let block_num = header.block_num();
-                if is_replacement {
-                    // Deleting the replaced header also unlinks its transactions, via the ON DELETE
-                    // CASCADE on block_transactions.
-                    queries::delete_block(tx, block_num)?;
-                }
                 record_protocol_config_activation(tx, &header, Some(protocol_config))?;
                 queries::insert_block_header(tx, &header)?;
-                queries::link_block_transactions(tx, block_num, &transactions)
+                queries::link_block_transactions(tx, header.block_num(), &transactions)
             })
             .await
     }
@@ -851,7 +857,6 @@ mod tests {
             header.clone(),
             ProtocolConfig::mock(),
             vec![transaction_ids[0], transaction_ids[1]],
-            false,
         )
         .await
         .unwrap();
@@ -869,9 +874,11 @@ mod tests {
             ],
         );
 
-        // Replace the block at the same height with one that only includes the third transaction.
-        // The two transactions it drops go back to being uncommitted, and stop being listed.
-        db.insert_signed_block(header, ProtocolConfig::mock(), vec![transaction_ids[2]], true)
+        // Replace the block at the same height with one that only includes the third transaction,
+        // deleting the replaced block first as `sign_block` does. The two transactions the
+        // replacement drops go back to being uncommitted, and stop being listed.
+        db.delete_block(header.block_num()).await.unwrap();
+        db.insert_signed_block(header, ProtocolConfig::mock(), vec![transaction_ids[2]])
             .await
             .unwrap();
 
@@ -908,7 +915,6 @@ mod tests {
             block_1,
             ProtocolConfig::mock(),
             vec![transaction_ids[3], transaction_ids[0]],
-            false,
         )
         .await
         .unwrap();
@@ -916,7 +922,6 @@ mod tests {
             block_2,
             ProtocolConfig::mock(),
             vec![transaction_ids[1], transaction_ids[2]],
-            false,
         )
         .await
         .unwrap();
@@ -973,8 +978,7 @@ mod tests {
         let header = BlockHeader::mock(1, None, None, &[], Word::empty());
         let unknown = TransactionId::from_raw(Word::from([1u32, 0, 0, 0]));
 
-        let result =
-            db.insert_signed_block(header, ProtocolConfig::mock(), vec![unknown], false).await;
+        let result = db.insert_signed_block(header, ProtocolConfig::mock(), vec![unknown]).await;
         assert!(result.is_err(), "linking an unvalidated transaction must fail");
     }
 

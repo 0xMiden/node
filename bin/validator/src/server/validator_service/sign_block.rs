@@ -129,17 +129,23 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
         // closure, so it can be returned to the block producer for cross-checking.
         let block_commitment = header.commitment();
 
+        // A validated block at the tip's height replaces the current tip: delete the replaced block
+        // first, so its transaction links do not linger. Should the process die between the delete
+        // and the insert below, the tip regresses to the parent and the replacement re-validates as
+        // a regular next block.
+        if header.block_num() == chain_tip_num {
+            self.db.delete_block(header.block_num()).await.map_err(|err| {
+                tonic::Status::internal(format!(
+                    "Failed to delete the replaced block: {}",
+                    err.as_report()
+                ))
+            })?;
+        }
+
         // Persist the signed header together with the block position of each of its transactions.
         let new_block_num = header.block_num().as_u32();
-        let is_replacement = header.block_num() == chain_tip_num;
-        self.persist_signed_block(
-            header,
-            protocol_config,
-            block_transactions,
-            is_replacement,
-            previous_backup,
-        )
-        .await?;
+        self.persist_signed_block(header, protocol_config, block_transactions, previous_backup)
+            .await?;
 
         // Update the in-memory counters after successful persistence. The block has already been
         // backed up to the block store by `validate_block`, so it is available to subscribers by
@@ -180,14 +186,11 @@ impl ValidatorService {
         header: BlockHeader,
         protocol_config: ProtocolConfig,
         transactions: Vec<TransactionId>,
-        is_replacement: bool,
         previous_backup: Option<Vec<u8>>,
     ) -> tonic::Result<()> {
         let block_num = header.block_num();
-        let Err(err) = self
-            .db
-            .insert_signed_block(header, protocol_config, transactions, is_replacement)
-            .await
+        let Err(err) =
+            self.db.insert_signed_block(header, protocol_config, transactions).await
         else {
             return Ok(());
         };
