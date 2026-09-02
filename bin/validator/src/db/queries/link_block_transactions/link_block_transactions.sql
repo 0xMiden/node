@@ -1,5 +1,3 @@
 -- Links one validated transaction to its position in a signed block.
-UPDATE validated_transactions
-SET block_num = ?1,
-    block_tx_index = ?2
-WHERE id = ?3;
+INSERT INTO block_transactions (block_num, block_tx_index, transaction_id)
+VALUES (?1, ?2, ?3);
