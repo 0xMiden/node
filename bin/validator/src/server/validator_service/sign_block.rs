@@ -9,7 +9,7 @@ use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{TransactionHeader, TransactionId};
 
-use super::ValidatorService;
+use super::{StatusResultExt, ValidatorService};
 use crate::COMPONENT;
 
 #[tonic::async_trait]
@@ -56,9 +56,7 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
             .acquire()
             .instrument(info_span!("acquire_permit"))
             .await
-            .map_err(|err| {
-                tonic::Status::internal(format!("sign_block semaphore closed: {err}"))
-            })?;
+            .or_internal("sign_block semaphore closed")?;
 
         let (proposed_block, protocol_config, protocol_config_commitment) =
             spawn_blocking_in_current_span(move || {
@@ -77,7 +75,7 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
                             request.block_header.next_protocol_config().cloned(),
                         )
                 })
-                .map_err(|error| tonic::Status::invalid_argument(error.to_string()))?;
+                .or_invalid_argument("Failed to build proposed block")?;
                 Ok::<_, tonic::Status>((
                     proposed_block,
                     protocol_config,
@@ -85,26 +83,24 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
                 ))
             })
             .await
-            .map_err(|error| {
-                tonic::Status::internal(format!("block decoding task failed: {error}"))
-            })??;
+            .or_internal("Block decoding task failed")??;
         let protocol_config = self
             .resolve_protocol_config(protocol_config_commitment, protocol_config)
             .await?;
 
         let block_num = proposed_block.block_num();
-        let previous_backup = self.block_store.load_block(block_num).await.map_err(|err| {
-            tonic::Status::internal(format!("Failed to load previous block backup: {err}"))
-        })?;
+        let previous_backup = self
+            .block_store
+            .load_block(block_num)
+            .await
+            .or_internal("Failed to load previous block backup")?;
 
         // Load the current chain tip from the database.
         let chain_tip = self
             .db
             .load_chain_tip()
             .await
-            .map_err(|err| {
-                tonic::Status::internal(format!("Failed to load chain tip: {}", err.as_report()))
-            })?
+            .or_internal("Failed to load chain tip")?
             .ok_or_else(|| tonic::Status::internal("Chain tip not found in database"))?;
 
         // Capture the block's transactions in block order before the proposed block is consumed, so
@@ -117,13 +113,10 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
         let chain_tip_num = chain_tip.block_num();
 
         // Validate the block against the current chain tip.
-        let (signature, header) =
-            self.validate_block(proposed_block, chain_tip).await.map_err(|err| {
-                tonic::Status::invalid_argument(format!(
-                    "Failed to validate block: {}",
-                    err.as_report()
-                ))
-            })?;
+        let (signature, header) = self
+            .validate_block(proposed_block, chain_tip)
+            .await
+            .or_invalid_argument("Failed to validate block")?;
 
         // Capture the commitment that was signed before `header` is moved into the persistence
         // closure, so it can be returned to the block producer for cross-checking.
@@ -161,9 +154,11 @@ impl ValidatorService {
         commitment: Word,
         supplied: Option<ProtocolConfig>,
     ) -> tonic::Result<ProtocolConfig> {
-        let stored = self.db.load_protocol_config(commitment).await.map_err(|err| {
-            tonic::Status::internal(format!("Failed to load protocol config: {}", err.as_report()))
-        })?;
+        let stored = self
+            .db
+            .load_protocol_config(commitment)
+            .await
+            .or_internal("Failed to load protocol config")?;
 
         match (supplied, stored) {
             (Some(supplied), Some(stored)) if supplied != stored => Err(tonic::Status::internal(
