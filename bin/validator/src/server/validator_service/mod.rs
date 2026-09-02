@@ -75,6 +75,26 @@ pub enum ValidatorError {
     EncryptionKeyAttestationFailed(String),
 }
 
+/// Maps a `Result`'s error into a `tonic::Status` carrying `context` and the error's full source
+/// chain, collapsing the `map_err(|err| Status::<code>(err.as_report_context(...)))` boilerplate
+/// every handler repeats.
+trait StatusResultExt<T> {
+    /// Maps the error to [`tonic::Status::internal`].
+    fn or_internal(self, context: &'static str) -> tonic::Result<T>;
+    /// Maps the error to [`tonic::Status::invalid_argument`].
+    fn or_invalid_argument(self, context: &'static str) -> tonic::Result<T>;
+}
+
+impl<T, E: miden_node_tracing::ErrorReport> StatusResultExt<T> for Result<T, E> {
+    fn or_internal(self, context: &'static str) -> tonic::Result<T> {
+        self.map_err(|err| tonic::Status::internal(err.as_report_context(context)))
+    }
+
+    fn or_invalid_argument(self, context: &'static str) -> tonic::Result<T> {
+        self.map_err(|err| tonic::Status::invalid_argument(err.as_report_context(context)))
+    }
+}
+
 // VALIDATOR SERVICE
 // ================================================================================
 
