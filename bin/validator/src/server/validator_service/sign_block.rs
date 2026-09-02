@@ -93,8 +93,8 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
         let block_transactions: Vec<TransactionId> =
             proposed_block.transactions().map(TransactionHeader::id).collect();
         // Capture the tip height before the tip is consumed: a validated block at the same height
-        // replaces the current tip, and the replaced block must be deleted before the new one is
-        // persisted. The semaphore held above guarantees the tip cannot change in between.
+        // replaces the current tip rather than extending it. The semaphore held above guarantees
+        // the tip cannot change in between.
         let chain_tip_num = chain_tip.block_num();
 
         // Validate the block against the current chain tip.
@@ -110,22 +110,17 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
         // closure, so it can be returned to the block producer for cross-checking.
         let block_commitment = header.commitment();
 
-        // A validated block at the tip's height replaces the current tip: delete the replaced block
-        // first, so its transaction links do not linger. Should the process die between the delete
-        // and the insert below, the tip regresses to the parent and the replacement re-validates as
-        // a regular next block.
-        if header.block_num() == chain_tip_num {
-            self.db.delete_block(header.block_num()).await.map_err(|err| {
-                tonic::Status::internal(format!(
-                    "Failed to delete the replaced block: {}",
-                    err.as_report()
-                ))
-            })?;
-        }
-
-        // Persist the signed header together with the block position of each of its transactions.
+        // Persist the signed header together with the block position of each of its transactions. A
+        // validated block at the tip's height replaces the current tip, which also deletes the
+        // replaced block — atomically with persisting its successor, so a crash cannot leave the
+        // replaced block's links behind.
         let new_block_num = header.block_num().as_u32();
-        self.db.insert_signed_block(header, block_transactions).await.map_err(|err| {
+        let persisted = if header.block_num() == chain_tip_num {
+            self.db.replace_signed_block(header, block_transactions).await
+        } else {
+            self.db.insert_signed_block(header, block_transactions).await
+        };
+        persisted.map_err(|err| {
             tonic::Status::internal(format!("Failed to persist block header: {}", err.as_report()))
         })?;
 

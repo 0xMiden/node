@@ -218,25 +218,11 @@ impl ValidatorDbWriter {
             .await
     }
 
-    /// Deletes the block signed at the given height, unlinking the block's transactions along with
-    /// it via the `ON DELETE CASCADE` on `block_transactions`.
-    ///
-    /// Called before [`Self::insert_signed_block`] when a block replaces one already signed at the
-    /// same height, so transactions dropped by the replacement do not keep a stale link.
-    #[miden_instrument(
-        target = COMPONENT,
-    )]
-    pub(crate) async fn delete_block(&self, block_num: BlockNumber) -> Result<(), DatabaseError> {
-        self.writer
-            .write("delete_block", move |tx| queries::delete_block(tx, block_num))
-            .await
-    }
-
     /// Persists a signed block's header and links the block's transactions to their in-block
     /// positions, all in one database transaction so the header and the links stay consistent.
     ///
-    /// The height must not already hold a block; when replacing one, the caller runs
-    /// [`Self::delete_block`] first.
+    /// The height must not already hold a block; use [`Self::replace_signed_block`] to replace
+    /// one.
     #[miden_instrument(
         target = COMPONENT,
     )]
@@ -247,11 +233,42 @@ impl ValidatorDbWriter {
     ) -> Result<(), DatabaseError> {
         self.writer
             .write("insert_signed_block", move |tx| {
-                queries::insert_block_header(tx, &header)?;
-                queries::link_block_transactions(tx, header.block_num(), &transactions)
+                persist_signed_block(tx, &header, &transactions)
             })
             .await
     }
+
+    /// Replaces the block signed at `header`'s height, in one database transaction: deletes the
+    /// replaced block — unlinking its transactions via the `ON DELETE CASCADE` on
+    /// `block_transactions`, so transactions dropped by the replacement do not keep a stale link —
+    /// then persists the new header and links exactly as [`Self::insert_signed_block`] does.
+    #[miden_instrument(
+        target = COMPONENT,
+    )]
+    pub(crate) async fn replace_signed_block(
+        &self,
+        header: BlockHeader,
+        transactions: Vec<TransactionId>,
+    ) -> Result<(), DatabaseError> {
+        self.writer
+            .write("replace_signed_block", move |tx| {
+                queries::delete_block(tx, header.block_num())?;
+                persist_signed_block(tx, &header, &transactions)
+            })
+            .await
+    }
+}
+
+/// Persists a signed block's header and links its transactions, within the caller's database
+/// transaction: the shared tail of [`ValidatorDbWriter::insert_signed_block`] and
+/// [`ValidatorDbWriter::replace_signed_block`].
+fn persist_signed_block(
+    tx: &miden_node_db::sqlite::WriteTx<'_>,
+    header: &BlockHeader,
+    transactions: &[TransactionId],
+) -> Result<(), DatabaseError> {
+    queries::insert_block_header(tx, header)?;
+    queries::link_block_transactions(tx, header.block_num(), transactions)
 }
 
 // LIFECYCLE
@@ -562,11 +579,10 @@ mod tests {
             ],
         );
 
-        // Replace the block at the same height with one that only includes the third transaction,
-        // deleting the replaced block first as `sign_block` does. The two transactions the
-        // replacement drops go back to being uncommitted, and stop being listed.
-        db.delete_block(header.block_num()).await.unwrap();
-        db.insert_signed_block(header, vec![transaction_ids[2]]).await.unwrap();
+        // Replace the block at the same height with one that only includes the third transaction.
+        // The two transactions the replacement drops go back to being uncommitted, and stop being
+        // listed.
+        db.replace_signed_block(header, vec![transaction_ids[2]]).await.unwrap();
 
         let listed = db.list_validated_transactions(params).await.unwrap();
         assert_eq!(
