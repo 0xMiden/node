@@ -1,19 +1,16 @@
--- Links validated transactions to the signed block that includes them.
+-- Records which signed block includes each validated transaction, and at which position.
 --
--- Both columns are nullable by design, not just for legacy rows: records are written at
--- validation time, before the transaction is part of any block. A row stays unlinked while the
--- transaction is in flight, if it is never included in a signed block, or if it predates this
--- migration. Unlinked rows are reachable by transaction id and count towards share issuance, but
--- are never listed: only the committed order (block number, then index within the block) has any
--- bearing on the chain, and an unlinked row has no position in it.
---
--- These columns supersede `insertion_sequence` as the administration API's ordering; that column
--- remains the table's primary key and nothing more.
-ALTER TABLE validated_transactions ADD COLUMN block_num BIGINT;
-ALTER TABLE validated_transactions ADD COLUMN block_tx_index BIGINT;
-
--- Serves keyset pagination and block-range filtering in committed order. Partial, because
--- listing never reads unlinked rows.
-CREATE INDEX idx_validated_transactions_block_position
-ON validated_transactions(block_num, block_tx_index)
-WHERE block_num IS NOT NULL;
+-- A transaction is validated before it is part of any block, so a validated transaction gains a
+-- row here only once a signed block includes it. `(block_num, block_tx_index)` is the
+-- transaction's position in the chain's committed order.
+CREATE TABLE block_transactions (
+    -- Height of the signed block. Deleting the block header deletes its links with it.
+    block_num      BIGINT NOT NULL REFERENCES block_headers(block_num) ON DELETE CASCADE,
+    -- Index of the transaction within the block.
+    block_tx_index BIGINT NOT NULL,
+    -- The included transaction. A transaction is included by at most one block, and only
+    -- transactions validated by this validator can be linked.
+    transaction_id BLOB   NOT NULL UNIQUE REFERENCES validated_transactions(id),
+    -- Also the index that serves listing in committed order.
+    PRIMARY KEY (block_num, block_tx_index)
+) WITHOUT ROWID;

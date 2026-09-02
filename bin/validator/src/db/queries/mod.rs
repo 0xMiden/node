@@ -8,17 +8,20 @@
 
 mod private_record_row;
 
-mod clear_block_transaction_links;
-pub use clear_block_transaction_links::clear_block_transaction_links;
-
 mod count_signed_blocks;
 pub use count_signed_blocks::count_signed_blocks;
 
 mod count_validated_transactions;
 pub use count_validated_transactions::count_validated_transactions;
 
+mod delete_block;
+pub use delete_block::delete_block;
+
 mod find_unvalidated_transactions;
 pub use find_unvalidated_transactions::find_unvalidated_transactions;
+
+mod insert_block_header;
+pub use insert_block_header::insert_block_header;
 
 mod insert_validated_private_transaction;
 pub use insert_validated_private_transaction::insert_validated_private_transaction;

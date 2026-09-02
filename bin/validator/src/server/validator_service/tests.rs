@@ -810,9 +810,9 @@ async fn sign_block_links_transactions_to_the_signed_block() {
         .server
         .db
         .list_validated_transactions(ListTransactionsParams {
-            block_range: Some((BlockNumber::from(1u32), BlockNumber::from(1u32))),
+            start: Some((BlockNumber::from(1u32), 0)),
+            block_to: Some(BlockNumber::from(1u32)),
             limit: 10,
-            include_records: false,
         })
         .await
         .unwrap();
