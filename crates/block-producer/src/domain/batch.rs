@@ -1,15 +1,40 @@
 use std::collections::{HashMap, HashSet};
+use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::batch::BatchId;
 use miden_protocol::block::BlockNumber;
+use miden_protocol::note::Note;
 
 use crate::domain::transaction::AuthenticatedTransaction;
 
 // SELECTED BATCH
 // ================================================================================================
+
+/// Identifies a transaction selection in the batch graph.
+///
+/// A sequencer-built batch has a different [`BatchId`] after the batch builder appends the fee
+/// transaction. A user-proven batch keeps the same ID.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct SelectedBatchId(BatchId);
+
+impl SelectedBatchId {
+    pub(crate) fn from_batch_id(batch_id: BatchId) -> Self {
+        Self(batch_id)
+    }
+
+    pub(crate) fn as_batch_id(self) -> BatchId {
+        self.0
+    }
+}
+
+impl Display for SelectedBatchId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 /// Parameters that define how the node builds a batch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,10 +59,11 @@ impl BatchParameters {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SelectedBatch {
     txs: Vec<Arc<AuthenticatedTransaction>>,
-    id: BatchId,
+    id: SelectedBatchId,
     parameters: BatchParameters,
     account_updates: HashMap<AccountId, (Word, Word, Option<Word>)>,
     unauthenticated_notes: HashSet<Word>,
+    collectible_fee_notes: Vec<Note>,
 }
 
 impl SelectedBatch {
@@ -49,7 +75,7 @@ impl SelectedBatch {
         }
     }
 
-    pub(crate) fn id(&self) -> BatchId {
+    pub(crate) fn id(&self) -> SelectedBatchId {
         self.id
     }
 
@@ -63,6 +89,10 @@ impl SelectedBatch {
 
     pub(crate) fn parameters(&self) -> BatchParameters {
         self.parameters
+    }
+
+    pub(crate) fn collectible_fee_notes(&self) -> &[Note] {
+        &self.collectible_fee_notes
     }
 
     /// The aggregated list of account transitions this batch causes given as tuples of `(AccountId,
@@ -142,7 +172,9 @@ not match the current commitment {}",
     /// Finalizes the batch selection.
     pub(crate) fn build(self) -> SelectedBatch {
         let Self { parameters, txs, account_updates } = self;
-        let id = BatchId::from_ids(txs.iter().map(|tx| (tx.id(), tx.account_id())));
+        let id = SelectedBatchId::from_batch_id(BatchId::from_ids(
+            txs.iter().map(|tx| (tx.id(), tx.account_id())),
+        ));
 
         let mut unauthenticated_notes: HashSet<_> =
             txs.iter().flat_map(|tx| tx.unauthenticated_note_ids()).collect();
@@ -151,12 +183,15 @@ not match the current commitment {}",
             unauthenticated_notes.remove(&output_note);
         }
 
+        let collectible_fee_notes = txs.iter().flat_map(|tx| tx.fee_notes()).cloned().collect();
+
         SelectedBatch {
             txs,
             id,
             parameters,
             account_updates,
             unauthenticated_notes,
+            collectible_fee_notes,
         }
     }
 }

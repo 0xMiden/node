@@ -45,13 +45,18 @@ services:
         echo "Building genesis block..."
         # The validator set consists of the public keys derived from the three
         # signing keys configured in validator.yml, ordered by validator service.
-        miden-validator genesis \
+        GENESIS_OUTPUT=$$(miden-validator genesis \
           --genesis-block-directory /data/genesis \
           --accounts-directory /data/accounts \
           --config /genesis.toml \
           --validator.key "$$(miden-validator pubkey --signing-key.hex "$${MIDEN_VALIDATOR_1_SIGNING_KEY}")" \
           --validator.key "$$(miden-validator pubkey --signing-key.hex "$${MIDEN_VALIDATOR_2_SIGNING_KEY}")" \
-          --validator.key "$$(miden-validator pubkey --signing-key.hex "$${MIDEN_VALIDATOR_3_SIGNING_KEY}")"
+          --validator.key "$$(miden-validator pubkey --signing-key.hex "$${MIDEN_VALIDATOR_3_SIGNING_KEY}")")
+        printf '%s\n' "$${GENESIS_OUTPUT}"
+        printf '%s\n' "$${GENESIS_OUTPUT}" \
+          | sed -n 's/^Batch builder account id: //p' \
+          > /data/genesis/batch-builder-account-id
+        test -s /data/genesis/batch-builder-account-id
 
         for VALIDATOR in 1 2 3; do
           echo "Bootstrapping validator $${VALIDATOR}..."

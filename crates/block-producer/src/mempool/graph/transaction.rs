@@ -435,7 +435,7 @@ impl TransactionGraph {
             self.inner.prune(tx.id());
             self.failures.remove(&tx.id());
         }
-        self.user_batches.remove(&batch.id());
+        self.user_batches.remove(&batch.id().as_batch_id());
     }
 
     fn mark_committed_notes_authenticated_for_descendants(
@@ -464,6 +464,10 @@ impl TransactionGraph {
     /// Total number of transactions in the graph.
     pub fn count(&self) -> usize {
         self.inner.node_count()
+    }
+
+    pub fn contains(&self, transaction: &TransactionId) -> bool {
+        self.inner.contains(transaction)
     }
 
     pub fn accounts_count(&self) -> usize {

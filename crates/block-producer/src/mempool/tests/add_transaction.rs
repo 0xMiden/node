@@ -2,14 +2,13 @@ use std::sync::Arc;
 
 use assert_matches::assert_matches;
 use miden_protocol::Word;
-use miden_protocol::batch::ProvenBatch;
 use miden_protocol::block::BlockHeader;
 use miden_protocol::transaction::{OutputNote, PublicOutputNote};
 
 use crate::domain::transaction::AuthenticatedTransaction;
 use crate::errors::{MempoolSubmissionError, StateConflict};
 use crate::mempool::Mempool;
-use crate::test_utils::batch::TransactionBatchConstructor;
+use crate::test_utils::batch::mock_proven_batch_with_builder_transaction;
 use crate::test_utils::note::mock_fee_note;
 use crate::test_utils::{MockProvenTxBuilder, mock_account_id};
 
@@ -338,7 +337,7 @@ fn committed_fee_note_consumption_is_accepted() {
 
     uut.add_transaction(producer.clone()).unwrap();
     uut.select_any_batch().unwrap();
-    uut.commit_batch(Arc::new(ProvenBatch::mocked_from_transactions([
+    uut.commit_batch(Arc::new(mock_proven_batch_with_builder_transaction([
         producer.raw_proven_transaction()
     ])));
     let block = uut.select_block();

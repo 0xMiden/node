@@ -1,0 +1,72 @@
+# Converts the fee notes in one batch into one P2ID note.
+
+use miden::core::mem
+use miden::standards::notes::p2id
+use miden_node::account::pass_through::sweep
+
+const WORD_NUM_ELEMENTS = 4
+const HEADER_NUM_WORDS = 2
+const NUM_LOCALS = 75
+const NUM_LOOP_STATE_LOCALS = 3
+const MAX_PAYLOAD_NUM_WORDS = (NUM_LOCALS - NUM_LOOP_STATE_LOCALS) / WORD_NUM_ELEMENTS
+const MAX_ASSET_IDS = MAX_PAYLOAD_NUM_WORDS - HEADER_NUM_WORDS
+
+const PAYLOAD_LOC = 0
+const TARGET_ID_SUFFIX_LOC = PAYLOAD_LOC
+const TARGET_ID_PREFIX_LOC = PAYLOAD_LOC + 1
+const TAG_LOC = PAYLOAD_LOC + 2
+const NOTE_TYPE_LOC = PAYLOAD_LOC + 3
+const SERIAL_NUM_LOC = PAYLOAD_LOC + 4
+const ASSET_IDS_LOC = PAYLOAD_LOC + 8
+const OUT_NOTE_IDX_LOC = ASSET_IDS_LOC + MAX_ASSET_IDS * WORD_NUM_ELEMENTS
+const ASSET_ID_PTR_LOC = OUT_NOTE_IDX_LOC + 1
+const NUM_ASSET_IDS_LOC = OUT_NOTE_IDX_LOC + 2
+
+const ERR_PASS_THROUGH_PAYLOAD_LENGTH_INVALID = "pass through payload length is outside the expected range"
+const ERR_PASS_THROUGH_PAYLOAD_NOT_WORD_ALIGNED = "pass through payload length is not a multiple of the word size"
+
+@transaction_script
+pub proc main
+    exec.forward_assets
+end
+
+@locals(75)
+proc forward_assets
+    locaddr.PAYLOAD_LOC exec.load_payload loc_store.NUM_ASSET_IDS_LOC
+
+    padw loc_loadw_le.SERIAL_NUM_LOC
+    loc_load.NOTE_TYPE_LOC loc_load.TAG_LOC
+    loc_load.TARGET_ID_PREFIX_LOC loc_load.TARGET_ID_SUFFIX_LOC
+    exec.p2id::create_output_note
+    loc_store.OUT_NOTE_IDX_LOC
+
+    locaddr.ASSET_IDS_LOC loc_store.ASSET_ID_PTR_LOC
+    loc_load.NUM_ASSET_IDS_LOC
+    dup neq.0
+    while.true
+        padw padw push.0.0.0
+        loc_load.OUT_NOTE_IDX_LOC
+        padw loc_load.ASSET_ID_PTR_LOC mem_loadw_le
+        call.sweep::sweep_asset_to_note
+        dropw dropw dropw dropw
+
+        loc_load.ASSET_ID_PTR_LOC add.WORD_NUM_ELEMENTS loc_store.ASSET_ID_PTR_LOC
+        sub.1 dup neq.0
+    end
+    drop
+end
+
+proc load_payload
+    movdn.4
+    adv.push_mapvaln
+    adv_push u32assert.err=ERR_PASS_THROUGH_PAYLOAD_LENGTH_INVALID
+
+    u32divmod.WORD_NUM_ELEMENTS
+    eq.0 assert.err=ERR_PASS_THROUGH_PAYLOAD_NOT_WORD_ALIGNED
+    dup u32gte.HEADER_NUM_WORDS assert.err=ERR_PASS_THROUGH_PAYLOAD_LENGTH_INVALID
+    dup u32lte.MAX_PAYLOAD_NUM_WORDS assert.err=ERR_PASS_THROUGH_PAYLOAD_LENGTH_INVALID
+
+    dup sub.HEADER_NUM_WORDS movdn.6
+    movup.5 swap
+    exec.mem::pipe_preimage_to_memory drop
+end

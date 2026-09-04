@@ -87,6 +87,7 @@ impl SequencerCommand {
             max_concurrent_proofs: self.block_producer.block.max_concurrent_proofs,
             mempool_tx_capacity: self.block_producer.mempool.tx_capacity,
             batch_workers: self.block_producer.batch.workers,
+            builder_account_id: self.block_producer.builder.account_id,
         }
         .spawn(shutdown.clone())
         .context("failed to spawn sequencer")?;

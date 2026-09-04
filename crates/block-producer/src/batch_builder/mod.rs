@@ -17,6 +17,7 @@ use miden_node_tracing::{
 };
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
+use miden_protocol::account::AccountId;
 use miden_protocol::batch::{BatchId, ProposedBatch, ProvenBatch};
 use miden_protocol::note::NoteId;
 use miden_protocol::transaction::TransactionId;
@@ -25,13 +26,15 @@ use tokio::task::{JoinError, JoinSet};
 use tokio::time::{Instant, MissedTickBehavior};
 use url::Url;
 
-use crate::domain::batch::SelectedBatch;
+use crate::domain::batch::{SelectedBatch, SelectedBatchId};
 use crate::domain::transaction::AuthenticatedTransaction;
 use crate::errors::{BuildBatchError, StoreError};
 use crate::mempool::SharedMempool;
 use crate::{COMPONENT, LOG_TARGET};
 
+mod pass_through;
 mod remote_prover;
+use pass_through::PassThroughTransactionBuilder;
 use remote_prover::BatchProver;
 pub use remote_prover::RemoteProverError;
 
@@ -52,6 +55,7 @@ pub struct BatchBuilder {
     ///
     /// If not provided, a local batch prover is used.
     batch_prover: BatchProver,
+    pass_through: PassThroughTransactionBuilder,
     state: Arc<State>,
 }
 
@@ -90,15 +94,18 @@ impl BatchBuilder {
         num_workers: NonZeroUsize,
         batch_prover_url: Option<Url>,
         intervals: BatchIntervals,
+        builder_account_id: AccountId,
     ) -> anyhow::Result<Self> {
         let batch_prover =
             batch_prover_url.map_or(Ok(BatchProver::local()), BatchProver::remote)?;
+        let pass_through = PassThroughTransactionBuilder::new(builder_account_id)?;
 
         Ok(Self {
             active_jobs: JoinSet::new(),
             num_workers,
             intervals,
             batch_prover,
+            pass_through,
             state,
         })
     }
@@ -169,6 +176,7 @@ impl BatchBuilder {
             state: self.state.clone(),
             mempool,
             batch_prover: self.batch_prover.clone(),
+            pass_through: self.pass_through.clone(),
         };
 
         self.active_jobs.spawn(
@@ -251,6 +259,7 @@ impl BatchBuilder {
 struct BatchJob {
     state: Arc<State>,
     batch_prover: BatchProver,
+    pass_through: PassThroughTransactionBuilder,
     mempool: SharedMempool,
 }
 
@@ -300,6 +309,8 @@ impl BatchJob {
         &self,
         selected: SelectedBatch,
     ) -> Result<ProposedBatch, BuildBatchError> {
+        let selected_id = selected.id();
+        let fee_notes = selected.collectible_fee_notes().to_vec();
         let mut block_numbers: BTreeSet<_> = selected
             .transactions()
             .iter()
@@ -337,11 +348,29 @@ impl BatchJob {
             .0
             .expect("reference block header should exist");
 
-        let transactions = selected
+        let mut transactions: Vec<_> = selected
             .into_transactions()
             .into_iter()
             .map(|tx| tx.proven_transaction())
             .collect();
+
+        let pass_through = self.pass_through.clone();
+        let executed_pass_through_tx = pass_through
+            .execute(
+                fee_notes,
+                selected_id.as_batch_id().as_word(),
+                reference_block_header.clone(),
+                partial_blockchain.clone(),
+            )
+            .await
+            .map_err(BuildBatchError::BuildBatchFeeTransaction)?;
+        let pass_through_tx = spawn_blocking_in_current_span(move || {
+            PassThroughTransactionBuilder::prove(executed_pass_through_tx)
+        })
+        .await
+        .map_err(BuildBatchError::JoinError)?
+        .map_err(BuildBatchError::BuildBatchFeeTransaction)?;
+        transactions.push(Arc::new(pass_through_tx));
 
         ProposedBatch::new(
             transactions,
@@ -408,7 +437,7 @@ impl BatchJob {
         target = COMPONENT,
         name = "batch_builder.rollback_batch",
     )]
-    fn rollback_batch(&self, batch_id: BatchId) -> Result<(), BuildBatchError> {
+    fn rollback_batch(&self, batch_id: SelectedBatchId) -> Result<(), BuildBatchError> {
         self.mempool
             .lock()
             .map_err(BuildBatchError::MempoolPoisoned)?
@@ -450,7 +479,7 @@ impl SelectedBatch {
                 },
             );
         SelectedBatchTelemetry {
-            batch_id: self.id(),
+            batch_id: self.id().as_batch_id(),
             transactions_count: self.transactions().len(),
             transaction_ids: tx_ids,
             input_notes_count,

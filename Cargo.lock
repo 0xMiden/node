@@ -4151,6 +4151,8 @@ dependencies = [
  "miden-node-utils",
  "miden-protocol",
  "miden-standards",
+ "miden-testing",
+ "miden-tx",
  "miden-tx-batch",
  "pretty_assertions",
  "rand 0.10.2",

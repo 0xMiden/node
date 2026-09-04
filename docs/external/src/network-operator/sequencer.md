@@ -18,6 +18,7 @@ miden-node sequencer \
   --validator.url http://validator-2:50101 \
   --validator.url http://validator-3:50101 \
   --ntx-builder.url http://ntx-builder:50301 \
+  --batch.builder.account.id <batch-builder-account-id> \
   --rpc.network-tx-auth-header-value <network-tx-auth-secret>
 ```
 
@@ -57,6 +58,7 @@ block data when this occurs. See [Recovery](/network-operator/recovery) for the 
 | `--validator.url`                    | Internal validator service URLs (one per validator).   |
 | `--ntx-builder.url`                  | Internal network transaction builder service URL.      |
 | `--batch.interval`                   | Maximum interval between batch scheduler checks.       |
+| `--batch.builder.account.id`         | Batch builder account that receives collected fees.    |
 | `--block.interval`                   | Block production interval.                             |
 
 Use `miden-node sequencer --help` for the complete current option list.

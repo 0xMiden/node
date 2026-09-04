@@ -6,8 +6,8 @@ use miden_node_proto::generated::sequencer;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::Nullifier;
-use miden_protocol::transaction::{ProvenTransaction, TransactionId, TxAccountUpdate};
+use miden_protocol::note::{Note, NoteId, Nullifier};
+use miden_protocol::transaction::{OutputNote, ProvenTransaction, TransactionId, TxAccountUpdate};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_standards::note::TxFeeNote;
 
@@ -119,8 +119,25 @@ impl AuthenticatedTransaction {
         self.inner.output_notes().num_notes()
     }
 
+    /// Returns the public output notes that use the canonical transaction fee script.
+    pub fn fee_notes(&self) -> impl Iterator<Item = &Note> + '_ {
+        let fee_script_root = TxFeeNote::script_root();
+
+        self.inner.output_notes().iter().filter_map(move |note| match note {
+            OutputNote::Public(note) if note.recipient().script().root() == fee_script_root => {
+                Some(note.as_note())
+            },
+            _ => None,
+        })
+    }
+
     pub fn input_note_count(&self) -> usize {
         self.inner.input_notes().num_notes() as usize
+    }
+
+    /// Returns the IDs of input notes whose authentication is deferred to the batch or block.
+    pub fn unauthenticated_input_note_ids(&self) -> impl Iterator<Item = NoteId> + '_ {
+        self.inner.unauthenticated_notes().map(miden_protocol::note::NoteHeader::id)
     }
 
     pub fn reference_block(&self) -> (BlockNumber, Word) {

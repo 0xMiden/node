@@ -62,10 +62,9 @@ use miden_standards::note::TxFeeNote;
 use thiserror::Error;
 
 use crate::block_builder::SelectedBlock;
-use crate::domain::batch::{BatchParameters, SelectedBatch};
+use crate::domain::batch::{BatchParameters, SelectedBatch, SelectedBatchId};
 use crate::domain::transaction::AuthenticatedTransaction;
 use crate::errors::{MempoolSubmissionError, StateConflict};
-use crate::mempool::budget::BudgetStatus;
 use crate::{
     COMPONENT,
     DEFAULT_MEMPOOL_TX_CAPACITY,
@@ -99,6 +98,9 @@ pub struct MempoolConfig {
 
     /// The constraints each proposed batch must adhere to.
     pub batch_budget: BatchBudget,
+
+    /// The maximum number of transactions allowed in a batch.
+    pub max_txs_per_batch: usize,
 
     /// How close to the chain tip the mempool will allow submitted transactions and batches to
     /// expire.
@@ -138,6 +140,7 @@ impl Default for MempoolConfig {
         Self {
             block_budget: BlockBudget::default(),
             batch_budget: BatchBudget::default(),
+            max_txs_per_batch: crate::DEFAULT_MAX_TXS_PER_BATCH.get(),
             expiration_slack: SERVER_MEMPOOL_EXPIRATION_SLACK,
             state_retention: SERVER_MEMPOOL_STATE_RETENTION,
             tx_capacity: DEFAULT_MEMPOOL_TX_CAPACITY,
@@ -296,13 +299,8 @@ impl Mempool {
             return Err(MempoolSubmissionError::CapacityExceeded);
         }
 
-        // Ensure the batch doesn't exceed the mempool budget for batches.
-        let mut budget = self.config.batch_budget;
-        for tx in txs {
-            if budget.check_then_subtract(tx) == BudgetStatus::Exceeded {
-                // TODO: better error plox.
-                return Err(MempoolSubmissionError::CapacityExceeded);
-            }
+        if txs.len() > self.config.max_txs_per_batch {
+            return Err(MempoolSubmissionError::CapacityExceeded);
         }
 
         let batch_id = BatchId::from_transactions(txs.iter().map(|tx| tx.raw_proven_transaction()));
@@ -313,6 +311,7 @@ impl Mempool {
         for tx in txs {
             self.authentication_staleness_check(tx.authentication_height())?;
             self.expiration_check(tx.expires_at())?;
+            self.fee_note_consumption_check(tx)?;
         }
 
         self.transactions
@@ -353,7 +352,7 @@ impl Mempool {
         };
         let batch = self
             .transactions
-            .select_any_internal_batch(self.config.batch_budget, parameters)?;
+            .select_any_internal_batch(self.config.batch_budget.clone(), parameters)?;
         let batch = self.append_selected_batch(batch);
         self.promote_user_batches();
         let telemetry = self.telemetry();
@@ -384,7 +383,7 @@ impl Mempool {
         };
         let batch = self
             .transactions
-            .select_full_internal_batch(self.config.batch_budget, parameters)?;
+            .select_full_internal_batch(self.config.batch_budget.clone(), parameters)?;
         let batch = self.append_selected_batch(batch);
         self.promote_user_batches();
         let telemetry = self.telemetry();
@@ -410,8 +409,9 @@ impl Mempool {
     /// Moves selectable user-proven batches into the batch graph.
     fn promote_user_batches(&mut self) {
         while let Some((batch, proof)) = self.transactions.select_user_batch() {
-            self.append_selected_batch(batch);
-            self.batches.submit_proof(proof);
+            if let Err(err) = self.batches.append_user_batch(batch, proof) {
+                panic!("failed to append user batch to dependency graph: {}", err.as_report());
+            }
         }
     }
 
@@ -424,7 +424,7 @@ impl Mempool {
         target = COMPONENT,
         name = "mempool.rollback_batch",
     )]
-    pub fn rollback_batch(&mut self, batch: BatchId) {
+    pub(crate) fn rollback_batch(&mut self, batch: SelectedBatchId) {
         // Guards against bugs in the proof scheduler where a retry results in multiple results
         // coming back for the same batch. If the batch previously succeeded, then yanking it would
         // corrupt the mempool since the batch might be in a block.
@@ -435,7 +435,7 @@ impl Mempool {
             return;
         }
 
-        let reverted_batches = self.batches.revert_batch_and_descendants(batch);
+        let reverted_batches = self.batches.revert_selected_batch_and_descendants(batch);
         for reverted in &reverted_batches {
             self.transactions.requeue_transactions(reverted);
         }
@@ -591,7 +591,7 @@ impl Mempool {
         //
         // Transactions which have failed excessively are also reverted.
         for batch in &block.batches {
-            let reverted = self.batches.revert_batch_and_descendants(batch.id());
+            let reverted = self.batches.revert_proven_batch_and_descendants(batch.id());
 
             for batch in reverted {
                 self.transactions.requeue_transactions(&batch);
@@ -600,8 +600,11 @@ impl Mempool {
         let failed_txs = block
             .batches
             .iter()
-            .flat_map(|batch| batch.transactions().as_slice().iter().map(TransactionHeader::id));
-        let evicted = self.transactions.increment_failure_count(failed_txs);
+            .flat_map(|batch| batch.transactions().as_slice())
+            .map(TransactionHeader::id)
+            .filter(|transaction| self.transactions.contains(transaction))
+            .collect::<Vec<_>>();
+        let evicted = self.transactions.increment_failure_count(failed_txs.into_iter());
         let telemetry = self.telemetry();
         miden_span_record!(
             mempool.transactions.uncommitted = telemetry.uncommitted_transactions,
@@ -629,8 +632,9 @@ impl Mempool {
             .committed_blocks
             .iter()
             .flat_map(|block| block.batches.iter())
-            .map(|batch| batch.transactions().as_slice().len())
-            .sum::<usize>();
+            .flat_map(|batch| batch.transactions().as_slice())
+            .filter(|transaction| self.transactions.contains(&transaction.id()))
+            .count();
 
         self.transactions
             .count()

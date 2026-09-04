@@ -129,6 +129,9 @@ pub enum BuildBatchError {
     #[error("failed to build proposed transaction batch")]
     ProposeBatchError(#[source] ProposedBatchError),
 
+    #[error("failed to build the batch fee transaction")]
+    BuildBatchFeeTransaction(#[source] anyhow::Error),
+
     #[error("failed to prove proposed transaction batch")]
     ProveBatchError(#[source] ProvenBatchError),
 

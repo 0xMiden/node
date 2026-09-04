@@ -13,6 +13,17 @@ use miden_protocol::vm::ExecutionProof;
 
 use crate::test_utils::MockProvenTxBuilder;
 
+/// Builds a mocked proven batch with a final batch builder transaction.
+pub fn mock_proven_batch_with_builder_transaction<'tx>(
+    txs: impl IntoIterator<Item = &'tx ProvenTransaction>,
+) -> ProvenBatch {
+    let builder_transaction = MockProvenTxBuilder::with_account_index(u32::MAX).build();
+    let mut txs = txs.into_iter().collect::<Vec<_>>();
+    txs.push(&builder_transaction);
+
+    ProvenBatch::mocked_from_transactions(txs)
+}
+
 pub trait TransactionBatchConstructor {
     /// Builds a **mocked** [`ProvenBatch`] from the given transactions, which most likely violates
     /// some of the rules of actual transaction batches.

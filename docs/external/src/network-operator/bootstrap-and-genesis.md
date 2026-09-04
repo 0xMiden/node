@@ -59,6 +59,10 @@ it. The operator starts with 1,000 MIDEN tokens so it can pay fees for the first
 written to the accounts directory as `native_faucet.mac` and `faucet_operator.mac`, and the faucet account id is
 printed. The operator file carries the only signing key permitted to mint, so treat it as a secret.
 
+Genesis also creates `batch_builder.mac` and prints its private account ID. Configure the sequencer with this ID in
+`--batch.builder.account.id`. This account receives the fees collected during batch building. Keep the account file
+private because it contains the batch builder signing key.
+
 To run a faucet against the network, pass `faucet_operator.mac` to the faucet's `init --import`, and the faucet account
 id to `--faucet-account-id`.
 

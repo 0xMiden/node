@@ -15,16 +15,18 @@ services:
         condition: service_started
       validator-3:
         condition: service_started
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - miden-node
-      - sequencer
-      - --rpc.listen=0.0.0.0:57291
-      - --data-directory=/data/node
-      - --validator.url=http://validator-1:50101
-      - --validator.url=http://validator-2:50101
-      - --validator.url=http://validator-3:50101
-      - --ntx-builder.url=http://ntx-builder:50301
-      - --rpc.network-tx-auth-header-value=secret_value
+      - |
+        exec miden-node sequencer \
+          --rpc.listen=0.0.0.0:57291 \
+          --data-directory=/data/node \
+          --validator.url=http://validator-1:50101 \
+          --validator.url=http://validator-2:50101 \
+          --validator.url=http://validator-3:50101 \
+          --ntx-builder.url=http://ntx-builder:50301 \
+          --batch.builder.account.id="$$(cat /data/genesis/batch-builder-account-id)" \
+          --rpc.network-tx-auth-header-value=secret_value
     environment:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       OTEL_RESOURCE_ATTRIBUTES: service.instance.id=sequencer

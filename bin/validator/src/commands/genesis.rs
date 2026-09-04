@@ -1,7 +1,11 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use miden_node_store::genesis::config::{AccountFileWithName, GenesisConfig};
+use miden_node_store::genesis::config::{
+    AccountFileWithName,
+    BATCH_BUILDER_FILE_NAME,
+    GenesisConfig,
+};
 use miden_node_utils::fs::ensure_empty_directory;
 use miden_protocol::block::ValidatorKeys;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
@@ -45,6 +49,11 @@ pub fn generate(
         .unwrap_or_default();
 
     let (genesis_state, secrets) = config.into_state(validator_keys)?;
+    let batch_builder_id = secrets
+        .secrets
+        .iter()
+        .find_map(|(name, account_id, _)| (name == BATCH_BUILDER_FILE_NAME).then_some(*account_id))
+        .context("genesis state does not contain the batch builder account")?;
 
     for item in secrets.as_account_files(&genesis_state) {
         let AccountFileWithName { account_file, name } = item?;
@@ -69,6 +78,7 @@ pub fn generate(
     println!("Genesis block written to {}.", genesis_block_path.display());
     println!();
     println!("Native faucet account id: {}", native_faucet_id.to_hex());
+    println!("Batch builder account id: {}", batch_builder_id.to_hex());
     println!();
     println!("Seed each validator's database with:");
     println!();

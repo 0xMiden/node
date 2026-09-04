@@ -8,6 +8,7 @@ use miden_node_tracing::{debug, error, info, miden_instrument};
 use miden_node_utils::formatting::{format_input_notes, format_output_notes};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
+use miden_protocol::account::AccountId;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::ProvenTransaction;
@@ -53,10 +54,8 @@ impl Default for BlockProducerApiConfig {
 impl BlockProducerApiConfig {
     fn mempool_config(self) -> MempoolConfig {
         MempoolConfig {
-            batch_budget: BatchBudget {
-                transactions: self.max_txs_per_batch.get(),
-                ..BatchBudget::default()
-            },
+            batch_budget: BatchBudget::new(self.max_txs_per_batch.get()),
+            max_txs_per_batch: self.max_txs_per_batch.get(),
             block_budget: BlockBudget {
                 batches: self.max_batches_per_block.get(),
             },
@@ -100,6 +99,9 @@ pub struct Sequencer {
 
     /// The number of concurrent batch-builder workers.
     pub batch_workers: NonZeroUsize,
+
+    /// The batch builder account that receives collected fees.
+    pub builder_account_id: AccountId,
 }
 
 // BLOCK PRODUCER
@@ -128,6 +130,7 @@ impl Sequencer {
             self.batch_workers,
             self.batch_prover_url,
             batch_intervals,
+            self.builder_account_id,
         )?;
         let api_config = BlockProducerApiConfig {
             max_txs_per_batch: self.max_txs_per_batch,

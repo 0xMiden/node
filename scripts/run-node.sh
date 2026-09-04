@@ -50,6 +50,7 @@ VALIDATOR_2_DIR="/tmp/validator-2"
 NTX_BUILDER_DIR="/tmp/ntx-builder"
 GENESIS_DIR="/tmp/genesis"
 ACCOUNTS_DIR="/tmp/accounts"
+BATCH_BUILDER_ACCOUNT_ID_FILE="$GENESIS_DIR/batch-builder-account-id"
 
 VALIDATOR_1_PORT=50101
 VALIDATOR_2_PORT=50102
@@ -163,12 +164,19 @@ if [[ "$SKIP_BOOTSTRAP" != "true" ]]; then
         VALIDATOR_2_PUBKEY=$("$VALIDATOR_BINARY" pubkey --signing-key.hex "$VALIDATOR_2_KEY_HEX")
     fi
 
-    "$VALIDATOR_BINARY" genesis \
+    GENESIS_OUTPUT=$("$VALIDATOR_BINARY" genesis \
         --genesis-block-directory "$GENESIS_DIR" \
         --accounts-directory "$ACCOUNTS_DIR" \
         --config "$GENESIS_CONFIG" \
         --validator.key "$VALIDATOR_1_PUBKEY" \
-        --validator.key "$VALIDATOR_2_PUBKEY"
+        --validator.key "$VALIDATOR_2_PUBKEY")
+    printf '%s\n' "$GENESIS_OUTPUT"
+    BATCH_BUILDER_ACCOUNT_ID=$(printf '%s\n' "$GENESIS_OUTPUT" | sed -n 's/^Batch builder account id: //p')
+    if [[ -z "$BATCH_BUILDER_ACCOUNT_ID" ]]; then
+        echo "error: genesis output did not contain the batch builder account id" >&2
+        exit 1
+    fi
+    printf '%s\n' "$BATCH_BUILDER_ACCOUNT_ID" > "$BATCH_BUILDER_ACCOUNT_ID_FILE"
 
     echo "Bootstrapping validator 1 (seeds from the genesis block)..."
     "$VALIDATOR_BINARY" bootstrap \
@@ -190,6 +198,12 @@ if [[ "$SKIP_BOOTSTRAP" != "true" ]]; then
 else
     echo "=== Skipping bootstrap (SKIP_BOOTSTRAP=true) ==="
 fi
+
+if [[ ! -s "$BATCH_BUILDER_ACCOUNT_ID_FILE" ]]; then
+    echo "error: batch builder account id is missing; run without SKIP_BOOTSTRAP" >&2
+    exit 1
+fi
+BATCH_BUILDER_ACCOUNT_ID=$(cat "$BATCH_BUILDER_ACCOUNT_ID_FILE")
 
 # --- Start components ---
 
@@ -241,6 +255,7 @@ OTEL_RESOURCE_ATTRIBUTES="$(node_resource_attributes sequencer)" \
     --validator.url "http://127.0.0.1:$VALIDATOR_1_PORT" \
     --validator.url "http://127.0.0.1:$VALIDATOR_2_PORT" \
     --ntx-builder.url "http://127.0.0.1:$NTX_BUILDER_PORT" \
+    --batch.builder.account.id "$BATCH_BUILDER_ACCOUNT_ID" \
     --internal.listen "0.0.0.0:$SEQUENCER_INTERNAL_PORT" \
     $EXTRA_ARGS &
 PIDS+=($!)
