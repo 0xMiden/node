@@ -184,9 +184,10 @@ impl FeeFunder {
 
 /// Checks that the note holds a non-zero amount of the fee faucet's fungible asset.
 fn ensure_note_carries_fee_asset(note: &Note, fee_faucet_id: AccountId) -> Result<()> {
-    let funded = note.assets().iter().any(|asset| match asset {
-        Asset::Fungible(asset) => asset.faucet_id() == fee_faucet_id && asset.amount().as_u64() > 0,
-        Asset::NonFungible(_) => false,
+    let funded = note.assets().iter().any(|asset| {
+        asset.as_fungible().is_some_and(|asset| {
+            asset.faucet_id() == fee_faucet_id && asset.amount().as_u64() > 0
+        })
     });
     anyhow::ensure!(
         funded,

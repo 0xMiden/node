@@ -9,12 +9,12 @@ use miden_node_proto::domain::encryption::{
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto::server::validator_api;
 use miden_node_store::{BlockStore, GenesisState};
-use miden_node_utils::fee::test_fee_params;
+use miden_node_utils::fee::{test_fee_params, test_protocol_config};
 use miden_protocol::Word;
 use miden_protocol::account::AccountUpdateDetails;
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::asset::{Asset, FungibleAsset};
-use miden_protocol::block::{BlockHeader, BlockInputs, BlockNumber, ProposedBlock, ValidatorKeys};
+use miden_protocol::block::{BlockHeader, BlockInputs, BlockNumber, ProposedBlock, ValidatorConfig};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::crypto::dsa::eddsa_25519_sha512::KeyExchangeKey;
 use miden_protocol::note::NoteType;
@@ -249,7 +249,8 @@ async fn setup_db_with_genesis(
         test_fee_params(),
         1,
         0,
-        ValidatorKeys::new(vec![key.public_key()]).unwrap(),
+        ValidatorConfig::new(vec![key.public_key()], 1).unwrap(),
+        test_protocol_config(),
     );
     let genesis_block = genesis_state.into_block().unwrap();
     let genesis_header = genesis_block.inner().header().clone();
@@ -299,7 +300,7 @@ fn dummy_proven_tx(seed: u8) -> ProvenTransaction {
         BlockNumber::GENESIS,
         Word::empty(),
         BlockNumber::from(u32::from(seed) + 1),
-        ExecutionProof::new_dummy(),
+        miden_protocol::testing::dummy_execution_proof(),
     )
     .unwrap()
 }
@@ -391,7 +392,7 @@ async fn signing_key_mismatch_rejected() {
     // Start a validator with a different key, modelling a validator configured with the wrong key.
     let rogue_signer = ValidatorSigner::new_local(random_secret_key());
     assert!(
-        !genesis_header.validator_keys().as_keys().contains(&rogue_signer.public_key()),
+        !genesis_header.validator_config().keys().contains(&rogue_signer.public_key()),
         "test requires a signing key that is not a member of the genesis validator set",
     );
 
@@ -558,7 +559,8 @@ async fn commitment_mismatch_rejected() {
         test_fee_params(),
         1,
         1,
-        ValidatorKeys::new(vec![other_genesis_signer.public_key()]).unwrap(),
+        ValidatorConfig::new(vec![other_genesis_signer.public_key()], 1).unwrap(),
+        test_protocol_config(),
     );
     let other_genesis_block = other_genesis_state.into_block().unwrap();
     let other_genesis_header = other_genesis_block.inner().header().clone();
@@ -591,7 +593,8 @@ async fn replacement_commitment_mismatch_rejected() {
         test_fee_params(),
         1,
         1,
-        ValidatorKeys::new(vec![other_genesis_signer.public_key()]).unwrap(),
+        ValidatorConfig::new(vec![other_genesis_signer.public_key()], 1).unwrap(),
+        test_protocol_config(),
     );
     let other_genesis_block = other_genesis_state.into_block().unwrap();
     let other_genesis_header = other_genesis_block.inner().header().clone();
@@ -667,7 +670,7 @@ async fn unknown_transactions_rejected() {
         vec![],
         BlockNumber::MAX,
         OrderedTransactionHeaders::new_unchecked(vec![tx_header]),
-        ExecutionProof::new_dummy(),
+        miden_protocol::testing::dummy_execution_proof(),
     )
     .unwrap();
 

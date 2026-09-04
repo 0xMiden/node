@@ -6,6 +6,7 @@ use miden_protocol::errors::{
     AccountError,
     AssetError,
     AssetVaultError,
+    ProtocolConfigError,
     TokenSymbolError,
 };
 use miden_protocol::utils::serde::DeserializationError;
@@ -31,6 +32,8 @@ pub enum GenesisConfigError {
     AccountDelta(#[from] AccountDeltaError),
     #[error("adding assets to account vault failed")]
     AssetVault(#[from] AssetVaultError),
+    #[error("protocol config construction failed")]
+    ProtocolConfig(#[from] ProtocolConfigError),
     #[error(
         "the defined asset '{symbol}' has no corresponding faucet, or the faucet was provided as an account file"
     )]

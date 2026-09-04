@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use diesel::query_dsl::methods::SelectDsl;
 use diesel::{BoolExpressionMethods, ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl};
-use miden_node_utils::fee::test_fee_params;
+use miden_node_utils::fee::{test_fee_params, test_protocol_config};
 use miden_protocol::account::auth::{AuthScheme, PublicKeyCommitment};
 use miden_protocol::account::component::AccountComponentMetadata;
 use miden_protocol::account::{
@@ -31,7 +31,7 @@ use miden_protocol::account::{
     StorageSlotType,
 };
 use miden_protocol::asset::{NonFungibleAsset, NonFungibleAssetDetails};
-use miden_protocol::block::{BlockAccountUpdate, BlockHeader, BlockNumber, ValidatorKeys};
+use miden_protocol::block::{BlockAccountUpdate, BlockHeader, BlockNumber, ValidatorConfig};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::testing::account_id::AccountIdBuilder;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
@@ -46,6 +46,15 @@ use crate::errors::DatabaseError;
 
 fn setup_test_db() -> SqliteConnection {
     crate::db::migrations::test_connection()
+}
+
+fn block_account_update(
+    account_id: AccountId,
+    final_state_commitment: Word,
+    details: AccountUpdateDetails,
+) -> BlockAccountUpdate {
+    BlockAccountUpdate::new(account_id, final_state_commitment, details)
+        .expect("test account update should be valid")
 }
 
 /// Test helper: reconstructs account storage at a given block from DB.
@@ -169,7 +178,6 @@ fn insert_block_header(conn: &mut SqliteConnection, block_num: BlockNumber) {
 
     let secret_key = SigningKey::new();
     let block_header = BlockHeader::new(
-        1_u8.into(),
         Word::default(),
         block_num,
         Word::default(),
@@ -177,10 +185,11 @@ fn insert_block_header(conn: &mut SqliteConnection, block_num: BlockNumber) {
         Word::default(),
         Word::default(),
         Word::default(),
-        Word::default(),
-        ValidatorKeys::new(vec![secret_key.public_key()]).unwrap(),
+        ValidatorConfig::new(vec![secret_key.public_key()], 1).unwrap(),
         test_fee_params(),
-        0_u8.into(),
+        test_protocol_config().to_commitment(),
+        None,
+        0,
     );
     let signature = secret_key.sign(block_header.commitment());
 
@@ -302,7 +311,7 @@ fn select_account_header_at_block_returns_correct_header() {
 
     // Insert the account
     let patch = AccountPatch::try_from(account.clone()).unwrap();
-    let account_update = BlockAccountUpdate::new(
+    let account_update = block_account_update(
         account_id,
         account.to_commitment(),
         AccountUpdateDetails::Public(patch),
@@ -345,7 +354,7 @@ fn select_account_header_at_block_historical_query() {
     // Insert the account at block 1
     let nonce_1 = account.nonce();
     let patch_1 = AccountPatch::try_from(account.clone()).unwrap();
-    let account_update_1 = BlockAccountUpdate::new(
+    let account_update_1 = block_account_update(
         account_id,
         account.to_commitment(),
         AccountUpdateDetails::Public(patch_1),
@@ -390,7 +399,7 @@ fn select_account_vault_at_block_empty() {
 
     // Insert account without vault assets
     let patch = AccountPatch::try_from(account.clone()).unwrap();
-    let account_update = BlockAccountUpdate::new(
+    let account_update = block_account_update(
         account_id,
         account.to_commitment(),
         AccountUpdateDetails::Public(patch),
@@ -431,11 +440,8 @@ fn upsert_accounts_inserts_storage_header() {
     let patch = AccountPatch::try_from(account).unwrap();
     assert!(patch.is_full_state(), "Patch should be full state");
 
-    let account_update = BlockAccountUpdate::new(
-        account_id,
-        account_commitment,
-        AccountUpdateDetails::Public(patch),
-    );
+    let account_update =
+        block_account_update(account_id, account_commitment, AccountUpdateDetails::Public(patch));
 
     // Upsert account
     let result = upsert_accounts(
@@ -493,7 +499,7 @@ fn upsert_accounts_closes_previous_validity_interval() {
     let precomputed_1 = precomputed_states_from_account(&account);
     let patch_1 = AccountPatch::try_from(account).unwrap();
 
-    let account_update_1 = BlockAccountUpdate::new(
+    let account_update_1 = block_account_update(
         account_id,
         account_commitment_1,
         AccountUpdateDetails::Public(patch_1),
@@ -540,7 +546,7 @@ fn upsert_accounts_closes_previous_validity_interval() {
     let precomputed_2 = precomputed_states_from_account(&account_2);
     let patch_2 = AccountPatch::try_from(account_2).unwrap();
 
-    let account_update_2 = BlockAccountUpdate::new(
+    let account_update_2 = block_account_update(
         account_id,
         account_commitment_2,
         AccountUpdateDetails::Public(patch_2),
@@ -640,11 +646,8 @@ fn upsert_accounts_with_multiple_storage_slots() {
     let account_commitment = account.to_commitment();
     let patch = AccountPatch::try_from(account).unwrap();
 
-    let account_update = BlockAccountUpdate::new(
-        account_id,
-        account_commitment,
-        AccountUpdateDetails::Public(patch),
-    );
+    let account_update =
+        block_account_update(account_id, account_commitment, AccountUpdateDetails::Public(patch));
 
     upsert_accounts(
         &mut conn,
@@ -716,11 +719,8 @@ fn upsert_accounts_with_empty_storage() {
     let account_commitment = account.to_commitment();
     let patch = AccountPatch::try_from(account).unwrap();
 
-    let account_update = BlockAccountUpdate::new(
-        account_id,
-        account_commitment,
-        AccountUpdateDetails::Public(patch),
-    );
+    let account_update =
+        block_account_update(account_id, account_commitment, AccountUpdateDetails::Public(patch));
 
     upsert_accounts(
         &mut conn,
@@ -796,11 +796,8 @@ fn select_latest_account_storage_ordering_semantics() {
     );
 
     let patch = AccountPatch::try_from(account).unwrap();
-    let account_update = BlockAccountUpdate::new(
-        account_id,
-        account_commitment,
-        AccountUpdateDetails::Public(patch),
-    );
+    let account_update =
+        block_account_update(account_id, account_commitment, AccountUpdateDetails::Public(patch));
 
     upsert_accounts(
         &mut conn,
@@ -864,11 +861,8 @@ fn select_latest_account_storage_multiple_slots() {
     let account_id = account.id();
     let account_commitment = account.to_commitment();
     let patch = AccountPatch::try_from(account).unwrap();
-    let account_update = BlockAccountUpdate::new(
-        account_id,
-        account_commitment,
-        AccountUpdateDetails::Public(patch),
-    );
+    let account_update =
+        block_account_update(account_id, account_commitment, AccountUpdateDetails::Public(patch));
 
     upsert_accounts(
         &mut conn,
@@ -909,11 +903,8 @@ fn select_latest_account_storage_slot_updates() {
     let account_commitment = account.to_commitment();
 
     let patch = AccountPatch::try_from(account.clone()).unwrap();
-    let account_update = BlockAccountUpdate::new(
-        account_id,
-        account_commitment,
-        AccountUpdateDetails::Public(patch),
-    );
+    let account_update =
+        block_account_update(account_id, account_commitment, AccountUpdateDetails::Public(patch));
 
     upsert_accounts(&mut conn, &[account_update], block_1, &PrecomputedPublicAccountStates::new())
         .expect("upsert_accounts failed");
@@ -941,7 +932,7 @@ fn select_latest_account_storage_slot_updates() {
     let expected_commitment = expected_account.to_commitment();
     let precomputed_public_states = precomputed_states_from_account(&expected_account);
 
-    let account_update = BlockAccountUpdate::new(
+    let account_update = block_account_update(
         account_id,
         expected_commitment,
         AccountUpdateDetails::Public(partial_patch),
@@ -967,7 +958,6 @@ fn select_latest_account_storage_slot_updates() {
 /// DESC).
 #[test]
 fn select_account_vault_at_block_historical_with_updates() {
-    use assert_matches::assert_matches;
     use miden_protocol::asset::FungibleAsset;
     use miden_protocol::testing::account_id::{
         ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
@@ -991,7 +981,7 @@ fn select_account_vault_at_block_historical_with_updates() {
 
     // Insert account at block 1
     let patch = AccountPatch::try_from(account.clone()).unwrap();
-    let account_update = BlockAccountUpdate::new(
+    let account_update = block_account_update(
         account_id,
         account.to_commitment(),
         AccountUpdateDetails::Public(patch),
@@ -1008,26 +998,26 @@ fn select_account_vault_at_block_historical_with_updates() {
     }
 
     // Insert vault asset at block 1: vault_key_1 = 1000 tokens
-    let asset_v1 = Asset::Fungible(FungibleAsset::new(faucet_id, 1000).unwrap());
+    let asset_v1 = Asset::from(FungibleAsset::new(faucet_id, 1000).unwrap());
     let vault_key_1 = asset_v1.id();
 
     insert_account_vault_asset(&mut conn, account_id, block_1, vault_key_1, Some(asset_v1))
         .expect("insert vault asset failed");
 
     // Update vault asset at block 2: vault_key_1 = 2000 tokens (updated value)
-    let asset_v2 = Asset::Fungible(FungibleAsset::new(faucet_id, 2000).unwrap());
+    let asset_v2 = Asset::from(FungibleAsset::new(faucet_id, 2000).unwrap());
     insert_account_vault_asset(&mut conn, account_id, block_2, vault_key_1, Some(asset_v2))
         .expect("insert vault asset update failed");
 
     // Add a second vault_key at block 2 (different faucet for different vault key)
     let faucet_id_2 = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap();
-    let asset_key2 = Asset::Fungible(FungibleAsset::new(faucet_id_2, 500).unwrap());
+    let asset_key2 = Asset::from(FungibleAsset::new(faucet_id_2, 500).unwrap());
     let vault_key_2 = asset_key2.id();
     insert_account_vault_asset(&mut conn, account_id, block_2, vault_key_2, Some(asset_key2))
         .expect("insert second vault asset failed");
 
     // Update vault_key_1 again at block 3: vault_key_1 = 3000 tokens
-    let asset_v3 = Asset::Fungible(FungibleAsset::new(faucet_id, 3000).unwrap());
+    let asset_v3 = Asset::from(FungibleAsset::new(faucet_id, 3000).unwrap());
     insert_account_vault_asset(&mut conn, account_id, block_3, vault_key_1, Some(asset_v3))
         .expect("insert vault asset update 2 failed");
 
@@ -1036,7 +1026,7 @@ fn select_account_vault_at_block_historical_with_updates() {
         .expect("Query at block 1 should succeed");
 
     assert_eq!(assets_at_block_1.len(), 1, "Should have 1 asset at block 1");
-    assert_matches!(&assets_at_block_1[0], Asset::Fungible(f) if f.amount().as_u64() == 1000);
+    assert_eq!(assets_at_block_1[0].unwrap_fungible().amount().as_u64(), 1000);
 
     // Query at block 2: should see vault_key_1 with 2000 tokens AND vault_key_2 with 500 tokens
     let assets_at_block_2 = select_account_vault_at_block(&mut conn, account_id, block_2)
@@ -1047,7 +1037,7 @@ fn select_account_vault_at_block_historical_with_updates() {
     // Find the amounts (order may vary)
     let amounts: Vec<u64> = assets_at_block_2
         .iter()
-        .map(|a| assert_matches!(a, Asset::Fungible(f) => f.amount().as_u64()))
+        .map(|asset| asset.unwrap_fungible().amount().as_u64())
         .collect();
 
     assert!(amounts.contains(&2000), "Block 2 should have vault_key_1 with 2000 tokens");
@@ -1061,7 +1051,7 @@ fn select_account_vault_at_block_historical_with_updates() {
 
     let amounts: Vec<u64> = assets_at_block_3
         .iter()
-        .map(|a| assert_matches!(a, Asset::Fungible(f) => f.amount().as_u64()))
+        .map(|asset| asset.unwrap_fungible().amount().as_u64())
         .collect();
 
     assert!(amounts.contains(&3000), "Block 3 should have vault_key_1 with 3000 tokens");
@@ -1080,7 +1070,7 @@ fn select_account_vault_at_block_bounds_read_to_limit() {
     insert_block_header(&mut conn, block_1);
 
     let patch = AccountPatch::try_from(account.clone()).unwrap();
-    let account_update = BlockAccountUpdate::new(
+    let account_update = block_account_update(
         account_id,
         account.to_commitment(),
         AccountUpdateDetails::Public(patch),
@@ -1100,7 +1090,7 @@ fn select_account_vault_at_block_bounds_read_to_limit() {
     let asset_count = AccountVaultDetails::MAX_RETURN_ENTRIES + 2;
     for i in 0..asset_count {
         let details = NonFungibleAssetDetails::new(faucet_id, vec![i as u8, (i >> 8) as u8]);
-        let asset = Asset::NonFungible(NonFungibleAsset::new(&details));
+        let asset = Asset::from(NonFungibleAsset::new(&details));
         insert_account_vault_asset(&mut conn, account_id, block_1, asset.id(), Some(asset))
             .expect("insert vault asset failed");
     }
@@ -1117,7 +1107,6 @@ fn select_account_vault_at_block_bounds_read_to_limit() {
 fn select_account_vault_at_block_exponential_updates() {
     const BLOCK_COUNT: u32 = 5;
 
-    use assert_matches::assert_matches;
     use miden_protocol::asset::{AssetId, FungibleAsset};
     use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET;
 
@@ -1134,7 +1123,7 @@ fn select_account_vault_at_block_exponential_updates() {
     }
 
     let patch = AccountPatch::try_from(account.clone()).unwrap();
-    let account_update = BlockAccountUpdate::new(
+    let account_update = block_account_update(
         account_id,
         account.to_commitment(),
         AccountUpdateDetails::Public(patch),
@@ -1154,7 +1143,7 @@ fn select_account_vault_at_block_exponential_updates() {
 
     for (index, block) in blocks.iter().enumerate() {
         let amount = 1u64 << index;
-        let asset = Asset::Fungible(FungibleAsset::new(faucet_id, amount).unwrap());
+        let asset = Asset::from(FungibleAsset::new(faucet_id, amount).unwrap());
         insert_account_vault_asset(&mut conn, account_id, *block, vault_key, Some(asset))
             .expect("insert vault asset failed");
     }
@@ -1165,10 +1154,7 @@ fn select_account_vault_at_block_exponential_updates() {
 
         assert_eq!(assets_at_block.len(), 1, "Should have 1 asset at block");
         let expected_amount = 1u64 << index;
-        assert_matches!(
-            &assets_at_block[0],
-            Asset::Fungible(f) if f.amount().as_u64() == expected_amount
-        );
+        assert_eq!(assets_at_block[0].unwrap_fungible().amount().as_u64(), expected_amount);
     }
 }
 
@@ -1176,7 +1162,6 @@ fn select_account_vault_at_block_exponential_updates() {
 /// deduplication handles deletion entries properly.
 #[test]
 fn select_account_vault_at_block_with_deletion() {
-    use assert_matches::assert_matches;
     use miden_protocol::asset::FungibleAsset;
     use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET;
 
@@ -1197,7 +1182,7 @@ fn select_account_vault_at_block_with_deletion() {
 
     // Insert account at block 1
     let patch = AccountPatch::try_from(account.clone()).unwrap();
-    let account_update = BlockAccountUpdate::new(
+    let account_update = block_account_update(
         account_id,
         account.to_commitment(),
         AccountUpdateDetails::Public(patch),
@@ -1214,7 +1199,7 @@ fn select_account_vault_at_block_with_deletion() {
     }
 
     // Insert vault asset at block 1
-    let asset = Asset::Fungible(FungibleAsset::new(faucet_id, 1000).unwrap());
+    let asset = Asset::from(FungibleAsset::new(faucet_id, 1000).unwrap());
     let vault_key = asset.id();
 
     insert_account_vault_asset(&mut conn, account_id, block_1, vault_key, Some(asset))
@@ -1225,7 +1210,7 @@ fn select_account_vault_at_block_with_deletion() {
         .expect("delete vault asset failed");
 
     // Re-add the vault asset at block 3 with different amount
-    let asset_v3 = Asset::Fungible(FungibleAsset::new(faucet_id, 2000).unwrap());
+    let asset_v3 = Asset::from(FungibleAsset::new(faucet_id, 2000).unwrap());
     insert_account_vault_asset(&mut conn, account_id, block_3, vault_key, Some(asset_v3))
         .expect("re-add vault asset failed");
 
@@ -1243,7 +1228,7 @@ fn select_account_vault_at_block_with_deletion() {
     let assets_at_block_3 = select_account_vault_at_block(&mut conn, account_id, block_3)
         .expect("Query at block 3 should succeed");
     assert_eq!(assets_at_block_3.len(), 1, "Should have 1 asset at block 3");
-    assert_matches!(&assets_at_block_3[0], Asset::Fungible(f) if f.amount().as_u64() == 2000);
+    assert_eq!(assets_at_block_3[0].unwrap_fungible().amount().as_u64(), 2000);
 }
 
 // ACCOUNT CODE PRUNING TESTS
@@ -1277,11 +1262,7 @@ fn account_code_exists(conn: &mut SqliteConnection, code_commitment: Word) -> bo
 fn make_full_state_update(account: &Account) -> BlockAccountUpdate {
     let patch = AccountPatch::try_from(account.clone()).unwrap();
     assert!(patch.is_full_state(), "expected full-state patch");
-    BlockAccountUpdate::new(
-        account.id(),
-        account.to_commitment(),
-        AccountUpdateDetails::Public(patch),
-    )
+    block_account_update(account.id(), account.to_commitment(), AccountUpdateDetails::Public(patch))
 }
 
 /// Builds a public account using a fixed account ID seed but a different component code.

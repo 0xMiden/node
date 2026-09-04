@@ -1,11 +1,12 @@
-use miden_block_prover::LocalBlockProver;
+use miden_block_prover::{BlockExecutor, LocalBlockProver};
 use miden_node_proto::BlockProofRequest;
 use miden_node_proto::generated::remote_prover as proto;
 use miden_node_tracing::{ErrorReport, miden_instrument};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
-use miden_protocol::block::BlockProof;
+use miden_protocol::block::ProposedBlock;
 use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
+use miden_protocol::vm::ExecutionProof;
 use miden_tx::LocalTransactionProver;
 use miden_tx_batch::{BatchExecutor, LocalBatchProver};
 
@@ -24,8 +25,8 @@ impl Prover {
     pub fn new(proof_type: ProofKind) -> Self {
         match proof_type {
             ProofKind::Transaction => Self::Transaction(LocalTransactionProver::default()),
-            ProofKind::Batch => Self::Batch(LocalBatchProver::new()),
-            ProofKind::Block => Self::Block(LocalBlockProver::new(MIN_PROOF_SECURITY_LEVEL)),
+            ProofKind::Batch => Self::Batch(LocalBatchProver::default()),
+            ProofKind::Block => Self::Block(LocalBlockProver::default()),
         }
     }
 
@@ -125,12 +126,25 @@ impl ProveRequest for LocalBatchProver {
 
 impl ProveRequest for LocalBlockProver {
     type Input = BlockProofRequest;
-    type Output = BlockProof;
+    type Output = ExecutionProof;
 
     fn prove(&self, input: Self::Input) -> Result<Self::Output, tonic::Status> {
         let BlockProofRequest { tx_batches, block_header, block_inputs } = input;
+        let proposed_block = ProposedBlock::new_at(
+            block_inputs,
+            tx_batches.into_vec(),
+            block_header.timestamp(),
+        )
+        .map_err(|e| {
+            tonic::Status::invalid_argument(e.as_report_context("failed to construct proposed block"))
+        })?
+        .with_next_validator_config(block_header.validator_config().clone())
+        .with_next_protocol_config(block_header.next_protocol_config().cloned());
+        let executed_block = BlockExecutor::new().execute(proposed_block).map_err(|e| {
+            tonic::Status::internal(e.as_report_context("failed to execute block"))
+        })?;
 
-        self.prove(tx_batches, &block_header, block_inputs)
+        self.prove(executed_block)
             .map_err(|e| tonic::Status::internal(e.as_report_context("failed to prove block")))
     }
 }

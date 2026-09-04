@@ -38,7 +38,7 @@ impl BatchProver {
     }
 
     pub(super) fn local() -> Self {
-        Self::Local(LocalBatchProver::new())
+        Self::Local(LocalBatchProver::default())
     }
 
     pub(super) fn remote(url: Url) -> anyhow::Result<Self> {

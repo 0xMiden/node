@@ -101,8 +101,8 @@ impl StateView {
 
 #[cfg(test)]
 mod tests {
-    use miden_node_utils::fee::test_fee_params;
-    use miden_protocol::block::ValidatorKeys;
+    use miden_node_utils::fee::{test_fee_params, test_protocol_config};
+    use miden_protocol::block::ValidatorConfig;
     use miden_protocol::testing::random_secret_key::random_secret_key;
 
     use super::*;
@@ -185,7 +185,9 @@ mod tests {
             test_fee_params(),
             1,
             1,
-            ValidatorKeys::new(vec![signer.public_key()]).expect("validator keys should be valid"),
+            ValidatorConfig::new(vec![signer.public_key()], 1)
+                .expect("validator config should be valid"),
+            test_protocol_config(),
         );
         let genesis_block = genesis_state.into_block().expect("genesis block should be created");
 

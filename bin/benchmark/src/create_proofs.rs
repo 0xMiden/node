@@ -272,7 +272,7 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
         let notes: Vec<Note> = wallet_chunk
             .iter()
             .map(|wallet| {
-                let asset = Asset::Fungible(FungibleAsset::new(faucet_id, 10).unwrap());
+                let asset = Asset::from(FungibleAsset::new(faucet_id, 10).unwrap());
                 P2idNote::builder()
                     .sender(faucet_id)
                     .target(wallet.id())
