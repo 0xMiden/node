@@ -6,7 +6,7 @@ use miden_protocol::batch::ProposedBatch;
 use miden_protocol::utils::serde::Deserializable;
 use tonic::Status;
 
-use super::SequencerInternalService;
+use super::{SequencerInternalService, ensure_transactions_have_fee_notes};
 
 #[tonic::async_trait]
 impl sequencer_api::SubmitAuthenticatedTxBatch for SequencerInternalService {
@@ -50,6 +50,8 @@ impl sequencer_api::SubmitAuthenticatedTxBatch for SequencerInternalService {
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
+        ensure_transactions_have_fee_notes(batch.transactions().iter().map(AsRef::as_ref))?;
+
         self.block_producer
             .submit_authenticated_tx_batch(batch, inputs)
             .await

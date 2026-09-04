@@ -37,13 +37,13 @@ If you are missing specific error information that could be useful, please open 
 `SubmitProvenTx` and `SubmitProvenTxBatch` may return the following detail codes when a transaction or batch is rejected
 during submission validation or by the sequencer's mempool.
 
-| Error              | Value | gRPC status        | Meaning                              |
-| ------------------ | ----- | ------------------ | ------------------------------------ |
-| `Internal`         | `0`   | `INTERNAL`         | Internal submission failure          |
-| `Expired`          | `1`   | `INVALID_ARGUMENT` | Transaction expired                  |
-| `StateConflict`    | `2`   | `INVALID_ARGUMENT` | State conflict                       |
-| `CapacityExceeded` | `3`   | `INVALID_ARGUMENT` | Mempool capacity exceeded            |
-| `MissingFee`       | `4`   | `INVALID_ARGUMENT` | Transaction has no non-zero fee note |
+| Error              | Value | gRPC status        | Meaning                               |
+| ------------------ | ----- | ------------------ | ------------------------------------- |
+| `Internal`         | `0`   | `INTERNAL`         | Internal submission failure           |
+| `Expired`          | `1`   | `INVALID_ARGUMENT` | Transaction expired                   |
+| `StateConflict`    | `2`   | `INVALID_ARGUMENT` | State conflict                        |
+| `CapacityExceeded` | `3`   | `INVALID_ARGUMENT` | Mempool capacity exceeded             |
+| `MissingFee`       | `4`   | `INVALID_ARGUMENT` | Transaction has no canonical fee note |
 
 `Expired` means the transaction or batch has expired, or will expire too soon for the sequencer to consider accepting
 it.
@@ -54,9 +54,9 @@ conflict, and use the detail byte when a client needs stable branching between b
 
 `CapacityExceeded` means the mempool capacity has been exhausted and is under load.
 
-`MissingFee` is returned only by `SubmitProvenTx`. It means that the submitted transaction requires a fee but does not
-contain an output note with the canonical `TX_FEE` script and a non-zero asset. Transactions that do not require a fee
-remain valid without a fee note. This check does not establish that the fee amount is sufficient.
+`MissingFee` means that a transaction submitted through `SubmitProvenTx` or `SubmitProvenTxBatch` does not contain an
+output note with the canonical `TX_FEE` script. This check applies to all submitted transactions. It does not establish
+that the fee amount is sufficient. A fee note can contain a zero-valued asset when the required fee is zero.
 
 ### Encrypted input errors
 

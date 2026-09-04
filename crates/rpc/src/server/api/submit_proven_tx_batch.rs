@@ -9,7 +9,12 @@ use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_tx_batch::BatchVerifier;
 use tonic::{Request, Status};
 
-use super::{RpcBackend, RpcService, submit_batch_to_validators};
+use super::{
+    RpcBackend,
+    RpcService,
+    ensure_transactions_have_fee_notes,
+    submit_batch_to_validators,
+};
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
@@ -66,6 +71,10 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
                 Status::invalid_argument(err.as_report_context("invalid proposed_batch"))
             })?
             .ok_or(Status::invalid_argument("missing `proposed_batch` field"))?;
+
+        ensure_transactions_have_fee_notes(
+            proposed_batch.transactions().iter().map(AsRef::as_ref),
+        )?;
 
         debug!(target: LOG_TARGET, "Submitting transaction batch");
 

@@ -5,7 +5,7 @@ use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::sequencer;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
-use miden_protocol::block::{BlockNumber, FeeParameters};
+use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::{ProvenTransaction, TransactionId, TxAccountUpdate};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
@@ -14,29 +14,14 @@ use miden_standards::note::TxFeeNote;
 use crate::errors::{MempoolSubmissionError, StateConflict};
 use crate::store::TransactionInputs;
 
-/// Ensures that a transaction pays a non-zero fee when fees are enabled.
+/// Ensures that a transaction creates a canonical fee note.
 ///
-/// A zero verification base fee disables this check. Otherwise, the transaction must contain a
-/// canonical fee output note with at least one non-zero asset. Validating that the amount is
-/// sufficient for the transaction's execution cost is handled separately.
-pub fn ensure_transaction_has_fee(
-    tx: &ProvenTransaction,
-    fee_parameters: &FeeParameters,
-) -> Result<(), MempoolSubmissionError> {
-    if fee_parameters.verification_base_fee() == 0 {
-        return Ok(());
-    }
-
+/// This check does not validate that the fee is sufficient for the transaction execution cost.
+pub fn ensure_transaction_has_fee(tx: &ProvenTransaction) -> Result<(), MempoolSubmissionError> {
     let fee_script_root = TxFeeNote::script_root();
     let contains_fee = tx.output_notes().iter().any(|note| {
-        let has_fee_script = note
-            .recipient()
-            .is_some_and(|recipient| recipient.script().root() == fee_script_root);
-        let has_non_zero_asset = note.assets().is_some_and(|assets| {
-            assets.iter().any(|asset| asset.to_value_word() != Word::empty())
-        });
-
-        has_fee_script && has_non_zero_asset
+        note.recipient()
+            .is_some_and(|recipient| recipient.script().root() == fee_script_root)
     });
 
     if contains_fee {
@@ -261,17 +246,12 @@ mod tests {
     use assert_matches::assert_matches;
     use miden_protocol::Word;
     use miden_protocol::asset::FungibleAsset;
-    use miden_protocol::block::FeeParameters;
     use miden_protocol::transaction::{OutputNote, ProvenTransaction, PublicOutputNote};
     use miden_standards::note::TxFeeNote;
 
     use super::ensure_transaction_has_fee;
     use crate::errors::MempoolSubmissionError;
     use crate::test_utils::{MockProvenTxBuilder, mock_account_id};
-
-    fn fee_parameters(verification_base_fee: u32) -> FeeParameters {
-        FeeParameters::new(FungibleAsset::mock_issuer(), verification_base_fee)
-    }
 
     fn transaction_with_fee_amount(amount: u64) -> ProvenTransaction {
         let fee_note = TxFeeNote::builder()
@@ -291,33 +271,23 @@ mod tests {
     fn transaction_fee_requires_the_canonical_note_script() {
         let tx = transaction_with_fee_amount(1);
 
-        ensure_transaction_has_fee(&tx, &fee_parameters(1)).unwrap();
+        ensure_transaction_has_fee(&tx).unwrap();
     }
 
     #[test]
-    fn transaction_without_fee_is_rejected_when_fees_are_enabled() {
+    fn transaction_without_fee_is_rejected() {
         let tx = MockProvenTxBuilder::with_account_index(1).build();
 
         assert_matches!(
-            ensure_transaction_has_fee(&tx, &fee_parameters(1)),
+            ensure_transaction_has_fee(&tx),
             Err(MempoolSubmissionError::MissingFee { transaction_id }) if transaction_id == tx.id()
         );
     }
 
     #[test]
-    fn transaction_with_zero_fee_asset_is_rejected_when_fees_are_enabled() {
+    fn transaction_with_zero_fee_asset_is_accepted() {
         let tx = transaction_with_fee_amount(0);
 
-        assert_matches!(
-            ensure_transaction_has_fee(&tx, &fee_parameters(1)),
-            Err(MempoolSubmissionError::MissingFee { transaction_id }) if transaction_id == tx.id()
-        );
-    }
-
-    #[test]
-    fn transaction_without_fee_is_accepted_when_fees_are_disabled() {
-        let tx = MockProvenTxBuilder::with_account_index(1).build();
-
-        ensure_transaction_has_fee(&tx, &fee_parameters(0)).unwrap();
+        ensure_transaction_has_fee(&tx).unwrap();
     }
 }
