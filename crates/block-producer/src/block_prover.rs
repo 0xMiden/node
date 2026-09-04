@@ -11,7 +11,7 @@ use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{BlockHeader, BlockInputs, ProposedBlock};
 use miden_protocol::errors::ProposedBlockError;
-use miden_protocol::utils::serde::{Deserializable, DeserializationError, Serializable};
+use miden_protocol::utils::serde::{DeserializationError, Serializable};
 use miden_protocol::vm::ExecutionProof;
 use url::Url;
 
@@ -32,8 +32,6 @@ pub enum ProverError {
 /// Errors returned by [`RemoteBlockProver`].
 #[derive(Debug, thiserror::Error)]
 pub enum RemoteProverError {
-    #[error("failed to build proposed block")]
-    ProposeBlock(#[source] ProposedBlockError),
     #[error("remote prover request failed")]
     Grpc(#[source] tonic::Status),
     #[error("failed to deserialize block proof from remote prover")]
