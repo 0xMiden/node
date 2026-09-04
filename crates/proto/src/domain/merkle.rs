@@ -374,7 +374,7 @@ mod tests {
         };
         let encoded = proto::primitives::PartialSmt {
             root: Some(PartialSmt::EMPTY_ROOT.into()),
-            nodes: vec![node.clone(), node],
+            nodes: vec![node, node],
             leaves: vec![],
             value_only_leaves: vec![],
         };

@@ -367,7 +367,7 @@ pub async fn create_and_deploy_accounts(
         None => None,
     };
 
-    let committed_counter = deploy_counter_account(
+    let committed_counter = Box::pin(deploy_counter_account(
         &counter_account,
         tip_header,
         protocol_config.clone(),
@@ -376,7 +376,7 @@ pub async fn create_and_deploy_accounts(
         creation_fee_faucet,
         submission_client,
         prover,
-    )
+    ))
     .await?;
     let anchored_fee_faucet_id = funder.is_some().then_some(fee_faucet_id);
     let counter_anchor = resolve_counter_anchor(
@@ -948,6 +948,10 @@ pub async fn build_probe_transaction_inputs(
 }
 
 /// Deploy a counter account to the network by submitting its genesis transaction via RPC.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the arguments describe the account, its complete transaction anchor, and submission"
+)]
 #[miden_instrument(
     target = COMPONENT,
     name = "deploy-counter-account",
