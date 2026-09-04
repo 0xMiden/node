@@ -28,7 +28,12 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::{AssetId, AssetWitness};
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::errors::TransactionInputError;
+use miden_protocol::errors::{
+    AccountError,
+    AssetError,
+    ProtocolConfigError,
+    TransactionInputError,
+};
 use miden_protocol::note::{Note, NoteId, NoteScript, NoteScriptRoot};
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{
@@ -79,8 +84,14 @@ pub enum NtxError {
     Proving(#[source] TransactionProverError),
     #[error("failed to submit transaction")]
     Submission(#[source] tonic::Status),
-    #[error("invalid protocol configuration for network account: {0}")]
-    ProtocolConfig(String),
+    #[error("failed to read the fee asset ID from the network account")]
+    FeeAssetStorage(#[source] AccountError),
+    #[error("invalid fee asset ID in the network account")]
+    FeeAsset(#[source] AssetError),
+    #[error("invalid protocol configuration for the network account")]
+    ProtocolConfig(#[source] ProtocolConfigError),
+    #[error("network account fee asset does not match the reference block protocol configuration")]
+    ProtocolConfigCommitmentMismatch,
 }
 
 type NtxResult<T> = Result<T, NtxError>;
@@ -750,15 +761,13 @@ impl NtxDataStore {
         let fee_asset_id = account
             .storage()
             .get_item(FeePolicyManager::fee_asset_id_slot())
-            .map_err(|err| NtxError::ProtocolConfig(format!("failed to read fee asset ID: {err}")))?
+            .map_err(NtxError::FeeAssetStorage)?
             .try_into()
-            .map_err(|err| NtxError::ProtocolConfig(format!("invalid fee asset ID: {err}")))?;
-        let protocol_config = ProtocolConfig::current(fee_asset_id)
-            .map_err(|err| NtxError::ProtocolConfig(err.to_string()))?;
+            .map_err(NtxError::FeeAsset)?;
+        let protocol_config =
+            ProtocolConfig::current(fee_asset_id).map_err(NtxError::ProtocolConfig)?;
         if protocol_config.to_commitment() != reference_block.protocol_config_commitment() {
-            return Err(NtxError::ProtocolConfig(
-                "account fee asset does not match reference block protocol configuration".into(),
-            ));
+            return Err(NtxError::ProtocolConfigCommitmentMismatch);
         }
 
         Ok(Self {
@@ -1013,8 +1022,10 @@ impl MastForestStore for NtxDataStore {
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeSet, HashMap};
+    use std::error::Error;
     use std::future::ready;
 
+    use miden_protocol::errors::ProtocolConfigError;
     use miden_protocol::note::Note;
     use miden_tx::{FailedNote, TransactionExecutorError, TransactionProverError};
 
@@ -1191,5 +1202,16 @@ mod tests {
     fn prover_other_is_the_retried_variant() {
         let err = TransactionProverError::other("remote prover unreachable");
         assert!(matches!(err, TransactionProverError::Other { .. }));
+    }
+
+    #[test]
+    fn protocol_config_error_preserves_its_typed_source() {
+        let error = NtxError::ProtocolConfig(ProtocolConfigError::MinimumSecurityBitsMustBeNonZero);
+
+        assert!(
+            error
+                .source()
+                .is_some_and(|source| source.downcast_ref::<ProtocolConfigError>().is_some())
+        );
     }
 }
