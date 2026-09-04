@@ -395,17 +395,44 @@ async fn get_transaction_returns_the_full_record() {
     assert_eq!(error.status, StatusCode::BAD_REQUEST);
 }
 
+/// The share endpoint refuses to act as a decryption oracle: it only issues shares whose decryption
+/// context references a transaction this validator itself validated.
+#[tokio::test]
+async fn share_refused_for_unvalidated_transaction() {
+    let mut keys = operator_keys();
+    let record_owner = keys.pop().unwrap();
+    let (_directory, _writer, reader) = test_database().await;
+    let service = ValidatorAdminService::new(keys.pop().unwrap(), reader);
+    let transaction_id = TransactionId::from_raw(Word::from([2u32, 4, 6, 8]));
+    let record = target_record(&record_owner, transaction_id, 30, b"record");
+
+    let error = issue(&service, share_request(&record)).await.unwrap_err();
+
+    assert_eq!(error.status, StatusCode::NOT_FOUND);
+}
+
 #[tokio::test]
 async fn shares_for_different_ciphertexts_are_not_reusable() {
     let mut keys = operator_keys();
     let record_owner = keys.pop().unwrap();
-    let second = ValidatorAdminService::new(keys.pop().unwrap(), test_database().await.2);
-    let first = ValidatorAdminService::new(keys.pop().unwrap(), test_database().await.2);
     let transaction_id = TransactionId::from_raw(Word::from([1u32, 2, 3, 4]));
     let first_record = target_record(&record_owner, transaction_id, 2, b"same plaintext");
     let second_record = target_record(&record_owner, transaction_id, 3, b"same plaintext");
     assert_eq!(first_record.context(), second_record.context());
     assert_ne!(first_record.encrypted_record_key(), second_record.encrypted_record_key());
+    // Each validator has validated (and stored its own record for) the transaction.
+    let (_first_dir, first_writer, first_reader) = test_database().await;
+    first_writer
+        .insert_validated_private_transaction(first_record.clone())
+        .await
+        .unwrap();
+    let (_second_dir, second_writer, second_reader) = test_database().await;
+    second_writer
+        .insert_validated_private_transaction(second_record.clone())
+        .await
+        .unwrap();
+    let second = ValidatorAdminService::new(keys.pop().unwrap(), second_reader);
+    let first = ValidatorAdminService::new(keys.pop().unwrap(), first_reader);
 
     let shares = [
         issue(&first, share_request(&first_record)).await.unwrap().decryption_share,
@@ -425,10 +452,13 @@ async fn shares_for_different_ciphertexts_are_not_reusable() {
 #[tokio::test]
 async fn invalid_share_requests_return_bad_request() {
     let mut keys = operator_keys();
-    let record =
-        target_record(&keys[0], TransactionId::from_raw(Word::from([1u32, 2, 3, 4])), 4, b"record");
+    let transaction_id = TransactionId::from_raw(Word::from([1u32, 2, 3, 4]));
+    let record = target_record(&keys[0], transaction_id, 4, b"record");
     let context = record.context().to_bytes();
-    let (_directory, _writer, reader) = test_database().await;
+    let (_directory, writer, reader) = test_database().await;
+    // The referenced transaction is validated, so these requests fail on their own defects rather
+    // than on the validated-transaction check.
+    writer.insert_validated_private_transaction(record.clone()).await.unwrap();
 
     let invalid_hex = IssueDecryptionShareRequest {
         ciphertext: "not hex".to_owned(),
