@@ -31,6 +31,7 @@ use miden_protocol::note::{
     PartialNote,
     PartialNoteMetadata,
 };
+use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{
     AccountInputs,
     InputNotes,
@@ -42,6 +43,7 @@ use miden_protocol::utils::serde::Serializable;
 use miden_protocol::vm::FutureMaybeSend;
 use miden_protocol::{Felt, Word};
 use miden_standards::account::auth::{FeeConversionInfo, commit_fee_conversion_info};
+use miden_standards::account::fees::FeePolicyManager;
 use miden_standards::code_builder::CodeBuilder;
 use miden_standards::note::{NetworkAccountTarget, NoteExecutionHint};
 use miden_tx::auth::BasicAuthenticator;
@@ -76,6 +78,7 @@ pub struct Driver {
     secret_key: SecretKey,
     increment_script: NoteScript,
     genesis_header: BlockHeader,
+    protocol_config: ProtocolConfig,
     prover: LocalTransactionProver,
     rng: ChaCha20Rng,
 }
@@ -101,6 +104,19 @@ impl Driver {
             counter.id(),
         );
 
+        let fee_asset_id = counter
+            .storage()
+            .get_item(FeePolicyManager::fee_asset_id_slot())
+            .context("counter account is missing its fee asset ID")?
+            .try_into()
+            .context("counter account carries an invalid fee asset ID")?;
+        let protocol_config = ProtocolConfig::current(fee_asset_id)
+            .context("failed to construct the current protocol configuration")?;
+        anyhow::ensure!(
+            protocol_config.to_commitment() == genesis_header.protocol_config_commitment(),
+            "the counter's fee asset does not match the chain's protocol configuration",
+        );
+
         Ok(Self {
             wallet,
             counter,
@@ -109,6 +125,7 @@ impl Driver {
             increment_script: create_increment_script()
                 .context("failed to compile the increment note script")?,
             genesis_header,
+            protocol_config,
             prover: LocalTransactionProver::default(),
             rng,
         })
@@ -148,8 +165,11 @@ impl Driver {
         tx_args.extend_advice_map([(auth_args, conversion_info_preimage)]);
         tx_args.add_output_note_recipient(Box::new(recipient));
 
-        let mut data_store =
-            DriverDataStore::new(self.genesis_header.clone(), PartialBlockchain::default());
+        let mut data_store = DriverDataStore::new(
+            self.genesis_header.clone(),
+            self.protocol_config.clone(),
+            PartialBlockchain::default(),
+        );
         data_store.add_account(self.wallet.clone());
         // The counter is *foreign* to this transaction: creating a note targeted at it makes the
         // wallet's auth procedure price the note through the counter's `estimate_note_fee` via FPI.
@@ -192,7 +212,7 @@ impl Driver {
     /// Builds the auth args committing to paying the fee in the chain's native asset at rate 1/1,
     /// together with the advice-map preimage the auth procedure verifies against them in-VM.
     fn fee_conversion_auth_args(&mut self) -> (Word, Vec<Felt>) {
-        let fee_faucet_id = self.genesis_header.fee_parameters().fee_faucet_id();
+        let fee_faucet_id = self.protocol_config.fee_asset_id().faucet_id();
         // The salt keeps the auth args usable as a per-transaction unique value for replay
         // protection.
         let salt = Word::new([
@@ -335,16 +355,22 @@ struct DriverDataStore {
     accounts: HashMap<AccountId, Account>,
     account_witnesses: HashMap<AccountId, AccountWitness>,
     block_header: BlockHeader,
+    protocol_config: ProtocolConfig,
     partial_blockchain: PartialBlockchain,
     mast_store: TransactionMastStore,
 }
 
 impl DriverDataStore {
-    fn new(block_header: BlockHeader, partial_blockchain: PartialBlockchain) -> Self {
+    fn new(
+        block_header: BlockHeader,
+        protocol_config: ProtocolConfig,
+        partial_blockchain: PartialBlockchain,
+    ) -> Self {
         Self {
             accounts: HashMap::new(),
             account_witnesses: HashMap::new(),
             block_header,
+            protocol_config,
             partial_blockchain,
             mast_store: TransactionMastStore::new(),
         }
@@ -375,14 +401,16 @@ impl DataStore for DriverDataStore {
         &self,
         account_id: AccountId,
         _block_refs: BTreeSet<BlockNumber>,
-    ) -> impl FutureMaybeSend<Result<(PartialAccount, BlockHeader, PartialBlockchain), DataStoreError>>
-    {
+    ) -> impl FutureMaybeSend<
+        Result<(PartialAccount, BlockHeader, ProtocolConfig, PartialBlockchain), DataStoreError>,
+    > {
         async move {
             let account = self.account(account_id)?;
 
             Ok((
                 PartialAccount::from(account),
                 self.block_header.clone(),
+                self.protocol_config.clone(),
                 self.partial_blockchain.clone(),
             ))
         }
