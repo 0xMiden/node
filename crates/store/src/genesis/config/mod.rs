@@ -57,6 +57,9 @@ pub const FAUCET_OPERATOR_FILE_NAME: &str = "faucet_operator.mac";
 /// Name of the account file written for the pass-through account.
 pub const PASS_THROUGH_ACCOUNT_FILE_NAME: &str = "pass_through.mac";
 
+/// Name of the account file written for the generated batch builder.
+pub const BATCH_BUILDER_FILE_NAME: &str = "batch_builder.mac";
+
 // GENESIS CONFIG
 // ================================================================================================
 
@@ -232,6 +235,13 @@ impl GenesisConfig {
             build_pass_through_account().map_err(GenesisConfigError::PassThroughAccountBuild)?;
         secrets.push((PASS_THROUGH_ACCOUNT_FILE_NAME.to_string(), pass_through_account.id(), None));
 
+        let (batch_builder_account, batch_builder_secret) = build_batch_builder()?;
+        secrets.push((
+            BATCH_BUILDER_FILE_NAME.to_string(),
+            batch_builder_account.id(),
+            Some(batch_builder_secret),
+        ));
+
         faucet_accounts.insert(symbol.clone(), native_faucet_account);
 
         // Setup additional fungible faucets from parameters
@@ -365,6 +375,7 @@ impl GenesisConfig {
         all_accounts.extend(wallet_accounts);
 
         all_accounts.push(pass_through_account);
+        all_accounts.push(batch_builder_account);
 
         // Append file-loaded accounts as-is
         all_accounts.extend(file_loaded_accounts);
@@ -470,6 +481,19 @@ fn build_faucet_operator() -> Result<(Account, RpoSecretKey), GenesisConfigError
     operator.set_nonce(ONE)?;
 
     Ok((operator, secret_key))
+}
+
+/// Builds the private wallet that receives the batch builder's fee notes.
+fn build_batch_builder() -> Result<(Account, RpoSecretKey), GenesisConfigError> {
+    let mut rng = ChaCha20Rng::from_seed(rand::random());
+
+    let secret_key = RpoSecretKey::with_rng(&mut rng);
+    let auth = Approver::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
+    let init_seed: [u8; 32] = rng.random();
+    let mut account = create_basic_wallet(init_seed, auth, AccountType::Private)?;
+    account.set_nonce(ONE)?;
+
+    Ok((account, secret_key))
 }
 
 // NATIVE FAUCET

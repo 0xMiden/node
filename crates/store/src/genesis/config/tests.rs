@@ -107,10 +107,10 @@ async fn genesis_accounts_have_nonce_one() -> TestResult {
     let gcfg = GenesisConfig::default();
     let (state, secrets) = gcfg.into_state(dev_validator_keys()).unwrap();
 
-    // The default configuration generates the native faucet, its operator, and the pass-through
-    // account.
+    // The default configuration generates the native faucet, its operator, the pass-through
+    // account, and the batch builder.
     let account_files = secrets.as_account_files(&state).collect::<Result<Vec<_>, _>>()?;
-    assert_eq!(account_files.len(), 3);
+    assert_eq!(account_files.len(), 4);
     for AccountFileWithName { account_file, name } in account_files {
         assert_eq!(account_file.account.nonce(), ONE, "{name} should be deployed at genesis");
     }
@@ -138,6 +138,33 @@ fn pass_through_account_is_part_of_genesis() -> TestResult {
         .expect("the pass-through account file should be generated");
     assert_eq!(*account_id, account.id());
     assert!(secret.is_none());
+
+    Ok(())
+}
+
+#[test]
+fn generated_batch_builder_is_a_private_wallet() -> TestResult {
+    use miden_standards::account::wallets::BasicWallet;
+
+    let (state, secrets) = GenesisConfig::default().into_state(dev_validator_keys())?;
+
+    let (_, account_id, secret) = secrets
+        .secrets
+        .iter()
+        .find(|(name, ..)| name == BATCH_BUILDER_FILE_NAME)
+        .expect("the batch builder account file should be generated");
+    assert!(secret.is_some());
+
+    let account = state
+        .accounts
+        .iter()
+        .find(|account| account.id() == *account_id)
+        .expect("the batch builder account should be part of the genesis state");
+    assert!(account.id().is_private());
+    assert_eq!(account.nonce(), ONE);
+    assert!(account.vault().is_empty());
+    assert!(account.code().has_procedure(BasicWallet::receive_asset_root().as_word()));
+    assert!(account.code().has_procedure(BasicWallet::create_note_root().as_word()));
 
     Ok(())
 }
@@ -345,11 +372,17 @@ verification_base_fee = 0
     let (state, secrets) = gcfg.into_state(dev_validator_keys())?;
     assert!(state.accounts.iter().any(|a| a.id() == faucet_id));
 
-    // The pass-through account has no key. A file-loaded faucet creates no additional secret.
-    assert_eq!(secrets.secrets.len(), 1);
-    let (name, _, secret) = &secrets.secrets[0];
-    assert_eq!(name, PASS_THROUGH_ACCOUNT_FILE_NAME);
-    assert!(secret.is_none());
+    // A file-loaded faucet creates no new secret. The generated accounts are still present.
+    assert_eq!(secrets.secrets.len(), 2);
+    let find = |file_name| {
+        secrets
+            .secrets
+            .iter()
+            .find(|(name, ..)| name == file_name)
+            .unwrap_or_else(|| panic!("{file_name} should be generated"))
+    };
+    assert!(find(PASS_THROUGH_ACCOUNT_FILE_NAME).2.is_none());
+    assert!(find(BATCH_BUILDER_FILE_NAME).2.is_some());
 
     Ok(())
 }
