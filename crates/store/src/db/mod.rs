@@ -685,22 +685,23 @@ impl Db {
         let mut block_range_start = BlockNumber::GENESIS;
         let entries_limit = entries_limit.unwrap_or_else(default_storage_map_entries_limit);
 
-        let mut page = self
+        let mut page = match self
             .select_storage_map_sync_values(
                 account_id,
                 block_num.range_from(block_range_start),
                 Some(entries_limit),
             )
-            .await?;
+            .await
+        {
+            Ok(page) => page,
+            Err(DatabaseError::AccountSyncPageExceedsPayloadLimit { .. }) => {
+                return Ok(AccountStorageMapDetails::limit_exceeded(slot_name));
+            },
+            Err(err) => return Err(err),
+        };
 
         values.extend(page.values);
         let mut last_block_included = page.last_block_included;
-
-        // If the first page returned no values, the block at block_range_start has more entries
-        // than the limit allows (e.g. genesis accounts with large storage maps).
-        if values.is_empty() && last_block_included == block_range_start {
-            return Ok(AccountStorageMapDetails::limit_exceeded(slot_name));
-        }
 
         loop {
             if page.last_block_included == *block_num
@@ -710,13 +711,20 @@ impl Db {
             }
 
             block_range_start = page.last_block_included.child();
-            page = self
+            page = match self
                 .select_storage_map_sync_values(
                     account_id,
                     block_num.range_from(block_range_start),
                     Some(entries_limit),
                 )
-                .await?;
+                .await
+            {
+                Ok(page) => page,
+                Err(DatabaseError::AccountSyncPageExceedsPayloadLimit { .. }) => {
+                    return Ok(AccountStorageMapDetails::limit_exceeded(slot_name));
+                },
+                Err(err) => return Err(err),
+            };
 
             if page.last_block_included <= last_block_included {
                 return Ok(AccountStorageMapDetails::limit_exceeded(slot_name));

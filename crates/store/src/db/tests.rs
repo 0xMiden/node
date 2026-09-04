@@ -1417,7 +1417,7 @@ fn select_storage_map_sync_values_all_entries_in_genesis_block() {
     .unwrap();
 
     // Insert 3 entries, all in genesis block
-    for i in 0..3 {
+    for i in 0..3u32 {
         queries::insert_account_storage_map_value(
             &mut conn,
             account_id,
@@ -1430,8 +1430,7 @@ fn select_storage_map_sync_values_all_entries_in_genesis_block() {
     }
 
     // Query with limit=1 so that raw.len() (3) > limit (1), triggering the pagination branch. All
-    // entries are in block 0, so take_while produces nothing and last_block_num.saturating_sub(1) =
-    // -1.
+    // entries are in block 0, so pagination cannot make progress.
     let result = queries::select_account_storage_map_values_paged(
         &mut conn,
         account_id,
@@ -1439,19 +1438,14 @@ fn select_storage_map_sync_values_all_entries_in_genesis_block() {
         1,
     );
 
-    // Should not error - should return a valid page (possibly with empty values indicating no
-    // progress, which the caller interprets as limit_exceeded)
-    let page = result.expect("should not return an internal error for genesis block entries");
-    // The page should indicate no progress was made (stuck at genesis)
-    assert!(
-        page.values.is_empty() || page.last_block_included == genesis,
-        "should indicate pagination did not make progress"
+    assert_matches!(
+        result,
+        Err(crate::errors::DatabaseError::AccountSyncPageExceedsPayloadLimit { block_num })
+            if block_num == genesis
     );
 }
 
-/// Tests that single-block overflow works for non-genesis blocks too. All entries are in block 5
-/// and exceed the limit. The function should signal no progress rather than returning incorrect
-/// data.
+/// Tests that single-block overflow returns an error instead of silently reporting no progress.
 #[test]
 fn select_storage_map_sync_values_all_entries_in_single_non_genesis_block() {
     let mut conn = create_db();
@@ -1469,7 +1463,7 @@ fn select_storage_map_sync_values_all_entries_in_single_non_genesis_block() {
     )
     .unwrap();
 
-    for i in 0..3 {
+    for i in 0..3u32 {
         queries::insert_account_storage_map_value(
             &mut conn,
             account_id,
@@ -1482,12 +1476,123 @@ fn select_storage_map_sync_values_all_entries_in_single_non_genesis_block() {
     }
 
     // limit=1, so 3 rows > 1 triggers pagination. All in block 5.
-    let page =
-        queries::select_account_storage_map_values_paged(&mut conn, account_id, block5..=block5, 1)
-            .unwrap();
+    let result =
+        queries::select_account_storage_map_values_paged(&mut conn, account_id, block5..=block5, 1);
 
-    assert!(page.values.is_empty(), "should have no values when single block exceeds limit");
-    assert_eq!(page.last_block_included, block5, "should signal no progress at block 5");
+    assert_matches!(
+        result,
+        Err(crate::errors::DatabaseError::AccountSyncPageExceedsPayloadLimit { block_num })
+            if block_num == block5
+    );
+}
+
+/// Tests that vault sync pagination rejects single-block overflow the same way as storage maps.
+#[test]
+fn select_account_vault_sync_values_all_entries_in_single_block() {
+    use miden_protocol::asset::{Asset, FungibleAsset};
+
+    let mut conn = create_db();
+    let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+    // Distinct faucet IDs → distinct vault keys; same faucet would UNIQUE-collide in one block.
+    let faucet_ids = [
+        AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap(),
+        AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap(),
+        AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_2).unwrap(),
+    ];
+
+    let block5 = BlockNumber::from(5);
+    create_block(&mut conn, block5);
+
+    queries::upsert_accounts(
+        &mut conn,
+        &[mock_block_account_update(account_id, 0)],
+        block5,
+        &queries::PrecomputedPublicAccountStates::new(),
+    )
+    .unwrap();
+
+    for (i, faucet_id) in faucet_ids.into_iter().enumerate() {
+        let asset = Asset::Fungible(FungibleAsset::new(faucet_id, (i as u64) + 1).unwrap());
+        queries::insert_account_vault_asset(&mut conn, account_id, block5, asset.id(), Some(asset))
+            .unwrap();
+    }
+
+    let result = queries::select_account_vault_assets_with_row_limit(
+        &mut conn,
+        account_id,
+        block5..=block5,
+        1,
+    );
+
+    assert_matches!(
+        result,
+        Err(crate::errors::DatabaseError::AccountSyncPageExceedsPayloadLimit { block_num })
+            if block_num == block5
+    );
+}
+
+/// Multi-block vault sync: when the page limit truncates mid-range, keep complete blocks only.
+#[test]
+fn select_account_vault_sync_values_multi_block_pagination() {
+    use miden_protocol::asset::{Asset, FungibleAsset};
+
+    let mut conn = create_db();
+    let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+    let faucet_1 = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let faucet_2 = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap();
+    let faucet_3 = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_2).unwrap();
+
+    let block1 = BlockNumber::from(1);
+    let block2 = BlockNumber::from(2);
+    let block3 = BlockNumber::from(3);
+
+    create_block(&mut conn, block1);
+    create_block(&mut conn, block2);
+    create_block(&mut conn, block3);
+
+    queries::upsert_accounts(
+        &mut conn,
+        &[mock_block_account_update(account_id, 0)],
+        block1,
+        &queries::PrecomputedPublicAccountStates::new(),
+    )
+    .unwrap();
+    queries::upsert_accounts(
+        &mut conn,
+        &[mock_block_account_update(account_id, 1)],
+        block2,
+        &queries::PrecomputedPublicAccountStates::new(),
+    )
+    .unwrap();
+    queries::upsert_accounts(
+        &mut conn,
+        &[mock_block_account_update(account_id, 2)],
+        block3,
+        &queries::PrecomputedPublicAccountStates::new(),
+    )
+    .unwrap();
+
+    let asset_1 = Asset::Fungible(FungibleAsset::new(faucet_1, 1).unwrap());
+    let asset_2 = Asset::Fungible(FungibleAsset::new(faucet_2, 2).unwrap());
+    let asset_3 = Asset::Fungible(FungibleAsset::new(faucet_3, 3).unwrap());
+    queries::insert_account_vault_asset(&mut conn, account_id, block1, asset_1.id(), Some(asset_1))
+        .unwrap();
+    queries::insert_account_vault_asset(&mut conn, account_id, block2, asset_2.id(), Some(asset_2))
+        .unwrap();
+    queries::insert_account_vault_asset(&mut conn, account_id, block3, asset_3.id(), Some(asset_3))
+        .unwrap();
+
+    // limit=2: fetch 3 rows, drop incomplete block 3, keep blocks 1-2.
+    let (last_block_included, values) = queries::select_account_vault_assets_with_row_limit(
+        &mut conn,
+        account_id,
+        BlockNumber::GENESIS..=block3,
+        2,
+    )
+    .unwrap();
+
+    assert_eq!(values.len(), 2, "should include entries from blocks 1 and 2");
+    assert_eq!(last_block_included, block2, "last included block should be 2");
 }
 
 /// Tests that normal multi-block pagination still works correctly: entries in blocks 1, 2, 3 with

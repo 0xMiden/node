@@ -291,7 +291,8 @@ fn database_error_to_status(err: &DatabaseError) -> Status {
         DatabaseError::AccountNotFoundInDb(_)
         | DatabaseError::AccountsNotFoundInDb(_)
         | DatabaseError::AccountNotPublic(_) => Status::not_found(message),
-        DatabaseError::TransactionPageExceedsPayloadLimit { .. } => Status::out_of_range(message),
+        DatabaseError::TransactionPageExceedsPayloadLimit { .. }
+        | DatabaseError::AccountSyncPageExceedsPayloadLimit { .. } => Status::out_of_range(message),
         DatabaseError::RangeBeyondTip(_) => Status::invalid_argument(message),
         _ => Status::internal(message),
     }

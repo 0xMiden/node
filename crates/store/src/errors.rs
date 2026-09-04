@@ -101,6 +101,8 @@ pub enum DatabaseError {
          use a stricter filter to reduce the number of transactions returned"
     )]
     TransactionPageExceedsPayloadLimit { block_num: BlockNumber },
+    #[error("account sync updates for block {block_num} would exceed maximum response size")]
+    AccountSyncPageExceedsPayloadLimit { block_num: BlockNumber },
     #[error("data corrupted: {0}")]
     DataCorrupted(String),
     #[error(transparent)]
