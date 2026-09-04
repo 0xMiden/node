@@ -1,7 +1,7 @@
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use miden_node_tracing::debug;
-use miden_protocol::block::{BlockHeader, BlockNumber};
+use miden_protocol::block::BlockHeader;
 use miden_protocol::crypto::merkle::mmr::PartialMmr;
 use miden_protocol::transaction::PartialBlockchain;
 
@@ -10,8 +10,9 @@ use crate::LOG_TARGET;
 // CHAIN STATE
 // ================================================================================================
 
-/// Contains information about the chain that is relevant to the [`NetworkTransactionBuilder`] and
-/// all account actors managed by the [`Coordinator`].
+/// Contains information about the chain that is relevant to the
+/// [`NetworkTransactionBuilder`](crate::NetworkTransactionBuilder).
+///
 ///
 /// The chain MMR stored here contains:
 /// - The MMR peaks.
@@ -80,37 +81,5 @@ impl ChainState {
         let pruned_block_height =
             (self.chain_mmr.chain_length().as_usize().saturating_sub(max_block_count)) as u32;
         Arc::make_mut(&mut self.chain_mmr).prune_to(..pruned_block_height.into());
-    }
-}
-
-/// A thread-safe wrapper around [`ChainState`] that can be shared across multiple actors.
-///
-/// The API guarantees that the lock cannot be held across await points.
-pub struct SharedChainState(RwLock<ChainState>);
-
-impl SharedChainState {
-    pub fn new(chain_tip_header: BlockHeader, chain_mmr: PartialMmr) -> Self {
-        Self(RwLock::new(ChainState::new(chain_tip_header, chain_mmr)))
-    }
-
-    pub(crate) fn chain_tip_block_number(&self) -> BlockNumber {
-        self.0.read().expect("chain state lock poisoned").chain_tip_header.block_num()
-    }
-
-    /// Returns a clone of the current partial chain MMR. Cheap enough for per-block persistence
-    /// since the MMR is bounded by `max_block_count` headers.
-    pub(crate) fn current_mmr(&self) -> PartialMmr {
-        self.0.read().expect("chain state lock poisoned").current_mmr()
-    }
-
-    pub(crate) fn update_chain_tip(&self, tip: BlockHeader, max_block_count: usize) {
-        self.0
-            .write()
-            .expect("chain state lock poisoned")
-            .update_chain_tip(tip, max_block_count);
-    }
-
-    pub(crate) fn get_cloned(&self) -> ChainState {
-        self.0.read().expect("chain state lock poisoned").clone()
     }
 }

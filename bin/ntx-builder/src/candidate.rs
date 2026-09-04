@@ -86,10 +86,9 @@ fn sponsorship_amount(note: &Note) -> AssetAmount {
 pub struct TransactionCandidate {
     /// The current inflight state of the account.
     ///
-    /// Wrapped in `Arc` so building a candidate shares the actor's resident account instead of
-    /// deep-cloning it (which, for accounts with large storage maps, is expensive). The account is
-    /// only ever read during execution; the actor advances its own copy via `Arc::make_mut` once
-    /// the candidate has been consumed.
+    /// Wrapped in `Arc` so building a candidate shares the account the attempt loaded instead of
+    /// deep-cloning it, which is expensive for accounts with large storage maps. The account is
+    /// only ever read during execution.
     pub account: Arc<Account>,
 
     /// The sponsored feature notes selected for this transaction: each feature note addressed to

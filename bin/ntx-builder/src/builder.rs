@@ -1,33 +1,29 @@
 use std::pin::Pin;
-use std::sync::Arc;
 
 use anyhow::Context;
 use futures::Stream;
 use miden_node_tracing::{info, miden_instrument};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
-use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use tokio::net::TcpListener;
-use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
-use crate::actor::ActorRequest;
-use crate::chain_state::SharedChainState;
+use crate::attempt::AttemptOutcome;
+use crate::chain_state::ChainState;
 use crate::clients::RpcError;
 use crate::committed_block::CommittedBlockEffects;
-use crate::coordinator::Coordinator;
 use crate::db::NtxDbWriter;
+use crate::scheduler::Scheduler;
 use crate::server::NtxBuilderRpcServer;
 use crate::{LOG_TARGET, NtxBuilderConfig};
 
 /// Discriminator returned by the steady-state `select!` so the dispatch can run on a fully-owned
-/// `&mut self` instead of three concurrent borrows. The `Block` variant is boxed since a
-/// `SignedBlock` dwarfs the other two payloads.
+/// `&mut self` instead of two concurrent borrows. The `Block` variant is boxed since a
+/// `SignedBlock` dwarfs the other payloads.
 enum SteadyStateAction {
     Block(Box<Option<Result<(SignedBlock, BlockNumber), RpcError>>>),
-    Request(Option<ActorRequest>),
-    Respawn(Option<miden_protocol::account::AccountId>),
+    Completion(anyhow::Result<AttemptOutcome>),
     Shutdown,
 }
 
@@ -44,16 +40,13 @@ pub(crate) type BlockStream =
 
 /// Network transaction builder component.
 ///
-/// Runs in three phases:
-/// 1. **Catch-up**: drain the committed-block subscription, applying each block to the local DB
-///    and in-memory chain, until the local tip matches the node-reported `committed_chain_tip`
-///    (signaled by `is_synced` flipping to `true`). No actors run.
-/// 2. **Boundary**: query the DB for accounts with carry-over pending notes (e.g. from a previous
-///    process) and spawn an actor for each.
-/// 3. **Steady-state**: on every subsequent committed block, apply the effects, advance the chain,
-///    and have the coordinator spawn-if-missing for newly-targeted accounts then wake every active
-///    actor. Concurrently drain actor requests (`NotesFailed`, `CacheNoteScript`) so the actors'
-///    DB writes happen serialized through the builder.
+/// Runs in two phases:
+/// 1. **Catch-up**: drain the committed-block subscription, applying each block to the local DB and
+///    in-memory chain, until the local tip matches the node-reported `committed_chain_tip`
+///    (signaled by `is_synced` flipping to `true`). No transaction attempts run.
+/// 2. **Steady-state**: on every committed block, apply the effects, advance the chain, resolve the
+///    scheduler's in-flight transactions against the block, and fill the free attempt slots.
+///    Concurrently reap finished attempts, persisting the note bookkeeping each one reports.
 pub struct NetworkTransactionBuilder {
     /// Configuration for the builder.
     config: NtxBuilderConfig,
@@ -63,13 +56,10 @@ pub struct NetworkTransactionBuilder {
     block_stream: BlockStream,
     /// Highest block number applied to the DB so far.
     last_applied_block: BlockNumber,
-    /// In-memory partial chain shared with every spawned actor through the coordinator.
-    chain: Arc<SharedChainState>,
-    /// Lifecycle owner for `AccountActor` instances.
-    coordinator: Coordinator,
-    /// Channel receiving DB-side requests (note-failed bookkeeping, script-cache persistence) from
-    /// spawned actors. Drained in the steady-state loop so writes happen through the builder.
-    actor_request_rx: mpsc::Receiver<ActorRequest>,
+    /// In-memory partial chain.
+    chain: ChainState,
+    /// Owner of the transaction attempts and of the in-flight transaction set.
+    scheduler: Scheduler,
     /// `false` until the first applied block whose `committed_chain_tip` matches the just-applied
     /// block number. Stays `true` afterwards.
     is_synced: bool,
@@ -81,9 +71,8 @@ impl NetworkTransactionBuilder {
         db: NtxDbWriter,
         block_stream: BlockStream,
         last_applied_block: BlockNumber,
-        chain: Arc<SharedChainState>,
-        coordinator: Coordinator,
-        actor_request_rx: mpsc::Receiver<ActorRequest>,
+        chain: ChainState,
+        scheduler: Scheduler,
     ) -> Self {
         Self {
             config,
@@ -91,8 +80,7 @@ impl NetworkTransactionBuilder {
             block_stream,
             last_applied_block,
             chain,
-            coordinator,
-            actor_request_rx,
+            scheduler,
             is_synced: false,
         }
     }
@@ -153,38 +141,24 @@ impl NetworkTransactionBuilder {
             }
         }
 
-        // Phase 2: spawn an actor for every account with carry-over pending notes. Accounts whose
-        // creation has not been committed yet have their spawn deferred by the coordinator.
-        let max_note_attempts = self.config.max_note_attempts;
-        let pending_accounts = self
-            .db
-            .accounts_with_pending_notes(max_note_attempts)
-            .await
-            .context("failed to load accounts with pending notes at catch-up")?;
-        info!(
-            target: LOG_TARGET,
-            "spawning actors for accounts with carry-over pending notes",
-            account.ids.count = pending_accounts.len()
-        );
-        for account_id in pending_accounts {
-            self.coordinator.spawn_actor_when_committed(account_id).await?;
-        }
+        // Phase 2: work the accounts that have pending notes, one attempt per free slot, driven by
+        // committed blocks and by the completion of earlier attempts.
+        self.scheduler.dispatch(&self.chain).await?;
 
-        // Phase 3: drive actors per committed block, plus serialize their DB writes.
         loop {
             // Split `&mut self` into disjoint borrows so each `select!` arm holds only the one
             // field it polls. The action is materialised and self is released before the body
             // dispatches the work via the regular `&mut self` methods.
             let action = {
                 let block_stream = &mut self.block_stream;
-                let actor_request_rx = &mut self.actor_request_rx;
-                let coordinator = &mut self.coordinator;
+                let scheduler = &mut self.scheduler;
 
                 tokio::select! {
                     () = shutdown.cancelled() => SteadyStateAction::Shutdown,
                     block = block_stream.next() => SteadyStateAction::Block(Box::new(block)),
-                    request = actor_request_rx.recv() => SteadyStateAction::Request(request),
-                    respawn = coordinator.next() => SteadyStateAction::Respawn(respawn?),
+                    completion = scheduler.next_completion() => {
+                        SteadyStateAction::Completion(completion)
+                    },
                 }
             };
 
@@ -192,28 +166,18 @@ impl NetworkTransactionBuilder {
                 SteadyStateAction::Block(block) => {
                     let (block, committed_tip) =
                         (*block).context("block stream ended")?.context("block stream failed")?;
-                    let (effects, sponsored_accounts) =
+                    let effects =
                         self.apply_committed_block_with_effects(block, committed_tip).await?;
-                    self.coordinator.handle_committed_block(&effects, &sponsored_accounts).await?;
+                    self.scheduler.handle_committed_block(&effects);
+                    self.scheduler.dispatch(&self.chain).await?;
                 },
-                SteadyStateAction::Request(request) => {
-                    let Some(request) = request else {
-                        anyhow::bail!("actor request channel closed unexpectedly");
-                    };
-                    handle_actor_request(&self.db, request, self.config.max_note_attempts).await?;
-                },
-                SteadyStateAction::Respawn(respawn) => {
-                    if let Some(account_id) = respawn {
-                        info!(
-                            target: LOG_TARGET,
-                            "respawning actor that shut down with a pending notification",
-                            account.id = account_id
-                        );
-                        self.coordinator.spawn_actor(account_id);
+                SteadyStateAction::Completion(outcome) => {
+                    if self.scheduler.handle_completion(&self.db, outcome?).await? {
+                        self.scheduler.dispatch(&self.chain).await?;
                     }
                 },
                 SteadyStateAction::Shutdown => {
-                    self.coordinator.shutdown().await?;
+                    self.scheduler.shutdown().await;
                     return Ok(());
                 },
             }
@@ -239,10 +203,9 @@ impl NetworkTransactionBuilder {
         self.apply_committed_block_with_effects(block, committed_tip).await.map(drop)
     }
 
-    /// Applies a committed block and returns the computed `CommittedBlockEffects`, plus the
-    /// accounts whose pending feature notes gained a sponsorship in this block (one entry per
-    /// sponsorship), so the steady-state loop can hand both to the coordinator without re-deriving
-    /// them from the signed block.
+    /// Applies a committed block and returns the computed [`CommittedBlockEffects`], so the caller
+    /// can resolve the scheduler's in-flight transactions against the same effects without
+    /// re-deriving them from the signed block.
     #[miden_instrument(
         name = "ntx.builder.apply_committed_block",
         fields(
@@ -254,7 +217,7 @@ impl NetworkTransactionBuilder {
         &mut self,
         block: SignedBlock,
         committed_tip: BlockNumber,
-    ) -> anyhow::Result<(CommittedBlockEffects, Vec<AccountId>)> {
+    ) -> anyhow::Result<CommittedBlockEffects> {
         let header = block.header().clone();
         let block_num = header.block_num();
 
@@ -266,43 +229,13 @@ impl NetworkTransactionBuilder {
         let next_mmr = self.chain.current_mmr();
 
         let effects_for_db = effects.clone();
-        let sponsored_accounts = self
-            .db
+        self.db
             .apply_committed_block(effects_for_db, next_mmr)
             .await
             .context("failed to apply committed block to DB")?;
 
         self.last_applied_block = block_num;
 
-        Ok((effects, sponsored_accounts))
+        Ok(effects)
     }
-}
-
-/// Handles a single actor request then acknowledges the actor. All writes go through the
-/// framework's single writer connection, so the actors' reads cannot starve them.
-async fn handle_actor_request(
-    db: &NtxDbWriter,
-    request: ActorRequest,
-    max_note_attempts: usize,
-) -> anyhow::Result<()> {
-    match request {
-        ActorRequest::NotesFailed { failed_notes, block_num, ack_tx } => {
-            db.notes_failed(failed_notes, block_num)
-                .await
-                .context("failed to persist note failure")?;
-            let _ = ack_tx.send(());
-        },
-        ActorRequest::NotesDiscarded { nullifiers, block_num, ack_tx } => {
-            db.discard_notes(nullifiers, block_num, max_note_attempts)
-                .await
-                .context("failed to persist note discard")?;
-            let _ = ack_tx.send(());
-        },
-        ActorRequest::CacheNoteScript { script_root, script } => {
-            db.insert_note_scripts(script_root, script)
-                .await
-                .context("failed to cache note script")?;
-        },
-    }
-    Ok(())
 }
