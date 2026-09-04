@@ -14,6 +14,9 @@ use crate::{COMPONENT, LOG_TARGET, StorageKeyEpoch, StoredPrivateRecord};
 mod migrations;
 mod queries;
 
+#[cfg(test)]
+pub(crate) use queries::ListTransactionsParams;
+
 // VALIDATOR DATABASE
 // ================================================================================================
 
@@ -143,6 +146,22 @@ impl ValidatorDbReader {
     ) -> Result<Vec<StoredPrivateRecord>, DatabaseError> {
         self.reader.read("load_all_transactions", queries::load_all_transactions).await
     }
+
+    /// Loads one page of committed transactions in chronological order i.e. `(block_num,
+    /// block_tx_index)`.
+    // `expect(dead_code)` is gated to non-test builds because tests do call this, which would leave
+    // the expectation unfulfilled.
+    #[cfg_attr(not(test), expect(dead_code, reason = "used in follow-up PR"))]
+    pub(crate) async fn list_validated_transactions(
+        &self,
+        params: queries::ListTransactionsParams,
+    ) -> Result<Vec<queries::ListedTransaction>, DatabaseError> {
+        self.reader
+            .read("list_validated_transactions", move |tx| {
+                queries::list_validated_transactions(tx, &params)
+            })
+            .await
+    }
 }
 
 /// Write handle to the validator database.
@@ -198,6 +217,58 @@ impl ValidatorDbWriter {
             .write("upsert_block_header", move |tx| queries::upsert_block_header(tx, &header))
             .await
     }
+
+    /// Persists a signed block's header and links the block's transactions to their in-block
+    /// positions, all in one database transaction so the header and the links stay consistent.
+    ///
+    /// The height must not already hold a block; use [`Self::replace_signed_block`] to replace
+    /// one.
+    #[miden_instrument(
+        target = COMPONENT,
+    )]
+    pub(crate) async fn insert_signed_block(
+        &self,
+        header: BlockHeader,
+        transactions: Vec<TransactionId>,
+    ) -> Result<(), DatabaseError> {
+        self.writer
+            .write("insert_signed_block", move |tx| {
+                persist_signed_block(tx, &header, &transactions)
+            })
+            .await
+    }
+
+    /// Replaces the block signed at `header`'s height, in one database transaction: deletes the
+    /// replaced block — unlinking its transactions via the `ON DELETE CASCADE` on
+    /// `block_transactions`, so transactions dropped by the replacement do not keep a stale link —
+    /// then persists the new header and links exactly as [`Self::insert_signed_block`] does.
+    #[miden_instrument(
+        target = COMPONENT,
+    )]
+    pub(crate) async fn replace_signed_block(
+        &self,
+        header: BlockHeader,
+        transactions: Vec<TransactionId>,
+    ) -> Result<(), DatabaseError> {
+        self.writer
+            .write("replace_signed_block", move |tx| {
+                queries::delete_block(tx, header.block_num())?;
+                persist_signed_block(tx, &header, &transactions)
+            })
+            .await
+    }
+}
+
+/// Persists a signed block's header and links its transactions, within the caller's database
+/// transaction: the shared tail of [`ValidatorDbWriter::insert_signed_block`] and
+/// [`ValidatorDbWriter::replace_signed_block`].
+fn persist_signed_block(
+    tx: &miden_node_db::sqlite::WriteTx<'_>,
+    header: &BlockHeader,
+    transactions: &[TransactionId],
+) -> Result<(), DatabaseError> {
+    queries::insert_block_header(tx, header)?;
+    queries::link_block_transactions(tx, header.block_num(), transactions)
 }
 
 // LIFECYCLE
@@ -453,6 +524,158 @@ mod tests {
         assert_eq!(loaded, records);
     }
 
+    /// Validated transactions that are not part of a signed block have no position in the committed
+    /// order, so the listing does not surface them at all.
+    #[tokio::test]
+    async fn uncommitted_transactions_are_not_listed() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
+        let db = setup(temp_dir.path().join("validator.sqlite3")).await.unwrap();
+        let transaction_ids = [
+            TransactionId::from_raw(Word::from([9u32, 0, 0, 0])),
+            TransactionId::from_raw(Word::from([1u32, 0, 0, 0])),
+        ];
+        for (transaction_id, seed) in transaction_ids.into_iter().zip([1u8, 2]) {
+            db.insert_validated_private_transaction(private_record(transaction_id, seed))
+                .await
+                .unwrap();
+        }
+
+        let params = ListTransactionsParams { start: None, block_to: None, limit: 10 };
+        assert!(db.list_validated_transactions(params).await.unwrap().is_empty());
+        // They remain reachable by transaction id.
+        assert!(db.load_private_record(transaction_ids[0]).await.unwrap().is_some());
+    }
+
+    /// A signed block links its transactions in block order; replacing the block at the same height
+    /// deletes the replaced block's links along with its header.
+    #[tokio::test]
+    async fn insert_signed_block_links_and_relinks_transactions() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
+        let db = setup(temp_dir.path().join("validator.sqlite3")).await.unwrap();
+        let transaction_ids = (1u64..=3)
+            .map(|i| TransactionId::from_raw(Word::try_from([i, i, i, i]).unwrap()))
+            .collect::<Vec<_>>();
+        for (seed, transaction_id) in [1u8, 2, 3].into_iter().zip(&transaction_ids) {
+            db.insert_validated_private_transaction(private_record(*transaction_id, seed))
+                .await
+                .unwrap();
+        }
+
+        let header = BlockHeader::mock(7, None, None, &[], Word::empty());
+        db.insert_signed_block(header.clone(), vec![transaction_ids[0], transaction_ids[1]])
+            .await
+            .unwrap();
+
+        let params = ListTransactionsParams { start: None, block_to: None, limit: 10 };
+        let listed = db.list_validated_transactions(params).await.unwrap();
+        assert_eq!(
+            listed
+                .iter()
+                .map(|item| (item.transaction_id, item.block_num, item.block_tx_index))
+                .collect::<Vec<_>>(),
+            vec![
+                (transaction_ids[0], BlockNumber::from(7u32), 0),
+                (transaction_ids[1], BlockNumber::from(7u32), 1),
+            ],
+        );
+
+        // Replace the block at the same height with one that only includes the third transaction.
+        // The two transactions the replacement drops go back to being uncommitted, and stop being
+        // listed.
+        db.replace_signed_block(header, vec![transaction_ids[2]]).await.unwrap();
+
+        let listed = db.list_validated_transactions(params).await.unwrap();
+        assert_eq!(
+            listed
+                .iter()
+                .map(|item| (item.transaction_id, item.block_num, item.block_tx_index))
+                .collect::<Vec<_>>(),
+            vec![(transaction_ids[2], BlockNumber::from(7u32), 0)],
+        );
+    }
+
+    /// A full sweep pages through committed transactions in committed order, honoring the row limit
+    /// exactly, with each page resuming one position past the last row of the previous one.
+    #[tokio::test]
+    async fn list_validated_transactions_pages_in_committed_order() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
+        let db = setup(temp_dir.path().join("validator.sqlite3")).await.unwrap();
+        let transaction_ids = (1u64..=5)
+            .map(|i| TransactionId::from_raw(Word::try_from([i, i, i, i]).unwrap()))
+            .collect::<Vec<_>>();
+        for (seed, transaction_id) in (1u8..=5).zip(&transaction_ids) {
+            db.insert_validated_private_transaction(private_record(*transaction_id, seed))
+                .await
+                .unwrap();
+        }
+        // Blocks 1 and 2 include two transactions each; the fifth is never committed. The later
+        // insertion is committed in the earlier block, to prove the listing follows committed order
+        // rather than insertion order.
+        let block_1 = BlockHeader::mock(1, None, None, &[], Word::empty());
+        let block_2 = BlockHeader::mock(2, None, None, &[], Word::empty());
+        db.insert_signed_block(block_1, vec![transaction_ids[3], transaction_ids[0]])
+            .await
+            .unwrap();
+        db.insert_signed_block(block_2, vec![transaction_ids[1], transaction_ids[2]])
+            .await
+            .unwrap();
+        let expected_order =
+            [transaction_ids[3], transaction_ids[0], transaction_ids[1], transaction_ids[2]];
+
+        // Sweep with a limit of three: the first page ends mid-block, and the next page resumes one
+        // position past the last row returned.
+        let mut swept = Vec::new();
+        let mut start = None;
+        loop {
+            let params = ListTransactionsParams { start, block_to: None, limit: 3 };
+            let page = db.list_validated_transactions(params).await.unwrap();
+            let Some(last) = page.last() else { break };
+            assert!(page.len() <= 3, "a page must honor the row limit");
+            start = Some((last.block_num, last.block_tx_index + 1));
+            swept.extend(page.into_iter().map(|item| item.transaction_id));
+        }
+        assert_eq!(swept, expected_order);
+
+        // Bounding by block number: `start` excludes block 1, `block_to` excludes block 2.
+        let from_block_2 = db
+            .list_validated_transactions(ListTransactionsParams {
+                start: Some((BlockNumber::from(2u32), 0)),
+                block_to: None,
+                limit: 10,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            from_block_2.iter().map(|item| item.transaction_id).collect::<Vec<_>>(),
+            vec![transaction_ids[1], transaction_ids[2]],
+        );
+        let up_to_block_1 = db
+            .list_validated_transactions(ListTransactionsParams {
+                start: None,
+                block_to: Some(BlockNumber::from(1u32)),
+                limit: 10,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            up_to_block_1.iter().map(|item| item.transaction_id).collect::<Vec<_>>(),
+            vec![transaction_ids[3], transaction_ids[0]],
+        );
+    }
+
+    /// Linking a transaction this validator never validated fails the foreign key on
+    /// `block_transactions`, so a signed block cannot silently reference unknown transactions.
+    #[tokio::test]
+    async fn insert_signed_block_rejects_unvalidated_transactions() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
+        let db = setup(temp_dir.path().join("validator.sqlite3")).await.unwrap();
+        let header = BlockHeader::mock(1, None, None, &[], Word::empty());
+        let unknown = TransactionId::from_raw(Word::from([1u32, 0, 0, 0]));
+
+        let result = db.insert_signed_block(header, vec![unknown]).await;
+        assert!(result.is_err(), "linking an unvalidated transaction must fail");
+    }
+
     #[tokio::test]
     async fn stored_private_record_opens_with_threshold_shares() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
@@ -498,7 +721,8 @@ mod tests {
             .read("private_record_schema", |tx| {
                 tx.query(
                     "SELECT sql FROM sqlite_schema \
-                     WHERE tbl_name = 'validated_transactions' AND sql IS NOT NULL \
+                     WHERE tbl_name IN ('validated_transactions', 'block_transactions') \
+                       AND sql IS NOT NULL \
                      ORDER BY name",
                     &[],
                     |row| row.get::<String>(0),
@@ -512,5 +736,6 @@ mod tests {
         assert!(schema.contains("id                    BLOB NOT NULL UNIQUE"));
         assert!(schema.contains("idx_validated_transactions_key_epoch"));
         assert!(schema.contains("idx_validated_transactions_setup_context_id"));
+        assert!(schema.contains("PRIMARY KEY (block_num, block_tx_index)"));
     }
 }

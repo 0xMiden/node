@@ -3,13 +3,13 @@ use std::sync::atomic::Ordering;
 use miden_node_proto::domain::encryption::transaction_inputs_associated_data;
 use miden_node_proto::generated as grpc;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{ErrorReport, Instrument, info_span, miden_instrument, miden_span_record};
+use miden_node_tracing::{Instrument, info_span, miden_instrument, miden_span_record};
 use miden_protocol::transaction::{ProvenTransaction, TransactionId, TransactionInputs};
 use miden_tx::utils::serde::{Deserializable, Serializable};
 use rand_core_06::OsRng;
 use tonic::Status;
 
-use super::ValidatorService;
+use super::{StatusResultExt, ValidatorService};
 use crate::tx_validation::validate_transaction;
 use crate::{COMPONENT, PrivateRecordContext, PrivateRecordId};
 
@@ -42,9 +42,11 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
             .map_err(|_| Status::resource_exhausted("validator is busy streaming a backup"))?;
 
         // Short-circuit transactions that have already been validated.
-        let already_validated = self.db.transaction_exists(tx_id).await.map_err(|err| {
-            Status::internal(err.as_report_context("Failed to query transaction"))
-        })?;
+        let already_validated = self
+            .db
+            .transaction_exists(tx_id)
+            .await
+            .or_internal("Failed to query transaction")?;
         if already_validated {
             return Ok(());
         }
@@ -58,12 +60,12 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
             .acquire()
             .instrument(info_span!("acquire_validation_permit"))
             .await
-            .map_err(|err| Status::internal(format!("validation semaphore closed: {err}")))?;
+            .or_internal("validation semaphore closed")?;
 
         // Validate the transaction.
-        validate_transaction(tx, inputs).await.map_err(|err| {
-            Status::invalid_argument(err.as_report_context("Invalid transaction"))
-        })?;
+        validate_transaction(tx, inputs)
+            .await
+            .or_invalid_argument("Invalid transaction")?;
 
         // Re-encrypt the private inputs under a fresh content key. Sealing runs secp256k1 group
         // operations, so it goes to a blocking thread rather than stalling an async worker.
@@ -79,27 +81,22 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
         })
         .await
         .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))
-        .map_err(|err| {
-            Status::internal(err.as_report_context("Failed to protect transaction inputs"))
-        })?;
+        .or_internal("Failed to protect transaction inputs")?;
 
         // Store the validated transaction and private record atomically.
-        let count =
-            self.db
-                .insert_validated_private_transaction(private_record)
-                .await
-                .map_err(|err| {
-                    Status::internal(err.as_report_context("Failed to insert transaction"))
-                })?;
+        let count = self
+            .db
+            .insert_validated_private_transaction(private_record)
+            .await
+            .or_internal("Failed to insert transaction")?;
 
         self.validated_transactions_count.fetch_add(count as u64, Ordering::Relaxed);
         Ok(())
     }
 
     fn decode(request: grpc::transaction::ProvenTransaction) -> tonic::Result<Self::Input> {
-        let tx = ProvenTransaction::read_from_bytes(&request.transaction).map_err(|err| {
-            Status::invalid_argument(err.as_report_context("Invalid proven transaction"))
-        })?;
+        let tx = ProvenTransaction::read_from_bytes(&request.transaction)
+            .or_invalid_argument("Invalid proven transaction")?;
         let sealed = request.sealed_transaction_inputs.ok_or_else(|| {
             Status::invalid_argument(
                 "Missing sealed transaction inputs: fetch the encryption key with \
@@ -161,8 +158,7 @@ impl ValidatorService {
                 ))
             })?;
 
-        TransactionInputs::read_from_bytes(&plaintext).map_err(|err| {
-            Status::invalid_argument(err.as_report_context("Invalid transaction inputs"))
-        })
+        TransactionInputs::read_from_bytes(&plaintext)
+            .or_invalid_argument("Invalid transaction inputs")
     }
 }

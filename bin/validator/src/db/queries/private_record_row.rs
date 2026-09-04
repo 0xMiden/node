@@ -45,7 +45,7 @@ pub fn private_record_from_row(row: &Row<'_>) -> Result<StoredPrivateRecord, Dat
     .map_err(|source| DatabaseError::deserialization("private record", source))
 }
 
-fn fixed_32(bytes: Vec<u8>, field: &'static str) -> Result<[u8; 32], DatabaseError> {
+pub(super) fn fixed_32(bytes: Vec<u8>, field: &'static str) -> Result<[u8; 32], DatabaseError> {
     let actual_len = bytes.len();
     bytes.try_into().map_err(|_bytes: Vec<u8>| {
         let source = std::io::Error::new(
