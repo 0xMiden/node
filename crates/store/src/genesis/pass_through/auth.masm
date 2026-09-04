@@ -1,0 +1,24 @@
+# The authentication procedure for the genesis pass-through account.
+
+use miden::protocol::active_account
+use miden::protocol::native_account
+
+const ERR_PASS_THROUGH_ACCOUNT_STATE_CHANGED = "a pass-through account must not change its state"
+
+#! Verifies that the account commitment did not change during the transaction.
+#! This procedure does not increment the nonce or create a fee note.
+#! Anyone can execute a transaction against an account that uses this procedure.
+#! The input note scripts must make the transferred assets safe for unrestricted consumption.
+#!
+#! Inputs:  [AUTH_ARGS, pad(12)]
+#! Outputs: [pad(16)]
+#!
+#! Panics if the account commitment changed.
+@auth_script
+pub proc auth_pass_through
+    dropw
+
+    exec.native_account::get_initial_commitment
+    exec.active_account::compute_commitment
+    assert_eqw.err=ERR_PASS_THROUGH_ACCOUNT_STATE_CHANGED
+end

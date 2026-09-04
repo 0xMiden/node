@@ -19,6 +19,7 @@ use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionKernel};
 
 pub mod config;
+pub mod pass_through;
 
 // GENESIS STATE
 // ================================================================================================

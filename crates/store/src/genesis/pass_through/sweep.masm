@@ -1,0 +1,35 @@
+# The asset sweep procedure for the genesis pass-through account.
+
+use miden::core::word
+use miden::protocol::active_account
+use miden::protocol::native_account
+use miden::protocol::output_note
+use {AssetId} from miden::protocol::types
+
+const ERR_PASS_THROUGH_ACCOUNT_ALREADY_HELD_ASSET = "a pass-through account must not hold the swept asset before the transaction"
+
+#! Moves the complete balance of one asset into an output note.
+#! The account must not hold the asset before the transaction starts.
+#! The procedure does nothing when the current balance is zero.
+#!
+#! Inputs:  [ASSET_ID, note_idx, pad(11)]
+#! Outputs: [pad(16)]
+#!
+#! Panics if the account held the asset before the transaction.
+@account_procedure
+pub proc sweep_asset_to_note(asset_id: AssetId, note_idx: u16)
+    dupw exec.native_account::get_initial_asset exec.word::eqz
+    assert.err=ERR_PASS_THROUGH_ACCOUNT_ALREADY_HELD_ASSET
+
+    dupw exec.active_account::get_asset
+    dupw exec.word::eqz
+
+    if.true
+        dropw dropw drop
+    else
+        swapw
+        dupw.1 dupw.1
+        exec.native_account::remove_asset dropw
+        exec.output_note::add_asset
+    end
+end
