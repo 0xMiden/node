@@ -3,7 +3,7 @@ use miden_node_proto::{DecodeMessageExt, generated as proto};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use tonic::Status;
 
-use super::SequencerInternalService;
+use super::{SequencerInternalService, ensure_transactions_have_fee_notes};
 
 #[tonic::async_trait]
 impl sequencer_api::SubmitAuthenticatedTxBatch for SequencerInternalService {
@@ -39,6 +39,7 @@ impl sequencer_api::SubmitAuthenticatedTxBatch for SequencerInternalService {
         for tx in batch.transactions() {
             self.account_admission.check(tx.account_update()).await?;
         }
+        ensure_transactions_have_fee_notes(batch.transactions().iter().map(AsRef::as_ref))?;
 
         self.block_producer
             .submit_authenticated_tx_batch(batch, inputs)

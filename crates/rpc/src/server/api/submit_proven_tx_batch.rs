@@ -8,7 +8,12 @@ use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_tx_batch::BatchVerifier;
 use tonic::{Request, Status};
 
-use super::{RpcBackend, RpcService, submit_batch_to_validators};
+use super::{
+    RpcBackend,
+    RpcService,
+    ensure_transactions_have_fee_notes,
+    submit_batch_to_validators,
+};
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
@@ -67,6 +72,10 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
             batch.reference_block.number = proven_batch.reference_block_num(),
             batch.reference_block.commitment = proven_batch.reference_block_commitment()
         );
+
+        ensure_transactions_have_fee_notes(
+            proposed_batch.transactions().iter().map(AsRef::as_ref),
+        )?;
 
         debug!(target: LOG_TARGET, "Submitting transaction batch");
 
