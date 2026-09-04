@@ -18,7 +18,6 @@ use miden_protocol::Word;
 use miden_protocol::account::{
     Account,
     AccountId,
-    AccountPatch,
     AccountStorageHeader,
     PartialAccount,
     StorageMapKey,
@@ -114,7 +113,7 @@ fn is_transient_rpc_error(err: &RpcError) -> bool {
 }
 
 /// Maximum number of retries applied to a single transient request before the error is propagated
-/// to the actor-level retry.
+/// to the caller.
 const MAX_REQUEST_RETRIES: usize = 20;
 
 /// Builds the [`ExponentialBuilder`] used to back off retries on transient request failures.
@@ -141,9 +140,6 @@ fn log_transient_retry<E: std::error::Error + 'static>(
 pub struct NtxExecutionResult {
     /// ID of the submitted transaction.
     pub tx_id: TransactionId,
-    /// The account patch the transaction produced, applied to the actor's in-memory account once
-    /// the transaction lands.
-    pub account_patch: AccountPatch,
     /// Notes that failed consumability filtering for a genuine reason (not a cycle-budget drop).
     /// Their attempt counters should be incremented.
     pub failed_notes: Vec<FailedNote>,
@@ -161,7 +157,7 @@ pub struct NtxExecutionResult {
 }
 
 /// The outcome of consumability filtering: the executable set plus the failed notes partitioned by
-/// how the actor should treat them. See [`NtxExecutionResult`] for the meaning of each bucket.
+/// how the caller should treat them. See [`NtxExecutionResult`] for the meaning of each bucket.
 struct FilteredNotes {
     successful: InputNotes<InputNote>,
     failed: Vec<FailedNote>,
@@ -202,7 +198,7 @@ impl NtxContext {
     /// Creates a new [`NtxContext`] instance.
     #[expect(
         clippy::too_many_arguments,
-        reason = "execution context aggregates actor resources"
+        reason = "execution context aggregates the resources of one attempt"
     )]
     pub fn new(
         prover: RemoteTransactionProver,
@@ -260,9 +256,9 @@ impl NtxContext {
     ///
     /// # Returns
     ///
-    /// On success, returns an [`NtxExecutionResult`] containing the transaction ID, the account
-    /// delta the transaction produced, any notes that failed during filtering, and note scripts
-    /// fetched from the remote RPC service that should be persisted to the local DB cache.
+    /// On success, returns an [`NtxExecutionResult`] containing the transaction ID, any notes that
+    /// failed during filtering, and note scripts fetched from the remote RPC service that should be
+    /// persisted to the local DB cache.
     ///
     /// # Errors
     ///
@@ -329,9 +325,9 @@ impl NtxContext {
                     .await
                     .unwrap_or_else(|err| std::panic::resume_unwind(err.into_panic()))?;
 
-                // Destructure the executed tx into its parts; the actor applies the account patch
-                // to its in-memory account once this transaction lands in a committed block.
-                let (tx_inputs, _, account_patch, _) = executed_tx.into_parts();
+                // The committed account state is derived from the block that lands this
+                // transaction, so the patch the execution produced is not needed here.
+                let (tx_inputs, ..) = executed_tx.into_parts();
 
                 // Prove transaction.
                 let proven_tx = Box::pin(self.prove(&tx_inputs)).await?;
@@ -341,7 +337,6 @@ impl NtxContext {
 
                 Ok(NtxExecutionResult {
                     tx_id: proven_tx.id(),
-                    account_patch,
                     failed_notes,
                     deferred_notes,
                     oversized_notes,
@@ -596,7 +591,7 @@ impl NtxContext {
     /// Submits the transaction through the RPC service.
     ///
     /// Transient gRPC failures (`Unavailable`, `DeadlineExceeded`, ...) are retried in-place;
-    /// content-rejection codes escape on the first attempt so the actor can mark the batch failed.
+    /// content-rejection codes escape on the first attempt so the caller can mark the batch failed.
     #[miden_instrument(
         target = COMPONENT,
         name = "ntx.execute_transaction.submit",
@@ -714,7 +709,7 @@ fn partition_cycle_limited(failed: Vec<FailedNote>) -> (Vec<FailedNote>, Vec<Fai
 ///
 /// This is sufficient for executing a network transaction.
 struct NtxDataStore {
-    /// The native account, shared with the actor via `Arc` to avoid a deep clone per transaction.
+    /// The native account, shared through `Arc` to avoid a deep clone per transaction.
     account: Arc<Account>,
     reference_block: BlockHeader,
     protocol_config: Arc<ProtocolConfig>,
@@ -727,8 +722,8 @@ struct NtxDataStore {
     script_cache: LruCache<Word, NoteScript>,
     /// Local database for persistent note script.
     db: NtxDbReader,
-    /// Scripts fetched from the remote RPC service during execution, to be persisted by the
-    /// coordinator.
+    /// Scripts fetched from the remote RPC service during execution. They are reported in the
+    /// execution result and persisted by the scheduler, which owns the database writer.
     fetched_scripts: Arc<Mutex<Vec<(Word, NoteScript)>>>,
     /// Maps storage map roots to storage slot names.
     ///
@@ -1002,7 +997,7 @@ impl DataStore for NtxDataStore {
                 })?;
 
             if let Some(script) = maybe_script {
-                // Collect for later persistence by the coordinator.
+                // Collect so the scheduler can persist the script after the attempt returns.
                 self.fetched_scripts
                     .lock()
                     .expect("fetched scripts lock poisoned")
@@ -1064,7 +1059,7 @@ mod tests {
     #[tokio::test]
     async fn data_store_returns_snapshot_protocol_config() {
         let (db, _dir) = crate::db::test_setup().await;
-        let actor_context = crate::actor::AccountActorContext::test(&db.reader());
+        let context = crate::attempt::AttemptContext::test(&db.reader());
         let allowed_root =
             mock_single_target_note(mock_network_account_id(), 77).as_note().script().root();
         let account = Arc::new(mock_network_account([allowed_root]));
@@ -1078,8 +1073,8 @@ mod tests {
         let data_store = NtxDataStore::new(
             Arc::clone(&account),
             chain_state,
-            actor_context.clients.rpc,
-            actor_context.state.script_cache,
+            context.clients.rpc,
+            context.script_cache,
             db.reader(),
             miden_node_utils::retry::exponential(
                 Duration::from_millis(1),
