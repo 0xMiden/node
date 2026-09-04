@@ -1,10 +1,9 @@
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 use miden_protocol::Word;
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta};
 use miden_protocol::crypto::merkle::smt::{
     LeafIndex,
-    NodeValue,
     PartialSmt,
     SMT_DEPTH,
     SmtLeaf,
@@ -213,27 +212,14 @@ impl From<SmtProof> for proto::primitives::SmtOpening {
 
 impl From<UniqueNodes> for proto::primitives::PartialSmt {
     fn from(unique_nodes: UniqueNodes) -> Self {
-        use proto::primitives::partial_smt_node::Value;
-
         let UniqueNodes { root, nodes, leaves, value_only_leaves } = unique_nodes;
 
-        let mut node_levels = nodes.into_iter().collect::<Vec<_>>();
-        node_levels.sort_by_key(|(depth, _)| *depth);
-        let node_levels = node_levels
+        let nodes = nodes
             .into_iter()
-            .map(|(depth, nodes)| {
-                let nodes = nodes
-                    .into_iter()
-                    .map(|(index, value)| {
-                        let value = match value {
-                            NodeValue::EmptySubtreeRoot => Value::EmptySubtreeRoot(true),
-                            NodeValue::Present(value) => Value::Digest(value.into()),
-                        };
-                        proto::primitives::PartialSmtNode { index, value: Some(value) }
-                    })
-                    .collect();
-
-                proto::primitives::PartialSmtNodeLevel { depth: u32::from(depth), nodes }
+            .map(|(index, value)| proto::primitives::PartialSmtNode {
+                depth: u32::from(index.depth()),
+                position: index.position(),
+                value: Some(value.into()),
             })
             .collect();
 
@@ -255,7 +241,7 @@ impl From<UniqueNodes> for proto::primitives::PartialSmt {
 
         Self {
             root: Some(root.into()),
-            node_levels,
+            nodes,
             leaves,
             value_only_leaves,
         }
@@ -266,97 +252,74 @@ impl TryFrom<proto::primitives::PartialSmt> for UniqueNodes {
     type Error = ConversionError;
 
     fn try_from(value: proto::primitives::PartialSmt) -> Result<Self, Self::Error> {
-        use proto::primitives::partial_smt_node::Value;
-
         let decoder = value.decoder();
         let proto::primitives::PartialSmt {
             root,
-            node_levels,
+            nodes,
             leaves,
             value_only_leaves,
         } = value;
 
         let root = decode!(decoder, root)?;
 
-        let mut seen_depths = BTreeSet::new();
-        let mut decoded_levels = Vec::with_capacity(node_levels.len());
-        for level in node_levels {
-            let depth = u8::try_from(level.depth).context("node_levels.depth")?;
+        let mut decoded_nodes = BTreeMap::new();
+        for node in nodes {
+            let depth = u8::try_from(node.depth).context("nodes.depth")?;
             if depth == 0 || depth >= SMT_DEPTH {
                 return Err(ConversionError::message(format!(
                     "partial SMT node depth {depth} must be in the range 1..{SMT_DEPTH}"
                 )));
             }
-            if !seen_depths.insert(depth) {
+            let index = NodeIndex::new(depth, node.position).context("nodes.position")?;
+            let decoder = node.decoder();
+            let node_value: Word = decode!(decoder, node.value)?;
+            if decoded_nodes.insert(index, node_value).is_some() {
                 return Err(ConversionError::message(format!(
-                    "partial SMT contains duplicate node depth {depth}"
+                    "partial SMT contains duplicate node index {index}"
                 )));
             }
-
-            let mut seen_indices = BTreeSet::new();
-            let mut decoded_nodes = Vec::with_capacity(level.nodes.len());
-            for node in level.nodes {
-                NodeIndex::new(depth, node.index).context("node_levels.nodes.index")?;
-                if !seen_indices.insert(node.index) {
-                    return Err(ConversionError::message(format!(
-                        "partial SMT contains duplicate node index {} at depth {depth}",
-                        node.index
-                    )));
-                }
-
-                let node_value = match node.value.ok_or_else(|| {
-                    ConversionError::missing_field::<proto::primitives::PartialSmtNode>("value")
-                })? {
-                    Value::Digest(value) => NodeValue::Present(value.try_into().context("digest")?),
-                    Value::EmptySubtreeRoot(true) => NodeValue::EmptySubtreeRoot,
-                    Value::EmptySubtreeRoot(false) => {
-                        return Err(ConversionError::message(
-                            "partial SMT empty_subtree_root marker must be true",
-                        ));
-                    },
-                };
-                decoded_nodes.push((node.index, node_value));
-            }
-            decoded_levels.push((depth, decoded_nodes));
         }
 
-        let mut seen_leaf_indices = BTreeSet::new();
-        let mut decoded_leaves = Vec::with_capacity(leaves.len());
+        let mut decoded_leaves = BTreeMap::new();
         for indexed_leaf in leaves {
-            if !seen_leaf_indices.insert(indexed_leaf.index) {
+            let decoder = indexed_leaf.decoder();
+            let leaf: SmtLeaf = decode!(decoder, indexed_leaf.leaf)?;
+            if leaf.index().position() != indexed_leaf.index {
+                return Err(ConversionError::message(format!(
+                    "partial SMT leaf index {} does not match embedded index {}",
+                    indexed_leaf.index,
+                    leaf.index().position()
+                )));
+            }
+            if decoded_leaves.insert(indexed_leaf.index, leaf).is_some() {
                 return Err(ConversionError::message(format!(
                     "partial SMT contains duplicate leaf index {}",
                     indexed_leaf.index
                 )));
             }
-            let decoder = indexed_leaf.decoder();
-            let leaf = decode!(decoder, indexed_leaf.leaf)?;
-            decoded_leaves.push((indexed_leaf.index, leaf));
         }
 
-        let mut seen_value_only_indices = BTreeSet::new();
-        let mut decoded_value_only_leaves = Vec::with_capacity(value_only_leaves.len());
+        let mut decoded_value_only_leaves = BTreeMap::new();
         for indexed_digest in value_only_leaves {
-            if !seen_value_only_indices.insert(indexed_digest.index) {
-                return Err(ConversionError::message(format!(
-                    "partial SMT contains duplicate value-only leaf index {}",
-                    indexed_digest.index
-                )));
-            }
-            if seen_leaf_indices.contains(&indexed_digest.index) {
+            if decoded_leaves.contains_key(&indexed_digest.index) {
                 return Err(ConversionError::message(format!(
                     "partial SMT leaf index {} has both a leaf and a value-only leaf",
                     indexed_digest.index
                 )));
             }
             let decoder = indexed_digest.decoder();
-            let digest = decode!(decoder, indexed_digest.value)?;
-            decoded_value_only_leaves.push((indexed_digest.index, digest));
+            let digest: Word = decode!(decoder, indexed_digest.value)?;
+            if decoded_value_only_leaves.insert(indexed_digest.index, digest).is_some() {
+                return Err(ConversionError::message(format!(
+                    "partial SMT contains duplicate value-only leaf index {}",
+                    indexed_digest.index
+                )));
+            }
         }
 
         Ok(UniqueNodes {
             root,
-            nodes: decoded_levels.into_iter().collect(),
+            nodes: decoded_nodes,
             leaves: decoded_leaves,
             value_only_leaves: decoded_value_only_leaves,
         })
@@ -397,7 +360,7 @@ mod tests {
             PartialSmt::from_proofs([smt.open(&key0), smt.open(&missing_key)]).unwrap();
 
         let encoded: proto::primitives::PartialSmt = partial_smt.clone().into();
-        assert!(encoded.node_levels.is_sorted_by_key(|level| level.depth));
+        assert!(encoded.nodes.is_sorted_by_key(|node| (node.depth, node.position)));
 
         let decoded_unique_nodes = UniqueNodes::try_from(encoded).unwrap();
         let decoded = PartialSmt::from_unique_nodes(decoded_unique_nodes).unwrap();
@@ -408,54 +371,31 @@ mod tests {
     }
 
     #[test]
-    fn partial_smt_rejects_false_empty_subtree_marker() {
-        use proto::primitives::partial_smt_node::Value;
-
+    fn partial_smt_rejects_duplicate_nodes() {
+        let node = proto::primitives::PartialSmtNode {
+            depth: 1,
+            position: 0,
+            value: Some(Word::empty().into()),
+        };
         let encoded = proto::primitives::PartialSmt {
             root: Some(PartialSmt::EMPTY_ROOT.into()),
-            node_levels: vec![proto::primitives::PartialSmtNodeLevel {
-                depth: 1,
-                nodes: vec![proto::primitives::PartialSmtNode {
-                    index: 0,
-                    value: Some(Value::EmptySubtreeRoot(false)),
-                }],
-            }],
+            nodes: vec![node.clone(), node],
             leaves: vec![],
             value_only_leaves: vec![],
         };
 
         let err = UniqueNodes::try_from(encoded).unwrap_err();
-        assert!(err.to_string().contains("must be true"));
-    }
-
-    #[test]
-    fn partial_smt_rejects_duplicate_depths() {
-        let encoded = proto::primitives::PartialSmt {
-            root: Some(PartialSmt::EMPTY_ROOT.into()),
-            node_levels: vec![
-                proto::primitives::PartialSmtNodeLevel { depth: 1, nodes: vec![] },
-                proto::primitives::PartialSmtNodeLevel { depth: 1, nodes: vec![] },
-            ],
-            leaves: vec![],
-            value_only_leaves: vec![],
-        };
-
-        let err = UniqueNodes::try_from(encoded).unwrap_err();
-        assert!(err.to_string().contains("duplicate node depth"));
+        assert!(err.to_string().contains("duplicate node index"));
     }
 
     #[test]
     fn partial_smt_rejects_invalid_node_index() {
-        use proto::primitives::partial_smt_node::Value;
-
         let encoded = proto::primitives::PartialSmt {
             root: Some(PartialSmt::EMPTY_ROOT.into()),
-            node_levels: vec![proto::primitives::PartialSmtNodeLevel {
+            nodes: vec![proto::primitives::PartialSmtNode {
                 depth: 1,
-                nodes: vec![proto::primitives::PartialSmtNode {
-                    index: 2,
-                    value: Some(Value::EmptySubtreeRoot(true)),
-                }],
+                position: 2,
+                value: Some(Word::empty().into()),
             }],
             leaves: vec![],
             value_only_leaves: vec![],
@@ -463,5 +403,41 @@ mod tests {
 
         let err = UniqueNodes::try_from(encoded).unwrap_err();
         assert!(err.to_string().contains("not valid for depth"));
+    }
+
+    #[test]
+    fn partial_smt_rejects_duplicate_leaves() {
+        let leaf = proto::primitives::IndexedSmtLeaf {
+            index: 0,
+            leaf: Some(SmtLeaf::new_empty(LeafIndex::new_max_depth(0)).into()),
+        };
+        let encoded = proto::primitives::PartialSmt {
+            root: Some(PartialSmt::EMPTY_ROOT.into()),
+            nodes: vec![],
+            leaves: vec![leaf.clone(), leaf],
+            value_only_leaves: vec![],
+        };
+
+        let err = UniqueNodes::try_from(encoded).unwrap_err();
+        assert!(err.to_string().contains("duplicate leaf index"));
+    }
+
+    #[test]
+    fn partial_smt_rejects_overlapping_leaf_representations() {
+        let encoded = proto::primitives::PartialSmt {
+            root: Some(PartialSmt::EMPTY_ROOT.into()),
+            nodes: vec![],
+            leaves: vec![proto::primitives::IndexedSmtLeaf {
+                index: 0,
+                leaf: Some(SmtLeaf::new_empty(LeafIndex::new_max_depth(0)).into()),
+            }],
+            value_only_leaves: vec![proto::primitives::IndexedDigest {
+                index: 0,
+                value: Some(Word::empty().into()),
+            }],
+        };
+
+        let err = UniqueNodes::try_from(encoded).unwrap_err();
+        assert!(err.to_string().contains("both a leaf and a value-only leaf"));
     }
 }

@@ -58,8 +58,8 @@ message PartialSmt {
     // The root expected after reconstruction.
     Digest root = 1;
 
-    // Boundary nodes needed to reconstruct intermediate nodes, grouped by depth.
-    repeated PartialSmtNodeLevel node_levels = 2;
+    // Boundary nodes needed to reconstruct intermediate nodes.
+    repeated PartialSmtNode nodes = 2;
 
     // Fully materialized, non-empty leaves.
     repeated IndexedSmtLeaf leaves = 3;
@@ -68,27 +68,16 @@ message PartialSmt {
     repeated IndexedDigest value_only_leaves = 4;
 }
 
-// Partial SMT boundary nodes at a single depth.
-message PartialSmtNodeLevel {
-    // Depth of all nodes in this group.
-    uint32 depth = 1;
-
-    // Boundary nodes at this depth.
-    repeated PartialSmtNode nodes = 2;
-}
-
 // A boundary node needed to reconstruct a partial SMT.
 message PartialSmtNode {
-    // Position of the node within its depth.
-    fixed64 index = 1;
+    // The depth of the node.
+    uint32 depth = 1;
 
-    oneof value {
-        // Hash of a non-empty boundary node.
-        Digest digest = 2;
+    // The position of the node within its depth.
+    fixed64 position = 2;
 
-        // Indicates the canonical empty subtree root for the containing depth.
-        bool empty_subtree_root = 3;
-    }
+    // The hash of the node.
+    Digest value = 3;
 }
 
 // A fully materialized SMT leaf together with its index.
