@@ -13,7 +13,6 @@ use miden_node_proto::clients::RpcClient;
 use miden_node_proto::generated::note::NoteIdList;
 use miden_node_tracing::{info, warn};
 use miden_protocol::account::AccountId;
-use miden_protocol::asset::Asset;
 use miden_protocol::note::{Note, NoteId};
 use reqwest::Client;
 use url::Url;
@@ -185,9 +184,9 @@ impl FeeFunder {
 /// Checks that the note holds a non-zero amount of the fee faucet's fungible asset.
 fn ensure_note_carries_fee_asset(note: &Note, fee_faucet_id: AccountId) -> Result<()> {
     let funded = note.assets().iter().any(|asset| {
-        asset.as_fungible().is_some_and(|asset| {
-            asset.faucet_id() == fee_faucet_id && asset.amount().as_u64() > 0
-        })
+        asset
+            .as_fungible()
+            .is_some_and(|asset| asset.faucet_id() == fee_faucet_id && asset.amount().as_u64() > 0)
     });
     anyhow::ensure!(
         funded,

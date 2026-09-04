@@ -17,9 +17,11 @@ configuration.
 configuration, it can check RPC freshness, validator health, remote prover status, faucet availability, explorer
 availability, note transport, and end-to-end network transaction flows.
 
-End-to-end transaction checks require the validator's signing public key. Set
-`MIDEN_MONITOR_VALIDATOR_SIGNING_PUBLIC_KEY` to its hex encoding. The monitor uses this key to verify the validator's
-transaction encryption key before it submits private inputs.
+End-to-end transaction checks require the native fee faucet ID and the validator's signing public key. Set
+`MIDEN_MONITOR_FEE_FAUCET_ID` to the account ID printed by `miden-validator genesis`. Set
+`MIDEN_MONITOR_VALIDATOR_SIGNING_PUBLIC_KEY` to the validator key's hex encoding. The monitor uses this key to verify
+the validator's transaction encryption key before it submits private inputs. Remote transaction-prover probes also
+require the fee faucet ID.
 
 Use the binary help output for the current configuration surface:
 

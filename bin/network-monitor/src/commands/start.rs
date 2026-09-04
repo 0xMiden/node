@@ -26,6 +26,8 @@ use crate::{COMPONENT, LOG_TARGET};
     err,
 )]
 pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
+    validate_startup_config(&config)?;
+
     info!(target: LOG_TARGET, "Loaded configuration", port = config.port);
 
     let _otel_guard =
@@ -75,4 +77,41 @@ pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
     tasks.spawn_http_server(server_state, &config);
 
     tasks.handle_failure().await
+}
+
+/// Validates configuration that is required before background monitoring tasks start.
+fn validate_startup_config(config: &MonitorConfig) -> Result<()> {
+    if !config.disable_ntx_service {
+        config.fee_faucet_id()?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    #[test]
+    fn status_only_prover_monitoring_does_not_require_a_fee_faucet_at_startup() {
+        let config = MonitorConfig::parse_from([
+            "network-monitor",
+            "--disable-ntx-service",
+            "--remote-prover-urls",
+            "http://127.0.0.1:50051",
+        ]);
+
+        validate_startup_config(&config)
+            .expect("prover status discovery must start without transaction-probe configuration");
+    }
+
+    #[test]
+    fn ntx_monitoring_requires_a_fee_faucet_at_startup() {
+        let config = MonitorConfig::parse_from(["network-monitor"]);
+
+        let error = validate_startup_config(&config)
+            .expect_err("NTX monitoring executes transactions and needs a fee faucet");
+        assert!(error.to_string().contains("--fee-faucet-id"));
+    }
 }

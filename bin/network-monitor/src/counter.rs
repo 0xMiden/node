@@ -326,6 +326,7 @@ impl IncrementService {
         let accounts = Box::pin(create_and_deploy_accounts(
             &self.submission_client,
             &self.prover,
+            self.config.fee_faucet_id()?,
             self.funding.as_ref(),
         ))
         .await
@@ -377,7 +378,7 @@ impl IncrementService {
 
         let mut tx_args = TransactionArgs::default().with_tx_script(script);
         let (auth_args, conversion_info_preimage) = fee_conversion_auth_args(
-            self.tx.counter_anchor.block_header.fee_parameters().fee_faucet_id(),
+            self.tx.counter_anchor.protocol_config.fee_asset_id().faucet_id(),
             &mut self.tx.rng,
         );
         tx_args = tx_args.with_auth_args(auth_args);
@@ -399,8 +400,11 @@ impl IncrementService {
         let (proven_tx, tx_inputs, account_patch) = spawn_blocking_in_current_span(move || {
             let account_id = wallet_account.id();
             let block_num = anchor.block_header.block_num();
-            let mut data_store =
-                MonitorDataStore::new(anchor.block_header.clone(), anchor.blockchain.clone());
+            let mut data_store = MonitorDataStore::new(
+                anchor.block_header.clone(),
+                anchor.protocol_config.clone(),
+                anchor.blockchain.clone(),
+            );
             data_store.add_account(wallet_account);
             data_store.add_foreign_account(anchor.counter_account.clone(), anchor.witness.clone());
             // Moving the callback-enabled fee asset loads the issuing faucet.
@@ -448,8 +452,8 @@ impl IncrementService {
     /// No-op on zero-fee chains. A top-up failure flips the card instead of failing the
     /// increment: the wallet keeps transacting on its remaining balance.
     async fn maybe_topup_fee_funding(&mut self) {
-        let fee_parameters = self.tx.counter_anchor.block_header.fee_parameters().clone();
-        let verification_base_fee = fee_parameters.verification_base_fee();
+        let verification_base_fee =
+            self.tx.counter_anchor.block_header.fee_parameters().verification_base_fee();
         if verification_base_fee == 0 {
             return;
         }
@@ -458,7 +462,8 @@ impl IncrementService {
             return;
         };
 
-        let fee_asset = AssetId::new_fungible(fee_parameters.fee_faucet_id());
+        let fee_faucet_id = self.tx.counter_anchor.protocol_config.fee_asset_id().faucet_id();
+        let fee_asset = AssetId::new_fungible(fee_faucet_id);
         let balance = self
             .tx
             .wallet_account
@@ -482,8 +487,7 @@ impl IncrementService {
             account.id = self.tx.wallet_account.id(),
             asset.balance = balance
         );
-        let mut funder =
-            FeeFunder::new(funding, self.rpc_client.clone(), fee_parameters.fee_faucet_id());
+        let mut funder = FeeFunder::new(funding, self.rpc_client.clone(), fee_faucet_id);
         match funder
             .fund(self.tx.wallet_account.id(), wallet_funding_amount(verification_base_fee))
             .await
@@ -1423,6 +1427,7 @@ mod tests {
         let creation_tx = execute_counter_genesis_tx(
             &counter,
             bootstrap_chain.latest_block_header(),
+            bootstrap_chain.protocol_config().clone(),
             bootstrap_chain.latest_partial_blockchain(),
             None,
             None,
@@ -1453,13 +1458,16 @@ mod tests {
 
         let mut tx_args = TransactionArgs::default().with_tx_script(script);
         let (auth_args, preimage) =
-            fee_conversion_auth_args(block_header.fee_parameters().fee_faucet_id(), &mut rng);
+            fee_conversion_auth_args(chain.protocol_config().fee_asset_id().faucet_id(), &mut rng);
         tx_args = tx_args.with_auth_args(auth_args);
         tx_args.extend_advice_map([(auth_args, preimage)]);
         tx_args.add_output_note_recipient(Box::new(note_recipient));
 
-        let mut data_store =
-            MonitorDataStore::new(block_header.clone(), chain.latest_partial_blockchain());
+        let mut data_store = MonitorDataStore::new(
+            block_header.clone(),
+            chain.protocol_config().clone(),
+            chain.latest_partial_blockchain(),
+        );
         data_store.add_account(wallet.clone());
         data_store.add_foreign_account(committed_counter, witness);
 
@@ -1554,6 +1562,7 @@ mod tests {
         let err = execute_counter_genesis_tx(
             &counter,
             chain.latest_block_header(),
+            chain.protocol_config().clone(),
             chain.latest_partial_blockchain(),
             Some(note.clone()),
             None,
@@ -1577,6 +1586,7 @@ mod tests {
         let creation_tx = execute_counter_genesis_tx(
             &counter,
             chain.latest_block_header(),
+            chain.protocol_config().clone(),
             chain.latest_partial_blockchain(),
             Some(note),
             Some((committed_faucet, witness)),
@@ -1615,6 +1625,7 @@ mod tests {
         let creation_tx = execute_counter_genesis_tx(
             &counter,
             bootstrap_chain.latest_block_header(),
+            bootstrap_chain.protocol_config().clone(),
             bootstrap_chain.latest_partial_blockchain(),
             Some(counter_funding),
             None,
@@ -1647,13 +1658,16 @@ mod tests {
 
         let mut tx_args = TransactionArgs::default().with_tx_script(script);
         let (auth_args, preimage) =
-            fee_conversion_auth_args(block_header.fee_parameters().fee_faucet_id(), &mut rng);
+            fee_conversion_auth_args(chain.protocol_config().fee_asset_id().faucet_id(), &mut rng);
         tx_args = tx_args.with_auth_args(auth_args);
         tx_args.extend_advice_map([(auth_args, preimage)]);
         tx_args.add_output_note_recipient(Box::new(note_recipient));
 
-        let mut data_store =
-            MonitorDataStore::new(block_header.clone(), chain.latest_partial_blockchain());
+        let mut data_store = MonitorDataStore::new(
+            block_header.clone(),
+            chain.protocol_config().clone(),
+            chain.latest_partial_blockchain(),
+        );
         data_store.add_account(wallet.clone());
         data_store.add_foreign_account(committed_counter, witness);
 
