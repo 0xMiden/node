@@ -240,42 +240,6 @@ async fn sponsorships_for_pending_notes_binds_by_feature_note_not_tag() {
     assert_eq!(pending[&feature.as_note().id()].len(), 1);
 }
 
-/// `apply_committed_block` reports one wakeup per sponsorship whose feature note is known and still
-/// pending; sponsorships for consumed or unknown feature notes wake nobody.
-#[tokio::test]
-async fn apply_committed_block_returns_sponsored_account_wakeups() {
-    let (db, _dir) = test_setup().await;
-    let account_id = mock_network_account_id();
-    let pending = mock_single_target_note(account_id, 1);
-    let consumed = mock_single_target_note(account_id, 2);
-    db.insert_network_notes(vec![pending.clone(), consumed.clone()]).await.unwrap();
-    db.mark_notes_consumed(vec![consumed.as_note().nullifier()], BlockNumber::from(1))
-        .await
-        .unwrap();
-
-    let effects = CommittedBlockEffects {
-        header: mock_block_header(BlockNumber::from(2)),
-        network_notes: vec![],
-        sponsorship_notes: vec![
-            sponsorship_for(account_id, pending.as_note().id(), 3),
-            sponsorship_for(account_id, pending.as_note().id(), 6),
-            sponsorship_for(account_id, consumed.as_note().id(), 4),
-            sponsorship_for(account_id, NoteId::from_raw(Word::from([9, 9, 9, 9u32])), 5),
-        ],
-        nullifiers: vec![],
-        network_account_updates: vec![],
-        account_transactions: vec![],
-    };
-
-    let wakeups = db.apply_committed_block(effects, PartialMmr::default()).await.unwrap();
-
-    assert_eq!(
-        wakeups,
-        vec![account_id, account_id],
-        "each sponsorship bound to the pending feature note wakes its account once",
-    );
-}
-
 // NOTE ELIGIBILITY
 // ================================================================================================
 //
@@ -439,6 +403,74 @@ async fn reset_sponsored_notes_skips_consumed_feature_notes() {
     );
 }
 
+/// The stored block can be too permissive: a periodic window that was open when the value was
+/// written closes again later. Selection detects that and reports the correction, which
+/// `update_note_eligibility` persists so the account stops being selected for the note.
+#[tokio::test]
+async fn stale_eligibility_is_reported_and_corrected() {
+    let (db, _dir) = test_setup().await;
+    let account_id = mock_network_account_id();
+    let hint = NoteExecutionHint::on_block_slot(8, 4, 0);
+    let note = mock_single_target_note_with_hint(account_id, 1, hint);
+    db.insert_network_notes(vec![note.clone()]).await.unwrap();
+
+    assert_eq!(
+        db.note_eligibility(note.as_note().id()).await,
+        Some(BlockNumber::GENESIS),
+        "the window is open at the block that created the note",
+    );
+
+    // The window has closed again by block 100, so the stored value is now too permissive.
+    let available = db.available_notes(account_id, BlockNumber::from(100), 30).await.unwrap();
+    assert!(available.eligible.is_empty(), "the exact check rejects the closed window");
+    assert_eq!(
+        available.stale_eligibility,
+        vec![(note.as_note().nullifier(), BlockNumber::from(256))],
+        "selection reports the block at which the window opens again",
+    );
+
+    db.update_note_eligibility(available.stale_eligibility).await.unwrap();
+
+    assert!(
+        db.ready_accounts(30, BlockNumber::from(100), vec![], 10)
+            .await
+            .unwrap()
+            .is_empty(),
+        "once corrected, the account is no longer selected for this note",
+    );
+}
+
+/// The eligibility column, not just the attempt cap, keeps a backed-off account out of selection.
+#[tokio::test]
+async fn ready_accounts_respect_the_eligibility_column() {
+    let (db, _dir) = test_setup().await;
+    let account_id = mock_network_account_id();
+    db.upsert_account_for_test(account_id, mock_account(account_id), mock_transaction_id(1))
+        .await
+        .unwrap();
+    let note = mock_single_target_note(account_id, 1);
+    db.insert_network_notes(vec![note.clone()]).await.unwrap();
+
+    let failed_at = BlockNumber::from(50);
+    db.notes_failed(vec![(note.as_note().nullifier(), test_note_error("boom"))], failed_at)
+        .await
+        .unwrap();
+    let eligible_from = db.note_eligibility(note.as_note().id()).await.unwrap();
+
+    assert!(
+        db.ready_accounts(30, eligible_from.parent().unwrap(), vec![], 10)
+            .await
+            .unwrap()
+            .is_empty(),
+        "the account is not selected before its note becomes eligible",
+    );
+    assert_eq!(
+        db.ready_accounts(30, eligible_from, vec![], 10).await.unwrap(),
+        vec![account_id],
+        "the account is selected again exactly at the stored block",
+    );
+}
+
 // AVAILABLE NOTES + BACKOFF
 // ================================================================================================
 
@@ -540,15 +572,21 @@ async fn note_script_cache_roundtrip() {
     db.insert_note_scripts(root, script).await.unwrap();
 }
 
-// ACCOUNTS WITH PENDING NOTES
+// READY ACCOUNTS
 // ================================================================================================
 
 #[tokio::test]
-async fn accounts_with_pending_notes_distinct_and_filters_consumed_and_capped() {
+async fn ready_accounts_are_distinct_and_exclude_consumed_and_capped_notes() {
     let (db, _dir) = test_setup().await;
     let alice = mock_network_account_id();
     let bob = mock_network_account_id_seeded(42);
     let carol = mock_network_account_id_seeded(99);
+
+    for account_id in [alice, bob, carol] {
+        db.upsert_account_for_test(account_id, mock_account(account_id), mock_transaction_id(1))
+            .await
+            .unwrap();
+    }
 
     let alice_note_1 = mock_single_target_note(alice, 1);
     let alice_note_2 = mock_single_target_note(alice, 2);
@@ -559,12 +597,12 @@ async fn accounts_with_pending_notes_distinct_and_filters_consumed_and_capped() 
         .await
         .unwrap();
 
-    // Alice has two notes — must still appear exactly once (DISTINCT). Bob's only note is already
-    // consumed — exclude.
+    // Alice has two notes and must still appear exactly once. Bob's only note is already consumed,
+    // so he is excluded.
     db.mark_notes_consumed(vec![bob_note.as_note().nullifier()], BlockNumber::from(7))
         .await
         .unwrap();
-    // Carol's note has hit the attempt cap — exclude.
+    // Carol's note has hit the attempt cap, so she is excluded.
     for _ in 0..30 {
         db.notes_failed(
             vec![(carol_note.as_note().nullifier(), test_note_error("boom"))],
@@ -574,9 +612,53 @@ async fn accounts_with_pending_notes_distinct_and_filters_consumed_and_capped() 
         .unwrap();
     }
 
-    let pending = db.accounts_with_pending_notes(30).await.unwrap();
-    assert_eq!(pending.len(), 1, "only alice should remain pending");
-    assert_eq!(pending[0], alice);
+    let ready = db.ready_accounts(30, BlockNumber::from(1000), vec![], 10).await.unwrap();
+    assert_eq!(ready, vec![alice], "only alice has a pending note within its attempt budget");
+}
+
+/// The limit caps the returned accounts, and the account whose note has waited longest comes first,
+/// so attempt slots rotate over the accounts that have work.
+#[tokio::test]
+async fn ready_accounts_are_limited_and_least_recently_attempted_first() {
+    let (db, _dir) = test_setup().await;
+    let recent = mock_network_account_id();
+    let stale = mock_network_account_id_seeded(42);
+
+    for account_id in [recent, stale] {
+        db.upsert_account_for_test(account_id, mock_account(account_id), mock_transaction_id(1))
+            .await
+            .unwrap();
+    }
+
+    let recent_note = mock_single_target_note(recent, 1);
+    let stale_note = mock_single_target_note(stale, 2);
+    db.insert_network_notes(vec![recent_note.clone(), stale_note.clone()])
+        .await
+        .unwrap();
+
+    db.notes_failed(
+        vec![(stale_note.as_note().nullifier(), test_note_error("older"))],
+        BlockNumber::from(1),
+    )
+    .await
+    .unwrap();
+    db.notes_failed(
+        vec![(recent_note.as_note().nullifier(), test_note_error("newer"))],
+        BlockNumber::from(9),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        db.ready_accounts(30, BlockNumber::from(1000), vec![], 1).await.unwrap(),
+        vec![stale],
+        "the least recently attempted account is served first",
+    );
+    assert_eq!(
+        db.ready_accounts(30, BlockNumber::from(1000), vec![stale], 1).await.unwrap(),
+        vec![recent],
+        "an excluded account is skipped in favour of the next one",
+    );
 }
 
 // SUBMITTED-TX LANDING
@@ -636,8 +718,8 @@ async fn apply_committed_block_seeds_genesis_network_account() {
         db.get_account(account_id).await.unwrap().is_some(),
         "genesis account should be seeded"
     );
-    // The seeded account carries the zero sentinel: no transaction produced it. An actor never
-    // submits the zero id, so this can never be mistaken for a landed transaction.
+    // The seeded account carries the zero sentinel: no transaction produced it. No submitted
+    // transaction has the zero id, so this can never be mistaken for a landed transaction.
     assert_eq!(
         db.account_last_tx(account_id).await.unwrap(),
         Some(TransactionId::from_raw(Word::empty())),
@@ -705,7 +787,10 @@ async fn discard_notes_pins_attempts_to_cap_and_drops_from_pending() {
         "a discarded note must not be selectable",
     );
     assert!(
-        !db.accounts_with_pending_notes(30).await.unwrap().contains(&account_id),
-        "an account whose only note was discarded must not count as pending",
+        !db.ready_accounts(30, BlockNumber::from(1000), vec![], 10)
+            .await
+            .unwrap()
+            .contains(&account_id),
+        "an account whose only note was discarded must not be ready for an attempt",
     );
 }

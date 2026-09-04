@@ -8,32 +8,31 @@ use std::time::Duration;
 
 use anyhow::Context;
 use builder::BlockStream;
-use chain_state::SharedChainState;
+use chain_state::ChainState;
 use clients::{RemoteTransactionProver, RpcClient};
 use miden_node_store::genesis::GenesisBlock;
 use miden_node_tracing::{ErrorReport, debug};
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::shutdown::CancellationToken;
-use tokio::sync::mpsc;
 use tonic::metadata::AsciiMetadataValue;
 use url::Url;
 
-use crate::actor::{AccountActorContext, ActorConfig, GrpcClients, State};
-use crate::coordinator::Coordinator;
+use crate::attempt::{AttemptConfig, AttemptContext, GrpcClients};
 use crate::db::NtxDbReader;
+use crate::scheduler::Scheduler;
 
 pub(crate) type NoteError = Arc<dyn ErrorReport + Send + Sync>;
 
-mod actor;
 mod allowlist;
+mod attempt;
 mod builder;
 mod candidate;
 mod chain_state;
 mod clients;
 mod committed_block;
-mod coordinator;
 pub(crate) mod db;
 mod execute;
+mod scheduler;
 mod selection;
 pub mod server;
 mod sponsorship;
@@ -119,17 +118,14 @@ pub const LOG_TARGET: &str = "user::miden-ntx-builder";
 const DEFAULT_MAX_NOTES_PER_TX: NonZeroUsize = NonZeroUsize::new(20).expect("literal is non-zero");
 const _: () = assert!(DEFAULT_MAX_NOTES_PER_TX.get() <= miden_tx::MAX_NUM_CHECKER_NOTES);
 
-/// Default maximum number of network transactions which should be in progress concurrently.
+/// Default maximum number of network transactions which are computed concurrently.
 ///
-/// This only counts transactions which are being computed locally and does not include
-/// uncommitted transactions in the mempool.
+/// This bounds the transaction attempts running locally. It does not include submitted
+/// transactions which are waiting to be committed: those hold no local compute.
 const DEFAULT_MAX_CONCURRENT_TXS: usize = 4;
 
 /// Default maximum number of blocks to keep in the chain MMR.
 const DEFAULT_MAX_BLOCK_COUNT: usize = 4;
-
-/// Default channel capacity for account loading through RPC.
-const DEFAULT_ACCOUNT_CHANNEL_CAPACITY: usize = 1_000;
 
 /// Default maximum number of attempts to execute a failing note before dropping it.
 const DEFAULT_MAX_NOTE_ATTEMPTS: usize = 30;
@@ -137,9 +133,6 @@ const DEFAULT_MAX_NOTE_ATTEMPTS: usize = 30;
 /// Default script cache size.
 const DEFAULT_SCRIPT_CACHE_SIZE: NonZeroUsize =
     NonZeroUsize::new(1_000).expect("literal is non-zero");
-
-/// Default duration after which an idle network account actor will deactivate.
-const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_mins(5);
 
 /// Default per-request timeout for node RPC requests.
 const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
@@ -149,9 +142,6 @@ const DEFAULT_TX_PROVER_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Default timeout for gRPC requests served by the network transaction builder.
 const DEFAULT_GRPC_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Default maximum number of crashes an account actor is allowed before being deactivated.
-const DEFAULT_MAX_ACCOUNT_CRASHES: usize = 10;
 
 /// Default initial sleep applied between per-request retries on transient infrastructure failures
 /// (downed prover, transport error, RPC crash, RPC gRPC hiccup). Doubles on each retry up to
@@ -169,8 +159,9 @@ const DEFAULT_MAX_TX_CYCLES: u32 = 1 << 19;
 
 /// Default number of blocks after which a submitted network transaction expires.
 ///
-/// Used both as the on-chain transaction expiration delta and as the local retry timeout an actor
-/// waits in `WaitForBlock` before resubmitting. Must be within the kernel's `1..=u16::MAX` range.
+/// Used both as the on-chain transaction expiration delta and as the local timeout after which the
+/// scheduler releases the account for a new attempt. Must be within the kernel's `1..=u16::MAX`
+/// range.
 const DEFAULT_TX_EXPIRATION_DELTA: NonZeroU16 = NonZeroU16::new(30).unwrap();
 
 // CONFIGURATION
@@ -203,8 +194,8 @@ pub struct NtxBuilderConfig {
     /// repeated gRPC calls.
     pub script_cache_size: NonZeroUsize,
 
-    /// Maximum number of network transactions which should be in progress concurrently across all
-    /// account actors.
+    /// Maximum number of network transactions computed concurrently. Submitted transactions waiting
+    /// to be committed do not count against this limit.
     pub max_concurrent_txs: usize,
 
     /// Maximum number of network notes a single transaction is allowed to consume. Sponsorship
@@ -218,20 +209,6 @@ pub struct NtxBuilderConfig {
     /// Maximum number of blocks to keep in the chain MMR. Older blocks are pruned.
     pub max_block_count: usize,
 
-    /// Channel capacity for loading accounts through RPC during startup.
-    pub account_channel_capacity: usize,
-
-    /// Duration after which an idle network account will deactivate.
-    ///
-    /// An account is considered idle once it has no viable notes to consume.
-    /// A deactivated account will reactivate if targeted with new notes.
-    pub idle_timeout: Duration,
-
-    /// Maximum number of crashes before an account deactivated.
-    ///
-    /// Once this limit is reached, no new transactions will be created for this account.
-    pub max_account_crashes: usize,
-
     /// Maximum number of VM execution cycles allowed for a single network transaction.
     ///
     /// Network transactions that exceed this limit will fail with an execution error.
@@ -239,8 +216,9 @@ pub struct NtxBuilderConfig {
     pub max_cycles: u32,
 
     /// Number of blocks after which a submitted network transaction expires. Set as the on-chain
-    /// transaction expiration delta and reused as the local `WaitForBlock` retry timeout. Must be
-    /// within `1..=u16::MAX` (enforced by the transaction kernel).
+    /// transaction expiration delta and reused as the local timeout after which the scheduler
+    /// releases the account for a new attempt. Must be within `1..=u16::MAX` (enforced by the
+    /// transaction kernel).
     pub tx_expiration_delta: NonZeroU16,
 
     /// Initial sleep applied between per-request retries on transient infrastructure failures (e.g.
@@ -273,9 +251,6 @@ impl NtxBuilderConfig {
             max_notes_per_tx: DEFAULT_MAX_NOTES_PER_TX,
             max_note_attempts: DEFAULT_MAX_NOTE_ATTEMPTS,
             max_block_count: DEFAULT_MAX_BLOCK_COUNT,
-            account_channel_capacity: DEFAULT_ACCOUNT_CHANNEL_CAPACITY,
-            idle_timeout: DEFAULT_IDLE_TIMEOUT,
-            max_account_crashes: DEFAULT_MAX_ACCOUNT_CRASHES,
             max_cycles: DEFAULT_MAX_TX_CYCLES,
             tx_expiration_delta: DEFAULT_TX_EXPIRATION_DELTA,
             request_backoff_initial: DEFAULT_REQUEST_BACKOFF_INITIAL,
@@ -358,29 +333,6 @@ impl NtxBuilderConfig {
         self
     }
 
-    /// Sets the account channel capacity for startup loading.
-    #[must_use]
-    pub fn with_account_channel_capacity(mut self, capacity: usize) -> Self {
-        self.account_channel_capacity = capacity;
-        self
-    }
-
-    /// Sets the idle timeout for actors.
-    ///
-    /// Actors that remain idle (no viable notes) for this duration will be deactivated.
-    #[must_use]
-    pub fn with_idle_timeout(mut self, timeout: Duration) -> Self {
-        self.idle_timeout = timeout;
-        self
-    }
-
-    /// Sets the maximum number of crashes before an account actor is deactivated.
-    #[must_use]
-    pub fn with_max_account_crashes(mut self, max: usize) -> Self {
-        self.max_account_crashes = max;
-        self
-    }
-
     /// Sets the maximum number of VM execution cycles for network transactions.
     #[must_use]
     pub fn with_max_cycles(mut self, max: u32) -> Self {
@@ -388,8 +340,8 @@ impl NtxBuilderConfig {
         self
     }
 
-    /// Sets the transaction expiration delta (in blocks). Also bounds the actor's `WaitForBlock`
-    /// retry timeout.
+    /// Sets the transaction expiration delta (in blocks). Also bounds how long the scheduler keeps
+    /// an account blocked on a submission that never lands.
     #[must_use]
     pub fn with_tx_expiration_delta(mut self, delta: NonZeroU16) -> Self {
         self.tx_expiration_delta = delta;
@@ -431,8 +383,8 @@ impl NtxBuilderConfig {
         shutdown: CancellationToken,
     ) -> anyhow::Result<NetworkTransactionBuilder> {
         // Set up the database connection pool. Writes are serialized by the framework's single
-        // dedicated writer connection, so block application never contends with the account actors
-        // (which only read) for the shared reader pool.
+        // dedicated writer connection, so block application never contends with the transaction
+        // attempts (which only read) for the shared reader pool.
         let db = db::load_with_pool_size(
             self.database_filepath.clone(),
             self.sqlite_connection_pool_size,
@@ -522,10 +474,9 @@ impl NtxBuilderConfig {
         // block that the builder has not applied.
         let block_stream: BlockStream = Box::pin(rpc.block_subscription_reconnecting(block_from));
 
-        let chain = Arc::new(SharedChainState::new(header, mmr, protocol_config));
+        let chain = ChainState::new(header, mmr, protocol_config);
 
-        let (coordinator, actor_request_rx) =
-            self.build_coordinator(rpc, db.reader(), chain.clone(), shutdown)?;
+        let scheduler = self.build_scheduler(rpc, db.reader())?;
 
         Ok(NetworkTransactionBuilder::new(
             self,
@@ -533,26 +484,16 @@ impl NtxBuilderConfig {
             block_stream,
             last_applied_block,
             chain,
-            coordinator,
-            actor_request_rx,
+            scheduler,
         ))
     }
 
-    /// Builds the actor [`Coordinator`] and the channel over which spawned actors send their DB
-    /// writes back to the builder's event loop.
+    /// Builds the [`Scheduler`] that owns the transaction attempts.
     ///
-    /// The receiver is owned by the builder loop; the sender is cloned into every spawned actor so
-    /// all actor-side DB writes serialize through the loop.
-    fn build_coordinator(
-        &self,
-        rpc: RpcClient,
-        db: NtxDbReader,
-        chain: Arc<SharedChainState>,
-        shutdown: CancellationToken,
-    ) -> anyhow::Result<(Coordinator, mpsc::Receiver<actor::ActorRequest>)> {
-        let (request_tx, actor_request_rx) = mpsc::channel(self.account_channel_capacity);
-        let tx_args = selection::build_tx_args(self.tx_expiration_delta);
-        let actor_context = AccountActorContext {
+    /// The attempt context it carries is cloned into every spawned attempt, so the gRPC clients and
+    /// the note script cache are shared rather than rebuilt per transaction.
+    fn build_scheduler(&self, rpc: RpcClient, db: NtxDbReader) -> anyhow::Result<Scheduler> {
+        let ctx = AttemptContext {
             clients: GrpcClients {
                 rpc,
                 prover: RemoteTransactionProver::new(
@@ -560,30 +501,18 @@ impl NtxBuilderConfig {
                     self.tx_prover_timeout,
                 )?,
             },
-            state: State {
-                db,
-                chain,
-                script_cache: LruCache::new(self.script_cache_size),
-                tx_args,
-            },
-            config: ActorConfig {
+            db,
+            script_cache: LruCache::new(self.script_cache_size),
+            tx_args: selection::build_tx_args(self.tx_expiration_delta),
+            config: AttemptConfig {
                 max_notes_per_tx: self.max_notes_per_tx,
                 max_note_attempts: self.max_note_attempts,
-                idle_timeout: self.idle_timeout,
                 max_cycles: self.max_cycles,
-                tx_expiration_delta: self.tx_expiration_delta,
                 request_backoff_initial: self.request_backoff_initial,
                 request_backoff_max: self.request_backoff_max,
             },
-            request_tx,
         };
-        let coordinator = Coordinator::new(
-            self.max_concurrent_txs,
-            self.max_account_crashes,
-            actor_context,
-            shutdown,
-        );
 
-        Ok((coordinator, actor_request_rx))
+        Ok(Scheduler::new(ctx, self.max_concurrent_txs, self.tx_expiration_delta))
     }
 }

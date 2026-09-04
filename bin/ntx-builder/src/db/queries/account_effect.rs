@@ -25,8 +25,8 @@ impl NetworkAccountEffect {
                     .map(|na| NetworkAccountEffect::Created(na.into_account()))
             },
             AccountUpdateDetails::Public(update) => {
-                // Partial updates carry no storage we can inspect here. Forward them as updates and
-                // let the coordinator's actor registry filter to known network accounts.
+                // Partial updates carry no storage we can inspect here. Forward them as updates;
+                // `apply_committed_block` drops the ones whose account is not tracked locally.
                 Some(NetworkAccountEffect::Updated(update.clone()))
             },
         }

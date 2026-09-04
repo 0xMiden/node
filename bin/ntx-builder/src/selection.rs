@@ -56,9 +56,10 @@ pub(crate) struct Selection {
     /// Notes dropped because the account does not allowlist their script root. They can never be
     /// consumed by this account, so the caller must penalize them.
     pub rejected: Vec<(Nullifier, NoteError)>,
-    /// Earliest block at which a currently-ineligible note becomes eligible, or `None` when the
-    /// account has no pending note awaiting a backoff or execution-hint window.
-    pub next_retry_block: Option<BlockNumber>,
+    /// Notes whose stored eligibility block has passed while the exact hint and backoff check still
+    /// rejects them, paired with the block they really become eligible at. The caller persists
+    /// these; see [`crate::db::eligibility`].
+    pub stale_eligibility: Vec<(Nullifier, BlockNumber)>,
 }
 
 /// Selects a transaction candidate for `account` by querying its available notes.
@@ -80,7 +81,7 @@ pub(crate) async fn select_candidate(
         .available_notes(account_id, block_num, max_note_attempts)
         .await
         .context("failed to query DB for available notes")?;
-    let next_retry_block = availability.next_retry_block;
+    let stale_eligibility = availability.stale_eligibility;
 
     let partitioned_notes = partition_by_allowlist(account.as_ref(), availability.eligible)
         .context("failed to read network account note allowlist")?;
@@ -142,17 +143,10 @@ pub(crate) async fn select_candidate(
     }
 
     if selected.is_empty() {
-        // Notes just dropped by the allowlist re-enter eligibility through backoff, so ask for a
-        // re-check on the next block rather than reporting the account as having no pending work.
-        let next_retry_block = if rejected.is_empty() {
-            next_retry_block
-        } else {
-            Some(next_retry_block.map_or(block_num.child(), |block| block.min(block_num.child())))
-        };
         return Ok(Selection {
             candidate: None,
             rejected,
-            next_retry_block,
+            stale_eligibility,
         });
     }
 
@@ -164,7 +158,7 @@ pub(crate) async fn select_candidate(
             chain_state,
         }),
         rejected,
-        next_retry_block,
+        stale_eligibility,
     })
 }
 
@@ -479,10 +473,9 @@ end";
         assert!(selection.candidate.is_none(), "a non-allowlisted note is never selected");
         assert_eq!(selection.rejected.len(), 1, "the note is reported for the caller to penalize");
         assert_eq!(selection.rejected[0].0, note.as_note().nullifier());
-        assert_eq!(
-            selection.next_retry_block,
-            Some(BlockNumber::from(1)),
-            "a rejected note schedules a re-check on the next block",
+        assert!(
+            selection.stale_eligibility.is_empty(),
+            "the note was eligible; penalizing it is what moves its eligibility",
         );
     }
 
