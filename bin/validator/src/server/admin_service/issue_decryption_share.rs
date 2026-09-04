@@ -38,7 +38,7 @@ pub(super) async fn issue_decryption_share(
         .reader
         .transaction_exists(context.transaction_id())
         .await
-        .map_err(|_error| ApiError::internal("failed to look up the transaction"))?;
+        .map_err(|error| ApiError::internal("failed to look up the transaction", &error))?;
     if !validated {
         return Err(ApiError::not_found(
             "decryption context references a transaction this validator has not validated",
@@ -59,8 +59,8 @@ pub(super) async fn issue_decryption_share(
 ///
 /// Matched exhaustively rather than through a wildcard, so that a new [`PrivateRecordError`]
 /// variant — or a `golden-ehtdh1` upgrade that introduces a new failure — has to be classified
-/// here, instead of silently defaulting to an internal error over what may be a malformed
-/// request.
+/// here, instead of silently defaulting to an internal error that logs at ERROR and pages an
+/// operator over what may be a malformed request.
 ///
 /// Only the bad-request arm is reachable today. `issue_decryption_share` rejects, in order, a
 /// ciphertext that does not decode, a wrong-sized wrapped content key, and a ciphertext not bound
@@ -88,7 +88,7 @@ fn map_share_error(error: &PrivateRecordError) -> ApiError {
         | PrivateRecordError::InvalidNonceLength { .. }
         | PrivateRecordError::InvalidRecordCiphertext
         | PrivateRecordError::RecordDecryption => {
-            ApiError::internal("failed to issue Golden decryption share")
+            ApiError::internal("failed to issue Golden decryption share", error)
         },
     }
 }
