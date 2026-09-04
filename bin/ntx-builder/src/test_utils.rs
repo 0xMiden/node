@@ -39,18 +39,36 @@ pub fn mock_single_target_note(
     mock_single_target_note_with_code(network_account_id, seed, None)
 }
 
+/// Creates a `AccountTargetNetworkNote` carrying the given execution hint.
+pub fn mock_single_target_note_with_hint(
+    network_account_id: AccountId,
+    seed: u8,
+    hint: NoteExecutionHint,
+) -> AccountTargetNetworkNote {
+    mock_single_target_note_inner(network_account_id, seed, None, hint)
+}
+
 /// Creates a `AccountTargetNetworkNote` with optional custom note script code.
 pub fn mock_single_target_note_with_code(
     network_account_id: AccountId,
     seed: u8,
     code: Option<&str>,
 ) -> AccountTargetNetworkNote {
+    mock_single_target_note_inner(network_account_id, seed, code, NoteExecutionHint::Always)
+}
+
+fn mock_single_target_note_inner(
+    network_account_id: AccountId,
+    seed: u8,
+    code: Option<&str>,
+    hint: NoteExecutionHint,
+) -> AccountTargetNetworkNote {
     let mut rng = ChaCha20Rng::from_seed([seed; 32]);
     let sender = AccountIdBuilder::new()
         .account_type(AccountType::Private)
         .build_with_rng(&mut rng);
 
-    let target = NetworkAccountTarget::new(network_account_id, NoteExecutionHint::Always)
+    let target = NetworkAccountTarget::new(network_account_id, hint)
         .expect("network account should be valid target");
 
     let mut builder = NoteBuilder::new(sender, rng).attachment(target);
