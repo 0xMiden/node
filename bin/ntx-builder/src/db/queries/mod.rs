@@ -71,6 +71,9 @@ pub use mark_sponsorships_consumed::mark_sponsorships_consumed;
 mod notes_failed;
 pub use notes_failed::notes_failed;
 
+mod reset_sponsored_notes;
+pub use reset_sponsored_notes::reset_sponsored_notes;
+
 mod select_chain_state;
 pub use select_chain_state::select_chain_state;
 
@@ -163,15 +166,18 @@ pub fn apply_committed_block(
         }
     }
 
-    insert_network_notes(tx, &effects.network_notes)?;
+    let block_num = effects.header.block_num();
+
+    insert_network_notes(tx, &effects.network_notes, block_num)?;
     insert_sponsorship_notes(tx, &effects.sponsorship_notes)?;
 
-    mark_notes_consumed(tx, &effects.nullifiers, effects.header.block_num())?;
-    mark_sponsorships_consumed(tx, &effects.nullifiers, effects.header.block_num())?;
+    mark_notes_consumed(tx, &effects.nullifiers, block_num)?;
+    mark_sponsorships_consumed(tx, &effects.nullifiers, block_num)?;
 
-    // Resolved after the consumption marks so a feature note consumed in this same block does not
-    // produce a wakeup.
+    // Both of these run after the consumption marks so a feature note consumed in this same block
+    // is neither woken nor made eligible again.
     let sponsored = get_target_account_ids_for_sponsor_notes(tx, &effects.sponsorship_notes)?;
+    reset_sponsored_notes(tx, &effects.sponsorship_notes, block_num)?;
 
     update_chain_state_tip(tx, effects.header.block_num(), &effects.header, chain_mmr)?;
 

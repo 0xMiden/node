@@ -12,9 +12,11 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::merkle::mmr::PartialMmr;
 use miden_protocol::note::NoteId;
 use miden_protocol::transaction::TransactionId;
+use miden_standards::note::NoteExecutionHint;
 
 use crate::NoteError;
 use crate::committed_block::CommittedBlockEffects;
+use crate::db::eligibility::{NEVER_ELIGIBLE, eligible_block_after_failure};
 use crate::db::test_setup;
 use crate::sponsorship::SponsorshipNote;
 use crate::test_utils::*;
@@ -284,6 +286,154 @@ async fn apply_committed_block_returns_sponsored_account_wakeups() {
         wakeups,
         vec![account_id, account_id],
         "each sponsorship bound to the pending feature note wakes its account once",
+    );
+}
+
+// NOTE ELIGIBILITY
+// ================================================================================================
+//
+// Every write path that touches a note must store exactly what `db::eligibility` computes. These
+// tests compare the stored column against the helpers, which is what lets the column stand in for
+// the read-time check.
+
+#[tokio::test]
+async fn ingestion_stores_the_hint_derived_eligibility() {
+    let (db, _dir) = test_setup().await;
+    let account_id = mock_network_account_id();
+    let created_at = BlockNumber::from(40);
+
+    let unconstrained = mock_single_target_note(account_id, 1);
+    let windowed = mock_single_target_note_with_hint(
+        account_id,
+        2,
+        NoteExecutionHint::after_block(BlockNumber::from(100)),
+    );
+    let past_window = mock_single_target_note_with_hint(
+        account_id,
+        3,
+        NoteExecutionHint::after_block(BlockNumber::from(7)),
+    );
+
+    db.insert_network_notes_at(
+        vec![unconstrained.clone(), windowed.clone(), past_window.clone()],
+        created_at,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        db.note_eligibility(unconstrained.as_note().id()).await,
+        Some(created_at),
+        "a note with no window is eligible in the block that created it",
+    );
+    assert_eq!(
+        db.note_eligibility(windowed.as_note().id()).await,
+        Some(BlockNumber::from(100)),
+        "a note inside a future window waits for the window to open",
+    );
+    assert_eq!(
+        db.note_eligibility(past_window.as_note().id()).await,
+        Some(created_at),
+        "a window that already opened does not move the note into the past",
+    );
+}
+
+#[tokio::test]
+async fn failure_stores_the_backoff_derived_eligibility() {
+    let (db, _dir) = test_setup().await;
+    let account_id = mock_network_account_id();
+    let note = mock_single_target_note(account_id, 1);
+    db.insert_network_notes(vec![note.clone()]).await.unwrap();
+
+    let failed_at = BlockNumber::from(50);
+    for attempt in 1..=3_usize {
+        db.notes_failed(vec![(note.as_note().nullifier(), test_note_error("boom"))], failed_at)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            db.note_eligibility(note.as_note().id()).await,
+            Some(eligible_block_after_failure(note.execution_hint(), attempt, failed_at)),
+            "the stored block must match the backoff for the attempt count after the increment",
+        );
+    }
+}
+
+#[tokio::test]
+async fn discard_pins_eligibility_beyond_every_block() {
+    let (db, _dir) = test_setup().await;
+    let account_id = mock_network_account_id();
+    let note = mock_single_target_note(account_id, 1);
+    db.insert_network_notes(vec![note.clone()]).await.unwrap();
+
+    db.discard_notes(vec![note.as_note().nullifier()], BlockNumber::from(9), 30)
+        .await
+        .unwrap();
+
+    assert_eq!(db.note_eligibility(note.as_note().id()).await, Some(NEVER_ELIGIBLE));
+}
+
+/// A sponsorship arriving for a backed-off feature note makes the note eligible again.
+#[tokio::test]
+async fn arriving_sponsorship_clears_the_feature_note_backoff() {
+    let (db, _dir) = test_setup().await;
+    let account_id = mock_network_account_id();
+    let feature = mock_single_target_note(account_id, 1);
+    db.insert_network_notes(vec![feature.clone()]).await.unwrap();
+
+    // The feature note failed, so it is waiting out a backoff.
+    db.notes_failed(
+        vec![(feature.as_note().nullifier(), test_note_error("fee not covered"))],
+        BlockNumber::from(10),
+    )
+    .await
+    .unwrap();
+    let backed_off = db.note_eligibility(feature.as_note().id()).await.unwrap();
+    assert!(backed_off > BlockNumber::from(10));
+
+    let sponsorship_block = BlockNumber::from(11);
+    let effects = CommittedBlockEffects {
+        header: mock_block_header(sponsorship_block),
+        network_notes: vec![],
+        sponsorship_notes: vec![mock_sponsorship(account_id, feature.as_note().id(), 2)],
+        nullifiers: vec![],
+        network_account_updates: vec![],
+        account_transactions: vec![],
+    };
+    db.apply_committed_block(effects, PartialMmr::default()).await.unwrap();
+
+    assert_eq!(
+        db.note_eligibility(feature.as_note().id()).await,
+        Some(sponsorship_block),
+        "the sponsorship is new information, so the note deserves an attempt now",
+    );
+}
+
+/// A sponsorship for a note that is already consumed changes nothing.
+#[tokio::test]
+async fn arriving_sponsorship_ignores_consumed_feature_notes() {
+    let (db, _dir) = test_setup().await;
+    let account_id = mock_network_account_id();
+    let feature = mock_single_target_note(account_id, 1);
+    db.insert_network_notes(vec![feature.clone()]).await.unwrap();
+    db.mark_notes_consumed(vec![feature.as_note().nullifier()], BlockNumber::from(5))
+        .await
+        .unwrap();
+
+    let effects = CommittedBlockEffects {
+        header: mock_block_header(BlockNumber::from(6)),
+        network_notes: vec![],
+        sponsorship_notes: vec![mock_sponsorship(account_id, feature.as_note().id(), 2)],
+        nullifiers: vec![],
+        network_account_updates: vec![],
+        account_transactions: vec![],
+    };
+    db.apply_committed_block(effects, PartialMmr::default()).await.unwrap();
+
+    assert_eq!(
+        db.note_eligibility(feature.as_note().id()).await,
+        Some(BlockNumber::GENESIS),
+        "a consumed note keeps the eligibility it was ingested with",
     );
 }
 
