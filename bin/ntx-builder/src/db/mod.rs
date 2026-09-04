@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use miden_node_db::DatabaseError;
+#[cfg(test)]
+use miden_node_db::SqlTypeConvert;
 use miden_node_db::sqlite::{DbReader, DbWriter};
 use miden_node_tracing::{info, miden_instrument};
 use miden_protocol::Word;
@@ -25,6 +27,7 @@ use crate::db::queries::NoteStatusRow;
 use crate::sponsorship::SponsorshipNote;
 use crate::{COMPONENT, NoteError, db};
 
+pub(crate) mod eligibility;
 pub(crate) mod queries;
 
 mod migrations;
@@ -434,6 +437,21 @@ impl NtxDbReader {
             .unwrap()
     }
 
+    /// Reads the stored eligibility block of a note, so tests can assert that the write paths
+    /// materialize exactly what [`eligibility`] computes.
+    pub(crate) async fn note_eligibility(&self, note_id: NoteId) -> Option<BlockNumber> {
+        self.reader
+            .read("note_eligibility", move |tx| {
+                let sql = "SELECT next_eligible_block FROM notes WHERE note_id = ?1";
+                Ok::<Option<i64>, DatabaseError>(
+                    tx.query(sql, &[&note_id], |row| row.get::<i64>(0))?.into_iter().next(),
+                )
+            })
+            .await
+            .unwrap()
+            .map(|block| BlockNumber::from_raw_sql(block).unwrap())
+    }
+
     pub(crate) async fn count_notes(&self) -> i64 {
         self.count("SELECT COUNT(*) FROM notes").await
     }
@@ -473,12 +491,24 @@ impl NtxDbWriter {
             .await
     }
 
+    /// Inserts notes as if they were created in the genesis block, so their stored eligibility is
+    /// driven by their execution hint alone.
     pub(crate) async fn insert_network_notes(
         &self,
         notes: Vec<AccountTargetNetworkNote>,
     ) -> Result<(), DatabaseError> {
+        self.insert_network_notes_at(notes, BlockNumber::GENESIS).await
+    }
+
+    pub(crate) async fn insert_network_notes_at(
+        &self,
+        notes: Vec<AccountTargetNetworkNote>,
+        created_at: BlockNumber,
+    ) -> Result<(), DatabaseError> {
         self.writer
-            .write("insert_network_notes", move |tx| queries::insert_network_notes(tx, &notes))
+            .write("insert_network_notes", move |tx| {
+                queries::insert_network_notes(tx, &notes, created_at)
+            })
             .await
     }
 
