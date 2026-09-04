@@ -2,11 +2,15 @@ use std::sync::Arc;
 
 use assert_matches::assert_matches;
 use miden_protocol::Word;
+use miden_protocol::batch::ProvenBatch;
 use miden_protocol::block::BlockHeader;
+use miden_protocol::transaction::{OutputNote, PublicOutputNote};
 
 use crate::domain::transaction::AuthenticatedTransaction;
 use crate::errors::{MempoolSubmissionError, StateConflict};
 use crate::mempool::Mempool;
+use crate::test_utils::batch::TransactionBatchConstructor;
+use crate::test_utils::note::mock_fee_note;
 use crate::test_utils::{MockProvenTxBuilder, mock_account_id};
 
 #[test]
@@ -306,6 +310,59 @@ fn unknown_unauthenticated_notes_are_rejected() {
             StateConflict::UnauthenticatedNotesMissing(..)
         ))
     );
+}
+
+#[test]
+fn inflight_fee_note_consumption_is_rejected() {
+    let (mut uut, _) = Mempool::for_tests();
+    let (producer, consumer, fee_note_id) = fee_note_dependency();
+
+    uut.add_transaction(producer).unwrap();
+    let reference = uut.clone();
+    let result = uut.add_transaction(consumer.clone());
+
+    assert_matches!(
+        result,
+        Err(MempoolSubmissionError::ConsumesInflightFeeNotes {
+            transaction_id,
+            note_ids,
+        }) if transaction_id == consumer.id() && note_ids == vec![fee_note_id]
+    );
+    assert_eq!(uut, reference);
+}
+
+#[test]
+fn committed_fee_note_consumption_is_accepted() {
+    let (mut uut, _) = Mempool::for_tests();
+    let (producer, consumer, _) = fee_note_dependency();
+
+    uut.add_transaction(producer.clone()).unwrap();
+    uut.select_any_batch().unwrap();
+    uut.commit_batch(Arc::new(ProvenBatch::mocked_from_transactions([
+        producer.raw_proven_transaction()
+    ])));
+    let block = uut.select_block();
+    let header = BlockHeader::mock(block.block_number, None, None, &[], Word::empty());
+    uut.commit_block(&header);
+
+    uut.add_transaction(consumer).unwrap();
+}
+
+fn fee_note_dependency() -> (Arc<AuthenticatedTransaction>, Arc<AuthenticatedTransaction>, Word) {
+    let fee_note = mock_fee_note(100);
+    let fee_note_id = fee_note.id().as_word();
+    let producer = MockProvenTxBuilder::with_account_index(100)
+        .output_notes(vec![OutputNote::Public(PublicOutputNote::new(fee_note.clone()).unwrap())])
+        .build();
+    let consumer = MockProvenTxBuilder::with_account_index(101)
+        .unauthenticated_notes(vec![fee_note])
+        .build();
+
+    (
+        Arc::new(AuthenticatedTransaction::from_inner(producer)),
+        Arc::new(AuthenticatedTransaction::from_inner(consumer)),
+        fee_note_id,
+    )
 }
 
 mod account_state {

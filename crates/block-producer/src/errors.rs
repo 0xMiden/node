@@ -78,6 +78,12 @@ pub enum MempoolSubmissionError {
     #[error("transaction {transaction_id} does not contain a non-zero TX_FEE output note")]
     MissingFee { transaction_id: TransactionId },
 
+    #[error("transaction {transaction_id} consumes in-flight TX_FEE notes: {note_ids:?}")]
+    ConsumesInflightFeeNotes {
+        transaction_id: TransactionId,
+        note_ids: Vec<Word>,
+    },
+
     #[error("mempool lock is poisoned")]
     #[grpc(internal)]
     MempoolPoisoned(#[source] MempoolPoisonError),

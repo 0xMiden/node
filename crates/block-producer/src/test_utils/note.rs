@@ -1,5 +1,8 @@
+use miden_protocol::Word;
+use miden_protocol::asset::FungibleAsset;
 use miden_protocol::note::Note;
 use miden_protocol::transaction::{OutputNote, PublicOutputNote};
+use miden_standards::note::TxFeeNote;
 use miden_standards::testing::note::NoteBuilder;
 use rand_chacha::ChaCha20Rng;
 use rand_chacha::rand_core::SeedableRng;
@@ -13,4 +16,16 @@ pub fn mock_note(num: u8) -> Note {
 
 pub fn mock_output_note(num: u8) -> OutputNote {
     OutputNote::Public(PublicOutputNote::new(mock_note(num)).unwrap())
+}
+
+pub fn mock_fee_note(num: u8) -> Note {
+    let asset = FungibleAsset::new(FungibleAsset::mock_issuer(), u64::from(num) + 1).unwrap();
+
+    TxFeeNote::builder()
+        .sender(mock_account_id(num))
+        .serial_number(Word::from([u32::from(num), 0, 0, 0]))
+        .asset(asset)
+        .build()
+        .unwrap()
+        .into()
 }
