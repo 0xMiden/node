@@ -1161,8 +1161,7 @@ fn prepare_precomputed_full_account_update(
         .iter()
         .filter(|(_asset_id, value)| **value != Word::empty())
         .map(|(asset_id, value)| {
-            Asset::new(*asset_id, *value)
-                .map(|asset| (account_id, *asset_id, Some(asset)))
+            Asset::new(*asset_id, *value).map(|asset| (account_id, *asset_id, Some(asset)))
         })
         .collect::<Result<Vec<_>, _>>()?;
 

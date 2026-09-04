@@ -129,19 +129,18 @@ impl ProveRequest for LocalBlockProver {
 
     fn prove(&self, input: Self::Input) -> Result<Self::Output, tonic::Status> {
         let BlockProofRequest { tx_batches, block_header, block_inputs } = input;
-        let proposed_block = ProposedBlock::new_at(
-            block_inputs,
-            tx_batches.into_vec(),
-            block_header.timestamp(),
-        )
-        .map_err(|e| {
-            tonic::Status::invalid_argument(e.as_report_context("failed to construct proposed block"))
-        })?
-        .with_next_validator_config(block_header.validator_config().clone())
-        .with_next_protocol_config(block_header.next_protocol_config().cloned());
-        let executed_block = BlockExecutor::new().execute(proposed_block).map_err(|e| {
-            tonic::Status::internal(e.as_report_context("failed to execute block"))
-        })?;
+        let proposed_block =
+            ProposedBlock::new_at(block_inputs, tx_batches.into_vec(), block_header.timestamp())
+                .map_err(|e| {
+                    tonic::Status::invalid_argument(
+                        e.as_report_context("failed to construct proposed block"),
+                    )
+                })?
+                .with_next_validator_config(block_header.validator_config().clone())
+                .with_next_protocol_config(block_header.next_protocol_config().cloned());
+        let executed_block = BlockExecutor::new()
+            .execute(proposed_block)
+            .map_err(|e| tonic::Status::internal(e.as_report_context("failed to execute block")))?;
 
         self.prove(executed_block)
             .map_err(|e| tonic::Status::internal(e.as_report_context("failed to prove block")))

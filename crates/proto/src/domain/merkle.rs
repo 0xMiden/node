@@ -253,12 +253,7 @@ impl TryFrom<proto::primitives::PartialSmt> for UniqueNodes {
 
     fn try_from(value: proto::primitives::PartialSmt) -> Result<Self, Self::Error> {
         let decoder = value.decoder();
-        let proto::primitives::PartialSmt {
-            root,
-            nodes,
-            leaves,
-            value_only_leaves,
-        } = value;
+        let proto::primitives::PartialSmt { root, nodes, leaves, value_only_leaves } = value;
 
         let root = decode!(decoder, root)?;
 
