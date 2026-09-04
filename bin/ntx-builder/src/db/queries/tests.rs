@@ -443,7 +443,7 @@ async fn stale_eligibility_is_reported_and_corrected() {
     };
     db.apply_committed_block(effects, PartialMmr::default()).await.unwrap();
     assert_eq!(
-        db.ready_accounts(30, sponsorship_block, vec![], 10).await.unwrap(),
+        db.ready_accounts(30, sponsorship_block, vec![], vec![], 10).await.unwrap(),
         vec![account_id],
         "the stored block selects the account for a note it cannot attempt yet",
     );
@@ -459,7 +459,10 @@ async fn stale_eligibility_is_reported_and_corrected() {
     db.update_note_eligibility(available.stale_eligibility).await.unwrap();
 
     assert!(
-        db.ready_accounts(30, sponsorship_block, vec![], 10).await.unwrap().is_empty(),
+        db.ready_accounts(30, sponsorship_block, vec![], vec![], 10)
+            .await
+            .unwrap()
+            .is_empty(),
         "once corrected, the account is no longer selected for this note",
     );
 }
@@ -482,14 +485,14 @@ async fn ready_accounts_respect_the_eligibility_column() {
     let eligible_from = db.note_eligibility(note.as_note().id()).await.unwrap();
 
     assert!(
-        db.ready_accounts(30, eligible_from.parent().unwrap(), vec![], 10)
+        db.ready_accounts(30, eligible_from.parent().unwrap(), vec![], vec![], 10)
             .await
             .unwrap()
             .is_empty(),
         "the account is not selected before its note becomes eligible",
     );
     assert_eq!(
-        db.ready_accounts(30, eligible_from, vec![], 10).await.unwrap(),
+        db.ready_accounts(30, eligible_from, vec![], vec![], 10).await.unwrap(),
         vec![account_id],
         "the account is selected again exactly at the stored block",
     );
@@ -636,7 +639,10 @@ async fn ready_accounts_are_distinct_and_exclude_consumed_and_capped_notes() {
         .unwrap();
     }
 
-    let ready = db.ready_accounts(30, BlockNumber::from(1000), vec![], 10).await.unwrap();
+    let ready = db
+        .ready_accounts(30, BlockNumber::from(1000), vec![], vec![], 10)
+        .await
+        .unwrap();
     assert_eq!(ready, vec![alice], "only alice has a pending note within its attempt budget");
 }
 
@@ -674,14 +680,59 @@ async fn ready_accounts_are_limited_and_least_recently_attempted_first() {
     .unwrap();
 
     assert_eq!(
-        db.ready_accounts(30, BlockNumber::from(1000), vec![], 1).await.unwrap(),
+        db.ready_accounts(30, BlockNumber::from(1000), vec![], vec![], 1).await.unwrap(),
         vec![stale],
         "the least recently attempted account is served first",
     );
     assert_eq!(
-        db.ready_accounts(30, BlockNumber::from(1000), vec![stale], 1).await.unwrap(),
+        db.ready_accounts(30, BlockNumber::from(1000), vec![stale], vec![], 1)
+            .await
+            .unwrap(),
         vec![recent],
         "an excluded account is skipped in favour of the next one",
+    );
+}
+
+/// A priority account is served before every other ready account, whatever the wait ordering says.
+#[tokio::test]
+async fn ready_accounts_serve_priority_accounts_first() {
+    let (db, _dir) = test_setup().await;
+    let ordinary = mock_network_account_id();
+    let prioritized = mock_network_account_id_seeded(42);
+
+    for account_id in [ordinary, prioritized] {
+        db.upsert_account_for_test(account_id, mock_account(account_id), mock_transaction_id(1))
+            .await
+            .unwrap();
+    }
+
+    let ordinary_note = mock_single_target_note(ordinary, 1);
+    let prioritized_note = mock_single_target_note(prioritized, 2);
+    db.insert_network_notes(vec![ordinary_note, prioritized_note.clone()])
+        .await
+        .unwrap();
+
+    // The priority account has waited least, so the wait ordering alone would serve it last.
+    db.notes_failed(
+        vec![(prioritized_note.as_note().nullifier(), test_note_error("boom"))],
+        BlockNumber::from(9),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        db.ready_accounts(30, BlockNumber::from(1000), vec![], vec![prioritized], 1)
+            .await
+            .unwrap(),
+        vec![prioritized],
+        "the priority account takes the only free slot",
+    );
+    assert_eq!(
+        db.ready_accounts(30, BlockNumber::from(1000), vec![], vec![prioritized], 2)
+            .await
+            .unwrap(),
+        vec![prioritized, ordinary],
+        "with room for both, the priority account still comes first",
     );
 }
 
@@ -811,7 +862,7 @@ async fn discard_notes_pins_attempts_to_cap_and_drops_from_pending() {
         "a discarded note must not be selectable",
     );
     assert!(
-        !db.ready_accounts(30, BlockNumber::from(1000), vec![], 10)
+        !db.ready_accounts(30, BlockNumber::from(1000), vec![], vec![], 10)
             .await
             .unwrap()
             .contains(&account_id),

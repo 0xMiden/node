@@ -10,5 +10,6 @@ WHERE n.committed_at IS NULL
   AND n.next_eligible_block <= ?2
   AND n.account_id NOT IN (SELECT value FROM rarray(?3))
 GROUP BY n.account_id
-ORDER BY MIN(n.next_eligible_block) ASC
-LIMIT ?4
+ORDER BY (n.account_id IN (SELECT value FROM rarray(?4))) DESC,
+         MIN(n.next_eligible_block) ASC
+LIMIT ?5
