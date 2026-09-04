@@ -7,9 +7,10 @@ use miden_protocol::block::{
     BlockSignatures,
     FeeParameters,
     SignedBlock,
-    ValidatorKeys,
+    ValidatorConfig,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
+use miden_protocol::protocol_config::NextProtocolConfig;
 use miden_protocol::utils::serde::Serializable;
 use thiserror::Error;
 
@@ -38,18 +39,19 @@ impl From<proto::blockchain::BlockNumber> for BlockNumber {
 impl From<&BlockHeader> for proto::blockchain::BlockHeader {
     fn from(header: &BlockHeader) -> Self {
         Self {
-            version: header.version(),
-            prev_block_commitment: Some(header.prev_block_commitment().into()),
+            version: u32::from(header.version()),
+            timestamp: header.timestamp(),
             block_num: header.block_num().as_u32(),
+            prev_block_commitment: Some(header.prev_block_commitment().into()),
             chain_commitment: Some(header.chain_commitment().into()),
             account_root: Some(header.account_root().into()),
             nullifier_root: Some(header.nullifier_root().into()),
             note_root: Some(header.note_root().into()),
             tx_commitment: Some(header.tx_commitment().into()),
-            tx_kernel_commitment: Some(header.tx_kernel_commitment().into()),
-            validator_keys: header.validator_keys().as_keys().iter().map(Into::into).collect(),
-            timestamp: header.timestamp(),
+            validator_config: Some(header.validator_config().into()),
             fee_parameters: Some(header.fee_parameters().into()),
+            protocol_config_commitment: Some(header.protocol_config_commitment().into()),
+            next_protocol_config: header.next_protocol_config().map(Into::into),
         }
     }
 }
@@ -64,7 +66,7 @@ impl TryFrom<&proto::blockchain::BlockHeader> for BlockHeader {
     type Error = ConversionError;
 
     fn try_from(value: &proto::blockchain::BlockHeader) -> Result<Self, Self::Error> {
-        value.try_into()
+        value.clone().try_into()
     }
 }
 
@@ -72,6 +74,13 @@ impl TryFrom<proto::blockchain::BlockHeader> for BlockHeader {
     type Error = ConversionError;
 
     fn try_from(value: proto::blockchain::BlockHeader) -> Result<Self, Self::Error> {
+        if value.version != 1 {
+            return Err(ConversionError::message(format!(
+                "unsupported block version {}",
+                value.version
+            )));
+        }
+
         let decoder = value.decoder();
         let prev_block_commitment = decode!(decoder, value.prev_block_commitment)?;
         let chain_commitment = decode!(decoder, value.chain_commitment)?;
@@ -79,20 +88,16 @@ impl TryFrom<proto::blockchain::BlockHeader> for BlockHeader {
         let nullifier_root = decode!(decoder, value.nullifier_root)?;
         let note_root = decode!(decoder, value.note_root)?;
         let tx_commitment = decode!(decoder, value.tx_commitment)?;
-        let tx_kernel_commitment = decode!(decoder, value.tx_kernel_commitment)?;
-        let validator_keys = value
-            .validator_keys
-            .into_iter()
-            .map(PublicKey::try_from)
-            .collect::<Result<Vec<_>, _>>()
-            .context("validator_keys")?;
-        let validator_keys = ValidatorKeys::new(validator_keys)
-            .map_err(ConversionError::new)
-            .context("validator_keys")?;
+        let validator_config = decode!(decoder, value.validator_config)?;
         let fee_parameters = decode!(decoder, value.fee_parameters)?;
+        let protocol_config_commitment = decode!(decoder, value.protocol_config_commitment)?;
+        let next_protocol_config = value
+            .next_protocol_config
+            .map(NextProtocolConfig::try_from)
+            .transpose()
+            .context("next_protocol_config")?;
 
         Ok(BlockHeader::new(
-            value.version,
             prev_block_commitment,
             value.block_num.into(),
             chain_commitment,
@@ -100,9 +105,10 @@ impl TryFrom<proto::blockchain::BlockHeader> for BlockHeader {
             nullifier_root,
             note_root,
             tx_commitment,
-            tx_kernel_commitment,
-            validator_keys,
+            validator_config,
             fee_parameters,
+            protocol_config_commitment,
+            next_protocol_config,
             value.timestamp,
         ))
     }
@@ -207,6 +213,69 @@ impl From<&PublicKey> for proto::blockchain::ValidatorPublicKey {
     }
 }
 
+// VALIDATOR CONFIGURATION
+// ================================================================================================
+
+impl TryFrom<proto::blockchain::ValidatorConfig> for ValidatorConfig {
+    type Error = ConversionError;
+
+    fn try_from(value: proto::blockchain::ValidatorConfig) -> Result<Self, Self::Error> {
+        let keys = value
+            .keys
+            .into_iter()
+            .map(PublicKey::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .context("keys")?;
+        let quorum = u16::try_from(value.quorum).context("quorum")?;
+
+        Self::new(keys, quorum).map_err(ConversionError::new)
+    }
+}
+
+impl From<ValidatorConfig> for proto::blockchain::ValidatorConfig {
+    fn from(value: ValidatorConfig) -> Self {
+        Self::from(&value)
+    }
+}
+
+impl From<&ValidatorConfig> for proto::blockchain::ValidatorConfig {
+    fn from(value: &ValidatorConfig) -> Self {
+        Self {
+            keys: value.keys().iter().map(Into::into).collect(),
+            quorum: u32::from(value.quorum()),
+        }
+    }
+}
+
+// NEXT PROTOCOL CONFIGURATION
+// ================================================================================================
+
+impl TryFrom<proto::blockchain::NextProtocolConfig> for NextProtocolConfig {
+    type Error = ConversionError;
+
+    fn try_from(value: proto::blockchain::NextProtocolConfig) -> Result<Self, Self::Error> {
+        let decoder = value.decoder();
+        let protocol_config = decode!(decoder, value.protocol_config)?;
+
+        Self::new(value.effective_from.into(), protocol_config).map_err(ConversionError::new)
+    }
+}
+
+impl From<NextProtocolConfig> for proto::blockchain::NextProtocolConfig {
+    fn from(value: NextProtocolConfig) -> Self {
+        Self::from(&value)
+    }
+}
+
+impl From<&NextProtocolConfig> for proto::blockchain::NextProtocolConfig {
+    fn from(value: &NextProtocolConfig) -> Self {
+        Self {
+            effective_from: value.effective_from().as_u32(),
+            protocol_config: Some(value.protocol_config().into()),
+        }
+    }
+}
+
 // SIGNATURE
 // ================================================================================================
 
@@ -235,9 +304,7 @@ impl From<&Signature> for proto::blockchain::BlockSignature {
 impl TryFrom<proto::blockchain::FeeParameters> for FeeParameters {
     type Error = ConversionError;
     fn try_from(fee_params: proto::blockchain::FeeParameters) -> Result<Self, Self::Error> {
-        let decoder = fee_params.decoder();
-        let native_asset_id = decode!(decoder, fee_params.native_asset_id)?;
-        Ok(FeeParameters::new(native_asset_id, fee_params.verification_base_fee))
+        Ok(FeeParameters::new(fee_params.verification_base_fee))
     }
 }
 
@@ -250,7 +317,6 @@ impl From<FeeParameters> for proto::blockchain::FeeParameters {
 impl From<&FeeParameters> for proto::blockchain::FeeParameters {
     fn from(value: &FeeParameters) -> Self {
         Self {
-            native_asset_id: Some(value.fee_faucet_id().into()),
             verification_base_fee: value.verification_base_fee(),
         }
     }
@@ -300,5 +366,78 @@ impl From<RangeInclusive<BlockNumber>> for proto::rpc::BlockRange {
             block_from: range.start().as_u32(),
             block_to: range.end().as_u32(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use miden_protocol::Word;
+    use miden_protocol::protocol_config::NextProtocolConfig;
+
+    use super::*;
+
+    fn header_with_scheduled_upgrade() -> BlockHeader {
+        let header = BlockHeader::mock(7, None, None, &[]);
+        let next_protocol_config =
+            NextProtocolConfig::new(BlockNumber::from(42u32), Word::from([21u32, 22, 23, 24]))
+                .unwrap();
+
+        BlockHeader::new(
+            header.prev_block_commitment(),
+            header.block_num(),
+            header.chain_commitment(),
+            header.account_root(),
+            header.nullifier_root(),
+            header.note_root(),
+            header.tx_commitment(),
+            header.validator_config().clone(),
+            header.fee_parameters().clone(),
+            header.protocol_config_commitment(),
+            Some(next_protocol_config),
+            header.timestamp(),
+        )
+    }
+
+    #[test]
+    fn block_header_round_trip_preserves_protocol_configuration() {
+        let header = header_with_scheduled_upgrade();
+
+        let encoded: proto::blockchain::BlockHeader = (&header).into();
+        let decoded = BlockHeader::try_from(encoded).unwrap();
+
+        assert_eq!(decoded, header);
+    }
+
+    #[test]
+    fn block_header_rejects_unknown_version() {
+        let mut encoded: proto::blockchain::BlockHeader =
+            BlockHeader::mock(7, None, None, &[]).into();
+        encoded.version = 2;
+
+        let error = BlockHeader::try_from(encoded).unwrap_err();
+
+        assert!(error.to_string().contains("version"));
+    }
+
+    #[test]
+    fn block_header_rejects_invalid_validator_quorum() {
+        let mut encoded: proto::blockchain::BlockHeader =
+            BlockHeader::mock(7, None, None, &[]).into();
+        encoded.validator_config.as_mut().unwrap().quorum = 0;
+
+        let error = BlockHeader::try_from(encoded).unwrap_err();
+
+        assert!(error.to_string().contains("validator_config"));
+    }
+
+    #[test]
+    fn block_header_requires_protocol_config_commitment() {
+        let mut encoded: proto::blockchain::BlockHeader =
+            BlockHeader::mock(7, None, None, &[]).into();
+        encoded.protocol_config_commitment = None;
+
+        let error = BlockHeader::try_from(encoded).unwrap_err();
+
+        assert!(error.to_string().contains("protocol_config_commitment"));
     }
 }
