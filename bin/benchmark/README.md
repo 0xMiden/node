@@ -35,8 +35,12 @@ make install-benchmark
 ```sh
 miden-benchmark create-proofs \
   --rpc-url http://127.0.0.1:57291 \
+  --fee-faucet-id <ACCOUNT_ID> \
   --num-transactions 100
 ```
+
+`--fee-faucet-id` identifies the native faucet whose asset pays transaction fees. Block headers commit to the protocol
+configuration but do not contain its full value. `miden-validator genesis` prints this account ID.
 
 Writes the bundle to `./benchmark-proofs/`:
 
@@ -68,6 +72,7 @@ locally:
 ```sh
 miden-benchmark create-proofs \
   --rpc-url           http://127.0.0.1:57291 \
+  --fee-faucet-id     <ACCOUNT_ID> \
   --num-transactions  100 \
   --remote-prover-url http://prover.example.com:50051
 ```

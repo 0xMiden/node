@@ -608,7 +608,7 @@ impl<B: BackendReader> AccountStateForest<B> {
             .flatten()
             .zip(hashed_entries)
             .map(|(raw_key, (_hashed_key, value))| {
-                Asset::from_id_and_value(raw_key, value).map_err(WitnessError::from)
+                Asset::new(raw_key, value).map_err(WitnessError::from)
             })
             .collect::<Result<Vec<_>, _>>()?;
 

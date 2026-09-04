@@ -9,7 +9,6 @@ use miden_protocol::transaction::{
     ProvenTransaction,
     TransactionHeader,
 };
-use miden_protocol::vm::ExecutionProof;
 
 use crate::test_utils::MockProvenTxBuilder;
 
@@ -71,7 +70,7 @@ impl TransactionBatchConstructor for ProvenBatch {
             OrderedTransactionHeaders::new_unchecked(
                 txs.into_iter().map(TransactionHeader::from).collect(),
             ),
-            ExecutionProof::new_dummy(),
+            miden_protocol::testing::dummy_execution_proof(),
         )
         .unwrap()
     }

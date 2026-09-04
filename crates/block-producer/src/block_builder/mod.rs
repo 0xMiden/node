@@ -345,8 +345,8 @@ impl BlockBuilder {
         // committed to by the parent block's header.
         let parent_header = block_inputs.prev_block_header();
         let signatures = parent_header
-            .validator_keys()
-            .as_keys()
+            .validator_config()
+            .keys()
             .iter()
             .enumerate()
             .map(|(position, key)| {
@@ -363,7 +363,7 @@ impl BlockBuilder {
         // Verify the signatures against the built block to ensure that every validator has provided
         // a valid signature for the relevant block.
         signatures
-            .verify_against(header.commitment(), parent_header.validator_keys())
+            .verify_against(header.commitment(), parent_header.validator_config())
             .map_err(|_| BuildBlockError::InvalidSignature)?;
 
         let (ordered_batches, ..) = proposed_block.into_parts();

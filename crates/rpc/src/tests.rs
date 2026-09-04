@@ -51,7 +51,7 @@ use miden_protocol::account::{
     AssetCallbackFlag,
 };
 use miden_protocol::asset::FungibleAsset;
-use miden_protocol::block::FeeParameters;
+use miden_protocol::block::{FeeParameters, ValidatorConfig};
 use miden_protocol::testing::noop_auth_component::NoopAuthComponent;
 use miden_protocol::transaction::{
     OutputNote,
@@ -141,11 +141,9 @@ impl TestStore {
             miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey::read_from_bytes(&[7; 32])
                 .expect("test signing key should decode")
                 .public_key();
-        let validator_keys =
-            miden_protocol::block::ValidatorKeys::new(vec![validator_key]).unwrap();
-        let (mut genesis_state, _) = config.into_state(validator_keys).unwrap();
-        genesis_state.fee_parameters =
-            FeeParameters::new(genesis_state.fee_parameters.fee_faucet_id(), verification_base_fee);
+        let validator_config = ValidatorConfig::new(vec![validator_key], 1).unwrap();
+        let (mut genesis_state, _) = config.into_state(validator_config).unwrap();
+        genesis_state.fee_parameters = FeeParameters::new(verification_base_fee);
         let genesis_block =
             genesis_state.clone().into_block().expect("genesis block should be created");
         let genesis_commitment = genesis_block.inner().header().commitment();
@@ -177,7 +175,7 @@ fn build_test_account(seed: [u8; 32]) -> (Account, AccountPatch) {
 
 /// Creates a minimal proven transaction for testing.
 ///
-/// This uses `ExecutionProof::new_dummy()` and is intended for tests that
+/// This uses a dummy execution proof and is intended for tests that
 /// need to test validation logic.
 fn build_test_proven_tx(
     account: &Account,
@@ -220,7 +218,7 @@ fn build_test_proven_tx_with_fee(
         0.into(),
         genesis,
         u32::MAX.into(),
-        ExecutionProof::new_dummy(),
+        miden_protocol::testing::dummy_execution_proof(),
     )
     .unwrap()
 }
@@ -260,7 +258,23 @@ fn build_test_proven_tx_with_id(
         0.into(),
         genesis,
         u32::MAX.into(),
-        ExecutionProof::new_dummy(),
+        miden_protocol::testing::dummy_execution_proof(),
+    )
+    .unwrap()
+}
+
+fn replace_transaction_proof(
+    transaction: &ProvenTransaction,
+    proof: ExecutionProof,
+) -> ProvenTransaction {
+    ProvenTransaction::new(
+        transaction.account_update().clone(),
+        transaction.input_notes().iter().cloned(),
+        transaction.output_notes().iter().cloned(),
+        transaction.ref_block_num(),
+        transaction.ref_block_commitment(),
+        transaction.expiration_block_num(),
+        proof,
     )
     .unwrap()
 }
@@ -527,6 +541,34 @@ async fn rpc_server_does_not_require_fees_when_the_base_fee_is_zero() {
         status.message().contains("Invalid proof for transaction"),
         "expected proof validation after the fee gate, got: {status}"
     );
+}
+
+#[tokio::test]
+async fn rpc_server_rejects_deferred_transaction_proofs() {
+    let store = TestStore::start().await;
+    let genesis = store.genesis_commitment();
+    let (account, account_patch) = build_test_account([0; 32]);
+    let transaction = build_test_proven_tx(&account, &account_patch, genesis);
+    let transaction = replace_transaction_proof(
+        &transaction,
+        miden_protocol::testing::dummy_deferred_execution_proof(),
+    );
+    let request = proto::transaction::ProvenTransaction {
+        transaction: transaction.to_bytes(),
+        sealed_transaction_inputs: None,
+    };
+
+    let service = RpcService::new(
+        Arc::clone(&store.state),
+        RpcBackend::full_node(source_rpc_client(), None),
+        None,
+        NonZeroUsize::new(1_000_000).unwrap(),
+        None,
+    );
+
+    let status = service.submit_proven_tx(Request::new(request)).await.unwrap_err();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert!(status.message().contains("outstanding precompile obligation"));
 }
 
 #[tokio::test]
@@ -1370,7 +1412,7 @@ fn sync_chain_mmr_block_header_matches_chain_commitment() {
     let mut headers = Vec::new();
     for i in 0..5u32 {
         let chain_commitment = server_mmr.peaks().hash_peaks();
-        let header = BlockHeader::mock(i, Some(chain_commitment), None, &[], Word::default());
+        let header = BlockHeader::mock(i, Some(chain_commitment), None, &[]);
         server_mmr.add(header.commitment()).unwrap();
         headers.push(header);
     }

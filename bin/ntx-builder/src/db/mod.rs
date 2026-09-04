@@ -8,11 +8,13 @@ use miden_node_db::sqlite::{DbReader, DbWriter};
 use miden_node_tracing::{info, miden_instrument};
 use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountId};
-use miden_protocol::block::{BlockHeader, BlockNumber, SignedBlock, ValidatorKeys};
+use miden_protocol::block::{BlockHeader, BlockNumber, SignedBlock, ValidatorConfig};
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
 use miden_protocol::crypto::merkle::mmr::PartialMmr;
 use miden_protocol::note::{Note, NoteId, NoteScript, Nullifier};
 #[cfg(test)]
 use miden_protocol::transaction::TransactionId;
+use miden_protocol::utils::serde::{ByteReader, ByteWriter, Deserializable, Serializable};
 #[cfg(test)]
 use miden_standards::note::AccountTargetNetworkNote;
 
@@ -31,6 +33,49 @@ mod migrations;
 /// budget on its own.
 pub(crate) const OVERSIZED_NOTE_DISCARD_REASON: &str =
     "note consumption exceeds the per-transaction cycle budget; it can never be consumed";
+
+/// Genesis validator keys persisted in the pre-0.17 native encoding.
+///
+/// The transaction-encryption trust root only needs the ordered keys, not the quorum newly carried
+/// by [`ValidatorConfig`]. Keeping this wrapper encoded as `Vec<PublicKey>` preserves the existing
+/// database representation while the runtime block header uses `ValidatorConfig`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GenesisValidatorKeys(Vec<ValidatorPublicKey>);
+
+impl GenesisValidatorKeys {
+    fn from_validator_config(config: &ValidatorConfig) -> Self {
+        Self(config.keys().to_vec())
+    }
+
+    pub(crate) fn keys(&self) -> &[ValidatorPublicKey] {
+        &self.0
+    }
+}
+
+impl Serializable for GenesisValidatorKeys {
+    fn write_into<W: ByteWriter>(&self, target: &mut W) {
+        self.0.write_into(target);
+    }
+}
+
+impl Deserializable for GenesisValidatorKeys {
+    fn read_from<R: ByteReader>(
+        source: &mut R,
+    ) -> Result<Self, miden_protocol::utils::serde::DeserializationError> {
+        let keys = Vec::<ValidatorPublicKey>::read_from(source)?;
+        let quorum = u16::try_from(keys.len()).map_err(|_| {
+            miden_protocol::utils::serde::DeserializationError::InvalidValue(
+                "validator key count does not fit in u16".into(),
+            )
+        })?;
+        ValidatorConfig::new(keys.clone(), quorum).map_err(|err| {
+            miden_protocol::utils::serde::DeserializationError::InvalidValue(err.to_string())
+        })?;
+        Ok(Self(keys))
+    }
+}
+
+miden_node_db::impl_blob_codec!(GenesisValidatorKeys);
 
 // NTX BUILDER DATABASE
 // ================================================================================================
@@ -55,7 +100,7 @@ impl NtxDbReader {
     /// Reads the validator signing keys persisted from the genesis header.
     pub(crate) async fn select_genesis_validator_keys(
         &self,
-    ) -> Result<Option<ValidatorKeys>, DatabaseError> {
+    ) -> Result<Option<GenesisValidatorKeys>, DatabaseError> {
         self.reader
             .read("select_genesis_validator_keys", db::queries::select_genesis_validator_keys)
             .await
@@ -529,7 +574,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("failed to create temp directory");
         let db_path = dir.path().join("ntx-builder.sqlite3");
         let genesis = mock_genesis_block();
-        let expected_validator_keys = genesis.header().validator_keys().clone();
+        let expected_validator_keys =
+            GenesisValidatorKeys::from_validator_config(genesis.header().validator_config());
 
         bootstrap(db_path.clone(), &genesis)
             .await

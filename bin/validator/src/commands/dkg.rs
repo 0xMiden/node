@@ -436,8 +436,8 @@ async fn generate_identity(
         genesis
             .inner()
             .header()
-            .validator_keys()
-            .as_keys()
+            .validator_config()
+            .keys()
             .contains(&validator_public_key),
         "validator signing key is not committed by genesis",
     );
@@ -498,7 +498,7 @@ fn prepare(
     let epoch = decode_fixed_hex::<32>(epoch, "storage-key epoch")?;
     let genesis = read_trusted_genesis(genesis_path)?;
     let genesis_commitment = genesis.inner().header().commitment();
-    let validator_keys = genesis.inner().header().validator_keys().as_keys();
+    let validator_keys = genesis.inner().header().validator_config().keys();
 
     ensure!(
         registration_paths.len() == validator_keys.len(),
@@ -1094,7 +1094,7 @@ fn read_ceremony(genesis_path: &Path, directory: &Path) -> anyhow::Result<Ceremo
         "registry mismatch between DKG rounds",
     );
 
-    let validator_keys = genesis.inner().header().validator_keys().as_keys();
+    let validator_keys = genesis.inner().header().validator_config().keys();
     ensure!(
         manifest.participants.len() == validator_keys.len(),
         "manifest participant count does not match genesis",

@@ -1085,10 +1085,8 @@ fn prepare_full_account_update(
     let mut assets = Vec::new();
     for asset in account.vault().assets() {
         // Only insert assets with non-zero values for fungible assets
-        let should_insert = match asset {
-            Asset::Fungible(fungible) => fungible.amount().as_u64() > 0,
-            Asset::NonFungible(_) => true,
-        };
+        let should_insert =
+            asset.as_fungible().is_none_or(|fungible| fungible.amount().as_u64() > 0);
         if should_insert {
             assets.push((account_id, asset.id(), Some(asset)));
         }
@@ -1163,8 +1161,7 @@ fn prepare_precomputed_full_account_update(
         .iter()
         .filter(|(_asset_id, value)| **value != Word::empty())
         .map(|(asset_id, value)| {
-            Asset::from_id_and_value(*asset_id, *value)
-                .map(|asset| (account_id, *asset_id, Some(asset)))
+            Asset::new(*asset_id, *value).map(|asset| (account_id, *asset_id, Some(asset)))
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -1211,7 +1208,7 @@ fn prepare_partial_account_update(
         let update_or_remove = if *value == Word::empty() {
             None
         } else {
-            Some(Asset::from_id_and_value(*vault_key, *value)?)
+            Some(Asset::new(*vault_key, *value)?)
         };
         assets.push((account_id, *vault_key, update_or_remove));
     }

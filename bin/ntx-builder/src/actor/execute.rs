@@ -28,8 +28,14 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::{AssetId, AssetWitness};
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::errors::TransactionInputError;
+use miden_protocol::errors::{
+    AccountError,
+    AssetError,
+    ProtocolConfigError,
+    TransactionInputError,
+};
 use miden_protocol::note::{Note, NoteId, NoteScript, NoteScriptRoot};
+use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{
     AccountInputs,
     ExecutedTransaction,
@@ -42,6 +48,7 @@ use miden_protocol::transaction::{
     TransactionInputs,
 };
 use miden_protocol::vm::FutureMaybeSend;
+use miden_standards::account::fees::FeePolicyManager;
 use miden_tx::auth::UnreachableAuth;
 use miden_tx::{
     DataStore,
@@ -77,6 +84,14 @@ pub enum NtxError {
     Proving(#[source] TransactionProverError),
     #[error("failed to submit transaction")]
     Submission(#[source] tonic::Status),
+    #[error("failed to read the fee asset ID from the network account")]
+    FeeAssetStorage(#[source] AccountError),
+    #[error("invalid fee asset ID in the network account")]
+    FeeAsset(#[source] AssetError),
+    #[error("invalid protocol configuration for the network account")]
+    ProtocolConfig(#[source] ProtocolConfigError),
+    #[error("network account fee asset does not match the reference block protocol configuration")]
+    ProtocolConfigCommitmentMismatch,
 }
 
 type NtxResult<T> = Result<T, NtxError>;
@@ -299,7 +314,7 @@ impl NtxContext {
                             ctx.script_cache.clone(),
                             ctx.db.clone(),
                             ctx.request_backoff,
-                        );
+                        )?;
                         handle.block_on(
                             async {
                                 let FilteredNotes { successful, failed, deferred, oversized } =
@@ -700,6 +715,7 @@ struct NtxDataStore {
     /// The native account, shared with the actor via `Arc` to avoid a deep clone per transaction.
     account: Arc<Account>,
     reference_block: BlockHeader,
+    protocol_config: ProtocolConfig,
     /// The chain MMR, wrapped in `Arc` to avoid expensive clones when reading the chain state.
     chain_mmr: Arc<PartialBlockchain>,
     mast_store: TransactionMastStore,
@@ -738,13 +754,26 @@ impl NtxDataStore {
         script_cache: LruCache<Word, NoteScript>,
         db: NtxDbReader,
         request_backoff: ExponentialBuilder,
-    ) -> Self {
+    ) -> NtxResult<Self> {
         let mast_store = TransactionMastStore::new();
         mast_store.load_account_code(account.code());
 
-        Self {
+        let fee_asset_id = account
+            .storage()
+            .get_item(FeePolicyManager::fee_asset_id_slot())
+            .map_err(NtxError::FeeAssetStorage)?
+            .try_into()
+            .map_err(NtxError::FeeAsset)?;
+        let protocol_config =
+            ProtocolConfig::current(fee_asset_id).map_err(NtxError::ProtocolConfig)?;
+        if protocol_config.to_commitment() != reference_block.protocol_config_commitment() {
+            return Err(NtxError::ProtocolConfigCommitmentMismatch);
+        }
+
+        Ok(Self {
             account,
             reference_block,
+            protocol_config,
             chain_mmr,
             mast_store,
             rpc,
@@ -753,7 +782,7 @@ impl NtxDataStore {
             fetched_scripts: Arc::new(Mutex::new(Vec::new())),
             storage_slots: Arc::new(Mutex::new(HashMap::default())),
             request_backoff,
-        }
+        })
     }
 
     /// Returns the [`ExponentialBuilder`] used for per-request retry backoff against the RPC
@@ -793,8 +822,9 @@ impl DataStore for NtxDataStore {
         &self,
         account_id: AccountId,
         ref_blocks: BTreeSet<BlockNumber>,
-    ) -> impl FutureMaybeSend<Result<(PartialAccount, BlockHeader, PartialBlockchain), DataStoreError>>
-    {
+    ) -> impl FutureMaybeSend<
+        Result<(PartialAccount, BlockHeader, ProtocolConfig, PartialBlockchain), DataStoreError>,
+    > {
         async move {
             if self.account.id() != account_id {
                 return Err(DataStoreError::AccountNotFound(account_id));
@@ -811,7 +841,12 @@ impl DataStore for NtxDataStore {
             self.register_storage_map_slots(account_id, &self.account.storage().to_header());
 
             let partial_account = PartialAccount::from(self.account.as_ref());
-            Ok((partial_account, self.reference_block.clone(), (*self.chain_mmr).clone()))
+            Ok((
+                partial_account,
+                self.reference_block.clone(),
+                self.protocol_config.clone(),
+                (*self.chain_mmr).clone(),
+            ))
         }
     }
 
@@ -987,8 +1022,10 @@ impl MastForestStore for NtxDataStore {
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeSet, HashMap};
+    use std::error::Error;
     use std::future::ready;
 
+    use miden_protocol::errors::ProtocolConfigError;
     use miden_protocol::note::Note;
     use miden_tx::{FailedNote, TransactionExecutorError, TransactionProverError};
 
@@ -1165,5 +1202,16 @@ mod tests {
     fn prover_other_is_the_retried_variant() {
         let err = TransactionProverError::other("remote prover unreachable");
         assert!(matches!(err, TransactionProverError::Other { .. }));
+    }
+
+    #[test]
+    fn protocol_config_error_preserves_its_typed_source() {
+        let error = NtxError::ProtocolConfig(ProtocolConfigError::MinimumSecurityBitsMustBeNonZero);
+
+        assert!(
+            error
+                .source()
+                .is_some_and(|source| source.downcast_ref::<ProtocolConfigError>().is_some())
+        );
     }
 }

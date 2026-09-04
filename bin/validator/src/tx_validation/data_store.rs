@@ -6,6 +6,7 @@ use miden_protocol::account::{AccountId, PartialAccount, StorageMapKey, StorageM
 use miden_protocol::asset::{AssetId, AssetWitness};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::note::{NoteScript, NoteScriptRoot};
+use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{AccountInputs, PartialBlockchain, TransactionInputs};
 use miden_protocol::vm::FutureMaybeSend;
 use miden_tx::{
@@ -41,8 +42,9 @@ impl DataStore for TransactionInputsDataStore {
         &self,
         account_id: AccountId,
         _ref_blocks: BTreeSet<BlockNumber>,
-    ) -> impl FutureMaybeSend<Result<(PartialAccount, BlockHeader, PartialBlockchain), DataStoreError>>
-    {
+    ) -> impl FutureMaybeSend<
+        Result<(PartialAccount, BlockHeader, ProtocolConfig, PartialBlockchain), DataStoreError>,
+    > {
         async move {
             if self.tx_inputs.account().id() != account_id {
                 return Err(DataStoreError::AccountNotFound(account_id));
@@ -51,6 +53,7 @@ impl DataStore for TransactionInputsDataStore {
             Ok((
                 self.tx_inputs.account().clone(),
                 self.tx_inputs.block_header().clone(),
+                self.tx_inputs.protocol_config().clone(),
                 self.tx_inputs.blockchain().clone(),
             ))
         }

@@ -27,6 +27,7 @@ use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
 use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::note::{Note, NoteScript, NoteScriptRoot, PartialNote};
+use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{
     AccountInputs,
     ExecutedTransaction,
@@ -175,7 +176,12 @@ impl ProofCollector {
     reason = "single linear orchestration of genesis fetch + mint phase + consume phase; \
               splitting would just shuffle locals (faucet, data_store, authenticator) around"
 )]
-pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: Option<String>) {
+pub(crate) async fn run(
+    rpc_url: Url,
+    num_transactions: u64,
+    fee_faucet_id: AccountId,
+    remote_prover_url: Option<String>,
+) {
     let mut rpc_client = create_genesis_aware_rpc_client(&rpc_url, Duration::from_secs(10))
         .await
         .unwrap();
@@ -189,6 +195,13 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
         .block_header
         .expect("RPC returned no block header");
     let genesis_header: BlockHeader = genesis_header_proto.try_into().unwrap();
+    let protocol_config = ProtocolConfig::current(AssetId::new_fungible(fee_faucet_id))
+        .expect("fee faucet should produce a valid protocol configuration");
+    assert_eq!(
+        protocol_config.to_commitment(),
+        genesis_header.protocol_config_commitment(),
+        "--fee-faucet-id does not match the target chain's protocol configuration",
+    );
 
     // The tip header and chain MMR come from separate RPC calls, so retry until they refer to the
     // same chain tip.
@@ -230,7 +243,8 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
         .map(|index| create_wallet(&wallet_public_key, index))
         .collect();
 
-    let mut data_store = BenchmarkDataStore::new(ref_block_header.clone(), partial_blockchain);
+    let mut data_store =
+        BenchmarkDataStore::new(ref_block_header.clone(), protocol_config, partial_blockchain);
     data_store.add_account(faucet.clone());
     for wallet in &wallets {
         data_store.add_account(wallet.clone());
@@ -272,7 +286,7 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
         let notes: Vec<Note> = wallet_chunk
             .iter()
             .map(|wallet| {
-                let asset = Asset::Fungible(FungibleAsset::new(faucet_id, 10).unwrap());
+                let asset = Asset::from(FungibleAsset::new(faucet_id, 10).unwrap());
                 P2idNote::builder()
                     .sender(faucet_id)
                     .target(wallet.id())
@@ -468,15 +482,21 @@ fn create_wallet(
 struct BenchmarkDataStore {
     accounts: HashMap<AccountId, Account>,
     block_header: BlockHeader,
+    protocol_config: ProtocolConfig,
     partial_block_chain: PartialBlockchain,
     mast_store: TransactionMastStore,
 }
 
 impl BenchmarkDataStore {
-    fn new(block_header: BlockHeader, partial_block_chain: PartialBlockchain) -> Self {
+    fn new(
+        block_header: BlockHeader,
+        protocol_config: ProtocolConfig,
+        partial_block_chain: PartialBlockchain,
+    ) -> Self {
         Self {
             accounts: HashMap::new(),
             block_header,
+            protocol_config,
             partial_block_chain,
             mast_store: TransactionMastStore::new(),
         }
@@ -500,12 +520,18 @@ impl DataStore for BenchmarkDataStore {
         &self,
         account_id: AccountId,
         _block_refs: BTreeSet<BlockNumber>,
-    ) -> impl FutureMaybeSend<Result<(PartialAccount, BlockHeader, PartialBlockchain), DataStoreError>>
-    {
+    ) -> impl FutureMaybeSend<
+        Result<(PartialAccount, BlockHeader, ProtocolConfig, PartialBlockchain), DataStoreError>,
+    > {
         async move {
             let account = self.get_account(account_id)?;
             let partial_account = PartialAccount::from(account);
-            Ok((partial_account, self.block_header.clone(), self.partial_block_chain.clone()))
+            Ok((
+                partial_account,
+                self.block_header.clone(),
+                self.protocol_config.clone(),
+                self.partial_block_chain.clone(),
+            ))
         }
     }
 

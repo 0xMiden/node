@@ -279,7 +279,7 @@ impl TryFrom<proto::note::NoteScript> for NoteScript {
         let entrypoint = MastNodeId::from_u32_safe(entrypoint, &mast)
             .map_err(|err| ConversionError::deserialization("note_script.entrypoint", err))?;
 
-        Ok(Self::from_parts(Arc::new(mast), entrypoint))
+        Self::from_parts(Arc::new(mast), entrypoint).map_err(ConversionError::new)
     }
 }
 

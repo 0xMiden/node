@@ -1,7 +1,6 @@
 syntax = "proto3";
 package blockchain;
 
-import "types/account.proto";
 import "types/primitives.proto";
 
 // BLOCK
@@ -61,38 +60,53 @@ message BlockHeader {
     // Specifies the version of the protocol.
     uint32 version = 1;
 
-    // The commitment of the previous blocks header.
-    primitives.Digest prev_block_commitment = 2;
+    // The time when the block was created.
+    fixed32 timestamp = 2;
 
     // A unique sequential number of the current block.
     fixed32 block_num = 3;
 
+    // The commitment of the previous blocks header.
+    primitives.Digest prev_block_commitment = 4;
+
     // A commitment to an MMR of the entire chain where each block is a leaf.
-    primitives.Digest chain_commitment = 4;
+    primitives.Digest chain_commitment = 5;
 
     // A commitment to account database.
-    primitives.Digest account_root = 5;
+    primitives.Digest account_root = 6;
 
     // A commitment to the nullifier database.
-    primitives.Digest nullifier_root = 6;
+    primitives.Digest nullifier_root = 7;
 
     // A commitment to all notes created in the current block.
-    primitives.Digest note_root = 7;
+    primitives.Digest note_root = 8;
 
     // A commitment to a set of IDs of transactions which affected accounts in this block.
-    primitives.Digest tx_commitment = 8;
+    primitives.Digest tx_commitment = 9;
 
-    // The set of validator ECDSA public keys authorized to sign the next block.
-    repeated ValidatorPublicKey validator_keys = 9;
+    // The validator configuration authorized to sign the next block.
+    ValidatorConfig validator_config = 10;
 
-    // A commitment to all transaction kernels supported by this block.
-    primitives.Digest tx_kernel_commitment = 10;
-
-    // Fee parameters for block processing.
+    // The fee parameters for block processing.
     FeeParameters fee_parameters = 11;
 
-    // The time when the block was created.
-    fixed32 timestamp = 12;
+    // A commitment to the active protocol configuration.
+    primitives.Digest protocol_config_commitment = 12;
+
+    // The scheduled protocol configuration, if one exists.
+    NextProtocolConfig next_protocol_config = 13;
+}
+
+// The validator public keys and the number of signatures required for a block.
+message ValidatorConfig {
+    repeated ValidatorPublicKey keys = 1;
+    uint32 quorum = 2;
+}
+
+// A protocol configuration that becomes active at a later block.
+message NextProtocolConfig {
+    fixed32 effective_from = 1;
+    primitives.Digest protocol_config = 2;
 }
 
 // PUBLIC KEY
@@ -132,10 +146,8 @@ message SignBlockResponse {
 
 // Definition of the fee parameters.
 message FeeParameters {
-    // The faucet account ID which is used for native fee assets.
-    account.AccountId native_asset_id = 1;
     // The base fee (in base units) capturing the cost for the verification of a transaction.
-    fixed32 verification_base_fee = 2;
+    fixed32 verification_base_fee = 1;
 }
 
 // BLOCK BODY

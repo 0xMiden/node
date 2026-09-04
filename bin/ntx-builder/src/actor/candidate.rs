@@ -69,10 +69,11 @@ impl SponsoredFeatureNote {
 /// A sponsorship note is validated to carry exactly one asset when it is ingested, so the first
 /// asset is the fee it pays.
 fn sponsorship_amount(note: &Note) -> AssetAmount {
-    match note.assets().as_slice().first() {
-        Some(Asset::Fungible(asset)) => asset.amount(),
-        _ => AssetAmount::ZERO,
-    }
+    note.assets()
+        .as_slice()
+        .first()
+        .and_then(Asset::as_fungible)
+        .map_or(AssetAmount::ZERO, |asset| asset.amount())
 }
 
 // TRANSACTION CANDIDATE
