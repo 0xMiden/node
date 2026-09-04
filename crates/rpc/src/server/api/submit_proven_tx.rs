@@ -1,4 +1,3 @@
-use miden_node_block_producer::ensure_transaction_has_fee;
 use miden_node_block_producer::store::get_tx_inputs;
 use miden_node_proto::clients::{SequencerClient, ValidatorClient};
 use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
@@ -15,7 +14,13 @@ use miden_protocol::transaction::{
 };
 use tonic::{Request, Status};
 
-use super::{COMPONENT, RpcBackend, RpcService, submit_tx_to_validators};
+use super::{
+    COMPONENT,
+    RpcBackend,
+    RpcService,
+    ensure_transactions_have_fee_notes,
+    submit_tx_to_validators,
+};
 use crate::LOG_TARGET;
 
 #[tonic::async_trait]
@@ -73,10 +78,9 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
         }
 
         // Verify the reference block is actually part of the chain.
-        let reference_header = self
-            .verify_reference_commitment(tx.ref_block_num(), tx.ref_block_commitment())
+        self.verify_reference_commitment(tx.ref_block_num(), tx.ref_block_commitment())
             .await?;
-        ensure_transaction_has_fee(&tx, reference_header.fee_parameters()).map_err(Status::from)?;
+        ensure_transactions_have_fee_notes([&tx])?;
 
         // Rebuild a new ProvenTransaction with decorators removed from output notes
         let account_update = TxAccountUpdate::new(
