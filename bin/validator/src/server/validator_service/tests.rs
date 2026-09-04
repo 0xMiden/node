@@ -14,7 +14,13 @@ use miden_protocol::Word;
 use miden_protocol::account::AccountUpdateDetails;
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::asset::{Asset, FungibleAsset};
-use miden_protocol::block::{BlockHeader, BlockInputs, BlockNumber, ProposedBlock, ValidatorConfig};
+use miden_protocol::block::{
+    BlockHeader,
+    BlockInputs,
+    BlockNumber,
+    ProposedBlock,
+    ValidatorConfig,
+};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::crypto::dsa::eddsa_25519_sha512::KeyExchangeKey;
 use miden_protocol::note::NoteType;
@@ -651,7 +657,6 @@ async fn unknown_transactions_rejected() {
         OrderedTransactionHeaders,
         TransactionHeader,
     };
-    use miden_protocol::vm::ExecutionProof;
 
     let tv = TestValidator::new().await;
     let genesis_header = tv.chain_tip.clone();
@@ -665,7 +670,8 @@ async fn unknown_transactions_rejected() {
         Word::default(),
         InputNotes::<InputNoteCommitment>::default(),
         vec![],
-    );
+    )
+    .expect("dummy transaction header should be valid");
     let tx_id = tx_header.id();
 
     // Build a ProvenBatch containing this transaction.
