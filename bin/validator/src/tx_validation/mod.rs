@@ -30,6 +30,8 @@ pub enum TransactionValidationError {
     },
     #[error("transaction proof verification failed")]
     ProofVerificationFailed(#[from] TransactionVerifierError),
+    #[error("transaction proof has an outstanding precompile obligation")]
+    IncompleteProof,
 }
 
 // TRANSACTION VALIDATION
@@ -46,14 +48,21 @@ pub async fn validate_transaction(
     proven_tx: ProvenTransaction,
     tx_inputs: TransactionInputs,
 ) -> Result<(), TransactionValidationError> {
+    if !proven_tx.proof().is_complete() {
+        return Err(TransactionValidationError::IncompleteProof);
+    }
+
     // Proof verification is CPU-intensive; run it on a dedicated blocking thread.
     let proven_tx_clone = proven_tx.clone();
-    spawn_blocking_in_span(
+    let verification_outcome = spawn_blocking_in_span(
         move || TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL).verify(&proven_tx_clone),
         info_span!("verify"),
     )
     .await
     .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))?;
+    if !verification_outcome.is_complete() {
+        return Err(TransactionValidationError::IncompleteProof);
+    }
 
     // Create a DataStore from the transaction inputs.
     let data_store = TransactionInputsDataStore::new(tx_inputs.clone());

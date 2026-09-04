@@ -263,6 +263,22 @@ fn build_test_proven_tx_with_id(
     .unwrap()
 }
 
+fn replace_transaction_proof(
+    transaction: &ProvenTransaction,
+    proof: ExecutionProof,
+) -> ProvenTransaction {
+    ProvenTransaction::new(
+        transaction.account_update().clone(),
+        transaction.input_notes().iter().cloned(),
+        transaction.output_notes().iter().cloned(),
+        transaction.ref_block_num(),
+        transaction.ref_block_commitment(),
+        transaction.expiration_block_num(),
+        proof,
+    )
+    .unwrap()
+}
+
 fn assert_beyond_tip(status: &tonic::Status, endpoint: &str) {
     assert_eq!(
         status.code(),
@@ -525,6 +541,34 @@ async fn rpc_server_does_not_require_fees_when_the_base_fee_is_zero() {
         status.message().contains("Invalid proof for transaction"),
         "expected proof validation after the fee gate, got: {status}"
     );
+}
+
+#[tokio::test]
+async fn rpc_server_rejects_deferred_transaction_proofs() {
+    let store = TestStore::start().await;
+    let genesis = store.genesis_commitment();
+    let (account, account_patch) = build_test_account([0; 32]);
+    let transaction = build_test_proven_tx(&account, &account_patch, genesis);
+    let transaction = replace_transaction_proof(
+        &transaction,
+        miden_protocol::testing::dummy_deferred_execution_proof(),
+    );
+    let request = proto::transaction::ProvenTransaction {
+        transaction: transaction.to_bytes(),
+        sealed_transaction_inputs: None,
+    };
+
+    let service = RpcService::new(
+        Arc::clone(&store.state),
+        RpcBackend::full_node(source_rpc_client(), None),
+        None,
+        NonZeroUsize::new(1_000_000).unwrap(),
+        None,
+    );
+
+    let status = service.submit_proven_tx(Request::new(request)).await.unwrap_err();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert!(status.message().contains("outstanding precompile obligation"));
 }
 
 #[tokio::test]

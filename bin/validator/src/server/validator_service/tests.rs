@@ -305,6 +305,22 @@ fn dummy_proven_tx(seed: u8) -> ProvenTransaction {
     .unwrap()
 }
 
+fn replace_transaction_proof(
+    transaction: &ProvenTransaction,
+    proof: ExecutionProof,
+) -> ProvenTransaction {
+    ProvenTransaction::new(
+        transaction.account_update().clone(),
+        transaction.input_notes().iter().cloned(),
+        transaction.output_notes().iter().cloned(),
+        transaction.ref_block_num(),
+        transaction.ref_block_commitment(),
+        transaction.expiration_block_num(),
+        proof,
+    )
+    .unwrap()
+}
+
 /// A proven transaction and alternate inputs used to reach each validation stage.
 struct ProvenTransactionFixture {
     transaction: ProvenTransaction,
@@ -1200,6 +1216,24 @@ async fn failed_proof_verification_does_not_store_inputs() {
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
     assert!(status.message().contains("proof verification"), "got: {}", status.message());
     tv.assert_transaction_absent(tx.id(), 0).await;
+}
+
+/// A deferred proof must not store the authenticated transaction inputs.
+#[tokio::test]
+async fn deferred_proof_does_not_store_inputs() {
+    let tv = TestValidator::new().await;
+    let fixture = proven_transaction_fixture().await;
+    let transaction = replace_transaction_proof(
+        &fixture.transaction,
+        miden_protocol::testing::dummy_deferred_execution_proof(),
+    );
+    let sealed = tv.seal(transaction.id(), &fixture.inputs.to_bytes());
+
+    let status = tv.call_submit_proven_transaction(&transaction, sealed).await.unwrap_err();
+
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert!(status.message().contains("outstanding precompile obligation"));
+    tv.assert_transaction_absent(transaction.id(), 0).await;
 }
 
 /// A transaction that cannot be re-executed must not create a sealed record.
