@@ -2,7 +2,6 @@ use miden_block_prover::{BlockExecutor, LocalBlockProver};
 use miden_node_proto::BlockProofRequest;
 use miden_node_proto::generated::remote_prover as proto;
 use miden_node_tracing::{ErrorReport, miden_instrument};
-use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::block::ProposedBlock;
 use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
