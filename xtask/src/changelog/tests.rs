@@ -76,7 +76,7 @@ description = "Added a bootstrap command."
 }
 
 #[test]
-fn accepts_migration_impact() {
+fn rejects_migration_impact() {
     let body = valid_body(
         r#"[[entry]]
 scope       = "node"
@@ -85,7 +85,9 @@ description = "Added a storage migration for node databases."
 "#,
     );
 
-    verify_pr_body(&body).unwrap();
+    let error = verify_pr_body(&body).unwrap_err();
+
+    assert!(error.to_string().contains("unknown variant `migration`"));
 }
 
 #[test]
@@ -246,6 +248,21 @@ description = "Improved RPC behavior."
     let err = verify_pr_body(&body).unwrap_err();
 
     assert!(err.to_string().contains("unknown variant `improved`"));
+}
+
+#[test]
+fn rejects_protocol_scope() {
+    let body = valid_body(
+        r#"[[entry]]
+scope       = "protocol"
+impact      = "changed"
+description = "Bumped the protocol version."
+"#,
+    );
+
+    let err = verify_pr_body(&body).unwrap_err();
+
+    assert!(err.to_string().contains("unknown variant `protocol`"));
 }
 
 #[test]
