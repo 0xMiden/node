@@ -11,9 +11,10 @@ use builder::BlockStream;
 use chain_state::ChainState;
 use clients::{RemoteTransactionProver, RpcClient};
 use miden_node_store::genesis::GenesisBlock;
-use miden_node_tracing::{ErrorReport, debug};
+use miden_node_tracing::{ErrorReport, debug, warn};
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::shutdown::CancellationToken;
+use miden_protocol::account::AccountId;
 use tonic::metadata::AsciiMetadataValue;
 use url::Url;
 
@@ -202,6 +203,12 @@ pub struct NtxBuilderConfig {
     /// to be committed do not count against this limit.
     pub max_concurrent_txs: usize,
 
+    /// Network accounts served before every other account, such as the native faucet.
+    ///
+    /// Each one still holds at most one attempt slot. Keep the list shorter than
+    /// [`Self::max_concurrent_txs`] so a slot always remains for the other accounts.
+    pub priority_accounts: Vec<AccountId>,
+
     /// Maximum number of network notes a single transaction is allowed to consume. Sponsorship
     /// notes count against this budget.
     pub max_notes_per_tx: NonZeroUsize,
@@ -252,6 +259,7 @@ impl NtxBuilderConfig {
             grpc_timeout: DEFAULT_GRPC_TIMEOUT,
             script_cache_size: DEFAULT_SCRIPT_CACHE_SIZE,
             max_concurrent_txs: DEFAULT_MAX_CONCURRENT_TXS,
+            priority_accounts: Vec::new(),
             max_notes_per_tx: DEFAULT_MAX_NOTES_PER_TX,
             max_note_attempts: DEFAULT_MAX_NOTE_ATTEMPTS,
             max_block_count: DEFAULT_MAX_BLOCK_COUNT,
@@ -303,6 +311,13 @@ impl NtxBuilderConfig {
     #[must_use]
     pub fn with_max_concurrent_txs(mut self, max: usize) -> Self {
         self.max_concurrent_txs = max;
+        self
+    }
+
+    /// Sets the network accounts served before every other account.
+    #[must_use]
+    pub fn with_priority_accounts(mut self, accounts: Vec<AccountId>) -> Self {
+        self.priority_accounts = accounts;
         self
     }
 
@@ -517,9 +532,23 @@ impl NtxBuilderConfig {
             },
         };
 
+        // With as many priority accounts as slots, the other accounts only run when a priority
+        // account has nothing to do.
+        if !self.priority_accounts.is_empty()
+            && self.priority_accounts.len() >= self.max_concurrent_txs
+        {
+            warn!(
+                target: LOG_TARGET,
+                "priority accounts can occupy every build slot; raise --max-concurrent-txs",
+                account.ids.count = self.priority_accounts.len(),
+                ntx_builder.max_concurrent_txs = self.max_concurrent_txs
+            );
+        }
+
         let config = SchedulerConfig {
             max_concurrent_txs: self.max_concurrent_txs,
             tx_expiration_delta: self.tx_expiration_delta,
+            priority_accounts: self.priority_accounts.clone(),
         };
 
         Ok(Scheduler::new(ctx, config))
