@@ -8,7 +8,7 @@ use miden_node_tracing::{debug, error, info, miden_instrument};
 use miden_node_utils::formatting::{format_input_notes, format_output_notes};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
-use miden_protocol::batch::ProposedBatch;
+use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::ProvenTransaction;
 use tokio::sync::{Mutex, RwLock};
@@ -376,6 +376,7 @@ impl BlockProducerApi {
     )]
     pub async fn submit_proven_tx_batch(
         &self,
+        proof: ProvenBatch,
         batch: ProposedBatch,
     ) -> Result<BlockNumber, MempoolSubmissionError> {
         // We assume that the rpc component has verified everything, including the transaction
@@ -391,7 +392,7 @@ impl BlockProducerApi {
             );
         }
 
-        self.submit_authenticated_tx_batch(batch, inputs).await
+        self.submit_authenticated_tx_batch(proof, batch, inputs).await
     }
 
     /// Adds a batch whose transactions have already been authenticated against the store to the
@@ -409,6 +410,7 @@ impl BlockProducerApi {
     #[expect(clippy::let_and_return)]
     pub async fn submit_authenticated_tx_batch(
         &self,
+        proof: ProvenBatch,
         batch: ProposedBatch,
         inputs: Vec<TransactionInputs>,
     ) -> Result<BlockNumber, MempoolSubmissionError> {
@@ -436,7 +438,7 @@ impl BlockProducerApi {
         let result = shared_mempool
             .lock()
             .map_err(MempoolSubmissionError::MempoolPoisoned)?
-            .add_user_batch(&txs, parameters);
+            .add_user_batch(&txs, parameters, Arc::new(proof));
         result
     }
 

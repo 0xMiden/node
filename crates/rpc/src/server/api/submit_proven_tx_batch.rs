@@ -113,7 +113,7 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
         }
 
         // Verify batch transaction proofs.
-        verify_batch_proof(proven_batch, &proposed_batch).await?;
+        verify_batch_proof(&proven_batch, &proposed_batch).await?;
 
         match &self.backend {
             RpcBackend::Sequencer { block_producer, validators } => {
@@ -124,7 +124,7 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
                 )
                 .await?;
                 block_producer
-                    .submit_proven_tx_batch(proposed_batch)
+                    .submit_proven_tx_batch(proven_batch, proposed_batch)
                     .await
                     .map(Into::into)
                     .map_err(Into::into)
@@ -135,6 +135,7 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
                 self.submit_authenticated_batch_to_sequencer(
                     pre_auth.validators().as_slice(),
                     pre_auth.sequencer().clone(),
+                    proven_batch,
                     proposed_batch,
                     &request.sealed_transaction_inputs,
                 )
@@ -167,6 +168,7 @@ impl RpcService {
         &self,
         validators: &[ValidatorClient],
         mut sequencer: SequencerClient,
+        proven_batch: ProvenBatch,
         proposed_batch: ProposedBatch,
         sealed_transaction_inputs: &[proto::transaction::SealedTransactionInputs],
     ) -> tonic::Result<proto::blockchain::BlockNumber> {
@@ -183,6 +185,7 @@ impl RpcService {
         let authenticated_batch = proto::sequencer::AuthenticatedTransactionBatch {
             proposed_batch: proposed_batch.to_bytes(),
             auth_inputs,
+            batch_proof: proven_batch.to_bytes(),
         };
         sequencer
             .submit_authenticated_tx_batch(authenticated_batch)
@@ -195,7 +198,7 @@ impl RpcService {
 ///
 /// Errors on id mismatch, or the proof cannot be verified [`MIN_PROOF_SECURITY_LEVEL`]
 async fn verify_batch_proof(
-    proven_batch: ProvenBatch,
+    proven_batch: &ProvenBatch,
     proposed_batch: &ProposedBatch,
 ) -> tonic::Result<()> {
     if proven_batch.id() != proposed_batch.id() {

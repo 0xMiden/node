@@ -42,7 +42,7 @@ message AuthenticatedTransaction {
     fixed32 authentication_height = 4;
 }
 
-// A proposed batch together with the inputs each of its transactions was authenticated against.
+// A proven batch together with its proposed contents and authenticated transaction inputs.
 message AuthenticatedTransactionBatch {
     // The proposed batch.
     //
@@ -53,6 +53,11 @@ message AuthenticatedTransactionBatch {
     //
     // Must match the transaction ordering in the batch.
     repeated AuthInputs auth_inputs = 2;
+
+    // The proven batch.
+    //
+    // Encoded using [miden_protocol::batch::ProvenBatch::to_bytes].
+    bytes batch_proof = 3;
 }
 
 // The store-derived inputs a transaction was authenticated against.

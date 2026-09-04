@@ -2,7 +2,7 @@ use miden_node_block_producer::store::TransactionInputs;
 use miden_node_proto::generated as proto;
 use miden_node_proto::generated::server::sequencer_api;
 use miden_node_tracing::ErrorReport;
-use miden_protocol::batch::ProposedBatch;
+use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::utils::serde::Deserializable;
 use tonic::Status;
 
@@ -10,7 +10,7 @@ use super::{SequencerInternalService, ensure_transactions_have_fee_notes};
 
 #[tonic::async_trait]
 impl sequencer_api::SubmitAuthenticatedTxBatch for SequencerInternalService {
-    type Input = (ProposedBatch, Vec<TransactionInputs>);
+    type Input = (ProvenBatch, ProposedBatch, Vec<TransactionInputs>);
     type Output = proto::blockchain::BlockNumber;
 
     fn decode(
@@ -19,6 +19,17 @@ impl sequencer_api::SubmitAuthenticatedTxBatch for SequencerInternalService {
         let batch = ProposedBatch::read_from_bytes(&request.proposed_batch).map_err(|err| {
             Status::invalid_argument(err.as_report_context("invalid proposed_batch"))
         })?;
+        let proof = ProvenBatch::read_from_bytes(&request.batch_proof).map_err(|err| {
+            Status::invalid_argument(err.as_report_context("invalid batch_proof"))
+        })?;
+
+        if proof.id() != batch.id() {
+            return Err(Status::invalid_argument(format!(
+                "batch proof ID {} does not match proposed batch ID {}",
+                proof.id(),
+                batch.id(),
+            )));
+        }
 
         if batch.transactions().len() != request.auth_inputs.len() {
             return Err(Status::invalid_argument(format!(
@@ -37,7 +48,7 @@ impl sequencer_api::SubmitAuthenticatedTxBatch for SequencerInternalService {
                 Status::invalid_argument(err.as_report_context("invalid auth_inputs"))
             })?;
 
-        Ok((batch, inputs))
+        Ok((proof, batch, inputs))
     }
 
     fn encode(output: Self::Output) -> tonic::Result<proto::blockchain::BlockNumber> {
@@ -46,14 +57,14 @@ impl sequencer_api::SubmitAuthenticatedTxBatch for SequencerInternalService {
 
     async fn handle(
         &self,
-        (batch, inputs): Self::Input,
+        (proof, batch, inputs): Self::Input,
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
         ensure_transactions_have_fee_notes(batch.transactions().iter().map(AsRef::as_ref))?;
 
         self.block_producer
-            .submit_authenticated_tx_batch(batch, inputs)
+            .submit_authenticated_tx_batch(proof, batch, inputs)
             .await
             .map(Into::into)
             .map_err(Into::into)

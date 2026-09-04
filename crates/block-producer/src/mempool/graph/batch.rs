@@ -50,11 +50,12 @@ impl GraphNode for SelectedBatch {
 // BATCH GRAPH
 // ================================================================================================
 
-/// Tracks [`SelectedBatch`] instances that are pending proof generation.
+/// Tracks [`SelectedBatch`] instances that are waiting for inclusion in a block.
 ///
 /// Batches form nodes in the underlying [`Graph`]. Edges between batches capture dependencies
 /// introduced by shared resources (nullifiers, notes, and account states). The graph remains a DAG
 /// by requiring that each batch builds on top of the state created by previously inserted batches.
+/// Sequencer-built batches wait for a proof. User-proven batches include their proof when inserted.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct BatchGraph {
     inner: Graph<SelectedBatch>,

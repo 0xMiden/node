@@ -2,7 +2,7 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use assert_matches::assert_matches;
-use miden_protocol::batch::BatchId;
+use miden_protocol::batch::{BatchId, ProvenBatch};
 use miden_protocol::block::BlockNumber;
 use pretty_assertions::assert_eq;
 
@@ -11,14 +11,10 @@ use crate::domain::transaction::AuthenticatedTransaction;
 use crate::errors::{MempoolSubmissionError, StateConflict};
 use crate::mempool::Mempool;
 use crate::test_utils::MockProvenTxBuilder;
+use crate::test_utils::batch::TransactionBatchConstructor;
 
-/// This checks that transactions from a user batch remain as the same batch upon selection.
-///
-/// Since the selection process is random, its difficult to test this directly, but this at
-/// least acts as a smoke test. We select two batches and check that one of them is the user
-/// batch.
 #[test]
-fn user_batch_is_isolated_from_other_transactions() {
+fn user_batch_bypasses_batch_proving() {
     let (mut uut, _) = Mempool::for_tests();
 
     let conventional_a = build_tx(MockProvenTxBuilder::with_account_index(200));
@@ -30,22 +26,14 @@ fn user_batch_is_isolated_from_other_transactions() {
     let user_batch_txs = MockProvenTxBuilder::sequential();
     let user_batch_id =
         BatchId::from_transactions(user_batch_txs.iter().map(|tx| tx.raw_proven_transaction()));
+    let user_proof = Arc::new(ProvenBatch::mocked_from_transactions(
+        user_batch_txs.iter().map(|tx| tx.raw_proven_transaction()),
+    ));
     let user_parameters = BatchParameters { reference_block: 42.into() };
-    uut.add_user_batch(&user_batch_txs, user_parameters).unwrap();
+    uut.add_user_batch(&user_batch_txs, user_parameters, Arc::clone(&user_proof))
+        .unwrap();
 
-    let batch_a = uut.select_any_batch().unwrap();
-    let batch_b = uut.select_any_batch().unwrap();
-
-    let (user, conventional) = if batch_a.id() == user_batch_id {
-        (batch_a, batch_b)
-    } else {
-        (batch_b, batch_a)
-    };
-
-    assert_eq!(user.id(), user_batch_id);
-    assert_eq!(user.transactions(), user_batch_txs.as_slice());
-    assert_eq!(user.parameters(), user_parameters);
-
+    let conventional = uut.select_any_batch().unwrap();
     assert_eq!(conventional.transactions().len(), 2);
     assert!(conventional.transactions().contains(&conventional_a));
     assert!(conventional.transactions().contains(&conventional_b));
@@ -53,6 +41,10 @@ fn user_batch_is_isolated_from_other_transactions() {
         conventional.parameters(),
         BatchParameters { reference_block: BlockNumber::GENESIS }
     );
+
+    assert_eq!(user_proof.id(), user_batch_id);
+    let block = uut.select_block();
+    assert_eq!(block.batches, vec![user_proof]);
 }
 
 #[test]
@@ -61,9 +53,24 @@ fn user_batch_respects_batch_budget() {
     uut.config.batch_budget.transactions = 1;
 
     let user_batch_txs = MockProvenTxBuilder::sequential();
-    let result = uut.add_user_batch(&user_batch_txs[..2], BatchParameters::for_tests());
+    let result = add_user_batch(&mut uut, &user_batch_txs[..2], BatchParameters::for_tests());
 
     assert_matches!(result, Err(MempoolSubmissionError::CapacityExceeded));
+}
+
+#[test]
+fn user_batch_rejects_a_mismatched_proof() {
+    let (mut uut, reference) = Mempool::for_tests();
+    let [batch_tx, proof_tx] = [
+        build_tx(MockProvenTxBuilder::with_account_index(40)),
+        build_tx(MockProvenTxBuilder::with_account_index(41)),
+    ];
+    let proof = ProvenBatch::mocked_from_transactions([proof_tx.raw_proven_transaction()]);
+
+    let result = uut.add_user_batch(&[batch_tx], BatchParameters::for_tests(), Arc::new(proof));
+
+    assert_matches!(result, Err(MempoolSubmissionError::BatchIdMismatch { .. }));
+    assert_eq!(uut, reference);
 }
 
 #[test]
@@ -77,21 +84,22 @@ fn user_batch_capacity_counts_batched_uncommitted_transactions() {
     uut.select_any_batch().unwrap();
 
     assert_matches!(
-        uut.add_user_batch(&user_batch, BatchParameters::for_tests()),
+        add_user_batch(&mut uut, &user_batch, BatchParameters::for_tests()),
         Err(MempoolSubmissionError::CapacityExceeded)
     );
 }
 
 #[test]
-fn user_batch_counts_as_full_batch() {
+fn user_batch_is_not_selected_for_proving() {
     let (mut uut, _) = Mempool::for_tests();
     uut.config.batch_budget.transactions = 3;
 
     let user_batch_txs = MockProvenTxBuilder::sequential();
-    uut.add_user_batch(&user_batch_txs[..1], BatchParameters::for_tests()).unwrap();
+    add_user_batch(&mut uut, &user_batch_txs[..1], BatchParameters::for_tests()).unwrap();
 
-    let batch = uut.select_full_batch().unwrap();
-    assert_eq!(batch.transactions(), &user_batch_txs[..1]);
+    assert!(uut.select_any_batch().is_none());
+    assert!(uut.select_full_batch().is_none());
+    assert_eq!(uut.select_block().batches.len(), 1);
 }
 
 #[test]
@@ -101,7 +109,8 @@ fn user_batch_with_internal_state_conflicts_are_rejected() {
     let conflicting_a = tx_with_nullifiers(10, 0..1);
     let conflicting_b = tx_with_nullifiers(11, 0..1);
 
-    let result = uut.add_user_batch(
+    let result = add_user_batch(
+        &mut uut,
         &[conflicting_a.clone(), conflicting_b.clone()],
         BatchParameters::for_tests(),
     );
@@ -125,8 +134,11 @@ fn user_batch_conflicts_with_existing_state_are_rejected() {
     let conflicting = tx_with_nullifiers(21, 5..6);
     let companion = tx_with_nullifiers(22, 6..7);
 
-    let result =
-        uut.add_user_batch(&[conflicting.clone(), companion.clone()], BatchParameters::for_tests());
+    let result = add_user_batch(
+        &mut uut,
+        &[conflicting.clone(), companion.clone()],
+        BatchParameters::for_tests(),
+    );
 
     assert_matches!(
         result,
@@ -138,6 +150,16 @@ fn user_batch_conflicts_with_existing_state_are_rejected() {
 
 fn build_tx(builder: MockProvenTxBuilder) -> Arc<AuthenticatedTransaction> {
     Arc::new(AuthenticatedTransaction::from_inner(builder.build()))
+}
+
+fn add_user_batch(
+    mempool: &mut Mempool,
+    txs: &[Arc<AuthenticatedTransaction>],
+    parameters: BatchParameters,
+) -> Result<BlockNumber, MempoolSubmissionError> {
+    let proof =
+        ProvenBatch::mocked_from_transactions(txs.iter().map(|tx| tx.raw_proven_transaction()));
+    mempool.add_user_batch(txs, parameters, Arc::new(proof))
 }
 
 fn tx_with_nullifiers(
