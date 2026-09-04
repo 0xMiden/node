@@ -1,7 +1,7 @@
 use std::sync::{Arc, LazyLock, Mutex};
 
 use assert_matches::assert_matches;
-use diesel::{Connection, SqliteConnection};
+use diesel::{Connection, ExpressionMethods, RunQueryDsl, SqliteConnection};
 use miden_node_proto::domain::account::{AccountSummary, StorageMapEntries};
 use miden_node_utils::fee::{test_fee_params, test_protocol_config};
 use miden_protocol::account::auth::{AuthScheme, PublicKeyCommitment};
@@ -3760,6 +3760,45 @@ fn db_roundtrip_transactions() {
 
     // Verify database roundtrip
     assert_eq!(*record, expected);
+}
+
+#[test]
+fn select_transactions_records_rejects_a_corrupted_transaction_id() {
+    let mut conn = create_db();
+    let block_num = BlockNumber::from(1);
+    create_block(&mut conn, block_num);
+
+    let bob = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    queries::upsert_accounts(
+        &mut conn,
+        &[mock_block_account_update(bob, 0)],
+        block_num,
+        &queries::PrecomputedPublicAccountStates::new(),
+    )
+    .unwrap();
+
+    let tx = mock_block_transaction(bob, 1);
+    queries::insert_transactions(
+        &mut conn,
+        block_num,
+        &OrderedTransactionHeaders::new_unchecked(vec![tx]),
+    )
+    .unwrap();
+
+    diesel::update(crate::db::schema::transactions::table)
+        .set(crate::db::schema::transactions::transaction_id.eq(num_to_word(999).to_bytes()))
+        .execute(&mut conn)
+        .unwrap();
+
+    let err =
+        queries::select_transactions_records(&mut conn, &[bob], BlockNumber::GENESIS..=block_num)
+            .expect_err("a stored transaction ID that does not match its header must be rejected");
+
+    assert_matches!(
+        err,
+        DatabaseError::DataCorrupted(message)
+            if message.contains("transaction ID") && message.contains("does not match")
+    );
 }
 
 #[test]
