@@ -59,7 +59,6 @@ miden-node-utils            = { path = "crates/utils", version = "0.16.0-rc.5" }
 
 # miden-protocol dependencies. These should be updated in sync.
 miden-block-prover = { git = "https://github.com/0xMiden/protocol", rev = "b736227267952f89b89a1764b8c91a5da1982e32", version = "0.17" }
-miden-objects      = { git = "https://github.com/0xMiden/protocol", rev = "b736227267952f89b89a1764b8c91a5da1982e32", version = "0.17" }
 miden-protocol     = { default-features = false, git = "https://github.com/0xMiden/protocol", rev = "b736227267952f89b89a1764b8c91a5da1982e32", version = "0.17" }
 miden-standards    = { git = "https://github.com/0xMiden/protocol", rev = "b736227267952f89b89a1764b8c91a5da1982e32", version = "0.17" }
 miden-testing      = { git = "https://github.com/0xMiden/protocol", rev = "b736227267952f89b89a1764b8c91a5da1982e32", version = "0.17" }

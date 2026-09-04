@@ -39,9 +39,8 @@ miden-benchmark create-proofs \
   --num-transactions 100
 ```
 
-`--fee-faucet-id` identifies the native faucet whose asset pays transaction fees. Block headers
-commit to the protocol configuration but do not contain its preimage. `miden-validator genesis`
-prints this account ID.
+`--fee-faucet-id` identifies the native faucet whose asset pays transaction fees. Block headers commit to the protocol
+configuration but do not contain its full value. `miden-validator genesis` prints this account ID.
 
 Writes the bundle to `./benchmark-proofs/`:
 
