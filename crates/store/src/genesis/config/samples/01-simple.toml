@@ -29,3 +29,8 @@ assets       = [{ amount = 777, symbol = "MIDEN" }]
 [[wallet]]
 account_type = "private"
 assets       = [{ amount = 1, symbol = "WHAT" }]
+
+[[wallet]]
+account_type = "public"
+assets       = [{ amount = 1_000_000_000, symbol = "MIDEN" }]
+name         = "funding_service"
