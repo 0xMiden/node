@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "bin/benchmark",
+  "bin/funding-service",
   "bin/large-account-benchmark",
   "bin/network-monitor",
   "bin/node",

@@ -69,11 +69,12 @@ fn parsing_yields_expected_default_values() -> TestResult {
         assert_eq!(val.as_u64(), 777);
     });
 
-    // check total issuance of the faucet
+    // check total issuance of the faucet, which covers the operator prefund, both MIDEN wallets and
+    // the named wallet
     let faucet = FungibleFaucet::try_from(native_faucet.storage()).unwrap();
     assert_eq!(
         faucet.token_supply().as_u64(),
-        DEFAULT_FAUCET_OPERATOR_BALANCE + 999_777,
+        DEFAULT_FAUCET_OPERATOR_BALANCE + 999_777 + 1_000_000_000,
         "Issuance mismatch"
     );
 

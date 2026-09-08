@@ -5,6 +5,7 @@ use std::process::Command;
 use codegen::{Function, Impl, Module, Trait, Type};
 use fs_err as fs;
 use miden_node_proto_build::{
+    funding_service_api_descriptor,
     ntx_builder_api_descriptor,
     remote_prover_api_descriptor,
     rpc_api_descriptor,
@@ -31,6 +32,7 @@ fn main() -> miette::Result<()> {
         validator_api_descriptor(),
         ntx_builder_api_descriptor(),
         sequencer_api_descriptor(),
+        funding_service_api_descriptor(),
     ];
 
     for file_descriptors in &descriptor_sets {

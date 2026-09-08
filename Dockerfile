@@ -109,6 +109,7 @@ RUN --mount=type=cache,sharing=locked,id=cargo-registry-${TARGETARCH},target=/us
         --bin miden-note-transport \
         --bin miden-ntx-builder \
         --bin miden-network-monitor \
+        --bin miden-funding-service \
         --bin miden-remote-prover \
         --bin miden-benchmark && \
     mkdir -p /app/bin && \
@@ -117,6 +118,7 @@ RUN --mount=type=cache,sharing=locked,id=cargo-registry-${TARGETARCH},target=/us
         /app/target/release/miden-note-transport \
         /app/target/release/miden-ntx-builder \
         /app/target/release/miden-network-monitor \
+        /app/target/release/miden-funding-service \
         /app/target/release/miden-remote-prover \
         /app/target/release/miden-benchmark \
         /app/bin/ && \

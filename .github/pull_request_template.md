@@ -27,7 +27,7 @@ reason    = "Internal change only."
 Do not add an entry for a protocol, Rust MSRV, or database migration version update. Release notes
 derive these updates from repository files.
 
-Allowed scopes: rpc, docs, node, note-transport, network-monitor, ntx-builder, prover, validator, internal, general
+Allowed scopes: rpc, docs, node, note-transport, network-monitor, funding-service, ntx-builder, prover, validator, internal, general
 Allowed impacts: breaking, added, changed, fixed, removed, deprecated
 -->
 

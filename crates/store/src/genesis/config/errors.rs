@@ -74,4 +74,6 @@ pub enum GenesisConfigError {
     InvalidSecretKey(#[from] DeserializationError),
     #[error("provided signer config is not supported")]
     UnsupportedSignerConfig,
+    #[error("account file name '{name}' is used more than once")]
+    DuplicateAccountFileName { name: String },
 }

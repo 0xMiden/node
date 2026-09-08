@@ -11,6 +11,7 @@ use tracing::Value;
 
 const BOOLEAN_FIELD_NAMES: &[&str] = &[
     "account.updated",
+    "funding_service.remote_prover",
     "note.erased",
     "note.id_resolved",
     "panic",
@@ -24,6 +25,7 @@ const NUMBER_FIELD_NAMES: &[&str] = &[
     "account.index",
     "asset.amount",
     "asset.balance",
+    "asset.reserve",
     "batch.expiration_height",
     "batch.expires_at",
     "batch.reference_block.number",
@@ -51,6 +53,10 @@ const NUMBER_FIELD_NAMES: &[&str] = &[
     "db.sqlite.wal.size",
     "dice_roll",
     "failure_rate",
+    "fee.verification_base_fee",
+    "funding_service.max_amount",
+    "funding_service.max_notes_per_tx",
+    "funding_service.tx_expiration_delta",
     "inputs_size",
     "mempool.accounts",
     "mempool.batches.proposed",
@@ -59,6 +65,8 @@ const NUMBER_FIELD_NAMES: &[&str] = &[
     "mempool.output_notes",
     "mempool.transactions.unbatched",
     "mempool.transactions.uncommitted",
+    "note.committed",
+    "note.count",
     "note.tag",
     "ntx_builder.max_cycles",
     "ntx_builder.tx_expiration_delta",
@@ -107,6 +115,8 @@ const STRING_FIELD_NAMES: &[&str] = &[
     "block.interval",
     "dependency.endpoint",
     "dependency.name",
+    "funding_service.listen",
+    "funding_service.poll_interval",
     "genesis.source",
     "genesis.source.kind",
     "grpc.timeout",
@@ -130,6 +140,7 @@ const STRING_FIELD_NAMES: &[&str] = &[
     "rpc.timeout",
     "sequencer.endpoint",
     "service.name",
+    "service.readiness.reason",
     "service.version",
     "shutdown.signal",
     "sync.block_source.endpoint",
@@ -296,7 +307,8 @@ impl<T: RecordAttribute> RecordAttribute for Option<T> {
 }
 
 impl RecordAttribute for Path {
-    const FIELD_NAMES: &'static [&'static str] = &["data.directory", "genesis.file", "path"];
+    const FIELD_NAMES: &'static [&'static str] =
+        &["account.file", "data.directory", "genesis.file", "path"];
 
     fn record_attribute(&self) -> impl Value + '_ {
         tracing::field::display(self.display())
@@ -352,6 +364,7 @@ impl_display_attribute!(
     AccountId,
     &[
         "account.id",
+        "asset.faucet_id",
         "counter.account.id.new",
         "counter.account.id.old",
         "note.sender",
