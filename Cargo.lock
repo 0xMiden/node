@@ -3962,6 +3962,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "miden-funding-service"
+version = "0.17.0-rc.1"
+dependencies = [
+ "anyhow",
+ "backon",
+ "clap",
+ "humantime",
+ "miden-node-proto",
+ "miden-node-proto-build",
+ "miden-node-tracing",
+ "miden-node-utils",
+ "miden-protocol",
+ "miden-standards",
+ "rand 0.10.2",
+ "rand_chacha 0.10.0",
+ "tempfile",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-health",
+ "tonic-reflection",
+ "tower-http",
+ "url",
+]
+
+[[package]]
 name = "miden-large-account-benchmark"
 version = "0.17.0-rc.1"
 dependencies = [

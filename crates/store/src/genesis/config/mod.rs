@@ -1,6 +1,7 @@
 //! Describe a subset of the genesis manifest in easily human readable format
 
 use std::cmp::Ordering;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -249,7 +250,8 @@ impl GenesisConfig {
         let zero_padding_width = usize::ilog10(std::cmp::max(10, wallet_configs.len())) as usize;
 
         // Setup all wallet accounts, which reference the faucet's for their provided assets.
-        for (index, WalletConfig { account_type, assets }) in wallet_configs.into_iter().enumerate()
+        for (index, WalletConfig { name, account_type, assets }) in
+            wallet_configs.into_iter().enumerate()
         {
             debug!(
                 target: LOG_TARGET,
@@ -285,11 +287,12 @@ impl GenesisConfig {
 
             debug_assert_eq!(wallet_account.nonce(), ONE);
 
-            secrets.push((
-                format!("wallet_{index:0zero_padding_width$}.mac"),
-                wallet_account.id(),
-                Some(secret_key),
-            ));
+            let file_name = match name {
+                Some(name) => format!("{name}.mac"),
+                None => format!("wallet_{index:0zero_padding_width$}.mac"),
+            };
+
+            secrets.push((file_name, wallet_account.id(), Some(secret_key)));
 
             wallet_accounts.push(wallet_account);
         }
@@ -357,6 +360,18 @@ impl GenesisConfig {
 
         // Append file-loaded accounts as-is
         all_accounts.extend(file_loaded_accounts);
+
+        // A duplicate name would make one account file overwrite another. The write itself refuses
+        // to replace an existing file, so without this check the failure appears only after part of
+        // the genesis output is already written.
+        let mut seen_file_names = BTreeSet::new();
+        for (file_name, ..) in &secrets {
+            if !seen_file_names.insert(file_name.clone()) {
+                return Err(GenesisConfigError::DuplicateAccountFileName {
+                    name: file_name.clone(),
+                });
+            }
+        }
 
         Ok((
             GenesisState {
@@ -592,6 +607,9 @@ impl FungibleFaucetConfig {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WalletConfig {
+    /// Stem of the account file written for this wallet.
+    #[serde(default)]
+    name: Option<String>,
     #[serde(default)]
     account_type: AccountTypeConfig,
     assets: Vec<AssetEntry>,
@@ -600,7 +618,7 @@ pub struct WalletConfig {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct AssetEntry {
     symbol: TokenSymbolStr,
-    /// The amount of full token units the given asset is populated with
+    /// The amount of the given asset, in base units.
     amount: u64,
 }
 
