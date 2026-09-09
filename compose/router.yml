@@ -38,6 +38,10 @@ configs:
         reverse_proxy h2c://note-transport:57292
       }
 
+      http://funding.localhost {
+        reverse_proxy h2c://funding-service:50401
+      }
+
       http://faucet.localhost {
         handle_path /api/* {
           reverse_proxy faucet:8000
