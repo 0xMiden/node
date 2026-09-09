@@ -1,0 +1,33 @@
+services:
+  funding-service:
+    image: ${MIDEN_FUNDING_SERVICE_IMAGE:-miden-funding-service}
+    pull_policy: missing
+    # The service only reads its account file, which the genesis step writes.
+    volumes:
+      - node-data:/data:ro
+    depends_on:
+      bootstrap-validator:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_started
+      sequencer:
+        condition: service_started
+      tx-prover:
+        condition: service_started
+    command:
+      - miden-funding-service
+      - start
+      - --listen=0.0.0.0:50401
+      - --rpc.url=http://sequencer:57291
+      - --tx-prover.url=${MIDEN_REMOTE_PROVER_URL:-http://tx-prover:50051}
+      - --account-file=/data/accounts/funding_service.mac
+    environment:
+      # Public keys for the three validators' insecure default development signing keys. The
+      # service verifies the attested encryption key at startup and exits when the attestation
+      # comes from a validator it does not trust, so every validator of the set is listed.
+      MIDEN_FUNDING_VALIDATOR_SIGNING_PUBLIC_KEYS: 031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f,02531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337,03462779ad4aad39514614751a71085f2f10e1c7a593e4e030efb5b8721ce55b0b
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_RESOURCE_ATTRIBUTES: service.instance.id=funding-service
+    ports:
+      - "127.0.0.1:50401:50401"
+    restart: unless-stopped

@@ -11,7 +11,8 @@
 #   seed service.
 # - MIDEN_NODE_IMAGE, MIDEN_VALIDATOR_IMAGE, MIDEN_NTX_BUILDER_IMAGE,
 #   MIDEN_REMOTE_PROVER_IMAGE, MIDEN_NETWORK_MONITOR_IMAGE,
-#   MIDEN_BENCHMARK_IMAGE, MIDEN_FAUCET_IMAGE, and MIDEN_NOTE_TRANSPORT_IMAGE:
+#   MIDEN_FUNDING_SERVICE_IMAGE, MIDEN_BENCHMARK_IMAGE, MIDEN_FAUCET_IMAGE, and
+#   MIDEN_NOTE_TRANSPORT_IMAGE:
 #   container images used by the local network. The core images default to the
 #   unqualified names built by the Makefile. Optional external images default
 #   to their pinned versions in the corresponding Compose files.
@@ -28,6 +29,7 @@ include:
   - compose/validator.yml
   - compose/node.yml
   - compose/ntx-builder.yml
+  - compose/funding-service.yml
   - compose/tx-prover.yml
   - compose/seed.yml
   - compose/note-transport.yml

@@ -114,6 +114,7 @@ Existing direct ports remain available for native gRPC clients, automation, and 
 | RPC API (gRPC-Web) | `http://rpc.localhost`              | `localhost:57291` for native gRPC |
 | Transaction prover | `http://prover.localhost`           | Not published directly            |
 | Note transport     | `http://ntl.localhost`              | `localhost:57292` for native gRPC |
+| Funding service    | `http://funding.localhost`          | `localhost:50401` for native gRPC |
 | Faucet frontend    | `http://faucet.localhost`           | `http://localhost:8081`           |
 | Faucet API         | `http://faucet.localhost/api`       | `http://localhost:8000`           |
 | Block explorer     | `http://explorer.localhost`         | `http://localhost:8080`           |

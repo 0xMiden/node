@@ -81,6 +81,7 @@ events at `info` while still printing user-visible `debug` events.
 | `user::miden-ntx-builder`     | Network transaction construction and account actor activity        |
 | `user::miden-prover`          | Remote prover lifecycle events                                     |
 | `user::miden-network-monitor` | Network monitor checks and end-to-end probes                       |
+| `user::miden-funding-service` | Funding service readiness, funding transactions, and note commits  |
 
 A `miden-node` process contains multiple components. For example, a sequencer can emit `user::miden-node`,
 `user::miden-rpc`, `user::miden-block-producer`, and `user::miden-store` events.
