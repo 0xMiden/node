@@ -241,3 +241,10 @@ configs:
 
       [fee_parameters]
       verification_base_fee = 0
+
+      # Funds the funding service. The name makes the genesis step write the account file to
+      # `/data/accounts/funding_service.mac`, which the service loads from a fixed path.
+      [[wallet]]
+      account_type = "public"
+      assets       = [{ amount = 1_000_000_000_000, symbol = "MIDEN" }]
+      name         = "funding_service"

@@ -61,6 +61,8 @@ struct PowChallengeResponse {
 #[serde(deny_unknown_fields)]
 pub(crate) struct GetTokensResponse {
     pub(crate) tx_id: String,
+    // Part of the API response, and `deny_unknown_fields` rejects it if it is not declared.
+    #[expect(dead_code)]
     pub(crate) note_id: String,
 }
 
