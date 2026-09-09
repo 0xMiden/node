@@ -25,6 +25,7 @@ use crate::node::RpcNodeClient;
 use crate::prover::Prover;
 use crate::server::FundingServer;
 use crate::status::{StatusRefresher, StatusSnapshot};
+use crate::top_up::TopUp;
 use crate::worker::{Funder, FunderSetup, WorkerConfig};
 
 mod account;
@@ -37,6 +38,7 @@ mod server;
 mod status;
 #[cfg(test)]
 mod test_utils;
+mod top_up;
 mod tx;
 mod worker;
 
@@ -69,6 +71,9 @@ pub const DEFAULT_TX_EXPIRATION_DELTA: NonZeroU16 =
 /// Default interval at which the service asks the node whether its notes are committed.
 pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
+/// Default interval between two collections of deposits sent to the funding account.
+pub const DEFAULT_TOP_UP_INTERVAL: Duration = Duration::from_secs(60);
+
 /// Default timeout of a request to the node's RPC API.
 pub const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -100,6 +105,7 @@ pub struct FundingServiceConfig {
     max_notes_per_tx: NonZeroUsize,
     tx_expiration_delta: NonZeroU16,
     poll_interval: Duration,
+    top_up_interval: Duration,
 }
 
 impl FundingServiceConfig {
@@ -121,6 +127,7 @@ impl FundingServiceConfig {
             max_notes_per_tx: DEFAULT_MAX_NOTES_PER_TX,
             tx_expiration_delta: DEFAULT_TX_EXPIRATION_DELTA,
             poll_interval: DEFAULT_POLL_INTERVAL,
+            top_up_interval: DEFAULT_TOP_UP_INTERVAL,
         }
     }
 
@@ -170,6 +177,12 @@ impl FundingServiceConfig {
     #[must_use]
     pub fn with_poll_interval(mut self, interval: Duration) -> Self {
         self.poll_interval = interval;
+        self
+    }
+
+    #[must_use]
+    pub fn with_top_up_interval(mut self, interval: Duration) -> Self {
+        self.top_up_interval = interval;
         self
     }
 
@@ -241,6 +254,7 @@ impl FundingServiceConfig {
             },
             max_amount: self.max_amount,
             http_timeout: self.http_timeout,
+            top_up_interval: self.top_up_interval,
         })
     }
 }
@@ -259,6 +273,7 @@ pub struct FundingService {
     worker_config: WorkerConfig,
     max_amount: u64,
     http_timeout: Duration,
+    top_up_interval: Duration,
 }
 
 impl FundingService {
@@ -296,6 +311,21 @@ impl FundingService {
                 .run(refresher_shutdown)
                 .await
                 .context("the funding service status refresher failed")
+        });
+
+        let top_up = TopUp::new(
+            self.node.clone(),
+            self.prover.clone(),
+            self.funder_key.clone(),
+            self.protocol_config.clone(),
+            self.worker_config.expiration_delta,
+            self.top_up_interval,
+        );
+        let top_up_shutdown = shutdown.clone();
+        tasks.spawn("top-up", async move {
+            Box::pin(top_up.run(top_up_shutdown))
+                .await
+                .context("the funding account top-up failed")
         });
 
         let funder = Funder::new(

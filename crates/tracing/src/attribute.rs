@@ -117,6 +117,7 @@ const STRING_FIELD_NAMES: &[&str] = &[
     "dependency.name",
     "funding_service.listen",
     "funding_service.poll_interval",
+    "funding_service.top_up_interval",
     "genesis.source",
     "genesis.source.kind",
     "grpc.timeout",

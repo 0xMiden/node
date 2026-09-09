@@ -11,6 +11,7 @@ use miden_funding_service::{
     DEFAULT_MAX_NOTES_PER_TX,
     DEFAULT_POLL_INTERVAL,
     DEFAULT_RPC_TIMEOUT,
+    DEFAULT_TOP_UP_INTERVAL,
     DEFAULT_TX_EXPIRATION_DELTA,
     DEFAULT_TX_PROVER_TIMEOUT,
     FundingServiceConfig,
@@ -35,6 +36,7 @@ const ENV_MAX_AMOUNT: &str = "MIDEN_FUNDING_MAX_AMOUNT";
 const ENV_MAX_NOTES_PER_TX: &str = "MIDEN_FUNDING_MAX_NOTES_PER_TX";
 const ENV_TX_EXPIRATION_DELTA: &str = "MIDEN_FUNDING_TX_EXPIRATION_DELTA";
 const ENV_POLL_INTERVAL: &str = "MIDEN_FUNDING_POLL_INTERVAL";
+const ENV_TOP_UP_INTERVAL: &str = "MIDEN_FUNDING_TOP_UP_INTERVAL";
 const ENV_VALIDATOR_SIGNING_PUBLIC_KEYS: &str = "MIDEN_FUNDING_VALIDATOR_SIGNING_PUBLIC_KEYS";
 
 #[derive(Parser)]
@@ -125,6 +127,16 @@ pub enum FundingServiceCommand {
         )]
         poll_interval: Duration,
 
+        /// Interval at which the service collects deposits sent to the funding account.
+        #[arg(
+            long = "top-up-interval",
+            env = ENV_TOP_UP_INTERVAL,
+            default_value = duration_to_human_readable_string(DEFAULT_TOP_UP_INTERVAL),
+            value_parser = humantime::parse_duration,
+            value_name = "DURATION"
+        )]
+        top_up_interval: Duration,
+
         /// Hex-encoded validator signing public key trusted to attest the transaction encryption
         /// key.
         #[arg(
@@ -153,6 +165,7 @@ impl FundingServiceCommand {
             max_notes_per_tx,
             tx_expiration_delta,
             poll_interval,
+            top_up_interval,
             validator_signing_public_keys,
         } = self;
 
@@ -171,7 +184,9 @@ impl FundingServiceCommand {
             funding_service.max_amount = max_amount,
             funding_service.max_notes_per_tx = max_notes_per_tx.get(),
             funding_service.tx_expiration_delta = tx_expiration_delta.get(),
-            funding_service.poll_interval = humantime::Duration::from(poll_interval).to_string()
+            funding_service.poll_interval = humantime::Duration::from(poll_interval).to_string(),
+            funding_service.top_up_interval =
+                humantime::Duration::from(top_up_interval).to_string()
         );
 
         let listener = TcpListener::bind(listen)
@@ -187,6 +202,7 @@ impl FundingServiceCommand {
             .with_max_notes_per_tx(max_notes_per_tx)
             .with_tx_expiration_delta(tx_expiration_delta)
             .with_poll_interval(poll_interval)
+            .with_top_up_interval(top_up_interval)
             .build()
             .await
             .context("failed to initialize the funding service")?

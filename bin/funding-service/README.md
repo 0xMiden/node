@@ -12,6 +12,9 @@ a block, then returns the note together with proof of its inclusion.
 
 The service reads the chain's protocol configuration from the node at startup, together with the genesis block header.
 
+The account is refilled by sending it a public pay-to-ID note that holds the native asset. The service scans for those
+notes and consumes them on its own.
+
 The service serves a JSON HTTP API.
 
 `POST /request-funds` takes the target `account_id`, in hexadecimal, and an `amount` in base units. It answers with the
@@ -20,7 +23,7 @@ full because the requester does not know the note ID before the answer arrives. 
 still find the note at the node, through the note tag of the target account.
 
 `GET /status` reports the funding account, its balance, the block that balance was read at, and the verification base
-fee of that block. An operator alerts on that balance, because the service does not refill itself.
+fee of that block. An operator alerts on that balance, because the service never mints.
 
 The service does not authenticate requests. An operator must restrict access to its HTTP API at the infrastructure
 level.

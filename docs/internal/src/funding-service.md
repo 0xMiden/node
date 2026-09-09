@@ -33,6 +33,16 @@ The native asset is callback-enabled: the kernel loads the issuing faucet in a f
 
 The transaction pays its own fee from the same vault the notes are paid from, so the worker holds back the worst-case fee of one transaction before it spends the balance. It then admits queued requests in order and stops at the first request which does not fit, which keeps the queue first-come-first-served and stops a stream of small requests from starving a large one. A request which does not fit is refused at once, and the requester is told that the account needs funds rather than being made to wait.
 
+## Refilling the account
+
+The service spends and never mints, so the account eventually runs down. An operator refills it by sending it a public pay-to-ID note that holds the native asset, and a collection task collects those notes.
+
+The collection synchronizes notes by the funding account's tag. To avoid consuming notes with custom assets, a filter is used, the notes need to be: public, pay-to-ID, targeting the funding account, holding the native asset and nothing else.
+
+The scan restarts at the genesis block after a restart, because the service keeps nothing on disk. That is cheap: the node returns only the blocks which hold a matching note. The node may answer a range in chunks, so the scan resumes from the last block the node reports as checked, and the remaining blocks are covered by the next scan.
+
+Two choices in this collection are deliberate. It runs as its own transaction rather than riding along with a funding transaction, because a deposit note comes from outside the service and a note which turns out to be unconsumable must not be able to fail a request a client is waiting on.
+
 ## Public notes
 
 The notes are public, so the node stores their details. The response carries the note and the proof that the note is in a block, which lets a requester consume the note without a further lookup at the node.
