@@ -1,10 +1,9 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl, SqliteConnection};
+use miden_node_db::DatabaseError;
+use miden_node_db::sqlite::{ReadTx, WriteTx};
 use miden_protocol::account::AccountId;
-use miden_protocol::utils::serde::{Deserializable, Serializable};
 
-use super::schema::account_allowlist;
 use super::{
     AllowlistError,
     InvitationCode,
@@ -12,75 +11,77 @@ use super::{
     InvitationStatus,
     RegistrationOutcome,
 };
-use crate::DatabaseError;
 
 pub(super) fn contains_account(
-    conn: &mut SqliteConnection,
+    tx: &ReadTx<'_>,
     account_id: AccountId,
 ) -> Result<bool, DatabaseError> {
-    let query =
-        account_allowlist::table.filter(account_allowlist::account_id.eq(account_id.to_bytes()));
-    diesel::select(diesel::dsl::exists(query))
-        .get_result(conn)
-        .map_err(DatabaseError::Diesel)
+    Ok(tx
+        .query(
+            "SELECT EXISTS(SELECT 1 FROM account_allowlist WHERE account_id = ?1)",
+            &[&account_id],
+            |row| row.get::<bool>(0),
+        )?
+        .into_iter()
+        .next()
+        .unwrap_or(false))
 }
 
 pub(super) fn invitation_status(
-    conn: &mut SqliteConnection,
+    tx: &ReadTx<'_>,
     invitation: &InvitationCode,
 ) -> Result<InvitationStatus, DatabaseError> {
-    let account = account_allowlist::table
-        .filter(account_allowlist::invitation_digest.eq(invitation.digest()))
-        .select(account_allowlist::account_id)
-        .first::<Option<Vec<u8>>>(conn)
-        .optional()
-        .map_err(DatabaseError::Diesel)?;
+    let account = tx
+        .query(
+            "SELECT account_id FROM account_allowlist WHERE invitation_digest = ?1",
+            &[&invitation.digest().to_vec()],
+            |row| row.get::<Option<AccountId>>(0),
+        )?
+        .into_iter()
+        .next();
 
     Ok(match account {
         None => InvitationStatus::Unknown,
         Some(None) => InvitationStatus::Unused,
-        Some(Some(bytes)) => InvitationStatus::Registered(
-            AccountId::read_from_bytes(&bytes).map_err(DatabaseError::DeserializationError)?,
-        ),
+        Some(Some(account)) => InvitationStatus::Registered(account),
     })
 }
 
-pub(super) fn add_account(
-    conn: &mut SqliteConnection,
-    account_id: AccountId,
-) -> Result<usize, DatabaseError> {
-    diesel::insert_into(account_allowlist::table)
-        .values((
-            account_allowlist::account_id.eq(account_id.to_bytes()),
-            account_allowlist::created_at.eq(current_timestamp()),
-        ))
-        .on_conflict(account_allowlist::account_id)
-        .do_nothing()
-        .execute(conn)
-        .map_err(DatabaseError::Diesel)
+pub(super) fn add_account(tx: &WriteTx<'_>, account_id: AccountId) -> Result<usize, DatabaseError> {
+    tx.execute(
+        "INSERT INTO account_allowlist (account_id, created_at) VALUES (?1, ?2)
+         ON CONFLICT(account_id) DO NOTHING",
+        &[&account_id, &current_timestamp()],
+    )
 }
 
 pub(super) fn import_invitation(
-    conn: &mut SqliteConnection,
+    tx: &WriteTx<'_>,
     entry: &InvitationEntry,
 ) -> Result<(), AllowlistError> {
-    match invitation_status(conn, &entry.invitation_code).map_err(AllowlistError::Database)? {
+    match invitation_status(tx, &entry.invitation_code)
+        .map_err(crate::DatabaseError::DatabaseError)
+        .map_err(AllowlistError::Database)?
+    {
         InvitationStatus::Unknown => {
             if let Some(account_id) = entry.account_id {
-                ensure_account_unregistered(conn, account_id)?;
+                ensure_account_unregistered(tx, account_id)?;
             }
-            diesel::insert_into(account_allowlist::table)
-                .values((
-                    account_allowlist::invitation_digest.eq(entry.invitation_code.digest()),
-                    account_allowlist::account_id.eq(entry.account_id.map(|id| id.to_bytes())),
-                    account_allowlist::created_at.eq(current_timestamp()),
-                ))
-                .execute(conn)
-                .map_err(|error| AllowlistError::Database(DatabaseError::Diesel(error)))?;
+            tx.execute(
+                "INSERT INTO account_allowlist (invitation_digest, account_id, created_at)
+                 VALUES (?1, ?2, ?3)",
+                &[
+                    &entry.invitation_code.digest().to_vec(),
+                    &entry.account_id,
+                    &current_timestamp(),
+                ],
+            )
+            .map_err(crate::DatabaseError::DatabaseError)
+            .map_err(AllowlistError::Database)?;
         },
         InvitationStatus::Unused => {
             if let Some(account_id) = entry.account_id {
-                bind_invitation(conn, &entry.invitation_code, account_id)?;
+                bind_invitation(tx, &entry.invitation_code, account_id)?;
             }
         },
         InvitationStatus::Registered(account_id) => {
@@ -93,44 +94,49 @@ pub(super) fn import_invitation(
 }
 
 pub(super) fn register_account(
-    conn: &mut SqliteConnection,
+    tx: &WriteTx<'_>,
     invitation: &InvitationCode,
     account_id: AccountId,
 ) -> Result<RegistrationOutcome, AllowlistError> {
-    match invitation_status(conn, invitation).map_err(AllowlistError::Database)? {
+    match invitation_status(tx, invitation)
+        .map_err(crate::DatabaseError::DatabaseError)
+        .map_err(AllowlistError::Database)?
+    {
         InvitationStatus::Unknown => Err(AllowlistError::InvitationNotFound),
         InvitationStatus::Registered(registered) if registered == account_id => {
             Ok(RegistrationOutcome::AlreadyRegistered)
         },
         InvitationStatus::Registered(_) => Err(AllowlistError::InvitationAlreadyUsed),
         InvitationStatus::Unused => {
-            bind_invitation(conn, invitation, account_id)?;
+            bind_invitation(tx, invitation, account_id)?;
             Ok(RegistrationOutcome::Registered)
         },
     }
 }
 
 fn bind_invitation(
-    conn: &mut SqliteConnection,
+    tx: &WriteTx<'_>,
     invitation: &InvitationCode,
     account_id: AccountId,
 ) -> Result<(), AllowlistError> {
-    ensure_account_unregistered(conn, account_id)?;
-    diesel::update(
-        account_allowlist::table
-            .filter(account_allowlist::invitation_digest.eq(invitation.digest())),
+    ensure_account_unregistered(tx, account_id)?;
+    tx.execute(
+        "UPDATE account_allowlist SET account_id = ?1 WHERE invitation_digest = ?2",
+        &[&account_id, &invitation.digest().to_vec()],
     )
-    .set(account_allowlist::account_id.eq(account_id.to_bytes()))
-    .execute(conn)
-    .map_err(|error| AllowlistError::Database(DatabaseError::Diesel(error)))?;
+    .map_err(crate::DatabaseError::DatabaseError)
+    .map_err(AllowlistError::Database)?;
     Ok(())
 }
 
 fn ensure_account_unregistered(
-    conn: &mut SqliteConnection,
+    tx: &ReadTx<'_>,
     account_id: AccountId,
 ) -> Result<(), AllowlistError> {
-    if contains_account(conn, account_id).map_err(AllowlistError::Database)? {
+    if contains_account(tx, account_id)
+        .map_err(crate::DatabaseError::DatabaseError)
+        .map_err(AllowlistError::Database)?
+    {
         return Err(AllowlistError::AccountAlreadyRegistered(account_id));
     }
     Ok(())

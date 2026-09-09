@@ -1,8 +1,6 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use assert_matches::assert_matches;
-use diesel::connection::SimpleConnection;
-use diesel::{Connection, ExpressionMethods, QueryDsl, RunQueryDsl};
 use miden_node_db::migration::{SchemaHash, SchemaHashes};
 use miden_protocol::account::AccountId;
 use miden_protocol::testing::account_id::{
@@ -12,7 +10,6 @@ use miden_protocol::testing::account_id::{
 };
 use tempfile::TempDir;
 
-use super::schema::account_allowlist;
 use super::{
     AccountAllowlist,
     AllowlistError,
@@ -82,19 +79,24 @@ async fn registrations_and_creation_times_persist() {
         i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()).unwrap();
 
     let path = data_directory(&dir).allowlist_database_path();
-    let mut conn = diesel::SqliteConnection::establish(path.to_str().unwrap()).unwrap();
-    let timestamps: Vec<i64> = account_allowlist::table
-        .select(account_allowlist::created_at)
-        .load(&mut conn)
+    let timestamps = registry
+        .reader
+        .db
+        .read("creation_times", |tx| {
+            tx.query("SELECT created_at FROM account_allowlist", &[], |row| row.get::<i64>(0))
+        })
+        .await
         .unwrap();
     assert_eq!(timestamps.len(), 3);
     assert!(timestamps.iter().all(|timestamp| (before..=after).contains(timestamp)));
     // An earlier timestamp detects replacement without a clock delay.
-    diesel::update(account_allowlist::table)
-        .set(account_allowlist::created_at.eq(CREATED_AT))
-        .execute(&mut conn)
+    registry
+        .writer
+        .write("set_creation_times", |tx| {
+            tx.execute("UPDATE account_allowlist SET created_at = ?1", &[&CREATED_AT])
+        })
+        .await
         .unwrap();
-    drop(conn);
 
     registry.register_account(invitation(1), account(0)).await.unwrap();
     registry.import_invitations(entries).await.unwrap();
@@ -115,10 +117,13 @@ async fn registrations_and_creation_times_persist() {
             InvitationStatus::Registered(id)
         );
     }
-    let mut conn = diesel::SqliteConnection::establish(path.to_str().unwrap()).unwrap();
-    let timestamps: Vec<i64> = account_allowlist::table
-        .select(account_allowlist::created_at)
-        .load(&mut conn)
+    let timestamps = registry
+        .reader
+        .db
+        .read("creation_times", |tx| {
+            tx.query("SELECT created_at FROM account_allowlist", &[], |row| row.get::<i64>(0))
+        })
+        .await
         .unwrap();
     assert_eq!(timestamps, vec![CREATED_AT; 3]);
 }
@@ -128,12 +133,12 @@ async fn registry_writes_complete_while_block_database_is_write_locked() {
     let (dir, registry) = setup();
     let store_path = data_directory(&dir).database_path();
     crate::db::bootstrap_database(&store_path).unwrap();
-    let mut conn = diesel::SqliteConnection::establish(store_path.to_str().unwrap()).unwrap();
-    miden_node_db::configure_connection_on_creation(&mut conn).unwrap();
-    conn.batch_execute(
-        "BEGIN IMMEDIATE;
-         INSERT INTO account_codes (code_commitment, code) VALUES (X'01', X'02');",
-    )
+    let (writer, _) = miden_node_db::sqlite::open(&store_path).unwrap();
+    let tx = writer.begin_write().await.unwrap();
+    tx.run("insert_account_code", |tx| {
+        tx.execute("INSERT INTO account_codes (code_commitment, code) VALUES (X'01', X'02')", &[])
+    })
+    .await
     .unwrap();
 
     let result = tokio::time::timeout(Duration::from_secs(2), async {
@@ -145,7 +150,7 @@ async fn registry_writes_complete_while_block_database_is_write_locked() {
         assert_eq!(registry.add_accounts(vec![account(1)]).await.unwrap(), 1);
     })
     .await;
-    conn.batch_execute("ROLLBACK;").unwrap();
+    tx.rollback().await.unwrap();
     result.expect("registry writes must not wait for the block database write lock");
 
     let registry = reopen(&dir);

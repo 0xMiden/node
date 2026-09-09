@@ -5,8 +5,7 @@
 
 use std::path::Path;
 
-use diesel::SqliteConnection;
-use diesel::result::Error as DieselError;
+use miden_node_db::sqlite::{DbReader, DbWriter, WriteTx};
 use miden_protocol::account::AccountId;
 use thiserror::Error;
 
@@ -15,7 +14,6 @@ use crate::DatabaseError;
 mod invitation;
 mod migrations;
 mod queries;
-mod schema;
 
 pub use invitation::{InvalidInvitationCode, InvitationCode};
 
@@ -61,17 +59,18 @@ pub enum AllowlistError {
 /// Read-only access to the account registry.
 #[derive(Clone)]
 pub struct AccountAllowlistReader {
-    db: miden_node_db::Db,
+    db: DbReader,
 }
 
 impl AccountAllowlistReader {
     /// Returns whether the registry contains the account.
     pub async fn contains_account(&self, account_id: AccountId) -> Result<bool, DatabaseError> {
         self.db
-            .transact("allowlist.contains_account", move |conn| {
-                queries::contains_account(conn, account_id)
+            .read("allowlist.contains_account", move |tx| {
+                queries::contains_account(tx, account_id)
             })
             .await
+            .map_err(DatabaseError::DatabaseError)
     }
 
     /// Returns the registration state of the invitation code.
@@ -80,21 +79,22 @@ impl AccountAllowlistReader {
         invitation_code: InvitationCode,
     ) -> Result<InvitationStatus, DatabaseError> {
         self.db
-            .transact("allowlist.invitation_status", move |conn| {
-                queries::invitation_status(conn, &invitation_code)
+            .read("allowlist.invitation_status", move |tx| {
+                queries::invitation_status(tx, &invitation_code)
             })
             .await
+            .map_err(DatabaseError::DatabaseError)
     }
 }
 
 /// Persistent account registry in a separate SQLite database.
 ///
-/// The registry has its own connection pool. Its writes do not wait for block database writes.
+/// The registry has separate reader and writer pools. Its writes do not wait for block database writes.
 /// Each entry records its creation time in UTC Unix seconds. Registration and retries preserve this time.
 /// Write transactions acquire the write lock before they read registrations.
 /// Each write operation commits all its changes together. Failed operations leave no changes.
 pub struct AccountAllowlist {
-    db: miden_node_db::Db,
+    writer: DbWriter,
     reader: AccountAllowlistReader,
 }
 
@@ -132,10 +132,11 @@ impl AccountAllowlist {
             .verify_latest_schema(database_filepath)
             .map_err(miden_node_db::DatabaseError::migration)
             .map_err(DatabaseError::DatabaseError)?;
-        let db = miden_node_db::Db::new(database_filepath).map_err(DatabaseError::DatabaseError)?;
+        let (writer, reader) =
+            miden_node_db::sqlite::open(database_filepath).map_err(DatabaseError::DatabaseError)?;
         Ok(Self {
-            reader: AccountAllowlistReader { db: db.clone() },
-            db,
+            writer,
+            reader: AccountAllowlistReader { db: reader },
         })
     }
 
@@ -150,7 +151,7 @@ impl AccountAllowlist {
             .map_err(DatabaseError::DatabaseError)
     }
 
-    /// Returns a read-only handle that shares the database pool.
+    /// Returns a read-only handle that shares the reader pool.
     pub fn reader(&self) -> AccountAllowlistReader {
         self.reader.clone()
     }
@@ -164,9 +165,9 @@ impl AccountAllowlist {
         &self,
         entries: Vec<InvitationEntry>,
     ) -> Result<(), AllowlistError> {
-        self.transact("allowlist.import_invitations", move |conn| {
+        self.transact("allowlist.import_invitations", move |tx| {
             for entry in entries {
-                queries::import_invitation(conn, &entry)?;
+                queries::import_invitation(tx, &entry)?;
             }
             Ok(())
         })
@@ -177,17 +178,16 @@ impl AccountAllowlist {
     ///
     /// Existing accounts keep their invitation code registrations, if any.
     pub async fn add_accounts(&self, accounts: Vec<AccountId>) -> Result<usize, DatabaseError> {
-        self.db
-            .query("allowlist.add_accounts", move |conn| {
-                conn.immediate_transaction(|conn| {
-                    let mut inserted = 0;
-                    for account_id in accounts {
-                        inserted += queries::add_account(conn, account_id)?;
-                    }
-                    Ok(inserted)
-                })
+        self.writer
+            .write("allowlist.add_accounts", move |tx| {
+                let mut inserted = 0;
+                for account_id in accounts {
+                    inserted += queries::add_account(tx, account_id)?;
+                }
+                Ok::<_, miden_node_db::DatabaseError>(inserted)
             })
             .await
+            .map_err(DatabaseError::DatabaseError)
     }
 
     /// Registers an unused invitation code to an account in one transaction.
@@ -199,8 +199,8 @@ impl AccountAllowlist {
         invitation_code: InvitationCode,
         account_id: AccountId,
     ) -> Result<RegistrationOutcome, AllowlistError> {
-        self.transact("allowlist.register_account", move |conn| {
-            queries::register_account(conn, &invitation_code, account_id)
+        self.transact("allowlist.register_account", move |tx| {
+            queries::register_account(tx, &invitation_code, account_id)
         })
         .await
     }
@@ -208,26 +208,36 @@ impl AccountAllowlist {
     async fn transact<T: Send + 'static>(
         &self,
         name: &'static str,
-        query: impl FnOnce(&mut SqliteConnection) -> Result<T, AllowlistError> + Send + 'static,
+        query: impl FnOnce(&WriteTx<'_>) -> Result<T, AllowlistError> + Send + 'static,
     ) -> Result<T, AllowlistError> {
-        self.db
-            .query(name, move |conn| {
-                let mut query_error = None;
-                let result = conn.immediate_transaction(|conn| {
-                    query(conn).map_err(|error| {
-                        // Ask Diesel to roll back without converting the registry error.
-                        query_error = Some(error);
-                        DieselError::RollbackTransaction
-                    })
-                });
-                Ok::<_, miden_node_db::DatabaseError>(match (result, query_error) {
-                    (Ok(value), _) => Ok(value),
-                    (Err(DieselError::RollbackTransaction), Some(error)) => Err(error),
-                    // Report transaction failures even when the query also failed.
-                    (Err(error), _) => Err(AllowlistError::Database(DatabaseError::Diesel(error))),
-                })
-            })
+        let tx = self
+            .writer
+            .begin_write()
             .await
-            .map_err(|error| AllowlistError::Database(DatabaseError::DatabaseError(error)))?
+            .map_err(DatabaseError::DatabaseError)
+            .map_err(AllowlistError::Database)?;
+        let result = tx
+            .run(name, move |tx| Ok::<_, miden_node_db::DatabaseError>(query(tx)))
+            .await
+            .map_err(DatabaseError::DatabaseError)
+            .map_err(AllowlistError::Database)
+            .and_then(std::convert::identity);
+
+        match result {
+            Ok(value) => {
+                tx.commit()
+                    .await
+                    .map_err(DatabaseError::DatabaseError)
+                    .map_err(AllowlistError::Database)?;
+                Ok(value)
+            },
+            Err(error) => {
+                tx.rollback()
+                    .await
+                    .map_err(DatabaseError::DatabaseError)
+                    .map_err(AllowlistError::Database)?;
+                Err(error)
+            },
+        }
     }
 }
