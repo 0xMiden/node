@@ -3,7 +3,7 @@ use axum::extract::State;
 use serde::{Deserialize, Serialize};
 
 use crate::COMPONENT;
-use crate::status::StatusSnapshot;
+use crate::server::FundingState;
 
 // STATUS RESPONSE
 // ================================================================================================
@@ -33,7 +33,9 @@ pub(super) struct StatusResponse {
 /// The status is served while the service is still synchronizing, so an operator can read the
 /// funding account it was configured with.
 #[miden_node_tracing::miden_instrument(target = COMPONENT, name = "status")]
-pub(super) async fn status(State(status): State<StatusSnapshot>) -> Json<StatusResponse> {
+pub(super) async fn status(State(state): State<FundingState>) -> Json<StatusResponse> {
+    let status = &state.status;
+
     Json(StatusResponse {
         version: env!("CARGO_PKG_VERSION").to_string(),
         account_id: status.account_id().to_string(),
@@ -50,14 +52,14 @@ mod tests {
     use miden_protocol::asset::FungibleAsset;
 
     use super::*;
-    use crate::server::tests::test_status;
+    use crate::server::tests::test_state;
 
     #[tokio::test]
     async fn status_reports_the_configured_account_and_the_published_balance() {
-        let snapshot = test_status(500);
-        snapshot.update(1_234, 42.into(), 7);
+        let (state, _rx) = test_state(500);
+        state.status.update(1_234, 42.into(), 7);
 
-        let Json(response) = status(State(snapshot)).await;
+        let Json(response) = status(State(state)).await;
 
         assert_eq!(
             AccountId::from_hex(&response.account_id).unwrap(),

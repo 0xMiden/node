@@ -3,6 +3,8 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use miden_protocol::Word;
+use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{AccountFile, AccountId, AccountType};
 
 // FUNDER KEY
@@ -12,6 +14,8 @@ use miden_protocol::account::{AccountFile, AccountId, AccountType};
 #[derive(Clone, Debug)]
 pub struct FunderKey {
     account_id: AccountId,
+    secret_key: AuthSecretKey,
+    code_commitment: Word,
 }
 
 impl FunderKey {
@@ -19,6 +23,10 @@ impl FunderKey {
     pub fn load(path: &Path) -> Result<Self> {
         let account_file = AccountFile::read(path)
             .with_context(|| format!("failed to read the account file at {}", path.display()))?;
+
+        let secret_key = account_file.auth_secret_keys.first().cloned().with_context(|| {
+            format!("the account file at {} holds no secret key", path.display())
+        })?;
 
         let account = account_file.account;
         anyhow::ensure!(
@@ -28,11 +36,24 @@ impl FunderKey {
             account.id(),
         );
 
-        Ok(Self { account_id: account.id() })
+        Ok(Self {
+            account_id: account.id(),
+            secret_key,
+            code_commitment: account.code().commitment(),
+        })
     }
 
     pub fn account_id(&self) -> AccountId {
         self.account_id
+    }
+
+    pub fn secret_key(&self) -> &AuthSecretKey {
+        &self.secret_key
+    }
+
+    /// The commitment to the account code in the account file.
+    pub fn code_commitment(&self) -> Word {
+        self.code_commitment
     }
 }
 
@@ -81,12 +102,17 @@ mod tests {
         let path = write_account_file(
             dir.path(),
             &account,
-            vec![AuthSecretKey::Falcon512Poseidon2(secret_key)],
+            vec![AuthSecretKey::Falcon512Poseidon2(secret_key.clone())],
         );
 
         let funder = FunderKey::load(&path).expect("a public wallet with a key should load");
 
         assert_eq!(funder.account_id(), account.id());
+        assert_eq!(funder.code_commitment(), account.code().commitment());
+        assert_eq!(
+            funder.secret_key().public_key().to_commitment(),
+            AuthSecretKey::Falcon512Poseidon2(secret_key).public_key().to_commitment()
+        );
     }
 
     /// The service reads the funder's vault from the node, which is only possible for a public
