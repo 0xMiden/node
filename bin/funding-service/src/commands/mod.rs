@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::num::{NonZeroU16, NonZeroUsize};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -7,13 +8,19 @@ use clap::Parser;
 use miden_funding_service::{
     DEFAULT_HTTP_TIMEOUT,
     DEFAULT_MAX_AMOUNT,
+    DEFAULT_MAX_NOTES_PER_TX,
+    DEFAULT_POLL_INTERVAL,
     DEFAULT_RPC_TIMEOUT,
+    DEFAULT_TX_EXPIRATION_DELTA,
+    DEFAULT_TX_PROVER_TIMEOUT,
     FundingServiceConfig,
 };
 use miden_node_tracing::{OpenTelemetry, info};
 use miden_node_utils::clap::duration_to_human_readable_string;
 use miden_node_utils::formatting::format_endpoint;
 use miden_node_utils::shutdown::CancellationToken;
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
+use miden_protocol::utils::serde::Deserializable;
 use tokio::net::TcpListener;
 use url::Url;
 
@@ -21,8 +28,14 @@ const ENV_LISTEN: &str = "MIDEN_FUNDING_LISTEN";
 const ENV_HTTP_TIMEOUT: &str = "MIDEN_FUNDING_HTTP_TIMEOUT";
 const ENV_RPC_URL: &str = "MIDEN_FUNDING_RPC_URL";
 const ENV_RPC_TIMEOUT: &str = "MIDEN_FUNDING_RPC_TIMEOUT";
+const ENV_TX_PROVER_URL: &str = "MIDEN_FUNDING_TX_PROVER_URL";
+const ENV_TX_PROVER_TIMEOUT: &str = "MIDEN_FUNDING_TX_PROVER_TIMEOUT";
 const ENV_ACCOUNT_FILE: &str = "MIDEN_FUNDING_ACCOUNT_FILE";
 const ENV_MAX_AMOUNT: &str = "MIDEN_FUNDING_MAX_AMOUNT";
+const ENV_MAX_NOTES_PER_TX: &str = "MIDEN_FUNDING_MAX_NOTES_PER_TX";
+const ENV_TX_EXPIRATION_DELTA: &str = "MIDEN_FUNDING_TX_EXPIRATION_DELTA";
+const ENV_POLL_INTERVAL: &str = "MIDEN_FUNDING_POLL_INTERVAL";
+const ENV_VALIDATOR_SIGNING_PUBLIC_KEYS: &str = "MIDEN_FUNDING_VALIDATOR_SIGNING_PUBLIC_KEYS";
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -57,6 +70,20 @@ pub enum FundingServiceCommand {
         )]
         rpc_timeout: Duration,
 
+        /// The remote transaction prover's gRPC url.
+        #[arg(long = "tx-prover.url", env = ENV_TX_PROVER_URL, value_name = "URL")]
+        tx_prover_url: Option<Url>,
+
+        /// Request timeout for calls to the remote transaction prover.
+        #[arg(
+            long = "tx-prover.timeout",
+            env = ENV_TX_PROVER_TIMEOUT,
+            default_value = duration_to_human_readable_string(DEFAULT_TX_PROVER_TIMEOUT),
+            value_parser = humantime::parse_duration,
+            value_name = "DURATION"
+        )]
+        tx_prover_timeout: Duration,
+
         /// Path to the account file of the funding account.
         #[arg(long = "account-file", env = ENV_ACCOUNT_FILE, value_name = "PATH")]
         account_file: PathBuf,
@@ -69,6 +96,46 @@ pub enum FundingServiceCommand {
             value_name = "AMOUNT"
         )]
         max_amount: u64,
+
+        /// Largest number of notes one funding transaction creates.
+        #[arg(
+            long = "max-notes-per-tx",
+            env = ENV_MAX_NOTES_PER_TX,
+            default_value_t = DEFAULT_MAX_NOTES_PER_TX,
+            value_name = "NUM"
+        )]
+        max_notes_per_tx: NonZeroUsize,
+
+        /// Number of blocks after its reference block at which a funding transaction expires.
+        #[arg(
+            long = "tx-expiration-delta",
+            env = ENV_TX_EXPIRATION_DELTA,
+            default_value_t = DEFAULT_TX_EXPIRATION_DELTA,
+            value_name = "BLOCKS"
+        )]
+        tx_expiration_delta: NonZeroU16,
+
+        /// Interval at which the service asks the node whether its notes are committed.
+        #[arg(
+            long = "poll-interval",
+            env = ENV_POLL_INTERVAL,
+            default_value = duration_to_human_readable_string(DEFAULT_POLL_INTERVAL),
+            value_parser = humantime::parse_duration,
+            value_name = "DURATION"
+        )]
+        poll_interval: Duration,
+
+        /// Hex-encoded validator signing public key trusted to attest the transaction encryption
+        /// key.
+        #[arg(
+            long = "validator-signing-public-key",
+            env = ENV_VALIDATOR_SIGNING_PUBLIC_KEYS,
+            value_delimiter = ',',
+            value_parser = parse_validator_public_key,
+            required = true,
+            value_name = "HEX"
+        )]
+        validator_signing_public_keys: Vec<ValidatorPublicKey>,
     },
 }
 
@@ -79,8 +146,14 @@ impl FundingServiceCommand {
             http_timeout,
             rpc_url,
             rpc_timeout,
+            tx_prover_url,
+            tx_prover_timeout,
             account_file,
             max_amount,
+            max_notes_per_tx,
+            tx_expiration_delta,
+            poll_interval,
+            validator_signing_public_keys,
         } = self;
 
         info!(
@@ -92,18 +165,28 @@ impl FundingServiceCommand {
             http.timeout = humantime::Duration::from(http_timeout).to_string(),
             rpc.endpoint = format_endpoint(&rpc_url),
             rpc.timeout = humantime::Duration::from(rpc_timeout).to_string(),
+            tx_prover.endpoint =
+                tx_prover_url.as_ref().map_or_else(|| "local".to_owned(), format_endpoint),
             account.file = account_file.as_path(),
-            funding_service.max_amount = max_amount
+            funding_service.max_amount = max_amount,
+            funding_service.max_notes_per_tx = max_notes_per_tx.get(),
+            funding_service.tx_expiration_delta = tx_expiration_delta.get(),
+            funding_service.poll_interval = humantime::Duration::from(poll_interval).to_string()
         );
 
         let listener = TcpListener::bind(listen)
             .await
             .context("failed to bind to the funding service's HTTP socket")?;
 
-        FundingServiceConfig::new(rpc_url, account_file)
+        FundingServiceConfig::new(rpc_url, account_file, validator_signing_public_keys)
+            .with_tx_prover_url(tx_prover_url)
             .with_http_timeout(http_timeout)
             .with_rpc_timeout(rpc_timeout)
+            .with_tx_prover_timeout(tx_prover_timeout)
             .with_max_amount(max_amount)
+            .with_max_notes_per_tx(max_notes_per_tx)
+            .with_tx_expiration_delta(tx_expiration_delta)
+            .with_poll_interval(poll_interval)
             .build()
             .await
             .context("failed to initialize the funding service")?
@@ -120,4 +203,12 @@ impl FundingServiceCommand {
     pub fn open_telemetry(&self) -> OpenTelemetry {
         OpenTelemetry::from_env().with_name("funding-service")
     }
+}
+
+/// Decodes a hex-encoded validator signing public key.
+fn parse_validator_public_key(value: &str) -> Result<ValidatorPublicKey> {
+    let bytes = hex::decode(value.trim_start_matches("0x"))
+        .context("a validator signing public key must be hex encoded")?;
+    ValidatorPublicKey::read_from_bytes(&bytes)
+        .context("a validator signing public key must be a valid K256 public key")
 }
