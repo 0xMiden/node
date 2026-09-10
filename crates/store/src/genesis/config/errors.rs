@@ -6,6 +6,7 @@ use miden_protocol::errors::{
     AccountError,
     AssetError,
     AssetVaultError,
+    AuthSchemeError,
     ProtocolConfigError,
     TokenSymbolError,
 };
@@ -78,4 +79,6 @@ pub enum GenesisConfigError {
     DuplicateAccountFileName { name: String },
     #[error("account name '{name}' is not a plain file name")]
     InvalidAccountFileName { name: String },
+    #[error("failed to generate a key for the configured authentication scheme")]
+    AuthScheme(#[from] AuthSchemeError),
 }
