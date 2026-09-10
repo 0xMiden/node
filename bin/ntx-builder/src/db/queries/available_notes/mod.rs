@@ -7,7 +7,7 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Note;
 use miden_standards::note::AccountTargetNetworkNote;
 
-use crate::db::eligibility::{has_backoff_passed, note_recheck_block};
+use crate::db::eligibility::{has_backoff_passed, hint_floor, note_recheck_block};
 
 const SQL: &str = include_str!("available_notes.sql");
 
@@ -53,7 +53,7 @@ pub fn available_notes(
         })?;
 
         let hint = note.execution_hint();
-        let hint_ok = hint.can_be_consumed(block_num).unwrap_or(true);
+        let hint_ok = block_num >= hint_floor(hint);
         let backoff_ok = has_backoff_passed(block_num, last_attempt, attempt_count);
         if hint_ok && backoff_ok {
             eligible.push(note);
