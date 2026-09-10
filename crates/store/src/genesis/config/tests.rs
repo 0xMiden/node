@@ -413,7 +413,6 @@ path = "does_not_exist.mac"
 #[test]
 fn wallet_name_sets_the_account_file_name() -> TestResult {
     let toml = r#"
-version = 1
 timestamp = 1717344256
 
 [fee_parameters]
@@ -425,7 +424,7 @@ assets = []
 "#;
 
     let gcfg = GenesisConfig::read_toml(toml, Path::new("."))?;
-    let (state, secrets) = gcfg.into_state(dev_validator_keys())?;
+    let (state, secrets) = gcfg.into_state(dev_validator_config())?;
 
     let names: Vec<String> = secrets
         .as_account_files(&state)
@@ -444,7 +443,6 @@ assets = []
 #[test]
 fn duplicate_wallet_names_are_rejected() {
     let toml = r#"
-version = 1
 timestamp = 1717344256
 
 [fee_parameters]
@@ -460,7 +458,7 @@ assets = []
 "#;
 
     let gcfg = GenesisConfig::read_toml(toml, Path::new(".")).unwrap();
-    let err = gcfg.into_state(dev_validator_keys()).unwrap_err();
+    let err = gcfg.into_state(dev_validator_config()).unwrap_err();
 
     assert_matches!(err, GenesisConfigError::DuplicateAccountFileName { name } => {
         assert_eq!(name, "funding_service.mac");

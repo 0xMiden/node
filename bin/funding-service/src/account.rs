@@ -3,7 +3,6 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{AccountFile, AccountId, AccountType};
 
 // FUNDER KEY
@@ -16,21 +15,10 @@ pub struct FunderKey {
 }
 
 impl FunderKey {
-    /// Reads the funding account and its signing key from an account file.
+    /// Reads the funding account from an account file.
     pub fn load(path: &Path) -> Result<Self> {
         let account_file = AccountFile::read(path)
             .with_context(|| format!("failed to read the account file at {}", path.display()))?;
-
-        account_file
-            .auth_secret_keys
-            .iter()
-            .find(|key| matches!(key, AuthSecretKey::Falcon512Poseidon2(_)))
-            .with_context(|| {
-                format!(
-                    "the account file at {} holds no Falcon512Poseidon2 secret key",
-                    path.display()
-                )
-            })?;
 
         let account = account_file.account;
         anyhow::ensure!(
@@ -51,7 +39,7 @@ impl FunderKey {
 #[cfg(test)]
 mod tests {
     use miden_protocol::ONE;
-    use miden_protocol::account::auth::AuthScheme;
+    use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
     use miden_protocol::account::{Account, AccountType};
     use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
     use miden_standards::account::auth::Approver;
