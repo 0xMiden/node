@@ -6,6 +6,7 @@ use clap::Parser;
 use clap::error::ErrorKind;
 use commands::Command;
 
+mod admin;
 mod commands;
 
 const LOG_TARGET: &str = "user::miden-node";

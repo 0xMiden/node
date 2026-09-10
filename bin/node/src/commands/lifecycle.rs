@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use clap::ArgGroup;
+use miden_node_store::allowlist::AccountAllowlist;
 use miden_node_store::genesis::GenesisBlock;
 use miden_node_store::{DataDirectory, Db, State};
 use miden_node_tracing::info;
@@ -98,6 +99,14 @@ impl MigrateCommand {
 
         Db::migrate(data_directory.database_path())
             .context("failed to apply store database migrations")?;
+
+        // Only sequencer admin startup creates this optional database. Migration must also work for
+        // full nodes that do not have it.
+        let allowlist_path = data_directory.allowlist_database_path();
+        if fs_err::exists(&allowlist_path).context("failed to check account allowlist database")? {
+            AccountAllowlist::migrate(allowlist_path)
+                .context("failed to apply account allowlist migrations")?;
+        }
 
         Ok(())
     }

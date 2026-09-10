@@ -102,6 +102,7 @@ const STRING_FIELD_NAMES: &[&str] = &[
     "account.storage.kind",
     "account.storage.map.entry.operation",
     "account.storage.operation",
+    "admin.listen",
     "asset.symbol",
     "batch.interval",
     "block.interval",

@@ -35,6 +35,13 @@ pub enum InvitationStatus {
     Registered(AccountId),
 }
 
+/// An invitation's registration and allowlist entry timestamp in UTC Unix seconds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InvitationInfo {
+    pub account_id: Option<AccountId>,
+    pub allowlisted_at: i64,
+}
+
 /// The result of a successful registration request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RegistrationOutcome {
@@ -63,6 +70,30 @@ pub struct AccountAllowlistReader {
 }
 
 impl AccountAllowlistReader {
+    /// Returns when the account's allowlist entry was added, if it exists.
+    pub async fn allowlisted_at(
+        &self,
+        account_id: AccountId,
+    ) -> Result<Option<i64>, DatabaseError> {
+        self.db
+            .read("allowlist.allowlisted_at", move |tx| queries::allowlisted_at(tx, account_id))
+            .await
+            .map_err(DatabaseError::DatabaseError)
+    }
+
+    /// Returns the invitation's registration and allowlist entry timestamp, if it exists.
+    pub async fn invitation_info(
+        &self,
+        invitation_code: InvitationCode,
+    ) -> Result<Option<InvitationInfo>, DatabaseError> {
+        self.db
+            .read("allowlist.invitation_info", move |tx| {
+                queries::invitation_info(tx, &invitation_code)
+            })
+            .await
+            .map_err(DatabaseError::DatabaseError)
+    }
+
     /// Returns whether the registry contains the account.
     pub async fn contains_account(&self, account_id: AccountId) -> Result<bool, DatabaseError> {
         self.db
@@ -90,7 +121,7 @@ impl AccountAllowlistReader {
 /// Persistent account registry in a separate SQLite database.
 ///
 /// The registry has separate reader and writer pools. Its writes do not wait for block database writes.
-/// Each entry records its creation time in UTC Unix seconds. Registration and retries preserve this time.
+/// Each entry records when it was added to the allowlist in UTC Unix seconds. Registration and retries preserve this time.
 /// Write transactions acquire the write lock before they read registrations.
 /// Each write operation commits all its changes together. Failed operations leave no changes.
 pub struct AccountAllowlist {
@@ -156,36 +187,25 @@ impl AccountAllowlist {
         self.reader.clone()
     }
 
-    /// Imports invitation codes and their optional account registrations in one transaction.
+    /// Imports an invitation code with an optional account registration.
+    /// Returns true if the invitation entry is new.
     ///
     /// An entry without an account preserves any existing registration for its invitation code.
     /// An entry with an account can register an unused invitation code. An identical registration has no effect.
-    /// A conflicting registration rejects the whole import.
-    pub async fn import_invitations(
-        &self,
-        entries: Vec<InvitationEntry>,
-    ) -> Result<(), AllowlistError> {
-        self.transact("allowlist.import_invitations", move |tx| {
-            for entry in entries {
-                queries::import_invitation(tx, &entry)?;
-            }
-            Ok(())
+    /// A conflicting registration leaves the registry unchanged.
+    pub async fn import_invitation(&self, entry: InvitationEntry) -> Result<bool, AllowlistError> {
+        self.transact("allowlist.import_invitation", move |tx| {
+            queries::import_invitation(tx, &entry)
         })
         .await
     }
 
-    /// Adds accounts without invitation codes in one transaction and returns the number of new registrations.
+    /// Adds an account without an invitation code. Returns true if the registration is new.
     ///
-    /// Existing accounts keep their invitation code registrations, if any.
-    pub async fn add_accounts(&self, accounts: Vec<AccountId>) -> Result<usize, DatabaseError> {
+    /// An existing account keeps its invitation code registration, if any.
+    pub async fn add_account(&self, account_id: AccountId) -> Result<bool, DatabaseError> {
         self.writer
-            .write("allowlist.add_accounts", move |tx| {
-                let mut inserted = 0;
-                for account_id in accounts {
-                    inserted += queries::add_account(tx, account_id)?;
-                }
-                Ok::<_, miden_node_db::DatabaseError>(inserted)
-            })
+            .write("allowlist.add_account", move |tx| queries::add_account(tx, account_id))
             .await
             .map_err(DatabaseError::DatabaseError)
     }
