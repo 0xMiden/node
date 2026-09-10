@@ -116,12 +116,9 @@ impl StatusRefresher {
 
     /// Reads the funding account at the chain tip and publishes its balance.
     async fn refresh(&self) -> Result<()> {
-        let (header, _blockchain) = self.node.tip_chain_state().await?;
-        let block_num = header.block_num();
-        let (funder, _witness) = self.node.public_account(self.account_id, block_num).await?;
+        let (vault, block_num) = self.node.public_account_vault(self.account_id).await?;
 
-        let balance = funder
-            .vault()
+        let balance = vault
             .get_balance(AssetId::new_fungible(self.fee_faucet_id))
             .map_or(0, |amount| amount.as_u64());
         self.status.update(balance, block_num);

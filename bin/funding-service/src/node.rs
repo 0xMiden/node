@@ -1,33 +1,22 @@
 //! Node access. The RPC handling is copied from the network monitor.
 
-use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use backon::ExponentialBuilder;
 use miden_node_proto::clients::{Builder, RpcClient};
-use miden_node_proto::domain::account::{AccountResponse, AccountVaultDetails, StorageMapEntries};
+use miden_node_proto::domain::account::{AccountResponse, AccountVaultDetails};
+use miden_node_proto::generated::rpc::account_request::AccountDetailRequest;
 use miden_node_proto::generated::rpc::{
     AccountRequest as ProtoAccountRequest,
     BlockHeaderByNumberRequest,
-    FinalityLevel,
-    SyncChainMmrRequest,
 };
 use miden_node_tracing::warn;
 use miden_node_utils::retry::Retryable;
 use miden_protocol::Word;
-use miden_protocol::account::{
-    Account,
-    AccountId,
-    AccountStorage,
-    StorageMap,
-    StorageSlot,
-    StorageSlotType,
-};
-use miden_protocol::block::account_tree::AccountWitness;
+use miden_protocol::account::AccountId;
+use miden_protocol::asset::AssetVault;
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta, MmrPeaks, PartialMmr};
-use miden_protocol::transaction::PartialBlockchain;
 use url::Url;
 
 use crate::COMPONENT;
@@ -57,18 +46,52 @@ impl RpcNodeClient {
         &self.genesis_header
     }
 
-    /// The committed chain tip header with a partial blockchain which proves it.
-    pub async fn tip_chain_state(&self) -> Result<(BlockHeader, PartialBlockchain)> {
-        fetch_tip_chain_state(&mut self.rpc_client.clone(), self.genesis_header.commitment()).await
-    }
-
-    /// A public account in full with its account-tree witness at `block_num`.
-    pub async fn public_account(
+    /// The asset vault of a public account, with the block number the node observed it at.
+    pub async fn public_account_vault(
         &self,
         account_id: AccountId,
-        block_num: BlockNumber,
-    ) -> Result<(Account, AccountWitness)> {
-        fetch_public_account(&mut self.rpc_client.clone(), account_id, block_num).await
+    ) -> Result<(AssetVault, BlockNumber)> {
+        let id_bytes: [u8; 15] = account_id.into();
+        // A dummy commitment never matches the vault root, which makes the node return the vault in
+        // full. Code and storage are not requested.
+        let dummy = Word::default().into();
+        let request = ProtoAccountRequest {
+            account_id: Some(miden_node_proto::generated::account::AccountId {
+                id: id_bytes.to_vec(),
+            }),
+            // Without a block number the node answers at its chain tip.
+            block_num: None,
+            details: Some(AccountDetailRequest {
+                code_commitment: None,
+                asset_vault_commitment: Some(dummy),
+                storage_request: None,
+            }),
+        };
+
+        let response = self
+            .rpc_client
+            .clone()
+            .get_account(request)
+            .await
+            .with_context(|| format!("failed to fetch account {account_id}"))?
+            .into_inner();
+        let response = AccountResponse::try_from(response)
+            .context("failed to convert the account response")?;
+
+        let details = response
+            .details
+            .with_context(|| format!("no details returned for public account {account_id}"))?;
+
+        let vault = match details.vault_details {
+            AccountVaultDetails::Assets(assets) => {
+                AssetVault::new(&assets).context("failed to build the vault")?
+            },
+            AccountVaultDetails::LimitExceeded => {
+                anyhow::bail!("account {account_id} holds too many assets to fetch in full")
+            },
+        };
+
+        Ok((vault, response.block_num))
     }
 }
 
@@ -160,153 +183,4 @@ async fn fetch_genesis_block_header(rpc_client: &mut RpcClient) -> Result<BlockH
         .context("the genesis block header response holds no header")?;
 
     block_header.try_into().context("failed to convert the genesis block header")
-}
-
-/// Fetches the chain tip header together with a [`PartialBlockchain`] whose peaks hash to that
-/// header's chain commitment, making the pair usable as a transaction reference block.
-async fn fetch_tip_chain_state(
-    rpc_client: &mut RpcClient,
-    genesis_commitment: Word,
-) -> Result<(BlockHeader, PartialBlockchain)> {
-    let response = rpc_client
-        .sync_chain_mmr(SyncChainMmrRequest {
-            // The MMR is seeded with the genesis block below, so the delta starts at block 1.
-            current_client_block_height: BlockNumber::GENESIS.as_u32(),
-            finality_level: FinalityLevel::Committed.into(),
-        })
-        .await
-        .context("failed to sync the chain MMR")?
-        .into_inner();
-
-    let tip_header: BlockHeader = response
-        .block_header
-        .context("the sync_chain_mmr response did not include a block header")?
-        .try_into()
-        .context("failed to convert the sync target block header")?;
-
-    let delta: MmrDelta = response
-        .mmr_delta
-        .context("the sync_chain_mmr response did not include an MMR delta")?
-        .try_into()
-        .context("failed to convert the MMR delta")?;
-
-    let mut mmr = PartialMmr::from_peaks(
-        MmrPeaks::new(Forest::new(0).context("an empty forest should be valid")?, Vec::new())
-            .context("empty MMR peaks should be valid")?,
-    );
-
-    if tip_header.block_num() != BlockNumber::GENESIS {
-        mmr.add(genesis_commitment, false)
-            .context("failed to seed the MMR with the genesis block")?;
-        mmr.apply(delta).context("failed to apply the MMR delta")?;
-    }
-
-    anyhow::ensure!(
-        mmr.peaks().hash_peaks() == tip_header.chain_commitment(),
-        "the synced MMR peaks do not match the chain commitment of block {}",
-        tip_header.block_num()
-    );
-
-    let blockchain = PartialBlockchain::new(mmr, Vec::new())
-        .context("failed to build the partial blockchain")?;
-
-    Ok((tip_header, blockchain))
-}
-
-/// Fetches a public account in full, with code, vault and storage maps, plus its account-tree
-/// witness at the given block.
-async fn fetch_public_account(
-    rpc_client: &mut RpcClient,
-    account_id: AccountId,
-    block_num: BlockNumber,
-) -> Result<(Account, AccountWitness)> {
-    use miden_node_proto::generated::rpc::account_request::AccountDetailRequest;
-    use miden_node_proto::generated::rpc::account_request::account_detail_request::StorageRequest;
-
-    let id_bytes: [u8; 15] = account_id.into();
-    // Dummy commitments force the server to include code and vault data in the response.
-    let dummy: miden_node_proto::generated::primitives::Word = Word::default().into();
-    let request = ProtoAccountRequest {
-        account_id: Some(miden_node_proto::generated::account::AccountId { id: id_bytes.to_vec() }),
-        block_num: Some(block_num.into()),
-        details: Some(AccountDetailRequest {
-            code_commitment: Some(dummy.clone()),
-            asset_vault_commitment: Some(dummy),
-            storage_request: Some(StorageRequest::AllStorageMaps(true)),
-        }),
-    };
-
-    let response = rpc_client
-        .get_account(request)
-        .await
-        .with_context(|| format!("failed to fetch account {account_id}"))?
-        .into_inner();
-    let response =
-        AccountResponse::try_from(response).context("failed to convert the account response")?;
-
-    let witness = response.witness;
-    anyhow::ensure!(
-        witness.id() == account_id,
-        "the account tree returned a witness for {} when {account_id} was requested",
-        witness.id(),
-    );
-
-    let details = response
-        .details
-        .with_context(|| format!("no details returned for public account {account_id}"))?;
-
-    let code = details.account_code.context("the server did not return the account code")?;
-
-    let vault = match details.vault_details {
-        AccountVaultDetails::Assets(assets) => {
-            miden_protocol::asset::AssetVault::new(&assets).context("failed to build the vault")?
-        },
-        AccountVaultDetails::LimitExceeded => {
-            anyhow::bail!("account {account_id} holds too many assets to fetch in full")
-        },
-    };
-
-    // Value slots come from the header, map slots from the map details.
-    let mut map_entries = HashMap::new();
-    for map_detail in details.storage_details.map_details {
-        let StorageMapEntries::AllEntries(entries) = map_detail.entries else {
-            anyhow::bail!("storage map {} was not returned in full", map_detail.slot_name);
-        };
-        map_entries.insert(map_detail.slot_name, entries);
-    }
-
-    let mut slots = Vec::new();
-    for slot in details.storage_details.header.slots() {
-        match slot.slot_type() {
-            StorageSlotType::Value => {
-                slots.push(StorageSlot::with_value(slot.name().clone(), slot.value()));
-            },
-            StorageSlotType::Map => {
-                let entries = map_entries.remove(slot.name()).with_context(|| {
-                    format!("no map entries returned for storage slot {}", slot.name())
-                })?;
-                let map =
-                    StorageMap::with_entries(entries).context("failed to build the storage map")?;
-                anyhow::ensure!(
-                    map.root() == slot.value(),
-                    "the storage map root for slot {} does not match the storage header",
-                    slot.name()
-                );
-                slots.push(StorageSlot::with_map(slot.name().clone(), map));
-            },
-        }
-    }
-    let storage = AccountStorage::new(slots).context("failed to build the account storage")?;
-
-    let account =
-        Account::new(account_id, vault, storage, code, details.account_header.nonce(), None)
-            .context("failed to build the account")?;
-
-    // The witness and the details come from one response, so a mismatch means a bad reconstruction.
-    anyhow::ensure!(
-        account.to_commitment() == witness.state_commitment(),
-        "the reconstructed account {account_id} does not match its witness at block {block_num}",
-    );
-
-    Ok((account, witness))
 }
