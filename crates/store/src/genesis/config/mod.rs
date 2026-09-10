@@ -1,7 +1,6 @@
 //! Describe a subset of the genesis manifest in easily human readable format
 
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -247,8 +246,6 @@ impl GenesisConfig {
         let protocol_config =
             ProtocolConfig::current(AssetId::new_fungible(native_faucet_account_id))?;
 
-        let zero_padding_width = usize::ilog10(std::cmp::max(10, wallet_configs.len())) as usize;
-
         // Setup all wallet accounts, which reference the faucet's for their provided assets.
         for (index, WalletConfig { name, account_type, assets }) in
             wallet_configs.into_iter().enumerate()
@@ -259,6 +256,11 @@ impl GenesisConfig {
                 account.index = index,
                 account.assets.count = assets.len()
             );
+
+            // The name is joined onto the accounts directory, so it must be a plain file name.
+            if Path::new(&name).file_name() != Some(name.as_ref()) {
+                return Err(GenesisConfigError::InvalidAccountFileName { name });
+            }
 
             let mut rng = ChaCha20Rng::from_seed(rand::random());
             let secret_key = RpoSecretKey::with_rng(&mut rng);
@@ -287,12 +289,7 @@ impl GenesisConfig {
 
             debug_assert_eq!(wallet_account.nonce(), ONE);
 
-            let file_name = match name {
-                Some(name) => format!("{name}.mac"),
-                None => format!("wallet_{index:0zero_padding_width$}.mac"),
-            };
-
-            secrets.push((file_name, wallet_account.id(), Some(secret_key)));
+            secrets.push((format!("{name}.mac"), wallet_account.id(), Some(secret_key)));
 
             wallet_accounts.push(wallet_account);
         }
@@ -361,16 +358,13 @@ impl GenesisConfig {
         // Append file-loaded accounts as-is
         all_accounts.extend(file_loaded_accounts);
 
-        // A duplicate name would make one account file overwrite another. The write itself refuses
-        // to replace an existing file, so without this check the failure appears only after part of
-        // the genesis output is already written.
-        let mut seen_file_names = BTreeSet::new();
-        for (file_name, ..) in &secrets {
-            if !seen_file_names.insert(file_name.clone()) {
-                return Err(GenesisConfigError::DuplicateAccountFileName {
-                    name: file_name.clone(),
-                });
-            }
+        // Each generated account is written to its own file, so a repeated name would make one
+        // account overwrite another. This covers every generated name: the wallets, the configured
+        // faucets, and the native faucet with its operator.
+        let mut file_names: Vec<&str> = secrets.iter().map(|(name, ..)| name.as_str()).collect();
+        file_names.sort_unstable();
+        if let Some(pair) = file_names.windows(2).find(|pair| pair[0] == pair[1]) {
+            return Err(GenesisConfigError::DuplicateAccountFileName { name: pair[0].to_string() });
         }
 
         Ok((
@@ -608,8 +602,7 @@ impl FungibleFaucetConfig {
 #[serde(deny_unknown_fields)]
 pub struct WalletConfig {
     /// Stem of the account file written for this wallet.
-    #[serde(default)]
-    name: Option<String>,
+    name: String,
     #[serde(default)]
     account_type: AccountTypeConfig,
     assets: Vec<AssetEntry>,

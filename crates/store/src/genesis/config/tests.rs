@@ -407,3 +407,62 @@ path = "does_not_exist.mac"
         "Expected AccountFileRead error, got: {err:?}"
     );
 }
+
+/// The wallet name sets the stem of the account file, so a configuration must be able to point a
+/// service at a fixed path.
+#[test]
+fn wallet_name_sets_the_account_file_name() -> TestResult {
+    let toml = r#"
+version = 1
+timestamp = 1717344256
+
+[fee_parameters]
+verification_base_fee = 0
+
+[[wallet]]
+name   = "funding_service"
+assets = []
+"#;
+
+    let gcfg = GenesisConfig::read_toml(toml, Path::new("."))?;
+    let (state, secrets) = gcfg.into_state(dev_validator_keys())?;
+
+    let names: Vec<String> = secrets
+        .as_account_files(&state)
+        .map(|item| item.map(|file| file.name))
+        .collect::<Result<_, _>>()?;
+
+    assert!(
+        names.contains(&"funding_service.mac".to_string()),
+        "the named wallet should be written to funding_service.mac, got {names:?}"
+    );
+
+    Ok(())
+}
+
+/// A repeated name would make one account file overwrite another.
+#[test]
+fn duplicate_wallet_names_are_rejected() {
+    let toml = r#"
+version = 1
+timestamp = 1717344256
+
+[fee_parameters]
+verification_base_fee = 0
+
+[[wallet]]
+name   = "funding_service"
+assets = []
+
+[[wallet]]
+name   = "funding_service"
+assets = []
+"#;
+
+    let gcfg = GenesisConfig::read_toml(toml, Path::new(".")).unwrap();
+    let err = gcfg.into_state(dev_validator_keys()).unwrap_err();
+
+    assert_matches!(err, GenesisConfigError::DuplicateAccountFileName { name } => {
+        assert_eq!(name, "funding_service.mac");
+    });
+}
