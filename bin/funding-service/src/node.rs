@@ -16,7 +16,7 @@ use miden_node_utils::retry::Retryable;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::asset::AssetVault;
-use miden_protocol::block::{BlockHeader, BlockNumber};
+use miden_protocol::block::{BlockHeader, BlockNumber, FeeParameters};
 use url::Url;
 
 use crate::COMPONENT;
@@ -28,22 +28,28 @@ use crate::COMPONENT;
 #[derive(Clone)]
 pub struct RpcNodeClient {
     rpc_client: RpcClient,
-    genesis_header: BlockHeader,
+    genesis_commitment: Word,
 }
 
 impl RpcNodeClient {
     /// Connects to the node's RPC API.
     pub async fn connect(rpc_url: &Url, timeout: Duration) -> Result<Self> {
-        let (mut rpc_client, _genesis_commitment) =
+        let (rpc_client, genesis_commitment) =
             create_genesis_aware_rpc_client(rpc_url, timeout).await?;
-        let genesis_header = fetch_genesis_block_header(&mut rpc_client).await?;
 
-        Ok(Self { rpc_client, genesis_header })
+        Ok(Self { rpc_client, genesis_commitment })
     }
 
-    /// The genesis block header, which commits to the chain's fee parameters.
-    pub fn genesis_header(&self) -> &BlockHeader {
-        &self.genesis_header
+    /// The commitment of the genesis block the node serves. It identifies the chain.
+    pub fn genesis_commitment(&self) -> Word {
+        self.genesis_commitment
+    }
+
+    /// The fee parameters of `block_num`, or at the chain tip when it is `None`.
+    pub async fn fee_parameters(&self, block_num: Option<BlockNumber>) -> Result<FeeParameters> {
+        let header = fetch_block_header(&mut self.rpc_client.clone(), block_num).await?;
+
+        Ok(header.fee_parameters().clone())
     }
 
     /// The asset vault of a public account, with the block number the node observed it at.
@@ -134,7 +140,7 @@ async fn create_genesis_aware_rpc_client(
             .await
             .context("failed to create an RPC client for genesis discovery")?;
 
-        let genesis_header = fetch_genesis_block_header(&mut rpc).await?;
+        let genesis_header = fetch_block_header(&mut rpc, Some(BlockNumber::GENESIS)).await?;
         let genesis_commitment = genesis_header.commitment();
 
         // Rebuild the client, this time including the required genesis metadata so that write RPCs
@@ -165,22 +171,25 @@ async fn create_genesis_aware_rpc_client(
     .await
 }
 
-/// Fetches the genesis block header from RPC.
-async fn fetch_genesis_block_header(rpc_client: &mut RpcClient) -> Result<BlockHeader> {
+/// Fetches a block header from RPC.
+async fn fetch_block_header(
+    rpc_client: &mut RpcClient,
+    block_num: Option<BlockNumber>,
+) -> Result<BlockHeader> {
     let request = BlockHeaderByNumberRequest {
-        block_num: Some(BlockNumber::GENESIS.as_u32()),
+        block_num: block_num.map(|block_num| block_num.as_u32()),
         include_mmr_proof: None,
     };
 
     let response = rpc_client
         .get_block_header_by_number(request)
         .await
-        .context("failed to get the genesis block header from RPC")?;
+        .context("failed to get the block header from RPC")?;
 
     let block_header = response
         .into_inner()
         .block_header
-        .context("the genesis block header response holds no header")?;
+        .context("the block header response holds no header")?;
 
-    block_header.try_into().context("failed to convert the genesis block header")
+    block_header.try_into().context("failed to convert the block header")
 }

@@ -106,7 +106,7 @@ impl FundingServiceConfig {
 
         // A genesis block from another chain would name the wrong fee asset, so the service must
         // not start when the node serves a different chain.
-        let node_genesis = node.genesis_header().commitment();
+        let node_genesis = node.genesis_commitment();
         let configured_genesis = self.genesis.inner().header().commitment();
         anyhow::ensure!(
             configured_genesis == node_genesis,
@@ -118,7 +118,10 @@ impl FundingServiceConfig {
         // which the node's RPC API does not serve. The remaining fee parameters are in every block
         // header, and the status refresher reads them at the block it reports.
         let fee_faucet_id = self.genesis.protocol_config().fee_asset_id().faucet_id();
-        let fee_parameters = node.genesis_header().fee_parameters().clone();
+        let fee_parameters = node
+            .fee_parameters(None)
+            .await
+            .context("failed to read the fee parameters from the node")?;
 
         // A note holds the amount as a fungible asset, so an amount the asset type cannot express
         // must fail at startup instead of on every request.

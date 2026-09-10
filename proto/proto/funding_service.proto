@@ -37,4 +37,7 @@ message FundingServiceStatus {
 
     // The largest amount which one funding request accepts, in base units.
     uint64 max_amount = 5;
+
+    // The base fee for the verification of a transaction, in base units, at `chain_tip`.
+    fixed32 verification_base_fee = 6;
 }
