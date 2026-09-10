@@ -1,4 +1,4 @@
--- Makes the pending feature notes that just gained a `FEE_SPONSORSHIP` note eligible again.
+-- Sets `next_eligible_block` for every unconsumed note in the given note id list.
 
 UPDATE notes
 SET next_eligible_block = ?2

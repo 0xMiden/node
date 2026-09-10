@@ -5,13 +5,11 @@ use miden_node_db::{DatabaseError, SqlTypeConvert};
 use miden_protocol::block::BlockNumber;
 use miden_standards::note::AccountTargetNetworkNote;
 
-use crate::db::eligibility::first_eligible_block;
+use crate::db::eligibility::hint_floor;
 
 const SQL: &str = include_str!("insert_network_note.sql");
 
-/// Inserts network notes created by the block at `created_at`. Uses `INSERT OR IGNORE` so
-/// re-applying the same block (e.g. on a redelivery from the subscription stream) is a no-op rather
-/// than a constraint violation.
+/// Inserts network notes created by the block at `created_at`.
 ///
 /// Each note's `next_eligible_block` is derived from its execution hint, so a note inside a future
 /// window is not selected before the window opens.
@@ -22,7 +20,7 @@ pub fn insert_network_notes(
 ) -> Result<(), DatabaseError> {
     for note in notes {
         let inner = note.as_note();
-        let eligible_from = first_eligible_block(note.execution_hint(), created_at);
+        let eligible_from = hint_floor(note.execution_hint()).max(created_at);
         tx.execute(
             SQL,
             &[

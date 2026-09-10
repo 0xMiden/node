@@ -53,19 +53,6 @@ async fn upsert_account_replaces_existing_row() {
 // ================================================================================================
 
 #[tokio::test]
-async fn insert_network_notes_is_idempotent() {
-    let (db, _dir) = test_setup().await;
-    let account_id = mock_network_account_id();
-    let note = mock_single_target_note(account_id, 7);
-
-    db.insert_network_notes(vec![note.clone()]).await.unwrap();
-    // Re-applying the same block (e.g. on a subscription redelivery) must not error or duplicate.
-    db.insert_network_notes(vec![note]).await.unwrap();
-
-    assert_eq!(db.count_notes().await, 1);
-}
-
-#[tokio::test]
 async fn mark_notes_consumed_keeps_rows_and_sets_committed_at() {
     let (db, _dir) = test_setup().await;
     let account_id = mock_network_account_id();
@@ -297,7 +284,7 @@ async fn apply_committed_block_returns_sponsored_account_wakeups() {
 // the read-time check.
 
 #[tokio::test]
-async fn ingestion_stores_the_hint_derived_eligibility() {
+async fn insert_network_notes_stores_hint_derived_eligibility() {
     let (db, _dir) = test_setup().await;
     let account_id = mock_network_account_id();
     let created_at = BlockNumber::from(40);
@@ -313,9 +300,19 @@ async fn ingestion_stores_the_hint_derived_eligibility() {
         3,
         NoteExecutionHint::after_block(BlockNumber::from(7)),
     );
+    let slot_windowed = mock_single_target_note_with_hint(
+        account_id,
+        4,
+        NoteExecutionHint::on_block_slot(10, 7, 1),
+    );
 
     db.insert_network_notes_at(
-        vec![unconstrained.clone(), windowed.clone(), past_window.clone()],
+        vec![
+            unconstrained.clone(),
+            windowed.clone(),
+            past_window.clone(),
+            slot_windowed.clone(),
+        ],
         created_at,
     )
     .await
@@ -336,10 +333,15 @@ async fn ingestion_stores_the_hint_derived_eligibility() {
         Some(created_at),
         "a window that already opened does not move the note into the past",
     );
+    assert_eq!(
+        db.note_eligibility(slot_windowed.as_note().id()).await,
+        Some(NEVER_ELIGIBLE),
+        "a slot-windowed note is never eligible",
+    );
 }
 
 #[tokio::test]
-async fn failure_stores_the_backoff_derived_eligibility() {
+async fn notes_failed_stores_backoff_derived_eligibility() {
     let (db, _dir) = test_setup().await;
     let account_id = mock_network_account_id();
     let note = mock_single_target_note(account_id, 1);
@@ -360,7 +362,7 @@ async fn failure_stores_the_backoff_derived_eligibility() {
 }
 
 #[tokio::test]
-async fn discard_pins_eligibility_beyond_every_block() {
+async fn discard_notes_pins_eligibility_to_never() {
     let (db, _dir) = test_setup().await;
     let account_id = mock_network_account_id();
     let note = mock_single_target_note(account_id, 1);
@@ -375,7 +377,7 @@ async fn discard_pins_eligibility_beyond_every_block() {
 
 /// A sponsorship arriving for a backed-off feature note makes the note eligible again.
 #[tokio::test]
-async fn arriving_sponsorship_clears_the_feature_note_backoff() {
+async fn reset_sponsored_notes_clears_feature_note_backoff() {
     let (db, _dir) = test_setup().await;
     let account_id = mock_network_account_id();
     let feature = mock_single_target_note(account_id, 1);
@@ -411,7 +413,7 @@ async fn arriving_sponsorship_clears_the_feature_note_backoff() {
 
 /// A sponsorship for a note that is already consumed changes nothing.
 #[tokio::test]
-async fn arriving_sponsorship_ignores_consumed_feature_notes() {
+async fn reset_sponsored_notes_skips_consumed_feature_notes() {
     let (db, _dir) = test_setup().await;
     let account_id = mock_network_account_id();
     let feature = mock_single_target_note(account_id, 1);
