@@ -33,6 +33,7 @@ impl funding_service_api::Status for FundingRpcServer {
             balance: status.balance(),
             chain_tip: status.chain_tip().as_u32(),
             max_amount: status.max_amount(),
+            verification_base_fee: status.verification_base_fee(),
         })
     }
 }
@@ -48,7 +49,7 @@ mod tests {
     #[tokio::test]
     async fn status_reports_the_configured_account_and_the_published_balance() {
         let server = test_server(500);
-        server.status.update(1_234, 42.into());
+        server.status.update(1_234, 42.into(), 7);
 
         let status = funding_service_api::Status::handle(
             &server,
@@ -67,6 +68,7 @@ mod tests {
         assert_eq!(encoded.balance, 1_234);
         assert_eq!(encoded.chain_tip, 42);
         assert_eq!(encoded.max_amount, 500);
+        assert_eq!(encoded.verification_base_fee, 7);
         assert_eq!(encoded.version, env!("CARGO_PKG_VERSION"));
     }
 

@@ -28,6 +28,7 @@ pub struct StatusSnapshot {
     max_amount: u64,
     balance: Arc<AtomicU64>,
     chain_tip: Arc<AtomicU32>,
+    verification_base_fee: Arc<AtomicU32>,
 }
 
 impl StatusSnapshot {
@@ -38,13 +39,15 @@ impl StatusSnapshot {
             max_amount,
             balance: Arc::new(AtomicU64::new(0)),
             chain_tip: Arc::new(AtomicU32::new(0)),
+            verification_base_fee: Arc::new(AtomicU32::new(0)),
         }
     }
 
-    /// Publishes the balance the worker read at `chain_tip`.
-    pub fn update(&self, balance: u64, chain_tip: BlockNumber) {
+    /// Publishes the values the worker read at `chain_tip`.
+    pub fn update(&self, balance: u64, chain_tip: BlockNumber, verification_base_fee: u32) {
         self.balance.store(balance, Ordering::Relaxed);
         self.chain_tip.store(chain_tip.as_u32(), Ordering::Relaxed);
+        self.verification_base_fee.store(verification_base_fee, Ordering::Relaxed);
     }
 
     pub fn account_id(&self) -> AccountId {
@@ -61,6 +64,10 @@ impl StatusSnapshot {
 
     pub fn chain_tip(&self) -> BlockNumber {
         self.chain_tip.load(Ordering::Relaxed).into()
+    }
+
+    pub fn verification_base_fee(&self) -> u32 {
+        self.verification_base_fee.load(Ordering::Relaxed)
     }
 }
 
@@ -117,11 +124,14 @@ impl StatusRefresher {
     /// Reads the funding account at the chain tip and publishes its balance.
     async fn refresh(&self) -> Result<()> {
         let (vault, block_num) = self.node.public_account_vault(self.account_id).await?;
+        // The fee parameters are read at the block the vault came from, so the reported base fee
+        // belongs to the block the status reports.
+        let fee_parameters = self.node.fee_parameters(Some(block_num)).await?;
 
         let balance = vault
             .get_balance(AssetId::new_fungible(self.fee_faucet_id))
             .map_or(0, |amount| amount.as_u64());
-        self.status.update(balance, block_num);
+        self.status.update(balance, block_num, fee_parameters.verification_base_fee());
 
         Ok(())
     }
