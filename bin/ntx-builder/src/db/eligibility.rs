@@ -1,20 +1,15 @@
 //! When a network note becomes eligible for a transaction attempt.
 //!
-//! Two things delay a note: its execution hint, which opens a window of consumable blocks, and the
-//! exponential backoff applied after a failed attempt. This module computes both, and every write
-//! path that touches a note stores the result in `notes.next_eligible_block` so the scheduler can
-//! ask for the ready accounts with a single indexed query.
+//! Two things delay a note: its execution hint, which sets the first block at which the note may be
+//! consumed, and the exponential backoff applied after a failed attempt. This module computes both,
+//! and every write path that touches a note stores the result in `notes.next_eligible_block` so the
+//! scheduler can ask for the ready accounts with a single indexed query.
 
 use miden_protocol::block::BlockNumber;
 use miden_standards::note::NoteExecutionHint;
 
 /// Block number stored for a note that can never become eligible again.
 pub const NEVER_ELIGIBLE: BlockNumber = BlockNumber::MAX;
-
-/// Returns the block at which a freshly ingested note becomes eligible.
-pub fn first_eligible_block(hint: NoteExecutionHint, created_at: BlockNumber) -> BlockNumber {
-    eligible_at_or_after(hint, created_at)
-}
 
 /// Returns the block at which a note becomes eligible again after `attempts` failed attempts, the
 /// latest of which was recorded at `last_attempt`.
@@ -23,13 +18,7 @@ pub fn eligible_block_after_failure(
     attempts: usize,
     last_attempt: BlockNumber,
 ) -> BlockNumber {
-    eligible_at_or_after(hint, backoff_ready_block(Some(last_attempt), attempts))
-}
-
-/// Returns the first block at or after `floor` at which the note's execution hint permits
-/// consumption.
-fn eligible_at_or_after(hint: NoteExecutionHint, floor: BlockNumber) -> BlockNumber {
-    hint_next_consumable_block(hint, floor).map_or(floor, |block| block.max(floor))
+    hint_floor(hint).max(backoff_ready_block(Some(last_attempt), attempts))
 }
 
 /// Checks if the backoff block period has passed.
@@ -79,84 +68,26 @@ pub fn note_recheck_block(
     if !backoff_ok {
         recheck = recheck.max(backoff_ready_block(last_attempt, attempts));
     }
-    if !hint_ok && let Some(hint_block) = hint_next_consumable_block(hint, chain_tip) {
-        recheck = recheck.max(hint_block);
+    if !hint_ok {
+        recheck = recheck.max(hint_floor(hint));
     }
     recheck
 }
 
-/// Returns the first block at or after `from` for which `hint.can_be_consumed` turns true, or
-/// `None` when the hint imposes no future-block constraint ([`NoteExecutionHint::None`], `Always`
-/// or `Unknown`), leaving the caller's floor in place.
-pub fn hint_next_consumable_block(
-    hint: NoteExecutionHint,
-    from: BlockNumber,
-) -> Option<BlockNumber> {
+/// Returns the first block at which the execution hint permits consumption.
+pub fn hint_floor(hint: NoteExecutionHint) -> BlockNumber {
     match hint {
-        NoteExecutionHint::None | NoteExecutionHint::Always | NoteExecutionHint::Unknown(_) => None,
-        NoteExecutionHint::AfterBlock { block_num } => Some(block_num),
-        NoteExecutionHint::OnBlockSlot { round_len, slot_len, slot_offset } => {
-            let block = u64::from(from.as_u32());
-            // `1 << round_len` as `can_be_consumed` computes it, in u64 to avoid the overflow its
-            // u32 shift would hit; bail to the caller's floor for degenerate exponents.
-            let round_len_blocks = 1u64.checked_shl(u32::from(round_len))?;
-            let slot_len_blocks = 1u64.checked_shl(u32::from(slot_len))?;
-            let round_index = block / round_len_blocks;
-            let slot_start =
-                round_index * round_len_blocks + u64::from(slot_offset) * slot_len_blocks;
-            let slot_end = slot_start + slot_len_blocks;
-            let next = if block < slot_start {
-                slot_start
-            } else if block >= slot_end {
-                // Past this round's slot; the next opening is the same slot one round later.
-                slot_start + round_len_blocks
-            } else {
-                block
-            };
-            // Beyond the representable block range the note is effectively never consumable; clamp
-            // so the caller schedules at most a far-future recheck rather than wrapping.
-            Some(BlockNumber::from(u32::try_from(next).unwrap_or(u32::MAX)))
+        NoteExecutionHint::None | NoteExecutionHint::Always | NoteExecutionHint::Unknown(_) => {
+            BlockNumber::GENESIS
         },
+        NoteExecutionHint::AfterBlock { block_num } => block_num,
+        NoteExecutionHint::OnBlockSlot { .. } => NEVER_ELIGIBLE,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Brute-forces the first block at or after `from` for which the hint is consumable, by
-    /// scanning forward. Used as an independent oracle for [`hint_next_consumable_block`].
-    fn brute_force_next(hint: NoteExecutionHint, from: u32) -> Option<u32> {
-        (from..=from.saturating_add(4096))
-            .find(|&b| hint.can_be_consumed(BlockNumber::from(b)) == Some(true))
-    }
-
-    /// [`hint_next_consumable_block`] must agree, block for block, with scanning
-    /// [`NoteExecutionHint::can_be_consumed`] forward. This guards against the slot arithmetic
-    /// drifting from the protocol definition it mirrors.
-    #[test]
-    fn hint_next_consumable_block_matches_can_be_consumed() {
-        let hints = [
-            NoteExecutionHint::after_block(BlockNumber::from(200)),
-            NoteExecutionHint::on_block_slot(10, 7, 1),
-            NoteExecutionHint::on_block_slot(8, 4, 0),
-            NoteExecutionHint::on_block_slot(9, 5, 3),
-        ];
-        for hint in hints {
-            for b in 0u32..1300 {
-                // Only meaningful while the note is currently NOT consumable.
-                if hint.can_be_consumed(BlockNumber::from(b)) != Some(false) {
-                    continue;
-                }
-                let got = hint_next_consumable_block(hint, BlockNumber::from(b))
-                    .expect("a windowed hint must report a next block")
-                    .as_u32();
-                let expected = brute_force_next(hint, b)
-                    .expect("oracle must find a consumable block within the scan window");
-                assert_eq!(got, expected, "hint {hint:?} at block {b}");
-            }
-        }
-    }
 
     #[rstest::rstest]
     #[test]
@@ -222,30 +153,6 @@ mod tests {
         assert_eq!(
             eligible_block_after_failure(hint, 1, last_attempt),
             backoff_ready_block(Some(last_attempt), 1),
-        );
-    }
-
-    /// An ingested note is eligible immediately unless its hint says otherwise.
-    #[test]
-    fn first_eligible_block_follows_the_hint() {
-        let created_at = BlockNumber::from(42);
-
-        assert_eq!(
-            first_eligible_block(NoteExecutionHint::Always, created_at),
-            created_at,
-            "an unconstrained note is eligible in the block that created it",
-        );
-        assert_eq!(
-            first_eligible_block(
-                NoteExecutionHint::after_block(BlockNumber::from(100)),
-                created_at
-            ),
-            BlockNumber::from(100),
-        );
-        assert_eq!(
-            first_eligible_block(NoteExecutionHint::after_block(BlockNumber::from(7)), created_at),
-            created_at,
-            "a window that already opened does not move the note into the past",
         );
     }
 }
