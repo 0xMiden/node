@@ -54,6 +54,7 @@ miden-funding-service start \
 | `--max-notes-per-tx`             | `16`         | Largest number of notes one transaction creates. Must not exceed 100.                                                                                                   |
 | `--tx-expiration-delta`          | `50`         | Largest number of blocks after its reference block at which a funding transaction expires.                                                                              |
 | `--poll-interval`                | `1s`         | How often the service asks the node whether its notes are committed.                                                                                                    |
+| `--top-up-interval`              | `1m`         | How often the service scans for deposits sent to the funding account.                                                                                                   |
 | `--http.timeout`                 | `5m`         | Largest duration allocated to one HTTP request.                                                                                                                         |
 | `--rpc.timeout`                  | `10s`        | Timeout of a request to the node.                                                                                                                                       |
 | `--tx-prover.timeout`            | `1m`         | Timeout of a request to the remote prover.                                                                                                                              |
@@ -131,6 +132,26 @@ request again may fund the account twice.
 
 ## Keep the account funded
 
-`GET /status` reports the funding account's balance, which is the value to alert on. The service does not refill itself.
-Send a pay-to-ID note that holds the native asset to the funding account to top it up, and consume it with a client that
-holds the account's key.
+`GET /status` reports the funding account's balance, which is the value to alert on.
+
+To refill the account, send it a **public** pay-to-ID note that holds the native asset. The service scans for those
+notes and consumes them on its own, so no operator action is needed beyond sending the note. The scan runs every
+`--top-up-interval`, which defaults to one minute.
+
+A note is only collected when all of the following hold. Anything else is ignored, because the note tag encodes only the
+leading bits of an account ID, so notes for other accounts reach the service too, and anyone can send a note that holds
+whatever they like.
+
+| Requirement                                | Why                                                                                      |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| The note is public                         | The node does not store the details of a private note, so the service cannot consume it. |
+| It is a pay-to-ID note                     | Any other script may not release its assets to the account.                              |
+| It targets the funding account             | The tag alone does not prove the target.                                                 |
+| It holds the native asset and nothing else | Another asset would sit in the vault without the service being able to spend it.         |
+
+The service collects deposits in their own transaction, separate from the transactions that serve requests, so a note it
+cannot consume never fails a request a client is waiting on. That transaction pays its own fee, and it works even when
+the balance has reached zero, because the assets of a consumed note land before the fee is withdrawn.
+
+A deposit already collected is never collected twice: the service checks each candidate's nullifier against the chain
+before consuming it.
