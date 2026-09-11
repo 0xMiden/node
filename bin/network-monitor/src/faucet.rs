@@ -52,7 +52,10 @@ pub struct FaucetTestDetails {
 struct PowChallengeResponse {
     challenge: String,
     target: u64,
-    #[expect(dead_code)] // Timestamp is part of API response but not used
+    #[expect(
+        dead_code,
+        reason = "Part of the API response, unused but required for `deny_unknown_fields`"
+    )]
     timestamp: u64,
 }
 
@@ -61,8 +64,10 @@ struct PowChallengeResponse {
 #[serde(deny_unknown_fields)]
 pub(crate) struct GetTokensResponse {
     pub(crate) tx_id: String,
-    // Part of the API response, and `deny_unknown_fields` rejects it if it is not declared.
-    #[expect(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "Part of the API response, unused but required for `deny_unknown_fields`"
+    )]
     pub(crate) note_id: String,
 }
 
