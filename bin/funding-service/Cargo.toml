@@ -18,22 +18,19 @@ workspace = true
 doctest = false
 
 [dependencies]
-anyhow                 = { workspace = true }
-backon                 = { workspace = true }
-clap                   = { features = ["env", "string"], workspace = true }
-humantime              = { workspace = true }
-miden-node-proto       = { workspace = true }
-miden-node-proto-build = { workspace = true }
-miden-node-tracing     = { workspace = true }
-miden-node-utils       = { workspace = true }
-miden-protocol         = { features = ["std"], workspace = true }
-tokio                  = { features = ["macros", "net", "rt-multi-thread", "sync", "time"], workspace = true }
-tokio-stream           = { features = ["net"], workspace = true }
-tonic                  = { workspace = true }
-tonic-health           = { workspace = true }
-tonic-reflection       = { workspace = true }
-tower-http             = { workspace = true }
-url                    = { workspace = true }
+anyhow             = { workspace = true }
+axum               = { workspace = true }
+backon             = { workspace = true }
+clap               = { features = ["env", "string"], workspace = true }
+humantime          = { workspace = true }
+miden-node-proto   = { workspace = true }
+miden-node-tracing = { workspace = true }
+miden-node-utils   = { workspace = true }
+miden-protocol     = { features = ["std"], workspace = true }
+serde              = { workspace = true }
+tokio              = { features = ["macros", "net", "rt-multi-thread", "sync", "time"], workspace = true }
+tower-http         = { features = ["timeout"], workspace = true }
+url                = { workspace = true }
 
 [dev-dependencies]
 miden-protocol  = { features = ["std", "testing"], workspace = true }
@@ -41,3 +38,4 @@ miden-standards = { workspace = true }
 rand            = { workspace = true }
 rand_chacha     = { workspace = true }
 tempfile        = { workspace = true }
+tower           = { features = ["util"], workspace = true }

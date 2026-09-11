@@ -121,6 +121,7 @@ const STRING_FIELD_NAMES: &[&str] = &[
     "genesis.source",
     "genesis.source.kind",
     "grpc.timeout",
+    "http.timeout",
     "internal.listen",
     "mempool.removal.reason",
     "network_monitor.listen",
