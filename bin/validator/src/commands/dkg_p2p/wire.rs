@@ -22,6 +22,11 @@ impl SendStream {
     pub fn finish(&mut self) -> anyhow::Result<()> {
         self.inner.finish().context("failed to finish wire stream")
     }
+
+    #[cfg(test)]
+    pub fn into_inner(self) -> IrohSendStream {
+        self.inner
+    }
 }
 
 impl From<IrohSendStream> for SendStream {
@@ -35,6 +40,11 @@ pub struct RecvStream {
 }
 
 impl RecvStream {
+    #[cfg(test)]
+    pub fn into_inner(self) -> IrohRecvStream {
+        self.inner
+    }
+
     pub async fn read_exact<T: WireCodec>(&mut self, bytes: usize) -> anyhow::Result<T> {
         let mut bytes = vec![0; bytes];
         self.inner.read_exact(&mut bytes).await.context("failed to read wire message")?;

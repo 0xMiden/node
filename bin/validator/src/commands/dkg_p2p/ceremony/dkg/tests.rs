@@ -16,6 +16,7 @@ use miden_protocol::crypto::hash::rpo::Rpo256;
 use miden_validator::{StorageKeyEpoch, ValidatorSigner};
 use tokio::task::JoinSet;
 
+use super::super::peer::AuthenticatedPeer;
 use super::*;
 
 mod rejection;
@@ -109,10 +110,10 @@ async fn ceremony_succeeds(
     let TestCeremony { endpoints, validators } =
         TestCeremony::create_dealings(threshold, validator_count).await?;
     let mut confirmations = JoinSet::new();
-    for (ceremony, participants, dealings) in validators {
+    for (ceremony, mut participants, dealings) in validators {
         confirmations.spawn(async move {
-            let dealings = ceremony.exchange_dealings(&participants, dealings).await?;
-            let dealings = ceremony.confirm_dealings(&participants, dealings).await?;
+            let dealings = ceremony.exchange_dealings(&mut participants, dealings).await?;
+            let dealings = ceremony.confirm_dealings(&mut participants, dealings).await?;
             // Keep connections alive until every validator finishes confirmation.
             Ok::<_, anyhow::Error>((ceremony, participants, dealings))
         });
@@ -127,7 +128,8 @@ async fn ceremony_succeeds(
     .await??;
     let expected = confirmed[0].2.commitment();
     let mut outputs = Vec::new();
-    for (ceremony, participants, dealings) in confirmed {
+    let mut streams = Vec::new();
+    for (ceremony, mut participants, dealings) in confirmed {
         assert_eq!(dealings.commitment(), expected);
         assert_eq!(dealings.decryption_dealing_count(), validator_count);
         assert_eq!(dealings.context_dealing_count(), validator_count);
@@ -135,7 +137,27 @@ async fn ceremony_succeeds(
         assert_eq!(output.secret_share.participant, participants.local_index);
         assert_eq!(output.setup_context.epoch, *ceremony.epoch.as_bytes());
         outputs.push(output);
+        participants.finish_streams()?;
+        streams.extend(
+            participants
+                .session
+                .authenticated_peers
+                .into_iter()
+                .map(AuthenticatedPeer::into_streams),
+        );
     }
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        for (_, send, receive) in &mut streams {
+            // All ceremony messages used the first stream, which is now finished in both
+            // directions.
+            assert_eq!(send.id().index(), 0);
+            assert_eq!(receive.id(), send.id());
+            assert_eq!(receive.read(&mut [0]).await?, None);
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await??;
     for output in &outputs {
         assert_eq!(output.sealing_key, outputs[0].sealing_key);
         assert_eq!(output.public_key_set, outputs[0].public_key_set);
@@ -172,9 +194,9 @@ async fn dealing_confirmation_rejects_different_valid_dealings() -> anyhow::Resu
     for round in ["decryption", "context"] {
         let TestCeremony { endpoints, validators } = TestCeremony::create_dealings(2, 3).await?;
         let mut exchanges = JoinSet::new();
-        for (ceremony, participants, dealings) in validators {
+        for (ceremony, mut participants, dealings) in validators {
             exchanges.spawn(async move {
-                let dealings = ceremony.exchange_dealings(&participants, dealings).await?;
+                let dealings = ceremony.exchange_dealings(&mut participants, dealings).await?;
                 Ok::<_, anyhow::Error>((ceremony, participants, dealings))
             });
         }
@@ -213,9 +235,9 @@ async fn dealing_confirmation_rejects_different_valid_dealings() -> anyhow::Resu
         peer_dealings.insert(dealer_index, message);
 
         let mut confirmations = JoinSet::new();
-        for (ceremony, participants, dealings) in validators {
+        for (ceremony, mut participants, dealings) in validators {
             confirmations
-                .spawn(async move { ceremony.confirm_dealings(&participants, dealings).await });
+                .spawn(async move { ceremony.confirm_dealings(&mut participants, dealings).await });
         }
         let errors = tokio::time::timeout(Duration::from_secs(10), async {
             let mut errors = Vec::new();

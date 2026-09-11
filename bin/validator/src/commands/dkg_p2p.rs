@@ -101,7 +101,7 @@ impl ParticipateOptions {
                 "DKG peer session established",
             );
             let participants = ceremony.exchange_dkg_public_keys(session).await?;
-            let participants = ceremony.confirm_dkg_registry(participants).await?;
+            let mut participants = ceremony.confirm_dkg_registry(participants).await?;
             tracing::info!(
                 target: miden_validator::LOG_TARGET,
                 {
@@ -121,8 +121,8 @@ impl ParticipateOptions {
                 "Local DKG dealings created",
             );
 
-            let dealings = ceremony.exchange_dealings(&participants, dealings).await?;
-            let dealings = ceremony.confirm_dealings(&participants, dealings).await?;
+            let dealings = ceremony.exchange_dealings(&mut participants, dealings).await?;
+            let dealings = ceremony.confirm_dealings(&mut participants, dealings).await?;
             tracing::info!(
                 target: miden_validator::LOG_TARGET,
                 {
@@ -134,6 +134,7 @@ impl ParticipateOptions {
             );
 
             let output = ceremony.complete_dkg(&participants, dealings)?;
+            participants.finish_streams()?;
             tracing::info!(
                 target: miden_validator::LOG_TARGET,
                 {

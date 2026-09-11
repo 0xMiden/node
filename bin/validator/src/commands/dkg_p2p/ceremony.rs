@@ -3,6 +3,7 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use anyhow::{Context, ensure};
+use futures::future::try_join_all;
 use golden_core::{ParticipantIndex, ParticipantRegistry};
 use iroh::endpoint::presets;
 use iroh::{Endpoint, EndpointId, SecretKey as IrohSecretKey};
@@ -157,109 +158,90 @@ impl Ceremony {
 
     pub async fn exchange_configs(
         &self,
-        peers: AuthenticatedPeers,
+        mut peers: AuthenticatedPeers,
     ) -> anyhow::Result<AuthenticatedPeers> {
         let config = self.config()?;
-        let AuthenticatedPeers { authenticated_peers } = peers;
-        let peer_count = authenticated_peers.len();
-        let mut exchanges = JoinSet::new();
-        for peer in authenticated_peers {
-            let config = config.clone();
-            exchanges.spawn(async move {
-                peer.exchange_ceremony_config(&config).await?;
-                Ok::<_, anyhow::Error>(peer)
-            });
-        }
+        try_join_all(
+            peers
+                .authenticated_peers
+                .iter_mut()
+                .map(|peer| peer.exchange_ceremony_config(&config)),
+        )
+        .await?;
 
-        let mut authenticated_peers = Vec::with_capacity(peer_count);
-        while let Some(result) = exchanges.join_next().await {
-            authenticated_peers.push(result.context("ceremony config exchange task failed")??);
-        }
-
-        Ok(AuthenticatedPeers { authenticated_peers })
+        Ok(peers)
     }
 
     pub async fn exchange_nonces(
         &self,
-        peers: AuthenticatedPeers,
+        mut peers: AuthenticatedPeers,
     ) -> anyhow::Result<UnconfirmedSession> {
         let config = self.config()?;
         let local_nonce = CeremonyNonce::random(&mut OsRng);
-        let AuthenticatedPeers { authenticated_peers } = peers;
-        let peer_count = authenticated_peers.len();
-        let mut exchanges = JoinSet::new();
-        for peer in authenticated_peers {
-            exchanges.spawn(async move {
-                let peer_nonce = peer.exchange_ceremony_nonce(&local_nonce).await?;
-                Ok::<_, anyhow::Error>((peer, peer_nonce))
-            });
-        }
+        let nonces = try_join_all(
+            peers
+                .authenticated_peers
+                .iter_mut()
+                .map(|peer| peer.exchange_ceremony_nonce(&local_nonce)),
+        )
+        .await?;
 
         let mut contributions = vec![(self.signer.public_key(), local_nonce)];
-        let mut authenticated_peers = Vec::with_capacity(peer_count);
-        while let Some(result) = exchanges.join_next().await {
-            let (peer, nonce) = result.context("ceremony nonce exchange task failed")??;
+        for (peer, nonce) in peers.authenticated_peers.iter().zip(nonces) {
             contributions.push((peer.validator_public_key().clone(), nonce));
-            authenticated_peers.push(peer);
         }
         let id = SessionId::derive(&config, contributions);
 
-        Ok(UnconfirmedSession { id, authenticated_peers })
+        Ok(UnconfirmedSession {
+            id,
+            authenticated_peers: peers.authenticated_peers,
+        })
     }
 
-    pub async fn confirm_session(&self, session: UnconfirmedSession) -> anyhow::Result<Session> {
-        let UnconfirmedSession { id, authenticated_peers } = session;
-        let peer_count = authenticated_peers.len();
-        let mut confirmations = JoinSet::new();
-        for peer in authenticated_peers {
-            confirmations.spawn(async move {
-                let peer_session_id = peer.exchange_session_id(&id).await?;
-                ensure!(
-                    peer_session_id == id,
-                    "validator {:?} derived a different session ID: local {id}, peer {peer_session_id}",
-                    peer.validator_public_key(),
-                );
-                Ok::<_, anyhow::Error>(peer)
-            });
-        }
+    pub async fn confirm_session(
+        &self,
+        mut session: UnconfirmedSession,
+    ) -> anyhow::Result<Session> {
+        let id = session.id;
+        try_join_all(session.authenticated_peers.iter_mut().map(|peer| async move {
+            let peer_session_id = peer.exchange_session_id(&id).await?;
+            ensure!(
+                peer_session_id == id,
+                "validator {:?} derived a different session ID: local {id}, peer {peer_session_id}",
+                peer.validator_public_key(),
+            );
+            Ok::<_, anyhow::Error>(())
+        }))
+        .await?;
 
-        let mut authenticated_peers = Vec::with_capacity(peer_count);
-        while let Some(result) = confirmations.join_next().await {
-            authenticated_peers.push(result.context("session confirmation task failed")??);
-        }
-
-        Ok(Session { id, authenticated_peers })
+        Ok(Session {
+            id,
+            authenticated_peers: session.authenticated_peers,
+        })
     }
 
     pub async fn exchange_dkg_public_keys(
         &self,
-        session: Session,
+        mut session: Session,
     ) -> anyhow::Result<UnconfirmedDkgParticipants> {
         let secret_key = DkgSecretKey::random(&mut OsRng);
         let local_dkg_public_key = secret_key.public_key();
-        let Session { authenticated_peers, .. } = &session;
-        let mut exchanges = JoinSet::new();
-        for peer in authenticated_peers.clone() {
-            exchanges.spawn({
-                let local_dkg_public_key = local_dkg_public_key.clone();
+        let mut dkg_public_keys =
+            try_join_all(session.authenticated_peers.iter_mut().map(|peer| {
+                let local_dkg_public_key = &local_dkg_public_key;
                 async move {
                     let peer_dkg_public_key =
-                        peer.exchange_dkg_public_key(&local_dkg_public_key).await?;
+                        peer.exchange_dkg_public_key(local_dkg_public_key).await?;
                     Ok::<_, anyhow::Error>((
                         peer.validator_public_key().clone(),
                         peer_dkg_public_key,
                     ))
                 }
-            });
-        }
+            }))
+            .await?;
 
         let local_validator_key = self.signer.public_key();
-        let mut dkg_public_keys = vec![(local_validator_key.clone(), local_dkg_public_key)];
-        while let Some(result) = exchanges.join_next().await {
-            let (validator_public_key, dkg_public_key) =
-                result.context("DKG public key exchange task failed")??;
-            dkg_public_keys.push((validator_public_key, dkg_public_key));
-        }
+        dkg_public_keys.push((local_validator_key.clone(), local_dkg_public_key));
         dkg_public_keys.sort_by_key(|(validator_key, _)| validator_key.to_bytes());
 
         let mut local_index = None;
@@ -288,26 +270,19 @@ impl Ceremony {
 
     pub async fn confirm_dkg_registry(
         &self,
-        participants: UnconfirmedDkgParticipants,
+        mut participants: UnconfirmedDkgParticipants,
     ) -> anyhow::Result<DkgParticipants> {
         let registry_root = DkgRegistryRoot::from_registry(&participants.registry);
-        let Session { authenticated_peers, .. } = &participants.session;
-        let mut confirmations = JoinSet::new();
-        for peer in authenticated_peers.clone() {
-            confirmations.spawn(async move {
-                let peer_registry_root = peer.exchange_dkg_registry_root(&registry_root).await?;
-                ensure!(
-                    peer_registry_root == registry_root,
-                    "validator {:?} built a different DKG registry: local {registry_root}, peer {peer_registry_root}",
-                    peer.validator_public_key(),
-                );
-                Ok::<_, anyhow::Error>(())
-            });
-        }
-
-        while let Some(result) = confirmations.join_next().await {
-            result.context("DKG registry confirmation task failed")??;
-        }
+        let confirmations = participants.session.authenticated_peers.iter_mut().map(|peer| async move {
+            let peer_registry_root = peer.exchange_dkg_registry_root(&registry_root).await?;
+            ensure!(
+                peer_registry_root == registry_root,
+                "validator {:?} built a different DKG registry: local {registry_root}, peer {peer_registry_root}",
+                peer.validator_public_key(),
+            );
+            Ok::<_, anyhow::Error>(())
+        });
+        try_join_all(confirmations).await?;
 
         let UnconfirmedDkgParticipants {
             session,
@@ -337,6 +312,13 @@ impl Session {
 }
 
 impl DkgParticipants {
+    pub fn finish_streams(&mut self) -> anyhow::Result<()> {
+        for peer in &mut self.session.authenticated_peers {
+            peer.finish_stream()?;
+        }
+        Ok(())
+    }
+
     pub fn local_index(&self) -> ParticipantIndex {
         self.local_index
     }

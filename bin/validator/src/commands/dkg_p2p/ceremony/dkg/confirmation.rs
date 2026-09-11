@@ -1,8 +1,8 @@
 use std::fmt;
 
 use anyhow::{Context, ensure};
+use futures::future::try_join_all;
 use miden_protocol::crypto::hash::rpo::Rpo256;
-use tokio::task::JoinSet;
 
 use super::{Ceremony, DkgDealings, DkgParticipants, UnconfirmedDkgDealings};
 use crate::commands::dkg_p2p::wire::WireCodec;
@@ -56,25 +56,20 @@ impl fmt::Display for DkgDealingsCommitment {
 impl Ceremony {
     pub async fn confirm_dealings(
         &self,
-        participants: &DkgParticipants,
+        participants: &mut DkgParticipants,
         dealings: UnconfirmedDkgDealings,
     ) -> anyhow::Result<DkgDealings> {
         let commitment = DkgDealingsCommitment::from_dealings(participants, &dealings);
-        let mut confirmations = JoinSet::new();
-        for peer in participants.session.authenticated_peers.clone() {
-            confirmations.spawn(async move {
-                let peer_commitment = peer.exchange_dealings_commitment(&commitment).await?;
-                ensure!(
-                    peer_commitment == commitment,
-                    "validator {:?} received different DKG dealings: local {commitment}, peer {peer_commitment}",
-                    peer.validator_public_key(),
-                );
-                Ok::<_, anyhow::Error>(())
-            });
-        }
-        while let Some(result) = confirmations.join_next().await {
-            result.context("DKG dealings confirmation task failed")??;
-        }
+        let confirmations = participants.session.authenticated_peers.iter_mut().map(|peer| async move {
+            let peer_commitment = peer.exchange_dealings_commitment(&commitment).await?;
+            ensure!(
+                peer_commitment == commitment,
+                "validator {:?} received different DKG dealings: local {commitment}, peer {peer_commitment}",
+                peer.validator_public_key(),
+            );
+            Ok::<_, anyhow::Error>(())
+        });
+        try_join_all(confirmations).await?;
 
         let UnconfirmedDkgDealings {
             local,

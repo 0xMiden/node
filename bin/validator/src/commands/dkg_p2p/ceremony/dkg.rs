@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::Arc;
 
 use anyhow::{Context, ensure};
+use futures::StreamExt;
+use futures::stream::FuturesUnordered;
 use golden_core::wire::{from_wire_bytes, to_wire_bytes};
 use golden_core::{
     DealerMessage,
@@ -194,15 +195,15 @@ impl Ceremony {
 
     pub async fn exchange_dealings(
         &self,
-        participants: &DkgParticipants,
+        participants: &mut DkgParticipants,
         local: LocalDealings,
     ) -> anyhow::Result<UnconfirmedDkgDealings> {
-        let local_messages = Arc::new(DealerMessages::from_local(&local));
+        let local_messages = DealerMessages::from_local(&local);
         let mut validator_keys = self.validator_set.as_keys().to_vec();
         validator_keys.sort_by_key(Serializable::to_bytes);
 
-        let mut exchanges = tokio::task::JoinSet::new();
-        for peer in participants.session.authenticated_peers.clone() {
+        let mut exchanges = FuturesUnordered::new();
+        for peer in &mut participants.session.authenticated_peers {
             let position = validator_keys
                 .iter()
                 .position(|validator_key| validator_key == peer.validator_public_key())
@@ -210,17 +211,17 @@ impl Ceremony {
             let dealer = ParticipantIndex::new(
                 u32::try_from(position + 1).context("too many DKG participants")?,
             )?;
-            let local_messages = Arc::clone(&local_messages);
-            exchanges.spawn(async move {
-                let messages = peer.exchange_dealer_messages(&local_messages).await?;
+            let local_messages = &local_messages;
+            exchanges.push(async move {
+                let messages = peer.exchange_dealer_messages(local_messages).await?;
                 Ok::<_, anyhow::Error>((dealer, messages))
             });
         }
 
         let mut peer_decryption_dealings = BTreeMap::new();
         let mut peer_context_dealings = BTreeMap::new();
-        while let Some(result) = exchanges.join_next().await {
-            let (dealer, messages) = result.context("dealing exchange task failed")??;
+        while let Some(result) = exchanges.next().await {
+            let (dealer, messages) = result?;
             ensure!(
                 messages.decryption.dealer == dealer,
                 "authenticated participant {} sent a decryption dealing for participant {}",

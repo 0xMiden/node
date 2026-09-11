@@ -1,5 +1,3 @@
-use iroh::endpoint::Side;
-
 use super::*;
 use crate::commands::dkg_p2p::ceremony::session::{CeremonyNonce, SessionId};
 
@@ -32,7 +30,7 @@ async fn dealing_exchange_rejects_invalid_dealing(
     #[case] invalid: InvalidDealing,
 ) -> anyhow::Result<()> {
     let TestCeremony { endpoints, mut validators } = TestCeremony::create_dealings(2, 2).await?;
-    let (receiver_ceremony, receiver, receiver_dealings) = validators.pop().unwrap();
+    let (receiver_ceremony, mut receiver, receiver_dealings) = validators.pop().unwrap();
     let (sender_ceremony, mut sender, sender_dealings) = validators.pop().unwrap();
     let mut messages = DealerMessages::from_local(&sender_dealings);
     let (message, round_name) = match round {
@@ -79,7 +77,7 @@ async fn dealing_exchange_rejects_invalid_dealing(
 
     let (received, sent) = tokio::time::timeout(Duration::from_secs(10), async {
         tokio::join!(
-            receiver_ceremony.exchange_dealings(&receiver, receiver_dealings),
+            receiver_ceremony.exchange_dealings(&mut receiver, receiver_dealings),
             sender.session.authenticated_peers[0].exchange_dealer_messages(&messages),
         )
     })
@@ -114,16 +112,13 @@ async fn dealing_exchange_rejects_interrupted_message(
     #[case] disconnect: bool,
 ) -> anyhow::Result<()> {
     let TestCeremony { endpoints, mut validators } = TestCeremony::create_dealings(2, 2).await?;
-    let (receiver_ceremony, receiver, receiver_dealings) = validators.pop().unwrap();
-    let (_, sender, sender_dealings) = validators.pop().unwrap();
-    let connection = sender.session.authenticated_peers[0].connection();
+    let (receiver_ceremony, mut receiver, receiver_dealings) = validators.pop().unwrap();
+    let (_, mut sender, sender_dealings) = validators.pop().unwrap();
+    let (connection, mut send, mut receive) =
+        sender.session.authenticated_peers.pop().unwrap().into_streams();
     let message = DealerMessages::from_local(&sender_dealings).encode();
     let (received, sent) = tokio::time::timeout(Duration::from_secs(10), async {
-        tokio::join!(receiver_ceremony.exchange_dealings(&receiver, receiver_dealings), async {
-            let (mut send, mut receive) = match connection.side() {
-                Side::Client => connection.open_bi().await?,
-                Side::Server => connection.accept_bi().await?,
-            };
+        tokio::join!(receiver_ceremony.exchange_dealings(&mut receiver, receiver_dealings), async {
             send.write_all(&message[..message.len() - 1]).await?;
             // Wait for the other side to enter the exchange before interrupting it.
             receive.read_exact(&mut vec![0; message.len()]).await?;
