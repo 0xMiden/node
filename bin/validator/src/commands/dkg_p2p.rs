@@ -125,6 +125,16 @@ impl ParticipateOptions {
             "DKG dealings verified and confirmed with every peer",
         );
 
+        let output = ceremony.complete_dkg(&participants, dealings)?;
+        tracing::info!(
+            target: miden_validator::LOG_TARGET,
+            {
+                dkg.local_index = output.secret_share.participant.get(),
+                dkg.setup_context_root = %hex::encode(output.setup_context.root()),
+            },
+            "Local DKG key material derived",
+        );
+
         endpoint.close().await;
         Ok(())
     }

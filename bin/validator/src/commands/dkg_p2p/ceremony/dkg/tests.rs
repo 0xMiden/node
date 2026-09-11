@@ -4,13 +4,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use golden_core::verify_dealing_for_receiver;
+use golden_ehtdh1::{Combiner, UnsealingShare};
 use golden_evrf::paper::secp_secq::SecpSecqBackend;
 use iroh::address_lookup::memory::MemoryLookup;
 use iroh::endpoint::presets;
 use iroh::{Endpoint, SecretKey as IrohSecretKey};
+use itertools::Itertools;
 use miden_protocol::block::ValidatorKeys;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
+use miden_protocol::crypto::hash::rpo::Rpo256;
 use miden_validator::{StorageKeyEpoch, ValidatorSigner};
+use tokio::task::JoinSet;
 
 use super::*;
 
@@ -20,15 +24,15 @@ struct TestCeremony {
 }
 
 impl TestCeremony {
-    async fn exchange_dealings() -> anyhow::Result<Self> {
-        let signing_keys = [SigningKey::new(), SigningKey::new(), SigningKey::new()];
+    async fn exchange_dealings(threshold: usize, validator_count: usize) -> anyhow::Result<Self> {
+        let signing_keys = (0..validator_count).map(|_| SigningKey::new()).collect::<Vec<_>>();
         let validator_set = Arc::new(ValidatorKeys::new(
             signing_keys.iter().map(SigningKey::public_key).collect(),
         )?);
         let mut endpoints = Vec::new();
         let mut endpoint_secrets = Vec::new();
         let mut lookups = Vec::new();
-        for _ in 0..3 {
+        for _ in 0..validator_count {
             let secret = IrohSecretKey::generate();
             let lookup = MemoryLookup::new();
             let endpoint = Endpoint::builder(presets::Minimal)
@@ -61,7 +65,7 @@ impl TestCeremony {
                 validator_set: Arc::clone(&validator_set),
                 endpoint_secret,
                 peer_endpoints,
-                threshold: NonZeroUsize::new(2).unwrap(),
+                threshold: NonZeroUsize::new(threshold).unwrap(),
                 epoch: StorageKeyEpoch::new([9; 32]),
                 signer: Arc::new(ValidatorSigner::new_local(signing_key)),
             };
@@ -85,19 +89,26 @@ impl TestCeremony {
     }
 }
 
+#[rstest::rstest]
+#[case::one_of_one(1, 1)]
+#[case::one_of_two(1, 2)]
+#[case::two_of_two(2, 2)]
+#[case::one_of_three(1, 3)]
+#[case::two_of_three(2, 3)]
+#[case::three_of_three(3, 3)]
 #[tokio::test]
-async fn three_validators_confirm_the_same_dealings() -> anyhow::Result<()> {
-    let TestCeremony { endpoints, validators } = TestCeremony::exchange_dealings().await?;
-    let (_, participants, dealings) = &validators[0];
-    let expected = DkgDealingsCommitment::from_dealings(participants, dealings);
+async fn ceremony_succeeds(
+    #[case] threshold: usize,
+    #[case] validator_count: usize,
+) -> anyhow::Result<()> {
+    let TestCeremony { endpoints, validators } =
+        TestCeremony::exchange_dealings(threshold, validator_count).await?;
     let mut confirmations = JoinSet::new();
     for (ceremony, participants, dealings) in validators {
-        // Each validator inserts its own dealing separately from the arriving peer dealings.
-        assert_eq!(DkgDealingsCommitment::from_dealings(&participants, &dealings), expected);
         confirmations.spawn(async move {
             let dealings = ceremony.confirm_dealings(&participants, dealings).await?;
             // Keep connections alive until every validator finishes confirmation.
-            Ok::<_, anyhow::Error>((participants, dealings))
+            Ok::<_, anyhow::Error>((ceremony, participants, dealings))
         });
     }
     let confirmed = tokio::time::timeout(Duration::from_secs(10), async {
@@ -108,10 +119,41 @@ async fn three_validators_confirm_the_same_dealings() -> anyhow::Result<()> {
         Ok::<_, anyhow::Error>(confirmed)
     })
     .await??;
-    for (_, dealings) in confirmed {
+    let expected = confirmed[0].2.commitment();
+    let mut outputs = Vec::new();
+    for (ceremony, participants, dealings) in confirmed {
         assert_eq!(dealings.commitment(), expected);
-        assert_eq!(dealings.decryption_dealing_count(), 3);
-        assert_eq!(dealings.context_dealing_count(), 3);
+        assert_eq!(dealings.decryption_dealing_count(), validator_count);
+        assert_eq!(dealings.context_dealing_count(), validator_count);
+        let output = ceremony.complete_dkg(&participants, dealings)?;
+        assert_eq!(output.secret_share.participant, participants.local_index);
+        assert_eq!(output.setup_context.epoch, *ceremony.epoch.as_bytes());
+        outputs.push(output);
+    }
+    for output in &outputs {
+        assert_eq!(output.sealing_key, outputs[0].sealing_key);
+        assert_eq!(output.public_key_set, outputs[0].public_key_set);
+        assert_eq!(output.setup_context, outputs[0].setup_context);
+    }
+
+    let plaintext = b"private record encrypted with the P2P ceremony's public key";
+    let ciphertext = outputs[0].sealing_key.seal_bytes(&mut OsRng, plaintext)?;
+    let decryption_context = b"test record access";
+    let combiner =
+        Combiner::new(outputs[0].public_key_set.clone(), outputs[0].setup_context.clone())?;
+    let shares = outputs
+        .into_iter()
+        .map(|output| {
+            UnsealingShare::new(output.secret_share).decrypt_share(
+                &mut OsRng,
+                &output.setup_context,
+                &ciphertext,
+                decryption_context,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for selected in shares.into_iter().combinations(threshold) {
+        assert_eq!(combiner.combine_exact(&ciphertext, decryption_context, &selected)?, plaintext,);
     }
     for endpoint in endpoints {
         endpoint.close().await;
@@ -122,7 +164,8 @@ async fn three_validators_confirm_the_same_dealings() -> anyhow::Result<()> {
 #[tokio::test]
 async fn dealing_confirmation_rejects_different_valid_dealings() -> anyhow::Result<()> {
     for round in ["decryption", "context"] {
-        let TestCeremony { endpoints, mut validators } = TestCeremony::exchange_dealings().await?;
+        let TestCeremony { endpoints, mut validators } =
+            TestCeremony::exchange_dealings(2, 3).await?;
         let (dealer_ceremony, dealer, _) = &validators[2];
         let alternate = dealer_ceremony.create_dealings(dealer)?;
         let dealer_index = dealer.local_index;

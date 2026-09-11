@@ -61,6 +61,7 @@ build-rs      = { workspace = true }
 miden-node-db = { workspace = true }
 
 [dev-dependencies]
+itertools        = { workspace = true }
 miden-node-store = { workspace = true }
 miden-node-utils = { features = ["testing"], workspace = true }
 miden-protocol   = { default-features = true, features = ["testing"], workspace = true }
@@ -68,5 +69,6 @@ miden-testing    = { workspace = true }
 miden-tx         = { features = ["concurrent", "testing"], workspace = true }
 rand             = { workspace = true }
 rand_chacha_03   = { workspace = true }
+rstest           = { workspace = true }
 tokio            = { features = ["macros", "rt-multi-thread", "sync"], workspace = true }
 tower            = { features = ["util"], workspace = true }

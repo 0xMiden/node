@@ -23,10 +23,15 @@ use golden_halo2curves::golden_group::Secp256k1GoldenGroup;
 use miden_protocol::utils::serde::Serializable;
 use rand_core_06::{CryptoRngCore, OsRng};
 
+use self::confirmation::DkgDealingsCommitment;
 use super::super::wire::WireCodec;
 use super::{Ceremony, DkgParticipants};
 
+mod completion;
 pub mod confirmation;
+
+#[cfg(test)]
+mod tests;
 
 pub type StorageGroup = Secp256k1GoldenGroup;
 type StorageScalar = <StorageGroup as GoldenGroup>::Scalar;
@@ -43,6 +48,14 @@ pub struct UnconfirmedDkgDealings {
     local: LocalDealings,
     peer_decryption_dealings: BTreeMap<ParticipantIndex, DealerMessage<StorageGroup>>,
     peer_context_dealings: BTreeMap<ParticipantIndex, DealerMessage<StorageGroup>>,
+}
+
+/// Verified dealings whose commitment matched every authenticated peer's commitment.
+pub struct DkgDealings {
+    local: LocalDealings,
+    peer_decryption_dealings: BTreeMap<ParticipantIndex, DealerMessage<StorageGroup>>,
+    peer_context_dealings: BTreeMap<ParticipantIndex, DealerMessage<StorageGroup>>,
+    commitment: DkgDealingsCommitment,
 }
 
 #[derive(Clone)]
@@ -265,6 +278,24 @@ impl LocalDealings {
 
     pub fn context_dealing_root(&self) -> [u8; 32] {
         self.context_dealing.message.transcript_root
+    }
+}
+
+impl DkgDealings {
+    pub fn commitment(&self) -> DkgDealingsCommitment {
+        self.commitment
+    }
+
+    pub fn decryption_dealing_count(&self) -> usize {
+        std::iter::once(&self.local.decryption_dealing.message)
+            .chain(self.peer_decryption_dealings.values())
+            .count()
+    }
+
+    pub fn context_dealing_count(&self) -> usize {
+        std::iter::once(&self.local.context_dealing.message)
+            .chain(self.peer_context_dealings.values())
+            .count()
     }
 }
 

@@ -1,42 +1,11 @@
-use std::collections::BTreeMap;
 use std::fmt;
 
 use anyhow::{Context, ensure};
-use golden_core::{DealerMessage, ParticipantIndex};
 use miden_protocol::crypto::hash::rpo::Rpo256;
 use tokio::task::JoinSet;
 
-use super::{Ceremony, DkgParticipants, LocalDealings, StorageGroup, UnconfirmedDkgDealings};
+use super::{Ceremony, DkgDealings, DkgParticipants, UnconfirmedDkgDealings};
 use crate::commands::dkg_p2p::wire::WireCodec;
-
-#[cfg(test)]
-mod tests;
-
-/// Verified dealings whose commitment matched every authenticated peer's commitment.
-pub struct DkgDealings {
-    local: LocalDealings,
-    peer_decryption_dealings: BTreeMap<ParticipantIndex, DealerMessage<StorageGroup>>,
-    peer_context_dealings: BTreeMap<ParticipantIndex, DealerMessage<StorageGroup>>,
-    commitment: DkgDealingsCommitment,
-}
-
-impl DkgDealings {
-    pub fn commitment(&self) -> DkgDealingsCommitment {
-        self.commitment
-    }
-
-    pub fn decryption_dealing_count(&self) -> usize {
-        std::iter::once(&self.local.decryption_dealing.message)
-            .chain(self.peer_decryption_dealings.values())
-            .count()
-    }
-
-    pub fn context_dealing_count(&self) -> usize {
-        std::iter::once(&self.local.context_dealing.message)
-            .chain(self.peer_context_dealings.values())
-            .count()
-    }
-}
 
 /// Commits to the session, registry, then decryption and context roots in participant order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
