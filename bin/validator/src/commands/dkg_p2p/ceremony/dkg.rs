@@ -26,6 +26,8 @@ use rand_core_06::{CryptoRngCore, OsRng};
 use super::super::wire::WireCodec;
 use super::{Ceremony, DkgParticipants};
 
+pub mod confirmation;
+
 pub type StorageGroup = Secp256k1GoldenGroup;
 type StorageScalar = <StorageGroup as GoldenGroup>::Scalar;
 type StorageElement = <StorageGroup as GoldenGroup>::Element;
@@ -263,20 +265,6 @@ impl LocalDealings {
 
     pub fn context_dealing_root(&self) -> [u8; 32] {
         self.context_dealing.message.transcript_root
-    }
-}
-
-impl UnconfirmedDkgDealings {
-    pub fn decryption_dealing_count(&self) -> usize {
-        std::iter::once(&self.local.decryption_dealing.message)
-            .chain(self.peer_decryption_dealings.values())
-            .count()
-    }
-
-    pub fn context_dealing_count(&self) -> usize {
-        std::iter::once(&self.local.context_dealing.message)
-            .chain(self.peer_context_dealings.values())
-            .count()
     }
 }
 

@@ -10,6 +10,7 @@ use super::super::wire::{RecvStream, SendStream};
 use super::Ceremony;
 use super::ceremony_config::CeremonyConfig;
 use super::challenge::{Challenge, ChallengeResponse};
+use super::dkg::confirmation::DkgDealingsCommitment;
 use super::dkg::{DealerMessages, DkgPublicKey, DkgRegistryRoot};
 use super::session::{CeremonyNonce, SessionId};
 
@@ -214,6 +215,25 @@ impl AuthenticatedPeer {
             .context("failed to read peer dealer messages")?;
         send.finish().context("failed to finish dealing exchange stream")?;
         Ok(peer_messages)
+    }
+
+    pub async fn exchange_dealings_commitment(
+        &self,
+        local: &DkgDealingsCommitment,
+    ) -> anyhow::Result<DkgDealingsCommitment> {
+        let (mut send, mut receive) = self
+            .connection
+            .bi_stream()
+            .await
+            .context("failed to establish DKG dealings confirmation stream")?;
+
+        send.write(local).await.context("failed to send DKG dealings commitment")?;
+        let peer_commitment = receive
+            .read_exact::<DkgDealingsCommitment>(DkgDealingsCommitment::BYTES)
+            .await
+            .context("failed to read DKG dealings commitment")?;
+        send.finish().context("failed to finish DKG dealings confirmation stream")?;
+        Ok(peer_commitment)
     }
 
     pub fn validator_public_key(&self) -> &PublicKey {

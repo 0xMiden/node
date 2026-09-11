@@ -114,13 +114,15 @@ impl ParticipateOptions {
         );
 
         let dealings = ceremony.exchange_dealings(&participants, dealings).await?;
+        let dealings = ceremony.confirm_dealings(&participants, dealings).await?;
         tracing::info!(
             target: miden_validator::LOG_TARGET,
             {
                 dkg.decryption_dealings = dealings.decryption_dealing_count(),
                 dkg.context_dealings = dealings.context_dealing_count(),
+                dkg.dealings_commitment = %dealings.commitment(),
             },
-            "Peer DKG dealings received and verified",
+            "DKG dealings verified and confirmed with every peer",
         );
 
         endpoint.close().await;
