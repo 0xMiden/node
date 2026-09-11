@@ -27,6 +27,7 @@ mod ceremony_config;
 mod challenge;
 mod dkg;
 mod peer;
+mod persistence;
 mod session;
 #[cfg(test)]
 mod tests;

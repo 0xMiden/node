@@ -5,8 +5,9 @@ use std::time::{Duration, Instant};
 use iroh::{EndpointId, SecretKey as IrohSecretKey};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::utils::serde::Serializable;
+use miden_validator::DataDirectory;
 
-use super::super::super::ValidatorSigningKey;
+use super::super::super::{ValidatorSigningKey, ValidatorStorageKey};
 use super::super::ParticipateOptions;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -49,24 +50,28 @@ fn write_endpoint_secret(root: &Path, seed: u8) -> TestResultWith<(PathBuf, Endp
     Ok((path, secret.public()))
 }
 
-fn participate_options(
-    genesis: &Path,
-    signing_key: &SigningKey,
-    endpoint_secret: &Path,
-    peer_endpoints: Vec<EndpointId>,
-    threshold: usize,
-) -> ParticipateOptions {
-    ParticipateOptions {
-        genesis: genesis.to_path_buf(),
-        endpoint_secret: endpoint_secret.to_path_buf(),
-        peer_endpoints,
-        timeout: Duration::from_secs(30),
-        threshold: NonZeroUsize::new(threshold).expect("test threshold must be nonzero"),
-        epoch: "09".repeat(32),
-        signing_key: ValidatorSigningKey {
-            signing_key: Some(hex::encode(signing_key.to_bytes())),
-            signing_key_kms_id: None,
-        },
+impl ParticipateOptions {
+    fn for_tests(
+        data_directory: &Path,
+        genesis: &Path,
+        signing_key: &SigningKey,
+        endpoint_secret: &Path,
+        peer_endpoints: Vec<EndpointId>,
+        threshold: usize,
+    ) -> Self {
+        Self {
+            data_directory: data_directory.to_path_buf(),
+            genesis: genesis.to_path_buf(),
+            endpoint_secret: endpoint_secret.to_path_buf(),
+            peer_endpoints,
+            timeout: Duration::from_secs(30),
+            threshold: NonZeroUsize::new(threshold).expect("test threshold must be nonzero"),
+            epoch: "09".repeat(32),
+            signing_key: ValidatorSigningKey {
+                signing_key: Some(hex::encode(signing_key.to_bytes())),
+                signing_key_kms_id: None,
+            },
+        }
     }
 }
 
@@ -78,7 +83,8 @@ async fn participate_accepts_the_complete_offline_configuration() -> TestResult 
     let (_, peer_one) = write_endpoint_secret(root.path(), 2)?;
     let (_, peer_two) = write_endpoint_secret(root.path(), 3)?;
 
-    participate_options(
+    ParticipateOptions::for_tests(
+        root.path(),
         &genesis.path,
         &genesis.signing_keys[0],
         &endpoint_secret,
@@ -97,10 +103,77 @@ async fn single_validator_ceremony_succeeds() -> TestResult {
     let genesis = write_genesis(root.path(), 1)?;
     let (endpoint_secret, _) = write_endpoint_secret(root.path(), 1)?;
 
-    participate_options(&genesis.path, &genesis.signing_keys[0], &endpoint_secret, Vec::new(), 1)
-        .handle()
-        .await?;
+    ParticipateOptions::for_tests(
+        root.path(),
+        &genesis.path,
+        &genesis.signing_keys[0],
+        &endpoint_secret,
+        Vec::new(),
+        1,
+    )
+    .handle()
+    .await?;
 
+    let directory = DataDirectory::load(root.path().to_path_buf())?.storage_key_dir();
+    let operator_key = ValidatorStorageKey {
+        key_epoch: fs_err::read_to_string(directory.join("epoch.hex"))?,
+        setup_context: directory.join("setup-context.wire"),
+        public_key_set: directory.join("public-key-set.wire"),
+        secret_share: directory.join("secret-share.wire"),
+    }
+    .load()?;
+    assert_eq!(operator_key.key_epoch().as_bytes(), &[9; 32]);
+    assert_eq!(operator_key.participant().get(), 1);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(fs_err::metadata(&directory)?.permissions().mode() & 0o077, 0);
+        assert_eq!(
+            fs_err::metadata(directory.join("secret-share.wire"))?.permissions().mode() & 0o177,
+            0,
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn ceremony_refuses_to_overwrite_bundle() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let genesis = write_genesis(root.path(), 1)?;
+    let (endpoint_secret, _) = write_endpoint_secret(root.path(), 1)?;
+    ParticipateOptions::for_tests(
+        root.path(),
+        &genesis.path,
+        &genesis.signing_keys[0],
+        &endpoint_secret,
+        Vec::new(),
+        1,
+    )
+    .handle()
+    .await?;
+
+    let directory = DataDirectory::load(root.path().to_path_buf())?.storage_key_dir();
+    let files = ["epoch.hex", "setup-context.wire", "public-key-set.wire", "secret-share.wire"];
+    let original = files
+        .map(|name| fs_err::read(directory.join(name)))
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut options = ParticipateOptions::for_tests(
+        root.path(),
+        &genesis.path,
+        &genesis.signing_keys[0],
+        &endpoint_secret,
+        Vec::new(),
+        1,
+    );
+    options.epoch = "0a".repeat(32);
+    let error = options.handle().await.expect_err("existing storage keys must not be replaced");
+    assert!(error.to_string().contains("storage key directory already exists"));
+    for (name, expected) in files.into_iter().zip(original) {
+        assert_eq!(fs_err::read(directory.join(name))?, expected, "{name} was modified");
+    }
     Ok(())
 }
 
@@ -116,7 +189,8 @@ async fn ceremony_times_out_waiting_for_a_peer() -> TestResult {
     } else {
         (secret_b, endpoint_a)
     };
-    let mut options = participate_options(
+    let mut options = ParticipateOptions::for_tests(
+        root.path(),
         &genesis.path,
         &genesis.signing_keys[0],
         &endpoint_secret,
@@ -131,6 +205,7 @@ async fn ceremony_times_out_waiting_for_a_peer() -> TestResult {
         .expect_err("a missing peer must not keep the ceremony running indefinitely");
     assert!(started.elapsed() >= Duration::from_millis(100));
     assert_eq!(error.to_string(), "DKG ceremony timed out after 100ms");
+    assert!(!DataDirectory::load(root.path().to_path_buf())?.storage_key_dir().exists());
     Ok(())
 }
 
@@ -143,7 +218,8 @@ async fn participate_rejects_a_signer_outside_genesis() -> TestResult {
     let (_, peer_one) = write_endpoint_secret(root.path(), 2)?;
     let (_, peer_two) = write_endpoint_secret(root.path(), 3)?;
 
-    let error = participate_options(
+    let error = ParticipateOptions::for_tests(
+        root.path(),
         &genesis.path,
         &outsider,
         &endpoint_secret,
@@ -172,7 +248,8 @@ async fn participate_rejects_an_invalid_peer_endpoint_set() -> TestResult {
         (vec![peer_one, local_endpoint], "peer endpoints contain the local endpoint"),
     ];
     for (peer_endpoints, expected) in cases {
-        let error = participate_options(
+        let error = ParticipateOptions::for_tests(
+            root.path(),
             &genesis.path,
             &genesis.signing_keys[0],
             &endpoint_secret,
@@ -197,7 +274,8 @@ async fn participate_rejects_a_threshold_exceeding_the_genesis_validator_set() -
     let (_, peer_one) = write_endpoint_secret(root.path(), 2)?;
     let (_, peer_two) = write_endpoint_secret(root.path(), 3)?;
 
-    let error = participate_options(
+    let error = ParticipateOptions::for_tests(
+        root.path(),
         &genesis.path,
         &genesis.signing_keys[0],
         &endpoint_secret,

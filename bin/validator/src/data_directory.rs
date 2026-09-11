@@ -26,6 +26,10 @@ impl DataDirectory {
         self.data.join("blocks")
     }
 
+    pub fn storage_key_dir(&self) -> PathBuf {
+        self.data.join("storage-key")
+    }
+
     pub fn display(&self) -> std::path::Display<'_> {
         self.data.display()
     }
