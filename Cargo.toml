@@ -118,6 +118,7 @@ rstest             = { version = "0.26" }
 rusqlite           = { features = ["array", "bundled"], version = "0.37" }
 semver             = { version = "1.0" }
 serde              = { features = ["derive"], version = "1" }
+serde_json         = { version = "1.0" }
 serial_test        = { version = "3.2" }
 sha2               = { version = "0.10" }
 syn                = { version = "2.0" }
