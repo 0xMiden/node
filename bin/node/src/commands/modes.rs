@@ -49,7 +49,7 @@ pub struct SequencerCommand {
     #[arg(
         long = "internal.listen",
         env = "MIDEN_NODE_SEQUENCER_INTERNAL_LISTEN",
-        value_name = "LISTEN"
+        value_name = "IP:PORT"
     )]
     pub internal: Option<SocketAddr>,
 }

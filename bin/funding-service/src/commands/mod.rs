@@ -32,7 +32,7 @@ pub enum FundingServiceCommand {
     /// Starts the funding service.
     Start {
         /// Socket address at which to serve the funding service's gRPC API.
-        #[arg(long = "listen", env = ENV_LISTEN, value_name = "LISTEN")]
+        #[arg(long = "listen", env = ENV_LISTEN, value_name = "IP:PORT")]
         listen: SocketAddr,
 
         /// Maximum duration allocated to a gRPC request served by the funding service.
