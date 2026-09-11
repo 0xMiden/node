@@ -29,6 +29,11 @@ use miden_node_proto::generated::rpc::{
 use miden_node_proto::generated::submission::ProvenTransactionSubmission;
 use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify};
 use miden_node_tracing::warn;
+use miden_node_utils::limiter::{
+    QueryParamLimiter,
+    QueryParamNoteIdLimit,
+    QueryParamNullifierPrefixLimit,
+};
 use miden_node_utils::retry::{self, Retryable};
 use miden_protocol::Word;
 use miden_protocol::account::{
@@ -224,26 +229,31 @@ impl RpcNodeClient {
 
     /// The notes among `note_ids` whose details the node stores.
     pub async fn public_notes(&self, note_ids: &[NoteId]) -> Result<Vec<Note>> {
-        let note_ids = note_ids.iter().map(|note_id| note_id.as_word().into()).collect();
-
-        let response = self
-            .rpc_client
-            .clone()
-            .get_notes_by_id(NotesByIdRequest { note_ids })
-            .await
-            .context("failed to fetch notes from RPC")?
-            .into_inner();
-
         let mut notes = Vec::new();
-        for committed in response.notes {
-            let Some(note) = committed.note else {
-                continue;
-            };
-            if note.note_details.is_none() {
-                continue;
-            }
 
-            notes.push(Note::try_from(note).context("failed to convert a committed note")?);
+        // The node rejects a request which asks for more note IDs than it accepts, so the IDs are
+        // requested in chunks of the limit it enforces.
+        for chunk in note_ids.chunks(QueryParamNoteIdLimit::LIMIT) {
+            let note_ids = chunk.iter().map(|note_id| note_id.as_word().into()).collect();
+
+            let response = self
+                .rpc_client
+                .clone()
+                .get_notes_by_id(NotesByIdRequest { note_ids })
+                .await
+                .context("failed to fetch notes from RPC")?
+                .into_inner();
+
+            for committed in response.notes {
+                let Some(note) = committed.note else {
+                    continue;
+                };
+                if note.note_details.is_none() {
+                    continue;
+                }
+
+                notes.push(Note::try_from(note).context("failed to convert a committed note")?);
+            }
         }
 
         Ok(notes)
@@ -263,32 +273,38 @@ impl RpcNodeClient {
             .map(|nullifier| u32::from(nullifier.prefix()))
             .collect::<HashSet<_>>()
             .into_iter()
-            .collect();
-
-        let response = self
-            .rpc_client
-            .clone()
-            .sync_nullifiers(SyncNullifiersRequest {
-                block_range: Some(BlockRange {
-                    block_from: BlockNumber::GENESIS.as_u32(),
-                    block_to: tip.as_u32(),
-                }),
-                prefix_len: NULLIFIER_PREFIX_LEN,
-                nullifiers: prefixes,
-            })
-            .await
-            .context("failed to synchronize nullifiers")?
-            .into_inner();
+            .collect::<Vec<_>>();
 
         let requested: HashSet<Nullifier> = nullifiers.iter().copied().collect();
         let mut spent = HashSet::new();
-        for update in response.nullifiers {
-            let nullifier =
-                update.nullifier.context("a nullifier update did not include a nullifier")?;
-            let nullifier = Word::try_from(nullifier).context("failed to convert a nullifier")?;
-            let nullifier = Nullifier::from_raw(nullifier);
-            if requested.contains(&nullifier) {
-                spent.insert(nullifier);
+
+        // The node rejects a request which carries more prefixes than it accepts, so the prefixes
+        // are sent in chunks of the limit it enforces.
+        for chunk in prefixes.chunks(QueryParamNullifierPrefixLimit::LIMIT) {
+            let response = self
+                .rpc_client
+                .clone()
+                .sync_nullifiers(SyncNullifiersRequest {
+                    block_range: Some(BlockRange {
+                        block_from: BlockNumber::GENESIS.as_u32(),
+                        block_to: tip.as_u32(),
+                    }),
+                    prefix_len: NULLIFIER_PREFIX_LEN,
+                    nullifiers: chunk.to_vec(),
+                })
+                .await
+                .context("failed to synchronize nullifiers")?
+                .into_inner();
+
+            for update in response.nullifiers {
+                let nullifier =
+                    update.nullifier.context("a nullifier update did not include a nullifier")?;
+                let nullifier =
+                    Word::try_from(nullifier).context("failed to convert a nullifier")?;
+                let nullifier = Nullifier::from_raw(nullifier);
+                if requested.contains(&nullifier) {
+                    spent.insert(nullifier);
+                }
             }
         }
 
