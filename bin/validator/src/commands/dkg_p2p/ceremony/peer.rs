@@ -14,7 +14,6 @@ use super::dkg::confirmation::DkgDealingsCommitment;
 use super::dkg::{DealerMessages, DkgPublicKey, DkgRegistryRoot};
 use super::session::{CeremonyNonce, SessionId};
 
-#[derive(Clone)]
 pub struct ConnectedPeer {
     connection: Connection,
 }
@@ -90,29 +89,28 @@ impl ConnectedPeer {
             validator_set.as_keys().contains(&validator_public_key),
             "peer validator key is not committed by genesis",
         );
-        send.finish().context("failed to finish authentication stream")?;
-
-        Ok(AuthenticatedPeer { validator_public_key, connection: self })
+        Ok(AuthenticatedPeer {
+            validator_public_key,
+            connection: self,
+            send,
+            receive,
+        })
     }
 }
 
-#[derive(Clone)]
 pub struct AuthenticatedPeer {
     validator_public_key: PublicKey,
     connection: ConnectedPeer,
+    send: SendStream,
+    receive: RecvStream,
 }
 
 impl AuthenticatedPeer {
-    pub async fn exchange_ceremony_config(&self, local: &CeremonyConfig) -> anyhow::Result<()> {
-        let (mut send, mut receive) = self
-            .connection
-            .bi_stream()
-            .await
-            .context("failed to establish ceremony config stream")?;
+    pub async fn exchange_ceremony_config(&mut self, local: &CeremonyConfig) -> anyhow::Result<()> {
+        self.send.write(local).await.context("failed to send ceremony config")?;
 
-        send.write(local).await.context("failed to send ceremony config")?;
-
-        let peer_config = receive
+        let peer_config = self
+            .receive
             .read_exact::<CeremonyConfig>(CeremonyConfig::BYTES)
             .await
             .context("failed to read ceremony config")?;
@@ -120,120 +118,89 @@ impl AuthenticatedPeer {
             &peer_config == local,
             "peer ceremony config does not match: local {local:?}, peer {peer_config:?}",
         );
-        send.finish().context("failed to finish ceremony config stream")?;
         Ok(())
     }
 
     pub async fn exchange_ceremony_nonce(
-        &self,
+        &mut self,
         local: &CeremonyNonce,
     ) -> anyhow::Result<CeremonyNonce> {
-        let (mut send, mut receive) = self
-            .connection
-            .bi_stream()
-            .await
-            .context("failed to establish ceremony nonce stream")?;
-
-        send.write(local).await.context("failed to send ceremony nonce")?;
-        let peer_nonce = receive
+        self.send.write(local).await.context("failed to send ceremony nonce")?;
+        let peer_nonce = self
+            .receive
             .read_exact::<CeremonyNonce>(CeremonyNonce::BYTES)
             .await
             .context("failed to read ceremony nonce")?;
-        send.finish().context("failed to finish ceremony nonce stream")?;
         Ok(peer_nonce)
     }
 
-    pub async fn exchange_session_id(&self, local: &SessionId) -> anyhow::Result<SessionId> {
-        let (mut send, mut receive) = self
-            .connection
-            .bi_stream()
-            .await
-            .context("failed to establish session confirmation stream")?;
-
-        send.write(local).await.context("failed to send session ID")?;
-        let peer_session_id = receive
+    pub async fn exchange_session_id(&mut self, local: &SessionId) -> anyhow::Result<SessionId> {
+        self.send.write(local).await.context("failed to send session ID")?;
+        let peer_session_id = self
+            .receive
             .read_exact::<SessionId>(SessionId::BYTES)
             .await
             .context("failed to read session ID")?;
-        send.finish().context("failed to finish session confirmation stream")?;
         Ok(peer_session_id)
     }
 
     pub async fn exchange_dkg_public_key(
-        &self,
+        &mut self,
         local: &DkgPublicKey,
     ) -> anyhow::Result<DkgPublicKey> {
-        let (mut send, mut receive) = self
-            .connection
-            .bi_stream()
-            .await
-            .context("failed to establish DKG public key stream")?;
-
-        send.write(local).await.context("failed to send DKG public key")?;
-        let peer_dkg_public_key = receive
+        self.send.write(local).await.context("failed to send DKG public key")?;
+        let peer_dkg_public_key = self
+            .receive
             .read_exact::<DkgPublicKey>(DkgPublicKey::BYTES)
             .await
             .context("failed to read DKG public key")?;
-        send.finish().context("failed to finish DKG public key stream")?;
         Ok(peer_dkg_public_key)
     }
 
     pub async fn exchange_dkg_registry_root(
-        &self,
+        &mut self,
         local: &DkgRegistryRoot,
     ) -> anyhow::Result<DkgRegistryRoot> {
-        let (mut send, mut receive) = self
-            .connection
-            .bi_stream()
-            .await
-            .context("failed to establish DKG registry confirmation stream")?;
-
-        send.write(local).await.context("failed to send DKG registry root")?;
-        let peer_registry_root = receive
+        self.send.write(local).await.context("failed to send DKG registry root")?;
+        let peer_registry_root = self
+            .receive
             .read_exact::<DkgRegistryRoot>(DkgRegistryRoot::BYTES)
             .await
             .context("failed to read DKG registry root")?;
-        send.finish().context("failed to finish DKG registry confirmation stream")?;
         Ok(peer_registry_root)
     }
 
     pub async fn exchange_dealer_messages(
-        &self,
+        &mut self,
         local: &DealerMessages,
     ) -> anyhow::Result<DealerMessages> {
-        let (mut send, mut receive) = self
-            .connection
-            .bi_stream()
-            .await
-            .context("failed to establish dealing exchange stream")?;
-
         let message_bytes =
-            send.write(local).await.context("failed to send local dealer messages")?;
-        let peer_messages = receive
+            self.send.write(local).await.context("failed to send local dealer messages")?;
+        let peer_messages = self
+            .receive
             .read_exact::<DealerMessages>(message_bytes)
             .await
             .context("failed to read peer dealer messages")?;
-        send.finish().context("failed to finish dealing exchange stream")?;
         Ok(peer_messages)
     }
 
     pub async fn exchange_dealings_commitment(
-        &self,
+        &mut self,
         local: &DkgDealingsCommitment,
     ) -> anyhow::Result<DkgDealingsCommitment> {
-        let (mut send, mut receive) = self
-            .connection
-            .bi_stream()
-            .await
-            .context("failed to establish DKG dealings confirmation stream")?;
-
-        send.write(local).await.context("failed to send DKG dealings commitment")?;
-        let peer_commitment = receive
+        self.send.write(local).await.context("failed to send DKG dealings commitment")?;
+        let peer_commitment = self
+            .receive
             .read_exact::<DkgDealingsCommitment>(DkgDealingsCommitment::BYTES)
             .await
             .context("failed to read DKG dealings commitment")?;
-        send.finish().context("failed to finish DKG dealings confirmation stream")?;
         Ok(peer_commitment)
+    }
+
+    pub fn finish_stream(&mut self) -> anyhow::Result<()> {
+        self.send.finish().with_context(|| {
+            format!("failed to finish ceremony stream to {}", self.connection.endpoint_id())
+        })
     }
 
     pub fn validator_public_key(&self) -> &PublicKey {
@@ -243,5 +210,12 @@ impl AuthenticatedPeer {
     #[cfg(test)]
     pub fn connection(&self) -> &Connection {
         &self.connection.connection
+    }
+
+    #[cfg(test)]
+    pub fn into_streams(
+        self,
+    ) -> (Connection, iroh::endpoint::SendStream, iroh::endpoint::RecvStream) {
+        (self.connection.connection, self.send.into_inner(), self.receive.into_inner())
     }
 }
