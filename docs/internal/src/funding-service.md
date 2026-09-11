@@ -38,3 +38,11 @@ The transaction pays its own fee from the same vault the notes are paid from, so
 The notes are public, so the node stores their details. The response carries the note and the proof that the note is in a block, which lets a requester consume the note without a further lookup at the node.
 
 The worker skips a request whose requester has gone away. The transaction would otherwise spend the funding balance and pay a fee for a note which no requester waits for.
+
+## Refilling the account
+
+An operator refills it by sending it a public pay-to-ID note that holds the native asset, and a collection task consumes those notes.
+
+The collection synchronizes notes by the funding account's tag. A filter keeps only the notes the account can consume: public, pay-to-ID, targeting the funding account, and holding the native asset and nothing else.
+
+The collection runs as its own transaction rather than riding along with a funding transaction. A deposit note comes from outside the service, so a note which turns out to be unconsumable must not be able to fail a request a client is waiting on.
