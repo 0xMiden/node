@@ -1,5 +1,6 @@
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use iroh::{EndpointId, SecretKey as IrohSecretKey};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
@@ -59,6 +60,7 @@ fn participate_options(
         genesis: genesis.to_path_buf(),
         endpoint_secret: endpoint_secret.to_path_buf(),
         peer_endpoints,
+        timeout: Duration::from_secs(30),
         threshold: NonZeroUsize::new(threshold).expect("test threshold must be nonzero"),
         epoch: "09".repeat(32),
         signing_key: ValidatorSigningKey {
@@ -99,6 +101,36 @@ async fn single_validator_ceremony_succeeds() -> TestResult {
         .handle()
         .await?;
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn ceremony_times_out_waiting_for_a_peer() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let genesis = write_genesis(root.path(), 2)?;
+    let (secret_a, endpoint_a) = write_endpoint_secret(root.path(), 1)?;
+    let (secret_b, endpoint_b) = write_endpoint_secret(root.path(), 2)?;
+    // The higher endpoint ID waits for an incoming connection; the peer never starts.
+    let (endpoint_secret, peer) = if endpoint_a > endpoint_b {
+        (secret_a, endpoint_b)
+    } else {
+        (secret_b, endpoint_a)
+    };
+    let mut options = participate_options(
+        &genesis.path,
+        &genesis.signing_keys[0],
+        &endpoint_secret,
+        vec![peer],
+        2,
+    );
+    options.timeout = Duration::from_millis(100);
+
+    let started = Instant::now();
+    let error = tokio::time::timeout(Duration::from_secs(5), options.handle())
+        .await?
+        .expect_err("a missing peer must not keep the ceremony running indefinitely");
+    assert!(started.elapsed() >= Duration::from_millis(100));
+    assert_eq!(error.to_string(), "DKG ceremony timed out after 100ms");
     Ok(())
 }
 

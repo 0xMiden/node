@@ -96,8 +96,8 @@ async fn registry_confirmation_rejects_different_registry_roots() -> TestResult 
     );
 
     let (peers_a, peers_b) = tokio::try_join!(
-        ceremony_a.authenticate_peers_on(&endpoint_a),
-        ceremony_b.authenticate_peers_on(&endpoint_b),
+        ceremony_a.authenticate_peers(&endpoint_a),
+        ceremony_b.authenticate_peers(&endpoint_b),
     )?;
     let (peers_a, peers_b) = tokio::try_join!(
         ceremony_a.exchange_configs(peers_a),
@@ -166,8 +166,8 @@ async fn session_confirmation_rejects_different_session_ids() -> TestResult {
     );
 
     let (peers_a, peers_b) = tokio::try_join!(
-        ceremony_a.authenticate_peers_on(&endpoint_a),
-        ceremony_b.authenticate_peers_on(&endpoint_b),
+        ceremony_a.authenticate_peers(&endpoint_a),
+        ceremony_b.authenticate_peers(&endpoint_b),
     )?;
     let (peers_a, peers_b) = tokio::try_join!(
         ceremony_a.exchange_configs(peers_a),
@@ -228,8 +228,8 @@ async fn lower_endpoint_id_dials_peer() -> TestResult {
         endpoint_secret_b,
         BTreeSet::from([endpoint_a.id()]),
     );
-    let authentication_for_a = ceremony_a.authenticate_peers_on(&endpoint_a);
-    let authentication_for_b = ceremony_b.authenticate_peers_on(&endpoint_b);
+    let authentication_for_a = ceremony_a.authenticate_peers(&endpoint_a);
+    let authentication_for_b = ceremony_b.authenticate_peers(&endpoint_b);
 
     let (peers_a, peers_b) = tokio::try_join!(authentication_for_a, authentication_for_b)?;
     assert_eq!(peers_a.authenticated_peers.len(), 1);
@@ -272,8 +272,8 @@ async fn authentication_rejects_validator_key_outside_genesis() -> TestResult {
         endpoint_secret_b,
         BTreeSet::from([endpoint_a.id()]),
     );
-    let authentication_for_a = ceremony_a.authenticate_peers_on(&endpoint_a);
-    let authentication_for_outsider = outsider_ceremony.authenticate_peers_on(&endpoint_b);
+    let authentication_for_a = ceremony_a.authenticate_peers(&endpoint_a);
+    let authentication_for_outsider = outsider_ceremony.authenticate_peers(&endpoint_b);
 
     let (result_a, _) = tokio::join!(authentication_for_a, authentication_for_outsider);
     let error = result_a.err().expect("validator A should reject the outsider");
@@ -306,7 +306,7 @@ async fn authentication_rejects_signature_from_different_domain() -> TestResult 
         local_endpoint_secret,
         BTreeSet::from([peer_endpoint.id()]),
     );
-    let authentication = ceremony.authenticate_peers_on(local_endpoint);
+    let authentication = ceremony.authenticate_peers(local_endpoint);
     let respond_from_different_domain = async {
         let incoming = peer_endpoint
             .accept()

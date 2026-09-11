@@ -83,18 +83,16 @@ pub(super) struct Ceremony {
 impl Ceremony {
     const ALPN: &'static [u8] = b"/miden/validator-dkg-p2p/1";
 
-    pub async fn authenticate_peers(&self) -> anyhow::Result<(Endpoint, AuthenticatedPeers)> {
-        let endpoint = Endpoint::builder(presets::N0)
+    pub async fn bind_endpoint(&self) -> anyhow::Result<Endpoint> {
+        Endpoint::builder(presets::N0)
             .secret_key(self.endpoint_secret.clone())
             .alpns(vec![Self::ALPN.to_vec()])
             .bind()
             .await
-            .context("failed to bind Iroh endpoint")?;
-        let peers = self.authenticate_peers_on(&endpoint).await?;
-        Ok((endpoint, peers))
+            .context("failed to bind Iroh endpoint")
     }
 
-    async fn authenticate_peers_on(
+    pub async fn authenticate_peers(
         &self,
         endpoint: &Endpoint,
     ) -> anyhow::Result<AuthenticatedPeers> {

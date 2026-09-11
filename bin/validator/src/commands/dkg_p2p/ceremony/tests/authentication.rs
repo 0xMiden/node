@@ -46,7 +46,7 @@ async fn authentication_rejects_two_endpoints_using_the_same_validator_key() -> 
         });
     }
     let (result, remote_peers) = tokio::time::timeout(Duration::from_secs(10), async {
-        tokio::join!(ceremony.authenticate_peers_on(&endpoint), async {
+        tokio::join!(ceremony.authenticate_peers(&endpoint), async {
             let mut peers = Vec::new();
             while let Some(result) = authentications.join_next().await {
                 // Rejection may disconnect a peer before it reads the validator's response.

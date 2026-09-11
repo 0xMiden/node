@@ -41,8 +41,8 @@ async fn config_exchange_rejects_mismatch(
     let (result_a, result_b) = tokio::time::timeout(Duration::from_secs(10), async {
         // Valid genesis identities authenticate even when their ceremony settings disagree.
         let (peers_a, peers_b) = tokio::try_join!(
-            ceremony_a.authenticate_peers_on(&endpoint_a),
-            ceremony_b.authenticate_peers_on(&endpoint_b),
+            ceremony_a.authenticate_peers(&endpoint_a),
+            ceremony_b.authenticate_peers(&endpoint_b),
         )?;
         Ok::<_, anyhow::Error>(tokio::join!(
             ceremony_a.exchange_configs(peers_a),

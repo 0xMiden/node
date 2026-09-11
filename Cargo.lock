@@ -5388,6 +5388,7 @@ dependencies = [
  "golden-evrf",
  "golden-halo2curves",
  "hex",
+ "humantime",
  "iroh",
  "itertools 0.14.0",
  "miden-node-db",

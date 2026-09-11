@@ -72,7 +72,7 @@ impl TestCeremony {
                 signer: Arc::new(ValidatorSigner::new_local(signing_key)),
             };
             exchanges.spawn(async move {
-                let peers = ceremony.authenticate_peers_on(&endpoint).await?;
+                let peers = ceremony.authenticate_peers(&endpoint).await?;
                 let peers = ceremony.exchange_configs(peers).await?;
                 let session = ceremony.exchange_nonces(peers).await?;
                 let session = ceremony.confirm_session(session).await?;
