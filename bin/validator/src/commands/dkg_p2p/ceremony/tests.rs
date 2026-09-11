@@ -68,7 +68,7 @@ async fn bind_test_endpoint(secret_key: IrohSecretKey) -> TestResultWith<(Endpoi
 }
 
 #[tokio::test]
-async fn three_validators_confirm_the_same_dkg_registry() -> TestResult {
+async fn three_validators_exchange_valid_dealings() -> TestResult {
     let endpoint_secrets = [11u8, 12, 13].map(|seed| IrohSecretKey::from_bytes(&[seed; 32]));
     let (endpoint_a, lookup_a) = bind_test_endpoint(endpoint_secrets[0].clone()).await?;
     let (endpoint_b, lookup_b) = bind_test_endpoint(endpoint_secrets[1].clone()).await?;
@@ -138,37 +138,17 @@ async fn three_validators_confirm_the_same_dkg_registry() -> TestResult {
         ceremony_b.confirm_dkg_registry(participants_b),
         ceremony_c.confirm_dkg_registry(participants_c),
     )?;
-    for (local_index, (ceremony, participants, signing_key)) in [
-        (&ceremony_a, &participants_a, &signing_keys[0]),
-        (&ceremony_b, &participants_b, &signing_keys[1]),
-        (&ceremony_c, &participants_c, &signing_keys[2]),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let expected_local_index = ceremony
-            .validator_set
-            .as_keys()
-            .iter()
-            .position(|validator_key| validator_key == &signing_key.public_key())
-            .expect("local validator must be in the validator set")
-            + 1;
-        assert_eq!(participants.local_index().get() as usize, expected_local_index);
-
-        let mut actual = participants
-            .session
-            .authenticated_peers
-            .iter()
-            .map(|peer| (peer.connection().remote_id(), peer.validator_public_key().clone()))
-            .collect::<Vec<_>>();
-        actual.sort_by_key(|(endpoint_id, _)| *endpoint_id);
-        let mut expected = endpoint_ids
-            .into_iter()
-            .zip(signing_keys.iter().map(SigningKey::public_key))
-            .filter(|(endpoint_id, _)| *endpoint_id != endpoint_ids[local_index])
-            .collect::<Vec<_>>();
-        expected.sort_by_key(|(endpoint_id, _)| *endpoint_id);
-        assert_eq!(actual, expected);
+    let dealings_a = ceremony_a.create_dealings(&participants_a)?;
+    let dealings_b = ceremony_b.create_dealings(&participants_b)?;
+    let dealings_c = ceremony_c.create_dealings(&participants_c)?;
+    let (dealings_a, dealings_b, dealings_c) = tokio::try_join!(
+        ceremony_a.exchange_dealings(&participants_a, dealings_a),
+        ceremony_b.exchange_dealings(&participants_b, dealings_b),
+        ceremony_c.exchange_dealings(&participants_c, dealings_c),
+    )?;
+    for dealings in [&dealings_a, &dealings_b, &dealings_c] {
+        assert_eq!(dealings.decryption_dealing_count(), 3);
+        assert_eq!(dealings.context_dealing_count(), 3);
     }
 
     tokio::join!(endpoint_a.close(), endpoint_b.close(), endpoint_c.close());

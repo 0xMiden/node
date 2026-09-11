@@ -10,7 +10,7 @@ use super::super::wire::{RecvStream, SendStream};
 use super::Ceremony;
 use super::ceremony_config::CeremonyConfig;
 use super::challenge::{Challenge, ChallengeResponse};
-use super::dkg::{DkgPublicKey, DkgRegistryRoot};
+use super::dkg::{DealerMessages, DkgPublicKey, DkgRegistryRoot};
 use super::session::{CeremonyNonce, SessionId};
 
 #[derive(Clone)]
@@ -73,7 +73,7 @@ impl ConnectedPeer {
             .context("failed to send authentication challenge")?;
 
         let peer_challenge = receive
-            .read_exact::<Challenge>()
+            .read_exact::<Challenge>(Challenge::BYTES)
             .await
             .context("failed to read authentication challenge")?;
 
@@ -81,7 +81,7 @@ impl ConnectedPeer {
         send.write(&response).await.context("failed to send authentication response")?;
 
         let response = receive
-            .read_exact::<ChallengeResponse>()
+            .read_exact::<ChallengeResponse>(ChallengeResponse::BYTES)
             .await
             .context("failed to read challenge response")?;
         let validator_public_key = response.verify_against(&challenge)?;
@@ -112,7 +112,7 @@ impl AuthenticatedPeer {
         send.write(local).await.context("failed to send ceremony config")?;
 
         let peer_config = receive
-            .read_exact::<CeremonyConfig>()
+            .read_exact::<CeremonyConfig>(CeremonyConfig::BYTES)
             .await
             .context("failed to read ceremony config")?;
         ensure!(
@@ -135,7 +135,7 @@ impl AuthenticatedPeer {
 
         send.write(local).await.context("failed to send ceremony nonce")?;
         let peer_nonce = receive
-            .read_exact::<CeremonyNonce>()
+            .read_exact::<CeremonyNonce>(CeremonyNonce::BYTES)
             .await
             .context("failed to read ceremony nonce")?;
         send.finish().context("failed to finish ceremony nonce stream")?;
@@ -150,8 +150,10 @@ impl AuthenticatedPeer {
             .context("failed to establish session confirmation stream")?;
 
         send.write(local).await.context("failed to send session ID")?;
-        let peer_session_id =
-            receive.read_exact::<SessionId>().await.context("failed to read session ID")?;
+        let peer_session_id = receive
+            .read_exact::<SessionId>(SessionId::BYTES)
+            .await
+            .context("failed to read session ID")?;
         send.finish().context("failed to finish session confirmation stream")?;
         Ok(peer_session_id)
     }
@@ -168,7 +170,7 @@ impl AuthenticatedPeer {
 
         send.write(local).await.context("failed to send DKG public key")?;
         let peer_dkg_public_key = receive
-            .read_exact::<DkgPublicKey>()
+            .read_exact::<DkgPublicKey>(DkgPublicKey::BYTES)
             .await
             .context("failed to read DKG public key")?;
         send.finish().context("failed to finish DKG public key stream")?;
@@ -187,11 +189,31 @@ impl AuthenticatedPeer {
 
         send.write(local).await.context("failed to send DKG registry root")?;
         let peer_registry_root = receive
-            .read_exact::<DkgRegistryRoot>()
+            .read_exact::<DkgRegistryRoot>(DkgRegistryRoot::BYTES)
             .await
             .context("failed to read DKG registry root")?;
         send.finish().context("failed to finish DKG registry confirmation stream")?;
         Ok(peer_registry_root)
+    }
+
+    pub async fn exchange_dealer_messages(
+        &self,
+        local: &DealerMessages,
+    ) -> anyhow::Result<DealerMessages> {
+        let (mut send, mut receive) = self
+            .connection
+            .bi_stream()
+            .await
+            .context("failed to establish dealing exchange stream")?;
+
+        let message_bytes =
+            send.write(local).await.context("failed to send local dealer messages")?;
+        let peer_messages = receive
+            .read_exact::<DealerMessages>(message_bytes)
+            .await
+            .context("failed to read peer dealer messages")?;
+        send.finish().context("failed to finish dealing exchange stream")?;
+        Ok(peer_messages)
     }
 
     pub fn validator_public_key(&self) -> &PublicKey {

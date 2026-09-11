@@ -12,6 +12,7 @@ use super::super::wire::WireCodec;
 pub struct Challenge([u8; 32]);
 
 impl Challenge {
+    pub const BYTES: usize = 32;
     const SIGNATURE_DOMAIN: &'static [u8] =
         b"miden-validator-dkg-p2p-peer-authentication-signature-v1";
 
@@ -37,8 +38,6 @@ impl Challenge {
 }
 
 impl WireCodec for Challenge {
-    const BYTES: usize = 32;
-
     fn encode(&self) -> Vec<u8> {
         self.0.to_vec()
     }
@@ -56,6 +55,8 @@ pub struct ChallengeResponse {
 }
 
 impl ChallengeResponse {
+    pub const BYTES: usize = 33 + 65;
+
     pub fn verify_against(self, challenge: &Challenge) -> anyhow::Result<PublicKey> {
         ensure!(
             self.validator_public_key.verify(challenge.commitment(), &self.signature),
@@ -66,8 +67,6 @@ impl ChallengeResponse {
 }
 
 impl WireCodec for ChallengeResponse {
-    const BYTES: usize = 33 + 65;
-
     fn encode(&self) -> Vec<u8> {
         let mut bytes = self.validator_public_key.to_bytes();
         bytes.extend_from_slice(&self.signature.to_bytes());

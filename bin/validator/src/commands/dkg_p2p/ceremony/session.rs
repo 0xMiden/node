@@ -14,6 +14,8 @@ use super::ceremony_config::CeremonyConfig;
 pub struct CeremonyNonce([u8; 32]);
 
 impl CeremonyNonce {
+    pub const BYTES: usize = 32;
+
     pub fn random(rng: &mut impl CryptoRngCore) -> Self {
         let mut bytes = [0; 32];
         rng.fill_bytes(&mut bytes);
@@ -22,8 +24,6 @@ impl CeremonyNonce {
 }
 
 impl WireCodec for CeremonyNonce {
-    const BYTES: usize = 32;
-
     fn encode(&self) -> Vec<u8> {
         self.0.to_vec()
     }
@@ -38,6 +38,7 @@ impl WireCodec for CeremonyNonce {
 pub struct SessionId(Word);
 
 impl SessionId {
+    pub const BYTES: usize = 32;
     const DOMAIN: &'static [u8] = b"miden-validator-dkg-p2p-session-id-v1";
 
     pub fn derive(
@@ -57,8 +58,6 @@ impl SessionId {
 }
 
 impl WireCodec for SessionId {
-    const BYTES: usize = 32;
-
     fn encode(&self) -> Vec<u8> {
         self.0.to_bytes()
     }

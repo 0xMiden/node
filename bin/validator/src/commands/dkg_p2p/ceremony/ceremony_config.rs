@@ -13,14 +13,14 @@ pub struct CeremonyConfig {
 }
 
 impl CeremonyConfig {
+    pub const BYTES: usize = 32 + 4 + 32;
+
     pub const fn new(genesis_commitment: Word, threshold: u32, epoch: StorageKeyEpoch) -> Self {
         Self { genesis_commitment, threshold, epoch }
     }
 }
 
 impl WireCodec for CeremonyConfig {
-    const BYTES: usize = 32 + 4 + 32;
-
     fn encode(&self) -> Vec<u8> {
         let mut bytes = self.genesis_commitment.to_bytes();
         bytes.extend_from_slice(&self.threshold.to_le_bytes());

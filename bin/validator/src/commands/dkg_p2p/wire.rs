@@ -1,9 +1,7 @@
-use anyhow::{Context, ensure};
+use anyhow::Context;
 use iroh::endpoint::{RecvStream as IrohRecvStream, SendStream as IrohSendStream};
 
 pub trait WireCodec: Sized {
-    const BYTES: usize;
-
     fn encode(&self) -> Vec<u8>;
 
     fn decode(bytes: &[u8]) -> anyhow::Result<Self>;
@@ -14,11 +12,11 @@ pub struct SendStream {
 }
 
 impl SendStream {
-    pub async fn write<T: WireCodec>(&mut self, value: &T) -> anyhow::Result<()> {
+    pub async fn write<T: WireCodec>(&mut self, value: &T) -> anyhow::Result<usize> {
         let bytes = value.encode();
-        ensure!(bytes.len() == T::BYTES, "wire codec byte length does not match");
+        let bytes_written = bytes.len();
         self.inner.write_all(&bytes).await.context("failed to write wire message")?;
-        Ok(())
+        Ok(bytes_written)
     }
 
     pub fn finish(&mut self) -> anyhow::Result<()> {
@@ -37,8 +35,8 @@ pub struct RecvStream {
 }
 
 impl RecvStream {
-    pub async fn read_exact<T: WireCodec>(&mut self) -> anyhow::Result<T> {
-        let mut bytes = vec![0; T::BYTES];
+    pub async fn read_exact<T: WireCodec>(&mut self, bytes: usize) -> anyhow::Result<T> {
+        let mut bytes = vec![0; bytes];
         self.inner.read_exact(&mut bytes).await.context("failed to read wire message")?;
         T::decode(&bytes).context("failed to decode wire message")
     }

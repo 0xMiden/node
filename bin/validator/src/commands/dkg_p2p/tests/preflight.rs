@@ -110,7 +110,8 @@ async fn one_validator_ceremony_creates_local_dealings_without_peers() -> TestRe
     let session = ceremony.confirm_session(session).await?;
     let participants = ceremony.exchange_dkg_public_keys(session).await?;
     let participants = ceremony.confirm_dkg_registry(participants).await?;
-    let _dealings = ceremony.create_dealings(&participants)?;
+    let dealings = ceremony.create_dealings(&participants)?;
+    let _dealings = ceremony.exchange_dealings(&participants, dealings).await?;
     endpoint.close().await;
 
     Ok(())

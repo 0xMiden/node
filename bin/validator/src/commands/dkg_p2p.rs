@@ -113,6 +113,16 @@ impl ParticipateOptions {
             "Local DKG dealings created",
         );
 
+        let dealings = ceremony.exchange_dealings(&participants, dealings).await?;
+        tracing::info!(
+            target: miden_validator::LOG_TARGET,
+            {
+                dkg.decryption_dealings = dealings.decryption_dealing_count(),
+                dkg.context_dealings = dealings.context_dealing_count(),
+            },
+            "Peer DKG dealings received and verified",
+        );
+
         endpoint.close().await;
         Ok(())
     }
