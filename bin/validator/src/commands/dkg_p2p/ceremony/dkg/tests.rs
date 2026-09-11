@@ -18,13 +18,15 @@ use tokio::task::JoinSet;
 
 use super::*;
 
+mod rejection;
+
 struct TestCeremony {
     endpoints: Vec<Endpoint>,
-    validators: Vec<(Ceremony, DkgParticipants, UnconfirmedDkgDealings)>,
+    validators: Vec<(Ceremony, DkgParticipants, LocalDealings)>,
 }
 
 impl TestCeremony {
-    async fn exchange_dealings(threshold: usize, validator_count: usize) -> anyhow::Result<Self> {
+    async fn create_dealings(threshold: usize, validator_count: usize) -> anyhow::Result<Self> {
         let signing_keys = (0..validator_count).map(|_| SigningKey::new()).collect::<Vec<_>>();
         let validator_set = Arc::new(ValidatorKeys::new(
             signing_keys.iter().map(SigningKey::public_key).collect(),
@@ -77,14 +79,17 @@ impl TestCeremony {
                 let participants = ceremony.exchange_dkg_public_keys(session).await?;
                 let participants = ceremony.confirm_dkg_registry(participants).await?;
                 let dealings = ceremony.create_dealings(&participants)?;
-                let dealings = ceremony.exchange_dealings(&participants, dealings).await?;
                 Ok::<_, anyhow::Error>((ceremony, participants, dealings))
             });
         }
         let mut validators = Vec::new();
-        while let Some(result) = exchanges.join_next().await {
-            validators.push(result??);
-        }
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while let Some(result) = exchanges.join_next().await {
+                validators.push(result??);
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
         Ok(Self { endpoints, validators })
     }
 }
@@ -102,10 +107,11 @@ async fn ceremony_succeeds(
     #[case] validator_count: usize,
 ) -> anyhow::Result<()> {
     let TestCeremony { endpoints, validators } =
-        TestCeremony::exchange_dealings(threshold, validator_count).await?;
+        TestCeremony::create_dealings(threshold, validator_count).await?;
     let mut confirmations = JoinSet::new();
     for (ceremony, participants, dealings) in validators {
         confirmations.spawn(async move {
+            let dealings = ceremony.exchange_dealings(&participants, dealings).await?;
             let dealings = ceremony.confirm_dealings(&participants, dealings).await?;
             // Keep connections alive until every validator finishes confirmation.
             Ok::<_, anyhow::Error>((ceremony, participants, dealings))
@@ -164,8 +170,22 @@ async fn ceremony_succeeds(
 #[tokio::test]
 async fn dealing_confirmation_rejects_different_valid_dealings() -> anyhow::Result<()> {
     for round in ["decryption", "context"] {
-        let TestCeremony { endpoints, mut validators } =
-            TestCeremony::exchange_dealings(2, 3).await?;
+        let TestCeremony { endpoints, validators } = TestCeremony::create_dealings(2, 3).await?;
+        let mut exchanges = JoinSet::new();
+        for (ceremony, participants, dealings) in validators {
+            exchanges.spawn(async move {
+                let dealings = ceremony.exchange_dealings(&participants, dealings).await?;
+                Ok::<_, anyhow::Error>((ceremony, participants, dealings))
+            });
+        }
+        let mut validators = tokio::time::timeout(Duration::from_secs(10), async {
+            let mut validators = Vec::new();
+            while let Some(result) = exchanges.join_next().await {
+                validators.push(result??);
+            }
+            Ok::<_, anyhow::Error>(validators)
+        })
+        .await??;
         let (dealer_ceremony, dealer, _) = &validators[2];
         let alternate = dealer_ceremony.create_dealings(dealer)?;
         let dealer_index = dealer.local_index;

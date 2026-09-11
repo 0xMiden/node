@@ -18,6 +18,9 @@ use super::challenge::Challenge;
 use super::session::{CeremonyNonce, SessionId};
 use super::{Ceremony, ParticipantRegistry};
 
+mod authentication;
+mod configuration;
+
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 type TestResultWith<T> = Result<T, Box<dyn std::error::Error>>;
 
