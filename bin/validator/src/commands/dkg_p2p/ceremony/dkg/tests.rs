@@ -97,8 +97,10 @@ impl TestCeremony {
 
 #[rstest::rstest]
 #[case::one_of_one(1, 1)]
+#[ignore = "Golden rejects threshold-one zero sharing: https://github.com/0xMiden/golden-dkg/issues/64"]
 #[case::one_of_two(1, 2)]
 #[case::two_of_two(2, 2)]
+#[ignore = "Golden rejects threshold-one zero sharing: https://github.com/0xMiden/golden-dkg/issues/64"]
 #[case::one_of_three(1, 3)]
 #[case::two_of_three(2, 3)]
 #[case::three_of_three(3, 3)]
