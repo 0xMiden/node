@@ -1,19 +1,15 @@
-//! The gRPC server.
+//! The HTTP server.
 
 use std::time::Duration;
 
 use anyhow::Context;
-use miden_node_proto::server::funding_service_api;
-use miden_node_proto_build::funding_service_api_descriptor;
-use miden_node_tracing::grpc::grpc_trace_fn;
+use axum::Router;
+use axum::http::StatusCode;
+use axum::routing::get;
 use miden_node_tracing::info;
-use miden_node_tracing::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::shutdown::CancellationToken;
 use tokio::net::TcpListener;
-use tokio_stream::wrappers::TcpListenerStream;
-use tonic_health::pb::health_server::{Health, HealthServer};
-use tonic_reflection::server;
-use tower_http::classify::{GrpcCode, GrpcErrorsAsFailures, SharedClassifier};
+use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::LOG_TARGET;
@@ -21,86 +17,87 @@ use crate::status::StatusSnapshot;
 
 mod status;
 
-// FUNDING SERVICE RPC SERVER
+// FUNDING SERVICE HTTP SERVER
 // ================================================================================================
 
-/// The gRPC service of the funding service.
-///
-/// The handlers do no chain work: `Status` reads the values the status refresher publishes.
-pub struct FundingRpcServer {
+/// Path of the status endpoint.
+const STATUS_PATH: &str = "/status";
+
+/// The HTTP service of the funding service.
+pub struct FundingServer {
     status: StatusSnapshot,
     request_timeout: Duration,
 }
 
-impl FundingRpcServer {
+impl FundingServer {
     pub(crate) fn new(status: StatusSnapshot, request_timeout: Duration) -> Self {
         Self { status, request_timeout }
     }
 
-    /// Starts the gRPC server on the given listener.
-    ///
-    /// The health service is registered as a liveness signal for the API.
+    /// Starts the HTTP server on the given listener.
     pub async fn serve(
         self,
         listener: TcpListener,
-        health_service: HealthServer<impl Health>,
         shutdown: CancellationToken,
     ) -> anyhow::Result<()> {
-        let request_timeout = self.request_timeout;
-        let api_service = funding_service_api::service(self);
-        let reflection_service = server::Builder::configure()
-            .register_file_descriptor_set(funding_service_api_descriptor())
-            .register_encoded_file_descriptor_set(tonic_health::pb::FILE_DESCRIPTOR_SET)
-            .build_v1()
-            .context("failed to build the reflection service")?;
-
         let endpoint = listener
             .local_addr()
             .context("failed to read the funding service listen address")?;
         info!(
             target: LOG_TARGET,
-            "Funding service gRPC API listening",
+            "Funding service HTTP API listening",
             service.name = "miden-funding-service",
             service.version = env!("CARGO_PKG_VERSION"),
             funding_service.listen = endpoint.to_string()
         );
 
-        tonic::transport::Server::builder()
-            .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
-            // A rejected request is the client's problem, not a server failure, so those codes do
-            // not mark the span as failed.
-            .layer(
-                TraceLayer::new(SharedClassifier::new(
-                    GrpcErrorsAsFailures::new()
-                        .with_success(GrpcCode::InvalidArgument)
-                        .with_success(GrpcCode::FailedPrecondition)
-                        .with_success(GrpcCode::ResourceExhausted),
-                ))
-                .make_span_with(grpc_trace_fn),
-            )
-            .timeout(request_timeout)
-            .add_service(api_service)
-            .add_service(health_service)
-            .add_service(reflection_service)
-            .serve_with_incoming_shutdown(
-                TcpListenerStream::new(listener),
-                shutdown.cancelled_owned(),
-            )
+        axum::serve(listener, self.router())
+            .with_graceful_shutdown(shutdown.cancelled_owned())
             .await
-            .context("failed to serve the funding service gRPC API")
+            .context("failed to serve the funding service HTTP API")
+    }
+
+    /// Builds the router of the API.
+    fn router(self) -> Router {
+        Router::new()
+            .route(STATUS_PATH, get(status::status))
+            .layer(TraceLayer::new_for_http())
+            // The server cancels a handler which runs longer than the timeout. The client then
+            // receives the status code 408.
+            .layer(TimeoutLayer::with_status_code(
+                StatusCode::REQUEST_TIMEOUT,
+                self.request_timeout,
+            ))
+            .with_state(self.status)
     }
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use axum::body::Body;
+    use axum::http::Request;
     use miden_protocol::asset::FungibleAsset;
+    use tower::ServiceExt;
 
     use super::*;
 
-    /// Builds a server for the handler tests.
-    pub(crate) fn test_server(max_amount: u64) -> FundingRpcServer {
-        let status = StatusSnapshot::new(FungibleAsset::mock_issuer(), max_amount);
+    /// Builds a status snapshot for the handler tests.
+    pub(crate) fn test_status(max_amount: u64) -> StatusSnapshot {
+        StatusSnapshot::new(FungibleAsset::mock_issuer(), max_amount)
+    }
 
-        FundingRpcServer::new(status, Duration::from_secs(1))
+    fn test_router(status: StatusSnapshot) -> Router {
+        FundingServer::new(status, Duration::from_secs(1)).router()
+    }
+
+    #[tokio::test]
+    async fn status_is_served_as_json_on_its_route() {
+        let response = test_router(test_status(500))
+            .oneshot(Request::get(STATUS_PATH).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers().get("content-type").unwrap(), "application/json");
     }
 }

@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::Parser;
 use miden_funding_service::{
-    DEFAULT_GRPC_TIMEOUT,
+    DEFAULT_HTTP_TIMEOUT,
     DEFAULT_MAX_AMOUNT,
     DEFAULT_RPC_TIMEOUT,
     FundingServiceConfig,
@@ -19,7 +19,7 @@ use tokio::net::TcpListener;
 use url::Url;
 
 const ENV_LISTEN: &str = "MIDEN_FUNDING_LISTEN";
-const ENV_GRPC_TIMEOUT: &str = "MIDEN_FUNDING_GRPC_TIMEOUT";
+const ENV_HTTP_TIMEOUT: &str = "MIDEN_FUNDING_HTTP_TIMEOUT";
 const ENV_RPC_URL: &str = "MIDEN_FUNDING_RPC_URL";
 const ENV_RPC_TIMEOUT: &str = "MIDEN_FUNDING_RPC_TIMEOUT";
 const ENV_ACCOUNT_FILE: &str = "MIDEN_FUNDING_ACCOUNT_FILE";
@@ -31,19 +31,19 @@ const ENV_MAX_AMOUNT: &str = "MIDEN_FUNDING_MAX_AMOUNT";
 pub enum FundingServiceCommand {
     /// Starts the funding service.
     Start {
-        /// Socket address at which to serve the funding service's gRPC API.
+        /// Socket address at which to serve the funding service's HTTP API.
         #[arg(long = "listen", env = ENV_LISTEN, value_name = "IP:PORT")]
         listen: SocketAddr,
 
-        /// Maximum duration allocated to a gRPC request served by the funding service.
+        /// Maximum duration allocated to an HTTP request served by the funding service.
         #[arg(
-            long = "grpc.timeout",
-            env = ENV_GRPC_TIMEOUT,
-            default_value = duration_to_human_readable_string(DEFAULT_GRPC_TIMEOUT),
+            long = "http.timeout",
+            env = ENV_HTTP_TIMEOUT,
+            default_value = duration_to_human_readable_string(DEFAULT_HTTP_TIMEOUT),
             value_parser = humantime::parse_duration,
             value_name = "DURATION"
         )]
-        grpc_timeout: Duration,
+        http_timeout: Duration,
 
         /// The node RPC service gRPC url.
         #[arg(long = "rpc.url", env = ENV_RPC_URL, value_name = "URL")]
@@ -82,7 +82,7 @@ impl FundingServiceCommand {
     pub async fn handle(self, shutdown: CancellationToken) -> Result<()> {
         let Self::Start {
             listen,
-            grpc_timeout,
+            http_timeout,
             rpc_url,
             rpc_timeout,
             account_file,
@@ -96,7 +96,7 @@ impl FundingServiceCommand {
             service.name = "miden-funding-service",
             service.version = env!("CARGO_PKG_VERSION"),
             funding_service.listen = listen.to_string(),
-            grpc.timeout = humantime::Duration::from(grpc_timeout).to_string(),
+            http.timeout = humantime::Duration::from(http_timeout).to_string(),
             rpc.endpoint = format_endpoint(&rpc_url),
             rpc.timeout = humantime::Duration::from(rpc_timeout).to_string(),
             account.file = account_file.as_path(),
@@ -108,10 +108,10 @@ impl FundingServiceCommand {
 
         let listener = TcpListener::bind(listen)
             .await
-            .context("failed to bind to the funding service's gRPC socket")?;
+            .context("failed to bind to the funding service's HTTP socket")?;
 
         FundingServiceConfig::new(rpc_url, account_file, genesis)
-            .with_grpc_timeout(grpc_timeout)
+            .with_http_timeout(http_timeout)
             .with_rpc_timeout(rpc_timeout)
             .with_max_amount(max_amount)
             .build()
