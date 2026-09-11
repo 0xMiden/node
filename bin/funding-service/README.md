@@ -11,10 +11,10 @@ The service also needs a trusted genesis block file, from `--genesis`. The genes
 which the node's RPC API does not serve. The service refuses to start when the genesis block commits to a different
 chain than the node.
 
-The `Status` endpoint reports the funding account, its balance, and the block that balance was read at. An operator
-alerts on that balance, because the service does not refill itself.
+The service serves a JSON HTTP API. `GET /status` reports the funding account, its balance, and the block that balance
+was read at. An operator alerts on that balance, because the service does not refill itself.
 
-The service does not authenticate requests. An operator must restrict access to its gRPC API at the infrastructure
+The service does not authenticate requests. An operator must restrict access to its HTTP API at the infrastructure
 level.
 
 ## License

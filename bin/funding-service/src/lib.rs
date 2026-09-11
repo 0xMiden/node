@@ -8,7 +8,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Context;
-use miden_node_proto::server::funding_service_api;
 use miden_node_tracing::info;
 use miden_node_utils::genesis::GenesisBlock;
 use miden_node_utils::shutdown::CancellationToken;
@@ -20,7 +19,7 @@ use url::Url;
 
 use crate::account::FunderKey;
 use crate::node::RpcNodeClient;
-use crate::server::FundingRpcServer;
+use crate::server::FundingServer;
 use crate::status::{StatusRefresher, StatusSnapshot};
 
 mod account;
@@ -42,8 +41,8 @@ pub const DEFAULT_MAX_AMOUNT: u64 = 1_000_000_000;
 /// Default timeout of a request to the node's RPC API.
 pub const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Default timeout of a gRPC request served by this service.
-pub const DEFAULT_GRPC_TIMEOUT: Duration = Duration::from_secs(300);
+/// Default timeout of an HTTP request served by this service.
+pub const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// How often the service reads the funding account from the node.
 const STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
@@ -56,7 +55,7 @@ pub struct FundingServiceConfig {
     rpc_url: Url,
     account_file: PathBuf,
     genesis: GenesisBlock,
-    grpc_timeout: Duration,
+    http_timeout: Duration,
     rpc_timeout: Duration,
     max_amount: u64,
 }
@@ -71,15 +70,15 @@ impl FundingServiceConfig {
             rpc_url,
             account_file,
             genesis,
-            grpc_timeout: DEFAULT_GRPC_TIMEOUT,
+            http_timeout: DEFAULT_HTTP_TIMEOUT,
             rpc_timeout: DEFAULT_RPC_TIMEOUT,
             max_amount: DEFAULT_MAX_AMOUNT,
         }
     }
 
     #[must_use]
-    pub fn with_grpc_timeout(mut self, timeout: Duration) -> Self {
-        self.grpc_timeout = timeout;
+    pub fn with_http_timeout(mut self, timeout: Duration) -> Self {
+        self.http_timeout = timeout;
         self
     }
 
@@ -142,7 +141,7 @@ impl FundingServiceConfig {
             funder_key,
             fee_faucet_id,
             max_amount: self.max_amount,
-            grpc_timeout: self.grpc_timeout,
+            http_timeout: self.http_timeout,
         })
     }
 }
@@ -156,35 +155,27 @@ pub struct FundingService {
     funder_key: FunderKey,
     fee_faucet_id: AccountId,
     max_amount: u64,
-    grpc_timeout: Duration,
+    http_timeout: Duration,
 }
 
 impl FundingService {
-    /// Runs the gRPC server and the status refresher until one of them stops.
+    /// Runs the HTTP server and the status refresher until one of them stops.
     pub async fn run(
         self,
         listener: TcpListener,
         shutdown: CancellationToken,
     ) -> anyhow::Result<()> {
-        let (health_reporter, health_service) = tonic_health::server::health_reporter();
-        health_reporter
-            .set_service_status(
-                funding_service_api::service_name(),
-                tonic_health::ServingStatus::Serving,
-            )
-            .await;
-
         let status = StatusSnapshot::new(self.funder_key.account_id(), self.max_amount);
 
         let mut tasks = Tasks::new();
 
-        let server = FundingRpcServer::new(status.clone(), self.grpc_timeout);
+        let server = FundingServer::new(status.clone(), self.http_timeout);
         let server_shutdown = shutdown.clone();
-        tasks.spawn("grpc-server", async move {
+        tasks.spawn("http-server", async move {
             server
-                .serve(listener, health_service, server_shutdown)
+                .serve(listener, server_shutdown)
                 .await
-                .context("the funding service gRPC server failed")
+                .context("the funding service HTTP server failed")
         });
 
         let refresher = StatusRefresher::new(
