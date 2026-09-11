@@ -27,6 +27,10 @@ impl sequencer_api::SubmitAuthenticatedTx for SequencerInternalService {
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
+        self.account_admission
+            .check(tx.raw_proven_transaction().account_update())
+            .await?;
+
         let (block_num, commitment) = tx.reference_block();
         let reference_header = self
             .state

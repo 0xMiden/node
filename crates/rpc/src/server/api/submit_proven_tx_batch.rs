@@ -79,6 +79,12 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
 
         debug!(target: LOG_TARGET, "Submitting transaction batch");
 
+        if let RpcBackend::Sequencer { account_admission, .. } = &self.backend {
+            for tx in proposed_batch.transactions() {
+                account_admission.check(tx.account_update()).await?;
+            }
+        }
+
         // Verify the reference block is actually part of the chain.
         self.verify_reference_commitment(
             proven_batch.reference_block_num(),

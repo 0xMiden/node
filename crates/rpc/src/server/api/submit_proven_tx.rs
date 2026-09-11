@@ -66,6 +66,10 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
 
         debug!(target: LOG_TARGET, "Submitting transaction");
 
+        if let RpcBackend::Sequencer { account_admission, .. } = &self.backend {
+            account_admission.check(tx.account_update()).await?;
+        }
+
         // Verify the reference block is actually part of the chain.
         let reference_header = self
             .verify_reference_commitment(tx.ref_block_num(), tx.ref_block_commitment())

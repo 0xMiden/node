@@ -37,6 +37,13 @@ For larger deployments, prefer serving public RPC through full nodes so the sequ
 
 ## Allowlist Administration
 
+The sequencer checks new, non-network accounts against the allowlist on both public and internal submission APIs.
+Existing-account transactions and network-account creation do not require registration.
+
+For development networks, use `--disable-account-allowlist` or set `MIDEN_NODE_DISABLE_ACCOUNT_ALLOWLIST=true` to allow
+unrestricted account creation. Enforcement is enabled by default. The flag does not disable registration or the
+administration API.
+
 The sequencer can serve a private JSON administration API. The listener is disabled by default. Configure its address to
 enable it:
 

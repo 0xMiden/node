@@ -45,6 +45,10 @@ invitation codes over a network. Do not log invitation codes. Full nodes forward
 
 ## Transaction Submission
 
+The sequencer requires registration before a transaction creates a non-network account. Transactions for existing
+accounts and network-account creation do not require registration. An unregistered creation returns `PERMISSION_DENIED`.
+If a batch contains an unregistered creation, the sequencer rejects the entire batch.
+
 | Method                        | Purpose                                                                                     |
 | ----------------------------- | ------------------------------------------------------------------------------------------- |
 | `GetTransactionEncryptionKey` | Returns the transaction encryption public key, attested by a validator's signing key.       |

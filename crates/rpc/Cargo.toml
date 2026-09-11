@@ -30,6 +30,7 @@ miden-node-tracing        = { workspace = true }
 miden-node-utils          = { workspace = true }
 miden-objects             = { workspace = true }
 miden-protocol            = { default-features = true, workspace = true }
+miden-standards           = { workspace = true }
 miden-tx-batch            = { workspace = true }
 rand                      = { workspace = true }
 semver                    = { workspace = true }
@@ -49,7 +50,6 @@ fs-err             = { workspace = true }
 miden-node-tracing = { features = ["tracing-forest"], workspace = true }
 miden-node-utils   = { features = ["testing-prover"], workspace = true }
 miden-protocol     = { default-features = true, features = ["testing"], workspace = true }
-miden-standards    = { workspace = true }
 miden-testing      = { workspace = true }
 miden-tx           = { features = ["concurrent", "testing"], workspace = true }
 reqwest            = { workspace = true }

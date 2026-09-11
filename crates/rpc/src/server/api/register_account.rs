@@ -39,19 +39,20 @@ impl proto::server::rpc_api::RegisterAccount for RpcService {
             .map_err(|error| Status::invalid_argument(error.to_string()))?;
 
         match &self.backend {
-            RpcBackend::Sequencer { allowlist, .. } => {
-                allowlist.register_account(invitation, account_id).await.map(|_| ()).map_err(
-                    |error| {
-                        let code = match &error {
-                            AllowlistError::InvitationNotFound => Code::NotFound,
-                            AllowlistError::InvitationAlreadyUsed
-                            | AllowlistError::AccountAlreadyRegistered(_) => Code::AlreadyExists,
-                            AllowlistError::Database(_) => Code::Internal,
-                        };
-                        Status::new(code, error.as_report())
-                    },
-                )
-            },
+            RpcBackend::Sequencer { account_admission, .. } => account_admission
+                .allowlist
+                .register_account(invitation, account_id)
+                .await
+                .map(|_| ())
+                .map_err(|error| {
+                    let code = match &error {
+                        AllowlistError::InvitationNotFound => Code::NotFound,
+                        AllowlistError::InvitationAlreadyUsed
+                        | AllowlistError::AccountAlreadyRegistered(_) => Code::AlreadyExists,
+                        AllowlistError::Database(_) => Code::Internal,
+                    };
+                    Status::new(code, error.as_report())
+                }),
             RpcBackend::FullNode { source_rpc, .. } => {
                 let mut request = Request::new(request);
                 if let Some(accept) = metadata.get(http::header::ACCEPT.as_str()) {

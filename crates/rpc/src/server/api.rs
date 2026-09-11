@@ -31,7 +31,7 @@ use tonic::metadata::MetadataMap;
 use tonic::{IntoRequest, Request, Status};
 
 use crate::server::api::subscription::{IpBanList, MAX_REPLICA_SUBSCRIPTIONS};
-use crate::server::{NetworkTxAuth, RpcBackend};
+use crate::server::{AccountAdmission, NetworkTxAuth, RpcBackend};
 use crate::{COMPONENT, LOG_TARGET};
 
 // VALIDATOR FAN-OUT
@@ -275,6 +275,7 @@ impl RpcService {
 pub(crate) struct SequencerInternalService {
     pub(crate) state: Arc<State>,
     pub(crate) block_producer: BlockProducerApi,
+    pub(crate) account_admission: AccountAdmission,
 }
 
 // HELPERS

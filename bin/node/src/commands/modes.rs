@@ -13,10 +13,17 @@ use miden_node_proto::clients::{
     ValidatorClient,
     WantsConnection,
 };
-use miden_node_rpc::{PreAuthSubmission, Rpc, RpcMode, SequencerInternal, ValidatorClients};
+use miden_node_rpc::{
+    AccountAdmission,
+    PreAuthSubmission,
+    Rpc,
+    RpcMode,
+    SequencerInternal,
+    ValidatorClients,
+};
 use miden_node_store::allowlist::AccountAllowlist;
 use miden_node_store::{BlockWriter, DataDirectory, ProofWriter, State, WriterTask};
-use miden_node_tracing::info;
+use miden_node_tracing::{info, warn};
 use miden_node_utils::clap::duration_to_human_readable_string;
 use miden_node_utils::formatting::format_endpoint;
 use miden_node_utils::shutdown::CancellationToken;
@@ -59,6 +66,10 @@ pub struct SequencerCommand {
     /// Require external authentication and network isolation.
     #[arg(long = "admin.listen", env = "MIDEN_NODE_ADMIN_LISTEN", value_name = "IP:PORT")]
     pub admin_listen: Option<SocketAddr>,
+
+    /// Allow unrestricted account creation. Use only on development networks.
+    #[arg(long, env = "MIDEN_NODE_DISABLE_ACCOUNT_ALLOWLIST")]
+    pub disable_account_allowlist: bool,
 }
 
 impl SequencerCommand {
@@ -76,6 +87,12 @@ impl SequencerCommand {
         let block_prover_monitor =
             remote_prover_monitor(self.block_producer.block_prover.url.as_ref())?;
         let allowlist = Arc::new(self.load_allowlist()?);
+        let account_admission = if self.disable_account_allowlist {
+            warn!(target: crate::LOG_TARGET, "Account allowlist enforcement is disabled");
+            AccountAdmission::disabled(Arc::clone(&allowlist))
+        } else {
+            AccountAdmission::enabled(Arc::clone(&allowlist))
+        };
         let (state, block_writer, proof_writer, writer_task) =
             load_state(&runtime, shutdown.clone()).await?;
         let _disk_monitor = state.spawn_disk_monitor(shutdown.clone());
@@ -106,7 +123,7 @@ impl SequencerCommand {
             mode: RpcMode::sequencer(
                 block_producer.clone(),
                 validator_clients,
-                Arc::clone(&allowlist),
+                account_admission.clone(),
             ),
             ntx_builder: Some(ntx_builder_client),
             grpc_options: runtime.grpc_options,
@@ -151,6 +168,7 @@ impl SequencerCommand {
                 listener: bind_rpc(internal_listen).await?,
                 state,
                 block_producer,
+                account_admission,
                 grpc_options: runtime.grpc_options,
             };
             tasks.spawn("sequencer internal server", sequencer_internal.serve(shutdown.clone()));
