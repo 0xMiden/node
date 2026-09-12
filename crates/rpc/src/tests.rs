@@ -427,6 +427,14 @@ fn assert_beyond_tip(status: &tonic::Status, endpoint: &str) {
     );
 }
 
+/// Opaque inputs for RPC tests that reject a request before decryption or use a validator stub.
+fn test_sealed_transaction_inputs() -> proto::submission::SealedTransactionInputs {
+    proto::submission::SealedTransactionInputs {
+        key_id: vec![1, 2, 3],
+        ciphertext: vec![4, 5, 6],
+    }
+}
+
 #[tokio::test]
 async fn rpc_server_accepts_requests_without_accept_header() {
     // Start the RPC.
@@ -572,7 +580,7 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
 
     let request = proto::submission::ProvenTransactionSubmission {
         transaction: Some(transaction),
-        sealed_transaction_inputs: None,
+        sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
     };
 
     let response = rpc_client.submit_proven_tx(request).await;
@@ -596,7 +604,7 @@ async fn rpc_server_rejects_proven_transactions_without_fees() {
     let tx = build_test_proven_tx_with_fee(&account, &account_patch, genesis, false);
     let request = proto::submission::ProvenTransactionSubmission {
         transaction: Some((&tx).into()),
-        sealed_transaction_inputs: None,
+        sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
     };
 
     let service = RpcService::new(
@@ -660,7 +668,7 @@ async fn rpc_server_does_not_require_fees_when_the_base_fee_is_zero() {
     let tx = build_test_proven_tx_with_fee(&account, &account_patch, genesis, false);
     let request = proto::submission::ProvenTransactionSubmission {
         transaction: Some((&tx).into()),
-        sealed_transaction_inputs: None,
+        sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
     };
 
     let service = RpcService::new(
@@ -692,7 +700,7 @@ async fn rpc_server_rejects_invalid_deferred_transaction_proofs() {
     );
     let request = proto::submission::ProvenTransactionSubmission {
         transaction: Some((&transaction).into()),
-        sealed_transaction_inputs: None,
+        sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
     };
 
     let service = RpcService::new(
@@ -743,7 +751,7 @@ async fn rpc_server_forwards_valid_deferred_proofs_and_rejects_missing_witnesses
     );
     let request = proto::submission::ProvenTransactionSubmission {
         transaction: Some((&fixture.transaction).into()),
-        sealed_transaction_inputs: None,
+        sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
     };
     let status = service.submit_proven_tx(Request::new(request)).await.unwrap_err();
     // The stub rejects submissions after it records them.
@@ -761,6 +769,10 @@ async fn rpc_server_forwards_valid_deferred_proofs_and_rejects_missing_witnesses
             .unwrap();
         assert_eq!(forwarded.id(), fixture.transaction.id());
         assert_eq!(forwarded.proof(), fixture.transaction.proof());
+        assert_eq!(
+            submissions[0].sealed_transaction_inputs,
+            Some(test_sealed_transaction_inputs())
+        );
     }
 
     let invalid_tx = replace_transaction_proof(
@@ -769,7 +781,7 @@ async fn rpc_server_forwards_valid_deferred_proofs_and_rejects_missing_witnesses
     );
     let request = proto::submission::ProvenTransactionSubmission {
         transaction: Some((&invalid_tx).into()),
-        sealed_transaction_inputs: None,
+        sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
     };
     let status = service.submit_proven_tx(Request::new(request)).await.unwrap_err();
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
@@ -800,7 +812,7 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_reference_block() {
 
     let request = proto::submission::ProvenTransactionSubmission {
         transaction: Some((&tx).into()),
-        sealed_transaction_inputs: None,
+        sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
     };
 
     let response = rpc_client.submit_proven_tx(request).await;
@@ -839,7 +851,7 @@ async fn rpc_rejects_post_deployment_network_account_tx() {
     let tx = build_test_proven_tx_with_id(network_account_id, &account, genesis);
     let request = proto::submission::ProvenTransactionSubmission {
         transaction: Some((&tx).into()),
-        sealed_transaction_inputs: None,
+        sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
     };
 
     let service = RpcService::new(
@@ -1497,7 +1509,8 @@ async fn authenticated_batch_defers_validation_to_async_handler() {
     .expect_err("the async handler should reject the malformed proposed batch");
 
     assert_eq!(error.code(), tonic::Code::InvalidArgument);
-    assert!(error.message().contains("invalid proposed_batch"));
+    assert!(error.message().starts_with("proposed_batch.reference_block_header:"), "{error}");
+    assert!(error.message().contains("missing"), "{error}");
 }
 
 // Batch-path coverage for the network-account gate is provided manually. The query layer is covered
@@ -1525,7 +1538,7 @@ async fn rpc_server_rejects_tx_submissions_without_genesis() {
 
     let request = proto::submission::ProvenTransactionSubmission {
         transaction: Some((&tx).into()),
-        sealed_transaction_inputs: None,
+        sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
     };
 
     let response = rpc_client.submit_proven_tx(request).await;
