@@ -1,5 +1,5 @@
-use miden_node_proto::decode::read_block_range;
-use miden_node_proto::generated as proto;
+use miden_node_proto::errors::conversion_error_to_status;
+use miden_node_proto::{DecodeMessage, generated as proto};
 use miden_node_tracing::{debug, miden_instrument, miden_span_record};
 use miden_node_utils::limiter::QueryParamNullifierPrefixLimit;
 use tonic::Status;
@@ -15,11 +15,11 @@ use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::SyncNullifiers for RpcService {
-    type Input = proto::rpc::SyncNullifiersRequest;
+    type Input = proto::rpc::DecodedSyncNullifiersRequest;
     type Output = proto::rpc::SyncNullifiersResponse;
 
     fn decode(request: proto::rpc::SyncNullifiersRequest) -> tonic::Result<Self::Input> {
-        Ok(request)
+        request.decode_fields().map_err(conversion_error_to_status)
     }
 
     fn encode(output: Self::Output) -> tonic::Result<proto::rpc::SyncNullifiersResponse> {
@@ -37,7 +37,7 @@ impl proto::server::rpc_api::SyncNullifiers for RpcService {
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        let range = read_block_range::<Status>(request.block_range, "SyncNullifiersRequest")?;
+        let range = request.block_range;
 
         miden_span_record!(
             block_range.from = range.block_from,

@@ -51,12 +51,11 @@ impl sequencer_api::SubmitAuthenticatedTxBatch for SequencerInternalService {
 fn decode_authenticated_transaction_batch(
     request: proto::sequencer::AuthenticatedTransactionBatch,
 ) -> tonic::Result<(ProposedBatch, Vec<TransactionInputs>)> {
-    let proposed_batch = request
-        .proposed_batch
-        .ok_or_else(|| Status::invalid_argument("missing `proposed_batch` field"))?;
-    let batch = proposed_batch
+    let request = request
         .decode_fields()
-        .map_err(|err| Status::invalid_argument(format!("invalid proposed_batch: {err}")))?
+        .map_err(miden_node_proto::errors::conversion_error_to_status)?;
+    let batch = request
+        .proposed_batch
         .verify_with(miden_protocol::MIN_PROOF_SECURITY_LEVEL)
         .map_err(|err| Status::invalid_argument(format!("invalid proposed_batch: {err}")))?;
 
@@ -71,7 +70,7 @@ fn decode_authenticated_transaction_batch(
     let inputs = request
         .auth_inputs
         .into_iter()
-        .map(TransactionInputs::try_from)
+        .map(TransactionInputs::from_decoded)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|err| Status::invalid_argument(err.as_report_context("invalid auth_inputs")))?;
 

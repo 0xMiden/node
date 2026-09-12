@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 
-use miden_objects::{BuildUnchecked, DecodeMessage, Verify};
+use miden_protobuf::{BuildUnchecked, ConversionResultExt, Verify};
 use miden_protocol::account::AccountId;
-use miden_protocol::batch::OrderedBatches;
+use miden_protocol::batch::{OrderedBatches, ProvenBatch};
 use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::block::nullifier_tree::NullifierWitness;
-use miden_protocol::block::{BlockHeader, BlockInputs};
+use miden_protocol::block::{BlockHeader, BlockInputs, ProposedBlock};
 use miden_protocol::note::{NoteId, NoteInclusionProof, Nullifier};
 use miden_protocol::transaction::PartialBlockchain;
 use miden_protocol::utils::serde::{
@@ -16,7 +16,6 @@ use miden_protocol::utils::serde::{
     Serializable,
 };
 
-use crate::decode::{ConversionResultExt, verify_value};
 use crate::errors::ConversionError;
 use crate::generated as proto;
 
@@ -46,31 +45,43 @@ impl From<BlockProofRequest> for proto::block_proving::BlockProofRequest {
     }
 }
 
-impl TryFrom<proto::block_proving::BlockProofRequest> for BlockProofRequest {
+impl BuildUnchecked for proto::block_proving::DecodedBlockProofRequest {
+    type Output = BlockProofRequest;
     type Error = ConversionError;
 
-    fn try_from(value: proto::block_proving::BlockProofRequest) -> Result<Self, Self::Error> {
-        let block_inputs = value.block_inputs.ok_or_else(|| {
-            ConversionError::missing_field::<proto::block_proving::BlockProofRequest>(
-                "block_inputs",
-            )
-        })?;
-        let next_validator_config = value.next_validator_config.ok_or_else(|| {
-            ConversionError::missing_field::<proto::block_proving::BlockProofRequest>(
-                "next_validator_config",
-            )
-        })?;
-        let decoded = super::block_proposal::decode(
+    /// Reconstruct the proposed block without verifying batch proofs or parent chain state. Batch
+    /// construction also skips input-note authentication, aggregation, and transaction order. The
+    /// caller must complete these checks before accepting the block.
+    fn build_unchecked(self) -> Result<Self::Output, Self::Error> {
+        let block_inputs = self.block_inputs.build_unchecked().context("block_inputs")?;
+        let batches = self
+            .batches
+            .into_iter()
+            .enumerate()
+            .map(|(index, batch)| {
+                batch.build_unchecked().with_context(|| format!("batches[{index}]"))
+            })
+            .collect::<Result<Vec<ProvenBatch>, _>>()?;
+        let next_validator_config =
+            self.next_validator_config.verify().context("next_validator_config")?;
+        let next_protocol_config = self
+            .next_protocol_config
+            .map(Verify::verify)
+            .transpose()
+            .context("next_protocol_config")?;
+
+        let proposed_block =
+            ProposedBlock::new_at(block_inputs.clone(), batches.clone(), self.timestamp)
+                .map_err(ConversionError::new)?
+                .with_next_validator_config(next_validator_config)
+                .with_next_protocol_config(next_protocol_config);
+        let (block_header, _) =
+            proposed_block.into_header_and_body().map_err(ConversionError::new)?;
+
+        Ok(BlockProofRequest {
+            tx_batches: OrderedBatches::new(batches),
+            block_header,
             block_inputs,
-            value.batches,
-            value.timestamp,
-            next_validator_config,
-            value.next_protocol_config,
-        )?;
-        Ok(Self {
-            tx_batches: decoded.tx_batches,
-            block_header: decoded.block_header,
-            block_inputs: decoded.block_inputs,
         })
     }
 }
@@ -105,33 +116,29 @@ impl From<&BlockInputs> for proto::block_proving::BlockInputs {
     }
 }
 
-impl TryFrom<proto::block_proving::BlockInputs> for BlockInputs {
+impl BuildUnchecked for proto::block_proving::DecodedBlockInputs {
+    type Output = BlockInputs;
     type Error = ConversionError;
 
-    fn try_from(value: proto::block_proving::BlockInputs) -> Result<Self, Self::Error> {
+    /// Build block inputs without checking header linkage, signatures, or protocol transitions.
+    /// This includes headers in the partial blockchain. The caller must check the headers, chain
+    /// root, and witness roots against trusted chain state.
+    fn build_unchecked(self) -> Result<Self::Output, Self::Error> {
         let prev_block_header: BlockHeader =
-            build_unchecked_required::<proto::block_proving::BlockInputs, _, _>(
-                value.prev_block_header,
-                "prev_block_header",
-            )?;
+            self.prev_block_header.build_unchecked().context("prev_block_header")?;
         let partial_blockchain: PartialBlockchain =
-            build_unchecked_required::<proto::block_proving::BlockInputs, _, _>(
-                value.partial_blockchain,
-                "partial_blockchain",
-            )?;
+            self.partial_blockchain.build_unchecked().context("partial_blockchain")?;
 
         let mut account_witnesses = BTreeMap::<AccountId, AccountWitness>::new();
-        for (index, record) in value.account_witnesses.into_iter().enumerate() {
-            let account_id: AccountId = required_verified::<
-                proto::block_proving::AccountWitnessRecord,
-                _,
-                _,
-            >(record.account_id, "account_id")?;
-            let witness: AccountWitness = required_verified::<
-                proto::block_proving::AccountWitnessRecord,
-                _,
-                _,
-            >(record.witness, "witness")?;
+        for (index, record) in self.account_witnesses.into_iter().enumerate() {
+            let account_id = record
+                .account_id
+                .verify()
+                .with_context(|| format!("account_witnesses[{index}].account_id"))?;
+            let witness = record
+                .witness
+                .verify()
+                .with_context(|| format!("account_witnesses[{index}].witness"))?;
             if account_witnesses.insert(account_id, witness).is_some() {
                 return Err(ConversionError::message(format!(
                     "account_witnesses[{index}]: duplicate requested account ID {account_id}"
@@ -140,18 +147,12 @@ impl TryFrom<proto::block_proving::BlockInputs> for BlockInputs {
         }
 
         let mut nullifier_witnesses = BTreeMap::<Nullifier, NullifierWitness>::new();
-        for (index, record) in value.nullifier_witnesses.into_iter().enumerate() {
-            let nullifier_word = required::<
-                proto::block_proving::NullifierWitness,
-                _,
-                miden_protocol::Word,
-            >(record.nullifier, "nullifier")?;
-            let nullifier = Nullifier::from_raw(nullifier_word);
-            let proof: miden_protocol::crypto::merkle::smt::SmtProof =
-                required_verified::<proto::block_proving::NullifierWitness, _, _>(
-                    record.opening,
-                    "opening",
-                )?;
+        for (index, record) in self.nullifier_witnesses.into_iter().enumerate() {
+            let nullifier = Nullifier::from_raw(record.nullifier);
+            let proof = record
+                .opening
+                .verify()
+                .with_context(|| format!("nullifier_witnesses[{index}].opening"))?;
             if nullifier_witnesses.insert(nullifier, NullifierWitness::new(proof)).is_some() {
                 return Err(ConversionError::message(format!(
                     "nullifier_witnesses[{index}]: duplicate nullifier {nullifier}"
@@ -160,9 +161,10 @@ impl TryFrom<proto::block_proving::BlockInputs> for BlockInputs {
         }
 
         let mut unauthenticated_note_proofs = BTreeMap::<NoteId, NoteInclusionProof>::new();
-        for (index, proof) in value.unauthenticated_note_proofs.into_iter().enumerate() {
-            let (note_id, proof): (NoteId, NoteInclusionProof) =
-                verify_value("unauthenticated_note_proofs", proof)?;
+        for (index, proof) in self.unauthenticated_note_proofs.into_iter().enumerate() {
+            let (note_id, proof) = proof
+                .verify()
+                .with_context(|| format!("unauthenticated_note_proofs[{index}]"))?;
             if unauthenticated_note_proofs.insert(note_id, proof).is_some() {
                 return Err(ConversionError::message(format!(
                     "unauthenticated_note_proofs[{index}]: duplicate note ID {note_id}"
@@ -170,7 +172,7 @@ impl TryFrom<proto::block_proving::BlockInputs> for BlockInputs {
             }
         }
 
-        Ok(Self::new(
+        Ok(BlockInputs::new(
             prev_block_header,
             partial_blockchain,
             account_witnesses,
@@ -178,52 +180,6 @@ impl TryFrom<proto::block_proving::BlockInputs> for BlockInputs {
             unauthenticated_note_proofs,
         ))
     }
-}
-
-fn required<M, T, U>(value: Option<T>, field: &'static str) -> Result<U, ConversionError>
-where
-    M: prost::Message,
-    T: TryInto<U>,
-    T::Error: Into<miden_objects::ConversionError>,
-{
-    value
-        .ok_or_else(|| ConversionError::missing_field::<M>(field))?
-        .try_into()
-        .map_err(Into::into)
-        .map_err(ConversionError::from)
-}
-
-/// Reads a required canonical field and verifies its domain invariants.
-fn required_verified<M, T, U>(value: Option<T>, field: &'static str) -> Result<U, ConversionError>
-where
-    M: prost::Message,
-    T: DecodeMessage,
-    T::Decoded: Verify<Verified = U>,
-{
-    verify_value(field, value.ok_or_else(|| ConversionError::missing_field::<M>(field))?)
-}
-
-/// Reads a required canonical field and builds it without the checks the domain type cannot make
-/// from the message alone.
-///
-/// The caller is responsible for the skipped checks. Each decoded type documents which ones it
-/// leaves out.
-fn build_unchecked_required<M, T, U>(
-    value: Option<T>,
-    field: &'static str,
-) -> Result<U, ConversionError>
-where
-    M: prost::Message,
-    T: DecodeMessage,
-    T::Decoded: BuildUnchecked<Output = U>,
-{
-    value
-        .ok_or_else(|| ConversionError::missing_field::<M>(field))?
-        .decode_fields()
-        .context(field)?
-        .build_unchecked()
-        .map_err(ConversionError::new)
-        .context(field)
 }
 
 impl Serializable for BlockProofRequest {

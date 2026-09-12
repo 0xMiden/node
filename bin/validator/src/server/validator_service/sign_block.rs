@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use miden_node_proto::{SignBlockRequest, generated as grpc};
+use miden_node_proto::{BuildUnchecked, DecodeMessage, generated as grpc};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorReport, Instrument, info_span, miden_instrument};
 use miden_protocol::Word;
@@ -61,7 +61,7 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
 
         let (proposed_block, protocol_config, protocol_config_commitment) =
             spawn_blocking_in_current_span(move || {
-                let request = SignBlockRequest::try_from(request).map_err(tonic::Status::from)?;
+                let request = request.decode_fields().and_then(BuildUnchecked::build_unchecked).map_err(miden_node_proto::errors::conversion_error_to_status)?;
                 let protocol_config = request.protocol_config;
                 let protocol_config_commitment = request.block_header.protocol_config_commitment();
                 let proposed_block = ProposedBlock::new_at(

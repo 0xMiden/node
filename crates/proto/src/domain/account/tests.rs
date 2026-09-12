@@ -1,6 +1,7 @@
 use miden_protocol::account::StorageMapKey;
 
 use super::*;
+use crate::{DecodeMessage as _, Verify};
 
 #[test]
 fn registration_request_debug_hides_invitation_code() {
@@ -74,7 +75,7 @@ fn account_storage_map_details_partial_map_round_trip() {
     .unwrap();
     let encoded: crate::generated::rpc::account_storage_details::AccountStorageMapDetails =
         details.clone().into();
-    let decoded = AccountStorageMapDetails::try_from(encoded).unwrap();
+    let decoded = encoded.decode_fields().and_then(Verify::verify).unwrap();
 
     assert_eq!(decoded, details);
     assert_matches::assert_matches!(
@@ -112,7 +113,7 @@ fn account_storage_map_details_rejects_missing_result() {
         result: None,
     };
 
-    let err = AccountStorageMapDetails::try_from(encoded).unwrap_err();
+    let err = encoded.decode_fields().and_then(Verify::verify).unwrap_err();
     assert!(err.to_string().contains("result"));
 }
 
@@ -125,7 +126,7 @@ fn account_storage_map_details_rejects_false_limit_marker() {
         result: Some(Result::TooManyEntries(false)),
     };
 
-    let err = AccountStorageMapDetails::try_from(encoded).unwrap_err();
+    let err = encoded.decode_fields().and_then(Verify::verify).unwrap_err();
     assert!(err.to_string().contains("must be true"));
 }
 
@@ -150,7 +151,7 @@ fn account_storage_details_rejects_partial_map_root_mismatch() {
     let encoded: crate::generated::rpc::AccountStorageDetails =
         AccountStorageDetails { header, map_details: vec![map_details] }.into();
 
-    let err = AccountStorageDetails::try_from(encoded).unwrap_err();
+    let err = encoded.decode_fields().and_then(Verify::verify).unwrap_err();
     assert!(err.to_string().contains("does not match storage header"));
 }
 
@@ -164,7 +165,7 @@ fn account_detail_request_converts_all_storage_maps() {
         storage_request: Some(StorageRequest::AllStorageMaps(true)),
     };
 
-    let request = AccountDetailRequest::try_from(request).unwrap();
+    let request = request.decode_fields().and_then(Verify::verify).unwrap();
 
     assert_eq!(request.storage_request, AccountStorageRequest::AllStorageMaps);
 }
@@ -179,7 +180,7 @@ fn account_detail_request_rejects_false_all_storage_maps() {
         storage_request: Some(StorageRequest::AllStorageMaps(false)),
     };
 
-    let err = AccountDetailRequest::try_from(request).unwrap_err();
+    let err = request.decode_fields().and_then(Verify::verify).unwrap_err();
 
     assert!(err.to_string().contains("all_storage_maps"));
 }
@@ -204,7 +205,7 @@ fn account_detail_request_converts_explicit_storage_maps() {
         })),
     };
 
-    let request = AccountDetailRequest::try_from(request).unwrap();
+    let request = request.decode_fields().and_then(Verify::verify).unwrap();
 
     assert!(matches!(
         request.storage_request,
@@ -236,7 +237,7 @@ fn account_detail_request_rejects_duplicate_storage_map_keys() {
         })),
     };
 
-    let err = AccountDetailRequest::try_from(request).unwrap_err();
+    let err = request.decode_fields().and_then(Verify::verify).unwrap_err();
 
     assert!(err.to_string().contains("duplicate keys"));
 }
@@ -249,7 +250,7 @@ fn account_detail_request_allows_no_storage_slot_data() {
         storage_request: None,
     };
 
-    let request = AccountDetailRequest::try_from(request).unwrap();
+    let request = request.decode_fields().and_then(Verify::verify).unwrap();
 
     assert_eq!(request.storage_request, AccountStorageRequest::None);
 }

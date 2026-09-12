@@ -38,7 +38,7 @@ pub enum RemoteProverError {
     #[error("remote prover returned an invalid block proof response: {0}")]
     Protocol(String),
     #[error("failed to decode block proof from remote prover")]
-    Conversion(#[source] miden_objects::ConversionError),
+    Conversion(#[source] miden_node_proto::errors::ConversionError),
 }
 
 // BLOCK PROVER

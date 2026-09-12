@@ -5,14 +5,13 @@ use std::time::Duration;
 use anyhow::Context;
 use miden_node_proto::clients::RpcClient;
 use miden_node_proto::generated::rpc::{BlockSubscriptionRequest, ProofSubscriptionRequest};
+use miden_node_proto::{BuildUnchecked, DecodeMessage};
 use miden_node_store::state::{BlockWriter, ProofWriter, State};
 use miden_node_tracing::{Instrument, debug, info, info_span, miden_instrument, warn};
 use miden_node_utils::retry::{self, RetryableWithContext};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
-use miden_objects::{BuildUnchecked, DecodeMessage};
 use miden_protocol::block::{BlockNumber, SignedBlock};
-use miden_protocol::vm::ExecutionProof;
 use tokio_stream::StreamExt;
 use tonic_health::ServingStatus;
 use tonic_health::server::HealthReporter;
@@ -230,15 +229,10 @@ impl BlockSync {
             let Some(result) = result else {
                 return Ok(());
             };
-            let event = result?;
+            let event = result?.decode_fields().context("failed to decode block from upstream")?;
             let upstream_tip = BlockNumber::from(event.committed_chain_tip);
-            let block: SignedBlock = event
-                .block
-                .ok_or_else(|| anyhow::anyhow!("upstream block event is missing its block"))?
-                .decode_fields()
-                .context("failed to decode block from upstream")?
-                .build_unchecked()
-                .context("failed to build block from upstream")?;
+            let block: SignedBlock =
+                event.block.build_unchecked().context("failed to build block from upstream")?;
             let protocol_config = event
                 .protocol_config
                 .map(|config| {
@@ -334,7 +328,7 @@ impl ProofSync {
             let Some(result) = result else {
                 return Ok(());
             };
-            let event = result?;
+            let event = result?.decode_fields().context("failed to decode proof from upstream")?;
             let block_num = BlockNumber::from(event.block_num);
 
             anyhow::ensure!(
@@ -351,11 +345,7 @@ impl ProofSync {
                 },
             }
 
-            let proof: ExecutionProof = event
-                .proof
-                .ok_or_else(|| anyhow::anyhow!("upstream proof event is missing its proof"))?
-                .try_into()
-                .context("failed to decode proof from upstream")?;
+            let proof = event.proof;
             self.writer.apply_proof(block_num, proof.to_bytes()).await?;
 
             expected = expected.child();

@@ -2,7 +2,7 @@ use miden_node_proto::clients::{Builder, RemoteProverClient};
 use miden_node_proto::generated::remote_prover::proof::Proof as ProofVariant;
 use miden_node_proto::generated::remote_prover::proof_request::Request;
 use miden_node_proto::generated::remote_prover::{Proof, ProofRequest};
-use miden_objects::{DecodeMessage, VerifyWith};
+use miden_node_proto::{DecodeMessage, VerifyWith};
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_tx_batch::LocalBatchProver;
 use url::Url;
@@ -15,7 +15,7 @@ pub enum RemoteProverError {
     #[error("remote prover returned an invalid batch proof response: {0}")]
     Protocol(String),
     #[error("failed to decode proven batch from remote prover")]
-    Conversion(#[source] miden_objects::ConversionError),
+    Conversion(#[source] miden_node_proto::errors::ConversionError),
 }
 
 // BATCH PROVER
@@ -86,7 +86,9 @@ impl RemoteBatchProver {
         proof
             .decode_fields()
             .and_then(|proof| {
-                proof.verify_with(&proposed_batch).map_err(miden_objects::ConversionError::new)
+                proof
+                    .verify_with(&proposed_batch)
+                    .map_err(miden_node_proto::errors::ConversionError::new)
             })
             .map_err(RemoteProverError::Conversion)
     }
@@ -94,7 +96,7 @@ impl RemoteBatchProver {
 
 fn extract_batch_proof(
     response: Proof,
-) -> Result<miden_objects::proto::transaction::ProvenBatch, RemoteProverError> {
+) -> Result<miden_node_proto::generated::transaction::ProvenBatch, RemoteProverError> {
     match response.proof {
         Some(ProofVariant::Batch(proof)) => Ok(proof),
         Some(_) => Err(RemoteProverError::Protocol(

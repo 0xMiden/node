@@ -3,10 +3,9 @@ use std::fmt::{Display, Formatter};
 use std::num::NonZeroU32;
 
 use itertools::Itertools;
-use miden_node_proto::decode::GrpcDecodeExt;
-use miden_node_proto::errors::ConversionError;
+use miden_node_proto::Verify;
+use miden_node_proto::errors::{ConversionError, ConversionResultExt};
 use miden_node_proto::generated::sequencer;
-use miden_node_proto::{decode, verify};
 use miden_node_store::state::{State, TransactionInputs as StoreTransactionInputs};
 use miden_node_tracing::{debug, miden_instrument};
 use miden_node_utils::formatting::format_opt;
@@ -95,36 +94,22 @@ impl From<TransactionInputs> for sequencer::AuthInputs {
     }
 }
 
-impl TryFrom<sequencer::AuthInputs> for TransactionInputs {
-    type Error = ConversionError;
-
-    fn try_from(value: sequencer::AuthInputs) -> Result<Self, Self::Error> {
-        let decoder = value.decoder();
-        let account_id = verify!(decoder, value.account_id)?;
-
-        let account_commitment = value.account_commitment.map(Word::try_from).transpose()?;
-
+impl TransactionInputs {
+    /// Construct store inputs from decoded fields.
+    pub fn from_decoded(value: sequencer::DecodedAuthInputs) -> Result<Self, ConversionError> {
+        let account_id = value.account_id.verify().context("account_id")?;
         let nullifiers = value
             .nullifiers
             .into_iter()
             .map(|record| {
-                let decoder = record.decoder();
-                let nullifier = Nullifier::from_raw(decode!(decoder, record.nullifier)?);
-                Ok((nullifier, NonZeroU32::new(record.block_num)))
+                (Nullifier::from_raw(record.nullifier), NonZeroU32::new(record.block_num))
             })
-            .collect::<Result<_, ConversionError>>()?;
-
-        let found_unauthenticated_notes = value
-            .found_unauthenticated_notes
-            .into_iter()
-            .map(|word| Word::try_from(word).map_err(ConversionError::from))
-            .collect::<Result<_, ConversionError>>()?;
-
+            .collect();
         Ok(Self {
             account_id,
-            account_commitment,
+            account_commitment: value.account_commitment,
             nullifiers,
-            found_unauthenticated_notes,
+            found_unauthenticated_notes: value.found_unauthenticated_notes.into_iter().collect(),
             current_block_height: value.current_block_height.into(),
         })
     }

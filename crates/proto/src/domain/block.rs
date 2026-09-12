@@ -11,7 +11,7 @@ pub enum InvalidBlockRange {
     StartGreaterThanEnd { start: BlockNumber, end: BlockNumber },
 }
 
-impl proto::rpc::BlockRange {
+impl proto::rpc::DecodedBlockRange {
     /// Converts the block range into an inclusive range.
     ///
     /// A `RangeInclusive` is empty exactly when `start > end`, so that case is
@@ -48,8 +48,11 @@ mod tests {
 
     use super::*;
 
-    fn range(from: u32, to: u32) -> proto::rpc::BlockRange {
+    fn range(from: u32, to: u32) -> proto::rpc::DecodedBlockRange {
+        use crate::DecodeMessage;
         proto::rpc::BlockRange { block_from: from, block_to: to }
+            .decode_fields()
+            .unwrap()
     }
 
     #[test]

@@ -1,9 +1,8 @@
 use std::time::Duration;
 
 use miden_node_proto::clients::{Builder, ValidatorClient};
-use miden_node_proto::decode::GrpcDecodeExt;
-use miden_node_proto::errors::ConversionError;
-use miden_node_proto::{decode, generated as proto, verify};
+use miden_node_proto::errors::{ConversionError, ConversionResultExt};
+use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_node_tracing::{info, miden_instrument};
 use miden_protocol::Word;
 use miden_protocol::block::{BlockInputs, ProposedBlock};
@@ -122,10 +121,10 @@ impl BlockProducerValidatorClient {
     fn decode_response(
         response: proto::validator::SignBlockResponse,
     ) -> Result<SignBlockResponse, ValidatorError> {
-        let decoder = response.decoder();
-        let signature: Signature = verify!(decoder, response.signature)?;
-        let block_commitment = decode!(decoder, response.block_commitment)?;
-        let public_key = verify!(decoder, response.public_key)?;
+        let response = response.decode_fields()?;
+        let signature: Signature = response.signature.verify().context("signature")?;
+        let block_commitment = response.block_commitment;
+        let public_key = response.public_key.verify().context("public_key")?;
 
         Ok(SignBlockResponse { signature, block_commitment, public_key })
     }

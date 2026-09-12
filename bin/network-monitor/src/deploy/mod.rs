@@ -10,7 +10,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use backon::{ExponentialBuilder, Retryable};
 use miden_node_proto::clients::{Builder, RpcClient};
-use miden_node_proto::domain::account::{AccountResponse, AccountVaultDetails, StorageMapEntries};
+use miden_node_proto::domain::account::{AccountVaultDetails, StorageMapEntries};
 use miden_node_proto::domain::encryption::{
     TransactionInputsSealer,
     TrustedTransactionEncryptionState,
@@ -477,8 +477,10 @@ pub(crate) async fn fetch_foreign_account_inputs(
         .await
         .with_context(|| format!("failed to fetch account {account_id}"))?
         .into_inner();
-    let response =
-        AccountResponse::try_from(response).context("failed to convert the account response")?;
+    let response = response
+        .decode_fields()
+        .and_then(Verify::verify)
+        .context("failed to convert the account response")?;
 
     let witness = response.witness;
     anyhow::ensure!(
@@ -806,8 +808,10 @@ async fn fetch_account_witness(
         .context("failed to fetch the account witness")?
         .into_inner();
 
-    let response =
-        AccountResponse::try_from(response).context("failed to convert the account response")?;
+    let response = response
+        .decode_fields()
+        .and_then(Verify::verify)
+        .context("failed to convert the account response")?;
 
     Ok(response.witness)
 }

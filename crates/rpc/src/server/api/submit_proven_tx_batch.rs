@@ -1,9 +1,8 @@
 use miden_node_block_producer::store::get_tx_inputs;
 use miden_node_proto::clients::{SequencerClient, ValidatorClient};
-use miden_node_proto::generated as proto;
+use miden_node_proto::{DecodeMessage, VerifyWith, generated as proto};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorReport, debug, miden_instrument, miden_span_record, trace};
-use miden_objects::{DecodeMessage, VerifyWith};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_tx_batch::BatchVerifier;
@@ -58,7 +57,7 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
             proposed_batch_message.decode_fields().and_then(|batch| {
                 batch
                     .verify_with(MIN_PROOF_SECURITY_LEVEL)
-                    .map_err(miden_objects::ConversionError::new)
+                    .map_err(miden_node_proto::errors::ConversionError::new)
             })
         })
         .await

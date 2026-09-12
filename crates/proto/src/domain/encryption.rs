@@ -5,6 +5,7 @@
 //! A drift would not fail to compile: it would reject every submission at runtime with an opaque
 //! AEAD error, so the transcript is pinned by a golden vector in the tests below.
 
+use miden_protobuf::{ConversionError, DecodeMessage, Verify};
 use miden_protocol::Word;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{
     PublicKey as ValidatorPublicKey,
@@ -15,7 +16,6 @@ use miden_protocol::crypto::ies::SealingKey;
 use miden_protocol::transaction::TransactionId;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 
-use crate::decode::verify_value;
 use crate::generated as proto;
 
 /// Domain tag prefixed to the associated data of sealed transaction inputs.
@@ -270,7 +270,9 @@ pub fn verify_transaction_encryption_key(
         let Some(validator_public_key) = attestation.validator_public_key else {
             continue;
         };
-        let Ok(validator_public_key) = verify_value("validator_public_key", validator_public_key)
+        let Ok(validator_public_key) = validator_public_key
+            .decode_fields()
+            .and_then(|key| key.verify().map_err(ConversionError::new))
         else {
             continue;
         };
@@ -283,7 +285,9 @@ pub fn verify_transaction_encryption_key(
         let Some(signature) = attestation.signature else {
             continue;
         };
-        let Ok(signature): Result<ValidatorSignature, _> = verify_value("signature", signature)
+        let Ok(signature): Result<ValidatorSignature, _> = signature
+            .decode_fields()
+            .and_then(|signature| signature.verify().map_err(ConversionError::new))
         else {
             continue;
         };

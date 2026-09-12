@@ -1,10 +1,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use miden_node_proto::decode::ConversionResultExt;
-use miden_node_proto::errors::ConversionError;
+use miden_node_proto::BuildUnchecked;
+use miden_node_proto::errors::{ConversionError, ConversionResultExt};
 use miden_node_proto::generated::sequencer;
-use miden_objects::{BuildUnchecked, DecodeMessage};
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockNumber, FeeParameters};
@@ -187,33 +186,17 @@ impl From<AuthenticatedTransaction> for sequencer::AuthenticatedTransaction {
     }
 }
 
-impl TryFrom<sequencer::AuthenticatedTransaction> for AuthenticatedTransaction {
-    type Error = ConversionError;
-
-    fn try_from(value: sequencer::AuthenticatedTransaction) -> Result<Self, Self::Error> {
-        let inner = value
-            .transaction
-            .ok_or_else(|| {
-                ConversionError::missing_field::<sequencer::AuthenticatedTransaction>("transaction")
-            })?
-            .decode_fields()
-            .context("transaction")?
-            .build_unchecked()
-            .map_err(ConversionError::new)
-            .context("transaction")?;
-
-        let store_account_state = value.store_account_state.map(Word::try_from).transpose()?;
-
-        let notes_authenticated_by_store = value
-            .notes_authenticated_by_store
-            .into_iter()
-            .map(Word::try_from)
-            .collect::<Result<HashSet<_>, _>>()?;
-
+impl AuthenticatedTransaction {
+    /// Construct a transaction authenticated by a trusted sequencer client. The caller must ensure
+    /// that the client verified and authenticated the transaction.
+    pub fn from_decoded(
+        value: sequencer::DecodedAuthenticatedTransaction,
+    ) -> Result<Self, ConversionError> {
+        let inner = value.transaction.build_unchecked().context("transaction")?;
         Ok(Self {
             inner: Arc::new(inner),
-            store_account_state,
-            notes_authenticated_by_store,
+            store_account_state: value.store_account_state,
+            notes_authenticated_by_store: value.notes_authenticated_by_store.into_iter().collect(),
             authentication_height: value.authentication_height.into(),
         })
     }
@@ -268,6 +251,7 @@ impl AuthenticatedTransaction {
 #[cfg(test)]
 mod tests {
     use assert_matches::assert_matches;
+    use miden_node_proto::DecodeMessage;
     use miden_protocol::Word;
     use miden_protocol::asset::FungibleAsset;
     use miden_protocol::block::FeeParameters;
@@ -286,7 +270,8 @@ mod tests {
         let encoded = miden_node_proto::generated::sequencer::AuthenticatedTransaction::from(
             transaction.clone(),
         );
-        let decoded = AuthenticatedTransaction::try_from(encoded).unwrap();
+        let decoded =
+            AuthenticatedTransaction::from_decoded(encoded.decode_fields().unwrap()).unwrap();
         assert_eq!(decoded, transaction);
     }
 

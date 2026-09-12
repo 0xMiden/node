@@ -19,13 +19,16 @@ use crate::LOG_TARGET;
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::SubmitProvenTx for RpcService {
-    type Input = proto::submission::ProvenTransactionSubmission;
+    type Input = miden_node_proto::ProvenTransactionSubmission;
     type Output = proto::blockchain::BlockNumber;
 
     fn decode(
         request: proto::submission::ProvenTransactionSubmission,
     ) -> tonic::Result<Self::Input> {
-        Ok(request)
+        request
+            .decode_fields()
+            .and_then(BuildUnchecked::build_unchecked)
+            .map_err(miden_node_proto::errors::conversion_error_to_status)
     }
 
     fn encode(output: Self::Output) -> tonic::Result<proto::blockchain::BlockNumber> {
@@ -43,20 +46,11 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
         metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        let mut request = input;
+        let tx = input.transaction;
         let is_authorized_network_tx = self.is_authorized_network_tx(metadata);
         let original_accept_header = metadata.get(http::header::ACCEPT.as_str()).cloned();
 
         trace!(target: LOG_TARGET, "Received transaction submission");
-
-        let tx: ProvenTransaction = request
-            .transaction
-            .take()
-            .ok_or_else(|| Status::invalid_argument("missing `transaction` field"))?
-            .decode_fields()
-            .map_err(|err| Status::invalid_argument(format!("invalid transaction: {err}")))?
-            .build_unchecked()
-            .map_err(|err| Status::invalid_argument(format!("invalid transaction: {err}")))?;
 
         miden_span_record!(
             transaction.id = tx.id(),
@@ -99,7 +93,10 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
             tx.proof().clone(),
         )
         .map_err(|e| Status::invalid_argument(e.to_string()))?;
-        request.transaction = Some((&rebuilt_tx).into());
+        let request = proto::submission::ProvenTransactionSubmission {
+            transaction: Some((&rebuilt_tx).into()),
+            sealed_transaction_inputs: Some(input.sealed_transaction_inputs),
+        };
 
         // Block post-deployment network-account transactions from user RPC. First-deployment txs
         // are exempt because the protocol-level allowlist only kicks in once the account exists,

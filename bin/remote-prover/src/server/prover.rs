@@ -1,10 +1,9 @@
 use miden_block_prover::{BlockExecutor, LocalBlockProver};
-use miden_node_proto::BlockProofRequest;
 use miden_node_proto::generated::remote_prover::proof::Proof as ProofVariant;
-use miden_node_proto::generated::remote_prover::proof_request::Request;
+use miden_node_proto::generated::remote_prover::proof_request::DecodedRequest as Request;
 use miden_node_proto::generated::{block_proving, remote_prover as proto, transaction};
+use miden_node_proto::{BlockProofRequest, BuildUnchecked, DecodeMessage, Decoded, VerifyWith};
 use miden_node_tracing::{ErrorReport, miden_instrument};
-use miden_objects::{BuildUnchecked, DecodeMessage, VerifyWith};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::block::ProposedBlock;
 use miden_protocol::transaction::TransactionInputs;
@@ -39,8 +38,9 @@ impl Prover {
     )]
     pub fn prove(&self, request: proto::ProofRequest) -> Result<proto::Proof, tonic::Status> {
         let request = request
-            .request
-            .ok_or_else(|| tonic::Status::invalid_argument("missing proof request"))?;
+            .decode_fields()
+            .map_err(miden_node_proto::errors::conversion_error_to_status)?
+            .request;
 
         let proof = match (self, request) {
             (Self::Transaction(prover), Request::Transaction(input)) => {
@@ -66,21 +66,13 @@ impl Prover {
 
 fn prove_transaction(
     prover: &LocalTransactionProver,
-    input: transaction::TransactionInputs,
+    input: Decoded<transaction::TransactionInputs>,
 ) -> Result<ProofVariant, tonic::Status> {
-    let input: TransactionInputs = input
-        .decode_fields()
-        .map_err(|error| {
-            tonic::Status::invalid_argument(
-                error.as_report_context("failed to decode transaction inputs"),
-            )
-        })?
-        .build_unchecked()
-        .map_err(|error| {
-            tonic::Status::invalid_argument(
-                error.as_report_context("failed to build transaction inputs"),
-            )
-        })?;
+    let input: TransactionInputs = input.build_unchecked().map_err(|error| {
+        tonic::Status::invalid_argument(
+            error.as_report_context("failed to build transaction inputs"),
+        )
+    })?;
     let transaction = prover.prove(input).map_err(|error| {
         tonic::Status::internal(error.as_report_context("failed to prove transaction"))
     })?;
@@ -90,21 +82,11 @@ fn prove_transaction(
 
 fn prove_batch(
     prover: &LocalBatchProver,
-    input: transaction::ProposedBatch,
+    input: Decoded<transaction::ProposedBatch>,
 ) -> Result<ProofVariant, tonic::Status> {
-    let input = input
-        .decode_fields()
-        .map_err(|error| {
-            tonic::Status::invalid_argument(
-                error.as_report_context("failed to decode proposed batch"),
-            )
-        })?
-        .verify_with(MIN_PROOF_SECURITY_LEVEL)
-        .map_err(|error| {
-            tonic::Status::invalid_argument(
-                error.as_report_context("failed to verify proposed batch"),
-            )
-        })?;
+    let input = input.verify_with(MIN_PROOF_SECURITY_LEVEL).map_err(|error| {
+        tonic::Status::invalid_argument(error.as_report_context("failed to verify proposed batch"))
+    })?;
     let executed_batch = BatchExecutor::new().execute(input).map_err(|error| {
         tonic::Status::internal(error.as_report_context("failed to execute batch"))
     })?;
@@ -117,10 +99,10 @@ fn prove_batch(
 
 fn prove_block(
     prover: &LocalBlockProver,
-    input: block_proving::BlockProofRequest,
+    input: block_proving::DecodedBlockProofRequest,
 ) -> Result<ProofVariant, tonic::Status> {
     let BlockProofRequest { tx_batches, block_header, block_inputs } =
-        input.try_into().map_err(|error: miden_node_proto::errors::ConversionError| {
+        input.build_unchecked().map_err(|error| {
             tonic::Status::invalid_argument(
                 error.as_report_context("failed to decode block proving inputs"),
             )
