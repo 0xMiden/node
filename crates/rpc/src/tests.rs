@@ -6,12 +6,7 @@ use std::time::Duration;
 
 use http::header::{ACCEPT, CONTENT_TYPE};
 use http::{Extensions, HeaderMap, HeaderValue};
-use miden_node_block_producer::store::TransactionInputs;
-use miden_node_block_producer::{
-    AuthenticatedTransaction,
-    BlockProducerApi,
-    BlockProducerApiConfig,
-};
+use miden_node_block_producer::{BlockProducerApi, BlockProducerApiConfig};
 use miden_node_proto::clients::{
     Builder,
     GrpcClient,
@@ -21,6 +16,7 @@ use miden_node_proto::clients::{
     SequencerClient,
     ValidatorClient,
 };
+use miden_node_proto::domain::sequencer::{AuthenticatedTransaction, TransactionInputs};
 use miden_node_proto::generated::rpc::api_client::ApiClient as ProtoClient;
 use miden_node_proto::generated::rpc::api_server::Api;
 use miden_node_proto::generated::sequencer::api_server::Api as SequencerApi;

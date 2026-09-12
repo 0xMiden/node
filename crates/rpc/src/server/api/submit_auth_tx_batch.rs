@@ -1,6 +1,6 @@
-use miden_node_block_producer::store::TransactionInputs;
+use miden_node_proto::domain::sequencer::TransactionInputs;
 use miden_node_proto::generated::server::sequencer_api;
-use miden_node_proto::{DecodeMessage, VerifyWith, generated as proto};
+use miden_node_proto::{DecodeMessage, Verify, VerifyWith, generated as proto};
 use miden_node_tracing::ErrorReport;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_protocol::batch::ProposedBatch;
@@ -70,7 +70,7 @@ fn decode_authenticated_transaction_batch(
     let inputs = request
         .auth_inputs
         .into_iter()
-        .map(TransactionInputs::from_decoded)
+        .map(Verify::verify)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|err| Status::invalid_argument(err.as_report_context("invalid auth_inputs")))?;
 

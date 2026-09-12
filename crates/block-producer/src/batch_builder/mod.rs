@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::TryFutureExt;
+use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
 use miden_node_store::state::State;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{
@@ -26,7 +27,6 @@ use tokio::time::{Instant, MissedTickBehavior};
 use url::Url;
 
 use crate::domain::batch::SelectedBatch;
-use crate::domain::transaction::AuthenticatedTransaction;
 use crate::errors::{BuildBatchError, StoreError};
 use crate::mempool::SharedMempool;
 use crate::{COMPONENT, LOG_TARGET};

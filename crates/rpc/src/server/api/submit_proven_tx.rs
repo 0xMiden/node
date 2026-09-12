@@ -1,6 +1,7 @@
+use miden_node_block_producer::ensure_transaction_has_fee;
 use miden_node_block_producer::store::get_tx_inputs;
-use miden_node_block_producer::{AuthenticatedTransaction, ensure_transaction_has_fee};
 use miden_node_proto::clients::{SequencerClient, ValidatorClient};
+use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
 use miden_node_proto::{BuildUnchecked, DecodeMessage, generated as proto};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorReport, debug, miden_instrument, miden_span_record, trace};

@@ -1,5 +1,6 @@
 use core::error::Error as CoreError;
 
+use miden_node_proto::domain::sequencer::TransactionAuthenticationError;
 use miden_node_proto::errors::GrpcError;
 use miden_node_store::{
     ApplyBlockWithProvingInputsError,
@@ -102,6 +103,12 @@ pub enum StateConflict {
         expected: Word,
         current: Word,
     },
+}
+
+impl From<TransactionAuthenticationError> for StateConflict {
+    fn from(error: TransactionAuthenticationError) -> Self {
+        Self::NullifiersAlreadyExist(error.spent_nullifiers)
+    }
 }
 
 // Batch building errors

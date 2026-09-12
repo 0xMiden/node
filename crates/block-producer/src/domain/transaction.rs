@@ -1,18 +1,9 @@
-use std::collections::HashSet;
-use std::sync::Arc;
-
-use miden_node_proto::BuildUnchecked;
-use miden_node_proto::errors::{ConversionError, ConversionResultExt};
-use miden_node_proto::generated::sequencer;
 use miden_protocol::Word;
-use miden_protocol::account::AccountId;
-use miden_protocol::block::{BlockNumber, FeeParameters};
-use miden_protocol::note::Nullifier;
-use miden_protocol::transaction::{ProvenTransaction, TransactionId, TxAccountUpdate};
+use miden_protocol::block::FeeParameters;
+use miden_protocol::transaction::ProvenTransaction;
 use miden_standards::note::TxFeeNote;
 
-use crate::errors::{MempoolSubmissionError, StateConflict};
-use crate::store::TransactionInputs;
+use crate::errors::MempoolSubmissionError;
 
 /// Ensures that a transaction pays a non-zero fee when fees are enabled.
 ///
@@ -46,232 +37,29 @@ pub fn ensure_transaction_has_fee(
     }
 }
 
-/// A transaction who's proof has been verified, and which has been authenticated against the store.
-///
-/// Authentication ensures that all nullifiers are unspent, and additionally authenticates some
-/// previously unauthenticated input notes.
-///
-/// This struct is cheap to clone as it uses an Arc for the heavy data.
-///
-/// Note that this is of course only valid for the chain height of the authentication.
-#[derive(Clone, Debug, PartialEq)]
-pub struct AuthenticatedTransaction {
-    inner: Arc<ProvenTransaction>,
-    /// The account state provided by the store [inputs](TransactionInputs).
-    ///
-    /// This does not necessarily have to match the transaction's initial state
-    /// as this may still be modified by inflight transactions.
-    store_account_state: Option<Word>,
-    /// Unauthenticated note commitments that have now been authenticated by committed state,
-    /// either through store [inputs](TransactionInputs) or through locally committed mempool
-    /// history.
-    ///
-    /// In other words, notes which were unauthenticated at the time the transaction was proven,
-    /// but which have since been committed to, and authenticated by the store.
-    notes_authenticated_by_store: HashSet<Word>,
-    /// Chain height that the authentication took place at.
-    authentication_height: BlockNumber,
-}
-
-impl AuthenticatedTransaction {
-    /// Verifies the transaction against the inputs, enforcing that all nullifiers are unspent.
-    ///
-    /// __No__ proof verification is performed. The caller takes responsibility for ensuring
-    /// that the proof is valid.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if any of the transaction's nullifiers are marked as spent by the inputs.
-    pub fn new_unchecked(
-        tx: Arc<ProvenTransaction>,
-        inputs: TransactionInputs,
-    ) -> Result<AuthenticatedTransaction, StateConflict> {
-        let nullifiers_already_spent = tx
-            .nullifiers()
-            .filter(|nullifier| inputs.nullifiers.get(nullifier).copied().flatten().is_some())
-            .collect::<Vec<_>>();
-        if !nullifiers_already_spent.is_empty() {
-            return Err(StateConflict::NullifiersAlreadyExist(nullifiers_already_spent));
-        }
-
-        Ok(AuthenticatedTransaction {
-            inner: tx,
-            notes_authenticated_by_store: inputs.found_unauthenticated_notes,
-            authentication_height: inputs.current_block_height,
-            store_account_state: inputs.account_commitment,
-        })
-    }
-
-    pub fn id(&self) -> TransactionId {
-        self.inner.id()
-    }
-
-    pub fn account_id(&self) -> AccountId {
-        self.inner.account_id()
-    }
-
-    pub fn account_update(&self) -> &TxAccountUpdate {
-        self.inner.account_update()
-    }
-
-    pub fn store_account_state(&self) -> Option<Word> {
-        self.store_account_state
-    }
-
-    pub fn authentication_height(&self) -> BlockNumber {
-        self.authentication_height
-    }
-
-    pub fn nullifiers(&self) -> impl Iterator<Item = Nullifier> + '_ {
-        self.inner.nullifiers()
-    }
-
-    pub fn output_note_ids(&self) -> impl Iterator<Item = Word> + '_ {
-        self.inner.output_notes().iter().map(|n| n.id().as_word())
-    }
-
-    pub fn output_note_count(&self) -> usize {
-        self.inner.output_notes().num_notes()
-    }
-
-    pub fn input_note_count(&self) -> usize {
-        self.inner.input_notes().num_notes() as usize
-    }
-
-    pub fn reference_block(&self) -> (BlockNumber, Word) {
-        (self.inner.ref_block_num(), self.inner.ref_block_commitment())
-    }
-
-    /// Note IDs which were unauthenticated in the transaction __and__ which were not authenticated
-    /// by the store inputs.
-    pub fn unauthenticated_note_ids(&self) -> impl Iterator<Item = Word> + '_ {
-        self.inner
-            .unauthenticated_notes()
-            .map(|h| h.id().as_word())
-            .filter(|commitment| !self.notes_authenticated_by_store.contains(commitment))
-    }
-
-    pub(crate) fn mark_notes_authenticated(&mut self, notes: impl IntoIterator<Item = Word>) {
-        self.notes_authenticated_by_store.extend(notes);
-    }
-
-    pub fn proven_transaction(&self) -> Arc<ProvenTransaction> {
-        Arc::clone(&self.inner)
-    }
-
-    pub fn expires_at(&self) -> BlockNumber {
-        self.inner.expiration_block_num()
-    }
-
-    pub fn raw_proven_transaction(&self) -> &ProvenTransaction {
-        &self.inner
-    }
-}
-
-// PROTO CONVERSIONS
-// ================================================================================================
-
-impl From<AuthenticatedTransaction> for sequencer::AuthenticatedTransaction {
-    fn from(value: AuthenticatedTransaction) -> Self {
-        Self {
-            transaction: Some(value.inner.as_ref().into()),
-            store_account_state: value.store_account_state.map(Into::into),
-            notes_authenticated_by_store: value
-                .notes_authenticated_by_store
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-            authentication_height: value.authentication_height.as_u32(),
-        }
-    }
-}
-
-impl AuthenticatedTransaction {
-    /// Construct a transaction authenticated by a trusted sequencer client. The caller must ensure
-    /// that the client verified and authenticated the transaction.
-    pub fn from_decoded(
-        value: sequencer::DecodedAuthenticatedTransaction,
-    ) -> Result<Self, ConversionError> {
-        let inner = value.transaction.build_unchecked().context("transaction")?;
-        Ok(Self {
-            inner: Arc::new(inner),
-            store_account_state: value.store_account_state,
-            notes_authenticated_by_store: value.notes_authenticated_by_store.into_iter().collect(),
-            authentication_height: value.authentication_height.into(),
-        })
-    }
-}
-
-#[cfg(test)]
-impl AuthenticatedTransaction {
-    //! Builder methods intended for easier test setup.
-
-    /// Short-hand for `Self::new` where the input's are setup to match the transaction's initial
-    /// account state. This covers the account's initial state and nullifiers being set to unspent.
-    pub fn from_inner(inner: ProvenTransaction) -> Self {
-        use miden_protocol::Word;
-
-        let store_account_state = match inner.account_update().initial_state_commitment() {
-            zero if zero == Word::empty() => None,
-            non_zero => Some(non_zero),
-        };
-        let inputs = TransactionInputs {
-            account_id: inner.account_id(),
-            account_commitment: store_account_state,
-            nullifiers: inner.nullifiers().map(|nullifier| (nullifier, None)).collect(),
-            found_unauthenticated_notes: HashSet::default(),
-            current_block_height: 0.into(),
-        };
-        // SAFETY: nullifiers were set to None aka are definitely unspent.
-        Self::new_unchecked(Arc::new(inner), inputs).unwrap()
-    }
-
-    /// Overrides the authentication height with the given value.
-    #[must_use]
-    pub fn with_authentication_height(mut self, height: BlockNumber) -> Self {
-        self.authentication_height = height;
-        self
-    }
-
-    /// Overrides the store state with the given value.
-    #[must_use]
-    pub fn with_store_state(mut self, state: Word) -> Self {
-        self.store_account_state = Some(state);
-        self
-    }
-
-    /// Unsets the store state.
-    #[must_use]
-    pub fn with_empty_store_state(mut self) -> Self {
-        self.store_account_state = None;
-        self
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use assert_matches::assert_matches;
-    use miden_node_proto::DecodeMessage;
+    use miden_node_proto::{BuildUnchecked, DecodeMessage};
     use miden_protocol::Word;
     use miden_protocol::asset::FungibleAsset;
     use miden_protocol::block::FeeParameters;
     use miden_protocol::transaction::{OutputNote, ProvenTransaction, PublicOutputNote};
     use miden_standards::note::TxFeeNote;
 
-    use super::{AuthenticatedTransaction, ensure_transaction_has_fee};
+    use super::ensure_transaction_has_fee;
     use crate::errors::MempoolSubmissionError;
-    use crate::test_utils::{MockProvenTxBuilder, mock_account_id};
+    use crate::test_utils::{MockAuthenticatedTxBuilder, MockProvenTxBuilder, mock_account_id};
 
     #[test]
     fn authenticated_transaction_proto_roundtrip_preserves_the_transaction() {
-        let transaction = AuthenticatedTransaction::from_inner(
-            MockProvenTxBuilder::with_account_index(1).build(),
-        );
+        let transaction =
+            MockAuthenticatedTxBuilder::new(MockProvenTxBuilder::with_account_index(1).build())
+                .build();
         let encoded = miden_node_proto::generated::sequencer::AuthenticatedTransaction::from(
             transaction.clone(),
         );
-        let decoded =
-            AuthenticatedTransaction::from_decoded(encoded.decode_fields().unwrap()).unwrap();
+        let decoded = encoded.decode_fields().unwrap().build_unchecked().unwrap();
         assert_eq!(decoded, transaction);
     }
 
