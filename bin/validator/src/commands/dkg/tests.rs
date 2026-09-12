@@ -1002,7 +1002,7 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
         .map(ValidatorSigner::new_local)
         .collect::<Vec<_>>();
     let trusted_genesis = read_trusted_genesis(&genesis.path)?;
-    let validator_keys = trusted_genesis.inner().header().validator_keys().as_keys();
+    let validator_keys = trusted_genesis.inner().header().validator_config().keys();
     let tickets = signers
         .iter()
         .map(|signer| {

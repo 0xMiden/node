@@ -136,7 +136,7 @@ pub(super) async fn run_validator(options: DkgRunOptions) -> anyhow::Result<()> 
 
 pub(super) async fn serve_board(options: DkgBoardServeOptions) -> anyhow::Result<()> {
     let genesis = read_trusted_genesis(&options.genesis)?;
-    let participant_count = genesis.inner().header().validator_keys().as_keys().len();
+    let participant_count = genesis.inner().header().validator_config().keys().len();
     let (board, tickets) = BoardNode::create(&options.data_directory, participant_count).await?;
     publish_directory(&options.ticket_directory, |temporary| {
         for ticket in &tickets {
@@ -181,7 +181,7 @@ pub(super) async fn coordinate_common_files(
     timeout: Duration,
 ) -> anyhow::Result<()> {
     let genesis = read_trusted_genesis(genesis_path)?;
-    let validator_keys = genesis.inner().header().validator_keys().as_keys();
+    let validator_keys = genesis.inner().header().validator_config().keys();
     ensure!(
         threshold > 0 && threshold <= validator_keys.len(),
         "threshold must be between 1 and {}",
@@ -271,7 +271,7 @@ where
         format!("failed to create DKG work directory {}", work_directory.display())
     })?;
     let genesis = read_trusted_genesis(genesis_path)?;
-    let validator_keys = genesis.inner().header().validator_keys().as_keys();
+    let validator_keys = genesis.inner().header().validator_config().keys();
     let participant_count = validator_keys.len();
     ensure!(
         threshold > 0 && threshold <= participant_count,
@@ -330,7 +330,7 @@ where
 
     let genesis = read_trusted_genesis(genesis_path)?;
     let registrations =
-        wait_for_registrations(board, genesis.inner().header().validator_keys().as_keys(), timeout)
+        wait_for_registrations(board, genesis.inner().header().validator_config().keys(), timeout)
             .await?;
     let registration_directory = work_directory.join(REGISTRATIONS_DIRECTORY);
     materialize_or_compare(&registration_directory, &registrations)?;
@@ -490,8 +490,8 @@ fn participant_for_validator(
     let position = genesis
         .inner()
         .header()
-        .validator_keys()
-        .as_keys()
+        .validator_config()
+        .keys()
         .iter()
         .position(|key| key == validator_key)
         .context("validator signing key is not committed by genesis")?;
