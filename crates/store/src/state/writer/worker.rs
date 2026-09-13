@@ -208,7 +208,8 @@ impl WriteWorker {
             block.transaction.count = num_transactions
         );
 
-        self.validate_block_header(header).await?;
+        let previous_config_commitment = self.validate_block_header(header).await?;
+
         let commitment = header.protocol_config_commitment();
         if let Some(config) = protocol_config.as_ref() {
             let calculated = config.to_commitment();
@@ -220,11 +221,16 @@ impl WriteWorker {
                 .into());
             }
         }
+
         let stored = self.db.select_protocol_config_by_commitment(commitment).await?;
         if stored.is_none() && protocol_config.is_none() {
             return Err(crate::errors::DatabaseError::ProtocolConfigNotFound(commitment).into());
         }
-        let new_protocol_config = if stored.is_none() { protocol_config } else { None };
+        let activated_protocol_config = if previous_config_commitment != commitment {
+            stored.or(protocol_config)
+        } else {
+            None
+        };
 
         let block_lifecycle =
             lifecycle_events_enabled().then(|| BlockLifecycle::from_block_body(block_num, body));
@@ -261,7 +267,7 @@ impl WriteWorker {
             .db
             .apply_block(
                 signed_block,
-                new_protocol_config,
+                activated_protocol_config,
                 notes,
                 precomputed_public_states,
                 unresolved_note_nullifiers,
@@ -442,7 +448,7 @@ impl WriteWorker {
         target = COMPONENT,
         err,
     )]
-    async fn validate_block_header(&self, header: &BlockHeader) -> Result<(), ApplyBlockError> {
+    async fn validate_block_header(&self, header: &BlockHeader) -> Result<Word, ApplyBlockError> {
         let block_num = header.block_num();
 
         // Validate that the applied block is the next block in sequence.
@@ -463,7 +469,7 @@ impl WriteWorker {
             return Err(InvalidBlockError::NewBlockInvalidPrevCommitment.into());
         }
 
-        Ok(())
+        Ok(prev_block.protocol_config_commitment())
     }
 
     /// Computes nullifier and account tree mutations, validating roots against the block header.
@@ -725,6 +731,55 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn writer_records_reactivations_and_scopes_history() {
+        let (_temp_dir, state, mut writer, writer_task, first) = start_store().await;
+        let second = alternate_protocol_config();
+        let pinned = state.view();
+        for (config, supplied) in [
+            (&first, false),
+            (&second, true),
+            (&second, false),
+            (&first, false),
+            (&second, true),
+        ] {
+            let block = empty_block(&state, config).await;
+            writer.apply_block(block, supplied.then(|| config.clone())).await.unwrap();
+        }
+        assert_eq!(
+            pinned.get_protocol_config_commitment_at(0.into()).await.unwrap(),
+            Some(first.to_commitment())
+        );
+        assert!(matches!(
+            pinned.get_protocol_config_commitment_at(1.into()).await,
+            Err(DatabaseError::RangeBeyondTip(_))
+        ));
+        let view = state.view();
+        for (height, config) in
+            [(0, &first), (1, &first), (2, &second), (3, &second), (4, &first), (5, &second)]
+        {
+            assert_eq!(
+                view.get_protocol_config_commitment_at(height.into()).await.unwrap(),
+                Some(config.to_commitment())
+            );
+        }
+        let activations: Vec<i64> = state
+            .db
+            .query("activation history", |conn| {
+                protocol_configs::table
+                    .select(protocol_configs::block_number)
+                    .order(protocol_configs::block_number.asc())
+                    .load(conn)
+                    .map_err(DatabaseError::from)
+            })
+            .await
+            .unwrap();
+        assert_eq!(activations, vec![0, 2, 4, 5]);
+        drop(view);
+        drop(pinned);
+        writer.stop(writer_task).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn writer_reuses_a_known_protocol_config_without_a_supplied_config() {
         let (_temp_dir, state, mut writer, writer_task, protocol_config) = start_store().await;
         let block = empty_block(&state, &protocol_config).await;
@@ -815,7 +870,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn protocol_config_insertion_rolls_back_when_the_block_write_fails() {
-        let (_temp_dir, state, mut writer, writer_task, _genesis_config) = start_store().await;
+        let (_temp_dir, state, mut writer, writer_task, genesis_config) = start_store().await;
         let protocol_config = alternate_protocol_config();
         let commitment = protocol_config.to_commitment();
         let block = empty_block(&state, &protocol_config).await;
@@ -839,6 +894,16 @@ mod tests {
 
         assert_eq!(state.committed_tip(), 0.into());
         assert_eq!(state.view().get_protocol_config(commitment).await.unwrap(), None);
+        assert_eq!(
+            state
+                .db
+                .select_protocol_config_commitment_at(crate::state::ScopedBlockNum::new_unchecked(
+                    1.into()
+                ),)
+                .await
+                .unwrap(),
+            Some(genesis_config.to_commitment())
+        );
         assert_eq!(
             state
                 .db

@@ -90,7 +90,8 @@ diesel::table! {
 }
 
 diesel::table! {
-    protocol_configs (commitment) {
+    protocol_configs (commitment, block_number) {
+        block_number -> BigInt,
         commitment -> Binary,
         protocol_config -> Binary,
     }
