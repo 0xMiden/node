@@ -235,6 +235,8 @@ fn decode_transaction_proof(response: Proof) -> Result<ProvenTransaction, Transa
                 error,
             )
         })?
+        // SAFETY: This result is provisional until submission. The RPC verifies its proof and
+        // validators re-execute the sealed transaction inputs before accepting the transaction.
         .build_unchecked()
         .map_err(|error| {
             TransactionProverError::other_with_source(

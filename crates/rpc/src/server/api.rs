@@ -1,18 +1,15 @@
 use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock};
-use std::time::Duration;
 
 use anyhow::Context as AnyhowContext;
 use miden_node_block_producer::BlockProducerApi;
 use miden_node_proto::clients::NtxBuilderClient;
 use miden_node_proto::domain::block::InvalidBlockRange;
 use miden_node_proto::generated::rpc::MempoolStats as ProtoMempoolStats;
-use miden_node_proto::generated::rpc::api_server::Api;
 use miden_node_proto::generated::{self as proto};
-use miden_node_proto::{BuildUnchecked, DecodeMessage};
 use miden_node_store::state::State;
 use miden_node_store::{DatabaseError, GetBlockHeaderError};
-use miden_node_tracing::{miden_instrument, warn};
+use miden_node_tracing::miden_instrument;
 use miden_node_utils::limiter::{
     QueryParamAccountIdLimit,
     QueryParamLimiter,
@@ -23,17 +20,16 @@ use miden_node_utils::limiter::{
     QueryParamStorageMapSlotLimit,
 };
 use miden_node_utils::lru_cache::LruCache;
-use miden_node_utils::retry::{self, Retryable};
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use tokio::sync::Semaphore;
 use tonic::metadata::MetadataMap;
-use tonic::{IntoRequest, Request, Status};
+use tonic::{Request, Status};
 
+use crate::COMPONENT;
 use crate::server::api::subscription::{IpBanList, MAX_REPLICA_SUBSCRIPTIONS};
 use crate::server::{AccountAdmission, NetworkTxAuth, RpcBackend};
-use crate::{COMPONENT, LOG_TARGET};
 
 // VALIDATOR FAN-OUT
 // ================================================================================================
@@ -157,40 +153,15 @@ impl RpcService {
         Ok(())
     }
 
-    /// Fetches the genesis block header from the store.
-    ///
-    /// Automatically retries until the store connection becomes available.
-    pub async fn get_genesis_header_with_retry(&self) -> anyhow::Result<BlockHeader> {
-        // Retry with exponential backoff (base 500ms, max 30s) while the store is unavailable.
-        let header = (|| async {
-            self.get_block_header_by_number(
-                proto::rpc::BlockHeaderByNumberRequest {
-                    block_num: Some(BlockNumber::GENESIS.as_u32()),
-                    include_mmr_proof: None,
-                    include_protocol_config: None,
-                }
-                .into_request(),
-            )
+    /// Reads the genesis block header from the local store.
+    pub async fn get_genesis_header(&self) -> anyhow::Result<BlockHeader> {
+        let (header, _) = self
+            .state
+            .view()
+            .get_block_header(Some(BlockNumber::GENESIS), false)
             .await
-        })
-        .retry(retry::exponential(Duration::from_millis(500), Duration::from_secs(30)))
-        .when(|err| err.code() == tonic::Code::Unavailable)
-        .notify(|err, backoff| {
-            warn!(
-                err,
-                target: LOG_TARGET,
-                "connection failed while fetching genesis header, retrying",
-                retry.delay_ms = backoff.as_millis() as u64
-            );
-        })
-        .await?;
-
-        let header = header.into_inner().block_header.context("response is missing the header")?;
-        header
-            .decode_fields()
-            .context("failed to parse response")?
-            .build_unchecked()
-            .context("failed to build response header")
+            .context("failed to read genesis block header")?;
+        header.context("genesis block header is missing")
     }
 
     /// Returns the given block's onchain header.

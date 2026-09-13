@@ -257,6 +257,8 @@ impl BuildUnchecked for sequencer::DecodedAuthenticatedTransaction {
     /// Construct a transaction authenticated by a trusted sequencer client. The caller must ensure
     /// that the client verified and authenticated the transaction.
     fn build_unchecked(self) -> Result<Self::Output, Self::Error> {
+        // SAFETY: The caller must trust the sender to verify the transaction proof and store
+        // authentication data. This constructor does not establish that trust.
         let inner = self.transaction.build_unchecked().context("transaction")?;
         Ok(AuthenticatedTransaction {
             inner: Arc::new(inner),

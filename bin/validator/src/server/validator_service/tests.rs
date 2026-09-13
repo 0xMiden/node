@@ -931,6 +931,7 @@ async fn block_subscription_replays_then_freezes_signing() {
             .expect("response should carry a block")
             .decode_fields()
             .expect("valid signed block")
+            // SAFETY: This test only checks replay order for blocks signed by its local validator.
             .build_unchecked()
             .expect("valid signed block");
         assert_eq!(block.header().block_num().as_u32(), expected);

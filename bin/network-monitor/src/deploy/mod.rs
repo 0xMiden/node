@@ -286,6 +286,7 @@ pub async fn create_genesis_aware_rpc_client(
         let genesis_header: BlockHeader = genesis_block_header
             .decode_fields()
             .context("failed to decode block header")?
+            // SAFETY: Genesis has no parent. Deployment trusts the configured RPC for genesis.
             .build_unchecked()
             .context("failed to build block header")?;
         let genesis_commitment = genesis_header.commitment();
@@ -748,6 +749,8 @@ fn decode_chain_state(
         .context("sync_chain_mmr response did not include a block header")?
         .decode_fields()
         .context("failed to decode the sync target block header")?
+        // SAFETY: Deployment trusts the configured RPC for chain state. The MMR root is checked
+        // against this header below. That consistency check does not authenticate the RPC.
         .build_unchecked()
         .context("failed to build the sync target block header")?;
 

@@ -53,12 +53,16 @@ impl BuildUnchecked for proto::block_proving::DecodedBlockProofRequest {
     /// construction also skips input-note authentication, aggregation, and transaction order. The
     /// caller must complete these checks before accepting the block.
     fn build_unchecked(self) -> Result<Self::Output, Self::Error> {
+        // SAFETY: This unchecked constructor leaves parent authentication to its caller.
+        // ProposedBlock checks the supplied chain and witnesses against that parent below.
         let block_inputs = self.block_inputs.build_unchecked().context("block_inputs")?;
         let batches = self
             .batches
             .into_iter()
             .enumerate()
             .map(|(index, batch)| {
+                // SAFETY: This unchecked constructor leaves batch validation to its caller.
+                // ProposedBlock checks consistency across batches, not within each batch.
                 batch.build_unchecked().with_context(|| format!("batches[{index}]"))
             })
             .collect::<Result<Vec<ProvenBatch>, _>>()?;
@@ -124,8 +128,10 @@ impl BuildUnchecked for proto::block_proving::DecodedBlockInputs {
     /// This includes headers in the partial blockchain. The caller must check the headers, chain
     /// root, and witness roots against trusted chain state.
     fn build_unchecked(self) -> Result<Self::Output, Self::Error> {
+        // SAFETY: The caller must authenticate this parent against trusted chain state.
         let prev_block_header: BlockHeader =
             self.prev_block_header.build_unchecked().context("prev_block_header")?;
+        // SAFETY: Construction checks MMR membership. The caller must authenticate the MMR root.
         let partial_blockchain: PartialBlockchain =
             self.partial_blockchain.build_unchecked().context("partial_blockchain")?;
 

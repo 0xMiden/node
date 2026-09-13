@@ -181,6 +181,7 @@ async fn discover_genesis(rpc_url: &Url, timeout: Duration) -> Result<Word> {
     let genesis_header: BlockHeader = genesis_block_header
         .decode_fields()
         .context("Failed to decode block header")?
+        // SAFETY: Genesis has no parent. This benchmark trusts the configured RPC for genesis.
         .build_unchecked()
         .context("Failed to build block header")?;
 

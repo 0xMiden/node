@@ -342,6 +342,7 @@ fn decode_genesis_block_state(
         .context("RPC returned no genesis block header")?
         .decode_fields()
         .context("failed to decode the genesis block header")?
+        // SAFETY: Genesis has no parent. This benchmark trusts the configured RPC for genesis.
         .build_unchecked()
         .context("failed to build the genesis block header")?;
     let protocol_config =

@@ -59,6 +59,7 @@ mod tests {
         let encoded = miden_node_proto::generated::sequencer::AuthenticatedTransaction::from(
             transaction.clone(),
         );
+        // SAFETY: This test checks the round trip of a locally constructed transaction fixture.
         let decoded = encoded.decode_fields().unwrap().build_unchecked().unwrap();
         assert_eq!(decoded, transaction);
     }

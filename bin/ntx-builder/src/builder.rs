@@ -261,10 +261,7 @@ impl NetworkTransactionBuilder {
         committed_tip: BlockNumber,
         protocol_config: Option<ProtocolConfig>,
     ) -> anyhow::Result<(CommittedBlockEffects, Vec<AccountId>)> {
-        let header = block.header().clone();
-        let block_num = header.block_num();
-
-        let effects = CommittedBlockEffects::from_signed_block(&block);
+        let block_num = block.header().block_num();
 
         // Build the next immutable snapshot before persistence. Do not publish it until the
         // database transaction commits.
@@ -272,6 +269,7 @@ impl NetworkTransactionBuilder {
             self.chain
                 .next_chain_tip(header, protocol_config, self.config.max_block_count)?;
 
+        let effects = CommittedBlockEffects::from_signed_block(&block);
         let effects_for_db = effects.clone();
         let sponsored_accounts =
             persist_and_publish_chain_state(&self.db, &self.chain, effects_for_db, next_chain)

@@ -20,6 +20,8 @@ impl BuildUnchecked for proto::submission::DecodedProvenTransactionSubmission {
     /// inputs. The caller must verify the proof, authenticate the input notes, and unseal the
     /// inputs.
     fn build_unchecked(self) -> Result<Self::Output, Self::Error> {
+        // SAFETY: This unchecked constructor leaves proof verification and note authentication to
+        // the receiving service. The sealed inputs also require decryption and validation.
         let transaction = self.transaction.build_unchecked().context("transaction")?;
         let sealed_transaction_inputs = self.sealed_transaction_inputs.into();
         Ok(ProvenTransactionSubmission { transaction, sealed_transaction_inputs })
