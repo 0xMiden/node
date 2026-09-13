@@ -1884,9 +1884,13 @@ async fn protocol_config_transitions_follow_response_headers() {
         assert_eq!(header.block_num(), 4.into());
         if included {
             assert_eq!(
-                ensure_protocol_config_is_present_and_matches_header(response.protocol_config, &header).unwrap(
+                ensure_protocol_config_is_present_and_matches_header(
+                    response.protocol_config,
+                    &header
+                )
+                .unwrap(),
                 a
-           ) a);
+            );
         }
     }
 
@@ -1901,9 +1905,10 @@ async fn protocol_config_transitions_follow_response_headers() {
     let header: BlockHeader = proven.block_header.unwrap().try_into().unwrap();
     assert_eq!(header.block_num(), 0.into());
     assert_eq!(
-        ensure_protocol_config_is_present_and_matches_header(proven.protocol_config, &header).unwrap(
+        ensure_protocol_config_is_present_and_matches_header(proven.protocol_config, &header)
+            .unwrap(),
         a
-   ) a);
+    );
 
     for start in [1, 2] {
         let mut stream = client

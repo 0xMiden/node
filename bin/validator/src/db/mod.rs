@@ -73,7 +73,7 @@ impl ValidatorDbReader {
             .await
     }
 
-    /// Loads and verifies the protocol configuration with the given commitment.
+    /// Loads the protocol configuration with the given commitment.
     pub async fn load_protocol_config(
         &self,
         commitment: miden_protocol::Word,
@@ -200,7 +200,8 @@ impl ValidatorDbWriter {
 
     /// Persists a protocol configuration and its block header in one transaction.
     ///
-    /// If `protocol_config` is absent, the configuration must already be stored.
+    /// If `protocol_config` is absent, the configuration must already be stored
+    /// otherwise an error is returned.
     #[miden_instrument(
         target = COMPONENT,
     )]
@@ -221,11 +222,15 @@ impl ValidatorDbWriter {
                         )));
                     }
                     queries::insert_protocol_config(tx, config)?;
+                } else {
+                    // Ensure that the configuration is already stored.
+                    queries::load_protocol_config(tx, commitment)?.ok_or_else(|| {
+                        invalid_protocol_config(format!(
+                            "protocol config {commitment} is not stored"
+                        ))
+                    })?;
                 }
 
-                queries::load_protocol_config(tx, commitment)?.ok_or_else(|| {
-                    invalid_protocol_config(format!("protocol config {commitment} is not stored"))
-                })?;
                 queries::upsert_block_header(tx, &header)
             })
             .await
