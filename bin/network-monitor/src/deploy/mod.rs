@@ -16,7 +16,7 @@ use miden_node_proto::domain::encryption::{
     TrustedTransactionEncryptionState,
     verify_transaction_encryption_key,
 };
-use miden_node_proto::domain::protocol_config::decode_protocol_config;
+use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
 use miden_node_proto::generated::rpc::{
     AccountRequest as ProtoAccountRequest,
     BlockHeaderByNumberRequest,
@@ -744,8 +744,9 @@ fn decode_chain_state(
         .try_into()
         .context("failed to convert the sync target block header")?;
 
-    let protocol_config = decode_protocol_config(response.protocol_config, &tip_header)
-        .context("sync_chain_mmr response did not include a valid protocol configuration")?;
+    let protocol_config =
+        ensure_protocol_config_is_present_and_matches_header(response.protocol_config, &tip_header)
+            .context("sync_chain_mmr response did not include a valid protocol configuration")?;
 
     let delta: MmrDelta = response
         .mmr_delta
@@ -1179,7 +1180,7 @@ mod tests {
         MonitorDataStore,
         active_fee_funding,
         decode_chain_state,
-        decode_protocol_config,
+        ensure_protocol_config_is_present_and_matches_header,
     };
     use crate::deploy::wallet::create_wallet_account;
 
@@ -1226,8 +1227,9 @@ mod tests {
         let header = chain.genesis_block_header();
         let expected = chain.protocol_config().clone();
 
-        let decoded = decode_protocol_config(Some((&expected).into()), &header)
-            .expect("the RPC configuration matches its header");
+        let decoded =
+            ensure_protocol_config_is_present_and_matches_header(Some((&expected).into()), &header)
+                .expect("the RPC configuration matches its header");
 
         assert_eq!(decoded, expected);
     }

@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use miden_node_proto::domain::protocol_config::decode_protocol_config;
+use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
 use miden_node_proto::{BlockProofRequest, generated as grpc};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorReport, Instrument, info_span, miden_instrument};
@@ -66,7 +66,12 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
                 let supplied_protocol_config = request.protocol_config.take();
                 let request = BlockProofRequest::try_from(request).map_err(tonic::Status::from)?;
                 let protocol_config = supplied_protocol_config
-                    .map(|config| decode_protocol_config(Some(config), &request.block_header))
+                    .map(|config| {
+                        ensure_protocol_config_is_present_and_matches_header(
+                            Some(config),
+                            &request.block_header,
+                        )
+                    })
                     .transpose()
                     .map_err(tonic::Status::from)?;
                 let protocol_config_commitment = request.block_header.protocol_config_commitment();

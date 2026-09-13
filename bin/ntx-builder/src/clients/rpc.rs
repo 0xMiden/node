@@ -17,7 +17,7 @@ use miden_node_proto::domain::encryption::{
     TrustedTransactionEncryptionState,
     verify_transaction_encryption_key,
 };
-use miden_node_proto::domain::protocol_config::decode_protocol_config;
+use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::rpc::account_request::account_detail_request::{StorageMapDetailRequest, StorageMapDetailRequests, StorageRequest, storage_map_detail_request};
 use miden_node_proto::generated::rpc::account_request::account_detail_request::storage_map_detail_request::MapKeys;
@@ -500,7 +500,8 @@ fn decode_startup_header_response(
         ));
     }
 
-    decode_protocol_config(response.protocol_config, &header).map_err(RpcError::Conversion)
+    ensure_protocol_config_is_present_and_matches_header(response.protocol_config, &header)
+        .map_err(RpcError::Conversion)
 }
 
 fn decode_block_subscription_response(
@@ -518,7 +519,9 @@ fn decode_block_subscription_response(
     let protocol_config = response
         .protocol_config
         .clone()
-        .map(|config| decode_protocol_config(Some(config), block.header()))
+        .map(|config| {
+            ensure_protocol_config_is_present_and_matches_header(Some(config), block.header())
+        })
         .transpose()
         .map_err(RpcError::Conversion)?;
     let committed_tip = BlockNumber::from(response.committed_chain_tip);

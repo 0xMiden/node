@@ -11,7 +11,7 @@ use miden_node_proto::domain::encryption::{
     TrustedTransactionEncryptionState,
     verify_transaction_encryption_key,
 };
-use miden_node_proto::domain::protocol_config::decode_protocol_config;
+use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
 use miden_node_proto::generated::account::AccountId as ProtoAccountId;
 use miden_node_proto::generated::rpc::account_request::AccountDetailRequest;
 use miden_node_proto::generated::rpc::{
@@ -339,8 +339,9 @@ fn decode_genesis_block_state(
         .context("RPC returned no genesis block header")?
         .try_into()
         .context("failed to decode the genesis block header")?;
-    let protocol_config = decode_protocol_config(response.protocol_config, &header)
-        .context("RPC returned no valid genesis protocol configuration")?;
+    let protocol_config =
+        ensure_protocol_config_is_present_and_matches_header(response.protocol_config, &header)
+            .context("RPC returned no valid genesis protocol configuration")?;
 
     Ok((header, protocol_config))
 }

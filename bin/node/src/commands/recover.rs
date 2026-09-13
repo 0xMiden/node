@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_proto::clients::{Builder, ValidatorClient};
-use miden_node_proto::domain::protocol_config::decode_protocol_config;
+use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
 use miden_node_proto::generated::validator::{BlockSubscriptionRequest, BlockSubscriptionResponse};
 use miden_node_store::{BlockWriter, State, WriterTask};
 use miden_node_tracing::info;
@@ -255,7 +255,12 @@ async fn read_blocks(
                     .with_context(|| format!("failed to decode block from validator {url}"))?;
                 let protocol_config = event
                     .protocol_config
-                    .map(|config| decode_protocol_config(Some(config), block.header()))
+                    .map(|config| {
+                        ensure_protocol_config_is_present_and_matches_header(
+                            Some(config),
+                            block.header(),
+                        )
+                    })
                     .transpose()
                     .with_context(|| {
                         format!("failed to decode protocol config from validator {url}")

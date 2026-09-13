@@ -1842,7 +1842,7 @@ async fn next_block_with_protocol_config(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn protocol_config_transitions_follow_response_headers() {
-    use miden_node_proto::domain::protocol_config::decode_protocol_config;
+    use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
     use miden_protocol::block::BlockHeader;
     use miden_protocol::protocol_config::KernelConfig;
 
@@ -1883,7 +1883,10 @@ async fn protocol_config_transitions_follow_response_headers() {
         let header: BlockHeader = response.block_header.unwrap().try_into().unwrap();
         assert_eq!(header.block_num(), 4.into());
         if included {
-            assert_eq!(decode_protocol_config(response.protocol_config, &header).unwrap(), a);
+            assert_eq!(
+                ensure_protocol_config_is_present_and_matches_header(response.protocol_config, &header).unwrap(
+                a
+           ) a);
         }
     }
 
@@ -1897,7 +1900,10 @@ async fn protocol_config_transitions_follow_response_headers() {
         .into_inner();
     let header: BlockHeader = proven.block_header.unwrap().try_into().unwrap();
     assert_eq!(header.block_num(), 0.into());
-    assert_eq!(decode_protocol_config(proven.protocol_config, &header).unwrap(), a);
+    assert_eq!(
+        ensure_protocol_config_is_present_and_matches_header(proven.protocol_config, &header).unwrap(
+        a
+   ) a);
 
     for start in [1, 2] {
         let mut stream = client
@@ -1914,7 +1920,11 @@ async fn protocol_config_transitions_follow_response_headers() {
             if included {
                 let expected = if height == 2 || height == 3 { &b } else { &a };
                 assert_eq!(
-                    &decode_protocol_config(response.protocol_config, block.header()).unwrap(),
+                    &ensure_protocol_config_is_present_and_matches_header(
+                        response.protocol_config,
+                        block.header()
+                    )
+                    .unwrap(),
                     expected
                 );
             }

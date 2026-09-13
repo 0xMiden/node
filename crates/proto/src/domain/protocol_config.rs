@@ -6,8 +6,9 @@ use miden_protocol::protocol_config::ProtocolConfig;
 use crate::errors::ConversionError;
 use crate::generated::protocol_config::ProtocolConfig as ProtoProtocolConfig;
 
-/// Decodes a required configuration and verifies the header's commitment.
-pub fn decode_protocol_config(
+/// Ensures protocol configuration is present and matches the protocol configuration commitment in
+/// the header.
+pub fn ensure_protocol_config_is_present_and_matches_header(
     config: Option<ProtoProtocolConfig>,
     header: &BlockHeader,
 ) -> Result<ProtocolConfig, ConversionError> {
@@ -55,9 +56,25 @@ mod tests {
             None,
             0,
         );
-        assert!(decode_protocol_config(None, &header).is_err());
-        assert!(decode_protocol_config(Some(ProtoProtocolConfig::default()), &header).is_err());
-        assert_eq!(decode_protocol_config(Some((&config).into()), &header).unwrap(), config);
-        assert!(decode_protocol_config(Some(config.into()), &other_header).is_err());
+        assert!(ensure_protocol_config_is_present_and_matches_header(None, &header).is_err());
+        assert!(
+            ensure_protocol_config_is_present_and_matches_header(
+                Some(ProtoProtocolConfig::default()),
+                &header
+            )
+            .is_err()
+        );
+        assert_eq!(
+            ensure_protocol_config_is_present_and_matches_header(Some((&config).into()), &header)
+                .unwrap(),
+            config
+        );
+        assert!(
+            ensure_protocol_config_is_present_and_matches_header(
+                Some(config.into()),
+                &other_header
+            )
+            .is_err()
+        );
     }
 }

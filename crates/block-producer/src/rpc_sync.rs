@@ -239,7 +239,7 @@ impl BlockSync {
             let protocol_config = event
                 .protocol_config
                 .map(|config| {
-                    miden_node_proto::domain::protocol_config::decode_protocol_config(
+                    miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header(
                         Some(config),
                         block.header(),
                     )
