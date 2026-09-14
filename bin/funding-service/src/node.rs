@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use backon::ExponentialBuilder;
 use miden_node_proto::clients::{Builder, RpcClient};
 use miden_node_proto::domain::account::{AccountResponse, AccountVaultDetails};
+use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
 use miden_node_proto::generated::rpc::account_request::AccountDetailRequest;
 use miden_node_proto::generated::rpc::{
     AccountRequest as ProtoAccountRequest,
@@ -17,6 +18,7 @@ use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::asset::AssetVault;
 use miden_protocol::block::{BlockHeader, BlockNumber, FeeParameters};
+use miden_protocol::protocol_config::ProtocolConfig;
 use url::Url;
 
 use crate::COMPONENT;
@@ -29,20 +31,30 @@ use crate::COMPONENT;
 pub struct RpcNodeClient {
     rpc_client: RpcClient,
     genesis_commitment: Word,
+    protocol_config: ProtocolConfig,
 }
 
 impl RpcNodeClient {
     /// Connects to the node's RPC API.
     pub async fn connect(rpc_url: &Url, timeout: Duration) -> Result<Self> {
-        let (rpc_client, genesis_commitment) =
+        let (rpc_client, genesis_commitment, protocol_config) =
             create_genesis_aware_rpc_client(rpc_url, timeout).await?;
 
-        Ok(Self { rpc_client, genesis_commitment })
+        Ok(Self {
+            rpc_client,
+            genesis_commitment,
+            protocol_config,
+        })
     }
 
     /// The commitment of the genesis block the node serves. It identifies the chain.
     pub fn genesis_commitment(&self) -> Word {
         self.genesis_commitment
+    }
+
+    /// The protocol configuration the genesis block commits to.
+    pub fn protocol_config(&self) -> &ProtocolConfig {
+        &self.protocol_config
     }
 
     /// The fee parameters of `block_num`, or at the chain tip when it is `None`.
@@ -124,7 +136,7 @@ fn genesis_discovery_backoff() -> ExponentialBuilder {
 async fn create_genesis_aware_rpc_client(
     rpc_url: &Url,
     timeout: Duration,
-) -> Result<(RpcClient, Word)> {
+) -> Result<(RpcClient, Word, ProtocolConfig)> {
     (|| async {
         // First, create a temporary client without genesis metadata to discover the genesis block
         // header and its commitment.
@@ -140,7 +152,7 @@ async fn create_genesis_aware_rpc_client(
             .await
             .context("failed to create an RPC client for genesis discovery")?;
 
-        let genesis_header = fetch_block_header(&mut rpc, Some(BlockNumber::GENESIS)).await?;
+        let (genesis_header, protocol_config) = fetch_genesis_header_and_config(&mut rpc).await?;
         let genesis_commitment = genesis_header.commitment();
 
         // Rebuild the client, this time including the required genesis metadata so that write RPCs
@@ -157,7 +169,7 @@ async fn create_genesis_aware_rpc_client(
             .await
             .context("failed to connect to the RPC server with genesis metadata")?;
 
-        Ok((rpc_client, genesis_commitment))
+        Ok((rpc_client, genesis_commitment, protocol_config))
     })
     .retry(genesis_discovery_backoff())
     .notify(|err: &anyhow::Error, sleep: Duration| {
@@ -179,6 +191,7 @@ async fn fetch_block_header(
     let request = BlockHeaderByNumberRequest {
         block_num: block_num.map(|block_num| block_num.as_u32()),
         include_mmr_proof: None,
+        include_protocol_config: None,
     };
 
     let response = rpc_client
@@ -192,4 +205,36 @@ async fn fetch_block_header(
         .context("the block header response holds no header")?;
 
     block_header.try_into().context("failed to convert the block header")
+}
+
+/// Fetches the genesis block header and the protocol configuration it commits to.
+///
+/// The commitment of the returned configuration is checked against the header, so a configuration
+/// which names an asset the chain does not use is rejected.
+async fn fetch_genesis_header_and_config(
+    rpc_client: &mut RpcClient,
+) -> Result<(BlockHeader, ProtocolConfig)> {
+    let response = rpc_client
+        .get_block_header_by_number(BlockHeaderByNumberRequest {
+            block_num: Some(BlockNumber::GENESIS.as_u32()),
+            include_mmr_proof: None,
+            include_protocol_config: Some(true),
+        })
+        .await
+        .context("failed to get the genesis block header from RPC")?
+        .into_inner();
+
+    let block_header: BlockHeader = response
+        .block_header
+        .context("the block header response holds no header")?
+        .try_into()
+        .context("failed to convert the block header")?;
+
+    let protocol_config = ensure_protocol_config_is_present_and_matches_header(
+        response.protocol_config,
+        &block_header,
+    )
+    .context("the node served an invalid protocol configuration")?;
+
+    Ok((block_header, protocol_config))
 }

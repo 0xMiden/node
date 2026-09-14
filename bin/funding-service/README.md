@@ -7,9 +7,7 @@
 The service holds no chain state. It reads the funding account from the node, so a restart needs no recovery. Only the
 account file, which holds the account ID and its signing key, is on disk.
 
-The service also needs a trusted genesis block file, from `--genesis`. The genesis block names the chain's fee asset,
-which the node's RPC API does not serve. The service refuses to start when the genesis block commits to a different
-chain than the node.
+The service reads the chain's protocol configuration from the node at startup, together with the genesis block header.
 
 The service serves a JSON HTTP API. `GET /status` reports the funding account, its balance, and the block that balance
 was read at. An operator alerts on that balance, because the service does not refill itself.
