@@ -52,7 +52,9 @@ message BlockProofRequest {
   // The optional next protocol configuration included in the proposed block header.
   optional blockchain.NextProtocolConfig next_protocol_config = 5;
 
-  // The active configuration for signing. May be omitted if the validator already stores it.
-  // Proving-only callers may omit this field.
+  // The active configuration for signing. The block producer always supplies this field.
+  // Other callers may omit this field if the validator already stores the configuration.
+  // The validator returns INVALID_ARGUMENT if the field is omitted and the configuration is not stored.
+  // Proving requests do not require this field.
   optional protocol_config.ProtocolConfig protocol_config = 6;
 }

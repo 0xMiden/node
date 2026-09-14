@@ -125,6 +125,8 @@ impl BlockWriter {
     ///
     /// Supply the active configuration if its commitment is not yet stored. The configuration
     /// must match the block header. New configurations are committed with the block.
+    /// If the configuration is omitted and its commitment is not stored, this method returns
+    /// `DatabaseError::ProtocolConfigNotFound` through `ApplyBlockError`.
     ///
     /// Blocks are forwarded to the store's write worker task, which processes them one at a
     /// time.
