@@ -78,7 +78,7 @@ impl StatusSnapshot {
 pub struct StatusRefresher {
     node: RpcNodeClient,
     account_id: AccountId,
-    fee_faucet_id: AccountId,
+    fee_asset_id: AssetId,
     status: StatusSnapshot,
     interval: Duration,
 }
@@ -87,14 +87,14 @@ impl StatusRefresher {
     pub fn new(
         node: RpcNodeClient,
         account_id: AccountId,
-        fee_faucet_id: AccountId,
+        fee_asset_id: AssetId,
         status: StatusSnapshot,
         interval: Duration,
     ) -> Self {
         Self {
             node,
             account_id,
-            fee_faucet_id,
+            fee_asset_id,
             status,
             interval,
         }
@@ -128,9 +128,7 @@ impl StatusRefresher {
         // belongs to the block the status reports.
         let fee_parameters = self.node.fee_parameters(Some(block_num)).await?;
 
-        let balance = vault
-            .get_balance(AssetId::new_fungible(self.fee_faucet_id))
-            .map_or(0, |amount| amount.as_u64());
+        let balance = vault.get_balance(self.fee_asset_id).map_or(0, |amount| amount.as_u64());
         self.status.update(balance, block_num, fee_parameters.verification_base_fee());
 
         Ok(())
