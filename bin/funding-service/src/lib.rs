@@ -9,11 +9,9 @@ use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_tracing::info;
-use miden_node_utils::genesis::GenesisBlock;
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
-use miden_protocol::account::AccountId;
-use miden_protocol::asset::FungibleAsset;
+use miden_protocol::asset::{AssetId, FungibleAsset};
 use tokio::net::TcpListener;
 use url::Url;
 
@@ -54,7 +52,6 @@ const STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 pub struct FundingServiceConfig {
     rpc_url: Url,
     account_file: PathBuf,
-    genesis: GenesisBlock,
     http_timeout: Duration,
     rpc_timeout: Duration,
     max_amount: u64,
@@ -62,14 +59,10 @@ pub struct FundingServiceConfig {
 
 impl FundingServiceConfig {
     /// Creates a configuration with default timeouts and limits.
-    ///
-    /// The genesis block names the fee asset. The node's RPC API does not serve the protocol
-    /// configuration, so the operator must supply the genesis block from a trusted source.
-    pub fn new(rpc_url: Url, account_file: PathBuf, genesis: GenesisBlock) -> Self {
+    pub fn new(rpc_url: Url, account_file: PathBuf) -> Self {
         Self {
             rpc_url,
             account_file,
-            genesis,
             http_timeout: DEFAULT_HTTP_TIMEOUT,
             rpc_timeout: DEFAULT_RPC_TIMEOUT,
             max_amount: DEFAULT_MAX_AMOUNT,
@@ -103,20 +96,8 @@ impl FundingServiceConfig {
             .await
             .context("failed to connect to the node RPC API")?;
 
-        // A genesis block from another chain would name the wrong fee asset, so the service must
-        // not start when the node serves a different chain.
-        let node_genesis = node.genesis_commitment();
-        let configured_genesis = self.genesis.inner().header().commitment();
-        anyhow::ensure!(
-            configured_genesis == node_genesis,
-            "the genesis block does not match the node: the genesis block commits to \
-             {configured_genesis}, the node to {node_genesis}",
-        );
-
         // The fee asset is constant for the chain and is only named by the protocol configuration,
-        // which the node's RPC API does not serve. The remaining fee parameters are in every block
-        // header, and the status refresher reads them at the block it reports.
-        let fee_faucet_id = self.genesis.protocol_config().fee_asset_id().faucet_id();
+        let fee_asset_id = node.protocol_config().fee_asset_id();
         let fee_parameters = node
             .fee_parameters(None)
             .await
@@ -124,14 +105,15 @@ impl FundingServiceConfig {
 
         // A note holds the amount as a fungible asset, so an amount the asset type cannot express
         // must fail at startup instead of on every request.
-        FungibleAsset::new(fee_faucet_id, self.max_amount)
+        FungibleAsset::new(fee_asset_id.faucet_id(), self.max_amount)
             .context("--max-amount is not a valid amount of the native asset")?;
 
         info!(
             target: LOG_TARGET,
             "Funding service initialized",
             account.id = funder_key.account_id(),
-            asset.faucet_id = fee_faucet_id,
+            asset.faucet_id = fee_asset_id.faucet_id(),
+            genesis.commitment = node.genesis_commitment(),
             fee.verification_base_fee = fee_parameters.verification_base_fee(),
             funding_service.max_amount = self.max_amount
         );
@@ -139,7 +121,7 @@ impl FundingServiceConfig {
         Ok(FundingService {
             node,
             funder_key,
-            fee_faucet_id,
+            fee_asset_id,
             max_amount: self.max_amount,
             http_timeout: self.http_timeout,
         })
@@ -153,7 +135,7 @@ impl FundingServiceConfig {
 pub struct FundingService {
     node: RpcNodeClient,
     funder_key: FunderKey,
-    fee_faucet_id: AccountId,
+    fee_asset_id: AssetId,
     max_amount: u64,
     http_timeout: Duration,
 }
@@ -181,7 +163,7 @@ impl FundingService {
         let refresher = StatusRefresher::new(
             self.node,
             self.funder_key.account_id(),
-            self.fee_faucet_id,
+            self.fee_asset_id,
             status,
             STATUS_REFRESH_INTERVAL,
         );

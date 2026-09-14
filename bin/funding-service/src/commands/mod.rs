@@ -13,7 +13,6 @@ use miden_funding_service::{
 use miden_node_tracing::{OpenTelemetry, info};
 use miden_node_utils::clap::duration_to_human_readable_string;
 use miden_node_utils::formatting::format_endpoint;
-use miden_node_utils::genesis::read_genesis_block;
 use miden_node_utils::shutdown::CancellationToken;
 use tokio::net::TcpListener;
 use url::Url;
@@ -23,7 +22,6 @@ const ENV_HTTP_TIMEOUT: &str = "MIDEN_FUNDING_HTTP_TIMEOUT";
 const ENV_RPC_URL: &str = "MIDEN_FUNDING_RPC_URL";
 const ENV_RPC_TIMEOUT: &str = "MIDEN_FUNDING_RPC_TIMEOUT";
 const ENV_ACCOUNT_FILE: &str = "MIDEN_FUNDING_ACCOUNT_FILE";
-const ENV_GENESIS: &str = "MIDEN_FUNDING_GENESIS";
 const ENV_MAX_AMOUNT: &str = "MIDEN_FUNDING_MAX_AMOUNT";
 
 #[derive(Parser)]
@@ -63,10 +61,6 @@ pub enum FundingServiceCommand {
         #[arg(long = "account-file", env = ENV_ACCOUNT_FILE, value_name = "PATH")]
         account_file: PathBuf,
 
-        /// Path to a trusted genesis block file, which names the chain's fee asset.
-        #[arg(long = "genesis", env = ENV_GENESIS, value_name = "FILE")]
-        genesis_block_file: PathBuf,
-
         /// Largest amount one request may ask for, in base units of the native asset.
         #[arg(
             long = "max-amount",
@@ -86,7 +80,6 @@ impl FundingServiceCommand {
             rpc_url,
             rpc_timeout,
             account_file,
-            genesis_block_file,
             max_amount,
         } = self;
 
@@ -103,14 +96,11 @@ impl FundingServiceCommand {
             funding_service.max_amount = max_amount
         );
 
-        let genesis =
-            read_genesis_block(&genesis_block_file).context("failed to read the genesis block")?;
-
         let listener = TcpListener::bind(listen)
             .await
             .context("failed to bind to the funding service's HTTP socket")?;
 
-        FundingServiceConfig::new(rpc_url, account_file, genesis)
+        FundingServiceConfig::new(rpc_url, account_file)
             .with_http_timeout(http_timeout)
             .with_rpc_timeout(rpc_timeout)
             .with_max_amount(max_amount)
