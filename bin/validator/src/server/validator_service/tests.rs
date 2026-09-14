@@ -852,7 +852,8 @@ async fn sign_block_links_transactions_to_the_signed_block() {
         Word::default(),
         InputNotes::<InputNoteCommitment>::default(),
         vec![],
-    );
+    )
+    .unwrap();
     let tx_id = tx_header.id();
     let key_epoch = StorageKeyEpoch::new([2; 32]);
     let record = test_private_record_sealer(key_epoch, [4; 32])
@@ -883,7 +884,7 @@ async fn sign_block_links_transactions_to_the_signed_block() {
         vec![],
         BlockNumber::MAX,
         OrderedTransactionHeaders::new_unchecked(vec![tx_header]),
-        ExecutionProof::new_dummy(),
+        miden_protocol::testing::dummy_execution_proof(),
     )
     .unwrap();
     let block_inputs = BlockInputs::new(

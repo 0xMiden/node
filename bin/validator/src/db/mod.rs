@@ -871,7 +871,7 @@ mod tests {
                 .unwrap();
         }
 
-        let header = BlockHeader::mock(7, None, None, &[], Word::empty());
+        let header = BlockHeader::mock(7, None, None, &[]);
         db.insert_signed_block(
             header.clone(),
             ProtocolConfig::mock(),
@@ -927,8 +927,8 @@ mod tests {
         // Blocks 1 and 2 include two transactions each; the fifth is never committed. The later
         // insertion is committed in the earlier block, to prove the listing follows committed order
         // rather than insertion order.
-        let block_1 = BlockHeader::mock(1, None, None, &[], Word::empty());
-        let block_2 = BlockHeader::mock(2, None, None, &[], Word::empty());
+        let block_1 = BlockHeader::mock(1, None, None, &[]);
+        let block_2 = BlockHeader::mock(2, None, None, &[]);
         db.insert_signed_block(
             block_1,
             ProtocolConfig::mock(),
@@ -993,7 +993,7 @@ mod tests {
     async fn insert_signed_block_rejects_unvalidated_transactions() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
         let db = setup(temp_dir.path().join("validator.sqlite3")).await.unwrap();
-        let header = BlockHeader::mock(1, None, None, &[], Word::empty());
+        let header = BlockHeader::mock(1, None, None, &[]);
         let unknown = TransactionId::from_raw(Word::from([1u32, 0, 0, 0]));
 
         let result = db.insert_signed_block(header, ProtocolConfig::mock(), vec![unknown]).await;
