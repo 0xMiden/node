@@ -113,10 +113,7 @@ async fn list(
 /// transactions are listed, so listing tests have to place their records in a block.
 async fn commit(writer: &ValidatorDbWriter, block_num: u32, transactions: &[TransactionId]) {
     writer
-        .insert_signed_block(
-            BlockHeader::mock(block_num, None, None, &[], Word::empty()),
-            transactions.to_vec(),
-        )
+        .insert_signed_block(BlockHeader::mock(block_num, None, None, &[]), transactions.to_vec())
         .await
         .unwrap();
 }
