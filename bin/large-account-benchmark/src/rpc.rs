@@ -8,7 +8,6 @@ use miden_node_proto::clients::{Builder, RpcClient};
 use miden_node_proto::domain::encryption::{
     TransactionInputsSealer,
     TrustedTransactionEncryptionState,
-    verify_transaction_encryption_key,
 };
 use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
 use miden_node_proto::generated::account::account_storage_header::storage_slot::Content as SlotContent;
@@ -19,7 +18,7 @@ use miden_node_proto::generated::rpc::{
     BlockHeaderByNumberResponse,
 };
 use miden_node_proto::generated::submission::ProvenTransactionSubmission as ProtoProvenTransaction;
-use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify};
+use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify, VerifyWith};
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::account_tree::AccountWitness;
@@ -260,16 +259,14 @@ impl SubmissionClient {
             .context("failed to fetch the transaction encryption key")?
             .into_inner();
 
-        let verified = verify_transaction_encryption_key(
-            key,
-            TrustedTransactionEncryptionState::new(
+        let verified = key
+            .verify_with(TrustedTransactionEncryptionState::new(
                 self.genesis_commitment,
                 &self.trusted_validator_keys,
-            ),
-        )
-        .context(
-            "the node's transaction encryption key is not attested by the trusted validator",
-        )?;
+            ))
+            .context(
+                "the node's transaction encryption key is not attested by the trusted validator",
+            )?;
 
         let sealer = TransactionInputsSealer::new(verified);
         *cached = Some(sealer.clone());

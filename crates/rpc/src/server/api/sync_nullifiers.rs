@@ -1,5 +1,5 @@
 use miden_node_proto::errors::conversion_error_to_status;
-use miden_node_proto::{DecodeMessage, generated as proto};
+use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_node_tracing::{debug, miden_instrument, miden_span_record};
 use miden_node_utils::limiter::QueryParamNullifierPrefixLimit;
 use tonic::Status;
@@ -76,7 +76,8 @@ impl proto::server::rpc_api::SyncNullifiers for RpcService {
         }
 
         let block_range = range
-            .into_inclusive_range::<RpcInvalidBlockRange>()
+            .verify()
+            .map_err(RpcInvalidBlockRange::from)
             .map_err(invalid_block_range_to_status)?;
         let (chain_tip, (nullifiers, block_num)) = self
             .state

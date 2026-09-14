@@ -14,7 +14,6 @@ use miden_node_proto::domain::account::{AccountVaultDetails, StorageMapEntries};
 use miden_node_proto::domain::encryption::{
     TransactionInputsSealer,
     TrustedTransactionEncryptionState,
-    verify_transaction_encryption_key,
 };
 use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
 use miden_node_proto::generated::rpc::{
@@ -25,7 +24,7 @@ use miden_node_proto::generated::rpc::{
     SyncChainMmrResponse,
 };
 use miden_node_proto::generated::submission::ProvenTransactionSubmission as ProtoProvenTransaction;
-use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify};
+use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify, VerifyWith};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{debug, info, miden_instrument, warn};
 use miden_node_utils::retry;
@@ -150,14 +149,12 @@ impl TransactionSubmissionClient {
             .await
             .context("Failed to fetch the transaction encryption key")?
             .into_inner();
-        let verified = verify_transaction_encryption_key(
-            key,
-            TrustedTransactionEncryptionState::new(
+        let verified = key
+            .verify_with(TrustedTransactionEncryptionState::new(
                 self.genesis_commitment,
                 &self.trusted_validator_signing_keys,
-            ),
-        )
-        .context("Untrusted transaction encryption key")?;
+            ))
+            .context("Untrusted transaction encryption key")?;
         let sealer = TransactionInputsSealer::new(verified);
 
         let mut cached = self.sealer.lock().await;

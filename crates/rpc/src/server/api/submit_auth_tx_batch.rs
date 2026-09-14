@@ -1,9 +1,6 @@
-use miden_node_proto::domain::sequencer::TransactionInputs;
 use miden_node_proto::generated::server::sequencer_api;
-use miden_node_proto::{DecodeMessage, Verify, VerifyWith, generated as proto};
-use miden_node_tracing::ErrorReport;
+use miden_node_proto::{DecodeMessage, VerifyWith, generated as proto};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_protocol::batch::ProposedBatch;
 use tonic::Status;
 
 use super::SequencerInternalService;
@@ -29,12 +26,16 @@ impl sequencer_api::SubmitAuthenticatedTxBatch for SequencerInternalService {
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        let (batch, inputs) =
-            spawn_blocking_in_current_span(move || decode_authenticated_transaction_batch(request))
-                .await
-                .map_err(|err| {
-                    Status::internal(format!("authenticated batch decoding task failed: {err}"))
-                })??;
+        let (batch, inputs) = spawn_blocking_in_current_span(move || {
+            request
+                .decode_fields()
+                .and_then(|request| request.verify_with(miden_protocol::MIN_PROOF_SECURITY_LEVEL))
+                .map_err(miden_node_proto::errors::conversion_error_to_status)
+        })
+        .await
+        .map_err(|err| {
+            Status::internal(format!("authenticated batch decoding task failed: {err}"))
+        })??;
 
         for tx in batch.transactions() {
             self.account_admission.check(tx.account_update()).await?;
@@ -46,33 +47,4 @@ impl sequencer_api::SubmitAuthenticatedTxBatch for SequencerInternalService {
             .map(Into::into)
             .map_err(Into::into)
     }
-}
-
-fn decode_authenticated_transaction_batch(
-    request: proto::sequencer::AuthenticatedTransactionBatch,
-) -> tonic::Result<(ProposedBatch, Vec<TransactionInputs>)> {
-    let request = request
-        .decode_fields()
-        .map_err(miden_node_proto::errors::conversion_error_to_status)?;
-    let batch = request
-        .proposed_batch
-        .verify_with(miden_protocol::MIN_PROOF_SECURITY_LEVEL)
-        .map_err(|err| Status::invalid_argument(format!("invalid proposed_batch: {err}")))?;
-
-    if batch.transactions().len() != request.auth_inputs.len() {
-        return Err(Status::invalid_argument(format!(
-            "Number of inputs {} does not match number of transactions {} in batch",
-            request.auth_inputs.len(),
-            batch.transactions().len()
-        )));
-    }
-
-    let inputs = request
-        .auth_inputs
-        .into_iter()
-        .map(Verify::verify)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| Status::invalid_argument(err.as_report_context("invalid auth_inputs")))?;
-
-    Ok((batch, inputs))
 }

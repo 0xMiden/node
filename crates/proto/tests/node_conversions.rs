@@ -417,6 +417,24 @@ fn batch_submission_rejects_proof_that_does_not_match_proposal() {
 }
 
 #[test]
+fn batch_proof_response_preserves_batch_and_rejects_other_requested_kinds() {
+    let batch = nonempty_block_request().tx_batches.as_slice()[0].clone();
+    let response = generated::remote_prover::Proof {
+        proof: Some(generated::remote_prover::proof::Proof::Batch((&batch).into())),
+    };
+    assert!(response.clone().decode_fields().unwrap().into_transaction().is_err());
+    assert!(response.clone().decode_fields().unwrap().into_block().is_err());
+    let decoded = response
+        .decode_fields()
+        .unwrap()
+        .into_batch()
+        .unwrap()
+        .build_unchecked()
+        .unwrap();
+    assert_eq!(decoded, batch);
+}
+
+#[test]
 fn canonical_conversion_errors_map_to_invalid_argument() {
     let error = proto::account::AccountId::default().decode_fields().unwrap_err();
     let status = miden_node_proto::errors::conversion_error_to_status(error);

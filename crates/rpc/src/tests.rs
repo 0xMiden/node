@@ -408,7 +408,7 @@ async fn build_valid_batch_fixture() -> ValidBatchFixture {
     let request = proto::submission::TransactionBatch {
         batch: Some((&proven_batch).into()),
         proposed_batch: Some((&proposed_batch).into()),
-        sealed_transaction_inputs: vec![proto::submission::SealedTransactionInputs::default()],
+        sealed_transaction_inputs: vec![test_sealed_transaction_inputs()],
     };
 
     ValidBatchFixture { request, genesis_block, protocol_config }
@@ -1464,6 +1464,15 @@ async fn full_node_forwards_complete_transaction_batch_to_source_rpc() {
         NonZeroUsize::new(1_000_000).unwrap(),
         None,
     );
+
+    let mut malformed = fixture.request.clone();
+    malformed.sealed_transaction_inputs.clear();
+    let error = full_node
+        .submit_proven_tx_batch(Request::new(malformed))
+        .await
+        .expect_err("batch submission must require one sealed input per transaction");
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    assert!(error.message().contains("sealed transaction input count"), "{error}");
 
     let response = full_node
         .submit_proven_tx_batch(Request::new(fixture.request))

@@ -4,11 +4,10 @@ use miden_node_proto::domain::encryption::{
     TransactionEncryptionScheme,
     TrustedTransactionEncryptionState,
     transaction_inputs_associated_data,
-    verify_transaction_encryption_key,
 };
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto::server::validator_api;
-use miden_node_proto::{BuildUnchecked, DecodeMessage, SignBlockRequest, Verify};
+use miden_node_proto::{BuildUnchecked, DecodeMessage, SignBlockRequest, Verify, VerifyWith};
 use miden_node_store::{BlockStore, GenesisState};
 use miden_node_utils::fee::{test_fee_params, test_protocol_config};
 use miden_node_utils::testing::{
@@ -1195,11 +1194,9 @@ async fn transaction_encryption_key_is_attested() {
         "attestation must identify the serving validator",
     );
     let trusted_keys = [tv.server.signer.public_key()];
-    let verified = verify_transaction_encryption_key(
-        response,
-        TrustedTransactionEncryptionState::new(genesis, &trusted_keys),
-    )
-    .expect("attestation must verify against this validator's signing key");
+    let verified = response
+        .verify_with(TrustedTransactionEncryptionState::new(genesis, &trusted_keys))
+        .expect("attestation must verify against this validator's signing key");
     assert_eq!(verified.info(), &info);
 }
 
@@ -1249,18 +1246,16 @@ async fn tampered_attestation_fails_verification() {
 
     for tampered in [changed_scheme, changed_key_id, changed_public_key, injected_next_key] {
         assert!(
-            verify_transaction_encryption_key(tampered, trusted).is_err(),
+            tampered.verify_with(trusted).is_err(),
             "attestation must not verify over tampered fields",
         );
     }
 
     let tampered_genesis = Word::try_from([9u64, 9, 9, 9]).unwrap();
     assert!(
-        verify_transaction_encryption_key(
-            response,
-            TrustedTransactionEncryptionState::new(tampered_genesis, &trusted_keys),
-        )
-        .is_err(),
+        response
+            .verify_with(TrustedTransactionEncryptionState::new(tampered_genesis, &trusted_keys))
+            .is_err(),
         "attestation must not verify for another network",
     );
 }

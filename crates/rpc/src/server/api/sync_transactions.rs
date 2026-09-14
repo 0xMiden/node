@@ -65,7 +65,8 @@ impl proto::server::rpc_api::SyncTransactions for RpcService {
         );
 
         let block_range = range
-            .into_inclusive_range::<RpcInvalidBlockRange>()
+            .verify()
+            .map_err(RpcInvalidBlockRange::from)
             .map_err(invalid_block_range_to_status)?;
         let (chain_tip, (last_block_included, transaction_records_db)) = self
             .state

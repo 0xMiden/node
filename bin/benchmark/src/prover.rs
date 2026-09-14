@@ -15,9 +15,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use miden_node_proto::clients::{Builder, RemoteProverClient};
-use miden_node_proto::generated::remote_prover::proof::Proof as ProofVariant;
+use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::remote_prover::proof_request::Request;
-use miden_node_proto::generated::remote_prover::{Proof, ProofRequest};
+use miden_node_proto::generated::remote_prover::{DecodedProof, ProofRequest};
 use miden_node_proto::{BuildUnchecked, DecodeMessage};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_protocol::transaction::{ExecutedTransaction, ProvenTransaction, TransactionInputs};
@@ -208,42 +208,20 @@ impl RemoteTransactionProver {
             TransactionProverError::other_with_source("failed to prove transaction", err)
         })?;
 
-        decode_transaction_proof(response.into_inner())
+        response
+            .into_inner()
+            .decode_fields()
+            .and_then(DecodedProof::into_transaction)
+            // SAFETY: This benchmark trusts the configured prover to return a valid proof for the
+            // requested transaction.
+            .and_then(|transaction| transaction.build_unchecked().map_err(ConversionError::new))
+            .map_err(|error| {
+                TransactionProverError::other_with_source(
+                    "invalid remote transaction proof response",
+                    error,
+                )
+            })
     }
-}
-
-fn decode_transaction_proof(response: Proof) -> Result<ProvenTransaction, TransactionProverError> {
-    let proof = match response.proof {
-        Some(ProofVariant::Transaction(proof)) => proof,
-        Some(_) => {
-            return Err(TransactionProverError::other(
-                "remote prover response variant does not match transaction request",
-            ));
-        },
-        None => {
-            return Err(TransactionProverError::other(
-                "remote prover response is missing proof variant",
-            ));
-        },
-    };
-
-    proof
-        .decode_fields()
-        .map_err(|error| {
-            TransactionProverError::other_with_source(
-                "failed to decode received response from remote transaction prover",
-                error,
-            )
-        })?
-        // SAFETY: This benchmark trusts the configured prover to return a valid proof for the
-        // requested transaction.
-        .build_unchecked()
-        .map_err(|error| {
-            TransactionProverError::other_with_source(
-                "failed to build received response from remote transaction prover",
-                error,
-            )
-        })
 }
 
 // RAMPING RATE LIMITER
@@ -328,41 +306,7 @@ fn slot_interval(rate: u32) -> Duration {
 
 #[cfg(test)]
 mod tests {
-    use miden_node_proto::generated::remote_prover::Proof;
-    use miden_node_proto::generated::remote_prover::proof::Proof as ProofVariant;
-
     use super::*;
-
-    #[test]
-    fn missing_transaction_response_variant_is_a_protocol_error() {
-        let error = decode_transaction_proof(Proof { proof: None }).unwrap_err();
-
-        assert!(error.to_string().contains("missing proof variant"));
-    }
-
-    #[test]
-    fn mismatched_transaction_response_variant_is_a_protocol_error() {
-        let response = Proof {
-            proof: Some(ProofVariant::Block(
-                miden_node_proto::generated::primitives::ExecutionProof::default(),
-            )),
-        };
-        let error = decode_transaction_proof(response).unwrap_err();
-
-        assert!(error.to_string().contains("does not match transaction request"));
-    }
-
-    #[test]
-    fn invalid_transaction_response_preserves_conversion_error_source() {
-        let response = Proof {
-            proof: Some(ProofVariant::Transaction(
-                miden_node_proto::generated::transaction::ProvenTransaction::default(),
-            )),
-        };
-
-        let error = decode_transaction_proof(response).unwrap_err();
-        assert!(error.source().is_some(), "conversion error source must be preserved");
-    }
 
     #[test]
     fn rate_starts_at_start_rate() {
