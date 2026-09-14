@@ -282,9 +282,9 @@ pub async fn create_genesis_aware_rpc_client(
 
         let genesis_header: BlockHeader = genesis_block_header
             .decode_fields()
-            .context("Failed to decode block header")?
+            .context("failed to decode block header")?
             .build_unchecked()
-            .context("Failed to build block header")?;
+            .context("failed to build block header")?;
         let genesis_commitment = genesis_header.commitment();
         // Rebuild the client, this time including the required genesis metadata so that write RPCs
         // like SubmitProvenTx are accepted by the node.
@@ -817,9 +817,9 @@ async fn fetch_genesis_block_header(rpc_client: &mut RpcClient) -> Result<BlockH
 
     root_block_header
         .decode_fields()
-        .context("Failed to decode block header")?
+        .context("failed to decode block header")?
         .build_unchecked()
-        .context("Failed to build block header")
+        .context("failed to build block header")
 }
 
 /// Execute the counter account's genesis (creation) transaction in-memory.
