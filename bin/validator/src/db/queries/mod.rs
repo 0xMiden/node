@@ -14,11 +14,27 @@ pub use count_signed_blocks::count_signed_blocks;
 mod count_validated_transactions;
 pub use count_validated_transactions::count_validated_transactions;
 
+mod delete_block;
+pub use delete_block::delete_block;
+
 mod find_unvalidated_transactions;
 pub use find_unvalidated_transactions::find_unvalidated_transactions;
 
+mod insert_block_header;
+pub use insert_block_header::insert_block_header;
+
 mod insert_validated_private_transaction;
 pub use insert_validated_private_transaction::insert_validated_private_transaction;
+
+mod link_block_transactions;
+pub use link_block_transactions::link_block_transactions;
+
+mod list_validated_transactions;
+pub use list_validated_transactions::{
+    ListTransactionsParams,
+    ListedTransaction,
+    list_validated_transactions,
+};
 
 mod load_all_transactions;
 pub use load_all_transactions::load_all_transactions;
