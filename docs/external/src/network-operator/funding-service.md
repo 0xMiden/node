@@ -52,11 +52,15 @@ miden-funding-service start \
 | `--tx-prover.url`                | none         | Remote transaction prover. Without it the service proves in process.                                                                                                    |
 | `--max-amount`                   | `1000000000` | Largest amount one request may ask for, in base units.                                                                                                                  |
 | `--max-notes-per-tx`             | `16`         | Largest number of notes one transaction creates. Must not exceed 100.                                                                                                   |
-| `--tx-expiration-delta`          | `50`         | Blocks after its reference block at which a funding transaction expires.                                                                                                |
+| `--tx-expiration-delta`          | `50`         | Largest number of blocks after its reference block at which a funding transaction expires.                                                                              |
 | `--poll-interval`                | `1s`         | How often the service asks the node whether its notes are committed.                                                                                                    |
 | `--http.timeout`                 | `5m`         | Largest duration allocated to one HTTP request.                                                                                                                         |
 | `--rpc.timeout`                  | `10s`        | Timeout of a request to the node.                                                                                                                                       |
 | `--tx-prover.timeout`            | `1m`         | Timeout of a request to the remote prover.                                                                                                                              |
+
+`--tx-expiration-delta` is an upper bound, not a fixed value. A funding transaction reads the chain's fee configuration,
+and the protocol lowers the expiration delta of a transaction which reads mutable state. A funding transaction therefore
+expires at or before the requested block.
 
 A funding request blocks until the note is committed, so `--http.timeout` must exceed the proving time plus the
 expiration window (`--tx-expiration-delta` multiplied by the chain's block interval). Raise it where proving is slow. A
