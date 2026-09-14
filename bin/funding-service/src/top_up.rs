@@ -32,7 +32,7 @@ use crate::tx::ExecutionInputs;
 // ================================================================================================
 
 /// Finds deposits addressed to the funding account and consumes them.
-pub struct TopUp {
+pub struct TopUpCollector {
     node: RpcNodeClient,
     prover: Prover,
     key: FunderKey,
@@ -44,7 +44,7 @@ pub struct TopUp {
     rng: RandomCoin,
 }
 
-impl TopUp {
+impl TopUpCollector {
     pub fn new(
         node: RpcNodeClient,
         prover: Prover,
