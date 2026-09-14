@@ -94,11 +94,17 @@ hex                = { version = "0.4" }
 http               = { version = "1.3" }
 humantime          = { version = "2.2" }
 indexmap           = { version = "2.12" }
+iroh               = { default-features = false, features = ["tls-ring"], version = "=1.0.3" }
+iroh-blobs         = { default-features = false, features = ["fs-store"], version = "=0.103.0" }
+iroh-docs          = { default-features = false, features = ["fs-store"], version = "=0.101.0" }
+iroh-gossip        = { default-features = false, features = ["net"], version = "=0.101.0" }
+iroh-tickets       = { version = "=1.0.0" }
 itertools          = { version = "0.14" }
 libsqlite3-sys     = { features = ["bundled"], version = "0.35" }
 lru                = { default-features = false, version = "0.18" }
 miette             = { version = "7.6" }
 opentelemetry      = { version = "0.31" }
+postcard           = { features = ["use-std"], version = "1.1.3" }
 pretty_assertions  = { version = "1.4" }
 proc-macro2        = { version = "1.0" }
 # prost and protox are from different authors and are _not_ released in

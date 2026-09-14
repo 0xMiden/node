@@ -29,11 +29,17 @@ base64                 = { version = "0.22" }
 chacha20poly1305       = { workspace = true }
 clap                   = { features = ["env", "string"], workspace = true }
 fs-err                 = { workspace = true }
+futures                = { workspace = true }
 golden-core            = { workspace = true }
 golden-ehtdh1          = { workspace = true }
 golden-evrf            = { workspace = true }
 golden-halo2curves     = { workspace = true }
 hex                    = { workspace = true }
+iroh                   = { workspace = true }
+iroh-blobs             = { workspace = true }
+iroh-docs              = { workspace = true }
+iroh-gossip            = { workspace = true }
+iroh-tickets           = { workspace = true }
 miden-node-db          = { workspace = true }
 miden-node-proto       = { workspace = true }
 miden-node-proto-build = { features = ["internal"], workspace = true }
@@ -42,12 +48,13 @@ miden-node-tracing     = { workspace = true }
 miden-node-utils       = { features = ["testing"], workspace = true }
 miden-protocol         = { workspace = true }
 miden-tx               = { features = ["concurrent"], workspace = true }
+postcard               = { workspace = true }
 rand_core_06           = { workspace = true }
 serde                  = { workspace = true }
 sha2                   = { workspace = true }
 tempfile               = { workspace = true }
 thiserror              = { workspace = true }
-tokio                  = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
+tokio                  = { features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"], workspace = true }
 tokio-stream           = { features = ["net"], workspace = true }
 toml                   = { workspace = true }
 tonic                  = { default-features = true, features = ["transport"], workspace = true }
