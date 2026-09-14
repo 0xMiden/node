@@ -175,7 +175,6 @@ fn build_tx_args(
 mod tests {
     use miden_protocol::Word;
     use miden_protocol::asset::AssetId;
-
     use miden_standards::note::TxFeeNote;
 
     use super::*;
