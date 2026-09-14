@@ -25,7 +25,7 @@ use crate::node::RpcNodeClient;
 use crate::prover::Prover;
 use crate::server::FundingServer;
 use crate::status::{StatusRefresher, StatusSnapshot};
-use crate::top_up::TopUpCollector;
+use crate::top_up::{TopUpCollector, TopUpSetup};
 use crate::worker::{Funder, FunderSetup, WorkerConfig};
 
 mod account;
@@ -317,10 +317,12 @@ impl FundingService {
         let top_up = TopUpCollector::new(
             self.node.clone(),
             self.prover.clone(),
-            self.funder_key.clone(),
-            self.protocol_config.clone(),
-            self.worker_config.expiration_delta,
-            self.p2id_collection_interval,
+            TopUpSetup {
+                key: self.funder_key.clone(),
+                protocol_config: self.protocol_config.clone(),
+                expiration_delta: self.worker_config.expiration_delta,
+                interval: self.p2id_collection_interval,
+            },
         );
         let top_up_shutdown = shutdown.clone();
         tasks.spawn("top-up", async move {
