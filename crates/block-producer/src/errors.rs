@@ -89,6 +89,8 @@ pub enum MempoolSubmissionError {
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum StateConflict {
+    #[error("invalid transaction authentication inputs")]
+    InvalidAuthenticationInputs(#[source] TransactionAuthenticationError),
     #[error("nullifiers already exist: {0:?}")]
     NullifiersAlreadyExist(Vec<Nullifier>),
     #[error("output notes already exist: {0:?}")]
@@ -107,7 +109,12 @@ pub enum StateConflict {
 
 impl From<TransactionAuthenticationError> for StateConflict {
     fn from(error: TransactionAuthenticationError) -> Self {
-        Self::NullifiersAlreadyExist(error.spent_nullifiers)
+        match error {
+            TransactionAuthenticationError::NullifiersAlreadyExist(nullifiers) => {
+                Self::NullifiersAlreadyExist(nullifiers)
+            },
+            error => Self::InvalidAuthenticationInputs(error),
+        }
     }
 }
 

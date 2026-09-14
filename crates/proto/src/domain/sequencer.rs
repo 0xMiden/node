@@ -134,11 +134,15 @@ impl Display for TransactionInputs {
     }
 }
 
-/// The transaction consumes notes that are already spent in the supplied store inputs.
+/// The supplied store inputs do not authenticate the transaction.
 #[derive(Debug, Error, PartialEq, Eq)]
-#[error("nullifiers already exist: {spent_nullifiers:?}")]
-pub struct TransactionAuthenticationError {
-    pub spent_nullifiers: Vec<Nullifier>,
+pub enum TransactionAuthenticationError {
+    #[error("authentication account ID {actual} does not match transaction account ID {expected}")]
+    AccountIdMismatch { expected: AccountId, actual: AccountId },
+    #[error("authentication inputs omit transaction nullifiers: {0:?}")]
+    MissingNullifiers(Vec<Nullifier>),
+    #[error("nullifiers already exist: {0:?}")]
+    NullifiersAlreadyExist(Vec<Nullifier>),
 }
 
 /// A transaction with store authentication data supplied by a trusted caller.
@@ -168,27 +172,41 @@ pub struct AuthenticatedTransaction {
 }
 
 impl AuthenticatedTransaction {
-    /// Check that the transaction nullifiers are unspent in the supplied store inputs.
+    /// Check that the supplied store inputs match the account and contain an unspent result for
+    /// every transaction nullifier.
     ///
     /// The caller must verify the transaction proof and supply trusted store inputs.
     ///
     /// # Errors
     ///
-    /// Return an error if the inputs mark any transaction nullifier as spent.
+    /// Return an error if the account ID differs or any transaction nullifier is missing or spent.
     pub fn new_unchecked(
         tx: Arc<ProvenTransaction>,
         inputs: TransactionInputs,
     ) -> Result<AuthenticatedTransaction, TransactionAuthenticationError> {
-        // FIXME: Check that the inputs belong to this account and cover every transaction
-        // nullifier. A missing nullifier result currently counts as unspent.
-        let nullifiers_already_spent = tx
-            .nullifiers()
-            .filter(|nullifier| inputs.nullifiers.get(nullifier).copied().flatten().is_some())
-            .collect::<Vec<_>>();
-        if !nullifiers_already_spent.is_empty() {
-            return Err(TransactionAuthenticationError {
-                spent_nullifiers: nullifiers_already_spent,
+        if inputs.account_id != tx.account_id() {
+            return Err(TransactionAuthenticationError::AccountIdMismatch {
+                expected: tx.account_id(),
+                actual: inputs.account_id,
             });
+        }
+
+        let mut missing_nullifiers = Vec::new();
+        let mut nullifiers_already_spent = Vec::new();
+        for nullifier in tx.nullifiers() {
+            match inputs.nullifiers.get(&nullifier) {
+                None => missing_nullifiers.push(nullifier),
+                Some(Some(_)) => nullifiers_already_spent.push(nullifier),
+                Some(None) => {},
+            }
+        }
+        if !missing_nullifiers.is_empty() {
+            return Err(TransactionAuthenticationError::MissingNullifiers(missing_nullifiers));
+        }
+        if !nullifiers_already_spent.is_empty() {
+            return Err(TransactionAuthenticationError::NullifiersAlreadyExist(
+                nullifiers_already_spent,
+            ));
         }
 
         Ok(AuthenticatedTransaction {
