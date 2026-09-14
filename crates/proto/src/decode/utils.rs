@@ -20,10 +20,7 @@ where
 
 /// Reads and converts a root field from a request to Word, returning a specific error type if
 /// conversion fails
-pub fn read_root<E>(
-    root: Option<proto::primitives::Digest>,
-    entity: &'static str,
-) -> Result<Word, E>
+pub fn read_root<E>(root: Option<proto::primitives::Word>, entity: &'static str) -> Result<Word, E>
 where
     E: From<ConversionError>,
 {
@@ -39,11 +36,12 @@ pub fn convert_digests_to_words<E, I>(digests: I) -> Result<Vec<Word>, E>
 where
     E: From<ConversionError>,
     I: IntoIterator,
-    I::Item: TryInto<Word, Error = ConversionError>,
+    I::Item: TryInto<Word>,
+    <I::Item as TryInto<Word>>::Error: Into<ConversionError>,
 {
     digests
         .into_iter()
-        .map(TryInto::try_into)
+        .map(|value| value.try_into().map_err(Into::into))
         .collect::<Result<Vec<_>, ConversionError>>()
         .context("digests")
         .map_err(Into::into)
@@ -57,7 +55,7 @@ where
 {
     account_ids
         .into_iter()
-        .map(AccountId::try_from)
+        .map(|account_id| AccountId::try_from(account_id).map_err(ConversionError::from))
         .collect::<Result<_, ConversionError>>()
         .context("account_ids")
         .map_err(Into::into)

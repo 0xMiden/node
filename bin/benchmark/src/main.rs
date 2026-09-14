@@ -233,6 +233,7 @@ pub(crate) fn get_genesis_header_request() -> BlockHeaderByNumberRequest {
     BlockHeaderByNumberRequest {
         block_num: Some(BlockNumber::GENESIS.as_u32()),
         include_mmr_proof: None,
+        include_protocol_config: None,
     }
 }
 

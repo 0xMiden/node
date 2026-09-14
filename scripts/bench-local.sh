@@ -133,7 +133,6 @@ miden-validator genesis \
     --accounts-directory      "$DATA/accounts" \
     --validator.key           "$VALIDATOR_SIGNING_PUBLIC_KEY" \
     > "$LOGS/genesis.log" 2>&1
-
 say "bootstrapping validator storage from genesis"
 miden-validator bootstrap \
     --data-directory "$DATA/validator" \

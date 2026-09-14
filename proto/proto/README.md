@@ -2,9 +2,13 @@
 
 These protobuf files are part of the [Miden node](https://github.com/0xMiden/node#readme) repository.
 
-The files are organized by a visibility hierarchy. The root directory contains the public-facing RPC and remote prover
-protocols, while the `types` directory contains the data types used by these protocols. The `internal` directory
-contains the internal protocols used by the node, such as non-transactional data and validator protocols.
+The root directory contains the public RPC and remote prover protocols. The `types` directory contains node-owned
+messages for service workflows. The `internal` directory contains the internal component protocols.
+
+Canonical protocol objects come from `miden-objects` `0.17.0-rc.3`. Do not copy these object schemas into this
+directory. The build resolves canonical imports through `miden_objects::FILE_DESCRIPTOR_SET`. It includes imported
+schemas in each exported service descriptor set. The raw files in this directory alone are not sufficient to generate
+bindings.
 
 The organization of the files is as follows:
 
@@ -12,12 +16,19 @@ The organization of the files is as follows:
 rpc.proto
 remote_prover.proto
 types/
-├── primitives.proto
-└── xxx.proto
+├── submission.proto
+└── block_proving.proto
 internal/
 ├── ntx_builder.proto
+├── sequencer.proto
 └── validator.proto
 ```
 
-The public-facing files should only allow the usage of the `types` directory, to avoid service reflection to internal
-protocols.
+Public service files can import shared node-owned types and canonical object schemas. They must not import internal
+service files. This keeps internal services out of public service reflection.
+
+Keep service-specific wrappers with their service. For example, `rpc.proto` owns note query and compact note sync
+messages. `internal/validator.proto` owns the signing request and signature response. Submission envelopes belong in
+`types/submission.proto`. Block proving requests belong in `types/block_proving.proto`.
+
+See the [migration guidance](../README.md#canonical-protobuf-migration) before updating an existing client.

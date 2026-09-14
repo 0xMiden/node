@@ -75,7 +75,7 @@ impl proto::server::rpc_api::SyncAccountStorageMaps for RpcService {
             .into_iter()
             .map(|map_value| proto::rpc::StorageMapUpdate {
                 slot_name: map_value.slot_name.to_string(),
-                key: Some(map_value.key.into()),
+                key: Some(map_value.key.as_word().into()),
                 value: Some(map_value.value.into()),
                 block_num: map_value.block_num.as_u32(),
             })

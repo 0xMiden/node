@@ -10,10 +10,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use miden_node_proto::clients::RpcClient;
-use miden_node_proto::generated::note::NoteIdList;
+use miden_node_proto::generated::rpc::NotesByIdRequest;
 use miden_node_tracing::{info, warn};
 use miden_protocol::account::AccountId;
-use miden_protocol::asset::Asset;
 use miden_protocol::note::{Note, NoteId};
 use reqwest::Client;
 use url::Url;
@@ -136,8 +135,7 @@ impl FaucetClient {
 /// Funds monitor accounts with the chain's fee asset.
 ///
 /// Binds a [`FaucetClient`] to the RPC client used to await note commitment and to the chain's
-/// fee faucet ID, so callers fund an account from just an ID and an amount. Built where the
-/// genesis header is known, since the fee faucet ID comes from the genesis fee parameters.
+/// active fee faucet ID, so callers fund an account from just an ID and an amount.
 pub struct FeeFunder {
     faucet: FaucetClient,
     rpc_client: RpcClient,
@@ -183,10 +181,11 @@ impl FeeFunder {
 }
 
 /// Checks that the note holds a non-zero amount of the fee faucet's fungible asset.
-fn ensure_note_carries_fee_asset(note: &Note, fee_faucet_id: AccountId) -> Result<()> {
-    let funded = note.assets().iter().any(|asset| match asset {
-        Asset::Fungible(asset) => asset.faucet_id() == fee_faucet_id && asset.amount().as_u64() > 0,
-        Asset::NonFungible(_) => false,
+pub(crate) fn ensure_note_carries_fee_asset(note: &Note, fee_faucet_id: AccountId) -> Result<()> {
+    let funded = note.assets().iter().any(|asset| {
+        asset
+            .as_fungible()
+            .is_some_and(|asset| asset.faucet_id() == fee_faucet_id && asset.amount().as_u64() > 0)
     });
     anyhow::ensure!(
         funded,
@@ -225,7 +224,7 @@ async fn await_committed_note(rpc_client: &mut RpcClient, note_id: NoteId) -> Re
 /// Fetches one public note by ID; `Ok(None)` while the note is not committed yet.
 async fn fetch_note(rpc_client: &mut RpcClient, note_id: NoteId) -> Result<Option<Note>> {
     let response = rpc_client
-        .get_notes_by_id(NoteIdList { ids: vec![note_id.as_word().into()] })
+        .get_notes_by_id(NotesByIdRequest { note_ids: vec![(&note_id).into()] })
         .await
         .context("failed to fetch the funding note from RPC")?
         .into_inner();

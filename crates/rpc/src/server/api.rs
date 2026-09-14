@@ -44,7 +44,7 @@ use crate::{COMPONENT, LOG_TARGET};
 /// call.
 pub(crate) async fn submit_tx_to_validators(
     validators: &[miden_node_proto::clients::ValidatorClient],
-    request: &proto::transaction::ProvenTransaction,
+    request: &proto::submission::ProvenTransactionSubmission,
 ) -> tonic::Result<()> {
     futures::future::try_join_all(validators.iter().map(|validator| {
         let mut validator = validator.clone();
@@ -61,7 +61,7 @@ pub(crate) async fn submit_tx_to_validators(
 pub(crate) async fn submit_batch_to_validators(
     validators: &[miden_node_proto::clients::ValidatorClient],
     proposed_batch: &miden_protocol::batch::ProposedBatch,
-    sealed_transaction_inputs: &[proto::transaction::SealedTransactionInputs],
+    sealed_transaction_inputs: &[proto::submission::SealedTransactionInputs],
 ) -> tonic::Result<()> {
     futures::future::try_join_all(validators.iter().map(|validator| {
         let mut validator = validator.clone();
@@ -166,6 +166,7 @@ impl RpcService {
                 proto::rpc::BlockHeaderByNumberRequest {
                     block_num: Some(BlockNumber::GENESIS.as_u32()),
                     include_mmr_proof: None,
+                    include_protocol_config: None,
                 }
                 .into_request(),
             )
@@ -300,6 +301,18 @@ fn database_error_to_status(err: &DatabaseError) -> Status {
 
 fn invalid_block_range_to_status(RpcInvalidBlockRange(err): RpcInvalidBlockRange) -> Status {
     Status::invalid_argument(err.to_string())
+}
+
+/// Loads the configuration committed to by a stored header.
+async fn load_protocol_config(
+    view: &miden_node_store::state::StateView,
+    header: &BlockHeader,
+) -> tonic::Result<miden_protocol::protocol_config::ProtocolConfig> {
+    let commitment = header.protocol_config_commitment();
+    view.get_protocol_config(commitment)
+        .await
+        .map_err(|err| Status::internal(err.to_string()))?
+        .ok_or_else(|| Status::internal(format!("protocol config {commitment} is missing")))
 }
 
 // LIMIT HELPERS

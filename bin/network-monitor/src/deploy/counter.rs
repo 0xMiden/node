@@ -22,7 +22,7 @@ use miden_standards::account::fees::{BasicConstantFeePolicy, FeePolicyManager};
 use miden_standards::account::wallets::BasicWallet;
 use miden_standards::code_builder::CodeBuilder;
 use miden_standards::note::{FeeSponsorshipNote, P2idNote};
-use miden_standards::tx_script::ExpirationTransactionScript;
+use miden_standards::tx_script::{ExpirationTransactionScript, SendWalletNotesTransactionScript};
 
 use crate::COMPONENT;
 use crate::counter::create_increment_script;
@@ -102,7 +102,10 @@ pub fn create_counter_account(
         .build();
 
     let auth_component = AuthNetworkAccount::custom(allowed_scripts, fee_policy_manager)?
-        .with_allowed_tx_scripts([ExpirationTransactionScript::script_root()]);
+        .with_allowed_tx_scripts([
+            ExpirationTransactionScript::script_root(),
+            SendWalletNotesTransactionScript::script_root(),
+        ]);
 
     let init_seed: [u8; 32] = rand::random();
     let counter_account = AccountBuilder::new(init_seed)
@@ -189,6 +192,10 @@ mod tests {
         assert!(
             network_account.allows_tx_script(&ExpirationTransactionScript::script_root()),
             "the canonical expiration tx script must stay allowlisted"
+        );
+        assert!(
+            network_account.allows_tx_script(&SendWalletNotesTransactionScript::script_root()),
+            "the canonical wallet send-notes tx script must stay allowlisted"
         );
     }
 

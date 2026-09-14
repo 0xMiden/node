@@ -6,9 +6,9 @@ use miden_node_proto::errors::ConversionError;
 use miden_node_proto::{decode, generated as proto};
 use miden_node_tracing::{info, miden_instrument};
 use miden_protocol::Word;
-use miden_protocol::block::ProposedBlock;
+use miden_protocol::block::{BlockInputs, ProposedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
-use miden_protocol::utils::serde::Serializable;
+use miden_protocol::protocol_config::ProtocolConfig;
 use thiserror::Error;
 use url::Url;
 
@@ -91,10 +91,17 @@ impl BlockProducerValidatorClient {
     )]
     pub async fn sign_block(
         &self,
-        proposed_block: ProposedBlock,
+        proposed_block: &ProposedBlock,
+        block_inputs: &BlockInputs,
+        protocol_config: &ProtocolConfig,
     ) -> Result<Vec<SignBlockResponse>, ValidatorError> {
-        let message = proto::blockchain::ProposedBlock {
-            proposed_block: proposed_block.to_bytes(),
+        let message = proto::validator::SignBlockRequest {
+            protocol_config: Some(protocol_config.into()),
+            batches: proposed_block.batches().as_slice().iter().map(Into::into).collect(),
+            block_inputs: Some(block_inputs.into()),
+            timestamp: proposed_block.timestamp(),
+            next_validator_config: Some(proposed_block.next_validator_config().into()),
+            next_protocol_config: proposed_block.next_protocol_config().map(Into::into),
         };
 
         let responses = futures::future::try_join_all(self.clients.iter().map(|client| {
@@ -113,7 +120,7 @@ impl BlockProducerValidatorClient {
 
     /// Decodes a single validator's `sign_block` response.
     fn decode_response(
-        response: proto::blockchain::SignBlockResponse,
+        response: proto::validator::SignBlockResponse,
     ) -> Result<SignBlockResponse, ValidatorError> {
         let decoder = response.decoder();
         let signature: Signature = decode!(decoder, response.signature)?;

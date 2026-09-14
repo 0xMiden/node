@@ -27,6 +27,7 @@ use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
 use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::note::{Note, NoteScript, NoteScriptRoot, PartialNote};
+use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{
     AccountInputs,
     ExecutedTransaction,
@@ -59,7 +60,7 @@ use rayon::prelude::*;
 use url::Url;
 
 use crate::prover::BenchmarkProver;
-use crate::rpc_state::{fetch_chain_tip_header, fetch_partial_blockchain};
+use crate::rpc_state::fetch_chain_tip_state;
 use crate::summary::print_proving_summary;
 use crate::{
     PROOFS_DIR,
@@ -67,9 +68,6 @@ use crate::{
     get_genesis_header_request,
     write_to_file,
 };
-
-/// Maximum attempts to observe a stable chain tip.
-const MAX_TIP_FETCH_ATTEMPTS: u32 = 10;
 
 // CONSTANTS
 // ================================================================================================
@@ -189,31 +187,11 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
         .block_header
         .expect("RPC returned no block header");
     let genesis_header: BlockHeader = genesis_header_proto.try_into().unwrap();
-
-    // The tip header and chain MMR come from separate RPC calls, so retry until they refer to the
-    // same chain tip.
-    let mut tip_state = None;
-    for _ in 0..MAX_TIP_FETCH_ATTEMPTS {
-        println!("Fetching chain tip header...");
-        let ref_block_header = fetch_chain_tip_header(&mut rpc_client).await;
-        let ref_block_num = ref_block_header.block_num();
-
-        println!("Fetching chain MMR up to ref block...");
-        let partial_blockchain =
-            fetch_partial_blockchain(&mut rpc_client, ref_block_num.as_u32(), &genesis_header)
-                .await;
-
-        if partial_blockchain.chain_length() == ref_block_num {
-            tip_state = Some((ref_block_header, partial_blockchain));
-            break;
-        }
-    }
-    let (ref_block_header, partial_blockchain) = tip_state.unwrap_or_else(|| {
-        panic!(
-            "failed to fetch a consistent tip header and chain MMR after \
-             {MAX_TIP_FETCH_ATTEMPTS} attempts",
-        )
-    });
+    println!("Fetching chain tip state...");
+    let (ref_block_header, protocol_config, partial_blockchain) =
+        fetch_chain_tip_state(&mut rpc_client, &genesis_header)
+            .await
+            .expect("failed to fetch the chain tip transaction anchor");
     let ref_block_num = ref_block_header.block_num();
 
     println!("Creating faucet...");
@@ -230,7 +208,8 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
         .map(|index| create_wallet(&wallet_public_key, index))
         .collect();
 
-    let mut data_store = BenchmarkDataStore::new(ref_block_header.clone(), partial_blockchain);
+    let mut data_store =
+        BenchmarkDataStore::new(ref_block_header.clone(), protocol_config, partial_blockchain);
     data_store.add_account(faucet.clone());
     for wallet in &wallets {
         data_store.add_account(wallet.clone());
@@ -272,7 +251,7 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
         let notes: Vec<Note> = wallet_chunk
             .iter()
             .map(|wallet| {
-                let asset = Asset::Fungible(FungibleAsset::new(faucet_id, 10).unwrap());
+                let asset = Asset::from(FungibleAsset::new(faucet_id, 10).unwrap());
                 P2idNote::builder()
                     .sender(faucet_id)
                     .target(wallet.id())
@@ -468,15 +447,21 @@ fn create_wallet(
 struct BenchmarkDataStore {
     accounts: HashMap<AccountId, Account>,
     block_header: BlockHeader,
+    protocol_config: ProtocolConfig,
     partial_block_chain: PartialBlockchain,
     mast_store: TransactionMastStore,
 }
 
 impl BenchmarkDataStore {
-    fn new(block_header: BlockHeader, partial_block_chain: PartialBlockchain) -> Self {
+    fn new(
+        block_header: BlockHeader,
+        protocol_config: ProtocolConfig,
+        partial_block_chain: PartialBlockchain,
+    ) -> Self {
         Self {
             accounts: HashMap::new(),
             block_header,
+            protocol_config,
             partial_block_chain,
             mast_store: TransactionMastStore::new(),
         }
@@ -500,12 +485,18 @@ impl DataStore for BenchmarkDataStore {
         &self,
         account_id: AccountId,
         _block_refs: BTreeSet<BlockNumber>,
-    ) -> impl FutureMaybeSend<Result<(PartialAccount, BlockHeader, PartialBlockchain), DataStoreError>>
-    {
+    ) -> impl FutureMaybeSend<
+        Result<(PartialAccount, BlockHeader, ProtocolConfig, PartialBlockchain), DataStoreError>,
+    > {
         async move {
             let account = self.get_account(account_id)?;
             let partial_account = PartialAccount::from(account);
-            Ok((partial_account, self.block_header.clone(), self.partial_block_chain.clone()))
+            Ok((
+                partial_account,
+                self.block_header.clone(),
+                self.protocol_config.clone(),
+                self.partial_block_chain.clone(),
+            ))
         }
     }
 

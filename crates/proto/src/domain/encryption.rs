@@ -251,7 +251,7 @@ pub enum TransactionInputSealError {
 
 /// Verifies a served transaction encryption key against trusted chain state.
 pub fn verify_transaction_encryption_key(
-    key: proto::transaction::TransactionEncryptionKey,
+    key: proto::submission::TransactionEncryptionKey,
     trusted: TrustedTransactionEncryptionState<'_>,
 ) -> Result<VerifiedTransactionEncryptionKey, TransactionEncryptionKeyError> {
     if trusted.validator_signing_keys.is_empty() {
@@ -266,9 +266,10 @@ pub fn verify_transaction_encryption_key(
     let mut found_trusted_signer = false;
 
     for attestation in key.attestations {
-        let Ok(validator_public_key) =
-            ValidatorPublicKey::read_from_bytes(&attestation.validator_public_key)
-        else {
+        let Some(validator_public_key) = attestation.validator_public_key else {
+            continue;
+        };
+        let Ok(validator_public_key) = validator_public_key.try_into() else {
             continue;
         };
 
@@ -277,7 +278,10 @@ pub fn verify_transaction_encryption_key(
         }
         found_trusted_signer = true;
 
-        let Ok(signature) = ValidatorSignature::read_from_bytes(&attestation.signature) else {
+        let Some(signature) = attestation.signature else {
+            continue;
+        };
+        let Ok(signature): Result<ValidatorSignature, _> = signature.try_into() else {
             continue;
         };
         if signature.verify(commitment, &validator_public_key) {
@@ -298,7 +302,7 @@ pub fn verify_transaction_encryption_key(
 
 /// Decodes all key fields which are covered by the validator attestation.
 fn decode_key_info(
-    key: &proto::transaction::TransactionEncryptionKey,
+    key: &proto::submission::TransactionEncryptionKey,
 ) -> Result<(TransactionEncryptionKeyInfo, EncryptionPublicKey), TransactionEncryptionKeyError> {
     let scheme = TransactionEncryptionScheme::try_from(key.scheme)?;
     validate_key_id(&key.key_id, "encryption key id")?;
@@ -442,7 +446,7 @@ impl TransactionInputsSealer {
         &self,
         tx_id: TransactionId,
         transaction_inputs: &[u8],
-    ) -> Result<proto::transaction::SealedTransactionInputs, TransactionInputSealError> {
+    ) -> Result<proto::submission::SealedTransactionInputs, TransactionInputSealError> {
         let associated_data = transaction_inputs_associated_data(
             self.scheme.as_u32(),
             &self.key_id,
@@ -454,7 +458,7 @@ impl TransactionInputsSealer {
             .seal_bytes_with_associated_data(&mut rand::rng(), transaction_inputs, &associated_data)
             .map_err(TransactionInputSealError::Seal)?;
 
-        Ok(proto::transaction::SealedTransactionInputs {
+        Ok(proto::submission::SealedTransactionInputs {
             key_id: self.key_id.clone(),
             ciphertext: sealed.to_bytes(),
         })
@@ -491,8 +495,8 @@ mod tests {
         SigningKey::read_from_bytes(&[seed; 32]).expect("test signing key should decode")
     }
 
-    fn unsigned_encryption_key() -> proto::transaction::TransactionEncryptionKey {
-        proto::transaction::TransactionEncryptionKey {
+    fn unsigned_encryption_key() -> proto::submission::TransactionEncryptionKey {
+        proto::submission::TransactionEncryptionKey {
             scheme: TransactionEncryptionScheme::X25519XChaCha20Poly1305.as_i32(),
             key_id: TEST_KEY_ID.to_vec(),
             public_key: KeyExchangeKey::read_from_bytes(&[7u8; 32])
@@ -507,12 +511,12 @@ mod tests {
     fn signed_encryption_key(
         signer: &SigningKey,
         genesis_commitment: Word,
-    ) -> proto::transaction::TransactionEncryptionKey {
+    ) -> proto::submission::TransactionEncryptionKey {
         let mut key = unsigned_encryption_key();
         let (info, _) = decode_key_info(&key).unwrap();
-        key.attestations = vec![proto::transaction::ValidatorKeyAttestation {
-            validator_public_key: signer.public_key().to_bytes(),
-            signature: signer.sign(info.attestation_commitment(genesis_commitment)).to_bytes(),
+        key.attestations = vec![proto::submission::ValidatorKeyAttestation {
+            validator_public_key: Some(signer.public_key().into()),
+            signature: Some(signer.sign(info.attestation_commitment(genesis_commitment)).into()),
         }];
         key
     }
@@ -548,14 +552,19 @@ mod tests {
         );
 
         let mut malformed_key = signed_encryption_key(&signer, genesis());
-        malformed_key.attestations[0].validator_public_key.clear();
+        malformed_key.attestations[0]
+            .validator_public_key
+            .as_mut()
+            .unwrap()
+            .encoded
+            .clear();
         assert_matches!(
             verify_transaction_encryption_key(malformed_key, trusted),
             Err(TransactionEncryptionKeyError::NoTrustedAttestation)
         );
 
         let mut malformed_signature = signed_encryption_key(&signer, genesis());
-        malformed_signature.attestations[0].signature.clear();
+        malformed_signature.attestations[0].signature.as_mut().unwrap().encoded.clear();
         assert_matches!(
             verify_transaction_encryption_key(malformed_signature, trusted),
             Err(TransactionEncryptionKeyError::InvalidAttestation)
@@ -570,9 +579,9 @@ mod tests {
         let mut key = signed_encryption_key(&signer, genesis());
         key.attestations.insert(
             0,
-            proto::transaction::ValidatorKeyAttestation {
-                validator_public_key: Vec::new(),
-                signature: Vec::new(),
+            proto::submission::ValidatorKeyAttestation {
+                validator_public_key: None,
+                signature: None,
             },
         );
 
@@ -615,7 +624,7 @@ mod tests {
         changed_public_key.public_key =
             KeyExchangeKey::read_from_bytes(&[8u8; 32]).unwrap().public_key().to_bytes();
         let mut injected_next_key = key.clone();
-        injected_next_key.next_key = Some(proto::transaction::NextTransactionEncryptionKey {
+        injected_next_key.next_key = Some(proto::submission::NextTransactionEncryptionKey {
             scheme: key.scheme,
             key_id: vec![1, 2, 3, 4],
             public_key: KeyExchangeKey::read_from_bytes(&[9u8; 32])

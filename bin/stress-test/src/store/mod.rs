@@ -178,7 +178,7 @@ fn get_account_request(
         block_num: None,
         details: Some(AccountDetailRequest {
             code_commitment: None,
-            asset_vault_commitment: Some(proto::primitives::Digest::from(Word::empty())),
+            asset_vault_commitment: Some(proto::primitives::Word::from(Word::empty())),
             storage_request: Some(StorageRequest::StorageMaps(StorageMapDetailRequests {
                 storage_maps: vec![StorageMapDetailRequest {
                     slot_name: storage_map_slot,
@@ -661,9 +661,9 @@ fn transaction_record_to_proto(
     let output_note_proofs = record
         .output_note_proofs
         .into_iter()
-        .map(|note| proto::note::NoteInclusionInBlockProof {
+        .map(|note| proto::note::NoteInclusionProof {
             note_id: Some((&note.note_id).into()),
-            block_num: note.block_num.as_u32(),
+            block_num: Some(note.block_num.into()),
             note_index_in_block: note.note_index.leaf_index_value().into(),
             inclusion_path: Some(note.inclusion_path.into()),
         })
@@ -673,7 +673,7 @@ fn transaction_record_to_proto(
         .consumed_note_refs
         .into_iter()
         .map(|(nullifier, note_id)| proto::rpc::ConsumedNoteRef {
-            nullifier: Some(nullifier.into()),
+            nullifier: Some(nullifier.as_word().into()),
             note_id: Some((&note_id).into()),
         })
         .collect();

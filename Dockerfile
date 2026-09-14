@@ -6,14 +6,15 @@ ARG KACHE_VERSION=0.16.0
 ARG BIN
 ARG PORT
 
-FROM debian:${DEBIAN_RELEASE}-slim AS build-base
+FROM rust:${RUST_VERSION}-slim-${DEBIAN_RELEASE} AS build-base
 ARG KACHE_VERSION
 ARG TARGETARCH
+# Code generation requires rustfmt.
+RUN rustup component add rustfmt
 # Install build dependencies. RocksDB is compiled from source by librocksdb-sys.
 RUN apt-get update && \
     apt-get -y upgrade && \
     apt-get install -y --no-install-recommends \
-        build-essential \
         llvm \
         clang \
         libclang-dev \
@@ -23,18 +24,6 @@ RUN apt-get update && \
         curl \
         ca-certificates && \
     rm -rf /var/lib/apt/lists/*
-
-ENV RUSTUP_HOME=/usr/local/rustup \
-    CARGO_HOME=/usr/local/cargo \
-    PATH=/usr/local/cargo/bin:${PATH}
-ARG RUST_VERSION
-# Code generation requires rustfmt.
-RUN curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
-        --retry 5 --retry-max-time 120 \
-        https://sh.rustup.rs --output /tmp/rustup-init.sh && \
-    sh /tmp/rustup-init.sh -y --no-modify-path --profile minimal \
-        --default-toolchain "${RUST_VERSION}" --component rustfmt && \
-    rm /tmp/rustup-init.sh
 
 # Verify the release archive before Kache becomes a compiler wrapper.
 RUN case "${TARGETARCH}" in \

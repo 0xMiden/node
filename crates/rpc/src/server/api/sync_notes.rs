@@ -86,40 +86,41 @@ impl proto::server::rpc_api::SyncNotes for RpcService {
 // HELPERS
 // ================================================================================================
 
-fn note_sync_record_to_proto(note: NoteSyncRecord) -> proto::note::NoteSyncRecord {
+fn note_sync_record_to_proto(note: NoteSyncRecord) -> proto::rpc::NoteSyncRecord {
     let attachments = note
         .attachments
         .iter()
         .map(|attachment| {
             let payload = if attachment.num_words() == 1 {
-                proto::note::note_sync_attachment::Payload::Value(
+                proto::rpc::note_sync_attachment::Payload::Value(
                     attachment.content().as_words()[0].into(),
                 )
             } else {
-                proto::note::note_sync_attachment::Payload::Commitment(
+                proto::rpc::note_sync_attachment::Payload::Commitment(
                     attachment.to_commitment().into(),
                 )
             };
 
-            proto::note::NoteSyncAttachment {
+            proto::rpc::NoteSyncAttachment {
                 scheme: attachment.attachment_scheme().as_u16().into(),
                 payload: Some(payload),
             }
         })
         .collect();
-    let metadata = Some(proto::note::NoteSyncMetadata {
+    let metadata = Some(proto::rpc::NoteSyncMetadata {
         sender: Some(note.metadata.sender().into()),
+        version: proto::note::NoteVersion::V1 as i32,
         note_type: proto::note::NoteType::from(note.metadata.note_type()) as i32,
         tag: note.metadata.tag().as_u32(),
         attachments,
     });
-    let inclusion_proof = Some(proto::note::NoteInclusionInBlockProof {
+    let inclusion_proof = Some(proto::note::NoteInclusionProof {
         note_id: Some((&note.note_id).into()),
-        block_num: note.block_num.as_u32(),
+        block_num: Some(note.block_num.into()),
         note_index_in_block: note.note_index.leaf_index_value().into(),
         inclusion_path: Some(note.inclusion_path.into()),
     });
-    proto::note::NoteSyncRecord { metadata, inclusion_proof }
+    proto::rpc::NoteSyncRecord { metadata, inclusion_proof }
 }
 
 fn note_sync_error_to_status(err: NoteSyncError) -> Status {
@@ -137,8 +138,9 @@ fn note_sync_error_to_status(err: NoteSyncError) -> Status {
 
 #[cfg(test)]
 mod tests {
+    use miden_node_proto::prost::Message;
     use miden_protocol::account::{AccountId, AccountIdVersion, AccountType, AssetCallbackFlag};
-    use miden_protocol::block::{BlockNoteIndex, BlockNumber};
+    use miden_protocol::block::{BlockNoteIndex, BlockNumber, ValidatorConfig};
     use miden_protocol::crypto::merkle::SparseMerklePath;
     use miden_protocol::note::{
         NoteAttachment,
@@ -150,7 +152,13 @@ mod tests {
         NoteType,
         PartialNoteMetadata,
     };
-    use miden_protocol::{Hasher, Word};
+    use miden_protocol::{
+        BLOCK_NOTE_TREE_DEPTH,
+        Hasher,
+        MAX_BATCHES_PER_BLOCK,
+        MAX_OUTPUT_NOTES_PER_BATCH,
+        Word,
+    };
 
     use super::*;
 
@@ -181,6 +189,7 @@ mod tests {
             PartialNoteMetadata::new(sender, NoteType::Private).with_tag(NoteTag::from(7u32)),
             &attachments,
         );
+        let expected_metadata_commitment = metadata.to_commitment();
         let record = NoteSyncRecord {
             block_num: BlockNumber::from(3),
             note_index: BlockNoteIndex::new(0, 1).unwrap(),
@@ -193,6 +202,7 @@ mod tests {
         let proto_record = note_sync_record_to_proto(record);
         let proto_metadata = proto_record.metadata.unwrap();
         assert_eq!(proto_metadata.sender, Some(sender.into()));
+        assert_eq!(proto_metadata.version, proto::note::NoteVersion::V1 as i32);
         assert_eq!(proto_metadata.note_type, proto::note::NoteType::Private as i32);
         assert_eq!(proto_metadata.tag, 7);
         assert_eq!(proto_metadata.attachments.len(), 2);
@@ -201,14 +211,14 @@ mod tests {
         assert_eq!(first.scheme, u32::from(single_word_scheme.as_u16()));
         assert_eq!(
             first.payload,
-            Some(proto::note::note_sync_attachment::Payload::Value(single_word.into()))
+            Some(proto::rpc::note_sync_attachment::Payload::Value(single_word.into()))
         );
 
         let second = &proto_metadata.attachments[1];
         assert_eq!(second.scheme, u32::from(multi_word_scheme.as_u16()));
         assert_eq!(
             second.payload,
-            Some(proto::note::note_sync_attachment::Payload::Commitment(
+            Some(proto::rpc::note_sync_attachment::Payload::Commitment(
                 multi_word_commitment.into()
             ))
         );
@@ -217,18 +227,37 @@ mod tests {
             .attachments
             .iter()
             .map(|attachment| match attachment.payload.as_ref().unwrap() {
-                proto::note::note_sync_attachment::Payload::Value(value) => {
+                proto::rpc::note_sync_attachment::Payload::Value(value) => {
                     let value = Word::try_from(value).unwrap();
                     Hasher::hash_elements(value.as_elements())
                 },
-                proto::note::note_sync_attachment::Payload::Commitment(commitment) => {
+                proto::rpc::note_sync_attachment::Payload::Commitment(commitment) => {
                     Word::try_from(commitment).unwrap()
                 },
             })
             .collect();
         let commitment_elements: Vec<_> =
             attachment_commitments.iter().flat_map(Word::as_elements).copied().collect();
-        assert_eq!(Hasher::hash_elements(&commitment_elements), attachments.to_commitment());
+        let attachments_commitment = Hasher::hash_elements(&commitment_elements);
+        assert_eq!(attachments_commitment, attachments.to_commitment());
+
+        let mut attachment_schemes = proto_metadata
+            .attachments
+            .iter()
+            .map(|attachment| attachment.scheme)
+            .collect::<Vec<_>>();
+        attachment_schemes.resize(NoteAttachments::MAX_COUNT, 0);
+        let reconstructed: NoteMetadata = proto::note::NoteMetadata {
+            version: proto_metadata.version,
+            sender: proto_metadata.sender,
+            note_type: proto_metadata.note_type,
+            tag: proto_metadata.tag,
+            attachment_schemes,
+            attachments_commitment: Some(attachments_commitment.into()),
+        }
+        .try_into()
+        .unwrap();
+        assert_eq!(reconstructed.to_commitment(), expected_metadata_commitment);
     }
 
     #[test]
@@ -253,6 +282,122 @@ mod tests {
         };
 
         let proto_record = note_sync_record_to_proto(record);
-        assert!(proto_record.metadata.unwrap().attachments.is_empty());
+        let metadata = proto_record.metadata.unwrap();
+        assert!(metadata.attachments.is_empty());
+        assert_eq!(metadata.version, proto::note::NoteVersion::V1 as i32);
+    }
+
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the fixture exercises the maximum size of each response field"
+    )]
+    fn compact_note_sync_response_fits_pagination_size_estimates() {
+        // Keep these budgets aligned with the store note sync pagination estimates.
+        const RECORD_BUDGET: usize = 900;
+        const BLOCK_OVERHEAD_BUDGET: usize = 1800;
+
+        let word = Word::from([1, 2, 3, 4u32]);
+        let attachments = NoteAttachments::new(
+            (1..=NoteAttachments::MAX_COUNT)
+                .map(|scheme| {
+                    NoteAttachment::with_word(
+                        NoteAttachmentScheme::new(u16::try_from(scheme).unwrap()).unwrap(),
+                        word,
+                    )
+                })
+                .collect(),
+        )
+        .unwrap();
+        let sender = AccountId::dummy(
+            [1; 15],
+            AccountIdVersion::Version1,
+            AccountType::Public,
+            AssetCallbackFlag::Disabled,
+        );
+        let record = note_sync_record_to_proto(NoteSyncRecord {
+            block_num: BlockNumber::from(u32::MAX),
+            note_index: BlockNoteIndex::new(
+                MAX_BATCHES_PER_BLOCK - 1,
+                MAX_OUTPUT_NOTES_PER_BATCH - 1,
+            )
+            .unwrap(),
+            note_id: NoteId::from_raw(word),
+            metadata: NoteMetadata::new(
+                PartialNoteMetadata::new(sender, NoteType::Public)
+                    .with_tag(NoteTag::from(u32::MAX)),
+                &attachments,
+            ),
+            attachments,
+            inclusion_path: SparseMerklePath::from_parts(
+                0,
+                vec![word; usize::from(BLOCK_NOTE_TREE_DEPTH)],
+            )
+            .unwrap(),
+        });
+        assert_eq!(record.metadata.as_ref().unwrap().attachments.len(), 4);
+        assert_eq!(
+            record
+                .inclusion_proof
+                .as_ref()
+                .unwrap()
+                .inclusion_path
+                .as_ref()
+                .unwrap()
+                .siblings
+                .len(),
+            16
+        );
+
+        let header = proto::blockchain::BlockHeader {
+            version: proto::blockchain::BlockVersion::V1 as i32,
+            timestamp: u32::MAX,
+            block_num: Some(BlockNumber::from(u32::MAX).into()),
+            prev_block_commitment: Some(word.into()),
+            chain_commitment: Some(word.into()),
+            account_root: Some(word.into()),
+            nullifier_root: Some(word.into()),
+            note_root: Some(word.into()),
+            tx_commitment: Some(word.into()),
+            validator_config: Some(proto::blockchain::ValidatorConfig {
+                keys: vec![
+                    proto::primitives::PublicKey {
+                        variant: proto::primitives::PublicKeyVariant::EcdsaK256Keccak as i32,
+                        encoded: vec![2; 33],
+                    };
+                    ValidatorConfig::MAX_VALIDATORS
+                ],
+                quorum: u32::try_from(ValidatorConfig::MAX_VALIDATORS).unwrap(),
+            }),
+            fee_parameters: Some(proto::blockchain::FeeParameters {
+                verification_base_fee: u32::MAX,
+            }),
+            protocol_config_commitment: Some(word.into()),
+            next_protocol_config: Some(proto::blockchain::NextProtocolConfig {
+                effective_from: Some(BlockNumber::from(u32::MAX).into()),
+                protocol_config: Some(word.into()),
+            }),
+        };
+        let block = proto::rpc::sync_notes_response::NoteSyncBlock {
+            block_header: Some(header),
+            mmr_path: Some(proto::primitives::MerklePath {
+                siblings: vec![word.into(); u32::BITS as usize],
+            }),
+            notes: Vec::new(),
+        };
+        let mut response = proto::rpc::SyncNotesResponse {
+            pagination_info: Some(proto::rpc::PaginationInfo {
+                chain_tip: u32::MAX,
+                block_num: u32::MAX,
+            }),
+            blocks: vec![block],
+        };
+        let overhead = response.encoded_len();
+        assert!(overhead <= BLOCK_OVERHEAD_BUDGET, "block overhead is {overhead} bytes");
+
+        response.blocks[0].notes.push(record);
+        let record_size = response.encoded_len() - overhead;
+        assert!(record_size <= RECORD_BUDGET, "compact note record adds {record_size} bytes");
+        assert!(response.encoded_len() <= BLOCK_OVERHEAD_BUDGET + RECORD_BUDGET);
     }
 }

@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_proto::clients::{Builder, ValidatorClient};
+use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
 use miden_node_proto::generated::validator::{BlockSubscriptionRequest, BlockSubscriptionResponse};
 use miden_node_store::{BlockWriter, State, WriterTask};
 use miden_node_tracing::info;
@@ -15,10 +16,10 @@ use miden_protocol::block::{
     BlockNumber,
     BlockSignatures,
     SignedBlock,
-    ValidatorKeys,
+    ValidatorConfig,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
-use miden_protocol::utils::serde::Deserializable;
+use miden_protocol::protocol_config::ProtocolConfig;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tonic::codec::Streaming;
@@ -34,6 +35,34 @@ use crate::LOG_TARGET;
 /// Capacity of the channels connecting the recovery pipeline's stages, bounding the number of
 /// blocks buffered in memory while keeping every stage busy.
 const BLOCK_CHANNEL_CAPACITY: usize = 16;
+
+/// A recovered block and the protocol configuration supplied with its stream event.
+#[derive(Debug)]
+struct RecoveredBlock {
+    block: SignedBlock,
+    protocol_config: Option<ProtocolConfig>,
+}
+
+/// Tracks the active protocol configuration commitment for one validator stream.
+#[derive(Default)]
+struct ProtocolConfigStreamState {
+    commitment: Option<Word>,
+}
+
+impl ProtocolConfigStreamState {
+    /// Accepts a stream event only if it supplies every required configuration payload.
+    fn accept(&mut self, commitment: Word, supplied: bool) -> anyhow::Result<()> {
+        match self.commitment {
+            None if !supplied => anyhow::bail!("stream is missing its baseline protocol config"),
+            Some(previous) if previous != commitment && !supplied => {
+                anyhow::bail!("stream is missing its changed protocol config")
+            },
+            _ => {},
+        }
+        self.commitment = Some(commitment);
+        Ok(())
+    }
+}
 
 #[derive(clap::Args, Clone, Debug)]
 pub struct RecoverCommand {
@@ -179,10 +208,10 @@ async fn recover_from_validators(
     let coalescer =
         tokio::spawn(coalesce_blocks(block_streams, parent, recovery_tip, coalesced_tx));
 
-    while let Some(block) = coalesced_rx.recv().await {
-        let block_num = block.header().block_num();
+    while let Some(recovered) = coalesced_rx.recv().await {
+        let block_num = recovered.block.header().block_num();
         block_writer
-            .apply_block(block)
+            .apply_block(recovered.block, recovered.protocol_config)
             .await
             .context("failed to apply recovered block")?;
         info!(target: LOG_TARGET, "Applied recovered block", block.number = block_num);
@@ -205,8 +234,9 @@ async fn read_blocks(
     url: Url,
     mut stream: Streaming<BlockSubscriptionResponse>,
     block_count: u64,
-    blocks: mpsc::Sender<anyhow::Result<SignedBlock>>,
+    blocks: mpsc::Sender<anyhow::Result<RecoveredBlock>>,
 ) {
+    let mut config_state = ProtocolConfigStreamState::default();
     for _ in 0..block_count {
         let block = stream
             .next()
@@ -218,8 +248,29 @@ async fn read_blocks(
                 result.with_context(|| format!("block stream of validator {url} returned an error"))
             })
             .and_then(|event| {
-                SignedBlock::read_from_bytes(&event.block)
-                    .with_context(|| format!("failed to deserialize block from validator {url}"))
+                let block: SignedBlock = event
+                    .block
+                    .context("validator block stream response is missing block")?
+                    .try_into()
+                    .with_context(|| format!("failed to decode block from validator {url}"))?;
+                let protocol_config = event
+                    .protocol_config
+                    .map(|config| {
+                        ensure_protocol_config_is_present_and_matches_header(
+                            Some(config),
+                            block.header(),
+                        )
+                    })
+                    .transpose()
+                    .with_context(|| {
+                        format!("failed to decode protocol config from validator {url}")
+                    })?;
+                config_state
+                    .accept(block.header().protocol_config_commitment(), protocol_config.is_some())
+                    .with_context(|| {
+                        format!("invalid protocol config stream from validator {url}")
+                    })?;
+                Ok(RecoveredBlock { block, protocol_config })
             });
 
         let is_err = block.is_err();
@@ -232,16 +283,16 @@ async fn read_blocks(
 /// Coalesces the per-validator block streams into fully signed, verified blocks and forwards them
 /// in block-number order for application.
 async fn coalesce_blocks(
-    mut block_streams: Vec<(Url, mpsc::Receiver<anyhow::Result<SignedBlock>>)>,
+    mut block_streams: Vec<(Url, mpsc::Receiver<anyhow::Result<RecoveredBlock>>)>,
     mut parent: BlockHeader,
     recovery_tip: BlockNumber,
-    coalesced: mpsc::Sender<SignedBlock>,
+    coalesced: mpsc::Sender<RecoveredBlock>,
 ) -> anyhow::Result<()> {
     for block_num in parent.block_num().child().as_u32()..=recovery_tip.as_u32() {
         let block = next_coalesced_block(&mut block_streams, &parent)
             .await
             .with_context(|| format!("failed to reconstruct block {block_num}"))?;
-        parent = block.header().clone();
+        parent = block.block.header().clone();
 
         // A send failure means the applier has shut down; its error is reported by the caller.
         if coalesced.send(block).await.is_err() {
@@ -259,18 +310,19 @@ async fn coalesce_blocks(
 /// validator set that signature occupies. The signatures are therefore matched to their positions
 /// by verifying them against the validator keys committed to by the parent header.
 async fn next_coalesced_block(
-    block_streams: &mut [(Url, mpsc::Receiver<anyhow::Result<SignedBlock>>)],
+    block_streams: &mut [(Url, mpsc::Receiver<anyhow::Result<RecoveredBlock>>)],
     parent: &BlockHeader,
-) -> anyhow::Result<SignedBlock> {
+) -> anyhow::Result<RecoveredBlock> {
     let expected_block_num = parent.block_num().child();
 
     let mut signatures = Vec::with_capacity(block_streams.len());
-    let mut first_parts: Option<(BlockHeader, BlockBody)> = None;
+    let mut first_parts: Option<(BlockHeader, BlockBody, Option<ProtocolConfig>)> = None;
     for (url, blocks) in block_streams.iter_mut() {
-        let block = blocks
+        let recovered = blocks
             .recv()
             .await
             .with_context(|| format!("block channel of validator {url} closed unexpectedly"))??;
+        let RecoveredBlock { block, protocol_config } = recovered;
 
         anyhow::ensure!(
             block.header().block_num() == expected_block_num,
@@ -288,19 +340,27 @@ async fn next_coalesced_block(
         };
 
         match &first_parts {
-            None => first_parts = Some((header, body)),
-            Some((first_header, _)) => anyhow::ensure!(
-                header.commitment() == first_header.commitment(),
-                "validator {url} served a block with commitment {} which diverges from commitment {} served by the first validator",
-                header.commitment(),
-                first_header.commitment(),
-            ),
+            None => first_parts = Some((header, body, protocol_config)),
+            Some((first_header, _, first_protocol_config)) => {
+                anyhow::ensure!(
+                    header.commitment() == first_header.commitment(),
+                    "validator {url} served a block with commitment {} which diverges from commitment {} served by the first validator",
+                    header.commitment(),
+                    first_header.commitment(),
+                );
+                anyhow::ensure!(
+                    protocol_config == *first_protocol_config,
+                    "validator {url} served a protocol config which diverges from the first validator",
+                );
+            },
         }
         signatures.push(signature);
     }
-    let (header, body) = first_parts.context("at least one validator stream is required")?;
+    let (header, body, protocol_config) =
+        first_parts.context("at least one validator stream is required")?;
 
-    let signatures = coalesce_signatures(signatures, header.commitment(), parent.validator_keys())?;
+    let signatures =
+        coalesce_signatures(signatures, header.commitment(), parent.validator_config())?;
     let block = SignedBlock::new_unchecked(header, body, signatures);
 
     // Fully validate the reconstructed block before it is persisted, including verifying the
@@ -308,7 +368,7 @@ async fn next_coalesced_block(
     // signatures.
     block.validate(Some(parent)).context("coalesced block failed validation")?;
 
-    Ok(block)
+    Ok(RecoveredBlock { block, protocol_config })
 }
 
 /// Orders the collected per-validator signatures positionally against the validator set: the
@@ -319,18 +379,18 @@ async fn next_coalesced_block(
 fn coalesce_signatures(
     mut signatures: Vec<Signature>,
     block_commitment: Word,
-    validator_keys: &ValidatorKeys,
+    validator_config: &ValidatorConfig,
 ) -> anyhow::Result<BlockSignatures> {
     anyhow::ensure!(
-        signatures.len() == validator_keys.len(),
+        signatures.len() == validator_config.len(),
         "collected {} signatures but the validator set has {} keys; the provided validator URLs \
          must cover the full validator set",
         signatures.len(),
-        validator_keys.len(),
+        validator_config.len(),
     );
 
-    let mut ordered = Vec::with_capacity(validator_keys.len());
-    for (position, key) in validator_keys.as_keys().iter().enumerate() {
+    let mut ordered = Vec::with_capacity(validator_config.len());
+    for (position, key) in validator_config.keys().iter().enumerate() {
         let matched = signatures
             .iter()
             .position(|signature| signature.verify(block_commitment, key))
@@ -349,24 +409,60 @@ fn coalesce_signatures(
 #[cfg(test)]
 mod tests {
     use miden_protocol::Word;
-    use miden_protocol::block::ValidatorKeys;
+    use miden_protocol::account::AccountId;
+    use miden_protocol::asset::AssetId;
+    use miden_protocol::block::{
+        BlockBody,
+        BlockHeader,
+        BlockSignatures,
+        FeeParameters,
+        SignedBlock,
+        ValidatorConfig,
+    };
     use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
+    use miden_protocol::protocol_config::{KernelConfig, ProtocolConfig};
+    use miden_protocol::transaction::OrderedTransactionHeaders;
+    use tokio::sync::mpsc;
+    use url::Url;
 
-    use super::coalesce_signatures;
+    use super::{
+        ProtocolConfigStreamState,
+        RecoveredBlock,
+        coalesce_signatures,
+        next_coalesced_block,
+    };
 
     fn signers(count: usize) -> Vec<SigningKey> {
         (0..count).map(|_| SigningKey::new()).collect()
     }
 
-    fn validator_keys(signers: &[SigningKey]) -> ValidatorKeys {
-        ValidatorKeys::new(signers.iter().map(SigningKey::public_key).collect()).unwrap()
+    fn validator_config(signers: &[SigningKey]) -> ValidatorConfig {
+        ValidatorConfig::new(
+            signers.iter().map(SigningKey::public_key).collect(),
+            u16::try_from(signers.len()).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn protocol_configs() -> (ProtocolConfig, ProtocolConfig) {
+        let faucet: AccountId = 0xaa00_0000_0000_bc11_0000_bc00_0000_de00u128.try_into().unwrap();
+        let first = ProtocolConfig::current(AssetId::new_fungible(faucet)).unwrap();
+        let second = ProtocolConfig::new(
+            first.fee_asset_id(),
+            KernelConfig::new(Word::from([42u32, 0, 0, 0]), vec![]).unwrap(),
+            first.batch_kernel().clone(),
+            first.block_kernel().clone(),
+            first.proof_verification().clone(),
+        )
+        .unwrap();
+        (first, second)
     }
 
     #[test]
     fn signatures_are_ordered_against_the_validator_set() {
         let commitment = Word::from([1u32, 2, 3, 4]);
         let signers = signers(3);
-        let keys = validator_keys(&signers);
+        let keys = validator_config(&signers);
 
         // Collect the signatures in reverse order to prove they get reordered.
         let shuffled = signers.iter().rev().map(|signer| signer.sign(commitment)).collect();
@@ -379,7 +475,7 @@ mod tests {
     fn signature_count_mismatch_is_rejected() {
         let commitment = Word::from([1u32, 2, 3, 4]);
         let signers = signers(3);
-        let keys = validator_keys(&signers);
+        let keys = validator_config(&signers);
 
         let missing_one = signers.iter().take(2).map(|signer| signer.sign(commitment)).collect();
 
@@ -391,7 +487,7 @@ mod tests {
     fn duplicate_validator_signature_is_rejected() {
         let commitment = Word::from([1u32, 2, 3, 4]);
         let signers = signers(3);
-        let keys = validator_keys(&signers);
+        let keys = validator_config(&signers);
 
         // Two streams served by the same validator: its signature appears twice and the third
         // validator's signature is missing.
@@ -409,7 +505,7 @@ mod tests {
     fn foreign_signature_is_rejected() {
         let commitment = Word::from([1u32, 2, 3, 4]);
         let signers = signers(3);
-        let keys = validator_keys(&signers);
+        let keys = validator_config(&signers);
 
         // One signature comes from a key outside the validator set.
         let with_foreign = vec![
@@ -420,5 +516,107 @@ mod tests {
 
         let err = coalesce_signatures(with_foreign, commitment, &keys).unwrap_err();
         assert!(err.to_string().contains("no unmatched signature verifies"), "{err}");
+    }
+
+    #[test]
+    fn protocol_config_stream_requires_a_baseline() {
+        let mut state = ProtocolConfigStreamState::default();
+
+        let err = state
+            .accept(Word::from([1u32, 2, 3, 4]), false)
+            .expect_err("the first stream response must carry a protocol config");
+
+        assert!(err.to_string().contains("baseline protocol config"), "{err}");
+    }
+
+    #[test]
+    fn protocol_config_stream_requires_each_transition() {
+        let first = Word::from([1u32, 2, 3, 4]);
+        let second = Word::from([5u32, 6, 7, 8]);
+        let mut state = ProtocolConfigStreamState::default();
+
+        state.accept(first, true).unwrap();
+        state.accept(first, false).unwrap();
+        let err = state
+            .accept(second, false)
+            .expect_err("a changed commitment must carry a protocol config");
+
+        assert!(err.to_string().contains("changed protocol config"), "{err}");
+    }
+
+    #[test]
+    fn rejected_protocol_config_transition_does_not_advance_stream_state() {
+        let first = Word::from([1u32, 2, 3, 4]);
+        let second = Word::from([5u32, 6, 7, 8]);
+        let mut state = ProtocolConfigStreamState::default();
+
+        state.accept(first, true).unwrap();
+        state.accept(second, false).unwrap_err();
+
+        state
+            .accept(first, false)
+            .expect("a rejected transition must preserve the previous commitment");
+    }
+
+    #[tokio::test]
+    async fn coalescer_rejects_protocol_config_disagreement() {
+        let signers = signers(2);
+        let validators = validator_config(&signers);
+        let (first_config, second_config) = protocol_configs();
+        let parent = BlockHeader::new(
+            Word::empty(),
+            0.into(),
+            Word::empty(),
+            Word::empty(),
+            Word::empty(),
+            Word::empty(),
+            Word::empty(),
+            validators.clone(),
+            FeeParameters::new(0),
+            first_config.to_commitment(),
+            None,
+            0,
+        );
+        let body = BlockBody::new(
+            vec![],
+            vec![],
+            vec![],
+            OrderedTransactionHeaders::new_unchecked(vec![]),
+        )
+        .unwrap();
+        let header = BlockHeader::new(
+            parent.commitment(),
+            1.into(),
+            Word::empty(),
+            Word::empty(),
+            Word::empty(),
+            body.compute_block_note_tree().root(),
+            body.transaction_commitment(),
+            validators,
+            FeeParameters::new(0),
+            first_config.to_commitment(),
+            None,
+            1,
+        );
+        let mut streams = Vec::new();
+        for (index, config) in [first_config, second_config].into_iter().enumerate() {
+            let signature = signers[index].sign(header.commitment());
+            let block = SignedBlock::new_unchecked(
+                header.clone(),
+                body.clone(),
+                BlockSignatures::new(vec![signature]).unwrap(),
+            );
+            let (tx, rx) = mpsc::channel(1);
+            tx.send(Ok(RecoveredBlock { block, protocol_config: Some(config) }))
+                .await
+                .unwrap();
+            streams.push((Url::parse(&format!("http://validator-{index}.test")).unwrap(), rx));
+        }
+
+        let err = next_coalesced_block(&mut streams, &parent)
+            .await
+            .expect_err("validators must agree on the supplied protocol config");
+
+        assert!(err.to_string().contains("protocol config which diverges"), "{err}");
     }
 }

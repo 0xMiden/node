@@ -161,6 +161,21 @@ impl State {
             .map_err(StateInitializationError::DatabaseLoadError)?,
         );
 
+        let genesis_header = db
+            .select_genesis_block_header()
+            .await?
+            .ok_or(StateInitializationError::GenesisBlockMissing)?;
+        let genesis_protocol_config_commitment = genesis_header.protocol_config_commitment();
+        if db
+            .select_protocol_config_by_commitment(genesis_protocol_config_commitment)
+            .await?
+            .is_none()
+        {
+            return Err(StateInitializationError::GenesisProtocolConfigMissing {
+                commitment: genesis_protocol_config_commitment,
+            });
+        }
+
         // The chain tip drives forest loading and the account tree history below; `load_mmr`'s
         // consistency check also pins the chain MMR to this header.
         let latest_block_num = db
@@ -344,5 +359,99 @@ impl State {
                 .expect("state should load")
                 .start(CancellationToken::new());
         (state, block_writer, proof_writer)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use diesel::{Connection, ExpressionMethods, QueryDsl, RunQueryDsl, SqliteConnection};
+    use miden_node_utils::clap::StorageOptions;
+    use miden_node_utils::fee::{test_fee_params, test_protocol_config};
+    use miden_protocol::block::ValidatorConfig;
+    use miden_protocol::testing::random_secret_key::random_secret_key;
+    use miden_protocol::utils::serde::Serializable;
+
+    use super::State;
+    use crate::DataDirectory;
+    use crate::db::schema::protocol_configs;
+    use crate::errors::{DatabaseError, StateInitializationError};
+    use crate::genesis::GenesisState;
+
+    fn bootstrap_store(path: &std::path::Path) -> miden_protocol::Word {
+        let signer = random_secret_key();
+        let genesis = GenesisState::new(
+            Vec::new(),
+            test_fee_params(),
+            0,
+            ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
+            test_protocol_config(),
+        )
+        .into_block()
+        .unwrap();
+        let commitment = genesis.protocol_config().to_commitment();
+        State::bootstrap(genesis, path).unwrap();
+        commitment
+    }
+
+    fn database_connection(path: &std::path::Path) -> SqliteConnection {
+        let database_path = DataDirectory::load(path.to_path_buf()).unwrap().database_path();
+        SqliteConnection::establish(database_path.to_str().unwrap()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn load_rejects_missing_genesis_protocol_config() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let commitment = bootstrap_store(temp_dir.path());
+        let mut conn = database_connection(temp_dir.path());
+        diesel::delete(
+            protocol_configs::table.filter(protocol_configs::commitment.eq(commitment.to_bytes())),
+        )
+        .execute(&mut conn)
+        .unwrap();
+
+        let error = State::load(temp_dir.path(), StorageOptions::default())
+            .await
+            .err()
+            .expect("state load should fail");
+        assert!(matches!(
+            error,
+            StateInitializationError::GenesisProtocolConfigMissing { commitment: actual }
+                if actual == commitment
+        ));
+    }
+
+    #[tokio::test]
+    async fn load_rejects_corrupt_genesis_protocol_config() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let commitment = bootstrap_store(temp_dir.path());
+        let mut conn = database_connection(temp_dir.path());
+        let mut bytes = test_protocol_config().to_bytes();
+        bytes.push(0xff);
+        diesel::update(
+            protocol_configs::table.filter(protocol_configs::commitment.eq(commitment.to_bytes())),
+        )
+        .set(protocol_configs::protocol_config.eq(bytes))
+        .execute(&mut conn)
+        .unwrap();
+
+        let error = State::load(temp_dir.path(), StorageOptions::default())
+            .await
+            .err()
+            .expect("state load should fail");
+        assert!(matches!(
+            error,
+            StateInitializationError::DatabaseError(DatabaseError::DataCorrupted(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn state_view_returns_genesis_protocol_config() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let commitment = bootstrap_store(temp_dir.path());
+
+        let loaded = State::load(temp_dir.path(), StorageOptions::default()).await.unwrap();
+        let protocol_config = loaded.state.view().get_protocol_config(commitment).await.unwrap();
+
+        assert_eq!(protocol_config, Some(test_protocol_config()));
     }
 }

@@ -38,6 +38,9 @@ miden-benchmark create-proofs \
   --num-transactions 100
 ```
 
+The benchmark obtains the active protocol configuration from RPC and verifies it against the reference block before it
+generates transactions.
+
 Writes the bundle to `./benchmark-proofs/`:
 
 - `mint_txs.bin`, `mint_tx_inputs.bin`

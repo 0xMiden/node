@@ -1,5 +1,4 @@
 timestamp = 1717344256
-version   = 1
 
 # No `native_faucet` is set below, so the native MIDEN faucet is generated as a network account
 # owned by a generated operator account that holds the only key permitted to mint. Both are written

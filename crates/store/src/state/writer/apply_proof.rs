@@ -1,7 +1,7 @@
 use anyhow::{Context, ensure};
 use miden_node_tracing::miden_instrument;
-use miden_protocol::block::{BlockNumber, BlockProof};
-use miden_protocol::utils::serde::Deserializable;
+use miden_protocol::block::BlockNumber;
+use miden_protocol::vm::ExecutionProof;
 
 use crate::COMPONENT;
 use crate::state::{ProofNotification, ProofWriter};
@@ -49,10 +49,10 @@ impl ProofWriter {
     }
 }
 
-/// Verifies that `proof_bytes` is a valid [`BlockProof`] for the block at `block_num`.
+/// Verifies that `proof_bytes` is a valid [`ExecutionProof`] for the block at `block_num`.
 fn verify_block_proof(_block_num: BlockNumber, proof_bytes: &[u8]) -> anyhow::Result<()> {
-    let _proof =
-        BlockProof::read_from_bytes(proof_bytes).context("failed to deserialize block proof")?;
+    let _proof = ExecutionProof::read_from_bytes(proof_bytes)
+        .context("failed to deserialize block proof")?;
 
     // TODO: perform verification.
     Ok(())

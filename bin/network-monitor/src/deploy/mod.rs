@@ -16,20 +16,21 @@ use miden_node_proto::domain::encryption::{
     TrustedTransactionEncryptionState,
     verify_transaction_encryption_key,
 };
+use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
 use miden_node_proto::generated::rpc::{
     AccountRequest as ProtoAccountRequest,
     BlockHeaderByNumberRequest,
     FinalityLevel,
     SyncChainMmrRequest,
+    SyncChainMmrResponse,
 };
-use miden_node_proto::generated::transaction::ProvenTransaction as ProtoProvenTransaction;
+use miden_node_proto::generated::submission::ProvenTransactionSubmission as ProtoProvenTransaction;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{debug, info, miden_instrument, warn};
 use miden_node_utils::retry;
 use miden_protocol::Word;
 use miden_protocol::account::{
     Account,
-    AccountCode,
     AccountId,
     AccountStorage,
     PartialAccount,
@@ -46,7 +47,16 @@ use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta, MmrPeaks, PartialMmr};
-use miden_protocol::note::{Note, NoteScript, NoteScriptRoot};
+use miden_protocol::note::{
+    Note,
+    NoteAssets,
+    NoteScript,
+    NoteScriptRoot,
+    NoteType,
+    PartialNote,
+    PartialNoteMetadata,
+};
+use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{
     AccountInputs,
     ExecutedTransaction,
@@ -57,8 +67,10 @@ use miden_protocol::transaction::{
     TransactionArgs,
     TransactionInputs,
 };
-use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::utils::serde::Serializable;
 use miden_protocol::vm::FutureMaybeSend;
+use miden_standards::note::P2idNoteStorage;
+use miden_standards::tx_script::SendNotesTransactionScript;
 use miden_tx::auth::BasicAuthenticator;
 use miden_tx::{
     DataStore,
@@ -161,7 +173,8 @@ impl TransactionSubmissionClient {
         proven_tx: &ProvenTransaction,
         transaction_inputs: &[u8],
     ) -> Result<BlockNumber> {
-        let transaction = proven_tx.to_bytes();
+        let transaction: miden_node_proto::generated::transaction::ProvenTransaction =
+            proven_tx.into();
         let tx_id = proven_tx.id();
         let stale_key = AtomicBool::new(false);
 
@@ -180,7 +193,7 @@ impl TransactionSubmissionClient {
                 self.rpc_client
                     .clone()
                     .submit_proven_tx(ProtoProvenTransaction {
-                        transaction,
+                        transaction: Some(transaction),
                         sealed_transaction_inputs: Some(sealed),
                     })
                     .await
@@ -256,6 +269,7 @@ pub async fn create_genesis_aware_rpc_client(
         let block_header_request = BlockHeaderByNumberRequest {
             block_num: Some(BlockNumber::GENESIS.as_u32()),
             include_mmr_proof: None,
+            include_protocol_config: None,
         };
 
         let response = rpc
@@ -312,13 +326,15 @@ pub async fn create_and_deploy_accounts(
 
     let mut rpc_client = submission_client.rpc_client();
 
-    // The genesis header is immutable, so it is fetched once and reused by every step below.
-    let genesis_header = fetch_genesis_block_header(&mut rpc_client).await?;
-    let mut funder = active_fee_funder(&genesis_header, funding, &rpc_client)?;
-    let verification_base_fee = genesis_header.fee_parameters().verification_base_fee();
+    let funding_anchor =
+        fetch_tip_chain_state(&mut rpc_client, submission_client.genesis_commitment).await?;
+    let fee_faucet_id = funding_anchor.protocol_config.fee_asset_id().faucet_id();
+    let mut funder =
+        active_fee_funder(&funding_anchor.block_header, funding, &rpc_client, fee_faucet_id)?;
+    let verification_base_fee =
+        funding_anchor.block_header.fee_parameters().verification_base_fee();
 
     let (wallet_account, secret_key) = create_wallet_account()?;
-    let fee_faucet_id = genesis_header.fee_parameters().fee_faucet_id();
     let counter_account =
         create_counter_account(wallet_account.id(), fee_faucet_id, verification_base_fee)?;
 
@@ -339,35 +355,37 @@ pub async fn create_and_deploy_accounts(
         None => (None, None),
     };
 
-    // The creation transaction anchors at the tip; on fee-charging chains the fee faucet is
-    // provisioned as committed in that block (see `fetch_foreign_account_inputs`).
-    let (tip_header, blockchain) =
-        fetch_tip_chain_state(&mut rpc_client, genesis_header.commitment()).await?;
+    let creation_anchor =
+        fetch_tip_chain_state(&mut rpc_client, submission_client.genesis_commitment).await?;
+    let anchor_fee_faucet_id = creation_anchor.protocol_config.fee_asset_id().faucet_id();
     let creation_fee_faucet = match funder.as_ref() {
         Some(_) => Some(
-            fetch_foreign_account_inputs(&mut rpc_client, fee_faucet_id, tip_header.block_num())
-                .await
-                .context("failed to fetch the fee faucet's state at the reference block")?,
+            fetch_foreign_account_inputs(
+                &mut rpc_client,
+                anchor_fee_faucet_id,
+                creation_anchor.block_header.block_num(),
+            )
+            .await
+            .context("failed to fetch the fee faucet's state at the reference block")?,
         ),
         None => None,
     };
 
-    let committed_counter = deploy_counter_account(
+    let committed_counter = Box::pin(deploy_counter_account(
         &counter_account,
-        tip_header,
-        blockchain,
+        creation_anchor.block_header,
+        creation_anchor.protocol_config,
+        creation_anchor.blockchain,
         counter_funding_note,
         creation_fee_faucet,
         submission_client,
         prover,
-    )
+    ))
     .await?;
-    let anchored_fee_faucet_id = funder.is_some().then_some(fee_faucet_id);
     let counter_anchor = resolve_counter_anchor(
         &mut rpc_client,
-        &genesis_header,
         &committed_counter,
-        anchored_fee_faucet_id,
+        submission_client.genesis_commitment,
     )
     .await?;
 
@@ -413,20 +431,15 @@ pub fn active_fee_funding<'a>(
 
 /// Returns a [`FeeFunder`] on fee-charging chains, `None` on zero-fee chains.
 ///
-/// The funder binds the faucet client to the given RPC client and to the fee faucet ID from the
-/// genesis fee parameters.
+/// The funder binds the faucet client to the given RPC client and to the active fee faucet ID.
 pub fn active_fee_funder(
     genesis_header: &BlockHeader,
     funding: Option<&FaucetClient>,
     rpc_client: &RpcClient,
+    fee_faucet_id: AccountId,
 ) -> Result<Option<FeeFunder>> {
-    let funder = active_fee_funding(genesis_header, funding)?.map(|faucet| {
-        FeeFunder::new(
-            faucet.clone(),
-            rpc_client.clone(),
-            genesis_header.fee_parameters().fee_faucet_id(),
-        )
-    });
+    let funder = active_fee_funding(genesis_header, funding)?
+        .map(|faucet| FeeFunder::new(faucet.clone(), rpc_client.clone(), fee_faucet_id));
     Ok(funder)
 }
 
@@ -445,12 +458,12 @@ pub(crate) async fn fetch_foreign_account_inputs(
 
     let id_bytes: [u8; 15] = account_id.into();
     // Dummy commitments force the server to include code and vault data in the response.
-    let dummy: miden_node_proto::generated::primitives::Digest = Word::default().into();
+    let dummy: miden_node_proto::generated::primitives::Word = Word::default().into();
     let request = ProtoAccountRequest {
         account_id: Some(miden_node_proto::generated::account::AccountId { id: id_bytes.to_vec() }),
         block_num: Some(block_num.into()),
         details: Some(AccountDetailRequest {
-            code_commitment: Some(dummy),
+            code_commitment: Some(dummy.clone()),
             asset_vault_commitment: Some(dummy),
             storage_request: Some(StorageRequest::AllStorageMaps(true)),
         }),
@@ -475,10 +488,7 @@ pub(crate) async fn fetch_foreign_account_inputs(
         .details
         .with_context(|| format!("no details returned for public account {account_id}"))?;
 
-    let code = AccountCode::read_from_bytes(
-        &details.account_code.context("server did not return the account code")?,
-    )
-    .context("failed to deserialize the account code")?;
+    let code = details.account_code.context("server did not return the account code")?;
 
     let vault = match details.vault_details {
         AccountVaultDetails::Assets(assets) => {
@@ -550,6 +560,8 @@ pub struct CounterAnchor {
     pub block_header: BlockHeader,
     /// Chain MMR whose peaks hash to `block_header.chain_commitment()`.
     pub blockchain: PartialBlockchain,
+    /// Protocol configuration committed by `block_header`.
+    pub protocol_config: ProtocolConfig,
     /// The counter account exactly as committed in `block_header`.
     pub counter_account: Account,
     /// Witness proving `counter_account`'s inclusion in `block_header`'s account tree.
@@ -572,11 +584,9 @@ const ANCHOR_RESOLUTION_DELAY: Duration = Duration::from_secs(1);
 /// describes, since the deployment transaction needs a block to land in first.
 async fn resolve_counter_anchor(
     rpc_client: &mut RpcClient,
-    genesis_header: &BlockHeader,
     committed_counter: &Account,
-    fee_faucet_id: Option<AccountId>,
+    genesis_commitment: Word,
 ) -> Result<CounterAnchor> {
-    let genesis_commitment = genesis_header.commitment();
     let expected_state = committed_counter.to_commitment();
     let mut last_error = None;
 
@@ -590,7 +600,6 @@ async fn resolve_counter_anchor(
             committed_counter,
             expected_state,
             genesis_commitment,
-            fee_faucet_id,
         )
         .await
         {
@@ -642,9 +651,9 @@ async fn try_resolve_counter_anchor(
     committed_counter: &Account,
     expected_state: Word,
     genesis_commitment: Word,
-    fee_faucet_id: Option<AccountId>,
 ) -> Result<Option<CounterAnchor>> {
-    let (block_header, blockchain) = fetch_tip_chain_state(rpc_client, genesis_commitment).await?;
+    let anchor = fetch_tip_chain_state(rpc_client, genesis_commitment).await?;
+    let block_header = anchor.block_header;
     let block_num = block_header.block_num();
 
     let witness = fetch_account_witness(rpc_client, committed_counter.id(), block_num).await?;
@@ -667,28 +676,51 @@ async fn try_resolve_counter_anchor(
 
     // The kernel authenticates the faucet against the anchor block's account root, so fetch it
     // exactly as committed there.
-    let fee_faucet = match fee_faucet_id {
-        Some(faucet_id) => {
-            Some(fetch_foreign_account_inputs(rpc_client, faucet_id, block_num).await?)
-        },
-        None => None,
+    let fee_faucet = if block_header.fee_parameters().verification_base_fee() == 0 {
+        None
+    } else {
+        let faucet_id = anchor.protocol_config.fee_asset_id().faucet_id();
+        Some(fetch_foreign_account_inputs(rpc_client, faucet_id, block_num).await?)
     };
 
     Ok(Some(CounterAnchor {
         block_header,
-        blockchain,
+        blockchain: anchor.blockchain,
+        protocol_config: anchor.protocol_config,
         counter_account: committed_counter.clone(),
         witness,
         fee_faucet,
     }))
 }
 
-/// Fetch the chain tip header together with a [`PartialBlockchain`] whose peaks hash to that
-/// header's chain commitment, making the pair usable as a transaction reference block.
+/// Ensures that a transaction anchor and its protocol configuration describe the same state.
+fn ensure_anchor_protocol_config_matches(
+    block_header: &BlockHeader,
+    protocol_config: &ProtocolConfig,
+) -> Result<()> {
+    let provided_commitment = protocol_config.to_commitment();
+    let expected_commitment = block_header.protocol_config_commitment();
+    anyhow::ensure!(
+        provided_commitment == expected_commitment,
+        "protocol configuration commitment {provided_commitment} does not match anchor block {} \
+         commitment {expected_commitment}",
+        block_header.block_num(),
+    );
+    Ok(())
+}
+
+/// A verified transaction anchor for one chain state.
+struct ChainState {
+    block_header: BlockHeader,
+    protocol_config: ProtocolConfig,
+    blockchain: PartialBlockchain,
+}
+
+/// Fetches the chain tip header, protocol configuration, and partial blockchain.
 async fn fetch_tip_chain_state(
     rpc_client: &mut RpcClient,
     genesis_commitment: Word,
-) -> Result<(BlockHeader, PartialBlockchain)> {
+) -> Result<ChainState> {
     let response = rpc_client
         .sync_chain_mmr(SyncChainMmrRequest {
             // The MMR is seeded with the genesis block below, so the delta starts at block 1.
@@ -699,11 +731,22 @@ async fn fetch_tip_chain_state(
         .context("failed to sync the chain MMR")?
         .into_inner();
 
+    decode_chain_state(response, genesis_commitment)
+}
+
+fn decode_chain_state(
+    response: SyncChainMmrResponse,
+    genesis_commitment: Word,
+) -> Result<ChainState> {
     let tip_header: BlockHeader = response
         .block_header
         .context("sync_chain_mmr response did not include a block header")?
         .try_into()
         .context("failed to convert the sync target block header")?;
+
+    let protocol_config =
+        ensure_protocol_config_is_present_and_matches_header(response.protocol_config, &tip_header)
+            .context("sync_chain_mmr response did not include a valid protocol configuration")?;
 
     let delta: MmrDelta = response
         .mmr_delta
@@ -731,7 +774,11 @@ async fn fetch_tip_chain_state(
     let blockchain = PartialBlockchain::new(mmr, Vec::new())
         .context("failed to build the partial blockchain")?;
 
-    Ok((tip_header, blockchain))
+    Ok(ChainState {
+        block_header: tip_header,
+        protocol_config,
+        blockchain,
+    })
 }
 
 /// Fetch the account-tree witness proving an account's state in the given block.
@@ -758,26 +805,6 @@ async fn fetch_account_witness(
     Ok(response.witness)
 }
 
-/// Fetch the genesis block header from RPC.
-async fn fetch_genesis_block_header(rpc_client: &mut RpcClient) -> Result<BlockHeader> {
-    let block_header_request = BlockHeaderByNumberRequest {
-        block_num: Some(BlockNumber::GENESIS.as_u32()),
-        include_mmr_proof: None,
-    };
-
-    let response = rpc_client
-        .get_block_header_by_number(block_header_request)
-        .await
-        .context("Failed to get the genesis block header from RPC")?;
-
-    let root_block_header = response
-        .into_inner()
-        .block_header
-        .ok_or_else(|| anyhow::anyhow!("No block header in response"))?;
-
-    root_block_header.try_into().context("Failed to convert block header")
-}
-
 /// Execute the counter account's genesis (creation) transaction in-memory.
 ///
 /// Builds a [`MonitorDataStore`] over the given reference block and executes the creation
@@ -790,12 +817,13 @@ async fn fetch_genesis_block_header(rpc_client: &mut RpcClient) -> Result<BlockH
 pub(crate) async fn execute_counter_genesis_tx(
     counter_account: &Account,
     reference_header: BlockHeader,
+    protocol_config: ProtocolConfig,
     blockchain: PartialBlockchain,
     funding_note: Option<Note>,
     fee_faucet: Option<(Account, AccountWitness)>,
 ) -> Result<ExecutedTransaction> {
     let reference_block = reference_header.block_num();
-    let mut data_store = MonitorDataStore::new(reference_header, blockchain);
+    let mut data_store = MonitorDataStore::new(reference_header, protocol_config, blockchain);
     data_store.add_account(counter_account.clone());
     // Paying the fee moves the callback-enabled asset, which loads the issuing faucet.
     if let Some((faucet_account, faucet_witness)) = fee_faucet {
@@ -805,7 +833,13 @@ pub(crate) async fn execute_counter_genesis_tx(
     let executor: TransactionExecutor<'_, '_, _, BasicAuthenticator> =
         TransactionExecutor::new(&data_store);
 
-    let tx_args = TransactionArgs::default();
+    // Protocol 0.17 requires every network-account transaction to have an effect before fee
+    // payment. A funding note supplies this effect on fee-charging chains. Emit an empty private
+    // note when the chain has no fees so that account creation also satisfies this rule.
+    let tx_args = match funding_note.as_ref() {
+        Some(_) => TransactionArgs::default(),
+        None => counter_creation_tx_args(counter_account)?,
+    };
 
     let input_notes = match funding_note {
         Some(note) => InputNotes::new(vec![InputNote::unauthenticated(note)])
@@ -821,14 +855,33 @@ pub(crate) async fn execute_counter_genesis_tx(
     Ok(executed_tx)
 }
 
+fn counter_creation_tx_args(counter_account: &Account) -> Result<TransactionArgs> {
+    let recipient = P2idNoteStorage::new(counter_account.id()).into_recipient(Word::default());
+    let note = Note::new(
+        NoteAssets::default(),
+        PartialNoteMetadata::new(counter_account.id(), NoteType::Private),
+        recipient.clone(),
+    );
+    let partial_note = PartialNote::from(note);
+    let script = SendNotesTransactionScript::new(
+        &counter_account.code_interface(),
+        std::slice::from_ref(&partial_note),
+    )
+    .context("failed to build the counter creation transaction script")?;
+
+    let mut tx_args = TransactionArgs::default()
+        .with_tx_script_and_args(script.tx_script().clone(), script.tx_script_args());
+    tx_args.add_output_note_recipient(Box::new(recipient));
+    Ok(tx_args)
+}
+
 /// Build a valid set of transaction inputs for a throwaway counter genesis transaction.
 ///
 /// Used as the static payload for the remote-prover probe: it produces a real, self-consistent
 /// transaction the remote prover can re-execute and prove, without depending on the network
 /// transaction service or any pre-existing on-chain account. The only network access is the RPC
-/// handshake plus a single read of the genesis block header, which supplies both the reference block
-/// and the fee faucet the counter's fee policy is denominated in. Nothing is proven or submitted
-/// here.
+/// handshake plus one chain synchronization request, which supplies the complete transaction
+/// anchor. Nothing is proven or submitted here.
 ///
 /// On a fee-charging chain a faucet note is claimed and consumed to pay the fee. The transaction
 /// is never submitted, so the note is never spent on-chain: one claim serves every probe run.
@@ -838,39 +891,47 @@ pub async fn build_probe_transaction_inputs(
 ) -> Result<TransactionInputs> {
     let (wallet_account, _secret_key) = create_wallet_account()?;
 
-    let (mut rpc_client, _) =
+    let (mut rpc_client, genesis_commitment) =
         create_genesis_aware_rpc_client(rpc_url, Duration::from_secs(10)).await?;
-    let genesis_header = fetch_genesis_block_header(&mut rpc_client).await?;
-    let mut funder = active_fee_funder(&genesis_header, funding, &rpc_client)?;
-    let verification_base_fee = genesis_header.fee_parameters().verification_base_fee();
-    let fee_faucet_id = genesis_header.fee_parameters().fee_faucet_id();
+    let anchor = fetch_tip_chain_state(&mut rpc_client, genesis_commitment).await?;
+    let fee_faucet_id = anchor.protocol_config.fee_asset_id().faucet_id();
+    let mut funder = active_fee_funder(&anchor.block_header, funding, &rpc_client, fee_faucet_id)?;
+    let verification_base_fee = anchor.block_header.fee_parameters().verification_base_fee();
     let counter_account =
         create_counter_account(wallet_account.id(), fee_faucet_id, verification_base_fee)?;
 
-    let (tip_header, blockchain) =
-        fetch_tip_chain_state(&mut rpc_client, genesis_header.commitment()).await?;
-    let (funding_note, fee_faucet) = match funder.as_mut() {
+    let funding_note = match funder.as_mut() {
         Some(funder) => {
             let note = funder
                 .fund(counter_account.id(), counter_funding_amount(verification_base_fee))
                 .await
                 .context("failed to fund the probe's counter account")?;
-            let faucet = fetch_foreign_account_inputs(
+            Some(note)
+        },
+        None => None,
+    };
+
+    let execution_anchor = fetch_tip_chain_state(&mut rpc_client, genesis_commitment).await?;
+    let anchor_fee_faucet_id = execution_anchor.protocol_config.fee_asset_id().faucet_id();
+    let fee_faucet = if funder.is_some() {
+        Some(
+            fetch_foreign_account_inputs(
                 &mut rpc_client,
-                fee_faucet_id,
-                tip_header.block_num(),
+                anchor_fee_faucet_id,
+                execution_anchor.block_header.block_num(),
             )
             .await
-            .context("failed to fetch the fee faucet's state at the reference block")?;
-            (Some(note), Some(faucet))
-        },
-        None => (None, None),
+            .context("failed to fetch the fee faucet's state at the reference block")?,
+        )
+    } else {
+        None
     };
 
     let executed_tx = execute_counter_genesis_tx(
         &counter_account,
-        tip_header,
-        blockchain,
+        execution_anchor.block_header,
+        execution_anchor.protocol_config,
+        execution_anchor.blockchain,
         funding_note,
         fee_faucet,
     )
@@ -880,6 +941,10 @@ pub async fn build_probe_transaction_inputs(
 }
 
 /// Deploy a counter account to the network by submitting its genesis transaction via RPC.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the arguments describe the account, its complete transaction anchor, and submission"
+)]
 #[miden_instrument(
     target = COMPONENT,
     name = "deploy-counter-account",
@@ -888,6 +953,7 @@ pub async fn build_probe_transaction_inputs(
 pub async fn deploy_counter_account(
     counter_account: &Account,
     reference_header: BlockHeader,
+    protocol_config: ProtocolConfig,
     blockchain: PartialBlockchain,
     funding_note: Option<Note>,
     fee_faucet: Option<(Account, AccountWitness)>,
@@ -897,6 +963,7 @@ pub async fn deploy_counter_account(
     let executed_tx = execute_counter_genesis_tx(
         counter_account,
         reference_header,
+        protocol_config,
         blockchain,
         funding_note,
         fee_faucet,
@@ -927,16 +994,22 @@ pub struct MonitorDataStore {
     accounts: HashMap<AccountId, Account>,
     account_witnesses: HashMap<AccountId, AccountWitness>,
     block_header: BlockHeader,
+    protocol_config: ProtocolConfig,
     partial_block_chain: PartialBlockchain,
     mast_store: TransactionMastStore,
 }
 
 impl MonitorDataStore {
-    pub fn new(block_header: BlockHeader, partial_block_chain: PartialBlockchain) -> Self {
+    pub fn new(
+        block_header: BlockHeader,
+        protocol_config: ProtocolConfig,
+        partial_block_chain: PartialBlockchain,
+    ) -> Self {
         Self {
             accounts: HashMap::new(),
             account_witnesses: HashMap::new(),
             block_header,
+            protocol_config,
             partial_block_chain,
             mast_store: TransactionMastStore::new(),
         }
@@ -969,13 +1042,24 @@ impl DataStore for MonitorDataStore {
         &self,
         account_id: AccountId,
         mut _block_refs: BTreeSet<BlockNumber>,
-    ) -> impl FutureMaybeSend<Result<(PartialAccount, BlockHeader, PartialBlockchain), DataStoreError>>
-    {
+    ) -> impl FutureMaybeSend<
+        Result<(PartialAccount, BlockHeader, ProtocolConfig, PartialBlockchain), DataStoreError>,
+    > {
         async move {
+            ensure_anchor_protocol_config_matches(&self.block_header, &self.protocol_config)
+                .map_err(|err| DataStoreError::Other {
+                    error_msg: err.to_string().into(),
+                    source: None,
+                })?;
             let account = self.get_account(account_id)?;
             let partial_account = PartialAccount::from(account);
 
-            Ok((partial_account, self.block_header.clone(), self.partial_block_chain.clone()))
+            Ok((
+                partial_account,
+                self.block_header.clone(),
+                self.protocol_config.clone(),
+                self.partial_block_chain.clone(),
+            ))
         }
     }
 
@@ -1079,11 +1163,26 @@ impl MastForestStore for MonitorDataStore {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::time::Duration;
 
+    use miden_node_proto::generated::rpc::SyncChainMmrResponse;
+    use miden_protocol::Word;
+    use miden_protocol::asset::{AssetId, FungibleAsset};
+    use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta, MmrPeaks, PartialMmr};
+    use miden_protocol::protocol_config::ProtocolConfig;
+    use miden_protocol::transaction::PartialBlockchain;
     use miden_testing::MockChain;
 
-    use super::{FaucetClient, active_fee_funding};
+    use super::{
+        DataStore,
+        FaucetClient,
+        MonitorDataStore,
+        active_fee_funding,
+        decode_chain_state,
+        ensure_protocol_config_is_present_and_matches_header,
+    };
+    use crate::deploy::wallet::create_wallet_account;
 
     /// A fee-charging chain without a faucet must fail at startup; a zero-fee chain must not fund
     /// even when a faucet is configured.
@@ -1120,5 +1219,110 @@ mod tests {
             err.downcast_ref::<super::UnsupportedChainError>().is_some(),
             "the missing-faucet error must be typed as permanent"
         );
+    }
+
+    #[test]
+    fn rpc_protocol_config_is_accepted_for_its_header() {
+        let chain = MockChain::builder().build().expect("chain should build");
+        let header = chain.genesis_block_header();
+        let expected = chain.protocol_config().clone();
+
+        let decoded =
+            ensure_protocol_config_is_present_and_matches_header(Some((&expected).into()), &header)
+                .expect("the RPC configuration matches its header");
+
+        assert_eq!(decoded, expected);
+    }
+
+    #[test]
+    fn chain_state_response_requires_protocol_config() {
+        let chain = MockChain::builder().build().expect("chain should build");
+        let response = SyncChainMmrResponse {
+            block_range: None,
+            mmr_delta: Some(
+                MmrDelta {
+                    forest: Forest::new(0).expect("zero is a valid forest"),
+                    data: Vec::new(),
+                }
+                .into(),
+            ),
+            block_header: Some(chain.genesis_block_header().into()),
+            block_signatures: Vec::new(),
+            protocol_config: None,
+        };
+
+        let error = decode_chain_state(response, Word::empty())
+            .err()
+            .expect("a transaction anchor requires its protocol configuration");
+
+        assert!(format!("{error:#}").contains("protocol config is missing"));
+    }
+
+    #[test]
+    fn chain_state_response_rejects_an_mmr_mismatch() {
+        let chain = MockChain::builder().build().expect("chain should build");
+        let base = chain.genesis_block_header();
+        let header = miden_protocol::block::BlockHeader::new(
+            base.prev_block_commitment(),
+            base.block_num(),
+            Word::new([1_u32.into(), 0_u32.into(), 0_u32.into(), 0_u32.into()]),
+            base.account_root(),
+            base.nullifier_root(),
+            base.note_root(),
+            base.tx_commitment(),
+            base.validator_config().clone(),
+            base.fee_parameters().clone(),
+            base.protocol_config_commitment(),
+            base.next_protocol_config().cloned(),
+            base.timestamp(),
+        );
+        let response = SyncChainMmrResponse {
+            block_range: None,
+            mmr_delta: Some(
+                MmrDelta {
+                    forest: Forest::new(0).expect("zero is a valid forest"),
+                    data: Vec::new(),
+                }
+                .into(),
+            ),
+            block_header: Some(header.into()),
+            block_signatures: Vec::new(),
+            protocol_config: Some(chain.protocol_config().into()),
+        };
+
+        let error = decode_chain_state(response, Word::empty())
+            .err()
+            .expect("the response MMR must match the target header");
+
+        assert!(error.to_string().contains("synced MMR peaks do not match"));
+    }
+
+    #[tokio::test]
+    async fn data_store_rejects_a_protocol_config_mismatched_with_its_anchor_header() {
+        let chain = MockChain::builder().build().expect("chain should build");
+        let mismatched_fee_faucet = FungibleAsset::mock_issuer();
+        assert_ne!(mismatched_fee_faucet, chain.fee_faucet_id());
+        let mismatched_protocol_config =
+            ProtocolConfig::current(AssetId::new_fungible(mismatched_fee_faucet))
+                .expect("protocol config should build");
+        let anchor_header = chain.genesis_block_header();
+        assert_ne!(
+            mismatched_protocol_config.to_commitment(),
+            anchor_header.protocol_config_commitment(),
+        );
+
+        let blockchain =
+            PartialBlockchain::new(PartialMmr::from_peaks(MmrPeaks::default()), Vec::new())
+                .expect("empty genesis blockchain should build");
+        let (account, _) = create_wallet_account().expect("wallet should build");
+        let mut data_store =
+            MonitorDataStore::new(anchor_header, mismatched_protocol_config, blockchain);
+        data_store.add_account(account.clone());
+
+        let error = data_store
+            .get_transaction_inputs(account.id(), BTreeSet::new())
+            .await
+            .expect_err("an inconsistent header/config pair must not be served");
+        assert!(error.to_string().contains("protocol configuration commitment"));
     }
 }

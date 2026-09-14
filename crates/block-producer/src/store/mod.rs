@@ -81,7 +81,7 @@ impl From<TransactionInputs> for sequencer::AuthInputs {
                 .nullifiers
                 .into_iter()
                 .map(|(nullifier, block_num)| sequencer::NullifierRecord {
-                    nullifier: Some(nullifier.into()),
+                    nullifier: Some(nullifier.as_word().into()),
                     block_num: block_num.map_or(0, NonZeroU32::get),
                 })
                 .collect(),
@@ -109,7 +109,7 @@ impl TryFrom<sequencer::AuthInputs> for TransactionInputs {
             .into_iter()
             .map(|record| {
                 let decoder = record.decoder();
-                let nullifier = decode!(decoder, record.nullifier)?;
+                let nullifier = Nullifier::from_raw(decode!(decoder, record.nullifier)?);
                 Ok((nullifier, NonZeroU32::new(record.block_num)))
             })
             .collect::<Result<_, ConversionError>>()?;
@@ -117,7 +117,7 @@ impl TryFrom<sequencer::AuthInputs> for TransactionInputs {
         let found_unauthenticated_notes = value
             .found_unauthenticated_notes
             .into_iter()
-            .map(Word::try_from)
+            .map(|word| Word::try_from(word).map_err(ConversionError::from))
             .collect::<Result<_, ConversionError>>()?;
 
         Ok(Self {
