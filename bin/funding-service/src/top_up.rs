@@ -20,6 +20,7 @@ use miden_standards::note::{P2idNote, P2idNoteStorage};
 use miden_standards::tx_script::ExpirationTransactionScript;
 use miden_tx::TransactionExecutor;
 use miden_tx::auth::BasicAuthenticator;
+use tokio::time::MissedTickBehavior;
 
 use crate::LOG_TARGET;
 use crate::account::FunderKey;
@@ -72,9 +73,11 @@ impl TopUpCollector {
 
     /// Collects deposits until the service shuts down.
     pub async fn run(mut self, shutdown: CancellationToken) -> Result<()> {
+        let mut interval = tokio::time::interval(self.setup.interval);
+        interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
             tokio::select! {
-                () = tokio::time::sleep(self.setup.interval) => {},
+                _ = interval.tick() => {},
                 () = shutdown.cancelled() => return Ok(()),
             }
 
