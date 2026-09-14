@@ -1,11 +1,13 @@
 use std::sync::atomic::Ordering;
 
+use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
 use miden_node_proto::{BlockProofRequest, generated as grpc};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorReport, Instrument, info_span, miden_instrument};
 use miden_protocol::Word;
-use miden_protocol::block::{BlockNumber, ProposedBlock};
+use miden_protocol::block::{BlockHeader, BlockNumber, ProposedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
+use miden_protocol::protocol_config::ProtocolConfig;
 
 use super::ValidatorService;
 use crate::COMPONENT;
@@ -58,24 +60,52 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
                 tonic::Status::internal(format!("sign_block semaphore closed: {err}"))
             })?;
 
-        let proposed_block = spawn_blocking_in_current_span(move || {
-            let request = BlockProofRequest::try_from(request).map_err(tonic::Status::from)?;
-            ProposedBlock::new_at(
-                request.block_inputs,
-                request.tx_batches.into_vec(),
-                request.block_header.timestamp(),
-            )
-            .map(|block| {
-                block
-                    .with_next_validator_config(request.block_header.validator_config().clone())
-                    .with_next_protocol_config(request.block_header.next_protocol_config().cloned())
+        let (proposed_block, protocol_config, protocol_config_commitment) =
+            spawn_blocking_in_current_span(move || {
+                let mut request = request;
+                let supplied_protocol_config = request.protocol_config.take();
+                let request = BlockProofRequest::try_from(request).map_err(tonic::Status::from)?;
+                let protocol_config = supplied_protocol_config
+                    .map(|config| {
+                        ensure_protocol_config_is_present_and_matches_header(
+                            Some(config),
+                            &request.block_header,
+                        )
+                    })
+                    .transpose()
+                    .map_err(tonic::Status::from)?;
+                let protocol_config_commitment = request.block_header.protocol_config_commitment();
+                let proposed_block = ProposedBlock::new_at(
+                    request.block_inputs,
+                    request.tx_batches.into_vec(),
+                    request.block_header.timestamp(),
+                )
+                .map(|block| {
+                    block
+                        .with_next_validator_config(request.block_header.validator_config().clone())
+                        .with_next_protocol_config(
+                            request.block_header.next_protocol_config().cloned(),
+                        )
+                })
+                .map_err(|error| tonic::Status::invalid_argument(error.to_string()))?;
+                Ok::<_, tonic::Status>((
+                    proposed_block,
+                    protocol_config,
+                    protocol_config_commitment,
+                ))
             })
-            .map_err(|error| tonic::Status::invalid_argument(error.to_string()))
-        })
-        .await
-        .map_err(|error| {
-            tonic::Status::internal(format!("block decoding task failed: {error}"))
-        })??;
+            .await
+            .map_err(|error| {
+                tonic::Status::internal(format!("block decoding task failed: {error}"))
+            })??;
+        let protocol_config = self
+            .resolve_protocol_config(protocol_config_commitment, protocol_config)
+            .await?;
+
+        let block_num = proposed_block.block_num();
+        let previous_backup = self.block_store.load_block(block_num).await.map_err(|err| {
+            tonic::Status::internal(format!("Failed to load previous block backup: {err}"))
+        })?;
 
         // Load the current chain tip from the database.
         let chain_tip = self
@@ -102,9 +132,7 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
 
         // Persist the signed header.
         let new_block_num = header.block_num().as_u32();
-        self.db.upsert_block_header(header).await.map_err(|err| {
-            tonic::Status::internal(format!("Failed to persist block header: {}", err.as_report()))
-        })?;
+        self.persist_signed_header(header, protocol_config, previous_backup).await?;
 
         // Update the in-memory counters after successful persistence. The block has already been
         // backed up to the block store by `validate_block`, so it is available to subscribers by
@@ -113,5 +141,62 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
         self.signed_blocks_count.fetch_add(1, Ordering::Relaxed);
 
         Ok((signature, block_commitment, self.signer.public_key()))
+    }
+}
+
+impl ValidatorService {
+    /// Resolves and validates the active configuration before the block is signed.
+    async fn resolve_protocol_config(
+        &self,
+        commitment: Word,
+        supplied: Option<ProtocolConfig>,
+    ) -> tonic::Result<ProtocolConfig> {
+        let stored = self.db.load_protocol_config(commitment).await.map_err(|err| {
+            tonic::Status::internal(format!("Failed to load protocol config: {}", err.as_report()))
+        })?;
+
+        match (supplied, stored) {
+            (Some(supplied), Some(stored)) if supplied != stored => Err(tonic::Status::internal(
+                format!("Stored protocol config {commitment} differs from the supplied config"),
+            )),
+            (Some(supplied), _) => Ok(supplied),
+            (None, Some(stored)) => Ok(stored),
+            (None, None) => Err(tonic::Status::invalid_argument(format!(
+                "Protocol config {commitment} is not stored"
+            ))),
+        }
+    }
+
+    /// Persists the signed header and restores an existing backup if persistence fails.
+    async fn persist_signed_header(
+        &self,
+        header: BlockHeader,
+        protocol_config: ProtocolConfig,
+        previous_backup: Option<Vec<u8>>,
+    ) -> tonic::Result<()> {
+        let block_num = header.block_num();
+        let Err(err) = self
+            .db
+            .upsert_block_header_with_protocol_config(header, Some(protocol_config))
+            .await
+        else {
+            return Ok(());
+        };
+
+        if let Some(previous_backup) = previous_backup {
+            self.block_store
+                .save_block(block_num, &previous_backup)
+                .await
+                .map_err(|restore_err| {
+                    tonic::Status::internal(format!(
+                        "Failed to persist block header: {}; failed to restore block backup: {restore_err}",
+                        err.as_report()
+                    ))
+                })?;
+        }
+        Err(tonic::Status::internal(format!(
+            "Failed to persist block header: {}",
+            err.as_report()
+        )))
     }
 }

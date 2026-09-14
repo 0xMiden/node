@@ -150,7 +150,10 @@ fn bootstrap_rolls_back_protocol_config_when_genesis_insert_fails() {
     .unwrap();
 
     assert!(super::insert_genesis(&mut conn, empty_genesis_block()).is_err());
-    assert_eq!(queries::select_protocol_config(&mut conn, commitment).unwrap(), None);
+    assert_eq!(
+        queries::select_protocol_config_by_commitment(&mut conn, commitment).unwrap(),
+        None
+    );
 }
 
 fn block_account_update(

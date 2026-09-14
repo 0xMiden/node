@@ -133,9 +133,6 @@ miden-validator genesis \
     --accounts-directory      "$DATA/accounts" \
     --validator.key           "$VALIDATOR_SIGNING_PUBLIC_KEY" \
     > "$LOGS/genesis.log" 2>&1
-FEE_FAUCET_ID="$(sed -n 's/^Native faucet account id: //p' "$LOGS/genesis.log")"
-[ -n "$FEE_FAUCET_ID" ] || die "genesis did not report the native faucet account ID"
-
 say "bootstrapping validator storage from genesis"
 miden-validator bootstrap \
     --data-directory "$DATA/validator" \
@@ -211,7 +208,6 @@ say "running create-proofs with N=$N_TXS (use_remote_prover=$USE_REMOTE_PROVER)"
 miden-benchmark create-proofs \
     --rpc-url          "http://127.0.0.1:$RPC_PORT" \
     --num-transactions "$N_TXS" \
-    --fee-faucet-id    "$FEE_FAUCET_ID" \
     $REMOTE_PROVER_ARG \
     2>&1 | tee "$LOGS/create-proofs.log"
 

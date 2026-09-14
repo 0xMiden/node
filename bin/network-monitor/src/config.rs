@@ -7,7 +7,6 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use miden_protocol::account::AccountId;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
 use miden_protocol::utils::serde::Deserializable;
 use url::Url;
@@ -57,18 +56,6 @@ pub struct MonitorConfig {
         help = "The URL of the faucet service for testing (optional)"
     )]
     pub faucet_url: Option<Url>,
-
-    /// Faucet account whose fungible asset the target chain uses for fees.
-    ///
-    /// Transaction execution checks need this value because block headers contain only the
-    /// protocol configuration commitment.
-    #[arg(
-        long = "fee-faucet-id",
-        env = "MIDEN_MONITOR_FEE_FAUCET_ID",
-        value_parser = parse_account_id,
-        help = "Fee faucet account ID (hex or Bech32) for transaction execution checks"
-    )]
-    pub fee_faucet_id: Option<AccountId>,
 
     /// The interval at which to test the remote provers services.
     #[arg(
@@ -215,13 +202,6 @@ pub struct MonitorConfig {
 }
 
 impl MonitorConfig {
-    /// Returns the fee faucet required by checks that execute transactions.
-    pub fn fee_faucet_id(&self) -> Result<AccountId> {
-        self.fee_faucet_id.context(
-            "--fee-faucet-id is required for remote transaction-prover or network transaction checks",
-        )
-    }
-
     /// Decodes the validator signing key required by transaction submission checks.
     pub fn trusted_validator_signing_key(&self) -> Result<ValidatorPublicKey> {
         let encoded = self.validator_signing_public_key.as_deref().context(
@@ -232,10 +212,4 @@ impl MonitorConfig {
         ValidatorPublicKey::read_from_bytes(&bytes)
             .context("validator signing public key must be a valid K256 public key")
     }
-}
-
-fn parse_account_id(value: &str) -> std::result::Result<AccountId, String> {
-    AccountId::parse(value)
-        .map(|(account_id, _network_id)| account_id)
-        .map_err(|err| err.to_string())
 }

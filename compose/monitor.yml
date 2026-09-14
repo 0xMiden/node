@@ -8,20 +8,15 @@ services:
         condition: service_started
       sequencer:
         condition: service_started
-    entrypoint: ["/bin/sh", "-ec"]
     command:
-      - |
-        fee_faucet_id="$${MIDEN_MONITOR_FEE_FAUCET_ID:-$$(cat /data/genesis/native-faucet-id)}"
-        exec miden-network-monitor start --fee-faucet-id "$${fee_faucet_id}"
+      - miden-network-monitor
+      - start
     environment:
       MIDEN_MONITOR_RPC_URL: http://sequencer:57291
       MIDEN_MONITOR_PORT: "3001"
       MIDEN_MONITOR_NETWORK_NAME: Localhost
-      MIDEN_MONITOR_FEE_FAUCET_ID: ${MIDEN_MONITOR_FEE_FAUCET_ID:-}
       # Public key for validator 1's insecure default development signing key.
       MIDEN_MONITOR_VALIDATOR_SIGNING_PUBLIC_KEY: 031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
-    volumes:
-      - node-data:/data:ro
     ports:
       - "127.0.0.1:3001:3001"

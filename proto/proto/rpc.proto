@@ -10,6 +10,7 @@ import "block.proto";
 import "block_number.proto";
 import "note.proto";
 import "primitives.proto";
+import "protocol_config.proto";
 import "transaction.proto";
 import "types/submission.proto";
 
@@ -140,6 +141,10 @@ message BlockSubscriptionResponse {
 
     // The committed chain tip when this item was emitted.
     fixed32 committed_chain_tip = 2;
+
+    // The active configuration. Included with the first response and when its commitment changes.
+    // Verify its commitment against the accompanying block header.
+    protocol_config.ProtocolConfig protocol_config = 3;
 }
 
 // PROOF SUBSCRIPTION
@@ -229,6 +234,8 @@ message BlockHeaderByNumberRequest {
     optional uint32 block_num = 1;
     // Whether or not to return authentication data for the block header.
     optional bool include_mmr_proof = 2;
+    // Whether to include the active configuration for the returned header.
+    optional bool include_protocol_config = 3;
 }
 
 // Represents the result of getting a block header by block number.
@@ -241,6 +248,9 @@ message BlockHeaderByNumberResponse {
 
     // Current chain length.
     optional fixed32 chain_length = 3;
+
+    // Included when requested and the header exists. Verify its commitment against that header.
+    optional protocol_config.ProtocolConfig protocol_config = 4;
 }
 
 // GET BLOCK BY NUMBER
@@ -654,6 +664,11 @@ message SyncChainMmrResponse {
     // Validator signatures for the sync target, ordered positionally with respect to the
     // validator set committed to by the parent block's header.
     repeated primitives.Signature block_signatures = 4;
+
+    // The target header's active configuration. Included when the client starts at genesis or
+    // the starting and target headers have different configuration commitments.
+    // Verify its commitment against the target header.
+    optional protocol_config.ProtocolConfig protocol_config = 5;
 }
 
 // SYNC ACCOUNT STORAGE MAP

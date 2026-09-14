@@ -4,6 +4,7 @@ package validator;
 
 import "block.proto";
 import "primitives.proto";
+import "protocol_config.proto";
 import "types/block_proving.proto";
 import "types/submission.proto";
 import "google/protobuf/empty.proto";
@@ -62,6 +63,10 @@ message BlockSubscriptionResponse {
 
     // The signed chain tip when this item was emitted.
     fixed32 committed_chain_tip = 2;
+
+    // The active configuration. Included with the first response and when its commitment changes.
+    // Verify its commitment against the accompanying block header.
+    optional protocol_config.ProtocolConfig protocol_config = 3;
 }
 
 // VALIDATOR STATUS

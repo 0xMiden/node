@@ -15,7 +15,6 @@ use miden_node_proto::clients::{RemoteProverClient, RemoteProverProxyStatusClien
 use miden_node_proto::generated as proto;
 use miden_node_proto::prost::Message;
 use miden_node_tracing::{debug, miden_instrument, warn};
-use miden_protocol::account::AccountId;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -35,11 +34,6 @@ use crate::service_status::{
     ServiceStatus,
     Status,
 };
-
-const MISSING_FEE_FAUCET_GUIDANCE: &str = concat!(
-    "transaction prover probe requires --fee-faucet-id ",
-    "after transaction capability discovery",
-);
 
 // PROOF TYPE
 // ================================================================================================
@@ -106,11 +100,10 @@ struct ProbeSpawner {
 
 impl ProbeSpawner {
     /// Spawns a probe task and returns its handle.
-    fn spawn(&self, fee_faucet_id: AccountId) -> JoinHandle<()> {
+    fn spawn(&self) -> JoinHandle<()> {
         tokio::spawn(run_prover_test(
             self.client.clone(),
             self.rpc_url.clone(),
-            fee_faucet_id,
             self.funding.clone(),
             self.interval,
             self.probe_tx.clone(),
@@ -130,7 +123,6 @@ pub struct ProverStatusService {
     request_timeout: Duration,
     last_status: Option<RemoteProverStatusDetails>,
     last_status_err: Option<String>,
-    fee_faucet_id: Option<AccountId>,
     probe_rx: watch::Receiver<ProbeSnapshot>,
     probe_spawner: ProbeSpawner,
     probe_handle: Option<JoinHandle<()>>,
@@ -144,7 +136,6 @@ impl ProverStatusService {
         name: String,
         prover_url: Url,
         rpc_url: Url,
-        fee_faucet_id: Option<AccountId>,
         funding: Option<FaucetClient>,
         interval: Duration,
         request_timeout: Duration,
@@ -170,7 +161,6 @@ impl ProverStatusService {
             request_timeout,
             last_status: None,
             last_status_err: None,
-            fee_faucet_id,
             probe_rx,
             probe_spawner,
             probe_handle: None,
@@ -190,13 +180,10 @@ impl ProverStatusService {
         if !matches!(status.supported_proof_type, ProofType::Transaction) {
             return;
         }
-        let Some(fee_faucet_id) = self.fee_faucet_id else {
-            return;
-        };
         match &self.probe_handle {
             None => {
                 debug!(target: COMPONENT, "spawning probe task", prover = self.name);
-                self.probe_handle = Some(self.probe_spawner.spawn(fee_faucet_id));
+                self.probe_handle = Some(self.probe_spawner.spawn());
             },
             Some(handle) if handle.is_finished() => {
                 warn!(
@@ -218,7 +205,7 @@ impl ProverStatusService {
                         error: Some("probe task terminated unexpectedly; respawning".to_string()),
                     });
                 });
-                self.probe_handle = Some(self.probe_spawner.spawn(fee_faucet_id));
+                self.probe_handle = Some(self.probe_spawner.spawn());
             },
             Some(_) => {},
         }
@@ -258,18 +245,6 @@ impl ProverStatusService {
         // Most recent status poll failure takes precedence while retaining the last known details.
         if let Some(err) = &self.last_status_err {
             service_status = ServiceStatus::unhealthy(&self.name, err.clone(), details);
-        }
-
-        if self.fee_faucet_id.is_none()
-            && matches!(status_details.supported_proof_type, ProofType::Transaction)
-        {
-            service_status.error = Some(match service_status.error {
-                Some(error) => format!("{error}; {MISSING_FEE_FAUCET_GUIDANCE}"),
-                None => MISSING_FEE_FAUCET_GUIDANCE.to_string(),
-            });
-            if service_status.status == Status::Healthy {
-                service_status.status = Status::Unknown;
-            }
         }
 
         service_status
@@ -413,7 +388,6 @@ const PAYLOAD_RETRY_DELAY: Duration = Duration::from_secs(30);
 async fn run_prover_test(
     mut client: RemoteProverClient,
     rpc_url: Url,
-    fee_faucet_id: AccountId,
     funding: Option<FaucetClient>,
     interval: Duration,
     probe_tx: watch::Sender<ProbeSnapshot>,
@@ -428,7 +402,7 @@ async fn run_prover_test(
             );
             return;
         }
-        match generate_prover_test_payload(&rpc_url, fee_faucet_id, funding.as_ref()).await {
+        match generate_prover_test_payload(&rpc_url, funding.as_ref()).await {
             Ok(payload) => break payload,
             Err(e) => {
                 warn!(
@@ -566,11 +540,9 @@ fn tonic_status_to_json(status: &tonic::Status) -> String {
 )]
 async fn generate_prover_test_payload(
     rpc_url: &Url,
-    fee_faucet_id: AccountId,
     funding: Option<&FaucetClient>,
 ) -> anyhow::Result<proto::remote_prover::ProofRequest> {
-    let tx_inputs =
-        crate::deploy::build_probe_transaction_inputs(rpc_url, fee_faucet_id, funding).await?;
+    let tx_inputs = crate::deploy::build_probe_transaction_inputs(rpc_url, funding).await?;
     Ok(proto::remote_prover::ProofRequest {
         request: Some(proto::remote_prover::proof_request::Request::Transaction(tx_inputs.into())),
     })

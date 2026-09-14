@@ -19,19 +19,26 @@ use miden_node_utils::testing::{
 use miden_protocol::Word;
 use miden_protocol::account::AccountUpdateDetails;
 use miden_protocol::account::auth::AuthScheme;
-use miden_protocol::asset::{Asset, FungibleAsset};
+use miden_protocol::asset::{Asset, AssetId, FungibleAsset};
 use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{
     BlockHeader,
     BlockInputs,
     BlockNumber,
+    BlockSignatures,
     ProposedBlock,
+    SignedBlock,
     ValidatorConfig,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::crypto::dsa::eddsa_25519_sha512::KeyExchangeKey;
 use miden_protocol::note::NoteType;
-use miden_protocol::testing::account_id::{ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET, ACCOUNT_ID_SENDER};
+use miden_protocol::protocol_config::{KernelConfig, ProtocolConfig};
+use miden_protocol::testing::account_id::{
+    ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
+    ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1,
+    ACCOUNT_ID_SENDER,
+};
 use miden_protocol::testing::random_secret_key::random_secret_key;
 use miden_protocol::transaction::{
     InputNoteCommitment,
@@ -79,6 +86,7 @@ struct TestValidator {
     server: ValidatorService,
     chain: PartialBlockchain,
     chain_tip: BlockHeader,
+    protocol_config: ProtocolConfig,
     // Keeps the database's temp directory alive for the validator's lifetime: the reader pool opens
     // connections lazily, so the file must still exist when the first read runs.
     _temp_dir: tempfile::TempDir,
@@ -90,7 +98,8 @@ impl TestValidator {
     async fn new() -> Self {
         let key = random_secret_key();
         let signer = ValidatorSigner::new_local(key.clone());
-        let (temp_dir, db, block_store, genesis_header) = setup_db_with_genesis(&key).await;
+        let (temp_dir, db, block_store, genesis_header, protocol_config) =
+            setup_db_with_genesis(&key).await;
 
         Self {
             server: ValidatorService::new(
@@ -105,6 +114,7 @@ impl TestValidator {
             .unwrap(),
             chain: PartialBlockchain::default(),
             chain_tip: genesis_header,
+            protocol_config,
             _temp_dir: temp_dir,
         }
     }
@@ -157,6 +167,16 @@ impl TestValidator {
         &self,
         proposed_block: &ProposedBlock,
     ) -> Result<proto::validator::SignBlockResponse, tonic::Status> {
+        self.call_sign_block_with_protocol_config(proposed_block, Some(&self.protocol_config))
+            .await
+    }
+
+    /// Calls `sign_block` with the selected active protocol configuration payload.
+    async fn call_sign_block_with_protocol_config(
+        &self,
+        proposed_block: &ProposedBlock,
+        protocol_config: Option<&ProtocolConfig>,
+    ) -> Result<proto::validator::SignBlockResponse, tonic::Status> {
         let block_inputs = BlockInputs::new(
             proposed_block.prev_block_header().clone(),
             proposed_block.partial_blockchain().clone(),
@@ -165,14 +185,14 @@ impl TestValidator {
             BTreeMap::new(),
         );
         let (block_header, _) = proposed_block.clone().into_header_and_body().unwrap();
-        let request = tonic::Request::new(
-            BlockProofRequest {
-                tx_batches: OrderedBatches::new(proposed_block.batches().as_slice().to_vec()),
-                block_header,
-                block_inputs,
-            }
-            .into(),
-        );
+        let mut request: proto::block_proving::BlockProofRequest = BlockProofRequest {
+            tx_batches: OrderedBatches::new(proposed_block.batches().as_slice().to_vec()),
+            block_header,
+            block_inputs,
+        }
+        .into();
+        request.protocol_config = protocol_config.map(Into::into);
+        let request = tonic::Request::new(request);
         validator_api::SignBlock::full(&self.server, request).await
     }
 
@@ -269,13 +289,14 @@ impl TestValidator {
 /// of `key`. Returns the database handle and the genesis block header.
 async fn setup_db_with_genesis(
     key: &SigningKey,
-) -> (tempfile::TempDir, ValidatorDbWriter, BlockStore, BlockHeader) {
+) -> (tempfile::TempDir, ValidatorDbWriter, BlockStore, BlockHeader, ProtocolConfig) {
+    let protocol_config = test_protocol_config();
     let genesis_state = GenesisState::new(
         vec![],
         test_fee_params(),
         0,
         ValidatorConfig::new(vec![key.public_key()], 1).unwrap(),
-        test_protocol_config(),
+        protocol_config.clone(),
     );
     let genesis_block = genesis_state.into_block().unwrap();
     let genesis_header = genesis_block.inner().header().clone();
@@ -285,9 +306,14 @@ async fn setup_db_with_genesis(
     let block_store =
         BlockStore::bootstrap(dir.path().join("blocks").clone(), &genesis_block).unwrap();
 
-    db.upsert_block_header(genesis_header.clone()).await.unwrap();
+    db.upsert_block_header_with_protocol_config(
+        genesis_header.clone(),
+        Some(protocol_config.clone()),
+    )
+    .await
+    .unwrap();
 
-    (dir, db, block_store, genesis_header)
+    (dir, db, block_store, genesis_header, protocol_config)
 }
 
 /// Builds an empty [`ProposedBlock`] that extends the given parent block header using the provided
@@ -428,7 +454,7 @@ async fn proven_transaction_fixture() -> &'static ProvenTransactionFixture {
 async fn signing_key_mismatch_rejected() {
     // Seed a database whose genesis designates `genesis_key` as the validator key.
     let genesis_key = random_secret_key();
-    let (_temp_dir, db, block_store, genesis_header) = setup_db_with_genesis(&genesis_key).await;
+    let (_temp_dir, db, block_store, genesis_header, _) = setup_db_with_genesis(&genesis_key).await;
 
     // Start a validator with a different key, modelling a validator configured with the wrong key.
     let rogue_signer = ValidatorSigner::new_local(random_secret_key());
@@ -481,6 +507,59 @@ async fn sign_block_returns_signed_commitment() {
     assert!(signature.verify(header.commitment(), &public_key));
 }
 
+#[tokio::test]
+async fn sign_block_accepts_an_omitted_known_protocol_config() {
+    let tv = TestValidator::new().await;
+    let proposed = tv.propose_empty_block();
+
+    tv.call_sign_block_with_protocol_config(&proposed, None)
+        .await
+        .expect("a stored active config may be omitted");
+}
+
+#[tokio::test]
+async fn sign_block_rejects_an_omitted_unknown_protocol_config() {
+    let tv = TestValidator::new().await;
+    let commitment = tv.protocol_config.to_commitment();
+    crate::db::delete_protocol_config_for_test(&tv.server.db, commitment)
+        .await
+        .unwrap();
+    let proposed = tv.propose_empty_block();
+
+    let status = tv
+        .call_sign_block_with_protocol_config(&proposed, None)
+        .await
+        .expect_err("an unknown active config cannot be omitted");
+
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert_eq!(tv.load_chain_tip().await.block_num(), BlockNumber::GENESIS);
+    assert_eq!(tv.call_status().await.signed_blocks_count, 0);
+    assert_eq!(
+        tv.server.block_store.load_block(1.into()).await.unwrap(),
+        None,
+        "an unknown config must be rejected before backup"
+    );
+}
+
+#[tokio::test]
+async fn sign_block_rejects_a_mismatched_protocol_config_before_signing() {
+    let tv = TestValidator::new().await;
+    let proposed = tv.propose_empty_block();
+    let mismatched = ProtocolConfig::current(AssetId::new_fungible(
+        ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1.try_into().unwrap(),
+    ))
+    .unwrap();
+
+    let status = tv
+        .call_sign_block_with_protocol_config(&proposed, Some(&mismatched))
+        .await
+        .expect_err("a config that does not match the reconstructed header must be rejected");
+
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert_eq!(tv.load_chain_tip().await.block_num(), BlockNumber::GENESIS);
+    assert_eq!(tv.call_status().await.signed_blocks_count, 0);
+}
+
 /// An empty block at chain tip + 1 with the correct previous block commitment should be accepted.
 #[tokio::test]
 async fn chain_tip_plus_one_succeeds() {
@@ -526,6 +605,9 @@ async fn chain_tip_replacement_succeeds() {
 
     let result = tv.call_sign_block(&replacement).await;
     assert!(result.is_ok(), "chain tip replacement should succeed, got: {:?}", result.err());
+    tv.call_sign_block_with_protocol_config(&replacement, None)
+        .await
+        .expect("repeated signing must retain the stored configuration");
 
     // Verify that the chain tip in the database is now the replacement block, not the original.
     let new_chain_tip = tv.load_chain_tip().await;
@@ -538,6 +620,15 @@ async fn chain_tip_replacement_succeeds() {
         new_chain_tip.commitment(),
         original_header.commitment(),
         "chain tip should no longer be the original block"
+    );
+    assert_eq!(
+        tv.server
+            .db
+            .load_protocol_config(replacement_header.protocol_config_commitment())
+            .await
+            .unwrap(),
+        Some(tv.protocol_config.clone()),
+        "replacement persistence must retain the active protocol config"
     );
 }
 
@@ -845,6 +936,21 @@ async fn block_subscription_replays_then_freezes_signing() {
             .expect("valid signed block");
         assert_eq!(block.header().block_num().as_u32(), expected);
         assert_eq!(response.committed_chain_tip, 2);
+        if expected == 1 {
+            let config: ProtocolConfig = response
+                .protocol_config
+                .expect("the first response must carry the active protocol config")
+                .decode_fields()
+                .unwrap()
+                .verify()
+                .unwrap();
+            assert_eq!(config, tv.protocol_config);
+        } else {
+            assert!(
+                response.protocol_config.is_none(),
+                "an unchanged protocol config must be omitted"
+            );
+        }
     }
 
     // The live subscription holds the backup lock, so no new block can be signed while it is open.
@@ -862,6 +968,94 @@ async fn block_subscription_replays_then_freezes_signing() {
     tv.call_sign_block(&proposed)
         .await
         .expect("sign_block should succeed once the subscription is dropped");
+}
+
+#[tokio::test]
+async fn protocol_config_transition_is_streamed_and_used_for_next_signature() {
+    use std::time::Duration;
+
+    use tokio_stream::StreamExt;
+
+    let mut tv = TestValidator::new().await;
+    tv.apply_empty_block().await;
+
+    let block_2 = tv.propose_empty_block();
+    tv.call_sign_block(&block_2).await.unwrap();
+    let (header_2, body_2) = block_2.into_header_and_body().unwrap();
+    tv.chain.add_block(&tv.chain_tip, false);
+    tv.chain_tip = header_2.clone();
+
+    let next_config = ProtocolConfig::new(
+        tv.protocol_config.fee_asset_id(),
+        KernelConfig::new(Word::from([42u32, 0, 0, 0]), vec![]).unwrap(),
+        tv.protocol_config.batch_kernel().clone(),
+        tv.protocol_config.block_kernel().clone(),
+        tv.protocol_config.proof_verification().clone(),
+    )
+    .unwrap();
+    let transitioned_header = BlockHeader::new(
+        header_2.prev_block_commitment(),
+        header_2.block_num(),
+        header_2.chain_commitment(),
+        header_2.account_root(),
+        header_2.nullifier_root(),
+        header_2.note_root(),
+        header_2.tx_commitment(),
+        header_2.validator_config().clone(),
+        header_2.fee_parameters().clone(),
+        next_config.to_commitment(),
+        header_2.next_protocol_config().cloned(),
+        header_2.timestamp(),
+    );
+    let signature = tv
+        .server
+        .signer
+        .sign_commitment(transitioned_header.commitment())
+        .await
+        .unwrap();
+    let transitioned_block = SignedBlock::new_unchecked(
+        transitioned_header.clone(),
+        body_2,
+        BlockSignatures::new(vec![signature]).unwrap(),
+    );
+    tv.server
+        .block_store
+        .save_block(transitioned_header.block_num(), &transitioned_block.to_bytes())
+        .await
+        .unwrap();
+    tv.server
+        .db
+        .upsert_block_header_with_protocol_config(
+            transitioned_header.clone(),
+            Some(next_config.clone()),
+        )
+        .await
+        .unwrap();
+    tv.chain_tip = transitioned_header;
+
+    let mut stream = tv.call_block_subscription(1).await;
+    let first = tokio::time::timeout(Duration::from_secs(5), stream.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let first_config: ProtocolConfig =
+        first.protocol_config.unwrap().decode_fields().unwrap().verify().unwrap();
+    assert_eq!(first_config, tv.protocol_config);
+    let transition = tokio::time::timeout(Duration::from_secs(5), stream.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let streamed_config: ProtocolConfig =
+        transition.protocol_config.unwrap().decode_fields().unwrap().verify().unwrap();
+    assert_eq!(streamed_config, next_config);
+    drop(stream);
+
+    let block_3 = tv.propose_empty_block();
+    tv.call_sign_block_with_protocol_config(&block_3, None)
+        .await
+        .expect("the validator must sign with the transitioned active config");
 }
 
 // SERVE LOCK TESTS

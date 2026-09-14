@@ -110,10 +110,9 @@ impl Driver {
             .context("counter account is missing its fee asset ID")?
             .try_into()
             .context("counter account carries an invalid fee asset ID")?;
-        let protocol_config = ProtocolConfig::current(fee_asset_id)
-            .context("failed to construct the current protocol configuration")?;
+        let protocol_config = client.genesis_protocol_config().clone();
         anyhow::ensure!(
-            protocol_config.to_commitment() == genesis_header.protocol_config_commitment(),
+            protocol_config.fee_asset_id() == fee_asset_id,
             "the counter's fee asset does not match the chain's protocol configuration",
         );
 

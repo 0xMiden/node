@@ -8,6 +8,7 @@ use miden_node_tracing::{info, miden_instrument};
 use miden_protocol::Word;
 use miden_protocol::block::{BlockInputs, ProposedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
+use miden_protocol::protocol_config::ProtocolConfig;
 use thiserror::Error;
 use url::Url;
 
@@ -92,8 +93,10 @@ impl BlockProducerValidatorClient {
         &self,
         proposed_block: &ProposedBlock,
         block_inputs: &BlockInputs,
+        protocol_config: &ProtocolConfig,
     ) -> Result<Vec<SignBlockResponse>, ValidatorError> {
         let message = proto::block_proving::BlockProofRequest {
+            protocol_config: Some(protocol_config.into()),
             batches: proposed_block.batches().as_slice().iter().map(Into::into).collect(),
             block_inputs: Some(block_inputs.into()),
             timestamp: proposed_block.timestamp(),

@@ -16,6 +16,10 @@ Each response includes:
 
 - `block`: the serialized block.
 - `committed_chain_tip`: the current committed chain tip observed when the item was emitted.
+- `protocol_config`: the active configuration, included with the first response and when its commitment changes.
+
+Verify each configuration against the accompanying block header. Retain the configuration for subsequent responses that
+omit it. A new subscription includes the first block's configuration, even when `block_from` is not genesis.
 
 ## ProofSubscription
 

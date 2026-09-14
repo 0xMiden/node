@@ -18,10 +18,16 @@ use miden_node_proto::domain::encryption::{
     TrustedTransactionEncryptionState,
     verify_transaction_encryption_key,
 };
+use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::rpc::account_request::account_detail_request::{StorageMapDetailRequest, StorageMapDetailRequests, StorageRequest, storage_map_detail_request};
 use miden_node_proto::generated::rpc::account_request::account_detail_request::storage_map_detail_request::MapKeys;
-use miden_node_proto::generated::rpc::{BlockSubscriptionRequest, BlockSubscriptionResponse};
+use miden_node_proto::generated::rpc::{
+    BlockHeaderByNumberRequest,
+    BlockHeaderByNumberResponse,
+    BlockSubscriptionRequest,
+    BlockSubscriptionResponse,
+};
 use miden_node_proto::generated::{self as proto};
 use miden_node_tracing::ErrorReport;
 use miden_node_utils::retry::{self, Retryable};
@@ -39,6 +45,7 @@ use miden_protocol::asset::{Asset, AssetVault, AssetId, AssetWitness, PartialVau
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
 use miden_protocol::note::NoteScript;
+use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{AccountInputs, ProvenTransaction, TransactionInputs};
 use miden_protocol::utils::serde::Serializable;
 use thiserror::Error;
@@ -51,8 +58,51 @@ use crate::COMPONENT;
 // RPC CLIENT
 // ================================================================================================
 
-/// A signed block paired with the node's committed chain tip at the moment the block was emitted.
-type BlockSubscriptionItem = Result<(SignedBlock, BlockNumber), RpcError>;
+/// A signed block paired with its stream metadata.
+pub(crate) type BlockSubscriptionEvent = (SignedBlock, BlockNumber, Option<ProtocolConfig>);
+
+/// A decoded block-subscription event.
+type BlockSubscriptionItem = Result<BlockSubscriptionEvent, RpcError>;
+
+/// Tracks the active configuration within one block-subscription connection.
+///
+/// The node sends a baseline with the first response. It then omits the configuration until its
+/// commitment changes. A new connection creates a new tracker and requires a new baseline.
+#[derive(Default)]
+struct ProtocolConfigTracker {
+    current: Option<ProtocolConfig>,
+}
+
+impl ProtocolConfigTracker {
+    fn validate(
+        &mut self,
+        header: &miden_protocol::block::BlockHeader,
+        config: Option<&ProtocolConfig>,
+    ) -> Result<(), RpcError> {
+        if let Some(config) = config {
+            if config.to_commitment() != header.protocol_config_commitment() {
+                return Err(RpcError::InvalidResponse(
+                    "block protocol config commitment does not match its header".into(),
+                ));
+            }
+            self.current = Some(config.clone());
+            return Ok(());
+        }
+
+        let current = self.current.as_ref().ok_or_else(|| {
+            RpcError::InvalidResponse(
+                "first block subscription response is missing protocol config".into(),
+            )
+        })?;
+        if current.to_commitment() != header.protocol_config_commitment() {
+            return Err(RpcError::InvalidResponse(
+                "block subscription omitted a changed protocol config".into(),
+            ));
+        }
+
+        Ok(())
+    }
+}
 
 /// Delay between block-subscription reconnect attempts, paced so a node that immediately closes the
 /// connection cannot spin the reconnect loop. Connection *failures* are already backed off
@@ -185,13 +235,41 @@ impl RpcClient {
         Ok(sealer)
     }
 
+    /// Loads and verifies the active configuration for a persisted local header.
+    pub(crate) async fn protocol_config_for_header(
+        &self,
+        expected_header: &miden_protocol::block::BlockHeader,
+    ) -> Result<ProtocolConfig, RpcError> {
+        (|| async {
+            let response = self
+                .inner
+                .clone()
+                .get_block_header_by_number(startup_header_request(expected_header.block_num()))
+                .await
+                .map_err(RpcError::GrpcClientError)?
+                .into_inner();
+            decode_startup_header_response(response, expected_header)
+        })
+        .retry(self.backoff)
+        .when(|err| matches!(err, RpcError::GrpcClientError(_)))
+        .notify(|err, dur| {
+            warn!(
+                err,
+                target: COMPONENT,
+                "RPC request failed while verifying the persisted chain tip, retrying",
+                retry.delay_ms = dur.as_millis() as u64
+            );
+        })
+        .await
+    }
+
     /// Opens a committed-block subscription starting at `block_from`, retrying indefinitely with
     /// the client's configured exponential backoff while the initial connection attempt fails.
     ///
-    /// Returns a stream that decodes each [`BlockSubscriptionResponse`] into a `(SignedBlock,
-    /// committed_chain_tip)` pair. The committed chain tip is the latest block the node believes
-    /// is committed at the moment the response was emitted; the ntx-builder uses it to decide
-    /// when it has caught up to the live tip.
+    /// Returns a stream that decodes each [`BlockSubscriptionResponse`] into a block, the committed
+    /// chain tip, and an optional protocol configuration. The configuration is present for the
+    /// first response and for each transition. The committed chain tip is the latest block the node
+    /// believes is committed when it emits the response.
     #[miden_instrument(
         target = COMPONENT,
         name = "rpc.client.block_subscription_with_retry",
@@ -218,10 +296,18 @@ impl RpcClient {
             // Box the stream so its type is named and explicitly `'static` (it owns the cloned
             // client, borrowing nothing from `self`). This keeps the return type from capturing
             // `&self`, so callers like `block_subscription_reconnecting` can store it freely.
-            Ok(stream
+            let decoded = stream
                 .map_err(RpcError::GrpcClientError)
                 .and_then(|response| async move { decode_block_subscription_response(&response) })
-                .boxed())
+                .scan(ProtocolConfigTracker::default(), |tracker, item| {
+                    let item = item.and_then(|event| {
+                        tracker.validate(event.0.header(), event.2.as_ref())?;
+                        Ok(event)
+                    });
+                    std::future::ready(Some(item))
+                });
+
+            Ok(decoded.boxed())
         })
         .retry(self.backoff)
         .notify(|err: &RpcError, dur| {
@@ -284,11 +370,11 @@ impl RpcClient {
                     // Each quiet poll emits a liveness log; once no block has arrived for
                     // `STALL_TIMEOUT` the subscription is treated as stalled and reconnected.
                     match tokio::time::timeout(BLOCK_POLL_TIMEOUT, stream.next()).await {
-                        Ok(Some(Ok((block, committed_tip)))) => {
+                        Ok(Some(Ok((block, committed_tip, protocol_config)))) => {
                             next_from = block.header().block_num().child();
                             last_block = Instant::now();
                             return Some((
-                                Ok((block, committed_tip)),
+                                Ok((block, committed_tip, protocol_config)),
                                 (client, next_from, inner, last_block),
                             ));
                         },
@@ -391,10 +477,41 @@ impl RpcClient {
     }
 }
 
+fn startup_header_request(block_num: BlockNumber) -> BlockHeaderByNumberRequest {
+    BlockHeaderByNumberRequest {
+        block_num: Some(block_num.as_u32()),
+        include_mmr_proof: None,
+        include_protocol_config: Some(true),
+    }
+}
+
+fn decode_startup_header_response(
+    response: BlockHeaderByNumberResponse,
+    expected_header: &miden_protocol::block::BlockHeader,
+) -> Result<ProtocolConfig, RpcError> {
+    let header: miden_protocol::block::BlockHeader = response
+        .block_header
+        .ok_or_else(|| RpcError::InvalidResponse("header response is missing block header".into()))?
+        .decode_fields()
+        .map_err(ConversionError::from)
+        .map_err(RpcError::Conversion)?
+        .build_unchecked()
+        .map_err(ConversionError::new)
+        .map_err(RpcError::Conversion)?;
+    if header.commitment() != expected_header.commitment() {
+        return Err(RpcError::InvalidResponse(
+            "remote header does not match the persisted local header".into(),
+        ));
+    }
+
+    ensure_protocol_config_is_present_and_matches_header(response.protocol_config, &header)
+        .map_err(RpcError::Conversion)
+}
+
 fn decode_block_subscription_response(
     response: &BlockSubscriptionResponse,
-) -> Result<(SignedBlock, BlockNumber), RpcError> {
-    let block = response
+) -> Result<BlockSubscriptionEvent, RpcError> {
+    let block: SignedBlock = response
         .block
         .clone()
         .ok_or_else(|| {
@@ -406,8 +523,16 @@ fn decode_block_subscription_response(
         .build_unchecked()
         .map_err(ConversionError::new)
         .map_err(RpcError::Conversion)?;
+    let protocol_config = response
+        .protocol_config
+        .clone()
+        .map(|config| {
+            ensure_protocol_config_is_present_and_matches_header(Some(config), block.header())
+        })
+        .transpose()
+        .map_err(RpcError::Conversion)?;
     let committed_tip = BlockNumber::from(response.committed_chain_tip);
-    Ok((block, committed_tip))
+    Ok((block, committed_tip, protocol_config))
 }
 
 // ACTOR-PATH METHODS
@@ -633,4 +758,188 @@ pub enum RpcError {
     Conversion(#[source] ConversionError),
     #[error("invalid RPC response: {0}")]
     InvalidResponse(String),
+}
+
+#[cfg(test)]
+mod protocol_config_tests {
+    use miden_node_proto::generated::protocol_config::ProtocolConfig as ProtoProtocolConfig;
+    use miden_node_proto::generated::rpc::{
+        BlockHeaderByNumberResponse,
+        BlockSubscriptionResponse,
+    };
+    use miden_node_store::genesis::GenesisState;
+    use miden_node_utils::fee::{test_fee_params, test_protocol_config};
+    use miden_protocol::Word;
+    use miden_protocol::block::{BlockHeader, BlockNumber, FeeParameters};
+    use miden_protocol::protocol_config::ProtocolConfig;
+
+    use super::{
+        ProtocolConfigTracker,
+        RpcError,
+        decode_block_subscription_response,
+        decode_startup_header_response,
+        startup_header_request,
+    };
+    use crate::test_utils::mock_genesis_block;
+
+    fn valid_genesis_block() -> miden_protocol::block::SignedBlock {
+        GenesisState::new(
+            Vec::new(),
+            test_fee_params(),
+            0,
+            mock_genesis_block().header().validator_config().clone(),
+            test_protocol_config(),
+        )
+        .into_block()
+        .expect("test genesis block must build")
+        .inner()
+        .clone()
+    }
+
+    fn header_for_config(block_num: u32, config: &ProtocolConfig) -> BlockHeader {
+        let fixture = mock_genesis_block();
+        BlockHeader::new(
+            Word::empty(),
+            BlockNumber::from(block_num),
+            Word::empty(),
+            Word::empty(),
+            Word::empty(),
+            Word::empty(),
+            Word::empty(),
+            fixture.header().validator_config().clone(),
+            FeeParameters::new(0),
+            config.to_commitment(),
+            None,
+            block_num,
+        )
+    }
+
+    fn other_protocol_config() -> ProtocolConfig {
+        use miden_protocol::asset::AssetId;
+        use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1;
+
+        ProtocolConfig::current(AssetId::new_fungible(
+            ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1.try_into().unwrap(),
+        ))
+        .unwrap()
+    }
+
+    /// A malformed configuration must stop the stream item before the builder can apply its block.
+    #[test]
+    fn subscription_decoder_rejects_malformed_protocol_config() {
+        let block = valid_genesis_block();
+        let response = BlockSubscriptionResponse {
+            block: Some(block.into()),
+            committed_chain_tip: 0,
+            protocol_config: Some(ProtoProtocolConfig::default()),
+        };
+
+        let error = decode_block_subscription_response(&response)
+            .expect_err("a malformed protocol config must be rejected");
+
+        assert!(matches!(error, RpcError::Conversion(_)), "unexpected error: {error}");
+    }
+
+    /// A valid streamed configuration must remain attached to its decoded block event.
+    #[test]
+    fn subscription_decoder_preserves_protocol_config() {
+        let config = test_protocol_config();
+        let block = valid_genesis_block();
+        let response = BlockSubscriptionResponse {
+            block: Some(block.into()),
+            committed_chain_tip: 0,
+            protocol_config: Some((&config).into()),
+        };
+
+        let (_, _, decoded_config) = decode_block_subscription_response(&response).unwrap();
+
+        assert_eq!(decoded_config, Some(config));
+    }
+
+    /// Startup must explicitly request the active configuration for the persisted tip.
+    #[test]
+    fn startup_header_request_includes_protocol_config() {
+        let request = startup_header_request(BlockNumber::from(42));
+
+        assert_eq!(request.block_num, Some(42));
+        assert_eq!(request.include_protocol_config, Some(true));
+    }
+
+    /// Startup must reject a response without the requested configuration.
+    #[test]
+    fn startup_decoder_rejects_missing_protocol_config() {
+        let config = test_protocol_config();
+        let header = header_for_config(42, &config);
+        let response = BlockHeaderByNumberResponse {
+            block_header: Some((&header).into()),
+            chain_length: None,
+            mmr_path: None,
+            protocol_config: None,
+        };
+
+        assert!(decode_startup_header_response(response, &header).is_err());
+    }
+
+    /// Startup must reject a configuration that does not match the persisted header commitment.
+    #[test]
+    fn startup_decoder_rejects_protocol_config_mismatch() {
+        let config = test_protocol_config();
+        let other = other_protocol_config();
+        let header = header_for_config(42, &config);
+        let response = BlockHeaderByNumberResponse {
+            block_header: Some((&header).into()),
+            chain_length: None,
+            mmr_path: None,
+            protocol_config: Some((&other).into()),
+        };
+
+        assert!(decode_startup_header_response(response, &header).is_err());
+    }
+
+    /// Startup must reject a valid remote bundle when its header is not the persisted local tip.
+    #[test]
+    fn startup_decoder_rejects_remote_header_mismatch() {
+        let config = test_protocol_config();
+        let local = header_for_config(42, &config);
+        let remote = header_for_config(43, &config);
+        let response = BlockHeaderByNumberResponse {
+            block_header: Some((&remote).into()),
+            chain_length: None,
+            mmr_path: None,
+            protocol_config: Some((&config).into()),
+        };
+
+        assert!(decode_startup_header_response(response, &local).is_err());
+    }
+
+    /// A stream accepts omission only after a baseline and only while the commitment is unchanged.
+    #[test]
+    fn subscription_tracker_validates_baseline_and_transitions() {
+        let first = test_protocol_config();
+        let second = other_protocol_config();
+        let first_header = header_for_config(1, &first);
+        let second_header = header_for_config(2, &second);
+        let mut tracker = ProtocolConfigTracker::default();
+
+        assert!(tracker.validate(&first_header, None).is_err());
+        tracker.validate(&first_header, Some(&first)).unwrap();
+        tracker.validate(&first_header, None).unwrap();
+        assert!(tracker.validate(&second_header, None).is_err());
+        tracker.validate(&first_header, None).unwrap();
+        tracker.validate(&second_header, Some(&second)).unwrap();
+        tracker.validate(&second_header, None).unwrap();
+    }
+
+    /// Every reconnect starts a new stream and therefore requires a new baseline configuration.
+    #[test]
+    fn subscription_tracker_requires_baseline_after_reconnect() {
+        let config = test_protocol_config();
+        let header = header_for_config(1, &config);
+        let mut connected = ProtocolConfigTracker::default();
+        connected.validate(&header, Some(&config)).unwrap();
+        connected.validate(&header, None).unwrap();
+
+        let mut reconnected = ProtocolConfigTracker::default();
+        assert!(reconnected.validate(&header, None).is_err());
+    }
 }

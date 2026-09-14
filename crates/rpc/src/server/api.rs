@@ -166,6 +166,7 @@ impl RpcService {
                 proto::rpc::BlockHeaderByNumberRequest {
                     block_num: Some(BlockNumber::GENESIS.as_u32()),
                     include_mmr_proof: None,
+                    include_protocol_config: None,
                 }
                 .into_request(),
             )
@@ -304,6 +305,18 @@ fn database_error_to_status(err: &DatabaseError) -> Status {
 
 fn invalid_block_range_to_status(RpcInvalidBlockRange(err): RpcInvalidBlockRange) -> Status {
     Status::invalid_argument(err.to_string())
+}
+
+/// Loads the configuration committed to by a stored header.
+async fn load_protocol_config(
+    view: &miden_node_store::state::StateView,
+    header: &BlockHeader,
+) -> tonic::Result<miden_protocol::protocol_config::ProtocolConfig> {
+    let commitment = header.protocol_config_commitment();
+    view.get_protocol_config(commitment)
+        .await
+        .map_err(|err| Status::internal(err.to_string()))?
+        .ok_or_else(|| Status::internal(format!("protocol config {commitment} is missing")))
 }
 
 // LIMIT HELPERS

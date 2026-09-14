@@ -161,7 +161,11 @@ impl AccountActorContext {
         let chain_mmr = PartialMmr::from_peaks(
             MmrPeaks::new(Forest::new(0).expect("forest 0 is valid"), vec![]).unwrap(),
         );
-        let chain_state = Arc::new(SharedChainState::new(block_header, chain_mmr));
+        let chain_state = Arc::new(SharedChainState::new(
+            block_header,
+            chain_mmr,
+            miden_protocol::protocol_config::ProtocolConfig::mock(),
+        ));
         let (request_tx, _request_rx) = mpsc::channel(1);
         let tx_args = build_tx_args(NonZeroU16::new(30).unwrap());
 
@@ -610,14 +614,12 @@ impl AccountActor {
             return Ok((None, next_retry_block));
         }
 
-        let (chain_tip_header, chain_mmr) = chain_state.into_parts();
         Ok((
             Some(TransactionCandidate {
                 // Cheap: bumps the `Arc` refcount instead of deep-copying the account/storage.
                 account: Arc::clone(account),
                 notes: selected,
-                chain_tip_header,
-                chain_mmr,
+                chain_state,
             }),
             next_retry_block,
         ))
@@ -646,7 +648,7 @@ impl AccountActor {
         tx_candidate: TransactionCandidate,
         account: &mut Arc<Account>,
     ) -> anyhow::Result<ActorMode> {
-        let block_num = tx_candidate.chain_tip_header.block_num();
+        let block_num = tx_candidate.chain_state.chain_tip_header.block_num();
 
         // Execute the selected transaction.
         let context = execute::NtxContext::new(

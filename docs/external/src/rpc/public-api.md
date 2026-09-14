@@ -22,13 +22,13 @@ grpcurl rpc.testnet.miden.io:443 describe rpc.Api
 
 ## State Queries
 
-| Method                   | Purpose                                                                          |
-| ------------------------ | -------------------------------------------------------------------------------- |
-| `GetAccount`             | Returns account witness data and optional details for public accounts.           |
-| `GetBlockByNumber`       | Returns raw block data for a block number, optionally including the block proof. |
-| `GetBlockHeaderByNumber` | Returns a block header and, optionally, MMR authentication data.                 |
-| `GetNotesById`           | Returns committed notes matching the requested note IDs.                         |
-| `GetNoteScriptByRoot`    | Returns a note script by script root when available.                             |
+| Method                   | Purpose                                                                              |
+| ------------------------ | ------------------------------------------------------------------------------------ |
+| `GetAccount`             | Returns account witness data and optional details for public accounts.               |
+| `GetBlockByNumber`       | Returns raw block data for a block number, optionally including the block proof.     |
+| `GetBlockHeaderByNumber` | Returns a block header and, optionally, MMR authentication data and protocol config. |
+| `GetNotesById`           | Returns committed notes matching the requested note IDs.                             |
+| `GetNoteScriptByRoot`    | Returns a note script by script root when available.                                 |
 
 ## Transaction Submission
 
@@ -73,7 +73,7 @@ codes returned in gRPC status details.
 | `SyncNullifiers`         | Returns nullifiers matching specified 16-bit prefixes within a block range.             |
 | `SyncAccountVault`       | Returns public account vault updates within a block range.                              |
 | `SyncAccountStorageMaps` | Returns public account storage map updates within a block range.                        |
-| `SyncChainMmr`           | Returns MMR delta information needed to synchronize the chain MMR.                      |
+| `SyncChainMmr`           | Returns the chain MMR delta, target header, and protocol config when required.          |
 
 Use `GetLimits` to discover the maximum request sizes accepted by the node before batching large sync requests.
 
