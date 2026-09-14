@@ -25,7 +25,7 @@ use crate::node::RpcNodeClient;
 use crate::prover::Prover;
 use crate::server::FundingServer;
 use crate::status::{StatusRefresher, StatusSnapshot};
-use crate::top_up::TopUp;
+use crate::top_up::TopUpCollector;
 use crate::worker::{Funder, FunderSetup, WorkerConfig};
 
 mod account;
@@ -314,7 +314,7 @@ impl FundingService {
                 .context("the funding service status refresher failed")
         });
 
-        let top_up = TopUp::new(
+        let top_up = TopUpCollector::new(
             self.node.clone(),
             self.prover.clone(),
             self.funder_key.clone(),
