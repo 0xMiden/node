@@ -12,7 +12,7 @@ This removes a class of failure which a service holding its own copy of the acco
 
 ## One worker, one transaction in flight
 
-A single task owns the account and the requests. The gRPC handler validates the amount, puts the request on a queue, and waits for the worker's answer.
+A single task owns the account and the requests. The HTTP handler validates the amount, puts the request on a queue, and waits for the worker's answer.
 
 The worker therefore keeps one transaction in flight and collects every request which arrives in the meantime into the next transaction. A client which tops up several accounts at once pays for one transaction rather than one per account, which is what makes the service usable from a test suite.
 
@@ -21,7 +21,7 @@ Each batch runs the following steps.
 1. Read the chain tip and a partial blockchain which proves it. This is the transaction's reference block.
 2. Read the funding account and the fee faucet at that block.
 3. Decide which queued requests the balance covers.
-4. Build one private pay-to-ID note per admitted request.
+4. Build one public pay-to-ID note per admitted request.
 5. Execute, prove, and submit one transaction which creates all of them.
 6. Poll the node until every note is committed, then answer each requester with its note.
 
@@ -33,6 +33,8 @@ The native asset is callback-enabled: the kernel loads the issuing faucet in a f
 
 The transaction pays its own fee from the same vault the notes are paid from, so the worker holds back the worst-case fee of one transaction before it spends the balance. It then admits queued requests in order and stops at the first request which does not fit, which keeps the queue first-come-first-served and stops a stream of small requests from starving a large one. A request which does not fit is refused at once, and the requester is told that the account needs funds rather than being made to wait.
 
-## Private notes
+## Public notes
 
-The notes are private, so their details never reach the node. The response therefore carries the note in full, and it is the only copy: a client which loses the response cannot recover the funds. This is also why the worker skips a request whose requester has gone away. Creating the note anyway would move funds into a note nobody holds the details of, and those funds could not be recovered.
+The notes are public, so the node stores their details. The response carries the note and the proof that the note is in a block, which lets a requester consume the note without a further lookup at the node.
+
+The worker skips a request whose requester has gone away. The transaction would otherwise spend the funding balance and pay a fee for a note which no requester waits for.
