@@ -40,7 +40,7 @@ const WALLET_FUNDING_INCREMENTS: u64 = 20_000;
 const WALLET_TOPUP_THRESHOLD_INCREMENTS: u64 = 1_000;
 
 /// Largest amount requested per funding call, matching the funding service's default
-/// `--max-amount`. A larger request is rejected with `INVALID_ARGUMENT`.
+/// `--max-amount`. A larger request is rejected.
 const MAX_FUNDING_REQUEST_AMOUNT: u64 = 1_000_000_000;
 
 /// Transactions the counter is funded for at deployment. It only pays its own creation fee from
