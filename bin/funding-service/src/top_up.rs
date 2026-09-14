@@ -31,35 +31,35 @@ use crate::tx::ExecutionInputs;
 // DEPOSIT COLLECTION
 // ================================================================================================
 
+/// The configuration of a deposit collection.
+pub struct TopUpSetup {
+    /// The funding account's ID and signing key.
+    pub key: FunderKey,
+    /// The protocol configuration of the chain, which names the fee asset.
+    pub protocol_config: ProtocolConfig,
+    /// How many blocks after the reference block the deposit transaction expires.
+    pub expiration_delta: NonZeroU16,
+    /// How long the collector waits between two scans.
+    pub interval: Duration,
+}
+
 /// Finds deposits addressed to the funding account and consumes them.
 pub struct TopUpCollector {
     node: RpcNodeClient,
     prover: Prover,
-    key: FunderKey,
-    protocol_config: ProtocolConfig,
-    expiration_delta: NonZeroU16,
-    interval: Duration,
+    setup: TopUpSetup,
     /// The block the next scan starts at.
     next_block: BlockNumber,
     rng: RandomCoin,
 }
 
 impl TopUpCollector {
-    pub fn new(
-        node: RpcNodeClient,
-        prover: Prover,
-        key: FunderKey,
-        protocol_config: ProtocolConfig,
-        expiration_delta: NonZeroU16,
-        interval: Duration,
-    ) -> Self {
+    /// Creates a collector for the given funding account.
+    pub fn new(node: RpcNodeClient, prover: Prover, setup: TopUpSetup) -> Self {
         Self {
             node,
             prover,
-            key,
-            protocol_config,
-            expiration_delta,
-            interval,
+            setup,
             next_block: BlockNumber::GENESIS,
             rng: RandomCoin::new(Word::from(rand::random::<[u32; 4]>())),
         }
@@ -67,14 +67,14 @@ impl TopUpCollector {
 
     /// The faucet which issues the chain's fee asset.
     fn fee_faucet_id(&self) -> AccountId {
-        self.protocol_config.fee_asset_id().faucet_id()
+        self.setup.protocol_config.fee_asset_id().faucet_id()
     }
 
     /// Collects deposits until the service shuts down.
     pub async fn run(mut self, shutdown: CancellationToken) -> Result<()> {
         loop {
             tokio::select! {
-                () = tokio::time::sleep(self.interval) => {},
+                () = tokio::time::sleep(self.setup.interval) => {},
                 () = shutdown.cancelled() => return Ok(()),
             }
 
@@ -100,7 +100,7 @@ impl TopUpCollector {
         info!(
             target: LOG_TARGET,
             "Collecting deposits for the funding account",
-            account.id = self.key.account_id(),
+            account.id = self.setup.key.account_id(),
             note.count = deposits.len(),
             asset.amount = total
         );
@@ -112,7 +112,7 @@ impl TopUpCollector {
 
     /// Returns the deposits which the funding account can consume.
     async fn find_deposits(&mut self) -> Result<Vec<Note>> {
-        let tag = NoteTag::with_account_target(self.key.account_id());
+        let tag = NoteTag::with_account_target(self.setup.key.account_id());
         let synced = self.node.sync_note_ids(tag, self.next_block).await?;
 
         if synced.note_ids.is_empty() {
@@ -125,7 +125,7 @@ impl TopUpCollector {
             .public_notes(&synced.note_ids)
             .await?
             .into_iter()
-            .filter(|note| is_deposit(note, self.key.account_id(), self.fee_faucet_id()))
+            .filter(|note| is_deposit(note, self.setup.key.account_id(), self.fee_faucet_id()))
             .collect();
 
         if candidates.is_empty() {
@@ -153,19 +153,19 @@ impl TopUpCollector {
     async fn consume(&mut self, deposits: Vec<Note>) -> Result<()> {
         let (reference_header, blockchain) = self.node.tip_chain_state().await?;
         let reference_block = reference_header.block_num();
-        let account_id = self.key.account_id();
+        let account_id = self.setup.key.account_id();
 
         let (funder, _witness) = self.node.public_account(account_id, reference_block).await?;
         let fee_faucet = self.node.public_account(self.fee_faucet_id(), reference_block).await?;
 
         let inputs = ExecutionInputs {
             funder,
-            secret_key: self.key.secret_key().clone(),
+            secret_key: self.setup.key.secret_key().clone(),
             fee_faucet,
-            protocol_config: self.protocol_config.clone(),
+            protocol_config: self.setup.protocol_config.clone(),
             reference_header,
             blockchain,
-            expiration_delta: self.expiration_delta,
+            expiration_delta: self.setup.expiration_delta,
         };
 
         // Boxed because the transaction execution the future holds is large enough for the
