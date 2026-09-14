@@ -6,6 +6,7 @@ use miden_protocol::transaction::ProvenTransaction;
 use crate::errors::ConversionError;
 use crate::generated as proto;
 
+/// A decoded submission. Construction does not verify the transaction proof or chain state.
 #[derive(Debug)]
 pub struct ProvenTransactionSubmission {
     pub transaction: ProvenTransaction,
@@ -16,12 +17,13 @@ impl BuildUnchecked for proto::submission::DecodedProvenTransactionSubmission {
     type Output = ProvenTransactionSubmission;
     type Error = ConversionError;
 
-    /// Build the submission without checking the proof, input-note authentication, or sealed
-    /// inputs. The caller must verify the proof, authenticate the input notes, and unseal the
-    /// inputs.
+    /// Build the submission without verifying the proof, chain state, or sealed inputs. Receiving
+    /// services must verify the proof and reference block, check spent nullifiers and expiration,
+    /// and resolve input-note and account dependencies. Validators must decrypt and re-execute the
+    /// sealed inputs.
     fn build_unchecked(self) -> Result<Self::Output, Self::Error> {
-        // SAFETY: This unchecked constructor leaves proof verification and note authentication to
-        // the receiving service. The sealed inputs also require decryption and validation.
+        // SAFETY: This conversion checks structure only. The output remains unverified. Receiving
+        // services are responsible for the proof, chain-state, and sealed-input checks.
         let transaction = self.transaction.build_unchecked().context("transaction")?;
         let sealed_transaction_inputs = self.sealed_transaction_inputs.into();
         Ok(ProvenTransactionSubmission { transaction, sealed_transaction_inputs })

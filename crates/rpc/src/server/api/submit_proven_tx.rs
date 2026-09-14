@@ -28,6 +28,12 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
     ) -> tonic::Result<Self::Input> {
         request
             .decode_fields()
+            // SAFETY: The handler checks the reference block and proof before forwarding. Decoding
+            // does not authenticate the transaction against current chain state.
+            //
+            // FIXME: Check committed nullifiers and expiration against one local state snapshot
+            // on every submission path. Forwarding skips the local nullifier check, and
+            // expiration is checked later by the sequencer mempool.
             .and_then(BuildUnchecked::build_unchecked)
             .map_err(miden_node_proto::errors::conversion_error_to_status)
     }
@@ -149,7 +155,8 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
                 .await
             },
             RpcBackend::FullNode { source_rpc, pre_auth: None, .. } => {
-                // Unauthenticated transactions: forward the request to the source verbatim.
+                // FIXME: Preserve and forward the original request. This request contains the
+                // transaction rebuilt above with output-note decorators removed.
                 let mut forwarded_request = Request::new(request);
                 if let Some(accept) = original_accept_header {
                     forwarded_request.metadata_mut().insert(http::header::ACCEPT.as_str(), accept);

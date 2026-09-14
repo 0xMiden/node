@@ -440,7 +440,6 @@ async fn transaction_proof_is_correct() {
     let response = client.submit_request(request).await.unwrap();
     let response = match response.proof.unwrap() {
         ProofVariant::Transaction(transaction) => {
-            // SAFETY: This test verifies the proof and compares the transaction ID below.
             transaction.decode_fields().unwrap().build_unchecked().unwrap()
         },
         other => panic!("expected transaction proof response, got {other:?}"),

@@ -1,9 +1,39 @@
 use std::ops::RangeInclusive;
 
-use miden_protocol::block::BlockNumber;
+use miden_protobuf::{BuildUnchecked, ConversionResultExt, VerifyWith};
+use miden_protocol::block::{BlockHeader, BlockNumber, SignedBlock};
 use thiserror::Error;
 
+use crate::errors::ConversionError;
 use crate::generated as proto;
+
+impl BuildUnchecked for proto::rpc::DecodedBlockSubscriptionResponse {
+    type Output = (SignedBlock, BlockNumber);
+    type Error = ConversionError;
+
+    /// Check block consistency without verifying signatures or linkage against a trusted parent.
+    /// The caller must verify the block against trusted chain state before applying it. The
+    /// committed chain tip remains an upstream claim.
+    fn build_unchecked(self) -> Result<Self::Output, Self::Error> {
+        // SAFETY: The caller must authenticate the block before applying it. This conversion checks
+        // consistency only.
+        let block = self.block.build_unchecked().context("block")?;
+        Ok((block, self.committed_chain_tip.into()))
+    }
+}
+
+impl VerifyWith<&BlockHeader> for proto::rpc::DecodedBlockSubscriptionResponse {
+    type Verified = (SignedBlock, BlockNumber);
+    type Error = ConversionError;
+
+    /// Verify the block against a trusted parent header. This does not re-execute transactions or
+    /// validate account and nullifier state transitions. The committed chain tip remains an
+    /// upstream claim.
+    fn verify_with(self, parent: &BlockHeader) -> Result<Self::Verified, Self::Error> {
+        let block = self.block.verify_with(parent).context("block")?;
+        Ok((block, self.committed_chain_tip.into()))
+    }
+}
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum InvalidBlockRange {

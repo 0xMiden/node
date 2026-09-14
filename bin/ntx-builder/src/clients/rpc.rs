@@ -298,7 +298,13 @@ impl RpcClient {
             // `&self`, so callers like `block_subscription_reconnecting` can store it freely.
             let decoded = stream
                 .map_err(RpcError::GrpcClientError)
-                .and_then(|response| async move { decode_block_subscription_response(&response) })
+                .and_then(|response| async move {
+                    response.decode_fields()
+                        // SAFETY: The builder verifies the block against its trusted parent before
+                        // it writes block effects or notifies account actors.
+                        .and_then(BuildUnchecked::build_unchecked)
+                        .map_err(RpcError::Conversion)
+                })
                 .scan(ProtocolConfigTracker::default(), |tracker, item| {
                     let item = item.and_then(|event| {
                         tracker.validate(event.0.header(), event.2.as_ref())?;
@@ -506,27 +512,6 @@ fn decode_startup_header_response(
 
     ensure_protocol_config_is_present_and_matches_header(response.protocol_config, &header)
         .map_err(RpcError::Conversion)
-}
-
-fn decode_block_subscription_response(
-    response: &BlockSubscriptionResponse,
-) -> Result<BlockSubscriptionEvent, RpcError> {
-    let response = response.clone().decode_fields().map_err(RpcError::Conversion)?;
-    let block: SignedBlock = response
-        .block
-        .build_unchecked()
-        .map_err(ConversionError::new)
-        .map_err(RpcError::Conversion)?;
-    let protocol_config = response
-        .protocol_config
-        .clone()
-        .map(|config| {
-            ensure_protocol_config_is_present_and_matches_header(Some(config), block.header())
-        })
-        .transpose()
-        .map_err(RpcError::Conversion)?;
-    let committed_tip = BlockNumber::from(response.committed_chain_tip);
-    Ok((block, committed_tip, protocol_config))
 }
 
 // ACTOR-PATH METHODS

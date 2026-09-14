@@ -68,6 +68,8 @@ fn prove_transaction(
     prover: &LocalTransactionProver,
     input: Decoded<transaction::TransactionInputs>,
 ) -> Result<ProofVariant, tonic::Status> {
+    // SAFETY: Construction checks input consistency and note inclusion against supplied headers.
+    // This stateless prover cannot authenticate the chain. The submitting node must do that.
     let input: TransactionInputs = input.build_unchecked().map_err(|error| {
         tonic::Status::invalid_argument(
             error.as_report_context("failed to build transaction inputs"),
@@ -101,6 +103,11 @@ fn prove_block(
     prover: &LocalBlockProver,
     input: block_proving::DecodedBlockProofRequest,
 ) -> Result<ProofVariant, tonic::Status> {
+    // SAFETY: This service only produces a proof for the supplied proposal. It does not commit the
+    // block. The caller must validate batch contents and authenticate the parent chain.
+    //
+    // FIXME: Verify batch proofs and contents before block proving. The current batch kernel
+    // does not bind the aggregated note contents or expiration.
     let BlockProofRequest { tx_batches, block_header, block_inputs } =
         input.build_unchecked().map_err(|error| {
             tonic::Status::invalid_argument(

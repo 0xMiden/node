@@ -765,7 +765,6 @@ async fn rpc_server_forwards_valid_deferred_proofs_and_rejects_missing_witnesses
             .unwrap()
             .decode_fields()
             .unwrap()
-            // SAFETY: This test compares the forwarded transaction with its submitted fixture.
             .build_unchecked()
             .unwrap();
         assert_eq!(forwarded.id(), fixture.transaction.id());

@@ -72,6 +72,11 @@ fn decode_transaction_proof(response: Proof) -> Result<ProvenTransaction, Transa
                 error,
             )
         })?
+        // SAFETY: Construction checks transaction structure. The RPC checks the proof at
+        // submission.
+        //
+        // FIXME: Verify the proof locally and match the response to the requested
+        // execution, including its reference block and expiration, before returning success.
         .build_unchecked()
         .map_err(|error| {
             TransactionProverError::other_with_source(

@@ -113,10 +113,12 @@ pub struct TransactionAuthenticationError {
     pub spent_nullifiers: Vec<Nullifier>,
 }
 
-/// A transaction with a verified proof and authentication against the store.
+/// A transaction with store authentication data supplied by a trusted caller.
 ///
-/// Authentication checks that the nullifiers are unspent in the supplied store inputs.
-/// It also authenticates input notes that the store has committed.
+/// The caller must verify the proof. [`Self::new_unchecked`] checks the supplied nullifier results
+/// and records which input notes the store has committed. Protobuf conversion trusts the sender's
+/// authentication data. The mempool resolves remaining note and account dependencies and checks
+/// conflicts and expiration.
 ///
 /// Clones share the transaction through an [`Arc`].
 ///
@@ -132,6 +134,8 @@ pub struct AuthenticatedTransaction {
     /// committed mempool history have since authenticated these notes.
     notes_authenticated_by_store: HashSet<Word>,
     /// The chain height at authentication.
+    ///
+    /// FIXME: Include the block commitment to identify the exact state used for authentication.
     authentication_height: BlockNumber,
 }
 
@@ -147,6 +151,8 @@ impl AuthenticatedTransaction {
         tx: Arc<ProvenTransaction>,
         inputs: TransactionInputs,
     ) -> Result<AuthenticatedTransaction, TransactionAuthenticationError> {
+        // FIXME: Check that the inputs belong to this account and cover every transaction
+        // nullifier. A missing nullifier result currently counts as unspent.
         let nullifiers_already_spent = tx
             .nullifiers()
             .filter(|nullifier| inputs.nullifiers.get(nullifier).copied().flatten().is_some())

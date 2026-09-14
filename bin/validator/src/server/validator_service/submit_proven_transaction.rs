@@ -101,6 +101,11 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
     ) -> tonic::Result<Self::Input> {
         let submission = request
             .decode_fields()
+            // SAFETY: New transaction IDs pass proof verification and re-execution before storage.
+            // Previously validated IDs use the handler's duplicate-submission shortcut.
+            //
+            // FIXME: Authenticate the reference block against the validator's chain state.
+            // Re-execution currently uses the headers supplied in the sealed inputs.
             .and_then(BuildUnchecked::build_unchecked)
             .map_err(miden_node_proto::errors::conversion_error_to_status)?;
         let tx = submission.transaction;

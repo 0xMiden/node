@@ -15,8 +15,9 @@ impl sequencer_api::SubmitAuthenticatedTx for SequencerInternalService {
     fn decode(request: proto::sequencer::AuthenticatedTransaction) -> tonic::Result<Self::Input> {
         request
             .decode_fields()
-            // SAFETY: This internal endpoint trusts the submitting full node to verify the proof
-            // and authenticate input notes. The handler checks the reference block locally.
+            // SAFETY: Network isolation must restrict this endpoint to trusted full nodes. The
+            // sender supplies proof and store validation. The handler checks the reference block
+            // locally, and the mempool checks conflicts, dependencies, and expiration.
             .and_then(BuildUnchecked::build_unchecked)
             .map_err(|err| {
                 Status::invalid_argument(err.as_report_context("invalid authenticated transaction"))
