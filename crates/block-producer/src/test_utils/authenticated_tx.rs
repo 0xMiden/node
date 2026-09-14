@@ -41,7 +41,6 @@ impl MockAuthenticatedTxBuilder {
     }
 
     pub fn build(self) -> AuthenticatedTransaction {
-        // SAFETY: The fixture marks all nullifiers as unspent. Tests can use dummy proofs.
         AuthenticatedTransaction::new_unchecked(Arc::new(self.transaction), self.inputs).unwrap()
     }
 }

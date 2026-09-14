@@ -26,7 +26,7 @@ use miden_protocol::block::{
     ValidatorConfig,
 };
 use miden_protocol::crypto::merkle::SparseMerklePath;
-use miden_protocol::note::{Note, NoteInclusionProof};
+use miden_protocol::note::{Note, NoteInclusionProof, Nullifier};
 use miden_protocol::protocol_config::NextProtocolConfig;
 use miden_protocol::transaction::{
     InputNoteCommitment,
@@ -548,4 +548,52 @@ fn signing_roundtrip_validates_supplied_active_configuration() {
     assert_eq!(decoded.protocol_config, Some(config));
     let encoded = generated::validator::SignBlockRequest::from(decoded);
     assert_eq!(encoded, message);
+}
+
+#[test]
+fn authentication_inputs_reject_duplicate_nullifiers_in_any_spent_state() {
+    for block_numbers in [[0, 0], [10, 0], [0, 10], [10, 10]] {
+        let message = generated::sequencer::AuthInputs {
+            account_id: Some(private_account_id(7).into()),
+            nullifiers: block_numbers
+                .into_iter()
+                .map(|block_num| generated::sequencer::NullifierRecord {
+                    nullifier: Some(Word::from([1u32, 2, 3, 4]).into()),
+                    block_num,
+                })
+                .collect(),
+            current_block_height: 10,
+            ..Default::default()
+        };
+
+        let error = message.decode_fields().and_then(Verify::verify).unwrap_err();
+        assert!(error.to_string().starts_with("nullifiers[1]:"), "{error}");
+        assert!(error.to_string().contains("duplicate nullifier"), "{error}");
+    }
+}
+
+#[test]
+fn authentication_inputs_preserve_distinct_spent_and_unspent_nullifiers() {
+    let unspent = Nullifier::from_raw(Word::from([1u32, 2, 3, 4]));
+    let spent = Nullifier::from_raw(Word::from([5u32, 6, 7, 8]));
+    let message = generated::sequencer::AuthInputs {
+        account_id: Some(private_account_id(7).into()),
+        nullifiers: vec![
+            generated::sequencer::NullifierRecord {
+                nullifier: Some(unspent.as_word().into()),
+                block_num: 0,
+            },
+            generated::sequencer::NullifierRecord {
+                nullifier: Some(spent.as_word().into()),
+                block_num: 10,
+            },
+        ],
+        current_block_height: 10,
+        ..Default::default()
+    };
+
+    let inputs = message.decode_fields().and_then(Verify::verify).unwrap();
+    assert_eq!(inputs.nullifiers.len(), 2);
+    assert_eq!(inputs.nullifiers[&unspent], None);
+    assert_eq!(inputs.nullifiers[&spent].unwrap().get(), 10);
 }

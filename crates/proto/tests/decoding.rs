@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::error::Error;
 
 use miden_node_proto::domain::account::AccountStorageRequest;
-use miden_node_proto::errors::conversion_error_to_status;
+use miden_node_proto::errors::{ConversionError, conversion_error_to_status};
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_protocol::Word;
 use miden_protocol::account::{AccountId, AccountIdVersion, AccountType, AssetCallbackFlag};
@@ -66,6 +66,20 @@ fn missing_account_id_is_an_invalid_argument() {
 }
 
 #[test]
+fn conversion_status_preserves_field_context_and_nested_causes() {
+    let error = ConversionError::with_source(
+        "invalid object",
+        std::io::Error::other("underlying validation failure"),
+    )
+    .context("transaction");
+
+    let status = conversion_error_to_status(error);
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert!(status.message().starts_with("transaction: invalid object"));
+    assert!(status.message().contains("underlying validation failure"));
+}
+
+#[test]
 fn nested_map_keys_report_the_field_index_and_original_error() {
     use detail::storage_map_detail_request::{MapKeys, SlotData};
     use proto::rpc::account_request::account_detail_request as detail;
@@ -99,14 +113,14 @@ fn nested_map_keys_report_the_field_index_and_original_error() {
 #[test]
 fn account_details_require_vault_data_but_allow_absent_code() {
     let account_id = account_request().decode_fields().unwrap().verify().unwrap().account_id;
+    let storage = miden_protocol::account::AccountStorageHeader::new(Vec::new()).unwrap();
     let header = miden_protocol::account::AccountHeader::new(
         account_id,
         miden_protocol::Felt::ONE,
         Word::empty(),
-        Word::empty(),
+        storage.to_commitment(),
         Word::empty(),
     );
-    let storage = miden_protocol::account::AccountStorageHeader::new(Vec::new()).unwrap();
     let details = proto::rpc::account_response::AccountDetails {
         header: Some(header.into()),
         storage_details: Some(proto::rpc::AccountStorageDetails {

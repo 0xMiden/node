@@ -612,6 +612,8 @@ impl Verify for proto::rpc::DecodedAccountResponse {
     type Verified = AccountResponse;
     type Error = ConversionError;
 
+    /// Check that supplied details match the account witness. The caller must authenticate the
+    /// witness root and block against trusted chain state.
     fn verify(self) -> Result<Self::Verified, Self::Error> {
         let Self { block_num, witness, details } = self;
 
@@ -620,6 +622,17 @@ impl Verify for proto::rpc::DecodedAccountResponse {
         let witness = witness.verify().context("witness")?;
 
         let details = details.map(Verify::verify).transpose().context("details")?;
+
+        if let Some(details) = &details {
+            if details.account_header.id() != witness.id() {
+                return Err(ConversionError::message("account ID does not match witness")
+                    .context("details.header.account_id"));
+            }
+            if details.account_header.to_commitment() != witness.state_commitment() {
+                return Err(ConversionError::message("account commitment does not match witness")
+                    .context("details.header"));
+            }
+        }
 
         Ok(AccountResponse { block_num, witness, details })
     }
@@ -670,6 +683,8 @@ impl Verify for proto::rpc::account_response::DecodedAccountDetails {
     type Verified = AccountDetails;
     type Error = ConversionError;
 
+    /// Verify storage and supplied code commitments against the account header. This does not
+    /// authenticate the header against trusted chain state.
     fn verify(self) -> Result<Self::Verified, Self::Error> {
         let Self {
             header,
@@ -681,9 +696,21 @@ impl Verify for proto::rpc::account_response::DecodedAccountDetails {
         let account_header = header.verify().context("header")?;
 
         let storage_details = storage_details.verify().context("storage_details")?;
+        if storage_details.header.to_commitment() != account_header.storage_commitment() {
+            return Err(ConversionError::message(
+                "storage commitment does not match account header",
+            )
+            .context("storage_details.header"));
+        }
 
         let vault_details = vault_details.verify().context("vault_details")?;
         let account_code = code.map(Verify::verify).transpose().context("code")?;
+        if let Some(code) = &account_code
+            && code.commitment() != account_header.code_commitment()
+        {
+            return Err(ConversionError::message("code commitment does not match account header")
+                .context("code"));
+        }
 
         Ok(AccountDetails {
             account_header,

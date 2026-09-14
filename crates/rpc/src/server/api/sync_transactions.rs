@@ -1,9 +1,8 @@
-use miden_node_proto::errors::conversion_error_to_status;
+use miden_node_proto::errors::{ConversionResultExt, conversion_error_to_status};
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_node_store::{NoteSyncRecord, TransactionRecord};
 use miden_node_tracing::{debug, miden_instrument, miden_span_record};
 use miden_node_utils::limiter::QueryParamAccountIdLimit;
-use tonic::Status;
 
 use super::{
     RpcInvalidBlockRange,
@@ -20,6 +19,7 @@ impl proto::server::rpc_api::SyncTransactions for RpcService {
     type Output = proto::rpc::SyncTransactionsResponse;
 
     fn decode(request: proto::rpc::SyncTransactionsRequest) -> tonic::Result<Self::Input> {
+        check::<QueryParamAccountIdLimit>(request.account_ids.len())?;
         request.decode_fields().map_err(conversion_error_to_status)
     }
 
@@ -40,12 +40,13 @@ impl proto::server::rpc_api::SyncTransactions for RpcService {
     ) -> tonic::Result<Self::Output> {
         let range = request.block_range;
         let n_accounts = request.account_ids.len();
-        check::<QueryParamAccountIdLimit>(n_accounts)?;
         let account_ids = request
             .account_ids
             .into_iter()
-            .map(|id| id.verify().map_err(|err| Status::invalid_argument(err.to_string())))
-            .collect::<Result<Vec<_>, _>>()?;
+            .enumerate()
+            .map(|(index, id)| id.verify().with_context(|| format!("account_ids[{index}]")))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(conversion_error_to_status)?;
         let logged_account_ids = &account_ids[..account_ids.len().min(10)];
 
         miden_span_record!(

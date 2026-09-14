@@ -1,4 +1,4 @@
-use miden_node_proto::errors::conversion_error_to_status;
+use miden_node_proto::errors::{ConversionResultExt, conversion_error_to_status};
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_node_tracing::{debug, miden_instrument, miden_span_record};
 use tonic::Status;
@@ -38,7 +38,8 @@ impl proto::server::rpc_api::SyncAccountStorageMaps for RpcService {
         let account_id = request
             .account_id
             .verify()
-            .map_err(|err| Status::invalid_argument(err.to_string()))?;
+            .context("account_id")
+            .map_err(conversion_error_to_status)?;
         let range = request.block_range;
 
         miden_span_record!(

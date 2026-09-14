@@ -92,13 +92,14 @@ impl Verify for sequencer::DecodedAuthInputs {
 
     fn verify(self) -> Result<Self::Verified, Self::Error> {
         let account_id = self.account_id.verify().context("account_id")?;
-        let nullifiers = self
-            .nullifiers
-            .into_iter()
-            .map(|record| {
-                (Nullifier::from_raw(record.nullifier), NonZeroU32::new(record.block_num))
-            })
-            .collect();
+        let mut nullifiers = HashMap::with_capacity(self.nullifiers.len());
+        for (index, record) in self.nullifiers.into_iter().enumerate() {
+            let nullifier = Nullifier::from_raw(record.nullifier);
+            if nullifiers.insert(nullifier, NonZeroU32::new(record.block_num)).is_some() {
+                return Err(ConversionError::message(format!("duplicate nullifier {nullifier}"))
+                    .context(format!("nullifiers[{index}]")));
+            }
+        }
         Ok(TransactionInputs {
             account_id,
             account_commitment: self.account_commitment,

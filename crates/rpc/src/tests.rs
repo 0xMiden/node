@@ -1929,6 +1929,73 @@ async fn get_limits_endpoint() {
 }
 
 #[tokio::test]
+async fn sync_endpoints_preserve_account_verification_context() {
+    let (mut rpc_client, _rpc_addr, _store, _server) = start_rpc().await;
+    let invalid_id = proto::account::AccountId {
+        version: Some(proto::account::account_id::Version::V1(proto::account::AccountIdV1 {
+            prefix: Some(proto::primitives::Felt { value: 0 }),
+            suffix: Some(proto::primitives::Felt { value: 0 }),
+        })),
+    };
+    let block_range = Some(proto::rpc::BlockRange { block_from: 0, block_to: 0 });
+    let storage_error = rpc_client
+        .sync_account_storage_maps(proto::rpc::SyncAccountStorageMapsRequest {
+            account_id: Some(invalid_id),
+            block_range,
+        })
+        .await
+        .unwrap_err();
+    let vault_error = rpc_client
+        .sync_account_vault(proto::rpc::SyncAccountVaultRequest {
+            account_id: Some(invalid_id),
+            block_range,
+        })
+        .await
+        .unwrap_err();
+    let valid_id = AccountId::dummy(
+        [7; 15],
+        AccountIdVersion::Version1,
+        AccountType::Public,
+        AssetCallbackFlag::Disabled,
+    );
+    let transactions_error = rpc_client
+        .sync_transactions(proto::rpc::SyncTransactionsRequest {
+            account_ids: vec![valid_id.into(), invalid_id],
+            block_range,
+        })
+        .await
+        .unwrap_err();
+
+    for (error, field) in [
+        (storage_error, "account_id:"),
+        (vault_error, "account_id:"),
+        (transactions_error, "account_ids[1]:"),
+    ] {
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert!(error.message().starts_with(field), "{error}");
+        assert!(error.message().contains("not a known account ID version"), "{error}");
+    }
+}
+
+#[tokio::test]
+async fn sync_transactions_rejects_oversized_requests_before_decoding_fields() {
+    let (mut rpc_client, _rpc_addr, _store, _server) = start_rpc().await;
+    let error = rpc_client
+        .sync_transactions(proto::rpc::SyncTransactionsRequest {
+            block_range: Some(proto::rpc::BlockRange { block_from: 0, block_to: 0 }),
+            account_ids: vec![
+                proto::account::AccountId::default();
+                QueryParamAccountIdLimit::LIMIT + 1
+            ],
+        })
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.code(), tonic::Code::OutOfRange);
+    assert!(error.message().contains("account_id exceeded limit"), "{error}");
+}
+
+#[tokio::test]
 async fn sync_chain_mmr_returns_delta() {
     use miden_protocol::block::BlockHeader;
     let (mut rpc_client, _rpc_addr, _store, _server) = start_rpc().await;

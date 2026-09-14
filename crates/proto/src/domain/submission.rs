@@ -61,6 +61,10 @@ impl Verify for proto::submission::DecodedTransactionBatch {
     type Verified = TransactionBatchSubmission;
     type Error = ConversionError;
 
+    /// Verify transaction proofs at the minimum security level, proposal agreement, and the sealed
+    /// input count. The caller must verify the batch execution proof and authenticate the reference
+    /// chain. Receiving services must check nullifiers, expiration, and dependencies against their
+    /// state. Validators must decrypt and re-execute the sealed inputs.
     fn verify(self) -> Result<Self::Verified, Self::Error> {
         let batch_reference_num = self.batch.reference_block_num.block_num;
         let proposed_reference_num = self.proposed_batch.reference_block_header.block_num.block_num;
