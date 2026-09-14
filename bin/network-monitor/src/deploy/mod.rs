@@ -114,6 +114,11 @@ pub struct TransactionSubmissionClient {
 }
 
 impl TransactionSubmissionClient {
+    /// The commitment of the genesis block the node serves. It identifies the chain.
+    pub fn genesis_commitment(&self) -> Word {
+        self.genesis_commitment
+    }
+
     /// Connects to RPC and pins the validator key trusted for encryption-key attestations.
     pub async fn connect(
         rpc_url: &Url,
@@ -555,9 +560,9 @@ pub(crate) async fn fetch_foreign_account_inputs(
 /// transaction must reference a block that already contains the counter account, and the counter
 /// state fed to the executor must be the state committed in that block.
 ///
-/// The anchor is resolved once, right after deployment and before any increment note exists, and
-/// then reused: the referenced block is historical and immutable, so later increments (which do
-/// change the counter's live state) never invalidate it.
+/// A foreign call lowers the transaction's expiration delta, so a transaction which references an
+/// old block expires before the node accepts it. The anchor is therefore rebuilt at the chain tip
+/// before every increment. See [`refresh_counter_anchor`].
 pub struct CounterAnchor {
     /// Header of the block the increment transactions reference.
     pub block_header: BlockHeader,
@@ -643,6 +648,50 @@ async fn resolve_counter_anchor(
         committed_counter.id(),
         ANCHOR_RESOLUTION_ATTEMPTS
     )
+}
+
+/// Reads a public account as committed at the current chain tip.
+pub async fn fetch_account_at_tip(
+    rpc_client: &mut RpcClient,
+    account_id: AccountId,
+    genesis_commitment: Word,
+) -> Result<Account> {
+    let tip = fetch_tip_chain_state(rpc_client, genesis_commitment).await?;
+    let (account, _witness) =
+        fetch_foreign_account_inputs(rpc_client, account_id, tip.block_header.block_num()).await?;
+
+    Ok(account)
+}
+
+/// Rebuilds the [`CounterAnchor`] from the state committed at the current chain tip.
+pub async fn refresh_counter_anchor(
+    rpc_client: &mut RpcClient,
+    counter_id: AccountId,
+    genesis_commitment: Word,
+) -> Result<CounterAnchor> {
+    let tip = fetch_tip_chain_state(rpc_client, genesis_commitment).await?;
+    let block_num = tip.block_header.block_num();
+
+    let (counter_account, witness) =
+        fetch_foreign_account_inputs(rpc_client, counter_id, block_num).await?;
+
+    // The kernel authenticates the faucet against the anchor block's account root, so fetch it
+    // exactly as committed there.
+    let fee_faucet = if tip.block_header.fee_parameters().verification_base_fee() == 0 {
+        None
+    } else {
+        let faucet_id = tip.protocol_config.fee_asset_id().faucet_id();
+        Some(fetch_foreign_account_inputs(rpc_client, faucet_id, block_num).await?)
+    };
+
+    Ok(CounterAnchor {
+        block_header: tip.block_header,
+        blockchain: tip.blockchain,
+        protocol_config: tip.protocol_config,
+        counter_account,
+        witness,
+        fee_faucet,
+    })
 }
 
 /// One [`resolve_counter_anchor`] attempt.
