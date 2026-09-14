@@ -1,5 +1,6 @@
 use std::fmt::{self, Display, Formatter};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use miden_protocol::Word;
 use miden_protocol::account::{AccountId, AccountIdPrefix, StorageMapKey, StorageSlotName};
@@ -74,18 +75,14 @@ const NUMBER_FIELD_NAMES: &[&str] = &[
     "prover.proof_type.raw",
     "reference_block.number",
     "retry.attempt",
-    "retry.delay_ms",
-    "shutdown.grace_period_ms",
     "snapshot.block_num",
     "snapshots.lag_blocks",
     "snapshots.live",
-    "snapshots.oldest_superseded_for_ms",
     "subscription.idle_ms",
     "subscription.stall_timeout_ms",
     "sync.block_gap",
     "sync.ready_threshold",
     "sync.upstream_block",
-    "timeout.ms",
     "tip.number",
     "tip.stale_duration_secs",
     "transaction.expiration_delta",
@@ -260,6 +257,22 @@ impl_scalar_attribute!(
     usize,
 );
 impl_scalar_attribute!(NUMBER_FIELD_NAMES; u32);
+
+/// Durations are recorded as whole milliseconds in a `u64`, saturating at `u64::MAX`.
+///
+/// Every allowed field name ends with `ms` so the recorded unit is visible on the query side.
+impl RecordAttribute for Duration {
+    const FIELD_NAMES: &'static [&'static str] = &[
+        "retry.delay_ms",
+        "shutdown.grace_period_ms",
+        "snapshots.oldest_superseded_for_ms",
+        "timeout.ms",
+    ];
+
+    fn record_attribute(&self) -> impl Value + '_ {
+        u64::try_from(self.as_millis()).unwrap_or(u64::MAX)
+    }
+}
 
 impl RecordAttribute for str {
     const FIELD_NAMES: &'static [&'static str] = STRING_FIELD_NAMES;
