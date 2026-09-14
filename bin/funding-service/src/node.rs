@@ -168,8 +168,9 @@ impl RpcNodeClient {
     ) -> Result<(Account, AccountWitness)> {
         fetch_public_account(&mut self.rpc_client.clone(), account_id, block_num).await
     }
-    /// The chain tip which bounds whether a transaction can still be committed.
-    pub async fn chain_tip(&self) -> Result<BlockNumber> {
+
+    /// The chain tip of the node's local store.
+    pub async fn committed_tip(&self) -> Result<BlockNumber> {
         let status = self
             .rpc_client
             .clone()
@@ -178,10 +179,7 @@ impl RpcNodeClient {
             .context("failed to fetch the node status")?
             .into_inner();
 
-        // The block producer's tip leads the store's tip, so it is the tighter bound.
-        let tip = status.block_producer.map_or(status.chain_tip, |producer| producer.chain_tip);
-
-        Ok(tip.into())
+        Ok(status.chain_tip.into())
     }
 
     /// The inclusion proofs of the notes which are committed, keyed by note ID.

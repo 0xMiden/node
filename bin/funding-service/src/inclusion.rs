@@ -36,43 +36,43 @@ pub async fn await_inclusion(
     let mut found: HashMap<NoteId, NoteInclusionProof> = HashMap::new();
 
     loop {
-        match node.committed_notes(note_ids).await {
-            Ok(proofs) => found.extend(proofs),
-            Err(err) => warn!(
-                &err,
-                target: LOG_TARGET,
-                "Failed to look up the funding notes; retrying"
-            ),
-        }
+        // The tip is read before the notes. The store only moves forward, so the lookup below
+        // observes a store which is at least at this height. The expiration check depends on this
+        // order.
+        let tip = match node.committed_tip().await {
+            Ok(tip) => Some(tip),
+            Err(err) => {
+                warn!(
+                    &err,
+                    target: LOG_TARGET,
+                    "Failed to read the chain tip while waiting for the funding notes"
+                );
+                None
+            },
+        };
+
+        let notes_read = match node.committed_notes(note_ids).await {
+            Ok(proofs) => {
+                found.extend(proofs);
+                true
+            },
+            Err(err) => {
+                warn!(
+                    &err,
+                    target: LOG_TARGET,
+                    "Failed to look up the funding notes; retrying"
+                );
+                false
+            },
+        };
 
         if found.len() == note_ids.len() {
             return Inclusion::Committed(found);
         }
 
-        // The chain tip decides whether the transaction can still be included. A failure to read it
-        // must not end the wait, because the notes may well commit.
-        match node.chain_tip().await {
-            Ok(tip) if tip >= expiration_block => {
-                // The tip may have passed the expiration block while the last block was being
-                // applied, so look once more before giving up.
-                if let Ok(proofs) = node.committed_notes(note_ids).await {
-                    found.extend(proofs);
-                }
 
-                if found.len() == note_ids.len() {
-                    return Inclusion::Committed(found);
-                }
-
-                if found.is_empty() {
-                    return Inclusion::Expired;
-                }
-            },
-            Ok(_) => {},
-            Err(err) => warn!(
-                &err,
-                target: LOG_TARGET,
-                "Failed to read the chain tip while waiting for the funding notes"
-            ),
+        if notes_read && found.is_empty() && tip.is_some_and(|tip| tip >= expiration_block) {
+            return Inclusion::Expired;
         }
 
         tokio::select! {
