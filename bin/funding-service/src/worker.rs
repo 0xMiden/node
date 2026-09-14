@@ -64,8 +64,6 @@ pub struct FundingRequest {
 /// A committed funding note.
 #[derive(Debug, Clone)]
 pub struct FundedNote {
-    /// The note in full. The node does not store the details of a private note, so this is the only
-    /// copy.
     pub note: Note,
     /// Proof that the note is in a block.
     pub inclusion_proof: NoteInclusionProof,
@@ -173,8 +171,8 @@ impl Funder {
                 }
             }
 
-            // A requester which gave up must not be funded: the note would be created but never
-            // delivered, and its funds would be stranded in a private note nobody holds.
+            // A requester which gave up must not be funded. The transaction would spend the funding
+            // balance and pay a fee for a note which no requester waits for.
             batch.retain(|request| !request.reply.is_closed());
             if batch.is_empty() {
                 continue;
