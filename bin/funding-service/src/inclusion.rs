@@ -70,7 +70,6 @@ pub async fn await_inclusion(
             return Inclusion::Committed(found);
         }
 
-
         if notes_read && found.is_empty() && tip.is_some_and(|tip| tip >= expiration_block) {
             return Inclusion::Expired;
         }
