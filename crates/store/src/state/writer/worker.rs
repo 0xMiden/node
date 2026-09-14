@@ -226,10 +226,10 @@ impl WriteWorker {
         if stored.is_none() && protocol_config.is_none() {
             return Err(crate::errors::DatabaseError::ProtocolConfigNotFound(commitment).into());
         }
-        let activated_protocol_config = if previous_config_commitment != commitment {
-            stored.or(protocol_config)
-        } else {
+        let activated_protocol_config = if previous_config_commitment == commitment {
             None
+        } else {
+            stored.or(protocol_config)
         };
 
         let block_lifecycle =
