@@ -198,7 +198,11 @@ impl ValidatorDbWriter {
             .await
     }
 
-    /// Persists a protocol configuration and its block header in one transaction.
+    /// Persists a block header and its configuration activation in one transaction.
+    ///
+    /// Records an activation if the configuration differs from the preceding activation.
+    /// A replacement at the current tip must retain its active configuration.
+    /// Callers must validate block order before this method runs.
     ///
     /// If `protocol_config` is absent, the configuration must already be stored
     /// otherwise an error is returned.
@@ -213,7 +217,7 @@ impl ValidatorDbWriter {
         self.writer
             .write("upsert_block_header_with_protocol_config", move |tx| {
                 let commitment = header.protocol_config_commitment();
-                if let Some(config) = protocol_config.as_ref() {
+                let config = if let Some(config) = protocol_config {
                     let calculated = config.to_commitment();
                     if calculated != commitment {
                         return Err(invalid_protocol_config(format!(
@@ -221,14 +225,19 @@ impl ValidatorDbWriter {
                              {calculated}"
                         )));
                     }
-                    queries::insert_protocol_config(tx, config)?;
+                    config
                 } else {
-                    // Ensure that the configuration is already stored.
                     queries::load_protocol_config(tx, commitment)?.ok_or_else(|| {
                         invalid_protocol_config(format!(
                             "protocol config {commitment} is not stored"
                         ))
-                    })?;
+                    })?
+                };
+
+                let block_number = header.block_num();
+                let previous = queries::load_protocol_config_commitment_before(tx, block_number)?;
+                if previous != Some(commitment) {
+                    queries::insert_protocol_config(tx, &config, block_number)?;
                 }
 
                 queries::upsert_block_header(tx, &header)
@@ -354,6 +363,8 @@ fn open_with_pool_size(
 
 #[cfg(test)]
 mod tests {
+    mod protocol_config_history;
+
     use miden_node_utils::fee::{test_fee_params, test_protocol_config};
     use miden_protocol::Word;
     use miden_protocol::asset::AssetId;
@@ -475,6 +486,10 @@ mod tests {
         db.upsert_block_header_with_protocol_config(header, Some(config.clone()))
             .await
             .unwrap();
+        assert_eq!(
+            protocol_config_history::history(&db).await,
+            vec![(0, config.to_commitment(), config.clone())]
+        );
         assert_eq!(db.load_protocol_config(config.to_commitment()).await.unwrap(), Some(config));
     }
 

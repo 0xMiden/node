@@ -9,7 +9,11 @@
 mod private_record_row;
 
 mod protocol_config;
-pub use protocol_config::{insert as insert_protocol_config, load as load_protocol_config};
+pub use protocol_config::{
+    insert as insert_protocol_config,
+    load as load_protocol_config,
+    load_before as load_protocol_config_commitment_before,
+};
 
 mod count_signed_blocks;
 pub use count_signed_blocks::count_signed_blocks;

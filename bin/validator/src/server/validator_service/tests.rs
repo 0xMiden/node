@@ -604,6 +604,9 @@ async fn chain_tip_replacement_succeeds() {
 
     let result = tv.call_sign_block(&replacement).await;
     assert!(result.is_ok(), "chain tip replacement should succeed, got: {:?}", result.err());
+    tv.call_sign_block_with_protocol_config(&replacement, None)
+        .await
+        .expect("repeated signing must retain the stored configuration");
 
     // Verify that the chain tip in the database is now the replacement block, not the original.
     let new_chain_tip = tv.load_chain_tip().await;
@@ -1040,7 +1043,7 @@ async fn protocol_config_transition_is_streamed_and_used_for_next_signature() {
     drop(stream);
 
     let block_3 = tv.propose_empty_block();
-    tv.call_sign_block_with_protocol_config(&block_3, Some(&next_config))
+    tv.call_sign_block_with_protocol_config(&block_3, None)
         .await
         .expect("the validator must sign with the transitioned active config");
 }
