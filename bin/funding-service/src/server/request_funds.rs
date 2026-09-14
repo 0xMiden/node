@@ -51,7 +51,7 @@ impl From<FundedNote> for RequestFundsResponse {
 // REQUEST FUNDS HANDLER
 // ================================================================================================
 
-/// Creates a private P2ID note which holds `amount` base units of the native asset and targets
+/// Creates a public P2ID note which holds `amount` base units of the native asset and targets
 /// `account_id`, then waits for the note to commit.
 #[miden_node_tracing::miden_instrument(
     target = COMPONENT,
@@ -133,16 +133,14 @@ mod tests {
         assert_eq!(err.status_code(), StatusCode::BAD_REQUEST);
     }
 
-    /// The response must carry the note in full: the node does not store the details of a private
-    /// note, so the requester cannot fetch them anywhere else.
     #[test]
-    fn response_contains_private_note() {
+    fn response_contains_the_full_note() {
         let faucet_id = FungibleAsset::mock_issuer();
         let note: Note = P2idNote::builder()
             .sender(faucet_id)
             .target(faucet_id)
             .serial_number(Word::from([3u32; 4]))
-            .note_type(NoteType::Private)
+            .note_type(NoteType::Public)
             .asset(FungibleAsset::new(faucet_id, 42).unwrap())
             .build()
             .unwrap()

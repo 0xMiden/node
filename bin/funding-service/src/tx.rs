@@ -30,7 +30,7 @@ use crate::data_store::InMemoryDataStore;
 // NOTE CREATION
 // ================================================================================================
 
-/// Builds one private P2ID note per target which holds `amount` base units of the fee asset.
+/// Builds one public P2ID note per target which holds `amount` base units of the fee asset.
 pub fn build_funding_notes(
     sender: AccountId,
     fee_faucet_id: AccountId,
@@ -46,7 +46,7 @@ pub fn build_funding_notes(
                 .sender(sender)
                 .target(target)
                 .asset(asset)
-                .note_type(NoteType::Private)
+                .note_type(NoteType::Public)
                 .generate_serial_number(rng)
                 .build()
                 .context("failed to build the funding note")?
@@ -159,8 +159,6 @@ fn build_tx_args(
     let mut tx_args = TransactionArgs::default()
         .with_tx_script_and_args(script.tx_script().clone(), script.tx_script_args());
 
-    // A private note's recipient is not derivable from the note ID, so the executor needs it to
-    // build the output note.
     for note in notes {
         tx_args.add_output_note_recipient(Box::new(note.recipient().clone()));
     }
@@ -273,9 +271,8 @@ mod tests {
             BALANCE - requested
         );
 
-        // Every note must be a private note the requester can consume.
         for note in &notes {
-            assert_eq!(note.metadata().note_type(), NoteType::Private);
+            assert_eq!(note.metadata().note_type(), NoteType::Public);
             assert_eq!(note.assets().num_assets(), 1);
         }
 

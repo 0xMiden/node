@@ -63,10 +63,6 @@ pub async fn await_inclusion(
                     return Inclusion::Committed(found);
                 }
 
-                // A proof for any note proves that the transaction committed, so every note was
-                // created and the missing proofs are only not visible yet. Giving up here would
-                // report notes which exist as never created, and their assets would be lost,
-                // because the service holds the only copy of a private note.
                 if found.is_empty() {
                     return Inclusion::Expired;
                 }
