@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 
+use miden_node_proto::SignBlockRequest;
 use miden_node_proto::domain::encryption::{
     TransactionEncryptionScheme,
     TrustedTransactionEncryptionState,
     transaction_inputs_associated_data,
     verify_transaction_encryption_key,
 };
-use miden_node_proto::domain::proof_request::BlockProofRequest;
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto::server::validator_api;
 use miden_node_store::{BlockStore, GenesisState};
@@ -184,13 +184,13 @@ impl TestValidator {
             BTreeMap::new(),
         );
         let (block_header, _) = proposed_block.clone().into_header_and_body().unwrap();
-        let mut request: proto::block_proving::BlockProofRequest = BlockProofRequest {
+        let request: proto::validator::SignBlockRequest = SignBlockRequest {
             tx_batches: OrderedBatches::new(proposed_block.batches().as_slice().to_vec()),
             block_header,
             block_inputs,
+            protocol_config: protocol_config.cloned(),
         }
         .into();
-        request.protocol_config = protocol_config.map(Into::into);
         let request = tonic::Request::new(request);
         validator_api::SignBlock::full(&self.server, request).await
     }
