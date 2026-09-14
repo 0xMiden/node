@@ -18,7 +18,6 @@ use miden_node_proto::domain::encryption::{
 };
 use miden_node_proto::generated::rpc::BlockHeaderByNumberRequest;
 use miden_protocol::Word;
-use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
@@ -58,11 +57,6 @@ pub enum Command {
         /// STARK proving, so start small.
         #[arg(long, default_value_t = 10)]
         num_transactions: u64,
-        /// Faucet account whose fungible asset the target chain uses for fees.
-        ///
-        /// Block headers commit to the protocol configuration but do not contain its preimage.
-        #[arg(long, value_parser = parse_account_id)]
-        fee_faucet_id: AccountId,
         /// If set, proofs are produced by the remote prover at this URL instead of locally.
         /// Dispatch is rate-limited: starts at 1 req/s, bumps by 1 req/s every 3 minutes up to 10
         /// req/s, and freezes at the current step if the prover returns a retryable error
@@ -112,11 +106,9 @@ impl Cli {
             Command::CreateProofs {
                 rpc_url,
                 num_transactions,
-                fee_faucet_id,
                 remote_prover_url,
             } => {
-                create_proofs::run(rpc_url, num_transactions, fee_faucet_id, remote_prover_url)
-                    .await;
+                create_proofs::run(rpc_url, num_transactions, remote_prover_url).await;
             },
             Command::RunBenchmark {
                 rpc_url,
@@ -136,12 +128,6 @@ impl Cli {
             },
         }
     }
-}
-
-fn parse_account_id(value: &str) -> std::result::Result<AccountId, String> {
-    AccountId::parse(value)
-        .map(|(account_id, _network_id)| account_id)
-        .map_err(|err| err.to_string())
 }
 
 // SHARED INFRA
@@ -247,6 +233,7 @@ pub(crate) fn get_genesis_header_request() -> BlockHeaderByNumberRequest {
     BlockHeaderByNumberRequest {
         block_num: Some(BlockNumber::GENESIS.as_u32()),
         include_mmr_proof: None,
+        include_protocol_config: None,
     }
 }
 

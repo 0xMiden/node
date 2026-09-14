@@ -106,7 +106,7 @@ pub struct Db {
 fn insert_genesis(conn: &mut SqliteConnection, genesis: GenesisBlock) -> Result<()> {
     let (genesis_block, protocol_config) = genesis.into_parts();
     conn.transaction(move |conn| {
-        models::queries::insert_protocol_config(conn, &protocol_config)?;
+        models::queries::insert_protocol_config(conn, &protocol_config, BlockNumber::GENESIS)?;
         models::queries::apply_block(
             conn,
             &genesis_block,
@@ -284,7 +284,18 @@ impl Db {
         commitment: Word,
     ) -> Result<Option<ProtocolConfig>> {
         self.transact("protocol config by commitment", move |conn| {
-            queries::select_protocol_config(conn, commitment)
+            queries::select_protocol_config_by_commitment(conn, commitment)
+        })
+        .await
+    }
+
+    /// Selects the configuration commitment active at the specified block.
+    pub async fn select_protocol_config_commitment_at(
+        &self,
+        block_number: ScopedBlockNum,
+    ) -> Result<Option<Word>> {
+        self.transact("protocol config commitment at block", move |conn| {
+            queries::select_protocol_config_commitment_at(conn, *block_number)
         })
         .await
     }
@@ -637,12 +648,20 @@ impl Db {
     pub(crate) async fn apply_block(
         &self,
         signed_block: SignedBlock,
+        activated_protocol_config: Option<ProtocolConfig>,
         notes: Vec<(NoteRecord, Option<Nullifier>)>,
         precomputed_public_states: PrecomputedPublicAccountStates,
         unresolved_note_nullifiers: Vec<Nullifier>,
         prune_tip: BlockNumber,
     ) -> Result<BTreeMap<Nullifier, NoteId>> {
         self.transact("apply block", move |conn| {
+            if let Some(protocol_config) = activated_protocol_config.as_ref() {
+                queries::insert_protocol_config(
+                    conn,
+                    protocol_config,
+                    signed_block.header().block_num(),
+                )?;
+            }
             models::queries::apply_block(conn, &signed_block, &notes, &precomputed_public_states)?;
             models::queries::prune_history(conn, prune_tip)?;
 

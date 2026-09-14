@@ -9,8 +9,6 @@
 # - MIDEN_SEED_RPC_URL and MIDEN_SEED_VALIDATOR_1_SIGNING_PUBLIC_KEY through
 #   MIDEN_SEED_VALIDATOR_3_SIGNING_PUBLIC_KEY: overrides used by the on-demand
 #   seed service.
-# - MIDEN_MONITOR_FEE_FAUCET_ID: optional override for the fee faucet used by
-#   monitor transaction checks. It defaults to the local genesis faucet.
 # - MIDEN_NODE_IMAGE, MIDEN_VALIDATOR_IMAGE, MIDEN_NTX_BUILDER_IMAGE,
 #   MIDEN_REMOTE_PROVER_IMAGE, MIDEN_NETWORK_MONITOR_IMAGE,
 #   MIDEN_BENCHMARK_IMAGE, MIDEN_FAUCET_IMAGE, and MIDEN_NOTE_TRANSPORT_IMAGE:

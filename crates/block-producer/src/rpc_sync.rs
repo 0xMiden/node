@@ -236,6 +236,16 @@ impl BlockSync {
                 .ok_or_else(|| anyhow::anyhow!("upstream block event is missing its block"))?
                 .try_into()
                 .context("failed to decode block from upstream")?;
+            let protocol_config = event
+                .protocol_config
+                .map(|config| {
+                    miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header(
+                        Some(config),
+                        block.header(),
+                    )
+                })
+                .transpose()
+                .context("failed to decode protocol config from upstream")?;
             // Each synced block gets its own root span: the surrounding `sync` span lives for the
             // whole subscription, so parenting under it would chain every block into one
             // never-exported trace.
@@ -245,7 +255,7 @@ impl BlockSync {
                 "sync_block",
                 block.number = block.header().block_num().as_u32(),
             );
-            self.writer.apply_block(block).instrument(block_span).await?;
+            self.writer.apply_block(block, protocol_config).instrument(block_span).await?;
 
             let local_tip = self.state.committed_tip();
             self.readiness.update(upstream_tip, local_tip).await;

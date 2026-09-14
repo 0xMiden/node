@@ -38,11 +38,13 @@ pub async fn bootstrap(
 
     let _ = BlockStore::bootstrap(dirs.block_store_dir(), &genesis_block)?;
 
-    let (genesis_header, ..) = genesis_block.into_inner().into_parts();
+    let (genesis_block, protocol_config) = genesis_block.into_parts();
+    let (genesis_header, ..) = genesis_block.into_parts();
     miden_validator::db::bootstrap(
         dirs.database_path(),
         sqlite_connection_pool_size,
         genesis_header,
+        protocol_config,
     )
     .await
     .context("failed to bootstrap the validator database")?;
@@ -97,6 +99,13 @@ mod tests {
         let genesis = read_genesis_block(&genesis_directory.join("genesis.dat")).unwrap();
         let config = genesis.protocol_config().clone();
         let commitment = genesis.inner().header().protocol_config_commitment();
+        let validator_db = miden_validator::db::load(data_directory.join("validator.sqlite3"))
+            .await
+            .unwrap();
+        assert_eq!(
+            validator_db.load_protocol_config(commitment).await.unwrap(),
+            Some(config.clone())
+        );
         let block_bytes = genesis.inner().to_bytes();
         assert_eq!(config.to_commitment(), commitment);
         let node_directory = root.path().join("node");

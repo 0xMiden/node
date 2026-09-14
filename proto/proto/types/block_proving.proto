@@ -7,6 +7,7 @@ import "block.proto";
 import "note.proto";
 import "partial_blockchain.proto";
 import "primitives.proto";
+import "protocol_config.proto";
 
 // The requested account ID paired with the canonical account-tree witness.
 message AccountWitnessRecord {
@@ -50,4 +51,10 @@ message BlockProofRequest {
   blockchain.ValidatorConfig next_validator_config = 4;
   // The optional next protocol configuration included in the proposed block header.
   optional blockchain.NextProtocolConfig next_protocol_config = 5;
+
+  // The active configuration for signing. The block producer always supplies this field.
+  // Other callers may omit this field if the validator already stores the configuration.
+  // The validator returns INVALID_ARGUMENT if the field is omitted and the configuration is not stored.
+  // Proving requests do not require this field.
+  optional protocol_config.ProtocolConfig protocol_config = 6;
 }

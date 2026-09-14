@@ -215,6 +215,7 @@ pub(crate) async fn current_block_height(mut client: RpcClient) -> u32 {
         .get_block_header_by_number(BlockHeaderByNumberRequest {
             block_num: None,
             include_mmr_proof: None,
+            include_protocol_config: None,
         })
         .await
         .expect("failed to fetch latest block header")

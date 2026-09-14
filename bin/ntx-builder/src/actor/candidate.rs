@@ -5,10 +5,10 @@ use std::sync::Arc;
 use miden_protocol::Word;
 use miden_protocol::account::Account;
 use miden_protocol::asset::{Asset, AssetAmount};
-use miden_protocol::block::BlockHeader;
 use miden_protocol::note::{Note, NoteId, Nullifier};
-use miden_protocol::transaction::PartialBlockchain;
 use miden_standards::note::AccountTargetNetworkNote;
+
+use crate::chain_state::ChainState;
 
 // SPONSORED FEATURE NOTE
 // ================================================================================================
@@ -97,15 +97,8 @@ pub struct TransactionCandidate {
     /// the account together with the sponsorships that pay its fee.
     pub notes: Vec<SponsoredFeatureNote>,
 
-    /// The latest locally committed block header.
-    ///
-    /// This should be used as the reference block during transaction execution.
-    pub chain_tip_header: BlockHeader,
-
-    /// The chain MMR, which lags behind the tip by one block.
-    ///
-    /// Wrapped in `Arc` to avoid expensive clones when reading the chain state.
-    pub chain_mmr: Arc<PartialBlockchain>,
+    /// The immutable chain snapshot for transaction execution.
+    pub chain_state: ChainState,
 }
 
 impl TransactionCandidate {
@@ -162,22 +155,15 @@ mod tests {
     #[test]
     fn sponsor_to_feature_nullifier_covers_sponsorships_only() {
         let sponsored_notes = [sponsored(1, 2), sponsored(2, 0)];
-        let chain_mmr = PartialBlockchain::new(
-            miden_protocol::crypto::merkle::mmr::PartialMmr::from_peaks(
-                miden_protocol::crypto::merkle::mmr::MmrPeaks::new(
-                    miden_protocol::crypto::merkle::mmr::Forest::new(0).unwrap(),
-                    vec![],
-                )
-                .unwrap(),
-            ),
-            [],
-        )
-        .unwrap();
+        let chain_state = ChainState::new(
+            crate::test_utils::mock_block_header(0_u32.into()),
+            miden_protocol::crypto::merkle::mmr::PartialMmr::default(),
+            miden_protocol::protocol_config::ProtocolConfig::mock(),
+        );
         let candidate = TransactionCandidate {
             account: Arc::new(crate::test_utils::mock_account(mock_network_account_id())),
             notes: sponsored_notes.to_vec(),
-            chain_tip_header: crate::test_utils::mock_block_header(0_u32.into()),
-            chain_mmr: Arc::new(chain_mmr),
+            chain_state,
         };
 
         let map = candidate.sponsor_to_feature_nullifier();
@@ -187,6 +173,10 @@ mod tests {
             assert_eq!(map[&sponsorship.id()], feature_nullifier);
         }
         assert_eq!(candidate.num_notes(), 4);
+        assert_eq!(
+            candidate.chain_state.protocol_config.as_ref(),
+            &miden_protocol::protocol_config::ProtocolConfig::mock()
+        );
     }
 
     /// Sponsorships are ordered largest-first, so a later truncation to the cap keeps the ones most

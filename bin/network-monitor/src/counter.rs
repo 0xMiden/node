@@ -326,7 +326,6 @@ impl IncrementService {
         let accounts = Box::pin(create_and_deploy_accounts(
             &self.submission_client,
             &self.prover,
-            self.config.fee_faucet_id()?,
             self.funding.as_ref(),
         ))
         .await

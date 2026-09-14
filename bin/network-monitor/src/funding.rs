@@ -135,8 +135,7 @@ impl FaucetClient {
 /// Funds monitor accounts with the chain's fee asset.
 ///
 /// Binds a [`FaucetClient`] to the RPC client used to await note commitment and to the chain's
-/// fee faucet ID, so callers fund an account from just an ID and an amount. Built where the
-/// genesis header is known, since the fee faucet ID comes from the genesis fee parameters.
+/// active fee faucet ID, so callers fund an account from just an ID and an amount.
 pub struct FeeFunder {
     faucet: FaucetClient,
     rpc_client: RpcClient,
@@ -182,7 +181,7 @@ impl FeeFunder {
 }
 
 /// Checks that the note holds a non-zero amount of the fee faucet's fungible asset.
-fn ensure_note_carries_fee_asset(note: &Note, fee_faucet_id: AccountId) -> Result<()> {
+pub(crate) fn ensure_note_carries_fee_asset(note: &Note, fee_faucet_id: AccountId) -> Result<()> {
     let funded = note.assets().iter().any(|asset| {
         asset
             .as_fungible()

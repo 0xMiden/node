@@ -3973,6 +3973,7 @@ dependencies = [
  "miden-node-proto",
  "miden-protocol",
  "miden-standards",
+ "miden-testing",
  "miden-tx",
  "rand 0.10.2",
  "rand_chacha 0.10.0",

@@ -421,6 +421,7 @@ impl NtxBuilderConfig {
     /// - The DB cannot be opened or the schema verification fails
     /// - The DB has not been bootstrapped (no persisted chain state)
     /// - The RPC connection fails (after retries)
+    /// - The remote header or protocol config does not match the persisted chain tip
     pub async fn build(
         self,
         shutdown: CancellationToken,
@@ -500,6 +501,10 @@ impl NtxBuilderConfig {
                 "ntx-builder database has not been bootstrapped; \
                  run `miden-ntx-builder bootstrap` first",
             )?;
+        let protocol_config = rpc
+            .protocol_config_for_header(&header)
+            .await
+            .context("failed to verify the persisted chain tip and protocol config")?;
 
         let block_from = last_applied_block.child();
 
@@ -513,7 +518,7 @@ impl NtxBuilderConfig {
         // block that the builder has not applied.
         let block_stream: BlockStream = Box::pin(rpc.block_subscription_reconnecting(block_from));
 
-        let chain = Arc::new(SharedChainState::new(header, mmr));
+        let chain = Arc::new(SharedChainState::new(header, mmr, protocol_config));
 
         let (coordinator, actor_request_rx) =
             self.build_coordinator(rpc, db.reader(), chain.clone(), shutdown)?;

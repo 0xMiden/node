@@ -365,6 +365,7 @@ impl_blob_codec!(
     miden_protocol::note::NoteScript,
     miden_protocol::note::NoteStorage,
     miden_protocol::note::Nullifier,
+    miden_protocol::protocol_config::ProtocolConfig,
     miden_protocol::crypto::merkle::SparseMerklePath,
     miden_protocol::crypto::merkle::mmr::PartialMmr,
     miden_protocol::Word,

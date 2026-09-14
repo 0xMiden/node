@@ -114,6 +114,7 @@ fn new_tempdir() -> std::path::PathBuf {
 /// A wrapper around the loaded store state and its backing data directory.
 struct TestStore {
     state: Arc<State>,
+    writer: miden_node_store::state::BlockWriter,
     genesis_commitment: Word,
     data_directory: std::path::PathBuf,
 }
@@ -143,9 +144,10 @@ impl TestStore {
         let data_directory = new_tempdir();
         let genesis_commitment =
             Self::bootstrap_with_base_fee(&data_directory, verification_base_fee);
-        let (state, ..) = State::for_tests(&data_directory).await;
+        let (state, writer, ..) = State::for_tests(&data_directory).await;
         Self {
             state,
+            writer,
             genesis_commitment,
             data_directory,
         }
@@ -158,9 +160,10 @@ impl TestStore {
         let data_directory = new_tempdir();
         let genesis_commitment =
             Self::bootstrap_from_mock_genesis(&data_directory, genesis_block, protocol_config);
-        let (state, ..) = State::for_tests(&data_directory).await;
+        let (state, writer, ..) = State::for_tests(&data_directory).await;
         Self {
             state,
+            writer,
             genesis_commitment,
             data_directory,
         }
@@ -431,6 +434,7 @@ async fn rpc_server_accepts_requests_without_accept_header() {
     let request = proto::rpc::BlockHeaderByNumberRequest {
         block_num: Some(0),
         include_mmr_proof: None,
+        include_protocol_config: None,
     };
     let response = rpc_client.get_block_header_by_number(request).await;
 
@@ -1518,6 +1522,7 @@ async fn send_request(
     let request = proto::rpc::BlockHeaderByNumberRequest {
         block_num: Some(0),
         include_mmr_proof: None,
+        include_protocol_config: None,
     };
     rpc_client.get_block_header_by_number(request).await
 }
@@ -1671,6 +1676,7 @@ async fn get_limits_endpoint() {
 
 #[tokio::test]
 async fn sync_chain_mmr_returns_delta() {
+    use miden_protocol::block::BlockHeader;
     let (mut rpc_client, _rpc_addr, _store, _server) = start_rpc().await;
 
     let request = proto::rpc::SyncChainMmrRequest {
@@ -1683,6 +1689,45 @@ async fn sync_chain_mmr_returns_delta() {
     let mmr_delta = response.mmr_delta.expect("mmr_delta should exist");
     assert_eq!(mmr_delta.forest, 0);
     assert!(mmr_delta.update_data.is_empty());
+    let config: ProtocolConfig =
+        response.protocol_config.expect("genesis config").try_into().unwrap();
+    let header: BlockHeader = response.block_header.unwrap().try_into().unwrap();
+    assert_eq!(config.to_commitment(), header.protocol_config_commitment());
+}
+
+#[tokio::test]
+async fn header_protocol_config_is_opt_in() {
+    use miden_protocol::block::BlockHeader;
+    let (mut client, _, _store, _server) = start_rpc().await;
+    for include in [None, Some(false), Some(true)] {
+        let response = client
+            .get_block_header_by_number(proto::rpc::BlockHeaderByNumberRequest {
+                block_num: Some(0),
+                include_mmr_proof: Some(true),
+                include_protocol_config: include,
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(response.protocol_config.is_some(), include == Some(true));
+        assert!(response.mmr_path.is_some());
+        if let Some(config) = response.protocol_config {
+            let config: ProtocolConfig = config.try_into().unwrap();
+            let header: BlockHeader = response.block_header.unwrap().try_into().unwrap();
+            assert_eq!(config.to_commitment(), header.protocol_config_commitment());
+        }
+    }
+    let response = client
+        .get_block_header_by_number(proto::rpc::BlockHeaderByNumberRequest {
+            block_num: Some(1),
+            include_mmr_proof: None,
+            include_protocol_config: Some(true),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(response.block_header.is_none());
+    assert!(response.protocol_config.is_none());
 }
 
 #[test]
@@ -1741,6 +1786,201 @@ async fn sync_nullifiers_rejects_prefix_above_u16() {
         status.message().contains("does not fit"),
         "error should mention the prefix does not fit, got: {}",
         status.message()
+    );
+}
+
+#[tokio::test]
+async fn block_subscription_starts_with_matching_config() {
+    let (mut client, _, _store, _server) = start_rpc().await;
+    let mut stream = client
+        .block_subscription(proto::rpc::BlockSubscriptionRequest { block_from: 0 })
+        .await
+        .unwrap()
+        .into_inner();
+    let event = stream.message().await.unwrap().unwrap();
+    let block: SignedBlock = event.block.unwrap().try_into().unwrap();
+    let config: ProtocolConfig = event.protocol_config.expect("initial config").try_into().unwrap();
+    assert_eq!(config.to_commitment(), block.header().protocol_config_commitment());
+}
+
+async fn next_block_with_protocol_config(
+    store: &TestStore,
+    config: &ProtocolConfig,
+) -> SignedBlock {
+    use miden_protocol::block::{BlockBody, BlockHeader};
+    use miden_protocol::crypto::merkle::mmr::Mmr;
+    use miden_protocol::transaction::OrderedTransactionHeaders;
+
+    let view = store.state.view();
+    let (parent, _) = view.get_block_header(None, false).await.unwrap();
+    let parent = parent.unwrap();
+    let mut mmr = Mmr::new();
+    for height in 0..=parent.block_num().as_u32() {
+        let (header, _) = view.get_block_header(Some(height.into()), false).await.unwrap();
+        mmr.add(header.unwrap().commitment()).unwrap();
+    }
+    let body =
+        BlockBody::new(vec![], vec![], vec![], OrderedTransactionHeaders::new_unchecked(vec![]))
+            .unwrap();
+
+    let header = BlockHeader::new(
+        parent.commitment(),
+        parent.block_num().child(),
+        mmr.peaks().hash_peaks(),
+        parent.account_root(),
+        parent.nullifier_root(),
+        body.compute_block_note_tree().root(),
+        body.transaction_commitment(),
+        parent.validator_config().clone(),
+        parent.fee_parameters().clone(),
+        config.to_commitment(),
+        None,
+        parent.timestamp() + 1,
+    );
+    SignedBlock::new_unchecked(header, body, BlockSignatures::new(vec![]).unwrap())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn protocol_config_transitions_follow_response_headers() {
+    use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
+    use miden_protocol::block::BlockHeader;
+    use miden_protocol::protocol_config::KernelConfig;
+
+    let (mut client, _, mut store, _server) = start_rpc().await;
+    let (genesis, _) = store.state.view().get_block_header(Some(0.into()), false).await.unwrap();
+    let genesis = genesis.unwrap();
+    let a = store
+        .state
+        .view()
+        .get_protocol_config(genesis.protocol_config_commitment())
+        .await
+        .unwrap()
+        .unwrap();
+    let b = ProtocolConfig::new(
+        a.fee_asset_id(),
+        KernelConfig::new(Word::from([42u32, 0, 0, 0]), vec![]).unwrap(),
+        a.batch_kernel().clone(),
+        a.block_kernel().clone(),
+        a.proof_verification().clone(),
+    )
+    .unwrap();
+
+    for config in [&a, &b, &b, &a] {
+        let block = next_block_with_protocol_config(&store, config).await;
+        store.writer.apply_block(block, Some(config.clone())).await.unwrap();
+    }
+
+    for (height, included) in [(0, true), (1, false), (2, true), (3, true), (4, false)] {
+        let response = client
+            .sync_chain_mmr(proto::rpc::SyncChainMmrRequest {
+                current_client_block_height: height,
+                finality_level: proto::rpc::FinalityLevel::Committed.into(),
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(response.protocol_config.is_some(), included);
+        let header: BlockHeader = response.block_header.unwrap().try_into().unwrap();
+        assert_eq!(header.block_num(), 4.into());
+        if included {
+            assert_eq!(
+                ensure_protocol_config_is_present_and_matches_header(
+                    response.protocol_config,
+                    &header
+                )
+                .unwrap(),
+                a
+            );
+        }
+    }
+
+    let proven = client
+        .sync_chain_mmr(proto::rpc::SyncChainMmrRequest {
+            current_client_block_height: 0,
+            finality_level: proto::rpc::FinalityLevel::Proven.into(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let header: BlockHeader = proven.block_header.unwrap().try_into().unwrap();
+    assert_eq!(header.block_num(), 0.into());
+    assert_eq!(
+        ensure_protocol_config_is_present_and_matches_header(proven.protocol_config, &header)
+            .unwrap(),
+        a
+    );
+
+    for start in [1, 2] {
+        let mut stream = client
+            .block_subscription(proto::rpc::BlockSubscriptionRequest { block_from: start })
+            .await
+            .unwrap()
+            .into_inner();
+        for height in start..=4 {
+            let response = stream.message().await.unwrap().unwrap();
+            let block: SignedBlock = response.block.unwrap().try_into().unwrap();
+            assert_eq!(block.header().block_num(), height.into());
+            let included = height == start || height == 2 || height == 4;
+            assert_eq!(response.protocol_config.is_some(), included);
+            if included {
+                let expected = if height == 2 || height == 3 { &b } else { &a };
+                assert_eq!(
+                    &ensure_protocol_config_is_present_and_matches_header(
+                        response.protocol_config,
+                        block.header()
+                    )
+                    .unwrap(),
+                    expected
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn invalid_protocol_config_does_not_advance_store() {
+    use miden_protocol::asset::AssetId;
+    use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1;
+
+    let mut store = TestStore::start().await;
+    let (header, _) = store.state.view().get_block_header(None, false).await.unwrap();
+    let header = header.unwrap();
+    let initial = store
+        .state
+        .view()
+        .get_protocol_config(header.protocol_config_commitment())
+        .await
+        .unwrap()
+        .unwrap();
+    let config = ProtocolConfig::current(AssetId::new_fungible(
+        ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1.try_into().unwrap(),
+    ))
+    .unwrap();
+    assert_ne!(config.to_commitment(), initial.to_commitment());
+
+    let block = next_block_with_protocol_config(&store, &config).await;
+
+    // Try applying without a matching protocol config
+    assert!(store.writer.apply_block(block.clone(), None).await.is_err());
+    assert!(store.writer.apply_block(block.clone(), Some(initial)).await.is_err());
+    assert_eq!(store.state.committed_tip(), 0.into());
+    assert!(store.state.load_block(1.into()).await.unwrap().is_none());
+    assert!(
+        store
+            .state
+            .view()
+            .get_protocol_config(config.to_commitment())
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Then apply with the matching protocol config
+    store.writer.apply_block(block, Some(config.clone())).await.unwrap();
+    assert_eq!(store.state.committed_tip(), 1.into());
+    assert_eq!(
+        store.state.view().get_protocol_config(config.to_commitment()).await.unwrap(),
+        Some(config)
     );
 }
 

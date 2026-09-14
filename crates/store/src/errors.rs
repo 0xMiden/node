@@ -92,6 +92,8 @@ pub enum DatabaseError {
         "protocol config commitment mismatch (expected {expected}, but calculated is {calculated})"
     )]
     ProtocolConfigCommitmentMismatch { expected: Word, calculated: Word },
+    #[error("protocol config {0} is missing")]
+    ProtocolConfigNotFound(Word),
     #[error("account {0} not found")]
     AccountNotFoundInDb(AccountId),
     #[error("accounts {0:?} not found")]

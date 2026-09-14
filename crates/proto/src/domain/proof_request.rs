@@ -34,6 +34,7 @@ impl From<&BlockProofRequest> for proto::block_proving::BlockProofRequest {
             timestamp: value.block_header.timestamp(),
             next_validator_config: Some(value.block_header.validator_config().into()),
             next_protocol_config: value.block_header.next_protocol_config().map(Into::into),
+            protocol_config: None,
         }
     }
 }

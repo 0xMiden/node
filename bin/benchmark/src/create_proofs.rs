@@ -60,7 +60,7 @@ use rayon::prelude::*;
 use url::Url;
 
 use crate::prover::BenchmarkProver;
-use crate::rpc_state::{fetch_chain_tip_header, fetch_partial_blockchain};
+use crate::rpc_state::fetch_chain_tip_state;
 use crate::summary::print_proving_summary;
 use crate::{
     PROOFS_DIR,
@@ -68,9 +68,6 @@ use crate::{
     get_genesis_header_request,
     write_to_file,
 };
-
-/// Maximum attempts to observe a stable chain tip.
-const MAX_TIP_FETCH_ATTEMPTS: u32 = 10;
 
 // CONSTANTS
 // ================================================================================================
@@ -176,12 +173,7 @@ impl ProofCollector {
     reason = "single linear orchestration of genesis fetch + mint phase + consume phase; \
               splitting would just shuffle locals (faucet, data_store, authenticator) around"
 )]
-pub(crate) async fn run(
-    rpc_url: Url,
-    num_transactions: u64,
-    fee_faucet_id: AccountId,
-    remote_prover_url: Option<String>,
-) {
+pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: Option<String>) {
     let mut rpc_client = create_genesis_aware_rpc_client(&rpc_url, Duration::from_secs(10))
         .await
         .unwrap();
@@ -195,38 +187,11 @@ pub(crate) async fn run(
         .block_header
         .expect("RPC returned no block header");
     let genesis_header: BlockHeader = genesis_header_proto.try_into().unwrap();
-    let protocol_config = ProtocolConfig::current(AssetId::new_fungible(fee_faucet_id))
-        .expect("fee faucet should produce a valid protocol configuration");
-    assert_eq!(
-        protocol_config.to_commitment(),
-        genesis_header.protocol_config_commitment(),
-        "--fee-faucet-id does not match the target chain's protocol configuration",
-    );
-
-    // The tip header and chain MMR come from separate RPC calls, so retry until they refer to the
-    // same chain tip.
-    let mut tip_state = None;
-    for _ in 0..MAX_TIP_FETCH_ATTEMPTS {
-        println!("Fetching chain tip header...");
-        let ref_block_header = fetch_chain_tip_header(&mut rpc_client).await;
-        let ref_block_num = ref_block_header.block_num();
-
-        println!("Fetching chain MMR up to ref block...");
-        let partial_blockchain =
-            fetch_partial_blockchain(&mut rpc_client, ref_block_num.as_u32(), &genesis_header)
-                .await;
-
-        if partial_blockchain.chain_length() == ref_block_num {
-            tip_state = Some((ref_block_header, partial_blockchain));
-            break;
-        }
-    }
-    let (ref_block_header, partial_blockchain) = tip_state.unwrap_or_else(|| {
-        panic!(
-            "failed to fetch a consistent tip header and chain MMR after \
-             {MAX_TIP_FETCH_ATTEMPTS} attempts",
-        )
-    });
+    println!("Fetching chain tip state...");
+    let (ref_block_header, protocol_config, partial_blockchain) =
+        fetch_chain_tip_state(&mut rpc_client, &genesis_header)
+            .await
+            .expect("failed to fetch the chain tip transaction anchor");
     let ref_block_num = ref_block_header.block_num();
 
     println!("Creating faucet...");

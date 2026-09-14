@@ -11,15 +11,21 @@ use miden_node_proto::domain::encryption::{
     TrustedTransactionEncryptionState,
     verify_transaction_encryption_key,
 };
+use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
 use miden_node_proto::generated::account::AccountId as ProtoAccountId;
 use miden_node_proto::generated::rpc::account_request::AccountDetailRequest;
-use miden_node_proto::generated::rpc::{AccountRequest, BlockHeaderByNumberRequest};
+use miden_node_proto::generated::rpc::{
+    AccountRequest,
+    BlockHeaderByNumberRequest,
+    BlockHeaderByNumberResponse,
+};
 use miden_node_proto::generated::submission::ProvenTransactionSubmission as ProtoProvenTransaction;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
+use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::ProvenTransaction;
 use miden_protocol::utils::serde::Deserializable;
 use tokio::sync::Mutex;
@@ -29,6 +35,7 @@ use url::Url;
 pub struct SubmissionClient {
     rpc: RpcClient,
     genesis_header: BlockHeader,
+    genesis_protocol_config: ProtocolConfig,
     genesis_commitment: Word,
     trusted_validator_keys: Arc<[ValidatorPublicKey]>,
     sealer: Mutex<Option<TransactionInputsSealer>>,
@@ -77,7 +84,7 @@ impl SubmissionClient {
             .await
             .context("failed to connect to RPC for genesis discovery")?;
 
-        let genesis_header = genesis_block_header(&mut discovery).await?;
+        let (genesis_header, genesis_protocol_config) = genesis_block_state(&mut discovery).await?;
         let genesis_commitment = genesis_header.commitment();
 
         // Step two: the real client, carrying the genesis commitment so writes are accepted.
@@ -99,6 +106,7 @@ impl SubmissionClient {
         let client = Self {
             rpc,
             genesis_header,
+            genesis_protocol_config,
             genesis_commitment,
             trusted_validator_keys: Arc::from(trusted_keys),
             sealer: Mutex::new(None),
@@ -114,6 +122,11 @@ impl SubmissionClient {
     /// The genesis block header, used as the reference block for every increment transaction.
     pub fn genesis_header(&self) -> &BlockHeader {
         &self.genesis_header
+    }
+
+    /// Returns the configuration committed by the genesis header.
+    pub fn genesis_protocol_config(&self) -> &ProtocolConfig {
+        &self.genesis_protocol_config
     }
 
     /// Reads the current chain tip height.
@@ -308,21 +321,37 @@ impl SubmissionClient {
 
 /// Reads the genesis block header, which anchors both the client metadata and transaction
 /// execution.
-async fn genesis_block_header(rpc: &mut RpcClient) -> Result<BlockHeader> {
+async fn genesis_block_state(rpc: &mut RpcClient) -> Result<(BlockHeader, ProtocolConfig)> {
     let response = rpc
-        .get_block_header_by_number(BlockHeaderByNumberRequest {
-            block_num: Some(BlockNumber::GENESIS.as_u32()),
-            include_mmr_proof: None,
-        })
+        .get_block_header_by_number(genesis_header_request())
         .await
         .context("failed to read the genesis block header")?
         .into_inner();
 
-    response
+    decode_genesis_block_state(response)
+}
+
+fn decode_genesis_block_state(
+    response: BlockHeaderByNumberResponse,
+) -> Result<(BlockHeader, ProtocolConfig)> {
+    let header = response
         .block_header
         .context("RPC returned no genesis block header")?
         .try_into()
-        .context("failed to decode the genesis block header")
+        .context("failed to decode the genesis block header")?;
+    let protocol_config =
+        ensure_protocol_config_is_present_and_matches_header(response.protocol_config, &header)
+            .context("RPC returned no valid genesis protocol configuration")?;
+
+    Ok((header, protocol_config))
+}
+
+fn genesis_header_request() -> BlockHeaderByNumberRequest {
+    BlockHeaderByNumberRequest {
+        block_num: Some(BlockNumber::GENESIS.as_u32()),
+        include_mmr_proof: None,
+        include_protocol_config: Some(true),
+    }
 }
 
 /// True when the node rejected a submission because our sealed inputs used a stale encryption key.
@@ -332,4 +361,37 @@ fn is_stale_key(err: &anyhow::Error) -> bool {
             .downcast_ref::<tonic::Status>()
             .is_some_and(|status| status.code() == tonic::Code::FailedPrecondition)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use miden_node_proto::generated::rpc::BlockHeaderByNumberResponse;
+    use miden_protocol::account::AccountId;
+    use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1;
+    use miden_testing::MockChain;
+
+    use super::decode_genesis_block_state;
+
+    #[test]
+    fn genesis_response_rejects_mismatched_protocol_config() {
+        let chain = MockChain::builder().build().expect("chain should build");
+        let other = MockChain::builder()
+            .fee_faucet_id(
+                AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1)
+                    .expect("test faucet ID is valid"),
+            )
+            .build()
+            .expect("chain should build");
+        let response = BlockHeaderByNumberResponse {
+            block_header: Some(chain.genesis_block_header().into()),
+            mmr_path: None,
+            chain_length: None,
+            protocol_config: Some(other.protocol_config().into()),
+        };
+
+        let error = decode_genesis_block_state(response)
+            .expect_err("the genesis configuration must match its header");
+
+        assert!(format!("{error:#}").contains("does not match header commitment"));
+    }
 }

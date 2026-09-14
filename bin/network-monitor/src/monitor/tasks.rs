@@ -115,7 +115,6 @@ impl Tasks {
                 name,
                 prover_url.clone(),
                 config.rpc_url.clone(),
-                config.fee_faucet_id,
                 funding.clone(),
                 config.status_check_interval,
                 config.request_timeout,
@@ -288,13 +287,8 @@ async fn bootstrap_ntx(
     .await?;
     // The faucet funds fee payments; whether it is needed is decided during deployment.
     let funding = FaucetClient::from_config(config);
-    let accounts = Box::pin(create_and_deploy_accounts(
-        &submission_client,
-        &prover,
-        config.fee_faucet_id()?,
-        funding.as_ref(),
-    ))
-    .await?;
+    let accounts =
+        Box::pin(create_and_deploy_accounts(&submission_client, &prover, funding.as_ref())).await?;
 
     let (accounts_tx, accounts_rx) = watch::channel(TrackedAccounts {
         wallet: accounts.wallet.clone(),

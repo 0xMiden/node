@@ -1,18 +1,21 @@
 use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl, SqliteConnection};
 use miden_protocol::Word;
+use miden_protocol::block::BlockNumber;
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::utils::serde::{ByteReader, Deserializable, Serializable, SliceReader};
 
 use crate::db::schema::protocol_configs;
 use crate::errors::DatabaseError;
 
-/// Inserts a protocol configuration by its commitment.
+/// Inserts a protocol configuration at its activation block.
 pub(crate) fn insert_protocol_config(
     conn: &mut SqliteConnection,
     protocol_config: &ProtocolConfig,
+    block_number: BlockNumber,
 ) -> Result<usize, DatabaseError> {
     diesel::insert_into(protocol_configs::table)
         .values((
+            protocol_configs::block_number.eq(i64::from(block_number.as_u32())),
             protocol_configs::commitment.eq(protocol_config.to_commitment().to_bytes()),
             protocol_configs::protocol_config.eq(protocol_config.to_bytes()),
         ))
@@ -20,15 +23,16 @@ pub(crate) fn insert_protocol_config(
         .map_err(Into::into)
 }
 
-/// Selects a protocol configuration and verifies its commitment.
-pub(crate) fn select_protocol_config(
+/// Selects a protocol configuration by its commitment.
+pub(crate) fn select_protocol_config_by_commitment(
     conn: &mut SqliteConnection,
     commitment: Word,
 ) -> Result<Option<ProtocolConfig>, DatabaseError> {
     let bytes = protocol_configs::table
         .filter(protocol_configs::commitment.eq(commitment.to_bytes()))
         .select(protocol_configs::protocol_config)
-        .get_result::<Vec<u8>>(conn)
+        .order(protocol_configs::block_number.asc())
+        .first::<Vec<u8>>(conn)
         .optional()?;
 
     let Some(bytes) = bytes else {
@@ -53,6 +57,20 @@ pub(crate) fn select_protocol_config(
     Ok(Some(protocol_config))
 }
 
+/// Selects the configuration commitment active at the specified block.
+pub(crate) fn select_protocol_config_commitment_at(
+    conn: &mut SqliteConnection,
+    block_number: BlockNumber,
+) -> Result<Option<Word>, DatabaseError> {
+    let bytes = protocol_configs::table
+        .filter(protocol_configs::block_number.le(i64::from(block_number.as_u32())))
+        .order(protocol_configs::block_number.desc())
+        .select(protocol_configs::commitment)
+        .first::<Vec<u8>>(conn)
+        .optional()?;
+    bytes.map(|bytes| Word::read_from_bytes(&bytes).map_err(Into::into)).transpose()
+}
+
 #[cfg(test)]
 mod tests {
     use diesel::{ExpressionMethods, RunQueryDsl, SqliteConnection};
@@ -61,7 +79,7 @@ mod tests {
     use miden_protocol::protocol_config::ProtocolConfig;
     use miden_protocol::utils::serde::Serializable;
 
-    use super::{insert_protocol_config, select_protocol_config};
+    use super::{insert_protocol_config, select_protocol_config_by_commitment};
     use crate::db::schema::protocol_configs;
     use crate::errors::DatabaseError;
 
@@ -75,16 +93,19 @@ mod tests {
         let config = test_protocol_config();
         let commitment = config.to_commitment();
 
-        insert_protocol_config(&mut conn, &config).unwrap();
+        insert_protocol_config(&mut conn, &config, 0.into()).unwrap();
 
-        assert_eq!(select_protocol_config(&mut conn, commitment).unwrap(), Some(config));
+        assert_eq!(
+            select_protocol_config_by_commitment(&mut conn, commitment).unwrap(),
+            Some(config)
+        );
     }
 
     #[test]
     fn returns_none_for_unknown_commitment() {
         let mut conn = connection();
 
-        assert_eq!(select_protocol_config(&mut conn, Word::empty()).unwrap(), None);
+        assert_eq!(select_protocol_config_by_commitment(&mut conn, Word::empty()).unwrap(), None);
     }
 
     #[test]
@@ -105,14 +126,48 @@ mod tests {
         ))
         .unwrap();
 
-        insert_protocol_config(&mut conn, &first).unwrap();
-        insert_protocol_config(&mut conn, &second).unwrap();
+        insert_protocol_config(&mut conn, &first, 0.into()).unwrap();
+        insert_protocol_config(&mut conn, &second, 1.into()).unwrap();
 
-        assert_eq!(select_protocol_config(&mut conn, first.to_commitment()).unwrap(), Some(first));
         assert_eq!(
-            select_protocol_config(&mut conn, second.to_commitment()).unwrap(),
+            select_protocol_config_by_commitment(&mut conn, first.to_commitment()).unwrap(),
+            Some(first)
+        );
+        assert_eq!(
+            select_protocol_config_by_commitment(&mut conn, second.to_commitment()).unwrap(),
             Some(second)
         );
+    }
+
+    #[test]
+    fn selects_commitment_at_activation_boundaries() {
+        let mut conn = connection();
+        let first = test_protocol_config();
+        let second = ProtocolConfig::current(miden_protocol::asset::AssetId::new_fungible(
+            miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1
+                .try_into()
+                .unwrap(),
+        ))
+        .unwrap();
+        assert_ne!(first.to_commitment(), second.to_commitment());
+        assert_eq!(super::select_protocol_config_commitment_at(&mut conn, 0.into()).unwrap(), None);
+        for (height, config) in [(0, &first), (3, &second), (7, &first)] {
+            insert_protocol_config(&mut conn, config, height.into()).unwrap();
+        }
+        for (height, config) in
+            [(0, &first), (2, &first), (3, &second), (6, &second), (7, &first), (9, &first)]
+        {
+            assert_eq!(
+                super::select_protocol_config_commitment_at(&mut conn, height.into()).unwrap(),
+                Some(config.to_commitment())
+            );
+        }
+        assert_eq!(
+            select_protocol_config_by_commitment(&mut conn, first.to_commitment()).unwrap(),
+            Some(first.clone())
+        );
+        assert!(insert_protocol_config(&mut conn, &first, 7.into()).is_err());
+        assert!(insert_protocol_config(&mut conn, &second, 7.into()).is_err());
     }
 
     #[test]
@@ -123,6 +178,7 @@ mod tests {
         let calculated = config.to_commitment();
         diesel::insert_into(protocol_configs::table)
             .values((
+                protocol_configs::block_number.eq(0_i64),
                 protocol_configs::commitment.eq(expected.to_bytes()),
                 protocol_configs::protocol_config.eq(config.to_bytes()),
             ))
@@ -130,7 +186,7 @@ mod tests {
             .unwrap();
 
         assert!(matches!(
-            select_protocol_config(&mut conn, expected),
+            select_protocol_config_by_commitment(&mut conn, expected),
             Err(DatabaseError::ProtocolConfigCommitmentMismatch {
                 expected: actual_expected,
                 calculated: actual_calculated,
@@ -144,14 +200,19 @@ mod tests {
         let commitment = Word::empty();
         diesel::insert_into(protocol_configs::table)
             .values((
+                protocol_configs::block_number.eq(0_i64),
                 protocol_configs::commitment.eq(commitment.to_bytes()),
                 protocol_configs::protocol_config.eq(vec![0xff]),
             ))
             .execute(&mut conn)
             .unwrap();
 
+        assert_eq!(
+            super::select_protocol_config_commitment_at(&mut conn, 0.into()).unwrap(),
+            Some(commitment)
+        );
         assert!(matches!(
-            select_protocol_config(&mut conn, commitment),
+            select_protocol_config_by_commitment(&mut conn, commitment),
             Err(DatabaseError::DeserializationError(_))
         ));
     }
@@ -165,6 +226,7 @@ mod tests {
         bytes.push(0xff);
         diesel::insert_into(protocol_configs::table)
             .values((
+                protocol_configs::block_number.eq(0_i64),
                 protocol_configs::commitment.eq(commitment.to_bytes()),
                 protocol_configs::protocol_config.eq(bytes),
             ))
@@ -172,7 +234,7 @@ mod tests {
             .unwrap();
 
         assert!(matches!(
-            select_protocol_config(&mut conn, commitment),
+            select_protocol_config_by_commitment(&mut conn, commitment),
             Err(DatabaseError::DataCorrupted(_))
         ));
     }
