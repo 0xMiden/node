@@ -4110,7 +4110,9 @@ name = "miden-node"
 version = "0.17.0-rc.1"
 dependencies = [
  "anyhow",
+ "axum",
  "clap",
+ "fs-err",
  "humantime",
  "miden-node-block-producer",
  "miden-node-proto",
@@ -4119,9 +4121,14 @@ dependencies = [
  "miden-node-tracing",
  "miden-node-utils",
  "miden-protocol",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
  "tokio",
  "tokio-stream",
  "tonic",
+ "tower",
  "url",
 ]
 
@@ -4233,6 +4240,7 @@ name = "miden-node-rpc"
 version = "0.17.0-rc.1"
 dependencies = [
  "anyhow",
+ "fs-err",
  "futures",
  "http 1.5.0",
  "mediatype",
@@ -4294,6 +4302,7 @@ dependencies = [
  "rand_chacha 0.10.0",
  "rayon",
  "serde",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.20",
  "thread-priority",

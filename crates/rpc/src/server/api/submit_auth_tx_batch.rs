@@ -36,6 +36,10 @@ impl sequencer_api::SubmitAuthenticatedTxBatch for SequencerInternalService {
                     Status::internal(format!("authenticated batch decoding task failed: {err}"))
                 })??;
 
+        for tx in batch.transactions() {
+            self.account_admission.check(tx.account_update()).await?;
+        }
+
         self.block_producer
             .submit_authenticated_tx_batch(batch, inputs)
             .await

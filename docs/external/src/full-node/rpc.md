@@ -22,6 +22,12 @@ must fetch the key first and a validator's answer does not change while it is ru
 Because sealing transaction inputs is mandatory, this endpoint is on the critical path for submission: a full node that
 cannot reach a validator or its upstream source can no longer serve submitting clients at all, not merely the key query.
 
+## Account Registration
+
+Full nodes forward `RegisterAccount` requests to their configured upstream RPC source. The sequencer stores the
+registration. Full nodes do not maintain a local allowlist. This also applies when pre-authenticated transaction
+submission is configured.
+
 ## Transaction Submission
 
 Full nodes do not sequence transactions. `SubmitProvenTx` and `SubmitProvenTxBatch` are forwarded to the configured

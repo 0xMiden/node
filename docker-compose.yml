@@ -1,4 +1,6 @@
 # Environment variables:
+# - MIDEN_NODE_DISABLE_ACCOUNT_ALLOWLIST: allow unrestricted account creation.
+#   Defaults to true for local development. Set to false to require registration.
 # - MIDEN_REMOTE_PROVER_URL: remote transaction prover URL. Defaults to the
 #   bundled miden-remote-prover service at http://tx-prover:50051.
 # - MIDEN_VALIDATOR_1_SIGNING_KEY, MIDEN_VALIDATOR_2_SIGNING_KEY, and
