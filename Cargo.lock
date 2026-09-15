@@ -3962,6 +3962,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "miden-funding-service"
+version = "0.17.0-rc.1"
+dependencies = [
+ "anyhow",
+ "axum",
+ "backon",
+ "clap",
+ "humantime",
+ "miden-node-proto",
+ "miden-node-tracing",
+ "miden-node-utils",
+ "miden-protocol",
+ "miden-standards",
+ "rand 0.10.2",
+ "rand_chacha 0.10.0",
+ "serde",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tower-http",
+ "url",
+]
+
+[[package]]
 name = "miden-large-account-benchmark"
 version = "0.17.0-rc.1"
 dependencies = [
@@ -7652,6 +7676,7 @@ dependencies = [
  "http-body 1.1.0",
  "http-body-util",
  "pin-project-lite",
+ "tokio",
  "tower",
  "tower-layer",
  "tower-service",
