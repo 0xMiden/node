@@ -28,7 +28,7 @@ Public service files can import shared node-owned types and canonical object sch
 service files. This keeps internal services out of public service reflection.
 
 Keep service-specific wrappers with their service. For example, `rpc.proto` owns note query and compact note sync
-messages. `internal/validator.proto` owns the signature response. Submission envelopes belong in
+messages. `internal/validator.proto` owns the signing request and signature response. Submission envelopes belong in
 `types/submission.proto`. Block proving requests belong in `types/block_proving.proto`.
 
 See the [migration guidance](../README.md#canonical-protobuf-migration) before updating an existing client.

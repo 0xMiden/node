@@ -2,6 +2,17 @@ use miden_protocol::account::StorageMapKey;
 
 use super::*;
 
+#[test]
+fn registration_request_debug_hides_invitation_code() {
+    let code = "private invitation code";
+    let request = proto::rpc::RegisterAccountRequest {
+        invitation_code: code.to_owned(),
+        account_id: None,
+    };
+    let debug = format!("{request:?}");
+    assert!(!debug.contains(code));
+}
+
 fn word_from_u32(arr: [u32; 4]) -> Word {
     Word::from(arr)
 }

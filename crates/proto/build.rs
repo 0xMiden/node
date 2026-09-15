@@ -61,6 +61,7 @@ fn generate_bindings(file_descriptors: &FileDescriptorSet, dst_dir: &Path) -> mi
     for &(proto_path, rust_path) in miden_objects::EXTERN_PATHS {
         prost_config.extern_path(proto_path, rust_path);
     }
+    prost_config.skip_debug(["RegisterAccountRequest"]);
 
     // Generate the stub of the user facing server from its proto file
     tonic_prost_build::configure()

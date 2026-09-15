@@ -195,8 +195,8 @@ pub enum ValidatorCommand {
         #[arg(long = "listen", env = ENV_LISTEN, value_name = "LISTEN")]
         listen: std::net::SocketAddr,
 
-        /// Socket address at which to serve the private administration API.
-        #[arg(long = "admin.listen", env = ENV_ADMIN_LISTEN, value_name = "LISTEN")]
+        /// IP address and port for the private administration API (for example, 127.0.0.1:50102).
+        #[arg(long = "admin.listen", env = ENV_ADMIN_LISTEN, value_name = "IP:PORT")]
         admin_listen: Option<std::net::SocketAddr>,
 
         #[command(flatten)]

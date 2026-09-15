@@ -1,7 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
-use miden_node_proto::{BlockProofRequest, generated as grpc};
+use miden_node_proto::{SignBlockRequest, generated as grpc};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorReport, Instrument, info_span, miden_instrument};
 use miden_protocol::Word;
@@ -14,14 +13,14 @@ use crate::COMPONENT;
 
 #[tonic::async_trait]
 impl grpc::server::validator_api::SignBlock for ValidatorService {
-    type Input = grpc::block_proving::BlockProofRequest;
+    type Input = grpc::validator::SignBlockRequest;
     type Output = (Signature, Word, PublicKey);
 
     #[miden_instrument(
         target = COMPONENT,
         err,
     )]
-    fn decode(request: grpc::block_proving::BlockProofRequest) -> tonic::Result<Self::Input> {
+    fn decode(request: grpc::validator::SignBlockRequest) -> tonic::Result<Self::Input> {
         Ok(request)
     }
 
@@ -62,18 +61,8 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
 
         let (proposed_block, protocol_config, protocol_config_commitment) =
             spawn_blocking_in_current_span(move || {
-                let mut request = request;
-                let supplied_protocol_config = request.protocol_config.take();
-                let request = BlockProofRequest::try_from(request).map_err(tonic::Status::from)?;
-                let protocol_config = supplied_protocol_config
-                    .map(|config| {
-                        ensure_protocol_config_is_present_and_matches_header(
-                            Some(config),
-                            &request.block_header,
-                        )
-                    })
-                    .transpose()
-                    .map_err(tonic::Status::from)?;
+                let request = SignBlockRequest::try_from(request).map_err(tonic::Status::from)?;
+                let protocol_config = request.protocol_config;
                 let protocol_config_commitment = request.block_header.protocol_config_commitment();
                 let proposed_block = ProposedBlock::new_at(
                     request.block_inputs,

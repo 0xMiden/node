@@ -2,10 +2,10 @@ use std::collections::BTreeMap;
 
 use miden_objects::{BuildUnchecked, DecodeMessage, Verify};
 use miden_protocol::account::AccountId;
-use miden_protocol::batch::{OrderedBatches, ProvenBatch};
+use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::block::nullifier_tree::NullifierWitness;
-use miden_protocol::block::{BlockHeader, BlockInputs, ProposedBlock};
+use miden_protocol::block::{BlockHeader, BlockInputs};
 use miden_protocol::note::{NoteId, NoteInclusionProof, Nullifier};
 use miden_protocol::transaction::PartialBlockchain;
 use miden_protocol::utils::serde::{
@@ -16,7 +16,7 @@ use miden_protocol::utils::serde::{
     Serializable,
 };
 
-use crate::decode::{ConversionResultExt, verify_optional, verify_value};
+use crate::decode::{ConversionResultExt, verify_value};
 use crate::errors::ConversionError;
 use crate::generated as proto;
 
@@ -36,7 +36,6 @@ impl From<&BlockProofRequest> for proto::block_proving::BlockProofRequest {
             timestamp: value.block_header.timestamp(),
             next_validator_config: Some(value.block_header.validator_config().into()),
             next_protocol_config: value.block_header.next_protocol_config().map(Into::into),
-            protocol_config: None,
         }
     }
 }
@@ -51,51 +50,27 @@ impl TryFrom<proto::block_proving::BlockProofRequest> for BlockProofRequest {
     type Error = ConversionError;
 
     fn try_from(value: proto::block_proving::BlockProofRequest) -> Result<Self, Self::Error> {
-        let block_inputs: BlockInputs = value
-            .block_inputs
-            .ok_or_else(|| {
-                ConversionError::missing_field::<proto::block_proving::BlockProofRequest>(
-                    "block_inputs",
-                )
-            })?
-            .try_into()?;
-
-        let batches = value
-            .batches
-            .into_iter()
-            .enumerate()
-            .map(|(index, batch)| {
-                batch
-                    .decode_fields()
-                    .and_then(|batch| {
-                        batch.build_unchecked().map_err(miden_objects::ConversionError::new)
-                    })
-                    .map_err(|error| {
-                        ConversionError::from(error.context(format!("batches[{index}]")))
-                    })
-            })
-            .collect::<Result<Vec<ProvenBatch>, _>>()?;
-
-        let next_validator_config = required_verified::<
-            proto::block_proving::BlockProofRequest,
-            _,
-            _,
-        >(value.next_validator_config, "next_validator_config")?;
-        let next_protocol_config =
-            verify_optional("next_protocol_config", value.next_protocol_config)?;
-
-        let proposed_block =
-            ProposedBlock::new_at(block_inputs.clone(), batches.clone(), value.timestamp)
-                .map_err(ConversionError::new)?
-                .with_next_validator_config(next_validator_config)
-                .with_next_protocol_config(next_protocol_config);
-        let (block_header, _) =
-            proposed_block.into_header_and_body().map_err(ConversionError::new)?;
-
-        Ok(Self {
-            tx_batches: OrderedBatches::new(batches),
-            block_header,
+        let block_inputs = value.block_inputs.ok_or_else(|| {
+            ConversionError::missing_field::<proto::block_proving::BlockProofRequest>(
+                "block_inputs",
+            )
+        })?;
+        let next_validator_config = value.next_validator_config.ok_or_else(|| {
+            ConversionError::missing_field::<proto::block_proving::BlockProofRequest>(
+                "next_validator_config",
+            )
+        })?;
+        let decoded = super::block_proposal::decode(
             block_inputs,
+            value.batches,
+            value.timestamp,
+            next_validator_config,
+            value.next_protocol_config,
+        )?;
+        Ok(Self {
+            tx_batches: decoded.tx_batches,
+            block_header: decoded.block_header,
+            block_inputs: decoded.block_inputs,
         })
     }
 }

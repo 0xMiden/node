@@ -95,7 +95,7 @@ impl BlockProducerValidatorClient {
         block_inputs: &BlockInputs,
         protocol_config: &ProtocolConfig,
     ) -> Result<Vec<SignBlockResponse>, ValidatorError> {
-        let message = proto::block_proving::BlockProofRequest {
+        let message = proto::validator::SignBlockRequest {
             protocol_config: Some(protocol_config.into()),
             batches: proposed_block.batches().as_slice().iter().map(Into::into).collect(),
             block_inputs: Some(block_inputs.into()),

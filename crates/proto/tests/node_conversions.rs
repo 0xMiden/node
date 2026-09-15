@@ -426,3 +426,111 @@ fn canonical_conversion_errors_map_to_invalid_argument() {
 
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
 }
+
+fn signing_request() -> miden_node_proto::SignBlockRequest {
+    let proof = nonempty_block_request();
+    miden_node_proto::SignBlockRequest {
+        tx_batches: proof.tx_batches,
+        block_header: proof.block_header,
+        block_inputs: proof.block_inputs,
+        protocol_config: None,
+    }
+}
+
+#[test]
+fn signing_roundtrip_preserves_proposal_and_matches_proving() {
+    let request = signing_request();
+    let message = generated::validator::SignBlockRequest::from(&request);
+    let decoded = miden_node_proto::SignBlockRequest::try_from(
+        generated::validator::SignBlockRequest::decode(message.encode_to_vec().as_slice()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(decoded.block_header, request.block_header);
+    assert_eq!(decoded.tx_batches.as_slice(), request.tx_batches.as_slice());
+    assert_eq!(
+        generated::block_proving::BlockInputs::from(&decoded.block_inputs),
+        generated::block_proving::BlockInputs::from(&request.block_inputs)
+    );
+    assert!(decoded.protocol_config.is_none());
+    let proof_message = generated::block_proving::BlockProofRequest {
+        batches: message.batches,
+        block_inputs: message.block_inputs,
+        timestamp: message.timestamp,
+        next_validator_config: message.next_validator_config,
+        next_protocol_config: message.next_protocol_config,
+    };
+    let proof = BlockProofRequest::try_from(proof_message).unwrap();
+    assert_eq!(decoded.block_header, proof.block_header);
+}
+
+#[test]
+fn signing_rejects_missing_fields_and_malformed_batches() {
+    let message = generated::validator::SignBlockRequest::from(&signing_request());
+    for field in ["block_inputs", "next_validator_config"] {
+        let mut invalid = message.clone();
+        if field == "block_inputs" {
+            invalid.block_inputs = None;
+        } else {
+            invalid.next_validator_config = None;
+        }
+        let error = miden_node_proto::SignBlockRequest::try_from(invalid).unwrap_err();
+        assert!(error.to_string().contains(field));
+    }
+    let mut invalid = message;
+    invalid.batches[0] = proto::transaction::ProvenBatch::default();
+    let error = miden_node_proto::SignBlockRequest::try_from(invalid).unwrap_err();
+    assert!(error.to_string().contains("batches[0]"));
+    assert!(
+        error
+            .source()
+            .unwrap()
+            .downcast_ref::<miden_objects::ConversionError>()
+            .is_some()
+    );
+}
+
+#[test]
+fn signing_rejects_duplicate_witnesses_and_preserves_absent_next_config() {
+    let mut message = generated::validator::SignBlockRequest::from(&signing_request());
+    message.next_protocol_config = None;
+    let decoded = miden_node_proto::SignBlockRequest::try_from(message.clone()).unwrap();
+    assert!(decoded.block_header.next_protocol_config().is_none());
+    let witnesses = &mut message.block_inputs.as_mut().unwrap().nullifier_witnesses;
+    witnesses.push(witnesses[0].clone());
+    let error = miden_node_proto::SignBlockRequest::try_from(message).unwrap_err();
+    assert!(error.to_string().contains("duplicate nullifier"));
+}
+
+#[test]
+fn signing_roundtrip_validates_supplied_active_configuration() {
+    use miden_protocol::asset::AssetId;
+    use miden_protocol::protocol_config::ProtocolConfig;
+    use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1;
+
+    let config = ProtocolConfig::current(AssetId::new_fungible(
+        ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1.try_into().unwrap(),
+    ))
+    .unwrap();
+    let proof = block_request_message();
+    let mut message = generated::validator::SignBlockRequest {
+        batches: proof.batches,
+        block_inputs: proof.block_inputs,
+        timestamp: proof.timestamp,
+        next_validator_config: proof.next_validator_config,
+        next_protocol_config: proof.next_protocol_config,
+        protocol_config: Some((&config).into()),
+    };
+    assert!(miden_node_proto::SignBlockRequest::try_from(message.clone()).is_err());
+    message
+        .block_inputs
+        .as_mut()
+        .unwrap()
+        .prev_block_header
+        .as_mut()
+        .unwrap()
+        .protocol_config_commitment = Some(config.to_commitment().into());
+    let decoded = miden_node_proto::SignBlockRequest::try_from(message.clone()).unwrap();
+    assert_eq!(decoded.protocol_config, Some(config));
+    let encoded = generated::validator::SignBlockRequest::from(decoded);
+    assert_eq!(encoded, message);
+}

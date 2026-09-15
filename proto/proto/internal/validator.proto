@@ -3,6 +3,7 @@ syntax = "proto3";
 package validator;
 
 import "block.proto";
+import "batch.proto";
 import "primitives.proto";
 import "protocol_config.proto";
 import "types/block_proving.proto";
@@ -21,7 +22,7 @@ service Api {
    rpc SubmitProvenTransaction(submission.ProvenTransactionSubmission) returns (google.protobuf.Empty) {}
 
    // Validates and signs a proposed block.
-   rpc SignBlock(block_proving.BlockProofRequest) returns (SignBlockResponse) {}
+   rpc SignBlock(SignBlockRequest) returns (SignBlockResponse) {}
 
    // Streams signed blocks starting from the given block number (inclusive).
    //
@@ -39,8 +40,26 @@ service Api {
    rpc GetTransactionEncryptionKey(google.protobuf.Empty) returns (submission.TransactionEncryptionKey) {}
 }
 
-// SIGN BLOCK RESPONSE
+// SIGN BLOCK REQUEST AND RESPONSE
 // ================================================================================================
+
+// The inputs required to validate and sign a proposed block.
+message SignBlockRequest {
+    // The proven transaction batches in block order.
+    repeated transaction.ProvenBatch batches = 1;
+    // The chain state and witnesses required to reconstruct the proposed block.
+    block_proving.BlockInputs block_inputs = 2;
+    // The timestamp of the proposed block.
+    fixed32 timestamp = 3;
+    // The next validator configuration included in the proposed block header.
+    blockchain.ValidatorConfig next_validator_config = 4;
+    // The optional next protocol configuration included in the proposed block header.
+    optional blockchain.NextProtocolConfig next_protocol_config = 5;
+    // The active configuration for signing. The block producer always supplies this field.
+    // Other callers may omit this field if the validator already stores the configuration.
+    // The validator returns INVALID_ARGUMENT if the field is omitted and the configuration is not stored.
+    optional protocol_config.ProtocolConfig protocol_config = 6;
+}
 
 message SignBlockResponse {
     primitives.Signature signature = 1;
