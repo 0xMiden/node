@@ -22,15 +22,32 @@ grpcurl rpc.testnet.miden.io:443 describe rpc.Api
 
 ## State Queries
 
-| Method                   | Purpose                                                                          |
-| ------------------------ | -------------------------------------------------------------------------------- |
-| `GetAccount`             | Returns account witness data and optional details for public accounts.           |
-| `GetBlockByNumber`       | Returns raw block data for a block number, optionally including the block proof. |
-| `GetBlockHeaderByNumber` | Returns a block header and, optionally, MMR authentication data.                 |
-| `GetNotesById`           | Returns committed notes matching the requested note IDs.                         |
-| `GetNoteScriptByRoot`    | Returns a note script by script root when available.                             |
+| Method                   | Purpose                                                                              |
+| ------------------------ | ------------------------------------------------------------------------------------ |
+| `GetAccount`             | Returns account witness data and optional details for public accounts.               |
+| `GetBlockByNumber`       | Returns raw block data for a block number, optionally including the block proof.     |
+| `GetBlockHeaderByNumber` | Returns a block header and, optionally, MMR authentication data and protocol config. |
+| `GetNotesById`           | Returns committed notes matching the requested note IDs.                             |
+| `GetNoteScriptByRoot`    | Returns a note script by script root when available.                                 |
+
+## Account Registration
+
+`RegisterAccount` binds an invitation code to an account ID. Send the original code string in `invitation_code` and the
+target account in `account_id`. Codes are case-sensitive. Send the code exactly as received, without trimming or
+normalization. Registration does not create an account on chain.
+
+Retrying the same code and account succeeds without changes. An unknown code returns `NOT_FOUND`. A code bound to
+another account, or an account already registered with another entry, returns `ALREADY_EXISTS`. Invalid input returns
+`INVALID_ARGUMENT`. Failed requests do not consume an invitation.
+
+Include the network's `genesis` parameter in the `Accept` header, as for transaction submission. Use TLS when sending
+invitation codes over a network. Do not log invitation codes. Full nodes forward registration to the sequencer.
 
 ## Transaction Submission
+
+The sequencer requires registration before a transaction creates a non-network account. Transactions for existing
+accounts and network-account creation do not require registration. An unregistered creation returns `PERMISSION_DENIED`.
+If a batch contains an unregistered creation, the sequencer rejects the entire batch.
 
 | Method                        | Purpose                                                                                     |
 | ----------------------------- | ------------------------------------------------------------------------------------------- |
@@ -73,7 +90,7 @@ codes returned in gRPC status details.
 | `SyncNullifiers`         | Returns nullifiers matching specified 16-bit prefixes within a block range.             |
 | `SyncAccountVault`       | Returns public account vault updates within a block range.                              |
 | `SyncAccountStorageMaps` | Returns public account storage map updates within a block range.                        |
-| `SyncChainMmr`           | Returns MMR delta information needed to synchronize the chain MMR.                      |
+| `SyncChainMmr`           | Returns the chain MMR delta, target header, and protocol config when required.          |
 
 Use `GetLimits` to discover the maximum request sizes accepted by the node before batching large sync requests.
 

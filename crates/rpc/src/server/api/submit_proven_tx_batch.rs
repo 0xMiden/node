@@ -3,9 +3,9 @@ use miden_node_proto::clients::{SequencerClient, ValidatorClient};
 use miden_node_proto::generated as proto;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorReport, debug, miden_instrument, miden_span_record, trace};
+use miden_objects::{DecodeMessage, VerifyWith};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
-use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_tx_batch::BatchVerifier;
 use tonic::{Request, Status};
 
@@ -19,10 +19,10 @@ use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
-    type Input = proto::transaction::TransactionBatch;
+    type Input = proto::submission::TransactionBatch;
     type Output = proto::blockchain::BlockNumber;
 
-    fn decode(request: proto::transaction::TransactionBatch) -> tonic::Result<Self::Input> {
+    fn decode(request: proto::submission::TransactionBatch) -> tonic::Result<Self::Input> {
         Ok(request)
     }
 
@@ -41,9 +41,11 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
         metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        let request = input;
+        let mut request = input;
         let is_authorized_network_tx = self.is_authorized_network_tx(metadata);
         let original_accept_header = metadata.get(http::header::ACCEPT.as_str()).cloned();
+        let preserve_batch_fields =
+            matches!(&self.backend, RpcBackend::FullNode { pre_auth: None, .. });
 
         trace!(
             target: LOG_TARGET,
@@ -51,9 +53,34 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
             batch.size = request.sealed_transaction_inputs.len()
         );
 
-        let proven_batch = ProvenBatch::read_from_bytes(&request.batch_proof).map_err(|err| {
-            Status::invalid_argument(err.as_report_context("invalid proven_batch"))
-        })?;
+        let proposed_batch_message = (if preserve_batch_fields {
+            request.proposed_batch.clone()
+        } else {
+            request.proposed_batch.take()
+        })
+        .ok_or_else(|| Status::invalid_argument("missing `proposed_batch` field"))?;
+        let proposed_batch = spawn_blocking_in_current_span(move || {
+            proposed_batch_message.decode_fields().and_then(|batch| {
+                batch
+                    .verify_with(MIN_PROOF_SECURITY_LEVEL)
+                    .map_err(miden_objects::ConversionError::new)
+            })
+        })
+        .await
+        .map_err(|err| Status::internal(format!("proposed batch decoding task failed: {err}")))?
+        .map_err(|err| Status::invalid_argument(format!("invalid proposed_batch: {err}")))?;
+
+        let proven_batch_message = (if preserve_batch_fields {
+            request.batch.clone()
+        } else {
+            request.batch.take()
+        })
+        .ok_or_else(|| Status::invalid_argument("missing `batch` field"))?;
+        let proven_batch = proven_batch_message
+            .decode_fields()
+            .map_err(|err| Status::invalid_argument(format!("invalid proven_batch: {err}")))?
+            .verify_with(&proposed_batch)
+            .map_err(|err| Status::invalid_argument(format!("invalid proven_batch: {err}")))?;
 
         miden_span_record!(
             batch.id = proven_batch.id(),
@@ -62,21 +89,17 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
             batch.reference_block.commitment = proven_batch.reference_block_commitment()
         );
 
-        let proposed_batch = request
-            .proposed_batch
-            .as_deref()
-            .map(ProposedBatch::read_from_bytes)
-            .transpose()
-            .map_err(|err| {
-                Status::invalid_argument(err.as_report_context("invalid proposed_batch"))
-            })?
-            .ok_or(Status::invalid_argument("missing `proposed_batch` field"))?;
-
         ensure_transactions_have_fee_notes(
             proposed_batch.transactions().iter().map(AsRef::as_ref),
         )?;
 
         debug!(target: LOG_TARGET, "Submitting transaction batch");
+
+        if let RpcBackend::Sequencer { account_admission, .. } = &self.backend {
+            for tx in proposed_batch.transactions() {
+                account_admission.check(tx.account_update()).await?;
+            }
+        }
 
         // Verify the reference block is actually part of the chain.
         self.verify_reference_commitment(
@@ -116,7 +139,7 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
         verify_batch_proof(proven_batch, &proposed_batch).await?;
 
         match &self.backend {
-            RpcBackend::Sequencer { block_producer, validators } => {
+            RpcBackend::Sequencer { block_producer, validators, .. } => {
                 submit_batch_to_validators(
                     validators.as_slice(),
                     &proposed_batch,
@@ -168,7 +191,7 @@ impl RpcService {
         validators: &[ValidatorClient],
         mut sequencer: SequencerClient,
         proposed_batch: ProposedBatch,
-        sealed_transaction_inputs: &[proto::transaction::SealedTransactionInputs],
+        sealed_transaction_inputs: &[proto::submission::SealedTransactionInputs],
     ) -> tonic::Result<proto::blockchain::BlockNumber> {
         submit_batch_to_validators(validators, &proposed_batch, sealed_transaction_inputs).await?;
 
@@ -181,7 +204,7 @@ impl RpcService {
         }
 
         let authenticated_batch = proto::sequencer::AuthenticatedTransactionBatch {
-            proposed_batch: proposed_batch.to_bytes(),
+            proposed_batch: Some((&proposed_batch).into()),
             auth_inputs,
         };
         sequencer

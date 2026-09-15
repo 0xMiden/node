@@ -88,6 +88,12 @@ pub enum DatabaseError {
     // ---------------------------------------------------------------------------------------------
     #[error("account commitment mismatch (expected {expected}, but calculated is {calculated})")]
     AccountCommitmentsMismatch { expected: Word, calculated: Word },
+    #[error(
+        "protocol config commitment mismatch (expected {expected}, but calculated is {calculated})"
+    )]
+    ProtocolConfigCommitmentMismatch { expected: Word, calculated: Word },
+    #[error("protocol config {0} is missing")]
+    ProtocolConfigNotFound(Word),
     #[error("account {0} not found")]
     AccountNotFoundInDb(AccountId),
     #[error("accounts {0:?} not found")]
@@ -183,6 +189,10 @@ pub enum StateInitializationError {
     AccountToDeltaConversionFailed(String),
     #[error("genesis block missing. The database should be bootstrapped first.")]
     GenesisBlockMissing,
+    #[error(
+        "genesis protocol config {commitment} is missing. Rebootstrap the database from genesis."
+    )]
+    GenesisProtocolConfigMissing { commitment: Word },
 }
 
 // ENDPOINT ERRORS

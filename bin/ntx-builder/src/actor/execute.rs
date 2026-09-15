@@ -28,8 +28,9 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::{AssetId, AssetWitness};
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::errors::TransactionInputError;
+use miden_protocol::errors::{AccountError, AssetError, TransactionInputError};
 use miden_protocol::note::{Note, NoteId, NoteScript, NoteScriptRoot};
+use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{
     AccountInputs,
     ExecutedTransaction,
@@ -42,6 +43,7 @@ use miden_protocol::transaction::{
     TransactionInputs,
 };
 use miden_protocol::vm::FutureMaybeSend;
+use miden_standards::account::fees::FeePolicyManager;
 use miden_tx::auth::UnreachableAuth;
 use miden_tx::{
     DataStore,
@@ -77,6 +79,14 @@ pub enum NtxError {
     Proving(#[source] TransactionProverError),
     #[error("failed to submit transaction")]
     Submission(#[source] tonic::Status),
+    #[error("failed to read the fee asset ID from the network account")]
+    FeeAssetStorage(#[source] AccountError),
+    #[error("invalid fee asset ID in the network account")]
+    FeeAsset(#[source] AssetError),
+    #[error("network account fee asset does not match the protocol configuration")]
+    FeeAssetMismatch,
+    #[error("protocol configuration does not match the reference block")]
+    ProtocolConfigCommitmentMismatch,
 }
 
 type NtxResult<T> = Result<T, NtxError>;
@@ -267,17 +277,12 @@ impl NtxContext {
         tx: TransactionCandidate,
     ) -> impl FutureMaybeSend<NtxResult<NtxExecutionResult>> {
         let num_notes = tx.num_notes();
-        let TransactionCandidate {
-            account,
-            notes,
-            chain_tip_header,
-            chain_mmr,
-        } = tx;
+        let TransactionCandidate { account, notes, chain_state } = tx;
         miden_span_record!(
             account.id = account.id(),
             account.id.network_prefix = account.id().prefix(),
             note.count = num_notes,
-            reference_block.number = chain_tip_header.block_num()
+            reference_block.number = chain_state.chain_tip_header.block_num()
         );
 
         async move {
@@ -293,13 +298,12 @@ impl NtxContext {
                     spawn_blocking_in_current_span(move || {
                         let data_store = NtxDataStore::new(
                             account,
-                            chain_tip_header,
-                            chain_mmr,
+                            chain_state,
                             ctx.rpc.clone(),
                             ctx.script_cache.clone(),
                             ctx.db.clone(),
                             ctx.request_backoff,
-                        );
+                        )?;
                         handle.block_on(
                             async {
                                 let FilteredNotes { successful, failed, deferred, oversized } =
@@ -700,6 +704,7 @@ struct NtxDataStore {
     /// The native account, shared with the actor via `Arc` to avoid a deep clone per transaction.
     account: Arc<Account>,
     reference_block: BlockHeader,
+    protocol_config: Arc<ProtocolConfig>,
     /// The chain MMR, wrapped in `Arc` to avoid expensive clones when reading the chain state.
     chain_mmr: Arc<PartialBlockchain>,
     mast_store: TransactionMastStore,
@@ -732,19 +737,33 @@ impl NtxDataStore {
     /// Creates a new `NtxDataStore` with default cache size.
     fn new(
         account: Arc<Account>,
-        reference_block: BlockHeader,
-        chain_mmr: Arc<PartialBlockchain>,
+        chain_state: crate::chain_state::ChainState,
         rpc: RpcClient,
         script_cache: LruCache<Word, NoteScript>,
         db: NtxDbReader,
         request_backoff: ExponentialBuilder,
-    ) -> Self {
+    ) -> NtxResult<Self> {
         let mast_store = TransactionMastStore::new();
         mast_store.load_account_code(account.code());
+        let (reference_block, chain_mmr, protocol_config) = chain_state.into_parts();
 
-        Self {
+        if protocol_config.to_commitment() != reference_block.protocol_config_commitment() {
+            return Err(NtxError::ProtocolConfigCommitmentMismatch);
+        }
+        let fee_asset_id: AssetId = account
+            .storage()
+            .get_item(FeePolicyManager::fee_asset_id_slot())
+            .map_err(NtxError::FeeAssetStorage)?
+            .try_into()
+            .map_err(NtxError::FeeAsset)?;
+        if fee_asset_id != protocol_config.fee_asset_id() {
+            return Err(NtxError::FeeAssetMismatch);
+        }
+
+        Ok(Self {
             account,
             reference_block,
+            protocol_config,
             chain_mmr,
             mast_store,
             rpc,
@@ -753,7 +772,7 @@ impl NtxDataStore {
             fetched_scripts: Arc::new(Mutex::new(Vec::new())),
             storage_slots: Arc::new(Mutex::new(HashMap::default())),
             request_backoff,
-        }
+        })
     }
 
     /// Returns the [`ExponentialBuilder`] used for per-request retry backoff against the RPC
@@ -793,8 +812,9 @@ impl DataStore for NtxDataStore {
         &self,
         account_id: AccountId,
         ref_blocks: BTreeSet<BlockNumber>,
-    ) -> impl FutureMaybeSend<Result<(PartialAccount, BlockHeader, PartialBlockchain), DataStoreError>>
-    {
+    ) -> impl FutureMaybeSend<
+        Result<(PartialAccount, BlockHeader, ProtocolConfig, PartialBlockchain), DataStoreError>,
+    > {
         async move {
             if self.account.id() != account_id {
                 return Err(DataStoreError::AccountNotFound(account_id));
@@ -811,7 +831,12 @@ impl DataStore for NtxDataStore {
             self.register_storage_map_slots(account_id, &self.account.storage().to_header());
 
             let partial_account = PartialAccount::from(self.account.as_ref());
-            Ok((partial_account, self.reference_block.clone(), (*self.chain_mmr).clone()))
+            Ok((
+                partial_account,
+                self.reference_block.clone(),
+                self.protocol_config.as_ref().clone(),
+                (*self.chain_mmr).clone(),
+            ))
         }
     }
 
@@ -988,11 +1013,15 @@ impl MastForestStore for NtxDataStore {
 mod tests {
     use std::collections::{BTreeSet, HashMap};
     use std::future::ready;
+    use std::sync::Arc;
+    use std::time::Duration;
 
     use miden_protocol::note::Note;
-    use miden_tx::{FailedNote, TransactionExecutorError, TransactionProverError};
+    use miden_protocol::protocol_config::ProtocolConfig;
+    use miden_tx::{DataStore, FailedNote, TransactionExecutorError, TransactionProverError};
 
     use super::{
+        NtxDataStore,
         NtxError,
         RpcError,
         SponsoredFeatureNote,
@@ -1004,11 +1033,50 @@ mod tests {
         should_record_failure,
     };
     use crate::test_utils::{
+        mock_network_account,
         mock_network_account_id,
         mock_single_target_note,
         mock_sponsorship_note,
         mock_sponsorship_note_with_amount,
     };
+
+    /// Transaction inputs must use the verified snapshot config without deriving it from account
+    /// storage.
+    #[tokio::test]
+    async fn data_store_returns_snapshot_protocol_config() {
+        let (db, _dir) = crate::db::test_setup().await;
+        let actor_context = crate::actor::AccountActorContext::test(&db.reader());
+        let allowed_root =
+            mock_single_target_note(mock_network_account_id(), 77).as_note().script().root();
+        let account = Arc::new(mock_network_account([allowed_root]));
+        let block_header = crate::test_utils::mock_block_header(0_u32.into());
+        let protocol_config = Arc::new(ProtocolConfig::mock());
+        let chain_state = crate::chain_state::ChainState::new(
+            block_header.clone(),
+            miden_protocol::crypto::merkle::mmr::PartialMmr::default(),
+            protocol_config.as_ref().clone(),
+        );
+        let data_store = NtxDataStore::new(
+            Arc::clone(&account),
+            chain_state,
+            actor_context.clients.rpc,
+            actor_context.state.script_cache,
+            db.reader(),
+            miden_node_utils::retry::exponential(
+                Duration::from_millis(1),
+                Duration::from_millis(10),
+            ),
+        )
+        .unwrap();
+
+        let (_, returned_header, returned_config, _) = data_store
+            .get_transaction_inputs(account.id(), BTreeSet::from([block_header.block_num()]))
+            .await
+            .unwrap();
+
+        assert_eq!(returned_header, block_header);
+        assert_eq!(returned_config, *protocol_config);
+    }
 
     fn sponsored_note_with_two_sponsorships() -> SponsoredFeatureNote {
         let account_id = mock_network_account_id();
@@ -1153,9 +1221,8 @@ mod tests {
         let terminal_grpc = RpcError::GrpcClientError(tonic::Status::invalid_argument("bad input"));
         assert!(!is_transient_rpc_error(&terminal_grpc));
 
-        let non_grpc = RpcError::Deserialize(
-            miden_protocol::utils::serde::DeserializationError::InvalidValue("bad".into()),
-        );
+        let non_grpc =
+            RpcError::Conversion(miden_node_proto::errors::ConversionError::message("bad input"));
         assert!(!is_transient_rpc_error(&non_grpc));
     }
 

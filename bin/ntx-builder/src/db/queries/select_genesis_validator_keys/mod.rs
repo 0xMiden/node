@@ -2,7 +2,8 @@
 
 use miden_node_db::DatabaseError;
 use miden_node_db::sqlite::ReadTx;
-use miden_protocol::block::ValidatorKeys;
+
+use crate::db::GenesisValidatorKeys;
 
 const SQL: &str = include_str!("select_genesis_validator_keys.sql");
 
@@ -10,9 +11,9 @@ const SQL: &str = include_str!("select_genesis_validator_keys.sql");
 /// predates the column and must be re-bootstrapped.
 pub fn select_genesis_validator_keys(
     tx: &ReadTx<'_>,
-) -> Result<Option<ValidatorKeys>, DatabaseError> {
+) -> Result<Option<GenesisValidatorKeys>, DatabaseError> {
     Ok(tx
-        .query(SQL, &[], |row| row.get::<Option<ValidatorKeys>>(0))?
+        .query(SQL, &[], |row| row.get::<Option<GenesisValidatorKeys>>(0))?
         .into_iter()
         .next()
         .flatten())

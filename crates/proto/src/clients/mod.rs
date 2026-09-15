@@ -35,7 +35,6 @@ use miden_node_tracing::grpc::OtelInterceptor;
 use miden_node_tracing::{debug, info, warn};
 use miden_protocol::Word;
 use miden_protocol::batch::ProposedBatch;
-use miden_protocol::utils::serde::Serializable;
 use tonic::metadata::AsciiMetadataValue;
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint, Error as TransportError};
@@ -186,8 +185,8 @@ type GeneratedProverClient = generated::remote_prover::api_client::ApiClient<Int
 type GeneratedValidatorClient = generated::validator::api_client::ApiClient<InterceptedChannel>;
 type GeneratedNtxBuilderClient = generated::ntx_builder::api_client::ApiClient<InterceptedChannel>;
 type GeneratedSequencerClient = generated::sequencer::api_client::ApiClient<InterceptedChannel>;
-type GeneratedProvenTransaction = generated::transaction::ProvenTransaction;
-type SealedTransactionInputs = generated::transaction::SealedTransactionInputs;
+type GeneratedProvenTransaction = generated::submission::ProvenTransactionSubmission;
+type SealedTransactionInputs = generated::submission::SealedTransactionInputs;
 
 // gRPC CLIENTS
 // ================================================================================================
@@ -653,7 +652,7 @@ impl ValidatorClient {
         }
         for (tx, inputs) in proposed_batch.transactions().iter().zip(sealed_transaction_inputs) {
             let proven_tx = GeneratedProvenTransaction {
-                transaction: tx.to_bytes(),
+                transaction: Some(tx.as_ref().into()),
                 sealed_transaction_inputs: Some(inputs.clone()),
             };
             self.submit_proven_transaction(proven_tx).await?;
