@@ -95,7 +95,9 @@ use url::Url;
 
 use crate::server::RpcBackend;
 use crate::server::api::{RpcService, SequencerInternalService};
-use crate::{PreAuthSubmission, Rpc, RpcMode, ValidatorClients};
+use crate::{AccountAdmission, PreAuthSubmission, Rpc, RpcMode, ValidatorClients};
+
+mod allowlist;
 
 /// Global registry of temp directories. Held for the lifetime of the test binary so that `RocksDB`
 /// can always flush on drop regardless of test outcome or drop ordering.
@@ -640,6 +642,7 @@ async fn sequencer_authenticated_rpc_rejects_transactions_without_fees() {
     let service = SequencerInternalService {
         state: Arc::clone(&store.state),
         block_producer: block_producer.clone(),
+        account_admission: AccountAdmission::enabled(store.bootstrap_allowlist()),
     };
 
     let status = service
@@ -735,7 +738,7 @@ async fn rpc_server_forwards_valid_deferred_proofs_and_rejects_missing_witnesses
         RpcBackend::sequencer(
             block_producer,
             ValidatorClients::new(vec![validator]).unwrap(),
-            allowlist,
+            AccountAdmission::enabled(allowlist),
         ),
         None,
         NonZeroUsize::new(1_000_000).unwrap(),
@@ -1007,7 +1010,7 @@ async fn start_source_rpc_with_genesis(
                 RpcBackend::sequencer(
                     block_producer,
                     ValidatorClients::new(vec![validator]).unwrap(),
-                    allowlist,
+                    AccountAdmission::enabled(allowlist),
                 ),
                 Some(ntx_builder),
                 NonZeroUsize::new(1_000_000).unwrap(),
@@ -1478,6 +1481,7 @@ async fn authenticated_batch_defers_validation_to_async_handler() {
     let service = SequencerInternalService {
         state: Arc::clone(&store.state),
         block_producer,
+        account_admission: AccountAdmission::enabled(store.bootstrap_allowlist()),
     };
     let error = <SequencerInternalService as sequencer_api::SubmitAuthenticatedTxBatch>::handle(
         &service,
@@ -1595,7 +1599,7 @@ async fn start_rpc() -> (RpcClient, std::net::SocketAddr, TestStore, TestServerG
                 mode: RpcMode::sequencer(
                     block_producer,
                     ValidatorClients::new(vec![validator]).unwrap(),
-                    allowlist,
+                    AccountAdmission::enabled(allowlist),
                 ),
                 ntx_builder: None,
                 grpc_options,
