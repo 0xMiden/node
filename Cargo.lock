@@ -4297,7 +4297,6 @@ dependencies = [
  "miden-node-utils",
  "miden-protocol",
  "miden-standards",
- "miden-testing",
  "pretty_assertions",
  "rand 0.10.2",
  "rand_chacha 0.10.0",
