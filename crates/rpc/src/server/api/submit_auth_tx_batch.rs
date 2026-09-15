@@ -39,6 +39,7 @@ impl sequencer_api::SubmitAuthenticatedTxBatch for SequencerInternalService {
         for tx in batch.transactions() {
             self.account_admission.check(tx.account_update()).await?;
         }
+
         ensure_transactions_have_fee_notes(batch.transactions().iter().map(AsRef::as_ref))?;
 
         self.block_producer
