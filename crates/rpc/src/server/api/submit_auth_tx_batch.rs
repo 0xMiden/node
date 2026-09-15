@@ -36,11 +36,11 @@ impl sequencer_api::SubmitAuthenticatedTxBatch for SequencerInternalService {
                     Status::internal(format!("authenticated batch decoding task failed: {err}"))
                 })??;
 
-        ensure_transactions_have_fee_notes(batch.transactions().iter().map(AsRef::as_ref))?;
-
         for tx in batch.transactions() {
             self.account_admission.check(tx.account_update()).await?;
         }
+
+        ensure_transactions_have_fee_notes(batch.transactions().iter().map(AsRef::as_ref))?;
 
         self.block_producer
             .submit_authenticated_tx_batch(batch, inputs)

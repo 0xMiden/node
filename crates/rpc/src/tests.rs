@@ -62,13 +62,7 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::{Asset, FungibleAsset};
 use miden_protocol::batch::ProposedBatch;
-use miden_protocol::block::{
-    BlockSignatures,
-    FeeParameters,
-    ProvenBlock,
-    SignedBlock,
-    ValidatorConfig,
-};
+use miden_protocol::block::{BlockSignatures, ProvenBlock, SignedBlock, ValidatorConfig};
 use miden_protocol::note::NoteType;
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::testing::account_id::{ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET, ACCOUNT_ID_SENDER};
@@ -349,14 +343,16 @@ struct ValidBatchFixture {
 }
 
 async fn build_valid_batch_fixture() -> ValidBatchFixture {
-    let mut mock_chain_builder = MockChainBuilder::new();
+    let mut mock_chain_builder = MockChainBuilder::new()
+        .fee_faucet_id(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap())
+        .verification_base_fee(1);
     let account = mock_chain_builder
         .add_existing_wallet(Auth::BasicAuth {
             auth_scheme: AuthScheme::Falcon512Poseidon2,
         })
         .unwrap();
     let asset: Asset =
-        FungibleAsset::new(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap(), 100)
+        FungibleAsset::new(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap(), 1_000_000)
             .unwrap()
             .into();
     let note = mock_chain_builder
