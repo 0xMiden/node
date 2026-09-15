@@ -74,6 +74,57 @@ impl TestStore {
 }
 
 #[tokio::test]
+async fn is_account_allowed_reports_membership_regardless_of_enforcement() {
+    let store = TestStore::start().await;
+    let allowlist = store.bootstrap_allowlist();
+    let guard = TestServerGuard(CancellationToken::new());
+    let block_producer = BlockProducerApi::new(
+        Arc::clone(&store.state),
+        0.into(),
+        BlockProducerApiConfig::default(),
+        guard.0.clone(),
+    );
+    let [listed, unlisted] = [[0; 15], [1; 15]].map(|bytes| {
+        AccountId::dummy(
+            bytes,
+            AccountIdVersion::Version1,
+            AccountType::Private,
+            AssetCallbackFlag::Disabled,
+        )
+    });
+    allowlist.add_account(listed).await.unwrap();
+
+    for admission in [
+        AccountAdmission::enabled(Arc::clone(&allowlist)),
+        AccountAdmission::disabled(Arc::clone(&allowlist)),
+    ] {
+        let rpc = RpcService::new(
+            Arc::clone(&store.state),
+            RpcBackend::sequencer(
+                block_producer.clone(),
+                ValidatorClients::new(vec![dummy_client::<ValidatorClient>()]).unwrap(),
+                admission,
+            ),
+            None,
+            NonZeroUsize::new(1).unwrap(),
+            None,
+        );
+        for invalid in
+            [proto::account::AccountId::default(), proto::account::AccountId { id: vec![0] }]
+        {
+            assert_eq!(
+                rpc.is_account_allowed(Request::new(invalid)).await.unwrap_err().code(),
+                tonic::Code::InvalidArgument
+            );
+        }
+        for (account, expected) in [(listed, true), (unlisted, false)] {
+            let response = rpc.is_account_allowed(Request::new(account.into())).await.unwrap();
+            assert_eq!(response.into_inner().allowed, expected);
+        }
+    }
+}
+
+#[tokio::test]
 async fn account_admission_only_restricts_new_non_network_accounts() {
     let store = TestStore::start().await;
     let allowlist = store.bootstrap_allowlist();
