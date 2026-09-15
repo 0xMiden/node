@@ -102,6 +102,24 @@ async fn admin_registration_workflow() {
 }
 
 #[tokio::test]
+async fn database_failures_include_the_cause() {
+    let (dir, _allowlist, app) = setup();
+    fs_err::remove_file(dir.path().join("allowlist.sqlite3")).unwrap();
+
+    for (path, body) in [
+        (format!("/admin/allowlist/accounts/{}", account(0)), None),
+        (format!("/admin/allowlist/invitations/{INVITATION_DIGEST}"), Some(json!({}))),
+    ] {
+        for method in ["GET", "PUT"] {
+            let (status, response) = request(&app, method, &path, body.clone()).await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+            let error = response["error"].as_str().unwrap();
+            assert!(error.contains("unable to open database file"), "{error}");
+        }
+    }
+}
+
+#[tokio::test]
 async fn invalid_and_conflicting_requests_leave_no_changes() {
     let (_dir, _allowlist, app) = setup();
     for digest in ["abc".to_owned(), "g".repeat(64), "00".repeat(33)] {
