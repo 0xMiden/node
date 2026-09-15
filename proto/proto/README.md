@@ -2,8 +2,8 @@
 
 These protobuf files are part of the [Miden node](https://github.com/0xMiden/node#readme) repository.
 
-The root directory contains the public RPC and remote prover protocols. The `types` directory contains node-owned
-messages for service workflows. The `internal` directory contains the internal component protocols.
+The root directory contains the public RPC, remote prover, and note transport protocols. The `types` directory contains
+node-owned messages for service workflows. The `internal` directory contains the internal component protocols.
 
 Canonical protocol objects come from `miden-objects` `0.17.0-rc.4`. Do not copy these object schemas into this
 directory. The build resolves canonical imports through `miden_objects::FILE_DESCRIPTOR_SET`. It includes imported
@@ -15,6 +15,7 @@ The organization of the files is as follows:
 ```text
 rpc.proto
 remote_prover.proto
+note_transport.proto
 types/
 ├── submission.proto
 └── block_proving.proto

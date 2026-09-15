@@ -138,19 +138,38 @@ components are intended for local development and are not part of the Miden node
 
 ## Note Transport
 
-The [Miden Note Transport service](https://github.com/0xMiden/note-transport-service) exchanges private notes between
-clients. Enable its optional profile explicitly:
+The workspace `miden-note-transport` service exchanges private notes between clients. Enable its optional profile:
 
 ```bash
 docker compose --profile note-transport up -d
 ```
 
-Its browser-facing gRPC-Web endpoint is `http://ntl.localhost`; native gRPC clients can use `localhost:57292`. Notes are
-persisted in the `note-transport-data` volume.
+Its browser-facing gRPC-Web endpoint is `http://ntl.localhost`. Native gRPC clients can use `localhost:57292`. Compose
+initializes the database on first use and persists notes in the `note-transport-data` volume. The service limits stored
+note data to 1 GiB. Set `MIDEN_NOTE_TRANSPORT_IMAGE` to select a different workspace image.
 
-The pinned Gateway FM image currently supports only `linux/amd64`. Compose selects that platform explicitly, allowing
-Docker to run it through emulation on ARM hosts. To use a compatible native build instead, set both
-`MIDEN_NOTE_TRANSPORT_IMAGE` and `MIDEN_NOTE_TRANSPORT_PLATFORM`.
+The service implements `note_transport.Api/SendNote` and `note_transport.Api/FetchNotes`. Standard gRPC health checks
+use the service name `note_transport.Api`. The service also supports gRPC reflection and gRPC-Web.
+
+The new volume does not use or change the legacy `note-transport-data` volume. Legacy note transport databases are not
+supported. Keep that volume if its data is still needed.
+
+### Run without Docker
+
+Initialize a database before you start the service:
+
+```bash
+miden-note-transport bootstrap --database ./notes.sqlite3
+miden-note-transport start --database ./notes.sqlite3 --max-storage-bytes 1073741824
+```
+
+The default listen address is `127.0.0.1:57292`. Use `--listen` to change it. The default maximum note size is 512000
+bytes. The default connection limit is 4096, and the default gRPC timeout is 10 seconds. Use `--max-note-size`,
+`--max-connections`, and `--grpc.timeout` to change these limits. Add `--enable-otel` to export telemetry.
+
+Stop the service before database maintenance. Back up the database before a schema migration. Apply supported schema
+migrations with `miden-note-transport migrate --database ./notes.sqlite3`. Remove expired notes with
+`miden-note-transport cleanup --database ./notes.sqlite3`. The `migrate` command does not import legacy databases.
 
 ## Faucet
 

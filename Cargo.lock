@@ -4087,7 +4087,6 @@ dependencies = [
  "miden-node-proto",
  "miden-node-tracing",
  "miden-node-utils",
- "miden-note-transport-proto",
  "miden-protocol",
  "miden-standards",
  "miden-testing",
@@ -4102,6 +4101,7 @@ dependencies = [
  "time",
  "tokio",
  "tonic",
+ "tonic-health",
  "url",
 ]
 
@@ -4404,33 +4404,27 @@ dependencies = [
 [[package]]
 name = "miden-note-transport"
 version = "0.17.0-rc.1"
-
-[[package]]
-name = "miden-note-transport-proto"
-version = "0.5.0-rc.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0a9c3ee4ae464eb2c8acfd5a44cf37f47abe906eeb78ed97d722f3660e17ca1"
 dependencies = [
- "fs-err",
- "miden-note-transport-proto-build",
- "miette",
+ "anyhow",
+ "clap",
+ "miden-node-db",
+ "miden-node-proto",
+ "miden-node-proto-build",
+ "miden-node-tracing",
+ "miden-node-utils",
+ "miden-protocol",
  "prost",
- "prost-types",
+ "reqwest",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-stream",
  "tonic",
- "tonic-prost",
- "tonic-prost-build",
-]
-
-[[package]]
-name = "miden-note-transport-proto-build"
-version = "0.5.0-rc.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a9d736051a42941788c6534caf8cf779b388c0ae72c9d5f0d729d2a9872d833"
-dependencies = [
- "fs-err",
- "miette",
- "protox",
- "tonic-prost-build",
+ "tonic-health",
+ "tonic-reflection",
+ "tonic-web",
+ "tower",
+ "tower-http",
 ]
 
 [[package]]

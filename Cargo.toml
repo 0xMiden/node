@@ -67,8 +67,7 @@ miden-tx           = { default-features = false, version = "0.17.0-rc.4" }
 miden-tx-batch     = { version = "0.17.0-rc.4" }
 
 # Other miden dependencies. These should align with those expected by miden-protocol.
-miden-crypto               = { version = "0.32.0" }
-miden-note-transport-proto = { version = "0.5.0-rc.2" }
+miden-crypto = { version = "0.32.0" }
 
 # External dependencies
 anyhow             = { version = "1.0" }

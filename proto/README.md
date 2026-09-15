@@ -6,8 +6,8 @@
 ## Role
 
 This crate is intended for projects that need to generate gRPC bindings from the same protobuf API definitions used by
-the node. It includes descriptors for the public RPC API and remote prover API, and an optional feature for internal
-component APIs used by the Miden node workspace.
+the node. It includes descriptors for the public RPC, remote prover, and note transport APIs, and an optional feature
+for internal component APIs used by the Miden node workspace.
 
 Each descriptor set includes its imported schemas. External clients can use these self-contained descriptors to generate
 bindings in other languages. Canonical object schemas come from the published `miden-objects` crate through its

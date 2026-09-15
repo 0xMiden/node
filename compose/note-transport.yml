@@ -1,19 +1,30 @@
-# The default image is currently published for linux/amd64 only. Pin its
-# platform so Docker uses emulation on other architectures. Both the image and
-# platform remain overridable for compatible native builds.
 services:
-  note-transport:
+  bootstrap-note-transport:
     profiles: [note-transport]
-    image: ${MIDEN_NOTE_TRANSPORT_IMAGE:-gatewayfm/miden-note-transport:v0.5.0-alpha.1}
-    platform: ${MIDEN_NOTE_TRANSPORT_PLATFORM:-linux/amd64}
+    image: ${MIDEN_NOTE_TRANSPORT_IMAGE:-miden-note-transport}
     pull_policy: missing
     command:
-      - miden-note-transport-node
-      - --host
-      - 0.0.0.0
-      - --database-url
-      - /data/notes.sqlite3
+      - /bin/sh
+      - -ec
+      - |
+        if [ ! -e /data/notes.sqlite3 ]; then
+          miden-note-transport bootstrap --database /data/notes.sqlite3
+        fi
+    volumes:
+      - note-transport-data:/data
+
+  note-transport:
+    profiles: [note-transport]
+    image: ${MIDEN_NOTE_TRANSPORT_IMAGE:-miden-note-transport}
+    pull_policy: missing
+    command:
+      - miden-note-transport
+      - start
+      - --enable-otel
     environment:
+      MIDEN_NOTE_TRANSPORT_DATABASE: /data/notes.sqlite3
+      MIDEN_NOTE_TRANSPORT_LISTEN: 0.0.0.0:57292
+      MIDEN_NOTE_TRANSPORT_MAX_STORAGE_BYTES: "1073741824"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       OTEL_RESOURCE_ATTRIBUTES: service.instance.id=note-transport
     volumes:
@@ -21,6 +32,8 @@ services:
     ports:
       - "127.0.0.1:57292:57292"
     depends_on:
+      bootstrap-note-transport:
+        condition: service_completed_successfully
       otel-collector:
         condition: service_started
     restart: unless-stopped

@@ -103,6 +103,7 @@ jobs:
                 {"component":"validator",          "bin":"miden-validator",       "port":50101, "target":"runtime"},
                 {"component":"ntx-builder",        "bin":"miden-ntx-builder",     "port":50301, "target":"runtime"},
                 {"component":"remote-prover",      "bin":"miden-remote-prover",   "port":50051, "target":"runtime"},
+                {"component":"note-transport",     "bin":"miden-note-transport",  "port":57292, "target":"runtime"},
                 {"component":"network-monitor",    "bin":"miden-network-monitor", "port":3000,  "target":"runtime"},
                 {"component":"node-tps-benchmark", "bin":"miden-benchmark",                     "target":"runtime-tool"}
               ]
@@ -300,6 +301,7 @@ jobs:
         # Pin independently so the checked-out caller-provided ref cannot replace this action's code.
         uses: 0xMiden/node/.github/actions/publish-compose@3df9adbec870c8039d38cc946b2dc79ec9cf7e59
         env:
+          MIDEN_NOTE_TRANSPORT_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-note-transport:${{ needs.preflight.outputs.tag }}
           MIDEN_NODE_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-node:${{ needs.preflight.outputs.tag }}
           MIDEN_VALIDATOR_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-validator:${{ needs.preflight.outputs.tag }}
           MIDEN_NTX_BUILDER_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-ntx-builder:${{ needs.preflight.outputs.tag }}
@@ -387,6 +389,8 @@ jobs:
         # Pin independently so the checked-out caller-provided ref cannot replace this action's code.
         uses: 0xMiden/node/.github/actions/publish-compose@3df9adbec870c8039d38cc946b2dc79ec9cf7e59
         env:
+          MIDEN_NOTE_TRANSPORT_IMAGE:
+            ${{ env.REGISTRY_PREFIX }}/miden-note-transport:${{ needs.preflight.outputs.immutable_tag }}
           MIDEN_NODE_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-node:${{ needs.preflight.outputs.immutable_tag }}
           MIDEN_VALIDATOR_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-validator:${{ needs.preflight.outputs.immutable_tag }}
           MIDEN_NTX_BUILDER_IMAGE:
