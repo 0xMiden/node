@@ -76,20 +76,16 @@ pub async fn store_note(
         .write("store_note", move |tx| {
             let id = note.header.id().as_bytes().to_vec();
             let (seq, retained) = tx
-                .query(
-                    "SELECT next_cursor, retained_bytes FROM storage_metadata \
-                     WHERE singleton = 1",
-                    &[],
-                    |row| Ok((row.get::<i64>(0)?, row.get::<i64>(1)?)),
-                )?
+                .query(include_str!("queries/select_storage_metadata.sql"), &[], |row| {
+                    Ok((row.get::<i64>(0)?, row.get::<i64>(1)?))
+                })?
                 .into_iter()
                 .next()
                 .ok_or_else(|| StorageError::InvalidData("storage metadata is missing".into()))?;
-            let exists =
-                tx.query("SELECT EXISTS(SELECT 1 FROM notes WHERE id = ?1)", &[&id], |row| {
-                    row.get::<i64>(0)
-                })?[0]
-                    != 0;
+            let exists = tx
+                .query(include_str!("queries/note_exists.sql"), &[&id], |row| row.get::<i64>(0))?
+                [0]
+                != 0;
             if exists {
                 return Ok((StoreResult::AlreadyPresent, retained));
             }
@@ -121,13 +117,11 @@ pub async fn store_note(
                 )));
             }
             tx.execute(
-                "UPDATE storage_metadata SET next_cursor = ?1, retained_bytes = ?2 \
-                 WHERE singleton = 1",
+                include_str!("queries/update_storage_metadata.sql"),
                 &[&next_cursor, &next_retained],
             )?;
             tx.execute(
-                "INSERT INTO notes (seq, id, tag, header, details, created_at, after_block_num) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                include_str!("queries/insert_note.sql"),
                 &[
                     &seq,
                     &id,
@@ -162,15 +156,7 @@ pub async fn fetch_notes(
             // Count one extra candidate to detect a full page. Bound bytes before loading note
             // blobs.
             let rows = tx.query(
-                "WITH candidates AS (SELECT seq, LENGTH(header) + LENGTH(details) AS bytes \
-             FROM notes WHERE seq > ?1 AND tag IN (SELECT value FROM rarray(?2)) \
-             ORDER BY seq LIMIT ?3), \
-             bounded AS (SELECT seq, SUM(bytes) OVER (ORDER BY seq) AS running_bytes, \
-             COUNT(*) OVER () AS candidate_count FROM candidates) \
-             SELECT notes.seq, notes.header, notes.details, notes.created_at, \
-             notes.after_block_num, bounded.candidate_count \
-             FROM bounded JOIN notes ON notes.seq = bounded.seq \
-             WHERE bounded.running_bytes <= ?4 ORDER BY notes.seq LIMIT ?5",
+                include_str!("queries/fetch_notes.sql"),
                 &[
                     &cursor,
                     &tags,
@@ -222,8 +208,7 @@ pub async fn cleanup(
         .write("cleanup_notes", move |tx| {
             let retained = retained_bytes(tx)?;
             let rows = tx.query(
-                "SELECT seq, LENGTH(header) + LENGTH(details) FROM notes \
-                 WHERE created_at < ?1 ORDER BY seq LIMIT ?2",
+                include_str!("queries/select_expired_notes.sql"),
                 &[&cutoff, &max_rows],
                 |row| Ok((row.get::<i64>(0)?, row.get::<i64>(1)?)),
             )?;
@@ -239,11 +224,8 @@ pub async fn cleanup(
                 .filter(|bytes| *bytes >= 0)
                 .ok_or_else(|| StorageError::InvalidData("retained byte count underflow".into()))?;
             let seqs = InList::from_i64s(rows.iter().map(|(seq, _)| *seq));
-            tx.execute("DELETE FROM notes WHERE seq IN (SELECT value FROM rarray(?1))", &[&seqs])?;
-            tx.execute(
-                "UPDATE storage_metadata SET retained_bytes = ?1 WHERE singleton = 1",
-                &[&next_retained],
-            )?;
+            tx.execute(include_str!("queries/delete_notes.sql"), &[&seqs])?;
+            tx.execute(include_str!("queries/update_retained_bytes.sql"), &[&next_retained])?;
             Ok::<_, StorageError>((rows.len() as u64, next_retained))
         })
         .await?;
@@ -260,12 +242,10 @@ pub async fn record_retained_bytes(reader: &DbReader) -> Result<(), StorageError
 }
 
 fn retained_bytes(tx: &miden_node_db::sqlite::ReadTx<'_>) -> Result<i64, StorageError> {
-    tx.query("SELECT retained_bytes FROM storage_metadata WHERE singleton = 1", &[], |row| {
-        row.get::<i64>(0)
-    })?
-    .into_iter()
-    .next()
-    .ok_or_else(|| StorageError::InvalidData("storage metadata is missing".into()))
+    tx.query(include_str!("queries/select_retained_bytes.sql"), &[], |row| row.get::<i64>(0))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| StorageError::InvalidData("storage metadata is missing".into()))
 }
 
 fn record_storage_usage(retained: i64) {
