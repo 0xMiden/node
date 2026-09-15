@@ -9,18 +9,34 @@ use super::*;
 
 impl TestStore {
     async fn with_account_creation_batch() -> (Self, ProposedBatch) {
-        let mut builder = MockChainBuilder::new();
+        let mut builder = MockChainBuilder::new()
+            .fee_faucet_id(FungibleAsset::mock_issuer())
+            .verification_base_fee(1);
         let accounts = [
-            builder.create_new_wallet(Auth::IncrNonce).unwrap(),
-            builder.create_new_wallet(Auth::IncrNonce).unwrap(),
+            builder.create_new_wallet(Auth::basic_ecdsa()).unwrap(),
+            builder.create_new_wallet(Auth::basic_ecdsa()).unwrap(),
         ];
+        let notes = accounts.each_ref().map(|account| {
+            builder
+                .add_p2id_note(
+                    account.id(),
+                    account.id(),
+                    &[FungibleAsset::mock(1_000_000)],
+                    NoteType::Private,
+                )
+                .unwrap()
+        });
         let chain = builder.build().unwrap();
         let store =
             Self::start_from_mock_genesis(&chain.latest_block(), chain.protocol_config()).await;
         let mut transactions = Vec::new();
         // Batch decoding verifies each transaction proof before the admission check.
-        for account in accounts {
-            let context = chain.build_transaction(account).build().unwrap();
+        for (account, note) in accounts.into_iter().zip(notes) {
+            let context = chain
+                .build_transaction(account)
+                .authenticated_input_note(note.id())
+                .build()
+                .unwrap();
             let executed = Box::pin(context.execute()).await.unwrap();
             let inputs = executed.tx_inputs().clone();
             let proven = spawn_blocking_in_current_span(move || {

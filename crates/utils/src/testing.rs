@@ -3,6 +3,7 @@
 use miden_processor::{ExecutionOptions, FastProcessor};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::account::AccountUpdateDetails;
+use miden_protocol::asset::FungibleAsset;
 use miden_protocol::block::{BlockSignatures, SignedBlock};
 use miden_protocol::note::NoteType;
 use miden_protocol::transaction::{
@@ -35,9 +36,13 @@ pub async fn deferred_transaction_fixture() -> &'static DeferredTransactionFixtu
     static FIXTURE: OnceCell<DeferredTransactionFixture> = OnceCell::const_new();
     FIXTURE
         .get_or_init(|| async {
-            let mut builder = MockChainBuilder::new().verification_base_fee(0);
+            let mut builder = MockChainBuilder::new()
+                .fee_faucet_id(FungibleAsset::mock_issuer())
+                .verification_base_fee(1);
             let account = builder.add_existing_wallet(Auth::basic_ecdsa()).unwrap();
-            let note = builder.add_p2any_note(account.id(), NoteType::Private, []).unwrap();
+            let note = builder
+                .add_p2any_note(account.id(), NoteType::Private, [FungibleAsset::mock(1_000_000)])
+                .unwrap();
             let chain = builder.build().unwrap();
             let (header, body, ..) = chain.latest_block().into_parts();
             let genesis =
