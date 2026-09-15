@@ -13,8 +13,16 @@ impl TestStore {
             .fee_faucet_id(FungibleAsset::mock_issuer())
             .verification_base_fee(1);
         let accounts = [
-            builder.create_new_wallet(Auth::basic_ecdsa()).unwrap(),
-            builder.create_new_wallet(Auth::basic_ecdsa()).unwrap(),
+            builder
+                .create_new_wallet(Auth::BasicAuth {
+                    auth_scheme: AuthScheme::Falcon512Poseidon2,
+                })
+                .unwrap(),
+            builder
+                .create_new_wallet(Auth::BasicAuth {
+                    auth_scheme: AuthScheme::Falcon512Poseidon2,
+                })
+                .unwrap(),
         ];
         let notes = accounts.each_ref().map(|account| {
             builder
@@ -53,11 +61,12 @@ impl TestStore {
             .unwrap();
             transactions.push(Arc::new(proven));
         }
-        let batch = ProposedBatch::new_unverified(
+        let batch = ProposedBatch::new(
             transactions,
             chain.latest_block_header(),
             chain.latest_partial_blockchain(),
             BTreeMap::new(),
+            miden_protocol::MIN_PROOF_SECURITY_LEVEL,
         )
         .unwrap();
         (store, batch)
@@ -219,7 +228,7 @@ async fn submission_endpoints_reject_unregistered_creation_without_partial_batch
             .await,
     ] {
         let status = result.unwrap_err();
-        assert_eq!(status.code(), tonic::Code::PermissionDenied);
+        assert_eq!(status.code(), tonic::Code::PermissionDenied, "{status:?}");
         assert!(status.message().contains(&transactions[1].account_id().to_string()));
     }
 
