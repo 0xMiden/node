@@ -313,20 +313,31 @@ impl BlockBuilder {
     ) -> Result<BlockCommit, BuildBlockError> {
         let ProposedBlockAndInputs { proposed_block, block_inputs } = proposal;
 
-        // Concurrently build the block and validate it via the validators.
+        // Resolve the active configuration against the constructed header before requesting
+        // signatures.
         let build_result = spawn_blocking_in_current_span({
             let proposed_block = proposed_block.clone();
             move || proposed_block.into_header_and_body()
         });
-        let responses = self
-            .validator
-            .sign_block(proposed_block.clone())
-            .await
-            .map_err(|err| BuildBlockError::ValidateBlockFailed(err.into()))?;
         let (header, body) = build_result
             .await
             .map_err(|err| BuildBlockError::other(format!("task join error: {err}")))?
             .map_err(BuildBlockError::ProposeBlockFailed)?;
+        let commitment = header.protocol_config_commitment();
+        let protocol_config = self
+            .state
+            .view()
+            .get_protocol_config(commitment)
+            .await
+            .map_err(|err| BuildBlockError::other(err.to_string()))?
+            .ok_or_else(|| {
+                BuildBlockError::other(format!("protocol config {commitment} is missing"))
+            })?;
+        let responses = self
+            .validator
+            .sign_block(&proposed_block, &block_inputs, &protocol_config)
+            .await
+            .map_err(|err| BuildBlockError::ValidateBlockFailed(err.into()))?;
 
         // Every validator and the block producer must derive the same block from the same proposed
         // block. Comparing the commitment each validator signed against the locally built one
@@ -345,8 +356,8 @@ impl BlockBuilder {
         // committed to by the parent block's header.
         let parent_header = block_inputs.prev_block_header();
         let signatures = parent_header
-            .validator_keys()
-            .as_keys()
+            .validator_config()
+            .keys()
             .iter()
             .enumerate()
             .map(|(position, key)| {
@@ -363,7 +374,7 @@ impl BlockBuilder {
         // Verify the signatures against the built block to ensure that every validator has provided
         // a valid signature for the relevant block.
         signatures
-            .verify_against(header.commitment(), parent_header.validator_keys())
+            .verify_against(header.commitment(), parent_header.validator_config())
             .map_err(|_| BuildBlockError::InvalidSignature)?;
 
         let (ordered_batches, ..) = proposed_block.into_parts();

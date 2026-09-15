@@ -36,9 +36,8 @@ impl proto::server::rpc_api::SyncAccountVault for RpcService {
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        let account_id = read_account_id::<proto::rpc::SyncAccountVaultRequest, Status>(
-            request.account_id.clone(),
-        )?;
+        let account_id =
+            read_account_id::<proto::rpc::SyncAccountVaultRequest, Status>(request.account_id)?;
         let range = read_block_range::<Status>(request.block_range, "SyncAccountVaultRequest")?;
 
         miden_span_record!(

@@ -55,14 +55,6 @@ impl ConversionError {
         }
     }
 
-    /// Create a deserialization error for a named entity.
-    pub fn deserialization(entity: &'static str, source: DeserializationError) -> Self {
-        Self {
-            path: Vec::new(),
-            source: Box::new(DeserializationErrorWrapper { entity, source }),
-        }
-    }
-
     /// Create a `ConversionError` from an ad-hoc error message.
     pub fn message(msg: impl Into<String>) -> Self {
         Self {
@@ -100,6 +92,12 @@ impl From<ConversionError> for tonic::Status {
     }
 }
 
+impl From<miden_objects::ConversionError> for ConversionError {
+    fn from(value: miden_objects::ConversionError) -> Self {
+        Self::new(value)
+    }
+}
+
 // INTERNAL HELPER ERROR TYPES
 // ================================================================================================
 
@@ -116,24 +114,6 @@ impl fmt::Display for MissingFieldError {
 }
 
 impl std::error::Error for MissingFieldError {}
-
-#[derive(Debug)]
-struct DeserializationErrorWrapper {
-    entity: &'static str,
-    source: DeserializationError,
-}
-
-impl fmt::Display for DeserializationErrorWrapper {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "failed to deserialize {}: {}", self.entity, self.source)
-    }
-}
-
-impl std::error::Error for DeserializationErrorWrapper {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.source)
-    }
-}
 
 #[derive(Debug)]
 struct StringError(String);
@@ -198,7 +178,6 @@ impl_from_for_conversion_error!(
     miden_protocol::crypto::merkle::MerkleError,
     miden_protocol::crypto::merkle::smt::SmtLeafError,
     miden_protocol::crypto::merkle::smt::SmtProofError,
-    miden_standards::note::NetworkAccountTargetError,
     std::num::TryFromIntError,
     // Lets `GrpcStructDecoder::decode_field` extract required fields whose proto type is already
     // the target type (reflexive `TryInto`, which cannot fail).

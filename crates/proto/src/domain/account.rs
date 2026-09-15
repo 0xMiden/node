@@ -1,79 +1,34 @@
-use std::fmt::{Debug, Display, Formatter};
+use std::fmt::{Debug, Formatter};
 
 use miden_node_utils::limiter::{QueryParamLimiter, QueryParamStorageMapKeyTotalLimit};
 use miden_protocol::Word;
+#[cfg(test)]
+use miden_protocol::account::StorageSlotHeader;
 use miden_protocol::account::{
     Account,
+    AccountCode,
     AccountHeader,
     AccountId,
     AccountStorageHeader,
     StorageMap,
     StorageMapKey,
-    StorageSlotHeader,
     StorageSlotName,
     StorageSlotType,
 };
 use miden_protocol::asset::Asset;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::block::account_tree::AccountWitness;
+use miden_protocol::crypto::merkle::MerkleError;
 use miden_protocol::crypto::merkle::smt::{PartialSmt, SmtProof};
-use miden_protocol::crypto::merkle::{MerkleError, SparseMerklePath};
-use miden_protocol::utils::serde::{Deserializable, DeserializationError, Serializable};
 
 use super::try_convert;
-use crate::decode;
-use crate::decode::{ConversionResultExt, GrpcDecodeExt};
+use crate::decode::{ConversionResultExt, GrpcDecodeExt, verify_optional, verify_value};
 use crate::errors::ConversionError;
 use crate::generated::{self as proto};
+use crate::{decode, verify};
 
 #[cfg(test)]
 mod tests;
-
-// ACCOUNT ID
-// ================================================================================================
-
-impl Display for proto::account::AccountId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "0x")?;
-        for byte in &self.id {
-            write!(f, "{byte:02x}")?;
-        }
-        Ok(())
-    }
-}
-
-impl Debug for proto::account::AccountId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        Display::fmt(self, f)
-    }
-}
-
-// FROM PROTO ACCOUNT ID
-// ------------------------------------------------------------------------------------------------
-
-impl TryFrom<proto::account::AccountId> for AccountId {
-    type Error = ConversionError;
-
-    fn try_from(account_id: proto::account::AccountId) -> Result<Self, Self::Error> {
-        AccountId::read_from_bytes(&account_id.id)
-            .map_err(|_| ConversionError::message("value is not in the range 0..MODULUS"))
-    }
-}
-
-// INTO PROTO ACCOUNT ID
-// ------------------------------------------------------------------------------------------------
-
-impl From<&AccountId> for proto::account::AccountId {
-    fn from(account_id: &AccountId) -> Self {
-        (*account_id).into()
-    }
-}
-
-impl From<AccountId> for proto::account::AccountId {
-    fn from(account_id: AccountId) -> Self {
-        Self { id: account_id.to_bytes() }
-    }
-}
 
 // ACCOUNT UPDATE
 // ================================================================================================
@@ -85,53 +40,20 @@ pub struct AccountSummary {
     pub block_num: BlockNumber,
 }
 
-impl From<&AccountSummary> for proto::account::AccountSummary {
-    fn from(update: &AccountSummary) -> Self {
-        Self {
-            account_id: Some(update.account_id.into()),
-            account_commitment: Some(update.account_commitment.into()),
-            block_num: update.block_num.as_u32(),
-        }
-    }
-}
-
 #[derive(Debug, PartialEq)]
 pub struct AccountInfo {
     pub summary: AccountSummary,
     pub details: Option<Account>,
 }
 
-impl From<&AccountInfo> for proto::account::AccountDetails {
-    fn from(AccountInfo { summary, details }: &AccountInfo) -> Self {
-        Self {
-            summary: Some(summary.into()),
-            details: details.as_ref().map(Serializable::to_bytes),
-        }
-    }
-}
+// REGISTER ACCOUNT REQUEST
+// ================================================================================================
 
-// ACCOUNT STORAGE HEADER
-//================================================================================================
-
-impl TryFrom<proto::account::AccountStorageHeader> for AccountStorageHeader {
-    type Error = ConversionError;
-
-    fn try_from(value: proto::account::AccountStorageHeader) -> Result<Self, Self::Error> {
-        let proto::account::AccountStorageHeader { slots } = value;
-
-        let slot_headers = slots
-            .into_iter()
-            .map(|slot| {
-                let decoder = slot.decoder();
-                let slot_name = StorageSlotName::new(slot.slot_name)?;
-                let slot_type = storage_slot_type_from_raw(slot.slot_type)?;
-                let commitment = decode!(decoder, slot.commitment)?;
-                Ok(StorageSlotHeader::new(slot_name, slot_type, commitment))
-            })
-            .collect::<Result<Vec<_>, ConversionError>>()
-            .context("slots")?;
-
-        Ok(AccountStorageHeader::new(slot_headers)?)
+impl Debug for proto::rpc::RegisterAccountRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RegisterAccountRequest")
+            .field("account_id", &self.account_id)
+            .finish_non_exhaustive()
     }
 }
 
@@ -154,8 +76,8 @@ impl TryFrom<proto::rpc::AccountRequest> for AccountRequest {
         let decoder = value.decoder();
         let proto::rpc::AccountRequest { account_id, block_num, details } = value;
 
-        let account_id = decode!(decoder, account_id)?;
-        let block_num = block_num.map(Into::into);
+        let account_id = verify!(decoder, account_id)?;
+        let block_num = verify_optional("block_num", block_num)?;
 
         let details = details.map(TryFrom::try_from).transpose().context("details")?;
 
@@ -275,7 +197,13 @@ impl
                 return Err(ConversionError::message("enum variant discriminant out of range"));
             },
             ProtoSlotData::MapKeys(keys) => {
-                let keys = try_convert(keys.map_keys).collect::<Result<Vec<_>, _>>()?;
+                let keys = keys
+                    .map_keys
+                    .into_iter()
+                    .map(|key| {
+                        Word::try_from(key).map(StorageMapKey::new).map_err(ConversionError::from)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
                 if has_duplicate_storage_map_keys(&keys) {
                     return Err(ConversionError::message(
                         "storage map key request contains duplicate keys",
@@ -289,68 +217,6 @@ impl
 
 fn has_duplicate_storage_map_keys(keys: &[StorageMapKey]) -> bool {
     keys.iter().enumerate().any(|(index, key)| keys[..index].contains(key))
-}
-
-// ACCOUNT HEADER CONVERSIONS
-//================================================================================================
-
-impl TryFrom<proto::account::AccountHeader> for AccountHeader {
-    type Error = ConversionError;
-
-    fn try_from(value: proto::account::AccountHeader) -> Result<Self, Self::Error> {
-        let decoder = value.decoder();
-        let proto::account::AccountHeader {
-            account_id,
-            vault_root,
-            storage_commitment,
-            code_commitment,
-            nonce,
-        } = value;
-
-        let account_id = decode!(decoder, account_id)?;
-        let vault_root = decode!(decoder, vault_root)?;
-        let storage_commitment = decode!(decoder, storage_commitment)?;
-        let code_commitment = decode!(decoder, code_commitment)?;
-        let nonce = nonce
-            .try_into()
-            .map_err(|e| ConversionError::message(format!("{e}")))
-            .context("nonce")?;
-
-        Ok(AccountHeader::new(
-            account_id,
-            nonce,
-            vault_root,
-            storage_commitment,
-            code_commitment,
-        ))
-    }
-}
-
-impl From<AccountHeader> for proto::account::AccountHeader {
-    fn from(header: AccountHeader) -> Self {
-        proto::account::AccountHeader {
-            account_id: Some(header.id().into()),
-            vault_root: Some(header.vault_root().into()),
-            storage_commitment: Some(header.storage_commitment().into()),
-            code_commitment: Some(header.code_commitment().into()),
-            nonce: header.nonce().as_canonical_u64(),
-        }
-    }
-}
-
-impl From<AccountStorageHeader> for proto::account::AccountStorageHeader {
-    fn from(value: AccountStorageHeader) -> Self {
-        let slots = value
-            .slots()
-            .map(|slot_header| proto::account::account_storage_header::StorageSlot {
-                slot_name: slot_header.name().to_string(),
-                slot_type: storage_slot_type_to_raw(slot_header.slot_type()),
-                commitment: Some(proto::primitives::Digest::from(slot_header.value())),
-            })
-            .collect();
-
-        Self { slots }
-    }
 }
 
 // ACCOUNT VAULT DETAILS
@@ -402,8 +268,8 @@ impl TryFrom<proto::rpc::AccountVaultDetails> for AccountVaultDetails {
         } else {
             let parsed_assets = assets
                 .into_iter()
-                .map(Asset::try_from)
-                .collect::<Result<Vec<_>, ConversionError>>()?;
+                .map(|asset| verify_value("assets", asset))
+                .collect::<Result<Vec<_>, _>>()?;
             Ok(Self::Assets(parsed_assets))
         }
     }
@@ -418,7 +284,7 @@ impl From<AccountVaultDetails> for proto::rpc::AccountVaultDetails {
             },
             AccountVaultDetails::Assets(assets) => Self {
                 too_many_assets: false,
-                assets: assets.into_iter().map(proto::primitives::Asset::from).collect::<Vec<_>>(),
+                assets: assets.into_iter().map(proto::asset::Asset::from).collect::<Vec<_>>(),
             },
         }
     }
@@ -629,7 +495,7 @@ impl TryFrom<proto::rpc::account_storage_details::AccountStorageMapDetails>
                     ));
                 }
                 let partial_smt: PartialSmt =
-                    decode!(decoder, partial_smt).context("partial_smt")?;
+                    verify!(decoder, partial_smt).context("partial_smt")?;
                 for map_key in &map_keys {
                     partial_smt.get_value(&map_key.hash().as_word()).context("map_keys")?;
                 }
@@ -659,7 +525,7 @@ impl From<AccountStorageMapDetails>
                 let all = AllMapEntries {
                     entries: entries.into_iter().map(|(key, value)| {
                         proto::rpc::account_storage_details::account_storage_map_details::all_map_entries::StorageMapEntry {
-                            key: Some(key.into()),
+                            key: Some(Word::from(key).into()),
                             value: Some(value.into()),
                         }
                     }).collect::<Vec<_>>(),
@@ -668,7 +534,10 @@ impl From<AccountStorageMapDetails>
             },
             StorageMapEntries::PartialMap { map_keys, partial_smt } => {
                 ProtoResult::PartialMap(PartialStorageMap {
-                    map_keys: map_keys.into_iter().map(Into::into).collect(),
+                    map_keys: map_keys
+                        .into_iter()
+                        .map(|key| proto::primitives::Word::from(Word::from(key)))
+                        .collect(),
                     partial_smt: Some(partial_smt.into()),
                 })
             },
@@ -710,7 +579,7 @@ impl TryFrom<proto::rpc::AccountStorageDetails> for AccountStorageDetails {
         let decoder = value.decoder();
         let proto::rpc::AccountStorageDetails { header, map_details } = value;
 
-        let header: AccountStorageHeader = decode!(decoder, header)?;
+        let header: AccountStorageHeader = verify!(decoder, header)?;
 
         let map_details: Vec<AccountStorageMapDetails> =
             try_convert(map_details).collect::<Result<Vec<_>, _>>().context("map_details")?;
@@ -755,23 +624,6 @@ impl From<AccountStorageDetails> for proto::rpc::AccountStorageDetails {
     }
 }
 
-fn storage_slot_type_from_raw(slot_type: u32) -> Result<StorageSlotType, ConversionError> {
-    Ok(match slot_type {
-        0 => StorageSlotType::Value,
-        1 => StorageSlotType::Map,
-        _ => {
-            return Err(ConversionError::message("enum variant discriminant out of range"));
-        },
-    })
-}
-
-const fn storage_slot_type_to_raw(slot_type: StorageSlotType) -> u32 {
-    match slot_type {
-        StorageSlotType::Value => 0,
-        StorageSlotType::Map => 1,
-    }
-}
-
 // ACCOUNT PROOF RESPONSE
 //================================================================================================
 
@@ -789,9 +641,9 @@ impl TryFrom<proto::rpc::AccountResponse> for AccountResponse {
         let decoder = value.decoder();
         let proto::rpc::AccountResponse { block_num, witness, details } = value;
 
-        let block_num = decode!(decoder, block_num)?;
+        let block_num = verify!(decoder, block_num)?;
 
-        let witness = decode!(decoder, witness)?;
+        let witness = verify!(decoder, witness)?;
 
         let details = details.map(TryFrom::try_from).transpose().context("details")?;
 
@@ -817,7 +669,7 @@ impl From<AccountResponse> for proto::rpc::AccountResponse {
 /// Represents account details returned in response to an account proof request.
 pub struct AccountDetails {
     pub account_header: AccountHeader,
-    pub account_code: Option<Vec<u8>>,
+    pub account_code: Option<AccountCode>,
     pub vault_details: AccountVaultDetails,
     pub storage_details: AccountStorageDetails,
 }
@@ -826,7 +678,7 @@ impl AccountDetails {
     /// Creates account details where all storage map slots indicate limit exceeded.
     pub fn with_storage_limits_exceeded(
         account_header: AccountHeader,
-        account_code: Option<Vec<u8>>,
+        account_code: Option<AccountCode>,
         vault_details: AccountVaultDetails,
         storage_header: AccountStorageHeader,
         slot_names: impl IntoIterator<Item = StorageSlotName>,
@@ -852,12 +704,12 @@ impl TryFrom<proto::rpc::account_response::AccountDetails> for AccountDetails {
             storage_details,
         } = value;
 
-        let account_header = decode!(decoder, header)?;
+        let account_header = verify!(decoder, header)?;
 
         let storage_details = decode!(decoder, storage_details)?;
 
         let vault_details = decode!(decoder, vault_details)?;
-        let account_code = code;
+        let account_code = verify_optional("code", code)?;
 
         Ok(AccountDetails {
             account_header,
@@ -879,7 +731,7 @@ impl From<AccountDetails> for proto::rpc::account_response::AccountDetails {
 
         let header = Some(proto::account::AccountHeader::from(account_header));
         let storage_details = Some(storage_details.into());
-        let code = account_code;
+        let code = account_code.map(Into::into);
         let vault_details = Some(vault_details.into());
 
         Self {
@@ -887,106 +739,6 @@ impl From<AccountDetails> for proto::rpc::account_response::AccountDetails {
             storage_details,
             code,
             vault_details,
-        }
-    }
-}
-
-// ACCOUNT WITNESS
-// ================================================================================================
-
-impl TryFrom<proto::account::AccountWitness> for AccountWitness {
-    type Error = ConversionError;
-
-    fn try_from(account_witness: proto::account::AccountWitness) -> Result<Self, Self::Error> {
-        let decoder = account_witness.decoder();
-        let witness_id = decode!(decoder, account_witness.witness_id)?;
-        let commitment = decode!(decoder, account_witness.commitment)?;
-        let path = decode!(decoder, account_witness.path)?;
-
-        AccountWitness::new(witness_id, commitment, path).map_err(|err| {
-            ConversionError::deserialization(
-                "AccountWitness",
-                DeserializationError::InvalidValue(err.to_string()),
-            )
-        })
-    }
-}
-
-impl From<AccountWitness> for proto::account::AccountWitness {
-    fn from(witness: AccountWitness) -> Self {
-        Self {
-            account_id: Some(witness.id().into()),
-            witness_id: Some(witness.id().into()),
-            commitment: Some(witness.state_commitment().into()),
-            path: Some(witness.into_proof().into_parts().0.into()),
-        }
-    }
-}
-
-// ACCOUNT WITNESS RECORD
-// ================================================================================================
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AccountWitnessRecord {
-    pub account_id: AccountId,
-    pub witness: AccountWitness,
-}
-
-impl TryFrom<proto::account::AccountWitness> for AccountWitnessRecord {
-    type Error = ConversionError;
-
-    fn try_from(
-        account_witness_record: proto::account::AccountWitness,
-    ) -> Result<Self, Self::Error> {
-        let decoder = account_witness_record.decoder();
-        let witness_id = decode!(decoder, account_witness_record.witness_id)?;
-        let commitment = decode!(decoder, account_witness_record.commitment)?;
-        let account_id = decode!(decoder, account_witness_record.account_id)?;
-        let path: SparseMerklePath = decode!(decoder, account_witness_record.path)?;
-
-        let witness = AccountWitness::new(witness_id, commitment, path).map_err(|err| {
-            ConversionError::deserialization(
-                "AccountWitness",
-                DeserializationError::InvalidValue(err.to_string()),
-            )
-        })?;
-
-        Ok(Self { account_id, witness })
-    }
-}
-
-impl From<AccountWitnessRecord> for proto::account::AccountWitness {
-    fn from(from: AccountWitnessRecord) -> Self {
-        Self {
-            account_id: Some(from.account_id.into()),
-            witness_id: Some(from.witness.id().into()),
-            commitment: Some(from.witness.state_commitment().into()),
-            path: Some(from.witness.path().clone().into()),
-        }
-    }
-}
-
-// ASSET
-// ================================================================================================
-
-impl TryFrom<proto::primitives::Asset> for Asset {
-    type Error = ConversionError;
-
-    fn try_from(asset: proto::primitives::Asset) -> Result<Self, Self::Error> {
-        let decoder = asset.decoder();
-        let key_word: Word = decode!(decoder, asset.key)?;
-        let value_word: Word = decode!(decoder, asset.value)?;
-
-        let asset = Asset::from_id_and_value_words(key_word, value_word)?;
-        Ok(asset)
-    }
-}
-
-impl From<Asset> for proto::primitives::Asset {
-    fn from(asset_from: Asset) -> Self {
-        proto::primitives::Asset {
-            key: Some(asset_from.to_id_word().into()),
-            value: Some(asset_from.to_value_word().into()),
         }
     }
 }

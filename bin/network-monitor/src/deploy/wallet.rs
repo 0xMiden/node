@@ -18,6 +18,7 @@ use miden_protocol::account::{
 };
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
 use miden_standards::account::auth::{Approver, AuthSingleSig};
+use miden_standards::account::wallets::BasicWallet;
 use miden_standards::code_builder::CodeBuilder;
 use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha20Rng;
@@ -76,17 +77,20 @@ pub fn create_wallet_account() -> Result<(Account, SecretKey)> {
     .into();
     let init_seed: [u8; 32] = rng.random();
 
-    // The wallet carries a single custom component that both bumps its counter slot and creates the
-    // increment note in one account procedure (see `wallet_counter_program.masm`).
+    // The wallet's custom component both bumps its counter slot and creates the increment note in
+    // one account procedure (see `wallet_counter_program.masm`).
     let component_code = wallet_counter_component_code()?;
 
     let counter_slot = StorageSlot::with_value(WALLET_COUNTER_SLOT_NAME.clone(), Word::empty());
     let metadata = AccountComponentMetadata::new("wallet::program");
     let counter_component = AccountComponent::new(component_code, vec![counter_slot], metadata)?;
 
+    // `BasicWallet` exposes `receive_asset`, which the P2ID note script calls on the consuming
+    // account, so it is what lets the wallet claim the faucet notes that fund its fee payments.
     let account = AccountBuilder::new(init_seed)
         .account_type(AccountType::Public)
         .with_component(auth_component)
+        .with_component(BasicWallet)
         .with_component(counter_component)
         .build()
         .context("failed to build wallet account")?;

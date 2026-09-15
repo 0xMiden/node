@@ -1,12 +1,12 @@
+mod block_proposal;
+
 pub mod account;
 pub mod block;
-pub mod digest;
 pub mod encryption;
-pub mod merkle;
-pub mod note;
-pub mod nullifier;
 pub mod proof_request;
-pub mod transaction;
+pub mod protocol_config;
+pub mod sign_block_request;
+pub mod submission;
 
 use miden_node_tracing::{RecordAttribute, Value};
 

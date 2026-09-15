@@ -328,10 +328,9 @@ async fn read_bootstrap_genesis_block(
     genesis_block_file: Option<&Path>,
     network: Option<OfficialNetwork>,
 ) -> anyhow::Result<GenesisBlock> {
-    let signed_block = match (genesis_block_file, network) {
-        (Some(path), None) => read_genesis_block(path)?,
-        (None, Some(network)) => fetch_genesis_block(network).await?,
+    match (genesis_block_file, network) {
+        (Some(path), None) => read_genesis_block(path),
+        (None, Some(network)) => fetch_genesis_block(network).await,
         _ => unreachable!("clap requires exactly one genesis block source"),
-    };
-    GenesisBlock::try_from(signed_block)
+    }
 }

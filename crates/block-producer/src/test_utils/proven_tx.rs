@@ -13,7 +13,6 @@ use miden_protocol::transaction::{
     ProvenTransaction,
     TxAccountUpdate,
 };
-use miden_protocol::vm::ExecutionProof;
 use miden_protocol::{Felt, ONE, Word};
 use rand::RngExt;
 
@@ -161,7 +160,7 @@ impl MockProvenTxBuilder {
             BlockNumber::GENESIS,
             Word::empty(),
             self.expiration_block_num,
-            ExecutionProof::new_dummy(),
+            miden_protocol::testing::dummy_execution_proof(),
         )
         .unwrap()
     }

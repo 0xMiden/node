@@ -15,6 +15,8 @@ pub mod lru_cache;
 pub mod retry;
 pub mod shutdown;
 pub mod tasks;
+#[cfg(feature = "testing-prover")]
+pub mod testing;
 
 /// Extends nested results types, allowing them to be flattened.
 ///
