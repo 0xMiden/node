@@ -119,8 +119,8 @@ pub async fn execute(
     .await
     .context("the funding transaction task failed")??;
 
-    // The notes and the expiration are what the caller promises to the requester, so a mismatch
-    // must fail here instead of after the transaction is submitted.
+    // The notes are what the caller promises to the requester, so a mismatch must fail here instead
+    // of after the transaction is submitted.
     let output_note_ids: Vec<_> =
         executed_tx.output_notes().iter().map(RawOutputNote::id).collect();
     for note in &notes {
@@ -130,9 +130,13 @@ pub async fn execute(
             note.id(),
         );
     }
+
+    // A procedure which reads mutable state through a foreign call lowers the transaction's
+    // expiration delta, and the kernel keeps the lowest value.
     anyhow::ensure!(
-        executed_tx.expiration_block_num() == expected_expiration,
-        "the executed transaction expires at block {} instead of {expected_expiration}",
+        executed_tx.expiration_block_num() <= expected_expiration,
+        "the executed transaction expires at block {}, after the requested block \
+         {expected_expiration}",
         executed_tx.expiration_block_num(),
     );
 
