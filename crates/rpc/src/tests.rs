@@ -75,6 +75,7 @@ use miden_protocol::transaction::{
 };
 use miden_protocol::utils::serde::Deserializable;
 use miden_protocol::vm::ExecutionProof;
+use miden_standards::account::auth::{FeeConversionInfo, commit_fee_conversion_info};
 use miden_standards::account::wallets::BasicWallet;
 use miden_standards::note::TxFeeNote;
 use miden_testing::{Auth, MockChainBuilder};
@@ -367,9 +368,16 @@ async fn build_valid_batch_fixture() -> ValidBatchFixture {
     let genesis_block = mock_chain.latest_block();
     let protocol_config = mock_chain.protocol_config().clone();
 
+    let (auth_args, advice) = commit_fee_conversion_info(
+        FeeConversionInfo::one_to_one(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap()),
+        Word::from([9u32, 10, 11, 12]),
+    );
+
     let tx_context = mock_chain
         .build_transaction(account.id())
         .authenticated_input_note(note.id())
+        .auth_args(auth_args)
+        .add_advice_map_entry(auth_args, advice)
         .build()
         .unwrap();
     let executed_tx = Box::pin(tx_context.execute()).await.unwrap();

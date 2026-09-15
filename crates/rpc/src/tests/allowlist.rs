@@ -32,9 +32,15 @@ impl TestStore {
         let mut transactions = Vec::new();
         // Batch decoding verifies each transaction proof before the admission check.
         for (account, note) in accounts.into_iter().zip(notes) {
+            let (auth_args, advice) = commit_fee_conversion_info(
+                FeeConversionInfo::one_to_one(FungibleAsset::mock_issuer()),
+                Word::from([9u32, 10, 11, 12]),
+            );
             let context = chain
                 .build_transaction(account)
                 .authenticated_input_note(note.id())
+                .auth_args(auth_args)
+                .add_advice_map_entry(auth_args, advice)
                 .build()
                 .unwrap();
             let executed = Box::pin(context.execute()).await.unwrap();
