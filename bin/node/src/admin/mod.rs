@@ -13,11 +13,13 @@ use miden_node_store::allowlist::{
     InvitationCode,
     InvitationEntry,
 };
-use miden_node_tracing::info;
+use miden_node_tracing::{ErrorReport, info, miden_instrument, miden_span_record};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::account::AccountId;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
+
+use crate::LOG_TARGET;
 
 #[cfg(test)]
 mod tests;
@@ -76,6 +78,7 @@ struct InvitationRequest {
     account_id: Option<String>,
 }
 
+#[miden_instrument(target = LOG_TARGET, name = "admin.allowlist.put_invitation", err)]
 async fn put_invitation(
     State(allowlist): State<Arc<AccountAllowlist>>,
     Path(digest): Path<String>,
@@ -91,6 +94,7 @@ async fn put_invitation(
             .transpose()
             .map_err(|_| ApiError::InvalidAccountId)?,
     };
+    miden_span_record!(account.id = entry.account_id);
     let inserted = allowlist.import_invitation(entry).await.map_err(ApiError::Allowlist)?;
     Ok(if inserted {
         StatusCode::CREATED
@@ -99,11 +103,13 @@ async fn put_invitation(
     })
 }
 
+#[miden_instrument(target = LOG_TARGET, name = "admin.allowlist.put_account", err)]
 async fn put_account(
     State(allowlist): State<Arc<AccountAllowlist>>,
     Path(account): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let account = AccountId::from_hex(&account).map_err(|_| ApiError::InvalidAccountId)?;
+    miden_span_record!(account.id = account);
     let added = allowlist.add_account(account).await.map_err(ApiError::Database)?;
     Ok(if added {
         StatusCode::CREATED
@@ -127,6 +133,7 @@ struct InvitationStatusResponse {
     allowlisted_at: Option<i64>,
 }
 
+#[miden_instrument(target = LOG_TARGET, name = "admin.allowlist.invitation_status", err)]
 async fn invitation_status(
     State(allowlist): State<Arc<AccountAllowlist>>,
     Path(digest): Path<String>,
@@ -134,6 +141,7 @@ async fn invitation_status(
     let invitation =
         InvitationCode::from_hex_digest(&digest).map_err(|_| ApiError::InvalidInvitationDigest)?;
     let info = allowlist.invitation_info(invitation).await.map_err(ApiError::Database)?;
+    miden_span_record!(account.id = info.and_then(|info| info.account_id));
     let response = match info {
         Some(info) => InvitationStatusResponse {
             status: if info.account_id.is_some() {
@@ -159,11 +167,13 @@ struct AccountStatusResponse {
     allowlisted_at: i64,
 }
 
+#[miden_instrument(target = LOG_TARGET, name = "admin.allowlist.account_status", err)]
 async fn account_status(
     State(allowlist): State<Arc<AccountAllowlist>>,
     Path(account): Path<String>,
 ) -> Result<Json<AccountStatusResponse>, ApiError> {
     let account = AccountId::from_hex(&account).map_err(|_| ApiError::InvalidAccountId)?;
+    miden_span_record!(account.id = account);
     let allowlisted_at = allowlist
         .allowlisted_at(account)
         .await
@@ -203,6 +213,6 @@ impl IntoResponse for ApiError {
             ) => StatusCode::CONFLICT,
             Self::InvalidAccountId | Self::InvalidInvitationDigest => StatusCode::BAD_REQUEST,
         };
-        (status, Json(serde_json::json!({"error": self.to_string()}))).into_response()
+        (status, Json(serde_json::json!({"error": self.as_report()}))).into_response()
     }
 }
