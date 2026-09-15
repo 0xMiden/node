@@ -39,8 +39,7 @@ service Api {
     // registered without this code.
     rpc RegisterAccount(RegisterAccountRequest) returns (google.protobuf.Empty) {}
 
-    // Returns whether the account is in the sequencer's account allowlist.
-    // This reports membership even when account allowlist enforcement is disabled.
+    // Returns true if account allowlist enforcement is disabled or the account is allowlisted.
     rpc IsAccountAllowed(account.AccountId) returns (IsAccountAllowedResponse) {}
 
     // Returns block data for the specified block number, optionally including the block proof.
