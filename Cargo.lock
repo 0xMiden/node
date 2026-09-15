@@ -4387,6 +4387,7 @@ dependencies = [
  "miden-node-tracing",
  "miden-processor",
  "miden-protocol",
+ "miden-standards",
  "miden-testing",
  "miden-tx",
  "reqwest",

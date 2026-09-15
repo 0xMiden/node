@@ -75,7 +75,7 @@ pub enum MempoolSubmissionError {
     #[error("the mempool is at capacity")]
     CapacityExceeded,
 
-    #[error("transaction {transaction_id} does not contain a non-zero TX_FEE output note")]
+    #[error("transaction {transaction_id} does not contain a canonical TX_FEE output note")]
     MissingFee { transaction_id: TransactionId },
 
     #[error("transaction {transaction_id} consumes in-flight TX_FEE notes: {note_ids:?}")]

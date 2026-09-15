@@ -1,8 +1,8 @@
 //! Real transaction proofs for submission tests.
 
 use miden_processor::{ExecutionOptions, FastProcessor};
-use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::account::AccountUpdateDetails;
+use miden_protocol::asset::FungibleAsset;
 use miden_protocol::block::{BlockSignatures, SignedBlock};
 use miden_protocol::note::NoteType;
 use miden_protocol::transaction::{
@@ -13,6 +13,8 @@ use miden_protocol::transaction::{
     TxAccountUpdate,
 };
 use miden_protocol::vm::{ExecutionProof, PrecompileStatus};
+use miden_protocol::{MIN_PROOF_SECURITY_LEVEL, Word};
+use miden_standards::account::auth::{FeeConversionInfo, commit_fee_conversion_info};
 use miden_testing::{Auth, MockChainBuilder};
 use miden_tx::{
     AccountProcedureIndexMap,
@@ -35,17 +37,27 @@ pub async fn deferred_transaction_fixture() -> &'static DeferredTransactionFixtu
     static FIXTURE: OnceCell<DeferredTransactionFixture> = OnceCell::const_new();
     FIXTURE
         .get_or_init(|| async {
-            let mut builder = MockChainBuilder::new().verification_base_fee(0);
+            let mut builder = MockChainBuilder::new()
+                .fee_faucet_id(FungibleAsset::mock_issuer())
+                .verification_base_fee(1);
             let account = builder.add_existing_wallet(Auth::basic_ecdsa()).unwrap();
-            let note = builder.add_p2any_note(account.id(), NoteType::Private, []).unwrap();
+            let note = builder
+                .add_p2any_note(account.id(), NoteType::Private, [FungibleAsset::mock(1_000_000)])
+                .unwrap();
             let chain = builder.build().unwrap();
             let (header, body, ..) = chain.latest_block().into_parts();
             let genesis =
                 SignedBlock::new_unchecked(header, body, BlockSignatures::new(Vec::new()).unwrap());
+            let (auth_args, advice) = commit_fee_conversion_info(
+                FeeConversionInfo::one_to_one(FungibleAsset::mock_issuer()),
+                Word::from([9u32, 10, 11, 12]),
+            );
             let executed = Box::pin(
                 chain
                     .build_transaction(account.id())
                     .authenticated_input_note(note.id())
+                    .auth_args(auth_args)
+                    .add_advice_map_entry(auth_args, advice)
                     .build()
                     .unwrap()
                     .execute(),

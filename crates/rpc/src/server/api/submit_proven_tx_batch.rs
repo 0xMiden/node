@@ -9,7 +9,12 @@ use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_tx_batch::BatchVerifier;
 use tonic::{Request, Status};
 
-use super::{RpcBackend, RpcService, submit_batch_to_validators};
+use super::{
+    RpcBackend,
+    RpcService,
+    ensure_transactions_have_fee_notes,
+    submit_batch_to_validators,
+};
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
@@ -92,7 +97,11 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
             }
         }
 
-        // Verify the reference block is actually part of the chain.
+        ensure_transactions_have_fee_notes(
+            proposed_batch.transactions().iter().map(AsRef::as_ref),
+        )?;
+
+        // Verify that the reference block is part of the chain.
         self.verify_reference_commitment(
             proven_batch.reference_block_num(),
             proven_batch.reference_block_commitment(),
