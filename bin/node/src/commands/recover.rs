@@ -254,6 +254,9 @@ async fn read_blocks(
                     .context("validator block stream response is missing block")?
                     .decode_fields()
                     .with_context(|| format!("failed to decode block from validator {url}"))?
+                    // SAFETY: Each backup contains only one validator's signature. The coalescer
+                    // assembles and verifies the full signature set against the trusted parent
+                    // before the writer receives the block.
                     .build_unchecked()
                     .with_context(|| format!("failed to build block from validator {url}"))?;
                 let protocol_config = event

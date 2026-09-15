@@ -9,12 +9,18 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use miden_node_proto::clients::RpcClient;
-use miden_node_proto::generated::account::account_storage_header::storage_slot::Content as SlotContent;
+use miden_node_proto::domain::account::AccountVaultDetails;
 use miden_node_proto::{DecodeMessage, Verify};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{debug, error, info, miden_instrument, warn};
 use miden_protocol::account::auth::AuthSecretKey;
-use miden_protocol::account::{Account, AccountCode, AccountId, AccountPatch};
+use miden_protocol::account::{
+    Account,
+    AccountId,
+    AccountPatch,
+    AccountStorageHeader,
+    StorageSlotType,
+};
 use miden_protocol::asset::{AssetId, AssetVault};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
@@ -980,7 +986,7 @@ fn update_expected_and_pending(
 async fn fetch_account_storage_header(
     rpc_client: &mut RpcClient,
     account_id: AccountId,
-) -> Result<Option<miden_node_proto::generated::account::AccountStorageHeader>> {
+) -> Result<Option<AccountStorageHeader>> {
     let request = build_account_request(account_id, false);
     let resp = rpc_client.get_account(request).await?.into_inner();
 
@@ -988,10 +994,11 @@ async fn fetch_account_storage_header(
         return Ok(None);
     };
 
-    let storage_details = details.storage_details.context("missing storage details")?;
-    let storage_header = storage_details.header.context("missing storage header")?;
-
-    Ok(Some(storage_header))
+    let details = details
+        .decode_fields()
+        .and_then(Verify::verify)
+        .context("invalid account details")?;
+    Ok(Some(details.storage_details.header))
 }
 
 /// Fetch the u64 value held in the named value slot of the given account from RPC.
@@ -1008,18 +1015,14 @@ async fn fetch_slot_value(
     };
 
     let slot = storage_header
-        .slots
-        .iter()
-        .find(|slot| slot.slot_name == slot_name)
+        .slots()
+        .find(|slot| slot.name().as_str() == slot_name)
         .context(format!("slot '{slot_name}' not found"))?;
-
-    let slot_value: Word = match slot.content.as_ref() {
-        Some(SlotContent::Value(value)) => {
-            value.try_into().context("failed to convert slot value to word")?
-        },
-        Some(SlotContent::MapRoot(_)) => anyhow::bail!("slot '{slot_name}' is a storage map"),
-        None => anyhow::bail!("missing storage slot value"),
-    };
+    anyhow::ensure!(
+        slot.slot_type() == StorageSlotType::Value,
+        "slot '{slot_name}' is a storage map"
+    );
+    let slot_value = slot.value();
 
     let value = slot_value
         .as_elements()
@@ -1092,60 +1095,27 @@ async fn fetch_wallet_account(
         return Ok(None);
     };
 
-    let header = details.header.context("missing account header")?;
-    let nonce: u64 = header.nonce;
-
-    let code: AccountCode = details
-        .code
-        .context("server did not return account code")?
+    let details = details
         .decode_fields()
-        .context("failed to decode account code")?
-        .verify()
-        .context("failed to verify account code")?;
-
+        .and_then(Verify::verify)
+        .context("invalid account details")?;
+    let header = details.account_header;
+    let code = details.account_code.context("server did not return account code")?;
     let vault = match details.vault_details {
-        Some(vault_details) if vault_details.too_many_assets => {
+        AccountVaultDetails::LimitExceeded => {
             anyhow::bail!("account {account_id} has too many assets, cannot fetch full account");
         },
-        Some(vault_details) => {
-            let assets: Vec<miden_protocol::asset::Asset> = vault_details
-                .assets
-                .into_iter()
-                .map(|asset| {
-                    asset
-                        .decode_fields()
-                        .map_err(anyhow::Error::from)
-                        .and_then(|asset| asset.verify().map_err(anyhow::Error::from))
-                })
-                .collect::<Result<_, _>>()
-                .context("failed to convert assets")?;
+        AccountVaultDetails::Assets(assets) => {
             AssetVault::new(&assets).context("failed to create vault")?
         },
-        None => anyhow::bail!("server did not return asset vault for account {account_id}"),
     };
-
-    let storage_details = details.storage_details.context("missing storage details")?;
-    let storage = build_account_storage(storage_details)?;
-
-    let account = Account::new(account_id, vault, storage, code, Felt::new_unchecked(nonce), None)
+    let storage = build_account_storage(&details.storage_details.header)?;
+    let account = Account::new(account_id, vault, storage, code, header.nonce(), None)
         .context("failed to create account")?;
 
-    // Sanity check: verify reconstructed account matches header commitments
-    let expected_code_commitment: Word = header
-        .code_commitment
-        .context("missing code commitment in header")?
-        .try_into()
-        .context("invalid code commitment")?;
-    let expected_vault_root: Word = header
-        .vault_root
-        .context("missing vault root in header")?
-        .try_into()
-        .context("invalid vault root")?;
-    let expected_storage_commitment: Word = header
-        .storage_commitment
-        .context("missing storage commitment in header")?
-        .try_into()
-        .context("invalid storage commitment")?;
+    let expected_code_commitment = header.code_commitment();
+    let expected_vault_root = header.vault_root();
+    let expected_storage_commitment = header.storage_commitment();
 
     anyhow::ensure!(
         account.code().commitment() == expected_code_commitment,
@@ -1175,26 +1145,20 @@ async fn fetch_wallet_account(
 /// This function only supports accounts with value slots. If any storage map slots
 /// are encountered, an error is returned since the monitor only uses simple accounts.
 fn build_account_storage(
-    storage_details: miden_node_proto::generated::rpc::AccountStorageDetails,
+    storage_header: &AccountStorageHeader,
 ) -> Result<miden_protocol::account::AccountStorage> {
     use miden_protocol::account::{AccountStorage, StorageSlot};
 
-    let storage_header = storage_details.header.context("missing storage header")?;
-
-    let mut slots = Vec::new();
-    for slot in storage_header.slots {
-        let slot_name = miden_protocol::account::StorageSlotName::new(slot.slot_name.clone())
-            .context("invalid slot name")?;
-        let value: Word = match slot.content {
-            Some(SlotContent::Value(value)) => value.try_into().context("invalid slot value")?,
-            Some(SlotContent::MapRoot(_)) => {
-                anyhow::bail!("storage map slots are not supported for this account")
-            },
-            None => anyhow::bail!("missing slot value"),
-        };
-
-        slots.push(StorageSlot::with_value(slot_name, value));
-    }
+    let slots = storage_header
+        .slots()
+        .map(|slot| {
+            anyhow::ensure!(
+                slot.slot_type() == StorageSlotType::Value,
+                "storage map slots are not supported for this account"
+            );
+            Ok(StorageSlot::with_value(slot.name().clone(), slot.value()))
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     AccountStorage::new(slots).context("failed to create account storage")
 }

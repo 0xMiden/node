@@ -285,10 +285,8 @@ impl Rpc {
             self.network_tx_auth.map(NetworkTxAuth),
         );
 
-        let genesis = api
-            .get_genesis_header_with_retry()
-            .await
-            .context("Fetching genesis header from store")?;
+        let genesis =
+            api.get_genesis_header().await.context("Fetching genesis header from store")?;
 
         api.set_genesis_commitment(genesis.commitment())?;
 

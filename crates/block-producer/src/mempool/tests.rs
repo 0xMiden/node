@@ -10,7 +10,7 @@ use serial_test::serial;
 use super::*;
 use crate::mempool::graph::{TransactionGraph, TransactionRemoval};
 use crate::test_utils::batch::TransactionBatchConstructor;
-use crate::test_utils::{MockProvenTxBuilder, mock_account_id};
+use crate::test_utils::{MockAuthenticatedTxBuilder, MockProvenTxBuilder, mock_account_id};
 
 mod add_transaction;
 mod add_user_batch;
@@ -90,7 +90,7 @@ fn full_batch_selection_ignores_partial_internal_batch() {
     uut.config.batch_budget.transactions = 2;
 
     let tx = MockProvenTxBuilder::with_account_index(100).build();
-    let tx = Arc::new(AuthenticatedTransaction::from_inner(tx));
+    let tx = Arc::new(MockAuthenticatedTxBuilder::new(tx).build());
     uut.add_transaction(tx).unwrap();
     let reference = uut.clone();
 
@@ -104,9 +104,9 @@ fn full_batch_selection_returns_internal_batch_at_transaction_limit() {
     uut.config.batch_budget.transactions = 2;
 
     let tx_a = MockProvenTxBuilder::with_account_index(101).build();
-    let tx_a = Arc::new(AuthenticatedTransaction::from_inner(tx_a));
+    let tx_a = Arc::new(MockAuthenticatedTxBuilder::new(tx_a).build());
     let tx_b = MockProvenTxBuilder::with_account_index(102).build();
-    let tx_b = Arc::new(AuthenticatedTransaction::from_inner(tx_b));
+    let tx_b = Arc::new(MockAuthenticatedTxBuilder::new(tx_b).build());
 
     uut.add_transaction(tx_a.clone()).unwrap();
     uut.add_transaction(tx_b.clone()).unwrap();
@@ -125,7 +125,7 @@ fn internal_batch_selection_skips_candidates_exceeding_remaining_budget() {
     let parent = MockProvenTxBuilder::with_account_index(1000)
         .private_notes_created_range(0..2)
         .build();
-    let parent = Arc::new(AuthenticatedTransaction::from_inner(parent));
+    let parent = Arc::new(MockAuthenticatedTxBuilder::new(parent).build());
     let (oversized, fitting) = output_budget_ordered_child_transactions();
 
     uut.add_transaction(parent.clone()).unwrap();
@@ -152,13 +152,13 @@ fn output_budget_ordered_child_transactions()
             .unauthenticated_notes_range(0..1)
             .private_notes_created_range(10..12)
             .build();
-        let oversized = Arc::new(AuthenticatedTransaction::from_inner(oversized));
+        let oversized = Arc::new(MockAuthenticatedTxBuilder::new(oversized).build());
 
         for fitting_account in 1100..1200 {
             let fitting = MockProvenTxBuilder::with_account_index(fitting_account)
                 .unauthenticated_notes_range(1..2)
                 .build();
-            let fitting = Arc::new(AuthenticatedTransaction::from_inner(fitting));
+            let fitting = Arc::new(MockAuthenticatedTxBuilder::new(fitting).build());
 
             if oversized.id() < fitting.id() {
                 return (oversized, fitting);
@@ -281,7 +281,7 @@ fn block_commit_reverts_expired_txns() {
     let mut reference = uut.clone();
 
     let tx_to_commit = MockProvenTxBuilder::with_account_index(0).build();
-    let tx_to_commit = Arc::new(AuthenticatedTransaction::from_inner(tx_to_commit));
+    let tx_to_commit = Arc::new(MockAuthenticatedTxBuilder::new(tx_to_commit).build());
 
     // Force the tx into the next block by batching it.
     uut.add_transaction(tx_to_commit.clone()).unwrap();
@@ -294,7 +294,7 @@ fn block_commit_reverts_expired_txns() {
     let tx_to_revert = MockProvenTxBuilder::with_account_index(1)
         .expiration_block_num(uut.chain_tip().child())
         .build();
-    let tx_to_revert = Arc::new(AuthenticatedTransaction::from_inner(tx_to_revert));
+    let tx_to_revert = Arc::new(MockAuthenticatedTxBuilder::new(tx_to_revert).build());
     uut.add_transaction(tx_to_revert).unwrap();
 
     // Create and commit the block which should revert the above tx.
@@ -344,7 +344,7 @@ fn pruned_committed_notes_are_authenticated_for_inflight_descendants() {
     )
     .private_notes_created_range(3..4)
     .build();
-    let parent = Arc::new(AuthenticatedTransaction::from_inner(parent));
+    let parent = Arc::new(MockAuthenticatedTxBuilder::new(parent).build());
 
     let child = MockProvenTxBuilder::with_account(
         mock_account_id(2),
@@ -353,7 +353,7 @@ fn pruned_committed_notes_are_authenticated_for_inflight_descendants() {
     )
     .unauthenticated_notes_range(3..4)
     .build();
-    let child = Arc::new(AuthenticatedTransaction::from_inner(child));
+    let child = Arc::new(MockAuthenticatedTxBuilder::new(child).build());
 
     uut.add_transaction(parent.clone()).unwrap();
     let parent_batch = uut.select_any_batch().unwrap();
@@ -464,7 +464,7 @@ fn transactions_exceeding_failure_limit_are_removed() {
     let (mut uut, _) = Mempool::for_tests();
 
     let failing_tx = MockProvenTxBuilder::with_account_index(0).build();
-    let failing_tx = Arc::new(AuthenticatedTransaction::from_inner(failing_tx));
+    let failing_tx = Arc::new(MockAuthenticatedTxBuilder::new(failing_tx).build());
     let tx_id = failing_tx.id();
 
     uut.add_transaction(failing_tx).unwrap();
@@ -508,24 +508,30 @@ fn expiration_distinguishes_direct_and_dependent_transactions() {
     let [parent_template, child_template, _] = MockProvenTxBuilder::sequential();
     let parent_update = parent_template.account_update();
     let child_update = child_template.account_update();
-    let parent = Arc::new(AuthenticatedTransaction::from_inner(
-        MockProvenTxBuilder::with_account(
-            parent_update.account_id(),
-            parent_update.initial_state_commitment(),
-            parent_update.final_state_commitment(),
+    let parent = Arc::new(
+        MockAuthenticatedTxBuilder::new(
+            MockProvenTxBuilder::with_account(
+                parent_update.account_id(),
+                parent_update.initial_state_commitment(),
+                parent_update.final_state_commitment(),
+            )
+            .expiration_block_num(BlockNumber::from(1))
+            .build(),
         )
-        .expiration_block_num(BlockNumber::from(1))
         .build(),
-    ));
-    let child = Arc::new(AuthenticatedTransaction::from_inner(
-        MockProvenTxBuilder::with_account(
-            child_update.account_id(),
-            child_update.initial_state_commitment(),
-            child_update.final_state_commitment(),
+    );
+    let child = Arc::new(
+        MockAuthenticatedTxBuilder::new(
+            MockProvenTxBuilder::with_account(
+                child_update.account_id(),
+                child_update.initial_state_commitment(),
+                child_update.final_state_commitment(),
+            )
+            .expiration_block_num(BlockNumber::from(10))
+            .build(),
         )
-        .expiration_block_num(BlockNumber::from(10))
         .build(),
-    ));
+    );
     let parent_id = parent.id();
     let child_id = child.id();
 
@@ -582,7 +588,7 @@ fn pass_through_txs_on_an_empty_account() {
     let (mut uut, _) = Mempool::for_tests();
 
     let tx_final = MockProvenTxBuilder::with_account_index(0).build();
-    let tx_final = Arc::new(AuthenticatedTransaction::from_inner(tx_final));
+    let tx_final = Arc::new(MockAuthenticatedTxBuilder::new(tx_final).build());
 
     let account_update = tx_final.account_update().clone();
     let tx_pass_through_base = MockProvenTxBuilder::with_account(
@@ -594,10 +600,10 @@ fn pass_through_txs_on_an_empty_account() {
     // Note: transactions _must_ have an input note or update an account to be considered valid.
     // Since by definition pass through txs don't update an account, they must have a nullifier.
     let tx_pass_through_a = tx_pass_through_base.clone().nullifiers_range(0..2).build();
-    let tx_pass_through_a = Arc::new(AuthenticatedTransaction::from_inner(tx_pass_through_a));
+    let tx_pass_through_a = Arc::new(MockAuthenticatedTxBuilder::new(tx_pass_through_a).build());
 
     let tx_pass_through_b = tx_pass_through_base.nullifiers_range(3..5).build();
-    let tx_pass_through_b = Arc::new(AuthenticatedTransaction::from_inner(tx_pass_through_b));
+    let tx_pass_through_b = Arc::new(MockAuthenticatedTxBuilder::new(tx_pass_through_b).build());
 
     uut.add_transaction(tx_pass_through_a.clone()).unwrap();
     uut.add_transaction(tx_pass_through_b.clone()).unwrap();
@@ -644,11 +650,11 @@ fn pass_through_txs_with_note_dependencies() {
         .nullifiers_range(0..2)
         .private_notes_created_range(3..4)
         .build();
-    let tx_pass_through_a = Arc::new(AuthenticatedTransaction::from_inner(tx_pass_through_a));
+    let tx_pass_through_a = Arc::new(MockAuthenticatedTxBuilder::new(tx_pass_through_a).build());
 
     // This includes a note (3) created by (a).
     let tx_pass_through_b = tx_pass_through_base.unauthenticated_notes_range(3..4).build();
-    let tx_pass_through_b = Arc::new(AuthenticatedTransaction::from_inner(tx_pass_through_b));
+    let tx_pass_through_b = Arc::new(MockAuthenticatedTxBuilder::new(tx_pass_through_b).build());
 
     // Select batches such that (a) and (b) go into separate batches.
     //
@@ -694,11 +700,11 @@ fn intra_batch_unauthenticated_note() {
         .nullifiers_range(0..2)
         .private_notes_created_range(3..4)
         .build();
-    let tx_a = Arc::new(AuthenticatedTransaction::from_inner(tx_a));
+    let tx_a = Arc::new(MockAuthenticatedTxBuilder::new(tx_a).build());
 
     // Transaction B consumes the note (unauthenticated).
     let tx_b = tx_pass_through.unauthenticated_notes_range(3..4).build();
-    let tx_b = Arc::new(AuthenticatedTransaction::from_inner(tx_b));
+    let tx_b = Arc::new(MockAuthenticatedTxBuilder::new(tx_b).build());
 
     // Add both transactions before selecting a batch so they end up in the same batch.
     uut.add_transaction(tx_a.clone()).unwrap();

@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use miden_node_proto::clients::{Builder, RemoteProverClient};
-use miden_node_proto::generated::remote_prover::proof::Proof as ProofVariant;
+use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::remote_prover::proof_request::Request;
-use miden_node_proto::generated::remote_prover::{Proof, ProofRequest};
+use miden_node_proto::generated::remote_prover::{DecodedProof, ProofRequest};
 use miden_node_proto::{BuildUnchecked, DecodeMessage};
 use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
 use miden_tx::TransactionProverError;
@@ -45,79 +45,21 @@ impl RemoteTransactionProver {
             TransactionProverError::other_with_source("failed to prove transaction", err)
         })?;
 
-        decode_transaction_proof(response.into_inner())
-    }
-}
-
-fn decode_transaction_proof(response: Proof) -> Result<ProvenTransaction, TransactionProverError> {
-    let proof = match response.proof {
-        Some(ProofVariant::Transaction(proof)) => proof,
-        Some(_) => {
-            return Err(TransactionProverError::other(
-                "remote prover response variant does not match transaction request",
-            ));
-        },
-        None => {
-            return Err(TransactionProverError::other(
-                "remote prover response is missing proof variant",
-            ));
-        },
-    };
-
-    proof
-        .decode_fields()
-        .map_err(|error| {
-            TransactionProverError::other_with_source(
-                "failed to decode received response from remote transaction prover",
-                error,
-            )
-        })?
-        .build_unchecked()
-        .map_err(|error| {
-            TransactionProverError::other_with_source(
-                "failed to build received response from remote transaction prover",
-                error,
-            )
-        })
-}
-
-#[cfg(test)]
-mod response_tests {
-    use std::error::Error as _;
-
-    use miden_node_proto::generated::remote_prover::Proof;
-    use miden_node_proto::generated::remote_prover::proof::Proof as ProofVariant;
-
-    use super::*;
-
-    #[test]
-    fn missing_transaction_response_variant_is_a_protocol_error() {
-        let error = decode_transaction_proof(Proof { proof: None }).unwrap_err();
-
-        assert!(error.to_string().contains("missing proof variant"));
-    }
-
-    #[test]
-    fn mismatched_transaction_response_variant_is_a_protocol_error() {
-        let response = Proof {
-            proof: Some(ProofVariant::Block(
-                miden_node_proto::generated::primitives::ExecutionProof::default(),
-            )),
-        };
-        let error = decode_transaction_proof(response).unwrap_err();
-
-        assert!(error.to_string().contains("does not match transaction request"));
-    }
-
-    #[test]
-    fn invalid_transaction_response_preserves_conversion_error_source() {
-        let response = Proof {
-            proof: Some(ProofVariant::Transaction(
-                miden_node_proto::generated::transaction::ProvenTransaction::default(),
-            )),
-        };
-
-        let error = decode_transaction_proof(response).unwrap_err();
-        assert!(error.source().is_some(), "conversion error source must be preserved");
+        response
+            .into_inner()
+            .decode_fields()
+            .and_then(DecodedProof::into_transaction)
+            // SAFETY: Construction checks transaction structure. The RPC checks the proof at
+            // submission.
+            //
+            // FIXME: Verify the proof locally and match the response to the requested
+            // execution, including its reference block and expiration, before returning success.
+            .and_then(|transaction| transaction.build_unchecked().map_err(ConversionError::new))
+            .map_err(|error| {
+                TransactionProverError::other_with_source(
+                    "invalid remote transaction proof response",
+                    error,
+                )
+            })
     }
 }

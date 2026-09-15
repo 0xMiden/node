@@ -10,11 +10,10 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use backon::{ExponentialBuilder, Retryable};
 use miden_node_proto::clients::{Builder, RpcClient};
-use miden_node_proto::domain::account::{AccountResponse, AccountVaultDetails, StorageMapEntries};
+use miden_node_proto::domain::account::{AccountVaultDetails, StorageMapEntries};
 use miden_node_proto::domain::encryption::{
     TransactionInputsSealer,
     TrustedTransactionEncryptionState,
-    verify_transaction_encryption_key,
 };
 use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
 use miden_node_proto::generated::rpc::{
@@ -25,7 +24,7 @@ use miden_node_proto::generated::rpc::{
     SyncChainMmrResponse,
 };
 use miden_node_proto::generated::submission::ProvenTransactionSubmission as ProtoProvenTransaction;
-use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify};
+use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify, VerifyWith};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{debug, info, miden_instrument, warn};
 use miden_node_utils::retry;
@@ -150,14 +149,12 @@ impl TransactionSubmissionClient {
             .await
             .context("Failed to fetch the transaction encryption key")?
             .into_inner();
-        let verified = verify_transaction_encryption_key(
-            key,
-            TrustedTransactionEncryptionState::new(
+        let verified = key
+            .verify_with(TrustedTransactionEncryptionState::new(
                 self.genesis_commitment,
                 &self.trusted_validator_signing_keys,
-            ),
-        )
-        .context("Untrusted transaction encryption key")?;
+            ))
+            .context("Untrusted transaction encryption key")?;
         let sealer = TransactionInputsSealer::new(verified);
 
         let mut cached = self.sealer.lock().await;
@@ -286,6 +283,7 @@ pub async fn create_genesis_aware_rpc_client(
         let genesis_header: BlockHeader = genesis_block_header
             .decode_fields()
             .context("failed to decode block header")?
+            // SAFETY: Genesis has no parent. Deployment trusts the configured RPC for genesis.
             .build_unchecked()
             .context("failed to build block header")?;
         let genesis_commitment = genesis_header.commitment();
@@ -477,8 +475,10 @@ pub(crate) async fn fetch_foreign_account_inputs(
         .await
         .with_context(|| format!("failed to fetch account {account_id}"))?
         .into_inner();
-    let response =
-        AccountResponse::try_from(response).context("failed to convert the account response")?;
+    let response = response
+        .decode_fields()
+        .and_then(Verify::verify)
+        .context("failed to convert the account response")?;
 
     let witness = response.witness;
     anyhow::ensure!(
@@ -746,6 +746,8 @@ fn decode_chain_state(
         .context("sync_chain_mmr response did not include a block header")?
         .decode_fields()
         .context("failed to decode the sync target block header")?
+        // SAFETY: Deployment trusts the configured RPC for chain state. The MMR root is checked
+        // against this header below. That consistency check does not authenticate the RPC.
         .build_unchecked()
         .context("failed to build the sync target block header")?;
 
@@ -806,8 +808,10 @@ async fn fetch_account_witness(
         .context("failed to fetch the account witness")?
         .into_inner();
 
-    let response =
-        AccountResponse::try_from(response).context("failed to convert the account response")?;
+    let response = response
+        .decode_fields()
+        .and_then(Verify::verify)
+        .context("failed to convert the account response")?;
 
     Ok(response.witness)
 }

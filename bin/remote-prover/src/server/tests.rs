@@ -4,13 +4,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use assert_matches::assert_matches;
-use miden_node_proto::BlockProofRequest;
 use miden_node_proto::generated::remote_prover::api_client::ApiClient;
 use miden_node_proto::generated::remote_prover::proof::Proof as ProofVariant;
 use miden_node_proto::generated::remote_prover::proof_request::Request;
 use miden_node_proto::generated::remote_prover::{Proof, ProofRequest};
+use miden_node_proto::{BlockProofRequest, BuildUnchecked, DecodeMessage, VerifyWith};
 use miden_node_utils::shutdown::CancellationToken;
-use miden_objects::{BuildUnchecked, DecodeMessage, VerifyWith};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::asset::{Asset, FungibleAsset};
@@ -351,7 +350,7 @@ async fn malformed_transaction_inputs_are_rejected() {
     let err = client.submit_request(request).await.unwrap_err();
 
     assert_eq!(err.code(), tonic::Code::InvalidArgument);
-    assert!(err.message().contains("transaction inputs"));
+    assert!(err.message().starts_with("request.transaction."), "{}", err.message());
 
     server.abort();
 }
@@ -373,7 +372,7 @@ async fn malformed_batch_inputs_are_rejected() {
     let err = client.submit_request(request).await.unwrap_err();
 
     assert_eq!(err.code(), tonic::Code::InvalidArgument);
-    assert!(err.message().contains("proposed batch"));
+    assert!(err.message().starts_with("request.batch."), "{}", err.message());
 
     server.abort();
 }
@@ -395,7 +394,7 @@ async fn malformed_block_inputs_are_rejected() {
     let err = client.submit_request(request).await.unwrap_err();
 
     assert_eq!(err.code(), tonic::Code::InvalidArgument);
-    assert!(err.message().contains("block proving inputs"));
+    assert!(err.message().starts_with("request.block.block_inputs:"), "{}", err.message());
 
     server.abort();
 }

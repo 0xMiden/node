@@ -181,7 +181,7 @@ async fn submission_endpoints_reject_unregistered_creation_without_partial_batch
         public
             .submit_proven_tx(Request::new(proto::submission::ProvenTransactionSubmission {
                 transaction: Some(transactions[1].as_ref().into()),
-                sealed_transaction_inputs: None,
+                sealed_transaction_inputs: Some(SealedTransactionInputs::default()),
             }))
             .await,
         public
@@ -197,7 +197,7 @@ async fn submission_endpoints_reject_unregistered_creation_without_partial_batch
             .await,
     ] {
         let status = result.unwrap_err();
-        assert_eq!(status.code(), tonic::Code::PermissionDenied);
+        assert_eq!(status.code(), tonic::Code::PermissionDenied, "{status}");
         assert!(status.message().contains(&transactions[1].account_id().to_string()));
     }
 
