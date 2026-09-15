@@ -26,6 +26,7 @@ services:
       - --ntx-builder.url=http://ntx-builder:50301
       - --rpc.network-tx-auth-header-value=secret_value
     environment:
+      MIDEN_NODE_DISABLE_ACCOUNT_ALLOWLIST: "${MIDEN_NODE_DISABLE_ACCOUNT_ALLOWLIST:-true}"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       OTEL_RESOURCE_ATTRIBUTES: service.instance.id=sequencer
     ports:
