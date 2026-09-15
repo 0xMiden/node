@@ -1,274 +1,22 @@
 use std::ops::RangeInclusive;
 
-use miden_protocol::block::{
-    BlockBody,
-    BlockHeader,
-    BlockNumber,
-    BlockSignatures,
-    FeeParameters,
-    SignedBlock,
-    ValidatorKeys,
-};
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
-use miden_protocol::utils::serde::Serializable;
+use miden_protocol::block::BlockNumber;
 use thiserror::Error;
 
-use crate::decode::{ConversionResultExt, DecodeBytesExt, GrpcDecodeExt};
-use crate::errors::ConversionError;
-use crate::{decode, generated as proto};
-
-// BLOCK NUMBER
-// ================================================================================================
-
-impl From<BlockNumber> for proto::blockchain::BlockNumber {
-    fn from(value: BlockNumber) -> Self {
-        proto::blockchain::BlockNumber { block_num: value.as_u32() }
-    }
-}
-
-impl From<proto::blockchain::BlockNumber> for BlockNumber {
-    fn from(value: proto::blockchain::BlockNumber) -> Self {
-        BlockNumber::from(value.block_num)
-    }
-}
-
-// BLOCK HEADER
-// ================================================================================================
-
-impl From<&BlockHeader> for proto::blockchain::BlockHeader {
-    fn from(header: &BlockHeader) -> Self {
-        Self {
-            version: header.version(),
-            prev_block_commitment: Some(header.prev_block_commitment().into()),
-            block_num: header.block_num().as_u32(),
-            chain_commitment: Some(header.chain_commitment().into()),
-            account_root: Some(header.account_root().into()),
-            nullifier_root: Some(header.nullifier_root().into()),
-            note_root: Some(header.note_root().into()),
-            tx_commitment: Some(header.tx_commitment().into()),
-            tx_kernel_commitment: Some(header.tx_kernel_commitment().into()),
-            validator_keys: header.validator_keys().as_keys().iter().map(Into::into).collect(),
-            timestamp: header.timestamp(),
-            fee_parameters: Some(header.fee_parameters().into()),
-        }
-    }
-}
-
-impl From<BlockHeader> for proto::blockchain::BlockHeader {
-    fn from(header: BlockHeader) -> Self {
-        (&header).into()
-    }
-}
-
-impl TryFrom<&proto::blockchain::BlockHeader> for BlockHeader {
-    type Error = ConversionError;
-
-    fn try_from(value: &proto::blockchain::BlockHeader) -> Result<Self, Self::Error> {
-        value.try_into()
-    }
-}
-
-impl TryFrom<proto::blockchain::BlockHeader> for BlockHeader {
-    type Error = ConversionError;
-
-    fn try_from(value: proto::blockchain::BlockHeader) -> Result<Self, Self::Error> {
-        let decoder = value.decoder();
-        let prev_block_commitment = decode!(decoder, value.prev_block_commitment)?;
-        let chain_commitment = decode!(decoder, value.chain_commitment)?;
-        let account_root = decode!(decoder, value.account_root)?;
-        let nullifier_root = decode!(decoder, value.nullifier_root)?;
-        let note_root = decode!(decoder, value.note_root)?;
-        let tx_commitment = decode!(decoder, value.tx_commitment)?;
-        let tx_kernel_commitment = decode!(decoder, value.tx_kernel_commitment)?;
-        let validator_keys = value
-            .validator_keys
-            .into_iter()
-            .map(PublicKey::try_from)
-            .collect::<Result<Vec<_>, _>>()
-            .context("validator_keys")?;
-        let validator_keys = ValidatorKeys::new(validator_keys)
-            .map_err(ConversionError::new)
-            .context("validator_keys")?;
-        let fee_parameters = decode!(decoder, value.fee_parameters)?;
-
-        Ok(BlockHeader::new(
-            value.version,
-            prev_block_commitment,
-            value.block_num.into(),
-            chain_commitment,
-            account_root,
-            nullifier_root,
-            note_root,
-            tx_commitment,
-            tx_kernel_commitment,
-            validator_keys,
-            fee_parameters,
-            value.timestamp,
-        ))
-    }
-}
-
-// BLOCK BODY
-// ================================================================================================
-
-impl From<&BlockBody> for proto::blockchain::BlockBody {
-    fn from(body: &BlockBody) -> Self {
-        Self { block_body: body.to_bytes() }
-    }
-}
-
-impl From<BlockBody> for proto::blockchain::BlockBody {
-    fn from(body: BlockBody) -> Self {
-        (&body).into()
-    }
-}
-
-impl TryFrom<&proto::blockchain::BlockBody> for BlockBody {
-    type Error = ConversionError;
-
-    fn try_from(value: &proto::blockchain::BlockBody) -> Result<Self, Self::Error> {
-        value.try_into()
-    }
-}
-
-impl TryFrom<proto::blockchain::BlockBody> for BlockBody {
-    type Error = ConversionError;
-    fn try_from(value: proto::blockchain::BlockBody) -> Result<Self, Self::Error> {
-        BlockBody::decode_bytes(&value.block_body, "BlockBody")
-    }
-}
-
-// SIGNED BLOCK
-// ================================================================================================
-
-impl From<&SignedBlock> for proto::blockchain::SignedBlock {
-    fn from(block: &SignedBlock) -> Self {
-        Self {
-            header: Some(block.header().into()),
-            body: Some(block.body().into()),
-            signatures: block.signatures().as_signatures().iter().map(Into::into).collect(),
-        }
-    }
-}
-
-impl From<SignedBlock> for proto::blockchain::SignedBlock {
-    fn from(block: SignedBlock) -> Self {
-        (&block).into()
-    }
-}
-
-impl TryFrom<&proto::blockchain::SignedBlock> for SignedBlock {
-    type Error = ConversionError;
-
-    fn try_from(value: &proto::blockchain::SignedBlock) -> Result<Self, Self::Error> {
-        value.try_into()
-    }
-}
-
-impl TryFrom<proto::blockchain::SignedBlock> for SignedBlock {
-    type Error = ConversionError;
-    fn try_from(value: proto::blockchain::SignedBlock) -> Result<Self, Self::Error> {
-        let decoder = value.decoder();
-        let header = decode!(decoder, value.header)?;
-        let body = decode!(decoder, value.body)?;
-        let signatures = value
-            .signatures
-            .into_iter()
-            .map(Signature::try_from)
-            .collect::<Result<Vec<_>, _>>()
-            .context("signatures")?;
-        let signatures = BlockSignatures::new(signatures)
-            .map_err(ConversionError::new)
-            .context("signatures")?;
-
-        Ok(SignedBlock::new_unchecked(header, body, signatures))
-    }
-}
-
-// PUBLIC KEY
-// ================================================================================================
-
-impl TryFrom<proto::blockchain::ValidatorPublicKey> for PublicKey {
-    type Error = ConversionError;
-    fn try_from(public_key: proto::blockchain::ValidatorPublicKey) -> Result<Self, Self::Error> {
-        PublicKey::decode_bytes(&public_key.validator_key, "PublicKey")
-    }
-}
-
-impl From<PublicKey> for proto::blockchain::ValidatorPublicKey {
-    fn from(value: PublicKey) -> Self {
-        Self::from(&value)
-    }
-}
-
-impl From<&PublicKey> for proto::blockchain::ValidatorPublicKey {
-    fn from(value: &PublicKey) -> Self {
-        Self { validator_key: value.to_bytes() }
-    }
-}
-
-// SIGNATURE
-// ================================================================================================
-
-impl TryFrom<proto::blockchain::BlockSignature> for Signature {
-    type Error = ConversionError;
-    fn try_from(signature: proto::blockchain::BlockSignature) -> Result<Self, Self::Error> {
-        Signature::decode_bytes(&signature.signature, "Signature")
-    }
-}
-
-impl From<Signature> for proto::blockchain::BlockSignature {
-    fn from(value: Signature) -> Self {
-        Self::from(&value)
-    }
-}
-
-impl From<&Signature> for proto::blockchain::BlockSignature {
-    fn from(value: &Signature) -> Self {
-        Self { signature: value.to_bytes() }
-    }
-}
-
-// FEE PARAMETERS
-// ================================================================================================
-
-impl TryFrom<proto::blockchain::FeeParameters> for FeeParameters {
-    type Error = ConversionError;
-    fn try_from(fee_params: proto::blockchain::FeeParameters) -> Result<Self, Self::Error> {
-        let decoder = fee_params.decoder();
-        let native_asset_id = decode!(decoder, fee_params.native_asset_id)?;
-        Ok(FeeParameters::new(native_asset_id, fee_params.verification_base_fee))
-    }
-}
-
-impl From<FeeParameters> for proto::blockchain::FeeParameters {
-    fn from(value: FeeParameters) -> Self {
-        Self::from(&value)
-    }
-}
-
-impl From<&FeeParameters> for proto::blockchain::FeeParameters {
-    fn from(value: &FeeParameters) -> Self {
-        Self {
-            native_asset_id: Some(value.fee_faucet_id().into()),
-            verification_base_fee: value.verification_base_fee(),
-        }
-    }
-}
-
-// BLOCK RANGE
-// ================================================================================================
+use crate::generated as proto;
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum InvalidBlockRange {
     #[error("start ({start}) greater than end ({end})")]
     StartGreaterThanEnd { start: BlockNumber, end: BlockNumber },
-    #[error("empty range: start ({start})..end ({end})")]
-    EmptyRange { start: BlockNumber, end: BlockNumber },
 }
 
 impl proto::rpc::BlockRange {
     /// Converts the block range into an inclusive range.
+    ///
+    /// A `RangeInclusive` is empty exactly when `start > end`, so that case is
+    /// reported as [`InvalidBlockRange::StartGreaterThanEnd`]. Equal endpoints
+    /// are a valid single-block range.
     pub fn into_inclusive_range<T: From<InvalidBlockRange>>(
         self,
     ) -> Result<RangeInclusive<BlockNumber>, T> {
@@ -276,14 +24,6 @@ impl proto::rpc::BlockRange {
 
         if block_range.start() > block_range.end() {
             return Err(InvalidBlockRange::StartGreaterThanEnd {
-                start: *block_range.start(),
-                end: *block_range.end(),
-            }
-            .into());
-        }
-
-        if block_range.is_empty() {
-            return Err(InvalidBlockRange::EmptyRange {
                 start: *block_range.start(),
                 end: *block_range.end(),
             }
@@ -300,5 +40,47 @@ impl From<RangeInclusive<BlockNumber>> for proto::rpc::BlockRange {
             block_from: range.start().as_u32(),
             block_to: range.end().as_u32(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    fn range(from: u32, to: u32) -> proto::rpc::BlockRange {
+        proto::rpc::BlockRange { block_from: from, block_to: to }
+    }
+
+    #[test]
+    fn into_inclusive_range_rejects_start_greater_than_end() {
+        let err = range(5, 4)
+            .into_inclusive_range::<InvalidBlockRange>()
+            .expect_err("inverted range must be rejected");
+        assert_eq!(
+            err,
+            InvalidBlockRange::StartGreaterThanEnd {
+                start: BlockNumber::from(5u32),
+                end: BlockNumber::from(4u32),
+            }
+        );
+    }
+
+    #[test]
+    fn into_inclusive_range_accepts_single_block() {
+        let got = range(7, 7)
+            .into_inclusive_range::<InvalidBlockRange>()
+            .expect("start == end is a valid inclusive range");
+        assert_eq!(*got.start(), BlockNumber::from(7u32));
+        assert_eq!(*got.end(), BlockNumber::from(7u32));
+    }
+
+    #[test]
+    fn into_inclusive_range_accepts_ascending_span() {
+        let got = range(1, 3)
+            .into_inclusive_range::<InvalidBlockRange>()
+            .expect("ascending range must be accepted");
+        assert_eq!(*got.start(), BlockNumber::from(1u32));
+        assert_eq!(*got.end(), BlockNumber::from(3u32));
     }
 }

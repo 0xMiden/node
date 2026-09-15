@@ -2,9 +2,12 @@
 syntax = "proto3";
 package validator;
 
-import "types/transaction.proto";
-import "types/blockchain.proto";
-import "types/primitives.proto";
+import "block.proto";
+import "batch.proto";
+import "primitives.proto";
+import "protocol_config.proto";
+import "types/block_proving.proto";
+import "types/submission.proto";
 import "google/protobuf/empty.proto";
 
 // VALIDATOR API
@@ -16,10 +19,10 @@ service Api {
    rpc Status(google.protobuf.Empty) returns (ValidatorStatus) {}
 
    // Submits a transaction to the validator.
-   rpc SubmitProvenTransaction(transaction.ProvenTransaction) returns (google.protobuf.Empty) {}
+   rpc SubmitProvenTransaction(submission.ProvenTransactionSubmission) returns (google.protobuf.Empty) {}
 
-   // Validates and signs a proposed block, returning the signature and the signed block commitment.
-   rpc SignBlock(blockchain.ProposedBlock) returns (blockchain.SignBlockResponse) {}
+   // Validates and signs a proposed block.
+   rpc SignBlock(SignBlockRequest) returns (SignBlockResponse) {}
 
    // Streams signed blocks starting from the given block number (inclusive).
    //
@@ -34,7 +37,34 @@ service Api {
    // The encryption key is shared across the whole validator set, so the returned public key is
    // identical regardless of which validator serves the request. The attestation carried in the
    // response is specific to this validator.
-   rpc GetTransactionEncryptionKey(google.protobuf.Empty) returns (transaction.TransactionEncryptionKey) {}
+   rpc GetTransactionEncryptionKey(google.protobuf.Empty) returns (submission.TransactionEncryptionKey) {}
+}
+
+// SIGN BLOCK REQUEST AND RESPONSE
+// ================================================================================================
+
+// The inputs required to validate and sign a proposed block.
+message SignBlockRequest {
+    // The proven transaction batches in block order.
+    repeated transaction.ProvenBatch batches = 1;
+    // The chain state and witnesses required to reconstruct the proposed block.
+    block_proving.BlockInputs block_inputs = 2;
+    // The timestamp of the proposed block.
+    fixed32 timestamp = 3;
+    // The next validator configuration included in the proposed block header.
+    blockchain.ValidatorConfig next_validator_config = 4;
+    // The optional next protocol configuration included in the proposed block header.
+    optional blockchain.NextProtocolConfig next_protocol_config = 5;
+    // The active configuration for signing. The block producer always supplies this field.
+    // Other callers may omit this field if the validator already stores the configuration.
+    // The validator returns INVALID_ARGUMENT if the field is omitted and the configuration is not stored.
+    optional protocol_config.ProtocolConfig protocol_config = 6;
+}
+
+message SignBlockResponse {
+    primitives.Signature signature = 1;
+    primitives.Word block_commitment = 2;
+    primitives.PublicKey public_key = 3;
 }
 
 // BLOCK SUBSCRIPTION
@@ -48,12 +78,14 @@ message BlockSubscriptionRequest {
 
 // A signed block streamed to a subscriber.
 message BlockSubscriptionResponse {
-    // The block encoded using [miden_serde_utils::Serializable] implementation for
-    // [miden_protocol::block::SignedBlock].
-    bytes block = 1;
+    blockchain.SignedBlock block = 1;
 
     // The signed chain tip when this item was emitted.
     fixed32 committed_chain_tip = 2;
+
+    // The active configuration. Included with the first response and when its commitment changes.
+    // Verify its commitment against the accompanying block header.
+    optional protocol_config.ProtocolConfig protocol_config = 3;
 }
 
 // VALIDATOR STATUS

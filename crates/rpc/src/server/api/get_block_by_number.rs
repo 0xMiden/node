@@ -1,20 +1,23 @@
 use miden_node_proto::generated as proto;
 use miden_node_tracing::{debug, miden_instrument};
-use miden_protocol::block::BlockNumber;
+use miden_protocol::block::{BlockNumber, SignedBlock};
+use miden_protocol::utils::serde::Deserializable;
+use miden_protocol::vm::ExecutionProof;
+use tonic::Status;
 
 use super::{RpcService, database_error_to_status};
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::GetBlockByNumber for RpcService {
-    type Input = proto::blockchain::BlockRequest;
-    type Output = proto::blockchain::MaybeBlock;
+    type Input = proto::rpc::BlockRequest;
+    type Output = proto::rpc::MaybeBlock;
 
-    fn decode(request: proto::blockchain::BlockRequest) -> tonic::Result<Self::Input> {
+    fn decode(request: proto::rpc::BlockRequest) -> tonic::Result<Self::Input> {
         Ok(request)
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::blockchain::MaybeBlock> {
+    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::MaybeBlock> {
         Ok(output)
     }
 
@@ -45,16 +48,28 @@ impl proto::server::rpc_api::GetBlockByNumber for RpcService {
             .state
             .load_block(block_num)
             .await
-            .map_err(|err| database_error_to_status(&err))?;
+            .map_err(|err| database_error_to_status(&err))?
+            .map(|bytes| {
+                SignedBlock::read_from_bytes(&bytes)
+                    .map(Into::into)
+                    .map_err(|err| Status::internal(format!("invalid stored block: {err}")))
+            })
+            .transpose()?;
         let proof = if request.include_proof.unwrap_or_default() {
             self.state
                 .load_proof(block_num)
                 .await
                 .map_err(|err| database_error_to_status(&err))?
+                .map(|bytes| {
+                    ExecutionProof::read_from_bytes(&bytes)
+                        .map(Into::into)
+                        .map_err(|err| Status::internal(format!("invalid stored proof: {err}")))
+                })
+                .transpose()?
         } else {
             None
         };
 
-        Ok(proto::blockchain::MaybeBlock { block, proof })
+        Ok(proto::rpc::MaybeBlock { block, proof })
     }
 }

@@ -60,14 +60,33 @@ pub fn migrate(database_filepath: impl AsRef<Path>) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod bootstrap_tests {
-    use miden_node_store::genesis::GenesisBlock;
+    use miden_node_store::genesis::{GenesisBlock, GenesisState};
+    use miden_node_utils::fee::{test_fee_params, test_protocol_config};
     use miden_protocol::block::{BlockSignatures, SignedBlock};
     use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 
-    #[test]
-    fn genesis_block_accepts_unsigned_block() {
-        let block = crate::test_utils::mock_genesis_block();
-        GenesisBlock::try_from(block).expect("unsigned genesis block should validate");
+    #[tokio::test]
+    async fn bootstrap_accepts_genesis_artifact_with_protocol_config() {
+        use miden_node_utils::genesis::read_genesis_block;
+        use miden_protocol::utils::serde::Serializable;
+
+        let genesis = GenesisState::new(
+            Vec::new(),
+            test_fee_params(),
+            0,
+            crate::test_utils::mock_genesis_block().header().validator_config().clone(),
+            test_protocol_config(),
+        )
+        .into_block()
+        .unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("genesis.dat");
+        fs_err::write(&path, genesis.to_bytes()).unwrap();
+        let decoded = read_genesis_block(&path).unwrap();
+        assert_eq!(decoded.protocol_config(), genesis.protocol_config());
+        let database_path = root.path().join("ntx.sqlite3");
+        super::bootstrap(database_path.clone(), &decoded).await.unwrap();
+        assert!(database_path.is_file());
     }
 
     #[test]
@@ -77,7 +96,8 @@ mod bootstrap_tests {
         let signatures = BlockSignatures::new(vec![signature]).unwrap();
         let block = SignedBlock::new_unchecked(header, body, signatures);
 
-        let err = GenesisBlock::try_from(block).expect_err("signed genesis block should fail");
+        let err = GenesisBlock::new(block, test_protocol_config())
+            .expect_err("signed genesis block should fail");
 
         assert!(err.to_string().contains("must not carry signatures"), "unexpected error: {err}");
     }
@@ -401,6 +421,7 @@ impl NtxBuilderConfig {
     /// - The DB cannot be opened or the schema verification fails
     /// - The DB has not been bootstrapped (no persisted chain state)
     /// - The RPC connection fails (after retries)
+    /// - The remote header or protocol config does not match the persisted chain tip
     pub async fn build(
         self,
         shutdown: CancellationToken,
@@ -428,7 +449,7 @@ impl NtxBuilderConfig {
             .await
             .context("failed to read genesis validator keys")?
             .context("genesis validator keys are missing; re-bootstrap the NTX builder database")?;
-        let trusted_validator_signing_keys = genesis_validator_keys.as_keys().to_vec();
+        let trusted_validator_signing_keys = genesis_validator_keys.keys().to_vec();
 
         let rpc = match self.rpc_auth_header.clone() {
             Some(rpc_auth_header_value) => RpcClient::new_with_auth(
@@ -480,6 +501,10 @@ impl NtxBuilderConfig {
                 "ntx-builder database has not been bootstrapped; \
                  run `miden-ntx-builder bootstrap` first",
             )?;
+        let protocol_config = rpc
+            .protocol_config_for_header(&header)
+            .await
+            .context("failed to verify the persisted chain tip and protocol config")?;
 
         let block_from = last_applied_block.child();
 
@@ -493,7 +518,7 @@ impl NtxBuilderConfig {
         // block that the builder has not applied.
         let block_stream: BlockStream = Box::pin(rpc.block_subscription_reconnecting(block_from));
 
-        let chain = Arc::new(SharedChainState::new(header, mmr));
+        let chain = Arc::new(SharedChainState::new(header, mmr, protocol_config));
 
         let (coordinator, actor_request_rx) =
             self.build_coordinator(rpc, db.reader(), chain.clone(), shutdown)?;

@@ -37,8 +37,11 @@ use crate::server::api::SequencerInternalService;
 use crate::server::health::HealthCheckLayer;
 
 mod accept;
+mod admission;
 pub(crate) mod api;
 mod health;
+
+pub use admission::AccountAdmission;
 
 /// The RPC server component.
 ///
@@ -73,6 +76,7 @@ pub enum RpcMode {
     Sequencer {
         block_producer: Box<BlockProducerApi>,
         validators: ValidatorClients,
+        account_admission: AccountAdmission,
     },
     /// Full-node RPC.
     ///
@@ -99,11 +103,12 @@ pub enum RpcMode {
 /// `Clone` because it is cloned once into `RpcService` and then read on every request; it never
 /// carries the full-node's store write capabilities ([`RpcMode`] does), since no handler needs
 /// them — those are consumed once by the sync loop at startup.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) enum RpcBackend {
     Sequencer {
         block_producer: Box<BlockProducerApi>,
         validators: ValidatorClients,
+        account_admission: AccountAdmission,
     },
     FullNode {
         source_rpc: Box<SourceRpcClient>,
@@ -119,10 +124,12 @@ impl RpcBackend {
     pub(crate) fn sequencer(
         block_producer: BlockProducerApi,
         validators: ValidatorClients,
+        account_admission: AccountAdmission,
     ) -> Self {
         Self::Sequencer {
             block_producer: Box::new(block_producer),
             validators,
+            account_admission,
         }
     }
 
@@ -203,10 +210,15 @@ impl PreAuthSubmission {
 }
 
 impl RpcMode {
-    pub fn sequencer(block_producer: BlockProducerApi, validators: ValidatorClients) -> Self {
+    pub fn sequencer(
+        block_producer: BlockProducerApi,
+        validators: ValidatorClients,
+        account_admission: AccountAdmission,
+    ) -> Self {
         Self::Sequencer {
             block_producer: Box::new(block_producer),
             validators,
+            account_admission,
         }
     }
 
@@ -237,9 +249,14 @@ impl RpcMode {
     /// [`RpcService`](api::RpcService).
     fn backend(&self) -> RpcBackend {
         match self {
-            Self::Sequencer { block_producer, validators } => RpcBackend::Sequencer {
+            Self::Sequencer {
+                block_producer,
+                validators,
+                account_admission,
+            } => RpcBackend::Sequencer {
                 block_producer: block_producer.clone(),
                 validators: validators.clone(),
+                account_admission: account_admission.clone(),
             },
             Self::FullNode { source_rpc, pre_auth, .. } => RpcBackend::FullNode {
                 source_rpc: source_rpc.clone(),
@@ -353,6 +370,7 @@ impl Rpc {
             // CORS rejection).
             .layer(
                 AcceptHeaderLayer::new(&rpc_version, genesis.commitment())
+                    .with_genesis_enforced_method("RegisterAccount")
                     .with_genesis_enforced_method("SubmitProvenTx")
                     .with_genesis_enforced_method("SubmitProvenTxBatch"),
             )
@@ -447,6 +465,8 @@ pub struct SequencerInternal {
     pub state: Arc<State>,
     /// The in-process block producer API submissions are forwarded to.
     pub block_producer: BlockProducerApi,
+    /// Account creation policy shared with the public RPC API.
+    pub account_admission: AccountAdmission,
     /// gRPC server options for internal services (timeouts).
     pub grpc_options: GrpcOptions,
 }
@@ -470,6 +490,7 @@ impl SequencerInternal {
         let service = SequencerInternalService {
             state: self.state,
             block_producer: self.block_producer,
+            account_admission: self.account_admission,
         };
 
         // Note: deliberately no accept-header / auth layers; this is a private, trusted interface

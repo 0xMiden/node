@@ -61,7 +61,7 @@ miden-node-db = { workspace = true }
 
 [dev-dependencies]
 miden-node-store = { workspace = true }
-miden-node-utils = { features = ["testing"], workspace = true }
+miden-node-utils = { features = ["testing-prover"], workspace = true }
 miden-protocol   = { default-features = true, features = ["testing"], workspace = true }
 miden-testing    = { workspace = true }
 miden-tx         = { features = ["concurrent", "testing"], workspace = true }

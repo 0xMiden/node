@@ -41,14 +41,21 @@ impl proto::server::rpc_api::GetBlockHeaderByNumber for RpcService {
         );
 
         let block_num = request.block_num.map(BlockNumber::from);
-        let (block_header, mmr_proof) = self
-            .state
-            .view()
+        let view = self.state.view();
+        let (block_header, mmr_proof) = view
             .get_block_header(block_num, request.include_mmr_proof.unwrap_or(false))
             .await
             .map_err(super::get_block_header_error_to_status)?;
 
+        let protocol_config = match block_header.as_ref() {
+            Some(header) if request.include_protocol_config.unwrap_or(false) => {
+                Some(super::load_protocol_config(&view, header).await?.into())
+            },
+            _ => None,
+        };
+
         Ok(proto::rpc::BlockHeaderByNumberResponse {
+            protocol_config,
             block_header: block_header.map(Into::into),
             chain_length: mmr_proof.as_ref().map(|p| p.forest().num_leaves() as u32),
             mmr_path: mmr_proof.map(|p| Into::into(p.merkle_path())),

@@ -756,8 +756,7 @@ mod tests {
 
         for block_num in 0..count {
             let chain_commitment = mmr.peaks().hash_peaks();
-            let header =
-                BlockHeader::mock(block_num, Some(chain_commitment), None, &[], Word::default());
+            let header = BlockHeader::mock(block_num, Some(chain_commitment), None, &[]);
             mmr.add(header.commitment()).expect("test MMR should accept block commitment");
             headers.push(header);
         }

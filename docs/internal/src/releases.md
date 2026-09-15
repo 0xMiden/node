@@ -25,8 +25,8 @@ delete release tags.
 3. The `Release` workflow validates the tag and package versions, checks crate builds and the minimum supported Rust
    version, dry-runs crate, Docker image, and Compose publishing, then publishes the Docker images and Compose
    application.
-4. After those checks pass, the workflow creates the GitHub release and release notes, then starts the crates.io and
-   Debian publishing workflows.
+4. After those checks pass, the workflow creates the GitHub release and release notes. It then starts the crates.io
+   publishing workflow.
 
 The root `docker-compose.yml` includes the component models under `compose/`, keeping direct local Compose commands and
 profiles independent of additional `-f` arguments. Local includes cannot be published directly, so the

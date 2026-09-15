@@ -30,6 +30,9 @@ pub(in crate::view) fn render_ntx_increment(details: &IncrementDetails, healthy:
                     @if let Some(blocks) = details.last_latency_blocks {
                         (metric_row("Latency:", &format!("{blocks} blocks")))
                     }
+                    @if let Some(balance) = details.fee_balance {
+                        (metric_row("Fee Balance:", &balance.to_string()))
+                    }
                     @if let Some(tx) = &details.last_tx_id {
                         div class="metric-row" {
                             span class="metric-label" { "Last TX ID:" }

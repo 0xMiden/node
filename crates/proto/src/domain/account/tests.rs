@@ -2,6 +2,17 @@ use miden_protocol::account::StorageMapKey;
 
 use super::*;
 
+#[test]
+fn registration_request_debug_hides_invitation_code() {
+    let code = "private invitation code";
+    let request = proto::rpc::RegisterAccountRequest {
+        invitation_code: code.to_owned(),
+        account_id: None,
+    };
+    let debug = format!("{request:?}");
+    assert!(!debug.contains(code));
+}
+
 fn word_from_u32(arr: [u32; 4]) -> Word {
     Word::from(arr)
 }
@@ -211,7 +222,7 @@ fn account_detail_request_rejects_duplicate_storage_map_keys() {
     };
     use crate::generated::rpc::account_request::account_detail_request::storage_map_detail_request::MapKeys;
 
-    let map_key: crate::generated::primitives::Digest = Word::from([1, 2, 3, 4u32]).into();
+    let map_key: crate::generated::primitives::Word = Word::from([1, 2, 3, 4u32]).into();
     let request = crate::generated::rpc::account_request::AccountDetailRequest {
         code_commitment: None,
         asset_vault_commitment: None,
@@ -219,7 +230,7 @@ fn account_detail_request_rejects_duplicate_storage_map_keys() {
             storage_maps: vec![StorageMapDetailRequest {
                 slot_name: "miden::test::storage::slot".to_string(),
                 slot_data: Some(storage_map_detail_request::SlotData::MapKeys(MapKeys {
-                    map_keys: vec![map_key, map_key],
+                    map_keys: vec![map_key.clone(), map_key],
                 })),
             }],
         })),

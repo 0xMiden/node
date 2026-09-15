@@ -31,3 +31,6 @@ rand_chacha      = { workspace = true }
 tokio            = { features = ["macros", "rt-multi-thread", "time"], workspace = true }
 tonic            = { workspace = true }
 url              = { workspace = true }
+
+[dev-dependencies]
+miden-testing = { workspace = true }
