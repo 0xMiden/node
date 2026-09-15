@@ -1,15 +1,46 @@
 use std::collections::BTreeMap;
 
-use miden_node_proto::generated::transaction::SealedTransactionInputs;
+use miden_node_proto::generated::submission::SealedTransactionInputs;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
-use miden_protocol::crypto::merkle::mmr::PartialMmr;
-use miden_protocol::transaction::PartialBlockchain;
 use miden_standards::account::auth::NetworkAccount;
 use miden_standards::account::fees::{BasicConstantFeePolicy, FeePolicyManager};
 
 use super::*;
 
 impl TestStore {
+    async fn with_account_creation_batch() -> (Self, ProposedBatch) {
+        let mut builder = MockChainBuilder::new();
+        let accounts = [
+            builder.create_new_wallet(Auth::IncrNonce).unwrap(),
+            builder.create_new_wallet(Auth::IncrNonce).unwrap(),
+        ];
+        let chain = builder.build().unwrap();
+        let store =
+            Self::start_from_mock_genesis(&chain.latest_block(), chain.protocol_config()).await;
+        let mut transactions = Vec::new();
+        // Batch decoding verifies each transaction proof before the admission check.
+        for account in accounts {
+            let context = chain.build_transaction(account).build().unwrap();
+            let executed = Box::pin(context.execute()).await.unwrap();
+            let inputs = executed.tx_inputs().clone();
+            let proven = spawn_blocking_in_current_span(move || {
+                LocalTransactionProver::default().prove(inputs)
+            })
+            .await
+            .unwrap()
+            .unwrap();
+            transactions.push(Arc::new(proven));
+        }
+        let batch = ProposedBatch::new_unverified(
+            transactions,
+            chain.latest_block_header(),
+            chain.latest_partial_blockchain(),
+            BTreeMap::new(),
+        )
+        .unwrap();
+        (store, batch)
+    }
+
     fn account_transaction(&self, account: &Account, is_new: bool) -> ProvenTransaction {
         let patch = AccountPatch::try_from(account.clone()).unwrap();
         let details = if account.is_public() {
@@ -36,7 +67,7 @@ impl TestStore {
             0.into(),
             self.genesis_commitment(),
             u32::MAX.into(),
-            ExecutionProof::new_dummy(),
+            miden_protocol::testing::dummy_execution_proof(),
         )
         .unwrap()
     }
@@ -88,7 +119,8 @@ async fn account_admission_only_restricts_new_non_network_accounts() {
 
 #[tokio::test]
 async fn submission_endpoints_reject_unregistered_creation_without_partial_batch_admission() {
-    let store = TestStore::start().await;
+    let (store, batch) = TestStore::with_account_creation_batch().await;
+    let transactions = batch.transactions();
     let allowlist = store.bootstrap_allowlist();
     let admission = AccountAdmission::enabled(Arc::clone(&allowlist));
     let guard = TestServerGuard(CancellationToken::new());
@@ -115,27 +147,9 @@ async fn submission_endpoints_reject_unregistered_creation_without_partial_batch
         account_admission: admission,
     };
 
-    let transactions = [3, 4].map(|seed| {
-        let (account, _) = build_test_account([seed; 32]);
-        Arc::new(store.account_transaction(&account, true))
-    });
     allowlist.add_account(transactions[0].account_id()).await.unwrap();
 
-    let header = store
-        .state
-        .view()
-        .get_block_header(Some(0.into()), false)
-        .await
-        .unwrap()
-        .0
-        .unwrap();
-    let batch = ProposedBatch::new_unverified(
-        transactions.to_vec(),
-        header.clone(),
-        PartialBlockchain::new(PartialMmr::default(), []).unwrap(),
-        BTreeMap::new(),
-    )
-    .unwrap();
+    let header = batch.reference_block_header();
     let proven_batch = ProvenBatch::new_unchecked(
         batch.id(),
         header.commitment(),
@@ -145,15 +159,15 @@ async fn submission_endpoints_reject_unregistered_creation_without_partial_batch
         batch.output_notes().to_vec(),
         batch.batch_expiration_block_num(),
         batch.transaction_headers(),
-        ExecutionProof::new_dummy(),
+        miden_protocol::testing::dummy_execution_proof(),
     )
     .unwrap();
     let tx = proto::sequencer::AuthenticatedTransaction {
-        transaction: transactions[1].to_bytes(),
+        transaction: Some(transactions[1].as_ref().into()),
         ..Default::default()
     };
     let authenticated_batch = proto::sequencer::AuthenticatedTransactionBatch {
-        proposed_batch: batch.to_bytes(),
+        proposed_batch: Some((&batch).into()),
         auth_inputs: transactions
             .iter()
             .map(|tx| proto::sequencer::AuthInputs {
@@ -165,15 +179,15 @@ async fn submission_endpoints_reject_unregistered_creation_without_partial_batch
 
     for result in [
         public
-            .submit_proven_tx(Request::new(proto::transaction::ProvenTransaction {
-                transaction: transactions[1].to_bytes(),
+            .submit_proven_tx(Request::new(proto::submission::ProvenTransactionSubmission {
+                transaction: Some(transactions[1].as_ref().into()),
                 sealed_transaction_inputs: None,
             }))
             .await,
         public
-            .submit_proven_tx_batch(Request::new(proto::transaction::TransactionBatch {
-                batch_proof: proven_batch.to_bytes(),
-                proposed_batch: Some(batch.to_bytes()),
+            .submit_proven_tx_batch(Request::new(proto::submission::TransactionBatch {
+                batch: Some((&proven_batch).into()),
+                proposed_batch: Some((&batch).into()),
                 sealed_transaction_inputs: vec![SealedTransactionInputs::default(); 2],
             }))
             .await,

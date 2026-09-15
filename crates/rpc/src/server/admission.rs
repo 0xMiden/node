@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use miden_node_store::allowlist::AccountAllowlist;
-use miden_node_tracing::error;
+use miden_node_tracing::{error, miden_instrument};
 use miden_protocol::account::{Account, AccountUpdateDetails};
 use miden_protocol::transaction::TxAccountUpdate;
 use miden_standards::account::auth::NetworkAccount;
 use tonic::Status;
 
-use crate::LOG_TARGET;
+use crate::{COMPONENT, LOG_TARGET};
 
 /// Account creation policy shared by the public and internal sequencer APIs.
 #[derive(Clone)]
@@ -26,6 +26,12 @@ impl AccountAdmission {
     }
 
     /// Rejects the submission if it creates an unregistered, non-network account.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "account_admission.check",
+        fields(account.id = update.account_id()),
+        err,
+    )]
     pub(crate) async fn check(&self, update: &TxAccountUpdate) -> tonic::Result<()> {
         if self.disabled || !update.initial_state_commitment().is_empty() {
             return Ok(());

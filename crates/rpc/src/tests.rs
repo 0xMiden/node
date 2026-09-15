@@ -738,7 +738,7 @@ async fn rpc_server_forwards_valid_deferred_proofs_and_rejects_missing_witnesses
         RpcBackend::sequencer(
             block_producer,
             ValidatorClients::new(vec![validator]).unwrap(),
-            allowlist,
+            AccountAdmission::enabled(allowlist),
         ),
         None,
         NonZeroUsize::new(1_000_000).unwrap(),
@@ -1481,6 +1481,7 @@ async fn authenticated_batch_defers_validation_to_async_handler() {
     let service = SequencerInternalService {
         state: Arc::clone(&store.state),
         block_producer,
+        account_admission: AccountAdmission::enabled(store.bootstrap_allowlist()),
     };
     let error = <SequencerInternalService as sequencer_api::SubmitAuthenticatedTxBatch>::handle(
         &service,
