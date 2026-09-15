@@ -1454,6 +1454,7 @@ async fn authenticated_batch_defers_validation_to_async_handler() {
     let request = proto::sequencer::AuthenticatedTransactionBatch {
         proposed_batch: Some(proto::transaction::ProposedBatch::default()),
         auth_inputs: Vec::new(),
+        batch_proof: None,
     };
     let input =
         <SequencerInternalService as sequencer_api::SubmitAuthenticatedTxBatch>::decode(request)

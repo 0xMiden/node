@@ -10,6 +10,7 @@ use miden_node_store::{
 };
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
+use miden_protocol::batch::BatchId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::utils::DeserializationError;
 use miden_protocol::errors::{ProposedBatchError, ProposedBlockError, ProvenBatchError};
@@ -87,6 +88,9 @@ pub enum MempoolSubmissionError {
     #[error("mempool lock is poisoned")]
     #[grpc(internal)]
     MempoolPoisoned(#[source] MempoolPoisonError),
+
+    #[error("user batch proof ID {proof_id} does not match transaction batch ID {batch_id}")]
+    BatchIdMismatch { proof_id: BatchId, batch_id: BatchId },
 }
 
 // Mempool submission conflicts with current state

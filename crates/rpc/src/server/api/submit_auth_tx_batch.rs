@@ -3,7 +3,7 @@ use miden_node_proto::generated::server::sequencer_api;
 use miden_node_proto::{DecodeMessage, VerifyWith, generated as proto};
 use miden_node_tracing::ErrorReport;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_protocol::batch::ProposedBatch;
+use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use tonic::Status;
 
 use super::{SequencerInternalService, ensure_transactions_have_fee_notes};
@@ -29,7 +29,7 @@ impl sequencer_api::SubmitAuthenticatedTxBatch for SequencerInternalService {
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        let (batch, inputs) =
+        let (proof, batch, inputs) =
             spawn_blocking_in_current_span(move || decode_authenticated_transaction_batch(request))
                 .await
                 .map_err(|err| {
@@ -43,7 +43,7 @@ impl sequencer_api::SubmitAuthenticatedTxBatch for SequencerInternalService {
         ensure_transactions_have_fee_notes(batch.transactions().iter().map(AsRef::as_ref))?;
 
         self.block_producer
-            .submit_authenticated_tx_batch(batch, inputs)
+            .submit_authenticated_tx_batch(proof, batch, inputs)
             .await
             .map(Into::into)
             .map_err(Into::into)
@@ -52,7 +52,7 @@ impl sequencer_api::SubmitAuthenticatedTxBatch for SequencerInternalService {
 
 fn decode_authenticated_transaction_batch(
     request: proto::sequencer::AuthenticatedTransactionBatch,
-) -> tonic::Result<(ProposedBatch, Vec<TransactionInputs>)> {
+) -> tonic::Result<(ProvenBatch, ProposedBatch, Vec<TransactionInputs>)> {
     let proposed_batch = request
         .proposed_batch
         .ok_or_else(|| Status::invalid_argument("missing `proposed_batch` field"))?;
@@ -61,6 +61,14 @@ fn decode_authenticated_transaction_batch(
         .map_err(|err| Status::invalid_argument(format!("invalid proposed_batch: {err}")))?
         .verify_with(miden_protocol::MIN_PROOF_SECURITY_LEVEL)
         .map_err(|err| Status::invalid_argument(format!("invalid proposed_batch: {err}")))?;
+
+    let proof = request
+        .batch_proof
+        .ok_or_else(|| Status::invalid_argument("missing `batch_proof` field"))?
+        .decode_fields()
+        .map_err(|err| Status::invalid_argument(format!("invalid batch_proof: {err}")))?
+        .verify_with(&batch)
+        .map_err(|err| Status::invalid_argument(format!("invalid batch_proof: {err}")))?;
 
     if batch.transactions().len() != request.auth_inputs.len() {
         return Err(Status::invalid_argument(format!(
@@ -77,5 +85,5 @@ fn decode_authenticated_transaction_batch(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|err| Status::invalid_argument(err.as_report_context("invalid auth_inputs")))?;
 
-    Ok((batch, inputs))
+    Ok((proof, batch, inputs))
 }
