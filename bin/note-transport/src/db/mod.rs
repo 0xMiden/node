@@ -135,7 +135,6 @@ pub async fn store_note(
             Ok((StoreResult::Inserted, next_retained))
         })
         .await?;
-    record_storage_usage(retained);
     Ok(result)
 }
 
