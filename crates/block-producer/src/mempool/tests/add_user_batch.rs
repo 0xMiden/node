@@ -4,6 +4,7 @@ use std::sync::Arc;
 use assert_matches::assert_matches;
 use miden_protocol::batch::{BatchId, ProvenBatch};
 use miden_protocol::block::BlockNumber;
+use miden_protocol::transaction::{OutputNote, PublicOutputNote, TransactionHeader};
 use pretty_assertions::assert_eq;
 
 use crate::domain::batch::BatchParameters;
@@ -12,6 +13,7 @@ use crate::errors::{MempoolSubmissionError, StateConflict};
 use crate::mempool::Mempool;
 use crate::test_utils::MockProvenTxBuilder;
 use crate::test_utils::batch::TransactionBatchConstructor;
+use crate::test_utils::note::mock_fee_note;
 
 #[test]
 fn user_batch_bypasses_batch_proving() {
@@ -50,12 +52,25 @@ fn user_batch_bypasses_batch_proving() {
 #[test]
 fn user_batch_respects_batch_budget() {
     let (mut uut, _) = Mempool::for_tests();
-    uut.config.batch_budget.transactions = 1;
+    uut.config.max_txs_per_batch = 1;
 
     let user_batch_txs = MockProvenTxBuilder::sequential();
     let result = add_user_batch(&mut uut, &user_batch_txs[..2], BatchParameters::for_tests());
 
     assert_matches!(result, Err(MempoolSubmissionError::CapacityExceeded));
+}
+
+#[test]
+fn user_batch_does_not_reserve_a_builder_transaction_slot() {
+    let (mut uut, _) = Mempool::for_tests();
+    uut.config.batch_budget.transactions = 1;
+    uut.config.max_txs_per_batch = 2;
+
+    let user_batch_txs = MockProvenTxBuilder::sequential();
+    add_user_batch(&mut uut, &user_batch_txs[..2], BatchParameters::for_tests()).unwrap();
+
+    assert!(uut.select_any_batch().is_none());
+    assert_eq!(uut.select_block().batches[0].transactions().as_slice().len(), 2);
 }
 
 #[test]
@@ -92,7 +107,6 @@ fn user_batch_capacity_counts_batched_uncommitted_transactions() {
 #[test]
 fn user_batch_is_not_selected_for_proving() {
     let (mut uut, _) = Mempool::for_tests();
-    uut.config.batch_budget.transactions = 3;
 
     let user_batch_txs = MockProvenTxBuilder::sequential();
     add_user_batch(&mut uut, &user_batch_txs[..1], BatchParameters::for_tests()).unwrap();
@@ -121,6 +135,49 @@ fn user_batch_with_internal_state_conflicts_are_rejected() {
     );
 
     assert_eq!(uut, reference);
+}
+
+#[test]
+fn user_batch_which_consumes_fee_note_is_accepted() {
+    let (mut uut, _) = Mempool::for_tests();
+    let fee_note = mock_fee_note(30);
+    let producer =
+        build_tx(MockProvenTxBuilder::with_account_index(30).output_notes(vec![
+            OutputNote::Public(PublicOutputNote::new(fee_note.clone()).unwrap()),
+        ]));
+    let consumer =
+        build_tx(MockProvenTxBuilder::with_account_index(31).unauthenticated_notes(vec![fee_note]));
+
+    add_user_batch(&mut uut, &[producer.clone(), consumer.clone()], BatchParameters::for_tests())
+        .unwrap();
+
+    let proof = &uut.select_block().batches[0];
+    assert_eq!(
+        proof
+            .transactions()
+            .as_slice()
+            .iter()
+            .map(TransactionHeader::id)
+            .collect::<Vec<_>>(),
+        vec![producer.id(), consumer.id()],
+    );
+}
+
+#[test]
+fn user_batch_which_consumes_external_inflight_fee_note_is_rejected() {
+    let (mut uut, _) = Mempool::for_tests();
+    let fee_note = mock_fee_note(32);
+    let producer =
+        build_tx(MockProvenTxBuilder::with_account_index(32).output_notes(vec![
+            OutputNote::Public(PublicOutputNote::new(fee_note.clone()).unwrap()),
+        ]));
+    let consumer =
+        build_tx(MockProvenTxBuilder::with_account_index(33).unauthenticated_notes(vec![fee_note]));
+    uut.add_transaction(producer).unwrap();
+
+    let result = add_user_batch(&mut uut, &[consumer], BatchParameters::for_tests());
+
+    assert_matches!(result, Err(MempoolSubmissionError::ConsumesInflightFeeNotes { .. }));
 }
 
 #[test]

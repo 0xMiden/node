@@ -9,7 +9,7 @@ use crate::domain::transaction::AuthenticatedTransaction;
 use crate::{DEFAULT_MAX_BATCHES_PER_BLOCK, DEFAULT_MAX_TXS_PER_BATCH};
 
 /// Constraints placed on the batches proposed by the [`Mempool`](super::Mempool).
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BatchBudget {
     /// Maximum number of transactions allowed in a batch.
     pub transactions: usize,
@@ -38,12 +38,7 @@ pub(crate) enum BudgetStatus {
 
 impl Default for BatchBudget {
     fn default() -> Self {
-        Self {
-            transactions: DEFAULT_MAX_TXS_PER_BATCH.get(),
-            input_notes: MAX_INPUT_NOTES_PER_BATCH,
-            output_notes: MAX_OUTPUT_NOTES_PER_BATCH,
-            accounts: MAX_ACCOUNTS_PER_BATCH,
-        }
+        Self::new(DEFAULT_MAX_TXS_PER_BATCH.get())
     }
 }
 
@@ -56,6 +51,16 @@ impl Default for BlockBudget {
 }
 
 impl BatchBudget {
+    /// Creates a standalone transaction budget and reserves room for one pass-through transaction.
+    pub fn new(max_transactions: usize) -> Self {
+        Self {
+            transactions: max_transactions.saturating_sub(1),
+            input_notes: MAX_INPUT_NOTES_PER_BATCH,
+            output_notes: MAX_OUTPUT_NOTES_PER_BATCH.saturating_sub(1),
+            accounts: MAX_ACCOUNTS_PER_BATCH.saturating_sub(1),
+        }
+    }
+
     /// Returns `true` if no more transaction resources can be consumed from this budget.
     pub(crate) fn is_exhausted(&self) -> bool {
         self.transactions == 0
@@ -108,5 +113,38 @@ impl BlockBudget {
             self.batches -= 1;
             BudgetStatus::WithinScope
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use miden_protocol::transaction::{OutputNote, PublicOutputNote};
+
+    use super::*;
+    use crate::test_utils::MockProvenTxBuilder;
+    use crate::test_utils::note::mock_fee_note;
+
+    #[test]
+    fn batch_budget_reserves_pass_through_transaction_resources() {
+        let budget = BatchBudget::new(10);
+
+        assert_eq!(budget.transactions, 9);
+        assert_eq!(budget.accounts, MAX_ACCOUNTS_PER_BATCH - 1);
+        assert_eq!(budget.output_notes, MAX_OUTPUT_NOTES_PER_BATCH - 1);
+        assert_eq!(budget.input_notes, MAX_INPUT_NOTES_PER_BATCH);
+    }
+
+    #[test]
+    fn fee_notes_consume_the_output_note_budget() {
+        let fee_note = mock_fee_note(1);
+        let tx = MockProvenTxBuilder::with_account_index(1)
+            .output_notes(vec![OutputNote::Public(PublicOutputNote::new(fee_note).unwrap())])
+            .build();
+        let tx = AuthenticatedTransaction::from_inner(tx);
+        let mut budget = BatchBudget::new(10);
+        let initial_output_notes = budget.output_notes;
+
+        assert_eq!(budget.check_then_subtract(&tx), BudgetStatus::WithinScope);
+        assert_eq!(budget.output_notes, initial_output_notes - 1);
     }
 }
