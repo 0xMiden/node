@@ -179,6 +179,8 @@ mod tests {
 
 type InterceptedChannel = InterceptedService<Channel, Interceptor>;
 type GeneratedRpcClient = generated::rpc::api_client::ApiClient<InterceptedChannel>;
+type GeneratedNoteTransportClient =
+    generated::note_transport::api_client::ApiClient<InterceptedChannel>;
 type GeneratedProxyStatusClient =
     generated::remote_prover::proxy_status_api_client::ProxyStatusApiClient<InterceptedChannel>;
 type GeneratedProverClient = generated::remote_prover::api_client::ApiClient<InterceptedChannel>;
@@ -193,6 +195,8 @@ type SealedTransactionInputs = generated::submission::SealedTransactionInputs;
 
 #[derive(Debug, Clone)]
 pub struct RpcClient(GeneratedRpcClient);
+#[derive(Debug, Clone)]
+pub struct NoteTransportClient(GeneratedNoteTransportClient);
 #[derive(Debug, Clone)]
 pub struct RemoteProverProxyStatusClient(GeneratedProxyStatusClient);
 #[derive(Debug, Clone)]
@@ -299,6 +303,26 @@ pub trait GrpcClient {
 impl GrpcClient for RpcClient {
     fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
         Self(GeneratedRpcClient::new(InterceptedService::new(channel, interceptor)))
+    }
+}
+
+impl Deref for NoteTransportClient {
+    type Target = GeneratedNoteTransportClient;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for NoteTransportClient {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl GrpcClient for NoteTransportClient {
+    fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
+        Self(GeneratedNoteTransportClient::new(InterceptedService::new(channel, interceptor)))
     }
 }
 
