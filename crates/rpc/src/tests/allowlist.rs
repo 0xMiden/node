@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use miden_protocol::batch::{ProposedBatch, ProvenBatch};
+use miden_protocol::batch::ProposedBatch;
 use miden_standards::account::auth::NetworkAccount;
 use miden_standards::account::fees::{BasicConstantFeePolicy, FeePolicyManager};
 
@@ -249,18 +249,15 @@ async fn submission_endpoints_reject_unregistered_creation_without_partial_batch
 
     allowlist.add_account(transactions[0].account_id()).await.unwrap();
 
-    let header = batch.reference_block_header();
-    let proven_batch = ProvenBatch::new_unchecked(
-        batch.id(),
-        header.commitment(),
-        header.block_num(),
-        batch.account_updates().clone(),
-        batch.input_notes().clone(),
-        batch.output_notes().to_vec(),
-        batch.batch_expiration_block_num(),
-        batch.transaction_headers(),
-        miden_protocol::testing::dummy_execution_proof(),
-    )
+    let proven_batch = spawn_blocking_in_current_span({
+        let batch = batch.clone();
+        move || {
+            let executed = BatchExecutor::new().execute(batch)?;
+            LocalBatchProver::default().prove(executed)
+        }
+    })
+    .await
+    .unwrap()
     .unwrap();
     let tx = proto::sequencer::AuthenticatedTransaction {
         transaction: Some(transactions[1].as_ref().into()),
@@ -272,6 +269,7 @@ async fn submission_endpoints_reject_unregistered_creation_without_partial_batch
     }
     let authenticated_batch = proto::sequencer::AuthenticatedTransactionBatch {
         proposed_batch: Some((&batch).into()),
+        batch_proof: Some((&proven_batch).into()),
         auth_inputs,
     };
 
