@@ -119,10 +119,15 @@ The status code tells a client whether to change the request, add funds, or send
 | `412 Precondition Failed`   | The funding account cannot cover the request plus the fee of one transaction. An operator must add funds. |
 | `429 Too Many Requests`     | Too many requests are queued.                                                                             |
 | `500 Internal Server Error` | The service failed for a reason the client cannot act on.                                                 |
-| `503 Service Unavailable`   | The node is unreachable, or the service is shutting down.                                                 |
+| `503 Service Unavailable`   | The node is unreachable, or the service is shutting down. The transaction may have reached the node.      |
 
-A request that fails with 409, 429, or 503 created no note, and a client may send it again as it is. After 408 or 500
-the service may still have created the note, so a client that sends the request again may fund the account twice.
+A request that fails with 400, 409, 412, or 429 created no note, and a client may send it again as it is. Either the
+service never built a transaction, or the node rejected it, or the transaction expired, and an expired transaction
+cannot commit later.
+
+A request that fails with 408, 500, or 503 may still have created the note. The service loses contact with the node
+after it submits the transaction, so it cannot tell whether the node accepted the transaction. A client that sends the
+request again may fund the account twice.
 
 ## Keep the account funded
 
