@@ -9,6 +9,7 @@ use miden_funding_service::{
     DEFAULT_HTTP_TIMEOUT,
     DEFAULT_MAX_AMOUNT,
     DEFAULT_MAX_NOTES_PER_TX,
+    DEFAULT_P2ID_COLLECTION_INTERVAL,
     DEFAULT_POLL_INTERVAL,
     DEFAULT_RPC_TIMEOUT,
     DEFAULT_TX_EXPIRATION_DELTA,
@@ -32,6 +33,7 @@ const ENV_TX_PROVER_URL: &str = "MIDEN_FUNDING_TX_PROVER_URL";
 const ENV_TX_PROVER_TIMEOUT: &str = "MIDEN_FUNDING_TX_PROVER_TIMEOUT";
 const ENV_ACCOUNT_FILE: &str = "MIDEN_FUNDING_ACCOUNT_FILE";
 const ENV_MAX_AMOUNT: &str = "MIDEN_FUNDING_MAX_AMOUNT";
+const ENV_P2ID_COLLECTION_INTERVAL: &str = "MIDEN_FUNDING_P2ID_COLLECTION_INTERVAL";
 const ENV_MAX_NOTES_PER_TX: &str = "MIDEN_FUNDING_MAX_NOTES_PER_TX";
 const ENV_TX_EXPIRATION_DELTA: &str = "MIDEN_FUNDING_TX_EXPIRATION_DELTA";
 const ENV_POLL_INTERVAL: &str = "MIDEN_FUNDING_POLL_INTERVAL";
@@ -125,6 +127,16 @@ pub enum FundingServiceCommand {
         )]
         poll_interval: Duration,
 
+        /// Interval at which the service collects the pay-to-ID notes sent to the funding account.
+        #[arg(
+            long = "p2id-collection-interval",
+            env = ENV_P2ID_COLLECTION_INTERVAL,
+            default_value = duration_to_human_readable_string(DEFAULT_P2ID_COLLECTION_INTERVAL),
+            value_parser = humantime::parse_duration,
+            value_name = "DURATION"
+        )]
+        p2id_collection_interval: Duration,
+
         /// Hex-encoded validator signing public key trusted to attest the transaction encryption
         /// key.
         #[arg(
@@ -153,6 +165,7 @@ impl FundingServiceCommand {
             max_notes_per_tx,
             tx_expiration_delta,
             poll_interval,
+            p2id_collection_interval,
             validator_signing_public_keys,
         } = self;
 
@@ -171,7 +184,9 @@ impl FundingServiceCommand {
             funding_service.max_amount = max_amount,
             funding_service.max_notes_per_tx = max_notes_per_tx.get(),
             funding_service.tx_expiration_delta = tx_expiration_delta.get(),
-            funding_service.poll_interval = humantime::Duration::from(poll_interval).to_string()
+            funding_service.poll_interval = humantime::Duration::from(poll_interval).to_string(),
+            funding_service.p2id_collection_interval =
+                humantime::Duration::from(p2id_collection_interval).to_string()
         );
 
         let listener = TcpListener::bind(listen)
@@ -187,6 +202,7 @@ impl FundingServiceCommand {
             .with_max_notes_per_tx(max_notes_per_tx)
             .with_tx_expiration_delta(tx_expiration_delta)
             .with_poll_interval(poll_interval)
+            .with_p2id_collection_interval(p2id_collection_interval)
             .build()
             .await
             .context("failed to initialize the funding service")?
