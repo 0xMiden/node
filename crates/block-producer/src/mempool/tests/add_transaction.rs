@@ -341,7 +341,7 @@ fn committed_fee_note_consumption_is_accepted() {
         producer.raw_proven_transaction()
     ])));
     let block = uut.select_block();
-    let header = BlockHeader::mock(block.block_number, None, None, &[], Word::empty());
+    let header = BlockHeader::mock(block.block_number, None, None, &[]);
     uut.commit_block(&header);
 
     uut.add_transaction(consumer).unwrap();

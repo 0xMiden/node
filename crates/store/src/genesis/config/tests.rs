@@ -122,23 +122,28 @@ async fn genesis_accounts_have_nonce_one() -> TestResult {
 
 #[test]
 fn pass_through_account_is_part_of_genesis() -> TestResult {
-    let (state, secrets) = GenesisConfig::default().into_state(dev_validator_keys())?;
-    let expected = build_pass_through_account()?;
-
-    let account = state
-        .accounts
-        .iter()
-        .find(|account| account.id() == expected.id())
-        .expect("the pass-through account should be part of the genesis state");
-    assert_eq!(account, &expected);
-
-    let (_, account_id, secret) = secrets
-        .secrets
-        .iter()
-        .find(|(name, ..)| name == PASS_THROUGH_ACCOUNT_FILE_NAME)
+    let (state, secrets) = GenesisConfig::default().into_state(dev_validator_config())?;
+    let exported = secrets
+        .as_account_files(&state)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .find(|file| file.name == PASS_THROUGH_ACCOUNT_FILE_NAME)
         .expect("the pass-through account file should be generated");
-    assert_eq!(*account_id, account.id());
-    assert!(secret.is_none());
+    let account = &exported.account_file.account;
+    assert!(state.accounts.contains(account));
+    assert!(account.is_public());
+    assert_eq!(account.nonce(), ONE);
+    assert!(account.vault().is_empty());
+    assert_eq!(exported.account_file.auth_secret_keys.len(), 1);
+
+    assert_eq!(
+        account
+            .storage()
+            .get_item(miden_standards::account::auth::AuthTxFeeCollector::public_key_slot(),)?,
+        miden_protocol::Word::from(
+            exported.account_file.auth_secret_keys[0].public_key().to_commitment(),
+        ),
+    );
 
     Ok(())
 }
@@ -147,7 +152,7 @@ fn pass_through_account_is_part_of_genesis() -> TestResult {
 fn generated_batch_builder_is_a_private_wallet() -> TestResult {
     use miden_standards::account::wallets::BasicWallet;
 
-    let (state, secrets) = GenesisConfig::default().into_state(dev_validator_keys())?;
+    let (state, secrets) = GenesisConfig::default().into_state(dev_validator_config())?;
 
     let (_, account_id, secret) = secrets
         .secrets
@@ -380,7 +385,7 @@ verification_base_fee = 0
             .find(|(name, ..)| name == file_name)
             .unwrap_or_else(|| panic!("{file_name} should be generated"))
     };
-    assert!(find(PASS_THROUGH_ACCOUNT_FILE_NAME).2.is_none());
+    assert!(find(PASS_THROUGH_ACCOUNT_FILE_NAME).2.is_some());
     assert!(find(BATCH_BUILDER_FILE_NAME).2.is_some());
 
     Ok(())

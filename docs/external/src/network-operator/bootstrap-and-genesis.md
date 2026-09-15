@@ -66,6 +66,9 @@ private because it contains the batch builder signing key.
 To run a faucet against the network, pass `faucet_operator.mac` to the faucet's `init --import`, and the faucet account
 id to `--faucet-account-id`.
 
+Genesis also creates `pass_through.mac`. This public account uses `AuthTxFeeCollector` to forward fee-note assets into a
+P2ID note without changing its state. Keep the file private because it contains the collector signing key.
+
 Upload `genesis-data/genesis.dat` so it is served at:
 
 ```text
