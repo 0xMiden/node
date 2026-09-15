@@ -22,19 +22,29 @@ anyhow             = { workspace = true }
 axum               = { workspace = true }
 backon             = { workspace = true }
 clap               = { features = ["env", "string"], workspace = true }
+futures            = { workspace = true }
+hex                = { workspace = true }
 humantime          = { workspace = true }
 miden-node-proto   = { workspace = true }
 miden-node-tracing = { workspace = true }
 miden-node-utils   = { workspace = true }
 miden-protocol     = { features = ["std"], workspace = true }
+miden-standards    = { workspace = true }
+miden-tx           = { features = ["concurrent", "std"], workspace = true }
+rand               = { workspace = true }
+rand_chacha        = { workspace = true }
 serde              = { workspace = true }
+thiserror          = { workspace = true }
 tokio              = { features = ["macros", "net", "rt-multi-thread", "sync", "time"], workspace = true }
+tonic              = { workspace = true }
 tower-http         = { features = ["timeout"], workspace = true }
 url                = { workspace = true }
 
 [dev-dependencies]
 miden-protocol  = { features = ["std", "testing"], workspace = true }
 miden-standards = { workspace = true }
+miden-testing   = { workspace = true }
+miden-tx        = { features = ["concurrent", "std", "testing"], workspace = true }
 rand            = { workspace = true }
 rand_chacha     = { workspace = true }
 tempfile        = { workspace = true }
