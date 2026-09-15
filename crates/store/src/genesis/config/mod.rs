@@ -34,6 +34,7 @@ use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use serde::{Deserialize, Serialize};
 
+use crate::genesis::pass_through::build_pass_through_account;
 use crate::{GenesisState, LOG_TARGET};
 
 mod errors;
@@ -53,6 +54,9 @@ pub const NATIVE_FAUCET_FILE_NAME: &str = "native_faucet.mac";
 
 /// Name of the account file written for the generated faucet operator.
 pub const FAUCET_OPERATOR_FILE_NAME: &str = "faucet_operator.mac";
+
+/// Name of the account file written for the pass-through account.
+pub const PASS_THROUGH_ACCOUNT_FILE_NAME: &str = "pass_through.mac";
 
 // GENESIS CONFIG
 // ================================================================================================
@@ -222,6 +226,14 @@ impl GenesisConfig {
             None => None,
         };
 
+        let (pass_through_account, pass_through_secret) =
+            build_pass_through_account().map_err(GenesisConfigError::PassThroughAccountBuild)?;
+        secrets.push((
+            PASS_THROUGH_ACCOUNT_FILE_NAME.to_string(),
+            pass_through_account.id(),
+            Some(pass_through_secret),
+        ));
+
         faucet_accounts.insert(symbol.clone(), native_faucet_account);
 
         // Setup additional fungible faucets from parameters
@@ -354,6 +366,8 @@ impl GenesisConfig {
 
         // Ensure the faucets always precede the wallets referencing them
         all_accounts.extend(wallet_accounts);
+
+        all_accounts.push(pass_through_account);
 
         // Append file-loaded accounts as-is
         all_accounts.extend(file_loaded_accounts);

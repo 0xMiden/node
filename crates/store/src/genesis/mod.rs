@@ -19,6 +19,7 @@ use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::OrderedTransactionHeaders;
 
 pub mod config;
+pub mod pass_through;
 
 pub use miden_node_utils::genesis::GenesisBlock;
 
