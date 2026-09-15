@@ -168,6 +168,11 @@ pub struct IncrementDetails {
     pub last_tx_id: Option<String>,
     /// Last measured latency in blocks from submission to state update.
     pub last_latency_blocks: Option<u32>,
+    /// The wallet's fee-asset balance in base units; `None` on zero-fee chains.
+    pub fee_balance: Option<u64>,
+    /// Error from the most recent faucet top-up attempt; `None` when it succeeded or none was
+    /// needed.
+    pub fee_topup_error: Option<String>,
 }
 
 /// Details about an in-flight latency measurement.

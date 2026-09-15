@@ -1,7 +1,7 @@
 use miden_node_block_producer::AuthenticatedTransaction;
 use miden_node_block_producer::store::get_tx_inputs;
 use miden_node_proto::clients::{SequencerClient, ValidatorClient};
-use miden_node_proto::generated as proto;
+use miden_node_proto::{BuildUnchecked, DecodeMessage, generated as proto};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorReport, debug, miden_instrument, miden_span_record, trace};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
@@ -12,7 +12,6 @@ use miden_protocol::transaction::{
     TransactionVerifier,
     TxAccountUpdate,
 };
-use miden_protocol::utils::serde::{Deserializable, Serializable};
 use tonic::{Request, Status};
 
 use super::{
@@ -26,10 +25,12 @@ use crate::LOG_TARGET;
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::SubmitProvenTx for RpcService {
-    type Input = proto::transaction::ProvenTransaction;
+    type Input = proto::submission::ProvenTransactionSubmission;
     type Output = proto::blockchain::BlockNumber;
 
-    fn decode(request: proto::transaction::ProvenTransaction) -> tonic::Result<Self::Input> {
+    fn decode(
+        request: proto::submission::ProvenTransactionSubmission,
+    ) -> tonic::Result<Self::Input> {
         Ok(request)
     }
 
@@ -54,9 +55,14 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
 
         trace!(target: LOG_TARGET, "Received transaction submission");
 
-        let tx = ProvenTransaction::read_from_bytes(&request.transaction).map_err(|err| {
-            Status::invalid_argument(err.as_report_context("invalid transaction"))
-        })?;
+        let tx: ProvenTransaction = request
+            .transaction
+            .take()
+            .ok_or_else(|| Status::invalid_argument("missing `transaction` field"))?
+            .decode_fields()
+            .map_err(|err| Status::invalid_argument(format!("invalid transaction: {err}")))?
+            .build_unchecked()
+            .map_err(|err| Status::invalid_argument(format!("invalid transaction: {err}")))?;
 
         miden_span_record!(
             transaction.id = tx.id(),
@@ -67,6 +73,10 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
         );
 
         debug!(target: LOG_TARGET, "Submitting transaction");
+
+        if let RpcBackend::Sequencer { account_admission, .. } = &self.backend {
+            account_admission.check(tx.account_update()).await?;
+        }
 
         // Verify the reference block is actually part of the chain.
         self.verify_reference_commitment(tx.ref_block_num(), tx.ref_block_commitment())
@@ -94,7 +104,7 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
             tx.proof().clone(),
         )
         .map_err(|e| Status::invalid_argument(e.to_string()))?;
-        request.transaction = rebuilt_tx.to_bytes();
+        request.transaction = Some((&rebuilt_tx).into());
 
         // Block post-deployment network-account transactions from user RPC. First-deployment txs
         // are exempt because the protocol-level allowlist only kicks in once the account exists,
@@ -109,7 +119,9 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
         }
 
         let tx_id = tx.id();
-        spawn_blocking_in_current_span(move || {
+        // The verifier checks deferred witnesses and their binding to the VM proof. Batch proving
+        // settles the remaining precompile obligation.
+        let _verification_outcome = spawn_blocking_in_current_span(move || {
             TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL).verify(&tx).map_err(|err| {
                 Status::invalid_argument(format!(
                     "Invalid proof for transaction {}: {}",
@@ -124,7 +136,7 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
         })??;
 
         match &self.backend {
-            RpcBackend::Sequencer { block_producer, validators } => {
+            RpcBackend::Sequencer { block_producer, validators, .. } => {
                 submit_tx_to_validators(validators.as_slice(), &request).await?;
                 block_producer
                     .submit_proven_tx(rebuilt_tx)
@@ -170,7 +182,7 @@ impl RpcService {
         &self,
         validators: &[ValidatorClient],
         sequencer: SequencerClient,
-        request: proto::transaction::ProvenTransaction,
+        request: proto::submission::ProvenTransactionSubmission,
         rebuilt_tx: ProvenTransaction,
     ) -> tonic::Result<proto::blockchain::BlockNumber> {
         let tx_inputs = get_tx_inputs(&self.state, &rebuilt_tx).await.map_err(|err| {

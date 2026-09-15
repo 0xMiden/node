@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use miden_protocol::utils::serde::Deserializable;
+use miden_objects::{DecodeMessage, Verify};
 
 mod utils;
 pub use utils::*;
@@ -55,6 +55,60 @@ impl<M: prost::Message> GrpcStructDecoder<M> {
             .try_into()
             .context(name)
     }
+
+    /// Decode a required optional field and verify the domain invariants.
+    ///
+    /// The decode step checks the wire representation. The verify step checks the domain
+    /// invariants. Both steps add the field name to the error path.
+    ///
+    /// A type that needs external context to verify, or that only supports unchecked
+    /// construction, does not satisfy the `Verify` bound. Decode such a field at the call site.
+    pub fn verify_field<T, F>(
+        &self,
+        name: &'static str,
+        value: Option<T>,
+    ) -> Result<F, ConversionError>
+    where
+        T: DecodeMessage,
+        T::Decoded: Verify<Verified = F>,
+    {
+        verify_value(name, value.ok_or_else(|| ConversionError::missing_field::<M>(name))?)
+    }
+}
+
+/// Decode a canonical message and verify the domain invariants.
+///
+/// The decode step checks the wire representation. The verify step checks the domain invariants.
+/// Both steps add `name` to the error path.
+///
+/// Use this where the field is not a required optional field of a parent message, such as an
+/// element of a repeated field.
+pub fn verify_value<T, F>(name: &'static str, value: T) -> Result<F, ConversionError>
+where
+    T: DecodeMessage,
+    T::Decoded: Verify<Verified = F>,
+{
+    value
+        .decode_fields()
+        .context(name)?
+        .verify()
+        .map_err(ConversionError::new)
+        .context(name)
+}
+
+/// Decode an optional canonical message and verify the domain invariants.
+///
+/// Returns `None` when the field is absent. Use [`GrpcStructDecoder::verify_field`] for a field
+/// that must be present.
+pub fn verify_optional<T, F>(
+    name: &'static str,
+    value: Option<T>,
+) -> Result<Option<F>, ConversionError>
+where
+    T: DecodeMessage,
+    T::Decoded: Verify<Verified = F>,
+{
+    value.map(|value| verify_value(name, value)).transpose()
 }
 
 /// Extension trait on [`prost::Message`] types to create a [`GrpcStructDecoder`] with the parent
@@ -69,6 +123,10 @@ pub trait GrpcDecodeExt: prost::Message + Sized {
 impl<T: prost::Message> GrpcDecodeExt for T {}
 
 /// Decodes a required optional field from a protobuf message using the message's decoder.
+///
+/// Use this for node-owned messages and for atomic canonical messages that decode straight to
+/// their domain type. Use [`verify!`] for canonical messages that have a separate verification
+/// step.
 ///
 /// Uses `stringify!` to automatically derive the field name for error reporting, avoiding
 /// the duplication between a string literal and the field access.
@@ -103,39 +161,29 @@ macro_rules! decode {
     };
 }
 
-// BYTE DESERIALIZATION EXTENSION TRAIT
-// ================================================================================================
-
-/// Extension trait on [`Deserializable`](miden_protocol::utils::Deserializable) types to
-/// deserialize from bytes and wrap errors as [`ConversionError`].
+/// Decodes and verifies a required optional field from a canonical protobuf message.
 ///
-/// This removes the boilerplate of calling `T::read_from_bytes(&bytes)` followed by
-/// `.map_err(|source| ConversionError::deserialization("T", source))`:
+/// Takes the same two forms as [`decode!`] and reports errors the same way.
 ///
-/// ```rust,ignore
-/// // Before:
-/// BlockBody::read_from_bytes(&value.block_body)
-///     .map_err(|source| ConversionError::deserialization("BlockBody", source))
-///
-/// // After:
-/// BlockBody::decode_bytes(&value.block_body, "BlockBody")
-/// ```
-pub trait DecodeBytesExt: Deserializable {
-    /// Deserialize from bytes, wrapping any error as a [`ConversionError`].
-    fn decode_bytes(bytes: &[u8], entity: &'static str) -> Result<Self, ConversionError> {
-        Self::read_from_bytes(bytes)
-            .map_err(|source| ConversionError::deserialization(entity, source))
-    }
+/// Only accepts fields whose decoded form implements [`miden_objects::Verify`]. A field that
+/// needs external context, or that only supports unchecked construction, must be decoded at the
+/// call site so that the chosen capability stays visible.
+#[macro_export]
+macro_rules! verify {
+    ($decoder:ident, $msg:ident . $field:ident) => {
+        $decoder.verify_field(stringify!($field), $msg.$field)
+    };
+    ($decoder:ident, $field:ident) => {
+        $decoder.verify_field(stringify!($field), $field)
+    };
 }
-
-impl<T: Deserializable> DecodeBytesExt for T {}
 
 #[cfg(test)]
 mod tests {
-    use miden_protocol::Felt;
+    use miden_protocol::Word;
 
     use super::*;
-    use crate::generated::primitives::Digest;
+    use crate::generated::primitives::Word as ProtoWord;
 
     /// Simulates a deeply nested conversion where each layer adds its field context.
     fn inner_conversion() -> Result<(), ConversionError> {
@@ -183,8 +231,8 @@ mod tests {
     #[test]
     fn test_decode_field_missing() {
         let decoder = GrpcStructDecoder::<crate::generated::blockchain::BlockHeader>::default();
-        let account_root: Option<Digest> = None;
-        let result: Result<[Felt; 4], _> = decode!(decoder, account_root);
+        let account_root: Option<ProtoWord> = None;
+        let result: Result<Word, _> = decode!(decoder, account_root);
         let err = result.unwrap_err();
         assert!(
             err.to_string().contains("account_root") && err.to_string().contains("missing"),
@@ -195,9 +243,8 @@ mod tests {
     #[test]
     fn test_decode_field_conversion_error() {
         let decoder = GrpcStructDecoder::<crate::generated::blockchain::BlockHeader>::default();
-        // Create a digest with an out-of-range value.
-        let account_root = Some(Digest { d0: u64::MAX, d1: 0, d2: 0, d3: 0 });
-        let result: Result<[Felt; 4], _> = decode!(decoder, account_root);
+        let account_root = Some(ProtoWord { encoded: vec![0xff; 32] });
+        let result: Result<Word, _> = decode!(decoder, account_root);
         let err = result.unwrap_err();
         assert!(
             err.to_string().starts_with("account_root: "),

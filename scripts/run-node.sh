@@ -248,6 +248,7 @@ sleep 2
 
 echo "Starting sequencer..."
 OTEL_RESOURCE_ATTRIBUTES="$(node_resource_attributes sequencer)" \
+    MIDEN_NODE_DISABLE_ACCOUNT_ALLOWLIST="${MIDEN_NODE_DISABLE_ACCOUNT_ALLOWLIST:-true}" \
     "$NODE_BINARY" sequencer \
     --rpc.listen "0.0.0.0:$RPC_PORT" \
     --rpc.network-tx-auth-header-value "$NETWORK_TX_AUTH" \

@@ -46,9 +46,10 @@ pub async fn validate_transaction(
     proven_tx: ProvenTransaction,
     tx_inputs: TransactionInputs,
 ) -> Result<(), TransactionValidationError> {
-    // Proof verification is CPU-intensive; run it on a dedicated blocking thread.
+    // Verify the proof on a blocking thread. The verifier also checks deferred witnesses. Batch
+    // proving settles the remaining precompile obligation.
     let proven_tx_clone = proven_tx.clone();
-    spawn_blocking_in_span(
+    let _verification_outcome = spawn_blocking_in_span(
         move || TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL).verify(&proven_tx_clone),
         info_span!("verify"),
     )

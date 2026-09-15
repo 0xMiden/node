@@ -4,9 +4,9 @@ use std::time::Duration;
 
 use miden_node_store::GenesisState;
 use miden_node_store::state::State;
-use miden_node_utils::fee::test_fee_params;
+use miden_node_utils::fee::{test_fee_params, test_protocol_config};
 use miden_protocol::Word;
-use miden_protocol::block::{BlockHeader, BlockNumber, ValidatorKeys};
+use miden_protocol::block::{BlockHeader, BlockNumber, ValidatorConfig};
 use miden_protocol::testing::random_secret_key::random_secret_key;
 use url::Url;
 
@@ -60,7 +60,7 @@ fn mempool_stats_track_uncommitted_work_and_the_canonical_tip() {
     assert_eq!(stats.uncommitted_transactions, 1);
     assert_eq!(stats.proven_batches, 0);
 
-    let header = BlockHeader::mock(block.block_number, None, None, &[], Word::empty());
+    let header = BlockHeader::mock(block.block_number, None, None, &[]);
     mempool.commit_block(&header);
     let stats = MempoolStats::from_mempool(&mempool);
     assert_eq!(stats.chain_tip, BlockNumber::GENESIS.child());
@@ -108,8 +108,8 @@ fn bootstrap_store(path: &std::path::Path) {
         vec![],
         test_fee_params(),
         1,
-        1,
-        ValidatorKeys::new(vec![signer.public_key()]).unwrap(),
+        ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
+        test_protocol_config(),
     );
     let genesis_block = genesis_state.into_block().expect("genesis block should be created");
 

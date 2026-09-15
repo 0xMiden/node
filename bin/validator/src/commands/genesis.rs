@@ -7,7 +7,7 @@ use miden_node_store::genesis::config::{
     GenesisConfig,
 };
 use miden_node_utils::fs::ensure_empty_directory;
-use miden_protocol::block::ValidatorKeys;
+use miden_protocol::block::ValidatorConfig;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_protocol::utils::serde::Serializable;
 
@@ -36,8 +36,9 @@ pub fn generate(
         ensure_empty_directory(directory)?;
     }
 
-    let validator_keys =
-        ValidatorKeys::new(validator_keys).context("invalid genesis validator set")?;
+    let quorum = u16::try_from(validator_keys.len()).context("too many genesis validators")?;
+    let validator_config =
+        ValidatorConfig::new(validator_keys, quorum).context("invalid genesis validator set")?;
 
     let config = genesis_config
         .map(|file_path| {
@@ -48,7 +49,7 @@ pub fn generate(
         .transpose()?
         .unwrap_or_default();
 
-    let (genesis_state, secrets) = config.into_state(validator_keys)?;
+    let (genesis_state, secrets) = config.into_state(validator_config)?;
     let batch_builder_id = secrets
         .secrets
         .iter()
@@ -67,12 +68,12 @@ pub fn generate(
         account_file.write(account_path)?;
     }
 
-    let native_faucet_id = genesis_state.fee_parameters.fee_faucet_id();
+    let native_faucet_id = genesis_state.protocol_config.fee_asset_id().faucet_id();
 
     let genesis_block = genesis_state.into_block().context("failed to build the genesis block")?;
 
     let genesis_block_path = genesis_block_directory.join(GENESIS_BLOCK_FILE_NAME);
-    fs_err::write(&genesis_block_path, genesis_block.inner().to_bytes())
+    fs_err::write(&genesis_block_path, genesis_block.to_bytes())
         .context("failed to write genesis block")?;
 
     println!("Genesis block written to {}.", genesis_block_path.display());

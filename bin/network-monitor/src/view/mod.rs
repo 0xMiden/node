@@ -432,6 +432,8 @@ mod tests {
             failure_count: 0,
             last_tx_id: Some("abc123".to_string()),
             last_latency_blocks: Some(2),
+            fee_balance: None,
+            fee_topup_error: None,
         };
         let html = render(vec![healthy("ntx-inc", ServiceDetails::NtxIncrement(details))]);
         assert!(html.contains("Local Transactions"));

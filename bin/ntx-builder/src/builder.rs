@@ -8,13 +8,14 @@ use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockNumber, SignedBlock};
+use miden_protocol::protocol_config::ProtocolConfig;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
 use crate::actor::ActorRequest;
-use crate::chain_state::SharedChainState;
-use crate::clients::RpcError;
+use crate::chain_state::{ChainState, SharedChainState};
+use crate::clients::{BlockSubscriptionEvent, RpcError};
 use crate::committed_block::CommittedBlockEffects;
 use crate::coordinator::Coordinator;
 use crate::db::NtxDbWriter;
@@ -25,7 +26,7 @@ use crate::{LOG_TARGET, NtxBuilderConfig};
 /// `&mut self` instead of three concurrent borrows. The `Block` variant is boxed since a
 /// `SignedBlock` dwarfs the other two payloads.
 enum SteadyStateAction {
-    Block(Box<Option<Result<(SignedBlock, BlockNumber), RpcError>>>),
+    Block(Box<Option<Result<BlockSubscriptionEvent, RpcError>>>),
     Request(Option<ActorRequest>),
     Respawn(Option<miden_protocol::account::AccountId>),
     Shutdown,
@@ -40,7 +41,7 @@ enum SteadyStateAction {
 /// Boxing gives the stream a `'static` lifetime by ensuring it owns all its data, avoiding the
 /// complex lifetime annotations otherwise required to store `impl Stream`.
 pub(crate) type BlockStream =
-    Pin<Box<dyn Stream<Item = Result<(SignedBlock, BlockNumber), RpcError>> + Send>>;
+    Pin<Box<dyn Stream<Item = Result<BlockSubscriptionEvent, RpcError>> + Send>>;
 
 /// Network transaction builder component.
 ///
@@ -135,12 +136,12 @@ impl NetworkTransactionBuilder {
     async fn run_event_loop(mut self, shutdown: CancellationToken) -> anyhow::Result<()> {
         // Phase 1: catch-up.
         loop {
-            let (block, committed_tip) = tokio::select! {
+            let (block, committed_tip, protocol_config) = tokio::select! {
                 () = shutdown.cancelled() => return Ok(()),
                 result = self.next_block() => result?,
             };
             let local_tip = block.header().block_num();
-            self.apply_committed_block(block, committed_tip).await?;
+            self.apply_committed_block(block, committed_tip, protocol_config).await?;
 
             if local_tip == committed_tip {
                 self.is_synced = true;
@@ -190,10 +191,11 @@ impl NetworkTransactionBuilder {
 
             match action {
                 SteadyStateAction::Block(block) => {
-                    let (block, committed_tip) =
+                    let (block, committed_tip, protocol_config) =
                         (*block).context("block stream ended")?.context("block stream failed")?;
-                    let (effects, sponsored_accounts) =
-                        self.apply_committed_block_with_effects(block, committed_tip).await?;
+                    let (effects, sponsored_accounts) = self
+                        .apply_committed_block_with_effects(block, committed_tip, protocol_config)
+                        .await?;
                     self.coordinator.handle_committed_block(&effects, &sponsored_accounts).await?;
                 },
                 SteadyStateAction::Request(request) => {
@@ -220,9 +222,9 @@ impl NetworkTransactionBuilder {
         }
     }
 
-    /// Pulls the next `(block, committed_tip)` pair from the subscription, surfacing both the
-    /// "stream ended" and per-item RPC errors as `anyhow::Error`.
-    async fn next_block(&mut self) -> anyhow::Result<(SignedBlock, BlockNumber)> {
+    /// Pulls the next block event from the subscription. This method returns stream and item
+    /// errors.
+    async fn next_block(&mut self) -> anyhow::Result<BlockSubscriptionEvent> {
         self.block_stream
             .next()
             .await
@@ -235,8 +237,11 @@ impl NetworkTransactionBuilder {
         &mut self,
         block: SignedBlock,
         committed_tip: BlockNumber,
+        protocol_config: Option<ProtocolConfig>,
     ) -> anyhow::Result<()> {
-        self.apply_committed_block_with_effects(block, committed_tip).await.map(drop)
+        self.apply_committed_block_with_effects(block, committed_tip, protocol_config)
+            .await
+            .map(drop)
     }
 
     /// Applies a committed block and returns the computed `CommittedBlockEffects`, plus the
@@ -254,28 +259,43 @@ impl NetworkTransactionBuilder {
         &mut self,
         block: SignedBlock,
         committed_tip: BlockNumber,
+        protocol_config: Option<ProtocolConfig>,
     ) -> anyhow::Result<(CommittedBlockEffects, Vec<AccountId>)> {
         let header = block.header().clone();
         let block_num = header.block_num();
 
         let effects = CommittedBlockEffects::from_signed_block(&block);
 
-        // Advance the in-memory chain (adds the previous tip header as an MMR leaf and prunes older
-        // tracked headers) before snapshotting the MMR for persistence.
-        self.chain.update_chain_tip(header, self.config.max_block_count);
-        let next_mmr = self.chain.current_mmr();
+        // Build the next immutable snapshot before persistence. Do not publish it until the
+        // database transaction commits.
+        let next_chain =
+            self.chain
+                .next_chain_tip(header, protocol_config, self.config.max_block_count)?;
 
         let effects_for_db = effects.clone();
-        let sponsored_accounts = self
-            .db
-            .apply_committed_block(effects_for_db, next_mmr)
-            .await
-            .context("failed to apply committed block to DB")?;
+        let sponsored_accounts =
+            persist_and_publish_chain_state(&self.db, &self.chain, effects_for_db, next_chain)
+                .await?;
 
         self.last_applied_block = block_num;
 
         Ok((effects, sponsored_accounts))
     }
+}
+
+async fn persist_and_publish_chain_state(
+    db: &NtxDbWriter,
+    chain: &SharedChainState,
+    effects: CommittedBlockEffects,
+    next_chain: ChainState,
+) -> anyhow::Result<Vec<AccountId>> {
+    let next_mmr = next_chain.current_mmr();
+    let sponsored_accounts = db
+        .apply_committed_block(effects, next_mmr)
+        .await
+        .context("failed to apply committed block to DB")?;
+    chain.publish(next_chain);
+    Ok(sponsored_accounts)
 }
 
 /// Handles a single actor request then acknowledges the actor. All writes go through the
@@ -305,4 +325,47 @@ async fn handle_actor_request(
         },
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod protocol_config_tests {
+    use std::sync::Arc;
+
+    use miden_protocol::crypto::merkle::mmr::PartialMmr;
+    use miden_protocol::protocol_config::ProtocolConfig;
+
+    use super::persist_and_publish_chain_state;
+    use crate::chain_state::SharedChainState;
+    use crate::committed_block::CommittedBlockEffects;
+    use crate::db::test_setup;
+    use crate::test_utils::{mock_block_header, mock_network_account_update};
+
+    /// A failed database transaction must leave the published chain snapshot unchanged.
+    #[tokio::test]
+    async fn failed_database_write_does_not_publish_chain_snapshot() {
+        let (db, _dir) = test_setup().await;
+        let config = ProtocolConfig::mock();
+        let chain = Arc::new(SharedChainState::new(
+            mock_block_header(0_u32.into()),
+            PartialMmr::default(),
+            config,
+        ));
+        let next_header = mock_block_header(1_u32.into());
+        let next = chain.next_chain_tip(next_header.clone(), None, 4).unwrap();
+        let (account, details) = mock_network_account_update();
+        let effects = CommittedBlockEffects {
+            header: next_header,
+            network_notes: vec![],
+            sponsorship_notes: vec![],
+            nullifiers: vec![],
+            network_account_updates: vec![(account.id(), details)],
+            account_transactions: vec![],
+        };
+
+        persist_and_publish_chain_state(&db, chain.as_ref(), effects, next)
+            .await
+            .expect_err("a post-genesis account update without a transaction must fail");
+
+        assert_eq!(chain.get_cloned().chain_tip_header.block_num(), 0_u32.into());
+    }
 }

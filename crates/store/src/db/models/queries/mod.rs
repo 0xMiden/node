@@ -43,6 +43,8 @@ pub use nullifiers::NullifiersPage;
 pub(crate) use nullifiers::*;
 mod notes;
 pub(crate) use notes::*;
+mod protocol_configs;
+pub(crate) use protocol_configs::*;
 
 /// Apply a new block to the state.
 ///

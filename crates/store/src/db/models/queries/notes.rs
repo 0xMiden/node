@@ -66,13 +66,14 @@ use crate::errors::NoteSyncError;
 
 /// Estimated byte size of a [`NoteSyncUpdate`] excluding its notes.
 ///
-/// `BlockHeader` (~341 bytes) + MMR proof with 32 siblings (~1216 bytes).
-pub(crate) const NOTE_SYNC_BLOCK_OVERHEAD_BYTES: usize = 1600;
+/// Includes a canonical header with validator keys, a scheduled protocol configuration, and an
+/// MMR proof with 32 siblings.
+pub(crate) const NOTE_SYNC_BLOCK_OVERHEAD_BYTES: usize = 1800;
 
 /// Estimated byte size of a single [`NoteSyncRecord`].
 ///
-/// Note ID (~38 bytes) + index + sync metadata with up to four attachment entries (~200 bytes) +
-/// sparse merkle path with 16 siblings (~608 bytes).
+/// Includes a note ID, an index, compact metadata with four attachment entries, and a sparse
+/// Merkle path with 16 siblings.
 pub(crate) const NOTE_SYNC_RECORD_BYTES: usize = 900;
 
 // NETWORK NOTE TYPE
