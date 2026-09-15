@@ -11,7 +11,7 @@ use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::rand::{FeltRng, RandomCoin};
-use miden_protocol::note::{Note, NoteTag, NoteType};
+use miden_protocol::note::{Note, NoteTag, NoteType, Nullifier};
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{ExecutedTransaction, InputNote, InputNotes, TransactionArgs};
 use miden_protocol::utils::serde::Serializable;
@@ -51,6 +51,8 @@ pub struct TopUpCollector {
     setup: TopUpSetup,
     /// The block the next scan starts at.
     next_block: BlockNumber,
+    /// The deposits of the submitted transaction, and the block at which that transaction expires.
+    pending: Option<(Vec<Nullifier>, BlockNumber)>,
     rng: RandomCoin,
 }
 
@@ -62,6 +64,7 @@ impl TopUpCollector {
             prover,
             setup,
             next_block: BlockNumber::GENESIS,
+            pending: None,
             rng: RandomCoin::new(Word::from(rand::random::<[u32; 4]>())),
         }
     }
@@ -93,6 +96,10 @@ impl TopUpCollector {
 
     /// Runs one collection: find the deposits, and consume them if there are any.
     async fn collect(&mut self) -> Result<()> {
+        if self.transaction_is_pending().await? {
+            return Ok(());
+        }
+
         let deposits = self.find_deposits().await?;
         if deposits.is_empty() {
             return Ok(());
@@ -110,7 +117,30 @@ impl TopUpCollector {
 
         // Boxed because the transaction the future builds is large enough for the `large_futures`
         // lint to reject it on the enclosing future's stack.
-        Box::pin(self.consume(deposits)).await
+        let submitted = Box::pin(self.consume(deposits)).await?;
+        self.pending = Some(submitted);
+
+        Ok(())
+    }
+
+    /// Reports whether the submitted transaction is still pending.
+    async fn transaction_is_pending(&mut self) -> Result<bool> {
+        let Some((nullifiers, expiration_block)) = self.pending.clone() else {
+            return Ok(false);
+        };
+
+        let spent = self.node.spent_nullifiers(&nullifiers).await?;
+        if nullifiers.iter().all(|nullifier| spent.contains(nullifier)) {
+            self.pending = None;
+            return Ok(false);
+        }
+
+        if self.node.committed_tip().await? >= expiration_block {
+            self.pending = None;
+            return Ok(false);
+        }
+
+        Ok(true)
     }
 
     /// Returns the deposits which the funding account can consume.
@@ -136,8 +166,8 @@ impl TopUpCollector {
             return Ok(Vec::new());
         }
 
-        // A rescan sees deposits which an earlier collection already consumed. Consuming one twice
-        // the transaction, so the spent ones are dropped here.
+        // A rescan sees deposits which an earlier collection already consumed. The transaction
+        // fails if it consumes a note twice, so the spent notes are dropped here.
         let nullifiers: Vec<_> = candidates.iter().map(Note::nullifier).collect();
         let spent = self.node.spent_nullifiers(&nullifiers).await?;
         let unspent: Vec<Note> = candidates
@@ -145,15 +175,19 @@ impl TopUpCollector {
             .filter(|note| !spent.contains(&note.nullifier()))
             .collect();
 
-        // The cursor only advances once the notes of that range have been collected, so a failure
-        // to read them does not skip a deposit.
-        self.next_block = synced.last_checked_block + 1;
+        // The cursor only passes a range which holds no deposit left to collect. A transaction
+        // which does not commit leaves its deposits unspent, so the next scan finds them again.
+        if unspent.is_empty() {
+            self.next_block = synced.last_checked_block + 1;
+        }
 
         Ok(unspent)
     }
 
-    /// Consumes the deposits in one transaction.
-    async fn consume(&mut self, deposits: Vec<Note>) -> Result<()> {
+    /// Consumes the deposits in one transaction and returns the nullifiers of the deposits.
+    async fn consume(&mut self, deposits: Vec<Note>) -> Result<(Vec<Nullifier>, BlockNumber)> {
+        let nullifiers: Vec<Nullifier> = deposits.iter().map(Note::nullifier).collect();
+
         let (reference_header, blockchain) = self.node.tip_chain_state().await?;
         let reference_block = reference_header.block_num();
         let account_id = self.setup.key.account_id();
@@ -184,6 +218,7 @@ impl TopUpCollector {
             .await
             .context("failed to prove the deposit transaction")?;
         let transaction_id = proven_tx.id();
+        let expiration_block = proven_tx.expiration_block_num();
 
         self.node
             .submit(&proven_tx, &transaction_inputs)
@@ -194,10 +229,11 @@ impl TopUpCollector {
             target: LOG_TARGET,
             "Submitted a deposit transaction",
             transaction.id = transaction_id,
+            transaction.expires_at = expiration_block,
             block.number = reference_block
         );
 
-        Ok(())
+        Ok((nullifiers, expiration_block))
     }
 }
 
