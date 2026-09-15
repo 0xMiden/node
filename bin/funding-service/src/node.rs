@@ -24,7 +24,7 @@ use miden_node_proto::generated::rpc::{
     SyncChainMmrRequest,
 };
 use miden_node_proto::generated::submission::ProvenTransactionSubmission;
-use miden_node_proto::{BuildUnchecked, DecodeMessage};
+use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify};
 use miden_node_tracing::warn;
 use miden_node_utils::retry::{self, Retryable};
 use miden_protocol::Word;
@@ -197,14 +197,16 @@ impl RpcNodeClient {
 
         response
             .notes
-            .iter()
+            .into_iter()
             .map(|committed| {
                 let proof = committed
                     .inclusion_proof
-                    .as_ref()
                     .context("committed note response is missing the inclusion proof")?;
-                <(NoteId, NoteInclusionProof)>::try_from(proof)
-                    .context("failed to convert the note inclusion proof")
+                proof
+                    .decode_fields()
+                    .context("failed to decode the note inclusion proof")?
+                    .verify()
+                    .context("failed to verify the note inclusion proof")
             })
             .collect()
     }
@@ -470,14 +472,18 @@ async fn fetch_tip_chain_state(
     let tip_header: BlockHeader = response
         .block_header
         .context("the sync_chain_mmr response did not include a block header")?
-        .try_into()
-        .context("failed to convert the sync target block header")?;
+        .decode_fields()
+        .context("failed to decode the sync target block header")?
+        .build_unchecked()
+        .context("failed to build the sync target block header")?;
 
     let delta: MmrDelta = response
         .mmr_delta
         .context("the sync_chain_mmr response did not include an MMR delta")?
-        .try_into()
-        .context("failed to convert the MMR delta")?;
+        .decode_fields()
+        .context("failed to decode the MMR delta")?
+        .verify()
+        .context("failed to verify the MMR delta")?;
 
     let mut mmr = PartialMmr::from_peaks(
         MmrPeaks::new(Forest::new(0).context("an empty forest should be valid")?, Vec::new())
@@ -512,11 +518,10 @@ async fn fetch_public_account(
     use miden_node_proto::generated::rpc::account_request::AccountDetailRequest;
     use miden_node_proto::generated::rpc::account_request::account_detail_request::StorageRequest;
 
-    let id_bytes: [u8; 15] = account_id.into();
     // Dummy commitments force the server to include code and vault data in the response.
     let dummy: miden_node_proto::generated::primitives::Word = Word::default().into();
     let request = ProtoAccountRequest {
-        account_id: Some(miden_node_proto::generated::account::AccountId { id: id_bytes.to_vec() }),
+        account_id: Some(account_id.into()),
         block_num: Some(block_num.into()),
         details: Some(AccountDetailRequest {
             code_commitment: Some(dummy.clone()),
