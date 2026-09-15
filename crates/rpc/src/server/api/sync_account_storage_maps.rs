@@ -36,7 +36,7 @@ impl proto::server::rpc_api::SyncAccountStorageMaps for RpcService {
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
         let account_id = read_account_id::<proto::rpc::SyncAccountStorageMapsRequest, Status>(
-            request.account_id.clone(),
+            request.account_id,
         )?;
         let range =
             read_block_range::<Status>(request.block_range, "SyncAccountStorageMapsRequest")?;

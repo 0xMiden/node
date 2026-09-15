@@ -1,5 +1,7 @@
 use miden_node_proto::decode::read_block_range;
 use miden_node_proto::generated as proto;
+#[cfg(test)]
+use miden_node_proto::{DecodeMessage, Verify};
 use miden_node_store::{NoteSyncError, NoteSyncRecord};
 use miden_node_tracing::{debug, miden_instrument, miden_span_record};
 use miden_node_utils::limiter::QueryParamNoteTagLimit;
@@ -255,7 +257,9 @@ mod tests {
             attachment_schemes,
             attachments_commitment: Some(attachments_commitment.into()),
         }
-        .try_into()
+        .decode_fields()
+        .unwrap()
+        .verify()
         .unwrap();
         assert_eq!(reconstructed.to_commitment(), expected_metadata_commitment);
     }
@@ -362,8 +366,7 @@ mod tests {
             validator_config: Some(proto::blockchain::ValidatorConfig {
                 keys: vec![
                     proto::primitives::PublicKey {
-                        variant: proto::primitives::PublicKeyVariant::EcdsaK256Keccak as i32,
-                        encoded: vec![2; 33],
+                        key: Some(proto::primitives::public_key::Key::EcdsaK256Keccak(vec![2; 33])),
                     };
                     ValidatorConfig::MAX_VALIDATORS
                 ],

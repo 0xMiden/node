@@ -58,13 +58,13 @@ miden-node-tracing-macro    = { path = "crates/tracing-macro", version = "0.17.0
 miden-node-utils            = { path = "crates/utils", version = "0.17.0-rc.1" }
 
 # miden-protocol dependencies. These should be updated in sync.
-miden-block-prover = { version = "0.17.0-rc.3" }
-miden-objects      = { version = "0.17.0-rc.3" }
-miden-protocol     = { default-features = false, version = "0.17.0-rc.3" }
-miden-standards    = { version = "0.17.0-rc.3" }
-miden-testing      = { version = "0.17.0-rc.3" }
-miden-tx           = { default-features = false, version = "0.17.0-rc.3" }
-miden-tx-batch     = { version = "0.17.0-rc.3" }
+miden-block-prover = { version = "0.17.0-rc.4" }
+miden-objects      = { version = "0.17.0-rc.4" }
+miden-protocol     = { default-features = false, version = "0.17.0-rc.4" }
+miden-standards    = { version = "0.17.0-rc.4" }
+miden-testing      = { version = "0.17.0-rc.4" }
+miden-tx           = { default-features = false, version = "0.17.0-rc.4" }
+miden-tx-batch     = { version = "0.17.0-rc.4" }
 
 # Other miden dependencies. These should align with those expected by miden-protocol.
 miden-crypto               = { version = "0.32.0" }

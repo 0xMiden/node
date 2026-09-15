@@ -1,9 +1,8 @@
-use miden_node_proto::generated as proto;
 use miden_node_proto::generated::rpc::CommittedNote;
+use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_node_store::NoteRecord;
 use miden_node_tracing::{debug, miden_instrument, miden_span_record};
 use miden_node_utils::limiter::QueryParamNoteIdLimit;
-use miden_protocol::Word;
 use miden_protocol::note::NoteId;
 use tonic::Status;
 
@@ -36,13 +35,16 @@ impl proto::server::rpc_api::GetNotesById for RpcService {
     ) -> tonic::Result<Self::Output> {
         check::<QueryParamNoteIdLimit>(request.note_ids.len())?;
 
-        let note_ids: Vec<Word> = request
+        let note_ids: Vec<NoteId> = request
             .note_ids
             .into_iter()
-            .map(Word::try_from)
+            .map(|note_id| {
+                note_id.decode_fields().and_then(|note_id| {
+                    note_id.verify().map_err(miden_objects::ConversionError::new)
+                })
+            })
             .collect::<Result<_, _>>()
             .map_err(|err| Status::invalid_argument(format!("invalid note ID: {err}")))?;
-        let note_ids: Vec<NoteId> = note_ids.into_iter().map(NoteId::from_raw).collect();
         miden_span_record!(
             note.ids = &note_ids[..note_ids.len().min(10)],
             note.count = note_ids.len()
@@ -79,7 +81,7 @@ fn note_record_to_proto(note: NoteRecord) -> proto::rpc::CommittedNote {
         inclusion_path: Some(note.inclusion_path.into()),
     });
     let note = Some(proto::note::Note {
-        metadata: Some(note.metadata.into()),
+        metadata: Some(note.metadata.into_partial_metadata().into()),
         note_details: note.details.map(Into::into),
         note_attachments: Some(note.attachments.into()),
     });

@@ -4,7 +4,7 @@ use miden_node_proto::generated::remote_prover::proof::Proof as ProofVariant;
 use miden_node_proto::generated::remote_prover::proof_request::Request;
 use miden_node_proto::generated::{block_proving, remote_prover as proto, transaction};
 use miden_node_tracing::{ErrorReport, miden_instrument};
-use miden_objects::conversion::decode_proposed_batch;
+use miden_objects::{BuildUnchecked, DecodeMessage, VerifyWith};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::block::ProposedBlock;
 use miden_protocol::transaction::TransactionInputs;
@@ -68,11 +68,19 @@ fn prove_transaction(
     prover: &LocalTransactionProver,
     input: transaction::TransactionInputs,
 ) -> Result<ProofVariant, tonic::Status> {
-    let input = TransactionInputs::try_from(input).map_err(|error| {
-        tonic::Status::invalid_argument(
-            error.as_report_context("failed to decode transaction inputs"),
-        )
-    })?;
+    let input: TransactionInputs = input
+        .decode_fields()
+        .map_err(|error| {
+            tonic::Status::invalid_argument(
+                error.as_report_context("failed to decode transaction inputs"),
+            )
+        })?
+        .build_unchecked()
+        .map_err(|error| {
+            tonic::Status::invalid_argument(
+                error.as_report_context("failed to build transaction inputs"),
+            )
+        })?;
     let transaction = prover.prove(input).map_err(|error| {
         tonic::Status::internal(error.as_report_context("failed to prove transaction"))
     })?;
@@ -84,9 +92,19 @@ fn prove_batch(
     prover: &LocalBatchProver,
     input: transaction::ProposedBatch,
 ) -> Result<ProofVariant, tonic::Status> {
-    let input = decode_proposed_batch(input, MIN_PROOF_SECURITY_LEVEL).map_err(|error| {
-        tonic::Status::invalid_argument(error.as_report_context("failed to decode proposed batch"))
-    })?;
+    let input = input
+        .decode_fields()
+        .map_err(|error| {
+            tonic::Status::invalid_argument(
+                error.as_report_context("failed to decode proposed batch"),
+            )
+        })?
+        .verify_with(MIN_PROOF_SECURITY_LEVEL)
+        .map_err(|error| {
+            tonic::Status::invalid_argument(
+                error.as_report_context("failed to verify proposed batch"),
+            )
+        })?;
     let executed_batch = BatchExecutor::new().execute(input).map_err(|error| {
         tonic::Status::internal(error.as_report_context("failed to execute batch"))
     })?;

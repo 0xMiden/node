@@ -1,7 +1,7 @@
 use std::sync::atomic::Ordering;
 
 use miden_node_proto::domain::encryption::transaction_inputs_associated_data;
-use miden_node_proto::generated as grpc;
+use miden_node_proto::{BuildUnchecked, DecodeMessage, generated as grpc};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorReport, Instrument, info_span, miden_instrument, miden_span_record};
 use miden_protocol::transaction::{ProvenTransaction, TransactionId, TransactionInputs};
@@ -102,9 +102,15 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
         let transaction = request
             .transaction
             .ok_or_else(|| Status::invalid_argument("Missing proven transaction"))?;
-        let tx = ProvenTransaction::try_from(transaction).map_err(|err| {
-            Status::invalid_argument(err.as_report_context("Invalid proven transaction"))
-        })?;
+        let tx: ProvenTransaction = transaction
+            .decode_fields()
+            .map_err(|err| {
+                Status::invalid_argument(err.as_report_context("Invalid proven transaction"))
+            })?
+            .build_unchecked()
+            .map_err(|err| {
+                Status::invalid_argument(err.as_report_context("Invalid proven transaction"))
+            })?;
         let sealed = request.sealed_transaction_inputs.ok_or_else(|| {
             Status::invalid_argument(
                 "Missing sealed transaction inputs: fetch the encryption key with \

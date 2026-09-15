@@ -1,7 +1,7 @@
 use miden_node_block_producer::store::get_tx_inputs;
 use miden_node_block_producer::{AuthenticatedTransaction, ensure_transaction_has_fee};
 use miden_node_proto::clients::{SequencerClient, ValidatorClient};
-use miden_node_proto::generated as proto;
+use miden_node_proto::{BuildUnchecked, DecodeMessage, generated as proto};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorReport, debug, miden_instrument, miden_span_record, trace};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
@@ -53,7 +53,9 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
             .transaction
             .take()
             .ok_or_else(|| Status::invalid_argument("missing `transaction` field"))?
-            .try_into()
+            .decode_fields()
+            .map_err(|err| Status::invalid_argument(format!("invalid transaction: {err}")))?
+            .build_unchecked()
             .map_err(|err| Status::invalid_argument(format!("invalid transaction: {err}")))?;
 
         miden_span_record!(

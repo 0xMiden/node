@@ -11,9 +11,9 @@ use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use miden_node_proto::clients::RpcClient;
-use miden_node_proto::generated as proto;
 use miden_node_proto::generated::rpc::BlockHeaderByNumberRequest;
-use miden_protocol::block::{BlockHeader, SignedBlock};
+use miden_node_proto::{BuildUnchecked, DecodeMessage, generated as proto};
+use miden_protocol::block::BlockHeader;
 use miden_protocol::transaction::TransactionId;
 
 /// One scanned block that contained at least one of our txs. Empty blocks in the scan range are not
@@ -129,7 +129,11 @@ pub(crate) async fn scan_with_drain(
                 next_block += 1;
                 continue;
             };
-            let signed_block = match SignedBlock::try_from(block) {
+            let signed_block = match block
+                .decode_fields()
+                .map_err(anyhow::Error::from)
+                .and_then(|block| block.build_unchecked().map_err(anyhow::Error::from))
+            {
                 Ok(sb) => sb,
                 Err(err) => {
                     eprintln!(
@@ -223,7 +227,9 @@ pub(crate) async fn current_block_height(mut client: RpcClient) -> u32 {
     let header: BlockHeader = response
         .block_header
         .expect("no block header in response")
-        .try_into()
-        .expect("failed to decode block header");
+        .decode_fields()
+        .expect("failed to decode block header")
+        .build_unchecked()
+        .expect("failed to build block header");
     header.block_num().as_u32()
 }

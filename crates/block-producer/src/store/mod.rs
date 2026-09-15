@@ -3,10 +3,10 @@ use std::fmt::{Display, Formatter};
 use std::num::NonZeroU32;
 
 use itertools::Itertools;
-use miden_node_proto::decode;
 use miden_node_proto::decode::GrpcDecodeExt;
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::sequencer;
+use miden_node_proto::{decode, verify};
 use miden_node_store::state::{State, TransactionInputs as StoreTransactionInputs};
 use miden_node_tracing::{debug, miden_instrument};
 use miden_node_utils::formatting::format_opt;
@@ -100,7 +100,7 @@ impl TryFrom<sequencer::AuthInputs> for TransactionInputs {
 
     fn try_from(value: sequencer::AuthInputs) -> Result<Self, Self::Error> {
         let decoder = value.decoder();
-        let account_id = decode!(decoder, value.account_id)?;
+        let account_id = verify!(decoder, value.account_id)?;
 
         let account_commitment = value.account_commitment.map(Word::try_from).transpose()?;
 

@@ -10,6 +10,7 @@ use miden_node_proto::generated::remote_prover::proof::Proof as ProofVariant;
 use miden_node_proto::generated::remote_prover::proof_request::Request;
 use miden_node_proto::generated::remote_prover::{Proof, ProofRequest};
 use miden_node_utils::shutdown::CancellationToken;
+use miden_objects::{BuildUnchecked, DecodeMessage, VerifyWith};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::asset::{Asset, FungibleAsset};
@@ -17,12 +18,7 @@ use miden_protocol::batch::{OrderedBatches, ProposedBatch};
 use miden_protocol::block::{BlockHeader, BlockInputs, ProposedBlock};
 use miden_protocol::note::NoteType;
 use miden_protocol::testing::account_id::{ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET, ACCOUNT_ID_SENDER};
-use miden_protocol::transaction::{
-    ExecutedTransaction,
-    PartialBlockchain,
-    ProvenTransaction,
-    TransactionVerifier,
-};
+use miden_protocol::transaction::{ExecutedTransaction, PartialBlockchain, TransactionVerifier};
 use miden_protocol::vm::ExecutionProof;
 use miden_testing::{Auth, MockChainBuilder};
 use miden_tx::LocalTransactionProver;
@@ -444,7 +440,9 @@ async fn transaction_proof_is_correct() {
     let mut client = Client::connect(port).await;
     let response = client.submit_request(request).await.unwrap();
     let response = match response.proof.unwrap() {
-        ProofVariant::Transaction(transaction) => ProvenTransaction::try_from(transaction).unwrap(),
+        ProofVariant::Transaction(transaction) => {
+            transaction.decode_fields().unwrap().build_unchecked().unwrap()
+        },
         other => panic!("expected transaction proof response, got {other:?}"),
     };
 
@@ -472,9 +470,7 @@ async fn batch_proof_is_correct() {
     let mut client = Client::connect(port).await;
     let response = client.submit_request(request).await.unwrap();
     let response = match response.proof.unwrap() {
-        ProofVariant::Batch(proof) => {
-            miden_objects::conversion::decode_proven_batch(proof, &batch).unwrap()
-        },
+        ProofVariant::Batch(proof) => proof.decode_fields().unwrap().verify_with(&batch).unwrap(),
         other => panic!("expected batch proof response, got {other:?}"),
     };
 

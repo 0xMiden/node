@@ -1,6 +1,6 @@
 use miden_node_block_producer::store::TransactionInputs;
-use miden_node_proto::generated as proto;
 use miden_node_proto::generated::server::sequencer_api;
+use miden_node_proto::{DecodeMessage, VerifyWith, generated as proto};
 use miden_node_tracing::ErrorReport;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_protocol::batch::ProposedBatch;
@@ -54,11 +54,11 @@ fn decode_authenticated_transaction_batch(
     let proposed_batch = request
         .proposed_batch
         .ok_or_else(|| Status::invalid_argument("missing `proposed_batch` field"))?;
-    let batch = miden_objects::conversion::decode_proposed_batch(
-        proposed_batch,
-        miden_protocol::MIN_PROOF_SECURITY_LEVEL,
-    )
-    .map_err(|err| Status::invalid_argument(format!("invalid proposed_batch: {err}")))?;
+    let batch = proposed_batch
+        .decode_fields()
+        .map_err(|err| Status::invalid_argument(format!("invalid proposed_batch: {err}")))?
+        .verify_with(miden_protocol::MIN_PROOF_SECURITY_LEVEL)
+        .map_err(|err| Status::invalid_argument(format!("invalid proposed_batch: {err}")))?;
 
     if batch.transactions().len() != request.auth_inputs.len() {
         return Err(Status::invalid_argument(format!(

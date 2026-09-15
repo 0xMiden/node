@@ -9,6 +9,7 @@ use miden_node_proto::domain::block::InvalidBlockRange;
 use miden_node_proto::generated::rpc::MempoolStats as ProtoMempoolStats;
 use miden_node_proto::generated::rpc::api_server::Api;
 use miden_node_proto::generated::{self as proto};
+use miden_node_proto::{BuildUnchecked, DecodeMessage};
 use miden_node_store::state::State;
 use miden_node_store::{DatabaseError, GetBlockHeaderError};
 use miden_node_tracing::{miden_instrument, warn};
@@ -185,7 +186,11 @@ impl RpcService {
         .await?;
 
         let header = header.into_inner().block_header.context("response is missing the header")?;
-        BlockHeader::try_from(header).context("failed to parse response")
+        header
+            .decode_fields()
+            .context("failed to parse response")?
+            .build_unchecked()
+            .context("failed to build response header")
     }
 
     /// Returns the given block's onchain header.

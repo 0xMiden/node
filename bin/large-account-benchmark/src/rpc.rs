@@ -12,7 +12,7 @@ use miden_node_proto::domain::encryption::{
     verify_transaction_encryption_key,
 };
 use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
-use miden_node_proto::generated::account::AccountId as ProtoAccountId;
+use miden_node_proto::generated::account::account_storage_header::storage_slot::Content as SlotContent;
 use miden_node_proto::generated::rpc::account_request::AccountDetailRequest;
 use miden_node_proto::generated::rpc::{
     AccountRequest,
@@ -20,6 +20,7 @@ use miden_node_proto::generated::rpc::{
     BlockHeaderByNumberResponse,
 };
 use miden_node_proto::generated::submission::ProvenTransactionSubmission as ProtoProvenTransaction;
+use miden_node_proto::{BuildUnchecked, DecodeMessage};
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::account_tree::AccountWitness;
@@ -152,9 +153,8 @@ impl SubmissionClient {
     /// this tool submitted, while the counter account's slot only advances when the ntx-builder has
     /// actually loaded the large account and consumed a network note.
     pub async fn slot_value(&self, account_id: AccountId, slot_name: &str) -> Result<Option<u64>> {
-        let id_bytes: [u8; 15] = account_id.into();
         let request = AccountRequest {
-            account_id: Some(ProtoAccountId { id: id_bytes.to_vec() }),
+            account_id: Some(account_id.into()),
             block_num: None,
             details: Some(AccountDetailRequest {
                 code_commitment: None,
@@ -186,12 +186,15 @@ impl SubmissionClient {
             .find(|slot| slot.slot_name == slot_name)
             .with_context(|| format!("account has no storage slot named '{slot_name}'"))?;
 
-        let value: Word = slot
-            .commitment
-            .as_ref()
-            .context("storage slot carries no value")?
-            .try_into()
-            .context("failed to decode the storage slot value")?;
+        let value: Word = match slot.content.as_ref() {
+            Some(SlotContent::Value(value)) => {
+                value.try_into().context("failed to decode the storage slot value")?
+            },
+            Some(SlotContent::MapRoot(_)) => {
+                anyhow::bail!("storage slot '{slot_name}' is a storage map")
+            },
+            None => anyhow::bail!("storage slot carries no value"),
+        };
 
         // A value slot holds the number in the word's first element.
         Ok(Some(
@@ -213,9 +216,8 @@ impl SubmissionClient {
         account_id: AccountId,
         block_num: BlockNumber,
     ) -> Result<AccountWitness> {
-        let id_bytes: [u8; 15] = account_id.into();
         let request = AccountRequest {
-            account_id: Some(ProtoAccountId { id: id_bytes.to_vec() }),
+            account_id: Some(account_id.into()),
             block_num: Some(block_num.into()),
             details: None,
         };
@@ -337,8 +339,10 @@ fn decode_genesis_block_state(
     let header = response
         .block_header
         .context("RPC returned no genesis block header")?
-        .try_into()
-        .context("failed to decode the genesis block header")?;
+        .decode_fields()
+        .context("failed to decode the genesis block header")?
+        .build_unchecked()
+        .context("failed to build the genesis block header")?;
     let protocol_config =
         ensure_protocol_config_is_present_and_matches_header(response.protocol_config, &header)
             .context("RPC returned no valid genesis protocol configuration")?;

@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-use miden_node_proto::SignBlockRequest;
 use miden_node_proto::domain::encryption::{
     TransactionEncryptionScheme,
     TrustedTransactionEncryptionState,
@@ -9,6 +8,7 @@ use miden_node_proto::domain::encryption::{
 };
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto::server::validator_api;
+use miden_node_proto::{BuildUnchecked, DecodeMessage, SignBlockRequest, Verify};
 use miden_node_store::{BlockStore, GenesisState};
 use miden_node_utils::fee::{test_fee_params, test_protocol_config};
 use miden_node_utils::testing::{
@@ -499,9 +499,9 @@ async fn sign_block_returns_signed_commitment() {
         "returned commitment must match the proposed block's commitment",
     );
     let signature: miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature =
-        response.signature.unwrap().try_into().unwrap();
+        response.signature.unwrap().decode_fields().unwrap().verify().unwrap();
     let public_key: miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey =
-        response.public_key.unwrap().try_into().unwrap();
+        response.public_key.unwrap().decode_fields().unwrap().verify().unwrap();
     assert_eq!(public_key, tv.server.signer.public_key());
     assert!(signature.verify(header.commitment(), &public_key));
 }
@@ -926,7 +926,12 @@ async fn block_subscription_replays_then_freezes_signing() {
             .expect("replayed block should arrive promptly")
             .expect("stream should not end")
             .expect("stream item should not be an error");
-        let block = SignedBlock::try_from(response.block.expect("response should carry a block"))
+        let block: SignedBlock = response
+            .block
+            .expect("response should carry a block")
+            .decode_fields()
+            .expect("valid signed block")
+            .build_unchecked()
             .expect("valid signed block");
         assert_eq!(block.header().block_num().as_u32(), expected);
         assert_eq!(response.committed_chain_tip, 2);
@@ -934,7 +939,9 @@ async fn block_subscription_replays_then_freezes_signing() {
             let config: ProtocolConfig = response
                 .protocol_config
                 .expect("the first response must carry the active protocol config")
-                .try_into()
+                .decode_fields()
+                .unwrap()
+                .verify()
                 .unwrap();
             assert_eq!(config, tv.protocol_config);
         } else {
@@ -1031,14 +1038,16 @@ async fn protocol_config_transition_is_streamed_and_used_for_next_signature() {
         .unwrap()
         .unwrap()
         .unwrap();
-    let first_config: ProtocolConfig = first.protocol_config.unwrap().try_into().unwrap();
+    let first_config: ProtocolConfig =
+        first.protocol_config.unwrap().decode_fields().unwrap().verify().unwrap();
     assert_eq!(first_config, tv.protocol_config);
     let transition = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await
         .unwrap()
         .unwrap()
         .unwrap();
-    let streamed_config: ProtocolConfig = transition.protocol_config.unwrap().try_into().unwrap();
+    let streamed_config: ProtocolConfig =
+        transition.protocol_config.unwrap().decode_fields().unwrap().verify().unwrap();
     assert_eq!(streamed_config, next_config);
     drop(stream);
 

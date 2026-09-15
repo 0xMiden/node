@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use miden_objects::{BuildUnchecked, DecodeMessage, Verify};
 use miden_protocol::account::AccountId;
 use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::account_tree::AccountWitness;
@@ -15,6 +16,7 @@ use miden_protocol::utils::serde::{
     Serializable,
 };
 
+use crate::decode::{ConversionResultExt, verify_value};
 use crate::errors::ConversionError;
 use crate::generated as proto;
 
@@ -107,25 +109,29 @@ impl TryFrom<proto::block_proving::BlockInputs> for BlockInputs {
     type Error = ConversionError;
 
     fn try_from(value: proto::block_proving::BlockInputs) -> Result<Self, Self::Error> {
-        let prev_block_header = required::<proto::block_proving::BlockInputs, _, BlockHeader>(
-            value.prev_block_header,
-            "prev_block_header",
-        )?;
-        let partial_blockchain = required::<proto::block_proving::BlockInputs, _, PartialBlockchain>(
-            value.partial_blockchain,
-            "partial_blockchain",
-        )?;
+        let prev_block_header: BlockHeader =
+            build_unchecked_required::<proto::block_proving::BlockInputs, _, _>(
+                value.prev_block_header,
+                "prev_block_header",
+            )?;
+        let partial_blockchain: PartialBlockchain =
+            build_unchecked_required::<proto::block_proving::BlockInputs, _, _>(
+                value.partial_blockchain,
+                "partial_blockchain",
+            )?;
 
         let mut account_witnesses = BTreeMap::<AccountId, AccountWitness>::new();
         for (index, record) in value.account_witnesses.into_iter().enumerate() {
-            let account_id = required::<proto::block_proving::AccountWitnessRecord, _, AccountId>(
-                record.account_id,
-                "account_id",
-            )?;
-            let witness = required::<proto::block_proving::AccountWitnessRecord, _, AccountWitness>(
-                record.witness,
-                "witness",
-            )?;
+            let account_id: AccountId = required_verified::<
+                proto::block_proving::AccountWitnessRecord,
+                _,
+                _,
+            >(record.account_id, "account_id")?;
+            let witness: AccountWitness = required_verified::<
+                proto::block_proving::AccountWitnessRecord,
+                _,
+                _,
+            >(record.witness, "witness")?;
             if account_witnesses.insert(account_id, witness).is_some() {
                 return Err(ConversionError::message(format!(
                     "account_witnesses[{index}]: duplicate requested account ID {account_id}"
@@ -141,11 +147,11 @@ impl TryFrom<proto::block_proving::BlockInputs> for BlockInputs {
                 miden_protocol::Word,
             >(record.nullifier, "nullifier")?;
             let nullifier = Nullifier::from_raw(nullifier_word);
-            let proof = required::<
-                proto::block_proving::NullifierWitness,
-                _,
-                miden_protocol::crypto::merkle::smt::SmtProof,
-            >(record.opening, "opening")?;
+            let proof: miden_protocol::crypto::merkle::smt::SmtProof =
+                required_verified::<proto::block_proving::NullifierWitness, _, _>(
+                    record.opening,
+                    "opening",
+                )?;
             if nullifier_witnesses.insert(nullifier, NullifierWitness::new(proof)).is_some() {
                 return Err(ConversionError::message(format!(
                     "nullifier_witnesses[{index}]: duplicate nullifier {nullifier}"
@@ -155,8 +161,8 @@ impl TryFrom<proto::block_proving::BlockInputs> for BlockInputs {
 
         let mut unauthenticated_note_proofs = BTreeMap::<NoteId, NoteInclusionProof>::new();
         for (index, proof) in value.unauthenticated_note_proofs.into_iter().enumerate() {
-            let (note_id, proof) =
-                <(NoteId, NoteInclusionProof)>::try_from(&proof).map_err(ConversionError::from)?;
+            let (note_id, proof): (NoteId, NoteInclusionProof) =
+                verify_value("unauthenticated_note_proofs", proof)?;
             if unauthenticated_note_proofs.insert(note_id, proof).is_some() {
                 return Err(ConversionError::message(format!(
                     "unauthenticated_note_proofs[{index}]: duplicate note ID {note_id}"
@@ -185,6 +191,39 @@ where
         .try_into()
         .map_err(Into::into)
         .map_err(ConversionError::from)
+}
+
+/// Reads a required canonical field and verifies its domain invariants.
+fn required_verified<M, T, U>(value: Option<T>, field: &'static str) -> Result<U, ConversionError>
+where
+    M: prost::Message,
+    T: DecodeMessage,
+    T::Decoded: Verify<Verified = U>,
+{
+    verify_value(field, value.ok_or_else(|| ConversionError::missing_field::<M>(field))?)
+}
+
+/// Reads a required canonical field and builds it without the checks the domain type cannot make
+/// from the message alone.
+///
+/// The caller is responsible for the skipped checks. Each decoded type documents which ones it
+/// leaves out.
+fn build_unchecked_required<M, T, U>(
+    value: Option<T>,
+    field: &'static str,
+) -> Result<U, ConversionError>
+where
+    M: prost::Message,
+    T: DecodeMessage,
+    T::Decoded: BuildUnchecked<Output = U>,
+{
+    value
+        .ok_or_else(|| ConversionError::missing_field::<M>(field))?
+        .decode_fields()
+        .context(field)?
+        .build_unchecked()
+        .map_err(ConversionError::new)
+        .context(field)
 }
 
 impl Serializable for BlockProofRequest {

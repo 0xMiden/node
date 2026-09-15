@@ -11,7 +11,6 @@ use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::NoteTag;
-use miden_protocol::utils::serde::Serializable;
 use rand::RngExt;
 use rand::seq::SliceRandom;
 use tokio::fs;
@@ -174,7 +173,7 @@ fn get_account_request(
     };
 
     proto::rpc::AccountRequest {
-        account_id: Some(proto::account::AccountId { id: account_id.to_bytes() }),
+        account_id: Some(account_id.into()),
         block_num: None,
         details: Some(AccountDetailRequest {
             code_commitment: None,

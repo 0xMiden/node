@@ -22,10 +22,10 @@ use miden_protocol::crypto::merkle::MerkleError;
 use miden_protocol::crypto::merkle::smt::{PartialSmt, SmtProof};
 
 use super::try_convert;
-use crate::decode;
-use crate::decode::{ConversionResultExt, GrpcDecodeExt};
+use crate::decode::{ConversionResultExt, GrpcDecodeExt, verify_optional, verify_value};
 use crate::errors::ConversionError;
 use crate::generated::{self as proto};
+use crate::{decode, verify};
 
 #[cfg(test)]
 mod tests;
@@ -76,8 +76,8 @@ impl TryFrom<proto::rpc::AccountRequest> for AccountRequest {
         let decoder = value.decoder();
         let proto::rpc::AccountRequest { account_id, block_num, details } = value;
 
-        let account_id = decode!(decoder, account_id)?;
-        let block_num = block_num.map(Into::into);
+        let account_id = verify!(decoder, account_id)?;
+        let block_num = verify_optional("block_num", block_num)?;
 
         let details = details.map(TryFrom::try_from).transpose().context("details")?;
 
@@ -268,7 +268,7 @@ impl TryFrom<proto::rpc::AccountVaultDetails> for AccountVaultDetails {
         } else {
             let parsed_assets = assets
                 .into_iter()
-                .map(|asset| Asset::try_from(asset).map_err(ConversionError::from))
+                .map(|asset| verify_value("assets", asset))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(Self::Assets(parsed_assets))
         }
@@ -495,7 +495,7 @@ impl TryFrom<proto::rpc::account_storage_details::AccountStorageMapDetails>
                     ));
                 }
                 let partial_smt: PartialSmt =
-                    decode!(decoder, partial_smt).context("partial_smt")?;
+                    verify!(decoder, partial_smt).context("partial_smt")?;
                 for map_key in &map_keys {
                     partial_smt.get_value(&map_key.hash().as_word()).context("map_keys")?;
                 }
@@ -579,7 +579,7 @@ impl TryFrom<proto::rpc::AccountStorageDetails> for AccountStorageDetails {
         let decoder = value.decoder();
         let proto::rpc::AccountStorageDetails { header, map_details } = value;
 
-        let header: AccountStorageHeader = decode!(decoder, header)?;
+        let header: AccountStorageHeader = verify!(decoder, header)?;
 
         let map_details: Vec<AccountStorageMapDetails> =
             try_convert(map_details).collect::<Result<Vec<_>, _>>().context("map_details")?;
@@ -641,9 +641,9 @@ impl TryFrom<proto::rpc::AccountResponse> for AccountResponse {
         let decoder = value.decoder();
         let proto::rpc::AccountResponse { block_num, witness, details } = value;
 
-        let block_num = decode!(decoder, block_num)?;
+        let block_num = verify!(decoder, block_num)?;
 
-        let witness = decode!(decoder, witness)?;
+        let witness = verify!(decoder, witness)?;
 
         let details = details.map(TryFrom::try_from).transpose().context("details")?;
 
@@ -704,13 +704,12 @@ impl TryFrom<proto::rpc::account_response::AccountDetails> for AccountDetails {
             storage_details,
         } = value;
 
-        let account_header = decode!(decoder, header)?;
+        let account_header = verify!(decoder, header)?;
 
         let storage_details = decode!(decoder, storage_details)?;
 
         let vault_details = decode!(decoder, vault_details)?;
-        let account_code =
-            code.map(AccountCode::try_from).transpose().map_err(ConversionError::from)?;
+        let account_code = verify_optional("code", code)?;
 
         Ok(AccountDetails {
             account_header,

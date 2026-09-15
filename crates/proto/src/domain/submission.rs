@@ -1,8 +1,10 @@
+use miden_objects::{BuildUnchecked, DecodeMessage, VerifyWith};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::transaction::ProvenTransaction;
 
+use crate::decode::{ConversionResultExt, verify_value};
 use crate::errors::ConversionError;
 use crate::generated as proto;
 
@@ -18,15 +20,18 @@ impl TryFrom<proto::submission::ProvenTransactionSubmission> for ProvenTransacti
     fn try_from(
         value: proto::submission::ProvenTransactionSubmission,
     ) -> Result<Self, Self::Error> {
-        let transaction = value
+        let transaction: ProvenTransaction = value
             .transaction
             .ok_or_else(|| {
                 ConversionError::missing_field::<proto::submission::ProvenTransactionSubmission>(
                     "transaction",
                 )
             })?
-            .try_into()
-            .map_err(ConversionError::from)?;
+            .decode_fields()
+            .context("transaction")?
+            .build_unchecked()
+            .map_err(ConversionError::new)
+            .context("transaction")?;
         let sealed_transaction_inputs = value.sealed_transaction_inputs.ok_or_else(|| {
             ConversionError::missing_field::<proto::submission::ProvenTransactionSubmission>(
                 "sealed_transaction_inputs",
@@ -72,30 +77,38 @@ impl TryFrom<proto::submission::TransactionBatch> for TransactionBatchSubmission
                     "reference_block_header",
                 )
             })?
-            .try_into()
-            .map_err(ConversionError::from)?;
-        let batch_reference_num: BlockNumber = batch_message
-            .reference_block_num
-            .ok_or_else(|| {
+            .decode_fields()
+            .context("reference_block_header")?
+            .build_unchecked()
+            .map_err(ConversionError::new)
+            .context("reference_block_header")?;
+        let batch_reference_num: BlockNumber = verify_value(
+            "reference_block_num",
+            batch_message.reference_block_num.ok_or_else(|| {
                 ConversionError::missing_field::<proto::transaction::ProvenBatch>(
                     "reference_block_num",
                 )
-            })?
-            .into();
+            })?,
+        )?;
         if batch_reference_num != proposed_reference_header.block_num() {
             return Err(ConversionError::message(
                 "batch reference block number does not match proposal",
             ));
         }
 
-        let proposed_batch = miden_objects::conversion::decode_proposed_batch(
-            proposed_message,
-            MIN_PROOF_SECURITY_LEVEL,
-        )
-        .map_err(ConversionError::from)?;
+        let proposed_batch = proposed_message
+            .decode_fields()
+            .context("proposed_batch")?
+            .verify_with(MIN_PROOF_SECURITY_LEVEL)
+            .map_err(ConversionError::new)
+            .context("proposed_batch")?;
 
-        let batch = miden_objects::conversion::decode_proven_batch(batch_message, &proposed_batch)
-            .map_err(ConversionError::from)?;
+        let batch = batch_message
+            .decode_fields()
+            .context("batch")?
+            .verify_with(&proposed_batch)
+            .map_err(ConversionError::new)
+            .context("batch")?;
 
         if value.sealed_transaction_inputs.len() != proposed_batch.transactions().len() {
             return Err(ConversionError::message(format!(

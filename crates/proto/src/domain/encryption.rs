@@ -15,6 +15,7 @@ use miden_protocol::crypto::ies::SealingKey;
 use miden_protocol::transaction::TransactionId;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 
+use crate::decode::verify_value;
 use crate::generated as proto;
 
 /// Domain tag prefixed to the associated data of sealed transaction inputs.
@@ -269,7 +270,8 @@ pub fn verify_transaction_encryption_key(
         let Some(validator_public_key) = attestation.validator_public_key else {
             continue;
         };
-        let Ok(validator_public_key) = validator_public_key.try_into() else {
+        let Ok(validator_public_key) = verify_value("validator_public_key", validator_public_key)
+        else {
             continue;
         };
 
@@ -281,7 +283,8 @@ pub fn verify_transaction_encryption_key(
         let Some(signature) = attestation.signature else {
             continue;
         };
-        let Ok(signature): Result<ValidatorSignature, _> = signature.try_into() else {
+        let Ok(signature): Result<ValidatorSignature, _> = verify_value("signature", signature)
+        else {
             continue;
         };
         if signature.verify(commitment, &validator_public_key) {
@@ -552,19 +555,18 @@ mod tests {
         );
 
         let mut malformed_key = signed_encryption_key(&signer, genesis());
-        malformed_key.attestations[0]
-            .validator_public_key
-            .as_mut()
-            .unwrap()
-            .encoded
-            .clear();
+        malformed_key.attestations[0].validator_public_key = Some(proto::primitives::PublicKey {
+            key: Some(proto::primitives::public_key::Key::EcdsaK256Keccak(Vec::new())),
+        });
         assert_matches!(
             verify_transaction_encryption_key(malformed_key, trusted),
             Err(TransactionEncryptionKeyError::NoTrustedAttestation)
         );
 
         let mut malformed_signature = signed_encryption_key(&signer, genesis());
-        malformed_signature.attestations[0].signature.as_mut().unwrap().encoded.clear();
+        malformed_signature.attestations[0].signature = Some(proto::primitives::Signature {
+            signature: Some(proto::primitives::signature::Signature::EcdsaK256Keccak(Vec::new())),
+        });
         assert_matches!(
             verify_transaction_encryption_key(malformed_signature, trusted),
             Err(TransactionEncryptionKeyError::InvalidAttestation)

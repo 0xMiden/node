@@ -17,6 +17,7 @@ use miden_node_proto::domain::encryption::{
     verify_transaction_encryption_key,
 };
 use miden_node_proto::generated::rpc::BlockHeaderByNumberRequest;
+use miden_node_proto::{BuildUnchecked, DecodeMessage};
 use miden_protocol::Word;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
@@ -177,8 +178,11 @@ async fn discover_genesis(rpc_url: &Url, timeout: Duration) -> Result<Word> {
         .block_header
         .ok_or_else(|| anyhow::anyhow!("No block header in response"))?;
 
-    let genesis_header: BlockHeader =
-        genesis_block_header.try_into().context("Failed to convert block header")?;
+    let genesis_header: BlockHeader = genesis_block_header
+        .decode_fields()
+        .context("Failed to decode block header")?
+        .build_unchecked()
+        .context("Failed to build block header")?;
 
     Ok(genesis_header.commitment())
 }

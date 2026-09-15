@@ -26,6 +26,7 @@ use miden_node_proto::generated::rpc::api_server::Api;
 use miden_node_proto::generated::sequencer::api_server::Api as SequencerApi;
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto::server::{ntx_builder_api, rpc_api, sequencer_api, validator_api};
+use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify};
 use miden_node_store::DataDirectory;
 use miden_node_store::allowlist::{AccountAllowlist, InvitationCode, InvitationEntry};
 use miden_node_store::genesis::GenesisBlock;
@@ -754,8 +755,14 @@ async fn rpc_server_forwards_valid_deferred_proofs_and_rejects_missing_witnesses
     {
         let submissions = submissions.lock().unwrap();
         assert_eq!(submissions.len(), 1);
-        let forwarded: ProvenTransaction =
-            submissions[0].transaction.clone().unwrap().try_into().unwrap();
+        let forwarded: ProvenTransaction = submissions[0]
+            .transaction
+            .clone()
+            .unwrap()
+            .decode_fields()
+            .unwrap()
+            .build_unchecked()
+            .unwrap();
         assert_eq!(forwarded.id(), fixture.transaction.id());
         assert_eq!(forwarded.proof(), fixture.transaction.proof());
     }
@@ -1235,12 +1242,13 @@ fn test_encryption_key() -> proto::submission::TransactionEncryptionKey {
         public_key: vec![7; 32],
         attestations: vec![proto::submission::ValidatorKeyAttestation {
             validator_public_key: Some(proto::primitives::PublicKey {
-                variant: proto::primitives::PublicKeyVariant::EcdsaK256Keccak as i32,
-                encoded: vec![8; 33],
+                key: Some(proto::primitives::public_key::Key::EcdsaK256Keccak(vec![8; 33])),
             }),
             signature: Some(proto::primitives::Signature {
-                variant: proto::primitives::SignatureVariant::EcdsaK256Keccak as i32,
-                encoded: vec![9; 65],
+                signature: Some(proto::primitives::signature::Signature::EcdsaK256Keccak(vec![
+                    9;
+                    65
+                ])),
             }),
         }],
         next_key: Some(proto::submission::NextTransactionEncryptionKey {
@@ -1657,7 +1665,7 @@ async fn register_account_validates_input_and_preserves_registrations() {
         },
         proto::rpc::RegisterAccountRequest { account_id: None, ..request.clone() },
         proto::rpc::RegisterAccountRequest {
-            account_id: Some(proto::account::AccountId { id: vec![0] }),
+            account_id: Some(proto::account::AccountId::default()),
             ..request.clone()
         },
     ] {
@@ -1917,9 +1925,20 @@ async fn sync_chain_mmr_returns_delta() {
     let mmr_delta = response.mmr_delta.expect("mmr_delta should exist");
     assert_eq!(mmr_delta.forest, 0);
     assert!(mmr_delta.update_data.is_empty());
-    let config: ProtocolConfig =
-        response.protocol_config.expect("genesis config").try_into().unwrap();
-    let header: BlockHeader = response.block_header.unwrap().try_into().unwrap();
+    let config: ProtocolConfig = response
+        .protocol_config
+        .expect("genesis config")
+        .decode_fields()
+        .unwrap()
+        .verify()
+        .unwrap();
+    let header: BlockHeader = response
+        .block_header
+        .unwrap()
+        .decode_fields()
+        .unwrap()
+        .build_unchecked()
+        .unwrap();
     assert_eq!(config.to_commitment(), header.protocol_config_commitment());
 }
 
@@ -1940,8 +1959,14 @@ async fn header_protocol_config_is_opt_in() {
         assert_eq!(response.protocol_config.is_some(), include == Some(true));
         assert!(response.mmr_path.is_some());
         if let Some(config) = response.protocol_config {
-            let config: ProtocolConfig = config.try_into().unwrap();
-            let header: BlockHeader = response.block_header.unwrap().try_into().unwrap();
+            let config: ProtocolConfig = config.decode_fields().unwrap().verify().unwrap();
+            let header: BlockHeader = response
+                .block_header
+                .unwrap()
+                .decode_fields()
+                .unwrap()
+                .build_unchecked()
+                .unwrap();
             assert_eq!(config.to_commitment(), header.protocol_config_commitment());
         }
     }
@@ -2026,8 +2051,15 @@ async fn block_subscription_starts_with_matching_config() {
         .unwrap()
         .into_inner();
     let event = stream.message().await.unwrap().unwrap();
-    let block: SignedBlock = event.block.unwrap().try_into().unwrap();
-    let config: ProtocolConfig = event.protocol_config.expect("initial config").try_into().unwrap();
+    let block: SignedBlock =
+        event.block.unwrap().decode_fields().unwrap().build_unchecked().unwrap();
+    let config: ProtocolConfig = event
+        .protocol_config
+        .expect("initial config")
+        .decode_fields()
+        .unwrap()
+        .verify()
+        .unwrap();
     assert_eq!(config.to_commitment(), block.header().protocol_config_commitment());
 }
 
@@ -2108,7 +2140,13 @@ async fn protocol_config_transitions_follow_response_headers() {
             .unwrap()
             .into_inner();
         assert_eq!(response.protocol_config.is_some(), included);
-        let header: BlockHeader = response.block_header.unwrap().try_into().unwrap();
+        let header: BlockHeader = response
+            .block_header
+            .unwrap()
+            .decode_fields()
+            .unwrap()
+            .build_unchecked()
+            .unwrap();
         assert_eq!(header.block_num(), 4.into());
         if included {
             assert_eq!(
@@ -2130,7 +2168,8 @@ async fn protocol_config_transitions_follow_response_headers() {
         .await
         .unwrap()
         .into_inner();
-    let header: BlockHeader = proven.block_header.unwrap().try_into().unwrap();
+    let header: BlockHeader =
+        proven.block_header.unwrap().decode_fields().unwrap().build_unchecked().unwrap();
     assert_eq!(header.block_num(), 0.into());
     assert_eq!(
         ensure_protocol_config_is_present_and_matches_header(proven.protocol_config, &header)
@@ -2146,7 +2185,8 @@ async fn protocol_config_transitions_follow_response_headers() {
             .into_inner();
         for height in start..=4 {
             let response = stream.message().await.unwrap().unwrap();
-            let block: SignedBlock = response.block.unwrap().try_into().unwrap();
+            let block: SignedBlock =
+                response.block.unwrap().decode_fields().unwrap().build_unchecked().unwrap();
             assert_eq!(block.header().block_num(), height.into());
             let included = height == start || height == 2 || height == 4;
             assert_eq!(response.protocol_config.is_some(), included);

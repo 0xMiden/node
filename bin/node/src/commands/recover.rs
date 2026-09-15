@@ -6,6 +6,7 @@ use anyhow::Context;
 use miden_node_proto::clients::{Builder, ValidatorClient};
 use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
 use miden_node_proto::generated::validator::{BlockSubscriptionRequest, BlockSubscriptionResponse};
+use miden_node_proto::{BuildUnchecked, DecodeMessage};
 use miden_node_store::{BlockWriter, State, WriterTask};
 use miden_node_tracing::info;
 use miden_node_utils::shutdown::CancellationToken;
@@ -251,8 +252,10 @@ async fn read_blocks(
                 let block: SignedBlock = event
                     .block
                     .context("validator block stream response is missing block")?
-                    .try_into()
-                    .with_context(|| format!("failed to decode block from validator {url}"))?;
+                    .decode_fields()
+                    .with_context(|| format!("failed to decode block from validator {url}"))?
+                    .build_unchecked()
+                    .with_context(|| format!("failed to build block from validator {url}"))?;
                 let protocol_config = event
                     .protocol_config
                     .map(|config| {

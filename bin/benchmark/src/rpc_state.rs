@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use miden_node_proto::clients::RpcClient;
 use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
 use miden_node_proto::generated::rpc::{FinalityLevel, SyncChainMmrRequest, SyncChainMmrResponse};
+use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify};
 use miden_protocol::block::BlockHeader;
 use miden_protocol::crypto::merkle::mmr::{MmrDelta, MmrPeaks, PartialMmr};
 use miden_protocol::protocol_config::ProtocolConfig;
@@ -40,16 +41,20 @@ fn decode_chain_tip_state(
     let tip_header: BlockHeader = response
         .block_header
         .context("sync_chain_mmr response missing block_header")?
-        .try_into()
-        .context("failed to decode the chain tip block header")?;
+        .decode_fields()
+        .context("failed to decode the chain tip block header")?
+        .build_unchecked()
+        .context("failed to build the chain tip block header")?;
     let protocol_config =
         ensure_protocol_config_is_present_and_matches_header(response.protocol_config, &tip_header)
             .context("sync_chain_mmr response missing a valid protocol configuration")?;
     let delta: MmrDelta = response
         .mmr_delta
         .context("sync_chain_mmr response missing mmr_delta")?
-        .try_into()
-        .context("failed to decode the chain MMR delta")?;
+        .decode_fields()
+        .context("failed to decode the chain MMR delta")?
+        .verify()
+        .context("failed to verify the chain MMR delta")?;
 
     let mut partial_mmr = PartialMmr::from_peaks(MmrPeaks::default());
 

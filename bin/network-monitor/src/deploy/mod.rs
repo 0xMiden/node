@@ -25,6 +25,7 @@ use miden_node_proto::generated::rpc::{
     SyncChainMmrResponse,
 };
 use miden_node_proto::generated::submission::ProvenTransactionSubmission as ProtoProvenTransaction;
+use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{debug, info, miden_instrument, warn};
 use miden_node_utils::retry;
@@ -282,8 +283,11 @@ pub async fn create_genesis_aware_rpc_client(
             .block_header
             .ok_or_else(|| anyhow::anyhow!("No block header in response"))?;
 
-        let genesis_header: BlockHeader =
-            genesis_block_header.try_into().context("Failed to convert block header")?;
+        let genesis_header: BlockHeader = genesis_block_header
+            .decode_fields()
+            .context("failed to decode block header")?
+            .build_unchecked()
+            .context("failed to build block header")?;
         let genesis_commitment = genesis_header.commitment();
         // Rebuild the client, this time including the required genesis metadata so that write RPCs
         // like SubmitProvenTx are accepted by the node.
@@ -456,11 +460,10 @@ pub(crate) async fn fetch_foreign_account_inputs(
     use miden_node_proto::generated::rpc::account_request::AccountDetailRequest;
     use miden_node_proto::generated::rpc::account_request::account_detail_request::StorageRequest;
 
-    let id_bytes: [u8; 15] = account_id.into();
     // Dummy commitments force the server to include code and vault data in the response.
     let dummy: miden_node_proto::generated::primitives::Word = Word::default().into();
     let request = ProtoAccountRequest {
-        account_id: Some(miden_node_proto::generated::account::AccountId { id: id_bytes.to_vec() }),
+        account_id: Some(account_id.into()),
         block_num: Some(block_num.into()),
         details: Some(AccountDetailRequest {
             code_commitment: Some(dummy.clone()),
@@ -741,8 +744,10 @@ fn decode_chain_state(
     let tip_header: BlockHeader = response
         .block_header
         .context("sync_chain_mmr response did not include a block header")?
-        .try_into()
-        .context("failed to convert the sync target block header")?;
+        .decode_fields()
+        .context("failed to decode the sync target block header")?
+        .build_unchecked()
+        .context("failed to build the sync target block header")?;
 
     let protocol_config =
         ensure_protocol_config_is_present_and_matches_header(response.protocol_config, &tip_header)
@@ -751,8 +756,10 @@ fn decode_chain_state(
     let delta: MmrDelta = response
         .mmr_delta
         .context("sync_chain_mmr response did not include an MMR delta")?
-        .try_into()
-        .context("failed to convert the MMR delta")?;
+        .decode_fields()
+        .context("failed to decode the MMR delta")?
+        .verify()
+        .context("failed to verify the MMR delta")?;
 
     let mut mmr = PartialMmr::from_peaks(
         MmrPeaks::new(Forest::new(0).context("empty forest should be valid")?, Vec::new())
