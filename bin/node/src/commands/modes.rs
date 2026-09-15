@@ -14,7 +14,8 @@ use miden_node_proto::clients::{
     WantsConnection,
 };
 use miden_node_rpc::{PreAuthSubmission, Rpc, RpcMode, SequencerInternal, ValidatorClients};
-use miden_node_store::{BlockWriter, ProofWriter, State, WriterTask};
+use miden_node_store::allowlist::AccountAllowlist;
+use miden_node_store::{BlockWriter, DataDirectory, ProofWriter, State, WriterTask};
 use miden_node_tracing::info;
 use miden_node_utils::clap::duration_to_human_readable_string;
 use miden_node_utils::formatting::format_endpoint;
@@ -27,6 +28,7 @@ use super::block_producer::BlockProducerOptions;
 use super::rpc::SyncOptions;
 use super::runtime::{RuntimeConfig, RuntimeOptions};
 use super::store::StoreOptions;
+use crate::admin::AdminServer;
 
 // RUNTIME MODES
 // ================================================================================================
@@ -52,6 +54,11 @@ pub struct SequencerCommand {
         value_name = "LISTEN"
     )]
     pub internal: Option<SocketAddr>,
+
+    /// IP address and port for the private administration API (for example, 127.0.0.1:50100).
+    /// Require external authentication and network isolation.
+    #[arg(long = "admin.listen", env = "MIDEN_NODE_ADMIN_LISTEN", value_name = "IP:PORT")]
+    pub admin_listen: Option<SocketAddr>,
 }
 
 impl SequencerCommand {
@@ -104,6 +111,28 @@ impl SequencerCommand {
         tasks.spawn("sequencer", sequencer.wait());
         tasks.spawn("RPC server", rpc.serve(shutdown.clone()));
         tasks.spawn("store block writer", join_store_writer(writer_task));
+        if let Some(address) = self.admin_listen {
+            let shutdown = shutdown.clone();
+            tasks.spawn("sequencer admin API", async move {
+                let data_directory = DataDirectory::load(runtime.data_directory)?;
+                // Chain bootstrap does not create the optional allowlist database. A promoted full
+                // node can reach startup without it.
+                //
+                // This is okay because this is a temporary database.
+                let allowlist_path = data_directory.allowlist_database_path();
+                if !fs_err::exists(&allowlist_path)
+                    .context("failed to check account allowlist database")?
+                {
+                    AccountAllowlist::bootstrap(&allowlist_path)
+                        .context("failed to bootstrap account allowlist database")?;
+                }
+                let allowlist = Arc::new(
+                    AccountAllowlist::load(allowlist_path)
+                        .context("failed to load account allowlist database")?,
+                );
+                AdminServer::bind(address, allowlist).await?.serve(shutdown).await
+            });
+        }
         for (index, validator_monitor) in validator_monitors.into_iter().enumerate() {
             tasks.spawn_infallible(
                 format!("validator {index} connection monitor"),

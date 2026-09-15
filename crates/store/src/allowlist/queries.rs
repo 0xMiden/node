@@ -8,6 +8,7 @@ use super::{
     AllowlistError,
     InvitationCode,
     InvitationEntry,
+    InvitationInfo,
     InvitationStatus,
     RegistrationOutcome,
 };
@@ -31,34 +32,61 @@ pub(super) fn invitation_status(
     tx: &ReadTx<'_>,
     invitation: &InvitationCode,
 ) -> Result<InvitationStatus, DatabaseError> {
-    let account = tx
-        .query(
-            "SELECT account_id FROM account_allowlist WHERE invitation_digest = ?1",
-            &[&invitation.digest().to_vec()],
-            |row| row.get::<Option<AccountId>>(0),
-        )?
-        .into_iter()
-        .next();
-
-    Ok(match account {
+    Ok(match invitation_info(tx, invitation)? {
         None => InvitationStatus::Unknown,
-        Some(None) => InvitationStatus::Unused,
-        Some(Some(account)) => InvitationStatus::Registered(account),
+        Some(InvitationInfo { account_id: None, .. }) => InvitationStatus::Unused,
+        Some(InvitationInfo { account_id: Some(account), .. }) => {
+            InvitationStatus::Registered(account)
+        },
     })
 }
 
-pub(super) fn add_account(tx: &WriteTx<'_>, account_id: AccountId) -> Result<usize, DatabaseError> {
+pub(super) fn invitation_info(
+    tx: &ReadTx<'_>,
+    invitation: &InvitationCode,
+) -> Result<Option<InvitationInfo>, DatabaseError> {
+    Ok(tx
+        .query(
+            "SELECT account_id, allowlisted_at FROM account_allowlist WHERE invitation_digest = ?1",
+            &[&invitation.digest().to_vec()],
+            |row| {
+                Ok(InvitationInfo {
+                    account_id: row.get(0)?,
+                    allowlisted_at: row.get(1)?,
+                })
+            },
+        )?
+        .into_iter()
+        .next())
+}
+
+pub(super) fn allowlisted_at(
+    tx: &ReadTx<'_>,
+    account_id: AccountId,
+) -> Result<Option<i64>, DatabaseError> {
+    Ok(tx
+        .query(
+            "SELECT allowlisted_at FROM account_allowlist WHERE account_id = ?1",
+            &[&account_id],
+            |row| row.get(0),
+        )?
+        .into_iter()
+        .next())
+}
+
+pub(super) fn add_account(tx: &WriteTx<'_>, account_id: AccountId) -> Result<bool, DatabaseError> {
     tx.execute(
-        "INSERT INTO account_allowlist (account_id, created_at) VALUES (?1, ?2)
+        "INSERT INTO account_allowlist (account_id, allowlisted_at) VALUES (?1, ?2)
          ON CONFLICT(account_id) DO NOTHING",
         &[&account_id, &current_timestamp()],
     )
+    .map(|inserted| inserted != 0)
 }
 
 pub(super) fn import_invitation(
     tx: &WriteTx<'_>,
     entry: &InvitationEntry,
-) -> Result<(), AllowlistError> {
+) -> Result<bool, AllowlistError> {
     match invitation_status(tx, &entry.invitation_code)
         .map_err(crate::DatabaseError::DatabaseError)
         .map_err(AllowlistError::Database)?
@@ -67,17 +95,19 @@ pub(super) fn import_invitation(
             if let Some(account_id) = entry.account_id {
                 ensure_account_unregistered(tx, account_id)?;
             }
-            tx.execute(
-                "INSERT INTO account_allowlist (invitation_digest, account_id, created_at)
-                 VALUES (?1, ?2, ?3)",
-                &[
-                    &entry.invitation_code.digest().to_vec(),
-                    &entry.account_id,
-                    &current_timestamp(),
-                ],
-            )
-            .map_err(crate::DatabaseError::DatabaseError)
-            .map_err(AllowlistError::Database)?;
+            return tx
+                .execute(
+                    "INSERT INTO account_allowlist (invitation_digest, account_id, allowlisted_at)
+                     VALUES (?1, ?2, ?3)",
+                    &[
+                        &entry.invitation_code.digest().to_vec(),
+                        &entry.account_id,
+                        &current_timestamp(),
+                    ],
+                )
+                .map(|inserted| inserted != 0)
+                .map_err(crate::DatabaseError::DatabaseError)
+                .map_err(AllowlistError::Database);
         },
         InvitationStatus::Unused => {
             if let Some(account_id) = entry.account_id {
@@ -90,7 +120,7 @@ pub(super) fn import_invitation(
             }
         },
     }
-    Ok(())
+    Ok(false)
 }
 
 pub(super) fn register_account(

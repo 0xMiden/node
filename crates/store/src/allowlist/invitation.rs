@@ -20,6 +20,20 @@ impl InvitationCode {
         Ok(Self(Sha256::digest(bytes).into()))
     }
 
+    /// Uses a caller-computed SHA-256 digest without hashing it again. The caller must compute the
+    /// digest from a nonempty invitation code.
+    pub fn from_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+
+    /// Parses a SHA-256 digest from 64 hexadecimal characters without a prefix. This method does
+    /// not hash the digest again.
+    pub fn from_hex_digest(value: &str) -> Result<Self, hex::FromHexError> {
+        let mut digest = [0; 32];
+        hex::decode_to_slice(value, &mut digest)?;
+        Ok(Self::from_digest(digest))
+    }
+
     pub(crate) fn digest(&self) -> &[u8] {
         &self.0
     }

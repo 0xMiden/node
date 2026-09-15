@@ -59,22 +59,22 @@ fn entry(value: u8, account_id: Option<AccountId>) -> InvitationEntry {
 #[test]
 fn migration_schema_hashes_are_stable() {
     const EXPECTED: [SchemaHash; 1] = [SchemaHash::from_hex(
-        "47ba3651faa1c3013f83adc935b605b51b55589fd60ee0446f424e1e45f30702",
+        "e46c4bb6724dfd7b0da02c11b471ef4535bf4acc577ebe8306cbd14fd2ced399",
     )];
     let migrator = super::migrations::migrator().unwrap();
     pretty_assertions::assert_eq!(migrator.schema_hashes(), SchemaHashes(&EXPECTED));
 }
 
 #[tokio::test]
-async fn registrations_and_creation_times_persist() {
-    const CREATED_AT: i64 = 946_684_800;
+async fn registrations_and_allowlist_timestamps_persist() {
+    const ALLOWLISTED_AT: i64 = 946_684_800;
 
     let (dir, registry) = setup();
     let before =
         i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()).unwrap();
-    let entries = vec![entry(1, None), entry(2, Some(account(1)))];
-    registry.import_invitations(entries.clone()).await.unwrap();
-    registry.add_accounts(vec![account(2)]).await.unwrap();
+    registry.import_invitation(entry(1, None)).await.unwrap();
+    registry.import_invitation(entry(2, Some(account(1)))).await.unwrap();
+    registry.add_account(account(2)).await.unwrap();
     let after =
         i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()).unwrap();
 
@@ -82,8 +82,8 @@ async fn registrations_and_creation_times_persist() {
     let timestamps = registry
         .reader
         .db
-        .read("creation_times", |tx| {
-            tx.query("SELECT created_at FROM account_allowlist", &[], |row| row.get::<i64>(0))
+        .read("allowlist_timestamps", |tx| {
+            tx.query("SELECT allowlisted_at FROM account_allowlist", &[], |row| row.get::<i64>(0))
         })
         .await
         .unwrap();
@@ -92,18 +92,18 @@ async fn registrations_and_creation_times_persist() {
     // An earlier timestamp detects replacement without a clock delay.
     registry
         .writer
-        .write("set_creation_times", |tx| {
-            tx.execute("UPDATE account_allowlist SET created_at = ?1", &[&CREATED_AT])
+        .write("set_allowlist_timestamps", |tx| {
+            tx.execute("UPDATE account_allowlist SET allowlisted_at = ?1", &[&ALLOWLISTED_AT])
         })
         .await
         .unwrap();
 
     registry.register_account(invitation(1), account(0)).await.unwrap();
-    registry.import_invitations(entries).await.unwrap();
-    assert_eq!(
-        registry.add_accounts(vec![account(0), account(1), account(2)]).await.unwrap(),
-        0
-    );
+    registry.import_invitation(entry(1, None)).await.unwrap();
+    registry.import_invitation(entry(2, Some(account(1)))).await.unwrap();
+    for index in 0..3 {
+        assert!(!registry.add_account(account(index)).await.unwrap());
+    }
     drop(registry);
 
     AccountAllowlist::migrate(&path).unwrap();
@@ -120,12 +120,12 @@ async fn registrations_and_creation_times_persist() {
     let timestamps = registry
         .reader
         .db
-        .read("creation_times", |tx| {
-            tx.query("SELECT created_at FROM account_allowlist", &[], |row| row.get::<i64>(0))
+        .read("allowlist_timestamps", |tx| {
+            tx.query("SELECT allowlisted_at FROM account_allowlist", &[], |row| row.get::<i64>(0))
         })
         .await
         .unwrap();
-    assert_eq!(timestamps, vec![CREATED_AT; 3]);
+    assert_eq!(timestamps, vec![ALLOWLISTED_AT; 3]);
 }
 
 #[tokio::test]
@@ -143,7 +143,8 @@ async fn registration_rules() {
         Err(AllowlistError::InvitationNotFound)
     );
 
-    registry.import_invitations(vec![entry(1, None), entry(2, None)]).await.unwrap();
+    registry.import_invitation(entry(1, None)).await.unwrap();
+    registry.import_invitation(entry(2, None)).await.unwrap();
     assert_eq!(reader.invitation_status(invitation(1)).await.unwrap(), InvitationStatus::Unused);
     assert!(!reader.contains_account(account(0)).await.unwrap());
 
@@ -164,11 +165,9 @@ async fn registration_rules() {
         Err(AllowlistError::AccountAlreadyRegistered(id)) if id == account(0)
     );
     assert!(!registry.contains_account(account(1)).await.unwrap());
-    assert_eq!(
-        registry.add_accounts(vec![account(0), account(1), account(1)]).await.unwrap(),
-        1
-    );
-    assert_eq!(registry.add_accounts(vec![account(1)]).await.unwrap(), 0);
+    assert!(!registry.add_account(account(0)).await.unwrap());
+    assert!(registry.add_account(account(1)).await.unwrap());
+    assert!(!registry.add_account(account(1)).await.unwrap());
     assert_matches!(
         registry.register_account(invitation(2), account(1)).await,
         Err(AllowlistError::AccountAlreadyRegistered(id)) if id == account(1)
@@ -183,23 +182,21 @@ async fn registration_rules() {
 }
 
 #[tokio::test]
-async fn conflicting_invitation_import_rolls_back_inserts_and_registrations() {
+async fn invitation_import_preserves_registrations_on_conflicts_and_retries() {
     let (_dir, registry) = setup();
-    registry
-        .import_invitations(vec![entry(1, None), entry(2, Some(account(0)))])
-        .await
-        .unwrap();
+    assert!(registry.import_invitation(entry(1, None)).await.unwrap());
+    assert!(registry.import_invitation(entry(2, Some(account(0)))).await.unwrap());
 
     assert_matches!(
-        registry
-            .import_invitations(vec![
-                entry(3, Some(account(1))),
-                entry(1, Some(account(2))),
-                entry(2, Some(account(1))),
-            ])
-            .await,
+        registry.import_invitation(entry(2, Some(account(1)))).await,
         Err(AllowlistError::InvitationAlreadyUsed)
     );
+    for code in [1, 3] {
+        assert_matches!(
+            registry.import_invitation(entry(code, Some(account(0)))).await,
+            Err(AllowlistError::AccountAlreadyRegistered(id)) if id == account(0)
+        );
+    }
 
     assert_eq!(
         registry.invitation_status(invitation(1)).await.unwrap(),
@@ -216,9 +213,10 @@ async fn conflicting_invitation_import_rolls_back_inserts_and_registrations() {
     assert!(!registry.contains_account(account(1)).await.unwrap());
     assert!(!registry.contains_account(account(2)).await.unwrap());
 
-    let entries = vec![entry(1, Some(account(2))), entry(3, Some(account(1)))];
-    registry.import_invitations(entries.clone()).await.unwrap();
-    registry.import_invitations(entries).await.unwrap();
+    assert!(!registry.import_invitation(entry(1, Some(account(2)))).await.unwrap());
+    assert!(registry.import_invitation(entry(3, Some(account(1)))).await.unwrap());
+    assert!(!registry.import_invitation(entry(1, Some(account(2)))).await.unwrap());
+    assert!(!registry.import_invitation(entry(3, Some(account(1)))).await.unwrap());
     assert_eq!(
         registry.invitation_status(invitation(1)).await.unwrap(),
         InvitationStatus::Registered(account(2))
@@ -232,7 +230,7 @@ async fn conflicting_invitation_import_rolls_back_inserts_and_registrations() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn concurrent_accounts_cannot_claim_the_same_invitation() {
     let (dir, registry) = setup();
-    registry.import_invitations(vec![entry(1, None)]).await.unwrap();
+    registry.import_invitation(entry(1, None)).await.unwrap();
     let other = reopen(&dir);
 
     let (first, second) = tokio::join!(
@@ -255,7 +253,8 @@ async fn concurrent_accounts_cannot_claim_the_same_invitation() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn concurrent_invitations_cannot_register_the_same_account() {
     let (dir, registry) = setup();
-    registry.import_invitations(vec![entry(1, None), entry(2, None)]).await.unwrap();
+    registry.import_invitation(entry(1, None)).await.unwrap();
+    registry.import_invitation(entry(2, None)).await.unwrap();
     let other = reopen(&dir);
 
     let (first, second) = tokio::join!(

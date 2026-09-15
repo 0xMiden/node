@@ -6,10 +6,11 @@
 use std::path::Path;
 
 use miden_node_db::sqlite::{DbReader, DbWriter, WriteTx};
+use miden_node_tracing::{error, miden_instrument};
 use miden_protocol::account::AccountId;
 use thiserror::Error;
 
-use crate::DatabaseError;
+use crate::{COMPONENT, DatabaseError, LOG_TARGET};
 
 mod invitation;
 mod migrations;
@@ -33,6 +34,13 @@ pub enum InvitationStatus {
     Unknown,
     Unused,
     Registered(AccountId),
+}
+
+/// An invitation's registration and allowlist entry timestamp in UTC Unix seconds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InvitationInfo {
+    pub account_id: Option<AccountId>,
+    pub allowlisted_at: i64,
 }
 
 /// The result of a successful registration request.
@@ -63,7 +71,44 @@ pub struct AccountAllowlistReader {
 }
 
 impl AccountAllowlistReader {
+    /// Returns when the account's allowlist entry was added, if it exists.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "store.allowlist.allowlisted_at",
+        fields(account.id = account_id),
+    )]
+    pub async fn allowlisted_at(
+        &self,
+        account_id: AccountId,
+    ) -> Result<Option<i64>, DatabaseError> {
+        self.db
+            .read("allowlist.allowlisted_at", move |tx| queries::allowlisted_at(tx, account_id))
+            .await
+            .map_err(DatabaseError::DatabaseError)
+            .inspect_err(|err| error!(err, target: LOG_TARGET, "Account allowlist query failed"))
+    }
+
+    /// Returns the invitation's registration and allowlist entry timestamp, if it exists.
+    #[miden_instrument(target = COMPONENT, name = "store.allowlist.invitation_info")]
+    pub async fn invitation_info(
+        &self,
+        invitation_code: InvitationCode,
+    ) -> Result<Option<InvitationInfo>, DatabaseError> {
+        self.db
+            .read("allowlist.invitation_info", move |tx| {
+                queries::invitation_info(tx, &invitation_code)
+            })
+            .await
+            .map_err(DatabaseError::DatabaseError)
+            .inspect_err(|err| error!(err, target: LOG_TARGET, "Account allowlist query failed"))
+    }
+
     /// Returns whether the registry contains the account.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "store.allowlist.contains_account",
+        fields(account.id = account_id),
+    )]
     pub async fn contains_account(&self, account_id: AccountId) -> Result<bool, DatabaseError> {
         self.db
             .read("allowlist.contains_account", move |tx| {
@@ -71,9 +116,11 @@ impl AccountAllowlistReader {
             })
             .await
             .map_err(DatabaseError::DatabaseError)
+            .inspect_err(|err| error!(err, target: LOG_TARGET, "Account allowlist query failed"))
     }
 
     /// Returns the registration state of the invitation code.
+    #[miden_instrument(target = COMPONENT, name = "store.allowlist.invitation_status")]
     pub async fn invitation_status(
         &self,
         invitation_code: InvitationCode,
@@ -84,13 +131,14 @@ impl AccountAllowlistReader {
             })
             .await
             .map_err(DatabaseError::DatabaseError)
+            .inspect_err(|err| error!(err, target: LOG_TARGET, "Account allowlist query failed"))
     }
 }
 
 /// Persistent account registry in a separate SQLite database.
 ///
 /// The registry has separate reader and writer pools. Its writes do not wait for block database writes.
-/// Each entry records its creation time in UTC Unix seconds. Registration and retries preserve this time.
+/// Each entry records when it was added to the allowlist in UTC Unix seconds. Registration and retries preserve this time.
 /// Write transactions acquire the write lock before they read registrations.
 /// Each write operation commits all its changes together. Failed operations leave no changes.
 pub struct AccountAllowlist {
@@ -156,44 +204,50 @@ impl AccountAllowlist {
         self.reader.clone()
     }
 
-    /// Imports invitation codes and their optional account registrations in one transaction.
+    /// Imports an invitation code with an optional account registration.
+    /// Returns true if the invitation entry is new.
     ///
     /// An entry without an account preserves any existing registration for its invitation code.
     /// An entry with an account can register an unused invitation code. An identical registration has no effect.
-    /// A conflicting registration rejects the whole import.
-    pub async fn import_invitations(
-        &self,
-        entries: Vec<InvitationEntry>,
-    ) -> Result<(), AllowlistError> {
-        self.transact("allowlist.import_invitations", move |tx| {
-            for entry in entries {
-                queries::import_invitation(tx, &entry)?;
-            }
-            Ok(())
+    /// A conflicting registration leaves the registry unchanged.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "store.allowlist.import_invitation",
+        fields(account.id = entry.account_id),
+    )]
+    pub async fn import_invitation(&self, entry: InvitationEntry) -> Result<bool, AllowlistError> {
+        self.transact("allowlist.import_invitation", move |tx| {
+            queries::import_invitation(tx, &entry)
         })
         .await
+        .inspect_err(|err| error!(err, target: LOG_TARGET, "Account allowlist import failed"))
     }
 
-    /// Adds accounts without invitation codes in one transaction and returns the number of new registrations.
+    /// Adds an account without an invitation code. Returns true if the registration is new.
     ///
-    /// Existing accounts keep their invitation code registrations, if any.
-    pub async fn add_accounts(&self, accounts: Vec<AccountId>) -> Result<usize, DatabaseError> {
+    /// An existing account keeps its invitation code registration, if any.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "store.allowlist.add_account",
+        fields(account.id = account_id),
+    )]
+    pub async fn add_account(&self, account_id: AccountId) -> Result<bool, DatabaseError> {
         self.writer
-            .write("allowlist.add_accounts", move |tx| {
-                let mut inserted = 0;
-                for account_id in accounts {
-                    inserted += queries::add_account(tx, account_id)?;
-                }
-                Ok::<_, miden_node_db::DatabaseError>(inserted)
-            })
+            .write("allowlist.add_account", move |tx| queries::add_account(tx, account_id))
             .await
             .map_err(DatabaseError::DatabaseError)
+            .inspect_err(|err| error!(err, target: LOG_TARGET, "Account allowlist update failed"))
     }
 
     /// Registers an unused invitation code to an account in one transaction.
     ///
     /// A retry with the same invitation code and account succeeds without changes.
     /// An account already registered by another method cannot consume an unused invitation code.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "store.allowlist.register_account",
+        fields(account.id = account_id),
+    )]
     pub async fn register_account(
         &self,
         invitation_code: InvitationCode,
@@ -203,6 +257,7 @@ impl AccountAllowlist {
             queries::register_account(tx, &invitation_code, account_id)
         })
         .await
+        .inspect_err(|err| error!(err, target: LOG_TARGET, "Account registration failed"))
     }
 
     async fn transact<T: Send + 'static>(
