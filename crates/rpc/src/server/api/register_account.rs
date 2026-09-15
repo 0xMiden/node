@@ -1,6 +1,6 @@
 use miden_node_proto::generated as proto;
 use miden_node_store::allowlist::{AllowlistError, InvitationCode};
-use miden_node_tracing::{miden_instrument, miden_span_record};
+use miden_node_tracing::{ErrorReport, miden_instrument, miden_span_record};
 use miden_protocol::account::AccountId;
 use tonic::{Code, Request, Status};
 
@@ -48,7 +48,7 @@ impl proto::server::rpc_api::RegisterAccount for RpcService {
                             | AllowlistError::AccountAlreadyRegistered(_) => Code::AlreadyExists,
                             AllowlistError::Database(_) => Code::Internal,
                         };
-                        Status::new(code, error.to_string())
+                        Status::new(code, error.as_report())
                     },
                 )
             },

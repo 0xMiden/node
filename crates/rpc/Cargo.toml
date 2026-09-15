@@ -45,6 +45,7 @@ tower-http                = { features = ["trace"], workspace = true }
 url                       = { workspace = true }
 
 [dev-dependencies]
+fs-err             = { workspace = true }
 miden-node-tracing = { features = ["tracing-forest"], workspace = true }
 miden-node-utils   = { features = ["testing-prover"], workspace = true }
 miden-protocol     = { default-features = true, features = ["testing"], workspace = true }

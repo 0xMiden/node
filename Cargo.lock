@@ -4240,6 +4240,7 @@ name = "miden-node-rpc"
 version = "0.17.0-rc.1"
 dependencies = [
  "anyhow",
+ "fs-err",
  "futures",
  "http 1.5.0",
  "mediatype",

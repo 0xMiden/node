@@ -1715,6 +1715,36 @@ async fn register_account_validates_input_and_preserves_registrations() {
 }
 
 #[tokio::test]
+async fn register_account_database_failures_include_the_cause() {
+    let (mut rpc, _addr, store, _server) = start_rpc().await;
+    let path = DataDirectory::load(store.data_directory.clone())
+        .unwrap()
+        .allowlist_database_path();
+    fs_err::remove_file(path).unwrap();
+
+    let account = AccountId::dummy(
+        [0; 15],
+        AccountIdVersion::Version1,
+        AccountType::Private,
+        AssetCallbackFlag::Disabled,
+    );
+    let mut request = Request::new(proto::rpc::RegisterAccountRequest {
+        invitation_code: "abc".to_owned(),
+        account_id: Some(account.into()),
+    });
+    request.metadata_mut().insert(
+        ACCEPT.as_str(),
+        format!("application/vnd.miden; genesis={}", store.genesis_commitment())
+            .parse()
+            .unwrap(),
+    );
+
+    let error = rpc.register_account(request).await.unwrap_err();
+    assert_eq!(error.code(), tonic::Code::Internal);
+    assert!(error.message().contains("unable to open database file"), "{error}");
+}
+
+#[tokio::test]
 async fn full_nodes_forward_account_registration_to_the_sequencer() {
     let (source_rpc, _addr, source_store, _server) = start_rpc().await;
     let allowlist = AccountAllowlist::load(
