@@ -17,7 +17,7 @@ use miden_node_tracing::{
 };
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
-use miden_protocol::account::AccountId;
+use miden_protocol::account::{AccountFile, AccountId};
 use miden_protocol::batch::{BatchId, ProposedBatch, ProvenBatch};
 use miden_protocol::note::NoteId;
 use miden_protocol::transaction::TransactionId;
@@ -95,10 +95,12 @@ impl BatchBuilder {
         batch_prover_url: Option<Url>,
         intervals: BatchIntervals,
         builder_account_id: AccountId,
+        pass_through_account: AccountFile,
     ) -> anyhow::Result<Self> {
         let batch_prover =
             batch_prover_url.map_or(Ok(BatchProver::local()), BatchProver::remote)?;
-        let pass_through = PassThroughTransactionBuilder::new(builder_account_id)?;
+        let pass_through =
+            PassThroughTransactionBuilder::new(builder_account_id, pass_through_account)?;
 
         Ok(Self {
             active_jobs: JoinSet::new(),
@@ -309,7 +311,6 @@ impl BatchJob {
         &self,
         selected: SelectedBatch,
     ) -> Result<ProposedBatch, BuildBatchError> {
-        let selected_id = selected.id();
         let fee_notes = selected.collectible_fee_notes().to_vec();
         let mut block_numbers: BTreeSet<_> = selected
             .transactions()
@@ -348,6 +349,13 @@ impl BatchJob {
             .0
             .expect("reference block header should exist");
 
+        let protocol_config = view
+            .get_protocol_config(reference_block_header.protocol_config_commitment())
+            .await
+            .map_err(StoreError::GetProtocolConfigFailed)
+            .map_err(BuildBatchError::FetchBatchInputsFailed)?
+            .expect("the reference block's protocol configuration should exist");
+
         let mut transactions: Vec<_> = selected
             .into_transactions()
             .into_iter()
@@ -358,8 +366,8 @@ impl BatchJob {
         let executed_pass_through_tx = pass_through
             .execute(
                 fee_notes,
-                selected_id.as_batch_id().as_word(),
                 reference_block_header.clone(),
+                protocol_config,
                 partial_blockchain.clone(),
             )
             .await

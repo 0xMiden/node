@@ -1,4 +1,5 @@
 use std::num::NonZeroUsize;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use miden_node_block_producer::{
@@ -84,6 +85,7 @@ mod tests {
     fn options(max_batches: usize, max_txs: usize) -> BlockProducerOptions {
         BlockProducerOptions {
             builder: BuilderOptions {
+                pass_through_account: "pass_through.mac".into(),
                 account_id: miden_protocol::testing::account_id::ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE
                     .try_into()
                     .unwrap(),
@@ -161,6 +163,15 @@ pub struct BuilderOptions {
         help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
     )]
     pub account_id: AccountId,
+
+    /// Account file that contains the deployed fee collector and its signing key.
+    #[arg(
+        long = "batch.builder.pass-through-account",
+        env = "MIDEN_NODE_BATCH_BUILDER_PASS_THROUGH_ACCOUNT",
+        value_name = "PATH",
+        help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
+    )]
+    pub pass_through_account: PathBuf,
 }
 
 #[derive(clap::Args, Clone, Debug)]

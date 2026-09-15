@@ -209,6 +209,8 @@ pub enum StoreError {
     GetBlockInclusionProofsFailed(#[source] GetBlockInclusionProofsError),
     #[error("failed to get block header from store")]
     GetBlockHeaderFailed(#[source] GetBlockHeaderError),
+    #[error("failed to get protocol configuration from store")]
+    GetProtocolConfigFailed(#[source] DatabaseError),
     #[error("failed to get note inclusion proofs from store")]
     GetNoteInclusionProofsFailed(#[source] GetNoteInclusionProofsError),
     #[error("failed to apply block to store")]

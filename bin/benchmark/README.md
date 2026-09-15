@@ -219,6 +219,7 @@ nohup miden-node sequencer \
   --validator.url                             http://127.0.0.1:50101 \
   --ntx-builder.url                           http://127.0.0.1:50301 \
   --batch.builder.account.id                  "$BATCH_BUILDER_ACCOUNT_ID" \
+  --batch.builder.pass-through-account        "$DATA/accounts/pass_through.mac" \
   --batch.max-txs                             1024 \
   --block.max-batches                         64 \
   --block.interval                            2s \

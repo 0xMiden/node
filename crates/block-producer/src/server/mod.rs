@@ -8,7 +8,7 @@ use miden_node_tracing::{debug, error, info, miden_instrument};
 use miden_node_utils::formatting::{format_input_notes, format_output_notes};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
-use miden_protocol::account::AccountId;
+use miden_protocol::account::{AccountFile, AccountId};
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::ProvenTransaction;
@@ -102,6 +102,9 @@ pub struct Sequencer {
 
     /// The batch builder account that receives collected fees.
     pub builder_account_id: AccountId,
+
+    /// The deployed pass-through account and its signing key.
+    pub pass_through_account: AccountFile,
 }
 
 // BLOCK PRODUCER
@@ -131,6 +134,7 @@ impl Sequencer {
             self.batch_prover_url,
             batch_intervals,
             self.builder_account_id,
+            self.pass_through_account,
         )?;
         let api_config = BlockProducerApiConfig {
             max_txs_per_batch: self.max_txs_per_batch,

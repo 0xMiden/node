@@ -5,7 +5,8 @@ use std::time::Duration;
 use miden_node_store::GenesisState;
 use miden_node_store::state::State;
 use miden_node_utils::fee::{test_fee_params, test_protocol_config};
-use miden_protocol::Word;
+use miden_protocol::account::AccountFile;
+use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::block::{BlockHeader, BlockNumber, ValidatorConfig};
 use miden_protocol::testing::random_secret_key::random_secret_key;
 use url::Url;
@@ -73,6 +74,8 @@ async fn block_producer_starts_with_store_state() {
     let data_directory = tempfile::tempdir().expect("tempdir should be created");
     bootstrap_store(data_directory.path());
     let (state, block_writer, proof_writer) = State::for_tests(data_directory.path()).await;
+    let (account, key) =
+        miden_node_store::genesis::pass_through::build_pass_through_account().unwrap();
 
     let block_producer = Sequencer {
         state,
@@ -89,6 +92,10 @@ async fn block_producer_starts_with_store_state() {
         max_concurrent_proofs: DEFAULT_MAX_CONCURRENT_PROOFS,
         mempool_tx_capacity: NonZeroUsize::new(100).unwrap(),
         batch_workers: DEFAULT_BATCH_WORKERS,
+        pass_through_account: AccountFile::new(
+            account,
+            vec![AuthSecretKey::Falcon512Poseidon2(key)],
+        ),
         builder_account_id:
             miden_protocol::testing::account_id::ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE
                 .try_into()

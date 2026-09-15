@@ -1,11 +1,9 @@
 use std::collections::BTreeSet;
 
-use miden_node_store::genesis::pass_through::{
-    build_pass_through_account,
-    pass_through_sweep_component_code,
-};
+use miden_protocol::Word;
 use miden_protocol::account::{
     Account,
+    AccountFile,
     AccountId,
     PartialAccount,
     StorageMapKey,
@@ -13,7 +11,8 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::{Asset, AssetId, AssetWitness};
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::note::{Note, NoteAssets, NoteScript, NoteScriptRoot, NoteTag, NoteType};
+use miden_protocol::note::{Note, NoteAssets, NoteScript, NoteScriptRoot, NoteType};
+use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{
     AccountInputs,
     ExecutedTransaction,
@@ -21,12 +20,11 @@ use miden_protocol::transaction::{
     PartialBlockchain,
     ProvenTransaction,
     TransactionArgs,
-    TransactionScript,
 };
 use miden_protocol::vm::{AdviceMap, FutureMaybeSend};
-use miden_protocol::{Felt, Hasher, Word};
-use miden_standards::code_builder::CodeBuilder;
+use miden_standards::account::auth::AuthTxFeeCollector;
 use miden_standards::note::P2idNoteStorage;
+use miden_tx::auth::BasicAuthenticator;
 use miden_tx::{
     DataStore,
     DataStoreError,
@@ -37,32 +35,49 @@ use miden_tx::{
     TransactionMastStore,
 };
 
-const PASS_THROUGH_TRANSACTION_SCRIPT: &str = include_str!("pass_through.masm");
-
 /// Builds the transaction that converts a batch's fee notes into one P2ID note.
 #[derive(Clone)]
 pub(super) struct PassThroughTransactionBuilder {
     account: Account,
     target: AccountId,
-    script: TransactionScript,
+    authenticator: BasicAuthenticator,
 }
 
 impl PassThroughTransactionBuilder {
-    pub(super) fn new(target: AccountId) -> anyhow::Result<Self> {
-        let account = build_pass_through_account()?;
-        let sweep_component = pass_through_sweep_component_code()?;
-        let script = CodeBuilder::default()
-            .with_dynamically_linked_package(sweep_component)?
-            .compile_tx_script(PASS_THROUGH_TRANSACTION_SCRIPT)?;
+    pub(super) fn new(target: AccountId, account_file: AccountFile) -> anyhow::Result<Self> {
+        let AccountFile { account, auth_secret_keys } = account_file;
+        let auth_root = AuthTxFeeCollector::code()
+            .procedure_roots()
+            .next()
+            .expect("the fee collector exports its authentication procedure");
+        anyhow::ensure!(
+            account.code().procedures().first() == Some(&auth_root),
+            "pass-through account must use AuthTxFeeCollector",
+        );
+        anyhow::ensure!(
+            !account.is_new() && account.vault().is_empty(),
+            "pass-through account must be deployed and have an empty vault",
+        );
+        let public_key = account.storage().get_item(AuthTxFeeCollector::public_key_slot())?;
+        let signature_scheme =
+            account.storage().get_item(AuthTxFeeCollector::signature_scheme_slot())?;
+        anyhow::ensure!(
+            auth_secret_keys.iter().any(|key| {
+                Word::from(key.public_key().to_commitment()) == public_key
+                    && Word::from([key.auth_scheme().as_u8(), 0, 0, 0]) == signature_scheme
+            }),
+            "pass-through account file must contain its signing key",
+        );
+        let authenticator = BasicAuthenticator::new(&auth_secret_keys);
 
-        Ok(Self { account, target, script })
+        Ok(Self { account, target, authenticator })
     }
 
     pub(super) async fn execute(
         &self,
         notes: Vec<Note>,
-        serial_number: Word,
         reference_block_header: BlockHeader,
+        protocol_config: ProtocolConfig,
         partial_blockchain: PartialBlockchain,
     ) -> anyhow::Result<ExecutedTransaction> {
         let asset_ids = notes
@@ -77,19 +92,21 @@ impl PassThroughTransactionBuilder {
             NoteAssets::MAX_NUM_ASSETS,
         );
 
-        let (script, script_args) = self.script_and_args(serial_number, asset_ids);
-        let mut tx_args =
-            TransactionArgs::new(AdviceMap::default()).with_tx_script_and_args(script, script_args);
+        let notes = InputNotes::from_unauthenticated_notes(notes)?;
+        let auth_args = AuthTxFeeCollector::auth_args(self.target, NoteType::Public);
+        let serial_number = AuthTxFeeCollector::derive_serial_number(auth_args, notes.commitment());
+        let mut tx_args = TransactionArgs::new(AdviceMap::default()).with_auth_args(auth_args);
         let output_note_recipient = P2idNoteStorage::new(self.target).into_recipient(serial_number);
         tx_args.extend_advice_map(output_note_recipient.to_advice_map_entries());
-        let notes = InputNotes::from_unauthenticated_notes(notes)?;
         let data_store = PassThroughDataStore::new(
             self.account.clone(),
             reference_block_header,
+            protocol_config,
             partial_blockchain,
         );
 
-        Ok(TransactionExecutor::<_, ()>::new(&data_store)
+        Ok(TransactionExecutor::new(&data_store)
+            .with_authenticator(&self.authenticator)
             .execute_transaction(
                 self.account.id(),
                 data_store.reference_block_header.block_num(),
@@ -100,38 +117,14 @@ impl PassThroughTransactionBuilder {
     }
 
     pub(super) fn prove(transaction: ExecutedTransaction) -> anyhow::Result<ProvenTransaction> {
-        Ok(LocalTransactionProver::default().prove(transaction)?)
-    }
-
-    fn script_and_args(
-        &self,
-        serial_number: Word,
-        asset_ids: impl IntoIterator<Item = AssetId>,
-    ) -> (TransactionScript, Word) {
-        let note_type = NoteType::Public;
-        let tag = NoteTag::with_account_target(self.target);
-        let mut payload = vec![
-            self.target.suffix(),
-            self.target.prefix().as_felt(),
-            Felt::from(tag),
-            Felt::from(note_type),
-        ];
-        payload.extend(serial_number.iter());
-        for asset_id in asset_ids {
-            payload.extend(asset_id.to_word().iter());
-        }
-
-        let script_args = Hasher::hash_elements(&payload);
-        let mut advice_map = AdviceMap::default();
-        advice_map.insert(script_args, payload);
-
-        (self.script.clone().with_advice_map(advice_map), script_args)
+        Ok(LocalTransactionProver::default().prove(transaction.tx_inputs().clone())?)
     }
 }
 
 struct PassThroughDataStore {
     account: Account,
     reference_block_header: BlockHeader,
+    protocol_config: ProtocolConfig,
     partial_blockchain: PartialBlockchain,
     mast_store: TransactionMastStore,
 }
@@ -140,6 +133,7 @@ impl PassThroughDataStore {
     fn new(
         account: Account,
         reference_block_header: BlockHeader,
+        protocol_config: ProtocolConfig,
         partial_blockchain: PartialBlockchain,
     ) -> Self {
         let mast_store = TransactionMastStore::new();
@@ -148,6 +142,7 @@ impl PassThroughDataStore {
         Self {
             account,
             reference_block_header,
+            protocol_config,
             partial_blockchain,
             mast_store,
         }
@@ -159,8 +154,9 @@ impl DataStore for PassThroughDataStore {
         &self,
         account_id: AccountId,
         ref_blocks: BTreeSet<BlockNumber>,
-    ) -> impl FutureMaybeSend<Result<(PartialAccount, BlockHeader, PartialBlockchain), DataStoreError>>
-    {
+    ) -> impl FutureMaybeSend<
+        Result<(PartialAccount, BlockHeader, ProtocolConfig, PartialBlockchain), DataStoreError>,
+    > {
         async move {
             if account_id != self.account.id()
                 || !ref_blocks.contains(&self.reference_block_header.block_num())
@@ -171,6 +167,7 @@ impl DataStore for PassThroughDataStore {
             Ok((
                 PartialAccount::from(&self.account),
                 self.reference_block_header.clone(),
+                self.protocol_config.clone(),
                 self.partial_blockchain.clone(),
             ))
         }
@@ -230,59 +227,107 @@ impl MastForestStore for PassThroughDataStore {
 #[cfg(test)]
 mod tests {
     use miden_node_store::genesis::pass_through::build_pass_through_account;
+    use miden_protocol::account::auth::AuthSecretKey;
     use miden_protocol::asset::FungibleAsset;
     use miden_protocol::testing::account_id::{
         ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE,
         ACCOUNT_ID_SENDER,
     };
-    use miden_protocol::transaction::OutputNote;
+    use miden_protocol::transaction::{OutputNote, TransactionVerifier};
     use miden_standards::note::TxFeeNote;
-    use miden_testing::MockChain;
+    use miden_testing::{Auth, MockChain};
 
     use super::*;
 
     #[tokio::test]
-    async fn converts_fee_notes_into_one_p2id_note() -> anyhow::Result<()> {
-        let pass_through_account = build_pass_through_account()?;
+    async fn collects_fee_notes_including_zero_fees_without_changing_account_state()
+    -> anyhow::Result<()> {
+        let (pass_through_account, key) = build_pass_through_account()?;
         let mut chain_builder = MockChain::builder();
         chain_builder.add_account(pass_through_account.clone())?;
         let chain = chain_builder.build()?;
 
         let target = ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE.try_into()?;
-        let serial_number = Word::from([11_u32, 12, 13, 14]);
-        let asset = FungibleAsset::mock(10);
-        let fee_note = TxFeeNote::builder()
-            .sender(ACCOUNT_ID_SENDER.try_into()?)
-            .serial_number(Word::from([1_u32, 2, 3, 4]))
-            .asset(asset)
-            .build()?;
+        let builder = PassThroughTransactionBuilder::new(
+            target,
+            AccountFile::new(
+                pass_through_account.clone(),
+                vec![AuthSecretKey::Falcon512Poseidon2(key)],
+            ),
+        )?;
+        for amounts in [vec![10, 20], vec![0]] {
+            let notes = amounts
+                .iter()
+                .enumerate()
+                .map(|(index, amount)| {
+                    TxFeeNote::builder()
+                        .sender(ACCOUNT_ID_SENDER.try_into().unwrap())
+                        .serial_number(Word::from([u32::try_from(index).unwrap(), 2, 3, 4]))
+                        .asset(FungibleAsset::mock(*amount))
+                        .build()
+                        .map(Note::from)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let serial_number = AuthTxFeeCollector::derive_serial_number(
+                AuthTxFeeCollector::auth_args(target, NoteType::Public),
+                InputNotes::from_unauthenticated_notes(notes.clone())?.commitment(),
+            );
+            let executed = builder
+                .execute(
+                    notes,
+                    chain.latest_block_header(),
+                    chain.protocol_config().clone(),
+                    chain.latest_partial_blockchain(),
+                )
+                .await?;
+            let transaction = PassThroughTransactionBuilder::prove(executed)?;
+            let outcome = TransactionVerifier::new(miden_protocol::MIN_PROOF_SECURITY_LEVEL)
+                .verify(&transaction)?;
+            assert!(outcome.is_complete());
 
-        let builder = PassThroughTransactionBuilder::new(target)?;
-        let executed = builder
-            .execute(
-                vec![fee_note.into()],
-                serial_number,
-                chain.latest_block_header(),
-                chain.latest_partial_blockchain(),
-            )
-            .await?;
-        let transaction = PassThroughTransactionBuilder::prove(executed)?;
+            assert_eq!(transaction.account_id(), pass_through_account.id());
+            assert_eq!(
+                transaction.account_update().initial_state_commitment(),
+                transaction.account_update().final_state_commitment(),
+            );
+            assert_eq!(usize::from(transaction.input_notes().num_notes()), amounts.len());
+            assert_eq!(transaction.output_notes().num_notes(), 1);
 
-        assert_eq!(transaction.account_id(), pass_through_account.id());
-        assert_eq!(
-            transaction.account_update().initial_state_commitment(),
-            transaction.account_update().final_state_commitment(),
-        );
-        assert_eq!(transaction.input_notes().num_notes(), 1);
-        assert_eq!(transaction.output_notes().num_notes(), 1);
+            let OutputNote::Public(output_note) = transaction.output_notes().get_note(0) else {
+                panic!("the batch builder output note must be public");
+            };
+            let expected_recipient = P2idNoteStorage::new(target).into_recipient(serial_number);
+            assert_eq!(output_note.recipient().digest(), expected_recipient.digest());
+            assert_eq!(
+                output_note.assets().iter().copied().collect::<Vec<_>>(),
+                vec![FungibleAsset::mock(amounts.iter().sum())],
+            );
+        }
 
-        let OutputNote::Public(output_note) = transaction.output_notes().get_note(0) else {
-            panic!("the batch builder output note must be public");
-        };
-        let expected_recipient = P2idNoteStorage::new(target).into_recipient(serial_number);
-        assert_eq!(output_note.recipient().digest(), expected_recipient.digest());
-        assert_eq!(output_note.assets().iter().copied().collect::<Vec<_>>(), vec![asset]);
+        Ok(())
+    }
 
+    #[test]
+    fn rejects_missing_or_mismatched_signing_keys() -> anyhow::Result<()> {
+        let (account, _) = build_pass_through_account()?;
+        let target = ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE.try_into()?;
+        for keys in [vec![], vec![AuthSecretKey::new_falcon512_poseidon2()]] {
+            let result =
+                PassThroughTransactionBuilder::new(target, AccountFile::new(account.clone(), keys));
+            let error = result.err().expect("the collector must require its own signing key");
+            assert!(error.to_string().contains("signing key"));
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_an_ordinary_wallet_as_the_collector() -> anyhow::Result<()> {
+        let account = MockChain::builder().add_existing_wallet(Auth::basic_ecdsa())?;
+        let target = ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE.try_into()?;
+        let result = PassThroughTransactionBuilder::new(target, AccountFile::new(account, vec![]));
+        let error = result.err().expect("an ordinary wallet must not collect batch fees");
+        assert!(error.to_string().contains("AuthTxFeeCollector"));
         Ok(())
     }
 }

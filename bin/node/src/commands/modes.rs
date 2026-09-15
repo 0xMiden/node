@@ -13,6 +13,7 @@ use miden_node_proto::clients::{
     ValidatorClient,
     WantsConnection,
 };
+use miden_node_proto::domain::account::AccountRequest;
 use miden_node_rpc::{
     AccountAdmission,
     PreAuthSubmission,
@@ -28,6 +29,7 @@ use miden_node_utils::clap::duration_to_human_readable_string;
 use miden_node_utils::formatting::format_endpoint;
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
+use miden_protocol::account::AccountFile;
 use tokio::net::TcpListener;
 use url::Url;
 
@@ -77,6 +79,9 @@ impl SequencerCommand {
         self.log_starting();
         let runtime = self.runtime.runtime_config(&self.store);
         self.block_producer.validate()?;
+        let pass_through_account =
+            AccountFile::read(&self.block_producer.builder.pass_through_account)
+                .context("failed to read batch.builder.pass-through-account")?;
         let network_tx_auth = self.runtime.rpc.network_tx_auth()?;
         let (validator_clients, validator_monitors) =
             self.external_services.validator_clients_and_monitors()?;
@@ -97,6 +102,21 @@ impl SequencerCommand {
             load_state(&runtime, shutdown.clone()).await?;
         let _disk_monitor = state.spawn_disk_monitor(shutdown.clone());
 
+        let on_chain_account = state
+            .view()
+            .get_account(AccountRequest {
+                account_id: pass_through_account.account.id(),
+                block_num: None,
+                details: None,
+            })
+            .await
+            .context("failed to read the pass-through account from the chain")?;
+        anyhow::ensure!(
+            on_chain_account.witness.state_commitment()
+                == pass_through_account.account.to_commitment(),
+            "pass-through account file does not match the account in the chain",
+        );
+
         let sequencer = Sequencer {
             state: Arc::clone(&state),
             block_writer,
@@ -113,6 +133,7 @@ impl SequencerCommand {
             mempool_tx_capacity: self.block_producer.mempool.tx_capacity,
             batch_workers: self.block_producer.batch.workers,
             builder_account_id: self.block_producer.builder.account_id,
+            pass_through_account,
         }
         .spawn(shutdown.clone())
         .context("failed to spawn sequencer")?;

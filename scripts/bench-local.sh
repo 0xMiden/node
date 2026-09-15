@@ -181,6 +181,7 @@ start_bg node miden-node sequencer \
     --validator.url                             "http://127.0.0.1:$VALIDATOR_PORT" \
     --ntx-builder.url                           "http://127.0.0.1:$NTX_PORT" \
     --batch.builder.account.id                  "$BATCH_BUILDER_ACCOUNT_ID" \
+    --batch.builder.pass-through-account        "$DATA/accounts/pass_through.mac" \
     --batch.max-txs                             64 \
     --block.max-batches                         16 \
     --block.interval                            2s \

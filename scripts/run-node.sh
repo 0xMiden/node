@@ -257,6 +257,7 @@ OTEL_RESOURCE_ATTRIBUTES="$(node_resource_attributes sequencer)" \
     --validator.url "http://127.0.0.1:$VALIDATOR_2_PORT" \
     --ntx-builder.url "http://127.0.0.1:$NTX_BUILDER_PORT" \
     --batch.builder.account.id "$BATCH_BUILDER_ACCOUNT_ID" \
+    --batch.builder.pass-through-account "$ACCOUNTS_DIR/pass_through.mac" \
     --internal.listen "0.0.0.0:$SEQUENCER_INTERNAL_PORT" \
     $EXTRA_ARGS &
 PIDS+=($!)
