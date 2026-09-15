@@ -215,11 +215,14 @@ impl RpcNodeClient {
                 let proof = record
                     .inclusion_proof
                     .context("a note sync record did not include an inclusion proof")?;
-                let note_id =
-                    proof.note_id.context("a note inclusion proof did not include a note ID")?;
-                let note_id =
-                    Word::try_from(note_id).context("failed to convert a synced note ID")?;
-                note_ids.push(NoteId::from_raw(note_id));
+                let note_id = proof
+                    .note_id
+                    .context("a note inclusion proof did not include a note ID")?
+                    .decode_fields()
+                    .context("failed to decode a synced note ID")?
+                    .verify()
+                    .context("failed to verify a synced note ID")?;
+                note_ids.push(note_id);
             }
         }
 
@@ -251,7 +254,12 @@ impl RpcNodeClient {
                     continue;
                 }
 
-                notes.push(Note::try_from(note).context("failed to convert a committed note")?);
+                let note = note
+                    .decode_fields()
+                    .context("failed to decode a committed note")?
+                    .verify()
+                    .context("failed to verify a committed note")?;
+                notes.push(note);
             }
         }
 
