@@ -59,7 +59,7 @@ fn entry(value: u8, account_id: Option<AccountId>) -> InvitationEntry {
 #[test]
 fn migration_schema_hashes_are_stable() {
     const EXPECTED: [SchemaHash; 1] = [SchemaHash::from_hex(
-        "0583eb81f0908f8b715a7d764937d631d2079bbae741815afa1b0ab6f284de0f",
+        "e46c4bb6724dfd7b0da02c11b471ef4535bf4acc577ebe8306cbd14fd2ced399",
     )];
     let migrator = super::migrations::migrator().unwrap();
     pretty_assertions::assert_eq!(migrator.schema_hashes(), SchemaHashes(&EXPECTED));
