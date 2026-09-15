@@ -1,7 +1,6 @@
 //! Real transaction proofs for submission tests.
 
 use miden_processor::{ExecutionOptions, FastProcessor};
-use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::account::AccountUpdateDetails;
 use miden_protocol::asset::FungibleAsset;
 use miden_protocol::block::{BlockSignatures, SignedBlock};
@@ -14,6 +13,8 @@ use miden_protocol::transaction::{
     TxAccountUpdate,
 };
 use miden_protocol::vm::{ExecutionProof, PrecompileStatus};
+use miden_protocol::{MIN_PROOF_SECURITY_LEVEL, Word};
+use miden_standards::account::auth::{FeeConversionInfo, commit_fee_conversion_info};
 use miden_testing::{Auth, MockChainBuilder};
 use miden_tx::{
     AccountProcedureIndexMap,
@@ -47,10 +48,16 @@ pub async fn deferred_transaction_fixture() -> &'static DeferredTransactionFixtu
             let (header, body, ..) = chain.latest_block().into_parts();
             let genesis =
                 SignedBlock::new_unchecked(header, body, BlockSignatures::new(Vec::new()).unwrap());
+            let (auth_args, advice) = commit_fee_conversion_info(
+                FeeConversionInfo::one_to_one(FungibleAsset::mock_issuer()),
+                Word::from([9u32, 10, 11, 12]),
+            );
             let executed = Box::pin(
                 chain
                     .build_transaction(account.id())
                     .authenticated_input_note(note.id())
+                    .auth_args(auth_args)
+                    .add_advice_map_entry(auth_args, advice)
                     .build()
                     .unwrap()
                     .execute(),
