@@ -20,6 +20,7 @@ use miden_protocol::block::nullifier_tree::{NullifierMutationSet, NullifierTree}
 use miden_protocol::block::{BlockBody, BlockHeader, BlockNumber, Blockchain, SignedBlock};
 use miden_protocol::crypto::merkle::smt::LargeSmt;
 use miden_protocol::note::{NoteDetails, Nullifier};
+use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::OutputNote;
 use miden_protocol::utils::serde::Serializable;
 use rayon::ThreadPool;
@@ -160,7 +161,10 @@ impl WriteWorker {
                     None => break,
                 },
             };
-            let result = self.write_block(req.signed_block).instrument(req.span).await;
+            let result = self
+                .write_block(req.signed_block, req.protocol_config)
+                .instrument(req.span)
+                .await;
             let _ = req.result_tx.send(result);
         }
     }
@@ -186,7 +190,11 @@ impl WriteWorker {
         target = COMPONENT,
         err,
     )]
-    async fn write_block(&mut self, signed_block: SignedBlock) -> Result<(), ApplyBlockError> {
+    async fn write_block(
+        &mut self,
+        signed_block: SignedBlock,
+        protocol_config: Option<ProtocolConfig>,
+    ) -> Result<(), ApplyBlockError> {
         let header = signed_block.header();
         let body = signed_block.body();
 
@@ -200,7 +208,29 @@ impl WriteWorker {
             block.transaction.count = num_transactions
         );
 
-        self.validate_block_header(header).await?;
+        let previous_config_commitment = self.validate_block_header(header).await?;
+
+        let commitment = header.protocol_config_commitment();
+        if let Some(config) = protocol_config.as_ref() {
+            let calculated = config.to_commitment();
+            if calculated != commitment {
+                return Err(crate::errors::DatabaseError::ProtocolConfigCommitmentMismatch {
+                    expected: commitment,
+                    calculated,
+                }
+                .into());
+            }
+        }
+
+        let stored = self.db.select_protocol_config_by_commitment(commitment).await?;
+        if stored.is_none() && protocol_config.is_none() {
+            return Err(crate::errors::DatabaseError::ProtocolConfigNotFound(commitment).into());
+        }
+        let activated_protocol_config = if previous_config_commitment == commitment {
+            None
+        } else {
+            stored.or(protocol_config)
+        };
 
         let block_lifecycle =
             lifecycle_events_enabled().then(|| BlockLifecycle::from_block_body(block_num, body));
@@ -237,6 +267,7 @@ impl WriteWorker {
             .db
             .apply_block(
                 signed_block,
+                activated_protocol_config,
                 notes,
                 precomputed_public_states,
                 unresolved_note_nullifiers,
@@ -417,7 +448,7 @@ impl WriteWorker {
         target = COMPONENT,
         err,
     )]
-    async fn validate_block_header(&self, header: &BlockHeader) -> Result<(), ApplyBlockError> {
+    async fn validate_block_header(&self, header: &BlockHeader) -> Result<Word, ApplyBlockError> {
         let block_num = header.block_num();
 
         // Validate that the applied block is the next block in sequence.
@@ -438,7 +469,7 @@ impl WriteWorker {
             return Err(InvalidBlockError::NewBlockInvalidPrevCommitment.into());
         }
 
-        Ok(())
+        Ok(prev_block.protocol_config_commitment())
     }
 
     /// Computes nullifier and account tree mutations, validating roots against the block header.
@@ -586,5 +617,303 @@ fn raise_thread_priority() {
                 "failed to raise apply-block thread priority; continuing at normal priority"
             );
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use assert_matches::assert_matches;
+    use diesel::{ExpressionMethods, QueryDsl, RunQueryDsl};
+    use miden_node_utils::clap::StorageOptions;
+    use miden_node_utils::fee::{test_fee_params, test_protocol_config};
+    use miden_node_utils::shutdown::CancellationToken;
+    use miden_protocol::asset::AssetId;
+    use miden_protocol::block::{
+        BlockBody,
+        BlockHeader,
+        BlockSignatures,
+        SignedBlock,
+        ValidatorConfig,
+    };
+    use miden_protocol::crypto::merkle::mmr::Mmr;
+    use miden_protocol::protocol_config::ProtocolConfig;
+    use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1;
+    use miden_protocol::testing::random_secret_key::random_secret_key;
+    use miden_protocol::transaction::OrderedTransactionHeaders;
+    use miden_protocol::utils::serde::Serializable;
+    use tempfile::TempDir;
+
+    use crate::db::schema::protocol_configs;
+    use crate::errors::{ApplyBlockError, DatabaseError};
+    use crate::genesis::GenesisState;
+    use crate::state::{BlockWriter, State, WriterTask};
+
+    async fn start_store() -> (TempDir, Arc<State>, BlockWriter, WriterTask, ProtocolConfig) {
+        let temp_dir = tempfile::tempdir().expect("test directory should be created");
+        let protocol_config = test_protocol_config();
+        let signer = random_secret_key();
+        let genesis = GenesisState::new(
+            Vec::new(),
+            test_fee_params(),
+            0,
+            ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
+            protocol_config.clone(),
+        )
+        .into_block()
+        .expect("genesis block should be created");
+        State::bootstrap(genesis, temp_dir.path()).expect("store should bootstrap");
+
+        let (state, block_writer, _proof_writer, writer_task) =
+            State::load(temp_dir.path(), StorageOptions::default())
+                .await
+                .expect("state should load")
+                .start(CancellationToken::new());
+
+        (temp_dir, state, block_writer, writer_task, protocol_config)
+    }
+
+    fn alternate_protocol_config() -> ProtocolConfig {
+        ProtocolConfig::current(AssetId::new_fungible(
+            ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1.try_into().unwrap(),
+        ))
+        .unwrap()
+    }
+
+    async fn empty_block(state: &State, protocol_config: &ProtocolConfig) -> SignedBlock {
+        let view = state.view();
+        let (parent, _) = view.get_block_header(None, false).await.unwrap();
+        let parent = parent.expect("chain should have a parent block");
+        let mut mmr = Mmr::new();
+        for height in 0..=parent.block_num().as_u32() {
+            let (header, _) = view.get_block_header(Some(height.into()), false).await.unwrap();
+            mmr.add(header.expect("block header should exist").commitment()).unwrap();
+        }
+        let body = BlockBody::new(
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            OrderedTransactionHeaders::new_unchecked(Vec::new()),
+        )
+        .unwrap();
+        let header = BlockHeader::new(
+            parent.commitment(),
+            parent.block_num().child(),
+            mmr.peaks().hash_peaks(),
+            parent.account_root(),
+            parent.nullifier_root(),
+            body.compute_block_note_tree().root(),
+            body.transaction_commitment(),
+            parent.validator_config().clone(),
+            parent.fee_parameters().clone(),
+            protocol_config.to_commitment(),
+            None,
+            parent.timestamp() + 1,
+        );
+        SignedBlock::new_unchecked(header, body, BlockSignatures::new(Vec::new()).unwrap())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn writer_inserts_a_new_protocol_config_with_its_block() {
+        let (_temp_dir, state, mut writer, writer_task, _genesis_config) = start_store().await;
+        let protocol_config = alternate_protocol_config();
+        let block = empty_block(&state, &protocol_config).await;
+
+        writer.apply_block(block, Some(protocol_config.clone())).await.unwrap();
+
+        assert_eq!(state.committed_tip(), 1.into());
+        assert_eq!(
+            state.view().get_protocol_config(protocol_config.to_commitment()).await.unwrap(),
+            Some(protocol_config)
+        );
+        writer.stop(writer_task).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn writer_records_reactivations_and_scopes_history() {
+        let (_temp_dir, state, mut writer, writer_task, first) = start_store().await;
+        let second = alternate_protocol_config();
+        let pinned = state.view();
+        for (config, supplied) in [
+            (&first, false),
+            (&second, true),
+            (&second, false),
+            (&first, false),
+            (&second, true),
+        ] {
+            let block = empty_block(&state, config).await;
+            writer.apply_block(block, supplied.then(|| config.clone())).await.unwrap();
+        }
+        assert_eq!(
+            pinned.get_protocol_config_commitment_at(0.into()).await.unwrap(),
+            Some(first.to_commitment())
+        );
+        assert!(matches!(
+            pinned.get_protocol_config_commitment_at(1.into()).await,
+            Err(DatabaseError::RangeBeyondTip(_))
+        ));
+        let view = state.view();
+        for (height, config) in
+            [(0, &first), (1, &first), (2, &second), (3, &second), (4, &first), (5, &second)]
+        {
+            assert_eq!(
+                view.get_protocol_config_commitment_at(height.into()).await.unwrap(),
+                Some(config.to_commitment())
+            );
+        }
+        let activations: Vec<i64> = state
+            .db
+            .query("activation history", |conn| {
+                protocol_configs::table
+                    .select(protocol_configs::block_number)
+                    .order(protocol_configs::block_number.asc())
+                    .load(conn)
+                    .map_err(DatabaseError::from)
+            })
+            .await
+            .unwrap();
+        assert_eq!(activations, vec![0, 2, 4, 5]);
+        drop(view);
+        drop(pinned);
+        writer.stop(writer_task).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn writer_reuses_a_known_protocol_config_without_a_supplied_config() {
+        let (_temp_dir, state, mut writer, writer_task, protocol_config) = start_store().await;
+        let block = empty_block(&state, &protocol_config).await;
+
+        writer.apply_block(block, None).await.unwrap();
+
+        assert_eq!(state.committed_tip(), 1.into());
+        writer.stop(writer_task).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn writer_reuses_a_known_protocol_config_when_it_is_supplied() {
+        let (_temp_dir, state, mut writer, writer_task, protocol_config) = start_store().await;
+        let block = empty_block(&state, &protocol_config).await;
+
+        writer.apply_block(block, Some(protocol_config)).await.unwrap();
+
+        assert_eq!(state.committed_tip(), 1.into());
+        writer.stop(writer_task).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn writer_rejects_an_unknown_protocol_config() {
+        let (_temp_dir, state, mut writer, writer_task, _genesis_config) = start_store().await;
+        let protocol_config = alternate_protocol_config();
+        let commitment = protocol_config.to_commitment();
+        let block = empty_block(&state, &protocol_config).await;
+
+        let error = writer.apply_block(block, None).await.unwrap_err();
+
+        assert_matches!(
+            error,
+            ApplyBlockError::DatabaseError(DatabaseError::ProtocolConfigNotFound(actual))
+                if actual == commitment
+        );
+        assert_eq!(state.committed_tip(), 0.into());
+        writer.stop(writer_task).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn writer_rejects_a_mismatched_supplied_protocol_config() {
+        let (_temp_dir, state, mut writer, writer_task, genesis_config) = start_store().await;
+        let protocol_config = alternate_protocol_config();
+        let expected = protocol_config.to_commitment();
+        let calculated = genesis_config.to_commitment();
+        let block = empty_block(&state, &protocol_config).await;
+
+        let error = writer.apply_block(block, Some(genesis_config)).await.unwrap_err();
+
+        assert_matches!(
+            error,
+            ApplyBlockError::DatabaseError(DatabaseError::ProtocolConfigCommitmentMismatch {
+                expected: actual_expected,
+                calculated: actual_calculated,
+            }) if actual_expected == expected && actual_calculated == calculated
+        );
+        assert_eq!(state.committed_tip(), 0.into());
+        writer.stop(writer_task).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn writer_rejects_a_corrupt_persisted_protocol_config() {
+        let (_temp_dir, state, mut writer, writer_task, protocol_config) = start_store().await;
+        let commitment = protocol_config.to_commitment();
+        let block = empty_block(&state, &protocol_config).await;
+        let mut bytes = protocol_config.to_bytes();
+        bytes.push(0xff);
+        state
+            .db
+            .query("corrupt protocol config", move |conn| {
+                diesel::update(
+                    protocol_configs::table
+                        .filter(protocol_configs::commitment.eq(commitment.to_bytes())),
+                )
+                .set(protocol_configs::protocol_config.eq(bytes))
+                .execute(conn)?;
+                Ok::<_, DatabaseError>(())
+            })
+            .await
+            .unwrap();
+
+        let error = writer.apply_block(block, Some(protocol_config)).await.unwrap_err();
+
+        assert_matches!(error, ApplyBlockError::DatabaseError(DatabaseError::DataCorrupted(_)));
+        assert_eq!(state.committed_tip(), 0.into());
+        writer.stop(writer_task).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn protocol_config_insertion_rolls_back_when_the_block_write_fails() {
+        let (_temp_dir, state, mut writer, writer_task, genesis_config) = start_store().await;
+        let protocol_config = alternate_protocol_config();
+        let commitment = protocol_config.to_commitment();
+        let block = empty_block(&state, &protocol_config).await;
+        state
+            .db
+            .query("reject block inserts", |conn| {
+                diesel::sql_query(
+                    "CREATE TRIGGER reject_block_insert BEFORE INSERT ON block_headers \
+                     BEGIN SELECT RAISE(ABORT, 'test block rejection'); END",
+                )
+                .execute(conn)?;
+                Ok::<_, DatabaseError>(())
+            })
+            .await
+            .unwrap();
+
+        assert_matches!(
+            writer.apply_block(block, Some(protocol_config)).await,
+            Err(ApplyBlockError::DbUpdateTaskFailed(_))
+        );
+
+        assert_eq!(state.committed_tip(), 0.into());
+        assert_eq!(state.view().get_protocol_config(commitment).await.unwrap(), None);
+        assert_eq!(
+            state
+                .db
+                .select_protocol_config_commitment_at(crate::state::ScopedBlockNum::new_unchecked(
+                    1.into()
+                ),)
+                .await
+                .unwrap(),
+            Some(genesis_config.to_commitment())
+        );
+        assert_eq!(
+            state
+                .db
+                .select_block_header_by_block_num(Some(
+                    crate::state::ScopedBlockNum::new_unchecked(1.into()),
+                ))
+                .await
+                .unwrap(),
+            None
+        );
+        writer.stop(writer_task).await;
     }
 }

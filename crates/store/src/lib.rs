@@ -3,6 +3,7 @@ extern crate miden_node_tracing as tracing;
 
 mod account_state_forest;
 mod accounts;
+pub mod allowlist;
 mod blocks;
 mod data_directory;
 mod db;

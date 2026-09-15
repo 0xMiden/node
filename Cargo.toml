@@ -33,8 +33,8 @@ homepage     = "https://miden.xyz"
 license      = "MIT"
 readme       = "README.md"
 repository   = "https://github.com/0xMiden/node"
-rust-version = "1.98.0"
-version      = "0.16.0-rc.5"
+rust-version = "1.98.1"
+version      = "0.17.0-rc.1"
 
 # Optimize the cryptography for faster tests involving account creation.
 [profile.test.package.miden-crypto]
@@ -45,28 +45,29 @@ debug = true
 
 [workspace.dependencies]
 # Workspace crates.
-miden-node-block-producer   = { path = "crates/block-producer", version = "0.16.0-rc.5" }
-miden-node-db               = { path = "crates/db", version = "0.16.0-rc.5" }
-miden-node-grpc-error-macro = { path = "crates/grpc-error-macro", version = "0.16.0-rc.5" }
-miden-node-proto            = { path = "crates/proto", version = "0.16.0-rc.5" }
-miden-node-proto-build      = { path = "proto", version = "0.16.0-rc.5" }
-miden-node-rpc              = { path = "crates/rpc", version = "0.16.0-rc.5" }
-miden-node-store            = { path = "crates/store", version = "0.16.0-rc.5" }
+miden-node-block-producer   = { path = "crates/block-producer", version = "0.17.0-rc.1" }
+miden-node-db               = { path = "crates/db", version = "0.17.0-rc.1" }
+miden-node-grpc-error-macro = { path = "crates/grpc-error-macro", version = "0.17.0-rc.1" }
+miden-node-proto            = { path = "crates/proto", version = "0.17.0-rc.1" }
+miden-node-proto-build      = { path = "proto", version = "0.17.0-rc.1" }
+miden-node-rpc              = { path = "crates/rpc", version = "0.17.0-rc.1" }
+miden-node-store            = { path = "crates/store", version = "0.17.0-rc.1" }
 miden-node-test-macro       = { path = "crates/test-macro" }
-miden-node-tracing          = { path = "crates/tracing", version = "0.16.0-rc.5" }
-miden-node-tracing-macro    = { path = "crates/tracing-macro", version = "0.16.0-rc.5" }
-miden-node-utils            = { path = "crates/utils", version = "0.16.0-rc.5" }
+miden-node-tracing          = { path = "crates/tracing", version = "0.17.0-rc.1" }
+miden-node-tracing-macro    = { path = "crates/tracing-macro", version = "0.17.0-rc.1" }
+miden-node-utils            = { path = "crates/utils", version = "0.17.0-rc.1" }
 
 # miden-protocol dependencies. These should be updated in sync.
-miden-block-prover = { version = "=0.16.0-rc.9" }
-miden-protocol     = { default-features = false, version = "=0.16.0-rc.9" }
-miden-standards    = { version = "=0.16.0-rc.9" }
-miden-testing      = { version = "=0.16.0-rc.9" }
-miden-tx           = { default-features = false, version = "=0.16.0-rc.9" }
-miden-tx-batch     = { version = "=0.16.0-rc.9" }
+miden-block-prover = { version = "0.17.0-rc.4" }
+miden-objects      = { version = "0.17.0-rc.4" }
+miden-protocol     = { default-features = false, version = "0.17.0-rc.4" }
+miden-standards    = { version = "0.17.0-rc.4" }
+miden-testing      = { version = "0.17.0-rc.4" }
+miden-tx           = { default-features = false, version = "0.17.0-rc.4" }
+miden-tx-batch     = { version = "0.17.0-rc.4" }
 
 # Other miden dependencies. These should align with those expected by miden-protocol.
-miden-crypto               = { version = "0.29.1" }
+miden-crypto               = { version = "0.32.0" }
 miden-note-transport-proto = { version = "0.5.0-rc.2" }
 
 # External dependencies
@@ -117,6 +118,7 @@ rstest             = { version = "0.26" }
 rusqlite           = { features = ["array", "bundled"], version = "0.37" }
 semver             = { version = "1.0" }
 serde              = { features = ["derive"], version = "1" }
+serde_json         = { version = "1.0" }
 serial_test        = { version = "3.2" }
 sha2               = { version = "0.10" }
 syn                = { version = "2.0" }

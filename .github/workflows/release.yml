@@ -335,7 +335,7 @@ jobs:
             --notes-file "${RUNNER_TEMP}/release-notes.md" \
             "${prerelease_flag[@]}"
 
-      - name: Trigger post-release publishing workflows
+      - name: Trigger crates.io publishing
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -343,15 +343,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          # The GitHub release is created with GITHUB_TOKEN, so its release
-          # event does not start follow-up workflows. workflow_dispatch events
-          # are allowed for GITHUB_TOKEN, so trigger those workflows directly.
+          # GITHUB_TOKEN creates the release, so the release event does not start workflows.
+          # Use workflow_dispatch to start crates.io publishing with GITHUB_TOKEN.
           gh workflow run publish-crates.yml \
-            --repo "${REPO}" \
-            --ref "${TAG}" \
-            --field "version=${TAG}"
-
-          gh workflow run publish-debian-all.yml \
             --repo "${REPO}" \
             --ref "${TAG}" \
             --field "version=${TAG}"

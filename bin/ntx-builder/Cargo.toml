@@ -45,6 +45,7 @@ build-rs      = { workspace = true }
 miden-node-db = { workspace = true }
 
 [dev-dependencies]
+fs-err           = { workspace = true }
 miden-node-utils = { features = ["testing"], workspace = true }
 miden-protocol   = { default-features = true, features = ["testing"], workspace = true }
 miden-standards  = { features = ["testing"], workspace = true }

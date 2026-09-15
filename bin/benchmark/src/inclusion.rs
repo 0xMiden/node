@@ -11,11 +11,10 @@ use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use miden_node_proto::clients::RpcClient;
-use miden_node_proto::generated as proto;
 use miden_node_proto::generated::rpc::BlockHeaderByNumberRequest;
-use miden_protocol::block::{BlockHeader, SignedBlock};
+use miden_node_proto::{BuildUnchecked, DecodeMessage, generated as proto};
+use miden_protocol::block::BlockHeader;
 use miden_protocol::transaction::TransactionId;
-use miden_protocol::utils::serde::Deserializable;
 
 /// One scanned block that contained at least one of our txs. Empty blocks in the scan range are not
 /// represented here.
@@ -111,7 +110,7 @@ pub(crate) async fn scan_with_drain(
         // Scan every unwatched block, capped at the max-bound target.
         let scan_to = tip.min(max_target);
         while next_block <= scan_to {
-            let request = proto::blockchain::BlockRequest {
+            let request = proto::rpc::BlockRequest {
                 block_num: next_block,
                 include_proof: None,
             };
@@ -126,11 +125,15 @@ pub(crate) async fn scan_with_drain(
                     continue;
                 },
             };
-            let Some(bytes) = response.block else {
+            let Some(block) = response.block else {
                 next_block += 1;
                 continue;
             };
-            let signed_block = match SignedBlock::read_from_bytes(&bytes) {
+            let signed_block = match block
+                .decode_fields()
+                .map_err(anyhow::Error::from)
+                .and_then(|block| block.build_unchecked().map_err(anyhow::Error::from))
+            {
                 Ok(sb) => sb,
                 Err(err) => {
                     eprintln!(
@@ -216,6 +219,7 @@ pub(crate) async fn current_block_height(mut client: RpcClient) -> u32 {
         .get_block_header_by_number(BlockHeaderByNumberRequest {
             block_num: None,
             include_mmr_proof: None,
+            include_protocol_config: None,
         })
         .await
         .expect("failed to fetch latest block header")
@@ -223,7 +227,9 @@ pub(crate) async fn current_block_height(mut client: RpcClient) -> u32 {
     let header: BlockHeader = response
         .block_header
         .expect("no block header in response")
-        .try_into()
-        .expect("failed to decode block header");
+        .decode_fields()
+        .expect("failed to decode block header")
+        .build_unchecked()
+        .expect("failed to build block header");
     header.block_num().as_u32()
 }

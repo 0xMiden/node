@@ -24,14 +24,14 @@ pub enum Command {
     /// nodes for the network must use `full` mode.
     ///
     /// Use `full` mode to run a non-sequencing node that syncs blocks from an upstream source.
-    Sequencer(SequencerCommand),
+    Sequencer(Box<SequencerCommand>),
 
     /// Start the node in full-node mode.
     ///
     /// In this mode, the node syncs blocks from an upstream source and serves a local RPC API.
     /// This is useful for avoiding rate limits on official networks, or for horizontally scaling
     /// RPC traffic.
-    Full(FullNodeCommand),
+    Full(Box<FullNodeCommand>),
 
     /// Initialize the node's storage from a trusted genesis block.
     ///

@@ -35,7 +35,7 @@ impl BlockWriter {
             .await
             .map_err(ApplyBlockWithProvingInputsError::SaveProvingInputs)?;
 
-        self.apply_block(signed_block)
+        self.apply_block(signed_block, None)
             .await
             .map_err(ApplyBlockWithProvingInputsError::ApplyBlock)
     }
