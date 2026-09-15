@@ -12,6 +12,7 @@ use miden_node_proto::generated::rpc::{
     AccountRequest as ProtoAccountRequest,
     BlockHeaderByNumberRequest,
 };
+use miden_node_proto::{BuildUnchecked, DecodeMessage};
 use miden_node_tracing::warn;
 use miden_node_utils::retry::Retryable;
 use miden_protocol::Word;
@@ -69,14 +70,11 @@ impl RpcNodeClient {
         &self,
         account_id: AccountId,
     ) -> Result<(AssetVault, BlockNumber)> {
-        let id_bytes: [u8; 15] = account_id.into();
         // A dummy commitment never matches the vault root, which makes the node return the vault in
         // full. Code and storage are not requested.
         let dummy = Word::default().into();
         let request = ProtoAccountRequest {
-            account_id: Some(miden_node_proto::generated::account::AccountId {
-                id: id_bytes.to_vec(),
-            }),
+            account_id: Some(account_id.into()),
             // Without a block number the node answers at its chain tip.
             block_num: None,
             details: Some(AccountDetailRequest {
@@ -204,7 +202,11 @@ async fn fetch_block_header(
         .block_header
         .context("the block header response holds no header")?;
 
-    block_header.try_into().context("failed to convert the block header")
+    block_header
+        .decode_fields()
+        .context("failed to decode the block header")?
+        .build_unchecked()
+        .context("failed to build the block header")
 }
 
 /// Fetches the genesis block header and the protocol configuration it commits to.
@@ -227,8 +229,10 @@ async fn fetch_genesis_header_and_config(
     let block_header: BlockHeader = response
         .block_header
         .context("the block header response holds no header")?
-        .try_into()
-        .context("failed to convert the block header")?;
+        .decode_fields()
+        .context("failed to decode the block header")?
+        .build_unchecked()
+        .context("failed to build the block header")?;
 
     let protocol_config = ensure_protocol_config_is_present_and_matches_header(
         response.protocol_config,
