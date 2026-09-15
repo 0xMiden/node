@@ -6,7 +6,7 @@ use miden_protocol::account::AccountId;
 use miden_protocol::batch::BatchId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
-use miden_protocol::transaction::TransactionId;
+use miden_protocol::transaction::{OutputNote, TransactionId};
 
 use crate::domain::batch::{BatchParameters, SelectedBatch};
 use crate::domain::transaction::AuthenticatedTransaction;
@@ -132,6 +132,19 @@ impl TransactionGraph {
 
     pub fn append(&mut self, tx: Arc<AuthenticatedTransaction>) -> Result<(), StateConflict> {
         self.inner.append(tx)
+    }
+
+    /// Returns the transaction and output note that created the specified note ID.
+    pub fn output_note(&self, note_id: Word) -> Option<(TransactionId, &OutputNote)> {
+        let creator = self.inner.note_creator(&note_id)?;
+        let output_note = creator
+            .raw_proven_transaction()
+            .output_notes()
+            .iter()
+            .find(|note| note.id().as_word() == note_id)
+            .expect("the note creator must contain the indexed output note");
+
+        Some((creator.id(), output_note))
     }
 
     /// Appends the transactions into the graph as an atomic unit.

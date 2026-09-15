@@ -57,7 +57,8 @@ use std::sync::{Arc, LockResult, Mutex, MutexGuard};
 use miden_node_tracing::{ErrorReport, debug, miden_instrument, miden_span_record};
 use miden_protocol::batch::{BatchId, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::transaction::TransactionHeader;
+use miden_protocol::transaction::{OutputNote, TransactionHeader, TransactionId};
+use miden_standards::note::TxFeeNote;
 use thiserror::Error;
 
 use crate::block_builder::SelectedBlock;
@@ -251,6 +252,7 @@ impl Mempool {
 
         self.authentication_staleness_check(tx.authentication_height())?;
         self.expiration_check(tx.expires_at())?;
+        self.fee_note_consumption_check(&tx)?;
 
         // Insert the transaction node.
         self.transactions
@@ -721,6 +723,46 @@ impl Mempool {
         }
 
         Ok(())
+    }
+
+    /// Rejects transactions that consume an uncommitted `TX_FEE` note.
+    fn fee_note_consumption_check(
+        &self,
+        tx: &AuthenticatedTransaction,
+    ) -> Result<(), MempoolSubmissionError> {
+        let fee_script_root = TxFeeNote::script_root();
+        let is_fee_note = |note: &OutputNote| {
+            note.recipient()
+                .is_some_and(|recipient| recipient.script().root() == fee_script_root)
+        };
+
+        let note_ids = tx
+            .unauthenticated_note_ids()
+            .filter(|note_id| {
+                let Some((creator, note)) = self.transactions.output_note(*note_id) else {
+                    return false;
+                };
+
+                !self.transaction_is_committed(creator) && is_fee_note(note)
+            })
+            .collect::<Vec<_>>();
+
+        if note_ids.is_empty() {
+            Ok(())
+        } else {
+            Err(MempoolSubmissionError::ConsumesInflightFeeNotes {
+                transaction_id: tx.id(),
+                note_ids,
+            })
+        }
+    }
+
+    fn transaction_is_committed(&self, transaction_id: TransactionId) -> bool {
+        self.committed_blocks
+            .iter()
+            .flat_map(|block| block.batches.iter())
+            .flat_map(|batch| batch.transactions().as_slice())
+            .any(|transaction| transaction.id() == transaction_id)
     }
 }
 

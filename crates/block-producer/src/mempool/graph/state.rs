@@ -171,6 +171,11 @@ where
     pub fn output_note_count(&self) -> usize {
         self.notes_created.len()
     }
+
+    /// Returns the node that created the specified note.
+    pub(super) fn note_creator(&self, note: &Word) -> Option<K> {
+        self.notes_created.get(note).copied()
+    }
 }
 
 /// Tracks the per-account state transitions that are in-flight within the mempool graph.
