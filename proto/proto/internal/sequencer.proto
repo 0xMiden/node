@@ -54,7 +54,7 @@ message AuthenticatedTransactionBatch {
     repeated AuthInputs auth_inputs = 2;
 
     // The proven batch.
-    batch.ProvenBatch batch_proof = 3;
+    transaction.ProvenBatch batch_proof = 3;
 }
 
 // The store-derived inputs a transaction was authenticated against.

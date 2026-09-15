@@ -229,9 +229,13 @@ impl GenesisConfig {
             None => None,
         };
 
-        let pass_through_account =
+        let (pass_through_account, pass_through_secret) =
             build_pass_through_account().map_err(GenesisConfigError::PassThroughAccountBuild)?;
-        secrets.push((PASS_THROUGH_ACCOUNT_FILE_NAME.to_string(), pass_through_account.id(), None));
+        secrets.push((
+            PASS_THROUGH_ACCOUNT_FILE_NAME.to_string(),
+            pass_through_account.id(),
+            Some(pass_through_secret),
+        ));
 
         let (batch_builder_account, batch_builder_secret) = build_batch_builder()?;
         secrets.push((
