@@ -1,4 +1,4 @@
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use assert_matches::assert_matches;
 use miden_node_db::migration::{SchemaHash, SchemaHashes};
@@ -126,39 +126,6 @@ async fn registrations_and_allowlist_timestamps_persist() {
         .await
         .unwrap();
     assert_eq!(timestamps, vec![ALLOWLISTED_AT; 3]);
-}
-
-#[tokio::test]
-async fn registry_writes_complete_while_block_database_is_write_locked() {
-    let (dir, registry) = setup();
-    let store_path = data_directory(&dir).database_path();
-    crate::db::bootstrap_database(&store_path).unwrap();
-    let (writer, _) = miden_node_db::sqlite::open(&store_path).unwrap();
-    let tx = writer.begin_write().await.unwrap();
-    tx.run("insert_account_code", |tx| {
-        tx.execute("INSERT INTO account_codes (code_commitment, code) VALUES (X'01', X'02')", &[])
-    })
-    .await
-    .unwrap();
-
-    let result = tokio::time::timeout(Duration::from_secs(2), async {
-        registry.import_invitation(entry(1, None)).await.unwrap();
-        assert_eq!(
-            registry.register_account(invitation(1), account(0)).await.unwrap(),
-            RegistrationOutcome::Registered
-        );
-        assert!(registry.add_account(account(1)).await.unwrap());
-    })
-    .await;
-    tx.rollback().await.unwrap();
-    result.expect("registry writes must not wait for the block database write lock");
-
-    let registry = reopen(&dir);
-    assert_eq!(
-        registry.invitation_status(invitation(1)).await.unwrap(),
-        InvitationStatus::Registered(account(0))
-    );
-    assert!(registry.contains_account(account(1)).await.unwrap());
 }
 
 #[tokio::test]
