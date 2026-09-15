@@ -148,6 +148,10 @@ zeroize            = { version = "1.8" }
 # tonic-prost is used by generated gRPC code rather than handwritten Rust.
 ignored = ["libsqlite3-sys", "tonic-prost"]
 
+[workspace.metadata.inheritance-check]
+# The normal and dev entries enable different SDK features in the tracing crate.
+ignore = [{ dependency = "opentelemetry_sdk", member = "crates/tracing" }]
+
 # Lints are set to warn for development, which are promoted to errors in CI.
 [workspace.lints.clippy]
 # Pedantic lints are set to a lower priority which allows lints in the group to be selectively enabled.
