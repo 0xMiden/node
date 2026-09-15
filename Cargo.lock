@@ -4294,6 +4294,7 @@ dependencies = [
  "rand_chacha 0.10.0",
  "rayon",
  "serde",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.20",
  "thread-priority",

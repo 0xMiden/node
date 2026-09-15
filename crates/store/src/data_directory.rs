@@ -29,6 +29,10 @@ impl DataDirectory {
         self.0.join("miden-store.sqlite3")
     }
 
+    pub fn allowlist_database_path(&self) -> PathBuf {
+        self.0.join("miden-allowlist.sqlite3")
+    }
+
     pub fn display(&self) -> std::path::Display<'_> {
         self.0.display()
     }
