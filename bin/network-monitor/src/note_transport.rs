@@ -46,7 +46,6 @@ impl Service for NoteTransportService {
     #[miden_instrument(
         target = COMPONENT,
         name = "check-status.note-transport",
-        ret(level = "info"),
     )]
     async fn check(&mut self) -> ServiceStatus {
         let details = NoteTransportStatusDetails {

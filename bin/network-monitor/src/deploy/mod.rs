@@ -948,7 +948,6 @@ pub async fn build_probe_transaction_inputs(
 #[miden_instrument(
     target = COMPONENT,
     name = "deploy-counter-account",
-    ret(level = "debug"),
 )]
 pub async fn deploy_counter_account(
     counter_account: &Account,
