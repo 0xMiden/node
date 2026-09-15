@@ -108,6 +108,10 @@ fn generate_bindings(file_descriptors: &FileDescriptorSet, dst_dir: &Path) -> mi
 fn collect_message_names(parent: &str, descriptors: &[DescriptorProto], names: &mut Vec<String>) {
     for descriptor in descriptors {
         let name = format!("{parent}.{}", descriptor.name());
+        // The derive adds Debug without field redaction. Keep invitation codes out of Debug output.
+        if name == "rpc.RegisterAccountRequest" {
+            continue;
+        }
         // Map messages use atomic adapters because the derive does not support maps.
         if matches!(name.as_str(), "rpc.RpcLimits" | "rpc.EndpointLimits") {
             continue;

@@ -2,13 +2,15 @@ use std::ops::RangeInclusive;
 
 use miden_protobuf::{BuildUnchecked, ConversionResultExt, Verify, VerifyWith};
 use miden_protocol::block::{BlockHeader, BlockNumber, SignedBlock};
+use miden_protocol::protocol_config::ProtocolConfig;
 use thiserror::Error;
 
+use super::protocol_config::verify_protocol_config_commitment;
 use crate::errors::ConversionError;
 use crate::generated as proto;
 
 impl BuildUnchecked for proto::rpc::DecodedBlockSubscriptionResponse {
-    type Output = (SignedBlock, BlockNumber);
+    type Output = (SignedBlock, BlockNumber, Option<ProtocolConfig>);
     type Error = ConversionError;
 
     /// Check block consistency without verifying signatures or linkage against a trusted parent.
@@ -18,12 +20,21 @@ impl BuildUnchecked for proto::rpc::DecodedBlockSubscriptionResponse {
         // SAFETY: The caller must authenticate the block before applying it. This conversion checks
         // consistency only.
         let block = self.block.build_unchecked().context("block")?;
-        Ok((block, self.committed_chain_tip.into()))
+        let protocol_config = self
+            .protocol_config
+            .map(|config| {
+                verify_protocol_config_commitment(
+                    config.verify().context("protocol_config")?,
+                    block.header(),
+                )
+            })
+            .transpose()?;
+        Ok((block, self.committed_chain_tip.into(), protocol_config))
     }
 }
 
 impl VerifyWith<&BlockHeader> for proto::rpc::DecodedBlockSubscriptionResponse {
-    type Verified = (SignedBlock, BlockNumber);
+    type Verified = (SignedBlock, BlockNumber, Option<ProtocolConfig>);
     type Error = ConversionError;
 
     /// Verify the block against a trusted parent header. This does not re-execute transactions or
@@ -31,7 +42,16 @@ impl VerifyWith<&BlockHeader> for proto::rpc::DecodedBlockSubscriptionResponse {
     /// upstream claim.
     fn verify_with(self, parent: &BlockHeader) -> Result<Self::Verified, Self::Error> {
         let block = self.block.verify_with(parent).context("block")?;
-        Ok((block, self.committed_chain_tip.into()))
+        let protocol_config = self
+            .protocol_config
+            .map(|config| {
+                verify_protocol_config_commitment(
+                    config.verify().context("protocol_config")?,
+                    block.header(),
+                )
+            })
+            .transpose()?;
+        Ok((block, self.committed_chain_tip.into(), protocol_config))
     }
 }
 

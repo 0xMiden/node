@@ -80,6 +80,7 @@ impl rpc_api::BlockSubscription for Upstream {
                 Ok(BlockSubscriptionResponse {
                     block: Some(block.into()),
                     committed_chain_tip,
+                    protocol_config: None,
                 })
             })
             .collect::<Vec<_>>();
@@ -281,6 +282,7 @@ unused_rpc!(
     proto::rpc::SyncAccountStorageMapsResponse
 );
 unused_rpc!(SyncChainMmr, proto::rpc::SyncChainMmrRequest, proto::rpc::SyncChainMmrResponse);
+unused_rpc!(RegisterAccount, proto::rpc::RegisterAccountRequest, ());
 unused_rpc!(
     GetNetworkNoteStatus,
     proto::note::NoteId,

@@ -61,15 +61,17 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
 
         let (proposed_block, protocol_config, protocol_config_commitment) =
             spawn_blocking_in_current_span(move || {
-                let request = request.decode_fields()
-                // SAFETY: Construction checks local batch invariants and block witnesses.
-                // validate_block checks transaction IDs and the trusted parent before signing.
-                //
-                // FIXME: Verify batch proofs and contents before signing. Validated transaction
-                // IDs do not establish correct note aggregation or expiration. The current batch
-                // kernel does not bind these fields, and transaction headers omit reference
-                // blocks and expiration. Full validation needs more data or protocol support.
-                .and_then(BuildUnchecked::build_unchecked).map_err(miden_node_proto::errors::conversion_error_to_status)?;
+                let request = request
+                    .decode_fields()
+                    // SAFETY: Construction checks local batch invariants and block witnesses.
+                    // validate_block checks transaction IDs and the trusted parent before signing.
+                    //
+                    // FIXME: Verify batch proofs and contents before signing. Validated transaction
+                    // IDs do not establish correct note aggregation or expiration. The current batch
+                    // kernel does not bind these fields, and transaction headers omit reference
+                    // blocks and expiration. Full validation needs more data or protocol support.
+                    .and_then(BuildUnchecked::build_unchecked)
+                    .map_err(miden_node_proto::errors::conversion_error_to_status)?;
                 let protocol_config = request.protocol_config;
                 let protocol_config_commitment = request.block_header.protocol_config_commitment();
                 let proposed_block = ProposedBlock::new_at(

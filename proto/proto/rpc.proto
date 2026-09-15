@@ -162,7 +162,7 @@ message BlockSubscriptionResponse {
 
     // The active configuration. Included with the first response and when its commitment changes.
     // Verify its commitment against the accompanying block header.
-    protocol_config.ProtocolConfig protocol_config = 3;
+    optional protocol_config.ProtocolConfig protocol_config = 3;
 }
 
 // PROOF SUBSCRIPTION

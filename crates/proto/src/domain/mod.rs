@@ -1,5 +1,3 @@
-mod block_proposal;
-
 pub mod account;
 pub mod block;
 pub mod encryption;
@@ -7,9 +5,9 @@ mod limits;
 pub mod note;
 pub mod proof_request;
 pub mod protocol_config;
-pub mod sign_block_request;
 pub mod remote_prover;
 pub mod sequencer;
+pub mod sign_block_request;
 pub mod submission;
 pub mod validator;
 
