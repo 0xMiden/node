@@ -39,7 +39,7 @@ configs:
       }
 
       http://funding.localhost {
-        reverse_proxy h2c://funding-service:50401
+        reverse_proxy funding-service:50401
       }
 
       http://faucet.localhost {
