@@ -74,7 +74,7 @@ impl TestStore {
 }
 
 #[tokio::test]
-async fn is_account_allowed_reports_membership_regardless_of_enforcement() {
+async fn is_account_allowed_respects_enforcement() {
     let store = TestStore::start().await;
     let allowlist = store.bootstrap_allowlist();
     let guard = TestServerGuard(CancellationToken::new());
@@ -93,11 +93,19 @@ async fn is_account_allowed_reports_membership_regardless_of_enforcement() {
         )
     });
     allowlist.add_account(listed).await.unwrap();
+    let path = DataDirectory::load(store.data_directory.clone())
+        .unwrap()
+        .allowlist_database_path();
+    let disabled_allowlist = Arc::new(AccountAllowlist::load(&path).unwrap());
 
-    for admission in [
-        AccountAdmission::enabled(Arc::clone(&allowlist)),
-        AccountAdmission::disabled(Arc::clone(&allowlist)),
+    for (admission, unlisted_allowed) in [
+        (AccountAdmission::enabled(allowlist), false),
+        (AccountAdmission::disabled(disabled_allowlist), true),
     ] {
+        // Disabled enforcement must not depend on database availability.
+        if unlisted_allowed {
+            fs_err::remove_file(&path).unwrap();
+        }
         let rpc = RpcService::new(
             Arc::clone(&store.state),
             RpcBackend::sequencer(
@@ -117,7 +125,7 @@ async fn is_account_allowed_reports_membership_regardless_of_enforcement() {
                 tonic::Code::InvalidArgument
             );
         }
-        for (account, expected) in [(listed, true), (unlisted, false)] {
+        for (account, expected) in [(listed, true), (unlisted, unlisted_allowed)] {
             let response = rpc.is_account_allowed(Request::new(account.into())).await.unwrap();
             assert_eq!(response.into_inner().allowed, expected);
         }

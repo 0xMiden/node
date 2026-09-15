@@ -30,8 +30,7 @@ impl proto::server::rpc_api::IsAccountAllowed for RpcService {
 
         match &self.backend {
             RpcBackend::Sequencer { account_admission, .. } => account_admission
-                .allowlist
-                .contains_account(account_id)
+                .is_account_allowed(account_id)
                 .await
                 .map_err(|error| Status::internal(error.as_report())),
             RpcBackend::FullNode { source_rpc, .. } => {

@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
+use miden_node_store::DatabaseError;
 use miden_node_store::allowlist::AccountAllowlist;
 use miden_node_tracing::{error, miden_instrument};
-use miden_protocol::account::{Account, AccountUpdateDetails};
+use miden_protocol::account::{Account, AccountId, AccountUpdateDetails};
 use miden_protocol::transaction::TxAccountUpdate;
 use miden_standards::account::auth::NetworkAccount;
 use tonic::Status;
@@ -23,6 +24,17 @@ impl AccountAdmission {
 
     pub fn disabled(allowlist: Arc<AccountAllowlist>) -> Self {
         Self { allowlist, disabled: true }
+    }
+
+    /// Returns true if enforcement is disabled or the account is allowlisted.
+    pub(crate) async fn is_account_allowed(
+        &self,
+        account_id: AccountId,
+    ) -> Result<bool, DatabaseError> {
+        if self.disabled {
+            return Ok(true);
+        }
+        self.allowlist.contains_account(account_id).await
     }
 
     /// Rejects the submission if it creates an unregistered, non-network account.
@@ -48,11 +60,11 @@ impl AccountAdmission {
         }
 
         let account_id = update.account_id();
-        let registered = self.allowlist.contains_account(account_id).await.map_err(|err| {
+        let allowed = self.is_account_allowed(account_id).await.map_err(|err| {
             error!(err, target: LOG_TARGET, "Account allowlist lookup failed");
             Status::internal("account allowlist lookup failed")
         })?;
-        if !registered {
+        if !allowed {
             return Err(Status::permission_denied(format!(
                 "account {account_id} is not registered"
             )));
