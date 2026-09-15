@@ -26,6 +26,8 @@ use miden_node_proto::generated::rpc::api_server::Api;
 use miden_node_proto::generated::sequencer::api_server::Api as SequencerApi;
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto::server::{ntx_builder_api, rpc_api, sequencer_api, validator_api};
+use miden_node_store::DataDirectory;
+use miden_node_store::allowlist::{AccountAllowlist, InvitationCode, InvitationEntry};
 use miden_node_store::genesis::GenesisBlock;
 use miden_node_store::genesis::config::GenesisConfig;
 use miden_node_store::state::State;
@@ -128,6 +130,14 @@ impl Drop for TestServerGuard {
 }
 
 impl TestStore {
+    fn bootstrap_allowlist(&self) -> Arc<AccountAllowlist> {
+        let path = DataDirectory::load(self.data_directory.clone())
+            .unwrap()
+            .allowlist_database_path();
+        AccountAllowlist::bootstrap(&path).unwrap();
+        Arc::new(AccountAllowlist::load(path).unwrap())
+    }
+
     fn genesis_commitment(&self) -> Word {
         self.genesis_commitment
     }
@@ -716,9 +726,17 @@ async fn rpc_server_forwards_valid_deferred_proofs_and_rejects_missing_witnesses
         BlockProducerApiConfig::default(),
         CancellationToken::new(),
     );
+    let allowlist_path =
+        DataDirectory::load(data_directory.clone()).unwrap().allowlist_database_path();
+    AccountAllowlist::bootstrap(&allowlist_path).unwrap();
+    let allowlist = Arc::new(AccountAllowlist::load(allowlist_path).unwrap());
     let service = RpcService::new(
         state,
-        RpcBackend::sequencer(block_producer, ValidatorClients::new(vec![validator]).unwrap()),
+        RpcBackend::sequencer(
+            block_producer,
+            ValidatorClients::new(vec![validator]).unwrap(),
+            allowlist,
+        ),
         None,
         NonZeroUsize::new(1_000_000).unwrap(),
         None,
@@ -954,6 +972,7 @@ async fn start_source_rpc_with_genesis(
         },
         None => TestStore::start().await,
     };
+    let allowlist = store.bootstrap_allowlist();
     let block_producer_dir = new_tempdir();
     match genesis_block {
         Some((genesis_block, protocol_config)) => {
@@ -988,6 +1007,7 @@ async fn start_source_rpc_with_genesis(
                 RpcBackend::sequencer(
                     block_producer,
                     ValidatorClients::new(vec![validator]).unwrap(),
+                    allowlist,
                 ),
                 Some(ntx_builder),
                 NonZeroUsize::new(1_000_000).unwrap(),
@@ -1541,6 +1561,7 @@ async fn connect_rpc(url: Url) -> RpcClient {
 async fn start_rpc() -> (RpcClient, std::net::SocketAddr, TestStore, TestServerGuard) {
     let grpc_options = GrpcOptions::test();
     let store = TestStore::start().await;
+    let allowlist = store.bootstrap_allowlist();
     let block_producer_dir = new_tempdir();
     TestStore::bootstrap(&block_producer_dir);
     let (block_producer_state, ..) = State::for_tests(&block_producer_dir).await;
@@ -1574,6 +1595,7 @@ async fn start_rpc() -> (RpcClient, std::net::SocketAddr, TestStore, TestServerG
                 mode: RpcMode::sequencer(
                     block_producer,
                     ValidatorClients::new(vec![validator]).unwrap(),
+                    allowlist,
                 ),
                 ntx_builder: None,
                 grpc_options,
@@ -1590,6 +1612,208 @@ async fn start_rpc() -> (RpcClient, std::net::SocketAddr, TestStore, TestServerG
     let rpc_client = connect_rpc(url).await;
 
     (rpc_client, rpc_addr, store, TestServerGuard(shutdown))
+}
+
+#[tokio::test]
+async fn register_account_validates_input_and_preserves_registrations() {
+    let (mut rpc, addr, store, _server) = start_rpc().await;
+    let allowlist = AccountAllowlist::load(
+        DataDirectory::load(store.data_directory.clone())
+            .unwrap()
+            .allowlist_database_path(),
+    )
+    .unwrap();
+    let [account, other] = [[0; 15], [1; 15]].map(|bytes| {
+        AccountId::dummy(
+            bytes,
+            AccountIdVersion::Version1,
+            AccountType::Private,
+            AssetCallbackFlag::Disabled,
+        )
+    });
+    let request = proto::rpc::RegisterAccountRequest {
+        invitation_code: "abc".to_owned(),
+        account_id: Some(account.into()),
+    };
+    assert_eq!(
+        rpc.register_account(request.clone()).await.unwrap_err().code(),
+        tonic::Code::InvalidArgument
+    );
+    rpc = Builder::new(Url::parse(&format!("http://{addr}")).unwrap())
+        .without_tls()
+        .with_timeout(REQUEST_TIMEOUT)
+        .without_metadata_version()
+        .with_metadata_genesis(store.genesis_commitment())
+        .without_otel_context_injection()
+        .connect_lazy::<RpcClient>();
+    for invalid in [
+        proto::rpc::RegisterAccountRequest {
+            invitation_code: String::new(),
+            ..request.clone()
+        },
+        proto::rpc::RegisterAccountRequest { account_id: None, ..request.clone() },
+        proto::rpc::RegisterAccountRequest {
+            account_id: Some(proto::account::AccountId { id: vec![0] }),
+            ..request.clone()
+        },
+    ] {
+        assert_eq!(
+            rpc.register_account(invalid).await.unwrap_err().code(),
+            tonic::Code::InvalidArgument
+        );
+    }
+    assert_eq!(
+        rpc.register_account(request.clone()).await.unwrap_err().code(),
+        tonic::Code::NotFound
+    );
+    let invitation = InvitationCode::from_hex_digest(
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+    )
+    .unwrap();
+    allowlist
+        .import_invitation(InvitationEntry {
+            invitation_code: invitation.clone(),
+            account_id: None,
+        })
+        .await
+        .unwrap();
+    let imported = allowlist.invitation_info(invitation.clone()).await.unwrap().unwrap();
+    rpc.register_account(request.clone()).await.unwrap();
+    rpc.register_account(request.clone()).await.unwrap();
+    let conflict = proto::rpc::RegisterAccountRequest {
+        account_id: Some(other.into()),
+        ..request.clone()
+    };
+    assert_eq!(
+        rpc.register_account(conflict).await.unwrap_err().code(),
+        tonic::Code::AlreadyExists
+    );
+    let registered = allowlist.invitation_info(invitation).await.unwrap().unwrap();
+    assert_eq!(registered.account_id, Some(account));
+    assert_eq!(registered.allowlisted_at, imported.allowlisted_at);
+    assert!(!allowlist.contains_account(other).await.unwrap());
+
+    let unused = InvitationCode::new("unused").unwrap();
+    allowlist
+        .import_invitation(InvitationEntry {
+            invitation_code: unused.clone(),
+            account_id: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        rpc.register_account(proto::rpc::RegisterAccountRequest {
+            invitation_code: "unused".to_owned(),
+            ..request
+        })
+        .await
+        .unwrap_err()
+        .code(),
+        tonic::Code::AlreadyExists
+    );
+    assert_eq!(allowlist.invitation_info(unused).await.unwrap().unwrap().account_id, None);
+}
+
+#[tokio::test]
+async fn register_account_database_failures_include_the_cause() {
+    let (mut rpc, _addr, store, _server) = start_rpc().await;
+    let path = DataDirectory::load(store.data_directory.clone())
+        .unwrap()
+        .allowlist_database_path();
+    fs_err::remove_file(path).unwrap();
+
+    let account = AccountId::dummy(
+        [0; 15],
+        AccountIdVersion::Version1,
+        AccountType::Private,
+        AssetCallbackFlag::Disabled,
+    );
+    let mut request = Request::new(proto::rpc::RegisterAccountRequest {
+        invitation_code: "abc".to_owned(),
+        account_id: Some(account.into()),
+    });
+    request.metadata_mut().insert(
+        ACCEPT.as_str(),
+        format!("application/vnd.miden; genesis={}", store.genesis_commitment())
+            .parse()
+            .unwrap(),
+    );
+
+    let error = rpc.register_account(request).await.unwrap_err();
+    assert_eq!(error.code(), tonic::Code::Internal);
+    assert!(error.message().contains("unable to open database file"), "{error}");
+}
+
+#[tokio::test]
+async fn full_nodes_forward_account_registration_to_the_sequencer() {
+    let (source_rpc, _addr, source_store, _server) = start_rpc().await;
+    let allowlist = AccountAllowlist::load(
+        DataDirectory::load(source_store.data_directory.clone())
+            .unwrap()
+            .allowlist_database_path(),
+    )
+    .unwrap();
+    let store = TestStore::start().await;
+    for (index, pre_auth) in [
+        None,
+        Some(PreAuthSubmission::new(vec![dummy_client()], dummy_client()).unwrap()),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let account = AccountId::dummy(
+            [u8::try_from(index).unwrap(); 15],
+            AccountIdVersion::Version1,
+            AccountType::Private,
+            AssetCallbackFlag::Disabled,
+        );
+        let code = format!(" invitation-\u{e9}-{index}\n");
+        let invitation = InvitationCode::new(&code).unwrap();
+        let rpc = RpcService::new(
+            Arc::clone(&store.state),
+            RpcBackend::full_node(source_rpc.clone(), pre_auth),
+            None,
+            NonZeroUsize::new(1).unwrap(),
+            None,
+        );
+        let registration = proto::rpc::RegisterAccountRequest {
+            invitation_code: code,
+            account_id: Some(account.into()),
+        };
+        let request = || {
+            let mut request = Request::new(registration.clone());
+            request.metadata_mut().insert(
+                ACCEPT.as_str(),
+                format!("application/vnd.miden; genesis={}", source_store.genesis_commitment())
+                    .parse()
+                    .unwrap(),
+            );
+            request
+        };
+        assert_eq!(
+            rpc.register_account(request()).await.unwrap_err().code(),
+            tonic::Code::NotFound
+        );
+        allowlist
+            .import_invitation(InvitationEntry {
+                invitation_code: invitation.clone(),
+                account_id: None,
+            })
+            .await
+            .unwrap();
+        rpc.register_account(request()).await.unwrap();
+        rpc.register_account(request()).await.unwrap();
+        assert_eq!(
+            allowlist.invitation_info(invitation).await.unwrap().unwrap().account_id,
+            Some(account)
+        );
+    }
+    assert!(
+        !DataDirectory::load(store.data_directory.clone())
+            .unwrap()
+            .allowlist_database_path()
+            .exists()
+    );
 }
 
 #[tokio::test]

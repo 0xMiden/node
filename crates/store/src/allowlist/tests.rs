@@ -46,7 +46,7 @@ fn account(index: usize) -> AccountId {
 }
 
 fn invitation(value: u8) -> InvitationCode {
-    InvitationCode::new(&[value; 16]).unwrap()
+    InvitationCode::new(&format!("invitation-{value}")).unwrap()
 }
 
 fn entry(value: u8, account_id: Option<AccountId>) -> InvitationEntry {
@@ -281,9 +281,14 @@ async fn concurrent_invitations_cannot_register_the_same_account() {
 }
 
 #[test]
-fn invitation_codes_reject_empty_input_and_hide_debug_values() {
-    assert!(InvitationCode::new(&[]).is_err());
-    let invitation = InvitationCode::new(b"private invitation code").unwrap();
+fn invitation_codes_preserve_text_and_hide_debug_values() {
+    assert!(InvitationCode::new("").is_err());
+    let code = InvitationCode::new("code").unwrap();
+    for different in ["Code", " code ", "code\n"] {
+        assert_ne!(code, InvitationCode::new(different).unwrap());
+    }
+    assert_ne!(InvitationCode::new("\u{e9}").unwrap(), InvitationCode::new("e\u{301}").unwrap());
+    let invitation = InvitationCode::new("private invitation code").unwrap();
     let debug = format!("{invitation:?}");
     assert!(!debug.contains("private invitation code"));
     assert!(!debug.contains(&hex::encode(invitation.digest())));

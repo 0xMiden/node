@@ -6,18 +6,18 @@ use thiserror::Error;
 /// A nonempty invitation code represented by its SHA-256 digest.
 ///
 /// The digest permits code matching without storing a code that an attacker can redeem after a database leak.
-/// Construction does not retain the original bytes. Debug output hides the digest.
+/// Construction does not retain the original text. Debug output hides the digest.
 /// Callers must use random invitation codes with enough entropy to resist guessing.
 #[derive(Clone, PartialEq, Eq)]
 pub struct InvitationCode([u8; 32]);
 
 impl InvitationCode {
-    /// Computes a digest of the exact invitation code bytes without text normalization.
-    pub fn new(bytes: &[u8]) -> Result<Self, InvalidInvitationCode> {
-        if bytes.is_empty() {
+    /// Computes a digest of the exact UTF-8 text without trimming or normalization.
+    pub fn new(code: &str) -> Result<Self, InvalidInvitationCode> {
+        if code.is_empty() {
             return Err(InvalidInvitationCode);
         }
-        Ok(Self(Sha256::digest(bytes).into()))
+        Ok(Self(Sha256::digest(code.as_bytes()).into()))
     }
 
     /// Uses a caller-computed SHA-256 digest without hashing it again. The caller must compute the
@@ -45,7 +45,7 @@ impl fmt::Debug for InvitationCode {
     }
 }
 
-/// An invitation code must contain at least one byte.
+/// An invitation code must not be empty.
 #[derive(Debug, Error, PartialEq, Eq)]
 #[error("invitation code must not be empty")]
 pub struct InvalidInvitationCode;

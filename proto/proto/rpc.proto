@@ -32,6 +32,13 @@ service Api {
     // Returns the latest details of the specified account.
     rpc GetAccount(AccountRequest) returns (AccountResponse) {}
 
+    // Registers an account with an invitation code on the sequencer.
+    // A retry with the same code and account succeeds without changes.
+    // Returns INVALID_ARGUMENT for invalid input, NOT_FOUND for an unknown code, and
+    // ALREADY_EXISTS if the code is registered to a different account or the account is already
+    // registered without this code.
+    rpc RegisterAccount(RegisterAccountRequest) returns (google.protobuf.Empty) {}
+
     // Returns block data for the specified block number, optionally including the block proof.
     rpc GetBlockByNumber(BlockRequest) returns (MaybeBlock) {}
 
@@ -123,6 +130,17 @@ service Api {
     //
     // Returns `NOT_FOUND` if the note ID is not tracked by the network transaction builder.
     rpc GetNetworkNoteStatus(note.NoteId) returns (GetNetworkNoteStatusResponse) {}
+}
+
+// REGISTER ACCOUNT
+// ================================================================================================
+
+message RegisterAccountRequest {
+    // The original, nonempty invitation code. Codes are case-sensitive.
+    string invitation_code = 1;
+
+    // The account to register. Registration does not create the account on chain.
+    account.AccountId account_id = 2;
 }
 
 // BLOCK SUBSCRIPTION

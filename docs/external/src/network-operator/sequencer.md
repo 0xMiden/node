@@ -56,8 +56,8 @@ access. Do not expose it through the public RPC ingress.
 | `PUT`  | `/admin/allowlist/accounts/{account_id}`           | None                                        | `201` for a new registration, `204` if already registered. Adds the account without consuming an invitation.  |
 | `GET`  | `/admin/allowlist/accounts/{account_id}`           | None                                        | `account_id` and `allowlisted_at`, or `404` if not registered.                                                |
 
-Compute `invitation_digest` as SHA-256 of the exact invitation code bytes. For text codes, use UTF-8 without a trailing
-newline or other normalization. Encode the digest as 64 hexadecimal characters without a `0x` prefix. The API stores
+Compute `invitation_digest` as SHA-256 of the invitation code's exact UTF-8 representation. Do not trim the code, add a
+newline, or normalize the text. Encode the digest as 64 hexadecimal characters without a `0x` prefix. The API stores
 this digest directly and does not hash it again. Generate nonempty random codes with enough entropy to resist guessing.
 Give the original code to the recipient. The administration API never receives or returns the original code.
 
@@ -71,9 +71,13 @@ Each request changes one entry. To import multiple entries, send one request per
 without replacing registrations. An invitation `PUT` without an account preserves its current registration.
 
 The registry is stored in `miden-allowlist.sqlite3`, separately from the block database. Chain bootstrap does not create
-it. Starting the sequencer administration API creates an empty registry if none exists, including when promoting an
-existing full node. Existing registries are loaded without replacing their entries. Startup does not apply migrations.
+it. Starting the sequencer creates an empty registry if none exists, including when promoting an existing full node.
+Existing registries are loaded without replacing their entries. Startup does not apply migrations.
 `miden-node migrate --data-directory node-data` applies allowlist migrations only if the registry exists.
+
+The public `RegisterAccount` RPC uses this registry even when the administration listener is disabled. It binds an
+unused invitation to an account. See [Account Registration](../rpc/public-api.md#account-registration) for the request
+and retry behavior.
 
 Back up the registry separately. It is not replicated with blocks. Restore it before starting a replacement sequencer to
 preserve invitations and registrations. Without a restored registry, the replacement starts with an empty allowlist.

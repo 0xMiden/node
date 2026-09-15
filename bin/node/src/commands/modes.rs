@@ -75,6 +75,7 @@ impl SequencerCommand {
             remote_prover_monitor(self.block_producer.batch.prover_url.as_ref())?;
         let block_prover_monitor =
             remote_prover_monitor(self.block_producer.block_prover.url.as_ref())?;
+        let allowlist = Arc::new(self.load_allowlist()?);
         let (state, block_writer, proof_writer, writer_task) =
             load_state(&runtime, shutdown.clone()).await?;
         let _disk_monitor = state.spawn_disk_monitor(shutdown.clone());
@@ -102,7 +103,11 @@ impl SequencerCommand {
         let rpc = Rpc {
             listener: bind_rpc(runtime.rpc_listen).await?,
             state: Arc::clone(&state),
-            mode: RpcMode::sequencer(block_producer.clone(), validator_clients),
+            mode: RpcMode::sequencer(
+                block_producer.clone(),
+                validator_clients,
+                Arc::clone(&allowlist),
+            ),
             ntx_builder: Some(ntx_builder_client),
             grpc_options: runtime.grpc_options,
             network_tx_auth,
@@ -114,22 +119,6 @@ impl SequencerCommand {
         if let Some(address) = self.admin_listen {
             let shutdown = shutdown.clone();
             tasks.spawn("sequencer admin API", async move {
-                let data_directory = DataDirectory::load(runtime.data_directory)?;
-                // Chain bootstrap does not create the optional allowlist database. A promoted full
-                // node can reach startup without it.
-                //
-                // This is okay because this is a temporary database.
-                let allowlist_path = data_directory.allowlist_database_path();
-                if !fs_err::exists(&allowlist_path)
-                    .context("failed to check account allowlist database")?
-                {
-                    AccountAllowlist::bootstrap(&allowlist_path)
-                        .context("failed to bootstrap account allowlist database")?;
-                }
-                let allowlist = Arc::new(
-                    AccountAllowlist::load(allowlist_path)
-                        .context("failed to load account allowlist database")?,
-                );
                 AdminServer::bind(address, allowlist).await?.serve(shutdown).await
             });
         }
@@ -168,6 +157,18 @@ impl SequencerCommand {
         }
 
         tasks.join_next_or_cancelled(shutdown).await
+    }
+
+    fn load_allowlist(&self) -> anyhow::Result<AccountAllowlist> {
+        let data_directory = DataDirectory::load(self.runtime.data_directory.clone())?;
+        // Chain bootstrap does not create the allowlist database. A promoted full node can reach
+        // sequencer startup without it.
+        let allowlist_path = data_directory.allowlist_database_path();
+        if !fs_err::exists(&allowlist_path).context("failed to check account allowlist database")? {
+            AccountAllowlist::bootstrap(&allowlist_path)
+                .context("failed to bootstrap account allowlist database")?;
+        }
+        AccountAllowlist::load(allowlist_path).context("failed to load account allowlist database")
     }
 
     fn log_starting(&self) {

@@ -1,3 +1,5 @@
+use std::fmt::{Debug, Formatter};
+
 use miden_node_utils::limiter::{QueryParamLimiter, QueryParamStorageMapKeyTotalLimit};
 use miden_protocol::Word;
 #[cfg(test)]
@@ -42,6 +44,17 @@ pub struct AccountSummary {
 pub struct AccountInfo {
     pub summary: AccountSummary,
     pub details: Option<Account>,
+}
+
+// REGISTER ACCOUNT REQUEST
+// ================================================================================================
+
+impl Debug for proto::rpc::RegisterAccountRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RegisterAccountRequest")
+            .field("account_id", &self.account_id)
+            .finish_non_exhaustive()
+    }
 }
 
 // ACCOUNT REQUEST

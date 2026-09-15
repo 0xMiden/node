@@ -100,8 +100,8 @@ impl MigrateCommand {
         Db::migrate(data_directory.database_path())
             .context("failed to apply store database migrations")?;
 
-        // Only sequencer admin startup creates this optional database. Migration must also work for
-        // full nodes that do not have it.
+        // Only sequencer startup creates this optional database. Migration must also work for full
+        // nodes that do not have it.
         let allowlist_path = data_directory.allowlist_database_path();
         if fs_err::exists(&allowlist_path).context("failed to check account allowlist database")? {
             AccountAllowlist::migrate(allowlist_path)

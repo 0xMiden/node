@@ -117,7 +117,7 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
         verify_batch_proof(proven_batch, &proposed_batch).await?;
 
         match &self.backend {
-            RpcBackend::Sequencer { block_producer, validators } => {
+            RpcBackend::Sequencer { block_producer, validators, .. } => {
                 submit_batch_to_validators(
                     validators.as_slice(),
                     &proposed_batch,

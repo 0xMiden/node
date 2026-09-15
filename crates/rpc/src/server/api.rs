@@ -82,6 +82,7 @@ mod get_network_note_status;
 mod get_note_script_by_root;
 mod get_notes_by_id;
 mod get_transaction_encryption_key;
+mod register_account;
 mod status;
 mod submit_auth_tx;
 mod submit_auth_tx_batch;

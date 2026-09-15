@@ -79,7 +79,7 @@ async fn admin_registration_workflow() {
     assert_eq!(registered["allowlisted_at"], unused["allowlisted_at"]);
     assert!(registered.get("invitation_code").is_none());
     assert_eq!(
-        allowlist.invitation_status(InvitationCode::new(b"abc").unwrap()).await.unwrap(),
+        allowlist.invitation_status(InvitationCode::new("abc").unwrap()).await.unwrap(),
         miden_node_store::allowlist::InvitationStatus::Registered(account(0))
     );
 
