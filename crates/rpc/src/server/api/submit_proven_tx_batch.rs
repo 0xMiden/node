@@ -173,7 +173,7 @@ impl RpcService {
         let authenticated_batch = proto::sequencer::AuthenticatedTransactionBatch {
             proposed_batch: Some((&proposed_batch).into()),
             auth_inputs,
-            batch_proof: proven_batch.to_bytes(),
+            batch_proof: Some((&proven_batch).into()),
         };
         sequencer
             .submit_authenticated_tx_batch(authenticated_batch)
