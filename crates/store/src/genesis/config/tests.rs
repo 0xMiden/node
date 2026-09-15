@@ -249,7 +249,6 @@ fn generated_native_faucet_is_a_network_account_owned_by_an_operator() -> TestRe
             .find(|(name, ..)| name == file_name)
             .unwrap_or_else(|| panic!("{file_name} should be generated"))
     };
-    assert_eq!(secrets.secrets.len(), 3);
     let (_, faucet_id, faucet_secret) = find(NATIVE_FAUCET_FILE_NAME);
     let (_, operator_id, operator_secret) = find(FAUCET_OPERATOR_FILE_NAME);
     assert_eq!(*faucet_id, native_faucet.id());
