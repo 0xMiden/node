@@ -9,6 +9,7 @@ use miden_node_proto::domain::block::InvalidBlockRange;
 use miden_node_proto::generated::rpc::MempoolStats as ProtoMempoolStats;
 use miden_node_proto::generated::rpc::api_server::Api;
 use miden_node_proto::generated::{self as proto};
+use miden_node_proto::{BuildUnchecked, DecodeMessage};
 use miden_node_store::state::State;
 use miden_node_store::{DatabaseError, GetBlockHeaderError};
 use miden_node_tracing::{miden_instrument, warn};
@@ -31,7 +32,7 @@ use tonic::metadata::MetadataMap;
 use tonic::{IntoRequest, Request, Status};
 
 use crate::server::api::subscription::{IpBanList, MAX_REPLICA_SUBSCRIPTIONS};
-use crate::server::{NetworkTxAuth, RpcBackend};
+use crate::server::{AccountAdmission, NetworkTxAuth, RpcBackend};
 use crate::{COMPONENT, LOG_TARGET};
 
 // VALIDATOR FAN-OUT
@@ -44,7 +45,7 @@ use crate::{COMPONENT, LOG_TARGET};
 /// call.
 pub(crate) async fn submit_tx_to_validators(
     validators: &[miden_node_proto::clients::ValidatorClient],
-    request: &proto::transaction::ProvenTransaction,
+    request: &proto::submission::ProvenTransactionSubmission,
 ) -> tonic::Result<()> {
     futures::future::try_join_all(validators.iter().map(|validator| {
         let mut validator = validator.clone();
@@ -61,7 +62,7 @@ pub(crate) async fn submit_tx_to_validators(
 pub(crate) async fn submit_batch_to_validators(
     validators: &[miden_node_proto::clients::ValidatorClient],
     proposed_batch: &miden_protocol::batch::ProposedBatch,
-    sealed_transaction_inputs: &[proto::transaction::SealedTransactionInputs],
+    sealed_transaction_inputs: &[proto::submission::SealedTransactionInputs],
 ) -> tonic::Result<()> {
     futures::future::try_join_all(validators.iter().map(|validator| {
         let mut validator = validator.clone();
@@ -82,6 +83,7 @@ mod get_network_note_status;
 mod get_note_script_by_root;
 mod get_notes_by_id;
 mod get_transaction_encryption_key;
+mod register_account;
 mod status;
 mod submit_auth_tx;
 mod submit_auth_tx_batch;
@@ -165,6 +167,7 @@ impl RpcService {
                 proto::rpc::BlockHeaderByNumberRequest {
                     block_num: Some(BlockNumber::GENESIS.as_u32()),
                     include_mmr_proof: None,
+                    include_protocol_config: None,
                 }
                 .into_request(),
             )
@@ -183,7 +186,11 @@ impl RpcService {
         .await?;
 
         let header = header.into_inner().block_header.context("response is missing the header")?;
-        BlockHeader::try_from(header).context("failed to parse response")
+        header
+            .decode_fields()
+            .context("failed to parse response")?
+            .build_unchecked()
+            .context("failed to build response header")
     }
 
     /// Returns the given block's onchain header.
@@ -273,6 +280,7 @@ impl RpcService {
 pub(crate) struct SequencerInternalService {
     pub(crate) state: Arc<State>,
     pub(crate) block_producer: BlockProducerApi,
+    pub(crate) account_admission: AccountAdmission,
 }
 
 // HELPERS
@@ -299,6 +307,18 @@ fn database_error_to_status(err: &DatabaseError) -> Status {
 
 fn invalid_block_range_to_status(RpcInvalidBlockRange(err): RpcInvalidBlockRange) -> Status {
     Status::invalid_argument(err.to_string())
+}
+
+/// Loads the configuration committed to by a stored header.
+async fn load_protocol_config(
+    view: &miden_node_store::state::StateView,
+    header: &BlockHeader,
+) -> tonic::Result<miden_protocol::protocol_config::ProtocolConfig> {
+    let commitment = header.protocol_config_commitment();
+    view.get_protocol_config(commitment)
+        .await
+        .map_err(|err| Status::internal(err.to_string()))?
+        .ok_or_else(|| Status::internal(format!("protocol config {commitment} is missing")))
 }
 
 // LIMIT HELPERS

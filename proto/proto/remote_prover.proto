@@ -3,6 +3,11 @@ syntax = "proto3";
 package remote_prover;
 
 import "google/protobuf/empty.proto";
+import "batch.proto";
+import "primitives.proto";
+import "transaction.proto";
+import "transaction_inputs.proto";
+import "types/block_proving.proto";
 
 // PROVER SERVICE
 // ================================================================================================
@@ -24,26 +29,22 @@ enum ProofType {
     BLOCK = 2;
 }
 
-// Request message for proof generation containing payload and proof type metadata.
+// Request message for proof generation.
 message ProofRequest {
-    // Type of proof being requested, determines payload interpretation
-    ProofType proof_type = 1;
-
-    // Serialized payload requiring proof generation. The encoding format is
-    // type-specific:
-    // - TRANSACTION: TransactionInputs encoded.
-    // - BATCH: ProposedBatch encoded.
-    // - BLOCK: BlockProofRequest encoded.
-    bytes payload = 2;
+    oneof request {
+        transaction.TransactionInputs transaction = 1;
+        transaction.ProposedBatch batch = 2;
+        block_proving.BlockProofRequest block = 3;
+    }
 }
 
 // Response message containing the generated proof.
 message Proof {
-    // Serialized proof bytes.
-    // - TRANSACTION: Returns an encoded ProvenTransaction.
-    // - BATCH: Returns an encoded ProvenBatch.
-    // - BLOCK: Returns an encoded BlockProof.
-    bytes payload = 1;
+    oneof proof {
+        transaction.ProvenTransaction transaction = 1;
+        transaction.ProvenBatch batch = 2;
+        primitives.ExecutionProof block = 3;
+    }
 }
 
 // PROXY STATUS SERVICE

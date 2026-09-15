@@ -32,6 +32,10 @@ pub struct BlockProducerOptions {
 
 impl BlockProducerOptions {
     pub fn validate(&self) -> anyhow::Result<()> {
+        if self.block.interval.is_zero() {
+            anyhow::bail!("block.interval must be greater than zero");
+        }
+
         if self.block.max_batches.get() > miden_protocol::MAX_BATCHES_PER_BLOCK {
             anyhow::bail!(
                 "block.max-batches cannot exceed protocol limit of {}",
@@ -53,6 +57,7 @@ impl BlockProducerOptions {
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroUsize;
+    use std::time::Duration;
 
     use super::{
         BatchOptions,
@@ -85,6 +90,19 @@ mod tests {
                 tx_capacity: miden_node_block_producer::DEFAULT_MEMPOOL_TX_CAPACITY,
             },
         }
+    }
+
+    #[test]
+    fn rejects_zero_block_interval() {
+        let mut options =
+            options(miden_protocol::MAX_BATCHES_PER_BLOCK, DEFAULT_MAX_TXS_PER_BATCH.get());
+        options.block.interval = Duration::ZERO;
+
+        let err = options
+            .validate()
+            .expect_err("a zero block interval would panic in tokio::time::interval");
+
+        assert!(err.to_string().contains("block.interval"));
     }
 
     #[test]

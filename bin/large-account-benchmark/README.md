@@ -80,7 +80,8 @@ miden-large-account-benchmark verify --accounts-dir ./seeded \
 
 It exits zero only if the counter moved, which requires every part of the chain to be working: the seeded accounts are
 on chain, the node accepts a transaction against the wallet, and the ntx-builder can load an account this large and
-consume the network note. Anything less exits non-zero with the reason.
+consume the network note. The verifier obtains the genesis protocol configuration from RPC and checks it against the
+genesis header and the seeded counter's fee asset. Anything less exits non-zero with the reason.
 
 ```text
 baseline: counter=0 chain_tip=42

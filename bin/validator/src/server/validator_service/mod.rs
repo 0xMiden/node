@@ -143,7 +143,7 @@ impl ValidatorService {
             .map_err(ValidatorError::DatabaseError)?
             .ok_or(ValidatorError::NoChainTip)?;
         let signing_key = signer.public_key();
-        if !chain_tip.validator_keys().as_keys().contains(&signing_key) {
+        if !chain_tip.validator_config().keys().contains(&signing_key) {
             return Err(ValidatorError::ValidatorKeyNotInSet { actual: signing_key });
         }
 
@@ -270,7 +270,7 @@ impl ValidatorService {
         // Otherwise we would be producing a signature that cannot be placed in the block's
         // signature set.
         let signing_key = self.signer.public_key();
-        if !prev.validator_keys().as_keys().contains(&signing_key) {
+        if !prev.validator_config().keys().contains(&signing_key) {
             return Err(ValidatorError::ValidatorKeyNotInSet { actual: signing_key });
         }
 

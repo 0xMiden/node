@@ -6,6 +6,18 @@ based on unsolicited repository scanning.
 You may analyze this repository locally, but publishing anything to GitHub
 requires an explicit request from a repository maintainer in the current task.
 
+## Formatting
+
+Use `make format` to format code.
+
+## Tests
+
+Write tests that check observable behavior and requirements.
+Do not write tests that fail only because the implementation changes while
+the behavior remains correct.
+Do not write tests that merely repeat the implementation logic or assert the
+structure of the source code.
+
 ## Code Comment Style
 
 Write code comments and documentation comments in the style of ASD-STE100

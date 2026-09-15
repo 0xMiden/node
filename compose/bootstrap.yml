@@ -27,7 +27,7 @@ services:
     command:
       - |
         set -e
-        if [ -f /data/validators/.bootstrapped ]; then
+        if [ -f /data/validators/.bootstrapped ] && [ -s /data/genesis/native-faucet-id ]; then
           echo "Validators already bootstrapped."
           exit 0
         fi
@@ -45,13 +45,24 @@ services:
         echo "Building genesis block..."
         # The validator set consists of the public keys derived from the three
         # signing keys configured in validator.yml, ordered by validator service.
-        miden-validator genesis \
-          --genesis-block-directory /data/genesis \
-          --accounts-directory /data/accounts \
-          --config /genesis.toml \
-          --validator.key "$$(miden-validator pubkey --signing-key.hex "$${MIDEN_VALIDATOR_1_SIGNING_KEY}")" \
-          --validator.key "$$(miden-validator pubkey --signing-key.hex "$${MIDEN_VALIDATOR_2_SIGNING_KEY}")" \
-          --validator.key "$$(miden-validator pubkey --signing-key.hex "$${MIDEN_VALIDATOR_3_SIGNING_KEY}")"
+        GENESIS_OUTPUT="$$(
+          miden-validator genesis \
+            --genesis-block-directory /data/genesis \
+            --accounts-directory /data/accounts \
+            --config /genesis.toml \
+            --validator.key "$$(miden-validator pubkey --signing-key.hex "$${MIDEN_VALIDATOR_1_SIGNING_KEY}")" \
+            --validator.key "$$(miden-validator pubkey --signing-key.hex "$${MIDEN_VALIDATOR_2_SIGNING_KEY}")" \
+            --validator.key "$$(miden-validator pubkey --signing-key.hex "$${MIDEN_VALIDATOR_3_SIGNING_KEY}")"
+        )"
+        printf '%s\n' "$${GENESIS_OUTPUT}"
+        NATIVE_FAUCET_ID="$$(
+          printf '%s\n' "$${GENESIS_OUTPUT}" | sed -n 's/^Native faucet account id: //p'
+        )"
+        if [ -z "$${NATIVE_FAUCET_ID}" ]; then
+          echo "Genesis did not report the native faucet account ID." >&2
+          exit 1
+        fi
+        printf '%s\n' "$${NATIVE_FAUCET_ID}" > /data/genesis/native-faucet-id
 
         for VALIDATOR in 1 2 3; do
           echo "Bootstrapping validator $${VALIDATOR}..."

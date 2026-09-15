@@ -382,14 +382,25 @@ fn with_output_note_proofs(
                 })
                 .collect();
 
-            let header = TransactionHeader::new_unchecked(
-                transaction_id,
+            let header = TransactionHeader::new(
                 AccountId::read_from_bytes(&raw.account_id)?,
                 Word::read_from_bytes(&raw.initial_state_commitment)?,
                 Word::read_from_bytes(&raw.final_state_commitment)?,
                 InputNotes::new_unchecked(input_notes),
                 output_notes,
-            );
+            )
+            .map_err(|err| {
+                DatabaseError::DataCorrupted(format!(
+                    "invalid transaction header for stored transaction {transaction_id}: {err}"
+                ))
+            })?;
+
+            if header.id() != transaction_id {
+                return Err(DatabaseError::DataCorrupted(format!(
+                    "stored transaction ID {transaction_id} does not match reconstructed ID {}",
+                    header.id()
+                )));
+            }
 
             Ok(crate::db::TransactionRecord {
                 block_num: BlockNumber::from_raw_sql(raw.block_num)?,

@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
-ARG RUST_VERSION=1.98
-ARG DEBIAN_RELEASE=bookworm
+ARG RUST_VERSION=1.98.1
+ARG DEBIAN_RELEASE=trixie
 ARG KACHE_VERSION=0.16.0
 ARG BIN
 ARG PORT
@@ -9,7 +9,7 @@ ARG PORT
 FROM rust:${RUST_VERSION}-slim-${DEBIAN_RELEASE} AS build-base
 ARG KACHE_VERSION
 ARG TARGETARCH
-# Used by our codegen code.
+# Code generation requires rustfmt.
 RUN rustup component add rustfmt
 # Install build dependencies. RocksDB is compiled from source by librocksdb-sys.
 RUN apt-get update && \
@@ -42,6 +42,7 @@ RUN case "${TARGETARCH}" in \
     esac && \
     KACHE_ARCHIVE="kache-${KACHE_ARCH}-unknown-linux-musl.tar.gz" && \
     curl --fail --location --silent --show-error \
+        --retry 5 --retry-max-time 120 \
         "https://github.com/kunobi-ninja/kache/releases/download/v${KACHE_VERSION}/${KACHE_ARCHIVE}" \
         --output "/tmp/${KACHE_ARCHIVE}" && \
     printf '%s  %s\n' "${KACHE_SHA256}" "/tmp/${KACHE_ARCHIVE}" | \

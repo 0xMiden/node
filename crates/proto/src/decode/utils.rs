@@ -1,9 +1,9 @@
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 
-use crate::decode::{ConversionResultExt, GrpcStructDecoder};
+use crate::decode::{ConversionResultExt, GrpcStructDecoder, verify_value};
 use crate::errors::ConversionError;
-use crate::{decode, generated as proto};
+use crate::{generated as proto, verify};
 
 /// Reads a block range from a request, returning a specific error type if the field is missing
 pub fn read_block_range<E>(
@@ -20,10 +20,7 @@ where
 
 /// Reads and converts a root field from a request to Word, returning a specific error type if
 /// conversion fails
-pub fn read_root<E>(
-    root: Option<proto::primitives::Digest>,
-    entity: &'static str,
-) -> Result<Word, E>
+pub fn read_root<E>(root: Option<proto::primitives::Word>, entity: &'static str) -> Result<Word, E>
 where
     E: From<ConversionError>,
 {
@@ -39,11 +36,12 @@ pub fn convert_digests_to_words<E, I>(digests: I) -> Result<Vec<Word>, E>
 where
     E: From<ConversionError>,
     I: IntoIterator,
-    I::Item: TryInto<Word, Error = ConversionError>,
+    I::Item: TryInto<Word>,
+    <I::Item as TryInto<Word>>::Error: Into<ConversionError>,
 {
     digests
         .into_iter()
-        .map(TryInto::try_into)
+        .map(|value| value.try_into().map_err(Into::into))
         .collect::<Result<Vec<_>, ConversionError>>()
         .context("digests")
         .map_err(Into::into)
@@ -57,7 +55,7 @@ where
 {
     account_ids
         .into_iter()
-        .map(AccountId::try_from)
+        .map(|account_id| verify_value("account_ids", account_id))
         .collect::<Result<_, ConversionError>>()
         .context("account_ids")
         .map_err(Into::into)
@@ -70,5 +68,5 @@ where
     E: From<ConversionError>,
 {
     let decoder = GrpcStructDecoder::<M>::default();
-    decode!(decoder, account_id).map_err(|e: ConversionError| e.into())
+    verify!(decoder, account_id).map_err(|e: ConversionError| e.into())
 }

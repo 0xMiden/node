@@ -1,43 +1,111 @@
 use std::fmt::Write as _;
 
-use super::{Impact, InvalidChangelogEntry, InvalidChangelogSource, ReleaseNoteEntry, Scope};
+use super::{
+    Database,
+    DatabaseMigrationUpdate,
+    Impact,
+    InvalidChangelogEntry,
+    InvalidChangelogSource,
+    ProtocolUpdate,
+    ReleaseNoteEntry,
+    RustMsrvUpdate,
+    Scope,
+};
 
 pub(super) fn release_notes(
     title: &str,
+    protocol_update: Option<&ProtocolUpdate>,
+    rust_msrv_update: Option<&RustMsrvUpdate>,
+    database_migration_updates: &[DatabaseMigrationUpdate],
     entries: &[ReleaseNoteEntry],
     invalid_entries: &[InvalidChangelogEntry],
 ) -> String {
     let mut notes = format!("{title}\n");
 
+    if protocol_update.is_some()
+        || rust_msrv_update.is_some()
+        || !database_migration_updates.is_empty()
+    {
+        notes.push('\n');
+    }
+
+    if let Some(update) = protocol_update {
+        append_protocol_update(&mut notes, update);
+    }
+
+    if let Some(update) = rust_msrv_update {
+        append_rust_msrv_update(&mut notes, update);
+    }
+
+    append_database_migration_updates(&mut notes, database_migration_updates);
+
     append_invalid_entries(&mut notes, invalid_entries);
 
     if entries.is_empty() {
-        notes.push_str("\nNo release-note-worthy changes.\n");
+        if protocol_update.is_none()
+            && rust_msrv_update.is_none()
+            && database_migration_updates.is_empty()
+        {
+            notes.push_str("\nNo release-note-worthy changes.\n");
+        }
         return notes;
     }
 
     append_impact_section(&mut notes, "Breaking Changes", Impact::Breaking, entries);
-    append_impact_section(&mut notes, "Migrations", Impact::Migration, entries);
 
     notes.push_str("\n## Changes by Scope\n");
 
     for scope in SCOPE_ORDER {
-        let mut entries = entries.iter().filter(|entry| entry.scope == scope).collect::<Vec<_>>();
-
-        if entries.is_empty() {
-            continue;
-        }
-
-        entries.sort_by_key(|entry| (entry.impact.sort_key(), entry.order));
-
-        writeln!(notes, "\n### {scope}\n").expect("writing to String cannot fail");
-
-        for entry in entries {
-            append_scope_entry(&mut notes, entry);
-        }
+        append_scope_section(&mut notes, scope, entries);
     }
 
     notes
+}
+
+fn append_scope_section(notes: &mut String, scope: Scope, entries: &[ReleaseNoteEntry]) {
+    let mut entries = entries.iter().filter(|entry| entry.scope == scope).collect::<Vec<_>>();
+
+    if entries.is_empty() {
+        return;
+    }
+
+    entries.sort_by_key(|entry| (entry.impact.sort_key(), entry.order));
+
+    writeln!(notes, "\n### {scope}\n").expect("writing to String cannot fail");
+
+    for entry in entries {
+        append_scope_entry(notes, entry);
+    }
+}
+
+fn append_protocol_update(notes: &mut String, update: &ProtocolUpdate) {
+    let previous = &update.previous;
+    let current = &update.current;
+
+    writeln!(notes, "Protocol support updated from `{previous}` to `{current}`.")
+        .expect("writing to String cannot fail");
+}
+
+fn append_rust_msrv_update(notes: &mut String, update: &RustMsrvUpdate) {
+    let previous = &update.previous;
+    let current = &update.current;
+
+    writeln!(notes, "Rust MSRV updated from `{previous}` to `{current}`.")
+        .expect("writing to String cannot fail");
+}
+
+fn append_database_migration_updates(notes: &mut String, updates: &[DatabaseMigrationUpdate]) {
+    for update in updates {
+        let database = update.database;
+        let service = match database {
+            Database::Store => "miden-node",
+            Database::Validator => "miden-validator",
+            Database::NtxBuilder => "miden-ntx-builder",
+        };
+
+        writeln!(notes, "{database} migration required. Run `{service} migrate`.")
+            .expect("writing to String cannot fail");
+    }
 }
 
 fn append_invalid_entries(notes: &mut String, invalid_entries: &[InvalidChangelogEntry]) {
@@ -108,10 +176,9 @@ fn append_callout_entry(notes: &mut String, entry: &ReleaseNoteEntry) {
 }
 
 impl Scope {
-    const fn sort_order() -> [Self; 11] {
+    const fn sort_order() -> [Self; 10] {
         [
             Self::General,
-            Self::Protocol,
             Self::Rpc,
             Self::Node,
             Self::Prover,
@@ -129,7 +196,6 @@ impl std::fmt::Display for Scope {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let label = match self {
             Self::General => "General",
-            Self::Protocol => "Protocol",
             Self::Rpc => "RPC",
             Self::Node => "Node",
             Self::Prover => "Prover",
@@ -145,16 +211,27 @@ impl std::fmt::Display for Scope {
     }
 }
 
+impl std::fmt::Display for Database {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            Self::Store => "Node",
+            Self::Validator => "Validator",
+            Self::NtxBuilder => "NTX Builder",
+        };
+
+        formatter.write_str(label)
+    }
+}
+
 impl Impact {
     fn sort_key(self) -> usize {
         match self {
             Self::Breaking => 0,
-            Self::Migration => 1,
-            Self::Added => 2,
-            Self::Changed => 3,
-            Self::Fixed => 4,
-            Self::Deprecated => 5,
-            Self::Removed => 6,
+            Self::Added => 1,
+            Self::Changed => 2,
+            Self::Fixed => 3,
+            Self::Deprecated => 4,
+            Self::Removed => 5,
         }
     }
 }
@@ -163,7 +240,6 @@ impl std::fmt::Display for Impact {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let label = match self {
             Self::Breaking => "Breaking",
-            Self::Migration => "Migration",
             Self::Added => "Added",
             Self::Changed => "Changed",
             Self::Fixed => "Fixed",
@@ -175,7 +251,7 @@ impl std::fmt::Display for Impact {
     }
 }
 
-const SCOPE_ORDER: [Scope; 11] = Scope::sort_order();
+const SCOPE_ORDER: [Scope; 10] = Scope::sort_order();
 
 #[cfg(test)]
 mod tests {
@@ -197,13 +273,6 @@ mod tests {
                 order: 0,
             },
             ReleaseNoteEntry {
-                pr_number: 11,
-                scope: Scope::Protocol,
-                impact: Impact::Migration,
-                description: "Added database migration.".to_owned(),
-                order: 1,
-            },
-            ReleaseNoteEntry {
                 pr_number: 12,
                 scope: Scope::Node,
                 impact: Impact::Added,
@@ -218,12 +287,44 @@ mod tests {
                 order: 3,
             },
         ];
+        let protocol_update = ProtocolUpdate {
+            previous: semver::Version::parse("0.16.0-rc.4").unwrap(),
+            current: semver::Version::parse("0.16.0-rc.9").unwrap(),
+        };
+        let rust_msrv_update = RustMsrvUpdate {
+            previous: "1.96.1".to_owned(),
+            current: "1.98.0".to_owned(),
+        };
+        let database_migration_updates = vec![
+            DatabaseMigrationUpdate {
+                database: Database::Store,
+                previous: 3,
+                current: 5,
+            },
+            DatabaseMigrationUpdate {
+                database: Database::NtxBuilder,
+                previous: 1,
+                current: 3,
+            },
+        ];
 
-        let notes = release_notes("Release v0.16.0", &entries, &invalid_entries);
+        let notes = release_notes(
+            "Release v0.16.0",
+            Some(&protocol_update),
+            Some(&rust_msrv_update),
+            &database_migration_updates,
+            &entries,
+            &invalid_entries,
+        );
 
         assert_eq!(
             notes,
             r"Release v0.16.0
+
+Protocol support updated from `0.16.0-rc.4` to `0.16.0-rc.9`.
+Rust MSRV updated from `1.96.1` to `1.98.0`.
+Node migration required. Run `miden-node migrate`.
+NTX Builder migration required. Run `miden-ntx-builder migrate`.
 
 ## Changelog Entries Requiring Attention
 
@@ -233,19 +334,11 @@ mod tests {
 
 - **RPC:** Changed request shape. (#10)
 
-## Migrations
-
-- **Protocol:** Added database migration. (#11)
-
 ## Changes by Scope
 
 ### General
 
 - **Fixed:** Fixed release metadata. (#13)
-
-### Protocol
-
-- **Migration:** Added database migration. (#11)
 
 ### RPC
 
@@ -254,6 +347,75 @@ mod tests {
 ### Node
 
 - **Added:** Added startup command. (#12)
+"
+        );
+    }
+
+    #[test]
+    fn renders_a_protocol_update_without_pr_entries() {
+        let protocol_update = ProtocolUpdate {
+            previous: semver::Version::parse("0.16.0-rc.4").unwrap(),
+            current: semver::Version::parse("0.16.0-rc.9").unwrap(),
+        };
+
+        let notes = release_notes("Release v0.16.0", Some(&protocol_update), None, &[], &[], &[]);
+
+        assert_eq!(
+            notes,
+            r"Release v0.16.0
+
+Protocol support updated from `0.16.0-rc.4` to `0.16.0-rc.9`.
+"
+        );
+    }
+
+    #[test]
+    fn renders_a_rust_msrv_update_without_pr_entries() {
+        let rust_msrv_update = RustMsrvUpdate {
+            previous: "1.96.1".to_owned(),
+            current: "1.98.0".to_owned(),
+        };
+
+        let notes = release_notes("Release v0.16.0", None, Some(&rust_msrv_update), &[], &[], &[]);
+
+        assert_eq!(
+            notes,
+            r"Release v0.16.0
+
+Rust MSRV updated from `1.96.1` to `1.98.0`.
+"
+        );
+    }
+
+    #[test]
+    fn renders_database_migration_updates_without_pr_entries() {
+        let updates = vec![
+            DatabaseMigrationUpdate {
+                database: Database::Store,
+                previous: 3,
+                current: 5,
+            },
+            DatabaseMigrationUpdate {
+                database: Database::Validator,
+                previous: 1,
+                current: 2,
+            },
+            DatabaseMigrationUpdate {
+                database: Database::NtxBuilder,
+                previous: 1,
+                current: 3,
+            },
+        ];
+
+        let notes = release_notes("Release v0.16.0", None, None, &updates, &[], &[]);
+
+        assert_eq!(
+            notes,
+            r"Release v0.16.0
+
+Node migration required. Run `miden-node migrate`.
+Validator migration required. Run `miden-validator migrate`.
+NTX Builder migration required. Run `miden-ntx-builder migrate`.
 "
         );
     }

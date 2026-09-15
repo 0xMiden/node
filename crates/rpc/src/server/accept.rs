@@ -6,7 +6,6 @@ use futures::future::BoxFuture;
 use http::header::{ACCEPT, ToStrError};
 use mediatype::{Name, ReadParams};
 use miden_node_tracing::ErrorReport;
-use miden_node_utils::FlattenResult;
 use miden_protocol::{Word, WordError};
 use semver::{Comparator, Version, VersionReq};
 use tower::{Layer, Service};
@@ -138,6 +137,25 @@ impl AcceptHeaderLayer {
     const GENESIS: Name<'static> = Name::new_unchecked("genesis");
     const GRPC: Name<'static> = Name::new_unchecked("grpc");
 
+    /// Parses repeated `Accept` header field values as one combined field value, as required by
+    /// HTTP list-header semantics.
+    fn negotiate_headers<'a>(
+        &self,
+        headers: impl IntoIterator<Item = &'a http::HeaderValue>,
+        genesis_mode: GenesisNegotiation,
+    ) -> Result<(), AcceptHeaderError> {
+        let mut accept = String::new();
+
+        for header in headers {
+            if !accept.is_empty() {
+                accept.push(',');
+            }
+            accept.push_str(header.to_str().map_err(AcceptHeaderError::InvalidUtf8)?);
+        }
+
+        self.negotiate(&accept, genesis_mode)
+    }
+
     /// Parses the `Accept` header's contents, searching for any media type compatible with our RPC
     /// version and genesis commitment, controlling whether `genesis` is optional or mandatory.
     fn negotiate(
@@ -156,6 +174,8 @@ impl AcceptHeaderLayer {
             }
             return Ok(());
         }
+
+        let mut candidate_error = None;
 
         // Parse media types until we find one we support.
         //
@@ -201,11 +221,16 @@ impl AcceptHeaderLayer {
             // The VersionReq checks major.minor compatibility. Pre-release labels are
             // checked separately because semver's VersionReq matching rejects all
             // pre-release versions when the comparator has no pre-release component.
-            let version = media_type
-                .get_param(Self::VERSION)
-                .map(|value| Version::parse(value.unquoted_str().as_ref()))
-                .transpose()
-                .map_err(AcceptHeaderError::InvalidVersion)?;
+            let version = match media_type.get_param(Self::VERSION) {
+                Some(value) => match Version::parse(value.unquoted_str().as_ref()) {
+                    Ok(version) => Some(version),
+                    Err(err) => {
+                        candidate_error.get_or_insert(AcceptHeaderError::InvalidVersion(err));
+                        continue;
+                    },
+                },
+                None => None,
+            };
             if let Some(version) = &version {
                 // Check major.minor match by stripping pre-release first.
                 let stable_version = Version {
@@ -244,7 +269,7 @@ impl AcceptHeaderLayer {
 
         // We've already handled the case where there are no media types specified, so if we are
         // here its because the client _did_ specify some but none of them are a match.
-        Err(AcceptHeaderError::NoSupportedMediaRange)
+        Err(candidate_error.unwrap_or(AcceptHeaderError::NoSupportedMediaRange))
     }
 }
 
@@ -287,7 +312,7 @@ where
         let requires_genesis = self.verifier.require_genesis_methods.contains(&method_name);
 
         // If `genesis` is required but the header is missing entirely, reject early.
-        let Some(header) = request.headers().get(ACCEPT) else {
+        if !request.headers().contains_key(ACCEPT) {
             if requires_genesis {
                 let response = tonic::Status::invalid_argument(
                     "Accept header with 'genesis' parameter is required for write RPC methods",
@@ -296,20 +321,15 @@ where
                 return futures::future::ready(Ok(response)).boxed();
             }
             return self.inner.call(request).boxed();
-        };
+        }
 
-        let result = header
-            .to_str()
-            .map_err(AcceptHeaderError::InvalidUtf8)
-            .map(|header| {
-                let mode = if requires_genesis {
-                    GenesisNegotiation::Mandatory
-                } else {
-                    GenesisNegotiation::Optional
-                };
-                self.verifier.negotiate(header, mode)
-            })
-            .flatten_result();
+        let mode = if requires_genesis {
+            GenesisNegotiation::Mandatory
+        } else {
+            GenesisNegotiation::Optional
+        };
+        let result =
+            self.verifier.negotiate_headers(request.headers().get_all(ACCEPT).iter(), mode);
 
         match result {
             Ok(()) => self.inner.call(request).boxed(),
@@ -442,6 +462,9 @@ mod tests {
     #[case::trailing_comma("application/vnd.miden, ")]
     // This should pass because the 2nd option is valid.
     #[case::multiple_types("application/vnd.miden; version=2.0.0, application/vnd.miden")]
+    #[case::malformed_then_valid(
+        "application/vnd.miden; version=not-a-version, application/vnd.miden"
+    )]
     // Parameter values may be quoted.
     #[case::quoted_quality(r#"application/vnd.miden; q="1""#)]
     #[case::quoted_version(r#"application/vnd.miden; version="0.2.3""#)]
@@ -450,6 +473,27 @@ mod tests {
     fn request_should_pass(#[case] accept: &'static str) {
         AcceptHeaderLayer::for_tests()
             .negotiate(accept, super::GenesisNegotiation::Optional)
+            .unwrap();
+    }
+
+    #[test]
+    fn repeated_accept_fields_consider_all_values() {
+        let layer = AcceptHeaderLayer::for_tests();
+        let mut headers = http::HeaderMap::new();
+        headers.append(
+            http::header::ACCEPT,
+            http::HeaderValue::from_static("application/vnd.miden; version=9.0.0"),
+        );
+        headers.append(
+            http::header::ACCEPT,
+            http::HeaderValue::from_static("application/vnd.miden; version=0.2.3"),
+        );
+
+        layer
+            .negotiate_headers(
+                headers.get_all(http::header::ACCEPT).iter(),
+                super::GenesisNegotiation::Optional,
+            )
             .unwrap();
     }
 

@@ -359,11 +359,12 @@ mod tests {
         let account_id = AccountId::try_from(ACCOUNT_ID_SENDER).unwrap();
         let persisted_header = note_header(account_id, 1);
         let erased_header = note_header(account_id, 2);
+        let consumed_header = note_header(account_id, 3);
         let unresolved_nullifier = Nullifier::from_raw(word(3));
         let resolved_nullifier = Nullifier::from_raw(word(4));
         let input_notes = InputNotes::new_unchecked(vec![
             InputNoteCommitment::from(unresolved_nullifier),
-            InputNoteCommitment::from_parts_unchecked(resolved_nullifier, Some(erased_header)),
+            InputNoteCommitment::from_parts_unchecked(resolved_nullifier, Some(consumed_header)),
         ]);
         let transaction = TransactionHeader::new(
             account_id,
@@ -371,7 +372,8 @@ mod tests {
             word(5),
             input_notes,
             vec![persisted_header, erased_header],
-        );
+        )
+        .expect("test transaction header should be valid");
         let transaction_id = transaction.id();
         let output_note = OutputNote::Private(
             PrivateOutputNote::new(persisted_header, NoteAttachments::default()).unwrap(),
@@ -393,7 +395,7 @@ mod tests {
         assert!(lifecycle.created_notes[1].erased);
         assert_eq!(lifecycle.consumed_notes.len(), 2);
         assert_eq!(lifecycle.consumed_notes[0].note_id, None);
-        assert_eq!(lifecycle.consumed_notes[1].note_id, Some(erased_header.id()));
+        assert_eq!(lifecycle.consumed_notes[1].note_id, Some(consumed_header.id()));
         assert_eq!(lifecycle.unresolved_note_nullifiers(), vec![unresolved_nullifier],);
     }
 
@@ -423,7 +425,8 @@ mod tests {
         )
         .unwrap();
         let update =
-            BlockAccountUpdate::new(account_id, word(10), AccountUpdateDetails::Public(patch));
+            BlockAccountUpdate::new(account_id, word(10), AccountUpdateDetails::Public(patch))
+                .expect("test account update should be valid");
         let body = BlockBody::new_unchecked(
             vec![update],
             Vec::new(),
