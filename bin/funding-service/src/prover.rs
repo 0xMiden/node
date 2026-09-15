@@ -7,6 +7,7 @@ use miden_node_proto::clients::{Builder, RemoteProverClient};
 use miden_node_proto::generated::remote_prover::ProofRequest;
 use miden_node_proto::generated::remote_prover::proof::Proof as ProofVariant;
 use miden_node_proto::generated::remote_prover::proof_request::Request as ProofRequestVariant;
+use miden_node_proto::{BuildUnchecked, DecodeMessage};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorReport, warn};
 use miden_protocol::transaction::{ExecutedTransaction, ProvenTransaction};
@@ -113,8 +114,11 @@ impl RemoteProver {
             None => anyhow::bail!("the remote prover response holds no proof"),
         };
 
-        ProvenTransaction::try_from(proof)
-            .context("failed to decode the response of the remote transaction prover")
+        proof
+            .decode_fields()
+            .context("failed to decode the response of the remote transaction prover")?
+            .build_unchecked()
+            .context("failed to build the response of the remote transaction prover")
     }
 
     /// Proves one executed transaction, falling back to local proving.
