@@ -28,7 +28,7 @@ supported. The error must implement `std::error::Error + 'static` or dereference
 supported. Source messages are available only when the error exposes them through `source()`.
 
 The attribute supports synchronous functions, async functions, and functions that end with an async block or
-`Box::pin(async { ... })`. With `err`, the `ret` option emits a return event only for `Ok` values.
+`Box::pin(async { ... })`. Return value logging with `ret` is not supported.
 
 For returned futures, the macro reads the output type from `Future<Output = T>` or Miden's `FutureMaybeSend<T>`. A
 custom opaque future trait can require an explicit result type in the async block.

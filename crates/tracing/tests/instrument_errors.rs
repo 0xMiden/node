@@ -99,7 +99,7 @@ fn borrowed_error_result() -> Result<(), &'static (dyn Error + Sync)> {
     Err(&ERROR)
 }
 
-#[miden_instrument(err, ret)]
+#[miden_instrument(err)]
 fn opaque_result(fail: bool) -> Result<impl std::fmt::Debug, Outer> {
     if fail { Err(failure()) } else { Ok(7) }
 }
@@ -110,7 +110,6 @@ fn opaque_result(fail: bool) -> Result<impl std::fmt::Debug, Outer> {
     name = "configured",
     level = "debug",
     err(level = "warn"),
-    ret(Display, level = tracing::Level::INFO),
 )]
 fn configured_result(success: bool) -> Result<usize, Outer> {
     if success { Ok(7) } else { Err(failure()) }
@@ -204,7 +203,7 @@ fn error_wrappers_export_complete_source_chains() {
 }
 
 #[test]
-fn configured_events_keep_levels_targets_and_success_only_returns() {
+fn configured_errors_keep_levels_targets_and_parents() {
     let spans = export(|| {
         assert_eq!(configured_result(true).unwrap(), 7);
         assert!(configured_result(false).is_err());
@@ -213,20 +212,17 @@ fn configured_events_keep_levels_targets_and_success_only_returns() {
     for span in &spans {
         assert_eq!(span.name, "configured");
         assert_eq!(span.parent_span_id, opentelemetry::trace::SpanId::INVALID);
-        assert_eq!(span.events.len(), 1);
-        assert_eq!(
-            attribute(&span.events[0].attributes, "target"),
-            Some(&Value::from("error-test"))
-        );
     }
-    assert_eq!(attribute(&spans[0].events[0].attributes, "return"), Some(&Value::from("7")));
-    assert_eq!(attribute(&spans[0].events[0].attributes, "level"), Some(&Value::from("INFO")));
+    assert!(spans[0].events.is_empty());
+    assert_eq!(spans[0].status, Status::Unset);
+    assert_eq!(spans[1].events.len(), 1);
+    assert_eq!(
+        attribute(&spans[1].events[0].attributes, "target"),
+        Some(&Value::from("error-test"))
+    );
     assert_eq!(attribute(&spans[1].events[0].attributes, "level"), Some(&Value::from("WARN")));
     assert_eq!(spans[1].status, Status::Unset);
-    assert_eq!(
-        attribute(&spans[1].events[0].attributes, "exception.stacktrace"),
-        Some(&Value::Array(Array::String(vec!["middle error".into(), "root cause".into()])))
-    );
+    assert_exception_attributes(&spans[1].events[0].attributes);
 }
 
 #[test]

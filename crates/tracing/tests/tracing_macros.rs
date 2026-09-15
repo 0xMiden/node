@@ -385,6 +385,7 @@ fn ui_tests() {
     tests.compile_fail("tests/ui/tracing_macros/invalid_record_formatter.rs");
     tests.compile_fail("tests/ui/tracing_macros/invalid_instrument_formatter.rs");
     tests.compile_fail("tests/ui/tracing_macros/invalid_err_formatter.rs");
+    tests.compile_fail("tests/ui/tracing_macros/invalid_ret.rs");
     tests.compile_fail("tests/ui/tracing_macros/outside_miden_instrument.rs");
     tests.compile_fail("tests/ui/tracing_macros/invalid_event_field_name.rs");
     tests.compile_fail("tests/ui/tracing_macros/invalid_event_field_type.rs");

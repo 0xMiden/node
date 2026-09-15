@@ -34,6 +34,7 @@ mod instrument;
 /// `err` records a typed error. The subscriber controls how it records the source chain.
 /// Errors must implement `std::error::Error + 'static` or dereference to that trait.
 /// `err(level = "warn")` sets the event level. Error formatters are not supported.
+/// Return value logging with `ret` is not supported.
 #[proc_macro_attribute]
 pub fn miden_instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attr = match rewrite_explicit_fields(TokenStream2::from(attr)) {

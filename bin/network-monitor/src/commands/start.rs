@@ -22,7 +22,6 @@ use crate::{COMPONENT, LOG_TARGET};
     fields(
         port = config.port,
     ),
-    ret(level = "debug"),
     err,
 )]
 pub async fn start_monitor(config: MonitorConfig) -> Result<()> {

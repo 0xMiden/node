@@ -294,7 +294,6 @@ impl Service for ProverStatusService {
         target = COMPONENT,
         name = "network_monitor.prover.status_check",
         level = "info",
-        ret(level = "debug"),
         fields(
             prover = self.name,
         ),
@@ -535,7 +534,6 @@ fn tonic_status_to_json(status: &tonic::Status) -> String {
     target = COMPONENT,
     name = "network_monitor.remote_prover.generate_prover_test_payload",
     level = "info",
-    ret(level = "debug"),
     err,
 )]
 async fn generate_prover_test_payload(

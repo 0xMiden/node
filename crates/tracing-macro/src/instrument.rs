@@ -21,36 +21,14 @@ use crate::split_top_level_args;
 
 pub fn instrument_result(attr: TokenStream, function: &mut ItemFn) -> Result<TokenStream> {
     let mut args = split_top_level_args(attr);
+    if let Some(ret) = args.iter().find(|arg| starts_with(arg, "ret")) {
+        return Err(syn::Error::new_spanned(ret, "`ret` is not supported by `miden_instrument`"));
+    }
     let Some(err) = take_argument(&mut args, "err")? else {
         return Ok(quote! { #(#args),* });
     };
-    let err = EventOptions::parse(err, false)?;
-    let ret = take_argument(&mut args, "ret")?
-        .map(|arg| EventOptions::parse(arg, true))
-        .transpose()?;
+    let error_level = error_level(err)?;
     let target = argument_value(&args, "target")?.unwrap_or_else(|| parse_quote!(module_path!()));
-    let error_level = err.level.unwrap_or_else(|| quote!(::miden_node_tracing::Level::ERROR));
-    let ret_event = if let Some(ret) = ret {
-        let level = match ret.level {
-            Some(level) => level,
-            None => argument_value(&args, "level")?
-                .map(level_tokens)
-                .transpose()?
-                .unwrap_or_else(|| quote!(::miden_node_tracing::Level::INFO)),
-        };
-        let value = if ret.display {
-            quote!(::miden_node_tracing::field::display(__miden_value))
-        } else {
-            quote!(::miden_node_tracing::field::debug(__miden_value))
-        };
-        quote! {
-            if let ::core::result::Result::Ok(__miden_value) = &__miden_result {
-                ::miden_node_tracing::event!(target: #target, #level, return = #value);
-            }
-        }
-    } else {
-        TokenStream::new()
-    };
     let events = quote! {
         if let ::core::result::Result::Err(__miden_error) = &__miden_result {
             use ::miden_node_tracing::__private::AsDynError as _;
@@ -61,7 +39,6 @@ pub fn instrument_result(attr: TokenStream, function: &mut ItemFn) -> Result<Tok
                 error = __miden_error.as_dyn_error()
             );
         }
-        #ret_event
         __miden_result
     };
 
@@ -198,49 +175,33 @@ fn argument_value(args: &[TokenStream], name: &str) -> Result<Option<Expr>> {
         .transpose()
 }
 
-#[derive(Default)]
-struct EventOptions {
-    level: Option<TokenStream>,
-    display: bool,
-}
-
-impl EventOptions {
-    fn parse(arg: Meta, allow_formatter: bool) -> Result<Self> {
-        let mut options = Self::default();
-        let list = match arg {
-            Meta::Path(_) => return Ok(options),
-            Meta::List(list) => list,
-            arg @ Meta::NameValue(_) => {
-                return Err(syn::Error::new_spanned(arg, "expected `err` or `ret` options"));
+fn error_level(arg: Meta) -> Result<TokenStream> {
+    let list = match arg {
+        Meta::Path(_) => return Ok(quote!(::miden_node_tracing::Level::ERROR)),
+        Meta::List(list) => list,
+        arg @ Meta::NameValue(_) => {
+            return Err(syn::Error::new_spanned(arg, "expected `err` or `err(level = ...)`"));
+        },
+    };
+    let mut level = None;
+    for arg in split_top_level_args(list.tokens) {
+        match syn::parse2::<Meta>(arg.clone())? {
+            Meta::NameValue(value) if value.path.is_ident("level") => {
+                if level.is_some() {
+                    return Err(syn::Error::new_spanned(arg, "duplicate `level` argument"));
+                }
+                level = Some(level_tokens(value.value)?);
             },
-        };
-        let mut formatter = false;
-        for arg in split_top_level_args(list.tokens) {
-            match syn::parse2::<Meta>(arg.clone())? {
-                Meta::NameValue(value) if value.path.is_ident("level") => {
-                    if options.level.is_some() {
-                        return Err(syn::Error::new_spanned(arg, "duplicate `level` argument"));
-                    }
-                    options.level = Some(level_tokens(value.value)?);
-                },
-                Meta::Path(path) if path.is_ident("Debug") || path.is_ident("Display") => {
-                    if !allow_formatter {
-                        return Err(syn::Error::new_spanned(
-                            arg,
-                            "`err` formatters are not supported; errors are recorded as typed values",
-                        ));
-                    }
-                    if formatter {
-                        return Err(syn::Error::new_spanned(arg, "duplicate formatter"));
-                    }
-                    formatter = true;
-                    options.display = path.is_ident("Display");
-                },
-                _ => return Err(syn::Error::new_spanned(arg, "unsupported event option")),
-            }
+            Meta::Path(path) if path.is_ident("Debug") || path.is_ident("Display") => {
+                return Err(syn::Error::new_spanned(
+                    arg,
+                    "`err` formatters are not supported; errors are recorded as typed values",
+                ));
+            },
+            _ => return Err(syn::Error::new_spanned(arg, "unsupported error event option")),
         }
-        Ok(options)
     }
+    Ok(level.unwrap_or_else(|| quote!(::miden_node_tracing::Level::ERROR)))
 }
 
 fn level_tokens(value: Expr) -> Result<TokenStream> {
