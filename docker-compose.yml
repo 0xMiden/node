@@ -18,7 +18,6 @@
 #   container images used by the local network. The core images default to the
 #   unqualified names built by the Makefile. Optional external images default
 #   to their pinned versions in the corresponding Compose files.
-# - MIDEN_NOTE_TRANSPORT_PLATFORM: platform used by the note transport image.
 #   Defaults to linux/amd64 because the pinned image is not multi-architecture.
 # - OTEL_EXPORTER_OTLP_ENDPOINT: optional additional OTLP/gRPC endpoint. Traces
 #   are always sent to the bundled collector, which forwards them to this
