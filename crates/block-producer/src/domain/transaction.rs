@@ -1,8 +1,10 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use miden_node_proto::decode::ConversionResultExt;
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::sequencer;
+use miden_objects::{BuildUnchecked, DecodeMessage};
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockNumber, FeeParameters};
@@ -194,8 +196,11 @@ impl TryFrom<sequencer::AuthenticatedTransaction> for AuthenticatedTransaction {
             .ok_or_else(|| {
                 ConversionError::missing_field::<sequencer::AuthenticatedTransaction>("transaction")
             })?
-            .try_into()
-            .map_err(ConversionError::from)?;
+            .decode_fields()
+            .context("transaction")?
+            .build_unchecked()
+            .map_err(ConversionError::new)
+            .context("transaction")?;
 
         let store_account_state = value.store_account_state.map(Word::try_from).transpose()?;
 

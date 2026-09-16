@@ -7,7 +7,7 @@ use miden_node_proto::domain::submission::{
     TransactionBatchSubmission,
 };
 use miden_node_proto::generated;
-use miden_objects::proto;
+use miden_objects::{DecodeMessage, proto};
 use miden_protocol::Word;
 use miden_protocol::account::{
     AccountId,
@@ -421,8 +421,7 @@ fn batch_submission_rejects_proof_that_does_not_match_proposal() {
 
 #[test]
 fn canonical_conversion_errors_map_to_invalid_argument() {
-    let error = miden_protocol::account::AccountId::try_from(proto::account::AccountId::default())
-        .unwrap_err();
+    let error = proto::account::AccountId::default().decode_fields().unwrap_err();
     let status: tonic::Status = miden_node_proto::errors::ConversionError::from(error).into();
 
     assert_eq!(status.code(), tonic::Code::InvalidArgument);

@@ -3,6 +3,7 @@
 use miden_protocol::block::BlockHeader;
 use miden_protocol::protocol_config::ProtocolConfig;
 
+use crate::decode::verify_value;
 use crate::errors::ConversionError;
 use crate::generated::protocol_config::ProtocolConfig as ProtoProtocolConfig;
 
@@ -12,10 +13,10 @@ pub fn ensure_protocol_config_is_present_and_matches_header(
     config: Option<ProtoProtocolConfig>,
     header: &BlockHeader,
 ) -> Result<ProtocolConfig, ConversionError> {
-    let config: ProtocolConfig = config
-        .ok_or_else(|| ConversionError::message("protocol config is missing"))?
-        .try_into()
-        .map_err(ConversionError::from)?;
+    let config: ProtocolConfig = verify_value(
+        "protocol_config",
+        config.ok_or_else(|| ConversionError::message("protocol config is missing"))?,
+    )?;
     let calculated = config.to_commitment();
     let expected = header.protocol_config_commitment();
     if calculated != expected {

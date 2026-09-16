@@ -11,6 +11,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use miden_node_proto::clients::RpcClient;
 use miden_node_proto::generated::rpc::NotesByIdRequest;
+use miden_node_proto::{DecodeMessage, Verify};
 use miden_node_tracing::{info, warn};
 use miden_protocol::account::AccountId;
 use miden_protocol::note::{Note, NoteId};
@@ -236,8 +237,10 @@ async fn fetch_note(rpc_client: &mut RpcClient, note_id: NoteId) -> Result<Optio
     let note = committed
         .note
         .context("committed note response is missing the note")?
-        .try_into()
-        .context("failed to convert the funding note")?;
+        .decode_fields()
+        .context("failed to decode the funding note")?
+        .verify()
+        .context("failed to verify the funding note")?;
 
     Ok(Some(note))
 }

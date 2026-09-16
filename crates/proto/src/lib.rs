@@ -14,4 +14,5 @@ pub use domain::sign_block_request::SignBlockRequest;
 pub use domain::submission::{ProvenTransactionSubmission, TransactionBatchSubmission};
 pub use domain::{convert, try_convert};
 pub use generated::server;
+pub use miden_objects::{BuildUnchecked, DecodeMessage, Verify, VerifyWith};
 pub use prost;

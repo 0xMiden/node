@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use miden_node_proto::clients::RpcClient;
+use miden_node_proto::generated::account::account_storage_header::storage_slot::Content as SlotContent;
+use miden_node_proto::{DecodeMessage, Verify};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{debug, error, info, miden_instrument, warn};
 use miden_protocol::account::auth::AuthSecretKey;
@@ -1010,12 +1012,13 @@ async fn fetch_slot_value(
         .find(|slot| slot.slot_name == slot_name)
         .context(format!("slot '{slot_name}' not found"))?;
 
-    let slot_value: Word = slot
-        .commitment
-        .as_ref()
-        .context("missing storage slot value")?
-        .try_into()
-        .context("failed to convert slot value to word")?;
+    let slot_value: Word = match slot.content.as_ref() {
+        Some(SlotContent::Value(value)) => {
+            value.try_into().context("failed to convert slot value to word")?
+        },
+        Some(SlotContent::MapRoot(_)) => anyhow::bail!("slot '{slot_name}' is a storage map"),
+        None => anyhow::bail!("missing storage slot value"),
+    };
 
     let value = slot_value
         .as_elements()
@@ -1034,9 +1037,7 @@ fn build_account_request(
     account_id: AccountId,
     include_code_and_vault: bool,
 ) -> miden_node_proto::generated::rpc::AccountRequest {
-    let id_bytes: [u8; 15] = account_id.into();
-    let account_id_proto =
-        miden_node_proto::generated::account::AccountId { id: id_bytes.to_vec() };
+    let account_id_proto: miden_node_proto::generated::account::AccountId = account_id.into();
 
     let (code_commitment, asset_vault_commitment) = if include_code_and_vault {
         let dummy: miden_node_proto::generated::primitives::Word = Word::default().into();
@@ -1096,8 +1097,10 @@ async fn fetch_wallet_account(
     let code: AccountCode = details
         .code
         .context("server did not return account code")?
-        .try_into()
-        .context("failed to decode account code")?;
+        .decode_fields()
+        .context("failed to decode account code")?
+        .verify()
+        .context("failed to verify account code")?;
 
     let vault = match details.vault_details {
         Some(vault_details) if vault_details.too_many_assets => {
@@ -1107,7 +1110,12 @@ async fn fetch_wallet_account(
             let assets: Vec<miden_protocol::asset::Asset> = vault_details
                 .assets
                 .into_iter()
-                .map(TryInto::try_into)
+                .map(|asset| {
+                    asset
+                        .decode_fields()
+                        .map_err(anyhow::Error::from)
+                        .and_then(|asset| asset.verify().map_err(anyhow::Error::from))
+                })
                 .collect::<Result<_, _>>()
                 .context("failed to convert assets")?;
             AssetVault::new(&assets).context("failed to create vault")?
@@ -1176,17 +1184,13 @@ fn build_account_storage(
     for slot in storage_header.slots {
         let slot_name = miden_protocol::account::StorageSlotName::new(slot.slot_name.clone())
             .context("invalid slot name")?;
-        let value: Word = slot
-            .commitment
-            .context("missing slot value")?
-            .try_into()
-            .context("invalid slot value")?;
-
-        // slot_type: 0 = Value, 1 = Map
-        anyhow::ensure!(
-            slot.slot_type == 0,
-            "storage map slots are not supported for this account"
-        );
+        let value: Word = match slot.content {
+            Some(SlotContent::Value(value)) => value.try_into().context("invalid slot value")?,
+            Some(SlotContent::MapRoot(_)) => {
+                anyhow::bail!("storage map slots are not supported for this account")
+            },
+            None => anyhow::bail!("missing slot value"),
+        };
 
         slots.push(StorageSlot::with_value(slot_name, value));
     }

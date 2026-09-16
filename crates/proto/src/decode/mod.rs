@@ -1,5 +1,7 @@
 use std::marker::PhantomData;
 
+use miden_objects::{DecodeMessage, Verify};
+
 mod utils;
 pub use utils::*;
 
@@ -53,6 +55,60 @@ impl<M: prost::Message> GrpcStructDecoder<M> {
             .try_into()
             .context(name)
     }
+
+    /// Decode a required optional field and verify the domain invariants.
+    ///
+    /// The decode step checks the wire representation. The verify step checks the domain
+    /// invariants. Both steps add the field name to the error path.
+    ///
+    /// A type that needs external context to verify, or that only supports unchecked
+    /// construction, does not satisfy the `Verify` bound. Decode such a field at the call site.
+    pub fn verify_field<T, F>(
+        &self,
+        name: &'static str,
+        value: Option<T>,
+    ) -> Result<F, ConversionError>
+    where
+        T: DecodeMessage,
+        T::Decoded: Verify<Verified = F>,
+    {
+        verify_value(name, value.ok_or_else(|| ConversionError::missing_field::<M>(name))?)
+    }
+}
+
+/// Decode a canonical message and verify the domain invariants.
+///
+/// The decode step checks the wire representation. The verify step checks the domain invariants.
+/// Both steps add `name` to the error path.
+///
+/// Use this where the field is not a required optional field of a parent message, such as an
+/// element of a repeated field.
+pub fn verify_value<T, F>(name: &'static str, value: T) -> Result<F, ConversionError>
+where
+    T: DecodeMessage,
+    T::Decoded: Verify<Verified = F>,
+{
+    value
+        .decode_fields()
+        .context(name)?
+        .verify()
+        .map_err(ConversionError::new)
+        .context(name)
+}
+
+/// Decode an optional canonical message and verify the domain invariants.
+///
+/// Returns `None` when the field is absent. Use [`GrpcStructDecoder::verify_field`] for a field
+/// that must be present.
+pub fn verify_optional<T, F>(
+    name: &'static str,
+    value: Option<T>,
+) -> Result<Option<F>, ConversionError>
+where
+    T: DecodeMessage,
+    T::Decoded: Verify<Verified = F>,
+{
+    value.map(|value| verify_value(name, value)).transpose()
 }
 
 /// Extension trait on [`prost::Message`] types to create a [`GrpcStructDecoder`] with the parent
@@ -67,6 +123,10 @@ pub trait GrpcDecodeExt: prost::Message + Sized {
 impl<T: prost::Message> GrpcDecodeExt for T {}
 
 /// Decodes a required optional field from a protobuf message using the message's decoder.
+///
+/// Use this for node-owned messages and for atomic canonical messages that decode straight to
+/// their domain type. Use [`verify!`] for canonical messages that have a separate verification
+/// step.
 ///
 /// Uses `stringify!` to automatically derive the field name for error reporting, avoiding
 /// the duplication between a string literal and the field access.
@@ -98,6 +158,23 @@ macro_rules! decode {
     };
     ($decoder:ident, $field:ident) => {
         $decoder.decode_field(stringify!($field), $field)
+    };
+}
+
+/// Decodes and verifies a required optional field from a canonical protobuf message.
+///
+/// Takes the same two forms as [`decode!`] and reports errors the same way.
+///
+/// Only accepts fields whose decoded form implements [`miden_objects::Verify`]. A field that
+/// needs external context, or that only supports unchecked construction, must be decoded at the
+/// call site so that the chosen capability stays visible.
+#[macro_export]
+macro_rules! verify {
+    ($decoder:ident, $msg:ident . $field:ident) => {
+        $decoder.verify_field(stringify!($field), $msg.$field)
+    };
+    ($decoder:ident, $field:ident) => {
+        $decoder.verify_field(stringify!($field), $field)
     };
 }
 

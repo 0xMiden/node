@@ -10,6 +10,7 @@ use miden_node_tracing::{Instrument, debug, info, info_span, miden_instrument, w
 use miden_node_utils::retry::{self, RetryableWithContext};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
+use miden_objects::{BuildUnchecked, DecodeMessage};
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use miden_protocol::vm::ExecutionProof;
 use tokio_stream::StreamExt;
@@ -234,8 +235,10 @@ impl BlockSync {
             let block: SignedBlock = event
                 .block
                 .ok_or_else(|| anyhow::anyhow!("upstream block event is missing its block"))?
-                .try_into()
-                .context("failed to decode block from upstream")?;
+                .decode_fields()
+                .context("failed to decode block from upstream")?
+                .build_unchecked()
+                .context("failed to build block from upstream")?;
             let protocol_config = event
                 .protocol_config
                 .map(|config| {

@@ -4,6 +4,7 @@ use miden_node_proto::clients::{Builder, RemoteProverClient};
 use miden_node_proto::generated::remote_prover::proof::Proof as ProofVariant;
 use miden_node_proto::generated::remote_prover::proof_request::Request;
 use miden_node_proto::generated::remote_prover::{Proof, ProofRequest};
+use miden_node_proto::{BuildUnchecked, DecodeMessage};
 use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
 use miden_tx::TransactionProverError;
 use url::Url;
@@ -63,12 +64,21 @@ fn decode_transaction_proof(response: Proof) -> Result<ProvenTransaction, Transa
         },
     };
 
-    ProvenTransaction::try_from(proof).map_err(|error| {
-        TransactionProverError::other_with_source(
-            "failed to decode received response from remote transaction prover",
-            error,
-        )
-    })
+    proof
+        .decode_fields()
+        .map_err(|error| {
+            TransactionProverError::other_with_source(
+                "failed to decode received response from remote transaction prover",
+                error,
+            )
+        })?
+        .build_unchecked()
+        .map_err(|error| {
+            TransactionProverError::other_with_source(
+                "failed to build received response from remote transaction prover",
+                error,
+            )
+        })
 }
 
 #[cfg(test)]

@@ -1,9 +1,9 @@
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 
-use crate::decode::{ConversionResultExt, GrpcStructDecoder};
+use crate::decode::{ConversionResultExt, GrpcStructDecoder, verify_value};
 use crate::errors::ConversionError;
-use crate::{decode, generated as proto};
+use crate::{generated as proto, verify};
 
 /// Reads a block range from a request, returning a specific error type if the field is missing
 pub fn read_block_range<E>(
@@ -55,7 +55,7 @@ where
 {
     account_ids
         .into_iter()
-        .map(|account_id| AccountId::try_from(account_id).map_err(ConversionError::from))
+        .map(|account_id| verify_value("account_ids", account_id))
         .collect::<Result<_, ConversionError>>()
         .context("account_ids")
         .map_err(Into::into)
@@ -68,5 +68,5 @@ where
     E: From<ConversionError>,
 {
     let decoder = GrpcStructDecoder::<M>::default();
-    decode!(decoder, account_id).map_err(|e: ConversionError| e.into())
+    verify!(decoder, account_id).map_err(|e: ConversionError| e.into())
 }

@@ -3,7 +3,7 @@ use miden_node_proto::clients::{SequencerClient, ValidatorClient};
 use miden_node_proto::generated as proto;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorReport, debug, miden_instrument, miden_span_record, trace};
-use miden_objects::conversion::{decode_proposed_batch, decode_proven_batch};
+use miden_objects::{DecodeMessage, VerifyWith};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_tx_batch::BatchVerifier;
@@ -55,7 +55,11 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
         })
         .ok_or_else(|| Status::invalid_argument("missing `proposed_batch` field"))?;
         let proposed_batch = spawn_blocking_in_current_span(move || {
-            decode_proposed_batch(proposed_batch_message, MIN_PROOF_SECURITY_LEVEL)
+            proposed_batch_message.decode_fields().and_then(|batch| {
+                batch
+                    .verify_with(MIN_PROOF_SECURITY_LEVEL)
+                    .map_err(miden_objects::ConversionError::new)
+            })
         })
         .await
         .map_err(|err| Status::internal(format!("proposed batch decoding task failed: {err}")))?
@@ -67,7 +71,10 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
             request.batch.take()
         })
         .ok_or_else(|| Status::invalid_argument("missing `batch` field"))?;
-        let proven_batch = decode_proven_batch(proven_batch_message, &proposed_batch)
+        let proven_batch = proven_batch_message
+            .decode_fields()
+            .map_err(|err| Status::invalid_argument(format!("invalid proven_batch: {err}")))?
+            .verify_with(&proposed_batch)
             .map_err(|err| Status::invalid_argument(format!("invalid proven_batch: {err}")))?;
 
         miden_span_record!(

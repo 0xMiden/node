@@ -41,7 +41,7 @@ impl proto::server::rpc_api::SyncTransactions for RpcService {
         let range = read_block_range::<Status>(request.block_range, "SyncTransactionsRequest")?;
         let n_accounts = request.account_ids.len();
         let account_ids =
-            read_account_ids::<Status, _>(request.account_ids.iter().take(10).cloned())?;
+            read_account_ids::<Status, _>(request.account_ids.iter().take(10).copied())?;
 
         miden_span_record!(
             block_range.from = range.block_from,
