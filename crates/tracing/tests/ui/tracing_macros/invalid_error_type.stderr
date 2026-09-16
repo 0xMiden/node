@@ -1,12 +1,14 @@
-error[E0599]: the method `as_report` exists for reference `&'static str`, but its trait bounds were not satisfied
+error[E0599]: the method `as_dyn_error` exists for reference `&'static str`, but its trait bounds were not satisfied
  --> tests/ui/tracing_macros/invalid_error_type.rs:4:5
   |
 4 |     error!("not an error", "test.exception");
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method cannot be called on `&'static str` due to unsatisfied trait bounds
   |
   = note: the following trait bounds were not satisfied:
+          `str: Sized`
+          which is required by `str: miden_node_tracing::__private::AsDynError`
           `str: std::error::Error`
-          which is required by `str: ErrorReport`
+          which is required by `str: miden_node_tracing::__private::AsDynError`
           `&str: std::error::Error`
-          which is required by `&str: ErrorReport`
+          which is required by `&str: miden_node_tracing::__private::AsDynError`
   = note: this error originates in the macro `error` (in Nightly builds, run with -Z macro-backtrace for more info)
