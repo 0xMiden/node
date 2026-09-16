@@ -2,7 +2,7 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock};
 
 use anyhow::Context as AnyhowContext;
-use miden_node_block_producer::{BlockProducerApi, ensure_transaction_has_fee};
+use miden_node_block_producer::BlockProducerApi;
 use miden_node_proto::clients::NtxBuilderClient;
 use miden_node_proto::domain::block::InvalidBlockRange;
 use miden_node_proto::generated::rpc::MempoolStats as ProtoMempoolStats;
@@ -23,7 +23,6 @@ use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::transaction::ProvenTransaction;
 use tokio::sync::Semaphore;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Status};
@@ -67,15 +66,6 @@ pub(crate) async fn submit_batch_to_validators(
     }))
     .await?;
     Ok(())
-}
-
-/// Rejects a submission if a transaction does not create a canonical fee note.
-pub(crate) fn ensure_transactions_have_fee_notes<'a>(
-    transactions: impl IntoIterator<Item = &'a ProvenTransaction>,
-) -> tonic::Result<()> {
-    transactions
-        .into_iter()
-        .try_for_each(|tx| ensure_transaction_has_fee(tx).map_err(Status::from))
 }
 
 // API METHODS
