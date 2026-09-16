@@ -28,14 +28,17 @@ message FetchNotesRequest {
     // The cursor belongs to the requested set of tags.
     // Reset it to zero when you add or remove tags.
     // Reordering tags or changing duplicate tags does not change the set.
-    // A restart can return notes that you fetched before.
+    // A cursor above the highest assigned cursor resets to zero.
+    // This can recover a cursor after database recreation and replay notes.
+    // Recreation is not detected if the new database has reached the old cursor.
     // Use note IDs to remove duplicate results.
     fixed64 cursor = 2;
 }
 
 message FetchNotesResponse {
     repeated TransportNote notes = 1;
-    // Cursor of the last returned note. An empty page keeps the request cursor.
+    // Cursor of the last returned note. An empty page keeps the effective request cursor.
+    // Recovery can lower this value. Use the returned value for the next request.
     fixed64 cursor = 2;
     // Indicates that another page is available for these tags.
     bool has_more = 3;

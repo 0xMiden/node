@@ -214,7 +214,7 @@ impl FetchNotes for Server {
         let page = db::fetch_notes(&self.reader, request.tags, request.cursor)
             .await
             .map_err(storage_status)?;
-        let mut cursor = request.cursor;
+        let mut cursor = page.effective_cursor;
         let mut notes = Vec::with_capacity(page.notes.len());
         let mut has_more = page.has_more;
         // Reserve the fixed64 cursor and the boolean continuation field.

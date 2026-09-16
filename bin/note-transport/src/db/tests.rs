@@ -104,7 +104,8 @@ async fn retry_at_capacity_preserves_first_write() {
         store_note(&writer, note(2, 42), limit).await,
         Err(StorageError::Capacity(_))
     ));
-    let page = fetch_notes(&reader, vec![42], 0).await.unwrap();
+    let page = fetch_notes(&reader, vec![42], 2).await.unwrap();
+    assert_eq!(page.effective_cursor, 0);
     assert_eq!(page.notes.len(), 1);
     assert_eq!(page.notes[0].after_block_num, original.after_block_num);
     assert_eq!(page.notes[0].created_at, original.created_at);
@@ -143,9 +144,11 @@ async fn fetch_byte_limit_and_oversize_rejection() {
         item.details = vec![0; FETCH_NOTES_MAX_BYTES / 2 - item.header.to_bytes().len()];
         store_note(&writer, item, u64::MAX).await.unwrap();
     }
-    let page = fetch_notes(&reader, vec![42], 0).await.unwrap();
+    let page = fetch_notes(&reader, vec![42], 100).await.unwrap();
+    assert_eq!(page.effective_cursor, 0);
     assert_eq!(page.notes.len(), 2);
     assert!(page.has_more);
+    assert_eq!(page.notes.iter().map(|note| note.seq).collect::<Vec<_>>(), vec![1, 2]);
     assert_eq!(fetch_notes(&reader, vec![42], 2).await.unwrap().notes.len(), 1);
     let mut oversized = note(4, 42);
     oversized.details = vec![0; FETCH_NOTES_MAX_BYTES];
@@ -287,7 +290,8 @@ async fn insufficient_reclaimed_capacity_rolls_back_deletions_and_cursor() {
         store_note(&writer, oversized, limit).await,
         Err(StorageError::Capacity(_))
     ));
-    let page = fetch_notes(&reader, vec![42], 0).await.unwrap();
+    let page = fetch_notes(&reader, vec![42], 13).await.unwrap();
+    assert_eq!(page.effective_cursor, 0);
     assert_eq!(
         page.notes.iter().map(|note| note.seq).collect::<Vec<_>>(),
         (1..=12).collect::<Vec<_>>()
@@ -339,6 +343,12 @@ async fn zero_retention_can_delete_the_inserted_note_without_reusing_its_cursor(
     item.created_at = 0;
     super::store_note(&writer, item, 0, 0).await.unwrap();
     assert!(fetch_notes(&reader, vec![42], 0).await.unwrap().notes.is_empty());
+    let caught_up = fetch_notes(&reader, vec![42], 1).await.unwrap();
+    assert!(caught_up.notes.is_empty());
+    assert_eq!(caught_up.effective_cursor, 1);
+    let stranded = fetch_notes(&reader, vec![42], 2).await.unwrap();
+    assert!(stranded.notes.is_empty());
+    assert_eq!(stranded.effective_cursor, 0);
     store_note(&writer, note(2, 42), u64::MAX).await.unwrap();
     assert_eq!(fetch_notes(&reader, vec![42], 0).await.unwrap().notes[0].seq, 2);
 }
@@ -375,4 +385,83 @@ async fn insertion_uses_the_configured_retention_period() {
     super::store_note(&writer, note(3, 42), u64::MAX, 7).await.unwrap();
     let page = fetch_notes(&reader, vec![42], 0).await.unwrap();
     assert_eq!(page.notes.iter().map(|note| note.seq).collect::<Vec<_>>(), vec![2, 3]);
+}
+
+#[tokio::test]
+async fn stranded_cursor_recovers_retained_notes() {
+    let (_dir, writer, reader) = database();
+    for seed in 1..=503 {
+        store_note(&writer, note(seed, 42), u64::MAX).await.unwrap();
+    }
+    let first = fetch_notes(&reader, vec![42], 900).await.unwrap();
+    assert_eq!(first.effective_cursor, 0);
+    assert_eq!(first.notes.len(), 500);
+    assert!(first.has_more);
+    assert_eq!(first.notes.first().unwrap().seq, 1);
+    assert_eq!(first.notes.last().unwrap().seq, 500);
+    let second = fetch_notes(&reader, vec![42], 500).await.unwrap();
+    assert_eq!(second.effective_cursor, 500);
+    assert_eq!(
+        second.notes.iter().map(|note| note.seq).collect::<Vec<_>>(),
+        vec![501, 502, 503]
+    );
+    assert!(!second.has_more);
+}
+
+#[tokio::test]
+async fn cleanup_of_highest_cursors_does_not_replay_retained_notes() {
+    let (dir, writer, reader) = database();
+    store_note(&writer, note(1, 42), u64::MAX).await.unwrap();
+    seed_expired(&writer, 2, 0, u64::MAX).await;
+    let mut expired = note(3, 42);
+    expired.created_at = 0;
+    super::store_note(&writer, expired, u64::MAX, 30).await.unwrap();
+    drop((writer, reader));
+    let (_writer, reader) = load(&dir.path().join("notes.sqlite3")).unwrap();
+    for cursor in [1, 2, 3] {
+        let page = fetch_notes(&reader, vec![42], cursor).await.unwrap();
+        assert!(page.notes.is_empty());
+        assert_eq!(page.effective_cursor, cursor);
+        assert!(!page.has_more);
+    }
+    let page = fetch_notes(&reader, vec![42], 4).await.unwrap();
+    assert_eq!(page.notes.iter().map(|note| note.seq).collect::<Vec<_>>(), vec![1]);
+}
+
+#[tokio::test]
+async fn fetch_rejects_invalid_storage_cursor() {
+    let (_dir, writer, reader) = database();
+    writer
+        .write("invalidate cursor", |tx| {
+            tx.execute("PRAGMA ignore_check_constraints = ON", &[])?;
+            tx.execute("UPDATE storage_metadata SET next_cursor = 0", &[])?;
+            tx.execute("PRAGMA ignore_check_constraints = OFF", &[])?;
+            Ok::<_, miden_node_db::DatabaseError>(())
+        })
+        .await
+        .unwrap();
+    for tags in [vec![], vec![42]] {
+        assert!(matches!(
+            fetch_notes(&reader, tags, 50).await,
+            Err(StorageError::InvalidData(_))
+        ));
+    }
+}
+
+#[tokio::test]
+async fn fetch_rejects_missing_storage_metadata_even_without_tags() {
+    let (_dir, writer, reader) = database();
+    writer
+        .write("remove metadata", |tx| {
+            tx.execute("DELETE FROM storage_metadata", &[])?;
+            Ok::<_, miden_node_db::DatabaseError>(())
+        })
+        .await
+        .unwrap();
+    for tags in [vec![], vec![42]] {
+        assert!(matches!(
+            fetch_notes(&reader, tags, 50).await,
+            Err(StorageError::InvalidData(_))
+        ));
+    }
 }

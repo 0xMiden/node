@@ -46,11 +46,16 @@ retry supplies a different block hint or storage is full.
 
 `FetchNotes` accepts at most 128 tags and an exclusive cursor. Start with cursor zero. Use each response cursor for the
 next request with the same set of tags. Results follow insertion order across all requested tags. Duplicate tags do not
-duplicate results. Empty pages retain the request cursor. The response `has_more` field indicates that another page is
-available.
+duplicate results. The response `has_more` field indicates that another page is available.
+
+A cursor above the highest cursor ever assigned by the database resets to zero. This rule can recover a cursor after
+database recreation. Cleanup does not lower this durable high-water mark. An empty page returns the effective request
+cursor, which is zero if recovery occurred. Always use the returned cursor for the next request, even if it decreases.
+Recovery cannot detect database recreation if the new database has already reached the old cursor. No database identity
+is encoded in the cursor.
 
 A cursor belongs to the requested set of tags. Reset the cursor to zero when you add or remove tags. Reordering tags or
-changing duplicate tags does not change the set. A restart can return notes that you fetched before. Use note IDs to
+changing duplicate tags does not change the set. Recovery can return notes that you fetched before. Use note IDs to
 remove duplicate results.
 
 For example, after you fetch tag A through cursor 100, reset the cursor to zero when you add tag B. If you reuse cursor

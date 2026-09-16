@@ -46,6 +46,8 @@ pub enum StorageError {
 pub struct FetchPage {
     pub notes: Vec<StoredNote>,
     pub has_more: bool,
+    /// The request cursor after recovery against the durable cursor counter.
+    pub effective_cursor: u64,
 }
 
 /// Creates a database with the current schema. The path must not exist.
@@ -153,7 +155,8 @@ pub async fn store_note(
         .await
 }
 
-/// Returns one page from a single database snapshot, in cursor order.
+/// Returns one page from a single database snapshot, in cursor order. Resets a cursor above the
+/// highest assigned cursor to zero.
 #[miden_instrument(target = COMPONENT, err)]
 pub async fn fetch_notes(
     reader: &DbReader,
@@ -161,11 +164,29 @@ pub async fn fetch_notes(
     cursor: u64,
 ) -> Result<FetchPage, StorageError> {
     let cursor = i64::try_from(cursor).map_err(|_| StorageError::InvalidCursor)?;
-    if tags.is_empty() {
-        return Ok(FetchPage { notes: vec![], has_more: false });
-    }
     reader
         .read("fetch_notes", move |tx| {
+            let next_cursor = tx
+                .query(include_str!("queries/select_storage_metadata.sql"), &[], |row| {
+                    row.get::<i64>(0)
+                })?
+                .into_iter()
+                .next()
+                .filter(|next_cursor| *next_cursor > 0)
+                .ok_or_else(|| {
+                    StorageError::InvalidData("storage cursor is missing or invalid".into())
+                })?;
+            // Cleanup can remove the highest retained note. Use the durable counter to detect
+            // cursors from a database with a larger cursor range.
+            let cursor = if cursor >= next_cursor { 0 } else { cursor };
+            let effective_cursor = u64::try_from(cursor).expect("cursor is nonnegative");
+            if tags.is_empty() {
+                return Ok(FetchPage {
+                    notes: vec![],
+                    has_more: false,
+                    effective_cursor,
+                });
+            }
             let tags = InList::from_i64s(tags.into_iter().map(i64::from));
             // Count one extra candidate to detect a full page. Bound bytes before loading note
             // blobs.
@@ -199,7 +220,7 @@ pub async fn fetch_notes(
             let notes: Vec<_> = rows.into_iter().map(|(note, _)| note).collect();
             let has_more =
                 candidate_count > i64::try_from(notes.len()).expect("page length fits i64");
-            Ok(FetchPage { notes, has_more })
+            Ok(FetchPage { notes, has_more, effective_cursor })
         })
         .await
 }

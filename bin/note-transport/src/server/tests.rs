@@ -47,6 +47,84 @@ fn server(config: Config) -> (tempfile::TempDir, Server) {
 }
 
 #[tokio::test]
+async fn grpc_cursor_recovers_after_database_recreation() {
+    use miden_node_proto::generated::note_transport::api_client::ApiClient;
+
+    let (_old_dir, old_server) = server(Config::default());
+    for serial in 1..=50 {
+        SendNote::full(&old_server, Request::new(note(serial, 7))).await.unwrap();
+    }
+    let old_cursor =
+        FetchNotes::full(&old_server, Request::new(FetchNotesRequest { tags: vec![7], cursor: 0 }))
+            .await
+            .unwrap()
+            .cursor;
+    assert_eq!(old_cursor, 50);
+    drop(old_server);
+
+    let (_dir, new_server) = server(Config::default());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let shutdown = CancellationToken::new();
+    let mut task = tokio::spawn(new_server.serve_on(listener, shutdown.clone()));
+    let mut requests = tokio::spawn(async move {
+        let mut client = ApiClient::connect(format!("http://{address}")).await.unwrap();
+        for tags in [vec![7], vec![]] {
+            let page = client
+                .fetch_notes(FetchNotesRequest { tags, cursor: old_cursor })
+                .await
+                .unwrap()
+                .into_inner();
+            assert!(page.notes.is_empty());
+            assert_eq!(page.cursor, 0);
+            assert!(!page.has_more);
+        }
+        let expected = (101..=110).map(|serial| note(serial, 7)).collect::<Vec<_>>();
+        for envelope in &expected {
+            client.send_note(envelope.clone()).await.unwrap();
+        }
+        let page = client
+            .fetch_notes(FetchNotesRequest { tags: vec![7], cursor: old_cursor })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(page.notes, expected);
+        assert_eq!(page.cursor, 10);
+        assert!(!page.has_more);
+        let empty = client
+            .fetch_notes(FetchNotesRequest { tags: vec![7], cursor: page.cursor })
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(empty.notes.is_empty());
+        assert_eq!(empty.cursor, 10);
+        for tags in [vec![], vec![99]] {
+            let empty = client
+                .fetch_notes(FetchNotesRequest { tags, cursor: old_cursor })
+                .await
+                .unwrap()
+                .into_inner();
+            assert!(empty.notes.is_empty());
+            assert_eq!(empty.cursor, 0);
+        }
+    });
+    let result = tokio::time::timeout(std::time::Duration::from_secs(20), &mut requests).await;
+    if result.is_err() {
+        requests.abort();
+        let _ = requests.await;
+    }
+    shutdown.cancel();
+    if let Ok(result) = tokio::time::timeout(std::time::Duration::from_secs(5), &mut task).await {
+        result.unwrap().unwrap();
+    } else {
+        task.abort();
+        let _ = task.await;
+        panic!("server shutdown timed out");
+    }
+    result.unwrap().unwrap();
+}
+
+#[tokio::test]
 async fn send_fetch_preserves_hint_presence_and_first_envelope() {
     let (_dir, server) = server(Config::default());
     let first = note(1, 7);
@@ -218,6 +296,7 @@ async fn grpc_health_reflection_web_and_shutdown() {
 #[tokio::test]
 async fn large_pages_fit_default_grpc_client_and_resume_without_gaps() {
     let (_dir, server) = server(Config::default());
+    let mut expected = std::collections::BTreeSet::new();
     for serial in 1_u32..=400 {
         let recipient = NoteRecipient::new(
             Word::from([serial, 0, 0, 0]),
@@ -230,6 +309,7 @@ async fn large_pages_fit_default_grpc_client_and_resume_without_gaps() {
         )
         .with_tag(NoteTag::new(77));
         let note = Note::new(NoteAssets::default(), metadata, recipient);
+        expected.insert(note.id());
         SendNote::full(
             &server,
             Request::new(TransportNote {
@@ -251,7 +331,7 @@ async fn large_pages_fit_default_grpc_client_and_resume_without_gaps() {
     .await
     .unwrap();
     let first = client
-        .fetch_notes(FetchNotesRequest { tags: vec![77], cursor: 0 })
+        .fetch_notes(FetchNotesRequest { tags: vec![77], cursor: 1000 })
         .await
         .unwrap()
         .into_inner();
@@ -274,8 +354,42 @@ async fn large_pages_fit_default_grpc_client_and_resume_without_gaps() {
             header.id()
         })
         .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(headers.len(), 400);
+    assert_eq!(headers, expected);
     drop(client);
     shutdown.cancel();
-    task.await.unwrap().unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn changing_tag_set_requires_restarting_from_zero() {
+    let (_dir, server) = server(Config::default());
+    let earlier = note(1, 8);
+    let later = note(2, 7);
+    for envelope in [&earlier, &later] {
+        SendNote::full(&server, Request::new(envelope.clone())).await.unwrap();
+    }
+    let first =
+        FetchNotes::full(&server, Request::new(FetchNotesRequest { tags: vec![7], cursor: 0 }))
+            .await
+            .unwrap();
+    assert_eq!(first.notes, vec![later.clone()]);
+    let continued = FetchNotes::full(
+        &server,
+        Request::new(FetchNotesRequest { tags: vec![7, 8], cursor: first.cursor }),
+    )
+    .await
+    .unwrap();
+    assert!(continued.notes.is_empty());
+    assert_eq!(continued.cursor, first.cursor);
+    let restarted = FetchNotes::full(
+        &server,
+        Request::new(FetchNotesRequest { tags: vec![8, 7, 8], cursor: 0 }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(restarted.notes, vec![earlier, later]);
 }
