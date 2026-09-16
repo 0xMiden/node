@@ -11,7 +11,6 @@ use miden_node_block_producer::{
     DEFAULT_MAX_TXS_PER_BATCH,
 };
 use miden_node_utils::clap::duration_to_human_readable_string;
-use miden_protocol::account::AccountId;
 use url::Url;
 
 // BLOCK PRODUCTION
@@ -86,9 +85,7 @@ mod tests {
         BlockProducerOptions {
             builder: BuilderOptions {
                 pass_through_account: "pass_through.mac".into(),
-                account_id: miden_protocol::testing::account_id::ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE
-                    .try_into()
-                    .unwrap(),
+                account: "batch_builder.mac".into(),
             },
             batch: BatchOptions {
                 interval: DEFAULT_BATCH_INTERVAL,
@@ -153,16 +150,14 @@ mod tests {
 
 #[derive(clap::Args, Clone, Debug)]
 pub struct BuilderOptions {
-    /// Batch builder account that receives the P2ID note created from each batch's fee notes.
+    /// Account file that contains the public batch builder wallet and its signing key.
     #[arg(
-        id = "batch.builder.account.id",
-        long = "batch.builder.account.id",
-        env = "MIDEN_NODE_BATCH_BUILDER_ACCOUNT_ID",
-        value_name = "ACCOUNT_ID",
-        value_parser = parse_account_id,
+        long = "batch.builder.account",
+        env = "MIDEN_NODE_BATCH_BUILDER_ACCOUNT",
+        value_name = "PATH",
         help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
     )]
-    pub account_id: AccountId,
+    pub account: PathBuf,
 
     /// Account file that contains the deployed fee collector and its signing key.
     #[arg(
@@ -222,12 +217,6 @@ pub struct BatchOptions {
         help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
     )]
     pub workers: NonZeroUsize,
-}
-
-fn parse_account_id(value: &str) -> Result<AccountId, String> {
-    AccountId::parse(value)
-        .map(|(account_id, _network)| account_id)
-        .map_err(|err| err.to_string())
 }
 
 #[derive(clap::Args, Clone, Debug)]

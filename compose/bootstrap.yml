@@ -63,10 +63,6 @@ services:
           exit 1
         fi
         printf '%s\n' "$${NATIVE_FAUCET_ID}" > /data/genesis/native-faucet-id
-        printf '%s\n' "$${GENESIS_OUTPUT}" \
-          | sed -n 's/^Batch builder account id: //p' \
-          > /data/genesis/batch-builder-account-id
-        test -s /data/genesis/batch-builder-account-id
 
         for VALIDATOR in 1 2 3; do
           echo "Bootstrapping validator $${VALIDATOR}..."

@@ -169,9 +169,6 @@ miden-validator genesis \
   --accounts-directory      "$DATA/accounts" \
   --validator.key           "<validator-key-hex>"
 
-# Use the batch builder account id printed by the genesis command.
-BATCH_BUILDER_ACCOUNT_ID="<batch-builder-account-id>"
-
 miden-validator bootstrap \
   --data-directory "$DATA/validator" \
   --genesis        "$DATA/genesis/genesis.dat"
@@ -218,7 +215,7 @@ nohup miden-node sequencer \
   --rpc.listen                                127.0.0.1:57291 \
   --validator.url                             http://127.0.0.1:50101 \
   --ntx-builder.url                           http://127.0.0.1:50301 \
-  --batch.builder.account.id                  "$BATCH_BUILDER_ACCOUNT_ID" \
+  --batch.builder.account                     "$DATA/accounts/batch_builder.mac" \
   --batch.builder.pass-through-account        "$DATA/accounts/pass_through.mac" \
   --batch.max-txs                             1024 \
   --block.max-batches                         64 \

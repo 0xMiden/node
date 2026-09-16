@@ -79,6 +79,16 @@ impl SequencerCommand {
         self.log_starting();
         let runtime = self.runtime.runtime_config(&self.store);
         self.block_producer.validate()?;
+        let builder_account = AccountFile::read(&self.block_producer.builder.account)
+            .context("failed to read batch.builder.account")?;
+        anyhow::ensure!(
+            builder_account.account.is_public(),
+            "batch.builder.account must be public",
+        );
+        anyhow::ensure!(
+            !builder_account.auth_secret_keys.is_empty(),
+            "batch.builder.account must contain its signing key",
+        );
         let pass_through_account =
             AccountFile::read(&self.block_producer.builder.pass_through_account)
                 .context("failed to read batch.builder.pass-through-account")?;
@@ -132,7 +142,7 @@ impl SequencerCommand {
             max_concurrent_proofs: self.block_producer.block.max_concurrent_proofs,
             mempool_tx_capacity: self.block_producer.mempool.tx_capacity,
             batch_workers: self.block_producer.batch.workers,
-            builder_account_id: self.block_producer.builder.account_id,
+            builder_account_id: builder_account.account.id(),
             pass_through_account,
         }
         .spawn(shutdown.clone())
