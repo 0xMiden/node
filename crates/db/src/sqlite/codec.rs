@@ -362,6 +362,8 @@ impl_blob_codec!(
     miden_protocol::note::NoteAssets,
     miden_protocol::note::NoteAttachments,
     miden_protocol::note::NoteId,
+    miden_protocol::note::NoteHeader,
+    miden_protocol::note::NoteDetails,
     miden_protocol::note::NoteScript,
     miden_protocol::note::NoteStorage,
     miden_protocol::note::Nullifier,

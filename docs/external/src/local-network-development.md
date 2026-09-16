@@ -160,21 +160,26 @@ supported. Keep that volume if its data is still needed.
 Initialize a database before you start the service:
 
 ```bash
-miden-note-transport bootstrap --database ./notes.sqlite3
-miden-note-transport start --database ./notes.sqlite3 --max-storage-bytes 1073741824
+miden-note-transport bootstrap --data-directory ./note-transport-data
+miden-note-transport start --data-directory ./note-transport-data --max-storage-bytes 1073741824
 ```
+
+The required data directory contains `notes.sqlite3`. You can set `MIDEN_NOTE_TRANSPORT_DATA_DIRECTORY` instead of
+`--data-directory`. Bootstrap creates the directory if it does not exist and rejects a directory that is not empty.
+Start and migrate require an existing database.
 
 The default listen address is `127.0.0.1:57292`. Use `--listen` to change it. The default maximum note size is 512000
 bytes. The default connection limit is 4096, and the default gRPC timeout is 10 seconds. Use `--max-note-size`,
 `--max-connections`, and `--grpc.timeout` to change these limits. Add `--enable-otel` to export telemetry.
 
 Each new insertion removes at most 10 of the oldest expired notes. The default retention period is 30 days. Use
-`--retention-days` or `MIDEN_NOTE_TRANSPORT_RETENTION_DAYS` to change it. Cleanup releases storage capacity in the same
-transaction as the insertion. Duplicate retries and reads do not trigger cleanup.
+`--retention-days` or `MIDEN_NOTE_TRANSPORT_RETENTION_DAYS` to change it. All size, capacity, connection, and retention
+limits must be greater than zero. Cleanup releases storage capacity in the same transaction as the insertion. Duplicate
+retries and reads do not trigger cleanup.
 
 Stop the service before database maintenance. Back up the database before a schema migration. Apply supported schema
-migrations with `miden-note-transport migrate --database ./notes.sqlite3`. The `migrate` command does not import legacy
-databases.
+migrations with `miden-note-transport migrate --data-directory ./note-transport-data`. The `migrate` command does not
+import legacy databases.
 
 ## Faucet
 

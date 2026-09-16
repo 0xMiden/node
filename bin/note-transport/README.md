@@ -8,21 +8,22 @@ node workspace and uses the workspace license.
 Create the database before starting the service:
 
 ```sh
-miden-note-transport bootstrap --database notes.sqlite3
-miden-note-transport start --database notes.sqlite3 --max-storage-bytes 1073741824
+miden-note-transport bootstrap --data-directory ./note-transport-data
+miden-note-transport start --data-directory ./note-transport-data --max-storage-bytes 1073741824
 ```
 
-The default listener is `127.0.0.1:57292`. Use `--listen` to change it. Set `MIDEN_NOTE_TRANSPORT_DATABASE`,
+The default listener is `127.0.0.1:57292`. Use `--listen` to change it. Set `MIDEN_NOTE_TRANSPORT_DATA_DIRECTORY`,
 `MIDEN_NOTE_TRANSPORT_LISTEN`, and `MIDEN_NOTE_TRANSPORT_MAX_STORAGE_BYTES` instead of the corresponding flags if
 needed. Use `--enable-otel` to export traces. The service uses the same OpenTelemetry environment variables and log
 filters as the other node binaries.
 
-Start verifies the schema and does not create or migrate the database. Use `migrate --database notes.sqlite3` to apply
-pending migrations. Bootstrap rejects an existing database. Database files from the standalone note transport service
-are not supported.
+Start verifies the schema and does not create or migrate the database. Use
+`migrate --data-directory ./note-transport-data` to apply pending migrations. The database file is `notes.sqlite3`
+inside the required data directory. Bootstrap creates the directory if it does not exist and rejects a directory that is
+not empty.
 
 The service retains notes for 30 days by default. Set `--retention-days` or `MIDEN_NOTE_TRANSPORT_RETENTION_DAYS` to
-change this period. Zero days is allowed.
+change this period. All size, capacity, connection, and retention limits must be greater than zero.
 
 Each new insertion deletes at most 10 expired notes, ordered by timestamp and then cursor. Duplicate retries, reads, and
 idle periods do not trigger cleanup. There is no background cleanup or manual cleanup command.
@@ -37,9 +38,10 @@ The public `note_transport.Api` service is defined in the workspace protobuf cra
 `FetchNotes` over gRPC and gRPC-Web. Standard gRPC health and reflection are available on the same listener. There are
 no note subscriptions or statistics RPCs.
 
-`SendNote` accepts a transport envelope with the shared protocol note header and note details. The service checks that
-the details commitment matches the header. An optional block hint gives recipients a lower bound for their chain scan.
-The service stores this hint without chain lookup; an absent hint differs from block zero.
+`SendNote` accepts a `SendNoteRequest` whose `note` field contains a `TransportNote` with the shared protocol note
+header and note details. It returns an empty `SendNoteResponse`. The service checks that the details commitment matches
+the header. An optional block hint gives recipients a lower bound for their chain scan. The service stores this hint
+without chain lookup; an absent hint differs from block zero.
 
 A retry with the same note ID succeeds and keeps the first envelope, timestamp, and cursor. This also applies when the
 retry supplies a different block hint or storage is full.
