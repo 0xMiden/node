@@ -40,7 +40,7 @@ service Api {
     rpc RegisterAccount(RegisterAccountRequest) returns (google.protobuf.Empty) {}
 
     // Returns true if account allowlist enforcement is disabled or the account is allowlisted.
-    rpc IsAccountAllowed(account.AccountId) returns (IsAccountAllowedResponse) {}
+    rpc IsAccountAllowed(IsAccountAllowedRequest) returns (IsAccountAllowedResponse) {}
 
     // Returns block data for the specified block number, optionally including the block proof.
     rpc GetBlockByNumber(BlockRequest) returns (MaybeBlock) {}
@@ -148,6 +148,10 @@ message RegisterAccountRequest {
 
 // IS ACCOUNT ALLOWED
 // ================================================================================================
+
+message IsAccountAllowedRequest {
+    account.AccountId account_id = 1;
+}
 
 message IsAccountAllowedResponse {
     bool allowed = 1;

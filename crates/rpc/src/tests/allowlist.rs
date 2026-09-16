@@ -117,16 +117,20 @@ async fn is_account_allowed_respects_enforcement() {
             NonZeroUsize::new(1).unwrap(),
             None,
         );
-        for invalid in
-            [proto::account::AccountId::default(), proto::account::AccountId { id: vec![0] }]
-        {
+        for account_id in [
+            None,
+            Some(proto::account::AccountId::default()),
+            Some(proto::account::AccountId { id: vec![0] }),
+        ] {
+            let invalid = proto::rpc::IsAccountAllowedRequest { account_id };
             assert_eq!(
                 rpc.is_account_allowed(Request::new(invalid)).await.unwrap_err().code(),
                 tonic::Code::InvalidArgument
             );
         }
         for (account, expected) in [(listed, true), (unlisted, unlisted_allowed)] {
-            let response = rpc.is_account_allowed(Request::new(account.into())).await.unwrap();
+            let query = proto::rpc::IsAccountAllowedRequest { account_id: Some(account.into()) };
+            let response = rpc.is_account_allowed(Request::new(query)).await.unwrap();
             assert_eq!(response.into_inner().allowed, expected);
         }
     }

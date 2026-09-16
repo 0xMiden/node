@@ -1647,7 +1647,7 @@ async fn register_account_validates_input_and_preserves_registrations() {
         invitation_code: "abc".to_owned(),
         account_id: Some(account.into()),
     };
-    let query: proto::account::AccountId = account.into();
+    let query = proto::rpc::IsAccountAllowedRequest { account_id: Some(account.into()) };
     assert!(!rpc.is_account_allowed(query.clone()).await.unwrap().into_inner().allowed);
     assert_eq!(
         rpc.register_account(request.clone()).await.unwrap_err().code(),
@@ -1758,7 +1758,7 @@ async fn allowlist_database_failures_include_the_cause() {
     assert_eq!(error.code(), tonic::Code::Internal);
     assert!(error.message().contains("unable to open database file"), "{error}");
 
-    let query: proto::account::AccountId = account.into();
+    let query = proto::rpc::IsAccountAllowedRequest { account_id: Some(account.into()) };
     let error = rpc.is_account_allowed(query).await.unwrap_err();
     assert_eq!(error.code(), tonic::Code::Internal);
     assert!(error.message().contains("unable to open database file"), "{error}");
@@ -1811,7 +1811,9 @@ async fn full_nodes_forward_allowlist_requests_to_the_sequencer() {
             request
         };
         let query = || {
-            let mut query = Request::new(account.into());
+            let mut query = Request::new(proto::rpc::IsAccountAllowedRequest {
+                account_id: Some(account.into()),
+            });
             *query.metadata_mut() = request().metadata().clone();
             query
         };

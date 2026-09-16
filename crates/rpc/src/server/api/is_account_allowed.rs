@@ -11,8 +11,12 @@ impl proto::server::rpc_api::IsAccountAllowed for RpcService {
     type Input = AccountId;
     type Output = bool;
 
-    fn decode(request: proto::account::AccountId) -> tonic::Result<Self::Input> {
-        request.try_into().map_err(|_| Status::invalid_argument("invalid account_id"))
+    fn decode(request: proto::rpc::IsAccountAllowedRequest) -> tonic::Result<Self::Input> {
+        request
+            .account_id
+            .ok_or_else(|| Status::invalid_argument("missing account_id"))?
+            .try_into()
+            .map_err(|_| Status::invalid_argument("invalid account_id"))
     }
 
     fn encode(allowed: Self::Output) -> tonic::Result<proto::rpc::IsAccountAllowedResponse> {
@@ -34,7 +38,9 @@ impl proto::server::rpc_api::IsAccountAllowed for RpcService {
                 .await
                 .map_err(|error| Status::internal(error.as_report())),
             RpcBackend::FullNode { source_rpc, .. } => {
-                let mut request = Request::new(account_id.into());
+                let mut request = Request::new(proto::rpc::IsAccountAllowedRequest {
+                    account_id: Some(account_id.into()),
+                });
                 if let Some(accept) = metadata.get(http::header::ACCEPT.as_str()) {
                     request.metadata_mut().insert(http::header::ACCEPT.as_str(), accept.clone());
                 }
