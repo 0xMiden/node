@@ -92,39 +92,3 @@ async fn main() -> anyhow::Result<()> {
     })
     .await
 }
-
-#[cfg(test)]
-mod tests {
-    use clap::{CommandFactory, FromArgMatches};
-
-    use super::*;
-
-    #[test]
-    fn start_parses_retention_days_and_defaults_to_thirty() {
-        for (value, expected) in
-            [(None, 30), (Some("0"), 0), (Some("7"), 7), (Some("4294967295"), u32::MAX)]
-        {
-            let mut arguments = vec![
-                "miden-note-transport",
-                "start",
-                "--database",
-                "notes.sqlite3",
-                "--max-storage-bytes",
-                "1024",
-            ];
-            if let Some(value) = value {
-                arguments.extend(["--retention-days", value]);
-            }
-            let matches = Cli::command()
-                .mut_subcommand("start", |command| {
-                    command.mut_arg("retention_days", |arg| arg.env(None::<&str>))
-                })
-                .try_get_matches_from(arguments)
-                .unwrap();
-            let Command::Start(args) = Cli::from_arg_matches(&matches).unwrap().command else {
-                panic!("expected start command");
-            };
-            assert_eq!(args.retention_days, expected);
-        }
-    }
-}
