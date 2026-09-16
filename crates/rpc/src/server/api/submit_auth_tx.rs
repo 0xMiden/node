@@ -1,14 +1,11 @@
+use miden_node_block_producer::ensure_transaction_has_fee;
 use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
 use miden_node_proto::generated::server::sequencer_api;
 use miden_node_proto::{DecodeMessageExt, generated as proto};
 use miden_node_tracing::ErrorReport;
 use tonic::Status;
 
-use super::{
-    SequencerInternalService,
-    ensure_transactions_have_fee_notes,
-    get_block_header_error_to_status,
-};
+use super::{SequencerInternalService, get_block_header_error_to_status};
 
 #[tonic::async_trait]
 impl sequencer_api::SubmitAuthenticatedTx for SequencerInternalService {
@@ -57,7 +54,7 @@ impl sequencer_api::SubmitAuthenticatedTx for SequencerInternalService {
             )));
         }
 
-        ensure_transactions_have_fee_notes([tx.raw_proven_transaction()])?;
+        ensure_transaction_has_fee(tx.raw_proven_transaction()).map_err(Status::from)?;
 
         self.block_producer
             .submit_authenticated_tx(tx)
