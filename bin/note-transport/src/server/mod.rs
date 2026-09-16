@@ -36,6 +36,7 @@ pub struct Config {
     pub max_note_size: usize,
     pub max_connections: usize,
     pub max_storage_bytes: u64,
+    pub retention_days: u32,
     pub grpc: GrpcOptions,
 }
 
@@ -45,6 +46,7 @@ impl Default for Config {
             max_note_size: 512_000,
             max_connections: 4096,
             max_storage_bytes: 1024 * 1024 * 1024,
+            retention_days: 30,
             grpc: GrpcOptions::default(),
         }
     }
@@ -165,9 +167,14 @@ impl SendNote for Server {
             return Err(tonic::Status::resource_exhausted("note exceeds max-note-size"));
         }
         let id = note.header.id();
-        let result = db::store_note(&self.writer, note, self.config.max_storage_bytes)
-            .await
-            .map_err(storage_status)?;
+        let result = db::store_note(
+            &self.writer,
+            note,
+            self.config.max_storage_bytes,
+            self.config.retention_days,
+        )
+        .await
+        .map_err(storage_status)?;
         info!(target: LOG_TARGET, "Note accepted",
             note.id = id,
             note_transport.payload_bytes = size,
