@@ -8,7 +8,7 @@ services:
       - -ec
       - |
         if [ ! -e /data/notes.sqlite3 ]; then
-          miden-note-transport bootstrap --database /data/notes.sqlite3
+          miden-note-transport bootstrap --data-directory /data
         fi
     volumes:
       - note-transport-data:/data
@@ -22,7 +22,7 @@ services:
       - start
       - --enable-otel
     environment:
-      MIDEN_NOTE_TRANSPORT_DATABASE: /data/notes.sqlite3
+      MIDEN_NOTE_TRANSPORT_DATA_DIRECTORY: /data
       MIDEN_NOTE_TRANSPORT_LISTEN: 0.0.0.0:57292
       MIDEN_NOTE_TRANSPORT_MAX_STORAGE_BYTES: "1073741824"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317

@@ -1,17 +1,22 @@
 syntax = "proto3";
 package note_transport;
 
-import "google/protobuf/empty.proto";
 import "note.proto";
 import "block_number.proto";
 
 // Delivers private notes to recipients that poll by tag.
 service Api {
     // Stores a note. A retry with the same note ID keeps the first envelope.
-    rpc SendNote(TransportNote) returns (google.protobuf.Empty) {}
+    rpc SendNote(SendNoteRequest) returns (SendNoteResponse) {}
     // Returns notes after the cursor, ordered by their storage cursor.
     rpc FetchNotes(FetchNotesRequest) returns (FetchNotesResponse) {}
 }
+
+message SendNoteRequest {
+    TransportNote note = 1;
+}
+
+message SendNoteResponse {}
 
 message TransportNote {
     note.NoteHeader header = 1;
