@@ -268,7 +268,11 @@ async fn large_pages_fit_default_grpc_client_and_resume_without_gaps() {
         .notes
         .iter()
         .chain(&second.notes)
-        .map(|note| NoteHeader::try_from(note.header.clone().unwrap()).unwrap().id())
+        .map(|note| {
+            let header: NoteHeader =
+                note.decoder().verify_field("header", note.header.clone()).unwrap();
+            header.id()
+        })
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(headers.len(), 400);
     drop(client);
