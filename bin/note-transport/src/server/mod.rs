@@ -132,8 +132,8 @@ impl SendNote for Server {
 
     fn decode(request: TransportNote) -> tonic::Result<Self::Input> {
         let decoder = request.decoder();
-        let header: NoteHeader = decoder.decode_field("header", request.header)?;
-        let details: NoteDetails = decoder.decode_field("details", request.details)?;
+        let header: NoteHeader = decoder.verify_field("header", request.header)?;
+        let details: NoteDetails = decoder.verify_field("details", request.details)?;
         if details.commitment() != header.details_commitment() {
             return Err(tonic::Status::invalid_argument("note details do not match the header"));
         }
