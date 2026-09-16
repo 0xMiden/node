@@ -37,6 +37,9 @@ service Api {
     // Returns INVALID_ARGUMENT for invalid input, NOT_FOUND for an unknown code, and
     // ALREADY_EXISTS if the code is registered to a different account or the account is already
     // registered without this code.
+    // If registration funding is configured, waits for the funding note to commit.
+    // Returns UNAVAILABLE if funding fails. The account remains registered and retries do not
+    // request funding again.
     rpc RegisterAccount(RegisterAccountRequest) returns (google.protobuf.Empty) {}
 
     // Returns true if account allowlist enforcement is disabled or the account is allowlisted.

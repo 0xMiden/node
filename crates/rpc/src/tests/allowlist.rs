@@ -7,6 +7,101 @@ use miden_standards::account::fees::{BasicConstantFeePolicy, FeePolicyManager};
 
 use super::*;
 
+#[tokio::test]
+async fn registration_requests_funding_once_after_commit() {
+    use axum::{Json, Router};
+    use serde_json::{Value, json};
+
+    let store = TestStore::start().await;
+    let allowlist = store.bootstrap_allowlist();
+    let accounts = [0, 1].map(|byte| {
+        AccountId::dummy(
+            [byte; 15],
+            AccountIdVersion::Version1,
+            AccountType::Private,
+            AssetCallbackFlag::Disabled,
+        )
+    });
+    let (requests, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let funding_api = Router::new().route(
+        "/request-funds",
+        axum::routing::post(move |Json(body): Json<Value>| {
+            let status = if body["account_id"] == accounts[1].to_hex() {
+                http::StatusCode::SERVICE_UNAVAILABLE
+            } else {
+                http::StatusCode::OK
+            };
+            requests.send(body).unwrap();
+            async move { status }
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+    let guard = TestServerGuard(CancellationToken::new());
+    let shutdown = guard.0.clone();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, funding_api)
+            .with_graceful_shutdown(shutdown.cancelled_owned())
+            .await
+            .unwrap();
+    });
+    let funding = crate::FundingClient::new(url, std::num::NonZeroU64::new(42).unwrap()).unwrap();
+    let rpc = RpcService::new(
+        Arc::clone(&store.state),
+        RpcBackend::sequencer(
+            BlockProducerApi::new(
+                Arc::clone(&store.state),
+                0.into(),
+                BlockProducerApiConfig::default(),
+                guard.0.clone(),
+            ),
+            ValidatorClients::new(vec![dummy_client::<ValidatorClient>()]).unwrap(),
+            AccountAdmission::disabled(Arc::clone(&allowlist)).with_funding_client(Some(funding)),
+        ),
+        None,
+        NonZeroUsize::new(1).unwrap(),
+        None,
+    );
+    for (index, account) in accounts.into_iter().enumerate() {
+        let code = format!("funding-{index}");
+        let request = proto::rpc::RegisterAccountRequest {
+            invitation_code: code.clone(),
+            account_id: Some(account.into()),
+        };
+        assert_eq!(
+            rpc.register_account(Request::new(request.clone())).await.unwrap_err().code(),
+            tonic::Code::NotFound
+        );
+        allowlist
+            .import_invitation(InvitationEntry {
+                invitation_code: InvitationCode::new(&code).unwrap(),
+                account_id: None,
+            })
+            .await
+            .unwrap();
+        let response = rpc.register_account(Request::new(request.clone())).await;
+        if index == 0 {
+            response.unwrap();
+        } else {
+            let error = response.unwrap_err();
+            assert_eq!(error.code(), tonic::Code::Unavailable);
+            assert!(error.message().contains("503 Service Unavailable"));
+        }
+        assert!(allowlist.contains_account(account).await.unwrap());
+        rpc.register_account(Request::new(request)).await.unwrap();
+        assert_eq!(
+            received.try_recv().unwrap(),
+            json!({"account_id": account.to_hex(), "amount": 42})
+        );
+        assert!(matches!(
+            received.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+    }
+    guard.0.cancel();
+    server.await.unwrap();
+}
+
 impl TestStore {
     async fn with_account_creation_batch() -> (Self, ProposedBatch) {
         let mut builder = MockChainBuilder::new();
