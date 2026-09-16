@@ -25,6 +25,11 @@ message FetchNotesRequest {
     // At most 128 tags. Duplicate tags do not duplicate results.
     repeated fixed32 tags = 1;
     // Exclusive lower bound. Zero starts from the first retained note.
+    // The cursor belongs to the requested set of tags.
+    // Reset it to zero when you add or remove tags.
+    // Reordering tags or changing duplicate tags does not change the set.
+    // A restart can return notes that you fetched before.
+    // Use note IDs to remove duplicate results.
     fixed64 cursor = 2;
 }
 
