@@ -10,6 +10,7 @@ use miden_node_store::{
 };
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
+use miden_protocol::asset::AssetId;
 use miden_protocol::batch::BatchId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::utils::DeserializationError;
@@ -88,6 +89,14 @@ pub enum MempoolSubmissionError {
     #[error("mempool lock is poisoned")]
     #[grpc(internal)]
     MempoolPoisoned(#[source] MempoolPoisonError),
+
+    #[error(
+        "transaction {transaction_id} must use only the native asset {fee_asset_id} in each TX_FEE output note"
+    )]
+    InvalidFeeAsset {
+        transaction_id: TransactionId,
+        fee_asset_id: AssetId,
+    },
 
     #[error("user batch proof ID {proof_id} does not match transaction batch ID {batch_id}")]
     BatchIdMismatch { proof_id: BatchId, batch_id: BatchId },
