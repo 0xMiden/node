@@ -361,7 +361,6 @@ impl IncrementService {
         target = COMPONENT,
         name = "network_monitor.counter.submit_increment",
         level = "info",
-        ret(level = "debug"),
         err,
     )]
     async fn submit_increment(&mut self) -> Result<(String, AccountPatch, BlockNumber)> {

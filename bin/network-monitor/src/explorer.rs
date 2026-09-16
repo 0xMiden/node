@@ -89,7 +89,6 @@ impl Service for ExplorerService {
     #[miden_instrument(
         target = COMPONENT,
         name = "check-status.explorer",
-        ret(level = "info"),
     )]
     async fn check(&mut self) -> ServiceStatus {
         let resp = self

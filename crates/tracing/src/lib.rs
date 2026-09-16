@@ -4,6 +4,7 @@ extern crate self as miden_node_tracing;
 
 mod attribute;
 pub mod grpc;
+mod instrument;
 mod logging;
 pub mod panic;
 mod span_ext;
@@ -42,6 +43,8 @@ pub use tracing::{event, if_log_enabled, level_enabled, span};
 #[doc(hidden)]
 pub mod __private {
     pub use tracing::{debug, error, info, instrument, trace, warn};
+
+    pub use crate::instrument::AsDynError;
 }
 
 /// Extends errors with a stable string representation of their source chain.
