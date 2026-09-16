@@ -168,8 +168,8 @@ bytes. The default connection limit is 4096, and the default gRPC timeout is 10 
 `--max-connections`, and `--grpc.timeout` to change these limits. Add `--enable-otel` to export telemetry.
 
 Stop the service before database maintenance. Back up the database before a schema migration. Apply supported schema
-migrations with `miden-note-transport migrate --database ./notes.sqlite3`. Remove expired notes with
-`miden-note-transport cleanup --database ./notes.sqlite3`. The `migrate` command does not import legacy databases.
+migrations with `miden-note-transport migrate --database ./notes.sqlite3`. The `migrate` command does not import legacy
+databases.
 
 ## Faucet
 
