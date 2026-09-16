@@ -44,9 +44,17 @@ The service stores this hint without chain lookup; an absent hint differs from b
 A retry with the same note ID succeeds and keeps the first envelope, timestamp, and cursor. This also applies when the
 retry supplies a different block hint or storage is full.
 
-`FetchNotes` accepts at most 128 tags and an exclusive cursor. Start with cursor zero and use each response cursor for
-the next request. Results follow insertion order across all requested tags. Duplicate tags do not duplicate results.
-Empty pages retain the request cursor. The response `has_more` field indicates that another page is available.
+`FetchNotes` accepts at most 128 tags and an exclusive cursor. Start with cursor zero. Use each response cursor for the
+next request with the same set of tags. Results follow insertion order across all requested tags. Duplicate tags do not
+duplicate results. Empty pages retain the request cursor. The response `has_more` field indicates that another page is
+available.
+
+A cursor belongs to the requested set of tags. Reset the cursor to zero when you add or remove tags. Reordering tags or
+changing duplicate tags does not change the set. A restart can return notes that you fetched before. Use note IDs to
+remove duplicate results.
+
+For example, after you fetch tag A through cursor 100, reset the cursor to zero when you add tag B. If you reuse cursor
+100, you skip retained notes for tag B with cursors at or below 100.
 
 A page contains at most 500 notes and 3 MiB of canonically serialized header and detail bytes. The encoded response also
 fits the default 4 MiB gRPC client limit. The default per-note limit is 512,000 bytes. `--max-note-size` can change it
