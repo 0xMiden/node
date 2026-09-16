@@ -256,7 +256,7 @@ where
         let data = (self.get_data)(block)
             .await
             .inspect_err(|err| {
-                error!(&err, "failed to load data for stream", block.number = block);
+                error!(err, "failed to load data for stream", block.number = block);
             })
             .map_err(|_| StreamError::Internal)?;
 
