@@ -1648,7 +1648,7 @@ async fn register_account_validates_input_and_preserves_registrations() {
         account_id: Some(account.into()),
     };
     let query = proto::rpc::IsAccountAllowedRequest { account_id: Some(account.into()) };
-    assert!(!rpc.is_account_allowed(query.clone()).await.unwrap().into_inner().allowed);
+    assert!(!rpc.is_account_allowed(query).await.unwrap().into_inner().allowed);
     assert_eq!(
         rpc.register_account(request.clone()).await.unwrap_err().code(),
         tonic::Code::InvalidArgument
