@@ -26,7 +26,7 @@ fn note(seed: u32, tag: u32) -> StoredNote {
     StoredNote {
         header: *note.header(),
         details: miden_protocol::note::NoteDetails::from(note).to_bytes(),
-        created_at: 0,
+        created_at: now_micros(),
         seq: 0,
         after_block_num: Some(10),
     }
@@ -109,51 +109,6 @@ async fn retry_at_capacity_preserves_first_write() {
     assert_eq!(page.notes[0].after_block_num, original.after_block_num);
     assert_eq!(page.notes[0].created_at, original.created_at);
     assert_eq!(page.notes[0].seq, 1);
-    assert!(!page.has_more);
-}
-
-#[tokio::test]
-async fn cleanup_releases_capacity_without_reusing_cursors() {
-    let (dir, writer, reader) = database();
-    let original = note(1, 42);
-    let limit = (original.header.to_bytes().len() + original.details.len()) as u64 * 2;
-    for seed in 1..=2 {
-        store_note(&writer, note(seed, 42), limit).await.unwrap();
-    }
-    assert_eq!(cleanup(&writer, 30, 1).await.unwrap(), 1);
-    assert_eq!(cleanup(&writer, 30, 1).await.unwrap(), 1);
-    drop((writer, reader));
-    let (writer, reader) = load(&dir.path().join("notes.sqlite3")).unwrap();
-    store_note(&writer, note(3, 42), limit).await.unwrap();
-    assert_eq!(fetch_notes(&reader, vec![42], 2).await.unwrap().notes[0].seq, 3);
-}
-
-#[tokio::test]
-async fn cleanup_preserves_recent_notes_and_respects_zero_and_maximum_limits() {
-    let (_dir, writer, reader) = database();
-    let old = note(1, 42);
-    let mut recent = note(2, 42);
-    recent.created_at = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_micros()
-        .try_into()
-        .unwrap();
-    store_note(&writer, old.clone(), u64::MAX).await.unwrap();
-    store_note(&writer, recent.clone(), u64::MAX).await.unwrap();
-
-    assert_eq!(cleanup(&writer, 30, 0).await.unwrap(), 0);
-    assert_eq!(cleanup(&writer, u32::MAX, 1000).await.unwrap(), 0);
-    let page = fetch_notes(&reader, vec![42], 0).await.unwrap();
-    assert_eq!(
-        page.notes.iter().map(|item| item.header.id()).collect::<Vec<_>>(),
-        vec![old.header.id(), recent.header.id()]
-    );
-
-    assert_eq!(cleanup(&writer, 30, 1000).await.unwrap(), 1);
-    let page = fetch_notes(&reader, vec![42], 0).await.unwrap();
-    assert_eq!(page.notes.len(), 1);
-    assert_eq!(page.notes[0].header.id(), recent.header.id());
     assert!(!page.has_more);
 }
 
@@ -252,4 +207,172 @@ async fn concurrent_writes_share_capacity() {
         tokio::join!(store_note(&writer, item, limit), store_note(&writer, note(2, 42), limit),);
     assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
     assert_eq!(fetch_notes(&reader, vec![42], 0).await.unwrap().notes.len(), 1);
+}
+
+fn now_micros() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_micros()
+        .try_into()
+        .unwrap()
+}
+
+async fn store_note(
+    writer: &DbWriter,
+    note: StoredNote,
+    limit: u64,
+) -> Result<StoreResult, StorageError> {
+    super::store_note(writer, note, limit, 30).await
+}
+
+async fn seed_expired(writer: &DbWriter, seed: u32, timestamp: i64, limit: u64) -> StoredNote {
+    let mut item = note(seed, 42);
+    item.created_at = timestamp;
+    super::store_note(writer, item.clone(), limit, u32::MAX).await.unwrap();
+    item
+}
+
+#[tokio::test]
+async fn insertion_deletes_at_most_ten_oldest_notes_with_cursor_ties() {
+    let (_dir, writer, reader) = database();
+    for seed in 1..=13 {
+        let timestamp = match seed {
+            1 => 3,
+            2..=4 => 2,
+            _ => 1,
+        };
+        seed_expired(&writer, seed, timestamp, u64::MAX).await;
+    }
+    store_note(&writer, note(14, 42), u64::MAX).await.unwrap();
+    let page = fetch_notes(&reader, vec![42], 0).await.unwrap();
+    assert_eq!(page.notes.iter().map(|note| note.seq).collect::<Vec<_>>(), vec![1, 3, 4, 14]);
+    store_note(&writer, note(15, 42), u64::MAX).await.unwrap();
+    let page = fetch_notes(&reader, vec![42], 0).await.unwrap();
+    assert_eq!(page.notes.iter().map(|note| note.seq).collect::<Vec<_>>(), vec![14, 15]);
+}
+
+#[tokio::test]
+async fn insertion_uses_cleanup_capacity_and_preserves_cursor_after_reopen() {
+    let (dir, writer, reader) = database();
+    let item = note(1, 42);
+    let size = (item.header.to_bytes().len() + item.details.len()) as u64;
+    for seed in 1..=2 {
+        seed_expired(&writer, seed, 0, size * 2).await;
+    }
+    store_note(&writer, note(3, 42), size * 2).await.unwrap();
+    drop((writer, reader));
+    let (writer, reader) = load(&dir.path().join("notes.sqlite3")).unwrap();
+    store_note(&writer, note(4, 42), size * 2).await.unwrap();
+    assert!(matches!(
+        store_note(&writer, note(5, 42), size * 2).await,
+        Err(StorageError::Capacity(_))
+    ));
+    let page = fetch_notes(&reader, vec![42], 0).await.unwrap();
+    assert_eq!(page.notes.iter().map(|note| note.seq).collect::<Vec<_>>(), vec![3, 4]);
+}
+
+#[tokio::test]
+async fn insufficient_reclaimed_capacity_rolls_back_deletions_and_cursor() {
+    let (_dir, writer, reader) = database();
+    let item = note(1, 42);
+    let size = item.header.to_bytes().len() + item.details.len();
+    let limit = (size * 12) as u64;
+    for seed in 1..=12 {
+        seed_expired(&writer, seed, 0, limit).await;
+    }
+    let mut oversized = note(13, 42);
+    oversized.details = vec![0; size * 11 - oversized.header.to_bytes().len()];
+    assert!(matches!(
+        store_note(&writer, oversized, limit).await,
+        Err(StorageError::Capacity(_))
+    ));
+    let page = fetch_notes(&reader, vec![42], 0).await.unwrap();
+    assert_eq!(
+        page.notes.iter().map(|note| note.seq).collect::<Vec<_>>(),
+        (1..=12).collect::<Vec<_>>()
+    );
+    store_note(&writer, note(13, 42), limit).await.unwrap();
+    let page = fetch_notes(&reader, vec![42], 0).await.unwrap();
+    assert_eq!(page.notes.iter().map(|note| note.seq).collect::<Vec<_>>(), vec![11, 12, 13]);
+}
+
+#[tokio::test]
+async fn duplicate_retry_and_reads_do_not_delete_expired_notes() {
+    let (_dir, writer, reader) = database();
+    let original = seed_expired(&writer, 1, 0, u64::MAX).await;
+    for seed in 2..=12 {
+        seed_expired(&writer, seed, 0, u64::MAX).await;
+    }
+    assert_eq!(fetch_notes(&reader, vec![42], 0).await.unwrap().notes.len(), 12);
+    assert_eq!(store_note(&writer, original, 0).await.unwrap(), StoreResult::AlreadyPresent);
+    assert_eq!(fetch_notes(&reader, vec![42], 0).await.unwrap().notes.len(), 12);
+}
+
+#[tokio::test]
+async fn failed_cleanup_rolls_back_insert_and_deletions() {
+    let (_dir, writer, reader) = database();
+    seed_expired(&writer, 1, 0, u64::MAX).await;
+    seed_expired(&writer, 2, 0, u64::MAX).await;
+    writer.write("reject deletion", |tx| {
+        tx.execute("CREATE TRIGGER reject_delete BEFORE DELETE ON notes WHEN OLD.seq = 2 BEGIN SELECT RAISE(ABORT, 'rejected'); END", &[])?;
+        Ok::<_, miden_node_db::DatabaseError>(())
+    }).await.unwrap();
+    assert!(store_note(&writer, note(3, 42), u64::MAX).await.is_err());
+    let page = fetch_notes(&reader, vec![42], 0).await.unwrap();
+    assert_eq!(page.notes.iter().map(|note| note.seq).collect::<Vec<_>>(), vec![1, 2]);
+    writer
+        .write("allow deletion", |tx| {
+            tx.execute("DROP TRIGGER reject_delete", &[])?;
+            Ok::<_, miden_node_db::DatabaseError>(())
+        })
+        .await
+        .unwrap();
+    store_note(&writer, note(3, 42), u64::MAX).await.unwrap();
+    assert_eq!(fetch_notes(&reader, vec![42], 0).await.unwrap().notes[0].seq, 3);
+}
+
+#[tokio::test]
+async fn zero_retention_can_delete_the_inserted_note_without_reusing_its_cursor() {
+    let (_dir, writer, reader) = database();
+    let mut item = note(1, 42);
+    item.created_at = 0;
+    super::store_note(&writer, item, 0, 0).await.unwrap();
+    assert!(fetch_notes(&reader, vec![42], 0).await.unwrap().notes.is_empty());
+    store_note(&writer, note(2, 42), u64::MAX).await.unwrap();
+    assert_eq!(fetch_notes(&reader, vec![42], 0).await.unwrap().notes[0].seq, 2);
+}
+
+#[tokio::test]
+async fn cleanup_preserves_notes_at_the_retention_boundary() {
+    let (_dir, writer, reader) = database();
+    for seed in 1..=3 {
+        seed_expired(&writer, seed, i64::from(seed), u64::MAX).await;
+    }
+    writer
+        .write("check retention boundary", |tx| {
+            let removed = cleanup_expired_notes(tx, 2)?;
+            let retained = retained_bytes(tx)?;
+            tx.execute(
+                include_str!("queries/update_storage_metadata.sql"),
+                &[&4_i64, &(retained - removed)],
+            )?;
+            Ok::<_, StorageError>(())
+        })
+        .await
+        .unwrap();
+    let page = fetch_notes(&reader, vec![42], 0).await.unwrap();
+    assert_eq!(page.notes.iter().map(|note| note.seq).collect::<Vec<_>>(), vec![2, 3]);
+}
+
+#[tokio::test]
+async fn insertion_uses_the_configured_retention_period() {
+    let (_dir, writer, reader) = database();
+    let day = 86_400_000_000;
+    let now = now_micros();
+    seed_expired(&writer, 1, now - 8 * day, u64::MAX).await;
+    seed_expired(&writer, 2, now - 6 * day, u64::MAX).await;
+    super::store_note(&writer, note(3, 42), u64::MAX, 7).await.unwrap();
+    let page = fetch_notes(&reader, vec![42], 0).await.unwrap();
+    assert_eq!(page.notes.iter().map(|note| note.seq).collect::<Vec<_>>(), vec![2, 3]);
 }

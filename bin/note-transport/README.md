@@ -21,6 +21,16 @@ Start verifies the schema and does not create or migrate the database. Use `migr
 pending migrations. Bootstrap rejects an existing database. Database files from the standalone note transport service
 are not supported.
 
+The service retains notes for 30 days by default. Set `--retention-days` or `MIDEN_NOTE_TRANSPORT_RETENTION_DAYS` to
+change this period. Zero days is allowed.
+
+Each new insertion deletes at most 10 expired notes, ordered by timestamp and then cursor. Duplicate retries, reads, and
+idle periods do not trigger cleanup. There is no background cleanup or manual cleanup command.
+
+The insertion, cleanup, and final storage capacity check use one atomic transaction. Cleanup can reclaim space for the
+new note. If there is still insufficient space, the transaction rolls back the insertion and all deletions. Cleanup
+keeps the durable cursor counter. This retention policy requires no schema migration.
+
 ## API
 
 The public `note_transport.Api` service is defined in the workspace protobuf crate. It supports `SendNote` and
