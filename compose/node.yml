@@ -24,8 +24,8 @@ services:
       - --validator.url=http://validator-2:50101
       - --validator.url=http://validator-3:50101
       - --ntx-builder.url=http://ntx-builder:50301
-      - --batch.builder.account=/data/accounts/batch_builder.mac
-      - --batch.builder.pass-through-account=/data/accounts/pass_through.mac
+      - --batch.builder.wallet-account=/data/accounts/batch_builder_wallet_account.mac
+      - --batch.builder.collection-account=/data/accounts/batch_builder_collection_account.mac
       - --rpc.network-tx-auth-header-value=secret_value
     environment:
       MIDEN_NODE_DISABLE_ACCOUNT_ALLOWLIST: "${MIDEN_NODE_DISABLE_ACCOUNT_ALLOWLIST:-true}"

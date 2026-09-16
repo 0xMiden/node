@@ -84,8 +84,8 @@ mod tests {
     fn options(max_batches: usize, max_txs: usize) -> BlockProducerOptions {
         BlockProducerOptions {
             builder: BuilderOptions {
-                pass_through_account: "pass_through.mac".into(),
-                account: "batch_builder.mac".into(),
+                collection_account: "batch_builder_collection_account.mac".into(),
+                wallet_account: "batch_builder_wallet_account.mac".into(),
             },
             batch: BatchOptions {
                 interval: DEFAULT_BATCH_INTERVAL,
@@ -150,23 +150,24 @@ mod tests {
 
 #[derive(clap::Args, Clone, Debug)]
 pub struct BuilderOptions {
-    /// Account file that contains the public batch builder wallet and its signing key.
+    /// Public wallet account file and signing key. This wallet receives the batch builder's fees.
     #[arg(
-        long = "batch.builder.account",
-        env = "MIDEN_NODE_BATCH_BUILDER_ACCOUNT",
+        long = "batch.builder.wallet-account",
+        env = "MIDEN_NODE_BATCH_BUILDER_WALLET_ACCOUNT",
         value_name = "PATH",
         help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
     )]
-    pub account: PathBuf,
+    pub wallet_account: PathBuf,
 
-    /// Account file that contains the deployed fee collector and its signing key.
+    /// Collection account file and signing key. This account combines each batch's fee notes into
+    /// one payment to the wallet.
     #[arg(
-        long = "batch.builder.pass-through-account",
-        env = "MIDEN_NODE_BATCH_BUILDER_PASS_THROUGH_ACCOUNT",
+        long = "batch.builder.collection-account",
+        env = "MIDEN_NODE_BATCH_BUILDER_COLLECTION_ACCOUNT",
         value_name = "PATH",
         help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
     )]
-    pub pass_through_account: PathBuf,
+    pub collection_account: PathBuf,
 }
 
 #[derive(clap::Args, Clone, Debug)]

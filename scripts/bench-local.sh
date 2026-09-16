@@ -178,8 +178,8 @@ start_bg node miden-node sequencer \
     --rpc.listen                                "127.0.0.1:$RPC_PORT" \
     --validator.url                             "http://127.0.0.1:$VALIDATOR_PORT" \
     --ntx-builder.url                           "http://127.0.0.1:$NTX_PORT" \
-    --batch.builder.account                     "$DATA/accounts/batch_builder.mac" \
-    --batch.builder.pass-through-account        "$DATA/accounts/pass_through.mac" \
+    --batch.builder.wallet-account              "$DATA/accounts/batch_builder_wallet_account.mac" \
+    --batch.builder.collection-account          "$DATA/accounts/batch_builder_collection_account.mac" \
     --batch.max-txs                             64 \
     --block.max-batches                         16 \
     --block.interval                            2s \

@@ -192,8 +192,8 @@ else
     echo "=== Skipping bootstrap (SKIP_BOOTSTRAP=true) ==="
 fi
 
-if [[ ! -s "$ACCOUNTS_DIR/batch_builder.mac" ]]; then
-    echo "error: batch builder account is missing; run without SKIP_BOOTSTRAP" >&2
+if [[ ! -s "$ACCOUNTS_DIR/batch_builder_wallet_account.mac" ]]; then
+    echo "error: batch builder wallet account is missing; run without SKIP_BOOTSTRAP" >&2
     exit 1
 fi
 
@@ -248,8 +248,8 @@ OTEL_RESOURCE_ATTRIBUTES="$(node_resource_attributes sequencer)" \
     --validator.url "http://127.0.0.1:$VALIDATOR_1_PORT" \
     --validator.url "http://127.0.0.1:$VALIDATOR_2_PORT" \
     --ntx-builder.url "http://127.0.0.1:$NTX_BUILDER_PORT" \
-    --batch.builder.account "$ACCOUNTS_DIR/batch_builder.mac" \
-    --batch.builder.pass-through-account "$ACCOUNTS_DIR/pass_through.mac" \
+    --batch.builder.wallet-account "$ACCOUNTS_DIR/batch_builder_wallet_account.mac" \
+    --batch.builder.collection-account "$ACCOUNTS_DIR/batch_builder_collection_account.mac" \
     --internal.listen "0.0.0.0:$SEQUENCER_INTERNAL_PORT" \
     $EXTRA_ARGS &
 PIDS+=($!)

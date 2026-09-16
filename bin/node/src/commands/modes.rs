@@ -79,19 +79,18 @@ impl SequencerCommand {
         self.log_starting();
         let runtime = self.runtime.runtime_config(&self.store);
         self.block_producer.validate()?;
-        let builder_account = AccountFile::read(&self.block_producer.builder.account)
-            .context("failed to read batch.builder.account")?;
+        let wallet_account = AccountFile::read(&self.block_producer.builder.wallet_account)
+            .context("failed to read batch.builder.wallet-account")?;
         anyhow::ensure!(
-            builder_account.account.is_public(),
-            "batch.builder.account must be public",
+            wallet_account.account.is_public(),
+            "batch.builder.wallet-account must be public",
         );
         anyhow::ensure!(
-            !builder_account.auth_secret_keys.is_empty(),
-            "batch.builder.account must contain its signing key",
+            !wallet_account.auth_secret_keys.is_empty(),
+            "batch.builder.wallet-account must contain its signing key",
         );
-        let pass_through_account =
-            AccountFile::read(&self.block_producer.builder.pass_through_account)
-                .context("failed to read batch.builder.pass-through-account")?;
+        let collection_account = AccountFile::read(&self.block_producer.builder.collection_account)
+            .context("failed to read batch.builder.collection-account")?;
         let network_tx_auth = self.runtime.rpc.network_tx_auth()?;
         let (validator_clients, validator_monitors) =
             self.external_services.validator_clients_and_monitors()?;
@@ -115,16 +114,16 @@ impl SequencerCommand {
         let on_chain_account = state
             .view()
             .get_account(AccountRequest {
-                account_id: pass_through_account.account.id(),
+                account_id: collection_account.account.id(),
                 block_num: None,
                 details: None,
             })
             .await
-            .context("failed to read the pass-through account from the chain")?;
+            .context("failed to read the batch builder collection account from the chain")?;
         anyhow::ensure!(
             on_chain_account.witness.state_commitment()
-                == pass_through_account.account.to_commitment(),
-            "pass-through account file does not match the account in the chain",
+                == collection_account.account.to_commitment(),
+            "batch builder collection account file does not match the account in the chain",
         );
 
         let sequencer = Sequencer {
@@ -142,8 +141,8 @@ impl SequencerCommand {
             max_concurrent_proofs: self.block_producer.block.max_concurrent_proofs,
             mempool_tx_capacity: self.block_producer.mempool.tx_capacity,
             batch_workers: self.block_producer.batch.workers,
-            builder_account_id: builder_account.account.id(),
-            pass_through_account,
+            builder_account_id: wallet_account.account.id(),
+            pass_through_account: collection_account,
         }
         .spawn(shutdown.clone())
         .context("failed to spawn sequencer")?;

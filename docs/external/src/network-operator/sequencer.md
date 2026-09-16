@@ -18,8 +18,8 @@ miden-node sequencer \
   --validator.url http://validator-2:50101 \
   --validator.url http://validator-3:50101 \
   --ntx-builder.url http://ntx-builder:50301 \
-  --batch.builder.account accounts/batch_builder.mac \
-  --batch.builder.pass-through-account accounts/pass_through.mac \
+  --batch.builder.wallet-account accounts/batch_builder_wallet_account.mac \
+  --batch.builder.collection-account accounts/batch_builder_collection_account.mac \
   --rpc.network-tx-auth-header-value <network-tx-auth-secret>
 ```
 
@@ -106,15 +106,15 @@ block data when this occurs. See [Recovery](/network-operator/recovery) for the 
 
 ## Common Configuration
 
-| Option                                 | Purpose                                                   |
-| -------------------------------------- | --------------------------------------------------------- |
-| `--rpc.listen`                         | Public RPC socket exposed by the sequencer.               |
-| `--rpc.network-tx-auth-header-value`   | Shared secret for authorized network transaction flow.    |
-| `--validator.url`                      | Internal validator service URLs (one per validator).      |
-| `--ntx-builder.url`                    | Internal network transaction builder service URL.         |
-| `--batch.interval`                     | Maximum interval between batch scheduler checks.          |
-| `--batch.builder.account`              | Public batch builder account file and signing key.        |
-| `--batch.builder.pass-through-account` | Account file with the deployed collector and signing key. |
-| `--block.interval`                     | Block production interval.                                |
+| Option                               | Purpose                                                |
+| ------------------------------------ | ------------------------------------------------------ |
+| `--rpc.listen`                       | Public RPC socket exposed by the sequencer.            |
+| `--rpc.network-tx-auth-header-value` | Shared secret for authorized network transaction flow. |
+| `--validator.url`                    | Internal validator service URLs (one per validator).   |
+| `--ntx-builder.url`                  | Internal network transaction builder service URL.      |
+| `--batch.interval`                   | Maximum interval between batch scheduler checks.       |
+| `--batch.builder.wallet-account`     | Public wallet account file and signing key.            |
+| `--batch.builder.collection-account` | Collection account file and signing key.               |
+| `--block.interval`                   | Block production interval.                             |
 
 Use `miden-node sequencer --help` for the complete current option list.
