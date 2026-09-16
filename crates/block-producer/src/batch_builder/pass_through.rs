@@ -117,7 +117,7 @@ impl PassThroughTransactionBuilder {
     }
 
     pub(super) fn prove(transaction: ExecutedTransaction) -> anyhow::Result<ProvenTransaction> {
-        Ok(LocalTransactionProver::default().prove(transaction.tx_inputs().clone())?)
+        Ok(LocalTransactionProver::default().prove(transaction)?)
     }
 }
 

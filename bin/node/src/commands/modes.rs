@@ -77,6 +77,10 @@ pub struct SequencerCommand {
 }
 
 impl SequencerCommand {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Keep sequencer service startup and task supervision together"
+    )]
     pub async fn handle(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         self.log_starting();
         let runtime = self.runtime.runtime_config(&self.store);
