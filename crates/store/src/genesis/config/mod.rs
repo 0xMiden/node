@@ -55,11 +55,11 @@ pub const NATIVE_FAUCET_FILE_NAME: &str = "native_faucet.mac";
 /// Name of the account file written for the generated faucet operator.
 pub const FAUCET_OPERATOR_FILE_NAME: &str = "faucet_operator.mac";
 
-/// Name of the account file written for the pass-through account.
-pub const PASS_THROUGH_ACCOUNT_FILE_NAME: &str = "pass_through.mac";
+/// Name of the account file written for the batch builder's collection account.
+pub const BATCH_BUILDER_COLLECTION_ACCOUNT_FILE_NAME: &str = "batch_builder_collection_account.mac";
 
-/// Name of the account file written for the generated batch builder.
-pub const BATCH_BUILDER_FILE_NAME: &str = "batch_builder.mac";
+/// Name of the account file written for the batch builder's wallet account.
+pub const BATCH_BUILDER_WALLET_ACCOUNT_FILE_NAME: &str = "batch_builder_wallet_account.mac";
 
 // GENESIS CONFIG
 // ================================================================================================
@@ -232,14 +232,14 @@ impl GenesisConfig {
         let (pass_through_account, pass_through_secret) =
             build_pass_through_account().map_err(GenesisConfigError::PassThroughAccountBuild)?;
         secrets.push((
-            PASS_THROUGH_ACCOUNT_FILE_NAME.to_string(),
+            BATCH_BUILDER_COLLECTION_ACCOUNT_FILE_NAME.to_string(),
             pass_through_account.id(),
             Some(pass_through_secret),
         ));
 
         let (batch_builder_account, batch_builder_secret) = build_batch_builder()?;
         secrets.push((
-            BATCH_BUILDER_FILE_NAME.to_string(),
+            BATCH_BUILDER_WALLET_ACCOUNT_FILE_NAME.to_string(),
             batch_builder_account.id(),
             Some(batch_builder_secret),
         ));
