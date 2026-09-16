@@ -120,7 +120,14 @@ async fn is_account_allowed_respects_enforcement() {
         for account_id in [
             None,
             Some(proto::account::AccountId::default()),
-            Some(proto::account::AccountId { id: vec![0] }),
+            Some(proto::account::AccountId {
+                version: Some(proto::account::account_id::Version::V1(
+                    proto::account::AccountIdV1 {
+                        suffix: Some(proto::primitives::Felt { value: 0 }),
+                        prefix: Some(proto::primitives::Felt { value: 0 }),
+                    },
+                )),
+            }),
         ] {
             let invalid = proto::rpc::IsAccountAllowedRequest { account_id };
             assert_eq!(

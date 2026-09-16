@@ -1,4 +1,4 @@
-use miden_node_proto::generated as proto;
+use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_node_tracing::{ErrorReport, miden_instrument, miden_span_record};
 use miden_protocol::account::AccountId;
 use tonic::{Request, Status};
@@ -15,7 +15,9 @@ impl proto::server::rpc_api::IsAccountAllowed for RpcService {
         request
             .account_id
             .ok_or_else(|| Status::invalid_argument("missing account_id"))?
-            .try_into()
+            .decode_fields()
+            .map_err(|_| Status::invalid_argument("invalid account_id"))?
+            .verify()
             .map_err(|_| Status::invalid_argument("invalid account_id"))
     }
 
