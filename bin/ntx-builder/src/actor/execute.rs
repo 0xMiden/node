@@ -123,7 +123,11 @@ fn request_backoff(initial: Duration, max: Duration) -> ExponentialBuilder {
 }
 
 /// Emits a structured warning for a transient NTX request failure that is about to be retried.
-fn log_transient_retry<E: std::error::Error>(operation: &'static str, err: &E, sleep: Duration) {
+fn log_transient_retry<E: std::error::Error + 'static>(
+    operation: &'static str,
+    err: &E,
+    sleep: Duration,
+) {
     warn!(
         err,
         target: COMPONENT,
