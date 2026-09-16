@@ -127,7 +127,7 @@ fn pass_through_account_is_part_of_genesis() -> TestResult {
         .as_account_files(&state)
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
-        .find(|file| file.name == PASS_THROUGH_ACCOUNT_FILE_NAME)
+        .find(|file| file.name == BATCH_BUILDER_COLLECTION_ACCOUNT_FILE_NAME)
         .expect("the pass-through account file should be generated");
     let account = &exported.account_file.account;
     assert!(state.accounts.contains(account));
@@ -384,7 +384,7 @@ verification_base_fee = 0
             .find(|(name, ..)| name == file_name)
             .unwrap_or_else(|| panic!("{file_name} should be generated"))
     };
-    assert!(find(PASS_THROUGH_ACCOUNT_FILE_NAME).2.is_some());
+    assert!(find(BATCH_BUILDER_COLLECTION_ACCOUNT_FILE_NAME).2.is_some());
     assert!(find(BATCH_BUILDER_FILE_NAME).2.is_some());
 
     Ok(())
