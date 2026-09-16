@@ -65,7 +65,6 @@ pub fn wallet_counter_component_code() -> Result<AccountComponentCode> {
 #[miden_instrument(
     target = COMPONENT,
     name = "create-wallet-account",
-    ret(level = "debug"),
 )]
 pub fn create_wallet_account() -> Result<(Account, SecretKey)> {
     let mut rng = ChaCha20Rng::from_seed(rand::random());

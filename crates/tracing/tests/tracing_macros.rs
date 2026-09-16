@@ -360,16 +360,10 @@ fn event_macros_record_canonical_attributes() {
         assert_eq!(event.fields.get("block.number").unwrap(), block_number);
     }
 
-    assert!(!events[3].fields.contains_key("exception.message"));
+    assert!(!events[3].fields.contains_key("error"));
     assert_eq!(events[0].fields.get("custom.attribute").unwrap(), "custom");
-    assert_eq!(
-        events[4].fields.get("exception.message").unwrap(),
-        "outer error\ncaused by: source error"
-    );
-    assert_eq!(
-        events.last().unwrap().fields.get("exception.message").unwrap(),
-        "outer error\ncaused by: source error"
-    );
+    assert_eq!(events[4].fields.get("error").unwrap(), "outer error");
+    assert_eq!(events.last().unwrap().fields.get("error").unwrap(), "outer error");
 }
 
 #[test]
@@ -390,6 +384,8 @@ fn ui_tests() {
     tests.compile_fail("tests/ui/tracing_macros/invalid_instrument_attribute.rs");
     tests.compile_fail("tests/ui/tracing_macros/invalid_record_formatter.rs");
     tests.compile_fail("tests/ui/tracing_macros/invalid_instrument_formatter.rs");
+    tests.compile_fail("tests/ui/tracing_macros/invalid_err_formatter.rs");
+    tests.compile_fail("tests/ui/tracing_macros/invalid_ret.rs");
     tests.compile_fail("tests/ui/tracing_macros/outside_miden_instrument.rs");
     tests.compile_fail("tests/ui/tracing_macros/invalid_event_field_name.rs");
     tests.compile_fail("tests/ui/tracing_macros/invalid_event_field_type.rs");

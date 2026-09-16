@@ -196,7 +196,6 @@ impl Service for FaucetService {
     target = COMPONENT,
     name = "network_monitor.faucet.fetch_faucet_metadata",
     level = "info",
-    ret(level = "debug"),
     err,
 )]
 pub(crate) async fn fetch_faucet_metadata(
@@ -221,7 +220,6 @@ pub(crate) async fn fetch_faucet_metadata(
     target = COMPONENT,
     name = "network_monitor.faucet.request_tokens",
     level = "info",
-    ret(level = "debug"),
     err,
 )]
 pub(crate) async fn request_tokens(
@@ -337,7 +335,6 @@ where
     target = COMPONENT,
     name = "network_monitor.faucet.solve_pow_challenge",
     level = "info",
-    ret(level = "debug"),
     err,
 )]
 fn solve_pow_challenge(challenge: &str, target: u64, timeout: Duration) -> anyhow::Result<u64> {
