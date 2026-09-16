@@ -133,7 +133,7 @@ fn log_transient_retry<E: std::error::Error + 'static>(
         target: COMPONENT,
         "ntx transient request failure; retrying after backoff",
         operation.name = operation,
-        retry.delay_ms = sleep.as_millis() as u64
+        retry.delay_ms = sleep
     );
 }
 

@@ -240,7 +240,7 @@ async fn run_ntx(
                 err,
                 target: LOG_TARGET,
                 "NTX bootstrap failed; retrying after backoff",
-                retry.delay_ms = sleep.as_millis() as u64
+                retry.delay_ms = sleep
             );
             publish_unhealthy(err);
         })
