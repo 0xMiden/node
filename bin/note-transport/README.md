@@ -21,15 +21,6 @@ Start verifies the schema and does not create or migrate the database. Use `migr
 pending migrations. Bootstrap rejects an existing database. Database files from the standalone note transport service
 are not supported.
 
-Cleanup is an explicit operator action:
-
-```sh
-miden-note-transport cleanup --database notes.sqlite3 --retention-days 30 --max-rows 1000
-```
-
-Each cleanup invocation deletes at most the requested number of expired notes. Operators can run it on a schedule.
-Cleanup releases storage capacity and keeps the durable cursor counter.
-
 ## API
 
 The public `note_transport.Api` service is defined in the workspace protobuf crate. It supports `SendNote` and

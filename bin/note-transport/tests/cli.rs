@@ -8,7 +8,7 @@ fn help_lists_service_lifecycle_commands() {
         .unwrap();
     assert!(output.status.success());
     let help = String::from_utf8(output.stdout).unwrap();
-    for command in ["bootstrap", "migrate", "start", "cleanup"] {
+    for command in ["bootstrap", "migrate", "start"] {
         assert!(help.contains(command), "missing command: {command}");
     }
 }
@@ -29,7 +29,7 @@ fn lifecycle_requires_explicit_initialization_and_preserves_existing_database() 
     assert!(run("bootstrap").status.success());
     assert!(!run("bootstrap").status.success());
     assert!(run("migrate").status.success());
-    assert!(run("cleanup").status.success());
+    assert!(!run("cleanup").status.success());
 }
 
 #[test]
@@ -41,4 +41,14 @@ fn start_requires_a_storage_limit() {
         .unwrap();
     assert!(!output.status.success());
     assert!(String::from_utf8(output.stderr).unwrap().contains("--max-storage-bytes"));
+}
+
+#[test]
+fn cleanup_command_is_rejected() {
+    let output = Command::new(env!("CARGO_BIN_EXE_miden-note-transport"))
+        .args(["cleanup", "--help"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8(output.stderr).unwrap().contains("unrecognized subcommand"));
 }
