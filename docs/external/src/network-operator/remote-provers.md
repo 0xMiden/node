@@ -24,6 +24,7 @@ Connect services to the relevant prover URLs:
 | ------------------------------- | -------------------- |
 | Sequencer batch proving         | `--batch-prover.url` |
 | Sequencer block proving         | `--block-prover.url` |
+| Sequencer transaction proving   | `--tx-prover.url`    |
 | NTX builder transaction proving | `--tx-prover.url`    |
 
 Remote provers are internal services. Put load balancing, service discovery, and admission control outside the prover

@@ -22,6 +22,7 @@ use miden_node_utils::cors::cors_for_grpc_web_layer;
 use miden_node_utils::grpc;
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
+use miden_protocol::Word;
 use miden_protocol::block::BlockNumber;
 use rand::RngExt;
 use tokio::net::TcpListener;
@@ -54,6 +55,13 @@ pub struct Rpc {
     pub ntx_builder: Option<NtxBuilderClient>,
     pub grpc_options: GrpcOptions,
     pub network_tx_auth: Option<AsciiMetadataValue>,
+}
+
+/// An initialized RPC server with a shared API for in-process callers.
+pub struct RpcServer {
+    rpc: Rpc,
+    api: Arc<api::RpcService>,
+    genesis: Word,
 }
 
 #[derive(Clone, Debug)]
@@ -275,14 +283,17 @@ impl Rpc {
     /// Note: Executes in place (i.e. not spawned) and will run indefinitely until
     ///       a fatal error is encountered.
     pub async fn serve(self, shutdown: CancellationToken) -> anyhow::Result<()> {
-        let endpoint = self.listener.local_addr().context("failed to read RPC listen address")?;
-        let mode = self.mode.as_str();
+        self.into_server().await?.serve(shutdown).await
+    }
+
+    /// Initializes the shared API without starting the network server.
+    pub async fn into_server(self) -> anyhow::Result<RpcServer> {
         let mut api = api::RpcService::new(
             self.state.clone(),
             self.mode.backend(),
             self.ntx_builder.clone(),
             NonZeroUsize::new(1_000_000).unwrap(),
-            self.network_tx_auth.map(NetworkTxAuth),
+            self.network_tx_auth.clone().map(NetworkTxAuth),
         );
 
         let genesis = api
@@ -292,13 +303,34 @@ impl Rpc {
 
         api.set_genesis_commitment(genesis.commitment())?;
 
-        let api_service = rpc_api::service(api);
+        Ok(RpcServer {
+            rpc: self,
+            api: Arc::new(api),
+            genesis: genesis.commitment(),
+        })
+    }
+}
+
+impl RpcServer {
+    /// Returns the API shared by the network server and in-process callers.
+    ///
+    /// Direct calls bypass transport middleware. Callers must apply their own request timeout.
+    pub fn api(&self) -> Arc<api::RpcService> {
+        Arc::clone(&self.api)
+    }
+
+    /// Serves network requests and runs the full-node sync task when required.
+    pub async fn serve(self, shutdown: CancellationToken) -> anyhow::Result<()> {
+        let Self { rpc, api, genesis } = self;
+        let endpoint = rpc.listener.local_addr().context("failed to read RPC listen address")?;
+        let mode = rpc.mode.as_str();
+        let api_service = rpc_api::service_from_arc(api);
 
         let mut tasks = Tasks::new();
 
         // Initialize health reporter and sync service based on the RPC mode.
         let (health_reporter, health_service) = tonic_health::server::health_reporter();
-        match self.mode {
+        match rpc.mode {
             RpcMode::Sequencer { .. } => {
                 health_reporter
                     .set_service_status(
@@ -306,7 +338,7 @@ impl Rpc {
                         tonic_health::ServingStatus::Serving,
                     )
                     .await;
-                let chain_tip = self.state.committed_tip();
+                let chain_tip = rpc.state.committed_tip();
                 log_node_ready(mode, endpoint, chain_tip);
             },
             RpcMode::FullNode {
@@ -317,7 +349,7 @@ impl Rpc {
                 ..
             } => {
                 Self::spawn_full_node_sync(
-                    &self.state,
+                    &rpc.state,
                     &mut tasks,
                     health_reporter,
                     mode,
@@ -344,7 +376,7 @@ impl Rpc {
 
         let rpc = tonic::transport::Server::builder()
             .accept_http1(true)
-            .timeout(self.grpc_options.request_timeout)
+            .timeout(rpc.grpc_options.request_timeout)
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(
                 TraceLayer::new(SharedClassifier::new(
@@ -369,7 +401,7 @@ impl Rpc {
             // CORS headers applied, masking the accept error in web-clients (which would experience
             // CORS rejection).
             .layer(
-                AcceptHeaderLayer::new(&rpc_version, genesis.commitment())
+                AcceptHeaderLayer::new(&rpc_version, genesis)
                     .with_genesis_enforced_method("RegisterAccount")
                     .with_genesis_enforced_method("SubmitProvenTx")
                     .with_genesis_enforced_method("SubmitProvenTxBatch"),
@@ -379,7 +411,7 @@ impl Rpc {
             // Enables gRPC reflection service.
             .add_service(reflection_service)
             .serve_with_incoming_shutdown(
-                TcpListenerStream::new(self.listener),
+                TcpListenerStream::new(rpc.listener),
                 shutdown.clone().cancelled_owned(),
             );
         tasks.spawn("RPC server", async move { rpc.await.map_err(|e| anyhow::anyhow!(e)) });
@@ -390,7 +422,7 @@ impl Rpc {
     /// Marks the RPC `NotServing` until synchronized, then spawns the full-node sync loop.
     #[expect(
         clippy::too_many_arguments,
-        reason = "assembles the full-node sync task from Rpc::serve's local state"
+        reason = "assembles the full-node sync task from RpcServer::serve's local state"
     )]
     async fn spawn_full_node_sync(
         state: &Arc<State>,

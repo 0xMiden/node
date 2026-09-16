@@ -17,6 +17,7 @@ use diesel::prelude::{
 use diesel::query_dsl::methods::SelectDsl;
 use diesel::sqlite::Sqlite;
 use diesel::{
+    BoolExpressionMethods,
     JoinOnDsl,
     NullableExpressionMethods,
     OptionalExtension,
@@ -50,7 +51,7 @@ use miden_protocol::note::{
     PartialNoteMetadata,
 };
 use miden_protocol::utils::serde::{Deserializable, Serializable};
-use miden_standards::note::NetworkAccountTarget;
+use miden_standards::note::{NetworkAccountTarget, P2idNote, P2idNoteStorage};
 
 use crate::COMPONENT;
 use crate::db::models::conv::{
@@ -220,6 +221,42 @@ pub(crate) fn select_notes_by_id(
         raw.into_iter().map(NoteRecordWithScriptRawJoined::from),
     )?;
     Ok(records)
+}
+
+/// Returns public P2ID notes that the target can consume at the specified block.
+pub(crate) fn select_unspent_p2id_notes(
+    conn: &mut SqliteConnection,
+    target: AccountId,
+    at_block: BlockNumber,
+    limit: usize,
+) -> Result<Vec<NoteRecord>, DatabaseError> {
+    let block = at_block.to_raw_sql();
+    let storage = NoteStorage::from(P2idNoteStorage::new(target));
+    let q = schema::notes::table
+        .left_join(
+            schema::note_scripts::table
+                .on(schema::notes::script_root.eq(schema::note_scripts::script_root.nullable())),
+        )
+        .filter(schema::notes::note_type.eq(note_type_to_raw_sql(NoteType::Public as u8)))
+        .filter(schema::notes::tag.eq(NoteTag::with_account_target(target).to_raw_sql()))
+        .filter(schema::notes::script_root.eq(P2idNote::script_root().to_bytes()))
+        .filter(schema::notes::storage.eq(storage.to_bytes()))
+        .filter(schema::notes::committed_at.le(block))
+        .filter(schema::notes::consumed_at.is_null().or(schema::notes::consumed_at.gt(block)))
+        .order_by((
+            schema::notes::committed_at.asc(),
+            schema::notes::batch_index.asc(),
+            schema::notes::note_index.asc(),
+        ))
+        .limit(limit as i64);
+    let raw = SelectDsl::select(
+        q,
+        (NoteRecordRawRow::as_select(), schema::note_scripts::script.nullable()),
+    )
+    .load::<(NoteRecordRawRow, Option<Vec<u8>>)>(conn)?;
+    vec_raw_try_into::<NoteRecord, NoteRecordWithScriptRawJoined>(
+        raw.into_iter().map(NoteRecordWithScriptRawJoined::from),
+    )
 }
 
 /// Select the subset of note commitments that already exist in the notes table and were

@@ -5,11 +5,13 @@ mod server;
 #[cfg(test)]
 mod tests;
 
+pub use server::api::RpcService;
 pub use server::{
     AccountAdmission,
     PreAuthSubmission,
     Rpc,
     RpcMode,
+    RpcServer,
     SequencerInternal,
     ValidatorClients,
 };

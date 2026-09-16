@@ -178,6 +178,7 @@ start_bg node miden-node sequencer \
     --rpc.listen                                "127.0.0.1:$RPC_PORT" \
     --validator.url                             "http://127.0.0.1:$VALIDATOR_PORT" \
     --ntx-builder.url                           "http://127.0.0.1:$NTX_PORT" \
+    --tx-prover.url                             "http://127.0.0.1:$REMOTE_PROVER_PORT" \
     --batch.builder.wallet-account              "$DATA/accounts/batch_builder_wallet_account.mac" \
     --batch.builder.collection-account          "$DATA/accounts/batch_builder_collection_account.mac" \
     --batch.max-txs                             64 \

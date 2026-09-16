@@ -586,6 +586,19 @@ impl Db {
         .await
     }
 
+    /// Returns public P2ID notes that the target can consume at the specified block.
+    pub async fn select_unspent_p2id_notes(
+        &self,
+        target: AccountId,
+        at_block: ScopedBlockNum,
+        limit: usize,
+    ) -> Result<Vec<NoteRecord>> {
+        self.transact("unspent P2ID notes", move |conn| {
+            queries::select_unspent_p2id_notes(conn, target, *at_block, limit)
+        })
+        .await
+    }
+
     /// Returns all note commitments from the DB that match the provided ones and were committed at
     /// or before `up_to_block`.
     #[miden_instrument(

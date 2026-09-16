@@ -215,6 +215,7 @@ nohup miden-node sequencer \
   --rpc.listen                                127.0.0.1:57291 \
   --validator.url                             http://127.0.0.1:50101 \
   --ntx-builder.url                           http://127.0.0.1:50301 \
+  --tx-prover.url                             http://127.0.0.1:50051 \
   --batch.builder.wallet-account              "$DATA/accounts/batch_builder_wallet_account.mac" \
   --batch.builder.collection-account          "$DATA/accounts/batch_builder_collection_account.mac" \
   --batch.max-txs                             1024 \

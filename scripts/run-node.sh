@@ -248,6 +248,7 @@ OTEL_RESOURCE_ATTRIBUTES="$(node_resource_attributes sequencer)" \
     --validator.url "http://127.0.0.1:$VALIDATOR_1_PORT" \
     --validator.url "http://127.0.0.1:$VALIDATOR_2_PORT" \
     --ntx-builder.url "http://127.0.0.1:$NTX_BUILDER_PORT" \
+    --tx-prover.url "http://127.0.0.1:$REMOTE_PROVER_PORT" \
     --batch.builder.wallet-account "$ACCOUNTS_DIR/batch_builder_wallet_account.mac" \
     --batch.builder.collection-account "$ACCOUNTS_DIR/batch_builder_collection_account.mac" \
     --internal.listen "0.0.0.0:$SEQUENCER_INTERNAL_PORT" \

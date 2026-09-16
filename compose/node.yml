@@ -15,6 +15,8 @@ services:
         condition: service_started
       validator-3:
         condition: service_started
+      tx-prover:
+        condition: service_started
     command:
       - miden-node
       - sequencer
@@ -24,6 +26,7 @@ services:
       - --validator.url=http://validator-2:50101
       - --validator.url=http://validator-3:50101
       - --ntx-builder.url=http://ntx-builder:50301
+      - --tx-prover.url=${MIDEN_REMOTE_PROVER_URL:-http://tx-prover:50051}
       - --batch.builder.wallet-account=/data/accounts/batch_builder_wallet_account.mac
       - --batch.builder.collection-account=/data/accounts/batch_builder_collection_account.mac
       - --rpc.network-tx-auth-header-value=secret_value

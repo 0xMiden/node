@@ -36,6 +36,10 @@ pub struct BlockProducerOptions {
 
 impl BlockProducerOptions {
     pub fn validate(&self) -> anyhow::Result<()> {
+        if self.builder.wallet_sync_interval.is_zero() {
+            anyhow::bail!("batch.builder.wallet-sync-interval must be greater than zero");
+        }
+
         if self.block.interval.is_zero() {
             anyhow::bail!("block.interval must be greater than zero");
         }
@@ -86,6 +90,7 @@ mod tests {
             builder: BuilderOptions {
                 collection_account: "batch_builder_collection_account.mac".into(),
                 wallet_account: "batch_builder_wallet_account.mac".into(),
+                wallet_sync_interval: crate::fee_collection::DEFAULT_WALLET_SYNC_INTERVAL,
             },
             batch: BatchOptions {
                 interval: DEFAULT_BATCH_INTERVAL,
@@ -116,6 +121,19 @@ mod tests {
             .expect_err("a zero block interval would panic in tokio::time::interval");
 
         assert!(err.to_string().contains("block.interval"));
+    }
+
+    #[test]
+    fn rejects_zero_wallet_sync_interval() {
+        let mut options = options(1, DEFAULT_MAX_TXS_PER_BATCH.get());
+        options.builder.wallet_sync_interval = Duration::ZERO;
+        assert!(
+            options
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("batch.builder.wallet-sync-interval")
+        );
     }
 
     #[test]
@@ -158,6 +176,17 @@ pub struct BuilderOptions {
         help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
     )]
     pub wallet_account: PathBuf,
+
+    /// Interval between checks for batch-building fees to collect into the wallet.
+    #[arg(
+        long = "batch.builder.wallet-sync-interval",
+        env = "MIDEN_NODE_BATCH_BUILDER_WALLET_SYNC_INTERVAL",
+        default_value = duration_to_human_readable_string(crate::fee_collection::DEFAULT_WALLET_SYNC_INTERVAL),
+        value_parser = humantime::parse_duration,
+        value_name = "DURATION",
+        help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
+    )]
+    pub wallet_sync_interval: Duration,
 
     /// Collection account file and signing key. This account combines each batch's fee notes into
     /// one payment to the wallet.

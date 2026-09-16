@@ -224,7 +224,8 @@ impl Service {
     fn generate(&self) -> Module {
         let mut module = Module::new(&self.name);
 
-        module.push_fn(self.service_constructor());
+        module.push_fn(self.service_constructor(false));
+        module.push_fn(self.service_constructor(true));
         module.push_fn(self.service_name());
         module.push_trait(self.service_trait());
         module.push_impl(self.blanket_impl());
@@ -336,12 +337,17 @@ impl Service {
     }
 
     /// Constructs the underlying tonic server for this service behind an opaque tower service type.
-    fn service_constructor(&self) -> Function {
-        let mut ret = Function::new("service");
+    fn service_constructor(&self, shared: bool) -> Function {
+        let (name, argument, constructor) = if shared {
+            ("service_from_arc", "std::sync::Arc<T>", "from_arc")
+        } else {
+            ("service", "T", "new")
+        };
+        let mut ret = Function::new(name);
         ret.vis("pub")
             .attr("allow(deprecated)")
             .generic("T")
-            .arg("service", "T")
+            .arg("service", argument)
             .ret(
                 "impl tower::Service<
     http::Request<tonic::body::Body>,
@@ -358,7 +364,7 @@ impl Service {
             .bound("T", "Send")
             .bound("T", "Sync")
             .bound("T", "'static")
-            .line(format!("{}::new(service)", self.tonic_server_path()));
+            .line(format!("{}::{constructor}(service)", self.tonic_server_path()));
 
         ret
     }

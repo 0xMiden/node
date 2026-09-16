@@ -76,7 +76,7 @@ use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{EMPTY_WORD, Felt, Word};
 use miden_standards::account::auth::{Approver, AuthSingleSig};
 use miden_standards::code_builder::CodeBuilder;
-use miden_standards::note::{NetworkAccountTarget, NoteExecutionHint, P2idNote};
+use miden_standards::note::{NetworkAccountTarget, NoteExecutionHint, P2idNote, TxFeeNote};
 use pretty_assertions::assert_eq;
 use rand::RngExt;
 use tempfile::tempdir;
@@ -871,6 +871,94 @@ fn notes() {
     let note_1 = res[1].clone();
     assert_eq!(note_0.details, note.details);
     assert_eq!(note_1.details, None);
+}
+
+#[test]
+fn unspent_p2id_notes_match_recipient_snapshot_and_limit() {
+    let mut conn = create_db();
+    for block in 1..=3u32 {
+        create_block(&mut conn, block.into());
+    }
+    let target = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
+    let other = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2).unwrap();
+    let sender = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    let asset =
+        FungibleAsset::new(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap(), 100).unwrap();
+    let payment = |serial, target, note_type| -> Note {
+        P2idNote::builder()
+            .sender(sender)
+            .target(target)
+            .serial_number(Word::from([serial, 2u32, 3, 4]))
+            .note_type(note_type)
+            .asset(asset)
+            .build()
+            .unwrap()
+            .into()
+    };
+    let payments = (0..4)
+        .map(|serial| payment(serial, target, NoteType::Public))
+        .collect::<Vec<_>>();
+    let foreign = payment(4, other, NoteType::Public);
+    let fee: Note = TxFeeNote::builder()
+        .sender(sender)
+        .serial_number(Word::from([5u32, 2, 3, 4]))
+        .asset(asset)
+        .build()
+        .unwrap()
+        .into();
+    let mut notes = vec![payment(6, target, NoteType::Private)];
+    for note in [foreign, fee] {
+        // Matching tags do not imply matching recipients or scripts.
+        notes.push(Note::with_attachments(
+            note.assets().clone(),
+            note.metadata()
+                .into_partial_metadata()
+                .with_tag(NoteTag::with_account_target(target)),
+            note.recipient().clone(),
+            note.attachments().clone(),
+        ));
+    }
+    notes.extend(payments.iter().cloned());
+    let records = notes
+        .iter()
+        .enumerate()
+        .map(|(index, note)| {
+            let record = NoteRecord {
+                block_num: if note.id() == payments[3].id() {
+                    3.into()
+                } else {
+                    1.into()
+                },
+                note_index: BlockNoteIndex::new(0, index).unwrap(),
+                note_id: note.id().as_word(),
+                metadata: *note.metadata(),
+                details: (!note.metadata().is_private()).then(|| NoteDetails::from(note)),
+                attachments: note.attachments().clone(),
+                inclusion_path: SparseMerklePath::default(),
+            };
+            let nullifier = record.details.as_ref().map(|_| note.nullifier());
+            (record, nullifier)
+        })
+        .collect::<Vec<_>>();
+    queries::insert_scripts(&mut conn, records.iter().map(|(record, _)| record)).unwrap();
+    queries::insert_notes(&mut conn, &records).unwrap();
+    queries::insert_nullifiers_for_block(&mut conn, &[payments[0].nullifier()], 2.into()).unwrap();
+
+    for (block, limit, expected) in [
+        (0, 10, &payments[0..0]),
+        (1, 10, &payments[..3]),
+        (2, 10, &payments[1..3]),
+        (2, 1, &payments[1..2]),
+        (3, 10, &payments[1..]),
+        (3, 0, &payments[0..0]),
+    ] {
+        let selected =
+            queries::select_unspent_p2id_notes(&mut conn, target, block.into(), limit).unwrap();
+        assert_eq!(
+            selected.iter().map(|note| NoteId::from_raw(note.note_id)).collect::<Vec<_>>(),
+            expected.iter().map(Note::id).collect::<Vec<_>>(),
+        );
+    }
 }
 
 /// Creates notes across 3 blocks, then calls `get_note_sync_multi` once and verifies all 3 blocks'

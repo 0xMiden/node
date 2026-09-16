@@ -30,6 +30,7 @@ use miden_node_utils::formatting::format_endpoint;
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
 use miden_protocol::account::AccountFile;
+use miden_protocol::block::BlockNumber;
 use tokio::net::TcpListener;
 use url::Url;
 
@@ -38,6 +39,7 @@ use super::rpc::SyncOptions;
 use super::runtime::{RuntimeConfig, RuntimeOptions};
 use super::store::StoreOptions;
 use crate::admin::AdminServer;
+use crate::fee_collection::{CollectionRpc, FeeCollector};
 
 // RUNTIME MODES
 // ================================================================================================
@@ -96,6 +98,8 @@ impl SequencerCommand {
             self.external_services.validator_clients_and_monitors()?;
         let (ntx_builder_client, ntx_builder_monitor) =
             self.external_services.ntx_builder_client_and_monitor()?;
+        let (tx_prover, tx_prover_monitor) =
+            self.external_services.tx_prover_client_and_monitor()?;
         let batch_prover_monitor =
             remote_prover_monitor(self.block_producer.batch.prover_url.as_ref())?;
         let block_prover_monitor =
@@ -126,6 +130,14 @@ impl SequencerCommand {
             "batch builder collection account file does not match the account in the chain",
         );
 
+        let genesis = state
+            .view()
+            .get_block_header(Some(BlockNumber::GENESIS), false)
+            .await?
+            .0
+            .context("genesis header is missing")?;
+        let builder_account_id = wallet_account.account.id();
+
         let sequencer = Sequencer {
             state: Arc::clone(&state),
             block_writer,
@@ -141,7 +153,7 @@ impl SequencerCommand {
             max_concurrent_proofs: self.block_producer.block.max_concurrent_proofs,
             mempool_tx_capacity: self.block_producer.mempool.tx_capacity,
             batch_workers: self.block_producer.batch.workers,
-            builder_account_id: wallet_account.account.id(),
+            builder_account_id,
             pass_through_account: collection_account,
         }
         .spawn(shutdown.clone())
@@ -159,10 +171,23 @@ impl SequencerCommand {
             ntx_builder: Some(ntx_builder_client),
             grpc_options: runtime.grpc_options,
             network_tx_auth,
-        };
+        }
+        .into_server()
+        .await?;
+        let collection_rpc = CollectionRpc::new(
+            rpc.api(),
+            &genesis,
+            runtime.grpc_options.request_timeout.min(Duration::from_secs(30)),
+        );
+        let collector =
+            FeeCollector::new(Arc::clone(&state), collection_rpc, tx_prover, wallet_account)?;
         let mut tasks = Tasks::new();
         tasks.spawn("sequencer", sequencer.wait());
         tasks.spawn("RPC server", rpc.serve(shutdown.clone()));
+        tasks.spawn(
+            "batch fee collection",
+            collector.run(self.block_producer.builder.wallet_sync_interval, shutdown.clone()),
+        );
         tasks.spawn("store block writer", join_store_writer(writer_task));
         if let Some(address) = self.admin_listen {
             let shutdown = shutdown.clone();
@@ -179,6 +204,10 @@ impl SequencerCommand {
         tasks.spawn_infallible(
             "ntx-builder connection monitor",
             ntx_builder_monitor.monitor::<NtxBuilderClient>("ntx-builder", shutdown.clone()),
+        );
+        tasks.spawn_infallible(
+            "transaction prover connection monitor",
+            tx_prover_monitor.monitor::<RemoteProverClient>("tx-prover", shutdown.clone()),
         );
         if let Some(batch_prover_monitor) = batch_prover_monitor {
             tasks.spawn_infallible(
@@ -241,6 +270,7 @@ impl SequencerCommand {
                 .collect::<Vec<_>>()
                 .join(","),
             ntx_builder.endpoint = format_endpoint(&self.external_services.ntx_builder_url),
+            tx_prover.endpoint = format_endpoint(&self.external_services.tx_prover_url),
             block.interval =
                 humantime::Duration::from(self.block_producer.block.interval).to_string(),
             batch.interval =
@@ -282,9 +312,37 @@ pub struct SequencerExternalServiceOptions {
     /// The network transaction builder service gRPC URL.
     #[arg(long = "ntx-builder.url", env = "MIDEN_NODE_NTX_BUILDER_URL", value_name = "URL")]
     pub ntx_builder_url: Url,
+
+    /// The remote transaction prover's gRPC URL.
+    #[arg(long = "tx-prover.url", env = "MIDEN_NODE_TX_PROVER_URL", value_name = "URL")]
+    pub tx_prover_url: Url,
+
+    /// Request timeout for calls to the remote transaction prover.
+    #[arg(
+        long = "tx-prover.timeout",
+        env = "MIDEN_NODE_TX_PROVER_TIMEOUT",
+        default_value = "10s",
+        value_parser = humantime::parse_duration,
+        value_name = "DURATION"
+    )]
+    pub tx_prover_timeout: Duration,
 }
 
 impl SequencerExternalServiceOptions {
+    fn tx_prover_client_and_monitor(
+        &self,
+    ) -> anyhow::Result<(RemoteProverClient, Builder<WantsConnection>)> {
+        let builder = Builder::new(self.tx_prover_url.clone())
+            .with_tls()?
+            .with_timeout(self.tx_prover_timeout)
+            .without_metadata_version()
+            .without_metadata_genesis()
+            .without_auth_header()
+            .with_otel_context_injection();
+        let client = builder.clone().connect_lazy::<RemoteProverClient>();
+        Ok((client, builder))
+    }
+
     fn validator_clients_and_monitors(
         &self,
     ) -> anyhow::Result<(ValidatorClients, Vec<Builder<WantsConnection>>)> {

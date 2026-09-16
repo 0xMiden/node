@@ -11,6 +11,7 @@ use commands::Command;
 
 mod admin;
 mod commands;
+mod fee_collection;
 
 const LOG_TARGET: &str = "user::miden-node";
 

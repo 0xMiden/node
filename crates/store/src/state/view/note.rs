@@ -1,16 +1,44 @@
 //! Note reads.
 //!
-//! These are content-addressed lookups and technically not block-scoped, but they live on
-//! [`StateView`] so that every read path flows through the same type.
+//! Unspent-note queries use the pinned snapshot. Content-addressed lookups can return newer notes.
 
 use miden_protocol::Word;
-use miden_protocol::note::{NoteId, NoteScript};
+use miden_protocol::account::AccountId;
+use miden_protocol::note::{Note, NoteId, NoteScript};
 
 use super::StateView;
 use crate::db::NoteRecord;
 use crate::errors::DatabaseError;
 
 impl StateView {
+    /// Returns public P2ID notes that the target can consume at this view's tip.
+    ///
+    /// Returns at most `limit` notes in creation order. Notes spent after this view's tip remain
+    /// eligible.
+    pub async fn get_unspent_p2id_notes(
+        &self,
+        target: AccountId,
+        limit: usize,
+    ) -> Result<Vec<Note>, DatabaseError> {
+        self.db
+            .select_unspent_p2id_notes(target, self.tip(), limit)
+            .await?
+            .into_iter()
+            .map(|record| {
+                let details = record.details.ok_or_else(|| {
+                    DatabaseError::DataCorrupted("public P2ID note has no details".into())
+                })?;
+                let (assets, recipient) = details.into_parts();
+                Ok(Note::with_attachments(
+                    assets,
+                    record.metadata.into_partial_metadata(),
+                    recipient,
+                    record.attachments,
+                ))
+            })
+            .collect()
+    }
+
     /// Queries a list of notes from the database.
     ///
     /// If the provided list of [`NoteId`]s is empty or no note matches, an empty list is
