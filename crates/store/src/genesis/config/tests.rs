@@ -157,7 +157,7 @@ fn generated_batch_builder_is_a_public_wallet() -> TestResult {
     let (_, account_id, secret) = secrets
         .secrets
         .iter()
-        .find(|(name, ..)| name == BATCH_BUILDER_FILE_NAME)
+        .find(|(name, ..)| name == BATCH_BUILDER_WALLET_ACCOUNT_FILE_NAME)
         .expect("the batch builder account file should be generated");
     assert!(secret.is_some());
 
@@ -385,7 +385,7 @@ verification_base_fee = 0
             .unwrap_or_else(|| panic!("{file_name} should be generated"))
     };
     assert!(find(BATCH_BUILDER_COLLECTION_ACCOUNT_FILE_NAME).2.is_some());
-    assert!(find(BATCH_BUILDER_FILE_NAME).2.is_some());
+    assert!(find(BATCH_BUILDER_WALLET_ACCOUNT_FILE_NAME).2.is_some());
 
     Ok(())
 }
