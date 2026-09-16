@@ -2,11 +2,11 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
-use miden_node_tracing::{OpenTelemetry, info};
+use miden_node_tracing::OpenTelemetry;
 use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::shutdown::run_with_shutdown;
 use miden_note_transport::server::{Config, Server};
-use miden_note_transport::{COMPONENT, LOG_TARGET, db};
+use miden_note_transport::{COMPONENT, db};
 
 #[derive(Parser)]
 #[command(version, about = "Miden note transport service")]
@@ -23,8 +23,6 @@ enum Command {
     Migrate(DatabaseArgs),
     /// Serves gRPC and gRPC-Web requests.
     Start(StartArgs),
-    /// Deletes one bounded batch of expired notes.
-    Cleanup(CleanupArgs),
 }
 
 #[derive(Args)]
@@ -57,18 +55,6 @@ struct StartArgs {
     enable_otel: bool,
 }
 
-#[derive(Args)]
-struct CleanupArgs {
-    #[command(flatten)]
-    database: DatabaseArgs,
-    /// Number of days to retain notes.
-    #[arg(long, env = "MIDEN_NOTE_TRANSPORT_RETENTION_DAYS", default_value_t = 30)]
-    retention_days: u32,
-    /// Maximum number of notes to delete.
-    #[arg(long, env = "MIDEN_NOTE_TRANSPORT_CLEANUP_MAX_ROWS", default_value_t = 1000)]
-    max_rows: u32,
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -82,23 +68,23 @@ async fn main() -> anyhow::Result<()> {
         match cli.command {
             Command::Bootstrap(args) => db::bootstrap(&args.database)?,
             Command::Migrate(args) => db::migrate(&args.database)?,
-            Command::Cleanup(args) => {
-                let (writer, _reader) = db::load(&args.database.database)?;
-                let deleted = db::cleanup(&writer, args.retention_days, args.max_rows).await?;
-                info!(target: LOG_TARGET, "Note cleanup complete", note_transport.deleted = deleted);
-            },
             Command::Start(args) => {
                 let (writer, reader) = db::load(&args.database.database)?;
-                let server = Server::new(Config {
-                    max_note_size: args.max_note_size,
-                    max_connections: args.max_connections,
-                    max_storage_bytes: args.max_storage_bytes,
-                    grpc: args.grpc,
-                }, writer, reader)?;
+                let server = Server::new(
+                    Config {
+                        max_note_size: args.max_note_size,
+                        max_connections: args.max_connections,
+                        max_storage_bytes: args.max_storage_bytes,
+                        grpc: args.grpc,
+                    },
+                    writer,
+                    reader,
+                )?;
                 let listener = tokio::net::TcpListener::bind(args.listen).await?;
                 server.serve_on(listener, shutdown).await?;
             },
         }
         Ok(())
-    }).await
+    })
+    .await
 }
