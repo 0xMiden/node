@@ -125,7 +125,7 @@ impl grpc::server::validator_api::BlockSubscription for ValidatorService {
                     }
                     .inspect_err(|err| {
                         error!(
-                            &err,
+                            err,
                             "failed to load block in validator recovery stream",
                             block.number = block
                         );

@@ -122,7 +122,6 @@ impl Service for RpcService {
         target = COMPONENT,
         name = "network_monitor.status.check_rpc",
         level = "info",
-        ret(level = "debug"),
     )]
     async fn check(&mut self) -> ServiceStatus {
         match self.rpc.status(()).await {

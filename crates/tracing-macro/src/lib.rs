@@ -22,12 +22,19 @@ use syn::{
     parse_quote,
 };
 
+mod instrument;
+
 /// Instruments a function using canonical tracing attributes.
 ///
 /// Field values must implement `RecordAttribute`, and their names must be registered for the value
 /// type. A field whose name ends in `.count` accepts any `usize` without registration. Append
 /// `#[nonstandard]` to any other field value to permit an unregistered name while retaining its
 /// canonical encoding.
+///
+/// `err` records a typed error. The subscriber controls how it records the source chain.
+/// Errors must implement `std::error::Error + 'static` or dereference to that trait.
+/// `err(level = "warn")` sets the event level. Error formatters are not supported.
+/// Return value logging with `ret` is not supported.
 #[proc_macro_attribute]
 pub fn miden_instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attr = match rewrite_explicit_fields(TokenStream2::from(attr)) {
@@ -36,6 +43,10 @@ pub fn miden_instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
     let mut function = parse_macro_input!(item as ItemFn);
     let fields = collect_recorded_fields(&function);
+    let attr = match instrument::instrument_result(attr, &mut function) {
+        Ok(attr) => attr,
+        Err(error) => return error.into_compile_error().into(),
+    };
     let args = match merge_inferred_fields(attr, &fields) {
         Ok(args) => args,
         Err(error) => return error.into_compile_error().into(),
@@ -61,9 +72,9 @@ pub fn miden_instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 /// Emits a trace-level event.
 ///
-/// An optional first argument may provide an error implementing `ErrorReport`. Its display value
-/// and source chain are recorded as `exception.message`; callers do not provide that attribute
-/// themselves.
+/// An optional first argument can provide a typed error. The error must implement
+/// `std::error::Error + 'static` or dereference to that trait. The OpenTelemetry layer records
+/// its message as `exception.message` and its sources as `exception.stacktrace`.
 ///
 /// The event name is required and must be a string literal. When an error is provided, optional
 /// `target:` and `parent:` arguments go between the error and name, in that order. Without an
@@ -90,9 +101,9 @@ pub fn trace(input: TokenStream) -> TokenStream {
 
 /// Emits a debug-level event.
 ///
-/// An optional first argument may provide an error implementing `ErrorReport`. Its display value
-/// and source chain are recorded as `exception.message`; callers do not provide that attribute
-/// themselves.
+/// An optional first argument can provide a typed error. The error must implement
+/// `std::error::Error + 'static` or dereference to that trait. The OpenTelemetry layer records
+/// its message as `exception.message` and its sources as `exception.stacktrace`.
 ///
 /// The event name is required and must be a string literal. When an error is provided, optional
 /// `target:` and `parent:` arguments go between the error and name, in that order. Without an
@@ -119,9 +130,9 @@ pub fn debug(input: TokenStream) -> TokenStream {
 
 /// Emits an info-level event.
 ///
-/// An optional first argument may provide an error implementing `ErrorReport`. Its display value
-/// and source chain are recorded as `exception.message`; callers do not provide that attribute
-/// themselves.
+/// An optional first argument can provide a typed error. The error must implement
+/// `std::error::Error + 'static` or dereference to that trait. The OpenTelemetry layer records
+/// its message as `exception.message` and its sources as `exception.stacktrace`.
 ///
 /// The event name is required and must be a string literal. When an error is provided, optional
 /// `target:` and `parent:` arguments go between the error and name, in that order. Without an
@@ -149,9 +160,9 @@ pub fn info(input: TokenStream) -> TokenStream {
 
 /// Emits a warning-level event.
 ///
-/// An optional first argument may provide an error implementing `ErrorReport`. Its display value
-/// and source chain are recorded as `exception.message`; callers do not provide that attribute
-/// themselves.
+/// An optional first argument can provide a typed error. The error must implement
+/// `std::error::Error + 'static` or dereference to that trait. The OpenTelemetry layer records
+/// its message as `exception.message` and its sources as `exception.stacktrace`.
 ///
 /// The event name is required and must be a string literal. When an error is provided, optional
 /// `target:` and `parent:` arguments go between the error and name, in that order. Without an
@@ -176,10 +187,11 @@ pub fn warn(input: TokenStream) -> TokenStream {
     expand_event(input, "warn", false)
 }
 
-/// Emits an error-level event with a complete error report.
+/// Emits an error-level event with a typed error.
 ///
-/// The first argument is required and must implement `ErrorReport`. Its display value and source
-/// chain are recorded as `exception.message`; callers do not provide that attribute themselves.
+/// The first argument is required. It must implement `std::error::Error + 'static` or dereference
+/// to that trait. The OpenTelemetry layer records its message as `exception.message` and its
+/// sources as `exception.stacktrace`.
 ///
 /// The event name follows the error and must be a string literal. Optional `target:` and `parent:`
 /// arguments go between the error and name, in that order. Additional attributes follow the name
@@ -220,7 +232,7 @@ struct ErrorEvent(Event);
 impl Parse for ErrorEvent {
     fn parse(input: ParseStream<'_>) -> Result<Self> {
         let event = parse_error_event(input)?;
-        event.reject_exception_message()?;
+        event.reject_exception_fields()?;
 
         Ok(Self(event))
     }
@@ -235,7 +247,7 @@ impl Parse for OptionalErrorEvent {
         } else {
             parse_error_event(input)?
         };
-        event.reject_exception_message()?;
+        event.reject_exception_fields()?;
 
         Ok(Self(event))
     }
@@ -315,13 +327,16 @@ impl Event {
         Ok(Self { error, target, parent, name, fields })
     }
 
-    fn reject_exception_message(&self) -> Result<()> {
-        if let Some(field) =
-            self.fields.iter().find(|field| field.path.name() == "exception.message")
-        {
+    fn reject_exception_fields(&self) -> Result<()> {
+        if let Some(field) = self.fields.iter().find(|field| {
+            matches!(field.path.name().as_str(), "exception.message" | "exception.stacktrace")
+        }) {
             Err(syn::Error::new_spanned(
                 &field.path,
-                "pass the error as the first argument instead of recording `exception.message`",
+                format!(
+                    "pass the error as the first argument instead of recording `{}`",
+                    field.path.name()
+                ),
             ))
         } else {
             Ok(())
@@ -332,19 +347,18 @@ impl Event {
         let target = self.target.as_ref().map(|target| quote! { target: #target, });
         let parent = self.parent.as_ref().map(|parent| quote! { parent: #parent, });
         let name = &self.name;
+        let error_import = self.error.as_ref().map(|_| {
+            quote! { use ::miden_node_tracing::__private::AsDynError as _; }
+        });
         let error = self.error.as_ref().map(|error| {
             quote! {
-                , exception.message = ::miden_node_tracing::record_attribute(
-                    &({
-                        use ::miden_node_tracing::ErrorReport as _;
-                        (#error).as_report()
-                    })
-                )
+                , error = (#error).as_dyn_error()
             }
         });
         let fields = self.fields.iter().map(RecordField::instrument_tokens);
 
-        quote! {
+        quote! {{
+            #error_import
             ::miden_node_tracing::__private::#level!(
                 #target
                 #parent
@@ -352,7 +366,7 @@ impl Event {
                 #error
                 #(, #fields)*
             )
-        }
+        }}
     }
 }
 
