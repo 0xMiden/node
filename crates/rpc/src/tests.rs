@@ -60,7 +60,7 @@ use miden_protocol::account::{
     AccountUpdateDetails,
     AssetCallbackFlag,
 };
-use miden_protocol::asset::{Asset, FungibleAsset};
+use miden_protocol::asset::{Asset, AssetId, FungibleAsset};
 use miden_protocol::batch::ProposedBatch;
 use miden_protocol::block::{BlockSignatures, ProvenBlock, SignedBlock, ValidatorConfig};
 use miden_protocol::note::NoteType;
@@ -138,6 +138,16 @@ impl TestStore {
 
     fn genesis_commitment(&self) -> Word {
         self.genesis_commitment
+    }
+
+    async fn fee_asset_id(&self) -> AssetId {
+        let view = self.state.view();
+        let header = view.get_block_header(Some(0.into()), false).await.unwrap().0.unwrap();
+        view.get_protocol_config(header.protocol_config_commitment())
+            .await
+            .unwrap()
+            .unwrap()
+            .fee_asset_id()
     }
 
     fn data_directory_path(&self) -> &std::path::Path {
@@ -235,8 +245,14 @@ fn build_test_proven_tx(
     account: &Account,
     patch: &AccountPatch,
     genesis: Word,
+    fee_asset_id: AssetId,
 ) -> ProvenTransaction {
-    build_test_proven_tx_with_fee(account, patch, genesis, true)
+    build_test_proven_tx_with_fee(
+        account,
+        patch,
+        genesis,
+        Some(FungibleAsset::new(fee_asset_id.faucet_id(), 1).unwrap()),
+    )
 }
 
 /// Creates a minimal proven transaction, optionally including its canonical fee output note.
@@ -244,7 +260,7 @@ fn build_test_proven_tx_with_fee(
     account: &Account,
     patch: &AccountPatch,
     genesis: Word,
-    include_fee: bool,
+    fee: Option<FungibleAsset>,
 ) -> ProvenTransaction {
     let account_id = AccountId::dummy(
         [0; 15],
@@ -262,8 +278,7 @@ fn build_test_proven_tx_with_fee(
     )
     .unwrap();
 
-    let output_notes =
-        include_fee.then(|| fee_output_note(account_id)).into_iter().collect::<Vec<_>>();
+    let output_notes = fee.map(|asset| fee_output_note(account_id, asset));
 
     ProvenTransaction::new(
         account_update,
@@ -277,11 +292,11 @@ fn build_test_proven_tx_with_fee(
     .unwrap()
 }
 
-fn fee_output_note(sender: AccountId) -> OutputNote {
+fn fee_output_note(sender: AccountId, asset: FungibleAsset) -> OutputNote {
     let fee_note = TxFeeNote::builder()
         .sender(sender)
         .serial_number(Word::from([1u32, 2, 3, 4]))
-        .asset(FungibleAsset::new(FungibleAsset::mock_issuer(), 1).unwrap())
+        .asset(asset)
         .build()
         .unwrap()
         .into();
@@ -294,6 +309,7 @@ fn build_test_proven_tx_with_id(
     account_id: AccountId,
     account: &Account,
     genesis: Word,
+    fee_asset_id: AssetId,
 ) -> ProvenTransaction {
     let patch = AccountPatch::empty(account_id);
     let account_update = TxAccountUpdate::new(
@@ -308,7 +324,10 @@ fn build_test_proven_tx_with_id(
     ProvenTransaction::new(
         account_update,
         Vec::<miden_protocol::transaction::InputNoteCommitment>::new(),
-        [fee_output_note(account_id)],
+        [fee_output_note(
+            account_id,
+            FungibleAsset::new(fee_asset_id.faucet_id(), 1).unwrap(),
+        )],
         0.into(),
         genesis,
         u32::MAX.into(),
@@ -569,7 +588,7 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
 
     // Build a valid proven transaction
     let (account, account_patch) = build_test_account([0; 32]);
-    let tx = build_test_proven_tx(&account, &account_patch, genesis);
+    let tx = build_test_proven_tx(&account, &account_patch, genesis, store.fee_asset_id().await);
 
     // Create an incorrect patch commitment from a different account
     let (other_account, _) = build_test_account([1; 32]);
@@ -599,12 +618,22 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
     );
 }
 
+#[rstest::rstest]
+#[case::missing(None, 4, "does not contain a canonical TX_FEE output note")]
+#[case::foreign(Some(1), 6, "must use only the native asset")]
+#[case::zero_foreign(Some(0), 6, "must use only the native asset")]
 #[tokio::test]
-async fn rpc_server_rejects_proven_transactions_without_fees() {
+async fn rpc_server_rejects_proven_transactions_without_native_fees(
+    #[case] foreign_fee_amount: Option<u64>,
+    #[case] expected_detail: u8,
+    #[case] expected_error: &str,
+) {
     let store = TestStore::start().await;
     let genesis = store.genesis_commitment();
     let (account, account_patch) = build_test_account([0; 32]);
-    let tx = build_test_proven_tx_with_fee(&account, &account_patch, genesis, false);
+    let fee = foreign_fee_amount
+        .map(|amount| FungibleAsset::new(FungibleAsset::mock_issuer(), amount).unwrap());
+    let tx = build_test_proven_tx_with_fee(&account, &account_patch, genesis, fee);
     let request = proto::submission::ProvenTransactionSubmission {
         transaction: Some((&tx).into()),
         sealed_transaction_inputs: None,
@@ -620,19 +649,29 @@ async fn rpc_server_rejects_proven_transactions_without_fees() {
 
     let status = service.submit_proven_tx(Request::new(request)).await.unwrap_err();
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
-    assert_eq!(status.details(), &[4]);
+    assert_eq!(status.details(), &[expected_detail]);
     assert!(
-        status.message().contains("does not contain a canonical TX_FEE output note"),
-        "expected the missing-fee error, got: {status}"
+        status.message().contains(expected_error),
+        "expected {expected_error}, got: {status}"
     );
 }
 
+#[rstest::rstest]
+#[case::missing(None, 4, "does not contain a canonical TX_FEE output note")]
+#[case::foreign(Some(1), 6, "must use only the native asset")]
+#[case::zero_foreign(Some(0), 6, "must use only the native asset")]
 #[tokio::test]
-async fn sequencer_authenticated_rpc_rejects_transactions_without_fees() {
+async fn sequencer_authenticated_rpc_rejects_transactions_without_native_fees(
+    #[case] foreign_fee_amount: Option<u64>,
+    #[case] expected_detail: u8,
+    #[case] expected_error: &str,
+) {
     let store = TestStore::start().await;
     let genesis = store.genesis_commitment();
     let (account, account_patch) = build_test_account([0; 32]);
-    let tx = build_test_proven_tx_with_fee(&account, &account_patch, genesis, false);
+    let fee = foreign_fee_amount
+        .map(|amount| FungibleAsset::new(FungibleAsset::mock_issuer(), amount).unwrap());
+    let tx = build_test_proven_tx_with_fee(&account, &account_patch, genesis, fee);
     let inputs = TransactionInputs {
         account_id: tx.account_id(),
         account_commitment: Some(tx.account_update().initial_state_commitment()),
@@ -659,8 +698,12 @@ async fn sequencer_authenticated_rpc_rejects_transactions_without_fees() {
         .unwrap_err();
 
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
-    assert_eq!(status.details(), &[4]);
+    assert_eq!(status.details(), &[expected_detail]);
     assert_eq!(block_producer.status().await.mempool_stats.uncommitted_transactions, 0);
+    assert!(
+        status.message().contains(expected_error),
+        "expected {expected_error}, got: {status}"
+    );
 }
 
 #[tokio::test]
@@ -668,7 +711,8 @@ async fn rpc_server_rejects_invalid_deferred_transaction_proofs() {
     let store = TestStore::start().await;
     let genesis = store.genesis_commitment();
     let (account, account_patch) = build_test_account([0; 32]);
-    let transaction = build_test_proven_tx(&account, &account_patch, genesis);
+    let transaction =
+        build_test_proven_tx(&account, &account_patch, genesis, store.fee_asset_id().await);
     let transaction = replace_transaction_proof(
         &transaction,
         miden_protocol::testing::dummy_deferred_execution_proof(),
@@ -779,7 +823,7 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_reference_block() {
     // Build a valid proven transaction but with the incorrect hash (empty).
     let invalid = Word::empty();
     let (account, account_patch) = build_test_account([0; 32]);
-    let tx = build_test_proven_tx(&account, &account_patch, invalid);
+    let tx = build_test_proven_tx(&account, &account_patch, invalid, store.fee_asset_id().await);
 
     let request = proto::submission::ProvenTransactionSubmission {
         transaction: Some((&tx).into()),
@@ -819,7 +863,12 @@ async fn rpc_rejects_post_deployment_network_account_tx() {
 
     // Build a non-deployment tx for that account.
     let (account, _) = build_test_account([0; 32]);
-    let tx = build_test_proven_tx_with_id(network_account_id, &account, genesis);
+    let tx = build_test_proven_tx_with_id(
+        network_account_id,
+        &account,
+        genesis,
+        store.fee_asset_id().await,
+    );
     let request = proto::submission::ProvenTransactionSubmission {
         transaction: Some((&tx).into()),
         sealed_transaction_inputs: None,
@@ -1542,7 +1591,7 @@ async fn rpc_server_rejects_tx_submissions_without_genesis() {
             .connect_lazy::<miden_node_proto::clients::RpcClient>();
 
     let (account, account_patch) = build_test_account([0; 32]);
-    let tx = build_test_proven_tx(&account, &account_patch, genesis);
+    let tx = build_test_proven_tx(&account, &account_patch, genesis, store.fee_asset_id().await);
 
     let request = proto::submission::ProvenTransactionSubmission {
         transaction: Some((&tx).into()),

@@ -4,7 +4,7 @@ use miden_node_proto::generated::server::sequencer_api;
 use miden_node_tracing::ErrorReport;
 use tonic::Status;
 
-use super::{SequencerInternalService, get_block_header_error_to_status};
+use super::{SequencerInternalService, get_block_header_error_to_status, load_protocol_config};
 
 #[tonic::async_trait]
 impl sequencer_api::SubmitAuthenticatedTx for SequencerInternalService {
@@ -48,7 +48,9 @@ impl sequencer_api::SubmitAuthenticatedTx for SequencerInternalService {
             )));
         }
 
-        ensure_transaction_has_fee(tx.raw_proven_transaction()).map_err(Status::from)?;
+        let protocol_config = load_protocol_config(&self.state.view(), &reference_header).await?;
+        ensure_transaction_has_fee(tx.raw_proven_transaction(), protocol_config.fee_asset_id())
+            .map_err(Status::from)?;
 
         self.block_producer
             .submit_authenticated_tx(tx)
