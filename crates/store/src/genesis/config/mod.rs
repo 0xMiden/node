@@ -486,14 +486,14 @@ fn build_faucet_operator() -> Result<(Account, RpoSecretKey), GenesisConfigError
     Ok((operator, secret_key))
 }
 
-/// Builds the private wallet that receives the batch builder's fee notes.
+/// Builds the public wallet that receives the batch builder's fee notes.
 fn build_batch_builder() -> Result<(Account, RpoSecretKey), GenesisConfigError> {
     let mut rng = ChaCha20Rng::from_seed(rand::random());
 
     let secret_key = RpoSecretKey::with_rng(&mut rng);
     let auth = Approver::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
     let init_seed: [u8; 32] = rng.random();
-    let mut account = create_basic_wallet(init_seed, auth, AccountType::Private)?;
+    let mut account = create_basic_wallet(init_seed, auth, AccountType::Public)?;
     account.set_nonce(ONE)?;
 
     Ok((account, secret_key))

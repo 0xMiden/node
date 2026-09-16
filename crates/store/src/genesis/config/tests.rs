@@ -149,7 +149,7 @@ fn pass_through_account_is_part_of_genesis() -> TestResult {
 }
 
 #[test]
-fn generated_batch_builder_is_a_private_wallet() -> TestResult {
+fn generated_batch_builder_is_a_public_wallet() -> TestResult {
     use miden_standards::account::wallets::BasicWallet;
 
     let (state, secrets) = GenesisConfig::default().into_state(dev_validator_config())?;
@@ -166,7 +166,7 @@ fn generated_batch_builder_is_a_private_wallet() -> TestResult {
         .iter()
         .find(|account| account.id() == *account_id)
         .expect("the batch builder account should be part of the genesis state");
-    assert!(account.id().is_private());
+    assert!(account.id().is_public());
     assert_eq!(account.nonce(), ONE);
     assert!(account.vault().is_empty());
     assert!(account.code().has_procedure(BasicWallet::receive_asset_root().as_word()));
