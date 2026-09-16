@@ -122,6 +122,10 @@ impl SharedChainState {
     }
 
     /// Verify the block against the current tip before building the next snapshot.
+    ///
+    /// The subscription starts after the persisted tip and resumes after its last received block.
+    /// Each block must be the direct child of the current tip. Reject repeated or older blocks so
+    /// the caller cannot apply their effects again.
     pub(crate) fn next_chain_tip(
         &self,
         block: &SignedBlock,

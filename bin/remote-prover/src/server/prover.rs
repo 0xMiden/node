@@ -69,7 +69,7 @@ fn prove_transaction(
     input: Decoded<transaction::TransactionInputs>,
 ) -> Result<ProofVariant, tonic::Status> {
     // SAFETY: Construction checks input consistency and note inclusion against supplied headers.
-    // This stateless prover cannot authenticate the chain. The submitting node must do that.
+    // This stateless prover cannot authenticate the chain. The submitting client must do that.
     let input: TransactionInputs = input.build_unchecked().map_err(|error| {
         tonic::Status::invalid_argument(
             error.as_report_context("failed to build transaction inputs"),
