@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,6 +16,7 @@ use miden_node_proto::clients::{
 };
 use miden_node_rpc::{
     AccountAdmission,
+    FundingClient,
     PreAuthSubmission,
     Rpc,
     RpcMode,
@@ -90,12 +92,8 @@ impl SequencerCommand {
         let block_prover_monitor =
             remote_prover_monitor(self.block_producer.block_prover.url.as_ref())?;
         let allowlist = Arc::new(self.load_allowlist()?);
-        let account_admission = if self.disable_account_allowlist {
-            warn!(target: crate::LOG_TARGET, "Account allowlist enforcement is disabled");
-            AccountAdmission::disabled(Arc::clone(&allowlist))
-        } else {
-            AccountAdmission::enabled(Arc::clone(&allowlist))
-        };
+        let funding = self.external_services.funding_client()?;
+        let account_admission = self.account_admission(Arc::clone(&allowlist), funding.clone());
         let (state, block_writer, proof_writer, writer_task) =
             load_state(&runtime, shutdown.clone()).await?;
         let _disk_monitor = state.spawn_disk_monitor(shutdown.clone());
@@ -141,7 +139,7 @@ impl SequencerCommand {
         if let Some(address) = self.admin_listen {
             let shutdown = shutdown.clone();
             tasks.spawn("sequencer admin API", async move {
-                AdminServer::bind(address, allowlist).await?.serve(shutdown).await
+                AdminServer::bind(address, allowlist, funding).await?.serve(shutdown).await
             });
         }
         for (index, validator_monitor) in validator_monitors.into_iter().enumerate() {
@@ -173,6 +171,20 @@ impl SequencerCommand {
         }
 
         tasks.join_next_or_cancelled(shutdown).await
+    }
+
+    fn account_admission(
+        &self,
+        allowlist: Arc<AccountAllowlist>,
+        funding: Option<FundingClient>,
+    ) -> AccountAdmission {
+        if self.disable_account_allowlist {
+            warn!(target: crate::LOG_TARGET, "Account allowlist enforcement is disabled");
+            AccountAdmission::disabled(allowlist)
+        } else {
+            AccountAdmission::enabled(allowlist)
+        }
+        .with_funding_client(funding)
     }
 
     fn load_allowlist(&self) -> anyhow::Result<AccountAllowlist> {
@@ -249,9 +261,35 @@ pub struct SequencerExternalServiceOptions {
     /// The network transaction builder service gRPC URL.
     #[arg(long = "ntx-builder.url", env = "MIDEN_NODE_NTX_BUILDER_URL", value_name = "URL")]
     pub ntx_builder_url: Url,
+
+    /// Base URL of the funding service for new account registrations.
+    #[arg(
+        long = "funding-service.url",
+        env = "MIDEN_NODE_FUNDING_SERVICE_URL",
+        value_name = "URL",
+        requires = "funding_service_amount"
+    )]
+    pub funding_service_url: Option<Url>,
+
+    /// Amount of the native asset to request per new registration, in base units.
+    #[arg(
+        long = "funding-service.amount",
+        env = "MIDEN_NODE_FUNDING_SERVICE_AMOUNT",
+        value_name = "AMOUNT",
+        requires = "funding_service_url"
+    )]
+    pub funding_service_amount: Option<NonZeroU64>,
 }
 
 impl SequencerExternalServiceOptions {
+    fn funding_client(&self) -> anyhow::Result<Option<FundingClient>> {
+        match (&self.funding_service_url, self.funding_service_amount) {
+            (Some(url), Some(amount)) => FundingClient::new(url.clone(), amount).map(Some),
+            (None, None) => Ok(None),
+            _ => anyhow::bail!("funding service URL and amount must be configured together"),
+        }
+    }
+
     fn validator_clients_and_monitors(
         &self,
     ) -> anyhow::Result<(ValidatorClients, Vec<Builder<WantsConnection>>)> {
@@ -500,4 +538,48 @@ fn remote_prover_monitor(
                 .with_otel_context_injection())
         })
         .transpose()
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    #[test]
+    fn funding_requires_a_url_and_positive_amount_together() {
+        let base = [
+            "miden-node",
+            "sequencer",
+            "--data-directory",
+            "node-data",
+            "--rpc.listen",
+            "127.0.0.1:57291",
+            "--validator.url",
+            "http://localhost:50101",
+            "--ntx-builder.url",
+            "http://localhost:50301",
+        ];
+        for options in [
+            vec![],
+            vec![
+                "--funding-service.url",
+                "http://localhost:50401",
+                "--funding-service.amount",
+                "42",
+            ],
+        ] {
+            crate::Cli::try_parse_from(base.into_iter().chain(options)).unwrap();
+        }
+        for options in [
+            vec!["--funding-service.url", "http://localhost:50401"],
+            vec!["--funding-service.amount", "42"],
+            vec![
+                "--funding-service.url",
+                "http://localhost:50401",
+                "--funding-service.amount",
+                "0",
+            ],
+        ] {
+            assert!(crate::Cli::try_parse_from(base.into_iter().chain(options)).is_err());
+        }
+    }
 }

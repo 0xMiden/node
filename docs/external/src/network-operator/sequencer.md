@@ -110,6 +110,32 @@ and retry behavior.
 Back up the registry separately. It is not replicated with blocks. Restore it before starting a replacement sequencer to
 preserve invitations and registrations. Without a restored registry, the replacement starts with an empty allowlist.
 
+## Registration Funding
+
+Configure both options to request funding for each new account registration:
+
+```bash
+--funding-service.url http://funding-service:50401 \
+--funding-service.amount 1000000
+```
+
+The amount is a positive number of native-asset base units. The corresponding environment variables are
+`MIDEN_NODE_FUNDING_SERVICE_URL` and `MIDEN_NODE_FUNDING_SERVICE_AMOUNT`. Funding is disabled when both options are
+absent. Keep the funding service on the operator network. It does not authenticate requests.
+
+The sequencer sends `POST /request-funds` to the service for each new registration through `RegisterAccount` or the
+administration API. This includes an admin binding an existing invitation to an account. The sequencer commits the
+registration before it requests funding, then waits for the funding response. Repeated registration requests do not
+request more funds. Existing registrations are not funded at startup. Disabling allowlist enforcement does not disable
+funding for accounts that register.
+
+The service creates a public P2ID note. The account owner can retrieve it through the account's note tag after the note
+commits. The registration response does not include the note.
+
+Funding failures return gRPC `UNAVAILABLE` or HTTP `503`. They do not undo registration. Requests are not retried or
+persisted. Repeating registration after a funding failure does not make another funding request. Operators can use the
+funding service directly to fund an account after a failed or interrupted request.
+
 ## Failover
 
 Full nodes replicate the committed sequencer state from their upstream block source. Because of this, a full node can be

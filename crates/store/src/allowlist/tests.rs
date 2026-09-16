@@ -15,6 +15,7 @@ use super::{
     AllowlistError,
     InvitationCode,
     InvitationEntry,
+    InvitationImportOutcome,
     InvitationStatus,
     RegistrationOutcome,
 };
@@ -184,8 +185,20 @@ async fn registration_rules() {
 #[tokio::test]
 async fn invitation_import_preserves_registrations_on_conflicts_and_retries() {
     let (_dir, registry) = setup();
-    assert!(registry.import_invitation(entry(1, None)).await.unwrap());
-    assert!(registry.import_invitation(entry(2, Some(account(0)))).await.unwrap());
+    assert_eq!(
+        registry.import_invitation(entry(1, None)).await.unwrap(),
+        InvitationImportOutcome {
+            invitation_added: true,
+            registered_account: None
+        }
+    );
+    assert_eq!(
+        registry.import_invitation(entry(2, Some(account(0)))).await.unwrap(),
+        InvitationImportOutcome {
+            invitation_added: true,
+            registered_account: Some(account(0))
+        }
+    );
 
     assert_matches!(
         registry.import_invitation(entry(2, Some(account(1)))).await,
@@ -213,10 +226,29 @@ async fn invitation_import_preserves_registrations_on_conflicts_and_retries() {
     assert!(!registry.contains_account(account(1)).await.unwrap());
     assert!(!registry.contains_account(account(2)).await.unwrap());
 
-    assert!(!registry.import_invitation(entry(1, Some(account(2)))).await.unwrap());
-    assert!(registry.import_invitation(entry(3, Some(account(1)))).await.unwrap());
-    assert!(!registry.import_invitation(entry(1, Some(account(2)))).await.unwrap());
-    assert!(!registry.import_invitation(entry(3, Some(account(1)))).await.unwrap());
+    assert_eq!(
+        registry.import_invitation(entry(1, Some(account(2)))).await.unwrap(),
+        InvitationImportOutcome {
+            invitation_added: false,
+            registered_account: Some(account(2))
+        }
+    );
+    assert_eq!(
+        registry.import_invitation(entry(3, Some(account(1)))).await.unwrap(),
+        InvitationImportOutcome {
+            invitation_added: true,
+            registered_account: Some(account(1))
+        }
+    );
+    for entry in [entry(1, Some(account(2))), entry(3, Some(account(1)))] {
+        assert_eq!(
+            registry.import_invitation(entry).await.unwrap(),
+            InvitationImportOutcome {
+                invitation_added: false,
+                registered_account: None
+            }
+        );
+    }
     assert_eq!(
         registry.invitation_status(invitation(1)).await.unwrap(),
         InvitationStatus::Registered(account(2))
