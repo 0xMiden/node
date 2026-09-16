@@ -5,7 +5,7 @@ use anyhow::Context;
 use miden_node_proto::clients::RemoteProverClient;
 use miden_node_store::State;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{info, warn};
+use miden_node_tracing::{info, miden_instrument, miden_span_record};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::Word;
 use miden_protocol::account::auth::AuthSecretKey;
@@ -13,6 +13,8 @@ use miden_protocol::account::{Account, AccountFile, StorageSlotType};
 use miden_protocol::block::BlockNumber;
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::account::wallets::BasicWallet;
+
+use crate::LOG_TARGET;
 
 mod rpc;
 mod store;
@@ -70,10 +72,8 @@ impl FeeCollector {
                 _ = shutdown.cancelled() => return Ok(()),
                 result = self.collect_fees() => result,
             };
-            let Ok(Some(expiration_block)) = result.inspect_err(|error| {
-                warn!(error, target: crate::LOG_TARGET,
-                    "Batch fee collection failed; retrying at the next interval");
-            }) else {
+            let Some(expiration_block) = result.unwrap_or_else(|error| error.expiration_block)
+            else {
                 continue;
             };
 
@@ -91,17 +91,24 @@ impl FeeCollector {
     /// Collects unspent fee payments and returns the transaction's expiration block.
     /// Returns `None` if no payments are available.
     ///
-    /// Logs submission errors but still returns the expiration block. The node can accept a
+    /// Submission errors include the expiration block. The node can accept a
     /// transaction before submission reports an error. The caller must wait until the chain tip
-    /// reaches the expiration block before it starts another collection.
-    /// Returns errors from state loading, execution, and proving.
-    async fn collect_fees(&self) -> anyhow::Result<Option<BlockNumber>> {
+    /// reaches the expiration block after either submission outcome.
+    /// Errors from state loading, execution, and proving do not include an expiration block.
+    #[miden_instrument(
+        target = LOG_TARGET,
+        name = "fee_collection.collect_fees",
+        fields(account.id = self.account_template.id()),
+        err,
+    )]
+    async fn collect_fees(&self) -> Result<Option<BlockNumber>, CollectionError> {
         let (context, notes) = self.collection_inputs().await?;
+        miden_span_record!(
+            reference_block.number = context.block_header.block_num(),
+            note.count = notes.len()
+        );
         if notes.is_empty() {
-            info!(target: crate::LOG_TARGET,
-                "Skipping batch fee collection: no unspent payments",
-                account.id = context.account.id().to_string(),
-                block.number = context.block_header.block_num());
+            info!(target: LOG_TARGET, "Skipping batch fee collection: no unspent payments");
             return Ok(None);
         }
 
@@ -116,22 +123,30 @@ impl FeeCollector {
         let transaction = transaction::prove(&self.prover, &inputs).await?;
 
         let expiration_block = transaction.expiration_block_num();
-        let _ = self
-            .rpc
-            .submit(&transaction, &inputs)
-            .await
-            .inspect(|()| {
-                info!(target: crate::LOG_TARGET, "Submitted batch fee collection transaction",
-                    transaction.id = transaction.id().to_string(),
-                    note.count = usize::from(transaction.input_notes().num_notes()));
-            })
-            .inspect_err(|error| {
-                warn!(error, target: crate::LOG_TARGET,
-                    "Batch fee collection submission failed; waiting for transaction expiration",
-                    transaction.id = transaction.id().to_string(),
-                    transaction.expires_at = expiration_block);
-            });
+        miden_span_record!(
+            transaction.id = transaction.id(),
+            transaction.expires_at = expiration_block
+        );
+        self.rpc.submit(&transaction, &inputs).await.map_err(|source| CollectionError {
+            source,
+            expiration_block: Some(expiration_block),
+        })?;
+        info!(target: LOG_TARGET, "Submitted batch fee collection transaction");
         Ok(Some(expiration_block))
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("batch fee collection failed")]
+struct CollectionError {
+    #[source]
+    source: anyhow::Error,
+    expiration_block: Option<BlockNumber>,
+}
+
+impl From<anyhow::Error> for CollectionError {
+    fn from(source: anyhow::Error) -> Self {
+        Self { source, expiration_block: None }
     }
 }
 

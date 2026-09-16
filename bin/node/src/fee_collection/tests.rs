@@ -344,7 +344,9 @@ async fn collection_attempts_refresh_the_wallet_and_unspent_notes_from_store() -
             let timeout_collector =
                 FeeCollector::new(Arc::clone(&collector.state), client, prover, account.clone())?;
             let expiration_block = Some(block.header().block_num() + u32::from(EXPIRATION_BLOCKS));
-            assert_eq!(timeout_collector.collect_fees().await?, expiration_block);
+            let error = timeout_collector.collect_fees().await.unwrap_err();
+            assert_eq!(error.expiration_block, expiration_block);
+            assert!(error.source.to_string().contains("RPC request timed out"));
             drop(timeout_collector);
             drop(rpc);
 
@@ -364,7 +366,8 @@ async fn collection_attempts_refresh_the_wallet_and_unspent_notes_from_store() -
                     notes.iter().map(Note::id).collect::<BTreeSet<_>>(),
                     inputs[1..].iter().map(Note::id).collect(),
                 );
-                assert_eq!(collector.collect_fees().await?, expiration_block);
+                let error = collector.collect_fees().await.unwrap_err();
+                assert_eq!(error.expiration_block, expiration_block);
             }
             anyhow::Ok(())
         }

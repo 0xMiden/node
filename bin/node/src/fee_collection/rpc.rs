@@ -11,12 +11,15 @@ use miden_node_proto::domain::encryption::{
 use miden_node_proto::generated as proto;
 use miden_node_proto::generated::rpc::api_server::Api;
 use miden_node_rpc::RpcService;
+use miden_node_tracing::miden_instrument;
 use miden_protocol::Word;
 use miden_protocol::block::BlockHeader;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
 use miden_protocol::utils::serde::Serializable;
 use tonic::{Request, Response};
+
+use crate::LOG_TARGET;
 
 pub(crate) struct CollectionRpc {
     api: Arc<RpcService>,
@@ -39,6 +42,12 @@ impl CollectionRpc {
         }
     }
 
+    #[miden_instrument(
+        target = LOG_TARGET,
+        name = "fee_collection.submit",
+        fields(transaction.id = tx.id()),
+        err,
+    )]
     pub(super) async fn submit(
         &self,
         tx: &ProvenTransaction,
