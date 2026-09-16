@@ -57,6 +57,24 @@ pub struct MonitorConfig {
     )]
     pub faucet_url: Option<Url>,
 
+    /// The URL of the funding service (optional).
+    #[arg(
+        long = "funding-service-url",
+        env = "MIDEN_MONITOR_FUNDING_SERVICE_URL",
+        help = "The URL of the funding service (optional)"
+    )]
+    pub funding_service_url: Option<Url>,
+
+    /// Timeout for a funding request to the funding service.
+    #[arg(
+        long = "funding-request-timeout",
+        env = "MIDEN_MONITOR_FUNDING_REQUEST_TIMEOUT",
+        default_value = "2m",
+        value_parser = humantime::parse_duration,
+        help = "Timeout for a funding request to the funding service"
+    )]
+    pub funding_request_timeout: Duration,
+
     /// The interval at which to test the remote provers services.
     #[arg(
         long = "remote-prover-test-interval",
