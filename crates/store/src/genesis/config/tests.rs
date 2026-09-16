@@ -127,7 +127,7 @@ fn pass_through_account_is_part_of_genesis() -> TestResult {
         .as_account_files(&state)
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
-        .find(|file| file.name == PASS_THROUGH_ACCOUNT_FILE_NAME)
+        .find(|file| file.name == BATCH_BUILDER_COLLECTION_ACCOUNT_FILE_NAME)
         .expect("the pass-through account file should be generated");
     let account = &exported.account_file.account;
     assert!(state.accounts.contains(account));
@@ -352,7 +352,7 @@ verification_base_fee = 0
     // A file-loaded faucet creates no additional secret.
     assert_eq!(secrets.secrets.len(), 1);
     let (name, _, secret) = &secrets.secrets[0];
-    assert_eq!(name, PASS_THROUGH_ACCOUNT_FILE_NAME);
+    assert_eq!(name, BATCH_BUILDER_COLLECTION_ACCOUNT_FILE_NAME);
     assert!(secret.is_some());
 
     Ok(())
