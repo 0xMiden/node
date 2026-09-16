@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use http::header::{ACCEPT, CONTENT_TYPE};
 use http::{Extensions, HeaderMap, HeaderValue};
-use miden_node_block_producer::store::TransactionInputs;
+use miden_node_block_producer::store::{TransactionInputs, get_tx_inputs};
 use miden_node_block_producer::{
     AuthenticatedTransaction,
     BlockProducerApi,
@@ -90,11 +90,7 @@ use tonic::metadata::MetadataMap;
 use url::Url;
 
 use crate::server::RpcBackend;
-use crate::server::api::{
-    RpcService,
-    SequencerInternalService,
-    ensure_transactions_have_fee_notes,
-};
+use crate::server::api::{RpcService, SequencerInternalService};
 use crate::{AccountAdmission, PreAuthSubmission, Rpc, RpcMode, ValidatorClients};
 
 mod allowlist;
@@ -339,19 +335,23 @@ fn replace_transaction_proof(
 
 struct ValidBatchFixture {
     request: proto::submission::TransactionBatch,
+    proposed_batch: ProposedBatch,
     genesis_block: ProvenBlock,
     protocol_config: ProtocolConfig,
 }
 
-async fn build_valid_batch_fixture() -> ValidBatchFixture {
+async fn build_valid_batch_fixture(include_fee: bool) -> ValidBatchFixture {
     let mut mock_chain_builder = MockChainBuilder::new()
         .fee_faucet_id(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap())
         .verification_base_fee(1);
-    let account = mock_chain_builder
-        .add_existing_wallet(Auth::BasicAuth {
+    let auth = if include_fee {
+        Auth::BasicAuth {
             auth_scheme: AuthScheme::Falcon512Poseidon2,
-        })
-        .unwrap();
+        }
+    } else {
+        Auth::IncrNonce
+    };
+    let account = mock_chain_builder.add_existing_wallet(auth).unwrap();
     let asset: Asset =
         FungibleAsset::new(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap(), 1_000_000)
             .unwrap()
@@ -388,6 +388,10 @@ async fn build_valid_batch_fixture() -> ValidBatchFixture {
             .unwrap()
             .unwrap();
 
+    if !include_fee {
+        assert!(proven_tx.output_notes().is_empty());
+    }
+
     let proposed_batch = ProposedBatch::new(
         vec![Arc::new(proven_tx)],
         mock_chain.latest_block_header(),
@@ -413,7 +417,12 @@ async fn build_valid_batch_fixture() -> ValidBatchFixture {
         sealed_transaction_inputs: vec![proto::submission::SealedTransactionInputs::default()],
     };
 
-    ValidBatchFixture { request, genesis_block, protocol_config }
+    ValidBatchFixture {
+        request,
+        proposed_batch,
+        genesis_block,
+        protocol_config,
+    }
 }
 
 fn assert_beyond_tip(status: &tonic::Status, endpoint: &str) {
@@ -616,19 +625,6 @@ async fn rpc_server_rejects_proven_transactions_without_fees() {
         status.message().contains("does not contain a canonical TX_FEE output note"),
         "expected the missing-fee error, got: {status}"
     );
-}
-
-#[test]
-fn rpc_fee_gate_rejects_a_feeless_transaction_in_a_batch() {
-    let (account, patch) = build_test_account([0; 32]);
-    let paid = build_test_proven_tx_with_fee(&account, &patch, Word::empty(), true);
-    let feeless = build_test_proven_tx_with_fee(&account, &patch, Word::empty(), false);
-
-    let status = ensure_transactions_have_fee_notes([&paid, &feeless]).unwrap_err();
-
-    assert_eq!(status.code(), tonic::Code::InvalidArgument);
-    assert_eq!(status.details(), &[4]);
-    assert!(status.message().contains(&feeless.id().to_string()));
 }
 
 #[tokio::test]
@@ -1419,9 +1415,12 @@ async fn full_node_preserves_original_accept_metadata_when_forwarding() {
     );
 }
 
+#[rstest::rstest]
+#[case::with_fee_notes(true)]
+#[case::without_fee_notes(false)]
 #[tokio::test(flavor = "multi_thread")]
-async fn full_node_forwards_complete_transaction_batch_to_source_rpc() {
-    let fixture = build_valid_batch_fixture().await;
+async fn full_node_forwards_complete_transaction_batch_to_source_rpc(#[case] include_fee: bool) {
+    let fixture = build_valid_batch_fixture(include_fee).await;
     let (validator, _validator_call_count, _last_accept, _validator_server) =
         start_validator(test_encryption_key(), None).await;
     let (source_rpc, _source_store, _source_server) = start_source_rpc_with_genesis(
@@ -1444,6 +1443,42 @@ async fn full_node_forwards_complete_transaction_batch_to_source_rpc() {
         .submit_proven_tx_batch(Request::new(fixture.request))
         .await
         .expect("full-node RPC should forward both structured batch fields to its source")
+        .into_inner();
+
+    assert_eq!(response.block_num, 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sequencer_authenticated_rpc_accepts_user_batch_without_fee_notes() {
+    let fixture = build_valid_batch_fixture(false).await;
+    let store =
+        TestStore::start_from_mock_genesis(&fixture.genesis_block, &fixture.protocol_config).await;
+    let guard = TestServerGuard(CancellationToken::new());
+    let block_producer = BlockProducerApi::new(
+        Arc::clone(&store.state),
+        store.state.committed_tip(),
+        BlockProducerApiConfig::default(),
+        guard.0.clone(),
+    );
+    let service = SequencerInternalService {
+        state: Arc::clone(&store.state),
+        block_producer,
+        account_admission: AccountAdmission::enabled(store.bootstrap_allowlist()),
+    };
+    let mut auth_inputs = Vec::new();
+    for tx in fixture.proposed_batch.transactions() {
+        auth_inputs.push(get_tx_inputs(&store.state, tx).await.unwrap().into());
+    }
+    let request = proto::sequencer::AuthenticatedTransactionBatch {
+        proposed_batch: fixture.request.proposed_batch,
+        batch_proof: fixture.request.batch,
+        auth_inputs,
+    };
+
+    let response = service
+        .submit_authenticated_tx_batch(Request::new(request))
+        .await
+        .expect("the sequencer should accept a user batch without fee output notes")
         .into_inner();
 
     assert_eq!(response.block_num, 0);
