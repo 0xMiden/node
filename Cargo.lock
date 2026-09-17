@@ -4121,6 +4121,8 @@ dependencies = [
  "miden-node-tracing",
  "miden-node-utils",
  "miden-protocol",
+ "miden-standards",
+ "rand 0.10.2",
  "serde",
  "serde_json",
  "tempfile",

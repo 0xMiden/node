@@ -25,6 +25,9 @@ which provides an easy method to obtain this data. This is directly supported by
 `--network testnet` or `--network devnet`. Bootstrap commands also support passing a file directly to cover custom
 networks, or if the official URLs are not trusted.
 
+Node bootstrap also creates `batch_builder_collection_account.mac` in the node data directory. Keep this file private
+because it contains the collection account's signing key.
+
 ## Bootstrap Flow
 
 <Tabs groupId="network-operator-genesis-source" defaultValue="official">
@@ -61,10 +64,6 @@ printed. The operator file carries the only signing key permitted to mint, so tr
 
 To run a faucet against the network, pass `faucet_operator.mac` to the faucet's `init --import`, and the faucet account
 id to `--faucet-account-id`.
-
-Genesis also creates `batch_builder_collection_account.mac`. This public account uses `AuthTxFeeCollector` to combine
-fee notes into one P2ID payment without changing its state. Keep the file private because it contains the collection
-account's signing key.
 
 Upload `genesis-data/genesis.dat` so it is served at:
 

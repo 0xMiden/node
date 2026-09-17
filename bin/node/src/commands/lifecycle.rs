@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
@@ -8,8 +9,47 @@ use miden_node_store::{DataDirectory, Db, State};
 use miden_node_tracing::info;
 use miden_node_utils::fs::ensure_empty_directory;
 use miden_node_utils::genesis::{OfficialNetwork, fetch_genesis_block, read_genesis_block};
+use miden_protocol::account::auth::AuthSecretKey;
+use miden_protocol::account::{AccountBuilder, AccountFile, AccountType};
+use miden_protocol::utils::serde::Serializable;
+use miden_standards::account::auth::AuthTxFeeCollector;
+use miden_standards::account::wallets::BasicWallet;
 
 use super::ENV_DATA_DIRECTORY;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bootstrap_saves_a_new_collector_and_preserves_its_signing_key() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let directory = DataDirectory::load(directory.path().to_path_buf())?;
+        create_collection_account(&directory)?;
+        let path = directory.batch_builder_collection_account_path();
+        let account_file = AccountFile::read(&path)?;
+        assert!(account_file.account.is_new());
+        assert!(account_file.account.is_public());
+        assert!(account_file.account.vault().is_empty());
+        assert_eq!(account_file.auth_secret_keys.len(), 1);
+        assert_eq!(
+            account_file.account.storage().get_item(AuthTxFeeCollector::public_key_slot())?,
+            miden_protocol::Word::from(
+                account_file.auth_secret_keys[0].public_key().to_commitment()
+            ),
+        );
+
+        let contents = fs_err::read(&path)?;
+        assert!(create_collection_account(&directory).is_err());
+        assert_eq!(fs_err::read(&path)?, contents);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(fs_err::metadata(&path)?.permissions().mode() & 0o777, 0o600);
+        }
+        Ok(())
+    }
+}
 
 // BOOTSTRAP
 // ================================================================================================
@@ -58,6 +98,8 @@ impl BootstrapCommand {
             read_bootstrap_genesis_block(self.genesis_block_file.as_deref(), self.network).await?;
         let genesis_commitment = genesis_block.inner().header().commitment();
         State::bootstrap(genesis_block, &self.data_directory)?;
+        create_collection_account(&DataDirectory::load(self.data_directory.clone())?)
+            .context("failed to create the batch builder collection account")?;
         info!(
             target: crate::LOG_TARGET,
             "Node bootstrap complete",
@@ -66,6 +108,28 @@ impl BootstrapCommand {
         );
         Ok(())
     }
+}
+
+/// Saves the collector and its signing key without registering the account on-chain.
+fn create_collection_account(directory: &DataDirectory) -> anyhow::Result<()> {
+    let secret_key = AuthSecretKey::new_falcon512_poseidon2();
+    let account = AccountBuilder::new(rand::random())
+        .account_type(AccountType::Public)
+        .with_component(AuthTxFeeCollector::from_public_key(secret_key.public_key()))
+        .with_component(BasicWallet)
+        .build()?;
+    let account_file = AccountFile::new(account, vec![secret_key]);
+    let mut options = fs_err::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use fs_err::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(directory.batch_builder_collection_account_path())?;
+    file.write_all(&account_file.to_bytes())?;
+    file.sync_all()?;
+    Ok(())
 }
 
 /// Reads the genesis block from the configured source and validates it.

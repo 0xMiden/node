@@ -26,8 +26,6 @@ pub enum GenesisConfigError {
     NativeFaucetNotFungible { path: PathBuf },
     #[error("account translation from config to state failed")]
     Account(#[from] AccountError),
-    #[error("failed to build the pass-through account")]
-    PassThroughAccountBuild(#[source] anyhow::Error),
     #[error("asset translation from config to state failed")]
     Asset(#[from] AssetError),
     #[error("adding assets to account failed")]

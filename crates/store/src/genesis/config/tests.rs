@@ -108,43 +108,14 @@ async fn genesis_accounts_have_nonce_one() -> TestResult {
     let gcfg = GenesisConfig::default();
     let (state, secrets) = gcfg.into_state(dev_validator_config()).unwrap();
 
-    // The default configuration generates the native faucet, its operator, and the pass-through
-    // account.
+    // The default configuration generates the native faucet and its operator.
     let account_files = secrets.as_account_files(&state).collect::<Result<Vec<_>, _>>()?;
-    assert_eq!(account_files.len(), 3);
+    assert_eq!(account_files.len(), 2);
     for AccountFileWithName { account_file, name } in account_files {
         assert_eq!(account_file.account.nonce(), ONE, "{name} should be deployed at genesis");
     }
 
     let _block = state.into_block()?;
-    Ok(())
-}
-
-#[test]
-fn pass_through_account_is_part_of_genesis() -> TestResult {
-    let (state, secrets) = GenesisConfig::default().into_state(dev_validator_config())?;
-    let exported = secrets
-        .as_account_files(&state)
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .find(|file| file.name == BATCH_BUILDER_COLLECTION_ACCOUNT_FILE_NAME)
-        .expect("the pass-through account file should be generated");
-    let account = &exported.account_file.account;
-    assert!(state.accounts.contains(account));
-    assert!(account.is_public());
-    assert_eq!(account.nonce(), ONE);
-    assert!(account.vault().is_empty());
-    assert_eq!(exported.account_file.auth_secret_keys.len(), 1);
-
-    assert_eq!(
-        account
-            .storage()
-            .get_item(miden_standards::account::auth::AuthTxFeeCollector::public_key_slot(),)?,
-        miden_protocol::Word::from(
-            exported.account_file.auth_secret_keys[0].public_key().to_commitment(),
-        ),
-    );
-
     Ok(())
 }
 
@@ -222,7 +193,7 @@ fn generated_native_faucet_is_a_network_account_owned_by_an_operator() -> TestRe
             .find(|(name, ..)| name == file_name)
             .unwrap_or_else(|| panic!("{file_name} should be generated"))
     };
-    assert_eq!(secrets.secrets.len(), 3);
+    assert_eq!(secrets.secrets.len(), 2);
     let (_, faucet_id, faucet_secret) = find(NATIVE_FAUCET_FILE_NAME);
     let (_, operator_id, operator_secret) = find(FAUCET_OPERATOR_FILE_NAME);
     assert_eq!(*faucet_id, native_faucet.id());
@@ -349,11 +320,8 @@ verification_base_fee = 0
     let (state, secrets) = gcfg.into_state(dev_validator_config())?;
     assert!(state.accounts.iter().any(|a| a.id() == faucet_id));
 
-    // A file-loaded faucet creates no additional secret.
-    assert_eq!(secrets.secrets.len(), 1);
-    let (name, _, secret) = &secrets.secrets[0];
-    assert_eq!(name, BATCH_BUILDER_COLLECTION_ACCOUNT_FILE_NAME);
-    assert!(secret.is_some());
+    // No secrets should be generated for file-loaded native faucet
+    assert!(secrets.secrets.is_empty());
 
     Ok(())
 }
