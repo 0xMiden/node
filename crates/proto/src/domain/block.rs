@@ -20,15 +20,12 @@ impl BuildUnchecked for proto::rpc::DecodedBlockSubscriptionResponse {
         // SAFETY: The caller must authenticate the block before applying it. This conversion checks
         // consistency only.
         let block = self.block.build_unchecked().context("block")?;
-        let protocol_config = self
-            .protocol_config
-            .map(|config| {
-                verify_protocol_config_commitment(
-                    config.verify().context("protocol_config")?,
-                    block.header(),
-                )
-            })
-            .transpose()?;
+        let protocol_config = self.protocol_config.try_map(|config| {
+            verify_protocol_config_commitment(
+                config.verify().map_err(ConversionError::new)?,
+                block.header(),
+            )
+        })?;
         Ok((block, self.committed_chain_tip.into(), protocol_config))
     }
 }
@@ -42,15 +39,12 @@ impl VerifyWith<&BlockHeader> for proto::rpc::DecodedBlockSubscriptionResponse {
     /// upstream claim.
     fn verify_with(self, parent: &BlockHeader) -> Result<Self::Verified, Self::Error> {
         let block = self.block.verify_with(parent).context("block")?;
-        let protocol_config = self
-            .protocol_config
-            .map(|config| {
-                verify_protocol_config_commitment(
-                    config.verify().context("protocol_config")?,
-                    block.header(),
-                )
-            })
-            .transpose()?;
+        let protocol_config = self.protocol_config.try_map(|config| {
+            verify_protocol_config_commitment(
+                config.verify().map_err(ConversionError::new)?,
+                block.header(),
+            )
+        })?;
         Ok((block, self.committed_chain_tip.into(), protocol_config))
     }
 }

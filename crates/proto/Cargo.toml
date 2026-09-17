@@ -21,7 +21,7 @@ miden-node-grpc-error-macro = { workspace = true }
 miden-node-tracing          = { workspace = true }
 miden-node-utils            = { workspace = true }
 miden-objects               = { workspace = true }
-miden-protobuf              = { workspace = true }
+miden-protobuf              = { features = ["tonic"], workspace = true }
 miden-protocol              = { workspace = true }
 prost                       = { workspace = true }
 rand                        = { workspace = true }

@@ -75,9 +75,9 @@ impl Verify for proto::rpc::DecodedAccountRequest {
         let Self { account_id, block_num, details } = self;
 
         let account_id = account_id.verify().context("account_id")?;
-        let block_num = block_num.map(Verify::verify).transpose().context("block_num")?;
+        let block_num = block_num.verify()?;
 
-        let details = details.map(Verify::verify).transpose().context("details")?;
+        let details = details.verify()?;
 
         Ok(AccountRequest { account_id, block_num, details })
     }
@@ -120,17 +120,8 @@ impl Verify for proto::rpc::account_request::DecodedAccountDetailRequest {
                 return Err(ConversionError::message("all_storage_maps must be true when set"));
             },
             Some(ProtoStorageRequest::StorageMaps(requests)) => {
-                let requests = requests
-                    .storage_maps
-                    .into_inner()
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, request)| {
-                        request.verify().with_context(|| {
-                            format!("storage_request.storage_maps.storage_maps[{index}]")
-                        })
-                    })
-                    .collect::<Result<_, _>>()?;
+                let requests =
+                    requests.storage_maps.verify().context("storage_request.storage_maps")?;
                 AccountStorageRequest::Explicit(requests)
             },
         };
@@ -187,10 +178,7 @@ impl Verify for proto::rpc::account_request::account_detail_request::storage_map
             ProtoSlotData::MapKeys(keys) => {
                 let keys = keys
                     .map_keys
-                    .into_inner()
-                    .into_iter()
-                    .map(StorageMapKey::new)
-                    .collect::<Vec<_>>();
+                    .map(StorageMapKey::new);
                 if has_duplicate_storage_map_keys(&keys) {
                     return Err(ConversionError::message(
                         "storage map key request contains duplicate keys",
@@ -254,12 +242,7 @@ impl Verify for proto::rpc::DecodedAccountVaultDetails {
         if too_many_assets {
             Ok(AccountVaultDetails::LimitExceeded)
         } else {
-            let parsed_assets = assets
-                .into_inner()
-                .into_iter()
-                .enumerate()
-                .map(|(index, asset)| asset.verify().with_context(|| format!("assets[{index}]")))
-                .collect::<Result<Vec<_>, _>>()?;
+            let parsed_assets = assets.verify()?;
             Ok(AccountVaultDetails::Assets(parsed_assets))
         }
     }
@@ -449,11 +432,7 @@ impl Verify for proto::rpc::account_storage_details::DecodedAccountStorageMapDet
                 return Err(ConversionError::message("too_many_entries must be true when set"));
             },
             ProtoResult::AllEntries(DecodedAllMapEntries { entries }) => {
-                let entries = entries
-                    .into_inner()
-                    .into_iter()
-                    .map(|entry| (StorageMapKey::new(entry.key), entry.value))
-                    .collect();
+                let entries = entries.map(|entry| (StorageMapKey::new(entry.key), entry.value));
                 StorageMapEntries::AllEntries(entries)
             },
             ProtoResult::PartialMap(DecodedPartialStorageMap { map_keys, partial_smt }) => {
@@ -557,12 +536,7 @@ impl Verify for proto::rpc::DecodedAccountStorageDetails {
 
         let header: AccountStorageHeader = header.verify().context("header")?;
 
-        let map_details: Vec<AccountStorageMapDetails> = map_details
-            .into_inner()
-            .into_iter()
-            .enumerate()
-            .map(|(index, detail)| detail.verify().with_context(|| format!("map_details[{index}]")))
-            .collect::<Result<Vec<_>, _>>()?;
+        let map_details = map_details.verify()?;
 
         for map_detail in &map_details {
             let StorageMapEntries::PartialMap { partial_smt, .. } = &map_detail.entries else {
@@ -627,7 +601,7 @@ impl Verify for proto::rpc::DecodedAccountResponse {
 
         let witness = witness.verify().context("witness")?;
 
-        let details = details.map(Verify::verify).transpose().context("details")?;
+        let details = details.verify()?;
 
         if let Some(details) = &details {
             if details.account_header.id() != witness.id() {
@@ -710,7 +684,7 @@ impl Verify for proto::rpc::account_response::DecodedAccountDetails {
         }
 
         let vault_details = vault_details.verify().context("vault_details")?;
-        let account_code = code.map(Verify::verify).transpose().context("code")?;
+        let account_code = code.verify()?;
         if let Some(code) = &account_code
             && code.commitment() != account_header.code_commitment()
         {

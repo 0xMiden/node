@@ -5,7 +5,7 @@
 //! A drift would not fail to compile: it would reject every submission at runtime with an opaque
 //! AEAD error, so the transcript is pinned by a golden vector in the tests below.
 
-use miden_protobuf::{ConversionError, DecodeMessage, Verify, VerifyWith};
+use miden_protobuf::{DecodeMessageExt, VerifyWith};
 use miden_protocol::Word;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{
     PublicKey as ValidatorPublicKey,
@@ -279,10 +279,7 @@ impl<'a> VerifyWith<TrustedTransactionEncryptionState<'a>>
             let Some(validator_public_key) = attestation.validator_public_key else {
                 continue;
             };
-            let Ok(validator_public_key) = validator_public_key
-                .decode_fields()
-                .and_then(|key| key.verify().map_err(ConversionError::new))
-            else {
+            let Ok(validator_public_key) = validator_public_key.decode_and_verify() else {
                 continue;
             };
 
@@ -294,10 +291,7 @@ impl<'a> VerifyWith<TrustedTransactionEncryptionState<'a>>
             let Some(signature) = attestation.signature else {
                 continue;
             };
-            let Ok(signature): Result<ValidatorSignature, _> = signature
-                .decode_fields()
-                .and_then(|signature| signature.verify().map_err(ConversionError::new))
-            else {
+            let Ok(signature): Result<ValidatorSignature, _> = signature.decode_and_verify() else {
                 continue;
             };
             if signature.verify(commitment, &validator_public_key) {

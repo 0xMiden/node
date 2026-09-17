@@ -1,5 +1,5 @@
 use miden_node_proto::generated::server::sequencer_api;
-use miden_node_proto::{DecodeMessage, VerifyWith, generated as proto};
+use miden_node_proto::{DecodeMessageExt, generated as proto};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use tonic::Status;
 
@@ -28,8 +28,7 @@ impl sequencer_api::SubmitAuthenticatedTxBatch for SequencerInternalService {
     ) -> tonic::Result<Self::Output> {
         let (batch, inputs) = spawn_blocking_in_current_span(move || {
             request
-                .decode_fields()
-                .and_then(|request| request.verify_with(miden_protocol::MIN_PROOF_SECURITY_LEVEL))
+                .decode_and_verify_with(miden_protocol::MIN_PROOF_SECURITY_LEVEL)
                 .map_err(miden_node_proto::errors::conversion_error_to_status)
         })
         .await

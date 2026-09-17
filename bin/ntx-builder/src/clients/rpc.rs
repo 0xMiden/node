@@ -1,3 +1,4 @@
+use miden_node_proto::DecodeMessageExt;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -9,7 +10,7 @@ use backon::ExponentialBuilder;
 use futures::stream::{BoxStream, TryStreamExt};
 use futures::{Stream, StreamExt};
 use miden_node_proto::clients::{Builder, RpcClient as InnerRpcClient};
-use miden_node_proto::{BuildUnchecked, DecodeMessage, VerifyWith, Verify};
+use miden_node_proto::VerifyWith;
 use miden_node_proto::domain::account::{
     AccountDetails, AccountResponse, AccountVaultDetails, StorageMapEntries
 };
@@ -295,10 +296,10 @@ impl RpcClient {
             let decoded = stream
                 .map_err(RpcError::GrpcClientError)
                 .and_then(|response| async move {
-                    response.decode_fields()
+                    response
                         // SAFETY: The builder verifies the block against its trusted parent before
                         // it writes block effects or notifies account actors.
-                        .and_then(BuildUnchecked::build_unchecked)
+                        .decode_and_build_unchecked()
                         .map_err(RpcError::Conversion)
                 })
                 .scan(ProtocolConfigTracker::default(), |tracker, item| {
@@ -494,11 +495,8 @@ fn decode_startup_header_response(
     let header: miden_protocol::block::BlockHeader = response
         .block_header
         .ok_or_else(|| RpcError::InvalidResponse("header response is missing block header".into()))?
-        .decode_fields()
-        .map_err(RpcError::Conversion)?
         // SAFETY: The commitment check below binds this header to the persisted local header.
-        .build_unchecked()
-        .map_err(ConversionError::new)
+        .decode_and_build_unchecked()
         .map_err(RpcError::Conversion)?;
     if header.commitment() != expected_header.commitment() {
         return Err(RpcError::InvalidResponse(
@@ -667,8 +665,7 @@ impl RpcClient {
             .await
             .map_err(RpcError::GrpcClientError)?
             .into_inner()
-            .decode_fields()
-            .and_then(Verify::verify)
+            .decode_and_verify()
             .map_err(RpcError::Conversion)
     }
 
@@ -685,7 +682,7 @@ impl RpcClient {
             .map_err(RpcError::GrpcClientError)?
             .into_inner();
 
-        response.decode_fields().and_then(Verify::verify).map_err(RpcError::Conversion)
+        response.decode_and_verify().map_err(RpcError::Conversion)
     }
 }
 

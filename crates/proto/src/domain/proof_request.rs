@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use miden_protobuf::{BuildUnchecked, ConversionResultExt, Verify};
 use miden_protocol::account::AccountId;
-use miden_protocol::batch::{OrderedBatches, ProvenBatch};
+use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::block::nullifier_tree::NullifierWitness;
 use miden_protocol::block::{BlockHeader, BlockInputs, ProposedBlock};
@@ -56,24 +56,12 @@ impl BuildUnchecked for proto::block_proving::DecodedBlockProofRequest {
         // SAFETY: This unchecked constructor leaves parent authentication to its caller.
         // ProposedBlock checks the supplied chain and witnesses against that parent below.
         let block_inputs = self.block_inputs.build_unchecked().context("block_inputs")?;
-        let batches = self
-            .batches
-            .into_inner()
-            .into_iter()
-            .enumerate()
-            .map(|(index, batch)| {
-                // SAFETY: This unchecked constructor leaves batch validation to its caller.
-                // ProposedBlock checks consistency across batches, not within each batch.
-                batch.build_unchecked().with_context(|| format!("batches[{index}]"))
-            })
-            .collect::<Result<Vec<ProvenBatch>, _>>()?;
+        // SAFETY: The caller must validate each batch. ProposedBlock checks consistency across
+        // batches, not within each batch.
+        let batches = self.batches.build_unchecked()?;
         let next_validator_config =
             self.next_validator_config.verify().context("next_validator_config")?;
-        let next_protocol_config = self
-            .next_protocol_config
-            .map(Verify::verify)
-            .transpose()
-            .context("next_protocol_config")?;
+        let next_protocol_config = self.next_protocol_config.verify()?;
 
         let proposed_block =
             ProposedBlock::new_at(block_inputs.clone(), batches.clone(), self.timestamp)

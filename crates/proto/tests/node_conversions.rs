@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::error::Error as _;
 
 use miden_node_proto::domain::proof_request::BlockProofRequest;
-use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify, generated};
+use miden_node_proto::{BuildUnchecked, DecodeMessage, DecodeMessageExt, Verify, generated};
 use miden_objects::proto;
 use miden_protocol::Word;
 use miden_protocol::account::{
@@ -271,8 +271,9 @@ fn block_proof_request_rejects_duplicate_nullifier_witnesses() {
     let witnesses = &mut message.block_inputs.as_mut().unwrap().nullifier_witnesses;
     witnesses.push(witnesses[0].clone());
 
-    let error = message.decode_fields().and_then(BuildUnchecked::build_unchecked).unwrap_err();
+    let error = message.decode_and_build_unchecked().unwrap_err();
 
+    assert!(error.to_string().contains("failed to build unchecked"), "{error}");
     assert!(error.to_string().contains("duplicate nullifier"));
 }
 

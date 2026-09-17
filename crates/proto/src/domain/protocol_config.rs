@@ -3,9 +3,9 @@
 use miden_protocol::block::BlockHeader;
 use miden_protocol::protocol_config::ProtocolConfig;
 
+use crate::DecodeMessageExt;
 use crate::errors::{ConversionError, ConversionResultExt};
 use crate::generated::protocol_config::ProtocolConfig as ProtoProtocolConfig;
-use crate::{DecodeMessage, Verify};
 
 /// Ensures protocol configuration is present and matches the protocol configuration commitment in
 /// the header.
@@ -15,8 +15,7 @@ pub fn ensure_protocol_config_is_present_and_matches_header(
 ) -> Result<ProtocolConfig, ConversionError> {
     let config = config
         .ok_or_else(|| ConversionError::message("protocol config is missing"))?
-        .decode_fields()
-        .and_then(|config| config.verify().map_err(ConversionError::new))
+        .decode_and_verify()
         .context("protocol_config")?;
     verify_protocol_config_commitment(config, header)
 }

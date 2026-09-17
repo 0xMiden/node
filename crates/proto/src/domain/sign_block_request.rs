@@ -5,7 +5,7 @@ use miden_protocol::block::{BlockHeader, BlockInputs};
 use miden_protocol::protocol_config::ProtocolConfig;
 
 use super::protocol_config::verify_protocol_config_commitment;
-use crate::errors::{ConversionError, ConversionResultExt};
+use crate::errors::ConversionError;
 use crate::{BuildUnchecked, Verify, generated as proto};
 
 /// The domain inputs needed to validate and sign a block.
@@ -34,15 +34,12 @@ impl BuildUnchecked for proto::validator::DecodedSignBlockRequest {
             next_protocol_config: self.next_protocol_config,
         }
         .build_unchecked()?;
-        let protocol_config = self
-            .protocol_config
-            .map(|config| {
-                verify_protocol_config_commitment(
-                    config.verify().context("protocol_config")?,
-                    &decoded.block_header,
-                )
-            })
-            .transpose()?;
+        let protocol_config = self.protocol_config.try_map(|config| {
+            verify_protocol_config_commitment(
+                config.verify().map_err(ConversionError::new)?,
+                &decoded.block_header,
+            )
+        })?;
         Ok(SignBlockRequest {
             tx_batches: decoded.tx_batches,
             block_header: decoded.block_header,

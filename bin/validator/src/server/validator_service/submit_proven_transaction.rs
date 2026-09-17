@@ -1,7 +1,7 @@
 use std::sync::atomic::Ordering;
 
 use miden_node_proto::domain::encryption::transaction_inputs_associated_data;
-use miden_node_proto::{BuildUnchecked, DecodeMessage, generated as grpc};
+use miden_node_proto::{DecodeMessageExt, generated as grpc};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorReport, Instrument, info_span, miden_instrument, miden_span_record};
 use miden_protocol::transaction::{ProvenTransaction, TransactionId, TransactionInputs};
@@ -100,13 +100,12 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
         request: grpc::submission::ProvenTransactionSubmission,
     ) -> tonic::Result<Self::Input> {
         let submission = request
-            .decode_fields()
             // SAFETY: New transaction IDs pass proof verification and re-execution before storage.
             // Previously validated IDs use the handler's duplicate-submission shortcut.
             //
             // FIXME: Authenticate the reference block against the validator's chain state.
             // Re-execution currently uses the headers supplied in the sealed inputs.
-            .and_then(BuildUnchecked::build_unchecked)
+            .decode_and_build_unchecked()
             .map_err(miden_node_proto::errors::conversion_error_to_status)?;
         let tx = submission.transaction;
         let sealed = submission.sealed_transaction_inputs;

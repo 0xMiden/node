@@ -18,7 +18,7 @@ use miden_node_proto::generated::rpc::{
     BlockHeaderByNumberResponse,
 };
 use miden_node_proto::generated::submission::ProvenTransactionSubmission as ProtoProvenTransaction;
-use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify, VerifyWith};
+use miden_node_proto::{BuildUnchecked, DecodeMessage, DecodeMessageExt, VerifyWith};
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::account_tree::AccountWitness;
@@ -228,10 +228,8 @@ impl SubmissionClient {
             .context("failed to fetch the account witness from RPC")?
             .into_inner();
 
-        let response = response
-            .decode_fields()
-            .and_then(Verify::verify)
-            .context("failed to decode the account response")?;
+        let response =
+            response.decode_and_verify().context("failed to decode the account response")?;
 
         // An account-ID prefix collision makes the tree return a witness for the *other* account,
         // and the data store keys witnesses by the account they prove.

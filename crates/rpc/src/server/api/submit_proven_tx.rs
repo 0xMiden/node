@@ -2,7 +2,7 @@ use miden_node_block_producer::ensure_transaction_has_fee;
 use miden_node_block_producer::store::get_tx_inputs;
 use miden_node_proto::clients::{SequencerClient, ValidatorClient};
 use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
-use miden_node_proto::{BuildUnchecked, DecodeMessage, generated as proto};
+use miden_node_proto::{DecodeMessageExt, generated as proto};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorReport, debug, miden_instrument, miden_span_record, trace};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
@@ -27,14 +27,13 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
         request: proto::submission::ProvenTransactionSubmission,
     ) -> tonic::Result<Self::Input> {
         request
-            .decode_fields()
             // SAFETY: The handler checks the reference block and proof before forwarding. Decoding
             // does not authenticate the transaction against current chain state.
             //
             // FIXME: Check committed nullifiers and expiration against one local state snapshot
             // on every submission path. Forwarding skips the local nullifier check, and
             // expiration is checked later by the sequencer mempool.
-            .and_then(BuildUnchecked::build_unchecked)
+            .decode_and_build_unchecked()
             .map_err(miden_node_proto::errors::conversion_error_to_status)
     }
 

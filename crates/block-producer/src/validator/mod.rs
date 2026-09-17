@@ -3,7 +3,7 @@ use std::time::Duration;
 use miden_node_proto::clients::{Builder, ValidatorClient};
 use miden_node_proto::domain::validator::SignBlockResponse;
 use miden_node_proto::errors::ConversionError;
-use miden_node_proto::{BuildUnchecked, DecodeMessage, generated as proto};
+use miden_node_proto::{DecodeMessageExt, generated as proto};
 use miden_node_tracing::{info, miden_instrument};
 use miden_protocol::block::{BlockInputs, ProposedBlock};
 use miden_protocol::protocol_config::ProtocolConfig;
@@ -98,10 +98,9 @@ impl BlockProducerValidatorClient {
                 let request = tonic::Request::new(message);
                 let response = client.sign_block(request).await?.into_inner();
                 response
-                    .decode_fields()
                     // SAFETY: The block builder matches the commitment to its proposed block and
                     // verifies the signatures against the trusted parent validator set.
-                    .and_then(BuildUnchecked::build_unchecked)
+                    .decode_and_build_unchecked()
                     .map_err(ValidatorError::Conversion)
             }
         }))

@@ -1,6 +1,6 @@
 use miden_node_block_producer::store::get_tx_inputs;
 use miden_node_proto::clients::{SequencerClient, ValidatorClient};
-use miden_node_proto::{DecodeMessage, TransactionBatchSubmission, Verify, generated as proto};
+use miden_node_proto::{DecodeMessageExt, TransactionBatchSubmission, generated as proto};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorReport, debug, miden_instrument, miden_span_record, trace};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
@@ -56,12 +56,10 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
             batch: proven_batch,
             proposed_batch,
             sealed_transaction_inputs,
-        } = spawn_blocking_in_current_span(move || {
-            submission.decode_fields().and_then(Verify::verify)
-        })
-        .await
-        .map_err(|err| Status::internal(format!("batch decoding task failed: {err}")))?
-        .map_err(miden_node_proto::errors::conversion_error_to_status)?;
+        } = spawn_blocking_in_current_span(move || submission.decode_and_verify())
+            .await
+            .map_err(|err| Status::internal(format!("batch decoding task failed: {err}")))?
+            .map_err(miden_node_proto::errors::conversion_error_to_status)?;
 
         miden_span_record!(
             batch.id = proven_batch.id(),

@@ -7,7 +7,7 @@ use miden_node_proto::domain::account::{
     SlotData,
 };
 use miden_node_proto::errors::conversion_error_to_status;
-use miden_node_proto::{DecodeMessage, Verify, generated as proto};
+use miden_node_proto::{DecodeMessageExt, generated as proto};
 use miden_node_store::GetAccountError;
 use miden_node_tracing::{debug, info_span, miden_instrument, miden_span_record};
 use miden_node_utils::limiter::{QueryParamStorageMapKeyTotalLimit, QueryParamStorageMapSlotLimit};
@@ -22,10 +22,7 @@ impl proto::server::rpc_api::GetAccount for RpcService {
     type Output = AccountResponse;
 
     fn decode(request: proto::rpc::AccountRequest) -> tonic::Result<Self::Input> {
-        request
-            .decode_fields()
-            .and_then(Verify::verify)
-            .map_err(conversion_error_to_status)
+        request.decode_and_verify().map_err(conversion_error_to_status)
     }
 
     fn encode(output: Self::Output) -> tonic::Result<proto::rpc::AccountResponse> {

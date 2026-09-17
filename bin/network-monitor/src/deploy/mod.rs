@@ -24,7 +24,7 @@ use miden_node_proto::generated::rpc::{
     SyncChainMmrResponse,
 };
 use miden_node_proto::generated::submission::ProvenTransactionSubmission as ProtoProvenTransaction;
-use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify, VerifyWith};
+use miden_node_proto::{BuildUnchecked, DecodeMessage, DecodeMessageExt, Verify, VerifyWith};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{debug, info, miden_instrument, warn};
 use miden_node_utils::retry;
@@ -480,10 +480,8 @@ pub(crate) async fn fetch_foreign_account_inputs(
         .await
         .with_context(|| format!("failed to fetch account {account_id}"))?
         .into_inner();
-    let response = response
-        .decode_fields()
-        .and_then(Verify::verify)
-        .context("failed to convert the account response")?;
+    let response =
+        response.decode_and_verify().context("failed to convert the account response")?;
 
     let witness = response.witness;
     anyhow::ensure!(
@@ -857,10 +855,8 @@ async fn fetch_account_witness(
         .context("failed to fetch the account witness")?
         .into_inner();
 
-    let response = response
-        .decode_fields()
-        .and_then(Verify::verify)
-        .context("failed to convert the account response")?;
+    let response =
+        response.decode_and_verify().context("failed to convert the account response")?;
 
     Ok(response.witness)
 }

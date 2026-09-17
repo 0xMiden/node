@@ -23,7 +23,7 @@ use miden_node_proto::generated::rpc::{
     SyncChainMmrRequest,
 };
 use miden_node_proto::generated::submission::ProvenTransactionSubmission;
-use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify, VerifyWith};
+use miden_node_proto::{BuildUnchecked, DecodeMessage, DecodeMessageExt, Verify, VerifyWith};
 use miden_node_tracing::warn;
 use miden_node_utils::retry::{self, Retryable};
 use miden_protocol::Word;
@@ -133,10 +133,8 @@ impl RpcNodeClient {
             .await
             .with_context(|| format!("failed to fetch account {account_id}"))?
             .into_inner();
-        let response = response
-            .decode_fields()
-            .and_then(Verify::verify)
-            .context("failed to convert the account response")?;
+        let response =
+            response.decode_and_verify().context("failed to convert the account response")?;
 
         let details = response
             .details
@@ -534,10 +532,8 @@ async fn fetch_public_account(
         .await
         .with_context(|| format!("failed to fetch account {account_id}"))?
         .into_inner();
-    let response = response
-        .decode_fields()
-        .and_then(Verify::verify)
-        .context("failed to convert the account response")?;
+    let response =
+        response.decode_and_verify().context("failed to convert the account response")?;
 
     let witness = response.witness;
     anyhow::ensure!(

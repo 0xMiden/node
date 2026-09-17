@@ -77,6 +77,7 @@ fn conversion_status_preserves_field_context_and_nested_causes() {
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
     assert!(status.message().starts_with("transaction: invalid object"));
     assert!(status.message().contains("underlying validation failure"));
+    assert!(status.source().unwrap().is::<ConversionError>());
 }
 
 #[test]
@@ -173,5 +174,20 @@ fn rpc_limits_preserve_endpoint_and_parameter_names() {
         .unwrap()
         .decode_fields()
         .unwrap();
-    assert_eq!(decoded, HashMap::from([("SyncNotes".to_string(), parameters)]));
+    assert_eq!(decoded.endpoints.as_ref().len(), 1);
+    assert_eq!(decoded.endpoints.as_ref()["SyncNotes"].parameters.as_ref(), &parameters);
+}
+
+#[test]
+fn rpc_limits_preserve_empty_maps() {
+    let decoded = proto::rpc::RpcLimits::default().decode_fields().unwrap();
+    assert!(decoded.endpoints.as_ref().is_empty());
+    let message = proto::rpc::RpcLimits {
+        endpoints: HashMap::from([(
+            "SyncNotes".to_string(),
+            proto::rpc::EndpointLimits::default(),
+        )]),
+    };
+    let decoded = message.decode_fields().unwrap();
+    assert!(decoded.endpoints.as_ref()["SyncNotes"].parameters.as_ref().is_empty());
 }
