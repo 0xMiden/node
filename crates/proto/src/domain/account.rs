@@ -111,7 +111,7 @@ impl Verify for proto::rpc::account_request::DecodedAccountDetailRequest {
             storage_request,
         } = self;
 
-        let storage_request = match storage_request {
+        let storage_request = match storage_request.into_inner() {
             None => AccountStorageRequest::None,
             Some(ProtoStorageRequest::AllStorageMaps(true)) => {
                 AccountStorageRequest::AllStorageMaps
@@ -122,6 +122,7 @@ impl Verify for proto::rpc::account_request::DecodedAccountDetailRequest {
             Some(ProtoStorageRequest::StorageMaps(requests)) => {
                 let requests = requests
                     .storage_maps
+                    .into_inner()
                     .into_iter()
                     .enumerate()
                     .map(|(index, request)| {
@@ -135,8 +136,8 @@ impl Verify for proto::rpc::account_request::DecodedAccountDetailRequest {
         };
 
         Ok(AccountDetailRequest {
-            code_commitment,
-            asset_vault_commitment,
+            code_commitment: code_commitment.into_inner(),
+            asset_vault_commitment: asset_vault_commitment.into_inner(),
             storage_request,
         })
     }
@@ -186,6 +187,7 @@ impl Verify for proto::rpc::account_request::account_detail_request::storage_map
             ProtoSlotData::MapKeys(keys) => {
                 let keys = keys
                     .map_keys
+                    .into_inner()
                     .into_iter()
                     .map(StorageMapKey::new)
                     .collect::<Vec<_>>();
@@ -253,6 +255,7 @@ impl Verify for proto::rpc::DecodedAccountVaultDetails {
             Ok(AccountVaultDetails::LimitExceeded)
         } else {
             let parsed_assets = assets
+                .into_inner()
                 .into_iter()
                 .enumerate()
                 .map(|(index, asset)| asset.verify().with_context(|| format!("assets[{index}]")))
@@ -447,12 +450,14 @@ impl Verify for proto::rpc::account_storage_details::DecodedAccountStorageMapDet
             },
             ProtoResult::AllEntries(DecodedAllMapEntries { entries }) => {
                 let entries = entries
+                    .into_inner()
                     .into_iter()
                     .map(|entry| (StorageMapKey::new(entry.key), entry.value))
                     .collect();
                 StorageMapEntries::AllEntries(entries)
             },
             ProtoResult::PartialMap(DecodedPartialStorageMap { map_keys, partial_smt }) => {
+                let map_keys = map_keys.into_inner();
                 if map_keys.len() > AccountStorageMapDetails::MAX_SMT_PROOF_ENTRIES {
                     return Err(ConversionError::message(format!(
                         "partial storage map contains {} keys, exceeding the limit of {}",
@@ -553,6 +558,7 @@ impl Verify for proto::rpc::DecodedAccountStorageDetails {
         let header: AccountStorageHeader = header.verify().context("header")?;
 
         let map_details: Vec<AccountStorageMapDetails> = map_details
+            .into_inner()
             .into_iter()
             .enumerate()
             .map(|(index, detail)| detail.verify().with_context(|| format!("map_details[{index}]")))

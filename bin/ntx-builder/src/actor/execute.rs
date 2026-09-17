@@ -440,13 +440,22 @@ impl NtxContext {
             .collect::<Vec<_>>();
 
         for failed_note in &failed {
-            info!(
-                failed_note.error(),
-                target: LOG_TARGET,
-                "note failed consumability check",
-                note.id = failed_note.note().id(),
-                note.nullifier = failed_note.note().nullifier()
-            );
+            if let Some(error) = failed_note.error() {
+                info!(
+                    error,
+                    target: LOG_TARGET,
+                    "note failed consumability check",
+                    note.id = failed_note.note().id(),
+                    note.nullifier = failed_note.note().nullifier()
+                );
+            } else {
+                info!(
+                    target: LOG_TARGET,
+                    "note rejected with its bundle",
+                    note.id = failed_note.note().id(),
+                    note.nullifier = failed_note.note().nullifier()
+                );
+            }
         }
 
         let successful = InputNotes::from_unauthenticated_notes(successful_notes)
@@ -1022,7 +1031,13 @@ mod tests {
 
     use miden_protocol::note::Note;
     use miden_protocol::protocol_config::ProtocolConfig;
-    use miden_tx::{DataStore, FailedNote, TransactionExecutorError, TransactionProverError};
+    use miden_tx::{
+        DataStore,
+        FailedNote,
+        NoteFailure,
+        TransactionExecutorError,
+        TransactionProverError,
+    };
 
     use super::{
         NtxDataStore,
@@ -1173,9 +1188,12 @@ mod tests {
         let err = || TransactionExecutorError::AccountUpdateCommitment("test error");
         let failed = vec![
             // Dropped because a per-tx cycle budget was exhausted: carries a cycle count.
-            FailedNote::new(cycle_limited_note, err(), Some(1234)),
+            FailedNote::new(
+                cycle_limited_note,
+                NoteFailure::Blamed { error: err(), num_cycles: Some(1234) },
+            ),
             // A genuine consumability failure: no cycle count.
-            FailedNote::new(genuine_note, err(), None),
+            FailedNote::new(genuine_note, NoteFailure::Blamed { error: err(), num_cycles: None }),
         ];
 
         let (cycle_limited, genuine) = partition_cycle_limited(failed);

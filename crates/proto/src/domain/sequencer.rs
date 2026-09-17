@@ -27,15 +27,16 @@ impl VerifyWith<u32> for sequencer::DecodedAuthenticatedTransactionBatch {
     /// conflicts, and expiration.
     fn verify_with(self, security_level: u32) -> Result<Self::Verified, Self::Error> {
         let batch = self.proposed_batch.verify_with(security_level).context("proposed_batch")?;
-        if batch.transactions().len() != self.auth_inputs.len() {
+        if batch.transactions().len() != self.auth_inputs.as_slice().len() {
             return Err(ConversionError::message(format!(
                 "authentication input count {} does not match transaction count {}",
-                self.auth_inputs.len(),
+                self.auth_inputs.as_slice().len(),
                 batch.transactions().len()
             )));
         }
         let inputs = self
             .auth_inputs
+            .into_inner()
             .into_iter()
             .enumerate()
             .map(|(index, inputs)| inputs.verify().with_context(|| format!("auth_inputs[{index}]")))
@@ -92,8 +93,8 @@ impl Verify for sequencer::DecodedAuthInputs {
 
     fn verify(self) -> Result<Self::Verified, Self::Error> {
         let account_id = self.account_id.verify().context("account_id")?;
-        let mut nullifiers = HashMap::with_capacity(self.nullifiers.len());
-        for (index, record) in self.nullifiers.into_iter().enumerate() {
+        let mut nullifiers = HashMap::with_capacity(self.nullifiers.as_slice().len());
+        for (index, record) in self.nullifiers.into_inner().into_iter().enumerate() {
             let nullifier = Nullifier::from_raw(record.nullifier);
             if nullifiers.insert(nullifier, NonZeroU32::new(record.block_num)).is_some() {
                 return Err(ConversionError::message(format!("duplicate nullifier {nullifier}"))
@@ -102,9 +103,13 @@ impl Verify for sequencer::DecodedAuthInputs {
         }
         Ok(TransactionInputs {
             account_id,
-            account_commitment: self.account_commitment,
+            account_commitment: self.account_commitment.into_inner(),
             nullifiers,
-            found_unauthenticated_notes: self.found_unauthenticated_notes.into_iter().collect(),
+            found_unauthenticated_notes: self
+                .found_unauthenticated_notes
+                .into_inner()
+                .into_iter()
+                .collect(),
             current_block_height: self.current_block_height.into(),
         })
     }
@@ -314,8 +319,12 @@ impl BuildUnchecked for sequencer::DecodedAuthenticatedTransaction {
         let inner = self.transaction.build_unchecked().context("transaction")?;
         Ok(AuthenticatedTransaction {
             inner: Arc::new(inner),
-            store_account_state: self.store_account_state,
-            notes_authenticated_by_store: self.notes_authenticated_by_store.into_iter().collect(),
+            store_account_state: self.store_account_state.into_inner(),
+            notes_authenticated_by_store: self
+                .notes_authenticated_by_store
+                .into_inner()
+                .into_iter()
+                .collect(),
             authentication_height: self.authentication_height.into(),
         })
     }

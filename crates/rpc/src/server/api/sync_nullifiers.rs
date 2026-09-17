@@ -38,12 +38,13 @@ impl proto::server::rpc_api::SyncNullifiers for RpcService {
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
         let range = request.block_range;
+        let nullifiers = request.nullifiers.into_inner();
 
         miden_span_record!(
             block_range.from = range.block_from,
             block_range.to = range.block_to,
             prefix_len = request.prefix_len,
-            prefixes = request.nullifiers.as_slice() #[nonstandard]
+            prefixes = nullifiers.as_slice() #[nonstandard]
         );
 
         debug!(
@@ -52,10 +53,10 @@ impl proto::server::rpc_api::SyncNullifiers for RpcService {
             block_range.from = range.block_from,
             block_range.to = range.block_to,
             prefix_len = request.prefix_len,
-            prefixes = request.nullifiers.as_slice() #[nonstandard]
+            prefixes = nullifiers.as_slice() #[nonstandard]
         );
 
-        check::<QueryParamNullifierPrefixLimit>(request.nullifiers.len())?;
+        check::<QueryParamNullifierPrefixLimit>(nullifiers.len())?;
 
         if request.prefix_len != 16 {
             return Err(Status::invalid_argument(format!(
@@ -67,9 +68,7 @@ impl proto::server::rpc_api::SyncNullifiers for RpcService {
         // Every prefix must fit in the requested 16-bit prefix length. The store narrows prefixes
         // with `prefix as u16`, which would otherwise silently truncate an out-of-range value (e.g.
         // 65536 -> 0) and query a different prefix than the client requested.
-        if let Some(&prefix) =
-            request.nullifiers.iter().find(|&&prefix| prefix > u32::from(u16::MAX))
-        {
+        if let Some(&prefix) = nullifiers.iter().find(|&&prefix| prefix > u32::from(u16::MAX)) {
             return Err(Status::invalid_argument(format!(
                 "nullifier prefix {prefix} does not fit in the requested prefix length of 16 bits"
             )));
@@ -82,7 +81,7 @@ impl proto::server::rpc_api::SyncNullifiers for RpcService {
         let (chain_tip, (nullifiers, block_num)) = self
             .state
             .with_view(async |view| {
-                view.sync_nullifiers(request.prefix_len, request.nullifiers, block_range)
+                view.sync_nullifiers(request.prefix_len, nullifiers, block_range)
                     .await
                     .map(|nullifiers| (view.tip(), nullifiers))
                     .map_err(|err| database_error_to_status(&err))
