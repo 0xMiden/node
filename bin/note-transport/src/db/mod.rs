@@ -52,12 +52,22 @@ pub enum StorageError {
     Capacity(String),
     #[error("invalid cursor")]
     InvalidCursor,
+    #[error("cursor belongs to another database generation; clear the cursor and retry")]
+    StaleCursor,
     #[error("{0}")]
     InvalidData(String),
 }
 
+/// A position in one database generation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Cursor {
+    pub nonce: u64,
+    pub sequence: u64,
+}
+
 #[derive(Debug)]
 pub struct FetchPage {
+    pub cursor: Cursor,
     pub notes: Vec<StoredNote>,
     pub has_more: bool,
 }
@@ -150,15 +160,22 @@ pub async fn store_note(
 pub async fn fetch_notes(
     reader: &DbReader,
     tags: Vec<u32>,
-    cursor: u64,
+    cursor: Option<Cursor>,
 ) -> Result<FetchPage, StorageError> {
-    let cursor = i64::try_from(cursor).map_err(|_| StorageError::InvalidCursor)?;
-    if tags.is_empty() {
-        return Ok(FetchPage { notes: vec![], has_more: false });
-    }
+    let sequence = cursor.map_or(0, |cursor| cursor.sequence);
+    let sequence = i64::try_from(sequence).map_err(|_| StorageError::InvalidCursor)?;
     reader
         .read("fetch_notes", move |tx| {
-            queries::fetch_notes(tx, tags.into_iter().map(NoteTag::new).collect(), cursor)
+            let metadata = queries::select_storage_metadata(tx)?;
+            if cursor.is_some_and(|cursor| cursor.nonce != metadata.nonce) {
+                return Err(StorageError::StaleCursor);
+            }
+            queries::fetch_notes(
+                tx,
+                tags.into_iter().map(NoteTag::new).collect(),
+                sequence,
+                metadata.nonce,
+            )
         })
         .await
 }
