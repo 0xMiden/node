@@ -8,6 +8,9 @@ import "block_number.proto";
 service Api {
     // Stores a note. A retry with the same note ID keeps the first envelope.
     rpc SendNote(SendNoteRequest) returns (SendNoteResponse) {}
+    // Verifies inclusion against the trusted node before storage, including on retries.
+    // A retry with the same note ID keeps the first envelope.
+    rpc SendNoteWithProof(SendNoteWithProofRequest) returns (SendNoteResponse) {}
     // Returns notes after the cursor, ordered by their storage cursor.
     rpc FetchNotes(FetchNotesRequest) returns (FetchNotesResponse) {}
 }
@@ -18,10 +21,19 @@ message SendNoteRequest {
 
 message SendNoteResponse {}
 
+message SendNoteWithProofRequest {
+    // Required. An absent block hint is set to the proven block number.
+    // A supplied block hint must match the proven block number.
+    TransportNote note = 1;
+    // Required. The service verifies this proof but does not store it.
+    note.NoteInclusionProof inclusion_proof = 2;
+}
+
 message TransportNote {
     note.NoteHeader header = 1;
     note.NoteDetails details = 2;
-    // Sender-supplied lower bound for the inclusion block. The service does not verify it.
+    // Lower bound for the inclusion block. SendNote does not verify this hint.
+    // SendNoteWithProof sets this hint to the proven block number.
     // An absent value differs from block zero.
     optional blockchain.BlockNumber after_block_num = 3;
 }

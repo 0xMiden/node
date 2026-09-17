@@ -1,22 +1,28 @@
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 
 use miden_node_db::sqlite::{DbReader, DbWriter};
+use miden_node_proto::clients::{Builder, RpcClient};
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::note_transport::{
+    DecodedTransportNote,
     FetchNotesCursor,
     FetchNotesRequest,
     FetchNotesResponse,
     SendNoteRequest,
     SendNoteResponse,
+    SendNoteWithProofRequest,
     TransportNote,
 };
-use miden_node_proto::server::note_transport_api::{FetchNotes, SendNote};
-use miden_node_proto::{DecodeMessage, Verify};
+use miden_node_proto::generated::rpc::BlockHeaderByNumberRequest;
+use miden_node_proto::server::note_transport_api::{FetchNotes, SendNote, SendNoteWithProof};
+use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify};
 use miden_node_tracing::grpc::grpc_trace_fn;
 use miden_node_tracing::panic::catch_panic_layer_fn;
 use miden_node_tracing::{error, info, miden_instrument};
 use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::shutdown::CancellationToken;
+use miden_protocol::BLOCK_NOTE_TREE_DEPTH;
+use miden_protocol::note::NoteInclusionProof;
 use miden_protocol::utils::serde::Serializable;
 use prost::Message;
 use tokio::net::TcpListener;
@@ -27,6 +33,7 @@ use tower::limit::GlobalConcurrencyLimitLayer;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
+use url::Url;
 
 use crate::{COMPONENT, LOG_TARGET, db};
 
@@ -35,6 +42,7 @@ const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct Config {
+    pub rpc_url: Url,
     pub max_note_size: NonZeroUsize,
     pub max_connections: NonZeroUsize,
     pub max_storage_bytes: NonZeroU64,
@@ -42,9 +50,11 @@ pub struct Config {
     pub grpc: GrpcOptions,
 }
 
-impl Default for Config {
-    fn default() -> Self {
+impl Config {
+    /// Creates a configuration with default limits and a trusted node endpoint.
+    pub fn new(rpc_url: Url) -> Self {
         Self {
+            rpc_url,
             max_note_size: NonZeroUsize::new(512_000).unwrap(),
             max_connections: NonZeroUsize::new(4096).unwrap(),
             max_storage_bytes: NonZeroU64::new(1024 * 1024 * 1024).unwrap(),
@@ -58,6 +68,7 @@ pub struct Server {
     config: Config,
     writer: DbWriter,
     reader: DbReader,
+    rpc: RpcClient,
 }
 
 impl Server {
@@ -68,7 +79,17 @@ impl Server {
             db::FETCH_NOTES_MAX_BYTES
         );
         anyhow::ensure!(!config.grpc.request_timeout.is_zero(), "grpc.timeout must be positive");
-        Ok(Self { config, writer, reader })
+        parse_rpc_url(config.rpc_url.as_str()).map_err(anyhow::Error::msg)?;
+        let rpc = Builder::new(config.rpc_url.clone())
+            .with_tls()?
+            // The lookup timeout covers connection setup and the complete response.
+            .without_timeout()
+            .without_metadata_version()
+            .without_metadata_genesis()
+            .without_auth_header()
+            .with_otel_context_injection()
+            .connect_lazy();
+        Ok(Self { config, writer, reader, rpc })
     }
 
     /// Serves requests until cancellation and waits for active requests to finish.
@@ -133,29 +154,7 @@ impl SendNote for Server {
     type Output = ();
 
     fn decode(request: SendNoteRequest) -> tonic::Result<Self::Input> {
-        use miden_node_proto::errors::ConversionResultExt;
-
-        let request = request.decode_fields().map_err(ConversionError::into_status)?.note;
-        let header = request
-            .header
-            .verify()
-            .context("note.header")
-            .map_err(ConversionError::into_status)?;
-        let details = request
-            .details
-            .verify()
-            .context("note.details")
-            .map_err(ConversionError::into_status)?;
-        let after_block_num = request
-            .after_block_num
-            .map(Verify::verify)
-            .transpose()
-            .context("note.after_block_num")
-            .map_err(ConversionError::into_status)?;
-        if details.commitment() != header.details_commitment() {
-            return Err(tonic::Status::invalid_argument("note details do not match the header"));
-        }
-        Ok(db::NewNote { header, details, after_block_num })
+        decode_note(request.decode_fields().map_err(ConversionError::into_status)?.note)
     }
 
     fn encode(_: ()) -> tonic::Result<SendNoteResponse> {
@@ -169,10 +168,103 @@ impl SendNote for Server {
         _: &MetadataMap,
         _: &Extensions,
     ) -> tonic::Result<()> {
+        self.store_note(note).await
+    }
+}
+
+#[tonic::async_trait]
+impl SendNoteWithProof for Server {
+    type Input = (db::NewNote, NoteInclusionProof);
+    type Output = ();
+
+    fn decode(request: SendNoteWithProofRequest) -> tonic::Result<Self::Input> {
+        use miden_node_proto::errors::ConversionResultExt;
+
+        let request = request.decode_fields().map_err(ConversionError::into_status)?;
+        let mut note = decode_note(request.note)?;
+        let (note_id, proof) = request
+            .inclusion_proof
+            .verify()
+            .context("inclusion_proof")
+            .map_err(ConversionError::into_status)?;
+        if note_id != note.header.id() {
+            return Err(tonic::Status::invalid_argument("proof note ID does not match the note"));
+        }
+        if proof.note_path().depth() != BLOCK_NOTE_TREE_DEPTH {
+            return Err(tonic::Status::invalid_argument("invalid note proof depth"));
+        }
+        let block_num = proof.location().block_num();
+        if note.after_block_num.is_some_and(|hint| hint != block_num) {
+            return Err(tonic::Status::invalid_argument("block hint does not match the proof"));
+        }
+        note.after_block_num = Some(block_num);
+        Ok((note, proof))
+    }
+
+    fn encode(_: ()) -> tonic::Result<SendNoteResponse> {
+        Ok(SendNoteResponse {})
+    }
+
+    #[miden_instrument(target = COMPONENT, err)]
+    async fn handle(
+        &self,
+        (note, proof): Self::Input,
+        _: &MetadataMap,
+        _: &Extensions,
+    ) -> tonic::Result<()> {
+        use miden_node_proto::errors::ConversionResultExt;
+
+        self.check_note_size(&note)?;
+        let mut rpc = self.rpc.clone();
+        let response = tokio::time::timeout(
+            // Reserve half of the request budget for note validation and storage.
+            self.config.grpc.request_timeout / 2,
+            rpc.get_block_header_by_number(BlockHeaderByNumberRequest {
+                block_num: Some(proof.location().block_num().as_u32()),
+                include_mmr_proof: Some(false),
+                include_protocol_config: Some(false),
+            }),
+        )
+        .await
+        .map_err(|_| tonic::Status::deadline_exceeded("block header lookup timed out"))?
+        .map_err(|error| lookup_status(&error))?
+        .into_inner();
+        let header = response
+            .block_header
+            .ok_or_else(|| tonic::Status::failed_precondition("proof block is not available"))?
+            .decode_fields()
+            // The configured node supplies the canonical header. No parent check is required.
+            .and_then(|header| header.build_unchecked().context("block_header"))
+            .map_err(|error| {
+                error!(error, target: LOG_TARGET, "Invalid node block header");
+                tonic::Status::unavailable("node returned an invalid block header")
+            })?;
+        if header.block_num() != proof.location().block_num() {
+            return Err(tonic::Status::unavailable("node returned a different block"));
+        }
+        proof
+            .note_path()
+            .verify(
+                proof.location().block_note_tree_index().into(),
+                note.header.id().as_word(),
+                &header.note_root(),
+            )
+            .map_err(|_| tonic::Status::invalid_argument("note inclusion proof is invalid"))?;
+        self.store_note(note).await
+    }
+}
+
+impl Server {
+    fn check_note_size(&self, note: &db::NewNote) -> tonic::Result<usize> {
         let size = note.header.to_bytes().len() + note.details.to_bytes().len();
         if size > self.config.max_note_size.get() {
             return Err(tonic::Status::resource_exhausted("note exceeds max-note-size"));
         }
+        Ok(size)
+    }
+
+    async fn store_note(&self, note: db::NewNote) -> tonic::Result<()> {
+        let size = self.check_note_size(&note)?;
         let id = note.header.id();
         let result = db::store_note(
             &self.writer,
@@ -274,6 +366,53 @@ impl FetchNotes for Server {
             note_transport.has_more = has_more);
         Ok(FetchNotesResponse { notes, cursor: Some(cursor), has_more })
     }
+}
+
+/// Parses the trusted node URL. Only HTTP and HTTPS endpoints are supported.
+pub fn parse_rpc_url(value: &str) -> Result<Url, String> {
+    let url = Url::parse(value).map_err(|error| error.to_string())?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err("rpc-url must be an HTTP or HTTPS URL with a host".into());
+    }
+    Ok(url)
+}
+
+fn lookup_status(error: &tonic::Status) -> tonic::Status {
+    match error.code() {
+        tonic::Code::NotFound => tonic::Status::failed_precondition("proof block is not available"),
+        tonic::Code::DeadlineExceeded => {
+            tonic::Status::deadline_exceeded("block header lookup timed out")
+        },
+        _ => {
+            error!(error, target: LOG_TARGET, "Block header lookup failed");
+            tonic::Status::unavailable("block header lookup failed")
+        },
+    }
+}
+
+fn decode_note(request: DecodedTransportNote) -> tonic::Result<db::NewNote> {
+    use miden_node_proto::errors::ConversionResultExt;
+
+    let header = request
+        .header
+        .verify()
+        .context("note.header")
+        .map_err(ConversionError::into_status)?;
+    let details = request
+        .details
+        .verify()
+        .context("note.details")
+        .map_err(ConversionError::into_status)?;
+    let after_block_num = request
+        .after_block_num
+        .map(Verify::verify)
+        .transpose()
+        .context("note.after_block_num")
+        .map_err(ConversionError::into_status)?;
+    if details.commitment() != header.details_commitment() {
+        return Err(tonic::Status::invalid_argument("note details do not match the header"));
+    }
+    Ok(db::NewNote { header, details, after_block_num })
 }
 
 fn storage_status(error: db::StorageError) -> tonic::Status {
