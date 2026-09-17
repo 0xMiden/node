@@ -142,9 +142,16 @@ fn account_details_require_vault_data_but_allow_absent_code() {
 #[test]
 fn absent_blocks_and_scripts_remain_optional() {
     let block = proto::rpc::MaybeBlock::default().decode_fields().unwrap();
-    assert!(block.block.is_none());
-    assert!(block.proof.is_none());
-    assert!(proto::rpc::MaybeNoteScript::default().decode_fields().unwrap().script.is_none());
+    assert!(block.block.as_ref().is_none());
+    assert!(block.proof.as_ref().is_none());
+    assert!(
+        proto::rpc::MaybeNoteScript::default()
+            .decode_fields()
+            .unwrap()
+            .script
+            .as_ref()
+            .is_none()
+    );
 }
 
 #[test]

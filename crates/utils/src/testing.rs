@@ -110,15 +110,11 @@ pub async fn deferred_transaction_fixture() -> &'static DeferredTransactionFixtu
 }
 
 /// Removes the deferred witness without changing the VM proof or its committed root.
-#[expect(
-    clippy::default_trait_access,
-    reason = "The protocol does not re-export DeferredStateWire."
-)]
 pub fn proof_with_missing_deferred_witness(transaction: &ProvenTransaction) -> ExecutionProof {
-    assert!(!transaction.proof().is_complete());
+    assert!(matches!(transaction.proof().precompile(), PrecompileStatus::Deferred(_)));
     ExecutionProof::from_parts(
         transaction.proof().compatibility().clone(),
         transaction.proof().vm().clone(),
-        PrecompileStatus::Deferred(Default::default()),
+        PrecompileStatus::Empty,
     )
 }

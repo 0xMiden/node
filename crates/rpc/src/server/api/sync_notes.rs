@@ -33,12 +33,13 @@ impl proto::server::rpc_api::SyncNotes for RpcService {
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
         let range = request.block_range;
+        let note_tags = request.note_tags.into_inner();
 
         miden_span_record!(
             block_range.from = range.block_from,
             block_range.to = range.block_to,
-            note.tags = request.note_tags.as_slice(),
-            note.tag.count = request.note_tags.len()
+            note.tags = note_tags.as_slice(),
+            note.tag.count = note_tags.len()
         );
 
         debug!(
@@ -46,11 +47,11 @@ impl proto::server::rpc_api::SyncNotes for RpcService {
             "Syncing notes",
             block_range.from = range.block_from,
             block_range.to = range.block_to,
-            note.tags = request.note_tags.as_slice(),
-            note.tag.count = request.note_tags.len()
+            note.tags = note_tags.as_slice(),
+            note.tag.count = note_tags.len()
         );
 
-        check::<QueryParamNoteTagLimit>(request.note_tags.len())?;
+        check::<QueryParamNoteTagLimit>(note_tags.len())?;
 
         let block_range = range
             .verify()
@@ -59,7 +60,7 @@ impl proto::server::rpc_api::SyncNotes for RpcService {
         let (chain_tip, (results, last_block_checked)) = self
             .state
             .with_view(async |view| {
-                view.sync_notes(request.note_tags, block_range)
+                view.sync_notes(note_tags, block_range)
                     .await
                     .map(|notes| (view.tip(), notes))
                     .map_err(note_sync_error_to_status)

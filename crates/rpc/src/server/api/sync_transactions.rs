@@ -19,7 +19,7 @@ impl proto::server::rpc_api::SyncTransactions for RpcService {
     type Output = proto::rpc::SyncTransactionsResponse;
 
     fn decode(request: proto::rpc::SyncTransactionsRequest) -> tonic::Result<Self::Input> {
-        check::<QueryParamAccountIdLimit>(request.account_ids.len())?;
+        check::<QueryParamAccountIdLimit>(request.account_ids.as_slice().len())?;
         request.decode_fields().map_err(conversion_error_to_status)
     }
 
@@ -39,9 +39,10 @@ impl proto::server::rpc_api::SyncTransactions for RpcService {
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
         let range = request.block_range;
-        let n_accounts = request.account_ids.len();
+        let n_accounts = request.account_ids.as_slice().len();
         let account_ids = request
             .account_ids
+            .into_inner()
             .into_iter()
             .enumerate()
             .map(|(index, id)| id.verify().with_context(|| format!("account_ids[{index}]")))

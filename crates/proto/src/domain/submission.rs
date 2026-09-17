@@ -80,10 +80,10 @@ impl Verify for proto::submission::DecodedTransactionBatch {
             .context("proposed_batch")?;
         let batch = self.batch.verify_with(&proposed_batch).context("batch")?;
 
-        if self.sealed_transaction_inputs.len() != proposed_batch.transactions().len() {
+        if self.sealed_transaction_inputs.as_slice().len() != proposed_batch.transactions().len() {
             return Err(ConversionError::message(format!(
                 "sealed transaction input count {} does not match proposal transaction count {}",
-                self.sealed_transaction_inputs.len(),
+                self.sealed_transaction_inputs.as_slice().len(),
                 proposed_batch.transactions().len()
             )));
         }
@@ -93,6 +93,7 @@ impl Verify for proto::submission::DecodedTransactionBatch {
             proposed_batch,
             sealed_transaction_inputs: self
                 .sealed_transaction_inputs
+                .into_inner()
                 .into_iter()
                 .map(Into::into)
                 .collect(),

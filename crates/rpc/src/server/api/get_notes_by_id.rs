@@ -38,6 +38,7 @@ impl proto::server::rpc_api::GetNotesById for RpcService {
     ) -> tonic::Result<Self::Output> {
         let note_ids: Vec<NoteId> = request
             .note_ids
+            .into_inner()
             .into_iter()
             .map(Verify::verify)
             .collect::<Result<_, _>>()

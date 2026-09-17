@@ -929,9 +929,18 @@ fn attribute_failed_notes(
     let mut seen = HashSet::new();
     let mut attributed = Vec::new();
     for f in failed {
-        let error_msg = f.error().as_report();
+        let Some(error) = f.error() else {
+            info!(
+                target: LOG_TARGET,
+                "note deferred after bundle rejection",
+                note.id = f.note().id(),
+                note.nullifier = f.note().nullifier()
+            );
+            continue;
+        };
+        let error_msg = error.as_report();
         info!(
-            f.error(),
+            error,
             target: LOG_TARGET,
             "note failed: consumability check",
             note.id = f.note().id(),
@@ -959,6 +968,78 @@ mod tests {
 
     use super::*;
     use crate::test_utils::{mock_account, mock_network_account_id, mock_transaction_id};
+
+    #[test]
+    fn collateral_notes_receive_no_penalty() {
+        let account_id = mock_network_account_id();
+        let note = crate::test_utils::mock_single_target_note(account_id, 1).into_note();
+        let blamed_by = crate::test_utils::mock_single_target_note(account_id, 2).into_note().id();
+        let failed = vec![FailedNote::new(note, miden_tx::NoteFailure::Collateral { blamed_by })];
+
+        assert!(attribute_failed_notes(failed, &HashMap::new()).is_empty());
+    }
+
+    #[test]
+    fn blamed_note_retains_its_error() {
+        let note =
+            crate::test_utils::mock_single_target_note(mock_network_account_id(), 1).into_note();
+        let nullifier = note.nullifier();
+        let failed = vec![FailedNote::new(
+            note,
+            miden_tx::NoteFailure::Blamed {
+                error: miden_tx::TransactionExecutorError::AccountUpdateCommitment(
+                    "consumability failure",
+                ),
+                num_cycles: None,
+            },
+        )];
+
+        let attributed = attribute_failed_notes(failed, &HashMap::new());
+        assert_eq!(attributed.len(), 1);
+        assert_eq!(attributed[0].0, nullifier);
+        assert!(attributed[0].1.to_string().contains("consumability failure"));
+    }
+
+    #[test]
+    fn collateral_sponsorship_does_not_suppress_blamed_failure() {
+        let account_id = mock_network_account_id();
+        let feature = crate::test_utils::mock_single_target_note(account_id, 1).into_note();
+        let collateral = crate::test_utils::mock_sponsorship_note(account_id, feature.id(), 2);
+        let blamed = crate::test_utils::mock_sponsorship_note(account_id, feature.id(), 3);
+        let another_blamed = crate::test_utils::mock_sponsorship_note(account_id, feature.id(), 4);
+        let sponsors = HashMap::from([
+            (collateral.id(), feature.nullifier()),
+            (blamed.id(), feature.nullifier()),
+            (another_blamed.id(), feature.nullifier()),
+        ]);
+        let blamed_by = blamed.id();
+        let failed = vec![
+            FailedNote::new(collateral, miden_tx::NoteFailure::Collateral { blamed_by }),
+            FailedNote::new(
+                blamed,
+                miden_tx::NoteFailure::Blamed {
+                    error: miden_tx::TransactionExecutorError::AccountUpdateCommitment(
+                        "first failure",
+                    ),
+                    num_cycles: None,
+                },
+            ),
+            FailedNote::new(
+                another_blamed,
+                miden_tx::NoteFailure::Blamed {
+                    error: miden_tx::TransactionExecutorError::AccountUpdateCommitment(
+                        "second failure",
+                    ),
+                    num_cycles: None,
+                },
+            ),
+        ];
+
+        let attributed = attribute_failed_notes(failed, &sponsors);
+        assert_eq!(attributed.len(), 1);
+        assert_eq!(attributed[0].0, feature.nullifier());
+        assert!(attributed[0].1.to_string().contains("first failure"));
+    }
 
     /// Builds a valid nonce-only [`AccountPatch`] that advances `account` by a single nonce.
     fn nonce_bump_patch(account: &Account) -> AccountPatch {

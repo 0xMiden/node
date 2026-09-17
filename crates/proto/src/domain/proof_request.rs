@@ -58,6 +58,7 @@ impl BuildUnchecked for proto::block_proving::DecodedBlockProofRequest {
         let block_inputs = self.block_inputs.build_unchecked().context("block_inputs")?;
         let batches = self
             .batches
+            .into_inner()
             .into_iter()
             .enumerate()
             .map(|(index, batch)| {
@@ -136,7 +137,7 @@ impl BuildUnchecked for proto::block_proving::DecodedBlockInputs {
             self.partial_blockchain.build_unchecked().context("partial_blockchain")?;
 
         let mut account_witnesses = BTreeMap::<AccountId, AccountWitness>::new();
-        for (index, record) in self.account_witnesses.into_iter().enumerate() {
+        for (index, record) in self.account_witnesses.into_inner().into_iter().enumerate() {
             let account_id = record
                 .account_id
                 .verify()
@@ -153,7 +154,7 @@ impl BuildUnchecked for proto::block_proving::DecodedBlockInputs {
         }
 
         let mut nullifier_witnesses = BTreeMap::<Nullifier, NullifierWitness>::new();
-        for (index, record) in self.nullifier_witnesses.into_iter().enumerate() {
+        for (index, record) in self.nullifier_witnesses.into_inner().into_iter().enumerate() {
             let nullifier = Nullifier::from_raw(record.nullifier);
             let proof = record
                 .opening
@@ -167,7 +168,8 @@ impl BuildUnchecked for proto::block_proving::DecodedBlockInputs {
         }
 
         let mut unauthenticated_note_proofs = BTreeMap::<NoteId, NoteInclusionProof>::new();
-        for (index, proof) in self.unauthenticated_note_proofs.into_iter().enumerate() {
+        for (index, proof) in self.unauthenticated_note_proofs.into_inner().into_iter().enumerate()
+        {
             let (note_id, proof) = proof
                 .verify()
                 .with_context(|| format!("unauthenticated_note_proofs[{index}]"))?;
