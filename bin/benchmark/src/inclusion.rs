@@ -132,6 +132,8 @@ pub(crate) async fn scan_with_drain(
             let signed_block = match block
                 .decode_fields()
                 .map_err(anyhow::Error::from)
+                // SAFETY: This benchmark uses blocks from the target RPC only to measure inclusion.
+                // It does not use them to authenticate chain state.
                 .and_then(|block| block.build_unchecked().map_err(anyhow::Error::from))
             {
                 Ok(sb) => sb,
@@ -229,6 +231,7 @@ pub(crate) async fn current_block_height(mut client: RpcClient) -> u32 {
         .expect("no block header in response")
         .decode_fields()
         .expect("failed to decode block header")
+        // SAFETY: The benchmark trusts the target RPC for this height measurement.
         .build_unchecked()
         .expect("failed to build block header");
     header.block_num().as_u32()

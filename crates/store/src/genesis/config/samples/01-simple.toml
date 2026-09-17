@@ -21,11 +21,19 @@ symbol       = "WHAT"
 [[wallet]]
 account_type = "private"
 assets       = [{ amount = 999_000, symbol = "MIDEN" }]
+name         = "wallet_treasury"
 
 [[wallet]]
 account_type = "private"
 assets       = [{ amount = 777, symbol = "MIDEN" }]
+name         = "wallet_user"
 
 [[wallet]]
 account_type = "private"
 assets       = [{ amount = 1, symbol = "WHAT" }]
+name         = "wallet_what"
+
+[[wallet]]
+account_type = "public"
+assets       = [{ amount = 1_000_000_000, symbol = "MIDEN" }]
+name         = "funding_service"

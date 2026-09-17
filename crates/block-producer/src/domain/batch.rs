@@ -1,12 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::batch::BatchId;
 use miden_protocol::block::BlockNumber;
-
-use crate::domain::transaction::AuthenticatedTransaction;
 
 // SELECTED BATCH
 // ================================================================================================

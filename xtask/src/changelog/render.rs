@@ -176,7 +176,7 @@ fn append_callout_entry(notes: &mut String, entry: &ReleaseNoteEntry) {
 }
 
 impl Scope {
-    const fn sort_order() -> [Self; 10] {
+    const fn sort_order() -> [Self; 11] {
         [
             Self::General,
             Self::Rpc,
@@ -186,6 +186,7 @@ impl Scope {
             Self::Validator,
             Self::NoteTransport,
             Self::NetworkMonitor,
+            Self::FundingService,
             Self::Docs,
             Self::Internal,
         ]
@@ -203,6 +204,7 @@ impl std::fmt::Display for Scope {
             Self::Validator => "Validator",
             Self::NoteTransport => "Note Transport",
             Self::NetworkMonitor => "Network Monitor",
+            Self::FundingService => "Funding Service",
             Self::Docs => "Docs",
             Self::Internal => "Internal",
         };
@@ -251,7 +253,7 @@ impl std::fmt::Display for Impact {
     }
 }
 
-const SCOPE_ORDER: [Scope; 10] = Scope::sort_order();
+const SCOPE_ORDER: [Scope; 11] = Scope::sort_order();
 
 #[cfg(test)]
 mod tests {

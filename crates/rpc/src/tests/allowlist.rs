@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-use miden_node_proto::generated::submission::SealedTransactionInputs;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_standards::account::auth::NetworkAccount;
 use miden_standards::account::fees::{BasicConstantFeePolicy, FeePolicyManager};
@@ -105,6 +104,76 @@ impl TestStore {
 }
 
 #[tokio::test]
+async fn is_account_allowed_respects_enforcement() {
+    let store = TestStore::start().await;
+    let allowlist = store.bootstrap_allowlist();
+    let guard = TestServerGuard(CancellationToken::new());
+    let block_producer = BlockProducerApi::new(
+        Arc::clone(&store.state),
+        0.into(),
+        BlockProducerApiConfig::default(),
+        guard.0.clone(),
+    );
+    let [listed, unlisted] = [[0; 15], [1; 15]].map(|bytes| {
+        AccountId::dummy(
+            bytes,
+            AccountIdVersion::Version1,
+            AccountType::Private,
+            AssetCallbackFlag::Disabled,
+        )
+    });
+    allowlist.add_account(listed).await.unwrap();
+    let path = DataDirectory::load(store.data_directory.clone())
+        .unwrap()
+        .allowlist_database_path();
+    let disabled_allowlist = Arc::new(AccountAllowlist::load(&path).unwrap());
+
+    for (admission, unlisted_allowed) in [
+        (AccountAdmission::enabled(allowlist), false),
+        (AccountAdmission::disabled(disabled_allowlist), true),
+    ] {
+        // Disabled enforcement must not depend on database availability.
+        if unlisted_allowed {
+            fs_err::remove_file(&path).unwrap();
+        }
+        let rpc = RpcService::new(
+            Arc::clone(&store.state),
+            RpcBackend::sequencer(
+                block_producer.clone(),
+                ValidatorClients::new(vec![dummy_client::<ValidatorClient>()]).unwrap(),
+                admission,
+            ),
+            None,
+            NonZeroUsize::new(1).unwrap(),
+            None,
+        );
+        for account_id in [
+            None,
+            Some(proto::account::AccountId::default()),
+            Some(proto::account::AccountId {
+                version: Some(proto::account::account_id::Version::V1(
+                    proto::account::AccountIdV1 {
+                        suffix: Some(proto::primitives::Felt { value: 0 }),
+                        prefix: Some(proto::primitives::Felt { value: 0 }),
+                    },
+                )),
+            }),
+        ] {
+            let invalid = proto::rpc::IsAccountAllowedRequest { account_id };
+            assert_eq!(
+                rpc.is_account_allowed(Request::new(invalid)).await.unwrap_err().code(),
+                tonic::Code::InvalidArgument
+            );
+        }
+        for (account, expected) in [(listed, true), (unlisted, unlisted_allowed)] {
+            let query = proto::rpc::IsAccountAllowedRequest { account_id: Some(account.into()) };
+            let response = rpc.is_account_allowed(Request::new(query)).await.unwrap();
+            assert_eq!(response.into_inner().allowed, expected);
+        }
+    }
+}
+
+#[tokio::test]
 async fn account_admission_only_restricts_new_non_network_accounts() {
     let store = TestStore::start().await;
     let allowlist = store.bootstrap_allowlist();
@@ -148,7 +217,7 @@ async fn account_admission_only_restricts_new_non_network_accounts() {
     assert!(!allowlist.contains_account(creation.account_id()).await.unwrap());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn submission_endpoints_reject_unregistered_creation_without_partial_batch_admission() {
     let (store, batch) = TestStore::with_account_creation_batch().await;
     let transactions = batch.transactions();
@@ -197,29 +266,27 @@ async fn submission_endpoints_reject_unregistered_creation_without_partial_batch
         transaction: Some(transactions[1].as_ref().into()),
         ..Default::default()
     };
+    let mut auth_inputs = Vec::new();
+    for tx in transactions {
+        auth_inputs.push(get_tx_inputs(&store.state, tx).await.unwrap().into());
+    }
     let authenticated_batch = proto::sequencer::AuthenticatedTransactionBatch {
         proposed_batch: Some((&batch).into()),
-        auth_inputs: transactions
-            .iter()
-            .map(|tx| proto::sequencer::AuthInputs {
-                account_id: Some(tx.account_id().into()),
-                ..Default::default()
-            })
-            .collect(),
+        auth_inputs,
     };
 
     for result in [
         public
             .submit_proven_tx(Request::new(proto::submission::ProvenTransactionSubmission {
                 transaction: Some(transactions[1].as_ref().into()),
-                sealed_transaction_inputs: None,
+                sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
             }))
             .await,
         public
             .submit_proven_tx_batch(Request::new(proto::submission::TransactionBatch {
                 batch: Some((&proven_batch).into()),
                 proposed_batch: Some((&batch).into()),
-                sealed_transaction_inputs: vec![SealedTransactionInputs::default(); 2],
+                sealed_transaction_inputs: vec![test_sealed_transaction_inputs(); 2],
             }))
             .await,
         internal.submit_authenticated_tx(Request::new(tx)).await,
@@ -228,7 +295,7 @@ async fn submission_endpoints_reject_unregistered_creation_without_partial_batch
             .await,
     ] {
         let status = result.unwrap_err();
-        assert_eq!(status.code(), tonic::Code::PermissionDenied, "{status:?}");
+        assert_eq!(status.code(), tonic::Code::PermissionDenied, "{status}");
         assert!(status.message().contains(&transactions[1].account_id().to_string()));
     }
 

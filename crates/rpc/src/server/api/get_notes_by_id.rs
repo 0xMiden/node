@@ -11,11 +11,14 @@ use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::GetNotesById for RpcService {
-    type Input = proto::rpc::NotesByIdRequest;
+    type Input = proto::rpc::DecodedNotesByIdRequest;
     type Output = Vec<CommittedNote>;
 
     fn decode(request: proto::rpc::NotesByIdRequest) -> tonic::Result<Self::Input> {
-        Ok(request)
+        check::<QueryParamNoteIdLimit>(request.note_ids.len())?;
+        request
+            .decode_fields()
+            .map_err(miden_node_proto::errors::conversion_error_to_status)
     }
 
     fn encode(notes: Self::Output) -> tonic::Result<proto::rpc::NotesByIdResponse> {
@@ -33,16 +36,10 @@ impl proto::server::rpc_api::GetNotesById for RpcService {
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        check::<QueryParamNoteIdLimit>(request.note_ids.len())?;
-
         let note_ids: Vec<NoteId> = request
             .note_ids
             .into_iter()
-            .map(|note_id| {
-                note_id.decode_fields().and_then(|note_id| {
-                    note_id.verify().map_err(miden_objects::ConversionError::new)
-                })
-            })
+            .map(Verify::verify)
             .collect::<Result<_, _>>()
             .map_err(|err| Status::invalid_argument(format!("invalid note ID: {err}")))?;
         miden_span_record!(

@@ -4,9 +4,9 @@ use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{BlockHeader, BlockInputs};
 use miden_protocol::protocol_config::ProtocolConfig;
 
-use super::protocol_config::ensure_protocol_config_is_present_and_matches_header;
-use crate::errors::ConversionError;
-use crate::generated as proto;
+use super::protocol_config::verify_protocol_config_commitment;
+use crate::errors::{ConversionError, ConversionResultExt};
+use crate::{BuildUnchecked, Verify, generated as proto};
 
 /// The domain inputs needed to validate and sign a block.
 #[derive(Debug)]
@@ -17,35 +17,33 @@ pub struct SignBlockRequest {
     pub protocol_config: Option<ProtocolConfig>,
 }
 
-impl TryFrom<proto::validator::SignBlockRequest> for SignBlockRequest {
+impl BuildUnchecked for proto::validator::DecodedSignBlockRequest {
+    type Output = SignBlockRequest;
     type Error = ConversionError;
 
-    fn try_from(value: proto::validator::SignBlockRequest) -> Result<Self, Self::Error> {
-        let block_inputs = value.block_inputs.ok_or_else(|| {
-            ConversionError::missing_field::<proto::validator::SignBlockRequest>("block_inputs")
-        })?;
-        let next_validator_config = value.next_validator_config.ok_or_else(|| {
-            ConversionError::missing_field::<proto::validator::SignBlockRequest>(
-                "next_validator_config",
-            )
-        })?;
-        let decoded = super::block_proposal::decode(
-            block_inputs,
-            value.batches,
-            value.timestamp,
-            next_validator_config,
-            value.next_protocol_config,
-        )?;
-        let protocol_config = value
+    /// Build the proposal and check any supplied protocol configuration against its header. The
+    /// caller must verify the parent and batch proofs and contents before signing.
+    fn build_unchecked(self) -> Result<Self::Output, Self::Error> {
+        // SAFETY: The caller must authenticate the parent and validate batches before signing. The
+        // shared proposal constructor checks block witnesses and batch consistency.
+        let decoded = proto::block_proving::DecodedBlockProofRequest {
+            block_inputs: self.block_inputs,
+            batches: self.batches,
+            timestamp: self.timestamp,
+            next_validator_config: self.next_validator_config,
+            next_protocol_config: self.next_protocol_config,
+        }
+        .build_unchecked()?;
+        let protocol_config = self
             .protocol_config
             .map(|config| {
-                ensure_protocol_config_is_present_and_matches_header(
-                    Some(config),
+                verify_protocol_config_commitment(
+                    config.verify().context("protocol_config")?,
                     &decoded.block_header,
                 )
             })
             .transpose()?;
-        Ok(Self {
+        Ok(SignBlockRequest {
             tx_batches: decoded.tx_batches,
             block_header: decoded.block_header,
             block_inputs: decoded.block_inputs,

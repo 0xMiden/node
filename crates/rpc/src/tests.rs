@@ -6,12 +6,8 @@ use std::time::Duration;
 
 use http::header::{ACCEPT, CONTENT_TYPE};
 use http::{Extensions, HeaderMap, HeaderValue};
-use miden_node_block_producer::store::{TransactionInputs, get_tx_inputs};
-use miden_node_block_producer::{
-    AuthenticatedTransaction,
-    BlockProducerApi,
-    BlockProducerApiConfig,
-};
+use miden_node_block_producer::store::get_tx_inputs;
+use miden_node_block_producer::{BlockProducerApi, BlockProducerApiConfig};
 use miden_node_proto::clients::{
     Builder,
     GrpcClient,
@@ -21,6 +17,7 @@ use miden_node_proto::clients::{
     SequencerClient,
     ValidatorClient,
 };
+use miden_node_proto::domain::sequencer::{AuthenticatedTransaction, TransactionInputs};
 use miden_node_proto::generated::rpc::api_client::ApiClient as ProtoClient;
 use miden_node_proto::generated::rpc::api_server::Api;
 use miden_node_proto::generated::sequencer::api_server::Api as SequencerApi;
@@ -433,7 +430,7 @@ async fn build_valid_batch_fixture(include_fee: bool) -> ValidBatchFixture {
     let request = proto::submission::TransactionBatch {
         batch: Some((&proven_batch).into()),
         proposed_batch: Some((&proposed_batch).into()),
-        sealed_transaction_inputs: vec![proto::submission::SealedTransactionInputs::default()],
+        sealed_transaction_inputs: vec![test_sealed_transaction_inputs()],
     };
 
     ValidBatchFixture {
@@ -455,6 +452,14 @@ fn assert_beyond_tip(status: &tonic::Status, endpoint: &str) {
         "{endpoint} error message should mention the chain tip, got: {}",
         status.message()
     );
+}
+
+/// Opaque inputs for RPC tests that reject a request before decryption or use a validator stub.
+fn test_sealed_transaction_inputs() -> proto::submission::SealedTransactionInputs {
+    proto::submission::SealedTransactionInputs {
+        key_id: vec![1, 2, 3],
+        ciphertext: vec![4, 5, 6],
+    }
 }
 
 #[tokio::test]
@@ -602,7 +607,7 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
 
     let request = proto::submission::ProvenTransactionSubmission {
         transaction: Some(transaction),
-        sealed_transaction_inputs: None,
+        sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
     };
 
     let response = rpc_client.submit_proven_tx(request).await;
@@ -636,7 +641,7 @@ async fn rpc_server_rejects_proven_transactions_without_native_fees(
     let tx = build_test_proven_tx_with_fee(&account, &account_patch, genesis, fee);
     let request = proto::submission::ProvenTransactionSubmission {
         transaction: Some((&tx).into()),
-        sealed_transaction_inputs: None,
+        sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
     };
 
     let service = RpcService::new(
@@ -719,7 +724,7 @@ async fn rpc_server_rejects_invalid_deferred_transaction_proofs() {
     );
     let request = proto::submission::ProvenTransactionSubmission {
         transaction: Some((&transaction).into()),
-        sealed_transaction_inputs: None,
+        sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
     };
 
     let service = RpcService::new(
@@ -770,7 +775,7 @@ async fn rpc_server_forwards_valid_deferred_proofs_and_rejects_missing_witnesses
     );
     let request = proto::submission::ProvenTransactionSubmission {
         transaction: Some((&fixture.transaction).into()),
-        sealed_transaction_inputs: None,
+        sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
     };
     let status = service.submit_proven_tx(Request::new(request)).await.unwrap_err();
     // The stub rejects submissions after it records them.
@@ -788,6 +793,10 @@ async fn rpc_server_forwards_valid_deferred_proofs_and_rejects_missing_witnesses
             .unwrap();
         assert_eq!(forwarded.id(), fixture.transaction.id());
         assert_eq!(forwarded.proof(), fixture.transaction.proof());
+        assert_eq!(
+            submissions[0].sealed_transaction_inputs,
+            Some(test_sealed_transaction_inputs())
+        );
     }
 
     let invalid_tx = replace_transaction_proof(
@@ -796,7 +805,7 @@ async fn rpc_server_forwards_valid_deferred_proofs_and_rejects_missing_witnesses
     );
     let request = proto::submission::ProvenTransactionSubmission {
         transaction: Some((&invalid_tx).into()),
-        sealed_transaction_inputs: None,
+        sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
     };
     let status = service.submit_proven_tx(Request::new(request)).await.unwrap_err();
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
@@ -827,7 +836,7 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_reference_block() {
 
     let request = proto::submission::ProvenTransactionSubmission {
         transaction: Some((&tx).into()),
-        sealed_transaction_inputs: None,
+        sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
     };
 
     let response = rpc_client.submit_proven_tx(request).await;
@@ -871,7 +880,7 @@ async fn rpc_rejects_post_deployment_network_account_tx() {
     );
     let request = proto::submission::ProvenTransactionSubmission {
         transaction: Some((&tx).into()),
-        sealed_transaction_inputs: None,
+        sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
     };
 
     let service = RpcService::new(
@@ -1488,6 +1497,15 @@ async fn full_node_forwards_complete_transaction_batch_to_source_rpc(#[case] inc
         None,
     );
 
+    let mut malformed = fixture.request.clone();
+    malformed.sealed_transaction_inputs.clear();
+    let error = full_node
+        .submit_proven_tx_batch(Request::new(malformed))
+        .await
+        .expect_err("batch submission must require one sealed input per transaction");
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    assert!(error.message().contains("sealed transaction input count"), "{error}");
+
     let response = full_node
         .submit_proven_tx_batch(Request::new(fixture.request))
         .await
@@ -1567,7 +1585,8 @@ async fn authenticated_batch_defers_validation_to_async_handler() {
     .expect_err("the async handler should reject the malformed proposed batch");
 
     assert_eq!(error.code(), tonic::Code::InvalidArgument);
-    assert!(error.message().contains("invalid proposed_batch"));
+    assert!(error.message().starts_with("proposed_batch.reference_block_header:"), "{error}");
+    assert!(error.message().contains("missing"), "{error}");
 }
 
 // Batch-path coverage for the network-account gate is provided manually. The query layer is covered
@@ -1595,7 +1614,7 @@ async fn rpc_server_rejects_tx_submissions_without_genesis() {
 
     let request = proto::submission::ProvenTransactionSubmission {
         transaction: Some((&tx).into()),
-        sealed_transaction_inputs: None,
+        sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
     };
 
     let response = rpc_client.submit_proven_tx(request).await;
@@ -1713,6 +1732,8 @@ async fn register_account_validates_input_and_preserves_registrations() {
         invitation_code: "abc".to_owned(),
         account_id: Some(account.into()),
     };
+    let query = proto::rpc::IsAccountAllowedRequest { account_id: Some(account.into()) };
+    assert!(!rpc.is_account_allowed(query).await.unwrap().into_inner().allowed);
     assert_eq!(
         rpc.register_account(request.clone()).await.unwrap_err().code(),
         tonic::Code::InvalidArgument
@@ -1758,6 +1779,7 @@ async fn register_account_validates_input_and_preserves_registrations() {
     let imported = allowlist.invitation_info(invitation.clone()).await.unwrap().unwrap();
     rpc.register_account(request.clone()).await.unwrap();
     rpc.register_account(request.clone()).await.unwrap();
+    assert!(rpc.is_account_allowed(query).await.unwrap().into_inner().allowed);
     let conflict = proto::rpc::RegisterAccountRequest {
         account_id: Some(other.into()),
         ..request.clone()
@@ -1793,7 +1815,7 @@ async fn register_account_validates_input_and_preserves_registrations() {
 }
 
 #[tokio::test]
-async fn register_account_database_failures_include_the_cause() {
+async fn allowlist_database_failures_include_the_cause() {
     let (mut rpc, _addr, store, _server) = start_rpc().await;
     let path = DataDirectory::load(store.data_directory.clone())
         .unwrap()
@@ -1820,10 +1842,15 @@ async fn register_account_database_failures_include_the_cause() {
     let error = rpc.register_account(request).await.unwrap_err();
     assert_eq!(error.code(), tonic::Code::Internal);
     assert!(error.message().contains("unable to open database file"), "{error}");
+
+    let query = proto::rpc::IsAccountAllowedRequest { account_id: Some(account.into()) };
+    let error = rpc.is_account_allowed(query).await.unwrap_err();
+    assert_eq!(error.code(), tonic::Code::Internal);
+    assert!(error.message().contains("unable to open database file"), "{error}");
 }
 
 #[tokio::test]
-async fn full_nodes_forward_account_registration_to_the_sequencer() {
+async fn full_nodes_forward_allowlist_requests_to_the_sequencer() {
     let (source_rpc, _addr, source_store, _server) = start_rpc().await;
     let allowlist = AccountAllowlist::load(
         DataDirectory::load(source_store.data_directory.clone())
@@ -1868,6 +1895,14 @@ async fn full_nodes_forward_account_registration_to_the_sequencer() {
             );
             request
         };
+        let query = || {
+            let mut query = Request::new(proto::rpc::IsAccountAllowedRequest {
+                account_id: Some(account.into()),
+            });
+            *query.metadata_mut() = request().metadata().clone();
+            query
+        };
+        assert!(!rpc.is_account_allowed(query()).await.unwrap().into_inner().allowed);
         assert_eq!(
             rpc.register_account(request()).await.unwrap_err().code(),
             tonic::Code::NotFound
@@ -1881,6 +1916,16 @@ async fn full_nodes_forward_account_registration_to_the_sequencer() {
             .unwrap();
         rpc.register_account(request()).await.unwrap();
         rpc.register_account(request()).await.unwrap();
+        assert!(rpc.is_account_allowed(query()).await.unwrap().into_inner().allowed);
+        let mut wrong_network = query();
+        wrong_network.metadata_mut().insert(
+            ACCEPT.as_str(),
+            format!("application/vnd.miden; genesis={}", Word::empty()).parse().unwrap(),
+        );
+        assert_eq!(
+            rpc.is_account_allowed(wrong_network).await.unwrap_err().code(),
+            tonic::Code::InvalidArgument
+        );
         assert_eq!(
             allowlist.invitation_info(invitation).await.unwrap().unwrap().account_id,
             Some(account)
@@ -1974,6 +2019,73 @@ async fn get_limits_endpoint() {
         QueryParamStorageMapSlotLimit::PARAM_NAME,
         QueryParamStorageMapSlotLimit::LIMIT
     );
+}
+
+#[tokio::test]
+async fn sync_endpoints_preserve_account_verification_context() {
+    let (mut rpc_client, _rpc_addr, _store, _server) = start_rpc().await;
+    let invalid_id = proto::account::AccountId {
+        version: Some(proto::account::account_id::Version::V1(proto::account::AccountIdV1 {
+            prefix: Some(proto::primitives::Felt { value: 0 }),
+            suffix: Some(proto::primitives::Felt { value: 0 }),
+        })),
+    };
+    let block_range = Some(proto::rpc::BlockRange { block_from: 0, block_to: 0 });
+    let storage_error = rpc_client
+        .sync_account_storage_maps(proto::rpc::SyncAccountStorageMapsRequest {
+            account_id: Some(invalid_id),
+            block_range,
+        })
+        .await
+        .unwrap_err();
+    let vault_error = rpc_client
+        .sync_account_vault(proto::rpc::SyncAccountVaultRequest {
+            account_id: Some(invalid_id),
+            block_range,
+        })
+        .await
+        .unwrap_err();
+    let valid_id = AccountId::dummy(
+        [7; 15],
+        AccountIdVersion::Version1,
+        AccountType::Public,
+        AssetCallbackFlag::Disabled,
+    );
+    let transactions_error = rpc_client
+        .sync_transactions(proto::rpc::SyncTransactionsRequest {
+            account_ids: vec![valid_id.into(), invalid_id],
+            block_range,
+        })
+        .await
+        .unwrap_err();
+
+    for (error, field) in [
+        (storage_error, "account_id:"),
+        (vault_error, "account_id:"),
+        (transactions_error, "account_ids[1]:"),
+    ] {
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert!(error.message().starts_with(field), "{error}");
+        assert!(error.message().contains("not a known account ID version"), "{error}");
+    }
+}
+
+#[tokio::test]
+async fn sync_transactions_rejects_oversized_requests_before_decoding_fields() {
+    let (mut rpc_client, _rpc_addr, _store, _server) = start_rpc().await;
+    let error = rpc_client
+        .sync_transactions(proto::rpc::SyncTransactionsRequest {
+            block_range: Some(proto::rpc::BlockRange { block_from: 0, block_to: 0 }),
+            account_ids: vec![
+                proto::account::AccountId::default();
+                QueryParamAccountIdLimit::LIMIT + 1
+            ],
+        })
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.code(), tonic::Code::OutOfRange);
+    assert!(error.message().contains("account_id exceeded limit"), "{error}");
 }
 
 #[tokio::test]
