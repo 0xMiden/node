@@ -117,7 +117,7 @@ pub enum FundingServiceCommand {
         )]
         tx_expiration_delta: NonZeroU16,
 
-        /// Interval at which the service asks the node whether its notes are committed.
+        /// Interval at which the funding worker runs a cycle while it has work.
         #[arg(
             long = "poll-interval",
             env = ENV_POLL_INTERVAL,
@@ -127,7 +127,7 @@ pub enum FundingServiceCommand {
         )]
         poll_interval: Duration,
 
-        /// Interval at which the service collects the pay-to-ID notes sent to the funding account.
+        /// Interval at which the service scans for the pay-to-ID notes sent to the funding account.
         #[arg(
             long = "p2id-collection-interval",
             env = ENV_P2ID_COLLECTION_INTERVAL,

@@ -2,7 +2,6 @@ use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use miden_node_tracing::ErrorReport;
-use miden_protocol::block::BlockNumber;
 use serde::{Deserialize, Serialize};
 
 /// The reason a funding request failed.
@@ -39,14 +38,6 @@ pub enum RequestFundsError {
     #[error("the funding service is not ready: {0}")]
     NotReady(&'static str),
 
-    /// The funding transaction did not commit before it expired.
-    #[error("the funding transaction did not commit before block {expiration_block}")]
-    TransactionExpired { expiration_block: BlockNumber },
-
-    /// The node rejected the funding transaction.
-    #[error("the node rejected the funding transaction")]
-    TransactionRejected(#[source] anyhow::Error),
-
     /// Too many requests are queued.
     #[error("too many funding requests are queued")]
     Busy,
@@ -64,8 +55,6 @@ impl RequestFundsError {
             },
             Self::InsufficientFunds { .. } => StatusCode::PRECONDITION_FAILED,
             Self::NotReady(_) => StatusCode::SERVICE_UNAVAILABLE,
-            // The request may be sent again as it is: no note was created.
-            Self::TransactionExpired { .. } | Self::TransactionRejected(_) => StatusCode::CONFLICT,
             Self::Busy => StatusCode::TOO_MANY_REQUESTS,
         }
     }
@@ -81,7 +70,7 @@ pub struct ErrorResponse {
 impl IntoResponse for RequestFundsError {
     fn into_response(self) -> Response {
         // An internal error may hold details about the service's own state, so the client only
-        // receives a fixed message. The full report is logged by the worker.
+        // receives a fixed message.
         let error = match &self {
             Self::Internal(_) => "internal error".to_owned(),
             other => other.as_report(),
