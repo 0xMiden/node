@@ -41,7 +41,7 @@ pub(super) async fn get_validated_private_transaction(
         .reader
         .load_private_record(transaction_id)
         .await
-        .map_err(|_error| ApiError::internal("failed to load the private record"))?
+        .map_err(|error| ApiError::internal("failed to load the private record", &error))?
         .ok_or_else(|| ApiError::not_found("transaction not found"))?;
     Ok(Json(record.into()))
 }
