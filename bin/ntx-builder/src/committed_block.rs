@@ -148,6 +148,7 @@ mod tests {
             Vec::new(),
             vec![batch],
             Vec::new(),
+            miden_protocol::transaction::TransactionLogDataCollection::default(),
             OrderedTransactionHeaders::new_unchecked(Vec::new()),
         );
         let block = SignedBlock::new_unchecked(

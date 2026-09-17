@@ -82,6 +82,8 @@ service Api {
     // --------------------------------------------------------------------------------------------
 
     // Returns transactions records for specific accounts within a block range.
+    rpc GetAccountLogs(GetAccountLogsRequest) returns (GetAccountLogsResponse) {}
+
     rpc SyncTransactions(SyncTransactionsRequest) returns (SyncTransactionsResponse) {}
 
     // Returns info which can be used by the client to sync up to the tip of chain for the notes
@@ -880,4 +882,36 @@ message EndpointLimits {
     // Key: parameter name (e.g., "nullifier", "account_id")
     // Value: limit value
     map<string, uint32> parameters = 1;
+}
+
+// Public logs emitted by one account. All range endpoints are inclusive.
+message GetAccountLogsRequest {
+    account.AccountId account_id = 1;
+    BlockRange block_range = 2;
+    // Canonical two-felt LogTopic encoding (16 bytes), when present.
+    optional bytes topic = 3;
+    AccountLogCursor after = 4;
+    // Zero selects the default (128). The maximum is 256.
+    uint32 page_size = 5;
+}
+
+message AccountLogCursor {
+    fixed32 block_num = 1;
+    uint32 transaction_index = 2;
+    uint32 log_index = 3;
+}
+
+message AccountLogRecord {
+    AccountLogCursor cursor = 1;
+    transaction.TransactionId transaction_id = 2;
+    account.AccountId native_account_id = 3;
+    // Canonical bounded TransactionLog encoding, including the emitter and topic.
+    bytes log = 4;
+}
+
+message GetAccountLogsResponse {
+    fixed32 chain_tip = 1;
+    repeated AccountLogRecord records = 2;
+    // Resume after this position with the same account, range, and topic.
+    AccountLogCursor next_cursor = 3;
 }

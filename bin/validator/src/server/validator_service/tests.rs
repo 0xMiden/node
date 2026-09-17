@@ -768,6 +768,7 @@ async fn unknown_transactions_rejected() {
         InputNotes,
         OrderedTransactionHeaders,
         TransactionHeader,
+        TransactionLogDataCollection,
     };
 
     let tv = TestValidator::new().await;
@@ -782,9 +783,11 @@ async fn unknown_transactions_rejected() {
         Word::default(),
         InputNotes::<InputNoteCommitment>::default(),
         vec![],
+        Word::empty(),
     )
     .unwrap();
     let tx_id = tx_header.id();
+    let headers = OrderedTransactionHeaders::new_unchecked(vec![tx_header]);
 
     // Build a ProvenBatch containing this transaction.
     let batch = ProvenBatch::new_unchecked(
@@ -803,7 +806,8 @@ async fn unknown_transactions_rejected() {
         InputNotes::default(),
         vec![],
         BlockNumber::MAX,
-        OrderedTransactionHeaders::new_unchecked(vec![tx_header]),
+        TransactionLogDataCollection::empty_for_headers(&headers),
+        headers,
         miden_protocol::testing::dummy_execution_proof(),
     )
     .unwrap();

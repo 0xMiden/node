@@ -372,6 +372,7 @@ mod tests {
             word(5),
             input_notes,
             vec![persisted_header, erased_header],
+            miden_protocol::Word::default(),
         )
         .expect("test transaction header should be valid");
         let transaction_id = transaction.id();
@@ -382,6 +383,9 @@ mod tests {
             Vec::new(),
             vec![vec![(0, output_note)]],
             Vec::new(),
+            miden_protocol::transaction::TransactionLogDataCollection::empty_for_headers(
+                &(OrderedTransactionHeaders::new_unchecked(vec![transaction.clone()])),
+            ),
             OrderedTransactionHeaders::new_unchecked(vec![transaction]),
         );
 
@@ -431,6 +435,9 @@ mod tests {
             vec![update],
             Vec::new(),
             Vec::new(),
+            miden_protocol::transaction::TransactionLogDataCollection::empty_for_headers(
+                &(OrderedTransactionHeaders::new_unchecked(Vec::new())),
+            ),
             OrderedTransactionHeaders::new_unchecked(Vec::new()),
         );
 

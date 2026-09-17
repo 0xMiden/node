@@ -510,6 +510,7 @@ mod tests {
             Word::from([0, seed, 0, 0]),
             Word::from([0, 0, seed, 0]),
             Word::from([0, 0, 0, seed]),
+            miden_protocol::Word::default(),
         )
     }
 

@@ -16,6 +16,9 @@ fn genesis(block_num: BlockNumber, config: &ProtocolConfig) -> SignedBlock {
         Vec::new(),
         Vec::new(),
         Vec::new(),
+        miden_protocol::transaction::TransactionLogDataCollection::empty_for_headers(
+            &(OrderedTransactionHeaders::new_unchecked(Vec::new())),
+        ),
         OrderedTransactionHeaders::new_unchecked(Vec::new()),
     );
     let key = SigningKey::read_from_bytes(&[7; 32]).unwrap();

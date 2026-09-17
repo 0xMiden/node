@@ -118,6 +118,7 @@ impl GenesisState {
             accounts,
             empty_output_notes,
             empty_nullifiers,
+            miden_protocol::transaction::TransactionLogDataCollection::default(),
             empty_transactions,
         );
 
