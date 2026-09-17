@@ -23,7 +23,7 @@ message TransportNote {
     note.NoteDetails details = 2;
     // Sender-supplied lower bound for the inclusion block. The service does not verify it.
     // An absent value differs from block zero.
-    blockchain.BlockNumber after_block_num = 3;
+    optional blockchain.BlockNumber after_block_num = 3;
 }
 
 message FetchNotesRequest {
