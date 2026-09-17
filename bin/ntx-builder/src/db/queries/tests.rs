@@ -16,7 +16,7 @@ use miden_standards::note::NoteExecutionHint;
 
 use crate::NoteError;
 use crate::committed_block::CommittedBlockEffects;
-use crate::db::eligibility::{NEVER_ELIGIBLE, eligible_block_after_failure};
+use crate::db::eligibility::{NEVER_ELIGIBLE, backoff_ready_block, hint_floor};
 use crate::db::test_setup;
 use crate::sponsorship::SponsorshipNote;
 use crate::test_utils::*;
@@ -319,7 +319,10 @@ async fn notes_failed_stores_backoff_derived_eligibility() {
 
         assert_eq!(
             db.note_eligibility(note.as_note().id()).await,
-            Some(eligible_block_after_failure(note.execution_hint(), attempt, failed_at)),
+            Some(
+                hint_floor(note.execution_hint())
+                    .max(backoff_ready_block(Some(failed_at), attempt)),
+            ),
             "the stored block must match the backoff for the attempt count after the increment",
         );
     }
@@ -403,39 +406,60 @@ async fn reset_sponsored_notes_skips_consumed_feature_notes() {
     );
 }
 
-/// The stored block can be too permissive: a periodic window that was open when the value was
-/// written closes again later. Selection detects that and reports the correction, which
-/// `update_note_eligibility` persists so the account stops being selected for the note.
+/// The stored block can be too permissive: `reset_sponsored_notes` clears it at the sponsorship
+/// block without consulting the execution hint. Selection detects that and reports the correction,
+/// which `update_note_eligibility` persists so the account stops being selected for the note.
 #[tokio::test]
 async fn stale_eligibility_is_reported_and_corrected() {
     let (db, _dir) = test_setup().await;
     let account_id = mock_network_account_id();
-    let hint = NoteExecutionHint::on_block_slot(8, 4, 0);
-    let note = mock_single_target_note_with_hint(account_id, 1, hint);
-    db.insert_network_notes(vec![note.clone()]).await.unwrap();
+    db.upsert_account_for_test(account_id, mock_account(account_id), mock_transaction_id(1))
+        .await
+        .unwrap();
 
+    let window_opens_at = BlockNumber::from(500);
+    let feature = mock_single_target_note_with_hint(
+        account_id,
+        1,
+        NoteExecutionHint::after_block(window_opens_at),
+    );
+    db.insert_network_notes(vec![feature.clone()]).await.unwrap();
     assert_eq!(
-        db.note_eligibility(note.as_note().id()).await,
-        Some(BlockNumber::GENESIS),
-        "the window is open at the block that created the note",
+        db.note_eligibility(feature.as_note().id()).await,
+        Some(window_opens_at),
+        "the note waits for its window to open",
     );
 
-    // The window has closed again by block 100, so the stored value is now too permissive.
-    let available = db.available_notes(account_id, BlockNumber::from(100), 30).await.unwrap();
+    // The sponsorship makes the note eligible at the block that carried it, which is well before
+    // the window opens.
+    let sponsorship_block = BlockNumber::from(100);
+    let effects = CommittedBlockEffects {
+        header: mock_block_header(sponsorship_block),
+        network_notes: vec![],
+        sponsorship_notes: vec![mock_sponsorship(account_id, feature.as_note().id(), 2)],
+        nullifiers: vec![],
+        network_account_updates: vec![],
+        account_transactions: vec![],
+    };
+    db.apply_committed_block(effects, PartialMmr::default()).await.unwrap();
+    assert_eq!(
+        db.ready_accounts(30, sponsorship_block, vec![], 10).await.unwrap(),
+        vec![account_id],
+        "the stored block selects the account for a note it cannot attempt yet",
+    );
+
+    let available = db.available_notes(account_id, sponsorship_block, 30).await.unwrap();
     assert!(available.eligible.is_empty(), "the exact check rejects the closed window");
     assert_eq!(
         available.stale_eligibility,
-        vec![(note.as_note().nullifier(), BlockNumber::from(256))],
-        "selection reports the block at which the window opens again",
+        vec![(feature.as_note().nullifier(), window_opens_at)],
+        "selection reports the block at which the window opens",
     );
 
     db.update_note_eligibility(available.stale_eligibility).await.unwrap();
 
     assert!(
-        db.ready_accounts(30, BlockNumber::from(100), vec![], 10)
-            .await
-            .unwrap()
-            .is_empty(),
+        db.ready_accounts(30, sponsorship_block, vec![], 10).await.unwrap().is_empty(),
         "once corrected, the account is no longer selected for this note",
     );
 }
