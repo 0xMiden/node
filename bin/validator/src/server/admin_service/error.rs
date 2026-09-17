@@ -36,7 +36,7 @@ impl ApiError {
     /// than anything about the request. Logging is the only record of it: these are plain axum
     /// handlers, so they are not covered by the `miden_instrument(err)` fault reporting the gRPC
     /// services get.
-    pub(super) fn internal(message: &'static str, cause: &impl ErrorReport) -> Self {
+    pub(super) fn internal(message: &'static str, cause: &(impl ErrorReport + 'static)) -> Self {
         error!(
             cause,
             target: LOG_TARGET,
