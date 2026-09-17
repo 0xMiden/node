@@ -99,24 +99,17 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
     fn decode(
         request: grpc::submission::ProvenTransactionSubmission,
     ) -> tonic::Result<Self::Input> {
-        let transaction = request
-            .transaction
-            .ok_or_else(|| Status::invalid_argument("Missing proven transaction"))?;
-        let tx: ProvenTransaction = transaction
+        let submission = request
             .decode_fields()
-            .map_err(|err| {
-                Status::invalid_argument(err.as_report_context("Invalid proven transaction"))
-            })?
-            .build_unchecked()
-            .map_err(|err| {
-                Status::invalid_argument(err.as_report_context("Invalid proven transaction"))
-            })?;
-        let sealed = request.sealed_transaction_inputs.ok_or_else(|| {
-            Status::invalid_argument(
-                "Missing sealed transaction inputs: fetch the encryption key with \
-                 GetTransactionEncryptionKey and seal the transaction inputs against it",
-            )
-        })?;
+            // SAFETY: New transaction IDs pass proof verification and re-execution before storage.
+            // Previously validated IDs use the handler's duplicate-submission shortcut.
+            //
+            // FIXME: Authenticate the reference block against the validator's chain state.
+            // Re-execution currently uses the headers supplied in the sealed inputs.
+            .and_then(BuildUnchecked::build_unchecked)
+            .map_err(miden_node_proto::errors::conversion_error_to_status)?;
+        let tx = submission.transaction;
+        let sealed = submission.sealed_transaction_inputs;
         if sealed.ciphertext.is_empty() {
             return Err(Status::invalid_argument("Empty sealed transaction inputs ciphertext"));
         }

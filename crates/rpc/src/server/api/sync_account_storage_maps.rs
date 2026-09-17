@@ -1,5 +1,5 @@
-use miden_node_proto::decode::{read_account_id, read_block_range};
-use miden_node_proto::generated as proto;
+use miden_node_proto::errors::{ConversionResultExt, conversion_error_to_status};
+use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_node_tracing::{debug, miden_instrument, miden_span_record};
 use tonic::Status;
 
@@ -13,11 +13,11 @@ use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::SyncAccountStorageMaps for RpcService {
-    type Input = proto::rpc::SyncAccountStorageMapsRequest;
+    type Input = proto::rpc::DecodedSyncAccountStorageMapsRequest;
     type Output = proto::rpc::SyncAccountStorageMapsResponse;
 
     fn decode(request: proto::rpc::SyncAccountStorageMapsRequest) -> tonic::Result<Self::Input> {
-        Ok(request)
+        request.decode_fields().map_err(conversion_error_to_status)
     }
 
     fn encode(output: Self::Output) -> tonic::Result<proto::rpc::SyncAccountStorageMapsResponse> {
@@ -35,11 +35,12 @@ impl proto::server::rpc_api::SyncAccountStorageMaps for RpcService {
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        let account_id = read_account_id::<proto::rpc::SyncAccountStorageMapsRequest, Status>(
-            request.account_id,
-        )?;
-        let range =
-            read_block_range::<Status>(request.block_range, "SyncAccountStorageMapsRequest")?;
+        let account_id = request
+            .account_id
+            .verify()
+            .context("account_id")
+            .map_err(conversion_error_to_status)?;
+        let range = request.block_range;
 
         miden_span_record!(
             account.id = account_id,
@@ -59,7 +60,8 @@ impl proto::server::rpc_api::SyncAccountStorageMaps for RpcService {
             return Err(Status::invalid_argument(format!("account {account_id} is not public")));
         }
         let block_range = range
-            .into_inclusive_range::<RpcInvalidBlockRange>()
+            .verify()
+            .map_err(RpcInvalidBlockRange::from)
             .map_err(invalid_block_range_to_status)?;
         let (chain_tip, storage_maps_page) = self
             .state

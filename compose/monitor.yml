@@ -4,6 +4,8 @@ services:
     image: ${MIDEN_NETWORK_MONITOR_IMAGE:-miden-network-monitor}
     pull_policy: missing
     depends_on:
+      funding-service:
+        condition: service_started
       otel-collector:
         condition: service_started
       sequencer:
@@ -13,6 +15,9 @@ services:
       - start
     environment:
       MIDEN_MONITOR_RPC_URL: http://sequencer:57291
+      # The monitor pays transaction fees from notes this service sends it. Only used on a chain
+      # which charges fees.
+      MIDEN_MONITOR_FUNDING_SERVICE_URL: http://funding-service:50401
       MIDEN_MONITOR_PORT: "3001"
       MIDEN_MONITOR_NETWORK_NAME: Localhost
       # Public key for validator 1's insecure default development signing key.

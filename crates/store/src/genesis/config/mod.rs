@@ -215,7 +215,7 @@ impl GenesisConfig {
                 secrets.push((
                     FAUCET_OPERATOR_FILE_NAME.to_string(),
                     operator.id(),
-                    Some(operator_secret),
+                    Some(AuthSecretKey::Falcon512Poseidon2(operator_secret)),
                 ));
                 Some(operator)
             },
@@ -236,7 +236,7 @@ impl GenesisConfig {
             secrets.push((
                 format!("faucet_{symbol}.mac", symbol = symbol.to_string().to_lowercase()),
                 faucet_account.id(),
-                Some(secret_key),
+                Some(AuthSecretKey::Falcon512Poseidon2(secret_key)),
             ));
             // Do _not_ collect the account, only after we know all wallet assets we know the
             // remaining supply in the faucets.
@@ -246,10 +246,9 @@ impl GenesisConfig {
         let protocol_config =
             ProtocolConfig::current(AssetId::new_fungible(native_faucet_account_id))?;
 
-        let zero_padding_width = usize::ilog10(std::cmp::max(10, wallet_configs.len())) as usize;
-
         // Setup all wallet accounts, which reference the faucet's for their provided assets.
-        for (index, WalletConfig { account_type, assets }) in wallet_configs.into_iter().enumerate()
+        for (index, WalletConfig { name, account_type, auth_scheme, assets }) in
+            wallet_configs.into_iter().enumerate()
         {
             debug!(
                 target: LOG_TARGET,
@@ -258,10 +257,20 @@ impl GenesisConfig {
                 account.assets.count = assets.len()
             );
 
+            // The name is joined onto the accounts directory, so it must be a plain file name.
+            if Path::new(&name).file_name() != Some(name.as_ref()) {
+                return Err(GenesisConfigError::InvalidAccountFileName { name });
+            }
+
+            let auth_scheme = auth_scheme
+                .as_deref()
+                .map(AuthScheme::from_str)
+                .transpose()?
+                .unwrap_or(AuthScheme::Falcon512Poseidon2);
+
             let mut rng = ChaCha20Rng::from_seed(rand::random());
-            let secret_key = RpoSecretKey::with_rng(&mut rng);
-            let auth =
-                Approver::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
+            let secret_key = AuthSecretKey::with_scheme_and_rng(auth_scheme, &mut rng)?;
+            let auth = Approver::from(&secret_key.public_key());
             let init_seed: [u8; 32] = rng.random();
 
             let mut wallet_account = create_basic_wallet(init_seed, auth, account_type.into())?;
@@ -285,11 +294,7 @@ impl GenesisConfig {
 
             debug_assert_eq!(wallet_account.nonce(), ONE);
 
-            secrets.push((
-                format!("wallet_{index:0zero_padding_width$}.mac"),
-                wallet_account.id(),
-                Some(secret_key),
-            ));
+            secrets.push((format!("{name}.mac"), wallet_account.id(), Some(secret_key)));
 
             wallet_accounts.push(wallet_account);
         }
@@ -357,6 +362,15 @@ impl GenesisConfig {
 
         // Append file-loaded accounts as-is
         all_accounts.extend(file_loaded_accounts);
+
+        // Each generated account is written to its own file, so a repeated name would make one
+        // account overwrite another. This covers every generated name: the wallets, the configured
+        // faucets, and the native faucet with its operator.
+        let mut file_names: Vec<&str> = secrets.iter().map(|(name, ..)| name.as_str()).collect();
+        file_names.sort_unstable();
+        if let Some(pair) = file_names.windows(2).find(|pair| pair[0] == pair[1]) {
+            return Err(GenesisConfigError::DuplicateAccountFileName { name: pair[0].to_string() });
+        }
 
         Ok((
             GenesisState {
@@ -592,15 +606,21 @@ impl FungibleFaucetConfig {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WalletConfig {
+    /// Stem of the account file written for this wallet.
+    name: String,
     #[serde(default)]
     account_type: AccountTypeConfig,
+    /// Signature scheme of the account's authentication component, named as [`AuthScheme`] writes
+    /// it. Defaults to `Falcon512Poseidon2`.
+    #[serde(default)]
+    auth_scheme: Option<String>,
     assets: Vec<AssetEntry>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct AssetEntry {
     symbol: TokenSymbolStr,
-    /// The amount of full token units the given asset is populated with
+    /// The amount of the given asset, in base units.
     amount: u64,
 }
 
@@ -642,7 +662,7 @@ pub struct AccountFileWithName {
 #[derive(Debug, Clone)]
 pub struct AccountSecrets {
     // name, account, private key of the account, if it has one
-    pub secrets: Vec<(String, AccountId, Option<RpoSecretKey>)>,
+    pub secrets: Vec<(String, AccountId, Option<AuthSecretKey>)>,
 }
 
 impl AccountSecrets {
@@ -663,8 +683,7 @@ impl AccountSecrets {
             let account = account_lut
                 .get(&account_id)
                 .ok_or(GenesisConfigError::MissingGenesisAccount { account_id })?;
-            let auth_secret_keys =
-                secret_key.map(AuthSecretKey::Falcon512Poseidon2).into_iter().collect();
+            let auth_secret_keys = secret_key.into_iter().collect();
             let account_file = AccountFile::new(account.clone(), auth_secret_keys);
             Ok(AccountFileWithName { name, account_file })
         })

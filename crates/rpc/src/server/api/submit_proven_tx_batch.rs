@@ -1,9 +1,8 @@
 use miden_node_block_producer::store::get_tx_inputs;
 use miden_node_proto::clients::{SequencerClient, ValidatorClient};
-use miden_node_proto::generated as proto;
+use miden_node_proto::{DecodeMessage, TransactionBatchSubmission, Verify, generated as proto};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorReport, debug, miden_instrument, miden_span_record, trace};
-use miden_objects::{DecodeMessage, VerifyWith};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_tx_batch::BatchVerifier;
@@ -48,34 +47,21 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
             batch.size = request.sealed_transaction_inputs.len()
         );
 
-        let proposed_batch_message = (if preserve_batch_fields {
-            request.proposed_batch.clone()
+        let submission = if preserve_batch_fields {
+            request.clone()
         } else {
-            request.proposed_batch.take()
-        })
-        .ok_or_else(|| Status::invalid_argument("missing `proposed_batch` field"))?;
-        let proposed_batch = spawn_blocking_in_current_span(move || {
-            proposed_batch_message.decode_fields().and_then(|batch| {
-                batch
-                    .verify_with(MIN_PROOF_SECURITY_LEVEL)
-                    .map_err(miden_objects::ConversionError::new)
-            })
+            std::mem::take(&mut request)
+        };
+        let TransactionBatchSubmission {
+            batch: proven_batch,
+            proposed_batch,
+            sealed_transaction_inputs,
+        } = spawn_blocking_in_current_span(move || {
+            submission.decode_fields().and_then(Verify::verify)
         })
         .await
-        .map_err(|err| Status::internal(format!("proposed batch decoding task failed: {err}")))?
-        .map_err(|err| Status::invalid_argument(format!("invalid proposed_batch: {err}")))?;
-
-        let proven_batch_message = (if preserve_batch_fields {
-            request.batch.clone()
-        } else {
-            request.batch.take()
-        })
-        .ok_or_else(|| Status::invalid_argument("missing `batch` field"))?;
-        let proven_batch = proven_batch_message
-            .decode_fields()
-            .map_err(|err| Status::invalid_argument(format!("invalid proven_batch: {err}")))?
-            .verify_with(&proposed_batch)
-            .map_err(|err| Status::invalid_argument(format!("invalid proven_batch: {err}")))?;
+        .map_err(|err| Status::internal(format!("batch decoding task failed: {err}")))?
+        .map_err(miden_node_proto::errors::conversion_error_to_status)?;
 
         miden_span_record!(
             batch.id = proven_batch.id(),
@@ -98,16 +84,6 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
             proven_batch.reference_block_commitment(),
         )
         .await?;
-
-        // Perform this check here since its cheap. If this passes we can safely zip inputs and
-        // transactions.
-        if request.sealed_transaction_inputs.len() != proposed_batch.transactions().len() {
-            return Err(Status::invalid_argument(format!(
-                "Number of inputs {} does not match number of transaction {} in batch",
-                request.sealed_transaction_inputs.len(),
-                proposed_batch.transactions().len()
-            )));
-        }
 
         // Same gate as `submit_proven_transaction`, applied to every post-deployment tx in the
         // batch. One store round-trip classifies all the non-deployment, public-account ids; any
@@ -134,7 +110,7 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
                 submit_batch_to_validators(
                     validators.as_slice(),
                     &proposed_batch,
-                    &request.sealed_transaction_inputs,
+                    &sealed_transaction_inputs,
                 )
                 .await?;
                 block_producer
@@ -150,7 +126,7 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
                     pre_auth.validators().as_slice(),
                     pre_auth.sequencer().clone(),
                     proposed_batch,
-                    &request.sealed_transaction_inputs,
+                    &sealed_transaction_inputs,
                 )
                 .await
             },

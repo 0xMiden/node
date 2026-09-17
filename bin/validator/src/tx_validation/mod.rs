@@ -83,6 +83,8 @@ pub async fn validate_transaction(
     .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))?;
 
     // Validate that the executed transaction matches the submitted transaction.
+    //
+    // FIXME: Also compare the reference block and expiration. TransactionHeader omits both.
     let executed_tx_header: TransactionHeader = (&executed_tx).into();
     let proven_tx_header: TransactionHeader = (&proven_tx).into();
     if executed_tx_header == proven_tx_header {

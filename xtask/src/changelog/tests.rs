@@ -122,6 +122,19 @@ description = "Added the note transport service."
 }
 
 #[test]
+fn accepts_funding_service_scope() {
+    let body = valid_body(
+        r#"[[entry]]
+scope       = "funding-service"
+impact      = "added"
+description = "Added the funding service."
+"#,
+    );
+
+    verify_pr_body(&body).unwrap();
+}
+
+#[test]
 fn accepts_no_changelog_marker() {
     let body = valid_body(
         r#"changelog = "none"

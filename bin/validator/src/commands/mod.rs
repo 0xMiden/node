@@ -192,7 +192,7 @@ pub enum ValidatorCommand {
     /// Starts the validator component.
     Start {
         /// Socket address at which to serve the gRPC API.
-        #[arg(long = "listen", env = ENV_LISTEN, value_name = "LISTEN")]
+        #[arg(long = "listen", env = ENV_LISTEN, value_name = "IP:PORT")]
         listen: std::net::SocketAddr,
 
         /// IP address and port for the private administration API (for example, 127.0.0.1:50102).

@@ -1,8 +1,7 @@
 use miden_node_proto::clients::{Builder, RemoteProverClient};
-use miden_node_proto::generated::remote_prover::proof::Proof as ProofVariant;
+use miden_node_proto::generated::remote_prover::ProofRequest;
 use miden_node_proto::generated::remote_prover::proof_request::Request;
-use miden_node_proto::generated::remote_prover::{Proof, ProofRequest};
-use miden_objects::{DecodeMessage, VerifyWith};
+use miden_node_proto::{DecodeMessage, VerifyWith};
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_tx_batch::LocalBatchProver;
 use url::Url;
@@ -12,10 +11,8 @@ use url::Url;
 pub enum RemoteProverError {
     #[error("remote prover request failed")]
     Grpc(#[source] tonic::Status),
-    #[error("remote prover returned an invalid batch proof response: {0}")]
-    Protocol(String),
     #[error("failed to decode proven batch from remote prover")]
-    Conversion(#[source] miden_objects::ConversionError),
+    Conversion(#[source] miden_node_proto::errors::ConversionError),
 }
 
 // BATCH PROVER
@@ -81,51 +78,10 @@ impl RemoteBatchProver {
         });
 
         let response = self.client.clone().prove(request).await.map_err(RemoteProverError::Grpc)?;
-        let proof = extract_batch_proof(response.into_inner())?;
-
-        proof
+        response
+            .into_inner()
             .decode_fields()
-            .and_then(|proof| {
-                proof.verify_with(&proposed_batch).map_err(miden_objects::ConversionError::new)
-            })
+            .and_then(|proof| proof.verify_with(&proposed_batch))
             .map_err(RemoteProverError::Conversion)
-    }
-}
-
-fn extract_batch_proof(
-    response: Proof,
-) -> Result<miden_objects::proto::transaction::ProvenBatch, RemoteProverError> {
-    match response.proof {
-        Some(ProofVariant::Batch(proof)) => Ok(proof),
-        Some(_) => Err(RemoteProverError::Protocol(
-            "response variant does not match batch request".to_string(),
-        )),
-        None => {
-            Err(RemoteProverError::Protocol("response is missing the proof variant".to_string()))
-        },
-    }
-}
-
-#[cfg(test)]
-mod response_tests {
-    use super::*;
-
-    #[test]
-    fn missing_batch_response_variant_is_a_protocol_error() {
-        let error = extract_batch_proof(Proof { proof: None }).unwrap_err();
-
-        assert!(matches!(error, RemoteProverError::Protocol(_)));
-    }
-
-    #[test]
-    fn mismatched_batch_response_variant_is_a_protocol_error() {
-        let response = Proof {
-            proof: Some(ProofVariant::Transaction(
-                miden_node_proto::generated::transaction::ProvenTransaction::default(),
-            )),
-        };
-        let error = extract_batch_proof(response).unwrap_err();
-
-        assert!(matches!(error, RemoteProverError::Protocol(_)));
     }
 }

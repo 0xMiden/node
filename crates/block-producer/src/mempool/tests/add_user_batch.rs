@@ -2,15 +2,15 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use assert_matches::assert_matches;
+use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
 use miden_protocol::batch::BatchId;
 use miden_protocol::block::BlockNumber;
 use pretty_assertions::assert_eq;
 
 use crate::domain::batch::BatchParameters;
-use crate::domain::transaction::AuthenticatedTransaction;
 use crate::errors::{MempoolSubmissionError, StateConflict};
 use crate::mempool::Mempool;
-use crate::test_utils::MockProvenTxBuilder;
+use crate::test_utils::{MockAuthenticatedTxBuilder, MockProvenTxBuilder};
 
 /// This checks that transactions from a user batch remain as the same batch upon selection.
 ///
@@ -137,7 +137,7 @@ fn user_batch_conflicts_with_existing_state_are_rejected() {
 }
 
 fn build_tx(builder: MockProvenTxBuilder) -> Arc<AuthenticatedTransaction> {
-    Arc::new(AuthenticatedTransaction::from_inner(builder.build()))
+    Arc::new(MockAuthenticatedTxBuilder::new(builder.build()).build())
 }
 
 fn tx_with_nullifiers(

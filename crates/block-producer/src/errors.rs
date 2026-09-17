@@ -1,5 +1,6 @@
 use core::error::Error as CoreError;
 
+use miden_node_proto::domain::sequencer::TransactionAuthenticationError;
 use miden_node_proto::errors::GrpcError;
 use miden_node_store::{
     ApplyBlockWithProvingInputsError,
@@ -94,6 +95,8 @@ pub enum MempoolSubmissionError {
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum StateConflict {
+    #[error("invalid transaction authentication inputs")]
+    InvalidAuthenticationInputs(#[source] TransactionAuthenticationError),
     #[error("nullifiers already exist: {0:?}")]
     NullifiersAlreadyExist(Vec<Nullifier>),
     #[error("output notes already exist: {0:?}")]
@@ -108,6 +111,17 @@ pub enum StateConflict {
         expected: Word,
         current: Word,
     },
+}
+
+impl From<TransactionAuthenticationError> for StateConflict {
+    fn from(error: TransactionAuthenticationError) -> Self {
+        match error {
+            TransactionAuthenticationError::NullifiersAlreadyExist(nullifiers) => {
+                Self::NullifiersAlreadyExist(nullifiers)
+            },
+            error => Self::InvalidAuthenticationInputs(error),
+        }
+    }
 }
 
 // Batch building errors

@@ -43,6 +43,7 @@ fn decode_chain_tip_state(
         .context("sync_chain_mmr response missing block_header")?
         .decode_fields()
         .context("failed to decode the chain tip block header")?
+        // SAFETY: This benchmark trusts the configured RPC for chain state.
         .build_unchecked()
         .context("failed to build the chain tip block header")?;
     let protocol_config =

@@ -1,9 +1,59 @@
 use std::ops::RangeInclusive;
 
-use miden_protocol::block::BlockNumber;
+use miden_protobuf::{BuildUnchecked, ConversionResultExt, Verify, VerifyWith};
+use miden_protocol::block::{BlockHeader, BlockNumber, SignedBlock};
+use miden_protocol::protocol_config::ProtocolConfig;
 use thiserror::Error;
 
+use super::protocol_config::verify_protocol_config_commitment;
+use crate::errors::ConversionError;
 use crate::generated as proto;
+
+impl BuildUnchecked for proto::rpc::DecodedBlockSubscriptionResponse {
+    type Output = (SignedBlock, BlockNumber, Option<ProtocolConfig>);
+    type Error = ConversionError;
+
+    /// Check block consistency without verifying signatures or linkage against a trusted parent.
+    /// The caller must verify the block against trusted chain state before applying it. The
+    /// committed chain tip remains an upstream claim.
+    fn build_unchecked(self) -> Result<Self::Output, Self::Error> {
+        // SAFETY: The caller must authenticate the block before applying it. This conversion checks
+        // consistency only.
+        let block = self.block.build_unchecked().context("block")?;
+        let protocol_config = self
+            .protocol_config
+            .map(|config| {
+                verify_protocol_config_commitment(
+                    config.verify().context("protocol_config")?,
+                    block.header(),
+                )
+            })
+            .transpose()?;
+        Ok((block, self.committed_chain_tip.into(), protocol_config))
+    }
+}
+
+impl VerifyWith<&BlockHeader> for proto::rpc::DecodedBlockSubscriptionResponse {
+    type Verified = (SignedBlock, BlockNumber, Option<ProtocolConfig>);
+    type Error = ConversionError;
+
+    /// Verify the block against a trusted parent header. This does not re-execute transactions or
+    /// validate account and nullifier state transitions. The committed chain tip remains an
+    /// upstream claim.
+    fn verify_with(self, parent: &BlockHeader) -> Result<Self::Verified, Self::Error> {
+        let block = self.block.verify_with(parent).context("block")?;
+        let protocol_config = self
+            .protocol_config
+            .map(|config| {
+                verify_protocol_config_commitment(
+                    config.verify().context("protocol_config")?,
+                    block.header(),
+                )
+            })
+            .transpose()?;
+        Ok((block, self.committed_chain_tip.into(), protocol_config))
+    }
+}
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum InvalidBlockRange {
@@ -11,23 +61,23 @@ pub enum InvalidBlockRange {
     StartGreaterThanEnd { start: BlockNumber, end: BlockNumber },
 }
 
-impl proto::rpc::BlockRange {
+impl Verify for proto::rpc::DecodedBlockRange {
+    type Verified = RangeInclusive<BlockNumber>;
+    type Error = InvalidBlockRange;
+
     /// Converts the block range into an inclusive range.
     ///
     /// A `RangeInclusive` is empty exactly when `start > end`, so that case is
     /// reported as [`InvalidBlockRange::StartGreaterThanEnd`]. Equal endpoints
     /// are a valid single-block range.
-    pub fn into_inclusive_range<T: From<InvalidBlockRange>>(
-        self,
-    ) -> Result<RangeInclusive<BlockNumber>, T> {
+    fn verify(self) -> Result<Self::Verified, Self::Error> {
         let block_range = RangeInclusive::new(self.block_from.into(), self.block_to.into());
 
         if block_range.start() > block_range.end() {
             return Err(InvalidBlockRange::StartGreaterThanEnd {
                 start: *block_range.start(),
                 end: *block_range.end(),
-            }
-            .into());
+            });
         }
 
         Ok(block_range)
@@ -48,15 +98,16 @@ mod tests {
 
     use super::*;
 
-    fn range(from: u32, to: u32) -> proto::rpc::BlockRange {
+    fn range(from: u32, to: u32) -> proto::rpc::DecodedBlockRange {
+        use crate::DecodeMessage;
         proto::rpc::BlockRange { block_from: from, block_to: to }
+            .decode_fields()
+            .unwrap()
     }
 
     #[test]
-    fn into_inclusive_range_rejects_start_greater_than_end() {
-        let err = range(5, 4)
-            .into_inclusive_range::<InvalidBlockRange>()
-            .expect_err("inverted range must be rejected");
+    fn verify_rejects_start_greater_than_end() {
+        let err = range(5, 4).verify().expect_err("inverted range must be rejected");
         assert_eq!(
             err,
             InvalidBlockRange::StartGreaterThanEnd {
@@ -67,19 +118,15 @@ mod tests {
     }
 
     #[test]
-    fn into_inclusive_range_accepts_single_block() {
-        let got = range(7, 7)
-            .into_inclusive_range::<InvalidBlockRange>()
-            .expect("start == end is a valid inclusive range");
+    fn verify_accepts_single_block() {
+        let got = range(7, 7).verify().expect("start == end is a valid inclusive range");
         assert_eq!(*got.start(), BlockNumber::from(7u32));
         assert_eq!(*got.end(), BlockNumber::from(7u32));
     }
 
     #[test]
-    fn into_inclusive_range_accepts_ascending_span() {
-        let got = range(1, 3)
-            .into_inclusive_range::<InvalidBlockRange>()
-            .expect("ascending range must be accepted");
+    fn verify_accepts_ascending_span() {
+        let got = range(1, 3).verify().expect("ascending range must be accepted");
         assert_eq!(*got.start(), BlockNumber::from(1u32));
         assert_eq!(*got.end(), BlockNumber::from(3u32));
     }

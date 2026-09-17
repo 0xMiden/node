@@ -5,14 +5,13 @@ use std::time::Duration;
 use anyhow::Context;
 use miden_node_proto::clients::RpcClient;
 use miden_node_proto::generated::rpc::{BlockSubscriptionRequest, ProofSubscriptionRequest};
+use miden_node_proto::{DecodeMessage, VerifyWith};
 use miden_node_store::state::{BlockWriter, ProofWriter, State};
 use miden_node_tracing::{Instrument, debug, info, info_span, miden_instrument, warn};
 use miden_node_utils::retry::{self, RetryableWithContext};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
-use miden_objects::{BuildUnchecked, DecodeMessage};
-use miden_protocol::block::{BlockNumber, SignedBlock};
-use miden_protocol::vm::ExecutionProof;
+use miden_protocol::block::BlockNumber;
 use tokio_stream::StreamExt;
 use tonic_health::ServingStatus;
 use tonic_health::server::HealthReporter;
@@ -205,6 +204,8 @@ impl BlockSync {
     )]
     async fn sync(&mut self, shutdown: CancellationToken) -> anyhow::Result<()> {
         let local_tip = self.state.committed_tip();
+        let (parent, _) = self.state.view().get_block_header(Some(local_tip), false).await?;
+        let mut parent = parent.context("local chain tip header not found")?;
         let mut client = self.source_rpc.clone();
         let upstream_tip =
             BlockNumber::from(client.status(tonic::Request::new(())).await?.into_inner().chain_tip);
@@ -230,25 +231,12 @@ impl BlockSync {
             let Some(result) = result else {
                 return Ok(());
             };
-            let event = result?;
-            let upstream_tip = BlockNumber::from(event.committed_chain_tip);
-            let block: SignedBlock = event
-                .block
-                .ok_or_else(|| anyhow::anyhow!("upstream block event is missing its block"))?
+            let (block, upstream_tip, protocol_config) = result?
                 .decode_fields()
                 .context("failed to decode block from upstream")?
-                .build_unchecked()
-                .context("failed to build block from upstream")?;
-            let protocol_config = event
-                .protocol_config
-                .map(|config| {
-                    miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header(
-                        Some(config),
-                        block.header(),
-                    )
-                })
-                .transpose()
-                .context("failed to decode protocol config from upstream")?;
+                .verify_with(&parent)
+                .context("failed to verify block from upstream")?;
+            let next_parent = block.header().clone();
             // Each synced block gets its own root span: the surrounding `sync` span lives for the
             // whole subscription, so parenting under it would chain every block into one
             // never-exported trace.
@@ -259,6 +247,7 @@ impl BlockSync {
                 block.number = block.header().block_num().as_u32(),
             );
             self.writer.apply_block(block, protocol_config).instrument(block_span).await?;
+            parent = next_parent;
 
             let local_tip = self.state.committed_tip();
             self.readiness.update(upstream_tip, local_tip).await;
@@ -334,7 +323,7 @@ impl ProofSync {
             let Some(result) = result else {
                 return Ok(());
             };
-            let event = result?;
+            let event = result?.decode_fields().context("failed to decode proof from upstream")?;
             let block_num = BlockNumber::from(event.block_num);
 
             anyhow::ensure!(
@@ -351,17 +340,16 @@ impl ProofSync {
                 },
             }
 
-            let proof: ExecutionProof = event
-                .proof
-                .ok_or_else(|| anyhow::anyhow!("upstream proof event is missing its proof"))?
-                .try_into()
-                .context("failed to decode proof from upstream")?;
+            let proof = event.proof;
             self.writer.apply_proof(block_num, proof.to_bytes()).await?;
 
             expected = expected.child();
         }
     }
 }
+
+#[cfg(test)]
+mod block_tests;
 
 #[cfg(test)]
 mod readiness_tests {

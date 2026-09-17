@@ -2,12 +2,8 @@ use std::collections::BTreeMap;
 use std::error::Error as _;
 
 use miden_node_proto::domain::proof_request::BlockProofRequest;
-use miden_node_proto::domain::submission::{
-    ProvenTransactionSubmission,
-    TransactionBatchSubmission,
-};
-use miden_node_proto::generated;
-use miden_objects::{DecodeMessage, proto};
+use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify, generated};
+use miden_objects::proto;
 use miden_protocol::Word;
 use miden_protocol::account::{
     AccountId,
@@ -30,7 +26,7 @@ use miden_protocol::block::{
     ValidatorConfig,
 };
 use miden_protocol::crypto::merkle::SparseMerklePath;
-use miden_protocol::note::{Note, NoteInclusionProof};
+use miden_protocol::note::{Note, NoteInclusionProof, Nullifier};
 use miden_protocol::protocol_config::NextProtocolConfig;
 use miden_protocol::transaction::{
     InputNoteCommitment,
@@ -215,10 +211,11 @@ fn nonempty_block_proof_roundtrip_preserves_header_order_and_witnesses() {
     let request = nonempty_block_request();
     let message = generated::block_proving::BlockProofRequest::from(&request);
     let wire = message.encode_to_vec();
-    let decoded = BlockProofRequest::try_from(
-        generated::block_proving::BlockProofRequest::decode(wire.as_slice()).unwrap(),
-    )
-    .unwrap();
+    let decoded = generated::block_proving::BlockProofRequest::decode(wire.as_slice())
+        .unwrap()
+        .decode_fields()
+        .and_then(BuildUnchecked::build_unchecked)
+        .unwrap();
 
     assert_eq!(decoded.block_header, request.block_header);
     assert_eq!(decoded.block_header.commitment(), request.block_header.commitment());
@@ -261,7 +258,7 @@ fn block_proof_request_can_clear_the_parent_protocol_upgrade() {
     let mut message = generated::block_proving::BlockProofRequest::from(&request);
     message.next_protocol_config = None;
 
-    let decoded = BlockProofRequest::try_from(message).unwrap();
+    let decoded = message.decode_fields().and_then(BuildUnchecked::build_unchecked).unwrap();
 
     assert!(decoded.block_inputs.prev_block_header().next_protocol_config().is_some());
     assert!(decoded.block_header.next_protocol_config().is_none());
@@ -274,7 +271,7 @@ fn block_proof_request_rejects_duplicate_nullifier_witnesses() {
     let witnesses = &mut message.block_inputs.as_mut().unwrap().nullifier_witnesses;
     witnesses.push(witnesses[0].clone());
 
-    let error = BlockProofRequest::try_from(message).unwrap_err();
+    let error = message.decode_fields().and_then(BuildUnchecked::build_unchecked).unwrap_err();
 
     assert!(error.to_string().contains("duplicate nullifier"));
 }
@@ -285,7 +282,7 @@ fn block_proof_request_rejects_duplicate_note_proofs() {
     let proofs = &mut message.block_inputs.as_mut().unwrap().unauthenticated_note_proofs;
     proofs.push(proofs[0].clone());
 
-    let error = BlockProofRequest::try_from(message).unwrap_err();
+    let error = message.decode_fields().and_then(BuildUnchecked::build_unchecked).unwrap_err();
 
     assert!(error.to_string().contains("duplicate note ID"));
 }
@@ -293,28 +290,30 @@ fn block_proof_request_rejects_duplicate_note_proofs() {
 #[test]
 fn malformed_block_batch_preserves_the_canonical_error_source() {
     let mut message = generated::block_proving::BlockProofRequest::from(&nonempty_block_request());
-    message.batches[0] = proto::transaction::ProvenBatch::default();
+    message.batches[0].reference_block_commitment =
+        Some(proto::primitives::Word { encoded: vec![0xff; 32] });
 
-    let error = BlockProofRequest::try_from(message).unwrap_err();
+    let error = message.decode_fields().unwrap_err();
 
-    assert!(error.to_string().contains("batches[0]"));
+    assert!(
+        error.to_string().starts_with("batches[0].reference_block_commitment.encoded:"),
+        "{error}"
+    );
     assert!(
         error
             .source()
             .unwrap()
-            .downcast_ref::<miden_objects::ConversionError>()
-            .is_some(),
-        "the canonical conversion error must remain available as a typed source",
+            .is::<miden_protocol::utils::serde::DeserializationError>()
     );
 }
 
 #[test]
 fn block_proof_request_rejects_missing_block_inputs() {
-    let error = BlockProofRequest::try_from(generated::block_proving::BlockProofRequest {
-        block_inputs: None,
-        ..Default::default()
-    })
-    .unwrap_err();
+    let error =
+        generated::block_proving::BlockProofRequest { block_inputs: None, ..Default::default() }
+            .decode_fields()
+            .and_then(BuildUnchecked::build_unchecked)
+            .unwrap_err();
 
     assert!(error.to_string().contains("block_inputs"));
 }
@@ -335,7 +334,7 @@ fn block_proof_request_rejects_duplicate_requested_account_ids() {
     let mut message = block_request_message();
     message.block_inputs.as_mut().unwrap().account_witnesses = vec![duplicate.clone(), duplicate];
 
-    let error = BlockProofRequest::try_from(message).unwrap_err();
+    let error = message.decode_fields().and_then(BuildUnchecked::build_unchecked).unwrap_err();
 
     assert!(error.to_string().contains("duplicate requested account ID"));
 }
@@ -357,7 +356,7 @@ fn block_proof_request_preserves_requested_account_id_separately_from_witness_id
             witness: Some(witness.into()),
         }];
 
-    let decoded = BlockProofRequest::try_from(message).unwrap();
+    let decoded = message.decode_fields().and_then(BuildUnchecked::build_unchecked).unwrap();
 
     let decoded_witness = &decoded.block_inputs.account_witnesses()[&requested_id];
     assert_eq!(decoded_witness.id(), witness_id);
@@ -392,7 +391,7 @@ fn submission_rejects_missing_transaction() {
         }),
     };
 
-    let error = ProvenTransactionSubmission::try_from(message).unwrap_err();
+    let error = message.decode_fields().and_then(BuildUnchecked::build_unchecked).unwrap_err();
 
     assert!(error.to_string().contains("transaction"));
 }
@@ -403,26 +402,42 @@ fn batch_submission_rejects_proof_that_does_not_match_proposal() {
     let reference_header =
         BlockHeader::mock(0, Some(partial_blockchain.peaks().hash_peaks()), None, &[]);
     let message = generated::submission::TransactionBatch {
-        batch: Some(proto::transaction::ProvenBatch {
-            reference_block_num: Some(BlockNumber::from(1_u32).into()),
-            ..Default::default()
-        }),
+        batch: Some(empty_batch(1).into()),
         proposed_batch: Some(proto::transaction::ProposedBatch {
             reference_block_header: Some(reference_header.into()),
+            partial_blockchain: Some((&partial_blockchain).into()),
             ..Default::default()
         }),
         sealed_transaction_inputs: Vec::new(),
     };
 
-    let error = TransactionBatchSubmission::try_from(message).unwrap_err();
+    let error = message.decode_fields().and_then(Verify::verify).unwrap_err();
 
     assert!(error.to_string().contains("does not match proposal"));
 }
 
 #[test]
+fn batch_proof_response_preserves_batch_and_rejects_other_requested_kinds() {
+    let batch = nonempty_block_request().tx_batches.as_slice()[0].clone();
+    let response = generated::remote_prover::Proof {
+        proof: Some(generated::remote_prover::proof::Proof::Batch((&batch).into())),
+    };
+    assert!(response.clone().decode_fields().unwrap().into_transaction().is_err());
+    assert!(response.clone().decode_fields().unwrap().into_block().is_err());
+    let decoded = response
+        .decode_fields()
+        .unwrap()
+        .into_batch()
+        .unwrap()
+        .build_unchecked()
+        .unwrap();
+    assert_eq!(decoded, batch);
+}
+
+#[test]
 fn canonical_conversion_errors_map_to_invalid_argument() {
     let error = proto::account::AccountId::default().decode_fields().unwrap_err();
-    let status: tonic::Status = miden_node_proto::errors::ConversionError::from(error).into();
+    let status = miden_node_proto::errors::conversion_error_to_status(error);
 
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
 }
@@ -441,10 +456,12 @@ fn signing_request() -> miden_node_proto::SignBlockRequest {
 fn signing_roundtrip_preserves_proposal_and_matches_proving() {
     let request = signing_request();
     let message = generated::validator::SignBlockRequest::from(&request);
-    let decoded = miden_node_proto::SignBlockRequest::try_from(
-        generated::validator::SignBlockRequest::decode(message.encode_to_vec().as_slice()).unwrap(),
-    )
-    .unwrap();
+    let decoded =
+        generated::validator::SignBlockRequest::decode(message.encode_to_vec().as_slice())
+            .unwrap()
+            .decode_fields()
+            .and_then(BuildUnchecked::build_unchecked)
+            .unwrap();
     assert_eq!(decoded.block_header, request.block_header);
     assert_eq!(decoded.tx_batches.as_slice(), request.tx_batches.as_slice());
     assert_eq!(
@@ -459,7 +476,7 @@ fn signing_roundtrip_preserves_proposal_and_matches_proving() {
         next_validator_config: message.next_validator_config,
         next_protocol_config: message.next_protocol_config,
     };
-    let proof = BlockProofRequest::try_from(proof_message).unwrap();
+    let proof = proof_message.decode_fields().and_then(BuildUnchecked::build_unchecked).unwrap();
     assert_eq!(decoded.block_header, proof.block_header);
 }
 
@@ -473,19 +490,19 @@ fn signing_rejects_missing_fields_and_malformed_batches() {
         } else {
             invalid.next_validator_config = None;
         }
-        let error = miden_node_proto::SignBlockRequest::try_from(invalid).unwrap_err();
+        let error = invalid.decode_fields().and_then(BuildUnchecked::build_unchecked).unwrap_err();
         assert!(error.to_string().contains(field));
     }
     let mut invalid = message;
-    invalid.batches[0] = proto::transaction::ProvenBatch::default();
-    let error = miden_node_proto::SignBlockRequest::try_from(invalid).unwrap_err();
-    assert!(error.to_string().contains("batches[0]"));
+    invalid.batches[0].reference_block_commitment =
+        Some(proto::primitives::Word { encoded: vec![0xff; 32] });
+    let error = invalid.decode_fields().and_then(BuildUnchecked::build_unchecked).unwrap_err();
+    assert!(error.to_string().starts_with("batches[0].reference_block_commitment.encoded:"));
     assert!(
         error
             .source()
             .unwrap()
-            .downcast_ref::<miden_objects::ConversionError>()
-            .is_some()
+            .is::<miden_protocol::utils::serde::DeserializationError>()
     );
 }
 
@@ -493,11 +510,15 @@ fn signing_rejects_missing_fields_and_malformed_batches() {
 fn signing_rejects_duplicate_witnesses_and_preserves_absent_next_config() {
     let mut message = generated::validator::SignBlockRequest::from(&signing_request());
     message.next_protocol_config = None;
-    let decoded = miden_node_proto::SignBlockRequest::try_from(message.clone()).unwrap();
+    let decoded = message
+        .clone()
+        .decode_fields()
+        .and_then(BuildUnchecked::build_unchecked)
+        .unwrap();
     assert!(decoded.block_header.next_protocol_config().is_none());
     let witnesses = &mut message.block_inputs.as_mut().unwrap().nullifier_witnesses;
     witnesses.push(witnesses[0].clone());
-    let error = miden_node_proto::SignBlockRequest::try_from(message).unwrap_err();
+    let error = message.decode_fields().and_then(BuildUnchecked::build_unchecked).unwrap_err();
     assert!(error.to_string().contains("duplicate nullifier"));
 }
 
@@ -520,7 +541,13 @@ fn signing_roundtrip_validates_supplied_active_configuration() {
         next_protocol_config: proof.next_protocol_config,
         protocol_config: Some((&config).into()),
     };
-    assert!(miden_node_proto::SignBlockRequest::try_from(message.clone()).is_err());
+    assert!(
+        message
+            .clone()
+            .decode_fields()
+            .and_then(BuildUnchecked::build_unchecked)
+            .is_err()
+    );
     message
         .block_inputs
         .as_mut()
@@ -529,8 +556,60 @@ fn signing_roundtrip_validates_supplied_active_configuration() {
         .as_mut()
         .unwrap()
         .protocol_config_commitment = Some(config.to_commitment().into());
-    let decoded = miden_node_proto::SignBlockRequest::try_from(message.clone()).unwrap();
+    let decoded = message
+        .clone()
+        .decode_fields()
+        .and_then(BuildUnchecked::build_unchecked)
+        .unwrap();
     assert_eq!(decoded.protocol_config, Some(config));
     let encoded = generated::validator::SignBlockRequest::from(decoded);
     assert_eq!(encoded, message);
+}
+
+#[test]
+fn authentication_inputs_reject_duplicate_nullifiers_in_any_spent_state() {
+    for block_numbers in [[0, 0], [10, 0], [0, 10], [10, 10]] {
+        let message = generated::sequencer::AuthInputs {
+            account_id: Some(private_account_id(7).into()),
+            nullifiers: block_numbers
+                .into_iter()
+                .map(|block_num| generated::sequencer::NullifierRecord {
+                    nullifier: Some(Word::from([1u32, 2, 3, 4]).into()),
+                    block_num,
+                })
+                .collect(),
+            current_block_height: 10,
+            ..Default::default()
+        };
+
+        let error = message.decode_fields().and_then(Verify::verify).unwrap_err();
+        assert!(error.to_string().starts_with("nullifiers[1]:"), "{error}");
+        assert!(error.to_string().contains("duplicate nullifier"), "{error}");
+    }
+}
+
+#[test]
+fn authentication_inputs_preserve_distinct_spent_and_unspent_nullifiers() {
+    let unspent = Nullifier::from_raw(Word::from([1u32, 2, 3, 4]));
+    let spent = Nullifier::from_raw(Word::from([5u32, 6, 7, 8]));
+    let message = generated::sequencer::AuthInputs {
+        account_id: Some(private_account_id(7).into()),
+        nullifiers: vec![
+            generated::sequencer::NullifierRecord {
+                nullifier: Some(unspent.as_word().into()),
+                block_num: 0,
+            },
+            generated::sequencer::NullifierRecord {
+                nullifier: Some(spent.as_word().into()),
+                block_num: 10,
+            },
+        ],
+        current_block_height: 10,
+        ..Default::default()
+    };
+
+    let inputs = message.decode_fields().and_then(Verify::verify).unwrap();
+    assert_eq!(inputs.nullifiers.len(), 2);
+    assert_eq!(inputs.nullifiers[&unspent], None);
+    assert_eq!(inputs.nullifiers[&spent].unwrap().get(), 10);
 }
