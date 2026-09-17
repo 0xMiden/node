@@ -5,10 +5,9 @@ These protobuf files are part of the [Miden node](https://github.com/0xMiden/nod
 The root directory contains the public RPC and remote prover protocols. The `types` directory contains node-owned
 messages for service workflows. The `internal` directory contains the internal component protocols.
 
-Canonical protocol objects come from `miden-objects` `0.17.0-rc.4`. Do not copy these object schemas into this
-directory. The build resolves canonical imports through `miden_objects::FILE_DESCRIPTOR_SET`. It includes imported
-schemas in each exported service descriptor set. The raw files in this directory alone are not sufficient to generate
-bindings.
+Canonical protocol objects come from `miden-objects`. Do not copy these object schemas into this directory. The build
+resolves canonical imports through `miden_objects::FILE_DESCRIPTOR_SET`. It includes imported schemas in each exported
+service descriptor set. The raw files in this directory alone are not sufficient to generate bindings.
 
 The organization of the files is as follows:
 

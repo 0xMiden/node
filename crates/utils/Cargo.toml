@@ -33,7 +33,7 @@ humantime          = { workspace = true }
 itertools          = { workspace = true }
 lru                = { workspace = true }
 miden-node-tracing = { workspace = true }
-miden-processor    = { optional = true, version = "0.32" }
+miden-processor    = { optional = true, workspace = true }
 miden-protocol     = { workspace = true }
 miden-testing      = { optional = true, workspace = true }
 miden-tx           = { optional = true, workspace = true }
