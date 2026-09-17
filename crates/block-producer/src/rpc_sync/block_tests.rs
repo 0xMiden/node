@@ -284,6 +284,11 @@ unused_rpc!(
 unused_rpc!(SyncChainMmr, proto::rpc::SyncChainMmrRequest, proto::rpc::SyncChainMmrResponse);
 unused_rpc!(RegisterAccount, proto::rpc::RegisterAccountRequest, ());
 unused_rpc!(
+    IsAccountAllowed,
+    proto::rpc::IsAccountAllowedRequest,
+    proto::rpc::IsAccountAllowedResponse
+);
+unused_rpc!(
     GetNetworkNoteStatus,
     proto::note::NoteId,
     proto::rpc::GetNetworkNoteStatusResponse
