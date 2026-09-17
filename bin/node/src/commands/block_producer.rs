@@ -10,6 +10,7 @@ use miden_node_block_producer::{
     DEFAULT_MAX_TXS_PER_BATCH,
 };
 use miden_node_utils::clap::duration_to_human_readable_string;
+use miden_protocol::account::AccountId;
 use url::Url;
 
 // BLOCK PRODUCTION
@@ -17,6 +18,9 @@ use url::Url;
 
 #[derive(clap::Args, Clone, Debug)]
 pub struct BlockProducerOptions {
+    #[command(flatten)]
+    pub builder: BuilderOptions,
+
     #[command(flatten)]
     pub batch: BatchOptions,
 
@@ -64,6 +68,7 @@ mod tests {
         BlockOptions,
         BlockProducerOptions,
         BlockProverOptions,
+        BuilderOptions,
         MempoolOptions,
     };
     use crate::commands::block_producer::{
@@ -74,6 +79,12 @@ mod tests {
 
     fn options(max_batches: usize, max_txs: usize) -> BlockProducerOptions {
         BlockProducerOptions {
+            builder: BuilderOptions {
+                wallet_account_id: miden_protocol::account::AccountId::from_hex(
+                    "0xcc0000000000dd010000ee000000ff",
+                )
+                .unwrap(),
+            },
             batch: BatchOptions {
                 interval: DEFAULT_BATCH_INTERVAL,
                 max_txs: NonZeroUsize::new(max_txs).unwrap(),
@@ -124,6 +135,19 @@ mod tests {
 
         assert!(err.to_string().contains("batch.max-txs"));
     }
+}
+
+#[derive(clap::Args, Clone, Debug)]
+pub struct BuilderOptions {
+    /// Wallet account ID that receives the batch builder's fees.
+    #[arg(
+        long = "batch.builder.wallet-account-id",
+        env = "MIDEN_NODE_BATCH_BUILDER_WALLET_ACCOUNT_ID",
+        value_name = "ACCOUNT_ID",
+        value_parser = AccountId::from_hex,
+        help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
+    )]
+    pub wallet_account_id: AccountId,
 }
 
 #[derive(clap::Args, Clone, Debug)]

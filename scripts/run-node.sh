@@ -5,6 +5,8 @@ set -euo pipefail
 SKIP_BOOTSTRAP="${SKIP_BOOTSTRAP:-false}"
 ENABLE_FULL_NODES="${ENABLE_FULL_NODES:-true}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
+# This unused account receives development-network fees without collecting them.
+BATCH_BUILDER_WALLET_ACCOUNT_ID="${BATCH_BUILDER_WALLET_ACCOUNT_ID:-0xcc0000000000dd010000ee000000ff}"
 # Shared secret authorizing the ntx-builder to submit network transactions to the sequencer's RPC.
 # Must match on both the sequencer (--rpc.network-tx-auth-header-value) and the ntx-builder
 # (--rpc.auth-header-value), otherwise network transactions are rejected with
@@ -242,6 +244,7 @@ OTEL_RESOURCE_ATTRIBUTES="$(node_resource_attributes sequencer)" \
     --validator.url "http://127.0.0.1:$VALIDATOR_1_PORT" \
     --validator.url "http://127.0.0.1:$VALIDATOR_2_PORT" \
     --ntx-builder.url "http://127.0.0.1:$NTX_BUILDER_PORT" \
+    --batch.builder.wallet-account-id "$BATCH_BUILDER_WALLET_ACCOUNT_ID" \
     --internal.listen "0.0.0.0:$SEQUENCER_INTERNAL_PORT" \
     $EXTRA_ARGS &
 PIDS+=($!)

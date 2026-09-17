@@ -210,11 +210,14 @@ nohup miden-remote-prover \
   > logs/remote-prover.log 2>&1 &
 
 # The node runs store + block-producer + RPC in a single sequencer process.
+# This unused account receives benchmark fees without collecting them.
+BATCH_BUILDER_WALLET_ACCOUNT_ID=0xcc0000000000dd010000ee000000ff
 nohup miden-node sequencer \
   --data-directory                            "$DATA/node" \
   --rpc.listen                                127.0.0.1:57291 \
   --validator.url                             http://127.0.0.1:50101 \
   --ntx-builder.url                           http://127.0.0.1:50301 \
+  --batch.builder.wallet-account-id           "$BATCH_BUILDER_WALLET_ACCOUNT_ID" \
   --batch.max-txs                             1024 \
   --block.max-batches                         64 \
   --block.interval                            2s \

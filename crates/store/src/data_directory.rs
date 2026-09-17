@@ -33,6 +33,10 @@ impl DataDirectory {
         self.0.join("miden-allowlist.sqlite3")
     }
 
+    pub fn batch_builder_collection_account_path(&self) -> PathBuf {
+        self.0.join("batch_builder_collection_account.mac")
+    }
+
     pub fn display(&self) -> std::path::Display<'_> {
         self.0.display()
     }

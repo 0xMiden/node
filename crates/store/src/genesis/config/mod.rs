@@ -34,7 +34,6 @@ use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use serde::{Deserialize, Serialize};
 
-use crate::genesis::pass_through::build_pass_through_account;
 use crate::{GenesisState, LOG_TARGET};
 
 mod errors;
@@ -54,12 +53,6 @@ pub const NATIVE_FAUCET_FILE_NAME: &str = "native_faucet.mac";
 
 /// Name of the account file written for the generated faucet operator.
 pub const FAUCET_OPERATOR_FILE_NAME: &str = "faucet_operator.mac";
-
-/// Name of the account file written for the batch builder's collection account.
-pub const BATCH_BUILDER_COLLECTION_ACCOUNT_FILE_NAME: &str = "batch_builder_collection_account.mac";
-
-/// Name of the account file written for the batch builder's wallet account.
-pub const BATCH_BUILDER_WALLET_ACCOUNT_FILE_NAME: &str = "batch_builder_wallet_account.mac";
 
 // GENESIS CONFIG
 // ================================================================================================
@@ -229,21 +222,6 @@ impl GenesisConfig {
             None => None,
         };
 
-        let (pass_through_account, pass_through_secret) =
-            build_pass_through_account().map_err(GenesisConfigError::PassThroughAccountBuild)?;
-        secrets.push((
-            BATCH_BUILDER_COLLECTION_ACCOUNT_FILE_NAME.to_string(),
-            pass_through_account.id(),
-            Some(pass_through_secret),
-        ));
-
-        let (batch_builder_account, batch_builder_secret) = build_batch_builder()?;
-        secrets.push((
-            BATCH_BUILDER_WALLET_ACCOUNT_FILE_NAME.to_string(),
-            batch_builder_account.id(),
-            Some(batch_builder_secret),
-        ));
-
         faucet_accounts.insert(symbol.clone(), native_faucet_account);
 
         // Setup additional fungible faucets from parameters
@@ -377,9 +355,6 @@ impl GenesisConfig {
         // Ensure the faucets always precede the wallets referencing them
         all_accounts.extend(wallet_accounts);
 
-        all_accounts.push(pass_through_account);
-        all_accounts.push(batch_builder_account);
-
         // Append file-loaded accounts as-is
         all_accounts.extend(file_loaded_accounts);
 
@@ -484,19 +459,6 @@ fn build_faucet_operator() -> Result<(Account, RpoSecretKey), GenesisConfigError
     operator.set_nonce(ONE)?;
 
     Ok((operator, secret_key))
-}
-
-/// Builds the public wallet that receives the batch builder's fee notes.
-fn build_batch_builder() -> Result<(Account, RpoSecretKey), GenesisConfigError> {
-    let mut rng = ChaCha20Rng::from_seed(rand::random());
-
-    let secret_key = RpoSecretKey::with_rng(&mut rng);
-    let auth = Approver::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
-    let init_seed: [u8; 32] = rng.random();
-    let mut account = create_basic_wallet(init_seed, auth, AccountType::Public)?;
-    account.set_nonce(ONE)?;
-
-    Ok((account, secret_key))
 }
 
 // NATIVE FAUCET
