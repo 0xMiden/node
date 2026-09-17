@@ -1,4 +1,4 @@
-//! Node access. The RPC handling is copied from the network monitor.
+//! Node access.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -48,7 +48,7 @@ use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::block::{BlockHeader, BlockNumber, FeeParameters};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta, MmrPeaks, PartialMmr};
-use miden_protocol::note::{Note, NoteId, NoteInclusionProof, NoteTag, Nullifier};
+use miden_protocol::note::{Note, NoteId, NoteTag, Nullifier};
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{PartialBlockchain, ProvenTransaction};
 use tokio::sync::Mutex;
@@ -174,7 +174,8 @@ impl RpcNodeClient {
         fetch_public_account(&mut self.rpc_client.clone(), account_id, block_num).await
     }
 
-    /// The IDs of the committed notes which carry `tag`, from `from_block` up to the chain tip.
+    /// Fetches the IDs of the committed notes which carry `tag`, from `from_block` up to the chain
+    /// tip, alongside the block the scan reached.
     pub async fn sync_note_ids(
         &self,
         tag: NoteTag,
@@ -230,7 +231,7 @@ impl RpcNodeClient {
     }
 
     /// The notes among `note_ids` whose details the node stores.
-    pub async fn public_notes(&self, note_ids: &[NoteId]) -> Result<Vec<Note>> {
+    pub async fn get_public_notes_by_id(&self, note_ids: &[NoteId]) -> Result<Vec<Note>> {
         let mut notes = Vec::new();
 
         // The node rejects a request which asks for more note IDs than it accepts, so the IDs are
@@ -266,13 +267,23 @@ impl RpcNodeClient {
         Ok(notes)
     }
 
-    /// The nullifiers among `nullifiers` which are already spent.
-    pub async fn spent_nullifiers(&self, nullifiers: &[Nullifier]) -> Result<HashSet<Nullifier>> {
+    /// The nullifiers among `nullifiers` which the node recorded as spent from `from_block` up to
+    /// the chain tip.
+    pub async fn sync_nullifiers(
+        &self,
+        nullifiers: &[Nullifier],
+        from_block: BlockNumber,
+    ) -> Result<HashSet<Nullifier>> {
         if nullifiers.is_empty() {
             return Ok(HashSet::new());
         }
 
         let tip = self.committed_tip().await?;
+
+        if from_block > tip {
+            return Ok(HashSet::new());
+        }
+
         // The node matches on prefixes, so the response holds every nullifier which shares a prefix
         // with one of ours. The exact matches are picked out below.
         let prefixes = nullifiers
@@ -288,30 +299,56 @@ impl RpcNodeClient {
         // The node rejects a request which carries more prefixes than it accepts, so the prefixes
         // are sent in chunks of the limit it enforces.
         for chunk in prefixes.chunks(QueryParamNullifierPrefixLimit::LIMIT) {
-            let response = self
-                .rpc_client
-                .clone()
-                .sync_nullifiers(SyncNullifiersRequest {
-                    block_range: Some(BlockRange {
-                        block_from: BlockNumber::GENESIS.as_u32(),
-                        block_to: tip.as_u32(),
-                    }),
-                    prefix_len: NULLIFIER_PREFIX_LEN,
-                    nullifiers: chunk.to_vec(),
-                })
-                .await
-                .context("failed to synchronize nullifiers")?
-                .into_inner();
+            let mut block_from = from_block;
 
-            for update in response.nullifiers {
-                let nullifier =
-                    update.nullifier.context("a nullifier update did not include a nullifier")?;
-                let nullifier =
-                    Word::try_from(nullifier).context("failed to convert a nullifier")?;
-                let nullifier = Nullifier::from_raw(nullifier);
-                if requested.contains(&nullifier) {
-                    spent.insert(nullifier);
+            // The node may answer with a partial range. The scan continues from the block the
+            // response reached, because a nullifier in the remaining blocks would otherwise be read
+            // as unspent.
+            loop {
+                let response = self
+                    .rpc_client
+                    .clone()
+                    .sync_nullifiers(SyncNullifiersRequest {
+                        block_range: Some(BlockRange {
+                            block_from: block_from.as_u32(),
+                            block_to: tip.as_u32(),
+                        }),
+                        prefix_len: NULLIFIER_PREFIX_LEN,
+                        nullifiers: chunk.to_vec(),
+                    })
+                    .await
+                    .context("failed to synchronize nullifiers")?
+                    .into_inner();
+
+                let last_checked_block: BlockNumber = response
+                    .pagination_info
+                    .context("the sync_nullifiers response did not include pagination information")?
+                    .block_num
+                    .into();
+
+                for update in response.nullifiers {
+                    let nullifier = update
+                        .nullifier
+                        .context("a nullifier update did not include a nullifier")?;
+                    let nullifier =
+                        Word::try_from(nullifier).context("failed to convert a nullifier")?;
+                    let nullifier = Nullifier::from_raw(nullifier);
+                    if requested.contains(&nullifier) {
+                        spent.insert(nullifier);
+                    }
                 }
+
+                if last_checked_block >= tip {
+                    break;
+                }
+
+                // A response which does not advance would repeat forever.
+                anyhow::ensure!(
+                    last_checked_block >= block_from,
+                    "the node answered a nullifier scan from block {block_from} with block \
+                     {last_checked_block}",
+                );
+                block_from = last_checked_block + 1;
             }
         }
 
@@ -329,37 +366,6 @@ impl RpcNodeClient {
             .into_inner();
 
         Ok(status.chain_tip.into())
-    }
-
-    /// The inclusion proofs of the notes which are committed, keyed by note ID.
-    pub async fn committed_notes(
-        &self,
-        note_ids: &[NoteId],
-    ) -> Result<HashMap<NoteId, NoteInclusionProof>> {
-        let note_ids = note_ids.iter().map(|note_id| note_id.as_word().into()).collect();
-
-        let response = self
-            .rpc_client
-            .clone()
-            .get_notes_by_id(NotesByIdRequest { note_ids })
-            .await
-            .context("failed to fetch the funding notes from RPC")?
-            .into_inner();
-
-        response
-            .notes
-            .into_iter()
-            .map(|committed| {
-                let proof = committed
-                    .inclusion_proof
-                    .context("committed note response is missing the inclusion proof")?;
-                proof
-                    .decode_fields()
-                    .context("failed to decode the note inclusion proof")?
-                    .verify()
-                    .context("failed to verify the note inclusion proof")
-            })
-            .collect()
     }
 
     /// Seals and submits one proven transaction, and returns the block it was accepted at.

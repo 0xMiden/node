@@ -10,20 +10,34 @@ The account is public, and the service stores no account state of its own. It re
 
 This removes a class of failure which a service holding its own copy of the account would have. If a service crashes between submitting a transaction and seeing it commit, its copy of the account is behind the chain, and every later transaction it builds is rejected for a stale nonce until it re-synchronizes. Reading the account each time means there is no local copy to fall behind.
 
+## The request handler builds the note
+
+The HTTP handler builds the public pay-to-ID note itself. A note needs only the sender, the target, the asset and a serial number, none of which depend on the chain, so the handler needs no call to the node. It answers with the note and puts it on the worker's queue.
+
+The answer is therefore optimistic: it names a note which no transaction has created yet. A requester which needs the note on chain either waits for it at the node or consumes it as an unauthenticated input note, which the node authenticates when it builds the block.
+
+The alternative, waiting until the note commits, costs at least one block interval per request and gives a requester no way to be told about a retry. The service now funds user accounts at registration, where that cost is not acceptable.
+
 ## One worker, one transaction in flight
 
-A single task owns the account and the requests. The HTTP handler validates the amount, puts the request on a queue, and waits for the worker's answer.
+A single task owns the account. It is the only writer of that account, which is what serializes its transactions.
 
-The worker therefore keeps one transaction in flight and collects every request which arrives in the meantime into the next transaction. A client which tops up several accounts at once pays for one transaction rather than one per account, which is what makes the service usable from a test suite.
+The worker wakes when a note is queued and on its own interval. One cycle runs the following steps.
 
-Each batch runs the following steps.
+1. Do nothing when there is no transaction in flight, nothing queued, no deposit pooled, and no scan due. An idle service therefore makes no call to the node beyond the status refresher's own.
+2. Read the chain tip and a partial blockchain which proves it, then the funding account and the fee faucet at that block. Every value of the cycle comes from this one reference block.
+3. Resolve the transaction in flight. The account has one writer, so a nonce higher than the one the transaction was built on means it committed. A reference block at or past the expiration block means it did not, and its deposits and notes return to the queues.
+4. Scan for deposits when the scan interval has passed.
+5. Select the deposits and the notes of the next transaction.
+6. Execute, prove and submit one transaction which consumes the deposits and creates the notes. Anything which fails returns the deposits and the notes to the queues, and the next cycle tries again from a fresh reference block.
 
-1. Read the chain tip and a partial blockchain which proves it. This is the transaction's reference block.
-2. Read the funding account and the fee faucet at that block.
-3. Decide which queued requests the balance covers.
-4. Build one public pay-to-ID note per admitted request.
-5. Execute, prove, and submit one transaction which creates all of them.
-6. Poll the node until every note is committed, then answer each requester with its note.
+A note keeps its serial number across a retry, so it keeps its ID. The note a requester holds is the note which is eventually created.
+
+### One transaction carries both directions
+
+The deposits and the funding notes share one transaction. Two tasks submitting from the same account would race for the nonce, and the loser's transaction would be rejected.
+
+The assets of an input note land in the vault before the kernel withdraws the fee. A deposit therefore pays for the notes of the same transaction, and a transaction which only consumes deposits works at a zero balance, which is the state a deposit exists to recover from.
 
 ### The fee faucet is a foreign account
 
@@ -31,18 +45,20 @@ The native asset is callback-enabled: the kernel loads the issuing faucet in a f
 
 ## Admission
 
-The transaction pays its own fee from the same vault the notes are paid from, so the worker holds back the worst-case fee of one transaction before it spends the balance. It then admits queued requests in order and stops at the first request which does not fit, which keeps the queue first-come-first-served and stops a stream of small requests from starving a large one. A request which does not fit is refused at once, and the requester is told that the account needs funds rather than being made to wait.
+The transaction pays its own fee from the same vault the notes are paid from, so the worker holds back the worst-case fee of one transaction before it spends the balance. It then admits queued notes in order and stops at the first note which does not fit, which keeps the queue first-come-first-served and stops a stream of small notes from starving a large one.
 
-## Public notes
+A note which does not fit stays in the queue. The service already answered a requester with it, so it is created once a deposit raises the balance rather than being dropped. The worker logs a warning and waits out the deposit scan interval before it reads the chain state again, because only a deposit changes the answer.
 
-The notes are public, so the node stores their details. The response carries the note and the proof that the note is in a block, which lets a requester consume the note without a further lookup at the node.
+The handler checks the amount against the balance the service last read, and refuses a request the account plainly cannot serve. That check is best effort: the balance is the one of an earlier block and does not account for the notes already queued.
 
-The worker skips a request whose requester has gone away. The transaction would otherwise spend the funding balance and pay a fee for a note which no requester waits for.
+## Deposits
 
-## Refilling the account
+A deposit is found by synchronizing notes by the funding account's tag. A filter keeps only the notes the account can consume: public, pay-to-ID, targeting the funding account, and holding the native asset and nothing else.
 
-An operator refills it by sending it a public pay-to-ID note that holds the native asset, and a collection task consumes those notes.
+A deposit which the chain already records as spent is dropped, because a transaction which consumes a spent note is rejected. The nullifier scan starts at the block the note was found in, since a note cannot be spent before it exists.
 
-The collection synchronizes notes by the funding account's tag. A filter keeps only the notes the account can consume: public, pay-to-ID, targeting the funding account, and holding the native asset and nothing else.
+The scan cursor advances past a range whether or not the worker consumes what it found. A deposit stays in the pool until it is spent, and a transaction which does not commit returns its deposits there, so no range has to be scanned twice. The pool is in memory, so a restart scans the chain again from genesis and finds whatever is still unspent.
 
-The collection runs as its own transaction rather than riding along with a funding transaction. A deposit note comes from outside the service, so a note which turns out to be unconsumable must not be able to fail a request a client is waiting on.
+One transaction consumes at most a fixed number of deposits, and takes the largest ones first. The protocol allows far more input notes than that; the bound is proving time, because every input note runs its own script and lengthens the transaction the service has to prove before it can serve the next one.
+
+A transaction which only consumes deposits is submitted only when the deposits are worth more than the fee. Anyone can send a note which holds a single base unit, and consuming it on its own would cost the account more than it brings in.
