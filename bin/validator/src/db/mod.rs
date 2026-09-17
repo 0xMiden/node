@@ -562,7 +562,7 @@ mod tests {
 
         let db = load(db_path).await.unwrap();
         assert_eq!(db.load_chain_tip().await.unwrap(), Some(header.clone()));
-        assert_eq!(db.load_all_transactions().await.unwrap(), vec![record]);
+        assert_eq!(db.load_private_record(transaction_id).await.unwrap(), Some(record));
         let migrated = db.load_private_record(transaction_id).await.unwrap().unwrap();
         assert_eq!(migrated.context().format_version(), PrivateRecordFormatVersion::V1);
         migrated.verify_encrypted_record_key().unwrap();

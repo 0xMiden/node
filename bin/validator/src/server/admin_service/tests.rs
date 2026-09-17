@@ -13,6 +13,7 @@ use miden_protocol::Word;
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::block::BlockHeader;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
+use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{TransactionId, TransactionInputs};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_testing::{Auth, MockChainBuilder};
@@ -113,7 +114,11 @@ async fn list(
 /// transactions are listed, so listing tests have to place their records in a block.
 async fn commit(writer: &ValidatorDbWriter, block_num: u32, transactions: &[TransactionId]) {
     writer
-        .insert_signed_block(BlockHeader::mock(block_num, None, None, &[]), transactions.to_vec())
+        .insert_signed_block(
+            BlockHeader::mock(block_num, None, None, &[]),
+            ProtocolConfig::mock(),
+            transactions.to_vec(),
+        )
         .await
         .unwrap();
 }
