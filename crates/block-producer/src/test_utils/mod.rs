@@ -8,6 +8,10 @@ mod proven_tx;
 
 pub use proven_tx::MockProvenTxBuilder;
 
+mod authenticated_tx;
+
+pub use authenticated_tx::MockAuthenticatedTxBuilder;
+
 mod account;
 
 pub use account::{MockPrivateAccount, mock_account_id};

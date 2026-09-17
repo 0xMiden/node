@@ -44,6 +44,7 @@ enum Scope {
     Node,
     NoteTransport,
     NetworkMonitor,
+    FundingService,
     NtxBuilder,
     Prover,
     Validator,

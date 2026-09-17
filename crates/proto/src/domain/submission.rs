@@ -1,44 +1,43 @@
-use miden_objects::{BuildUnchecked, DecodeMessage, VerifyWith};
+use miden_protobuf::{BuildUnchecked, ConversionResultExt, Verify, VerifyWith};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
-use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::transaction::ProvenTransaction;
 
-use crate::decode::{ConversionResultExt, verify_value};
 use crate::errors::ConversionError;
 use crate::generated as proto;
 
+/// A decoded submission. Construction does not verify the transaction proof or chain state.
 #[derive(Debug)]
 pub struct ProvenTransactionSubmission {
     pub transaction: ProvenTransaction,
     pub sealed_transaction_inputs: proto::submission::SealedTransactionInputs,
 }
 
-impl TryFrom<proto::submission::ProvenTransactionSubmission> for ProvenTransactionSubmission {
+impl BuildUnchecked for proto::submission::DecodedProvenTransactionSubmission {
+    type Output = ProvenTransactionSubmission;
     type Error = ConversionError;
 
-    fn try_from(
-        value: proto::submission::ProvenTransactionSubmission,
-    ) -> Result<Self, Self::Error> {
-        let transaction: ProvenTransaction = value
-            .transaction
-            .ok_or_else(|| {
-                ConversionError::missing_field::<proto::submission::ProvenTransactionSubmission>(
-                    "transaction",
-                )
-            })?
-            .decode_fields()
-            .context("transaction")?
-            .build_unchecked()
-            .map_err(ConversionError::new)
-            .context("transaction")?;
-        let sealed_transaction_inputs = value.sealed_transaction_inputs.ok_or_else(|| {
-            ConversionError::missing_field::<proto::submission::ProvenTransactionSubmission>(
-                "sealed_transaction_inputs",
-            )
-        })?;
+    /// Build the submission without verifying the proof, chain state, or sealed inputs. Receiving
+    /// services must verify the proof and reference block, check spent nullifiers and expiration,
+    /// and resolve input-note and account dependencies. Validators must decrypt and re-execute the
+    /// sealed inputs.
+    fn build_unchecked(self) -> Result<Self::Output, Self::Error> {
+        // SAFETY: This conversion checks structure only. The output remains unverified. Receiving
+        // services are responsible for the proof, chain-state, and sealed-input checks.
+        let transaction = self.transaction.build_unchecked().context("transaction")?;
+        let sealed_transaction_inputs = self.sealed_transaction_inputs.into();
+        Ok(ProvenTransactionSubmission { transaction, sealed_transaction_inputs })
+    }
+}
 
-        Ok(Self { transaction, sealed_transaction_inputs })
+impl From<proto::submission::DecodedSealedTransactionInputs>
+    for proto::submission::SealedTransactionInputs
+{
+    fn from(value: proto::submission::DecodedSealedTransactionInputs) -> Self {
+        Self {
+            key_id: value.key_id,
+            ciphertext: value.ciphertext,
+        }
     }
 }
 
@@ -58,70 +57,45 @@ pub struct TransactionBatchSubmission {
     pub sealed_transaction_inputs: Vec<proto::submission::SealedTransactionInputs>,
 }
 
-impl TryFrom<proto::submission::TransactionBatch> for TransactionBatchSubmission {
+impl Verify for proto::submission::DecodedTransactionBatch {
+    type Verified = TransactionBatchSubmission;
     type Error = ConversionError;
 
-    fn try_from(value: proto::submission::TransactionBatch) -> Result<Self, Self::Error> {
-        let proposed_message = value.proposed_batch.ok_or_else(|| {
-            ConversionError::missing_field::<proto::submission::TransactionBatch>("proposed_batch")
-        })?;
-        let batch_message = value.batch.ok_or_else(|| {
-            ConversionError::missing_field::<proto::submission::TransactionBatch>("batch")
-        })?;
-
-        let proposed_reference_header: BlockHeader = proposed_message
-            .reference_block_header
-            .clone()
-            .ok_or_else(|| {
-                ConversionError::missing_field::<proto::transaction::ProposedBatch>(
-                    "reference_block_header",
-                )
-            })?
-            .decode_fields()
-            .context("reference_block_header")?
-            .build_unchecked()
-            .map_err(ConversionError::new)
-            .context("reference_block_header")?;
-        let batch_reference_num: BlockNumber = verify_value(
-            "reference_block_num",
-            batch_message.reference_block_num.ok_or_else(|| {
-                ConversionError::missing_field::<proto::transaction::ProvenBatch>(
-                    "reference_block_num",
-                )
-            })?,
-        )?;
-        if batch_reference_num != proposed_reference_header.block_num() {
+    /// Verify transaction proofs at the minimum security level, proposal agreement, and the sealed
+    /// input count. The caller must verify the batch execution proof and authenticate the reference
+    /// chain. Receiving services must check nullifiers, expiration, and dependencies against their
+    /// state. Validators must decrypt and re-execute the sealed inputs.
+    fn verify(self) -> Result<Self::Verified, Self::Error> {
+        let batch_reference_num = self.batch.reference_block_num.block_num;
+        let proposed_reference_num = self.proposed_batch.reference_block_header.block_num.block_num;
+        if batch_reference_num != proposed_reference_num {
             return Err(ConversionError::message(
                 "batch reference block number does not match proposal",
             ));
         }
 
-        let proposed_batch = proposed_message
-            .decode_fields()
-            .context("proposed_batch")?
+        let proposed_batch = self
+            .proposed_batch
             .verify_with(MIN_PROOF_SECURITY_LEVEL)
-            .map_err(ConversionError::new)
             .context("proposed_batch")?;
+        let batch = self.batch.verify_with(&proposed_batch).context("batch")?;
 
-        let batch = batch_message
-            .decode_fields()
-            .context("batch")?
-            .verify_with(&proposed_batch)
-            .map_err(ConversionError::new)
-            .context("batch")?;
-
-        if value.sealed_transaction_inputs.len() != proposed_batch.transactions().len() {
+        if self.sealed_transaction_inputs.len() != proposed_batch.transactions().len() {
             return Err(ConversionError::message(format!(
                 "sealed transaction input count {} does not match proposal transaction count {}",
-                value.sealed_transaction_inputs.len(),
+                self.sealed_transaction_inputs.len(),
                 proposed_batch.transactions().len()
             )));
         }
 
-        Ok(Self {
+        Ok(TransactionBatchSubmission {
             batch,
             proposed_batch,
-            sealed_transaction_inputs: value.sealed_transaction_inputs,
+            sealed_transaction_inputs: self
+                .sealed_transaction_inputs
+                .into_iter()
+                .map(Into::into)
+                .collect(),
         })
     }
 }

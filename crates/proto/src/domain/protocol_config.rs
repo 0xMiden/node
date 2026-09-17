@@ -3,9 +3,9 @@
 use miden_protocol::block::BlockHeader;
 use miden_protocol::protocol_config::ProtocolConfig;
 
-use crate::decode::verify_value;
-use crate::errors::ConversionError;
+use crate::errors::{ConversionError, ConversionResultExt};
 use crate::generated::protocol_config::ProtocolConfig as ProtoProtocolConfig;
+use crate::{DecodeMessage, Verify};
 
 /// Ensures protocol configuration is present and matches the protocol configuration commitment in
 /// the header.
@@ -13,10 +13,19 @@ pub fn ensure_protocol_config_is_present_and_matches_header(
     config: Option<ProtoProtocolConfig>,
     header: &BlockHeader,
 ) -> Result<ProtocolConfig, ConversionError> {
-    let config: ProtocolConfig = verify_value(
-        "protocol_config",
-        config.ok_or_else(|| ConversionError::message("protocol config is missing"))?,
-    )?;
+    let config = config
+        .ok_or_else(|| ConversionError::message("protocol config is missing"))?
+        .decode_fields()
+        .and_then(|config| config.verify().map_err(ConversionError::new))
+        .context("protocol_config")?;
+    verify_protocol_config_commitment(config, header)
+}
+
+/// Check that the configuration matches the header commitment.
+pub(super) fn verify_protocol_config_commitment(
+    config: ProtocolConfig,
+    header: &BlockHeader,
+) -> Result<ProtocolConfig, ConversionError> {
     let calculated = config.to_commitment();
     let expected = header.protocol_config_commitment();
     if calculated != expected {

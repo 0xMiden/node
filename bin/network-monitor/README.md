@@ -30,9 +30,9 @@ unless it can verify the advertised encryption key. The monitor obtains the acti
 configuration returned by RPC and verifies it against the transaction's reference block.
 
 On a chain with a non-zero verification base fee, network transaction checks additionally require
-`MIDEN_MONITOR_FAUCET_URL`: the monitor funds its in-memory accounts by claiming the native fee asset from the faucet,
-and it tops the balance up automatically when it runs low. Without a configured faucet the monitor refuses to start its
-network transaction checks on such chains.
+`MIDEN_MONITOR_FUNDING_SERVICE_URL`: the monitor funds its in-memory accounts from the funding service and tops the
+balance up automatically when it runs low. Without it the monitor refuses to start its network transaction checks on
+such chains. `MIDEN_MONITOR_FAUCET_URL` is only used for the faucet checks.
 
 Use the binary help output for the current command and configuration surface. The help output is the source of truth for
 flags and environment variables.

@@ -1,4 +1,5 @@
-use miden_node_proto::generated as proto;
+use miden_node_proto::errors::conversion_error_to_status;
+use miden_node_proto::{DecodeMessage, generated as proto};
 use miden_node_tracing::{debug, miden_instrument, miden_span_record};
 use miden_protocol::Word;
 use miden_protocol::note::NoteScript;
@@ -12,14 +13,7 @@ impl proto::server::rpc_api::GetNoteScriptByRoot for RpcService {
     type Output = Option<NoteScript>;
 
     fn decode(request: proto::rpc::NoteScriptByRootRequest) -> tonic::Result<Self::Input> {
-        let note_script_root = request
-            .root
-            .as_ref()
-            .ok_or_else(|| tonic::Status::invalid_argument("missing note script root"))?
-            .try_into()
-            .map_err(|_| tonic::Status::invalid_argument("invalid note script root"))?;
-
-        Ok(note_script_root)
+        Ok(request.decode_fields().map_err(conversion_error_to_status)?.root)
     }
 
     fn encode(output: Self::Output) -> tonic::Result<proto::rpc::MaybeNoteScript> {
