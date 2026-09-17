@@ -587,6 +587,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            miden_protocol::transaction::TransactionLogDataCollection::default(),
             OrderedTransactionHeaders::new_unchecked(vec![]),
         )
         .unwrap();

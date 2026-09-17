@@ -228,6 +228,9 @@ async fn submission_endpoints_reject_unregistered_creation_without_partial_batch
         batch.input_notes().clone(),
         batch.output_notes().to_vec(),
         batch.batch_expiration_block_num(),
+        miden_protocol::transaction::TransactionLogDataCollection::empty_for_headers(
+            &(batch.transaction_headers()),
+        ),
         batch.transaction_headers(),
         miden_protocol::testing::dummy_execution_proof(),
     )

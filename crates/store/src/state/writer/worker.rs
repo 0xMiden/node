@@ -694,6 +694,9 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            miden_protocol::transaction::TransactionLogDataCollection::empty_for_headers(
+                &(OrderedTransactionHeaders::new_unchecked(Vec::new())),
+            ),
             OrderedTransactionHeaders::new_unchecked(Vec::new()),
         )
         .unwrap();

@@ -55,6 +55,8 @@ pub enum AccountStateForestUpdateError {
 
 #[derive(Debug, Error)]
 pub enum DatabaseError {
+    #[error("invalid account log range, cursor, or page limit")]
+    InvalidAccountLogQuery,
     // ERRORS WITH AUTOMATIC CONVERSIONS FROM NESTED ERROR TYPES
     // ---------------------------------------------------------------------------------------------
     #[error("account error")]

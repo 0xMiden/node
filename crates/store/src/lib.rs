@@ -18,7 +18,14 @@ pub use accounts::{AccountTreeWithHistory, HistoricalError, InMemoryAccountTree}
 pub use blocks::BlockStore;
 pub use data_directory::DataDirectory;
 pub use db::models::conv::SqlTypeConvert;
-pub use db::models::queries::StorageMapValuesPage;
+pub use db::models::queries::{
+    AccountLogCursor,
+    AccountLogPage,
+    AccountLogRecord,
+    MAX_ACCOUNT_LOG_PAGE_BYTES,
+    MAX_ACCOUNT_LOG_PAGE_SIZE,
+    StorageMapValuesPage,
+};
 pub use db::{
     AccountVaultValue,
     DatabaseOptions,

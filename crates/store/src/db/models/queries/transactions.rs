@@ -49,6 +49,7 @@ pub struct TransactionRecordRaw {
     input_notes: Vec<u8>,
     output_notes: Vec<u8>,
     size_in_bytes: i64,
+    logs_commitment: Vec<u8>,
 }
 
 /// Insert transactions to the DB using the given [`SqliteConnection`].
@@ -92,6 +93,7 @@ pub struct TransactionSummaryRowInsert {
     input_notes: Vec<u8>,
     output_notes: Vec<u8>,
     size_in_bytes: i64,
+    logs_commitment: Vec<u8>,
 }
 
 impl TransactionSummaryRowInsert {
@@ -103,7 +105,7 @@ impl TransactionSummaryRowInsert {
         transaction_header: &miden_protocol::transaction::TransactionHeader,
         block_num: BlockNumber,
     ) -> Self {
-        const HEADER_BASE_SIZE_BYTES: usize = 4 + 32 + 16 + 64;
+        const HEADER_BASE_SIZE_BYTES: usize = 4 + 32 + 16 + 64 + 32;
         const INPUT_NOTE_COMMITMENT_SIZE_BYTES: usize = 64;
         const OUTPUT_NOTE_SYNC_RECORD_SIZE_BYTES: usize = 700;
         // Worst case, every input note resolves to a consumed-note reference (nullifier + note id)
@@ -143,6 +145,7 @@ impl TransactionSummaryRowInsert {
             input_notes: input_notes_binary,
             output_notes: output_notes_binary,
             size_in_bytes,
+            logs_commitment: transaction_header.logs_commitment().to_bytes(),
         }
     }
 }
@@ -388,6 +391,7 @@ fn with_output_note_proofs(
                 Word::read_from_bytes(&raw.final_state_commitment)?,
                 InputNotes::new_unchecked(input_notes),
                 output_notes,
+                Word::read_from_bytes(&raw.logs_commitment)?,
             )
             .map_err(|err| {
                 DatabaseError::DataCorrupted(format!(

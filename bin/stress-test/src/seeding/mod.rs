@@ -895,6 +895,10 @@ fn create_batch(txs: &[ProvenTransaction], block_ref: &BlockHeader) -> ProvenBat
         InputNotes::new(input_notes).unwrap(),
         output_notes,
         BlockNumber::MAX,
+        miden_protocol::transaction::TransactionLogDataCollection::new(
+            txs.iter().map(|tx| tx.log_data().clone()).collect(),
+        )
+        .unwrap(),
         OrderedTransactionHeaders::new_unchecked(txs.iter().map(TransactionHeader::from).collect()),
         miden_protocol::testing::dummy_execution_proof(),
     )

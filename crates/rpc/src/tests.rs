@@ -94,6 +94,7 @@ use crate::server::RpcBackend;
 use crate::server::api::{RpcService, SequencerInternalService};
 use crate::{AccountAdmission, PreAuthSubmission, Rpc, RpcMode, ValidatorClients};
 
+mod account_logs;
 mod allowlist;
 
 /// Global registry of temp directories. Held for the lifetime of the test binary so that `RocksDB`
@@ -2190,9 +2191,16 @@ async fn next_block_with_protocol_config(
         let (header, _) = view.get_block_header(Some(height.into()), false).await.unwrap();
         mmr.add(header.unwrap().commitment()).unwrap();
     }
-    let body =
-        BlockBody::new(vec![], vec![], vec![], OrderedTransactionHeaders::new_unchecked(vec![]))
-            .unwrap();
+    let body = BlockBody::new(
+        vec![],
+        vec![],
+        vec![],
+        miden_protocol::transaction::TransactionLogDataCollection::empty_for_headers(
+            &(OrderedTransactionHeaders::new_unchecked(vec![])),
+        ),
+        OrderedTransactionHeaders::new_unchecked(vec![]),
+    )
+    .unwrap();
 
     let header = BlockHeader::new(
         parent.commitment(),

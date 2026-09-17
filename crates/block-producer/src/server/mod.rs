@@ -54,11 +54,15 @@ impl BlockProducerApiConfig {
     fn mempool_config(self) -> MempoolConfig {
         MempoolConfig {
             batch_budget: BatchBudget {
-                transactions: self.max_txs_per_batch.get(),
+                transactions: self
+                    .max_txs_per_batch
+                    .get()
+                    .min(miden_protocol::MAX_LOG_DATA_TRANSACTIONS_PER_BATCH),
                 ..BatchBudget::default()
             },
             block_budget: BlockBudget {
                 batches: self.max_batches_per_block.get(),
+                ..BlockBudget::default()
             },
             tx_capacity: self.mempool_tx_capacity,
             ..Default::default()

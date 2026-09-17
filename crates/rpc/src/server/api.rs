@@ -72,6 +72,7 @@ pub(crate) async fn submit_batch_to_validators(
 // ================================================================================================
 
 mod get_account;
+mod get_account_logs;
 mod get_block_by_number;
 mod get_block_header_by_number;
 mod get_limits;
@@ -272,7 +273,9 @@ fn database_error_to_status(err: &DatabaseError) -> Status {
         | DatabaseError::AccountsNotFoundInDb(_)
         | DatabaseError::AccountNotPublic(_) => Status::not_found(message),
         DatabaseError::TransactionPageExceedsPayloadLimit { .. } => Status::out_of_range(message),
-        DatabaseError::RangeBeyondTip(_) => Status::invalid_argument(message),
+        DatabaseError::InvalidAccountLogQuery | DatabaseError::RangeBeyondTip(_) => {
+            Status::invalid_argument(message)
+        },
         _ => Status::internal(message),
     }
 }
@@ -324,6 +327,10 @@ static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
 
     proto::rpc::RpcLimits {
         endpoints: std::collections::HashMap::from([
+            (
+                "GetAccountLogs".into(),
+                endpoint_limits(&[("page_size", 256), ("response_bytes", 1024 * 1024)]),
+            ),
             (
                 "SyncNullifiers".into(),
                 endpoint_limits(&[(NullifierPrefix::PARAM_NAME, NullifierPrefix::LIMIT)]),

@@ -185,3 +185,17 @@ files.extend-exclude = [
   "snapshots/",           # Snapshot tarballs used by the bench replay workflow.
   "stress-test-store-*/", # Stress-test RocksDB stores (generated LOGs contain non-word tokens).
 ]
+
+# Transaction log protocol stack: https://github.com/0xMiden/protocol/pull/3905.
+[patch.crates-io]
+miden-agglayer             = { git = "https://github.com/0xMiden/protocol", rev = "a7b62927531c20ffede7ba24ec09261ed1349ec3" }
+miden-block-prover         = { git = "https://github.com/0xMiden/protocol", rev = "a7b62927531c20ffede7ba24ec09261ed1349ec3" }
+miden-objects              = { git = "https://github.com/0xMiden/protocol", rev = "a7b62927531c20ffede7ba24ec09261ed1349ec3" }
+miden-protobuf             = { git = "https://github.com/0xMiden/protocol", rev = "a7b62927531c20ffede7ba24ec09261ed1349ec3" }
+miden-protobuf-derive      = { git = "https://github.com/0xMiden/protocol", rev = "a7b62927531c20ffede7ba24ec09261ed1349ec3" }
+miden-protocol             = { git = "https://github.com/0xMiden/protocol", rev = "a7b62927531c20ffede7ba24ec09261ed1349ec3" }
+miden-protocol-build-utils = { git = "https://github.com/0xMiden/protocol", rev = "a7b62927531c20ffede7ba24ec09261ed1349ec3" }
+miden-standards            = { git = "https://github.com/0xMiden/protocol", rev = "a7b62927531c20ffede7ba24ec09261ed1349ec3" }
+miden-testing              = { git = "https://github.com/0xMiden/protocol", rev = "a7b62927531c20ffede7ba24ec09261ed1349ec3" }
+miden-tx                   = { git = "https://github.com/0xMiden/protocol", rev = "a7b62927531c20ffede7ba24ec09261ed1349ec3" }
+miden-tx-batch             = { git = "https://github.com/0xMiden/protocol", rev = "a7b62927531c20ffede7ba24ec09261ed1349ec3" }

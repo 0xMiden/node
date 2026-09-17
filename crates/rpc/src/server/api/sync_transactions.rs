@@ -114,6 +114,7 @@ fn transaction_record_to_proto(record: TransactionRecord) -> proto::rpc::Transac
     proto::rpc::TransactionRecord {
         header: Some(proto::transaction::TransactionHeader {
             transaction_id: Some(record.header.id().into()),
+            logs_commitment: Some(record.header.logs_commitment().into()),
             account_id: Some(record.header.account_id().into()),
             initial_state_commitment: Some(record.header.initial_state_commitment().into()),
             final_state_commitment: Some(record.header.final_state_commitment().into()),

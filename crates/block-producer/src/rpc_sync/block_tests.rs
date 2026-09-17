@@ -261,6 +261,11 @@ unused_rpc!(
     proto::blockchain::BlockNumber
 );
 unused_rpc!(
+    GetAccountLogs,
+    proto::rpc::GetAccountLogsRequest,
+    proto::rpc::GetAccountLogsResponse
+);
+unused_rpc!(
     SyncTransactions,
     proto::rpc::SyncTransactionsRequest,
     proto::rpc::SyncTransactionsResponse

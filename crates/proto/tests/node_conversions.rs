@@ -80,6 +80,9 @@ fn empty_batch(reference_block_num: u32) -> ProvenBatch {
         InputNotes::<InputNoteCommitment>::default(),
         Vec::new(),
         BlockNumber::from(reference_block_num + 1),
+        miden_protocol::transaction::TransactionLogDataCollection::empty_for_headers(
+            &(OrderedTransactionHeaders::new_unchecked(Vec::new())),
+        ),
         OrderedTransactionHeaders::new_unchecked(Vec::new()),
         miden_protocol::testing::dummy_execution_proof(),
     )
@@ -161,6 +164,7 @@ fn nonempty_block_request() -> BlockProofRequest {
                 final_state,
                 input_notes.clone(),
                 Vec::new(),
+                miden_protocol::Word::default(),
             )
             .unwrap();
             let update = BatchAccountUpdate::new(
@@ -177,6 +181,9 @@ fn nonempty_block_request() -> BlockProofRequest {
                 input_notes,
                 Vec::new(),
                 BlockNumber::from(10),
+                miden_protocol::transaction::TransactionLogDataCollection::empty_for_headers(
+                    &(OrderedTransactionHeaders::new_unchecked(vec![transaction.clone()])),
+                ),
                 OrderedTransactionHeaders::new_unchecked(vec![transaction]),
                 miden_protocol::testing::dummy_execution_proof(),
             )

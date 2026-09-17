@@ -298,7 +298,10 @@ pub trait GrpcClient {
 
 impl GrpcClient for RpcClient {
     fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
-        Self(GeneratedRpcClient::new(InterceptedService::new(channel, interceptor)))
+        Self(
+            GeneratedRpcClient::new(InterceptedService::new(channel, interceptor))
+                .max_decoding_message_size(crate::MAX_BLOCK_MESSAGE_SIZE),
+        )
     }
 }
 
@@ -316,7 +319,10 @@ impl GrpcClient for RemoteProverClient {
 
 impl GrpcClient for ValidatorClient {
     fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
-        Self(GeneratedValidatorClient::new(InterceptedService::new(channel, interceptor)))
+        Self(
+            GeneratedValidatorClient::new(InterceptedService::new(channel, interceptor))
+                .max_decoding_message_size(crate::MAX_BLOCK_MESSAGE_SIZE),
+        )
     }
 }
 
