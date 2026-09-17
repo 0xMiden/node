@@ -1,6 +1,7 @@
 use std::fmt::{Debug, Formatter};
 
 use miden_node_utils::limiter::{QueryParamLimiter, QueryParamStorageMapKeyTotalLimit};
+use miden_protobuf::{ConversionResultExt, Verify};
 use miden_protocol::Word;
 #[cfg(test)]
 use miden_protocol::account::StorageSlotHeader;
@@ -21,11 +22,8 @@ use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::crypto::merkle::MerkleError;
 use miden_protocol::crypto::merkle::smt::{PartialSmt, SmtProof};
 
-use super::try_convert;
-use crate::decode::{ConversionResultExt, GrpcDecodeExt, verify_optional, verify_value};
 use crate::errors::ConversionError;
 use crate::generated::{self as proto};
-use crate::{decode, verify};
 
 #[cfg(test)]
 mod tests;
@@ -69,17 +67,17 @@ pub struct AccountRequest {
     pub details: Option<AccountDetailRequest>,
 }
 
-impl TryFrom<proto::rpc::AccountRequest> for AccountRequest {
+impl Verify for proto::rpc::DecodedAccountRequest {
+    type Verified = AccountRequest;
     type Error = ConversionError;
 
-    fn try_from(value: proto::rpc::AccountRequest) -> Result<Self, Self::Error> {
-        let decoder = value.decoder();
-        let proto::rpc::AccountRequest { account_id, block_num, details } = value;
+    fn verify(self) -> Result<Self::Verified, Self::Error> {
+        let Self { account_id, block_num, details } = self;
 
-        let account_id = verify!(decoder, account_id)?;
-        let block_num = verify_optional("block_num", block_num)?;
+        let account_id = account_id.verify().context("account_id")?;
+        let block_num = block_num.map(Verify::verify).transpose().context("block_num")?;
 
-        let details = details.map(TryFrom::try_from).transpose().context("details")?;
+        let details = details.map(Verify::verify).transpose().context("details")?;
 
         Ok(AccountRequest { account_id, block_num, details })
     }
@@ -100,26 +98,18 @@ pub enum AccountStorageRequest {
     Explicit(Vec<StorageMapRequest>),
 }
 
-impl TryFrom<proto::rpc::account_request::AccountDetailRequest> for AccountDetailRequest {
+impl Verify for proto::rpc::account_request::DecodedAccountDetailRequest {
+    type Verified = AccountDetailRequest;
     type Error = ConversionError;
 
-    fn try_from(
-        value: proto::rpc::account_request::AccountDetailRequest,
-    ) -> Result<Self, Self::Error> {
-        use proto::rpc::account_request::account_detail_request::StorageRequest as ProtoStorageRequest;
+    fn verify(self) -> Result<Self::Verified, Self::Error> {
+        use proto::rpc::account_request::account_detail_request::DecodedStorageRequest as ProtoStorageRequest;
 
-        let proto::rpc::account_request::AccountDetailRequest {
+        let Self {
             code_commitment,
             asset_vault_commitment,
             storage_request,
-        } = value;
-
-        let code_commitment =
-            code_commitment.map(TryFrom::try_from).transpose().context("code_commitment")?;
-        let asset_vault_commitment = asset_vault_commitment
-            .map(TryFrom::try_from)
-            .transpose()
-            .context("asset_vault_commitment")?;
+        } = self;
 
         let storage_request = match storage_request {
             None => AccountStorageRequest::None,
@@ -130,9 +120,16 @@ impl TryFrom<proto::rpc::account_request::AccountDetailRequest> for AccountDetai
                 return Err(ConversionError::message("all_storage_maps must be true when set"));
             },
             Some(ProtoStorageRequest::StorageMaps(requests)) => {
-                let requests = try_convert(requests.storage_maps)
-                    .collect::<Result<_, _>>()
-                    .context("storage_maps")?;
+                let requests = requests
+                    .storage_maps
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, request)| {
+                        request.verify().with_context(|| {
+                            format!("storage_request.storage_maps.storage_maps[{index}]")
+                        })
+                    })
+                    .collect::<Result<_, _>>()?;
                 AccountStorageRequest::Explicit(requests)
             },
         };
@@ -151,22 +148,17 @@ pub struct StorageMapRequest {
     pub slot_data: SlotData,
 }
 
-impl TryFrom<proto::rpc::account_request::account_detail_request::StorageMapDetailRequest>
-    for StorageMapRequest
+impl Verify
+    for proto::rpc::account_request::account_detail_request::DecodedStorageMapDetailRequest
 {
+    type Verified = StorageMapRequest;
     type Error = ConversionError;
 
-    fn try_from(
-        value: proto::rpc::account_request::account_detail_request::StorageMapDetailRequest,
-    ) -> Result<Self, Self::Error> {
-        let decoder = value.decoder();
-        let proto::rpc::account_request::account_detail_request::StorageMapDetailRequest {
-            slot_name,
-            slot_data,
-        } = value;
+    fn verify(self) -> Result<Self::Verified, Self::Error> {
+        let Self { slot_name, slot_data } = self;
 
         let slot_name = StorageSlotName::new(slot_name).context("slot_name")?;
-        let slot_data = decode!(decoder, slot_data)?;
+        let slot_data = slot_data.verify().context("slot_data")?;
 
         Ok(StorageMapRequest { slot_name, slot_data })
     }
@@ -179,19 +171,14 @@ pub enum SlotData {
     MapKeys(Vec<StorageMapKey>),
 }
 
-impl
-    TryFrom<
-        proto::rpc::account_request::account_detail_request::storage_map_detail_request::SlotData,
-    > for SlotData
-{
+impl Verify for proto::rpc::account_request::account_detail_request::storage_map_detail_request::DecodedSlotData {
+    type Verified = SlotData;
     type Error = ConversionError;
 
-    fn try_from(
-        value: proto::rpc::account_request::account_detail_request::storage_map_detail_request::SlotData,
-    ) -> Result<Self, Self::Error> {
-        use proto::rpc::account_request::account_detail_request::storage_map_detail_request::SlotData as ProtoSlotData;
+    fn verify(self) -> Result<Self::Verified, Self::Error> {
+        use proto::rpc::account_request::account_detail_request::storage_map_detail_request::DecodedSlotData as ProtoSlotData;
 
-        Ok(match value {
+        Ok(match self {
             ProtoSlotData::AllEntries(true) => SlotData::All,
             ProtoSlotData::AllEntries(false) => {
                 return Err(ConversionError::message("enum variant discriminant out of range"));
@@ -200,10 +187,8 @@ impl
                 let keys = keys
                     .map_keys
                     .into_iter()
-                    .map(|key| {
-                        Word::try_from(key).map(StorageMapKey::new).map_err(ConversionError::from)
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .map(StorageMapKey::new)
+                    .collect::<Vec<_>>();
                 if has_duplicate_storage_map_keys(&keys) {
                     return Err(ConversionError::message(
                         "storage map key request contains duplicate keys",
@@ -257,20 +242,22 @@ impl AccountVaultDetails {
     }
 }
 
-impl TryFrom<proto::rpc::AccountVaultDetails> for AccountVaultDetails {
+impl Verify for proto::rpc::DecodedAccountVaultDetails {
+    type Verified = AccountVaultDetails;
     type Error = ConversionError;
 
-    fn try_from(value: proto::rpc::AccountVaultDetails) -> Result<Self, Self::Error> {
-        let proto::rpc::AccountVaultDetails { too_many_assets, assets } = value;
+    fn verify(self) -> Result<Self::Verified, Self::Error> {
+        let Self { too_many_assets, assets } = self;
 
         if too_many_assets {
-            Ok(Self::LimitExceeded)
+            Ok(AccountVaultDetails::LimitExceeded)
         } else {
             let parsed_assets = assets
                 .into_iter()
-                .map(|asset| verify_value("assets", asset))
+                .enumerate()
+                .map(|(index, asset)| asset.verify().with_context(|| format!("assets[{index}]")))
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok(Self::Assets(parsed_assets))
+            Ok(AccountVaultDetails::Assets(parsed_assets))
         }
     }
 }
@@ -438,64 +425,48 @@ impl AccountStorageMapDetails {
     }
 }
 
-impl TryFrom<proto::rpc::account_storage_details::AccountStorageMapDetails>
-    for AccountStorageMapDetails
-{
+impl Verify for proto::rpc::account_storage_details::DecodedAccountStorageMapDetails {
+    type Verified = AccountStorageMapDetails;
     type Error = ConversionError;
 
-    fn try_from(
-        value: proto::rpc::account_storage_details::AccountStorageMapDetails,
-    ) -> Result<Self, Self::Error> {
+    fn verify(self) -> Result<Self::Verified, Self::Error> {
         use proto::rpc::account_storage_details::account_storage_map_details::{
-            AllMapEntries,
-            PartialStorageMap,
-            Result as ProtoResult,
+            DecodedAllMapEntries,
+            DecodedPartialStorageMap,
+            DecodedResult as ProtoResult,
         };
 
-        let decoder = value.decoder();
-        let proto::rpc::account_storage_details::AccountStorageMapDetails { slot_name, result } =
-            value;
+        let Self { slot_name, result } = self;
 
         let slot_name = StorageSlotName::new(slot_name).context("slot_name")?;
 
-        let entries = match decode!(decoder, result)? {
+        let entries = match result {
             ProtoResult::TooManyEntries(true) => StorageMapEntries::LimitExceeded,
             ProtoResult::TooManyEntries(false) => {
                 return Err(ConversionError::message("too_many_entries must be true when set"));
             },
-            ProtoResult::AllEntries(AllMapEntries { entries }) => {
+            ProtoResult::AllEntries(DecodedAllMapEntries { entries }) => {
                 let entries = entries
                     .into_iter()
-                    .map(|entry| {
-                        let decoder = entry.decoder();
-                        let key = StorageMapKey::new(decode!(decoder, entry.key)?);
-                        let value = decode!(decoder, entry.value)?;
-                        Ok((key, value))
-                    })
-                    .collect::<Result<Vec<_>, ConversionError>>()
-                    .context("entries")?;
+                    .map(|entry| (StorageMapKey::new(entry.key), entry.value))
+                    .collect();
                 StorageMapEntries::AllEntries(entries)
             },
-            ProtoResult::PartialMap(PartialStorageMap { map_keys, partial_smt }) => {
-                if map_keys.len() > Self::MAX_SMT_PROOF_ENTRIES {
+            ProtoResult::PartialMap(DecodedPartialStorageMap { map_keys, partial_smt }) => {
+                if map_keys.len() > AccountStorageMapDetails::MAX_SMT_PROOF_ENTRIES {
                     return Err(ConversionError::message(format!(
                         "partial storage map contains {} keys, exceeding the limit of {}",
                         map_keys.len(),
-                        Self::MAX_SMT_PROOF_ENTRIES
+                        AccountStorageMapDetails::MAX_SMT_PROOF_ENTRIES
                     )));
                 }
-                let map_keys = map_keys
-                    .into_iter()
-                    .map(|key| Word::try_from(key).map(StorageMapKey::new))
-                    .collect::<Result<Vec<_>, _>>()
-                    .context("map_keys")?;
+                let map_keys = map_keys.into_iter().map(StorageMapKey::new).collect::<Vec<_>>();
                 if has_duplicate_storage_map_keys(&map_keys) {
                     return Err(ConversionError::message(
                         "partial storage map contains duplicate keys",
                     ));
                 }
-                let partial_smt: PartialSmt =
-                    verify!(decoder, partial_smt).context("partial_smt")?;
+                let partial_smt: PartialSmt = partial_smt.verify().context("partial_smt")?;
                 for map_key in &map_keys {
                     partial_smt.get_value(&map_key.hash().as_word()).context("map_keys")?;
                 }
@@ -503,7 +474,7 @@ impl TryFrom<proto::rpc::account_storage_details::AccountStorageMapDetails>
             },
         };
 
-        Ok(Self { slot_name, entries })
+        Ok(Self::Verified { slot_name, entries })
     }
 }
 
@@ -572,17 +543,20 @@ impl AccountStorageDetails {
     }
 }
 
-impl TryFrom<proto::rpc::AccountStorageDetails> for AccountStorageDetails {
+impl Verify for proto::rpc::DecodedAccountStorageDetails {
+    type Verified = AccountStorageDetails;
     type Error = ConversionError;
 
-    fn try_from(value: proto::rpc::AccountStorageDetails) -> Result<Self, Self::Error> {
-        let decoder = value.decoder();
-        let proto::rpc::AccountStorageDetails { header, map_details } = value;
+    fn verify(self) -> Result<Self::Verified, Self::Error> {
+        let Self { header, map_details } = self;
 
-        let header: AccountStorageHeader = verify!(decoder, header)?;
+        let header: AccountStorageHeader = header.verify().context("header")?;
 
-        let map_details: Vec<AccountStorageMapDetails> =
-            try_convert(map_details).collect::<Result<Vec<_>, _>>().context("map_details")?;
+        let map_details: Vec<AccountStorageMapDetails> = map_details
+            .into_iter()
+            .enumerate()
+            .map(|(index, detail)| detail.verify().with_context(|| format!("map_details[{index}]")))
+            .collect::<Result<Vec<_>, _>>()?;
 
         for map_detail in &map_details {
             let StorageMapEntries::PartialMap { partial_smt, .. } = &map_detail.entries else {
@@ -609,7 +583,7 @@ impl TryFrom<proto::rpc::AccountStorageDetails> for AccountStorageDetails {
             }
         }
 
-        Ok(Self { header, map_details })
+        Ok(Self::Verified { header, map_details })
     }
 }
 
@@ -634,18 +608,31 @@ pub struct AccountResponse {
     pub details: Option<AccountDetails>,
 }
 
-impl TryFrom<proto::rpc::AccountResponse> for AccountResponse {
+impl Verify for proto::rpc::DecodedAccountResponse {
+    type Verified = AccountResponse;
     type Error = ConversionError;
 
-    fn try_from(value: proto::rpc::AccountResponse) -> Result<Self, Self::Error> {
-        let decoder = value.decoder();
-        let proto::rpc::AccountResponse { block_num, witness, details } = value;
+    /// Check that supplied details match the account witness. The caller must authenticate the
+    /// witness root and block against trusted chain state.
+    fn verify(self) -> Result<Self::Verified, Self::Error> {
+        let Self { block_num, witness, details } = self;
 
-        let block_num = verify!(decoder, block_num)?;
+        let block_num = block_num.verify().context("block_num")?;
 
-        let witness = verify!(decoder, witness)?;
+        let witness = witness.verify().context("witness")?;
 
-        let details = details.map(TryFrom::try_from).transpose().context("details")?;
+        let details = details.map(Verify::verify).transpose().context("details")?;
+
+        if let Some(details) = &details {
+            if details.account_header.id() != witness.id() {
+                return Err(ConversionError::message("account ID does not match witness")
+                    .context("details.header.account_id"));
+            }
+            if details.account_header.to_commitment() != witness.state_commitment() {
+                return Err(ConversionError::message("account commitment does not match witness")
+                    .context("details.header"));
+            }
+        }
 
         Ok(AccountResponse { block_num, witness, details })
     }
@@ -692,24 +679,38 @@ impl AccountDetails {
     }
 }
 
-impl TryFrom<proto::rpc::account_response::AccountDetails> for AccountDetails {
+impl Verify for proto::rpc::account_response::DecodedAccountDetails {
+    type Verified = AccountDetails;
     type Error = ConversionError;
 
-    fn try_from(value: proto::rpc::account_response::AccountDetails) -> Result<Self, Self::Error> {
-        let decoder = value.decoder();
-        let proto::rpc::account_response::AccountDetails {
+    /// Verify storage and supplied code commitments against the account header. This does not
+    /// authenticate the header against trusted chain state.
+    fn verify(self) -> Result<Self::Verified, Self::Error> {
+        let Self {
             header,
             code,
             vault_details,
             storage_details,
-        } = value;
+        } = self;
 
-        let account_header = verify!(decoder, header)?;
+        let account_header = header.verify().context("header")?;
 
-        let storage_details = decode!(decoder, storage_details)?;
+        let storage_details = storage_details.verify().context("storage_details")?;
+        if storage_details.header.to_commitment() != account_header.storage_commitment() {
+            return Err(ConversionError::message(
+                "storage commitment does not match account header",
+            )
+            .context("storage_details.header"));
+        }
 
-        let vault_details = decode!(decoder, vault_details)?;
-        let account_code = verify_optional("code", code)?;
+        let vault_details = vault_details.verify().context("vault_details")?;
+        let account_code = code.map(Verify::verify).transpose().context("code")?;
+        if let Some(code) = &account_code
+            && code.commitment() != account_header.code_commitment()
+        {
+            return Err(ConversionError::message("code commitment does not match account header")
+                .context("code"));
+        }
 
         Ok(AccountDetails {
             account_header,

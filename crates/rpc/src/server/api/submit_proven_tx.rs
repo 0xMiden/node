@@ -1,6 +1,7 @@
+use miden_node_block_producer::ensure_transaction_has_fee;
 use miden_node_block_producer::store::get_tx_inputs;
-use miden_node_block_producer::{AuthenticatedTransaction, ensure_transaction_has_fee};
 use miden_node_proto::clients::{SequencerClient, ValidatorClient};
+use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
 use miden_node_proto::{BuildUnchecked, DecodeMessage, generated as proto};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorReport, debug, miden_instrument, miden_span_record, trace};
@@ -19,13 +20,22 @@ use crate::LOG_TARGET;
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::SubmitProvenTx for RpcService {
-    type Input = proto::submission::ProvenTransactionSubmission;
+    type Input = miden_node_proto::ProvenTransactionSubmission;
     type Output = proto::blockchain::BlockNumber;
 
     fn decode(
         request: proto::submission::ProvenTransactionSubmission,
     ) -> tonic::Result<Self::Input> {
-        Ok(request)
+        request
+            .decode_fields()
+            // SAFETY: The handler checks the reference block and proof before forwarding. Decoding
+            // does not authenticate the transaction against current chain state.
+            //
+            // FIXME: Check committed nullifiers and expiration against one local state snapshot
+            // on every submission path. Forwarding skips the local nullifier check, and
+            // expiration is checked later by the sequencer mempool.
+            .and_then(BuildUnchecked::build_unchecked)
+            .map_err(miden_node_proto::errors::conversion_error_to_status)
     }
 
     fn encode(output: Self::Output) -> tonic::Result<proto::blockchain::BlockNumber> {
@@ -43,20 +53,11 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
         metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        let mut request = input;
+        let tx = input.transaction;
         let is_authorized_network_tx = self.is_authorized_network_tx(metadata);
         let original_accept_header = metadata.get(http::header::ACCEPT.as_str()).cloned();
 
         trace!(target: LOG_TARGET, "Received transaction submission");
-
-        let tx: ProvenTransaction = request
-            .transaction
-            .take()
-            .ok_or_else(|| Status::invalid_argument("missing `transaction` field"))?
-            .decode_fields()
-            .map_err(|err| Status::invalid_argument(format!("invalid transaction: {err}")))?
-            .build_unchecked()
-            .map_err(|err| Status::invalid_argument(format!("invalid transaction: {err}")))?;
 
         miden_span_record!(
             transaction.id = tx.id(),
@@ -100,7 +101,10 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
             tx.proof().clone(),
         )
         .map_err(|e| Status::invalid_argument(e.to_string()))?;
-        request.transaction = Some((&rebuilt_tx).into());
+        let request = proto::submission::ProvenTransactionSubmission {
+            transaction: Some((&rebuilt_tx).into()),
+            sealed_transaction_inputs: Some(input.sealed_transaction_inputs),
+        };
 
         // Block post-deployment network-account transactions from user RPC. First-deployment txs
         // are exempt because the protocol-level allowlist only kicks in once the account exists,
@@ -152,7 +156,8 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
                 .await
             },
             RpcBackend::FullNode { source_rpc, pre_auth: None, .. } => {
-                // Unauthenticated transactions: forward the request to the source verbatim.
+                // FIXME: Preserve and forward the original request. This request contains the
+                // transaction rebuilt above with output-note decorators removed.
                 let mut forwarded_request = Request::new(request);
                 if let Some(accept) = original_accept_header {
                     forwarded_request.metadata_mut().insert(http::header::ACCEPT.as_str(), accept);

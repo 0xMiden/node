@@ -43,6 +43,9 @@ another account, or an account already registered with another entry, returns `A
 Include the network's `genesis` parameter in the `Accept` header, as for transaction submission. Use TLS when sending
 invitation codes over a network. Do not log invitation codes. Full nodes forward registration to the sequencer.
 
+`IsAccountAllowed` takes an account ID in `account_id` and returns `true` if allowlist enforcement is disabled or the
+account is allowlisted. Full nodes forward this query to the sequencer.
+
 ## Transaction Submission
 
 The sequencer requires registration before a transaction creates a non-network account. Transactions for existing
