@@ -427,7 +427,7 @@ mod tests {
     };
     use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
     use miden_protocol::protocol_config::{KernelConfig, ProtocolConfig};
-    use miden_protocol::transaction::OrderedTransactionHeaders;
+    use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionLogDataCollection};
     use tokio::sync::mpsc;
     use url::Url;
 
@@ -587,7 +587,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
-            miden_protocol::transaction::TransactionLogDataCollection::default(),
+            TransactionLogDataCollection::default(),
             OrderedTransactionHeaders::new_unchecked(vec![]),
         )
         .unwrap();
