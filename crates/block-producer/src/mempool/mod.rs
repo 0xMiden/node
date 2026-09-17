@@ -769,7 +769,7 @@ impl Mempool {
                     return false;
                 };
 
-                !self.transaction_is_committed(creator) && is_fee_note(note)
+                is_fee_note(note) && !self.transaction_is_committed(creator)
             })
             .collect::<Vec<_>>();
 
