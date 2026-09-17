@@ -554,7 +554,7 @@ mod tests {
 
         let db = load(db_path).await.unwrap();
         assert_eq!(db.load_chain_tip().await.unwrap(), Some(header.clone()));
-        assert_eq!(db.load_all_transactions().await.unwrap(), vec![record]);
+        assert_eq!(db.load_private_record(transaction_id).await.unwrap(), Some(record));
         assert_eq!(db.load_protocol_config(config.to_commitment()).await.unwrap(), None);
 
         db.upsert_block_header_with_protocol_config(header, Some(config.clone()))
