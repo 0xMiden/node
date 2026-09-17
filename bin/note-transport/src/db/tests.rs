@@ -84,7 +84,7 @@ async fn retained_note_roundtrips_after_reopening() {
     drop((writer, reader));
 
     let (_writer, reader) = load(&dir.path().join("notes.sqlite3")).unwrap();
-    let page = fetch_notes(&reader, vec![u32::MAX], 0).await.unwrap();
+    let page = fetch_notes(&reader, vec![u32::MAX], None).await.unwrap();
     assert_eq!(page.notes.len(), 1);
     let retained = &page.notes[0];
     assert_eq!(retained.header, original.header);
@@ -105,14 +105,14 @@ async fn retry_at_capacity_preserves_first_write() {
         StoreResult::Inserted
     );
     let mut retry = original.clone();
-    let created_at = fetch_notes(&reader, vec![42], 0).await.unwrap().notes[0].created_at;
+    let created_at = fetch_notes(&reader, vec![42], None).await.unwrap().notes[0].created_at;
     retry.after_block_num = Some(BlockNumber::from(99));
     assert_eq!(store_note(&writer, retry, limit).await.unwrap(), StoreResult::AlreadyPresent);
     assert!(matches!(
         store_note(&writer, note(2, 42), limit).await,
         Err(StorageError::Capacity(_))
     ));
-    let page = fetch_notes(&reader, vec![42], 0).await.unwrap();
+    let page = fetch_notes(&reader, vec![42], None).await.unwrap();
     assert_eq!(page.notes.len(), 1);
     assert_eq!(page.notes[0].after_block_num, original.after_block_num);
     assert_eq!(page.notes[0].created_at, created_at);
@@ -126,19 +126,19 @@ async fn multi_tag_fetch_has_stable_bounded_pages() {
     for seed in 1..=503 {
         store_note(&writer, note(seed, seed % 2), u64::MAX).await.unwrap();
     }
-    let page = fetch_notes(&reader, vec![1, 0, 1], 0).await.unwrap();
+    let page = fetch_notes(&reader, vec![1, 0, 1], None).await.unwrap();
     assert_eq!(page.notes.len(), FETCH_NOTES_MAX_ROWS);
     assert!(page.has_more);
     assert_eq!(
         page.notes.iter().map(|n| n.seq).collect::<Vec<_>>(),
         (1..=500).collect::<Vec<_>>()
     );
-    let page = fetch_notes(&reader, vec![0, 1], 500).await.unwrap();
+    let page = fetch_notes(&reader, vec![0, 1], Some(page.cursor)).await.unwrap();
     assert_eq!(page.notes.len(), 3);
     assert!(!page.has_more);
-    assert!(fetch_notes(&reader, vec![], 0).await.unwrap().notes.is_empty());
+    assert!(fetch_notes(&reader, vec![], None).await.unwrap().notes.is_empty());
     assert!(matches!(
-        fetch_notes(&reader, vec![1], u64::MAX).await,
+        fetch_notes(&reader, vec![1], Some(Cursor { nonce: 0, sequence: u64::MAX })).await,
         Err(StorageError::InvalidCursor)
     ));
 }
@@ -152,10 +152,10 @@ async fn fetch_byte_limit_and_oversize_rejection() {
             .await
             .unwrap();
     }
-    let page = fetch_notes(&reader, vec![42], 0).await.unwrap();
+    let page = fetch_notes(&reader, vec![42], None).await.unwrap();
     assert_eq!(page.notes.len(), 2);
     assert!(page.has_more);
-    assert_eq!(fetch_notes(&reader, vec![42], 2).await.unwrap().notes.len(), 2);
+    assert_eq!(fetch_notes(&reader, vec![42], Some(page.cursor)).await.unwrap().notes.len(), 2);
     let oversized = note_with_advice(5, 42, FETCH_NOTES_MAX_BYTES / 8);
     assert!(matches!(
         store_note(&writer, oversized, u64::MAX).await,
@@ -182,7 +182,7 @@ async fn cursor_exhaustion_rejects_insert_without_losing_existing_notes() {
         store_note(&writer, note(1, 42), u64::MAX).await.unwrap(),
         StoreResult::AlreadyPresent
     );
-    assert_eq!(fetch_notes(&reader, vec![42], 0).await.unwrap().notes.len(), 1);
+    assert_eq!(fetch_notes(&reader, vec![42], None).await.unwrap().notes.len(), 1);
 }
 
 #[tokio::test]
@@ -203,7 +203,7 @@ async fn failed_insert_rolls_back_capacity_and_cursor() {
         .await
         .unwrap();
     store_note(&writer, item, limit).await.unwrap();
-    assert_eq!(fetch_notes(&reader, vec![42], 0).await.unwrap().notes[0].seq, 1);
+    assert_eq!(fetch_notes(&reader, vec![42], None).await.unwrap().notes[0].seq, 1);
 }
 
 #[tokio::test]
@@ -214,7 +214,7 @@ async fn concurrent_writes_share_capacity() {
     let (first, second) =
         tokio::join!(store_note(&writer, item, limit), store_note(&writer, note(2, 42), limit),);
     assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
-    assert_eq!(fetch_notes(&reader, vec![42], 0).await.unwrap().notes.len(), 1);
+    assert_eq!(fetch_notes(&reader, vec![42], None).await.unwrap().notes.len(), 1);
 }
 
 fn now_micros() -> i64 {
@@ -263,10 +263,10 @@ async fn insertion_deletes_at_most_ten_oldest_notes_with_cursor_ties() {
         seed_expired(&writer, seed, timestamp, u64::MAX).await;
     }
     store_note(&writer, note(14, 42), u64::MAX).await.unwrap();
-    let page = fetch_notes(&reader, vec![42], 0).await.unwrap();
+    let page = fetch_notes(&reader, vec![42], None).await.unwrap();
     assert_eq!(page.notes.iter().map(|note| note.seq).collect::<Vec<_>>(), vec![1, 3, 4, 14]);
     store_note(&writer, note(15, 42), u64::MAX).await.unwrap();
-    let page = fetch_notes(&reader, vec![42], 0).await.unwrap();
+    let page = fetch_notes(&reader, vec![42], None).await.unwrap();
     assert_eq!(page.notes.iter().map(|note| note.seq).collect::<Vec<_>>(), vec![14, 15]);
 }
 
@@ -286,7 +286,7 @@ async fn insertion_uses_cleanup_capacity_and_preserves_cursor_after_reopen() {
         store_note(&writer, note(5, 42), size * 2).await,
         Err(StorageError::Capacity(_))
     ));
-    let page = fetch_notes(&reader, vec![42], 0).await.unwrap();
+    let page = fetch_notes(&reader, vec![42], None).await.unwrap();
     assert_eq!(page.notes.iter().map(|note| note.seq).collect::<Vec<_>>(), vec![3, 4]);
 }
 
@@ -304,13 +304,13 @@ async fn insufficient_reclaimed_capacity_rolls_back_deletions_and_cursor() {
         store_note(&writer, oversized, limit).await,
         Err(StorageError::Capacity(_))
     ));
-    let page = fetch_notes(&reader, vec![42], 0).await.unwrap();
+    let page = fetch_notes(&reader, vec![42], None).await.unwrap();
     assert_eq!(
         page.notes.iter().map(|note| note.seq).collect::<Vec<_>>(),
         (1..=12).collect::<Vec<_>>()
     );
     store_note(&writer, note(13, 42), limit).await.unwrap();
-    let page = fetch_notes(&reader, vec![42], 0).await.unwrap();
+    let page = fetch_notes(&reader, vec![42], None).await.unwrap();
     assert_eq!(page.notes.iter().map(|note| note.seq).collect::<Vec<_>>(), vec![11, 12, 13]);
 }
 
@@ -321,9 +321,9 @@ async fn duplicate_retry_and_reads_do_not_delete_expired_notes() {
     for seed in 2..=12 {
         seed_expired(&writer, seed, 0, u64::MAX).await;
     }
-    assert_eq!(fetch_notes(&reader, vec![42], 0).await.unwrap().notes.len(), 12);
+    assert_eq!(fetch_notes(&reader, vec![42], None).await.unwrap().notes.len(), 12);
     assert_eq!(store_note(&writer, original, 1).await.unwrap(), StoreResult::AlreadyPresent);
-    assert_eq!(fetch_notes(&reader, vec![42], 0).await.unwrap().notes.len(), 12);
+    assert_eq!(fetch_notes(&reader, vec![42], None).await.unwrap().notes.len(), 12);
 }
 
 #[tokio::test]
@@ -336,7 +336,7 @@ async fn failed_cleanup_rolls_back_insert_and_deletions() {
         Ok::<_, miden_node_db::DatabaseError>(())
     }).await.unwrap();
     assert!(store_note(&writer, note(3, 42), u64::MAX).await.is_err());
-    let page = fetch_notes(&reader, vec![42], 0).await.unwrap();
+    let page = fetch_notes(&reader, vec![42], None).await.unwrap();
     assert_eq!(page.notes.iter().map(|note| note.seq).collect::<Vec<_>>(), vec![1, 2]);
     writer
         .write("allow deletion", |tx| {
@@ -346,7 +346,7 @@ async fn failed_cleanup_rolls_back_insert_and_deletions() {
         .await
         .unwrap();
     store_note(&writer, note(3, 42), u64::MAX).await.unwrap();
-    assert_eq!(fetch_notes(&reader, vec![42], 0).await.unwrap().notes[0].seq, 3);
+    assert_eq!(fetch_notes(&reader, vec![42], None).await.unwrap().notes[0].seq, 3);
 }
 
 #[tokio::test]
@@ -359,12 +359,12 @@ async fn cleanup_preserves_notes_at_the_retention_boundary() {
         .write("check retention boundary", |tx| {
             let removed = queries::delete_notes_created_before(tx, 2, CLEANUP_MAX_NOTES)?;
             let retained = queries::select_retained_bytes(tx)?;
-            queries::update_storage_metadata(tx, retained - removed)?;
+            queries::update_retained_bytes(tx, retained - removed)?;
             Ok::<_, StorageError>(())
         })
         .await
         .unwrap();
-    let page = fetch_notes(&reader, vec![42], 0).await.unwrap();
+    let page = fetch_notes(&reader, vec![42], None).await.unwrap();
     assert_eq!(page.notes.iter().map(|note| note.seq).collect::<Vec<_>>(), vec![2, 3]);
 }
 
@@ -378,6 +378,82 @@ async fn insertion_uses_the_configured_retention_period() {
     super::store_note(&writer, note(3, 42), NonZeroU64::MAX, NonZeroU32::new(7).unwrap())
         .await
         .unwrap();
-    let page = fetch_notes(&reader, vec![42], 0).await.unwrap();
+    let page = fetch_notes(&reader, vec![42], None).await.unwrap();
     assert_eq!(page.notes.iter().map(|note| note.seq).collect::<Vec<_>>(), vec![2, 3]);
+}
+
+#[tokio::test]
+async fn migration_preserves_notes_counters_and_nonce() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("notes.sqlite3");
+    miden_node_db::migration::Migrator::builder()
+        .unwrap()
+        .push_sql("001_initial", include_str!("migrations/001_initial.sql"))
+        .unwrap()
+        .build()
+        .unwrap()
+        .bootstrap(&path)
+        .unwrap();
+    let original = note(1, 42);
+    let retained_bytes =
+        i64::try_from(original.header.to_bytes().len() + original.details.to_bytes().len())
+            .unwrap();
+    let stored = original.clone();
+    let (writer, reader) = miden_node_db::sqlite::open(&path).unwrap();
+    writer
+        .write("seed legacy database", move |tx| {
+            queries::insert_note(tx, &stored, now_micros())?;
+            queries::update_retained_bytes(tx, retained_bytes)?;
+            Ok::<_, StorageError>(())
+        })
+        .await
+        .unwrap();
+    drop((writer, reader));
+    assert!(load(&path).is_err());
+    migrate(&path).unwrap();
+    let (writer, reader) = load(&path).unwrap();
+    let page = fetch_notes(&reader, vec![42], None).await.unwrap();
+    assert_eq!(page.notes.len(), 1);
+    assert_eq!(page.notes[0].header, original.header);
+    assert_eq!(page.notes[0].details, original.details);
+    assert_eq!(page.notes[0].after_block_num, original.after_block_num);
+    assert_eq!(page.cursor.sequence, 7);
+    assert!(matches!(
+        store_note(&writer, note(2, 42), u64::try_from(retained_bytes).unwrap()).await,
+        Err(StorageError::Capacity(_))
+    ));
+    drop((writer, reader));
+    migrate(&path).unwrap();
+    let (writer, reader) = load(&path).unwrap();
+    let empty = fetch_notes(&reader, vec![42], Some(page.cursor)).await.unwrap();
+    assert!(empty.notes.is_empty());
+    assert_eq!(empty.cursor, page.cursor);
+    store_note(&writer, note(2, 42), u64::MAX).await.unwrap();
+    let next = fetch_notes(&reader, vec![42], Some(page.cursor)).await.unwrap();
+    assert_eq!(next.notes.len(), 1);
+    assert_eq!(next.cursor.sequence, 8);
+}
+
+#[tokio::test]
+async fn cursor_survives_cleanup_of_all_notes() {
+    let (_dir, writer, reader) = database();
+    seed_expired(&writer, 1, 0, u64::MAX).await;
+    let first = fetch_notes(&reader, vec![42], None).await.unwrap();
+    writer
+        .write("remove expired notes", |tx| {
+            let removed = queries::delete_notes_created_before(tx, 1, CLEANUP_MAX_NOTES)?;
+            let retained_bytes = queries::select_retained_bytes(tx)?;
+            queries::update_retained_bytes(tx, retained_bytes - removed)?;
+            Ok::<_, StorageError>(())
+        })
+        .await
+        .unwrap();
+    let empty = fetch_notes(&reader, vec![42], Some(first.cursor)).await.unwrap();
+    assert!(empty.notes.is_empty());
+    assert_eq!(empty.cursor, first.cursor);
+    store_note(&writer, note(2, 42), u64::MAX).await.unwrap();
+    let next = fetch_notes(&reader, vec![42], Some(empty.cursor)).await.unwrap();
+    assert_eq!(next.notes.len(), 1);
+    assert_eq!(next.cursor.sequence, 2);
+    assert_eq!(next.cursor.nonce, first.cursor.nonce);
 }
