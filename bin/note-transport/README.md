@@ -9,8 +9,14 @@ Create the database before starting the service:
 
 ```sh
 miden-note-transport bootstrap --data-directory ./note-transport-data
-miden-note-transport start --data-directory ./note-transport-data --max-storage-bytes 1073741824
+miden-note-transport start --data-directory ./note-transport-data --max-storage-bytes 1073741824 --rpc-url http://localhost:57291
 ```
+
+Start requires a trusted node RPC URL. Set `--rpc-url` or `MIDEN_NOTE_TRANSPORT_RPC_URL` to an HTTP or HTTPS endpoint.
+The service uses this node to check note inclusion. It trusts the node's canonical block headers and does not verify
+chain consensus independently. The connection is lazy. A temporary node outage does not prevent startup, `SendNote`, or
+`FetchNotes`. Block lookups use half of the `--grpc.timeout` limit, which defaults to 10 seconds. The remaining time is
+reserved for note validation and storage.
 
 The default listener is `127.0.0.1:57292`. Use `--listen` to change it. Set `MIDEN_NOTE_TRANSPORT_DATA_DIRECTORY`,
 `MIDEN_NOTE_TRANSPORT_LISTEN`, and `MIDEN_NOTE_TRANSPORT_MAX_STORAGE_BYTES` instead of the corresponding flags if
@@ -34,17 +40,24 @@ keeps the durable cursor counter. This retention policy requires no schema migra
 
 ## API
 
-The public `note_transport.Api` service is defined in the workspace protobuf crate. It supports `SendNote` and
-`FetchNotes` over gRPC and gRPC-Web. Standard gRPC health and reflection are available on the same listener. There are
-no note subscriptions or statistics RPCs.
+The public `note_transport.Api` service is defined in the workspace protobuf crate. It supports `SendNote`,
+`SendNoteWithProof`, and `FetchNotes` over gRPC and gRPC-Web. Standard gRPC health and reflection are available on the
+same listener. There are no note subscriptions or statistics RPCs.
 
 `SendNote` accepts a `SendNoteRequest` whose `note` field contains a `TransportNote` with the shared protocol note
 header and note details. It returns an empty `SendNoteResponse`. The service checks that the details commitment matches
 the header. An optional block hint gives recipients a lower bound for their chain scan. The service stores this hint
 without chain lookup; an absent hint differs from block zero.
 
+`SendNoteWithProof` requires a `TransportNote` and a `NoteInclusionProof`. It checks the note ID, the proof path, and
+the referenced block's note root before storage. An absent block hint is set to the proven block number. A supplied hint
+must match that number. The service does not store the proof. Fetched notes do not indicate which submission method
+accepted them. This method also returns an empty `SendNoteResponse`.
+
 A retry with the same note ID succeeds and keeps the first envelope, timestamp, and cursor. This also applies when the
-retry supplies a different block hint or storage is full.
+`SendNote` retry supplies a different block hint or storage is full. `SendNoteWithProof` validates the proof and hint on
+every request, including duplicates. A valid retry through either method keeps the first envelope. In particular, a
+verified retry does not replace a hint previously stored by `SendNote`.
 
 `FetchNotes` accepts at most 128 tags and an exclusive cursor with a `fixed64` database nonce and a `fixed64` sequence.
 Omit the cursor to start from the first retained note. Store the complete response cursor and use it for the next
@@ -79,7 +92,9 @@ Restoring an older backup also restores its nonce. That recovery procedure must 
 starts. This service does not provide a nonce rotation command.
 
 Malformed requests return `INVALID_ARGUMENT`. Note size and storage capacity limits return `RESOURCE_EXHAUSTED`. Storage
-failures return `INTERNAL` and are logged by the service.
+failures return `INTERNAL` and are logged by the service. Invalid proofs and conflicting block hints return
+`INVALID_ARGUMENT`. An unknown proof block returns `FAILED_PRECONDITION`. Node lookup failures and invalid node
+responses return `UNAVAILABLE`. Lookup timeouts return `DEADLINE_EXCEEDED`. These failures do not store a note.
 
 ## Development
 

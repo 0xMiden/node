@@ -48,7 +48,7 @@ fn server(config: Config) -> (tempfile::TempDir, Server) {
 
 #[tokio::test]
 async fn send_fetch_preserves_optional_hint_presence() {
-    let (_dir, server) = server(Config::default());
+    let (_dir, server) = server(test_config());
     let first = note(1, 7);
     let mut second = note(2, 8);
     second.after_block_num = Some(BlockNumber { block_num: 0 });
@@ -78,7 +78,7 @@ async fn send_fetch_preserves_optional_hint_presence() {
 
 #[tokio::test]
 async fn duplicate_send_preserves_first_note_and_cursor() {
-    let (_dir, server) = server(Config::default());
+    let (_dir, server) = server(test_config());
 
     let mut first = note(1, 7);
     first.after_block_num = Some(BlockNumber { block_num: 100 });
@@ -103,7 +103,7 @@ async fn duplicate_send_preserves_first_note_and_cursor() {
 
 #[tokio::test]
 async fn rejects_missing_note() {
-    let (_dir, server) = server(Config::default());
+    let (_dir, server) = server(test_config());
     let error = SendNote::full(&server, Request::new(SendNoteRequest { note: None }))
         .await
         .unwrap_err();
@@ -112,7 +112,7 @@ async fn rejects_missing_note() {
 
 #[tokio::test]
 async fn invalid_cursor_has_generic_message() {
-    let (_dir, server) = server(Config::default());
+    let (_dir, server) = server(test_config());
     let error = FetchNotes::full(
         &server,
         Request::new(FetchNotesRequest {
@@ -131,7 +131,7 @@ async fn invalid_cursor_has_generic_message() {
 
 #[tokio::test]
 async fn rejects_missing_or_mismatched_note_fields() {
-    let (_dir, server) = server(Config::default());
+    let (_dir, server) = server(test_config());
     let valid = note(1, 7);
     let mut no_header = valid.clone();
     no_header.header = None;
@@ -149,7 +149,7 @@ async fn rejects_missing_or_mismatched_note_fields() {
 
 #[tokio::test]
 async fn rejects_malformed_nested_note_fields() {
-    let (_dir, server) = server(Config::default());
+    let (_dir, server) = server(test_config());
     let mut note = note(1, 7);
     note.details.as_mut().unwrap().recipient = None;
     let error = SendNote::full(&server, Request::new(SendNoteRequest { note: Some(note) }))
@@ -160,7 +160,7 @@ async fn rejects_malformed_nested_note_fields() {
 
 #[tokio::test]
 async fn rejects_invalid_note_metadata() {
-    let (_dir, server) = server(Config::default());
+    let (_dir, server) = server(test_config());
     let mut note = note(1, 7);
     note.header.as_mut().unwrap().metadata.as_mut().unwrap().note_type =
         miden_node_proto::generated::note::NoteType::Unspecified.into();
@@ -174,7 +174,7 @@ async fn rejects_invalid_note_metadata() {
 async fn rejects_oversized_notes_and_invalid_fetches() {
     let (_dir, server) = server(Config {
         max_note_size: NonZeroUsize::new(1).unwrap(),
-        ..Config::default()
+        ..test_config()
     });
     let error = SendNote::full(&server, Request::new(SendNoteRequest { note: Some(note(1, 7)) }))
         .await
@@ -196,7 +196,7 @@ async fn rejects_oversized_notes_and_invalid_fetches() {
 async fn capacity_failure_does_not_store_the_note() {
     let (_dir, server) = server(Config {
         max_storage_bytes: NonZeroU64::new(1).unwrap(),
-        ..Config::default()
+        ..test_config()
     });
     let error = SendNote::full(&server, Request::new(SendNoteRequest { note: Some(note(1, 7)) }))
         .await
@@ -241,7 +241,7 @@ async fn grpc_health_reflection_web_and_shutdown() {
     use tonic_reflection::pb::v1::server_reflection_request::MessageRequest;
     use tonic_reflection::pb::v1::server_reflection_response::MessageResponse;
 
-    let (_dir, server) = server(Config::default());
+    let (_dir, server) = server(test_config());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let shutdown = CancellationToken::new();
@@ -330,7 +330,7 @@ async fn grpc_health_reflection_web_and_shutdown() {
 
 #[tokio::test]
 async fn large_pages_fit_default_grpc_client_and_resume_without_gaps() {
-    let (_dir, server) = server(Config::default());
+    let (_dir, server) = server(test_config());
     for serial in 1_u32..=400 {
         let recipient = NoteRecipient::new(
             Word::from([serial, 0, 0, 0]),
@@ -396,8 +396,8 @@ async fn large_pages_fit_default_grpc_client_and_resume_without_gaps() {
 
 #[tokio::test]
 async fn rejects_cursor_from_another_database() {
-    let (_first_dir, first) = server(Config::default());
-    let (_second_dir, second) = server(Config::default());
+    let (_first_dir, first) = server(test_config());
+    let (_second_dir, second) = server(test_config());
     let page =
         FetchNotes::full(&first, Request::new(FetchNotesRequest { tags: vec![7], cursor: None }))
             .await
@@ -415,7 +415,7 @@ async fn rejects_cursor_from_another_database() {
 
 #[tokio::test]
 async fn cursor_survives_reopening_database() {
-    let (dir, server) = server(Config::default());
+    let (dir, server) = server(test_config());
     SendNote::full(&server, Request::new(SendNoteRequest { note: Some(note(1, 7)) }))
         .await
         .unwrap();
@@ -427,7 +427,7 @@ async fn cursor_survives_reopening_database() {
     let path = dir.path().join("notes.sqlite3");
     db::migrate(&path).unwrap();
     let (writer, reader) = db::load(&path).unwrap();
-    let server = Server::new(Config::default(), writer, reader).unwrap();
+    let server = Server::new(test_config(), writer, reader).unwrap();
     let empty = FetchNotes::full(
         &server,
         Request::new(FetchNotesRequest { tags: vec![7], cursor: first.cursor }),
@@ -451,8 +451,8 @@ async fn cursor_survives_reopening_database() {
 
 #[tokio::test]
 async fn stale_cursor_fails_before_and_after_sequence_catches_up() {
-    let (_first_dir, first) = server(Config::default());
-    let (_second_dir, second) = server(Config::default());
+    let (_first_dir, first) = server(test_config());
+    let (_second_dir, second) = server(test_config());
     SendNote::full(&first, Request::new(SendNoteRequest { note: Some(note(1, 7)) }))
         .await
         .unwrap();
@@ -484,7 +484,7 @@ async fn stale_cursor_fails_before_and_after_sequence_catches_up() {
 
 #[tokio::test]
 async fn empty_pages_and_nonce_extremes_roundtrip() {
-    let (_dir, server) = server(Config::default());
+    let (_dir, server) = server(test_config());
     for nonce in [0, u64::MAX] {
         server
             .writer
@@ -532,7 +532,7 @@ async fn empty_pages_and_nonce_extremes_roundtrip() {
 
 #[tokio::test]
 async fn missing_metadata_fails_even_without_tags() {
-    let (_dir, server) = server(Config::default());
+    let (_dir, server) = server(test_config());
     server
         .writer
         .write("remove metadata", |tx| {
@@ -546,4 +546,32 @@ async fn missing_metadata_fails_even_without_tags() {
             .await
             .unwrap_err();
     assert_eq!(error.code(), tonic::Code::Internal);
+}
+
+#[tokio::test]
+async fn proof_submission_requires_a_proof_over_grpc_web() {
+    let (_dir, server) = server(test_config());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let shutdown = CancellationToken::new();
+    let task = tokio::spawn(server.serve_on(listener, shutdown.clone()));
+    // The note field has the same wire encoding in both submission requests.
+    let response =
+        grpc_web_request(address, "SendNoteWithProof", SendNoteRequest { note: Some(note(1, 7)) })
+            .await;
+    let headers = response.headers().clone();
+    let body = response.bytes().await.unwrap();
+    shutdown.cancel();
+    task.await.unwrap().unwrap();
+    assert!(
+        headers.get("grpc-status").is_some_and(|status| status == "3")
+            || String::from_utf8_lossy(&body).contains("grpc-status:3"),
+        "expected INVALID_ARGUMENT, got {headers:?}, {body:?}"
+    );
+}
+
+mod proofs;
+
+fn test_config() -> Config {
+    Config::new("http://127.0.0.1:1".parse().unwrap())
 }
