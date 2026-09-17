@@ -1,160 +1,15 @@
-use std::collections::{HashMap, HashSet};
-use std::fmt::{Display, Formatter};
 use std::num::NonZeroU32;
 
-use itertools::Itertools;
-use miden_node_proto::decode::GrpcDecodeExt;
-use miden_node_proto::errors::ConversionError;
-use miden_node_proto::generated::sequencer;
-use miden_node_proto::{decode, verify};
+use miden_node_proto::domain::sequencer::TransactionInputs;
 use miden_node_store::state::{State, TransactionInputs as StoreTransactionInputs};
 use miden_node_tracing::{debug, miden_instrument};
-use miden_node_utils::formatting::format_opt;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::ProvenTransaction;
 
 use crate::errors::StoreError;
 use crate::{COMPONENT, LOG_TARGET};
-
-// TRANSACTION INPUTS
-// ================================================================================================
-
-/// Information needed from the store to verify a transaction.
-#[derive(Debug)]
-pub struct TransactionInputs {
-    /// Account ID
-    pub account_id: AccountId,
-    /// The account commitment in the store corresponding to tx's account ID
-    pub account_commitment: Option<Word>,
-    /// Maps each consumed notes' nullifier to block number, where the note is consumed.
-    ///
-    /// We use `NonZeroU32` as the wire format uses 0 to encode none.
-    pub nullifiers: HashMap<Nullifier, Option<NonZeroU32>>,
-    /// Unauthenticated note commitments which are present in the store.
-    ///
-    /// These are notes which were committed _after_ the transaction was created.
-    pub found_unauthenticated_notes: HashSet<Word>,
-    /// The current block height.
-    pub current_block_height: BlockNumber,
-}
-
-impl TransactionInputs {
-    fn from_store_inputs(
-        account_id: AccountId,
-        inputs: StoreTransactionInputs,
-        current_block_height: BlockNumber,
-    ) -> Self {
-        let account_commitment = if inputs.account_commitment == Word::empty() {
-            None
-        } else {
-            Some(inputs.account_commitment)
-        };
-
-        let nullifiers = inputs
-            .nullifiers
-            .into_iter()
-            .map(|nullifier| (nullifier.nullifier, NonZeroU32::new(nullifier.block_num.as_u32())))
-            .collect();
-
-        Self {
-            account_id,
-            account_commitment,
-            nullifiers,
-            found_unauthenticated_notes: inputs.found_unauthenticated_notes,
-            current_block_height,
-        }
-    }
-}
-
-// PROTO CONVERSIONS
-// ------------------------------------------------------------------------------------------------
-
-impl From<TransactionInputs> for sequencer::AuthInputs {
-    fn from(value: TransactionInputs) -> Self {
-        Self {
-            account_id: Some(value.account_id.into()),
-            account_commitment: value.account_commitment.map(Into::into),
-            nullifiers: value
-                .nullifiers
-                .into_iter()
-                .map(|(nullifier, block_num)| sequencer::NullifierRecord {
-                    nullifier: Some(nullifier.as_word().into()),
-                    block_num: block_num.map_or(0, NonZeroU32::get),
-                })
-                .collect(),
-            found_unauthenticated_notes: value
-                .found_unauthenticated_notes
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-            current_block_height: value.current_block_height.as_u32(),
-        }
-    }
-}
-
-impl TryFrom<sequencer::AuthInputs> for TransactionInputs {
-    type Error = ConversionError;
-
-    fn try_from(value: sequencer::AuthInputs) -> Result<Self, Self::Error> {
-        let decoder = value.decoder();
-        let account_id = verify!(decoder, value.account_id)?;
-
-        let account_commitment = value.account_commitment.map(Word::try_from).transpose()?;
-
-        let nullifiers = value
-            .nullifiers
-            .into_iter()
-            .map(|record| {
-                let decoder = record.decoder();
-                let nullifier = Nullifier::from_raw(decode!(decoder, record.nullifier)?);
-                Ok((nullifier, NonZeroU32::new(record.block_num)))
-            })
-            .collect::<Result<_, ConversionError>>()?;
-
-        let found_unauthenticated_notes = value
-            .found_unauthenticated_notes
-            .into_iter()
-            .map(|word| Word::try_from(word).map_err(ConversionError::from))
-            .collect::<Result<_, ConversionError>>()?;
-
-        Ok(Self {
-            account_id,
-            account_commitment,
-            nullifiers,
-            found_unauthenticated_notes,
-            current_block_height: value.current_block_height.into(),
-        })
-    }
-}
-
-impl Display for TransactionInputs {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let nullifiers = self
-            .nullifiers
-            .iter()
-            .map(|(k, v)| format!("{k}: {}", format_opt(v.as_ref())))
-            .join(", ");
-
-        let nullifiers = if nullifiers.is_empty() {
-            "None".to_owned()
-        } else {
-            format!("{{ {nullifiers} }}")
-        };
-
-        f.write_fmt(format_args!(
-            "{{ account_id: {}, account_commitment: {}, nullifiers: {} }}",
-            self.account_id,
-            format_opt(self.account_commitment.as_ref()),
-            nullifiers
-        ))
-    }
-}
-
-// STORE STATE
-// ================================================================================================
 
 /// Authenticates a proven transaction against the store, returning the [`TransactionInputs`]
 /// needed to admit it to the mempool.
@@ -205,13 +60,35 @@ pub async fn get_tx_inputs(
         return Err(StoreError::DuplicateAccountIdPrefix(proven_tx.account_id()));
     }
 
-    let tx_inputs = TransactionInputs::from_store_inputs(
-        proven_tx.account_id(),
-        store_inputs,
-        *current_block_height,
-    );
+    let tx_inputs = from_store_inputs(proven_tx.account_id(), store_inputs, *current_block_height);
 
     debug!(target: LOG_TARGET, "Transaction inputs loaded");
 
     Ok(tx_inputs)
+}
+
+fn from_store_inputs(
+    account_id: AccountId,
+    inputs: StoreTransactionInputs,
+    current_block_height: BlockNumber,
+) -> TransactionInputs {
+    let account_commitment = if inputs.account_commitment == Word::empty() {
+        None
+    } else {
+        Some(inputs.account_commitment)
+    };
+
+    let nullifiers = inputs
+        .nullifiers
+        .into_iter()
+        .map(|nullifier| (nullifier.nullifier, NonZeroU32::new(nullifier.block_num.as_u32())))
+        .collect();
+
+    TransactionInputs {
+        account_id,
+        account_commitment,
+        nullifiers,
+        found_unauthenticated_notes: inputs.found_unauthenticated_notes,
+        current_block_height,
+    }
 }

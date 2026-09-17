@@ -1,6 +1,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
+use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::batch::BatchId;
@@ -9,7 +10,6 @@ use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::TransactionId;
 
 use crate::domain::batch::{BatchParameters, SelectedBatch};
-use crate::domain::transaction::AuthenticatedTransaction;
 use crate::errors::StateConflict;
 use crate::mempool::BatchBudget;
 use crate::mempool::budget::BudgetStatus;

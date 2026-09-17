@@ -9,11 +9,17 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use miden_node_proto::clients::RpcClient;
-use miden_node_proto::generated::account::account_storage_header::storage_slot::Content as SlotContent;
+use miden_node_proto::{DecodeMessage, Verify};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{debug, error, info, miden_instrument, warn};
 use miden_protocol::account::auth::AuthSecretKey;
-use miden_protocol::account::{Account, AccountId, AccountPatch};
+use miden_protocol::account::{
+    Account,
+    AccountId,
+    AccountPatch,
+    AccountStorageHeader,
+    StorageSlotType,
+};
 use miden_protocol::asset::AssetId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
@@ -984,7 +990,7 @@ fn update_expected_and_pending(
 async fn fetch_account_storage_header(
     rpc_client: &mut RpcClient,
     account_id: AccountId,
-) -> Result<Option<miden_node_proto::generated::account::AccountStorageHeader>> {
+) -> Result<Option<AccountStorageHeader>> {
     let request = build_account_request(account_id, false);
     let resp = rpc_client.get_account(request).await?.into_inner();
 
@@ -992,10 +998,11 @@ async fn fetch_account_storage_header(
         return Ok(None);
     };
 
-    let storage_details = details.storage_details.context("missing storage details")?;
-    let storage_header = storage_details.header.context("missing storage header")?;
-
-    Ok(Some(storage_header))
+    let details = details
+        .decode_fields()
+        .and_then(Verify::verify)
+        .context("invalid account details")?;
+    Ok(Some(details.storage_details.header))
 }
 
 /// Fetch the u64 value held in the named value slot of the given account from RPC.
@@ -1012,18 +1019,14 @@ async fn fetch_slot_value(
     };
 
     let slot = storage_header
-        .slots
-        .iter()
-        .find(|slot| slot.slot_name == slot_name)
+        .slots()
+        .find(|slot| slot.name().as_str() == slot_name)
         .context(format!("slot '{slot_name}' not found"))?;
-
-    let slot_value: Word = match slot.content.as_ref() {
-        Some(SlotContent::Value(value)) => {
-            value.try_into().context("failed to convert slot value to word")?
-        },
-        Some(SlotContent::MapRoot(_)) => anyhow::bail!("slot '{slot_name}' is a storage map"),
-        None => anyhow::bail!("missing storage slot value"),
-    };
+    anyhow::ensure!(
+        slot.slot_type() == StorageSlotType::Value,
+        "slot '{slot_name}' is a storage map"
+    );
+    let slot_value = slot.value();
 
     let value = slot_value
         .as_elements()

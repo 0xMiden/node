@@ -1,7 +1,5 @@
-use miden_node_proto::decode::read_block_range;
-use miden_node_proto::generated as proto;
-#[cfg(test)]
-use miden_node_proto::{DecodeMessage, Verify};
+use miden_node_proto::errors::conversion_error_to_status;
+use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_node_store::{NoteSyncError, NoteSyncRecord};
 use miden_node_tracing::{debug, miden_instrument, miden_span_record};
 use miden_node_utils::limiter::QueryParamNoteTagLimit;
@@ -12,11 +10,11 @@ use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::SyncNotes for RpcService {
-    type Input = proto::rpc::SyncNotesRequest;
+    type Input = proto::rpc::DecodedSyncNotesRequest;
     type Output = proto::rpc::SyncNotesResponse;
 
     fn decode(request: proto::rpc::SyncNotesRequest) -> tonic::Result<Self::Input> {
-        Ok(request)
+        request.decode_fields().map_err(conversion_error_to_status)
     }
 
     fn encode(output: Self::Output) -> tonic::Result<proto::rpc::SyncNotesResponse> {
@@ -34,7 +32,7 @@ impl proto::server::rpc_api::SyncNotes for RpcService {
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        let range = read_block_range::<Status>(request.block_range, "SyncNotesRequest")?;
+        let range = request.block_range;
 
         miden_span_record!(
             block_range.from = range.block_from,
@@ -55,7 +53,8 @@ impl proto::server::rpc_api::SyncNotes for RpcService {
         check::<QueryParamNoteTagLimit>(request.note_tags.len())?;
 
         let block_range = range
-            .into_inclusive_range::<RpcInvalidBlockRange>()
+            .verify()
+            .map_err(RpcInvalidBlockRange::from)
             .map_err(invalid_block_range_to_status)?;
         let (chain_tip, (results, last_block_checked)) = self
             .state

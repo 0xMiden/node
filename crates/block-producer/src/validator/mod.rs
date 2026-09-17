@@ -1,13 +1,11 @@
 use std::time::Duration;
 
 use miden_node_proto::clients::{Builder, ValidatorClient};
-use miden_node_proto::decode::GrpcDecodeExt;
+use miden_node_proto::domain::validator::SignBlockResponse;
 use miden_node_proto::errors::ConversionError;
-use miden_node_proto::{decode, generated as proto, verify};
+use miden_node_proto::{BuildUnchecked, DecodeMessage, generated as proto};
 use miden_node_tracing::{info, miden_instrument};
-use miden_protocol::Word;
 use miden_protocol::block::{BlockInputs, ProposedBlock};
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
 use miden_protocol::protocol_config::ProtocolConfig;
 use thiserror::Error;
 use url::Url;
@@ -23,17 +21,6 @@ pub enum ValidatorError {
     Transport(#[from] tonic::Status),
     #[error("failed to convert block signature response: {0}")]
     Conversion(#[from] ConversionError),
-}
-
-// SIGN BLOCK RESPONSE
-// ================================================================================================
-
-/// A single validator's response to a `sign_block` request.
-#[derive(Debug, Clone)]
-pub struct SignBlockResponse {
-    pub signature: Signature,
-    pub block_commitment: Word,
-    pub public_key: PublicKey,
 }
 
 // VALIDATOR CLIENT
@@ -110,23 +97,16 @@ impl BlockProducerValidatorClient {
             async move {
                 let request = tonic::Request::new(message);
                 let response = client.sign_block(request).await?.into_inner();
-                Self::decode_response(response)
+                response
+                    .decode_fields()
+                    // SAFETY: The block builder matches the commitment to its proposed block and
+                    // verifies the signatures against the trusted parent validator set.
+                    .and_then(BuildUnchecked::build_unchecked)
+                    .map_err(ValidatorError::Conversion)
             }
         }))
         .await?;
 
         Ok(responses)
-    }
-
-    /// Decodes a single validator's `sign_block` response.
-    fn decode_response(
-        response: proto::validator::SignBlockResponse,
-    ) -> Result<SignBlockResponse, ValidatorError> {
-        let decoder = response.decoder();
-        let signature: Signature = verify!(decoder, response.signature)?;
-        let block_commitment = decode!(decoder, response.block_commitment)?;
-        let public_key = verify!(decoder, response.public_key)?;
-
-        Ok(SignBlockResponse { signature, block_commitment, public_key })
     }
 }

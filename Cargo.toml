@@ -61,6 +61,7 @@ miden-node-utils            = { path = "crates/utils", version = "0.17.0-rc.1" }
 # miden-protocol dependencies. These should be updated in sync.
 miden-block-prover = { version = "0.17.0-rc.4" }
 miden-objects      = { version = "0.17.0-rc.4" }
+miden-protobuf     = { version = "0.17.0-rc.4" }
 miden-protocol     = { default-features = false, version = "0.17.0-rc.4" }
 miden-standards    = { version = "0.17.0-rc.4" }
 miden-testing      = { version = "0.17.0-rc.4" }

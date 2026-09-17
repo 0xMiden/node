@@ -24,7 +24,7 @@ pub mod errors;
 mod errors;
 
 pub mod server;
-pub use domain::transaction::{AuthenticatedTransaction, ensure_transaction_has_fee};
+pub use domain::transaction::ensure_transaction_has_fee;
 pub use errors::MempoolSubmissionError;
 pub use proof_scheduler::DEFAULT_MAX_CONCURRENT_PROOFS;
 pub use rpc_sync::{RpcReadiness, RpcSync};

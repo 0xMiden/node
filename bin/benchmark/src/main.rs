@@ -14,10 +14,9 @@ use miden_node_proto::clients::{Builder, RpcClient};
 use miden_node_proto::domain::encryption::{
     TransactionInputsSealer,
     TrustedTransactionEncryptionState,
-    verify_transaction_encryption_key,
 };
 use miden_node_proto::generated::rpc::BlockHeaderByNumberRequest;
-use miden_node_proto::{BuildUnchecked, DecodeMessage};
+use miden_node_proto::{BuildUnchecked, DecodeMessage, VerifyWith};
 use miden_protocol::Word;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
@@ -181,6 +180,7 @@ async fn discover_genesis(rpc_url: &Url, timeout: Duration) -> Result<Word> {
     let genesis_header: BlockHeader = genesis_block_header
         .decode_fields()
         .context("Failed to decode block header")?
+        // SAFETY: Genesis has no parent. This benchmark trusts the configured RPC for genesis.
         .build_unchecked()
         .context("Failed to build block header")?;
 
@@ -224,11 +224,9 @@ pub(crate) async fn create_genesis_aware_rpc_client_pool(
         .context("Failed to fetch the transaction encryption key")?
         .into_inner();
     let trusted_keys = [trusted_validator_signing_key];
-    let verified = verify_transaction_encryption_key(
-        key,
-        TrustedTransactionEncryptionState::new(genesis, &trusted_keys),
-    )
-    .context("Untrusted transaction encryption key")?;
+    let verified = key
+        .verify_with(TrustedTransactionEncryptionState::new(genesis, &trusted_keys))
+        .context("Untrusted transaction encryption key")?;
 
     Ok((pool, TransactionInputsSealer::new(verified)))
 }

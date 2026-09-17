@@ -9,14 +9,13 @@ use backon::ExponentialBuilder;
 use futures::stream::{BoxStream, TryStreamExt};
 use futures::{Stream, StreamExt};
 use miden_node_proto::clients::{Builder, RpcClient as InnerRpcClient};
-use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify};
+use miden_node_proto::{BuildUnchecked, DecodeMessage, VerifyWith, Verify};
 use miden_node_proto::domain::account::{
     AccountDetails, AccountResponse, AccountVaultDetails, StorageMapEntries
 };
 use miden_node_proto::domain::encryption::{
     TransactionInputsSealer,
     TrustedTransactionEncryptionState,
-    verify_transaction_encryption_key,
 };
 use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
 use miden_node_proto::errors::ConversionError;
@@ -26,7 +25,6 @@ use miden_node_proto::generated::rpc::{
     BlockHeaderByNumberRequest,
     BlockHeaderByNumberResponse,
     BlockSubscriptionRequest,
-    BlockSubscriptionResponse,
 };
 use miden_node_proto::generated::{self as proto};
 use miden_node_tracing::ErrorReport;
@@ -213,18 +211,16 @@ impl RpcClient {
         }
 
         let key = self.inner.clone().get_transaction_encryption_key(()).await?.into_inner();
-        let verified = verify_transaction_encryption_key(
-            key,
-            TrustedTransactionEncryptionState::new(
+        let verified = key
+            .verify_with(TrustedTransactionEncryptionState::new(
                 self.genesis_commitment,
                 &self.trusted_validator_signing_keys,
-            ),
-        )
-        .map_err(|err| {
-            Status::failed_precondition(
-                err.as_report_context("Untrusted transaction encryption key"),
-            )
-        })?;
+            ))
+            .map_err(|err| {
+                Status::failed_precondition(
+                    err.as_report_context("Untrusted transaction encryption key"),
+                )
+            })?;
         let sealer = TransactionInputsSealer::new(verified);
 
         let mut cached = self.sealer.write().await;
@@ -266,7 +262,7 @@ impl RpcClient {
     /// Opens a committed-block subscription starting at `block_from`, retrying indefinitely with
     /// the client's configured exponential backoff while the initial connection attempt fails.
     ///
-    /// Returns a stream that decodes each [`BlockSubscriptionResponse`] into a block, the committed
+    /// Returns a stream that decodes each [`proto::rpc::BlockSubscriptionResponse`] into a block, the committed
     /// chain tip, and an optional protocol configuration. The configuration is present for the
     /// first response and for each transition. The committed chain tip is the latest block the node
     /// believes is committed when it emits the response.
@@ -298,7 +294,13 @@ impl RpcClient {
             // `&self`, so callers like `block_subscription_reconnecting` can store it freely.
             let decoded = stream
                 .map_err(RpcError::GrpcClientError)
-                .and_then(|response| async move { decode_block_subscription_response(&response) })
+                .and_then(|response| async move {
+                    response.decode_fields()
+                        // SAFETY: The builder verifies the block against its trusted parent before
+                        // it writes block effects or notifies account actors.
+                        .and_then(BuildUnchecked::build_unchecked)
+                        .map_err(RpcError::Conversion)
+                })
                 .scan(ProtocolConfigTracker::default(), |tracker, item| {
                     let item = item.and_then(|event| {
                         tracker.validate(event.0.header(), event.2.as_ref())?;
@@ -493,8 +495,8 @@ fn decode_startup_header_response(
         .block_header
         .ok_or_else(|| RpcError::InvalidResponse("header response is missing block header".into()))?
         .decode_fields()
-        .map_err(ConversionError::from)
         .map_err(RpcError::Conversion)?
+        // SAFETY: The commitment check below binds this header to the persisted local header.
         .build_unchecked()
         .map_err(ConversionError::new)
         .map_err(RpcError::Conversion)?;
@@ -506,33 +508,6 @@ fn decode_startup_header_response(
 
     ensure_protocol_config_is_present_and_matches_header(response.protocol_config, &header)
         .map_err(RpcError::Conversion)
-}
-
-fn decode_block_subscription_response(
-    response: &BlockSubscriptionResponse,
-) -> Result<BlockSubscriptionEvent, RpcError> {
-    let block: SignedBlock = response
-        .block
-        .clone()
-        .ok_or_else(|| {
-            RpcError::InvalidResponse("block subscription response is missing block".into())
-        })?
-        .decode_fields()
-        .map_err(ConversionError::from)
-        .map_err(RpcError::Conversion)?
-        .build_unchecked()
-        .map_err(ConversionError::new)
-        .map_err(RpcError::Conversion)?;
-    let protocol_config = response
-        .protocol_config
-        .clone()
-        .map(|config| {
-            ensure_protocol_config_is_present_and_matches_header(Some(config), block.header())
-        })
-        .transpose()
-        .map_err(RpcError::Conversion)?;
-    let committed_tip = BlockNumber::from(response.committed_chain_tip);
-    Ok((block, committed_tip, protocol_config))
 }
 
 // ACTOR-PATH METHODS
@@ -686,24 +661,14 @@ impl RpcClient {
     ) -> Result<Option<NoteScript>, RpcError> {
         let request = proto::rpc::NoteScriptByRootRequest { root: Some(script_root.into()) };
 
-        let script = self
-            .inner
+        self.inner
             .clone()
             .get_note_script_by_root(request)
             .await
             .map_err(RpcError::GrpcClientError)?
             .into_inner()
-            .script;
-
-        script
-            .map(|script| {
-                script
-                    .decode_fields()
-                    .map_err(ConversionError::from)?
-                    .verify()
-                    .map_err(ConversionError::new)
-            })
-            .transpose()
+            .decode_fields()
+            .and_then(Verify::verify)
             .map_err(RpcError::Conversion)
     }
 
@@ -720,7 +685,7 @@ impl RpcClient {
             .map_err(RpcError::GrpcClientError)?
             .into_inner();
 
-        AccountResponse::try_from(response).map_err(RpcError::Conversion)
+        response.decode_fields().and_then(Verify::verify).map_err(RpcError::Conversion)
     }
 }
 
@@ -767,19 +732,14 @@ mod protocol_config_tests {
         BlockHeaderByNumberResponse,
         BlockSubscriptionResponse,
     };
+    use miden_node_proto::{BuildUnchecked, DecodeMessage};
     use miden_node_store::genesis::GenesisState;
     use miden_node_utils::fee::{test_fee_params, test_protocol_config};
     use miden_protocol::Word;
     use miden_protocol::block::{BlockHeader, BlockNumber, FeeParameters};
     use miden_protocol::protocol_config::ProtocolConfig;
 
-    use super::{
-        ProtocolConfigTracker,
-        RpcError,
-        decode_block_subscription_response,
-        decode_startup_header_response,
-        startup_header_request,
-    };
+    use super::{ProtocolConfigTracker, decode_startup_header_response, startup_header_request};
     use crate::test_utils::mock_genesis_block;
 
     fn valid_genesis_block() -> miden_protocol::block::SignedBlock {
@@ -834,26 +794,39 @@ mod protocol_config_tests {
             protocol_config: Some(ProtoProtocolConfig::default()),
         };
 
-        let error = decode_block_subscription_response(&response)
+        let error = response
+            .decode_fields()
+            .and_then(BuildUnchecked::build_unchecked)
             .expect_err("a malformed protocol config must be rejected");
 
-        assert!(matches!(error, RpcError::Conversion(_)), "unexpected error: {error}");
+        assert!(error.to_string().contains("protocol_config"), "unexpected error: {error}");
     }
 
     /// A valid streamed configuration must remain attached to its decoded block event.
     #[test]
-    fn subscription_decoder_preserves_protocol_config() {
-        let config = test_protocol_config();
+    fn subscription_decoder_preserves_optional_protocol_config() {
         let block = valid_genesis_block();
+        for config in [None, Some(test_protocol_config())] {
+            let response = BlockSubscriptionResponse {
+                block: Some((&block).into()),
+                committed_chain_tip: 0,
+                protocol_config: config.as_ref().map(Into::into),
+            };
+            let (_, _, decoded_config) =
+                response.decode_fields().and_then(BuildUnchecked::build_unchecked).unwrap();
+            assert_eq!(decoded_config, config);
+        }
+    }
+
+    #[test]
+    fn subscription_decoder_rejects_mismatched_protocol_config() {
         let response = BlockSubscriptionResponse {
-            block: Some(block.into()),
+            block: Some(valid_genesis_block().into()),
             committed_chain_tip: 0,
-            protocol_config: Some((&config).into()),
+            protocol_config: Some(other_protocol_config().into()),
         };
-
-        let (_, _, decoded_config) = decode_block_subscription_response(&response).unwrap();
-
-        assert_eq!(decoded_config, Some(config));
+        let error = response.decode_fields().and_then(BuildUnchecked::build_unchecked).unwrap_err();
+        assert!(error.to_string().contains("does not match header commitment"));
     }
 
     /// Startup must explicitly request the active configuration for the persisted tip.

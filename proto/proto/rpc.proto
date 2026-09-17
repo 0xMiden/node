@@ -176,7 +176,7 @@ message BlockSubscriptionResponse {
 
     // The active configuration. Included with the first response and when its commitment changes.
     // Verify its commitment against the accompanying block header.
-    protocol_config.ProtocolConfig protocol_config = 3;
+    optional protocol_config.ProtocolConfig protocol_config = 3;
 }
 
 // PROOF SUBSCRIPTION
@@ -378,6 +378,7 @@ message AccountRequest {
             repeated StorageMapDetailRequest storage_maps = 1;
         }
 
+        // Omit this field to request no storage map details.
         oneof storage_request {
             // Request all entries for all storage map slots in the account.
             //
@@ -415,9 +416,9 @@ message AccountResponse {
         // Account code; empty if code commitments matched or none was requested.
         optional account.AccountCode code = 3;
 
-        // Account asset vault data; empty if vault commitments matched or the requester
-        // omitted it in the request.
-        optional AccountVaultDetails vault_details = 4;
+        // Account asset vault data. The asset list is empty if the commitments match or
+        // the request does not include a vault commitment.
+        AccountVaultDetails vault_details = 4;
     }
 
     // The block number at which the account witness was created and the account details were observed.

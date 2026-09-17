@@ -3,11 +3,10 @@ use miden_block_prover::{
     BlockProverError as LocalBlockProverError,
     LocalBlockProver,
 };
-use miden_node_proto::BlockProofRequest;
 use miden_node_proto::clients::{Builder, RemoteProverClient};
-use miden_node_proto::generated::remote_prover::proof::Proof as ProofVariant;
 use miden_node_proto::generated::remote_prover::proof_request::Request;
-use miden_node_proto::generated::remote_prover::{Proof, ProofRequest};
+use miden_node_proto::generated::remote_prover::{DecodedProof, ProofRequest};
+use miden_node_proto::{BlockProofRequest, DecodeMessage};
 use miden_node_tracing::miden_instrument;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_protocol::batch::OrderedBatches;
@@ -35,10 +34,8 @@ pub enum ProverError {
 pub enum RemoteProverError {
     #[error("remote prover request failed")]
     Grpc(#[source] tonic::Status),
-    #[error("remote prover returned an invalid block proof response: {0}")]
-    Protocol(String),
     #[error("failed to decode block proof from remote prover")]
-    Conversion(#[source] miden_objects::ConversionError),
+    Conversion(#[source] miden_node_proto::errors::ConversionError),
 }
 
 // BLOCK PROVER
@@ -139,44 +136,10 @@ impl RemoteBlockProver {
 
         let response = self.client.clone().prove(request).await.map_err(RemoteProverError::Grpc)?;
 
-        extract_block_proof(response.into_inner())
-    }
-}
-
-fn extract_block_proof(response: Proof) -> Result<ExecutionProof, RemoteProverError> {
-    match response.proof {
-        Some(ProofVariant::Block(proof)) => {
-            ExecutionProof::try_from(proof).map_err(RemoteProverError::Conversion)
-        },
-        Some(_) => Err(RemoteProverError::Protocol(
-            "response variant does not match block request".to_string(),
-        )),
-        None => {
-            Err(RemoteProverError::Protocol("response is missing the proof variant".to_string()))
-        },
-    }
-}
-
-#[cfg(test)]
-mod response_tests {
-    use super::*;
-
-    #[test]
-    fn missing_block_response_variant_is_a_protocol_error() {
-        let error = extract_block_proof(Proof { proof: None }).unwrap_err();
-
-        assert!(matches!(error, RemoteProverError::Protocol(_)));
-    }
-
-    #[test]
-    fn mismatched_block_response_variant_is_a_protocol_error() {
-        let response = Proof {
-            proof: Some(ProofVariant::Batch(
-                miden_node_proto::generated::transaction::ProvenBatch::default(),
-            )),
-        };
-        let error = extract_block_proof(response).unwrap_err();
-
-        assert!(matches!(error, RemoteProverError::Protocol(_)));
+        response
+            .into_inner()
+            .decode_fields()
+            .and_then(DecodedProof::into_block)
+            .map_err(RemoteProverError::Conversion)
     }
 }

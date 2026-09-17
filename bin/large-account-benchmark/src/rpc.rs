@@ -5,11 +5,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use miden_node_proto::clients::{Builder, RpcClient};
-use miden_node_proto::domain::account::AccountResponse;
 use miden_node_proto::domain::encryption::{
     TransactionInputsSealer,
     TrustedTransactionEncryptionState,
-    verify_transaction_encryption_key,
 };
 use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
 use miden_node_proto::generated::account::account_storage_header::storage_slot::Content as SlotContent;
@@ -20,7 +18,7 @@ use miden_node_proto::generated::rpc::{
     BlockHeaderByNumberResponse,
 };
 use miden_node_proto::generated::submission::ProvenTransactionSubmission as ProtoProvenTransaction;
-use miden_node_proto::{BuildUnchecked, DecodeMessage};
+use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify, VerifyWith};
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::account_tree::AccountWitness;
@@ -230,8 +228,10 @@ impl SubmissionClient {
             .context("failed to fetch the account witness from RPC")?
             .into_inner();
 
-        let response =
-            AccountResponse::try_from(response).context("failed to decode the account response")?;
+        let response = response
+            .decode_fields()
+            .and_then(Verify::verify)
+            .context("failed to decode the account response")?;
 
         // An account-ID prefix collision makes the tree return a witness for the *other* account,
         // and the data store keys witnesses by the account they prove.
@@ -259,16 +259,14 @@ impl SubmissionClient {
             .context("failed to fetch the transaction encryption key")?
             .into_inner();
 
-        let verified = verify_transaction_encryption_key(
-            key,
-            TrustedTransactionEncryptionState::new(
+        let verified = key
+            .verify_with(TrustedTransactionEncryptionState::new(
                 self.genesis_commitment,
                 &self.trusted_validator_keys,
-            ),
-        )
-        .context(
-            "the node's transaction encryption key is not attested by the trusted validator",
-        )?;
+            ))
+            .context(
+                "the node's transaction encryption key is not attested by the trusted validator",
+            )?;
 
         let sealer = TransactionInputsSealer::new(verified);
         *cached = Some(sealer.clone());
@@ -341,6 +339,7 @@ fn decode_genesis_block_state(
         .context("RPC returned no genesis block header")?
         .decode_fields()
         .context("failed to decode the genesis block header")?
+        // SAFETY: Genesis has no parent. This benchmark trusts the configured RPC for genesis.
         .build_unchecked()
         .context("failed to build the genesis block header")?;
     let protocol_config =
