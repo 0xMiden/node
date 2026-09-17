@@ -187,6 +187,7 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
         .into_inner()
         .block_header
         .expect("RPC returned no block header");
+    // SAFETY: Genesis has no parent. This benchmark trusts the configured RPC for genesis.
     let genesis_header: BlockHeader =
         genesis_header_proto.decode_fields().unwrap().build_unchecked().unwrap();
     println!("Fetching chain tip state...");

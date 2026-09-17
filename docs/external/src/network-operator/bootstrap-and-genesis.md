@@ -65,6 +65,10 @@ printed. The operator file carries the only signing key permitted to mint, so tr
 To run a faucet against the network, pass `faucet_operator.mac` to the faucet's `init --import`, and the faucet account
 id to `--faucet-account-id`.
 
+Every `[[wallet]]` entry needs a `name`, which is written to the accounts directory as `<name>.mac`. The name must be a
+plain file name, and no two generated accounts may share a name. The name keeps the path of a wallet stable, which a
+service that loads its account from a fixed path needs; see the [funding service](./funding-service.md).
+
 Upload `genesis-data/genesis.dat` so it is served at:
 
 ```text

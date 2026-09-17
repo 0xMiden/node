@@ -54,6 +54,7 @@ use std::collections::VecDeque;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, LockResult, Mutex, MutexGuard};
 
+use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
 use miden_node_tracing::{ErrorReport, debug, miden_instrument, miden_span_record};
 use miden_protocol::batch::{BatchId, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockNumber};
@@ -63,7 +64,6 @@ use thiserror::Error;
 
 use crate::block_builder::SelectedBlock;
 use crate::domain::batch::{BatchParameters, SelectedBatch};
-use crate::domain::transaction::AuthenticatedTransaction;
 use crate::errors::{MempoolSubmissionError, StateConflict};
 use crate::mempool::budget::BudgetStatus;
 use crate::{

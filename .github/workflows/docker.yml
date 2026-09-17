@@ -104,6 +104,7 @@ jobs:
                 {"component":"ntx-builder",        "bin":"miden-ntx-builder",     "port":50301, "target":"runtime"},
                 {"component":"remote-prover",      "bin":"miden-remote-prover",   "port":50051, "target":"runtime"},
                 {"component":"network-monitor",    "bin":"miden-network-monitor", "port":3000,  "target":"runtime"},
+                {"component":"funding-service",    "bin":"miden-funding-service", "port":50401, "target":"runtime"},
                 {"component":"node-tps-benchmark", "bin":"miden-benchmark",                     "target":"runtime-tool"}
               ]
             '
@@ -306,6 +307,8 @@ jobs:
           MIDEN_REMOTE_PROVER_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-remote-prover:${{ needs.preflight.outputs.tag }}
           MIDEN_NETWORK_MONITOR_IMAGE:
             ${{ env.REGISTRY_PREFIX }}/miden-network-monitor:${{ needs.preflight.outputs.tag }}
+          MIDEN_FUNDING_SERVICE_IMAGE:
+            ${{ env.REGISTRY_PREFIX }}/miden-funding-service:${{ needs.preflight.outputs.tag }}
           MIDEN_BENCHMARK_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-node-tps-benchmark:${{ needs.preflight.outputs.tag }}
         with:
           compose-file: docker-compose.yml
@@ -395,6 +398,8 @@ jobs:
             ${{ env.REGISTRY_PREFIX }}/miden-remote-prover:${{ needs.preflight.outputs.immutable_tag }}
           MIDEN_NETWORK_MONITOR_IMAGE:
             ${{ env.REGISTRY_PREFIX }}/miden-network-monitor:${{ needs.preflight.outputs.immutable_tag }}
+          MIDEN_FUNDING_SERVICE_IMAGE:
+            ${{ env.REGISTRY_PREFIX }}/miden-funding-service:${{ needs.preflight.outputs.immutable_tag }}
           MIDEN_BENCHMARK_IMAGE:
             ${{ env.REGISTRY_PREFIX }}/miden-node-tps-benchmark:${{ needs.preflight.outputs.immutable_tag }}
         with:

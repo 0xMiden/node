@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use miden_node_proto::domain::sequencer::{AuthenticatedTransaction, TransactionInputs};
 use miden_node_store::state::{BlockWriter, ProofWriter, State};
 use miden_node_tracing::{debug, error, info, miden_instrument};
 use miden_node_utils::formatting::{format_input_notes, format_output_notes};
@@ -19,10 +20,9 @@ use crate::batch_builder::{BatchBuilder, BatchIntervals};
 use crate::block_builder::BlockBuilder;
 use crate::block_prover::BlockProver;
 use crate::domain::batch::BatchParameters;
-use crate::domain::transaction::AuthenticatedTransaction;
-use crate::errors::MempoolSubmissionError;
+use crate::errors::{MempoolSubmissionError, StateConflict};
 use crate::mempool::{BatchBudget, BlockBudget, Mempool, MempoolConfig, SharedMempool};
-use crate::store::{TransactionInputs, get_tx_inputs};
+use crate::store::get_tx_inputs;
 use crate::validator::BlockProducerValidatorClient;
 use crate::{CACHED_MEMPOOL_STATS_UPDATE_INTERVAL, COMPONENT, LOG_TARGET, proof_scheduler};
 
@@ -345,6 +345,7 @@ impl BlockProducerApi {
             .map_err(MempoolSubmissionError::StoreStateReadFailed)?;
         // SAFETY: we assume that the rpc component has verified the transaction proof already.
         let tx = AuthenticatedTransaction::new_unchecked(tx.into(), inputs)
+            .map_err(StateConflict::from)
             .map_err(MempoolSubmissionError::AuthenticationFailed)?;
         self.submit_authenticated_tx(tx).await
     }
@@ -429,6 +430,7 @@ impl BlockProducerApi {
             // as the batch integrity itself.
             let tx = AuthenticatedTransaction::new_unchecked(Arc::clone(tx), inputs)
                 .map(Arc::new)
+                .map_err(StateConflict::from)
                 .map_err(MempoolSubmissionError::StateConflict)?;
             txs.push(tx);
         }

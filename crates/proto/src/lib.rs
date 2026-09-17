@@ -1,5 +1,4 @@
 pub mod clients;
-pub mod decode;
 pub mod domain;
 pub mod errors;
 
@@ -12,7 +11,6 @@ pub mod generated;
 pub use domain::proof_request::BlockProofRequest;
 pub use domain::sign_block_request::SignBlockRequest;
 pub use domain::submission::{ProvenTransactionSubmission, TransactionBatchSubmission};
-pub use domain::{convert, try_convert};
 pub use generated::server;
-pub use miden_objects::{BuildUnchecked, DecodeMessage, Verify, VerifyWith};
+pub use miden_protobuf::{BuildUnchecked, DecodeMessage, Decoded, Verify, VerifyWith};
 pub use prost;

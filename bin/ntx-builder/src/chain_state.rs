@@ -1,12 +1,9 @@
 use std::sync::{Arc, RwLock};
 
-use miden_node_tracing::debug;
-use miden_protocol::block::{BlockHeader, BlockNumber};
+use miden_protocol::block::{BlockHeader, BlockNumber, SignedBlock};
 use miden_protocol::crypto::merkle::mmr::PartialMmr;
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::PartialBlockchain;
-
-use crate::LOG_TARGET;
 
 // CHAIN STATE
 // ================================================================================================
@@ -87,18 +84,6 @@ impl ChainState {
             Arc::clone(&self.protocol_config)
         };
 
-        // Skip blocks already reflected in the chain state. The builder may load state during
-        // startup before receiving the same block from the committed-block subscription.
-        if tip.block_num() <= self.chain_tip_header.block_num() {
-            debug!(
-                target: LOG_TARGET,
-                "Skipping committed block already reflected in chain state",
-                block.number = tip.block_num(),
-                tip.number = self.chain_tip_header.block_num()
-            );
-            return Ok(self.clone());
-        }
-
         let mut next = self.clone();
         next.protocol_config = next_config;
 
@@ -136,17 +121,20 @@ impl SharedChainState {
         self.0.read().expect("chain state lock poisoned").chain_tip_header.block_num()
     }
 
+    /// Verify the block against the current tip before building the next snapshot.
+    ///
+    /// The subscription starts after the persisted tip and resumes after its last received block.
+    /// Each block must be the direct child of the current tip. Reject repeated or older blocks so
+    /// the caller cannot apply their effects again.
     pub(crate) fn next_chain_tip(
         &self,
-        tip: BlockHeader,
+        block: &SignedBlock,
         protocol_config: Option<ProtocolConfig>,
         max_block_count: usize,
     ) -> anyhow::Result<ChainState> {
-        self.0.read().expect("chain state lock poisoned").next_chain_tip(
-            tip,
-            protocol_config,
-            max_block_count,
-        )
+        let current = self.0.read().expect("chain state lock poisoned");
+        block.validate(Some(&current.chain_tip_header))?;
+        current.next_chain_tip(block.header().clone(), protocol_config, max_block_count)
     }
 
     /// Publishes a snapshot after its database state is durable.
@@ -229,5 +217,78 @@ mod protocol_config_tests {
 
         assert!(old.next_chain_tip(changed, None, 4).is_err());
         assert_eq!(old.chain_tip_header.block_num(), 0_u32.into());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use miden_node_store::GenesisState;
+    use miden_node_utils::fee::{test_fee_params, test_protocol_config};
+    use miden_protocol::block::{BlockInputs, BlockSignatures, ProposedBlock, ValidatorConfig};
+    use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
+
+    use super::*;
+
+    #[test]
+    fn rejected_blocks_do_not_advance_chain_state() {
+        let signer = SigningKey::new();
+        let attacker = SigningKey::new();
+        let genesis = GenesisState::new(
+            vec![],
+            test_fee_params(),
+            0,
+            ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
+            test_protocol_config(),
+        )
+        .into_block()
+        .unwrap();
+        let parent = genesis.inner().header();
+        let chain =
+            SharedChainState::new(parent.clone(), PartialMmr::default(), test_protocol_config());
+        let initial_mmr = chain.get_cloned().current_mmr();
+        let inputs = BlockInputs::new(
+            parent.clone(),
+            PartialBlockchain::default(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+        );
+        let (header, body) = ProposedBlock::new_at(inputs, vec![], parent.timestamp() + 1)
+            .unwrap()
+            .with_next_validator_config(
+                ValidatorConfig::new(vec![attacker.public_key()], 1).unwrap(),
+            )
+            .into_header_and_body()
+            .unwrap();
+
+        for signatures in [
+            vec![],
+            vec![attacker.sign(header.commitment())],
+            vec![signer.sign(parent.commitment())],
+        ] {
+            let invalid = SignedBlock::new_unchecked(
+                header.clone(),
+                body.clone(),
+                BlockSignatures::new(signatures).unwrap(),
+            );
+            assert!(chain.next_chain_tip(&invalid, None, 4).is_err());
+            assert_eq!(&chain.get_cloned().chain_tip_header, parent);
+            assert_eq!(chain.get_cloned().current_mmr(), initial_mmr);
+        }
+
+        let signatures = BlockSignatures::new(vec![signer.sign(header.commitment())]).unwrap();
+        let valid = SignedBlock::new_unchecked(header, body, signatures);
+        let next = chain.next_chain_tip(&valid, None, 4).unwrap();
+        assert_eq!(&chain.get_cloned().chain_tip_header, parent);
+        chain.publish(next);
+        assert_eq!(&chain.get_cloned().chain_tip_header, valid.header());
+        let advanced_mmr = chain.get_cloned().current_mmr();
+        assert_ne!(advanced_mmr, initial_mmr);
+
+        assert!(chain.next_chain_tip(&valid, None, 4).is_err());
+        assert_eq!(&chain.get_cloned().chain_tip_header, valid.header());
+        assert_eq!(chain.get_cloned().current_mmr(), advanced_mmr);
     }
 }
