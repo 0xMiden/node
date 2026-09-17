@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "bin/benchmark",
+  "bin/funding-service",
   "bin/large-account-benchmark",
   "bin/network-monitor",
   "bin/node",
@@ -149,6 +150,10 @@ zeroize            = { version = "1.8" }
 # libsqlite3-sys is kept to control the bundled SQLite linkage.
 # tonic-prost is used by generated gRPC code rather than handwritten Rust.
 ignored = ["libsqlite3-sys", "tonic-prost"]
+
+[workspace.metadata.inheritance-check]
+# The normal and dev entries enable different SDK features in the tracing crate.
+ignore = [{ dependency = "opentelemetry_sdk", member = "crates/tracing" }]
 
 # Lints are set to warn for development, which are promoted to errors in CI.
 [workspace.lints.clippy]

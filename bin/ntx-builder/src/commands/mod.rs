@@ -44,7 +44,7 @@ pub enum NtxBuilderCommand {
     /// Starts the network transaction builder component.
     Start {
         /// Socket address at which to serve the ntx-builder's gRPC API.
-        #[arg(long = "listen", env = ENV_LISTEN, value_name = "LISTEN")]
+        #[arg(long = "listen", env = ENV_LISTEN, value_name = "IP:PORT")]
         listen: SocketAddr,
 
         /// Maximum duration allocated to a gRPC request served by the ntx-builder.

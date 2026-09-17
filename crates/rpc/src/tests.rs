@@ -1665,6 +1665,8 @@ async fn register_account_validates_input_and_preserves_registrations() {
         invitation_code: "abc".to_owned(),
         account_id: Some(account.into()),
     };
+    let query = proto::rpc::IsAccountAllowedRequest { account_id: Some(account.into()) };
+    assert!(!rpc.is_account_allowed(query).await.unwrap().into_inner().allowed);
     assert_eq!(
         rpc.register_account(request.clone()).await.unwrap_err().code(),
         tonic::Code::InvalidArgument
@@ -1710,6 +1712,7 @@ async fn register_account_validates_input_and_preserves_registrations() {
     let imported = allowlist.invitation_info(invitation.clone()).await.unwrap().unwrap();
     rpc.register_account(request.clone()).await.unwrap();
     rpc.register_account(request.clone()).await.unwrap();
+    assert!(rpc.is_account_allowed(query).await.unwrap().into_inner().allowed);
     let conflict = proto::rpc::RegisterAccountRequest {
         account_id: Some(other.into()),
         ..request.clone()
@@ -1745,7 +1748,7 @@ async fn register_account_validates_input_and_preserves_registrations() {
 }
 
 #[tokio::test]
-async fn register_account_database_failures_include_the_cause() {
+async fn allowlist_database_failures_include_the_cause() {
     let (mut rpc, _addr, store, _server) = start_rpc().await;
     let path = DataDirectory::load(store.data_directory.clone())
         .unwrap()
@@ -1772,10 +1775,15 @@ async fn register_account_database_failures_include_the_cause() {
     let error = rpc.register_account(request).await.unwrap_err();
     assert_eq!(error.code(), tonic::Code::Internal);
     assert!(error.message().contains("unable to open database file"), "{error}");
+
+    let query = proto::rpc::IsAccountAllowedRequest { account_id: Some(account.into()) };
+    let error = rpc.is_account_allowed(query).await.unwrap_err();
+    assert_eq!(error.code(), tonic::Code::Internal);
+    assert!(error.message().contains("unable to open database file"), "{error}");
 }
 
 #[tokio::test]
-async fn full_nodes_forward_account_registration_to_the_sequencer() {
+async fn full_nodes_forward_allowlist_requests_to_the_sequencer() {
     let (source_rpc, _addr, source_store, _server) = start_rpc().await;
     let allowlist = AccountAllowlist::load(
         DataDirectory::load(source_store.data_directory.clone())
@@ -1820,6 +1828,14 @@ async fn full_nodes_forward_account_registration_to_the_sequencer() {
             );
             request
         };
+        let query = || {
+            let mut query = Request::new(proto::rpc::IsAccountAllowedRequest {
+                account_id: Some(account.into()),
+            });
+            *query.metadata_mut() = request().metadata().clone();
+            query
+        };
+        assert!(!rpc.is_account_allowed(query()).await.unwrap().into_inner().allowed);
         assert_eq!(
             rpc.register_account(request()).await.unwrap_err().code(),
             tonic::Code::NotFound
@@ -1833,6 +1849,16 @@ async fn full_nodes_forward_account_registration_to_the_sequencer() {
             .unwrap();
         rpc.register_account(request()).await.unwrap();
         rpc.register_account(request()).await.unwrap();
+        assert!(rpc.is_account_allowed(query()).await.unwrap().into_inner().allowed);
+        let mut wrong_network = query();
+        wrong_network.metadata_mut().insert(
+            ACCEPT.as_str(),
+            format!("application/vnd.miden; genesis={}", Word::empty()).parse().unwrap(),
+        );
+        assert_eq!(
+            rpc.is_account_allowed(wrong_network).await.unwrap_err().code(),
+            tonic::Code::InvalidArgument
+        );
         assert_eq!(
             allowlist.invitation_info(invitation).await.unwrap().unwrap().account_id,
             Some(account)
