@@ -1,8 +1,7 @@
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 
-use anyhow::Context;
 use miden_node_db::sqlite::{DbReader, DbWriter};
-use miden_node_proto::decode::GrpcDecodeExt;
+use miden_node_proto::errors::conversion_error_to_status;
 use miden_node_proto::generated::note_transport::{
     FetchNotesRequest,
     FetchNotesResponse,
@@ -11,12 +10,12 @@ use miden_node_proto::generated::note_transport::{
     TransportNote,
 };
 use miden_node_proto::server::note_transport_api::{FetchNotes, SendNote};
+use miden_node_proto::{DecodeMessage, Verify};
 use miden_node_tracing::grpc::grpc_trace_fn;
 use miden_node_tracing::panic::catch_panic_layer_fn;
 use miden_node_tracing::{error, info, miden_instrument};
 use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::shutdown::CancellationToken;
-use miden_protocol::note::{NoteDetails, NoteHeader};
 use miden_protocol::utils::serde::Serializable;
 use prost::Message;
 use tokio::net::TcpListener;
@@ -77,6 +76,7 @@ impl Server {
         listener: TcpListener,
         shutdown: CancellationToken,
     ) -> anyhow::Result<()> {
+        use anyhow::Context;
         use miden_node_proto::server::note_transport_api;
         db::record_retained_bytes(&self.reader).await?;
         let (health, health_service) = tonic_health::server::health_reporter();
@@ -132,19 +132,29 @@ impl SendNote for Server {
     type Output = ();
 
     fn decode(request: SendNoteRequest) -> tonic::Result<Self::Input> {
-        let request =
-            request.note.ok_or_else(|| tonic::Status::invalid_argument("missing note"))?;
-        let decoder = request.decoder();
-        let header: NoteHeader = decoder.verify_field("header", request.header)?;
-        let details: NoteDetails = decoder.verify_field("details", request.details)?;
+        use miden_node_proto::errors::ConversionResultExt;
+
+        let request = request.decode_fields().map_err(conversion_error_to_status)?.note;
+        let header = request
+            .header
+            .verify()
+            .context("note.header")
+            .map_err(conversion_error_to_status)?;
+        let details = request
+            .details
+            .verify()
+            .context("note.details")
+            .map_err(conversion_error_to_status)?;
+        let after_block_num = request
+            .after_block_num
+            .map(Verify::verify)
+            .transpose()
+            .context("note.after_block_num")
+            .map_err(conversion_error_to_status)?;
         if details.commitment() != header.details_commitment() {
             return Err(tonic::Status::invalid_argument("note details do not match the header"));
         }
-        Ok(db::NewNote {
-            header,
-            details,
-            after_block_num: request.after_block_num.map(|block| block.block_num.into()),
-        })
+        Ok(db::NewNote { header, details, after_block_num })
     }
 
     fn encode(_: ()) -> tonic::Result<SendNoteResponse> {

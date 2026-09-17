@@ -145,6 +145,29 @@ async fn rejects_missing_or_mismatched_note_fields() {
 }
 
 #[tokio::test]
+async fn rejects_malformed_nested_note_fields() {
+    let (_dir, server) = server(Config::default());
+    let mut note = note(1, 7);
+    note.details.as_mut().unwrap().recipient = None;
+    let error = SendNote::full(&server, Request::new(SendNoteRequest { note: Some(note) }))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+}
+
+#[tokio::test]
+async fn rejects_invalid_note_metadata() {
+    let (_dir, server) = server(Config::default());
+    let mut note = note(1, 7);
+    note.header.as_mut().unwrap().metadata.as_mut().unwrap().note_type =
+        miden_node_proto::generated::note::NoteType::Unspecified.into();
+    let error = SendNote::full(&server, Request::new(SendNoteRequest { note: Some(note) }))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+}
+
+#[tokio::test]
 async fn rejects_oversized_notes_and_invalid_fetches() {
     let (_dir, server) = server(Config {
         max_note_size: NonZeroUsize::new(1).unwrap(),
@@ -352,8 +375,7 @@ async fn large_pages_fit_default_grpc_client_and_resume_without_gaps() {
         .iter()
         .chain(&second.notes)
         .map(|note| {
-            let header: NoteHeader =
-                note.decoder().verify_field("header", note.header.clone()).unwrap();
+            let header = note.header.clone().unwrap().decode_fields().unwrap().verify().unwrap();
             header.id()
         })
         .collect::<std::collections::BTreeSet<_>>();
