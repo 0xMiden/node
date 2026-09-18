@@ -3,39 +3,23 @@ use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::vm::ExecutionProof;
 
 use crate::generated as proto;
-use crate::generated::remote_prover::proof::DecodedProof as ProofVariant;
 
 impl proto::remote_prover::DecodedProof {
     /// Extract the transaction fields without verifying the transaction.
     pub fn into_transaction(
         self,
     ) -> Result<Decoded<proto::transaction::ProvenTransaction>, ConversionError> {
-        match self.proof {
-            ProofVariant::Transaction(proof) => Ok(proof),
-            _ => Err(ConversionError::message(
-                "proof: response variant does not match transaction request",
-            )),
-        }
+        self.proof.into_transaction().context("proof")
     }
 
     /// Extract the batch fields without verifying the batch.
     pub fn into_batch(self) -> Result<Decoded<proto::transaction::ProvenBatch>, ConversionError> {
-        match self.proof {
-            ProofVariant::Batch(proof) => Ok(proof),
-            _ => Err(ConversionError::message(
-                "proof: response variant does not match batch request",
-            )),
-        }
+        self.proof.into_batch().context("proof")
     }
 
     /// Extract the block proof without verifying its statement.
     pub fn into_block(self) -> Result<ExecutionProof, ConversionError> {
-        match self.proof {
-            ProofVariant::Block(proof) => Ok(proof),
-            _ => Err(ConversionError::message(
-                "proof: response variant does not match block request",
-            )),
-        }
+        self.proof.into_block().context("proof")
     }
 }
 
@@ -72,9 +56,9 @@ mod tests {
     #[test]
     fn block_response_does_not_satisfy_transaction_or_batch_request() {
         let error = block_response().decode_fields().unwrap().into_transaction().unwrap_err();
-        assert!(error.to_string().contains("does not match transaction request"));
+        assert!(error.to_string().contains("expected oneof variant `transaction`, got `block`"));
         let error = block_response().decode_fields().unwrap().into_batch().unwrap_err();
-        assert!(error.to_string().contains("does not match batch request"));
+        assert!(error.to_string().contains("expected oneof variant `batch`, got `block`"));
     }
 
     #[test]

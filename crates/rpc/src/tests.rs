@@ -1518,7 +1518,8 @@ async fn authenticated_batch_defers_validation_to_async_handler() {
     .expect_err("the async handler should reject the malformed proposed batch");
 
     assert_eq!(error.code(), tonic::Code::InvalidArgument);
-    assert!(error.message().starts_with("proposed_batch.reference_block_header:"), "{error}");
+    assert!(error.message().contains("failed to decode"), "{error}");
+    assert!(error.message().contains("proposed_batch.reference_block_header:"), "{error}");
     assert!(error.message().contains("missing"), "{error}");
 }
 

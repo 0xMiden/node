@@ -1333,11 +1333,7 @@ async fn submit_rejects_missing_encrypted_inputs() {
         .unwrap_err();
 
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
-    assert!(
-        status.message().starts_with("sealed_transaction_inputs:"),
-        "{}",
-        status.message()
-    );
+    assert!(status.message().contains("sealed_transaction_inputs:"), "{}", status.message());
     assert!(status.message().contains("missing"));
     tv.assert_transaction_absent(tx.id(), 0).await;
 }

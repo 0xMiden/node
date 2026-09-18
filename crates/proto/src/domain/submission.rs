@@ -91,12 +91,7 @@ impl Verify for proto::submission::DecodedTransactionBatch {
         Ok(TransactionBatchSubmission {
             batch,
             proposed_batch,
-            sealed_transaction_inputs: self
-                .sealed_transaction_inputs
-                .into_inner()
-                .into_iter()
-                .map(Into::into)
-                .collect(),
+            sealed_transaction_inputs: self.sealed_transaction_inputs.map(Into::into),
         })
     }
 }

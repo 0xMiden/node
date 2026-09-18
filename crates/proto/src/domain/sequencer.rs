@@ -34,13 +34,7 @@ impl VerifyWith<u32> for sequencer::DecodedAuthenticatedTransactionBatch {
                 batch.transactions().len()
             )));
         }
-        let inputs = self
-            .auth_inputs
-            .into_inner()
-            .into_iter()
-            .enumerate()
-            .map(|(index, inputs)| inputs.verify().with_context(|| format!("auth_inputs[{index}]")))
-            .collect::<Result<Vec<_>, _>>()?;
+        let inputs = self.auth_inputs.verify()?;
         Ok((batch, inputs))
     }
 }

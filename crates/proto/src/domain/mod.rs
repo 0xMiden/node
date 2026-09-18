@@ -1,7 +1,6 @@
 pub mod account;
 pub mod block;
 pub mod encryption;
-mod limits;
 pub mod note;
 pub mod proof_request;
 pub mod protocol_config;

@@ -112,10 +112,6 @@ fn collect_message_names(parent: &str, descriptors: &[DescriptorProto], names: &
         if name == "rpc.RegisterAccountRequest" {
             continue;
         }
-        // Map messages use atomic adapters because the derive does not support maps.
-        if matches!(name.as_str(), "rpc.RpcLimits" | "rpc.EndpointLimits") {
-            continue;
-        }
         collect_message_names(&name, &descriptor.nested_type, names);
         names.push(name);
     }

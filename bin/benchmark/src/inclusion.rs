@@ -12,7 +12,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use miden_node_proto::clients::RpcClient;
 use miden_node_proto::generated::rpc::BlockHeaderByNumberRequest;
-use miden_node_proto::{BuildUnchecked, DecodeMessage, generated as proto};
+use miden_node_proto::{BuildUnchecked, DecodeMessage, DecodeMessageExt, generated as proto};
 use miden_protocol::block::BlockHeader;
 use miden_protocol::transaction::TransactionId;
 
@@ -130,11 +130,10 @@ pub(crate) async fn scan_with_drain(
                 continue;
             };
             let signed_block = match block
-                .decode_fields()
-                .map_err(anyhow::Error::from)
                 // SAFETY: This benchmark uses blocks from the target RPC only to measure inclusion.
                 // It does not use them to authenticate chain state.
-                .and_then(|block| block.build_unchecked().map_err(anyhow::Error::from))
+                .decode_and_build_unchecked()
+                .map_err(anyhow::Error::from)
             {
                 Ok(sb) => sb,
                 Err(err) => {

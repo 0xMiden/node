@@ -12,5 +12,12 @@ pub use domain::proof_request::BlockProofRequest;
 pub use domain::sign_block_request::SignBlockRequest;
 pub use domain::submission::{ProvenTransactionSubmission, TransactionBatchSubmission};
 pub use generated::server;
-pub use miden_protobuf::{BuildUnchecked, DecodeMessage, Decoded, Verify, VerifyWith};
+pub use miden_protobuf::{
+    BuildUnchecked,
+    DecodeMessage,
+    DecodeMessageExt,
+    Decoded,
+    Verify,
+    VerifyWith,
+};
 pub use prost;

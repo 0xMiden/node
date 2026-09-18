@@ -8,8 +8,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use miden_node_proto::DecodeMessageExt;
 use miden_node_proto::clients::RpcClient;
-use miden_node_proto::{DecodeMessage, Verify};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{debug, error, info, miden_instrument, warn};
 use miden_protocol::account::auth::AuthSecretKey;
@@ -998,10 +998,7 @@ async fn fetch_account_storage_header(
         return Ok(None);
     };
 
-    let details = details
-        .decode_fields()
-        .and_then(Verify::verify)
-        .context("invalid account details")?;
+    let details = details.decode_and_verify().context("invalid account details")?;
     Ok(Some(details.storage_details.header))
 }
 

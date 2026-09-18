@@ -1,7 +1,7 @@
 use miden_node_block_producer::ensure_transaction_has_fee;
 use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
 use miden_node_proto::generated::server::sequencer_api;
-use miden_node_proto::{BuildUnchecked, DecodeMessage, generated as proto};
+use miden_node_proto::{DecodeMessageExt, generated as proto};
 use miden_node_tracing::ErrorReport;
 use tonic::Status;
 
@@ -14,11 +14,10 @@ impl sequencer_api::SubmitAuthenticatedTx for SequencerInternalService {
 
     fn decode(request: proto::sequencer::AuthenticatedTransaction) -> tonic::Result<Self::Input> {
         request
-            .decode_fields()
             // SAFETY: Network isolation must restrict this endpoint to trusted full nodes. The
             // sender supplies proof and store validation. The handler checks the reference block
             // locally, and the mempool checks conflicts, dependencies, and expiration.
-            .and_then(BuildUnchecked::build_unchecked)
+            .decode_and_build_unchecked()
             .map_err(|err| {
                 Status::invalid_argument(err.as_report_context("invalid authenticated transaction"))
             })

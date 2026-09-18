@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::{StreamExt, stream};
+use miden_node_proto::DecodeMessageExt;
 use miden_node_proto::generated::{self as proto};
-use miden_node_proto::{DecodeMessage as _, Verify};
 use miden_node_store::state::State;
 use miden_node_utils::clap::StorageOptions;
 use miden_protocol::Word;
@@ -125,10 +125,7 @@ async fn get_account(
     let request = get_account_request(account_id, storage_map_slot);
 
     let start = Instant::now();
-    let request = request
-        .decode_fields()
-        .and_then(Verify::verify)
-        .expect("request should be valid");
+    let request = request.decode_and_verify().expect("request should be valid");
     let response: proto::rpc::AccountResponse =
         state.view().get_account(request).await.unwrap().into();
     let duration = start.elapsed();

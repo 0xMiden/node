@@ -1,7 +1,7 @@
+use miden_node_proto::DecodeMessageExt;
 use miden_node_proto::clients::{Builder, RemoteProverClient};
 use miden_node_proto::generated::remote_prover::ProofRequest;
 use miden_node_proto::generated::remote_prover::proof_request::Request;
-use miden_node_proto::{DecodeMessage, VerifyWith};
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_tx_batch::LocalBatchProver;
 use url::Url;
@@ -80,8 +80,7 @@ impl RemoteBatchProver {
         let response = self.client.clone().prove(request).await.map_err(RemoteProverError::Grpc)?;
         response
             .into_inner()
-            .decode_fields()
-            .and_then(|proof| proof.verify_with(&proposed_batch))
+            .decode_and_verify_with(&proposed_batch)
             .map_err(RemoteProverError::Conversion)
     }
 }
