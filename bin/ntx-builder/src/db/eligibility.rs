@@ -1,4 +1,4 @@
-//! When a network note becomes eligible for a transaction attempt.
+//! When a network note becomes eligible for consumption.
 //!
 //! Two things delay a note: its execution hint, which sets the first block at which the note may be
 //! consumed, and the exponential backoff applied after a failed attempt. This module computes both,

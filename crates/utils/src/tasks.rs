@@ -7,63 +7,52 @@ use tokio::task::{Id, JoinError, JoinSet};
 
 use crate::shutdown::CancellationToken;
 
-/// A named task set for supervising concurrently-running Tokio tasks.
+/// A tagged task set for supervising concurrently-running Tokio tasks.
 ///
 /// Dropping a task set aborts all tasks that are still running.
-pub struct Tasks {
-    handles: JoinSet<anyhow::Result<()>>,
-    names: HashMap<Id, String>,
+pub struct Tasks<T = anyhow::Result<()>, M = String> {
+    handles: JoinSet<T>,
+    tags: HashMap<Id, M>,
 }
 
-impl Default for Tasks {
+impl<T, M> Default for Tasks<T, M> {
     fn default() -> Self {
         Self {
             handles: JoinSet::new(),
-            names: HashMap::new(),
+            tags: HashMap::new(),
         }
     }
 }
 
-impl Tasks {
+impl<T: Send + 'static, M> Tasks<T, M> {
     /// Creates an empty task set.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Spawns a named task into the set.
+    /// Spawns a tagged task into the set.
     pub fn spawn(
         &mut self,
-        name: impl Into<String>,
-        task: impl Future<Output = anyhow::Result<()>> + Send + 'static,
+        tag: impl Into<M>,
+        task: impl Future<Output = T> + Send + 'static,
     ) -> Id {
         let id = self.handles.spawn(task).id();
-        self.names.insert(id, name.into());
+        self.tags.insert(id, tag.into());
         id
     }
 
-    /// Spawns a named task that does not return an error.
-    pub fn spawn_infallible(
-        &mut self,
-        name: impl Into<String>,
-        task: impl Future<Output = ()> + Send + 'static,
-    ) -> Id {
-        self.spawn(name, async move {
-            task.await;
-            Ok(())
-        })
-    }
-
-    /// Waits for the next task to complete.
-    pub async fn join_next(&mut self) -> Option<(String, Result<anyhow::Result<()>, JoinError>)> {
+    /// Waits for the next task to complete and returns it with its tag.
+    pub async fn join_next(&mut self) -> Option<(M, Result<T, JoinError>)> {
         let result = self.handles.join_next_with_id().await?;
         let id = match &result {
             Ok((id, _)) => *id,
             Err(err) => err.id(),
         };
-        let name = self.names.remove(&id).unwrap_or_else(|| "unknown".to_string());
+        // Every task is tagged when it is spawned, and a task is joined once.
+        let tag = self.tags.remove(&id).expect("a spawned task has a tag");
         let result = result.map(|(_, output)| output);
 
-        Some((name, result))
+        Some((tag, result))
     }
 
     /// Returns `true` if no tasks are currently in the set.
@@ -74,6 +63,31 @@ impl Tasks {
     /// Returns the number of tasks currently in the set.
     pub fn len(&self) -> usize {
         self.handles.len()
+    }
+
+    /// Returns the tag of every task in the set.
+    pub fn tags(&self) -> impl Iterator<Item = &M> {
+        self.tags.values()
+    }
+
+    /// Aborts every task in the set and waits for the tasks to finish.
+    pub async fn shutdown(&mut self) {
+        self.handles.shutdown().await;
+        self.tags.clear();
+    }
+}
+
+impl Tasks {
+    /// Spawns a named task that does not return an error.
+    pub fn spawn_infallible(
+        &mut self,
+        name: impl Into<String>,
+        task: impl Future<Output = ()> + Send + 'static,
+    ) -> Id {
+        self.spawn(name, async move {
+            task.await;
+            Ok(())
+        })
     }
 
     /// Waits for the next task to complete, treating that completion as an error.
