@@ -13,13 +13,15 @@ use miden_node_proto::{BuildUnchecked, DecodeMessage, generated as proto};
 use miden_node_store::GenesisState;
 use miden_node_store::state::State;
 use miden_node_utils::clap::StorageOptions;
-use miden_node_utils::fee::test_protocol_config;
+use miden_node_utils::genesis::GenesisBlock;
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::Word;
+use miden_protocol::asset::AssetId;
 use miden_protocol::block::{FeeParameters, ValidatorConfig};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::crypto::dsa::eddsa_25519_sha512::KeyExchangeKey;
 use miden_protocol::crypto::ies::{SealedMessage, UnsealingKey};
+use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{TransactionId, TransactionInputs, TransactionVerifier};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use tokio::net::TcpListener;
@@ -28,21 +30,13 @@ use tonic::codegen::http::Extensions;
 use tonic::metadata::MetadataMap;
 
 use super::*;
-use crate::test_utils::mock_collection_account;
+use crate::test_utils::{mock_collection_account, mock_native_faucet};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn collector_deployment_proves_the_block_and_supports_a_new_collector() {
     let directory = tempfile::tempdir().unwrap();
     let signer = SigningKey::new();
-    let genesis = GenesisState::new(
-        vec![],
-        FeeParameters::new(1),
-        1,
-        ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
-        test_protocol_config(),
-    )
-    .into_block()
-    .unwrap();
+    let genesis = genesis_with_faucet(&signer);
     let validator = Validator {
         signer,
         genesis: genesis.inner().header().commitment(),
@@ -135,6 +129,20 @@ async fn collector_deployment_proves_the_block_and_supports_a_new_collector() {
     shutdown.cancel();
     server.await.unwrap();
     writer.stop(writer_task).await;
+}
+
+fn genesis_with_faucet(signer: &SigningKey) -> GenesisBlock {
+    let faucet = mock_native_faucet();
+    let config = ProtocolConfig::current(AssetId::new_fungible(faucet.id())).unwrap();
+    GenesisState::new(
+        vec![faucet],
+        FeeParameters::new(1),
+        1,
+        ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
+        config,
+    )
+    .into_block()
+    .unwrap()
 }
 
 /// Signs blocks only after it accepts their transactions and decrypts their execution inputs.

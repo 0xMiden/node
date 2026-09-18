@@ -90,7 +90,7 @@ impl BatchBuilder {
     /// building workers.
     ///
     /// If no batch prover URL is provided, a local batch prover is used instead.
-    pub fn new(
+    pub async fn new(
         state: Arc<State>,
         num_workers: NonZeroUsize,
         batch_prover_url: Option<Url>,
@@ -101,8 +101,12 @@ impl BatchBuilder {
     ) -> anyhow::Result<Self> {
         let batch_prover =
             batch_prover_url.map_or(Ok(BatchProver::local()), BatchProver::remote)?;
-        let fee_collector =
-            FeeCollectorTransactionBuilder::new(builder_account_id, fee_collector_account)?;
+        let fee_collector = FeeCollectorTransactionBuilder::new(
+            builder_account_id,
+            fee_collector_account,
+            &state.view(),
+        )
+        .await?;
 
         Ok(Self {
             active_jobs: JoinSet::new(),
@@ -514,13 +518,15 @@ mod tests {
     use super::*;
     use crate::mempool::{Mempool, MempoolConfig};
     use crate::store::get_tx_inputs;
-    use crate::test_utils::mock_collection_account;
+    use crate::test_utils::{mock_collection_account, mock_native_faucet};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn builds_batches_without_fee_notes() -> anyhow::Result<()> {
         let mut collector = mock_collection_account();
         collector.account.set_nonce(ONE)?;
-        let mut chain = MockChain::builder().verification_base_fee(0);
+        let faucet = mock_native_faucet();
+        let mut chain = MockChain::builder().verification_base_fee(0).fee_faucet_id(faucet.id());
+        chain.add_account(faucet)?;
         chain.add_account(collector.account.clone())?;
         let wallet = chain.add_existing_wallet(Auth::basic_ecdsa())?;
         let chain = chain.build()?;
@@ -547,10 +553,12 @@ mod tests {
         mempool.lock().unwrap().add_transaction(transaction)?;
         let selected = mempool.lock().unwrap().select_any_batch().unwrap();
         let selected_id = selected.id().as_batch_id();
+        let fee_collector =
+            FeeCollectorTransactionBuilder::new(wallet.id(), collector, &state.view()).await?;
         let job = BatchJob {
             state,
             batch_prover: BatchProver::local(),
-            fee_collector: FeeCollectorTransactionBuilder::new(wallet.id(), collector)?,
+            fee_collector,
             validator: BlockProducerValidatorClient::new(Vec::new(), Duration::from_secs(1))?,
             mempool,
         };
