@@ -49,4 +49,5 @@ be imported or re-proven separately as part of recovery before the node resumes 
    tip, it reports that there is nothing to recover and exits successfully.
 
 4. Commission proofs for the recovered blocks.
-5. Restart the node as a sequencer. See [Sequencer](/network-operator/sequencer).
+5. Restore or replace the [fee collector account](./sequencer.md#fee-collector-account).
+6. Restart the node as a sequencer. See [Sequencer](/network-operator/sequencer).

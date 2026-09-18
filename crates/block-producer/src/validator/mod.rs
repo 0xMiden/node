@@ -1,12 +1,21 @@
 use std::time::Duration;
 
+use anyhow::Context;
 use miden_node_proto::clients::{Builder, ValidatorClient};
+use miden_node_proto::domain::encryption::{
+    TransactionInputsSealer,
+    TrustedTransactionEncryptionState,
+};
 use miden_node_proto::domain::validator::SignBlockResponse;
 use miden_node_proto::errors::ConversionError;
-use miden_node_proto::{DecodeMessageExt, generated as proto};
+use miden_node_proto::{DecodeMessageExt, VerifyWith, generated as proto};
 use miden_node_tracing::{info, miden_instrument};
-use miden_protocol::block::{BlockInputs, ProposedBlock};
+use miden_node_utils::retry::{self, Retryable};
+use miden_protocol::Word;
+use miden_protocol::block::{BlockInputs, ProposedBlock, ValidatorConfig};
 use miden_protocol::protocol_config::ProtocolConfig;
+use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
+use miden_protocol::utils::serde::Serializable;
 use thiserror::Error;
 use url::Url;
 
@@ -62,6 +71,49 @@ impl BlockProducerValidatorClient {
             .collect::<anyhow::Result<Vec<_>>>()?;
 
         Ok(Self { clients })
+    }
+
+    /// Validates a transaction with every validator before it can appear in a signed block.
+    #[miden_instrument(target = COMPONENT, name = "validator.client.validate_transaction", err)]
+    pub(crate) async fn validate_transaction(
+        &self,
+        transaction: &ProvenTransaction,
+        inputs: &TransactionInputs,
+        genesis: Word,
+        validators: &ValidatorConfig,
+    ) -> anyhow::Result<()> {
+        let client = self.clients.first().context("collector deployment requires a validator")?;
+        let key = (|| async { client.clone().get_transaction_encryption_key(()).await })
+            .retry(retry::exponential_bounded(
+                Duration::from_millis(100),
+                Duration::from_secs(2),
+                10,
+            ))
+            .when(|error| error.code() == tonic::Code::Unavailable)
+            .await?
+            .into_inner()
+            .verify_with(TrustedTransactionEncryptionState::new(genesis, validators.keys()))?;
+        let sealed =
+            TransactionInputsSealer::new(key).seal(transaction.id(), &inputs.to_bytes())?;
+        let request = proto::submission::ProvenTransactionSubmission {
+            transaction: Some(transaction.into()),
+            sealed_transaction_inputs: Some(sealed),
+        };
+        futures::future::try_join_all(self.clients.iter().map(|client| {
+            let request = request.clone();
+            async move {
+                (|| async { client.clone().submit_proven_transaction(request.clone()).await })
+                    .retry(retry::exponential_bounded(
+                        Duration::from_millis(100),
+                        Duration::from_secs(2),
+                        10,
+                    ))
+                    .when(|error| error.code() == tonic::Code::Unavailable)
+                    .await
+            }
+        }))
+        .await?;
+        Ok(())
     }
 
     /// Signs the proposed block via every validator concurrently, returning each validator's

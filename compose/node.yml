@@ -5,7 +5,7 @@ services:
     volumes:
       - node-data:/data
     depends_on:
-      bootstrap-node:
+      deploy-fee-collector:
         condition: service_completed_successfully
       otel-collector:
         condition: service_started
