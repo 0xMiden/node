@@ -169,8 +169,8 @@ jobs:
             echo "tag=${ref_name}"
           } >> "${GITHUB_OUTPUT}"
 
-  build-binaries:
-    name: Build binaries (${{ matrix.platform }})
+  validate-images:
+    name: Validate Docker images (${{ matrix.platform }})
     needs: preflight
     runs-on: warp-ubuntu-latest-x64-8x
     permissions:
@@ -192,29 +192,32 @@ jobs:
           ref: ${{ needs.preflight.outputs.commit }}
           persist-credentials: false
 
-      - name: Build binaries
-        uses: WarpBuilds/build-push-action@ec038a9f4b87a7c7ccb50ac7a26a90d46a610a81 # v6.0.9
+      - name: Validate Docker images
+        uses: WarpBuilds/bake-action@cb88c8ea0c887c0d1a3dcb534e71bd68a015e2d6 # v6.7.7
         with:
-          context: .
+          source: .
+          files: ./docker-bake.hcl
+          targets: validate
           push: false
-          file: ./Dockerfile
-          target: build-report
-          platforms: ${{ matrix.platform }}
           profile-name: ${{ vars.WARPBUILD_DOCKER_BUILDER_PROFILE }}
           pull: true
-          outputs: type=local,dest=${{ runner.temp }}/kache-report
+          set: |
+            *.platform=${{ matrix.platform }}
+            *.args.CREATED=${{ needs.preflight.outputs.created }}
+            *.args.VERSION=${{ needs.preflight.outputs.tag }}
+            *.args.COMMIT=${{ needs.preflight.outputs.commit }}
 
       - name: Upload Kache cache report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: kache-report-${{ matrix.architecture }}
-          path: ${{ runner.temp }}/kache-report/kache-report.md
+          path: kache-report/kache-report.md
           if-no-files-found: error
           retention-days: 1
 
   kache-summary:
     name: Summarize Kache cache
-    needs: build-binaries
+    needs: validate-images
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -247,42 +250,6 @@ jobs:
             done
             echo "</details>"
           } >> "${GITHUB_STEP_SUMMARY}"
-
-  dry-run-docker:
-    name: Validate ${{ matrix.component }} image
-    needs: [preflight, build-binaries]
-    runs-on: warp-ubuntu-latest-x64-8x
-    permissions:
-      contents: read
-      # WarpBuild uses OIDC to authenticate its remote builder.
-      id-token: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJson(needs.preflight.outputs.images) }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ needs.preflight.outputs.commit }}
-          persist-credentials: false
-
-      - name: Validate Docker image
-        uses: WarpBuilds/build-push-action@ec038a9f4b87a7c7ccb50ac7a26a90d46a610a81 # v6.0.9
-        with:
-          context: .
-          push: false
-          file: ./Dockerfile
-          target: ${{ matrix.target }}
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          profile-name: ${{ vars.WARPBUILD_DOCKER_BUILDER_PROFILE }}
-          pull: true
-          build-args: |
-            BIN=${{ matrix.bin }}
-            PORT=${{ matrix.port }}
-            CREATED=${{ needs.preflight.outputs.created }}
-            VERSION=${{ needs.preflight.outputs.tag }}
-            COMMIT=${{ needs.preflight.outputs.commit }}
 
   dry-run-compose:
     name: Dry-run docker compose publishing
@@ -319,7 +286,7 @@ jobs:
 
   publish-docker:
     name: Publish ${{ matrix.component }}
-    needs: [preflight, dry-run-docker, dry-run-compose]
+    needs: [preflight, validate-images, dry-run-compose]
     if: ${{ needs.preflight.outputs.mode == 'publish' }}
     runs-on: warp-ubuntu-latest-x64-8x
     permissions:
