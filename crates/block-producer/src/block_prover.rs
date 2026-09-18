@@ -43,7 +43,7 @@ pub enum RemoteProverError {
 
 /// Block prover which allows for proving via either local or remote backend.
 ///
-/// The local proving variant is intended for development and testing purposes.
+/// The local proving variant supports one-time deployments, development, and testing.
 /// The remote proving variant is intended for production use.
 pub enum BlockProver {
     Local(LocalBlockProver),

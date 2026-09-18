@@ -1,4 +1,5 @@
 mod block_producer;
+mod fee_collector;
 mod lifecycle;
 mod modes;
 mod recover;
@@ -8,6 +9,7 @@ pub(crate) mod section;
 mod store;
 
 use clap::Subcommand;
+pub use fee_collector::FeeCollectorCommand;
 pub use lifecycle::{BootstrapCommand, MigrateCommand};
 use miden_node_tracing::OpenTelemetry;
 use miden_node_utils::shutdown::CancellationToken;
@@ -39,6 +41,13 @@ pub enum Command {
     /// genesis block. The data directory contains the node's local data storage and must be
     /// initialized before the node can be started.
     Bootstrap(BootstrapCommand),
+
+    /// Create or deploy the sequencer's fee collector account.
+    ///
+    /// The immutable collector combines transaction fees into P2ID notes for the batch builder's
+    /// wallet.
+    #[command(subcommand)]
+    FeeCollector(FeeCollectorCommand),
 
     /// Apply pending migrations to the node's storage.
     ///
@@ -78,15 +87,17 @@ impl Command {
             Command::Full(_) => OpenTelemetry::from_env()
                 .with_name("node")
                 .with_attribute("miden.node.role", "full"),
-            Command::Bootstrap(_) | Command::Migrate(_) | Command::Recover(_) => {
-                OpenTelemetry::Disabled
-            },
+            Command::Bootstrap(_)
+            | Command::FeeCollector(_)
+            | Command::Migrate(_)
+            | Command::Recover(_) => OpenTelemetry::Disabled,
         }
     }
 
     pub(crate) async fn execute(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         match self {
             Command::Bootstrap(bootstrap_command) => bootstrap_command.handle().await,
+            Command::FeeCollector(command) => command.handle(shutdown).await,
             Command::Migrate(migrate_command) => migrate_command.handle(),
             Command::Sequencer(sequencer_command) => sequencer_command.handle(shutdown).await,
             Command::Full(full_node_command) => full_node_command.handle(shutdown).await,

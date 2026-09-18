@@ -32,6 +32,7 @@ miden-node-tracing = { workspace = true }
 miden-node-utils   = { features = ["testing"], workspace = true }
 miden-protocol     = { default-features = true, workspace = true }
 miden-standards    = { workspace = true }
+miden-tx           = { workspace = true }
 miden-tx-batch     = { workspace = true }
 rand               = { workspace = true }
 thiserror          = { workspace = true }
@@ -47,6 +48,7 @@ miden-node-tracing = { features = ["testing"], workspace = true }
 miden-node-utils   = { features = ["testing"], workspace = true }
 miden-protocol     = { default-features = true, features = ["testing"], workspace = true }
 miden-standards    = { features = ["testing"], workspace = true }
+miden-testing      = { workspace = true }
 pretty_assertions  = { workspace = true }
 rand_chacha        = { default-features = false, workspace = true }
 serial_test        = { workspace = true }

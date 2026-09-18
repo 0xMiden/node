@@ -7,7 +7,6 @@ use std::time::Duration;
 use futures::TryFutureExt;
 use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
 use miden_node_store::state::State;
-use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{
     ErrorSpanExt,
     Instrument,
@@ -21,7 +20,6 @@ use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{BatchId, ProposedBatch, ProvenBatch};
 use miden_protocol::note::NoteId;
 use miden_protocol::transaction::TransactionId;
-use miden_tx_batch::BatchExecutor;
 use tokio::task::{JoinError, JoinSet};
 use tokio::time::{Instant, MissedTickBehavior};
 use url::Url;
@@ -32,7 +30,7 @@ use crate::mempool::SharedMempool;
 use crate::{COMPONENT, LOG_TARGET};
 
 mod remote_prover;
-use remote_prover::BatchProver;
+pub(crate) use remote_prover::BatchProver;
 pub use remote_prover::RemoteProverError;
 
 // BATCH BUILDER
@@ -274,8 +272,8 @@ impl BatchJob {
                     batch.output_note.count = telemetry.output_notes_count
                 );
             })
-            .and_then(|proposed| self.prove_batch(proposed))
-            .and_then(|proven_batch| async { self.commit_batch(proven_batch) })
+            .and_then(|proposed| self.batch_prover.prove(proposed))
+            .and_then(|proven_batch| async { self.commit_batch(Arc::new(proven_batch)) })
             // Handle errors by propagating the error to the root span and rolling back the batch.
             .inspect_err(|err| Span::current().set_error(err))
             .instrument(Span::current())
@@ -351,45 +349,6 @@ impl BatchJob {
             MIN_PROOF_SECURITY_LEVEL,
         )
         .map_err(BuildBatchError::ProposeBatchError)
-    }
-
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "batch_builder.prove_batch",
-        err,
-    )]
-    async fn prove_batch(
-        &self,
-        proposed_batch: ProposedBatch,
-    ) -> Result<Arc<ProvenBatch>, BuildBatchError> {
-        miden_span_record!(prover.kind = self.batch_prover.kind());
-
-        let proven_batch = match &self.batch_prover {
-            BatchProver::Remote(prover) => prover
-                .prove(proposed_batch)
-                .await
-                .map_err(BuildBatchError::RemoteProverClientError),
-            BatchProver::Local(prover) => {
-                let prover = prover.clone();
-                spawn_blocking_in_current_span(move || {
-                    let executed_batch = BatchExecutor::new()
-                        .execute(proposed_batch)
-                        .map_err(BuildBatchError::ProveBatchError)?;
-                    prover.prove(executed_batch).map_err(BuildBatchError::ProveBatchError)
-                })
-                .await
-                .map_err(BuildBatchError::JoinError)?
-            },
-        }?;
-
-        if proven_batch.proof_security_level() < MIN_PROOF_SECURITY_LEVEL {
-            Err(BuildBatchError::SecurityLevelTooLow(
-                proven_batch.proof_security_level(),
-                MIN_PROOF_SECURITY_LEVEL,
-            ))
-        } else {
-            Ok(Arc::new(proven_batch))
-        }
     }
 
     #[miden_instrument(

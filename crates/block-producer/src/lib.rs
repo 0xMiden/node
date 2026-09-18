@@ -12,6 +12,7 @@ mod batch_builder;
 mod block_builder;
 mod block_prover;
 mod domain;
+mod fee_collector;
 mod mempool;
 mod proof_scheduler;
 mod rpc_sync;
@@ -26,6 +27,7 @@ mod errors;
 pub mod server;
 pub use domain::transaction::ensure_transaction_has_fee;
 pub use errors::MempoolSubmissionError;
+pub use fee_collector::deploy_fee_collector;
 pub use proof_scheduler::DEFAULT_MAX_CONCURRENT_PROOFS;
 pub use rpc_sync::{RpcReadiness, RpcSync};
 pub use server::{
