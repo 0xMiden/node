@@ -279,8 +279,7 @@ impl BatchJob {
     async fn build_batch(&self, batch: SelectedBatch) -> Result<(), BuildBatchError> {
         let batch_id = batch.id();
 
-        let result = self
-            .get_batch_inputs(batch)
+        let result = Box::pin(self.get_batch_inputs(batch))
             .inspect_ok(|proposed| {
                 let telemetry = proposed_batch_telemetry(proposed);
                 miden_span_record!(
@@ -384,6 +383,7 @@ impl BatchJob {
                     reference_block_header.clone(),
                     protocol_config,
                     partial_blockchain.clone(),
+                    &view,
                 )
                 .await
                 .map_err(BuildBatchError::BuildBatchFeeTransaction)?;
