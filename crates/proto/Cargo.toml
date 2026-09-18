@@ -56,5 +56,5 @@ ignored = [
 [package.metadata.cargo-shear]
 ignored = [
   "tonic-prost", # used in generated OUT_DIR code
-  "tower", # used in generated OUT_DIR code
+  "tower",       # used in generated OUT_DIR code
 ]
