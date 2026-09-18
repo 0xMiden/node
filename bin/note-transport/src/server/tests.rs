@@ -1,5 +1,13 @@
+use miden_node_proto::DecodeMessage;
 use miden_node_proto::generated::blockchain::BlockNumber;
-use miden_node_proto::generated::note_transport::{FetchNotesRequest, TransportNote};
+use miden_node_proto::generated::note_transport::{
+    FetchNotesCursor,
+    FetchNotesRequest,
+    FetchNotesResponse,
+    SendNoteRequest,
+    SendNoteResponse,
+    TransportNote,
+};
 use miden_node_proto::server::note_transport_api::{FetchNotes, SendNote};
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
@@ -15,6 +23,7 @@ use miden_protocol::note::{
     PartialNoteMetadata,
 };
 use miden_protocol::testing::account_id::ACCOUNT_ID_MAX_ZEROES;
+use prost::Message;
 use tonic::Request;
 
 use super::*;
