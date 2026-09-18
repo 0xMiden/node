@@ -89,7 +89,7 @@ impl Interceptor {
             (None, Some(genesis)) => format!("{}; {}={genesis}", Self::MEDIA_TYPE, Self::GENESIS),
             (Some(version), None) => format!("{}; {}={version}", Self::MEDIA_TYPE, Self::VERSION),
             (Some(version), Some(genesis)) => format!(
-                "{}; {}={version}, {}={genesis}",
+                "{}; {}={version}; {}={genesis}",
                 Self::MEDIA_TYPE,
                 Self::VERSION,
                 Self::GENESIS
@@ -149,7 +149,7 @@ mod tests {
 
         assert_eq!(
             request.metadata().get(ACCEPT.as_str()).and_then(|value| value.to_str().ok()),
-            Some("application/vnd.miden; version=9.9, genesis=0xabcd"),
+            Some("application/vnd.miden; version=9.9; genesis=0xabcd"),
         );
     }
 
