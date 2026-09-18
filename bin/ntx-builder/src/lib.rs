@@ -17,14 +17,17 @@ use miden_node_utils::shutdown::CancellationToken;
 use tonic::metadata::AsciiMetadataValue;
 use url::Url;
 
-use crate::attempt::{AttemptConfig, AttemptContext, GrpcClients};
 use crate::db::NtxDbReader;
-use crate::scheduler::Scheduler;
+use crate::network_transaction::{
+    GrpcClients,
+    NetworkTransactionConfig,
+    NetworkTransactionContext,
+};
+use crate::scheduler::{Scheduler, SchedulerConfig};
 
 pub(crate) type NoteError = Arc<dyn ErrorReport + Send + Sync>;
 
 mod allowlist;
-mod attempt;
 mod builder;
 mod candidate;
 mod chain_state;
@@ -32,6 +35,7 @@ mod clients;
 mod committed_block;
 pub(crate) mod db;
 mod execute;
+mod network_transaction;
 mod scheduler;
 mod selection;
 pub mod server;
@@ -120,7 +124,7 @@ const _: () = assert!(DEFAULT_MAX_NOTES_PER_TX.get() <= miden_tx::MAX_NUM_CHECKE
 
 /// Default maximum number of network transactions which are computed concurrently.
 ///
-/// This bounds the transaction attempts running locally. It does not include submitted
+/// This bounds the network transactions built locally. It does not include submitted
 /// transactions which are waiting to be committed: those hold no local compute.
 const DEFAULT_MAX_CONCURRENT_TXS: usize = 4;
 
@@ -160,7 +164,7 @@ const DEFAULT_MAX_TX_CYCLES: u32 = 1 << 19;
 /// Default number of blocks after which a submitted network transaction expires.
 ///
 /// Used both as the on-chain transaction expiration delta and as the local timeout after which the
-/// scheduler releases the account for a new attempt. Must be within the kernel's `1..=u16::MAX`
+/// scheduler releases the account for a new build. Must be within the kernel's `1..=u16::MAX`
 /// range.
 const DEFAULT_TX_EXPIRATION_DELTA: NonZeroU16 = NonZeroU16::new(30).unwrap();
 
@@ -217,7 +221,7 @@ pub struct NtxBuilderConfig {
 
     /// Number of blocks after which a submitted network transaction expires. Set as the on-chain
     /// transaction expiration delta and reused as the local timeout after which the scheduler
-    /// releases the account for a new attempt. Must be within `1..=u16::MAX` (enforced by the
+    /// releases the account for a new build. Must be within `1..=u16::MAX` (enforced by the
     /// transaction kernel).
     pub tx_expiration_delta: NonZeroU16,
 
@@ -349,7 +353,7 @@ impl NtxBuilderConfig {
     }
 
     /// Sets the per-request retry backoff bounds (initial sleep and cap) used when retrying
-    /// transient infrastructure failures inside a single transaction attempt.
+    /// transient infrastructure failures inside a single network transaction build.
     #[must_use]
     pub fn with_request_backoff(mut self, initial: Duration, max: Duration) -> Self {
         self.request_backoff_initial = initial;
@@ -384,7 +388,7 @@ impl NtxBuilderConfig {
     ) -> anyhow::Result<NetworkTransactionBuilder> {
         // Set up the database connection pool. Writes are serialized by the framework's single
         // dedicated writer connection, so block application never contends with the transaction
-        // attempts (which only read) for the shared reader pool.
+        // builds (which only read) for the shared reader pool.
         let db = db::load_with_pool_size(
             self.database_filepath.clone(),
             self.sqlite_connection_pool_size,
@@ -488,12 +492,12 @@ impl NtxBuilderConfig {
         ))
     }
 
-    /// Builds the [`Scheduler`] that owns the transaction attempts.
+    /// Builds the [`Scheduler`] that owns the network transaction builds.
     ///
-    /// The attempt context it carries is cloned into every spawned attempt, so the gRPC clients and
-    /// the note script cache are shared rather than rebuilt per transaction.
+    /// The context it carries is cloned into every spawned build, so the gRPC clients and the note
+    /// script cache are shared rather than rebuilt per transaction.
     fn build_scheduler(&self, rpc: RpcClient, db: NtxDbReader) -> anyhow::Result<Scheduler> {
-        let ctx = AttemptContext {
+        let ctx = NetworkTransactionContext {
             clients: GrpcClients {
                 rpc,
                 prover: RemoteTransactionProver::new(
@@ -504,7 +508,7 @@ impl NtxBuilderConfig {
             db,
             script_cache: LruCache::new(self.script_cache_size),
             tx_args: selection::build_tx_args(self.tx_expiration_delta),
-            config: AttemptConfig {
+            config: NetworkTransactionConfig {
                 max_notes_per_tx: self.max_notes_per_tx,
                 max_note_attempts: self.max_note_attempts,
                 max_cycles: self.max_cycles,
@@ -513,6 +517,11 @@ impl NtxBuilderConfig {
             },
         };
 
-        Ok(Scheduler::new(ctx, self.max_concurrent_txs, self.tx_expiration_delta))
+        let config = SchedulerConfig {
+            max_concurrent_txs: self.max_concurrent_txs,
+            tx_expiration_delta: self.tx_expiration_delta,
+        };
+
+        Ok(Scheduler::new(ctx, config))
     }
 }
