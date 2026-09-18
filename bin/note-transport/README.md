@@ -58,6 +58,11 @@ The service caches up to 1,024 note root commitments from the trusted node, keye
 least recently used entry when full. Failed lookups and invalid headers are not cached. Each submission still verifies
 its inclusion proof against the note root, including cache hits.
 
+Uncached header lookups make up to three attempts for `UNAVAILABLE`, `DEADLINE_EXCEEDED`, or `RESOURCE_EXHAUSTED`
+responses. Attempts use short exponential backoff and individual timeouts. All attempts and delays share half of the
+configured gRPC timeout: 5 seconds with the default 10-second timeout. Missing blocks and invalid headers are not
+retried.
+
 A retry with the same note ID succeeds and keeps the first envelope, timestamp, and cursor. This also applies when the
 `SendNote` retry supplies a different block hint or storage is full. `SendNoteWithProof` validates the proof on every
 request, including duplicates. A valid retry through either method keeps the first envelope. In particular, a verified

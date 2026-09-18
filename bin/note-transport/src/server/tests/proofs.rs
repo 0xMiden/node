@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -12,9 +12,11 @@ use tonic::codegen::{BoxFuture, http};
 
 use super::*;
 
+type HeaderResponses = BTreeMap<u32, VecDeque<Result<BlockHeaderByNumberResponse, tonic::Status>>>;
+
 #[derive(Clone)]
 struct NodeRpc {
-    responses: BTreeMap<u32, Result<BlockHeaderByNumberResponse, tonic::Status>>,
+    responses: Arc<Mutex<HeaderResponses>>,
     delay: Duration,
     requests: Arc<Mutex<Vec<u32>>>,
 }
@@ -30,7 +32,6 @@ impl tonic::server::UnaryService<BlockHeaderByNumberRequest> for NodeRpc {
     fn call(&mut self, request: Request<BlockHeaderByNumberRequest>) -> Self::Future {
         let this = self.clone();
         Box::pin(async move {
-            tokio::time::sleep(this.delay).await;
             // Return no header if the client asks for a different block or extra data.
             let request = request.into_inner();
             if request.include_mmr_proof.unwrap_or(false)
@@ -40,11 +41,16 @@ impl tonic::server::UnaryService<BlockHeaderByNumberRequest> for NodeRpc {
             }
             let block_num = request.block_num.unwrap();
             this.requests.lock().unwrap().push(block_num);
-            this.responses
-                .get(&block_num)
-                .cloned()
-                .unwrap_or_else(|| Ok(BlockHeaderByNumberResponse::default()))
-                .map(tonic::Response::new)
+            let response = {
+                let mut responses = this.responses.lock().unwrap();
+                match responses.get_mut(&block_num) {
+                    Some(responses) if responses.len() > 1 => responses.pop_front().unwrap(),
+                    Some(responses) => responses.front().unwrap().clone(),
+                    None => Ok(BlockHeaderByNumberResponse::default()),
+                }
+            };
+            tokio::time::sleep(this.delay).await;
+            response.map(tonic::Response::new)
         })
     }
 }
@@ -93,11 +99,22 @@ async fn node_rpc_responses(
     responses: BTreeMap<u32, Result<BlockHeaderByNumberResponse, tonic::Status>>,
     delay: Duration,
 ) -> (url::Url, tokio::task::JoinHandle<()>, Arc<Mutex<Vec<u32>>>) {
+    let responses = responses
+        .into_iter()
+        .map(|(block, response)| (block, VecDeque::from([response])))
+        .collect();
+    node_rpc_script(responses, delay).await
+}
+
+async fn node_rpc_script(
+    responses: HeaderResponses,
+    delay: Duration,
+) -> (url::Url, tokio::task::JoinHandle<()>, Arc<Mutex<Vec<u32>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap()).parse().unwrap();
     let requests = Arc::new(Mutex::new(Vec::new()));
     let rpc = NodeRpc {
-        responses,
+        responses: Arc::new(Mutex::new(responses)),
         delay,
         requests: requests.clone(),
     };
@@ -301,7 +318,11 @@ async fn lookup_failures_never_store_notes() {
     for (response, delay, code) in cases {
         let (url, upstream) = node_rpc(response, delay).await;
         let mut config = Config::new(url);
-        config.grpc.request_timeout = Duration::from_millis(200);
+        config.grpc.request_timeout = if delay.is_zero() {
+            Duration::from_secs(2)
+        } else {
+            Duration::from_millis(200)
+        };
         let (_dir, server) = server(config);
         let error = SendNoteWithProof::full(&server, Request::new(request.clone()))
             .await
@@ -464,13 +485,70 @@ async fn note_root_cache_does_not_cache_failed_or_invalid_headers() {
         ),
     ];
     for (response, code) in cases {
+        let expected_requests = if code == tonic::Code::DeadlineExceeded { 6 } else { 2 };
         let (url, upstream, requests) =
             node_rpc_responses(BTreeMap::from([(42, response)]), Duration::ZERO).await;
         let (_dir, server) = server(Config::new(url));
         for _ in 0..2 {
             assert_eq!(server.get_note_root(42.into()).await.unwrap_err().code(), code);
         }
-        assert_eq!(*requests.lock().unwrap(), vec![42, 42]);
+        assert_eq!(*requests.lock().unwrap(), vec![42; expected_requests]);
         upstream.abort();
     }
+}
+
+#[tokio::test]
+async fn transient_lookup_failures_retry_then_cache_the_root() {
+    for code in [
+        tonic::Code::Unavailable,
+        tonic::Code::DeadlineExceeded,
+        tonic::Code::ResourceExhausted,
+    ] {
+        let (request, response) = fixture();
+        let responses = VecDeque::from([
+            Err(tonic::Status::new(code, "temporary failure")),
+            Err(tonic::Status::new(code, "temporary failure")),
+            Ok(response),
+        ]);
+        let (url, upstream, requests) =
+            node_rpc_script(BTreeMap::from([(42, responses)]), Duration::ZERO).await;
+        let (_dir, server) = server(Config::new(url));
+        SendNoteWithProof::full(&server, Request::new(request.clone())).await.unwrap();
+        SendNoteWithProof::full(&server, Request::new(request)).await.unwrap();
+        assert_eq!(*requests.lock().unwrap(), vec![42, 42, 42]);
+        assert_eq!(fetched(&server).await.notes.len(), 1);
+        upstream.abort();
+    }
+}
+
+#[tokio::test]
+async fn transient_lookup_failures_stop_after_three_attempts() {
+    let (url, upstream, requests) = node_rpc_responses(
+        BTreeMap::from([(42, Err(tonic::Status::unavailable("offline")))]),
+        Duration::ZERO,
+    )
+    .await;
+    let (_dir, server) = server(Config::new(url));
+    assert_eq!(
+        server.get_note_root(42.into()).await.unwrap_err().code(),
+        tonic::Code::Unavailable
+    );
+    assert_eq!(*requests.lock().unwrap(), vec![42, 42, 42]);
+    upstream.abort();
+}
+
+#[tokio::test]
+async fn slow_lookup_retries_stay_within_the_shared_budget() {
+    let (_, response) = fixture();
+    let (url, upstream, requests) =
+        node_rpc_responses(BTreeMap::from([(42, Ok(response))]), Duration::from_secs(30)).await;
+    let mut config = Config::new(url);
+    config.grpc.request_timeout = Duration::from_millis(600);
+    let (_dir, server) = server(config);
+    let result = tokio::time::timeout(Duration::from_millis(500), server.get_note_root(42.into()))
+        .await
+        .expect("lookups must finish within the shared budget");
+    assert_eq!(result.unwrap_err().code(), tonic::Code::DeadlineExceeded);
+    assert_eq!(*requests.lock().unwrap(), vec![42, 42, 42]);
+    upstream.abort();
 }
