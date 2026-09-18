@@ -20,6 +20,10 @@ service stores this hint without chain lookup; an absent hint differs from block
 the referenced block's note root before storage. This request has no block hint. The service stores the exact inclusion
 block but does not store the proof. This method also returns an empty `SendNoteResponse`.
 
+The service caches up to 1,024 note root commitments from the trusted node, keyed by block number. The cache evicts the
+least recently used entry when full. Failed lookups and invalid headers are not cached. Each submission still verifies
+its inclusion proof against the note root, including cache hits.
+
 A retry with the same note ID succeeds and keeps the first envelope, timestamp, and cursor. This also applies when the
 `SendNote` retry supplies a different block hint or storage is full. `SendNoteWithProof` validates the proof on every
 request, including duplicates. A valid retry through either method keeps the first envelope. In particular, a verified

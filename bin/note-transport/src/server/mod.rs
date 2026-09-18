@@ -9,7 +9,10 @@ use miden_node_tracing::grpc::grpc_trace_fn;
 use miden_node_tracing::panic::catch_panic_layer_fn;
 use miden_node_tracing::{error, info};
 use miden_node_utils::clap::GrpcOptions;
+use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::shutdown::CancellationToken;
+use miden_protocol::Word;
+use miden_protocol::block::BlockNumber;
 use miden_protocol::utils::serde::Serializable;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
@@ -22,8 +25,11 @@ use url::Url;
 use crate::{COMPONENT, LOG_TARGET, db};
 
 mod fetch_notes;
+mod note_root;
 mod send_note;
 mod send_note_with_proof;
+
+const NOTE_ROOT_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(1024).unwrap();
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -54,6 +60,7 @@ pub struct Server {
     writer: DbWriter,
     reader: DbReader,
     rpc: RpcClient,
+    note_root_cache: LruCache<BlockNumber, Word>,
 }
 
 impl Server {
@@ -74,7 +81,13 @@ impl Server {
             .without_auth_header()
             .with_otel_context_injection()
             .connect_lazy();
-        Ok(Self { config, writer, reader, rpc })
+        Ok(Self {
+            config,
+            writer,
+            reader,
+            rpc,
+            note_root_cache: LruCache::new(NOTE_ROOT_CACHE_CAPACITY),
+        })
     }
 
     /// Serves requests until cancellation and waits for active requests to finish.
