@@ -25,6 +25,8 @@ mod tests;
 mod transaction;
 pub(crate) use transaction::FeeCollectorTransactionBuilder;
 
+mod faucet;
+
 /// Deploys a new collector in one block and proves the transaction, batch, and block locally.
 ///
 /// The deployment requires no funds and pays no fee. The sequencer must be stopped.
@@ -57,7 +59,7 @@ pub async fn deploy_fee_collector(
     let builder = FeeCollectorTransactionBuilder::new(account_file.account.id(), account_file)?;
     let validator = BlockProducerValidatorClient::new(validator_urls, validator_timeout)?;
 
-    let (header, config, blockchain, genesis) = state
+    let (executed, header, blockchain, genesis) = state
         .with_view(async |view| {
             let tip = *view.tip();
             let (_, header, _) = view.sync_chain_mmr(tip..=tip).await?;
@@ -72,10 +74,12 @@ pub async fn deploy_fee_collector(
                 .0
                 .context("genesis block header is missing")?
                 .commitment();
-            anyhow::Ok((header, config, blockchain, genesis))
+            let executed = builder
+                .execute(Vec::new(), header.clone(), config, blockchain.clone(), view)
+                .await?;
+            anyhow::Ok((executed, header, blockchain, genesis))
         })
         .await?;
-    let executed = builder.execute(Vec::new(), header.clone(), config, blockchain.clone()).await?;
     let inputs = executed.tx_inputs().clone();
     let transaction =
         spawn_blocking_in_current_span(move || FeeCollectorTransactionBuilder::prove(executed))
