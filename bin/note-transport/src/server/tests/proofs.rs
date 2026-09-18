@@ -1,4 +1,6 @@
+use std::collections::BTreeMap;
 use std::convert::Infallible;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use miden_node_proto::generated::note_transport::SendNoteWithProofRequest;
@@ -12,9 +14,9 @@ use super::*;
 
 #[derive(Clone)]
 struct NodeRpc {
-    response: Result<BlockHeaderByNumberResponse, tonic::Status>,
+    responses: BTreeMap<u32, Result<BlockHeaderByNumberResponse, tonic::Status>>,
     delay: Duration,
-    block_num: u32,
+    requests: Arc<Mutex<Vec<u32>>>,
 }
 
 impl tonic::server::NamedService for NodeRpc {
@@ -31,13 +33,18 @@ impl tonic::server::UnaryService<BlockHeaderByNumberRequest> for NodeRpc {
             tokio::time::sleep(this.delay).await;
             // Return no header if the client asks for a different block or extra data.
             let request = request.into_inner();
-            if request.block_num != Some(this.block_num)
-                || request.include_mmr_proof.unwrap_or(false)
+            if request.include_mmr_proof.unwrap_or(false)
                 || request.include_protocol_config.unwrap_or(false)
             {
                 return Ok(tonic::Response::new(BlockHeaderByNumberResponse::default()));
             }
-            this.response.map(tonic::Response::new)
+            let block_num = request.block_num.unwrap();
+            this.requests.lock().unwrap().push(block_num);
+            this.responses
+                .get(&block_num)
+                .cloned()
+                .unwrap_or_else(|| Ok(BlockHeaderByNumberResponse::default()))
+                .map(tonic::Response::new)
         })
     }
 }
@@ -78,16 +85,30 @@ async fn node_rpc_at_block(
     delay: Duration,
     block_num: u32,
 ) -> (url::Url, tokio::task::JoinHandle<()>) {
+    let (url, task, _) = node_rpc_responses(BTreeMap::from([(block_num, response)]), delay).await;
+    (url, task)
+}
+
+async fn node_rpc_responses(
+    responses: BTreeMap<u32, Result<BlockHeaderByNumberResponse, tonic::Status>>,
+    delay: Duration,
+) -> (url::Url, tokio::task::JoinHandle<()>, Arc<Mutex<Vec<u32>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap()).parse().unwrap();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let rpc = NodeRpc {
+        responses,
+        delay,
+        requests: requests.clone(),
+    };
     let task = tokio::spawn(async move {
         tonic::transport::Server::builder()
-            .add_service(NodeRpc { response, delay, block_num })
+            .add_service(rpc)
             .serve_with_incoming(TcpListenerStream::new(listener))
             .await
             .unwrap();
     });
-    (url, task)
+    (url, task, requests)
 }
 
 fn fixture() -> (SendNoteWithProofRequest, BlockHeaderByNumberResponse) {
@@ -375,4 +396,81 @@ async fn verified_submission_obeys_size_and_storage_limits() {
         assert!(fetched(&server).await.notes.is_empty());
     }
     upstream.abort();
+}
+
+#[tokio::test]
+async fn proof_retries_reuse_note_root_and_still_verify_proofs() {
+    let (request, response) = fixture();
+    let (url, upstream, requests) =
+        node_rpc_responses(BTreeMap::from([(42, Ok(response))]), Duration::ZERO).await;
+    let (_dir, server) = server(Config::new(url));
+    SendNoteWithProof::full(&server, Request::new(request.clone())).await.unwrap();
+    SendNoteWithProof::full(&server, Request::new(request.clone())).await.unwrap();
+    let mut invalid = request;
+    invalid.inclusion_proof.as_mut().unwrap().note_index_in_block ^= 1;
+    let error = SendNoteWithProof::full(&server, Request::new(invalid)).await.unwrap_err();
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    assert_eq!(*requests.lock().unwrap(), vec![42]);
+    assert_eq!(fetched(&server).await.notes.len(), 1);
+    upstream.abort();
+}
+
+#[tokio::test]
+async fn note_root_cache_evicts_the_least_recently_used_block() {
+    let responses = (41..=43)
+        .map(|block_num| {
+            let root = Word::from([block_num, 0, 0, 0]);
+            let header = BlockHeader::mock(block_num, None, Some(root), &[]);
+            (
+                block_num,
+                Ok(BlockHeaderByNumberResponse {
+                    block_header: Some(header.into()),
+                    ..Default::default()
+                }),
+            )
+        })
+        .collect();
+    let (url, upstream, requests) = node_rpc_responses(responses, Duration::ZERO).await;
+    let (_dir, mut server) = server(Config::new(url));
+    server.note_root_cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+    for block_num in [41, 42, 41, 43, 41, 42] {
+        let root = server.get_note_root(block_num.into()).await.unwrap();
+        assert_eq!(root, Word::from([block_num, 0, 0, 0]));
+    }
+    assert_eq!(*requests.lock().unwrap(), vec![41, 42, 43, 42]);
+    upstream.abort();
+}
+
+#[tokio::test]
+async fn note_root_cache_does_not_cache_failed_or_invalid_headers() {
+    let cases = [
+        (Ok(BlockHeaderByNumberResponse::default()), tonic::Code::FailedPrecondition),
+        (Err(tonic::Status::not_found("missing")), tonic::Code::FailedPrecondition),
+        (Err(tonic::Status::internal("upstream error")), tonic::Code::Unavailable),
+        (Err(tonic::Status::deadline_exceeded("timeout")), tonic::Code::DeadlineExceeded),
+        (
+            Ok(BlockHeaderByNumberResponse {
+                block_header: Some(miden_node_proto::generated::blockchain::BlockHeader::default()),
+                ..Default::default()
+            }),
+            tonic::Code::Unavailable,
+        ),
+        (
+            Ok(BlockHeaderByNumberResponse {
+                block_header: Some(BlockHeader::mock(43, None, None, &[]).into()),
+                ..Default::default()
+            }),
+            tonic::Code::Unavailable,
+        ),
+    ];
+    for (response, code) in cases {
+        let (url, upstream, requests) =
+            node_rpc_responses(BTreeMap::from([(42, response)]), Duration::ZERO).await;
+        let (_dir, server) = server(Config::new(url));
+        for _ in 0..2 {
+            assert_eq!(server.get_note_root(42.into()).await.unwrap_err().code(), code);
+        }
+        assert_eq!(*requests.lock().unwrap(), vec![42, 42]);
+        upstream.abort();
+    }
 }
