@@ -1059,7 +1059,7 @@ mod tests {
     #[tokio::test]
     async fn data_store_returns_snapshot_protocol_config() {
         let (db, _dir) = crate::db::test_setup().await;
-        let context = crate::attempt::AttemptContext::test(&db.reader());
+        let context = crate::network_transaction::NetworkTransactionContext::test(&db.reader());
         let allowed_root =
             mock_single_target_note(mock_network_account_id(), 77).as_note().script().root();
         let account = Arc::new(mock_network_account([allowed_root]));

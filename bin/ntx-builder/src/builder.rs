@@ -10,11 +10,11 @@ use miden_protocol::protocol_config::ProtocolConfig;
 use tokio::net::TcpListener;
 use tokio_stream::StreamExt;
 
-use crate::attempt::AttemptOutcome;
 use crate::chain_state::ChainState;
 use crate::clients::{BlockSubscriptionEvent, RpcError};
 use crate::committed_block::CommittedBlockEffects;
 use crate::db::NtxDbWriter;
+use crate::network_transaction::NetworkTransactionOutcome;
 use crate::scheduler::Scheduler;
 use crate::server::NtxBuilderRpcServer;
 use crate::{LOG_TARGET, NtxBuilderConfig};
@@ -24,7 +24,7 @@ use crate::{LOG_TARGET, NtxBuilderConfig};
 /// `SignedBlock` dwarfs the other payloads.
 enum SteadyStateAction {
     Block(Box<Option<Result<BlockSubscriptionEvent, RpcError>>>),
-    Completion(anyhow::Result<AttemptOutcome>),
+    Completion(anyhow::Result<NetworkTransactionOutcome>),
     Shutdown,
 }
 
@@ -44,10 +44,10 @@ pub(crate) type BlockStream =
 /// Runs in two phases:
 /// 1. **Catch-up**: drain the committed-block subscription, applying each block to the local DB and
 ///    in-memory chain, until the local tip matches the node-reported `committed_chain_tip`
-///    (signaled by `is_synced` flipping to `true`). No transaction attempts run.
+///    (signaled by `is_synced` flipping to `true`). No network transaction is built.
 /// 2. **Steady-state**: on every committed block, apply the effects, advance the chain, resolve the
-///    scheduler's in-flight transactions against the block, and fill the free attempt slots.
-///    Concurrently reap finished attempts, persisting the note bookkeeping each one reports.
+///    scheduler's in-flight transactions against the block, and fill the free build slots.
+///    Concurrently reap finished builds, persisting the note bookkeeping each one reports.
 pub struct NetworkTransactionBuilder {
     /// Configuration for the builder.
     config: NtxBuilderConfig,
@@ -59,7 +59,7 @@ pub struct NetworkTransactionBuilder {
     last_applied_block: BlockNumber,
     /// In-memory partial chain.
     chain: ChainState,
-    /// Owner of the transaction attempts and of the in-flight transaction set.
+    /// Owner of the network transaction builds and of the in-flight transaction set.
     scheduler: Scheduler,
     /// `false` until the first applied block whose `committed_chain_tip` matches the just-applied
     /// block number. Stays `true` afterwards.
@@ -142,8 +142,8 @@ impl NetworkTransactionBuilder {
             }
         }
 
-        // Phase 2: work the accounts that have pending notes, one attempt per free slot, driven by
-        // committed blocks and by the completion of earlier attempts.
+        // Phase 2: work the accounts that have pending notes, one build per free slot, driven by
+        // committed blocks and by the completion of earlier builds.
         self.scheduler.dispatch(&self.chain).await?;
 
         loop {
