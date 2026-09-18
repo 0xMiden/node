@@ -55,8 +55,12 @@ impl sequencer_api::SubmitAuthenticatedTx for SequencerInternalService {
         }
 
         let protocol_config = load_protocol_config(&self.state.view(), &reference_header).await?;
-        ensure_transaction_has_fee(tx.raw_proven_transaction(), protocol_config.fee_asset_id())
-            .map_err(Status::from)?;
+        ensure_transaction_has_fee(
+            tx.raw_proven_transaction(),
+            protocol_config.fee_asset_id(),
+            reference_header.fee_parameters(),
+        )
+        .map_err(Status::from)?;
 
         self.block_producer
             .submit_authenticated_tx(tx)

@@ -59,7 +59,13 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::{Asset, AssetId, FungibleAsset};
 use miden_protocol::batch::ProposedBatch;
-use miden_protocol::block::{BlockSignatures, ProvenBlock, SignedBlock, ValidatorConfig};
+use miden_protocol::block::{
+    BlockSignatures,
+    FeeParameters,
+    ProvenBlock,
+    SignedBlock,
+    ValidatorConfig,
+};
 use miden_protocol::note::NoteType;
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::testing::account_id::{ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET, ACCOUNT_ID_SENDER};
@@ -152,8 +158,13 @@ impl TestStore {
     }
 
     async fn start() -> Self {
+        Self::start_with_base_fee(0).await
+    }
+
+    async fn start_with_base_fee(verification_base_fee: u32) -> Self {
         let data_directory = new_tempdir();
-        let genesis_commitment = Self::bootstrap(&data_directory);
+        let genesis_commitment =
+            Self::bootstrap_with_base_fee(&data_directory, verification_base_fee);
         let (state, writer, ..) = State::for_tests(&data_directory).await;
         Self {
             state,
@@ -180,13 +191,18 @@ impl TestStore {
     }
 
     fn bootstrap(path: &std::path::Path) -> Word {
+        Self::bootstrap_with_base_fee(path, 0)
+    }
+
+    fn bootstrap_with_base_fee(path: &std::path::Path, verification_base_fee: u32) -> Word {
         let config = GenesisConfig::default();
         let validator_key =
             miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey::read_from_bytes(&[7; 32])
                 .expect("test signing key should decode")
                 .public_key();
         let validator_config = ValidatorConfig::new(vec![validator_key], 1).unwrap();
-        let (genesis_state, _) = config.into_state(validator_config).unwrap();
+        let (mut genesis_state, _) = config.into_state(validator_config).unwrap();
+        genesis_state.fee_parameters = FeeParameters::new(verification_base_fee);
         let genesis_block =
             genesis_state.clone().into_block().expect("genesis block should be created");
         let genesis_commitment = genesis_block.inner().header().commitment();
@@ -624,16 +640,19 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
 }
 
 #[rstest::rstest]
-#[case::missing(None, 4, "does not contain a canonical TX_FEE output note")]
-#[case::foreign(Some(1), 6, "must use only the native asset")]
-#[case::zero_foreign(Some(0), 6, "must use only the native asset")]
+#[case::missing(1, None, &[4], "does not contain a canonical TX_FEE output note")]
+#[case::foreign(1, Some(1), &[6], "must use only the native asset")]
+#[case::zero_foreign(1, Some(0), &[6], "must use only the native asset")]
+#[case::foreign_without_fees(0, Some(1), &[6], "must use only the native asset")]
+#[case::missing_without_fees(0, None, &[], "Invalid proof for transaction")]
 #[tokio::test]
-async fn rpc_server_rejects_proven_transactions_without_native_fees(
+async fn rpc_server_checks_transaction_fee_notes(
+    #[case] verification_base_fee: u32,
     #[case] foreign_fee_amount: Option<u64>,
-    #[case] expected_detail: u8,
+    #[case] expected_details: &[u8],
     #[case] expected_error: &str,
 ) {
-    let store = TestStore::start().await;
+    let store = TestStore::start_with_base_fee(verification_base_fee).await;
     let genesis = store.genesis_commitment();
     let (account, account_patch) = build_test_account([0; 32]);
     let fee = foreign_fee_amount
@@ -654,7 +673,7 @@ async fn rpc_server_rejects_proven_transactions_without_native_fees(
 
     let status = service.submit_proven_tx(Request::new(request)).await.unwrap_err();
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
-    assert_eq!(status.details(), &[expected_detail]);
+    assert_eq!(status.details(), expected_details);
     assert!(
         status.message().contains(expected_error),
         "expected {expected_error}, got: {status}"
@@ -662,16 +681,18 @@ async fn rpc_server_rejects_proven_transactions_without_native_fees(
 }
 
 #[rstest::rstest]
-#[case::missing(None, 4, "does not contain a canonical TX_FEE output note")]
-#[case::foreign(Some(1), 6, "must use only the native asset")]
-#[case::zero_foreign(Some(0), 6, "must use only the native asset")]
+#[case::missing(1, None, 4, "does not contain a canonical TX_FEE output note")]
+#[case::foreign(1, Some(1), 6, "must use only the native asset")]
+#[case::zero_foreign(1, Some(0), 6, "must use only the native asset")]
+#[case::foreign_without_fees(0, Some(1), 6, "must use only the native asset")]
 #[tokio::test]
 async fn sequencer_authenticated_rpc_rejects_transactions_without_native_fees(
+    #[case] verification_base_fee: u32,
     #[case] foreign_fee_amount: Option<u64>,
     #[case] expected_detail: u8,
     #[case] expected_error: &str,
 ) {
-    let store = TestStore::start().await;
+    let store = TestStore::start_with_base_fee(verification_base_fee).await;
     let genesis = store.genesis_commitment();
     let (account, account_patch) = build_test_account([0; 32]);
     let fee = foreign_fee_amount
@@ -709,6 +730,38 @@ async fn sequencer_authenticated_rpc_rejects_transactions_without_native_fees(
         status.message().contains(expected_error),
         "expected {expected_error}, got: {status}"
     );
+}
+
+#[tokio::test]
+async fn sequencer_authenticated_rpc_accepts_transactions_without_notes_when_fees_are_zero() {
+    let store = TestStore::start_with_base_fee(0).await;
+    let (account, account_patch) = build_test_account([0; 32]);
+    let tx =
+        build_test_proven_tx_with_fee(&account, &account_patch, store.genesis_commitment(), None);
+    let inputs = TransactionInputs {
+        account_id: tx.account_id(),
+        account_commitment: Some(tx.account_update().initial_state_commitment()),
+        nullifiers: HashMap::default(),
+        found_unauthenticated_notes: HashSet::default(),
+        current_block_height: 0.into(),
+    };
+    let tx = AuthenticatedTransaction::new_unchecked(tx.into(), inputs).unwrap();
+    let block_producer = BlockProducerApi::new(
+        Arc::clone(&store.state),
+        store.state.committed_tip(),
+        BlockProducerApiConfig::default(),
+        CancellationToken::new(),
+    );
+    let service = SequencerInternalService {
+        state: Arc::clone(&store.state),
+        block_producer: block_producer.clone(),
+        account_admission: AccountAdmission::enabled(store.bootstrap_allowlist()),
+    };
+
+    service
+        .submit_authenticated_tx(Request::new(proto::sequencer::AuthenticatedTransaction::from(tx)))
+        .await
+        .expect("zero-fee transactions do not require output notes");
 }
 
 #[tokio::test]
