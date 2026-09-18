@@ -345,6 +345,7 @@ impl RecordAttribute for BlockNumber {
         "block_range.to",
         "cutoff_block",
         "current_client_block_height",
+        "note.after_block_num",
         "reference_block.number",
         "snapshot.block_num",
         "sync.upstream_block",

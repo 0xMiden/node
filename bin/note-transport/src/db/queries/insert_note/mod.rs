@@ -20,6 +20,7 @@ pub fn insert_note(
             &note.details,
             &created_at,
             &note.after_block_num,
+            &note.included_in_block,
         ],
     )?;
     Ok(())

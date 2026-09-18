@@ -14,6 +14,7 @@ use super::*;
 struct NodeRpc {
     response: Result<BlockHeaderByNumberResponse, tonic::Status>,
     delay: Duration,
+    block_num: u32,
 }
 
 impl tonic::server::NamedService for NodeRpc {
@@ -30,7 +31,7 @@ impl tonic::server::UnaryService<BlockHeaderByNumberRequest> for NodeRpc {
             tokio::time::sleep(this.delay).await;
             // Return no header if the client asks for a different block or extra data.
             let request = request.into_inner();
-            if request.block_num != Some(42)
+            if request.block_num != Some(this.block_num)
                 || request.include_mmr_proof.unwrap_or(false)
                 || request.include_protocol_config.unwrap_or(false)
             {
@@ -69,11 +70,19 @@ async fn node_rpc(
     response: Result<BlockHeaderByNumberResponse, tonic::Status>,
     delay: Duration,
 ) -> (url::Url, tokio::task::JoinHandle<()>) {
+    node_rpc_at_block(response, delay, 42).await
+}
+
+async fn node_rpc_at_block(
+    response: Result<BlockHeaderByNumberResponse, tonic::Status>,
+    delay: Duration,
+    block_num: u32,
+) -> (url::Url, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap()).parse().unwrap();
     let task = tokio::spawn(async move {
         tonic::transport::Server::builder()
-            .add_service(NodeRpc { response, delay })
+            .add_service(NodeRpc { response, delay, block_num })
             .serve_with_incoming(TcpListenerStream::new(listener))
             .await
             .unwrap();
@@ -82,13 +91,18 @@ async fn node_rpc(
 }
 
 fn fixture() -> (SendNoteWithProofRequest, BlockHeaderByNumberResponse) {
+    fixture_at_block(42)
+}
+
+fn fixture_at_block(block_num: u32) -> (SendNoteWithProofRequest, BlockHeaderByNumberResponse) {
     let note = note(1, 7);
     let header = note.header.clone().unwrap().decode_fields().unwrap().verify().unwrap();
     let index = BlockNoteIndex::new(3, 5).unwrap();
     let tree = BlockNoteTree::with_entries([(index, &header)]).unwrap();
     let proof =
-        NoteInclusionProof::new(42.into(), index.leaf_index_value(), tree.open(index)).unwrap();
-    let block = BlockHeader::mock(42, None, Some(tree.root()), &[]);
+        NoteInclusionProof::new(block_num.into(), index.leaf_index_value(), tree.open(index))
+            .unwrap();
+    let block = BlockHeader::mock(block_num, None, Some(tree.root()), &[]);
     (
         SendNoteWithProofRequest {
             note: Some(note),
@@ -108,21 +122,26 @@ async fn fetched(server: &Server) -> FetchNotesResponse {
 }
 
 #[tokio::test]
-async fn verified_submission_stores_proven_hint_and_preserves_duplicates() {
+async fn verified_submission_stores_inclusion_block_and_preserves_duplicates() {
     let (request, response) = fixture();
     let (url, upstream) = node_rpc(Ok(response), Duration::ZERO).await;
     let (_dir, server) = server(Config::new(url));
     SendNoteWithProof::full(&server, Request::new(request.clone())).await.unwrap();
     let first = fetched(&server).await;
-    let mut expected = request.note.clone().unwrap();
-    expected.after_block_num = Some(BlockNumber { block_num: 42 });
-    assert_eq!(first.notes, vec![expected.clone()]);
-    let mut matching = request.clone();
-    matching.note = Some(expected);
-    SendNoteWithProof::full(&server, Request::new(matching)).await.unwrap();
-    SendNote::full(&server, Request::new(SendNoteRequest { note: request.note.clone() }))
-        .await
-        .unwrap();
+    assert_eq!(first.notes[0].after_block_num, None);
+    let mut expected = fetched_note(request.note.clone().unwrap(), None);
+    expected.included_in_block = Some(BlockNumber { block_num: 42 });
+    assert_eq!(first.notes, vec![expected]);
+    SendNoteWithProof::full(&server, Request::new(request.clone())).await.unwrap();
+    SendNote::full(
+        &server,
+        Request::new(SendNoteRequest {
+            note: request.note.clone(),
+            after_block_num: Some(BlockNumber { block_num: 10 }),
+        }),
+    )
+    .await
+    .unwrap();
     let mut invalid = request;
     invalid.inclusion_proof.as_mut().unwrap().note_index_in_block ^= 1;
     assert_eq!(
@@ -141,10 +160,18 @@ async fn verified_retry_preserves_unverified_envelope() {
     let (request, response) = fixture();
     let (url, upstream) = node_rpc(Ok(response), Duration::ZERO).await;
     let (_dir, server) = server(Config::new(url));
-    SendNote::full(&server, Request::new(SendNoteRequest { note: request.note.clone() }))
-        .await
-        .unwrap();
+    SendNote::full(
+        &server,
+        Request::new(SendNoteRequest {
+            note: request.note.clone(),
+            after_block_num: Some(BlockNumber { block_num: 10 }),
+        }),
+    )
+    .await
+    .unwrap();
     let first = fetched(&server).await;
+    assert_eq!(first.notes[0].after_block_num, Some(BlockNumber { block_num: 10 }));
+    assert_eq!(first.notes[0].included_in_block, None);
     SendNoteWithProof::full(&server, Request::new(request)).await.unwrap();
     assert_eq!(fetched(&server).await, first);
     upstream.abort();
@@ -167,9 +194,6 @@ async fn rejects_invalid_proof_requests_without_storage() {
     requests.push(request);
     let mut request = valid.clone();
     request.note = Some(note(2, 7));
-    requests.push(request);
-    let mut request = valid.clone();
-    request.note.as_mut().unwrap().after_block_num = Some(BlockNumber { block_num: 43 });
     requests.push(request);
     let mut request = valid.clone();
     request.inclusion_proof.as_mut().unwrap().note_index_in_block = u32::MAX;
@@ -293,7 +317,8 @@ async fn proof_submission_roundtrips_over_grpc_and_web() {
         .unwrap()
         .into_inner();
     assert_eq!(page.notes.len(), 1);
-    assert_eq!(page.notes[0].after_block_num, Some(BlockNumber { block_num: 42 }));
+    assert_eq!(page.notes[0].after_block_num, None);
+    assert_eq!(page.notes[0].included_in_block, Some(BlockNumber { block_num: 42 }));
     drop(client);
     shutdown.cancel();
     task.await.unwrap().unwrap();

@@ -1,7 +1,7 @@
-use miden_node_proto::DecodeMessage;
 use miden_node_proto::errors::conversion_error_to_status;
 use miden_node_proto::generated::note_transport::{SendNoteRequest, SendNoteResponse};
 use miden_node_proto::server::note_transport_api::SendNote;
+use miden_node_proto::{DecodeMessage, Verify};
 use miden_node_tracing::{miden_instrument, miden_span_record};
 use tonic::codegen::http::Extensions;
 use tonic::metadata::MetadataMap;
@@ -15,7 +15,17 @@ impl SendNote for Server {
     type Output = ();
 
     fn decode(request: SendNoteRequest) -> tonic::Result<Self::Input> {
-        decode_note(request.decode_fields().map_err(conversion_error_to_status)?.note)
+        use miden_node_proto::errors::ConversionResultExt;
+
+        let request = request.decode_fields().map_err(conversion_error_to_status)?;
+        let mut note = decode_note(request.note)?;
+        note.after_block_num = request
+            .after_block_num
+            .map(Verify::verify)
+            .transpose()
+            .context("after_block_num")
+            .map_err(conversion_error_to_status)?;
+        Ok(note)
     }
 
     fn encode(_: ()) -> tonic::Result<SendNoteResponse> {
