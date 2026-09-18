@@ -39,13 +39,13 @@ use miden_tx::{
 
 /// Builds transactions that deploy the fee collector or convert fee notes into one P2ID note.
 #[derive(Clone)]
-pub(crate) struct PassThroughTransactionBuilder {
+pub(crate) struct FeeCollectorTransactionBuilder {
     account: Account,
     target: AccountId,
     authenticator: BasicAuthenticator,
 }
 
-impl PassThroughTransactionBuilder {
+impl FeeCollectorTransactionBuilder {
     pub(crate) fn new(target: AccountId, account_file: AccountFile) -> anyhow::Result<Self> {
         let AccountFile { account, auth_secret_keys } = account_file;
         let auth_root = AuthTxFeeCollector::code()
@@ -54,11 +54,11 @@ impl PassThroughTransactionBuilder {
             .expect("the fee collector exports its authentication procedure");
         anyhow::ensure!(
             account.code().procedures().first() == Some(&auth_root),
-            "pass-through account must use AuthTxFeeCollector",
+            "fee collector account must use AuthTxFeeCollector",
         );
         anyhow::ensure!(
             account.vault().is_empty(),
-            "pass-through account must have an empty vault",
+            "fee collector account must have an empty vault",
         );
         let public_key = account.storage().get_item(AuthTxFeeCollector::public_key_slot())?;
         let signature_scheme =
@@ -68,7 +68,7 @@ impl PassThroughTransactionBuilder {
                 Word::from(key.public_key().to_commitment()) == public_key
                     && Word::from([key.auth_scheme().as_u8(), 0, 0, 0]) == signature_scheme
             }),
-            "pass-through account file must contain its signing key",
+            "fee collector account file must contain its signing key",
         );
         let authenticator = BasicAuthenticator::new(&auth_secret_keys);
 
@@ -89,7 +89,7 @@ impl PassThroughTransactionBuilder {
             .collect::<BTreeSet<_>>();
         anyhow::ensure!(
             asset_ids.len() <= NoteAssets::MAX_NUM_ASSETS,
-            "pass-through transaction names {} assets but at most {} fit into one note",
+            "fee collector transaction names {} assets but at most {} fit into one note",
             asset_ids.len(),
             NoteAssets::MAX_NUM_ASSETS,
         );
@@ -104,7 +104,7 @@ impl PassThroughTransactionBuilder {
         }
         let output_note_recipient = P2idNoteStorage::new(self.target).into_recipient(serial_number);
         tx_args.extend_advice_map(output_note_recipient.to_advice_map_entries());
-        let data_store = PassThroughDataStore::new(
+        let data_store = FeeCollectorDataStore::new(
             self.account.clone(),
             reference_block_header,
             protocol_config,
@@ -127,7 +127,7 @@ impl PassThroughTransactionBuilder {
     }
 }
 
-struct PassThroughDataStore {
+struct FeeCollectorDataStore {
     account: Account,
     reference_block_header: BlockHeader,
     protocol_config: ProtocolConfig,
@@ -135,7 +135,7 @@ struct PassThroughDataStore {
     mast_store: TransactionMastStore,
 }
 
-impl PassThroughDataStore {
+impl FeeCollectorDataStore {
     fn new(
         account: Account,
         reference_block_header: BlockHeader,
@@ -155,7 +155,7 @@ impl PassThroughDataStore {
     }
 }
 
-impl DataStore for PassThroughDataStore {
+impl DataStore for FeeCollectorDataStore {
     fn get_transaction_inputs(
         &self,
         account_id: AccountId,
@@ -167,7 +167,7 @@ impl DataStore for PassThroughDataStore {
             if account_id != self.account.id()
                 || !ref_blocks.contains(&self.reference_block_header.block_num())
             {
-                return Err(DataStoreError::other("invalid pass-through transaction inputs"));
+                return Err(DataStoreError::other("invalid fee collector transaction inputs"));
             }
 
             Ok((
@@ -195,7 +195,7 @@ impl DataStore for PassThroughDataStore {
     ) -> impl FutureMaybeSend<Result<Vec<AssetWitness>, DataStoreError>> {
         async move {
             if account_id != self.account.id() || vault_root != self.account.vault().root() {
-                return Err(DataStoreError::other("invalid pass-through account vault"));
+                return Err(DataStoreError::other("invalid fee collector account vault"));
             }
 
             Ok(asset_ids
@@ -222,7 +222,7 @@ impl DataStore for PassThroughDataStore {
     }
 }
 
-impl MastForestStore for PassThroughDataStore {
+impl MastForestStore for FeeCollectorDataStore {
     fn get(&self, procedure_hash: &Word) -> Option<LoadedMastForest> {
         self.mast_store.get(procedure_hash)
     }
@@ -248,7 +248,7 @@ mod tests {
     -> anyhow::Result<()> {
         let mut chain = MockChain::builder().verification_base_fee(1).build()?;
         let target = ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE.try_into()?;
-        let mut builder = PassThroughTransactionBuilder::new(target, mock_collection_account())?;
+        let mut builder = FeeCollectorTransactionBuilder::new(target, mock_collection_account())?;
         assert!(builder.account.is_new());
         assert!(builder.account.vault().is_empty());
         let executed = builder
@@ -259,7 +259,7 @@ mod tests {
                 chain.latest_partial_blockchain(),
             )
             .await?;
-        let deployment = PassThroughTransactionBuilder::prove(executed)?;
+        let deployment = FeeCollectorTransactionBuilder::prove(executed)?;
         let _outcome = TransactionVerifier::new(miden_protocol::MIN_PROOF_SECURITY_LEVEL)
             .verify(&deployment)?;
         assert_eq!(deployment.account_update().initial_state_commitment(), Word::empty());
@@ -299,7 +299,7 @@ mod tests {
                     chain.latest_partial_blockchain(),
                 )
                 .await?;
-            let transaction = PassThroughTransactionBuilder::prove(executed)?;
+            let transaction = FeeCollectorTransactionBuilder::prove(executed)?;
             let _outcome = TransactionVerifier::new(miden_protocol::MIN_PROOF_SECURITY_LEVEL)
                 .verify(&transaction)?;
 
@@ -330,8 +330,10 @@ mod tests {
         let account = mock_collection_account().account;
         let target = ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE.try_into()?;
         for keys in [vec![], vec![AuthSecretKey::new_falcon512_poseidon2()]] {
-            let result =
-                PassThroughTransactionBuilder::new(target, AccountFile::new(account.clone(), keys));
+            let result = FeeCollectorTransactionBuilder::new(
+                target,
+                AccountFile::new(account.clone(), keys),
+            );
             let error = result.err().expect("the collector must require its own signing key");
             assert!(error.to_string().contains("signing key"));
         }
@@ -343,7 +345,7 @@ mod tests {
     fn rejects_an_ordinary_wallet_as_the_collector() -> anyhow::Result<()> {
         let account = MockChain::builder().add_existing_wallet(Auth::basic_ecdsa())?;
         let target = ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE.try_into()?;
-        let result = PassThroughTransactionBuilder::new(target, AccountFile::new(account, vec![]));
+        let result = FeeCollectorTransactionBuilder::new(target, AccountFile::new(account, vec![]));
         let error = result.err().expect("an ordinary wallet must not collect batch fees");
         assert!(error.to_string().contains("AuthTxFeeCollector"));
         Ok(())

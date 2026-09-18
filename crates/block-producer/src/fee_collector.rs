@@ -23,7 +23,7 @@ use crate::{COMPONENT, LOG_TARGET};
 mod tests;
 
 mod transaction;
-pub(crate) use transaction::PassThroughTransactionBuilder;
+pub(crate) use transaction::FeeCollectorTransactionBuilder;
 
 /// Deploys a new collector in one block and proves the transaction, batch, and block locally.
 ///
@@ -54,7 +54,7 @@ pub async fn deploy_fee_collector(
         return Ok(());
     }
     // Deployment creates no output note, so the recipient is not used.
-    let builder = PassThroughTransactionBuilder::new(account_file.account.id(), account_file)?;
+    let builder = FeeCollectorTransactionBuilder::new(account_file.account.id(), account_file)?;
     let validator = BlockProducerValidatorClient::new(validator_urls, validator_timeout)?;
 
     let (header, config, blockchain, genesis) = state
@@ -78,7 +78,7 @@ pub async fn deploy_fee_collector(
     let executed = builder.execute(Vec::new(), header.clone(), config, blockchain.clone()).await?;
     let inputs = executed.tx_inputs().clone();
     let transaction =
-        spawn_blocking_in_current_span(move || PassThroughTransactionBuilder::prove(executed))
+        spawn_blocking_in_current_span(move || FeeCollectorTransactionBuilder::prove(executed))
             .await??;
     miden_span_record!(transaction.id = transaction.id());
     validator
