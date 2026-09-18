@@ -354,54 +354,57 @@ impl BatchJob {
             .0
             .expect("reference block header should exist");
 
-        let protocol_config = view
-            .get_protocol_config(reference_block_header.protocol_config_commitment())
-            .await
-            .map_err(StoreError::GetProtocolConfigFailed)
-            .map_err(BuildBatchError::FetchBatchInputsFailed)?
-            .expect("the reference block's protocol configuration should exist");
-        let genesis = view
-            .get_block_header(Some(BlockNumber::GENESIS), false)
-            .await
-            .map_err(StoreError::GetBlockHeaderFailed)
-            .map_err(BuildBatchError::FetchBatchInputsFailed)?
-            .0
-            .expect("the genesis block header should exist")
-            .commitment();
-
         let mut transactions: Vec<_> = selected
             .into_transactions()
             .into_iter()
             .map(|tx| tx.proven_transaction())
             .collect();
 
-        let pass_through = self.pass_through.clone();
-        let executed_pass_through_tx = pass_through
-            .execute(
-                fee_notes,
-                reference_block_header.clone(),
-                protocol_config,
-                partial_blockchain.clone(),
-            )
+        // A deployed collector must consume at least one note to prevent replay.
+        if !fee_notes.is_empty() {
+            let protocol_config = view
+                .get_protocol_config(reference_block_header.protocol_config_commitment())
+                .await
+                .map_err(StoreError::GetProtocolConfigFailed)
+                .map_err(BuildBatchError::FetchBatchInputsFailed)?
+                .expect("the reference block's protocol configuration should exist");
+            let genesis = view
+                .get_block_header(Some(BlockNumber::GENESIS), false)
+                .await
+                .map_err(StoreError::GetBlockHeaderFailed)
+                .map_err(BuildBatchError::FetchBatchInputsFailed)?
+                .0
+                .expect("the genesis block header should exist")
+                .commitment();
+
+            let pass_through = self.pass_through.clone();
+            let executed_pass_through_tx = pass_through
+                .execute(
+                    fee_notes,
+                    reference_block_header.clone(),
+                    protocol_config,
+                    partial_blockchain.clone(),
+                )
+                .await
+                .map_err(BuildBatchError::BuildBatchFeeTransaction)?;
+            let inputs = executed_pass_through_tx.tx_inputs().clone();
+            let pass_through_tx = spawn_blocking_in_current_span(move || {
+                PassThroughTransactionBuilder::prove(executed_pass_through_tx)
+            })
             .await
+            .map_err(BuildBatchError::JoinError)?
             .map_err(BuildBatchError::BuildBatchFeeTransaction)?;
-        let inputs = executed_pass_through_tx.tx_inputs().clone();
-        let pass_through_tx = spawn_blocking_in_current_span(move || {
-            PassThroughTransactionBuilder::prove(executed_pass_through_tx)
-        })
-        .await
-        .map_err(BuildBatchError::JoinError)?
-        .map_err(BuildBatchError::BuildBatchFeeTransaction)?;
-        self.validator
-            .validate_transaction(
-                &pass_through_tx,
-                &inputs,
-                genesis,
-                reference_block_header.validator_config(),
-            )
-            .await
-            .map_err(BuildBatchError::ValidateBatchFeeTransaction)?;
-        transactions.push(Arc::new(pass_through_tx));
+            self.validator
+                .validate_transaction(
+                    &pass_through_tx,
+                    &inputs,
+                    genesis,
+                    reference_block_header.validator_config(),
+                )
+                .await
+                .map_err(BuildBatchError::ValidateBatchFeeTransaction)?;
+            transactions.push(Arc::new(pass_through_tx));
+        }
 
         ProposedBatch::new(
             transactions,
@@ -502,7 +505,62 @@ mod tests {
     use std::future::pending;
     use std::time::Duration;
 
+    use miden_node_utils::genesis::GenesisBlock;
+    use miden_protocol::ONE;
+    use miden_protocol::block::{BlockSignatures, SignedBlock};
+    use miden_testing::{Auth, MockChain};
+    use miden_tx::LocalTransactionProver;
+
     use super::*;
+    use crate::mempool::{Mempool, MempoolConfig};
+    use crate::store::get_tx_inputs;
+    use crate::test_utils::mock_collection_account;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn builds_batches_without_fee_notes() -> anyhow::Result<()> {
+        let mut collector = mock_collection_account();
+        collector.account.set_nonce(ONE)?;
+        let mut chain = MockChain::builder().verification_base_fee(0);
+        chain.add_account(collector.account.clone())?;
+        let wallet = chain.add_existing_wallet(Auth::basic_ecdsa())?;
+        let chain = chain.build()?;
+        let executed = chain.build_transaction(wallet.id()).build()?.execute().await?;
+        let transaction = LocalTransactionProver::default().prove(executed)?;
+        assert_eq!(transaction.output_notes().num_notes(), 0);
+
+        let directory = tempfile::tempdir()?;
+        let genesis = chain.latest_block();
+        let genesis = GenesisBlock::new(
+            SignedBlock::new(
+                genesis.header().clone(),
+                genesis.body().clone(),
+                BlockSignatures::new(Vec::new())?,
+            )?,
+            chain.protocol_config().clone(),
+        )?;
+        State::bootstrap(genesis, directory.path())?;
+        let (state, ..) = State::for_tests(directory.path()).await;
+        let inputs = get_tx_inputs(&state, &transaction).await?;
+        let transaction =
+            Arc::new(AuthenticatedTransaction::new_unchecked(Arc::new(transaction), inputs)?);
+        let mempool = Mempool::shared(BlockNumber::GENESIS, MempoolConfig::default());
+        mempool.lock().unwrap().add_transaction(transaction)?;
+        let selected = mempool.lock().unwrap().select_any_batch().unwrap();
+        let selected_id = selected.id().as_batch_id();
+        let job = BatchJob {
+            state,
+            batch_prover: BatchProver::local(),
+            pass_through: PassThroughTransactionBuilder::new(wallet.id(), collector)?,
+            validator: BlockProducerValidatorClient::new(Vec::new(), Duration::from_secs(1))?,
+            mempool,
+        };
+
+        let proposed = Box::pin(job.get_batch_inputs(selected)).await?;
+        assert_eq!(proposed.id(), selected_id);
+        assert_eq!(proposed.transactions().len(), 1);
+        assert!(proposed.output_notes().is_empty());
+        Ok(())
+    }
 
     #[tokio::test]
     async fn abort_active_jobs_cancels_batch_jobs_without_waiting_for_completion() {

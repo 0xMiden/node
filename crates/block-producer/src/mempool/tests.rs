@@ -4,7 +4,7 @@ use std::time::Duration;
 use assert_matches::assert_matches;
 use miden_protocol::Word;
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::transaction::TransactionHeader;
+use miden_protocol::transaction::{OutputNote, PublicOutputNote, TransactionHeader};
 use pretty_assertions::assert_eq;
 use serial_test::serial;
 
@@ -12,8 +12,9 @@ use super::*;
 use crate::mempool::graph::{TransactionGraph, TransactionRemoval};
 use crate::test_utils::batch::{
     TransactionBatchConstructor,
-    mock_proven_batch_with_builder_transaction,
+    mock_proven_batch_with_fee_collection,
 };
+use crate::test_utils::note::mock_fee_note;
 use crate::test_utils::{MockAuthenticatedTxBuilder, MockProvenTxBuilder, mock_account_id};
 
 mod add_transaction;
@@ -76,7 +77,7 @@ fn retained_committed_transactions_do_not_consume_capacity() {
 
     uut.add_transaction(first.clone()).unwrap();
     uut.select_any_batch().unwrap();
-    uut.commit_batch(Arc::new(mock_proven_batch_with_builder_transaction([
+    uut.commit_batch(Arc::new(mock_proven_batch_with_fee_collection([
         first.raw_proven_transaction()
     ])));
     let block = uut.select_block();
@@ -241,7 +242,7 @@ fn children_of_failed_batches_are_ignored() {
     assert_eq!(uut, reference);
 
     let proven_batch =
-        Arc::new(mock_proven_batch_with_builder_transaction([txs[2].raw_proven_transaction()]));
+        Arc::new(mock_proven_batch_with_fee_collection([txs[2].raw_proven_transaction()]));
     uut.commit_batch(proven_batch);
     assert_eq!(uut, reference);
 }
@@ -290,7 +291,7 @@ fn block_commit_reverts_expired_txns() {
     // Force the tx into the next block by batching it.
     uut.add_transaction(tx_to_commit.clone()).unwrap();
     uut.select_any_batch().unwrap();
-    uut.commit_batch(Arc::new(mock_proven_batch_with_builder_transaction([
+    uut.commit_batch(Arc::new(mock_proven_batch_with_fee_collection([
         tx_to_commit.raw_proven_transaction()
     ])));
 
@@ -309,7 +310,7 @@ fn block_commit_reverts_expired_txns() {
     // A reverted transaction behaves as if it never existed.
     reference.add_transaction(tx_to_commit.clone()).unwrap();
     reference.select_any_batch().unwrap();
-    reference.commit_batch(Arc::new(mock_proven_batch_with_builder_transaction([
+    reference.commit_batch(Arc::new(mock_proven_batch_with_fee_collection([
         tx_to_commit.raw_proven_transaction()
     ])));
     reference.select_block();
@@ -364,7 +365,7 @@ fn pruned_committed_notes_are_authenticated_for_inflight_descendants() {
     assert_eq!(parent_batch.transactions(), std::slice::from_ref(&parent));
 
     uut.add_transaction(child.clone()).unwrap();
-    uut.commit_batch(Arc::new(mock_proven_batch_with_builder_transaction([
+    uut.commit_batch(Arc::new(mock_proven_batch_with_fee_collection([
         parent.raw_proven_transaction()
     ])));
 
@@ -413,8 +414,7 @@ fn rollbacks_of_already_proven_batches_are_ignored() {
     uut.add_transaction(txs[0].clone()).unwrap();
     let batch = uut.select_any_batch().unwrap();
 
-    let proof =
-        Arc::new(mock_proven_batch_with_builder_transaction([txs[0].raw_proven_transaction()]));
+    let proof = Arc::new(mock_proven_batch_with_fee_collection([txs[0].raw_proven_transaction()]));
     uut.commit_batch(Arc::clone(&proof));
     let reference = uut.clone();
 
@@ -425,26 +425,59 @@ fn rollbacks_of_already_proven_batches_are_ignored() {
 
 #[test]
 fn proven_batch_id_resolves_to_selected_batch_id() {
+    for append_fee_transaction in [false, true] {
+        let (mut uut, _) = Mempool::for_tests();
+        let mut user_tx = MockProvenTxBuilder::with_account_index(50);
+        if append_fee_transaction {
+            user_tx = user_tx.output_notes(vec![OutputNote::Public(
+                PublicOutputNote::new(mock_fee_note(50)).unwrap(),
+            )]);
+        }
+        let user_tx = user_tx.build();
+        let user_tx = Arc::new(MockAuthenticatedTxBuilder::new(user_tx).build());
+
+        uut.add_transaction(user_tx.clone()).unwrap();
+        let selected = uut.select_any_batch().unwrap();
+        let synthetic_tx = MockProvenTxBuilder::with_account_index(51).build();
+        let mut transactions = vec![user_tx.raw_proven_transaction()];
+        if append_fee_transaction {
+            transactions.push(&synthetic_tx);
+        }
+        let proof = Arc::new(ProvenBatch::mocked_from_transactions(transactions));
+        assert_eq!(selected.id().as_batch_id() != proof.id(), append_fee_transaction);
+
+        uut.commit_batch(Arc::clone(&proof));
+        let block = uut.select_block();
+        assert_eq!(block.batches.as_slice(), &[Arc::clone(&proof)]);
+
+        uut.rollback_block(block.block_number);
+        assert_eq!(uut.unbatched_transactions_count(), 1);
+
+        // A late proof must not restore a reverted batch.
+        uut.commit_batch(proof);
+        assert!(uut.select_block().batches.is_empty());
+        assert!(uut.select_any_batch().is_some());
+    }
+}
+
+#[test]
+fn late_fee_free_proof_does_not_match_a_shorter_selection() {
     let (mut uut, _) = Mempool::for_tests();
-    let user_tx = MockProvenTxBuilder::with_account_index(50).build();
-    let user_tx = Arc::new(MockAuthenticatedTxBuilder::new(user_tx).build());
-
-    uut.add_transaction(user_tx.clone()).unwrap();
+    let txs = MockProvenTxBuilder::sequential();
+    uut.add_transaction(Arc::clone(&txs[0])).unwrap();
+    uut.add_transaction(Arc::clone(&txs[1])).unwrap();
     let selected = uut.select_any_batch().unwrap();
-    let synthetic_tx = MockProvenTxBuilder::with_account_index(51).build();
     let proof = Arc::new(ProvenBatch::mocked_from_transactions([
-        user_tx.raw_proven_transaction(),
-        &synthetic_tx,
+        txs[0].raw_proven_transaction(),
+        txs[1].raw_proven_transaction(),
     ]));
-    assert_ne!(selected.id().as_batch_id(), proof.id());
+    uut.rollback_batch(selected.id());
 
-    uut.commit_batch(Arc::clone(&proof));
-    let block = uut.select_block();
-    assert_eq!(block.batches.as_slice(), &[proof]);
-
-    uut.rollback_block(block.block_number);
-    assert_eq!(uut.unbatched_transactions_count(), 1);
-    assert!(uut.select_any_batch().is_some());
+    uut.config.batch_budget.transactions = 1;
+    let shorter = uut.select_any_batch().unwrap();
+    assert_eq!(shorter.transactions(), &[Arc::clone(&txs[0])]);
+    uut.commit_batch(proof);
+    assert!(uut.select_block().batches.is_empty());
 }
 
 // BLOCK FAILED TESTS
@@ -458,7 +491,7 @@ fn block_failure_increments_tx_failures() {
 
     uut.add_transaction(reverted_txs[0].clone()).unwrap();
     uut.select_any_batch().unwrap();
-    uut.commit_batch(Arc::new(mock_proven_batch_with_builder_transaction([
+    uut.commit_batch(Arc::new(mock_proven_batch_with_fee_collection([
         reverted_txs[0].raw_proven_transaction()
     ])));
 

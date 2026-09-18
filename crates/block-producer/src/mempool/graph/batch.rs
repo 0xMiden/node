@@ -154,22 +154,35 @@ impl BatchGraph {
     /// becomes a root.
     pub fn submit_proof(&mut self, proof: Arc<ProvenBatch>) {
         let proof_id = proof.id();
+        let selected_id = SelectedBatchId::from_batch_id(proof_id);
+        if self.inner.contains(&selected_id) {
+            self.insert_proof(selected_id, proof_id, proof);
+            return;
+        }
+
+        // An appended fee transaction changes the batch ID.
         let (_builder_transaction, selected_transactions) = proof
             .transactions()
             .as_slice()
             .split_last()
-            .expect("a builder batch must contain a batch builder transaction");
-        assert!(
-            !selected_transactions.is_empty(),
-            "a builder batch must contain at least one user transaction",
-        );
+            .expect("a proven batch must contain a transaction");
+        if selected_transactions.is_empty() {
+            return;
+        }
         let selected_id = SelectedBatchId::from_batch_id(BatchId::from_ids(
             selected_transactions
                 .iter()
                 .map(|transaction| (transaction.id(), transaction.account_id())),
         ));
 
-        self.insert_proof(selected_id, proof_id, proof);
+        // Do not match a late fee-free proof to a shorter selection.
+        if self
+            .inner
+            .get(&selected_id)
+            .is_some_and(|batch| !batch.collectible_fee_notes().is_empty())
+        {
+            self.insert_proof(selected_id, proof_id, proof);
+        }
     }
 
     fn insert_proof(

@@ -8,7 +8,7 @@ use miden_protocol::transaction::{OutputNote, PublicOutputNote};
 
 use crate::errors::{MempoolSubmissionError, StateConflict};
 use crate::mempool::Mempool;
-use crate::test_utils::batch::mock_proven_batch_with_builder_transaction;
+use crate::test_utils::batch::mock_proven_batch_with_fee_collection;
 use crate::test_utils::note::mock_fee_note;
 use crate::test_utils::{MockAuthenticatedTxBuilder, MockProvenTxBuilder, mock_account_id};
 
@@ -343,7 +343,7 @@ fn committed_fee_note_consumption_is_accepted() {
 
     uut.add_transaction(producer.clone()).unwrap();
     uut.select_any_batch().unwrap();
-    uut.commit_batch(Arc::new(mock_proven_batch_with_builder_transaction([
+    uut.commit_batch(Arc::new(mock_proven_batch_with_fee_collection([
         producer.raw_proven_transaction()
     ])));
     let block = uut.select_block();

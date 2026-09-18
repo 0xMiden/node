@@ -17,7 +17,7 @@ use miden_standards::note::TxFeeNote;
 /// Identifies a transaction selection in the batch graph.
 ///
 /// A sequencer-built batch has a different [`BatchId`] after the batch builder appends the fee
-/// transaction. A user-proven batch keeps the same ID.
+/// transaction. Batches without fee notes and user-proven batches keep the same ID.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct SelectedBatchId(BatchId);
 

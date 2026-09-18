@@ -13,7 +13,7 @@ use url::Url;
 
 use crate::mempool::{Mempool, MempoolConfig};
 use crate::server::MempoolStats;
-use crate::test_utils::batch::mock_proven_batch_with_builder_transaction;
+use crate::test_utils::batch::mock_proven_batch_with_fee_collection;
 use crate::test_utils::{MockAuthenticatedTxBuilder, MockProvenTxBuilder};
 use crate::{
     DEFAULT_BATCH_WORKERS,
@@ -48,7 +48,7 @@ fn mempool_stats_track_uncommitted_work_and_the_canonical_tip() {
     assert_eq!(stats.proposed_batches, 1);
     assert_eq!(stats.proven_batches, 0);
 
-    mempool.commit_batch(Arc::new(mock_proven_batch_with_builder_transaction([
+    mempool.commit_batch(Arc::new(mock_proven_batch_with_fee_collection([
         tx.raw_proven_transaction()
     ])));
     let stats = MempoolStats::from_mempool(&mempool);
