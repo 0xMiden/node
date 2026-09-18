@@ -29,7 +29,7 @@ use url::Url;
 
 use crate::domain::batch::{SelectedBatch, SelectedBatchId};
 use crate::errors::{BuildBatchError, StoreError};
-use crate::fee_collector::PassThroughTransactionBuilder;
+use crate::fee_collector::FeeCollectorTransactionBuilder;
 use crate::mempool::SharedMempool;
 use crate::validator::BlockProducerValidatorClient;
 use crate::{COMPONENT, LOG_TARGET};
@@ -55,7 +55,7 @@ pub struct BatchBuilder {
     ///
     /// If not provided, a local batch prover is used.
     batch_prover: BatchProver,
-    pass_through: PassThroughTransactionBuilder,
+    fee_collector: FeeCollectorTransactionBuilder,
     validator: BlockProducerValidatorClient,
     state: Arc<State>,
 }
@@ -101,15 +101,15 @@ impl BatchBuilder {
     ) -> anyhow::Result<Self> {
         let batch_prover =
             batch_prover_url.map_or(Ok(BatchProver::local()), BatchProver::remote)?;
-        let pass_through =
-            PassThroughTransactionBuilder::new(builder_account_id, fee_collector_account)?;
+        let fee_collector =
+            FeeCollectorTransactionBuilder::new(builder_account_id, fee_collector_account)?;
 
         Ok(Self {
             active_jobs: JoinSet::new(),
             num_workers,
             intervals,
             batch_prover,
-            pass_through,
+            fee_collector,
             validator,
             state,
         })
@@ -181,7 +181,7 @@ impl BatchBuilder {
             state: self.state.clone(),
             mempool,
             batch_prover: self.batch_prover.clone(),
-            pass_through: self.pass_through.clone(),
+            fee_collector: self.fee_collector.clone(),
             validator: self.validator.clone(),
         };
 
@@ -265,7 +265,7 @@ impl BatchBuilder {
 struct BatchJob {
     state: Arc<State>,
     batch_prover: BatchProver,
-    pass_through: PassThroughTransactionBuilder,
+    fee_collector: FeeCollectorTransactionBuilder,
     validator: BlockProducerValidatorClient,
     mempool: SharedMempool,
 }
@@ -377,8 +377,8 @@ impl BatchJob {
                 .expect("the genesis block header should exist")
                 .commitment();
 
-            let pass_through = self.pass_through.clone();
-            let executed_pass_through_tx = pass_through
+            let fee_collector = self.fee_collector.clone();
+            let executed_fee_collection_tx = fee_collector
                 .execute(
                     fee_notes,
                     reference_block_header.clone(),
@@ -387,23 +387,23 @@ impl BatchJob {
                 )
                 .await
                 .map_err(BuildBatchError::BuildBatchFeeTransaction)?;
-            let inputs = executed_pass_through_tx.tx_inputs().clone();
-            let pass_through_tx = spawn_blocking_in_current_span(move || {
-                PassThroughTransactionBuilder::prove(executed_pass_through_tx)
+            let inputs = executed_fee_collection_tx.tx_inputs().clone();
+            let fee_collection_tx = spawn_blocking_in_current_span(move || {
+                FeeCollectorTransactionBuilder::prove(executed_fee_collection_tx)
             })
             .await
             .map_err(BuildBatchError::JoinError)?
             .map_err(BuildBatchError::BuildBatchFeeTransaction)?;
             self.validator
                 .validate_transaction(
-                    &pass_through_tx,
+                    &fee_collection_tx,
                     &inputs,
                     genesis,
                     reference_block_header.validator_config(),
                 )
                 .await
                 .map_err(BuildBatchError::ValidateBatchFeeTransaction)?;
-            transactions.push(Arc::new(pass_through_tx));
+            transactions.push(Arc::new(fee_collection_tx));
         }
 
         ProposedBatch::new(
@@ -550,7 +550,7 @@ mod tests {
         let job = BatchJob {
             state,
             batch_prover: BatchProver::local(),
-            pass_through: PassThroughTransactionBuilder::new(wallet.id(), collector)?,
+            fee_collector: FeeCollectorTransactionBuilder::new(wallet.id(), collector)?,
             validator: BlockProducerValidatorClient::new(Vec::new(), Duration::from_secs(1))?,
             mempool,
         };
