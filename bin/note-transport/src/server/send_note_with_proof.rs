@@ -3,7 +3,7 @@ use miden_node_proto::generated::note_transport::{SendNoteResponse, SendNoteWith
 use miden_node_proto::generated::rpc::BlockHeaderByNumberRequest;
 use miden_node_proto::server::note_transport_api::SendNoteWithProof;
 use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify};
-use miden_node_tracing::{error, miden_instrument};
+use miden_node_tracing::{error, miden_instrument, miden_span_record};
 use miden_protocol::BLOCK_NOTE_TREE_DEPTH;
 use miden_protocol::note::NoteInclusionProof;
 use tonic::codegen::http::Extensions;
@@ -54,7 +54,14 @@ impl SendNoteWithProof for Server {
     ) -> tonic::Result<()> {
         use miden_node_proto::errors::ConversionResultExt;
 
+        miden_span_record!(
+            note.id = note.header.id(),
+            note.tag = note.header.metadata().tag().as_u32(),
+            block.number = proof.location().block_num(),
+        );
+
         self.check_note_size(&note)?;
+
         let mut rpc = self.rpc.clone();
         let response = tokio::time::timeout(
             // Reserve half of the request budget for note validation and storage.
@@ -69,6 +76,7 @@ impl SendNoteWithProof for Server {
         .map_err(|_| tonic::Status::deadline_exceeded("block header lookup timed out"))?
         .map_err(|error| lookup_status(&error))?
         .into_inner();
+
         let header = response.block_header
             .ok_or_else(|| tonic::Status::failed_precondition("proof block is not available"))?
             .decode_fields()
@@ -81,6 +89,7 @@ impl SendNoteWithProof for Server {
         if header.block_num() != proof.location().block_num() {
             return Err(tonic::Status::unavailable("node returned a different block"));
         }
+
         proof
             .note_path()
             .verify(
@@ -89,6 +98,7 @@ impl SendNoteWithProof for Server {
                 &header.note_root(),
             )
             .map_err(|_| tonic::Status::invalid_argument("note inclusion proof is invalid"))?;
+
         self.store_note(note).await
     }
 }

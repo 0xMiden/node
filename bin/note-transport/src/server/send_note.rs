@@ -2,7 +2,7 @@ use miden_node_proto::DecodeMessage;
 use miden_node_proto::errors::conversion_error_to_status;
 use miden_node_proto::generated::note_transport::{SendNoteRequest, SendNoteResponse};
 use miden_node_proto::server::note_transport_api::SendNote;
-use miden_node_tracing::miden_instrument;
+use miden_node_tracing::{miden_instrument, miden_span_record};
 use tonic::codegen::http::Extensions;
 use tonic::metadata::MetadataMap;
 
@@ -29,6 +29,12 @@ impl SendNote for Server {
         _: &MetadataMap,
         _: &Extensions,
     ) -> tonic::Result<()> {
+        miden_span_record!(
+            note.id = note.header.id(),
+            note.tag = note.header.metadata().tag().as_u32(),
+            note.after_block_num = note.after_block_num,
+        );
+
         self.store_note(note).await
     }
 }
