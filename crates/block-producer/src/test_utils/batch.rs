@@ -6,19 +6,26 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::{
     InputNotes,
     OrderedTransactionHeaders,
+    OutputNote,
     ProvenTransaction,
     TransactionHeader,
 };
+use miden_standards::note::TxFeeNote;
 
 use crate::test_utils::MockProvenTxBuilder;
 
-/// Builds a mocked proven batch with a final batch builder transaction.
-pub fn mock_proven_batch_with_builder_transaction<'tx>(
+/// Builds a mocked proven batch with a fee collection transaction if it contains fee notes.
+pub fn mock_proven_batch_with_fee_collection<'tx>(
     txs: impl IntoIterator<Item = &'tx ProvenTransaction>,
 ) -> ProvenBatch {
     let builder_transaction = MockProvenTxBuilder::with_account_index(u32::MAX).build();
     let mut txs = txs.into_iter().collect::<Vec<_>>();
-    txs.push(&builder_transaction);
+    let fee_script_root = TxFeeNote::script_root();
+    if txs.iter().flat_map(|tx| tx.output_notes().iter()).any(
+        |note| matches!(note, OutputNote::Public(note) if note.recipient().script().root() == fee_script_root),
+    ) {
+        txs.push(&builder_transaction);
+    }
 
     ProvenBatch::mocked_from_transactions(txs)
 }

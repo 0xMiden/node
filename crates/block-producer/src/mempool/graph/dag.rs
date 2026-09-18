@@ -275,6 +275,10 @@ where
         self.nodes.contains_key(node)
     }
 
+    pub(super) fn get(&self, node: &N::Id) -> Option<&N> {
+        self.nodes.get(node)
+    }
+
     pub(super) fn get_mut(&mut self, node: &N::Id) -> Option<&mut N> {
         self.nodes.get_mut(node)
     }
