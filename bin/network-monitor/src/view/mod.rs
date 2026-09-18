@@ -473,21 +473,10 @@ mod tests {
 
     #[test]
     fn renders_note_transport_card() {
-        let details = NoteTransportStatusDetails {
-            url: "https://nt.example".to_string(),
-            version: Some("0.5.0".to_string()),
-            total_notes: Some(42),
-            total_tags: Some(7),
-            last_activity: None,
-        };
+        let details = NoteTransportStatusDetails { url: "https://nt.example".to_string() };
         let html =
             render(vec![healthy("note-transport", ServiceDetails::NoteTransportStatus(details))]);
         assert!(html.contains("Note Transport"));
-        assert!(html.contains("0.5.0"));
-        assert!(html.contains("42"));
-        assert!(html.contains("Total Notes"));
-        // Missing per-tag statistics render the activity row as a dash.
-        assert!(html.contains("Last Note Activity"));
     }
 
     #[test]
