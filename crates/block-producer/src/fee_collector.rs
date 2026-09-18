@@ -56,7 +56,9 @@ pub async fn deploy_fee_collector(
         return Ok(());
     }
     // Deployment creates no output note, so the recipient is not used.
-    let builder = FeeCollectorTransactionBuilder::new(account_file.account.id(), account_file)?;
+    let builder =
+        FeeCollectorTransactionBuilder::new(account_file.account.id(), account_file, &state.view())
+            .await?;
     let validator = BlockProducerValidatorClient::new(validator_urls, validator_timeout)?;
 
     let (executed, header, blockchain, genesis) = state

@@ -134,7 +134,8 @@ impl Sequencer {
             self.builder_account_id,
             self.fee_collector_account,
             validator,
-        )?;
+        )
+        .await?;
         let api_config = BlockProducerApiConfig {
             max_txs_per_batch: self.max_txs_per_batch,
             max_batches_per_block: self.max_batches_per_block,
