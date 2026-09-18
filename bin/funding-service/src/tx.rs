@@ -14,6 +14,7 @@ use miden_protocol::note::{Note, NoteType, PartialNote};
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{
     ExecutedTransaction,
+    InputNote,
     InputNotes,
     PartialBlockchain,
     RawOutputNote,
@@ -21,7 +22,7 @@ use miden_protocol::transaction::{
 };
 use miden_standards::account::auth::{FeeConversionInfo, commit_fee_conversion_info};
 use miden_standards::note::P2idNote;
-use miden_standards::tx_script::SendNotesTransactionScript;
+use miden_standards::tx_script::{ExpirationTransactionScript, SendNotesTransactionScript};
 use miden_tx::TransactionExecutor;
 use miden_tx::auth::BasicAuthenticator;
 
@@ -30,30 +31,27 @@ use crate::data_store::InMemoryDataStore;
 // NOTE CREATION
 // ================================================================================================
 
-/// Builds one public P2ID note per target which holds `amount` base units of the fee asset.
-pub fn build_funding_notes(
+/// Builds a public P2ID note which holds `amount` base units of the fee asset and targets `target`.
+pub fn build_funding_note(
     sender: AccountId,
     fee_faucet_id: AccountId,
-    targets: &[(AccountId, u64)],
+    target: AccountId,
+    amount: u64,
     rng: &mut RandomCoin,
-) -> Result<Vec<Note>> {
-    targets
-        .iter()
-        .map(|&(target, amount)| {
-            let asset = FungibleAsset::new(fee_faucet_id, amount)
-                .context("failed to build the funding asset")?;
-            let note: Note = P2idNote::builder()
-                .sender(sender)
-                .target(target)
-                .asset(asset)
-                .note_type(NoteType::Public)
-                .generate_serial_number(rng)
-                .build()
-                .context("failed to build the funding note")?
-                .into();
-            Ok(note)
-        })
-        .collect()
+) -> Result<Note> {
+    let asset =
+        FungibleAsset::new(fee_faucet_id, amount).context("failed to build the funding asset")?;
+    let note: Note = P2idNote::builder()
+        .sender(sender)
+        .target(target)
+        .asset(asset)
+        .note_type(NoteType::Public)
+        .generate_serial_number(rng)
+        .build()
+        .context("failed to build the funding note")?
+        .into();
+
+    Ok(note)
 }
 
 // TRANSACTION EXECUTION
@@ -77,10 +75,11 @@ pub struct ExecutionInputs {
     pub expiration_delta: NonZeroU16,
 }
 
-/// Executes the transaction which creates `notes`.
+/// Executes one transaction which consumes `deposits` and creates `outputs`.
 pub async fn execute(
     inputs: ExecutionInputs,
-    notes: Vec<Note>,
+    deposits: Vec<Note>,
+    outputs: Vec<Note>,
     rng: &mut RandomCoin,
 ) -> Result<ExecutedTransaction> {
     let ExecutionInputs {
@@ -97,7 +96,12 @@ pub async fn execute(
     let account_id = funder.id();
     let reference_block = reference_header.block_num();
     let expected_expiration = reference_block + u32::from(expiration_delta.get());
-    let tx_args = build_tx_args(&funder, fee_faucet_id, &notes, expiration_delta, rng)?;
+    let tx_args = build_tx_args(&funder, fee_faucet_id, &outputs, expiration_delta, rng)?;
+
+    // A deposit is consumed unauthenticated: the node authenticates it when it builds the block.
+    let input_notes =
+        InputNotes::new(deposits.into_iter().map(InputNote::unauthenticated).collect())
+            .context("failed to build the deposit input notes")?;
 
     let executed_tx = spawn_blocking_in_current_span(move || {
         let mut data_store = InMemoryDataStore::new(reference_header, blockchain, protocol_config);
@@ -111,7 +115,7 @@ pub async fn execute(
         futures::executor::block_on(executor.execute_transaction(
             account_id,
             reference_block,
-            InputNotes::default(),
+            input_notes,
             tx_args,
         ))
         .context("failed to execute the funding transaction")
@@ -119,11 +123,11 @@ pub async fn execute(
     .await
     .context("the funding transaction task failed")??;
 
-    // The notes are what the caller promises to the requester, so a mismatch must fail here instead
-    // of after the transaction is submitted.
+    // The output notes are what the caller already promised to a requester, so a mismatch must fail
+    // here instead of after the transaction is submitted.
     let output_note_ids: Vec<_> =
         executed_tx.output_notes().iter().map(RawOutputNote::id).collect();
-    for note in &notes {
+    for note in &outputs {
         anyhow::ensure!(
             output_note_ids.contains(&note.id()),
             "the executed transaction does not create note {}",
@@ -143,29 +147,38 @@ pub async fn execute(
     Ok(executed_tx)
 }
 
-/// Builds the transaction arguments which emit `notes` and pay the fee from the funder's vault.
+/// Builds the arguments of one transaction.
 fn build_tx_args(
     funder: &Account,
     fee_faucet_id: AccountId,
-    notes: &[Note],
+    outputs: &[Note],
     expiration_delta: NonZeroU16,
     rng: &mut RandomCoin,
 ) -> Result<TransactionArgs> {
-    let partial_notes: Vec<PartialNote> = notes.iter().map(|note| note.clone().into()).collect();
-    let code_interface = funder.code_interface();
-    let script = SendNotesTransactionScript::with_expiration_delta(
-        &code_interface,
-        &partial_notes,
-        expiration_delta,
-    )
-    .context("failed to build the send-notes transaction script")?;
+    let mut tx_args = if outputs.is_empty() {
+        let script = ExpirationTransactionScript::new(expiration_delta);
+        let script_args = script.tx_script_args();
 
-    let mut tx_args = TransactionArgs::default()
-        .with_tx_script_and_args(script.tx_script().clone(), script.tx_script_args());
+        TransactionArgs::default().with_tx_script_and_args(script.into(), script_args)
+    } else {
+        let partial_notes: Vec<PartialNote> =
+            outputs.iter().map(|note| note.clone().into()).collect();
+        let code_interface = funder.code_interface();
+        let script = SendNotesTransactionScript::with_expiration_delta(
+            &code_interface,
+            &partial_notes,
+            expiration_delta,
+        )
+        .context("failed to build the send-notes transaction script")?;
 
-    for note in notes {
-        tx_args.add_output_note_recipient(Box::new(note.recipient().clone()));
-    }
+        let mut tx_args = TransactionArgs::default()
+            .with_tx_script_and_args(script.tx_script().clone(), script.tx_script_args());
+        for note in outputs {
+            tx_args.add_output_note_recipient(Box::new(note.recipient().clone()));
+        }
+
+        tx_args
+    };
 
     let (auth_args, conversion_info_preimage) =
         commit_fee_conversion_info(FeeConversionInfo::one_to_one(fee_faucet_id), rng.draw_word());
@@ -190,6 +203,7 @@ mod tests {
     };
 
     const BALANCE: u64 = 1_000_000;
+    const EXPIRATION: NonZeroU16 = NonZeroU16::new(20).expect("literal is non-zero");
 
     /// Builds the execution inputs for the fixture's funding account at the chain tip.
     async fn execution_inputs(
@@ -217,32 +231,72 @@ mod tests {
         })
     }
 
-    /// One transaction must create every requested note, pay its own fee, and expire at the
-    /// configured delta.
-    #[tokio::test]
-    async fn one_transaction_creates_every_note_and_pays_the_fee() -> Result<()> {
-        let expiration_delta = NonZeroU16::new(20).unwrap();
-        let fixture = Fixture::new(BALANCE, TEST_BASE_FEE)?;
-        let mut rng = RandomCoin::new(Word::from([11u32; 4]));
+    /// Builds one funding note per `(target, amount)` pair.
+    fn funding_notes(
+        fixture: &Fixture,
+        targets: &[(AccountId, u64)],
+        rng: &mut RandomCoin,
+    ) -> Result<Vec<Note>> {
+        targets
+            .iter()
+            .map(|&(target, amount)| {
+                build_funding_note(fixture.funder.id(), fixture.fee_faucet_id, target, amount, rng)
+            })
+            .collect()
+    }
 
-        let targets: Vec<(AccountId, u64)> = (0u8..3)
+    /// Builds three target accounts and the amount each of them is funded with.
+    fn targets(fixture: &Fixture) -> Result<Vec<(AccountId, u64)>> {
+        (0u8..3)
             .map(|index| {
                 let (account, _) =
                     genesis_style_wallet(fixture.fee_faucet_id, 0, [index + 20; 32])?;
                 Ok((account.id(), 100 * (u64::from(index) + 1)))
             })
-            .collect::<Result<_>>()?;
-        let requested: u64 = targets.iter().map(|(_, amount)| amount).sum();
+            .collect()
+    }
 
-        let notes =
-            build_funding_notes(fixture.funder.id(), fixture.fee_faucet_id, &targets, &mut rng)?;
+    /// Builds a public P2ID deposit which holds `amount` of the native asset for the funder.
+    fn deposit_note(fixture: &Fixture, amount: u64, serial: u32) -> Note {
+        P2idNote::builder()
+            .sender(fixture.funder.id())
+            .target(fixture.funder.id())
+            .asset(FungibleAsset::new(fixture.fee_faucet_id, amount).expect("valid asset"))
+            .note_type(NoteType::Public)
+            .serial_number(Word::from([serial; 4]))
+            .build()
+            .expect("the note should build")
+            .into()
+    }
+
+    /// The balance of the native asset after `executed_tx` is applied to the funding account.
+    fn balance_after(fixture: &Fixture, executed_tx: &ExecutedTransaction) -> Result<u64> {
+        let mut updated = fixture.funder.clone();
+        updated.apply_patch(executed_tx.account_patch())?;
+
+        Ok(updated
+            .vault()
+            .get_balance(AssetId::new_fungible(fixture.fee_faucet_id))?
+            .as_u64())
+    }
+
+    /// One transaction must create every requested note, pay its own fee, and expire at the
+    /// configured delta.
+    #[tokio::test]
+    async fn one_transaction_creates_every_note_and_pays_the_fee() -> Result<()> {
+        let fixture = Fixture::new(BALANCE, TEST_BASE_FEE)?;
+        let mut rng = RandomCoin::new(Word::from([11u32; 4]));
+
+        let targets = targets(&fixture)?;
+        let requested: u64 = targets.iter().map(|(_, amount)| amount).sum();
+        let notes = funding_notes(&fixture, &targets, &mut rng)?;
         let reference_block = {
             let chain = fixture.chain.lock().await;
             chain.latest_block_header().block_num()
         };
 
-        let inputs = execution_inputs(&fixture, expiration_delta).await?;
-        let executed_tx = execute(inputs, notes.clone(), &mut rng).await?;
+        let inputs = execution_inputs(&fixture, EXPIRATION).await?;
+        let executed_tx = execute(inputs, Vec::new(), notes.clone(), &mut rng).await?;
 
         // Three funding notes plus the fee note the kernel emits.
         assert_eq!(executed_tx.output_notes().num_notes(), 4);
@@ -258,17 +312,12 @@ mod tests {
 
         assert_eq!(
             executed_tx.expiration_block_num(),
-            reference_block + u32::from(expiration_delta.get())
+            reference_block + u32::from(EXPIRATION.get())
         );
 
         // The vault pays both the notes and the fee, so it loses more than the requested amount.
         // The funding account exists on chain, so its patch is a delta and is applied.
-        let mut updated = fixture.funder.clone();
-        updated.apply_patch(executed_tx.account_patch())?;
-        let remaining = updated
-            .vault()
-            .get_balance(AssetId::new_fungible(fixture.fee_faucet_id))?
-            .as_u64();
+        let remaining = balance_after(&fixture, &executed_tx)?;
         assert!(
             remaining < BALANCE - requested,
             "the fee must be paid on top of the notes: {remaining} vs {}",
@@ -283,6 +332,69 @@ mod tests {
         Ok(())
     }
 
+    /// One transaction consumes the deposits and creates the funding notes together. The deposits
+    /// raise the balance, and the notes and the fee lower it.
+    #[tokio::test]
+    async fn one_transaction_consumes_deposits_and_creates_notes() -> Result<()> {
+        let fixture = Fixture::new(BALANCE, TEST_BASE_FEE)?;
+        let mut rng = RandomCoin::new(Word::from([13u32; 4]));
+
+        let targets = targets(&fixture)?;
+        let requested: u64 = targets.iter().map(|(_, amount)| amount).sum();
+        let notes = funding_notes(&fixture, &targets, &mut rng)?;
+        let deposits =
+            vec![deposit_note(&fixture, 400_000, 31), deposit_note(&fixture, 600_000, 32)];
+        let collected: u64 = 1_000_000;
+
+        let inputs = execution_inputs(&fixture, EXPIRATION).await?;
+        let executed_tx = execute(inputs, deposits.clone(), notes.clone(), &mut rng).await?;
+
+        let consumed: Vec<_> = executed_tx.input_notes().iter().map(InputNote::id).collect();
+        for deposit in &deposits {
+            assert!(
+                consumed.contains(&deposit.id()),
+                "the transaction must consume deposit {}",
+                deposit.id()
+            );
+        }
+
+        let created: Vec<_> = executed_tx.output_notes().iter().map(RawOutputNote::id).collect();
+        for note in &notes {
+            assert!(created.contains(&note.id()), "the transaction must create note {}", note.id());
+        }
+
+        // The deposits land, the notes leave, and the fee is paid on top of both.
+        let remaining = balance_after(&fixture, &executed_tx)?;
+        assert!(
+            remaining < BALANCE + collected - requested,
+            "the fee must be paid on top of the notes: {remaining}"
+        );
+        assert!(
+            remaining > BALANCE - requested,
+            "the deposits must raise the balance: {remaining}"
+        );
+
+        Ok(())
+    }
+
+    /// A transaction which only consumes deposits pays its fee from the assets those deposits bring
+    /// in, so it works at a zero balance. That is the state a deposit exists to recover from.
+    #[tokio::test]
+    async fn deposits_are_consumed_at_a_zero_balance() -> Result<()> {
+        let fixture = Fixture::new(0, TEST_BASE_FEE)?;
+        let mut rng = RandomCoin::new(Word::from([29u32; 4]));
+        let deposit = deposit_note(&fixture, 5_000_000, 7);
+
+        let inputs = execution_inputs(&fixture, EXPIRATION).await?;
+        let executed_tx = execute(inputs, vec![deposit], Vec::new(), &mut rng).await?;
+
+        let balance = balance_after(&fixture, &executed_tx)?;
+        assert!(balance > 0, "the deposit must raise the balance above zero");
+        assert!(balance < 5_000_000, "the transaction must pay its fee from the deposit");
+
+        Ok(())
+    }
+
     /// The native asset is callback-enabled, so moving it loads the issuing faucet in a foreign
     /// context. Without the faucet the kernel cannot start that context.
     #[tokio::test]
@@ -291,16 +403,17 @@ mod tests {
         let mut rng = RandomCoin::new(Word::from([17u32; 4]));
         let (target, _) = genesis_style_wallet(fixture.fee_faucet_id, 0, [41; 32])?;
 
-        let notes = build_funding_notes(
+        let note = build_funding_note(
             fixture.funder.id(),
             fixture.fee_faucet_id,
-            &[(target.id(), 100)],
+            target.id(),
+            100,
             &mut rng,
         )?;
 
         // Substitute an unrelated account for the faucet, which leaves the real faucet absent from
         // the data store.
-        let mut inputs = execution_inputs(&fixture, NonZeroU16::new(20).unwrap()).await?;
+        let mut inputs = execution_inputs(&fixture, EXPIRATION).await?;
         let (unrelated, _) = genesis_style_wallet(fixture.fee_faucet_id, 0, [51; 32])?;
         let unrelated_witness = {
             let chain = fixture.chain.lock().await;
@@ -311,7 +424,7 @@ mod tests {
         };
         inputs.fee_faucet = (unrelated, unrelated_witness);
 
-        let err = execute(inputs, notes, &mut rng)
+        let err = execute(inputs, Vec::new(), vec![note], &mut rng)
             .await
             .expect_err("moving a callback-enabled asset requires the issuing faucet");
         assert!(
@@ -322,14 +435,14 @@ mod tests {
         Ok(())
     }
 
-    /// A funding amount which the asset type cannot express must fail while the notes are built.
+    /// A funding amount which the asset type cannot express must fail while the note is built.
     #[tokio::test]
-    async fn an_invalid_amount_fails_while_building_the_notes() -> Result<()> {
+    async fn an_invalid_amount_fails_while_building_the_note() -> Result<()> {
         let mut rng = RandomCoin::new(Word::from([23u32; 4]));
         let (owner, _) = genesis_style_wallet(FungibleAsset::mock_issuer(), 0, [71; 32])?;
         let faucet = genesis_style_native_faucet(owner.id(), [77; 32])?;
 
-        let err = build_funding_notes(owner.id(), faucet.id(), &[(owner.id(), u64::MAX)], &mut rng)
+        let err = build_funding_note(owner.id(), faucet.id(), owner.id(), u64::MAX, &mut rng)
             .expect_err("an amount above the asset maximum must be rejected");
         assert!(format!("{err:#}").contains("asset"), "unexpected error: {err:#}");
 

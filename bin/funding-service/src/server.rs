@@ -8,6 +8,8 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use miden_node_tracing::info;
 use miden_node_utils::shutdown::CancellationToken;
+use miden_protocol::account::AccountId;
+use miden_protocol::note::Note;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tower_http::timeout::TimeoutLayer;
@@ -15,7 +17,6 @@ use tower_http::trace::TraceLayer;
 
 use crate::LOG_TARGET;
 use crate::status::StatusSnapshot;
-use crate::worker::FundingRequest;
 
 mod request_funds;
 mod status;
@@ -32,8 +33,11 @@ const REQUEST_FUNDS_PATH: &str = "/request-funds";
 /// The state the handlers share.
 #[derive(Clone)]
 pub(crate) struct FundingState {
-    pub(crate) requests: mpsc::Sender<FundingRequest>,
+    /// Where a handler puts the note it built, for the worker to create.
+    pub(crate) requests: mpsc::Sender<Note>,
     pub(crate) status: StatusSnapshot,
+    /// The faucet which issues the native asset the notes hold.
+    pub(crate) fee_faucet_id: AccountId,
 }
 
 /// The HTTP service of the funding service.
@@ -44,12 +48,13 @@ pub struct FundingServer {
 
 impl FundingServer {
     pub(crate) fn new(
-        requests: mpsc::Sender<FundingRequest>,
+        requests: mpsc::Sender<Note>,
         status: StatusSnapshot,
+        fee_faucet_id: AccountId,
         request_timeout: Duration,
     ) -> Self {
         Self {
-            state: FundingState { requests, status },
+            state: FundingState { requests, status, fee_faucet_id },
             request_timeout,
         }
     }
@@ -104,14 +109,15 @@ pub(crate) mod tests {
 
     /// Builds a server whose worker channel is held by the caller, so a test can assert on what the
     /// handlers queued without running a worker.
-    pub(crate) fn test_state(max_amount: u64) -> (FundingState, mpsc::Receiver<FundingRequest>) {
+    pub(crate) fn test_state(max_amount: u64) -> (FundingState, mpsc::Receiver<Note>) {
         let (requests, rx) = mpsc::channel(4);
-        let status = StatusSnapshot::new(FungibleAsset::mock_issuer(), max_amount);
+        let fee_faucet_id = FungibleAsset::mock_issuer();
+        let status = StatusSnapshot::new(fee_faucet_id, max_amount);
 
-        (FundingState { requests, status }, rx)
+        (FundingState { requests, status, fee_faucet_id }, rx)
     }
 
-    fn test_router(state: FundingState) -> Router {
+    pub(crate) fn test_router(state: FundingState) -> Router {
         FundingServer {
             state,
             request_timeout: Duration::from_secs(1),

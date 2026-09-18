@@ -1,6 +1,6 @@
-//! Node access. The RPC handling is copied from the network monitor.
+//! Node access.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -18,13 +18,21 @@ use miden_node_proto::generated::rpc::account_request::AccountDetailRequest;
 use miden_node_proto::generated::rpc::{
     AccountRequest as ProtoAccountRequest,
     BlockHeaderByNumberRequest,
+    BlockRange,
     FinalityLevel,
     NotesByIdRequest,
     SyncChainMmrRequest,
+    SyncNotesRequest,
+    SyncNullifiersRequest,
 };
 use miden_node_proto::generated::submission::ProvenTransactionSubmission;
 use miden_node_proto::{BuildUnchecked, DecodeMessage, DecodeMessageExt, Verify, VerifyWith};
 use miden_node_tracing::warn;
+use miden_node_utils::limiter::{
+    QueryParamLimiter,
+    QueryParamNoteIdLimit,
+    QueryParamNullifierPrefixLimit,
+};
 use miden_node_utils::retry::{self, Retryable};
 use miden_protocol::Word;
 use miden_protocol::account::{
@@ -40,7 +48,7 @@ use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::block::{BlockHeader, BlockNumber, FeeParameters};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta, MmrPeaks, PartialMmr};
-use miden_protocol::note::{NoteId, NoteInclusionProof};
+use miden_protocol::note::{Note, NoteId, NoteTag, Nullifier};
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{PartialBlockchain, ProvenTransaction};
 use tokio::sync::Mutex;
@@ -166,6 +174,187 @@ impl RpcNodeClient {
         fetch_public_account(&mut self.rpc_client.clone(), account_id, block_num).await
     }
 
+    /// Fetches the IDs of the committed notes which carry `tag`, from `from_block` up to the chain
+    /// tip, alongside the block the scan reached.
+    pub async fn sync_note_ids(
+        &self,
+        tag: NoteTag,
+        from_block: BlockNumber,
+    ) -> Result<SyncedNotes> {
+        let tip = self.committed_tip().await?;
+        // An empty range is rejected, and there is nothing to scan past the tip anyway.
+        if from_block > tip {
+            return Ok(SyncedNotes {
+                note_ids: Vec::new(),
+                last_checked_block: tip,
+            });
+        }
+
+        let response = self
+            .rpc_client
+            .clone()
+            .sync_notes(SyncNotesRequest {
+                block_range: Some(BlockRange {
+                    block_from: from_block.as_u32(),
+                    block_to: tip.as_u32(),
+                }),
+                note_tags: vec![u32::from(tag)],
+            })
+            .await
+            .context("failed to synchronize notes")?
+            .into_inner();
+
+        let last_checked_block = response
+            .pagination_info
+            .context("the sync_notes response did not include pagination information")?
+            .block_num
+            .into();
+
+        let mut note_ids = Vec::new();
+        for block in response.blocks {
+            for record in block.notes {
+                let proof = record
+                    .inclusion_proof
+                    .context("a note sync record did not include an inclusion proof")?;
+                let note_id = proof
+                    .note_id
+                    .context("a note inclusion proof did not include a note ID")?
+                    .decode_fields()
+                    .context("failed to decode a synced note ID")?
+                    .verify()
+                    .context("failed to verify a synced note ID")?;
+                note_ids.push(note_id);
+            }
+        }
+
+        Ok(SyncedNotes { note_ids, last_checked_block })
+    }
+
+    /// The notes among `note_ids` whose details the node stores.
+    pub async fn get_public_notes_by_id(&self, note_ids: &[NoteId]) -> Result<Vec<Note>> {
+        let mut notes = Vec::new();
+
+        // The node rejects a request which asks for more note IDs than it accepts, so the IDs are
+        // requested in chunks of the limit it enforces.
+        for chunk in note_ids.chunks(QueryParamNoteIdLimit::LIMIT) {
+            let note_ids = chunk.iter().map(|note_id| note_id.as_word().into()).collect();
+
+            let response = self
+                .rpc_client
+                .clone()
+                .get_notes_by_id(NotesByIdRequest { note_ids })
+                .await
+                .context("failed to fetch notes from RPC")?
+                .into_inner();
+
+            for committed in response.notes {
+                let Some(note) = committed.note else {
+                    continue;
+                };
+                if note.note_details.is_none() {
+                    continue;
+                }
+
+                let note = note
+                    .decode_fields()
+                    .context("failed to decode a committed note")?
+                    .verify()
+                    .context("failed to verify a committed note")?;
+                notes.push(note);
+            }
+        }
+
+        Ok(notes)
+    }
+
+    /// The nullifiers among `nullifiers` which the node recorded as spent from `from_block` up to
+    /// the chain tip.
+    pub async fn sync_nullifiers(
+        &self,
+        nullifiers: &[Nullifier],
+        from_block: BlockNumber,
+    ) -> Result<HashSet<Nullifier>> {
+        if nullifiers.is_empty() {
+            return Ok(HashSet::new());
+        }
+
+        let tip = self.committed_tip().await?;
+
+        if from_block > tip {
+            return Ok(HashSet::new());
+        }
+
+        // The node matches on prefixes, so the response holds every nullifier which shares a prefix
+        // with one of ours. The exact matches are picked out below.
+        let prefixes = nullifiers
+            .iter()
+            .map(|nullifier| u32::from(nullifier.prefix()))
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        let requested: HashSet<Nullifier> = nullifiers.iter().copied().collect();
+        let mut spent = HashSet::new();
+
+        // The node rejects a request which carries more prefixes than it accepts, so the prefixes
+        // are sent in chunks of the limit it enforces.
+        for chunk in prefixes.chunks(QueryParamNullifierPrefixLimit::LIMIT) {
+            let mut block_from = from_block;
+
+            // The node may answer with a partial range. The scan continues from the block the
+            // response reached, because a nullifier in the remaining blocks would otherwise be read
+            // as unspent.
+            loop {
+                let response = self
+                    .rpc_client
+                    .clone()
+                    .sync_nullifiers(SyncNullifiersRequest {
+                        block_range: Some(BlockRange {
+                            block_from: block_from.as_u32(),
+                            block_to: tip.as_u32(),
+                        }),
+                        prefix_len: NULLIFIER_PREFIX_LEN,
+                        nullifiers: chunk.to_vec(),
+                    })
+                    .await
+                    .context("failed to synchronize nullifiers")?
+                    .into_inner();
+
+                let last_checked_block: BlockNumber = response
+                    .pagination_info
+                    .context("the sync_nullifiers response did not include pagination information")?
+                    .block_num
+                    .into();
+
+                for update in response.nullifiers {
+                    let nullifier = update
+                        .nullifier
+                        .context("a nullifier update did not include a nullifier")?;
+                    let nullifier =
+                        Word::try_from(nullifier).context("failed to convert a nullifier")?;
+                    let nullifier = Nullifier::from_raw(nullifier);
+                    if requested.contains(&nullifier) {
+                        spent.insert(nullifier);
+                    }
+                }
+
+                if last_checked_block >= tip {
+                    break;
+                }
+
+                // A response which does not advance would repeat forever.
+                anyhow::ensure!(
+                    last_checked_block >= block_from,
+                    "the node answered a nullifier scan from block {block_from} with block \
+                     {last_checked_block}",
+                );
+                block_from = last_checked_block + 1;
+            }
+        }
+
+        Ok(spent)
+    }
+
     /// The chain tip of the node's local store.
     pub async fn committed_tip(&self) -> Result<BlockNumber> {
         let status = self
@@ -177,37 +366,6 @@ impl RpcNodeClient {
             .into_inner();
 
         Ok(status.chain_tip.into())
-    }
-
-    /// The inclusion proofs of the notes which are committed, keyed by note ID.
-    pub async fn committed_notes(
-        &self,
-        note_ids: &[NoteId],
-    ) -> Result<HashMap<NoteId, NoteInclusionProof>> {
-        let note_ids = note_ids.iter().map(|note_id| note_id.as_word().into()).collect();
-
-        let response = self
-            .rpc_client
-            .clone()
-            .get_notes_by_id(NotesByIdRequest { note_ids })
-            .await
-            .context("failed to fetch the funding notes from RPC")?
-            .into_inner();
-
-        response
-            .notes
-            .into_iter()
-            .map(|committed| {
-                let proof = committed
-                    .inclusion_proof
-                    .context("committed note response is missing the inclusion proof")?;
-                proof
-                    .decode_fields()
-                    .context("failed to decode the note inclusion proof")?
-                    .verify()
-                    .context("failed to verify the note inclusion proof")
-            })
-            .collect()
     }
 
     /// Seals and submits one proven transaction, and returns the block it was accepted at.
@@ -316,6 +474,17 @@ pub fn is_transient_error(err: &anyhow::Error) -> bool {
     err.chain()
         .filter_map(|cause| cause.downcast_ref::<tonic::Status>())
         .any(is_transient_status)
+}
+
+/// The only nullifier prefix length the node supports.
+const NULLIFIER_PREFIX_LEN: u32 = 16;
+
+/// The result of one note synchronization.
+pub struct SyncedNotes {
+    /// The notes which carry the requested tag.
+    pub note_ids: Vec<NoteId>,
+    /// The last block the node checked. The next scan starts after it.
+    pub last_checked_block: BlockNumber,
 }
 
 // RPC HELPERS

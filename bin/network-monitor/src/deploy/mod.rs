@@ -92,6 +92,11 @@ use crate::{COMPONENT, LOG_TARGET};
 pub mod counter;
 pub mod wallet;
 
+/// Bounds on the retries of a transaction whose unauthenticated note the node does not know yet.
+const UNKNOWN_NOTE_RETRY_MIN_DELAY: Duration = Duration::from_millis(500);
+const UNKNOWN_NOTE_RETRY_MAX_DELAY: Duration = Duration::from_secs(5);
+const UNKNOWN_NOTE_RETRY_MAX_TIMES: usize = 5;
+
 /// Monitor accounts and signing key created as one deployment unit.
 pub struct DeployedMonitorAccounts {
     pub wallet: Account,
@@ -170,8 +175,40 @@ impl TransactionSubmissionClient {
         Ok(sealer)
     }
 
-    /// Seals and submits one proven transaction, retrying once with a fresh key when needed.
+    /// Seals and submits one proven transaction.
+    ///
+    /// A transaction which consumes an unauthenticated note is retried while the node does not know
+    /// that note yet.
     pub async fn submit(
+        &self,
+        proven_tx: &ProvenTransaction,
+        transaction_inputs: &[u8],
+    ) -> Result<BlockNumber> {
+        let tx_id = proven_tx.id();
+
+        let block_num = (|| self.submit_once(proven_tx, transaction_inputs))
+            .retry(retry::exponential_bounded(
+                UNKNOWN_NOTE_RETRY_MIN_DELAY,
+                UNKNOWN_NOTE_RETRY_MAX_DELAY,
+                UNKNOWN_NOTE_RETRY_MAX_TIMES,
+            ))
+            .when(is_unknown_unauthenticated_note)
+            .notify(|err: &anyhow::Error, delay: Duration| {
+                warn!(
+                    err,
+                    target: COMPONENT,
+                    "An unauthenticated input note is unknown to the node; retrying after backoff",
+                    transaction.id = tx_id,
+                    retry.delay_ms = delay.as_millis() as u64
+                );
+            })
+            .await?;
+
+        Ok(block_num)
+    }
+
+    /// Seals and submits one proven transaction, retrying once with a fresh key when needed.
+    async fn submit_once(
         &self,
         proven_tx: &ProvenTransaction,
         transaction_inputs: &[u8],
@@ -221,6 +258,13 @@ impl TransactionSubmissionClient {
 
         Ok(result?.into_inner().block_num.into())
     }
+}
+
+/// Reports whether the node rejected the transaction because it does not know one of its
+/// unauthenticated input notes.
+fn is_unknown_unauthenticated_note(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<tonic::Status>()
+        .is_some_and(|status| status.message().contains("unauthenticated input notes are unknown"))
 }
 
 /// Backoff schedule applied to the genesis-discovery RPC handshake.
