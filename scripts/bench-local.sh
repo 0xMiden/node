@@ -163,6 +163,13 @@ start_bg validator miden-validator start \
     --encryption-key.hex "$ENCRYPTION_KEY_HEX"
 wait_for_port "$VALIDATOR_PORT" validator
 
+say "deploying fee collector"
+miden-node fee-collector create --data-directory "$DATA/node"
+miden-node fee-collector deploy \
+    --data-directory "$DATA/node" \
+    --validator.url "http://127.0.0.1:$VALIDATOR_PORT" \
+    > "$LOGS/deploy-fee-collector.log" 2>&1
+
 # The ntx-builder always needs a transaction prover, so start one regardless of
 # USE_REMOTE_PROVER (which only governs whether create-proofs offloads here too).
 start_bg remote-prover miden-remote-prover \

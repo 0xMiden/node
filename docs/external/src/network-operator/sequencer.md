@@ -8,6 +8,21 @@ sidebar_position: 4
 The sequencer is centralized network infrastructure operated by the network operator. It runs `miden-node sequencer`,
 produces blocks, serves public RPC, and connects to the validator and network transaction builder.
 
+## Fee Collection
+
+A dedicated immutable fee collector account combines transaction fees into a single P2ID note targeting the batch
+builder's wallet account.
+
+This process will need to change when we support fees paid in non-native tokens. For now, it provides a simple way to
+collect fees while avoiding race conditions on the receiving wallet account.
+
+Use `miden-node fee-collector create` to create the account and `miden-node fee-collector deploy` to deploy it.
+Deployment creates a dedicated block and therefore the validators must be running to sign this block.
+
+The collector account is fairly low-risk. It only needs to exist and is immutable once deployed. Keep the generated
+signing key to authorize transactions. A new collector can be trivially created and redeployed so backup isn't a strong
+requirement.
+
 ## Start
 
 ```bash
@@ -101,6 +116,15 @@ There is always some risk of data loss during failover because full nodes follow
 committed by the sequencer but not yet replicated to the promoted full node may be missing from that node's local state.
 The validator also retains a copy of the blocks it validated and signed, and can be used to recover missing committed
 block data when this occurs. See [Recovery](/network-operator/recovery) for the procedure.
+
+### Fee Collector Account
+
+Copy the existing `fee-collector.mac` file to the replacement node's data directory before starting it as a sequencer.
+This file contains the collector's signing key and is not replicated with chain state. The account is already deployed
+and does not need to be deployed again.
+
+If the file is lost, complete chain recovery, then create and deploy a new collector with the same
+[Fee Collection](#fee-collection) procedure. Keep the replacement node stopped until deployment completes.
 
 ## Common Configuration
 

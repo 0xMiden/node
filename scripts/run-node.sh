@@ -229,8 +229,20 @@ echo "Starting validator 2..."
     "${KMS_START_ARGS_2[@]}" &
 PIDS+=($!)
 
-# Give the validators a moment to bind before the sequencer starts producing blocks.
-sleep 2
+if [[ ! -f "$NODE_DIR/fee-collector.mac" ]]; then
+    echo "Creating fee collector account..."
+    "$NODE_BINARY" fee-collector create --data-directory "$NODE_DIR"
+fi
+
+echo "Waiting for validators before deploying the fee collector..."
+wait_for_port "$VALIDATOR_1_PORT"
+wait_for_port "$VALIDATOR_2_PORT"
+
+echo "Deploying fee collector..."
+"$NODE_BINARY" fee-collector deploy \
+    --data-directory "$NODE_DIR" \
+    --validator.url "http://127.0.0.1:$VALIDATOR_1_PORT" \
+    --validator.url "http://127.0.0.1:$VALIDATOR_2_PORT"
 
 echo "Starting sequencer..."
 OTEL_RESOURCE_ATTRIBUTES="$(node_resource_attributes sequencer)" \

@@ -201,6 +201,11 @@ nohup miden-validator start \
   --encryption-key.hex "<encryption-key-hex>" \
   > logs/validator.log 2>&1 &
 
+miden-node fee-collector create --data-directory "$DATA/node"
+miden-node fee-collector deploy \
+  --data-directory "$DATA/node" \
+  --validator.url http://127.0.0.1:50101
+
 # The ntx-builder needs a transaction prover, so start one regardless.
 nohup miden-remote-prover \
   --port     50051 \

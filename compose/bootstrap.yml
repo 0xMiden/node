@@ -215,6 +215,37 @@ services:
 
         touch /data/node/.bootstrapped
 
+  deploy-fee-collector:
+    image: ${MIDEN_NODE_IMAGE:-miden-node}
+    pull_policy: missing
+    volumes:
+      - node-data:/data
+    depends_on:
+      bootstrap-node:
+        condition: service_completed_successfully
+      validator-1:
+        condition: service_started
+      validator-2:
+        condition: service_started
+      validator-3:
+        condition: service_started
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        if [ -f /data/node/.fee-collector-deployed ]; then
+          exit 0
+        fi
+        if [ ! -f /data/node/fee-collector.mac ]; then
+          miden-node fee-collector create --data-directory /data/node
+        fi
+        miden-node fee-collector deploy \
+          --data-directory /data/node \
+          --validator.url http://validator-1:50101 \
+          --validator.url http://validator-2:50101 \
+          --validator.url http://validator-3:50101
+        touch /data/node/.fee-collector-deployed
+
   bootstrap-ntx-builder:
     image: ${MIDEN_NTX_BUILDER_IMAGE:-miden-ntx-builder}
     pull_policy: missing
