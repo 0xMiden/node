@@ -5,7 +5,7 @@ use miden_node_proto::generated::note_transport::{
     TransportNote,
 };
 use miden_node_proto::server::note_transport_api::FetchNotes;
-use miden_node_tracing::{debug, error, miden_instrument};
+use miden_node_tracing::{debug, error, miden_instrument, miden_span_record};
 use prost::Message;
 use tonic::codegen::http::Extensions;
 use tonic::metadata::MetadataMap;
@@ -44,6 +44,13 @@ impl FetchNotes for Server {
         _: &MetadataMap,
         _: &Extensions,
     ) -> tonic::Result<Self::Output> {
+        miden_span_record!(
+            note.tags = request.tags.as_slice(),
+            note.tag.count = request.tags.len(),
+            note_transport.cursor.sequence = request.cursor.map(|cursor| cursor.sequence),
+            note_transport.cursor.nonce = request.cursor.map(|cursor| cursor.nonce),
+        );
+
         let cursor = request.cursor.map(|cursor| db::Cursor {
             nonce: cursor.nonce,
             sequence: cursor.sequence,
