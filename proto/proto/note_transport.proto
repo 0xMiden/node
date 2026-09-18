@@ -35,15 +35,19 @@ message FetchNotesCursor {
 }
 
 message FetchNotesRequest {
-    // At most 128 tags. Duplicate tags do not duplicate results.
+    // Tags to fetch notes for. Accepts up to 128 tags.
+    // Duplicate tags do not cause duplicate results.
     repeated fixed32 tags = 1;
+
+    // Continue from the cursor returned by the previous response.
     // Omit the cursor to start from the first retained note.
-    // The cursor belongs to the requested set of tags.
-    // Clear it when you add or remove tags.
-    // Reordering tags or changing duplicate tags does not change the set.
-    // A nonce mismatch returns FAILED_PRECONDITION. Clear the cursor and retry.
-    // Starting again can return notes that you fetched before.
-    // Use note IDs to remove duplicate results.
+    //
+    // Reuse the cursor only for the same set of tags. Clear it when you add or remove a tag.
+    // Reordering tags or adding or removing duplicate tags does not require a reset.
+    //
+    // If the cursor nonce does not match the database nonce, the request returns
+    // FAILED_PRECONDITION. Clear the cursor and retry from the first retained note.
+    // This restart can return notes already fetched. Use note IDs to remove duplicates.
     FetchNotesCursor cursor = 2;
 }
 
