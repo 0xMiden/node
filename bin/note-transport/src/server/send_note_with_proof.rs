@@ -21,7 +21,7 @@ impl SendNoteWithProof for Server {
         use miden_node_proto::errors::ConversionResultExt;
 
         let request = request.decode_fields().map_err(ConversionError::into_status)?;
-        let mut note = decode_note(request.note)?;
+        let note = decode_note(request.note)?;
         let (note_id, proof) = request
             .inclusion_proof
             .verify()
@@ -33,11 +33,6 @@ impl SendNoteWithProof for Server {
         if proof.note_path().depth() != BLOCK_NOTE_TREE_DEPTH {
             return Err(tonic::Status::invalid_argument("invalid note proof depth"));
         }
-        let block_num = proof.location().block_num();
-        if note.after_block_num.is_some_and(|hint| hint != block_num) {
-            return Err(tonic::Status::invalid_argument("block hint does not match the proof"));
-        }
-        note.after_block_num = Some(block_num);
         Ok((note, proof))
     }
 
@@ -48,7 +43,7 @@ impl SendNoteWithProof for Server {
     #[miden_instrument(target = COMPONENT, err)]
     async fn handle(
         &self,
-        (note, proof): Self::Input,
+        (mut note, proof): Self::Input,
         _: &MetadataMap,
         _: &Extensions,
     ) -> tonic::Result<()> {
@@ -100,6 +95,7 @@ impl SendNoteWithProof for Server {
             )
             .map_err(|_| tonic::Status::invalid_argument("note inclusion proof is invalid"))?;
 
+        note.included_in_block = Some(proof.location().block_num());
         self.store_note(note).await
     }
 }

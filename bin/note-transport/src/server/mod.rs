@@ -183,16 +183,15 @@ fn decode_note(request: DecodedTransportNote) -> tonic::Result<db::NewNote> {
         .verify()
         .context("note.details")
         .map_err(ConversionError::into_status)?;
-    let after_block_num = request
-        .after_block_num
-        .map(Verify::verify)
-        .transpose()
-        .context("note.after_block_num")
-        .map_err(ConversionError::into_status)?;
     if details.commitment() != header.details_commitment() {
         return Err(tonic::Status::invalid_argument("note details do not match the header"));
     }
-    Ok(db::NewNote { header, details, after_block_num })
+    Ok(db::NewNote {
+        header,
+        details,
+        after_block_num: None,
+        included_in_block: None,
+    })
 }
 
 fn storage_status(error: db::StorageError) -> tonic::Status {

@@ -17,13 +17,14 @@ service Api {
 
 message SendNoteRequest {
     TransportNote note = 1;
+    // Unverified lower bound for the inclusion block. An absent value differs from block zero.
+    optional blockchain.BlockNumber after_block_num = 2;
 }
 
 message SendNoteResponse {}
 
 message SendNoteWithProofRequest {
-    // Required. An absent block hint is set to the proven block number.
-    // A supplied block hint must match the proven block number.
+    // Required. The inclusion proof supplies the exact inclusion block.
     TransportNote note = 1;
     // Required. The service verifies this proof but does not store it.
     note.NoteInclusionProof inclusion_proof = 2;
@@ -32,10 +33,18 @@ message SendNoteWithProofRequest {
 message TransportNote {
     note.NoteHeader header = 1;
     note.NoteDetails details = 2;
-    // Lower bound for the inclusion block. SendNote does not verify this hint.
-    // SendNoteWithProof sets this hint to the proven block number.
+}
+
+// A stored note. At most one of the block fields is present.
+message FetchedNote {
+    note.NoteHeader header = 1;
+    note.NoteDetails details = 2;
+    // Optional unverified lower bound supplied through SendNote.
     // An absent value differs from block zero.
     optional blockchain.BlockNumber after_block_num = 3;
+    // Exact inclusion block verified through SendNoteWithProof.
+    // This field is absent for notes stored through SendNote.
+    optional blockchain.BlockNumber included_in_block = 4;
 }
 
 // Identifies a position in a stable sequence of stored notes.
@@ -66,7 +75,7 @@ message FetchNotesRequest {
 }
 
 message FetchNotesResponse {
-    repeated TransportNote notes = 1;
+    repeated FetchedNote notes = 1;
     // Always present. Contains the sequence of the last returned note.
     // An empty page keeps the validated request cursor.
     // An initial empty page returns the current nonce and sequence zero.

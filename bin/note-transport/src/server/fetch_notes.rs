@@ -2,7 +2,7 @@ use miden_node_proto::generated::note_transport::{
     FetchNotesCursor,
     FetchNotesRequest,
     FetchNotesResponse,
-    TransportNote,
+    FetchedNote,
 };
 use miden_node_proto::server::note_transport_api::FetchNotes;
 use miden_node_tracing::{debug, error, miden_instrument, miden_span_record};
@@ -81,14 +81,11 @@ impl FetchNotes for Server {
                 error!(error, target: LOG_TARGET, "Invalid stored note cursor");
                 tonic::Status::internal("note storage operation failed")
             })?;
-            let note = TransportNote {
+            let note = FetchedNote {
                 header: Some(note.header.into()),
                 details: Some(note.details.into()),
-                after_block_num: note.after_block_num.map(|block_num| {
-                    miden_node_proto::generated::blockchain::BlockNumber {
-                        block_num: block_num.as_u32(),
-                    }
-                }),
+                after_block_num: note.after_block_num.map(Into::into),
+                included_in_block: note.included_in_block.map(Into::into),
             };
             let note_bytes = note.encoded_len();
             let field_bytes =
@@ -108,7 +105,7 @@ impl FetchNotes for Server {
         }
 
         debug!(target: LOG_TARGET, "Notes fetched",
-            note_transport.returned = notes.len(), note_transport.cursor = cursor.sequence,
+            note_transport.returned = notes.len(), note_transport.cursor.sequence = cursor.sequence,
             note_transport.has_more = has_more);
 
         Ok(FetchNotesResponse { notes, cursor: Some(cursor), has_more })
