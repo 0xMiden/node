@@ -85,7 +85,7 @@ impl SequencerCommand {
         self.log_starting();
         let runtime = self.runtime.runtime_config(&self.store);
         self.block_producer.validate()?;
-        let collection_account = self.fee_collector.read(&runtime.data_directory)?;
+        let fee_collector_account = self.fee_collector.read(&runtime.data_directory)?;
         let network_tx_auth = self.runtime.rpc.network_tx_auth()?;
         let (validator_clients, validator_monitors) =
             self.external_services.validator_clients_and_monitors()?;
@@ -122,7 +122,7 @@ impl SequencerCommand {
             mempool_tx_capacity: self.block_producer.mempool.tx_capacity,
             batch_workers: self.block_producer.batch.workers,
             builder_account_id: self.block_producer.builder.wallet_account_id,
-            pass_through_account: collection_account,
+            fee_collector_account,
         }
         .start(shutdown.clone())
         .await

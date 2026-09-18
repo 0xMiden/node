@@ -96,13 +96,13 @@ impl BatchBuilder {
         batch_prover_url: Option<Url>,
         intervals: BatchIntervals,
         builder_account_id: AccountId,
-        pass_through_account: AccountFile,
+        fee_collector_account: AccountFile,
         validator: BlockProducerValidatorClient,
     ) -> anyhow::Result<Self> {
         let batch_prover =
             batch_prover_url.map_or(Ok(BatchProver::local()), BatchProver::remote)?;
         let pass_through =
-            PassThroughTransactionBuilder::new(builder_account_id, pass_through_account)?;
+            PassThroughTransactionBuilder::new(builder_account_id, fee_collector_account)?;
 
         Ok(Self {
             active_jobs: JoinSet::new(),

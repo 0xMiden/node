@@ -103,8 +103,8 @@ pub struct Sequencer {
     /// The batch builder account that receives collected fees.
     pub builder_account_id: AccountId,
 
-    /// The deployed pass-through account and its signing key.
-    pub pass_through_account: AccountFile,
+    /// The deployed fee collector account and its signing key.
+    pub fee_collector_account: AccountFile,
 }
 
 // BLOCK PRODUCER
@@ -115,7 +115,7 @@ impl Sequencer {
     pub async fn start(mut self, shutdown: CancellationToken) -> Result<SequencerHandle> {
         info!(target: LOG_TARGET, "Initializing sequencer");
         let state = self.state;
-        crate::fee_collector::load_deployed_collector(&state, &mut self.pass_through_account)
+        crate::fee_collector::load_deployed_collector(&state, &mut self.fee_collector_account)
             .await?;
         let validator =
             BlockProducerValidatorClient::new(self.validator_urls.clone(), self.validator_timeout)?;
@@ -132,7 +132,7 @@ impl Sequencer {
             self.batch_prover_url,
             batch_intervals,
             self.builder_account_id,
-            self.pass_through_account,
+            self.fee_collector_account,
             validator,
         )?;
         let api_config = BlockProducerApiConfig {

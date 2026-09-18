@@ -94,7 +94,7 @@ async fn block_producer_starts_with_store_state() {
         max_concurrent_proofs: DEFAULT_MAX_CONCURRENT_PROOFS,
         mempool_tx_capacity: NonZeroUsize::new(100).unwrap(),
         batch_workers: DEFAULT_BATCH_WORKERS,
-        pass_through_account: account_file,
+        fee_collector_account: account_file,
         builder_account_id:
             miden_protocol::testing::account_id::ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE
                 .try_into()
