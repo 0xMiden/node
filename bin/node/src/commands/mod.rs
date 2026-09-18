@@ -45,7 +45,7 @@ pub enum Command {
     /// Create or deploy the sequencer's fee collector account.
     ///
     /// The immutable collector combines transaction fees into P2ID notes for the batch builder's
-    /// wallet.
+    /// wallet. Create and deploy a collector before starting the sequencer.
     #[command(subcommand)]
     FeeCollector(FeeCollectorCommand),
 
