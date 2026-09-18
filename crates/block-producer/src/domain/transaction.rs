@@ -1,16 +1,18 @@
 use miden_protocol::asset::AssetId;
+use miden_protocol::block::FeeParameters;
 use miden_protocol::transaction::{OutputNote, ProvenTransaction};
 use miden_standards::note::TxFeeNote;
 
 use crate::errors::MempoolSubmissionError;
 
-/// Ensures that a transaction creates a canonical fee note with the native asset.
-/// All canonical fee notes must contain exactly one asset with the specified ID.
+/// Requires a fee note when the reference block's verification base fee is nonzero.
+/// Every fee note must contain exactly one asset with the specified native asset ID.
 ///
 /// This check does not validate that the fee is sufficient for the transaction execution cost.
 pub fn ensure_transaction_has_fee(
     tx: &ProvenTransaction,
     fee_asset_id: AssetId,
+    fee_parameters: &FeeParameters,
 ) -> Result<(), MempoolSubmissionError> {
     let fee_script_root = TxFeeNote::script_root();
     let mut contains_fee = false;
@@ -30,7 +32,7 @@ pub fn ensure_transaction_has_fee(
         contains_fee = true;
     }
 
-    if contains_fee {
+    if contains_fee || fee_parameters.verification_base_fee() == 0 {
         Ok(())
     } else {
         Err(MempoolSubmissionError::MissingFee { transaction_id: tx.id() })
@@ -43,6 +45,7 @@ mod tests {
     use miden_node_proto::{BuildUnchecked, DecodeMessage};
     use miden_protocol::Word;
     use miden_protocol::asset::{Asset, AssetId, FungibleAsset};
+    use miden_protocol::block::FeeParameters;
     use miden_protocol::note::{Note, NoteAssets};
     use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1;
     use miden_protocol::transaction::{OutputNote, ProvenTransaction, PublicOutputNote};
@@ -97,7 +100,7 @@ mod tests {
     fn transaction_fee_requires_the_canonical_note_script() {
         let tx = transaction_with_fee_amount(1);
 
-        ensure_transaction_has_fee(&tx, fee_asset_id()).unwrap();
+        ensure_transaction_has_fee(&tx, fee_asset_id(), &FeeParameters::new(1)).unwrap();
     }
 
     #[test]
@@ -105,16 +108,23 @@ mod tests {
         let tx = MockProvenTxBuilder::with_account_index(1).build();
 
         assert_matches!(
-            ensure_transaction_has_fee(&tx, fee_asset_id()),
+            ensure_transaction_has_fee(&tx, fee_asset_id(), &FeeParameters::new(1)),
             Err(MempoolSubmissionError::MissingFee { transaction_id }) if transaction_id == tx.id()
         );
+    }
+
+    #[test]
+    fn transaction_without_fee_is_accepted_when_fees_are_zero() {
+        let tx = MockProvenTxBuilder::with_account_index(1).build();
+
+        ensure_transaction_has_fee(&tx, fee_asset_id(), &FeeParameters::new(0)).unwrap();
     }
 
     #[test]
     fn transaction_with_zero_fee_asset_is_accepted() {
         let tx = transaction_with_fee_amount(0);
 
-        ensure_transaction_has_fee(&tx, fee_asset_id()).unwrap();
+        ensure_transaction_has_fee(&tx, fee_asset_id(), &FeeParameters::new(1)).unwrap();
     }
 
     #[test]
@@ -127,11 +137,13 @@ mod tests {
             let tx = MockProvenTxBuilder::with_account_index(1)
                 .output_notes(vec![fee_output_note(&assets, 1)])
                 .build();
-            assert_matches!(
-                ensure_transaction_has_fee(&tx, fee_asset_id()),
-                Err(MempoolSubmissionError::InvalidFeeAsset { transaction_id, .. })
-                    if transaction_id == tx.id()
-            );
+            for base_fee in [0, 1] {
+                assert_matches!(
+                    ensure_transaction_has_fee(&tx, fee_asset_id(), &FeeParameters::new(base_fee)),
+                    Err(MempoolSubmissionError::InvalidFeeAsset { transaction_id, .. })
+                        if transaction_id == tx.id()
+                );
+            }
         }
     }
 
@@ -150,7 +162,7 @@ mod tests {
                 ])
                 .build();
             assert_matches!(
-                ensure_transaction_has_fee(&tx, fee_asset_id()),
+                ensure_transaction_has_fee(&tx, fee_asset_id(), &FeeParameters::new(1)),
                 Err(MempoolSubmissionError::InvalidFeeAsset { .. })
             );
         }

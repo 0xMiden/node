@@ -56,11 +56,12 @@ conflict, and use the detail byte when a client needs stable branching between b
 `CapacityExceeded` means the mempool capacity has been exhausted and is under load.
 
 `MissingFee` means that a standalone transaction submitted through `SubmitProvenTx` does not contain an output note with
-the canonical `TX_FEE` script. Each such note must contain exactly one native asset, as specified by the reference
-block's protocol configuration. `InvalidFeeAsset` means that a fee note does not meet this asset requirement. The
-internal `SubmitAuthenticatedTx` endpoint applies the same checks. Transactions within user-submitted batches are exempt
-because those batches handle their own fee collection. These checks do not establish that the fee amount is sufficient.
-A fee note can contain a zero-valued native asset when the required fee is zero.
+the `TX_FEE` script when the reference block's verification base fee is nonzero. A transaction can omit the fee note
+when that base fee is zero. Each fee note must contain exactly one native asset, as specified by the reference block's
+protocol configuration, even when fees are zero. `InvalidFeeAsset` means that a fee note does not meet this asset
+requirement. The internal `SubmitAuthenticatedTx` endpoint applies the same checks. Transactions within user-submitted
+batches are exempt because those batches handle their own fee collection. These checks do not establish that the fee
+amount is sufficient. A fee note can contain a zero-valued native asset when the required fee is zero.
 
 ### Encrypted input errors
 

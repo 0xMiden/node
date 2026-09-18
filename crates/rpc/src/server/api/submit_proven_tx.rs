@@ -77,7 +77,12 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
             .verify_reference_commitment(tx.ref_block_num(), tx.ref_block_commitment())
             .await?;
         let protocol_config = load_protocol_config(&self.state.view(), &reference_header).await?;
-        ensure_transaction_has_fee(&tx, protocol_config.fee_asset_id()).map_err(Status::from)?;
+        ensure_transaction_has_fee(
+            &tx,
+            protocol_config.fee_asset_id(),
+            reference_header.fee_parameters(),
+        )
+        .map_err(Status::from)?;
 
         // Rebuild a new ProvenTransaction with decorators removed from output notes
         let account_update = TxAccountUpdate::new(
