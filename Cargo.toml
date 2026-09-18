@@ -148,8 +148,7 @@ zeroize            = { version = "1.8" }
 
 [workspace.metadata.cargo-shear]
 # libsqlite3-sys is kept to control the bundled SQLite linkage.
-# tonic-prost is used by generated gRPC code rather than handwritten Rust.
-ignored = ["libsqlite3-sys", "tonic-prost"]
+ignored = ["libsqlite3-sys"]
 
 [workspace.metadata.inheritance-check]
 # The normal and dev entries enable different SDK features in the tracing crate.

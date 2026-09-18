@@ -37,6 +37,7 @@ fn note_with_advice(seed: u32, tag: u32, elements: usize) -> NewNote {
         header: *note.header(),
         details: miden_protocol::note::NoteDetails::from(note),
         after_block_num: Some(BlockNumber::from(10)),
+        included_in_block: None,
     }
 }
 
@@ -115,6 +116,7 @@ async fn retry_at_capacity_preserves_first_write() {
     let page = fetch_notes(&reader, vec![42], None).await.unwrap();
     assert_eq!(page.notes.len(), 1);
     assert_eq!(page.notes[0].after_block_num, original.after_block_num);
+    assert_eq!(page.notes[0].included_in_block, None);
     assert_eq!(page.notes[0].created_at, created_at);
     assert_eq!(page.notes[0].seq, 1);
     assert!(!page.has_more);
@@ -384,54 +386,81 @@ async fn insertion_uses_the_configured_retention_period() {
 
 #[tokio::test]
 async fn migration_preserves_notes_counters_and_nonce() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("notes.sqlite3");
-    miden_node_db::migration::Migrator::builder()
-        .unwrap()
-        .push_sql("001_initial", include_str!("migrations/001_initial.sql"))
-        .unwrap()
-        .build()
-        .unwrap()
-        .bootstrap(&path)
-        .unwrap();
-    let original = note(1, 42);
-    let retained_bytes =
-        i64::try_from(original.header.to_bytes().len() + original.details.to_bytes().len())
+    for with_nonce in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.sqlite3");
+        let builder = miden_node_db::migration::Migrator::builder()
+            .unwrap()
+            .push_sql("001_initial", include_str!("migrations/001_initial.sql"))
             .unwrap();
-    let stored = original.clone();
-    let (writer, reader) = miden_node_db::sqlite::open(&path).unwrap();
-    writer
-        .write("seed legacy database", move |tx| {
-            queries::insert_note(tx, &stored, 7, now_micros())?;
-            queries::update_storage_metadata(tx, 8, retained_bytes)?;
-            Ok::<_, StorageError>(())
-        })
-        .await
-        .unwrap();
-    drop((writer, reader));
-    assert!(load(&path).is_err());
-    migrate(&path).unwrap();
-    let (writer, reader) = load(&path).unwrap();
-    let page = fetch_notes(&reader, vec![42], None).await.unwrap();
-    assert_eq!(page.notes.len(), 1);
-    assert_eq!(page.notes[0].header, original.header);
-    assert_eq!(page.notes[0].details, original.details);
-    assert_eq!(page.notes[0].after_block_num, original.after_block_num);
-    assert_eq!(page.cursor.sequence, 7);
-    assert!(matches!(
-        store_note(&writer, note(2, 42), u64::try_from(retained_bytes).unwrap()).await,
-        Err(StorageError::Capacity(_))
-    ));
-    drop((writer, reader));
-    migrate(&path).unwrap();
-    let (writer, reader) = load(&path).unwrap();
-    let empty = fetch_notes(&reader, vec![42], Some(page.cursor)).await.unwrap();
-    assert!(empty.notes.is_empty());
-    assert_eq!(empty.cursor, page.cursor);
-    store_note(&writer, note(2, 42), u64::MAX).await.unwrap();
-    let next = fetch_notes(&reader, vec![42], Some(page.cursor)).await.unwrap();
-    assert_eq!(next.notes.len(), 1);
-    assert_eq!(next.cursor.sequence, 8);
+        let builder = if with_nonce {
+            builder
+                .push_code("002_cursor_nonce", migration_002_cursor_nonce::migrate)
+                .unwrap()
+        } else {
+            builder
+        };
+        builder.build().unwrap().bootstrap(&path).unwrap();
+        let original = note(1, 42);
+        let retained_bytes =
+            i64::try_from(original.header.to_bytes().len() + original.details.to_bytes().len())
+                .unwrap();
+        let stored = original.clone();
+        let (writer, reader) = miden_node_db::sqlite::open(&path).unwrap();
+        writer
+            .write("seed legacy database", move |tx| {
+                tx.execute(
+                    "INSERT INTO notes (seq, id, tag, header, details, created_at, after_block_num)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    &[
+                        &7_i64,
+                        &stored.header.id(),
+                        &stored.header.metadata().tag(),
+                        &stored.header,
+                        &stored.details,
+                        &now_micros(),
+                        &stored.after_block_num,
+                    ],
+                )?;
+                queries::update_storage_metadata(tx, 8, retained_bytes)?;
+                Ok::<_, StorageError>(())
+            })
+            .await
+            .unwrap();
+        let nonce = if with_nonce {
+            Some(reader.read("nonce", queries::select_storage_metadata).await.unwrap().nonce)
+        } else {
+            None
+        };
+        drop((writer, reader));
+        assert!(load(&path).is_err());
+        migrate(&path).unwrap();
+        let (writer, reader) = load(&path).unwrap();
+        let page = fetch_notes(&reader, vec![42], None).await.unwrap();
+        assert_eq!(page.notes.len(), 1);
+        assert_eq!(page.notes[0].header, original.header);
+        assert_eq!(page.notes[0].details, original.details);
+        assert_eq!(page.notes[0].after_block_num, original.after_block_num);
+        assert_eq!(page.notes[0].included_in_block, None);
+        assert_eq!(page.cursor.sequence, 7);
+        if let Some(nonce) = nonce {
+            assert_eq!(page.cursor.nonce, nonce);
+        }
+        assert!(matches!(
+            store_note(&writer, note(2, 42), u64::try_from(retained_bytes).unwrap()).await,
+            Err(StorageError::Capacity(_))
+        ));
+        drop((writer, reader));
+        migrate(&path).unwrap();
+        let (writer, reader) = load(&path).unwrap();
+        let empty = fetch_notes(&reader, vec![42], Some(page.cursor)).await.unwrap();
+        assert!(empty.notes.is_empty());
+        assert_eq!(empty.cursor, page.cursor);
+        store_note(&writer, note(2, 42), u64::MAX).await.unwrap();
+        let next = fetch_notes(&reader, vec![42], Some(page.cursor)).await.unwrap();
+        assert_eq!(next.notes.len(), 1);
+        assert_eq!(next.cursor.sequence, 8);
+    }
 }
 
 #[tokio::test]

@@ -9,8 +9,14 @@ Create the database before starting the service:
 
 ```sh
 miden-note-transport bootstrap --data-directory ./note-transport-data
-miden-note-transport start --data-directory ./note-transport-data --max-storage-bytes 1073741824
+miden-note-transport start --data-directory ./note-transport-data --max-storage-bytes 1073741824 --rpc-url http://localhost:57291
 ```
+
+Start requires a trusted node RPC URL. Set `--rpc-url` or `MIDEN_NOTE_TRANSPORT_RPC_URL` to an HTTP or HTTPS endpoint.
+The service uses this node to check note inclusion. It trusts the node's canonical block headers and does not verify
+chain consensus independently. The connection is lazy. A temporary node outage does not prevent startup, `SendNote`, or
+`FetchNotes`. Block lookups use half of the `--grpc.timeout` limit, which defaults to 10 seconds. The remaining time is
+reserved for note validation and storage.
 
 The default listener is `127.0.0.1:57292`. Use `--listen` to change it. Set `MIDEN_NOTE_TRANSPORT_DATA_DIRECTORY`,
 `MIDEN_NOTE_TRANSPORT_LISTEN`, and `MIDEN_NOTE_TRANSPORT_MAX_STORAGE_BYTES` instead of the corresponding flags if
@@ -29,22 +35,44 @@ Each new insertion deletes at most 10 expired notes, ordered by timestamp and th
 idle periods do not trigger cleanup. There is no background cleanup or manual cleanup command.
 
 The insertion, cleanup, and final storage capacity check use one atomic transaction. Cleanup can reclaim space for the
-new note. If there is still insufficient space, the transaction rolls back the insertion and all deletions. Cleanup
-keeps the durable cursor counter. This retention policy requires no schema migration.
+new note. If there is still insufficient space, the transaction rolls back the insertion and all deletions.
 
 ## API
 
-The public `note_transport.Api` service is defined in the workspace protobuf crate. It supports `SendNote` and
-`FetchNotes` over gRPC and gRPC-Web. Standard gRPC health and reflection are available on the same listener. There are
-no note subscriptions or statistics RPCs.
+The public `note_transport.Api` service is defined in the workspace protobuf crate. It supports `SendNote`,
+`SendNoteWithProof`, and `FetchNotes` over gRPC and gRPC-Web. Standard gRPC health and reflection are available on the
+same listener. There are no note subscriptions or statistics RPCs.
+
+### Sending notes
 
 `SendNote` accepts a `SendNoteRequest` whose `note` field contains a `TransportNote` with the shared protocol note
 header and note details. It returns an empty `SendNoteResponse`. The service checks that the details commitment matches
-the header. An optional block hint gives recipients a lower bound for their chain scan. The service stores this hint
-without chain lookup; an absent hint differs from block zero.
+the header. The optional `SendNoteRequest.after_block_num` gives recipients a lower bound for their chain scan. The
+service stores this hint without chain lookup; an absent hint differs from block zero.
+
+`SendNoteWithProof` requires a `TransportNote` and a `NoteInclusionProof`. It checks the note ID, the proof path, and
+the referenced block's note root before storage. This request has no block hint. The service stores the exact inclusion
+block but does not store the proof. This method also returns an empty `SendNoteResponse`.
+
+The service caches up to 1,024 note root commitments from the trusted node, keyed by block number. The cache evicts the
+least recently used entry when full. Failed lookups and invalid headers are not cached. Each submission still verifies
+its inclusion proof against the note root, including cache hits.
+
+Uncached header lookups make up to three attempts for `UNAVAILABLE`, `DEADLINE_EXCEEDED`, or `RESOURCE_EXHAUSTED`
+responses. Attempts use short exponential backoff and individual timeouts. All attempts and delays share half of the
+configured gRPC timeout: 5 seconds with the default 10-second timeout. Missing blocks and invalid headers are not
+retried.
 
 A retry with the same note ID succeeds and keeps the first envelope, timestamp, and cursor. This also applies when the
-retry supplies a different block hint or storage is full.
+`SendNote` retry supplies a different block hint or storage is full. `SendNoteWithProof` validates the proof on every
+request, including duplicates. A valid retry through either method keeps the first envelope. In particular, a verified
+retry does not replace a hint previously stored by `SendNote`.
+
+### Fetching notes
+
+`FetchNotes` returns `FetchedNote` records with the header, details, and two optional block fields. `after_block_num`
+contains the unverified lower bound from `SendNote`. `included_in_block` contains the exact block verified through
+`SendNoteWithProof`. At most one field is present. An absent block differs from block zero.
 
 `FetchNotes` accepts at most 128 tags and an exclusive cursor with a `fixed64` database nonce and a `fixed64` sequence.
 Omit the cursor to start from the first retained note. Store the complete response cursor and use it for the next
@@ -78,14 +106,9 @@ persisted scalar cursors when upgrading clients. Run the database migration befo
 Restoring an older backup also restores its nonce. That recovery procedure must rotate the nonce before the service
 starts. This service does not provide a nonce rotation command.
 
+### Errors
+
 Malformed requests return `INVALID_ARGUMENT`. Note size and storage capacity limits return `RESOURCE_EXHAUSTED`. Storage
-failures return `INTERNAL` and are logged by the service.
-
-## Development
-
-```sh
-cargo test -p miden-note-transport
-make format
-```
-
-The database uses `miden-node-db` transaction and migration helpers. It supports SQLite only.
+failures return `INTERNAL` and are logged by the service. Invalid proofs and conflicting block hints return
+`INVALID_ARGUMENT`. An unknown proof block returns `FAILED_PRECONDITION`. Node lookup failures and invalid node
+responses return `UNAVAILABLE`. Lookup timeouts return `DEADLINE_EXCEEDED`. These failures do not store a note.

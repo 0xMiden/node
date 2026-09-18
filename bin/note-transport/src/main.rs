@@ -7,7 +7,7 @@ use miden_node_tracing::OpenTelemetry;
 use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::fs::ensure_empty_directory;
 use miden_node_utils::shutdown::run_with_shutdown;
-use miden_note_transport::server::{Config, Server};
+use miden_note_transport::server::{Config, Server, parse_rpc_url};
 use miden_note_transport::{COMPONENT, db};
 
 #[derive(Parser)]
@@ -38,6 +38,9 @@ struct DataDirectoryArgs {
 struct StartArgs {
     #[command(flatten)]
     storage: DataDirectoryArgs,
+    /// Trusted node RPC endpoint for note inclusion verification.
+    #[arg(long, env = "MIDEN_NOTE_TRANSPORT_RPC_URL", value_parser = parse_rpc_url)]
+    rpc_url: url::Url,
     #[command(flatten)]
     grpc: GrpcOptions,
     /// Address for gRPC and gRPC-Web requests.
@@ -81,6 +84,7 @@ async fn main() -> anyhow::Result<()> {
                     db::load(&args.storage.data_directory.join("notes.sqlite3"))?;
                 let server = Server::new(
                     Config {
+                        rpc_url: args.rpc_url,
                         max_note_size: args.max_note_size,
                         max_connections: args.max_connections,
                         max_storage_bytes: args.max_storage_bytes,
