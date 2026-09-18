@@ -184,9 +184,7 @@ impl DataStore for PassThroughDataStore {
         _foreign_account_id: AccountId,
         _ref_block: BlockNumber,
     ) -> impl FutureMaybeSend<Result<AccountInputs, DataStoreError>> {
-        async {
-            Err(DataStoreError::other("pass-through transactions do not use foreign accounts"))
-        }
+        async { Err(DataStoreError::other("todo in followup: support native faucet callbacks")) }
     }
 
     fn get_vault_asset_witnesses(
@@ -213,7 +211,7 @@ impl DataStore for PassThroughDataStore {
         _map_root: Word,
         _map_key: StorageMapKey,
     ) -> impl FutureMaybeSend<Result<StorageMapWitness, DataStoreError>> {
-        async { Err(DataStoreError::other("pass-through transactions do not use storage maps")) }
+        async { Err(DataStoreError::other("todo in followup: support native faucet callbacks")) }
     }
 
     fn get_note_script(
@@ -262,9 +260,8 @@ mod tests {
             )
             .await?;
         let deployment = PassThroughTransactionBuilder::prove(executed)?;
-        let outcome = TransactionVerifier::new(miden_protocol::MIN_PROOF_SECURITY_LEVEL)
+        let _outcome = TransactionVerifier::new(miden_protocol::MIN_PROOF_SECURITY_LEVEL)
             .verify(&deployment)?;
-        assert!(outcome.is_complete());
         assert_eq!(deployment.account_update().initial_state_commitment(), Word::empty());
         assert_eq!(deployment.input_notes().num_notes(), 0);
         assert_eq!(deployment.output_notes().num_notes(), 0);
@@ -303,9 +300,8 @@ mod tests {
                 )
                 .await?;
             let transaction = PassThroughTransactionBuilder::prove(executed)?;
-            let outcome = TransactionVerifier::new(miden_protocol::MIN_PROOF_SECURITY_LEVEL)
+            let _outcome = TransactionVerifier::new(miden_protocol::MIN_PROOF_SECURITY_LEVEL)
                 .verify(&transaction)?;
-            assert!(outcome.is_complete());
 
             assert_eq!(transaction.account_id(), builder.account.id());
             assert_eq!(

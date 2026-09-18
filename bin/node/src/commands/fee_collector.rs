@@ -66,7 +66,7 @@ pub struct CreateCommand {
 impl CreateCommand {
     fn handle(self) -> anyhow::Result<()> {
         let output = DataDirectory::load(self.data_directory)?.fee_collector_account_path();
-        let secret_key = AuthSecretKey::new_falcon512_poseidon2();
+        let secret_key = AuthSecretKey::new_ecdsa_k256_keccak();
         let account = AccountBuilder::new(rand::random())
             .account_type(AccountType::Public)
             .with_component(AuthTxFeeCollector::from_public_key(secret_key.public_key()))

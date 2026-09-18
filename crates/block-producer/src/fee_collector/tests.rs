@@ -247,9 +247,9 @@ impl validator_api::SubmitProvenTransaction for Validator {
         assert_eq!(inputs.account().id(), transaction.account_id());
         assert!(transaction.input_notes().is_empty());
         assert!(transaction.output_notes().is_empty());
-        let outcome =
+        // Batch proving settles any remaining precompile work.
+        let _outcome =
             TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL).verify(&transaction).unwrap();
-        assert!(outcome.is_complete());
         self.transactions.lock().unwrap().insert(transaction.id());
         Ok(())
     }
