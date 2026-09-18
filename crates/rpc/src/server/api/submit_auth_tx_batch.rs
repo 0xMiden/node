@@ -26,7 +26,7 @@ impl sequencer_api::SubmitAuthenticatedTxBatch for SequencerInternalService {
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        let (batch, inputs) = spawn_blocking_in_current_span(move || {
+        let (proof, batch, inputs) = spawn_blocking_in_current_span(move || {
             request
                 .decode_and_verify_with(miden_protocol::MIN_PROOF_SECURITY_LEVEL)
                 .map_err(miden_node_proto::errors::conversion_error_to_status)
@@ -41,7 +41,7 @@ impl sequencer_api::SubmitAuthenticatedTxBatch for SequencerInternalService {
         }
 
         self.block_producer
-            .submit_authenticated_tx_batch(batch, inputs)
+            .submit_authenticated_tx_batch(proof, batch, inputs)
             .await
             .map(Into::into)
             .map_err(Into::into)
