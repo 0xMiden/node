@@ -121,6 +121,19 @@ pub async fn deploy_fee_collector(
     Ok(())
 }
 
+/// Checks the collector's committed state and loads its deployed nonce.
+pub(crate) async fn load_deployed_collector(
+    state: &State,
+    account_file: &mut AccountFile,
+) -> anyhow::Result<()> {
+    account_file.account.set_nonce(ONE)?;
+    anyhow::ensure!(
+        collector_is_deployed(state, &account_file.account).await?,
+        "fee collector is not deployed; use miden-node fee-collector deploy",
+    );
+    Ok(())
+}
+
 async fn collector_is_deployed(state: &State, account: &Account) -> anyhow::Result<bool> {
     let response = state
         .view()

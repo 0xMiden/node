@@ -32,6 +32,7 @@ use tokio::net::TcpListener;
 use url::Url;
 
 use super::block_producer::BlockProducerOptions;
+use super::fee_collector::FeeCollectorAccountOptions;
 use super::rpc::SyncOptions;
 use super::runtime::{RuntimeConfig, RuntimeOptions};
 use super::store::StoreOptions;
@@ -44,6 +45,9 @@ use crate::admin::AdminServer;
 pub struct SequencerCommand {
     #[command(flatten)]
     pub runtime: RuntimeOptions,
+
+    #[command(flatten)]
+    pub fee_collector: FeeCollectorAccountOptions,
 
     #[command(flatten)]
     pub external_services: SequencerExternalServiceOptions,
@@ -73,10 +77,15 @@ pub struct SequencerCommand {
 }
 
 impl SequencerCommand {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Keep sequencer service startup and task supervision together"
+    )]
     pub async fn handle(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         self.log_starting();
         let runtime = self.runtime.runtime_config(&self.store);
         self.block_producer.validate()?;
+        let collection_account = self.fee_collector.read(&runtime.data_directory)?;
         let network_tx_auth = self.runtime.rpc.network_tx_auth()?;
         let (validator_clients, validator_monitors) =
             self.external_services.validator_clients_and_monitors()?;
@@ -112,9 +121,12 @@ impl SequencerCommand {
             max_concurrent_proofs: self.block_producer.block.max_concurrent_proofs,
             mempool_tx_capacity: self.block_producer.mempool.tx_capacity,
             batch_workers: self.block_producer.batch.workers,
+            builder_account_id: self.block_producer.builder.wallet_account_id,
+            pass_through_account: collection_account,
         }
-        .spawn(shutdown.clone())
-        .context("failed to spawn sequencer")?;
+        .start(shutdown.clone())
+        .await
+        .context("failed to start sequencer")?;
         let block_producer = sequencer.api();
 
         let rpc = Rpc {

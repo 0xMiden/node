@@ -152,6 +152,12 @@ pub enum BuildBatchError {
     #[error("failed to build proposed transaction batch")]
     ProposeBatchError(#[source] ProposedBatchError),
 
+    #[error("failed to build the batch fee transaction")]
+    BuildBatchFeeTransaction(#[source] anyhow::Error),
+
+    #[error("failed to validate the batch fee transaction")]
+    ValidateBatchFeeTransaction(#[source] anyhow::Error),
+
     #[error("failed to prove proposed transaction batch")]
     ProveBatchError(#[source] ProvenBatchError),
 
@@ -229,6 +235,8 @@ pub enum StoreError {
     GetBlockInclusionProofsFailed(#[source] GetBlockInclusionProofsError),
     #[error("failed to get block header from store")]
     GetBlockHeaderFailed(#[source] GetBlockHeaderError),
+    #[error("failed to get protocol configuration from store")]
+    GetProtocolConfigFailed(#[source] DatabaseError),
     #[error("failed to get note inclusion proofs from store")]
     GetNoteInclusionProofsFailed(#[source] GetNoteInclusionProofsError),
     #[error("failed to apply block to store")]
