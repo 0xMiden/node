@@ -15,7 +15,7 @@ use miden_standards::account::auth::AuthTxFeeCollector;
 use miden_standards::account::wallets::BasicWallet;
 
 pub fn mock_collection_account() -> AccountFile {
-    let key = AuthSecretKey::new_falcon512_poseidon2();
+    let key = AuthSecretKey::new_ecdsa_k256_keccak();
     let account = AccountBuilder::new(rand::random())
         .account_type(AccountType::Public)
         .with_component(AuthTxFeeCollector::from_public_key(key.public_key()))

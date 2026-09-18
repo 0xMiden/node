@@ -49,12 +49,12 @@ pub async fn deploy_fee_collector(
     );
     let mut deployed_account = account_file.account.clone();
     deployed_account.set_nonce(ONE)?;
-    // Deployment creates no output note, so the recipient is not used.
-    let builder = PassThroughTransactionBuilder::new(account_file.account.id(), account_file)?;
     if collector_is_deployed(state, &deployed_account).await? {
         info!(target: LOG_TARGET, "Fee collector is already deployed");
         return Ok(());
     }
+    // Deployment creates no output note, so the recipient is not used.
+    let builder = PassThroughTransactionBuilder::new(account_file.account.id(), account_file)?;
     let validator = BlockProducerValidatorClient::new(validator_urls, validator_timeout)?;
 
     let (header, config, blockchain, genesis) = state
