@@ -47,6 +47,8 @@ use zeroize::Zeroizing;
 
 use super::ValidatorSigningKey;
 
+mod board;
+mod runner;
 #[cfg(test)]
 mod tests;
 
@@ -92,6 +94,12 @@ pub struct DkgOptions {
 /// DKG ceremony commands.
 #[derive(clap::Subcommand)]
 enum DkgCommand {
+    /// Runs the shared Iroh bulletin board for a ceremony.
+    Board(runner::DkgBoardServeOptions),
+
+    /// Runs every ceremony stage for one validator through an Iroh board.
+    Run(runner::DkgRunOptions),
+
     /// Generates this validator's DKG identity and public registration.
     Identity {
         /// Trusted genesis block for the network.
@@ -339,6 +347,8 @@ struct DealingSet {
 /// Runs one DKG ceremony command.
 pub async fn run(options: DkgOptions) -> anyhow::Result<()> {
     match options.command {
+        DkgCommand::Board(options) => runner::serve_board(options).await,
+        DkgCommand::Run(options) => runner::run_validator(options).await,
         DkgCommand::Identity {
             genesis,
             epoch,
@@ -1749,14 +1759,76 @@ fn publish_directory(
 ) -> anyhow::Result<()> {
     ensure!(!output_directory.exists(), "output directory already exists");
     let parent = output_directory.parent().unwrap_or_else(|| Path::new("."));
-    fs_err::create_dir_all(parent).context("failed to create output parent directory")?;
+    durably_create_directory_all(parent).context("failed to create output parent directory")?;
     let temporary = tempfile::Builder::new()
         .prefix(".storage-key-dkg-")
         .tempdir_in(parent)
         .context("failed to create temporary output directory")?;
     write(temporary.path())?;
+    sync_directory_tree(temporary.path())?;
     fs_err::rename(temporary.path(), output_directory)
         .context("failed to publish output directory")?;
+    sync_directory(parent)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_directory(directory: &Path) -> anyhow::Result<()> {
+    std::fs::File::open(directory)
+        .with_context(|| format!("failed to open directory {}", directory.display()))?
+        .sync_all()
+        .with_context(|| format!("failed to sync directory {}", directory.display()))
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_directory: &Path) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn durably_create_directory_all(directory: &Path) -> anyhow::Result<()> {
+    let absolute_directory = if directory.is_absolute() {
+        directory.to_owned()
+    } else {
+        std::env::current_dir()
+            .context("failed to determine current directory")?
+            .join(directory)
+    };
+    let existing_ancestor = absolute_directory
+        .ancestors()
+        .find(|ancestor| ancestor.exists())
+        .context("directory has no existing ancestor")?
+        .to_owned();
+    fs_err::create_dir_all(directory)?;
+
+    let mut current = absolute_directory.as_path();
+    while current != existing_ancestor {
+        current = current.parent().context("directory escaped its existing ancestor")?;
+        sync_directory(current)?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_directory_tree(directory: &Path) -> anyhow::Result<()> {
+    for entry in fs_err::read_dir(directory)
+        .with_context(|| format!("failed to read directory {}", directory.display()))?
+    {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            sync_directory_tree(&entry.path())?;
+        } else if file_type.is_file() {
+            std::fs::File::open(entry.path())
+                .with_context(|| format!("failed to open file {}", entry.path().display()))?
+                .sync_all()
+                .with_context(|| format!("failed to sync file {}", entry.path().display()))?;
+        }
+    }
+    sync_directory(directory)
+}
+
+#[cfg(not(unix))]
+fn sync_directory_tree(_directory: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
