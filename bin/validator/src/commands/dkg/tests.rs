@@ -899,6 +899,153 @@ async fn deal_rejects_unknown_identity_and_existing_output() -> TestResult {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn runner_rejects_another_participants_ticket_before_publishing() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let genesis = write_genesis(root.path())?;
+    let board_directory = root.path().join("board");
+    let (board, tickets) =
+        board::CoordinatorBoard::create_with_network(&board_directory, 3, false).await?;
+    let signer = ValidatorSigner::new_local(genesis.signing_keys[0].clone());
+    let epoch = "66".repeat(32);
+    let work_directory = root.path().join("work");
+    let participant =
+        runner::prepare_local_identity(&genesis.path, &epoch, &signer, &work_directory).await?;
+    let ticket = tickets
+        .iter()
+        .find(|ticket| ticket.participant() != participant.get())
+        .expect("a three-participant ceremony has another participant")
+        .clone();
+    let ticket_participant = ticket.participant();
+    let error = runner::run_validator_with_ticket::<ShareOpeningBackend>(
+        ticket,
+        &genesis.path,
+        &signer,
+        2,
+        &epoch,
+        &work_directory,
+        &root.path().join("bundle"),
+        Duration::from_secs(1),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains(&format!("ticket belongs to participant {ticket_participant}")),
+        "unexpected error: {error:#}"
+    );
+    assert!(
+        board
+            .reader()
+            .read_unique(&board::ArtifactSlot::Registration(ticket_participant))
+            .await?
+            .is_none()
+    );
+    board.shutdown().await?;
+    Ok(())
+}
+
+fn assert_completed_bundles(bundle_directories: &[PathBuf]) -> TestResult {
+    let shared_setup = fs_err::read(bundle_directories[0].join(SETUP_CONTEXT_FILE))?;
+    let shared_public_keys = fs_err::read(bundle_directories[0].join(PUBLIC_KEY_SET_FILE))?;
+    let secret_shares = bundle_directories
+        .iter()
+        .map(|bundle| fs_err::read(bundle.join(SECRET_SHARE_FILE)))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert!(bundle_directories.iter().all(|bundle| {
+        fs_err::read(bundle.join(SETUP_CONTEXT_FILE)).unwrap() == shared_setup
+            && fs_err::read(bundle.join(PUBLIC_KEY_SET_FILE)).unwrap() == shared_public_keys
+    }));
+    assert_ne!(secret_shares[0], secret_shares[1]);
+    assert_ne!(secret_shares[1], secret_shares[2]);
+    assert_ne!(secret_shares[0], secret_shares[2]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn memory_board_runs_complete_ceremony() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let genesis = write_genesis(root.path())?;
+    let board_directory = root.path().join("board");
+    fs_err::create_dir(&board_directory)?;
+    let (board, participant_boards) = board::CoordinatorBoard::create_memory(3)?;
+    let timeout = Duration::from_mins(2);
+    let epoch = "66".repeat(32);
+    let signers = genesis
+        .signing_keys
+        .iter()
+        .cloned()
+        .map(ValidatorSigner::new_local)
+        .collect::<Vec<_>>();
+    let work_directories = (1..=3)
+        .map(|participant| root.path().join(format!("work-{participant}")))
+        .collect::<Vec<_>>();
+    let bundle_directories = (1..=3)
+        .map(|participant| root.path().join(format!("bundle-{participant}")))
+        .collect::<Vec<_>>();
+    let mut participants = Vec::new();
+    for (signer, work_directory) in signers.iter().zip(&work_directories) {
+        fs_err::create_dir(work_directory)?;
+        let participant =
+            runner::prepare_local_identity(&genesis.path, &epoch, signer, work_directory).await?;
+        let position = usize::try_from(participant.get() - 1)?;
+        participants.push((participant, position));
+    }
+
+    let coordinate = runner::coordinate_common_files(
+        &board,
+        &board_directory,
+        &genesis.path,
+        2,
+        &epoch,
+        timeout,
+    );
+    let first = runner::run_validator_on_board::<ShareOpeningBackend>(
+        &participant_boards[participants[0].1],
+        &genesis.path,
+        &signers[0],
+        participants[0].0,
+        2,
+        &epoch,
+        &work_directories[0],
+        &bundle_directories[0],
+        timeout,
+    );
+    let second = runner::run_validator_on_board::<ShareOpeningBackend>(
+        &participant_boards[participants[1].1],
+        &genesis.path,
+        &signers[1],
+        participants[1].0,
+        2,
+        &epoch,
+        &work_directories[1],
+        &bundle_directories[1],
+        timeout,
+    );
+    let third = runner::run_validator_on_board::<ShareOpeningBackend>(
+        &participant_boards[participants[2].1],
+        &genesis.path,
+        &signers[2],
+        participants[2].0,
+        2,
+        &epoch,
+        &work_directories[2],
+        &bundle_directories[2],
+        timeout,
+    );
+    tokio::try_join!(coordinate, first, second, third)?;
+    assert_completed_bundles(&bundle_directories)?;
+
+    for participant_board in participant_boards {
+        participant_board.shutdown().await?;
+    }
+    board.shutdown().await?;
+    Ok(())
+}
+
 #[tokio::test]
 /// Proves a validator can resume from its saved identity after its ceremony process stops.
 #[expect(
@@ -910,7 +1057,7 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
     let genesis = write_genesis(root.path())?;
     let board_directory = root.path().join("board");
     let (board, tickets) =
-        board::BoardNode::create_with_network(&board_directory, 3, false).await?;
+        board::CoordinatorBoard::create_with_network(&board_directory, 3, false).await?;
     let timeout = Duration::from_mins(2);
     let restart_checkpoint_timeout = Duration::from_secs(10);
     let epoch = "66".repeat(32);
@@ -963,6 +1110,23 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
     let bundle_directories = (1..=3)
         .map(|participant| root.path().join(format!("bundle-{participant}")))
         .collect::<Vec<_>>();
+    let mut participant_indices = Vec::new();
+    let mut participant_boards = Vec::new();
+    for ((signer, ticket), work_directory) in signers.iter().zip(&tickets).zip(&work_directories) {
+        fs_err::create_dir_all(work_directory)?;
+        participant_indices.push(
+            runner::prepare_local_identity(&genesis.path, &epoch, signer, work_directory).await?,
+        );
+        participant_boards.push(
+            board::ParticipantBoard::join_with_network(
+                &work_directory.join("board"),
+                ticket.clone(),
+                3,
+                false,
+            )
+            .await?,
+        );
+    }
     let coordinate = runner::coordinate_common_files(
         &board,
         &board_directory,
@@ -971,54 +1135,42 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
         &epoch,
         timeout,
     );
-    let first = runner::run_validator_with_network::<ShareOpeningBackend>(
-        tickets[0].clone(),
+    let first = runner::run_validator_on_board::<ShareOpeningBackend>(
+        &participant_boards[0],
         &genesis.path,
         &signers[0],
+        participant_indices[0],
         2,
         &epoch,
         &work_directories[0],
         &bundle_directories[0],
-        false,
         timeout,
     );
-    let second = runner::run_validator_with_network::<ShareOpeningBackend>(
-        tickets[1].clone(),
+    let second = runner::run_validator_on_board::<ShareOpeningBackend>(
+        &participant_boards[1],
         &genesis.path,
         &signers[1],
+        participant_indices[1],
         2,
         &epoch,
         &work_directories[1],
         &bundle_directories[1],
-        false,
         timeout,
     );
-    let third = runner::run_validator_with_network::<ShareOpeningBackend>(
-        tickets[2].clone(),
+    let third = runner::run_validator_on_board::<ShareOpeningBackend>(
+        &participant_boards[2],
         &genesis.path,
         &signers[2],
+        participant_indices[2],
         2,
         &epoch,
         &work_directories[2],
         &bundle_directories[2],
-        false,
         timeout,
     );
     tokio::try_join!(coordinate, first, second, third)?;
 
-    let shared_setup = fs_err::read(bundle_directories[0].join(SETUP_CONTEXT_FILE))?;
-    let shared_public_keys = fs_err::read(bundle_directories[0].join(PUBLIC_KEY_SET_FILE))?;
-    let secret_shares = bundle_directories
-        .iter()
-        .map(|bundle| fs_err::read(bundle.join(SECRET_SHARE_FILE)))
-        .collect::<Result<Vec<_>, _>>()?;
-    assert!(bundle_directories.iter().all(|bundle| {
-        fs_err::read(bundle.join(SETUP_CONTEXT_FILE)).unwrap() == shared_setup
-            && fs_err::read(bundle.join(PUBLIC_KEY_SET_FILE)).unwrap() == shared_public_keys
-    }));
-    assert_ne!(secret_shares[0], secret_shares[1]);
-    assert_ne!(secret_shares[1], secret_shares[2]);
-    assert_ne!(secret_shares[0], secret_shares[2]);
+    assert_completed_bundles(&bundle_directories)?;
     let common_files = [MANIFEST_FILE, DECRYPTION_CONFIG_FILE, CONTEXT_CONFIG_FILE];
     assert!(common_files.iter().all(|name| {
         let expected = fs_err::read(board_directory.join("ceremony").join(name)).unwrap();
@@ -1027,6 +1179,9 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
             .all(|work| fs_err::read(work.join("ceremony").join(name)).unwrap() == expected)
     }));
 
+    for participant_board in participant_boards {
+        participant_board.shutdown().await?;
+    }
     board.shutdown().await?;
     Ok(())
 }

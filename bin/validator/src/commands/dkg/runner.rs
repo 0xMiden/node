@@ -7,7 +7,15 @@ use golden_core::{EvrfProofBackend, ParticipantIndex};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_validator::ValidatorSigner;
 
-use super::board::{ArtifactSlot, BoardNode, BoardTicket};
+use super::board::{
+    ArtifactSlot,
+    BoardReader,
+    BoardTicket,
+    CommonArtifact,
+    CoordinatorBoard,
+    ParticipantArtifact,
+    ParticipantBoard,
+};
 use super::{
     CONTEXT_CONFIG_FILE,
     CONTEXT_DEALING_FILE,
@@ -120,7 +128,7 @@ pub(super) async fn run_validator(options: DkgRunOptions) -> anyhow::Result<()> 
     ensure!(!board.is_empty(), "storage key DKG board ticket must not be empty");
     let board = board.parse::<BoardTicket>().context("invalid storage key DKG board ticket")?;
     let signer = options.signing_key.into_signer().await?;
-    run_validator_with_network::<SecpSecqBackend>(
+    run_validator_with_ticket::<SecpSecqBackend>(
         board,
         &options.genesis,
         &signer,
@@ -128,7 +136,6 @@ pub(super) async fn run_validator(options: DkgRunOptions) -> anyhow::Result<()> 
         &options.epoch,
         &options.work_directory,
         &options.output_directory,
-        true,
         CEREMONY_WAIT_TIMEOUT,
     )
     .await
@@ -137,11 +144,12 @@ pub(super) async fn run_validator(options: DkgRunOptions) -> anyhow::Result<()> 
 pub(super) async fn serve_board(options: DkgBoardServeOptions) -> anyhow::Result<()> {
     let genesis = read_trusted_genesis(&options.genesis)?;
     let participant_count = genesis.inner().header().validator_config().keys().len();
-    let (board, tickets) = BoardNode::create(&options.data_directory, participant_count).await?;
+    let (board, tickets) =
+        CoordinatorBoard::create(&options.data_directory, participant_count).await?;
     publish_directory(&options.ticket_directory, |temporary| {
         for ticket in &tickets {
             write_new_file(
-                &temporary.join(format!("participant-{}.ticket", ticket.participant)),
+                &temporary.join(format!("participant-{}.ticket", ticket.participant())),
                 ticket.to_string().as_bytes(),
                 true,
             )?;
@@ -173,7 +181,7 @@ pub(super) async fn serve_board(options: DkgBoardServeOptions) -> anyhow::Result
 
 /// Waits for signed registrations, prepares the ceremony, and publishes its common files.
 pub(super) async fn coordinate_common_files(
-    board: &BoardNode,
+    board: &CoordinatorBoard,
     data_directory: &Path,
     genesis_path: &Path,
     threshold: usize,
@@ -191,7 +199,7 @@ pub(super) async fn coordinate_common_files(
 
     let ceremony_directory = data_directory.join(CEREMONY_DIRECTORY);
     if !ceremony_directory.exists() {
-        let registrations = wait_for_registrations(board, validator_keys, timeout).await?;
+        let registrations = wait_for_registrations(board.reader(), validator_keys, timeout).await?;
         let registration_directory = data_directory.join(REGISTRATIONS_DIRECTORY);
         materialize_or_compare(&registration_directory, &registrations)?;
         let paths = registrations
@@ -207,17 +215,17 @@ pub(super) async fn coordinate_common_files(
         "board threshold changed after creation"
     );
     ensure!(ceremony.manifest.epoch == epoch, "board epoch changed after creation");
-    publish_named_file(board, &ArtifactSlot::Manifest, &ceremony_directory.join(MANIFEST_FILE))
+    publish_common_file(board, CommonArtifact::Manifest, &ceremony_directory.join(MANIFEST_FILE))
         .await?;
-    publish_named_file(
+    publish_common_file(
         board,
-        &ArtifactSlot::DecryptionConfig,
+        CommonArtifact::DecryptionConfig,
         &ceremony_directory.join(DECRYPTION_CONFIG_FILE),
     )
     .await?;
-    publish_named_file(
+    publish_common_file(
         board,
-        &ArtifactSlot::ContextConfig,
+        CommonArtifact::ContextConfig,
         &ceremony_directory.join(CONTEXT_CONFIG_FILE),
     )
     .await?;
@@ -225,7 +233,7 @@ pub(super) async fn coordinate_common_files(
 }
 
 async fn wait_for_registrations(
-    board: &BoardNode,
+    board: &BoardReader,
     validator_keys: &[PublicKey],
     timeout: Duration,
 ) -> anyhow::Result<Vec<(String, Vec<u8>)>> {
@@ -251,9 +259,9 @@ async fn wait_for_registrations(
 /// Runs the restartable validator state machine over one board.
 #[expect(
     clippy::too_many_arguments,
-    reason = "the inputs separate ceremony policy, durable paths, and test networking"
+    reason = "the inputs separate ceremony policy from durable paths"
 )]
-pub(super) async fn run_validator_with_network<B>(
+pub(super) async fn run_validator_with_ticket<B>(
     ticket: BoardTicket,
     genesis_path: &Path,
     signer: &ValidatorSigner,
@@ -261,7 +269,6 @@ pub(super) async fn run_validator_with_network<B>(
     epoch: &str,
     work_directory: &Path,
     output_directory: &Path,
-    use_network_services: bool,
     timeout: Duration,
 ) -> anyhow::Result<()>
 where
@@ -279,12 +286,14 @@ where
     );
     decode_fixed_hex::<32>(epoch, "storage-key epoch")?;
     let participant = prepare_local_identity(genesis_path, epoch, signer, work_directory).await?;
+    ensure!(
+        ticket.participant() == participant.get(),
+        "storage key DKG board ticket belongs to participant {}, but the signing key belongs to participant {}",
+        ticket.participant(),
+        participant.get(),
+    );
     let board_directory = work_directory.join(BOARD_DIRECTORY);
-    let board = if use_network_services {
-        BoardNode::join(&board_directory, ticket, participant_count).await?
-    } else {
-        BoardNode::join_with_network(&board_directory, ticket, participant_count, false).await?
-    };
+    let board = ParticipantBoard::join(&board_directory, ticket, participant_count).await?;
     let result = run_validator_on_board::<B>(
         &board,
         genesis_path,
@@ -306,8 +315,8 @@ where
     clippy::too_many_lines,
     reason = "the inputs and linear body mirror the ceremony policy and phase order"
 )]
-async fn run_validator_on_board<B>(
-    board: &BoardNode,
+pub(super) async fn run_validator_on_board<B>(
+    board: &ParticipantBoard,
     genesis_path: &Path,
     signer: &ValidatorSigner,
     participant: ParticipantIndex,
@@ -321,17 +330,20 @@ where
     B: EvrfProofBackend<StorageGroup>,
 {
     let identity_directory = work_directory.join(IDENTITY_DIRECTORY);
-    publish_named_file(
+    publish_participant_file(
         board,
-        &ArtifactSlot::Registration(participant.get()),
+        ParticipantArtifact::Registration,
         &identity_directory.join(REGISTRATION_FILE),
     )
     .await?;
 
     let genesis = read_trusted_genesis(genesis_path)?;
-    let registrations =
-        wait_for_registrations(board, genesis.inner().header().validator_config().keys(), timeout)
-            .await?;
+    let registrations = wait_for_registrations(
+        board.reader(),
+        genesis.inner().header().validator_config().keys(),
+        timeout,
+    )
+    .await?;
     let registration_directory = work_directory.join(REGISTRATIONS_DIRECTORY);
     materialize_or_compare(&registration_directory, &registrations)?;
     let registration_paths = registrations
@@ -345,15 +357,15 @@ where
     let common = vec![
         (
             MANIFEST_FILE.to_owned(),
-            board.wait_unique(&ArtifactSlot::Manifest, timeout).await?,
+            board.reader().wait_unique(&ArtifactSlot::Manifest, timeout).await?,
         ),
         (
             DECRYPTION_CONFIG_FILE.to_owned(),
-            board.wait_unique(&ArtifactSlot::DecryptionConfig, timeout).await?,
+            board.reader().wait_unique(&ArtifactSlot::DecryptionConfig, timeout).await?,
         ),
         (
             CONTEXT_CONFIG_FILE.to_owned(),
-            board.wait_unique(&ArtifactSlot::ContextConfig, timeout).await?,
+            board.reader().wait_unique(&ArtifactSlot::ContextConfig, timeout).await?,
         ),
     ];
     materialize_or_compare(&ceremony_directory, &common)?;
@@ -382,22 +394,22 @@ where
             &mut OsRng,
         )?;
     }
-    publish_named_file(
+    publish_participant_file(
         board,
-        &ArtifactSlot::DecryptionDealing(participant.get()),
+        ParticipantArtifact::DecryptionDealing,
         &dealings_directory.join(DECRYPTION_DEALING_FILE),
     )
     .await?;
-    publish_named_file(
+    publish_participant_file(
         board,
-        &ArtifactSlot::ContextDealing(participant.get()),
+        ParticipantArtifact::ContextDealing,
         &dealings_directory.join(CONTEXT_DEALING_FILE),
     )
     .await?;
 
     let participant_count = ceremony.manifest.participants.len();
     let public_dealings_directory = work_directory.join(PUBLIC_DEALINGS_DIRECTORY);
-    let public_dealings = wait_for_dealings(board, participant_count, timeout).await?;
+    let public_dealings = wait_for_dealings(board.reader(), participant_count, timeout).await?;
     materialize_or_compare(&public_dealings_directory, &public_dealings)?;
     let decryption_dealings = participant_files(
         &public_dealings_directory,
@@ -424,14 +436,14 @@ where
         )
         .await?;
     }
-    publish_named_file(
+    publish_participant_file(
         board,
-        &ArtifactSlot::TranscriptAcceptance(participant.get()),
+        ParticipantArtifact::TranscriptAcceptance,
         &acceptance_directory.join(TRANSCRIPT_ACCEPTANCE_FILE),
     )
     .await?;
 
-    let acceptances = wait_for_acceptances(board, participant_count, timeout).await?;
+    let acceptances = wait_for_acceptances(board.reader(), participant_count, timeout).await?;
     let public_acceptances_directory = work_directory.join(PUBLIC_ACCEPTANCES_DIRECTORY);
     materialize_or_compare(&public_acceptances_directory, &acceptances)?;
     let transcript_path = acceptance_directory.join(TRANSCRIPT_FILE);
@@ -533,7 +545,7 @@ fn validate_local_identity(
 }
 
 async fn wait_for_dealings(
-    board: &BoardNode,
+    board: &BoardReader,
     participant_count: usize,
     timeout: Duration,
 ) -> anyhow::Result<Vec<(String, Vec<u8>)>> {
@@ -557,7 +569,7 @@ async fn wait_for_dealings(
 }
 
 async fn wait_for_acceptances(
-    board: &BoardNode,
+    board: &BoardReader,
     participant_count: usize,
     timeout: Duration,
 ) -> anyhow::Result<Vec<(String, Vec<u8>)>> {
@@ -574,14 +586,24 @@ async fn wait_for_acceptances(
     Ok(acceptances)
 }
 
-async fn publish_named_file(
-    board: &BoardNode,
-    slot: &ArtifactSlot,
+async fn publish_common_file(
+    board: &CoordinatorBoard,
+    artifact: CommonArtifact,
     path: &Path,
 ) -> anyhow::Result<()> {
     let bytes = fs_err::read(path)
         .with_context(|| format!("failed to read ceremony artifact {}", path.display()))?;
-    board.publish(slot, &bytes).await?;
+    board.publish(artifact, &bytes).await
+}
+
+async fn publish_participant_file(
+    board: &ParticipantBoard,
+    artifact: ParticipantArtifact,
+    path: &Path,
+) -> anyhow::Result<()> {
+    let bytes = fs_err::read(path)
+        .with_context(|| format!("failed to read ceremony artifact {}", path.display()))?;
+    board.publish(artifact, &bytes).await?;
     Ok(())
 }
 

@@ -1,4 +1,4 @@
-//! A bounded, append-only exchange for storage key DKG artifacts.
+//! The Iroh adapter for the storage key DKG bulletin board.
 //!
 //! The board process is the only writer to the Iroh document. Validators receive a read-only
 //! document ticket plus a participant-scoped secret for the board's bounded upload protocol. Each
@@ -8,7 +8,6 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::io::Write;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -16,8 +15,8 @@ use std::time::Duration;
 
 use anyhow::{Context, ensure};
 use futures::StreamExt;
-use iroh::endpoint::{Connection, presets};
-use iroh::protocol::{AcceptError, ProtocolHandler, Router};
+use iroh::endpoint::presets;
+use iroh::protocol::Router;
 use iroh::{Endpoint, EndpointAddr, EndpointId, SecretKey};
 use iroh_blobs::api::downloader::{DownloadProgressItem, Downloader};
 use iroh_blobs::store::fs::FsStore;
@@ -32,31 +31,36 @@ use iroh_gossip::net::Gossip;
 use iroh_tickets::{ParseError, Ticket};
 use serde::{Deserialize, Serialize};
 
-use super::{
-    decode_fixed_hex,
-    durably_create_directory_all,
-    publish_directory,
-    sync_directory,
-    write_new_file,
+mod persistence;
+mod upload;
+
+#[cfg(test)]
+use persistence::ENDPOINT_SECRET_FILE;
+use persistence::{
+    BOARD_FORMAT_FILE,
+    BOARD_METADATA_DIRECTORY,
+    DOCUMENT_ID_FILE,
+    UPLOAD_SECRETS_DIRECTORY,
+    load_or_create_endpoint_secret,
+    load_upload_secrets,
+    publish_board_metadata,
+    require_current_board_format,
+};
+#[cfg(test)]
+use upload::upload_artifact_request;
+use upload::{UPLOAD_ALPN, UploadProtocol, upload_artifact};
+
+use super::super::{decode_fixed_hex, durably_create_directory_all};
+use super::core::{
+    ArtifactSlot,
+    BoardCore,
+    MAX_ARTIFACT_BYTES,
+    PublishAction,
+    SlotValues,
+    validate_artifact_length,
 };
 
-const ENDPOINT_SECRET_FILE: &str = "endpoint-secret.hex";
-const BOARD_METADATA_DIRECTORY: &str = "board-meta";
-const DOCUMENT_ID_FILE: &str = "document-id.hex";
-const BOARD_FORMAT_FILE: &str = "board-format";
-const BOARD_FORMAT: &[u8] = b"participant-upload-v4\n";
-const UPLOAD_SECRETS_DIRECTORY: &str = "upload-secrets";
-const UPLOAD_ALPN: &[u8] = b"/miden/storage-key-dkg-board-upload/3";
-const UPLOAD_HEADER_BYTES: usize = 32 + 1 + 4 + 8;
-const UPLOAD_RESPONSE_BYTES: usize = 1 + 32;
-const MAX_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_CONCURRENT_UPLOADS: usize = 3;
-const MAX_UPLOAD_ERROR_BYTES: usize = 1024;
-const UPLOAD_TIMEOUT: Duration = Duration::from_secs(30);
 const PEER_READY_TIMEOUT: Duration = Duration::from_secs(30);
-const COMMON_ARTIFACT_COUNT: usize = 3;
-const ARTIFACTS_PER_PARTICIPANT: usize = 4;
-const MAX_VALUES_PER_SLOT: usize = 2;
 
 /// The board address and read capability, paired with one participant's upload permission.
 ///
@@ -65,8 +69,14 @@ const MAX_VALUES_PER_SLOT: usize = 2;
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct BoardTicket {
     document: DocTicket,
-    pub(super) participant: u32,
+    participant: u32,
     upload_secret: [u8; 32],
+}
+
+impl BoardTicket {
+    pub(super) fn participant(&self) -> u32 {
+        self.participant
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -117,69 +127,50 @@ impl FromStr for BoardTicket {
     }
 }
 
-/// One immutable location in a DKG ceremony document.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) enum ArtifactSlot {
-    Registration(u32),
-    Manifest,
-    DecryptionConfig,
-    ContextConfig,
-    DecryptionDealing(u32),
-    ContextDealing(u32),
-    TranscriptAcceptance(u32),
+pub(super) fn validate_ticket(value: &str) -> anyhow::Result<u32> {
+    Ok(BoardTicket::from_str(value)?.participant())
+}
+
+pub(super) async fn create(
+    data_directory: &Path,
+    participant_count: usize,
+    use_network_services: bool,
+) -> anyhow::Result<(BoardNode, Vec<(String, u32)>)> {
+    let (node, tickets) =
+        BoardNode::create_with_network(data_directory, participant_count, use_network_services)
+            .await?;
+    let tickets = tickets
+        .into_iter()
+        .map(|ticket| {
+            let participant = ticket.participant();
+            (ticket.to_string(), participant)
+        })
+        .collect();
+    Ok((node, tickets))
+}
+
+pub(super) async fn join(
+    data_directory: &Path,
+    encoded_ticket: &str,
+    participant_count: usize,
+    use_network_services: bool,
+) -> anyhow::Result<BoardNode> {
+    let ticket = BoardTicket::from_str(encoded_ticket)?;
+    BoardNode::join_with_network(data_directory, ticket, participant_count, use_network_services)
+        .await
 }
 
 impl ArtifactSlot {
-    fn prefix(&self) -> String {
-        match self {
-            Self::Registration(participant) => format!("registration/{participant}/"),
-            Self::Manifest => "common/manifest/".to_owned(),
-            Self::DecryptionConfig => "common/decryption-config/".to_owned(),
-            Self::ContextConfig => "common/context-config/".to_owned(),
-            Self::DecryptionDealing(participant) => {
-                format!("dealing/{participant}/decryption/")
-            },
-            Self::ContextDealing(participant) => format!("dealing/{participant}/context/"),
-            Self::TranscriptAcceptance(participant) => {
-                format!("acceptance/{participant}/signature/")
-            },
-        }
-    }
-
     fn key(&self, hash: Hash) -> String {
         format!("{}{}", self.prefix(), hash.to_hex())
-    }
-
-    fn upload_fields(&self) -> anyhow::Result<(u8, u32)> {
-        let fields = match self {
-            Self::Registration(participant) => (1, *participant),
-            Self::DecryptionDealing(participant) => (2, *participant),
-            Self::ContextDealing(participant) => (3, *participant),
-            Self::TranscriptAcceptance(participant) => (4, *participant),
-            Self::Manifest | Self::DecryptionConfig | Self::ContextConfig => {
-                anyhow::bail!("only the DKG board may publish common ceremony artifacts")
-            },
-        };
-        Ok(fields)
-    }
-
-    fn from_upload_fields(kind: u8, participant: u32) -> anyhow::Result<Self> {
-        ensure!(participant > 0, "DKG board participant index must be nonzero");
-        match kind {
-            1 => Ok(Self::Registration(participant)),
-            2 => Ok(Self::DecryptionDealing(participant)),
-            3 => Ok(Self::ContextDealing(participant)),
-            4 => Ok(Self::TranscriptAcceptance(participant)),
-            _ => anyhow::bail!("DKG board upload contains an unknown artifact kind"),
-        }
     }
 }
 
 #[derive(Clone, Debug)]
 struct BoardWriter {
     author: iroh_docs::AuthorId,
+    core: Arc<BoardCore>,
     document: Doc,
-    allowed_prefixes: Arc<Vec<String>>,
     lock: Arc<tokio::sync::Mutex<()>>,
 }
 
@@ -194,22 +185,14 @@ enum Publisher {
     },
 }
 
-#[derive(Clone, Debug)]
-struct UploadProtocol {
-    permits: Arc<tokio::sync::Semaphore>,
-    upload_secrets: Arc<Vec<[u8; 32]>>,
-    writer: BoardWriter,
-}
-
 /// A persistent Iroh node joined to one ceremony document.
 pub(super) struct BoardNode {
     blobs: FsStore,
+    core: Arc<BoardCore>,
     document: Doc,
     downloader: Downloader,
     event_error: tokio::sync::watch::Receiver<Option<String>>,
     event_task: tokio::task::JoinHandle<()>,
-    allowed_prefixes: Arc<Vec<String>>,
-    max_document_entries: usize,
     peer_ready: tokio::sync::watch::Receiver<bool>,
     publisher: Publisher,
     remote_providers: std::sync::Arc<tokio::sync::RwLock<BTreeMap<Hash, Vec<EndpointId>>>>,
@@ -242,14 +225,6 @@ impl Drop for BoardNode {
 }
 
 impl BoardNode {
-    /// Creates a new ceremony document and returns one scoped ticket per participant.
-    pub(super) async fn create(
-        data_directory: &Path,
-        participant_count: usize,
-    ) -> anyhow::Result<(Self, Vec<BoardTicket>)> {
-        Self::create_with_network(data_directory, participant_count, true).await
-    }
-
     pub(super) async fn create_with_network(
         data_directory: &Path,
         participant_count: usize,
@@ -337,15 +312,6 @@ impl BoardNode {
         Ok((board, tickets))
     }
 
-    /// Joins an existing ceremony document through its read and upload ticket.
-    pub(super) async fn join(
-        data_directory: &Path,
-        ticket: BoardTicket,
-        participant_count: usize,
-    ) -> anyhow::Result<Self> {
-        Self::join_with_network(data_directory, ticket, participant_count, true).await
-    }
-
     pub(super) async fn join_with_network(
         data_directory: &Path,
         ticket: BoardTicket,
@@ -425,6 +391,7 @@ impl BoardNode {
 
     /// Reads the unique content value published for one artifact slot.
     pub(super) async fn read_unique(&self, slot: &ArtifactSlot) -> anyhow::Result<Option<Vec<u8>>> {
+        self.core.validate_slot(slot)?;
         self.validate_document_metadata().await?;
         let prefix = slot.prefix();
         let entries = self
@@ -498,14 +465,17 @@ impl BoardNode {
             );
             values.entry(hash).or_insert_with(|| bytes.to_vec());
         }
-        ensure!(values.len() <= 1, "DKG board contains conflicting artifacts for {prefix}");
-        Ok(values.into_values().next())
+        SlotValues::from_values(values.into_values()).into_unique(slot)
     }
 
     async fn validate_document_metadata(&self) -> anyhow::Result<()> {
         self.ensure_admitted()?;
-        inspect_document_metadata(&self.document, &self.allowed_prefixes, self.max_document_entries)
-            .await
+        inspect_document_metadata(
+            &self.document,
+            self.core.allowed_prefixes(),
+            self.core.max_document_entries(),
+        )
+        .await
     }
 
     fn ensure_admitted(&self) -> anyhow::Result<()> {
@@ -562,22 +532,9 @@ impl BoardNode {
     }
 }
 
-fn validate_artifact_length(length: usize) -> anyhow::Result<()> {
-    ensure!(length > 0, "DKG board artifact must not be empty");
-    ensure!(
-        u64::try_from(length).context("artifact length does not fit u64")? <= MAX_ARTIFACT_BYTES,
-        "DKG board artifact exceeds {MAX_ARTIFACT_BYTES} bytes",
-    );
-    Ok(())
-}
-
 impl BoardWriter {
     fn validate_slot(&self, slot: &ArtifactSlot) -> anyhow::Result<()> {
-        ensure!(
-            self.allowed_prefixes.contains(&slot.prefix()),
-            "DKG board upload targets an unknown participant or artifact slot"
-        );
-        Ok(())
+        self.core.validate_slot(slot)
     }
 
     async fn store(&self, slot: &ArtifactSlot, value: &[u8]) -> anyhow::Result<Hash> {
@@ -595,14 +552,11 @@ impl BoardWriter {
         let mut hashes = Vec::new();
         while let Some(entry) = entries.next().await {
             let entry = entry.context("failed to read DKG board artifact slot")?;
-            if entry.content_hash() == expected_hash {
-                return Ok(expected_hash);
-            }
             hashes.push(entry.content_hash());
-            ensure!(
-                hashes.len() < MAX_VALUES_PER_SLOT,
-                "DKG board artifact slot already contains conflicting values"
-            );
+        }
+        match SlotValues::from_values(hashes).publish(&expected_hash)? {
+            PublishAction::AlreadyPresent => return Ok(expected_hash),
+            PublishAction::Insert => {},
         }
 
         let stored_hash = self
@@ -613,171 +567,6 @@ impl BoardWriter {
         ensure!(stored_hash == expected_hash, "Iroh stored artifact under an unexpected hash");
         Ok(stored_hash)
     }
-}
-
-impl UploadProtocol {
-    async fn receive(&self, recv: &mut iroh::endpoint::RecvStream) -> anyhow::Result<Hash> {
-        let mut header = [0u8; UPLOAD_HEADER_BYTES];
-        recv.read_exact(&mut header)
-            .await
-            .context("failed to read DKG board upload header")?;
-        let kind = header[32];
-        let participant = u32::from_be_bytes(header[33..37].try_into().expect("fixed slice"));
-        let secret_position = usize::try_from(participant)
-            .context("participant index does not fit usize")?
-            .checked_sub(1)
-            .context("DKG board participant index must be nonzero")?;
-        let expected_secret = self
-            .upload_secrets
-            .get(secret_position)
-            .context("DKG board upload targets an unknown participant")?;
-        ensure!(
-            secrets_match(&header[..32], expected_secret),
-            "DKG board ticket does not authorize this participant"
-        );
-        let length = u64::from_be_bytes(header[37..45].try_into().expect("fixed slice"));
-        ensure!(
-            length > 0 && length <= MAX_ARTIFACT_BYTES,
-            "DKG board artifact exceeds {MAX_ARTIFACT_BYTES} bytes"
-        );
-        let slot = ArtifactSlot::from_upload_fields(kind, participant)?;
-        self.writer.validate_slot(&slot)?;
-        let length = usize::try_from(length).context("DKG board artifact length is too large")?;
-        let mut value = vec![0u8; length];
-        recv.read_exact(&mut value)
-            .await
-            .context("failed to read DKG board upload body")?;
-        recv.read_to_end(0).await.context("DKG board upload has trailing bytes")?;
-        self.writer.store(&slot, &value).await
-    }
-}
-
-impl ProtocolHandler for UploadProtocol {
-    async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
-        if let Ok(result) =
-            tokio::time::timeout(UPLOAD_TIMEOUT, self.serve_connection(&connection)).await
-        {
-            result
-        } else {
-            connection.close(1u32.into(), b"DKG board upload timed out");
-            Ok(())
-        }
-    }
-}
-
-impl UploadProtocol {
-    async fn serve_connection(&self, connection: &Connection) -> Result<(), AcceptError> {
-        let _permit = self.permits.acquire().await.map_err(AcceptError::from_err)?;
-        let (mut send, mut recv) = connection.accept_bi().await?;
-        let response = match self.receive(&mut recv).await {
-            Ok(hash) => {
-                let mut response = Vec::with_capacity(UPLOAD_RESPONSE_BYTES);
-                response.push(0);
-                response.extend_from_slice(hash.as_bytes());
-                response
-            },
-            Err(error) => upload_error_response(&error),
-        };
-        send.write_all(&response).await.map_err(AcceptError::from_err)?;
-        send.finish()?;
-        connection.closed().await;
-        Ok(())
-    }
-}
-
-async fn upload_artifact(
-    endpoint: &Endpoint,
-    target: &EndpointAddr,
-    authorized_participant: u32,
-    upload_secret: &[u8; 32],
-    slot: &ArtifactSlot,
-    value: &[u8],
-) -> anyhow::Result<Hash> {
-    validate_artifact_length(value.len())?;
-    let (kind, participant) = slot.upload_fields()?;
-    ensure!(
-        participant == authorized_participant,
-        "DKG board ticket does not authorize participant {participant}"
-    );
-    upload_artifact_request(
-        endpoint,
-        target,
-        upload_secret,
-        kind,
-        participant,
-        u64::try_from(value.len()).context("artifact length does not fit u64")?,
-        value,
-    )
-    .await
-}
-
-async fn upload_artifact_request(
-    endpoint: &Endpoint,
-    target: &EndpointAddr,
-    upload_secret: &[u8; 32],
-    kind: u8,
-    participant: u32,
-    declared_length: u64,
-    value: &[u8],
-) -> anyhow::Result<Hash> {
-    let connection = endpoint
-        .connect(target.clone(), UPLOAD_ALPN)
-        .await
-        .context("failed to connect to the DKG board upload service")?;
-    let (mut send, mut recv) =
-        connection.open_bi().await.context("failed to open a DKG board upload stream")?;
-    let mut header = [0u8; UPLOAD_HEADER_BYTES];
-    header[..32].copy_from_slice(upload_secret);
-    header[32] = kind;
-    header[33..37].copy_from_slice(&participant.to_be_bytes());
-    header[37..45].copy_from_slice(&declared_length.to_be_bytes());
-    send.write_all(&header)
-        .await
-        .context("failed to write DKG board upload header")?;
-    send.write_all(value).await.context("failed to write DKG board upload body")?;
-    send.finish().context("failed to finish DKG board upload")?;
-    let response = tokio::time::timeout(
-        UPLOAD_TIMEOUT,
-        recv.read_to_end(UPLOAD_RESPONSE_BYTES + MAX_UPLOAD_ERROR_BYTES),
-    )
-    .await
-    .context("timed out waiting for the DKG board upload response")?
-    .context("failed to read DKG board upload response")?;
-    connection.close(0u32.into(), b"upload complete");
-    ensure!(!response.is_empty(), "DKG board returned an empty upload response");
-    if response[0] != 0 {
-        let message = std::str::from_utf8(&response[1..])
-            .context("DKG board returned a non-UTF-8 upload error")?;
-        anyhow::bail!("DKG board rejected the artifact: {message}");
-    }
-    ensure!(
-        response.len() == UPLOAD_RESPONSE_BYTES,
-        "DKG board returned an invalid upload response"
-    );
-    Ok(Hash::from_bytes(response[1..].try_into().expect("validated response length")))
-}
-
-fn upload_error_response(error: &anyhow::Error) -> Vec<u8> {
-    let mut message = format!("{error:#}");
-    if message.len() > MAX_UPLOAD_ERROR_BYTES {
-        let mut end = MAX_UPLOAD_ERROR_BYTES;
-        while !message.is_char_boundary(end) {
-            end -= 1;
-        }
-        message.truncate(end);
-    }
-    let mut response = Vec::with_capacity(1 + message.len());
-    response.push(1);
-    response.extend_from_slice(message.as_bytes());
-    response
-}
-
-fn secrets_match(candidate: &[u8], expected: &[u8; 32]) -> bool {
-    candidate
-        .iter()
-        .zip(expected)
-        .fold(0u8, |difference, (left, right)| difference | (left ^ right))
-        == 0
 }
 
 impl BoardRuntime {
@@ -828,24 +617,17 @@ impl BoardRuntime {
         served_upload_secrets: Option<Vec<[u8; 32]>>,
         remote_upload: Option<(EndpointAddr, u32, [u8; 32])>,
     ) -> anyhow::Result<BoardNode> {
-        ensure!(participant_count > 0, "DKG board requires at least one participant");
         ensure!(
             served_upload_secrets.is_some() ^ remote_upload.is_some(),
             "DKG board must either serve or submit uploads"
         );
-        let artifact_slot_count = participant_count
-            .checked_mul(ARTIFACTS_PER_PARTICIPANT)
-            .and_then(|count| count.checked_add(COMMON_ARTIFACT_COUNT))
-            .context("DKG board participant count is too large")?;
-        let max_document_entries = artifact_slot_count
-            .checked_mul(MAX_VALUES_PER_SLOT)
-            .context("DKG board participant count is too large")?;
-        let allowed_prefixes = Arc::new(allowed_slot_prefixes(participant_count)?);
-        inspect_document_metadata(&document, &allowed_prefixes, max_document_entries).await?;
+        let core = Arc::new(BoardCore::new(participant_count)?);
+        inspect_document_metadata(&document, core.allowed_prefixes(), core.max_document_entries())
+            .await?;
         let writer = BoardWriter {
             author: self.author,
+            core: core.clone(),
             document: document.clone(),
-            allowed_prefixes: allowed_prefixes.clone(),
             lock: Arc::new(tokio::sync::Mutex::new(())),
         };
         let publisher = match remote_upload {
@@ -866,25 +648,17 @@ impl BoardRuntime {
                 upload_secrets.len() == participant_count,
                 "DKG board requires one upload secret per participant"
             );
-            router = router.accept(
-                UPLOAD_ALPN,
-                UploadProtocol {
-                    permits: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_UPLOADS)),
-                    upload_secrets: Arc::new(upload_secrets),
-                    writer,
-                },
-            );
+            router = router.accept(UPLOAD_ALPN, UploadProtocol::new(upload_secrets, writer));
         }
         let router = router.spawn();
         let events = BoardEvents::start(&document).await?;
         Ok(BoardNode {
             blobs: self.blobs,
+            core,
             document,
             downloader: self.downloader,
             event_error: events.error,
             event_task: events.task,
-            allowed_prefixes,
-            max_document_entries,
             peer_ready: events.peer_ready,
             publisher,
             remote_providers: events.remote_providers,
@@ -956,24 +730,6 @@ impl BoardEvents {
     }
 }
 
-fn allowed_slot_prefixes(participant_count: usize) -> anyhow::Result<Vec<String>> {
-    let mut prefixes = vec![
-        ArtifactSlot::Manifest.prefix(),
-        ArtifactSlot::DecryptionConfig.prefix(),
-        ArtifactSlot::ContextConfig.prefix(),
-    ];
-    for position in 0..participant_count {
-        let participant = u32::try_from(position + 1).context("too many DKG participants")?;
-        prefixes.extend([
-            ArtifactSlot::Registration(participant).prefix(),
-            ArtifactSlot::DecryptionDealing(participant).prefix(),
-            ArtifactSlot::ContextDealing(participant).prefix(),
-            ArtifactSlot::TranscriptAcceptance(participant).prefix(),
-        ]);
-    }
-    Ok(prefixes)
-}
-
 async fn inspect_document_metadata(
     document: &Doc,
     allowed_prefixes: &[String],
@@ -1004,99 +760,6 @@ async fn inspect_document_metadata(
             ensure!(previous == hash, "DKG board contains conflicting artifacts for {prefix}");
         }
     }
-    Ok(())
-}
-
-fn load_or_create_endpoint_secret(data_directory: &Path) -> anyhow::Result<SecretKey> {
-    let path = data_directory.join(ENDPOINT_SECRET_FILE);
-    if path.exists() {
-        let encoded = fs_err::read_to_string(&path)
-            .with_context(|| format!("failed to read Iroh endpoint secret {}", path.display()))?;
-        return SecretKey::from_str(encoded.trim()).context("invalid Iroh endpoint secret");
-    }
-
-    let secret = SecretKey::generate();
-    let mut temporary = tempfile::Builder::new()
-        .prefix(".endpoint-secret-")
-        .tempfile_in(data_directory)
-        .context("failed to create temporary Iroh endpoint secret")?;
-    temporary
-        .write_all(hex::encode(secret.to_bytes()).as_bytes())
-        .context("failed to write temporary Iroh endpoint secret")?;
-    temporary
-        .as_file()
-        .sync_all()
-        .context("failed to sync temporary Iroh endpoint secret")?;
-    temporary
-        .persist_noclobber(&path)
-        .map_err(|error| error.error)
-        .with_context(|| format!("failed to publish Iroh endpoint secret {}", path.display()))?;
-    sync_directory(data_directory)?;
-    Ok(secret)
-}
-
-fn publish_board_metadata(
-    path: &Path,
-    document: &Doc,
-    upload_secrets: &[[u8; 32]],
-) -> anyhow::Result<()> {
-    publish_directory(path, |temporary| {
-        write_new_file(
-            &temporary.join(DOCUMENT_ID_FILE),
-            hex::encode(document.id().to_bytes()).as_bytes(),
-            true,
-        )?;
-        write_new_file(&temporary.join(BOARD_FORMAT_FILE), BOARD_FORMAT, true)?;
-        let upload_secrets_directory = temporary.join(UPLOAD_SECRETS_DIRECTORY);
-        fs_err::create_dir(&upload_secrets_directory).with_context(|| {
-            format!(
-                "failed to create DKG board upload secrets {}",
-                upload_secrets_directory.display()
-            )
-        })?;
-        for (position, secret) in upload_secrets.iter().enumerate() {
-            write_new_file(
-                &upload_secrets_directory.join(format!("participant-{}.hex", position + 1)),
-                hex::encode(secret).as_bytes(),
-                true,
-            )?;
-        }
-        Ok(())
-    })
-}
-
-fn load_upload_secrets(
-    metadata_directory: &Path,
-    participant_count: usize,
-) -> anyhow::Result<Vec<[u8; 32]>> {
-    let path = metadata_directory.join(UPLOAD_SECRETS_DIRECTORY);
-    let entry_count = fs_err::read_dir(&path)
-        .with_context(|| format!("failed to read DKG board upload secrets {}", path.display()))?
-        .collect::<Result<Vec<_>, _>>()?
-        .len();
-    ensure!(
-        entry_count == participant_count,
-        "DKG board upload secret count does not match the participant count"
-    );
-    (1..=participant_count)
-        .map(|participant| {
-            let secret_path = path.join(format!("participant-{participant}.hex"));
-            let bytes = fs_err::read_to_string(&secret_path).with_context(|| {
-                format!("failed to read DKG board upload secret {}", secret_path.display())
-            })?;
-            decode_fixed_hex::<32>(bytes.trim(), "DKG board upload secret")
-        })
-        .collect()
-}
-
-fn require_current_board_format(metadata_directory: &Path) -> anyhow::Result<()> {
-    let path = metadata_directory.join(BOARD_FORMAT_FILE);
-    let format = fs_err::read(&path)
-        .with_context(|| format!("failed to read DKG board format {}", path.display()))?;
-    ensure!(
-        format == BOARD_FORMAT,
-        "unsupported DKG board format; start a new ceremony in a new data directory"
-    );
     Ok(())
 }
 
