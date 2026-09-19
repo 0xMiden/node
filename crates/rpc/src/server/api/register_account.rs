@@ -1,5 +1,5 @@
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
-use miden_node_store::allowlist::{AllowlistError, InvitationCode};
+use miden_node_store::allowlist::{AllowlistError, InvitationCode, RegistrationOutcome};
 use miden_node_tracing::{ErrorReport, miden_instrument, miden_span_record};
 use miden_protocol::account::AccountId;
 use tonic::{Code, Request, Status};
@@ -40,20 +40,30 @@ impl proto::server::rpc_api::RegisterAccount for RpcService {
             .map_err(|error| Status::invalid_argument(error.to_string()))?;
 
         match &self.backend {
-            RpcBackend::Sequencer { account_admission, .. } => account_admission
-                .allowlist
-                .register_account(invitation, account_id)
-                .await
-                .map(|_| ())
-                .map_err(|error| {
-                    let code = match &error {
-                        AllowlistError::InvitationNotFound => Code::NotFound,
-                        AllowlistError::InvitationAlreadyUsed
-                        | AllowlistError::AccountAlreadyRegistered(_) => Code::AlreadyExists,
-                        AllowlistError::Database(_) => Code::Internal,
-                    };
-                    Status::new(code, error.as_report())
-                }),
+            RpcBackend::Sequencer { account_admission, .. } => {
+                let outcome = account_admission
+                    .allowlist
+                    .register_account(invitation, account_id)
+                    .await
+                    .map_err(|error| {
+                        let code = match &error {
+                            AllowlistError::InvitationNotFound => Code::NotFound,
+                            AllowlistError::InvitationAlreadyUsed
+                            | AllowlistError::AccountAlreadyRegistered(_) => Code::AlreadyExists,
+                            AllowlistError::Database(_) => Code::Internal,
+                        };
+                        Status::new(code, error.as_report())
+                    })?;
+                if outcome == RegistrationOutcome::Registered
+                    && let Some(funding) = &account_admission.funding
+                {
+                    funding
+                        .fund(account_id)
+                        .await
+                        .map_err(|error| Status::unavailable(error.as_report()))?;
+                }
+                Ok(())
+            },
             RpcBackend::FullNode { source_rpc, .. } => {
                 let mut request = Request::new(request);
                 if let Some(accept) = metadata.get(http::header::ACCEPT.as_str()) {
