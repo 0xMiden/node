@@ -3,7 +3,6 @@
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
 
 use arc_swap::ArcSwap;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
@@ -32,15 +31,7 @@ use crate::state::loader::{
     verify_tree_consistency,
 };
 use crate::state::writer::{WriteRequest, WriteWorker, WriterTask};
-use crate::state::{
-    BlockCache,
-    BlockWriter,
-    ProofCache,
-    ProofWriter,
-    SnapshotGuard,
-    State,
-    StateSnapshot,
-};
+use crate::state::{BlockCache, BlockWriter, ProofCache, ProofWriter, State, StateSnapshot};
 use crate::{COMPONENT, DataDirectory, DatabaseOptions};
 
 /// Awaits a spawned load task, forwarding its result.
@@ -291,9 +282,6 @@ impl State {
         let block_cache = BlockCache::new(BLOCK_CACHE_CAPACITY);
         let proof_cache = ProofCache::new(PROOF_CACHE_CAPACITY);
 
-        // Shared counter of live snapshot generations, for observability.
-        let snapshots_live = Arc::new(AtomicUsize::new(0));
-
         // Create the initial snapshot from reader views of the just-loaded trees.
         let initial_snapshot = Arc::new(StateSnapshot::new(
             nullifier_tree
@@ -304,7 +292,6 @@ impl State {
             forest
                 .reader()
                 .map_err(|e| StateInitializationError::AccountStateForestIoError(e.as_report()))?,
-            SnapshotGuard::new(Arc::clone(&snapshots_live), latest_block_num),
         ));
         let latest_snapshot = Arc::new(ArcSwap::from(initial_snapshot));
 
@@ -324,7 +311,6 @@ impl State {
             account_tree,
             blockchain,
             forest,
-            snapshots_live,
             apply_block_thread_priority,
         );
         let state = Self {
