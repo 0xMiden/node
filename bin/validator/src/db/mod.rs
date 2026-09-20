@@ -468,8 +468,8 @@ mod tests {
         assert!(!db_path.exists());
     }
 
-    /// Migrating a database must keep every record readable, including records that were sealed
-    /// in an earlier format. A record authenticates its own format version, so a migration cannot
+    /// Migrating a database must keep every record readable, including records that were sealed in
+    /// an earlier format. A record authenticates its own format version, so a migration cannot
     /// reinterpret an existing record as a later format.
     #[tokio::test]
     async fn migration_preserves_headers_and_private_records() {

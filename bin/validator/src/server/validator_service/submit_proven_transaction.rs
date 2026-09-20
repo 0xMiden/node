@@ -70,8 +70,8 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
         let private_record_payload =
             grpc::transaction::TransactionEffects::from(&effects).encode_to_vec();
 
-        // Encrypt the effects under a fresh content key. Sealing runs secp256k1 group
-        // operations, so it goes to a blocking thread rather than stalling an async worker.
+        // Encrypt the effects under a fresh content key. Sealing runs secp256k1 group operations,
+        // so it goes to a blocking thread rather than stalling an async worker.
         let record_id = PrivateRecordId::new(tx_id, &self.signer.public_key());
         let context = PrivateRecordContext::new(
             self.private_record_chain_id,
