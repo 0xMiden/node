@@ -97,8 +97,11 @@ jobs:
   docker:
     name: Docker dry-run
     permissions:
+      # Reusable-workflow permission ceiling; dry-run jobs do not receive these writes.
+      attestations: write
       contents: read
       id-token: write
+      packages: write
     uses: ./.github/workflows/docker.yml
     with:
       mode: dry-run

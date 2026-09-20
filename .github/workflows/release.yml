@@ -264,13 +264,16 @@ jobs:
     needs: [preflight, check-crate-builds, dry-run-crates, check-msrv, stage-docker]
     if: ${{ github.repository_owner == '0xMiden' }}
     permissions:
+      attestations: write
       contents: read
+      id-token: write
       packages: write
     uses: ./.github/workflows/docker.yml
     with:
       mode: promote
       ref: ${{ needs.preflight.outputs.tag }}
       created: ${{ needs.preflight.outputs.created }}
+      staged_tag: ${{ needs.stage-docker.outputs.immutable_tag }}
 
   publish-github-release:
     name: Publish GitHub release
