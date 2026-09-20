@@ -1,5 +1,5 @@
 //! Records a transaction that this validator has re-executed and validated, together with its
-//! encrypted private inputs.
+//! encrypted private record.
 
 use miden_node_db::DatabaseError;
 use miden_node_db::sqlite::WriteTx;
@@ -8,7 +8,7 @@ use crate::StoredPrivateRecord;
 
 const SQL: &str = include_str!("insert_validated_private_transaction.sql");
 
-/// Inserts a validated transaction and its encrypted private inputs.
+/// Inserts a validated transaction and its encrypted private record.
 ///
 /// Returns the number of inserted rows, which is zero if the transaction was already recorded.
 pub fn insert_validated_private_transaction(

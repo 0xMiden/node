@@ -58,7 +58,14 @@ The unseal happens before the serve lock is taken, so a slow or hung decrypt bac
 the exclusive lock that a backup block subscription needs. The cost is that an already-validated
 resubmission pays for the unseal before being short-circuited.
 
-After the proof, re-execution, and header checks pass, the validator encrypts the validated inputs
-under a fresh content key. Golden EHTDH1 protects that content key with the validators' threshold
-key. The validator stores only the transaction ID and the protected record. It does not store the
-client envelope or plaintext. A rejected transaction never creates a record.
+After the proof, re-execution, and header checks pass, the validator encrypts the effects of the
+re-executed transaction under a fresh content key. Golden EHTDH1 protects that content key with the
+validators' threshold key. The validator stores only the transaction ID and the protected record. It
+does not store the client envelope or plaintext. A rejected transaction never creates a record.
+
+The record holds a `TransactionEffects` message in its canonical Protobuf encoding. The effects
+state what the transaction did: the account state commitments, the account patch, the input and
+output notes, the reference block, and the expiration block. They omit the partial account, the
+partial blockchain, the advice witness, and the transaction arguments, so a record is evidence of a
+transaction rather than a means to execute it again. A record names its own format in
+`format_version`, and both encryption layers authenticate that version.

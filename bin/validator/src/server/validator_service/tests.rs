@@ -6,8 +6,16 @@ use miden_node_proto::domain::encryption::{
     transaction_inputs_associated_data,
 };
 use miden_node_proto::generated::{self as proto};
+use miden_node_proto::prost::Message;
 use miden_node_proto::server::validator_api;
-use miden_node_proto::{BuildUnchecked, DecodeMessage, SignBlockRequest, Verify, VerifyWith};
+use miden_node_proto::{
+    BuildUnchecked,
+    DecodeMessage,
+    DecodeMessageExt,
+    SignBlockRequest,
+    Verify,
+    VerifyWith,
+};
 use miden_node_store::{BlockStore, GenesisState};
 use miden_node_utils::fee::{test_fee_params, test_protocol_config};
 use miden_node_utils::testing::{
@@ -43,6 +51,7 @@ use miden_protocol::transaction::{
     OutputNote,
     PartialBlockchain,
     ProvenTransaction,
+    TransactionEffects,
     TransactionId,
     TransactionInputs,
     TxAccountUpdate,
@@ -51,6 +60,8 @@ use miden_protocol::vm::ExecutionProof;
 use miden_testing::{Auth, MockChainBuilder};
 use miden_tx::LocalTransactionProver;
 use miden_tx::utils::serde::{Deserializable, Serializable};
+use rand_chacha_03::ChaCha20Rng;
+use rand_chacha_03::rand_core::SeedableRng;
 use tokio::sync::OnceCell;
 
 use super::{ValidatorError, ValidatorService};
@@ -59,7 +70,11 @@ use crate::metrics::InitialMetrics;
 use crate::storage_key::tests::operator_keys;
 use crate::{
     LocalX25519TransactionInputDecrypter,
+    PRIVATE_RECORD_FORMAT_V2,
+    PrivateRecordCombiner,
     PrivateRecordSealer,
+    PrivateRecordShareRequest,
+    StoredPrivateRecord,
     TransactionInputDecrypter,
     ValidatorSigner,
 };
@@ -440,6 +455,28 @@ async fn proven_transaction_fixture() -> &'static ProvenTransactionFixture {
             }
         })
         .await
+}
+
+/// Combines a threshold of operator decryption shares and decodes the record.
+fn open_transaction_effects(record: &StoredPrivateRecord) -> TransactionEffects {
+    let operator_keys = operator_keys();
+    let request = PrivateRecordShareRequest::for_record(record);
+    let shares = [0, 1].map(|index| {
+        let mut rng = ChaCha20Rng::from_seed([40 + index; 32]);
+        operator_keys[usize::from(index)]
+            .issue_private_record_share(&mut rng, &request, record)
+            .unwrap()
+    });
+
+    let opened = PrivateRecordCombiner::from_operator_key(&operator_keys[2])
+        .unwrap()
+        .open(&request, record, &shares)
+        .unwrap();
+
+    proto::transaction::TransactionEffects::decode(opened.as_slice())
+        .unwrap()
+        .decode_and_verify()
+        .unwrap()
 }
 
 // TESTS
@@ -1460,7 +1497,7 @@ async fn invalid_deferred_proof_does_not_store_inputs() {
 }
 
 #[tokio::test]
-async fn valid_deferred_proof_stores_inputs() {
+async fn valid_deferred_proof_stores_a_record() {
     let tv = TestValidator::new().await;
     let fixture = deferred_transaction_fixture().await;
     let tx = &fixture.transaction;
@@ -1470,6 +1507,34 @@ async fn valid_deferred_proof_stores_inputs() {
     assert!(tv.transaction_exists(tx.id()).await);
     assert!(tv.server.db.load_private_record(tx.id()).await.unwrap().is_some());
     assert_eq!(tv.validated_transaction_count().await, 1);
+}
+
+/// The stored record must hold the effects of the submitted transaction, so that operators who
+/// combine enough decryption shares can see what the transaction did.
+#[tokio::test]
+async fn stored_record_holds_the_transaction_effects() {
+    let tv = TestValidator::new().await;
+    let fixture = deferred_transaction_fixture().await;
+    let tx = &fixture.transaction;
+    tv.call_submit_proven_transaction(tx, tv.seal(tx.id(), &fixture.inputs.to_bytes()))
+        .await
+        .unwrap();
+
+    let record = tv.server.db.load_private_record(tx.id()).await.unwrap().unwrap();
+    assert_eq!(record.context().format_version(), PRIVATE_RECORD_FORMAT_V2);
+
+    let effects = open_transaction_effects(&record);
+
+    assert_eq!(effects.transaction_id(), tx.id());
+    assert_eq!(
+        effects.initial_state_commitment(),
+        tx.account_update().initial_state_commitment()
+    );
+    assert_eq!(effects.final_state_commitment(), tx.account_update().final_state_commitment());
+    assert_eq!(effects.output_notes().commitment(), tx.output_notes().commitment());
+    // The transaction header omits both of these, so re-execution alone does not establish them.
+    assert_eq!(effects.ref_block_number(), tx.ref_block_num());
+    assert_eq!(effects.expiration_block_num(), tx.expiration_block_num());
 }
 
 #[tokio::test]

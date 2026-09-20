@@ -13,6 +13,7 @@ mod tx_validation;
 pub use data_directory::DataDirectory;
 pub use private_record::{
     PRIVATE_RECORD_FORMAT_V1,
+    PRIVATE_RECORD_FORMAT_V2,
     PrivateRecordChainId,
     PrivateRecordCombiner,
     PrivateRecordContext,

@@ -182,7 +182,7 @@ impl ValidatorDbWriter {
         self.reader.clone()
     }
 
-    /// Inserts a validated transaction and its encrypted private inputs, returning the number of
+    /// Inserts a validated transaction and its encrypted private record, returning the number of
     /// inserted rows. The count is zero if the transaction was already recorded.
     #[miden_instrument(
         target = COMPONENT,
@@ -380,6 +380,7 @@ mod tests {
     use crate::private_record::test_private_record_sealer;
     use crate::storage_key::tests::operator_keys;
     use crate::{
+        PRIVATE_RECORD_FORMAT_V1,
         PrivateRecordChainId,
         PrivateRecordCombiner,
         PrivateRecordContext,
@@ -399,6 +400,25 @@ mod tests {
 
     fn private_record(transaction_id: TransactionId, seed: u8) -> StoredPrivateRecord {
         let context = PrivateRecordContext::new(CHAIN_ID, KEY_EPOCH, transaction_id);
+        seal_record(transaction_id, seed, context)
+    }
+
+    /// Seals a record that holds transaction inputs.
+    fn private_record_v1(transaction_id: TransactionId, seed: u8) -> StoredPrivateRecord {
+        let context = PrivateRecordContext::with_format_version(
+            CHAIN_ID,
+            KEY_EPOCH,
+            transaction_id,
+            PRIVATE_RECORD_FORMAT_V1,
+        );
+        seal_record(transaction_id, seed, context)
+    }
+
+    fn seal_record(
+        transaction_id: TransactionId,
+        seed: u8,
+        context: PrivateRecordContext,
+    ) -> StoredPrivateRecord {
         let mut rng = ChaCha20Rng::from_seed([seed; 32]);
         test_private_record_sealer(KEY_EPOCH, SETUP_CONTEXT_ID)
             .seal(&mut rng, record_id(transaction_id), context, b"private transaction inputs")
@@ -448,6 +468,9 @@ mod tests {
         assert!(!db_path.exists());
     }
 
+    /// Migrating a database must keep every record readable, including records that were sealed
+    /// in an earlier format. A record authenticates its own format version, so a migration cannot
+    /// reinterpret an existing record as a later format.
     #[tokio::test]
     async fn migration_preserves_headers_and_private_records() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -464,7 +487,7 @@ mod tests {
         let config = test_protocol_config();
         let header = genesis_header(&config);
         let transaction_id = TransactionId::from_raw(Word::from([1u32, 2, 3, 4]));
-        let record = private_record(transaction_id, 1);
+        let record = private_record_v1(transaction_id, 1);
         let db = open_with_pool_size(&db_path, NonZeroUsize::new(2).unwrap()).unwrap();
         let stored_header = header.clone();
         db.writer
@@ -481,6 +504,9 @@ mod tests {
         let db = load(db_path).await.unwrap();
         assert_eq!(db.load_chain_tip().await.unwrap(), Some(header.clone()));
         assert_eq!(db.load_all_transactions().await.unwrap(), vec![record]);
+        let migrated = db.load_private_record(transaction_id).await.unwrap().unwrap();
+        assert_eq!(migrated.context().format_version(), PRIVATE_RECORD_FORMAT_V1);
+        migrated.verify_encrypted_record_key().unwrap();
         assert_eq!(db.load_protocol_config(config.to_commitment()).await.unwrap(), None);
 
         db.upsert_block_header_with_protocol_config(header, Some(config.clone()))

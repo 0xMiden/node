@@ -31,12 +31,12 @@ pub fn private_record_from_row(row: &Row<'_>) -> Result<StoredPrivateRecord, Dat
 
     StoredPrivateRecord::from_storage_fields(PrivateRecordStorageFields {
         record_id,
-        context: PrivateRecordContext::new(
+        context: PrivateRecordContext::with_format_version(
             PrivateRecordChainId::new(chain_id),
             StorageKeyEpoch::new(key_epoch),
             transaction_id,
+            format_version,
         ),
-        format_version,
         setup_context_id,
         nonce,
         encrypted_record,
