@@ -15,6 +15,20 @@ use crate::errors::{DatabaseError, NoteSyncError, StateSyncError};
 // ================================================================================================
 
 impl StateView {
+    /// Returns a bounded page of public logs for one emitter account.
+    pub async fn account_logs(
+        &self,
+        account: AccountId,
+        range: RangeInclusive<BlockNumber>,
+        topic: Option<miden_protocol::transaction::LogTopic>,
+        after: Option<crate::AccountLogCursor>,
+        limit: u32,
+    ) -> Result<crate::AccountLogPage, DatabaseError> {
+        self.db
+            .select_account_logs(account, self.scope_range(range)?, topic, after, limit)
+            .await
+    }
+
     /// Returns the complete transaction records for the specified accounts within the specified
     /// block range, including state commitments and note IDs.
     ///

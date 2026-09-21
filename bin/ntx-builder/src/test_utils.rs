@@ -211,6 +211,7 @@ pub fn mock_genesis_block() -> miden_protocol::block::SignedBlock {
         Vec::new(),
         Vec::new(),
         Vec::new(),
+        miden_protocol::transaction::TransactionLogDataCollection::default(),
         OrderedTransactionHeaders::new_unchecked(Vec::new()),
     );
     let signatures = BlockSignatures::new(Vec::new()).unwrap();
@@ -250,6 +251,7 @@ pub fn mock_genesis_block_with_network_account() -> (miden_protocol::block::Sign
         vec![update],
         Vec::new(),
         Vec::new(),
+        miden_protocol::transaction::TransactionLogDataCollection::default(),
         OrderedTransactionHeaders::new_unchecked(Vec::new()),
     );
     let signatures = BlockSignatures::new(Vec::new()).unwrap();

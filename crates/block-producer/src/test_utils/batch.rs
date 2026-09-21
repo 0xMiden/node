@@ -67,6 +67,10 @@ impl TransactionBatchConstructor for ProvenBatch {
             InputNotes::new_unchecked(input_notes),
             output_notes,
             BlockNumber::MAX,
+            miden_protocol::transaction::TransactionLogDataCollection::new(
+                txs.iter().map(|tx| tx.log_data().clone()).collect(),
+            )
+            .unwrap(),
             OrderedTransactionHeaders::new_unchecked(
                 txs.into_iter().map(TransactionHeader::from).collect(),
             ),

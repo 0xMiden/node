@@ -32,6 +32,9 @@ use miden_protocol::note::Nullifier;
 use super::DatabaseError;
 use crate::db::NoteRecord;
 
+mod account_logs;
+pub use account_logs::*;
+
 mod transactions;
 pub use transactions::*;
 mod block_headers;
@@ -69,6 +72,7 @@ pub(crate) fn apply_block(
     count += insert_scripts(conn, notes.iter().map(|(note, _)| note))?;
     count += insert_notes(conn, notes)?;
     count += insert_transactions(conn, block.header().block_num(), block.body().transactions())?;
+    count += insert_account_logs(conn, block.header().block_num(), block.body())?;
     count += insert_nullifiers_for_block(
         conn,
         block.body().created_nullifiers(),

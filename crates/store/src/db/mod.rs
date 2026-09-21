@@ -843,6 +843,21 @@ impl Db {
         .await
     }
 
+    /// Returns a bounded page of public logs ordered by block and occurrence.
+    pub async fn select_account_logs(
+        &self,
+        account: AccountId,
+        range: ScopedBlockRange,
+        topic: Option<miden_protocol::transaction::LogTopic>,
+        after: Option<queries::AccountLogCursor>,
+        limit: u32,
+    ) -> Result<queries::AccountLogPage> {
+        self.transact("account logs", move |conn| {
+            queries::select_account_logs(conn, account, range.into_inner(), topic, after, limit)
+        })
+        .await
+    }
+
     /// Returns the complete transaction records for the specified accounts within the specified
     /// block range, including state commitments and note IDs.
     ///

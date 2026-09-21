@@ -99,6 +99,9 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
             tx.proof().clone(),
         )
         .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let rebuilt_tx = rebuilt_tx
+            .with_log_data(tx.log_data().clone())
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
         let request = proto::submission::ProvenTransactionSubmission {
             transaction: Some((&rebuilt_tx).into()),
             sealed_transaction_inputs: Some(input.sealed_transaction_inputs),

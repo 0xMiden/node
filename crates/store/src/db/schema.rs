@@ -8,6 +8,19 @@ diesel::table! {
 }
 
 diesel::table! {
+    account_logs (emitter_account_id, block_num, transaction_index, log_index) {
+        emitter_account_id -> Binary,
+        block_num -> BigInt,
+        transaction_index -> BigInt,
+        log_index -> BigInt,
+        topic -> Binary,
+        native_account_id -> Binary,
+        transaction_id -> Binary,
+        record -> Binary,
+    }
+}
+
+diesel::table! {
     account_storage_map_values (account_id, block_num, slot_name, key) {
         account_id -> Binary,
         block_num -> BigInt,
@@ -114,11 +127,16 @@ diesel::table! {
         input_notes -> Binary,
         output_notes -> Binary,
         size_in_bytes -> BigInt,
+        logs_commitment -> Binary,
     }
 }
 
+diesel::joinable!(account_logs -> block_headers (block_num));
+diesel::joinable!(account_logs -> transactions (transaction_id));
+
 diesel::allow_tables_to_appear_in_same_query!(
     account_codes,
+    account_logs,
     account_storage_map_values,
     account_vault_assets,
     accounts,

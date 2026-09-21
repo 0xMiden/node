@@ -90,6 +90,10 @@ fn generate_bindings(file_descriptors: &FileDescriptorSet, dst_dir: &Path) -> mi
         "#[proto_decode(optional)]",
     );
 
+    for field in ["rpc.GetAccountLogsRequest.after", "rpc.GetAccountLogsResponse.next_cursor"] {
+        prost_config.field_attribute(field, "#[proto_decode(optional)]");
+    }
+
     // Generate the stub of the user facing server from its proto file
     tonic_prost_build::configure()
         .server_mod_attribute(".", "#[allow(deprecated, clippy::mixed_attributes_style)]")

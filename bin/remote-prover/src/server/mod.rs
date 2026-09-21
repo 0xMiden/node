@@ -84,7 +84,13 @@ impl Server {
         let status_service =
             remote_prover_worker_status_api::service(status::StatusService::new(self.kind));
         let prover_service = ProverService::with_capacity(self.kind, self.capacity);
-        let prover_service = remote_prover_api::service(prover_service);
+        #[expect(
+            deprecated,
+            reason = "generated service constructors do not expose message size limits"
+        )]
+        let prover_service =
+            miden_node_proto::generated::remote_prover::api_server::ApiServer::new(prover_service)
+                .max_decoding_message_size(miden_node_proto::MAX_BLOCK_MESSAGE_SIZE);
 
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_file_descriptor_set(miden_node_proto_build::remote_prover_api_descriptor())

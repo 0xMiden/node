@@ -1798,6 +1798,7 @@ fn mock_block_transaction(account_id: AccountId, num: u64) -> TransactionHeader 
         final_account_commitment,
         input_notes,
         output_notes,
+        miden_protocol::Word::default(),
     )
     .expect("test transaction header should be valid")
 }
@@ -1834,6 +1835,7 @@ fn mock_block_transaction_with_output_notes(
         final_account_commitment,
         input_notes,
         output_notes,
+        miden_protocol::Word::default(),
     )
     .expect("test transaction header should be valid")
 }
@@ -2407,7 +2409,13 @@ fn serialization_symmetry_core_types() {
     assert_eq!(nullifier, restored, "Nullifier serialization must be symmetric");
 
     // TransactionId
-    let tx_id = TransactionId::new(num_to_word(1), num_to_word(2), num_to_word(3), num_to_word(4));
+    let tx_id = TransactionId::new(
+        num_to_word(1),
+        num_to_word(2),
+        num_to_word(3),
+        num_to_word(4),
+        miden_protocol::Word::default(),
+    );
     let bytes = tx_id.to_bytes();
     let restored = TransactionId::read_from_bytes(&bytes).unwrap();
     assert_eq!(tx_id, restored, "TransactionId serialization must be symmetric");
