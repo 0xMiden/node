@@ -35,7 +35,7 @@ pub fn fetch_notes(
                     details: row.get(2)?,
                     created_at: row.get(3)?,
                     after_block_num: row.get(4)?,
-                    included_in_block: row.get(5)?,
+                    committed_in_block: row.get(5)?,
                 },
                 row.get::<i64>(6)?,
             ))

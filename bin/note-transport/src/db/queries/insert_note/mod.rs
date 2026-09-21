@@ -14,7 +14,7 @@ pub fn insert_note(tx: &WriteTx<'_>, note: &NewNote, created_at: i64) -> Result<
             &note.details,
             &created_at,
             &note.after_block_num,
-            &note.included_in_block,
+            &note.committed_in_block,
         ],
     )
     .map_err(|error| match error {

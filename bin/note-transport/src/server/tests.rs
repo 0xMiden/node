@@ -60,7 +60,7 @@ fn fetched_note(note: TransportNote, after_block_num: Option<BlockNumber>) -> Fe
         header: note.header,
         details: note.details,
         after_block_num,
-        included_in_block: None,
+        committed_in_block: None,
     }
 }
 

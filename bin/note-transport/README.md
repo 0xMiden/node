@@ -37,7 +37,7 @@ retry does not replace a hint previously stored by `SendNote`.
 ### Fetching notes
 
 `FetchNotes` returns `FetchedNote` records with the header, details, and two optional block fields. `after_block_num`
-contains the unverified lower bound from `SendNote`. `included_in_block` contains the exact block verified through
+contains the unverified lower bound from `SendNote`. `committed_in_block` contains the exact block verified through
 `SendNoteWithProof`. At most one field is present. An absent block differs from block zero.
 
 `FetchNotes` accepts at most 128 tags and an exclusive cursor with a `fixed64` database nonce and a `fixed64` sequence.

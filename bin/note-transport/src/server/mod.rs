@@ -203,7 +203,7 @@ fn decode_note(request: DecodedTransportNote) -> tonic::Result<db::NewNote> {
         header,
         details,
         after_block_num: None,
-        included_in_block: None,
+        committed_in_block: None,
     })
 }
 

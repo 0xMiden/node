@@ -37,7 +37,7 @@ fn note_with_advice(seed: u32, tag: u32, elements: usize) -> NewNote {
         header: *note.header(),
         details: miden_protocol::note::NoteDetails::from(note),
         after_block_num: Some(BlockNumber::from(10)),
-        included_in_block: None,
+        committed_in_block: None,
     }
 }
 
@@ -116,7 +116,7 @@ async fn retry_at_capacity_preserves_first_write() {
     let page = fetch_notes(&reader, vec![42], None).await.unwrap();
     assert_eq!(page.notes.len(), 1);
     assert_eq!(page.notes[0].after_block_num, original.after_block_num);
-    assert_eq!(page.notes[0].included_in_block, None);
+    assert_eq!(page.notes[0].committed_in_block, None);
     assert_eq!(page.notes[0].created_at, created_at);
     assert_eq!(page.notes[0].seq, 1);
     assert!(!page.has_more);

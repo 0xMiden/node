@@ -44,7 +44,7 @@ message FetchedNote {
     optional blockchain.BlockNumber after_block_num = 3;
     // Exact inclusion block verified through SendNoteWithProof.
     // This field is absent for notes stored through SendNote.
-    optional blockchain.BlockNumber included_in_block = 4;
+    optional blockchain.BlockNumber committed_in_block = 4;
 }
 
 // Identifies a position in a stable sequence of stored notes.

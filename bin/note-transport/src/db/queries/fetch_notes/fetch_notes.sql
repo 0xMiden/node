@@ -32,7 +32,7 @@ SELECT
     notes.details,
     notes.created_at,
     notes.after_block_num,
-    notes.included_in_block,
+    notes.committed_in_block,
     bounded.candidate_count
 FROM bounded
 JOIN notes ON notes.seq = bounded.seq

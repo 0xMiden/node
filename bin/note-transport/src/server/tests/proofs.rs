@@ -168,7 +168,7 @@ async fn verified_submission_stores_inclusion_block_and_preserves_duplicates() {
     let first = fetched(&server).await;
     assert_eq!(first.notes[0].after_block_num, None);
     let mut expected = fetched_note(request.note.clone().unwrap(), None);
-    expected.included_in_block = Some(BlockNumber { block_num: 42 });
+    expected.committed_in_block = Some(BlockNumber { block_num: 42 });
     assert_eq!(first.notes, vec![expected]);
     SendNoteWithProof::full(&server, Request::new(request.clone())).await.unwrap();
     SendNote::full(
@@ -209,7 +209,7 @@ async fn verified_retry_preserves_unverified_envelope() {
     .unwrap();
     let first = fetched(&server).await;
     assert_eq!(first.notes[0].after_block_num, Some(BlockNumber { block_num: 10 }));
-    assert_eq!(first.notes[0].included_in_block, None);
+    assert_eq!(first.notes[0].committed_in_block, None);
     SendNoteWithProof::full(&server, Request::new(request)).await.unwrap();
     assert_eq!(fetched(&server).await, first);
     upstream.abort();
@@ -360,7 +360,7 @@ async fn proof_submission_roundtrips_over_grpc_and_web() {
         .into_inner();
     assert_eq!(page.notes.len(), 1);
     assert_eq!(page.notes[0].after_block_num, None);
-    assert_eq!(page.notes[0].included_in_block, Some(BlockNumber { block_num: 42 }));
+    assert_eq!(page.notes[0].committed_in_block, Some(BlockNumber { block_num: 42 }));
     drop(client);
     shutdown.cancel();
     task.await.unwrap().unwrap();

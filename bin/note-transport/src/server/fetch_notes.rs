@@ -85,7 +85,7 @@ impl FetchNotes for Server {
                 header: Some(note.header.into()),
                 details: Some(note.details.into()),
                 after_block_num: note.after_block_num.map(Into::into),
-                included_in_block: note.included_in_block.map(Into::into),
+                committed_in_block: note.committed_in_block.map(Into::into),
             };
             let note_bytes = note.encoded_len();
             let field_bytes =

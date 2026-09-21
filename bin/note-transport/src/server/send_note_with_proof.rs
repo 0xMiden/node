@@ -65,7 +65,7 @@ impl SendNoteWithProof for Server {
             )
             .map_err(|_| tonic::Status::invalid_argument("note inclusion proof is invalid"))?;
 
-        note.included_in_block = Some(proof.location().block_num());
+        note.committed_in_block = Some(proof.location().block_num());
         self.store_note(note).await
     }
 }
