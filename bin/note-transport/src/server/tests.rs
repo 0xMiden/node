@@ -30,16 +30,18 @@ use tonic::Request;
 use super::*;
 
 fn note(serial: u32, tag: u32) -> TransportNote {
+    note_with_type(serial, tag, NoteType::Private)
+}
+
+fn note_with_type(serial: u32, tag: u32, note_type: NoteType) -> TransportNote {
     let recipient = NoteRecipient::new(
         Word::from([serial, 0, 0, 0]),
         NoteScript::mock(),
         NoteStorage::new(vec![]).unwrap(),
     );
-    let metadata = PartialNoteMetadata::new(
-        AccountId::try_from(ACCOUNT_ID_MAX_ZEROES).unwrap(),
-        NoteType::Private,
-    )
-    .with_tag(NoteTag::new(tag));
+    let metadata =
+        PartialNoteMetadata::new(AccountId::try_from(ACCOUNT_ID_MAX_ZEROES).unwrap(), note_type)
+            .with_tag(NoteTag::new(tag));
     let note = Note::new(NoteAssets::default(), metadata, recipient);
     TransportNote {
         header: Some((*note.header()).into()),
@@ -133,6 +135,25 @@ async fn duplicate_send_preserves_first_note_and_cursor() {
     assert_eq!(after.notes, vec![fetched_note(first, hint)]);
     assert_eq!(after.cursor, before.cursor);
     assert!(!after.has_more);
+}
+
+#[tokio::test]
+async fn rejects_public_note_without_storage() {
+    let (_dir, server) = server(test_config());
+    let request = FetchNotesRequest { tags: vec![7], cursor: None };
+    let before = FetchNotes::full(&server, Request::new(request.clone())).await.unwrap();
+    let error = SendNote::full(
+        &server,
+        Request::new(SendNoteRequest {
+            note: Some(note_with_type(1, 7, NoteType::Public)),
+            after_block_num: None,
+        }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    assert_eq!(error.message(), "only private notes are supported");
+    assert_eq!(FetchNotes::full(&server, Request::new(request)).await.unwrap(), before);
 }
 
 #[tokio::test]

@@ -133,7 +133,13 @@ fn fixture() -> (SendNoteWithProofRequest, BlockHeaderByNumberResponse) {
 }
 
 fn fixture_at_block(block_num: u32) -> (SendNoteWithProofRequest, BlockHeaderByNumberResponse) {
-    let note = note(1, 7);
+    fixture_for_note(block_num, note(1, 7))
+}
+
+fn fixture_for_note(
+    block_num: u32,
+    note: TransportNote,
+) -> (SendNoteWithProofRequest, BlockHeaderByNumberResponse) {
     let header = note.header.clone().unwrap().decode_fields().unwrap().verify().unwrap();
     let index = BlockNoteIndex::new(3, 5).unwrap();
     let tree = BlockNoteTree::with_entries([(index, &header)]).unwrap();
@@ -157,6 +163,22 @@ async fn fetched(server: &Server) -> FetchNotesResponse {
     FetchNotes::full(server, Request::new(FetchNotesRequest { tags: vec![7], cursor: None }))
         .await
         .unwrap()
+}
+
+#[tokio::test]
+async fn rejects_public_note_without_storage_or_lookup() {
+    let (request, response) = fixture_for_note(42, note_with_type(1, 7, NoteType::Public));
+    let (url, upstream, requests) =
+        node_rpc_responses(BTreeMap::from([(42, Ok(response))]), Duration::ZERO).await;
+    let (_dir, server) = server(Config::new(url));
+    let before = fetched(&server).await;
+    let result = SendNoteWithProof::full(&server, Request::new(request)).await;
+    upstream.abort();
+    let error = result.unwrap_err();
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    assert_eq!(error.message(), "only private notes are supported");
+    assert_eq!(fetched(&server).await, before);
+    assert!(requests.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

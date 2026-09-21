@@ -191,6 +191,9 @@ fn decode_note(request: DecodedTransportNote) -> tonic::Result<db::NewNote> {
         .verify()
         .context("note.header")
         .map_err(ConversionError::into_status)?;
+    if !header.metadata().is_private() {
+        return Err(tonic::Status::invalid_argument("only private notes are supported"));
+    }
     let details = request
         .details
         .verify()

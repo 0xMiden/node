@@ -11,6 +11,9 @@ same listener. There are no note subscriptions or statistics RPCs.
 
 ### Sending notes
 
+Both submission methods accept only private notes. They reject non-private notes with `INVALID_ARGUMENT` before storage
+or trusted-node lookup.
+
 `SendNote` accepts a `SendNoteRequest` whose `note` field contains a `TransportNote` with the shared protocol note
 header and note details. It returns an empty `SendNoteResponse`. The service checks that the details commitment matches
 the header. The optional `SendNoteRequest.after_block_num` gives recipients a lower bound for their chain scan. The
