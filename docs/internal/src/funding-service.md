@@ -28,13 +28,13 @@ The worker waits for a request, a deposit scan deadline, or a transaction poll d
 2. Otherwise, collect deposits when the scan interval is due, or take one batch of funding requests from the channel.
 3. Read the chain state, execute the transaction, and prove it.
 4. Record its ID, account nonce, expiration block, and selected notes before submitting it to the node.
-5. Wait for commitment or expiration. Restore the selected notes immediately only when the submission response proves rejection.
+5. Wait for commitment or expiration, regardless of the submission response.
 
-A transport error can occur after the node accepts a transaction. The worker keeps that transaction pending until the chain resolves its outcome. The account has one writer, so a higher nonce means the transaction committed. If the nonce has not changed at the expiration block, the worker can retry its notes in a new transaction. The notes keep their IDs across retries.
+A submission error can occur after the node accepts a transaction. The worker treats every submission error as an unknown outcome and keeps the transaction pending until the chain resolves it. The account has one writer, so a higher nonce means the transaction committed. If the nonce has not changed at the expiration block, the worker can retry its notes in a new transaction. The notes keep their IDs across retries. A failed RPC submission also clears the cached encryption key so the next submission fetches a fresh key.
 
 ### Separate collection and payout transactions
 
-The same worker submits both kinds of transaction. A collection consumes deposits without creating funding notes. A payout creates funding notes without consuming deposits. A failed collection waits until the next scan interval, which lets payouts continue between collection attempts.
+The same worker submits both kinds of transaction. A collection consumes deposits without creating funding notes. A payout creates funding notes without consuming deposits. Collection attempts run on scan ticks. A collection that fails during preparation leaves payouts free to continue. Once submission starts, payouts wait until the collection commits or expires.
 
 Input assets enter the vault before the kernel withdraws the fee. A collection can therefore pay its fee from the deposits when the account balance is zero. Payouts use the balance after collection commits. Separate transactions each pay their own fee.
 

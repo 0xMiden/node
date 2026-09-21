@@ -26,7 +26,7 @@ use tokio::time::MissedTickBehavior;
 
 use crate::account::FunderKey;
 use crate::deposit::{DepositScanner, native_amount};
-use crate::node::{RpcNodeClient, is_submission_rejected, is_transient_error};
+use crate::node::{RpcNodeClient, is_transient_error};
 use crate::prover::Prover;
 use crate::status::StatusSnapshot;
 use crate::tx::{self, ExecutionInputs};
@@ -220,7 +220,7 @@ impl Funder {
             return Ok(());
         }
 
-        // A failed collection waits for the next scan. Payouts can continue between scans.
+        // Collection attempts run on scan ticks.
         let deposits = if collect_deposits {
             self.select_deposits().await?
         } else {
@@ -244,7 +244,7 @@ impl Funder {
         let prepared =
             Box::pin(self.prepare(reference_header, blockchain, funder, &selection)).await;
         match prepared {
-            Ok(prepared) => self.submit_prepared(prepared, selection).await?,
+            Ok(prepared) => self.submit_prepared(prepared, selection).await,
             Err(err) => {
                 self.restore(selection.deposits, selection.notes);
                 return Err(err).context("failed to prepare the funding transaction");
@@ -360,7 +360,7 @@ impl Funder {
     }
 
     /// Records the pending transaction before the submission request can reach the node.
-    async fn submit_prepared(&mut self, prepared: Prepared, selection: Selection) -> Result<()> {
+    async fn submit_prepared(&mut self, prepared: Prepared, selection: Selection) {
         let Prepared { transaction, transaction_inputs, nonce } = prepared;
         let transaction_id = transaction.id();
         let expiration_block = transaction.expiration_block_num();
@@ -381,12 +381,6 @@ impl Funder {
                     transaction.expires_at = expiration_block
                 );
             },
-            Err(err) if is_submission_rejected(&err) => {
-                let pending =
-                    self.pending.take().expect("the transaction was recorded before submission");
-                self.restore(pending.deposits, pending.notes);
-                return Err(err).context("the node rejected the funding transaction");
-            },
             Err(err) => {
                 warn!(
                     &err,
@@ -397,8 +391,6 @@ impl Funder {
                 );
             },
         }
-
-        Ok(())
     }
 
     /// Reads the chain state every cycle needs, at a fresh reference block.

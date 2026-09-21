@@ -152,7 +152,8 @@ whatever they like.
 
 Deposits are consumed in separate collection transactions. Input assets enter the vault before the fee is withdrawn, so
 collection works when the balance is zero. Payouts use the balance after collection commits. Each transaction pays its
-own fee. A failed collection waits until the next scan interval, so payouts can continue between collection attempts.
+own fee. After any submission attempt, the worker waits for the transaction to commit or expire before it processes
+another transaction. Submission errors do not cause an immediate retry.
 
 The service deduplicates deposits by nullifier and checks for spent deposits before collection. If a scan fails, it
 retries the same block range.

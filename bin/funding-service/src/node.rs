@@ -2,7 +2,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -33,7 +32,7 @@ use miden_node_utils::limiter::{
     QueryParamNoteIdLimit,
     QueryParamNullifierPrefixLimit,
 };
-use miden_node_utils::retry::{self, Retryable};
+use miden_node_utils::retry::Retryable;
 use miden_protocol::Word;
 use miden_protocol::account::{
     Account,
@@ -374,48 +373,25 @@ impl RpcNodeClient {
         proven_tx: &ProvenTransaction,
         transaction_inputs: &[u8],
     ) -> Result<BlockNumber> {
-        let transaction: miden_node_proto::generated::transaction::ProvenTransaction =
-            proven_tx.into();
-        let tx_id = proven_tx.id();
-        let stale_key = AtomicBool::new(false);
+        let sealed = self
+            .sealer()
+            .await?
+            .seal(proven_tx.id(), transaction_inputs)
+            .context("failed to seal the transaction inputs")?;
+        let result = self
+            .rpc_client
+            .clone()
+            .submit_proven_tx(ProvenTransactionSubmission {
+                transaction: Some(proven_tx.into()),
+                sealed_transaction_inputs: Some(sealed),
+            })
+            .await
+            .context("failed to submit the proven transaction to RPC");
 
-        let result = (|| {
-            let transaction = transaction.clone();
-            async {
-                if stale_key.swap(false, Ordering::Relaxed) {
-                    *self.sealer.lock().await = None;
-                }
-
-                let sealed = self
-                    .sealer()
-                    .await?
-                    .seal(tx_id, transaction_inputs)
-                    .context("failed to seal the transaction inputs")?;
-                self.rpc_client
-                    .clone()
-                    .submit_proven_tx(ProvenTransactionSubmission {
-                        transaction: Some(transaction),
-                        sealed_transaction_inputs: Some(sealed),
-                    })
-                    .await
-                    .context("failed to submit the proven transaction to RPC")
-            }
-        })
-        .retry(retry::constant(Duration::ZERO, Some(1)))
-        .when(|err: &anyhow::Error| {
-            err.downcast_ref::<tonic::Status>()
-                .is_some_and(|status| status.code() == tonic::Code::FailedPrecondition)
-        })
-        .notify(|status: &anyhow::Error, _| {
-            stale_key.store(true, Ordering::Relaxed);
-            warn!(
-                status,
-                target: COMPONENT,
-                "Transaction inputs rejected as stale, refreshing the encryption key and retrying",
-                transaction.id = tx_id
-            );
-        })
-        .await;
+        if result.is_err() {
+            // The encryption key can be stale. Fetch it again for the next submission.
+            *self.sealer.lock().await = None;
+        }
 
         Ok(result?.into_inner().block_num.into())
     }
@@ -448,23 +424,6 @@ impl RpcNodeClient {
         *cached = Some(sealer.clone());
         Ok(sealer)
     }
-}
-
-/// Returns true when the node response proves that this submission was rejected. Transport failures
-/// and duplicate submissions can have an unknown outcome.
-pub fn is_submission_rejected(err: &anyhow::Error) -> bool {
-    err.downcast_ref::<tonic::Status>().is_some_and(|status| {
-        matches!(
-            status.code(),
-            tonic::Code::InvalidArgument
-                | tonic::Code::FailedPrecondition
-                | tonic::Code::PermissionDenied
-                | tonic::Code::Unauthenticated
-                | tonic::Code::NotFound
-                | tonic::Code::OutOfRange
-                | tonic::Code::Unimplemented
-        )
-    })
 }
 
 // TRANSIENT ERRORS

@@ -14,8 +14,9 @@ tracks each submitted transaction until its commitment or expiration is known. N
 while the worker processes one batch.
 
 The account is refilled by sending it a public pay-to-ID note that holds the native asset. The service scans for those
-notes and consumes them in separate collection transactions. A failed collection waits until the next scan interval so
-payouts can continue.
+notes and consumes them in separate collection transactions. After any submission attempt, the worker waits for the
+transaction to commit or expire before it processes another transaction. Submission errors do not cause an immediate
+retry.
 
 The service reads the chain's protocol configuration from the node at startup, together with the genesis block header.
 
