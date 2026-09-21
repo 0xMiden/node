@@ -26,9 +26,11 @@ message TransportNote {
     optional blockchain.BlockNumber after_block_num = 3;
 }
 
-// Identifies a position in one database generation.
+// Identifies a position in a stable sequence of stored notes.
 message FetchNotesCursor {
-    // Random database nonce. All unsigned 64-bit values are valid.
+    // Random nonce that identifies the sequence. Service restarts and note cleanup preserve it.
+    // Recreating the database assigns a new nonce and invalidates previous cursors.
+    // All unsigned 64-bit values are valid.
     fixed64 nonce = 1;
     // Exclusive lower bound. Zero starts from the first retained note.
     fixed64 sequence = 2;
