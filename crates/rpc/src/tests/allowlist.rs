@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-use miden_node_proto::generated::submission::SealedTransactionInputs;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_standards::account::auth::NetworkAccount;
 use miden_standards::account::fees::{BasicConstantFeePolicy, FeePolicyManager};
@@ -9,18 +8,48 @@ use super::*;
 
 impl TestStore {
     async fn with_account_creation_batch() -> (Self, ProposedBatch) {
-        let mut builder = MockChainBuilder::new();
+        let mut builder = MockChainBuilder::new()
+            .fee_faucet_id(FungibleAsset::mock_issuer())
+            .verification_base_fee(1);
         let accounts = [
-            builder.create_new_wallet(Auth::IncrNonce).unwrap(),
-            builder.create_new_wallet(Auth::IncrNonce).unwrap(),
+            builder
+                .create_new_wallet(Auth::BasicAuth {
+                    auth_scheme: AuthScheme::Falcon512Poseidon2,
+                })
+                .unwrap(),
+            builder
+                .create_new_wallet(Auth::BasicAuth {
+                    auth_scheme: AuthScheme::Falcon512Poseidon2,
+                })
+                .unwrap(),
         ];
+        let notes = accounts.each_ref().map(|account| {
+            builder
+                .add_p2id_note(
+                    account.id(),
+                    account.id(),
+                    &[FungibleAsset::mock(1_000_000)],
+                    NoteType::Private,
+                )
+                .unwrap()
+        });
         let chain = builder.build().unwrap();
         let store =
             Self::start_from_mock_genesis(&chain.latest_block(), chain.protocol_config()).await;
         let mut transactions = Vec::new();
         // Batch decoding verifies each transaction proof before the admission check.
-        for account in accounts {
-            let context = chain.build_transaction(account).build().unwrap();
+        for (account, note) in accounts.into_iter().zip(notes) {
+            let (auth_args, advice) = commit_fee_conversion_info(
+                FeeConversionInfo::one_to_one(FungibleAsset::mock_issuer()),
+                Word::from([9u32, 10, 11, 12]),
+            );
+            let context = chain
+                .build_transaction(account)
+                .authenticated_input_note(note.id())
+                .auth_args(auth_args)
+                .add_advice_map_entry(auth_args, advice)
+                .build()
+                .unwrap();
             let executed = Box::pin(context.execute()).await.unwrap();
             let inputs = executed.tx_inputs().clone();
             let proven = spawn_blocking_in_current_span(move || {
@@ -31,11 +60,12 @@ impl TestStore {
             .unwrap();
             transactions.push(Arc::new(proven));
         }
-        let batch = ProposedBatch::new_unverified(
+        let batch = ProposedBatch::new(
             transactions,
             chain.latest_block_header(),
             chain.latest_partial_blockchain(),
             BTreeMap::new(),
+            miden_protocol::MIN_PROOF_SECURITY_LEVEL,
         )
         .unwrap();
         (store, batch)
@@ -187,7 +217,7 @@ async fn account_admission_only_restricts_new_non_network_accounts() {
     assert!(!allowlist.contains_account(creation.account_id()).await.unwrap());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn submission_endpoints_reject_unregistered_creation_without_partial_batch_admission() {
     let (store, batch) = TestStore::with_account_creation_batch().await;
     let transactions = batch.transactions();
@@ -236,29 +266,27 @@ async fn submission_endpoints_reject_unregistered_creation_without_partial_batch
         transaction: Some(transactions[1].as_ref().into()),
         ..Default::default()
     };
+    let mut auth_inputs = Vec::new();
+    for tx in transactions {
+        auth_inputs.push(get_tx_inputs(&store.state, tx).await.unwrap().into());
+    }
     let authenticated_batch = proto::sequencer::AuthenticatedTransactionBatch {
         proposed_batch: Some((&batch).into()),
-        auth_inputs: transactions
-            .iter()
-            .map(|tx| proto::sequencer::AuthInputs {
-                account_id: Some(tx.account_id().into()),
-                ..Default::default()
-            })
-            .collect(),
+        auth_inputs,
     };
 
     for result in [
         public
             .submit_proven_tx(Request::new(proto::submission::ProvenTransactionSubmission {
                 transaction: Some(transactions[1].as_ref().into()),
-                sealed_transaction_inputs: Some(SealedTransactionInputs::default()),
+                sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
             }))
             .await,
         public
             .submit_proven_tx_batch(Request::new(proto::submission::TransactionBatch {
                 batch: Some((&proven_batch).into()),
                 proposed_batch: Some((&batch).into()),
-                sealed_transaction_inputs: vec![SealedTransactionInputs::default(); 2],
+                sealed_transaction_inputs: vec![test_sealed_transaction_inputs(); 2],
             }))
             .await,
         internal.submit_authenticated_tx(Request::new(tx)).await,

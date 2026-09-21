@@ -76,7 +76,7 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
             }
         }
 
-        // Verify the reference block is actually part of the chain.
+        // Verify that the reference block is part of the chain.
         self.verify_reference_commitment(
             proven_batch.reference_block_num(),
             proven_batch.reference_block_commitment(),
