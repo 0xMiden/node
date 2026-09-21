@@ -321,6 +321,10 @@ fn invitation_codes_preserve_text_and_hide_debug_values() {
     }
     assert_ne!(InvitationCode::new("\u{e9}").unwrap(), InvitationCode::new("e\u{301}").unwrap());
     let invitation = InvitationCode::new("private invitation code").unwrap();
+    assert_eq!(
+        InvitationCode::from_hex_digest(&invitation.to_hex_digest()).unwrap(),
+        invitation
+    );
     let debug = format!("{invitation:?}");
     assert!(!debug.contains("private invitation code"));
     assert!(!debug.contains(&hex::encode(invitation.digest())));

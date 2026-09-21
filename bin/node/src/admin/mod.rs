@@ -22,6 +22,9 @@ use tokio::net::TcpListener;
 
 use crate::LOG_TARGET;
 
+mod client;
+pub(crate) use client::AdminClient;
+
 #[cfg(test)]
 mod tests;
 

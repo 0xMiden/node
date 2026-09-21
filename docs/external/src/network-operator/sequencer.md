@@ -110,6 +110,35 @@ and retry behavior.
 Back up the registry separately. It is not replicated with blocks. Restore it before starting a replacement sequencer to
 preserve invitations and registrations. Without a restored registry, the replacement starts with an empty allowlist.
 
+### Admin CLI
+
+Use `miden-node admin` to call the private administration API. Set its base URL with `--url` or `MIDEN_NODE_ADMIN_URL`.
+The CLI does not need the sequencer's data directory.
+
+Create 100 invitation codes and save them to a new CSV file:
+
+```bash
+miden-node admin --url http://127.0.0.1:50100 create-invites \
+  --count 100 --output invitations.csv
+```
+
+Each code contains 12 random ASCII alphanumeric characters (`A-Z`, `a-z`, and `0-9`). Codes are unique within the
+generated batch. The CSV has one column, `invitation_code`, with the original codes to give to users. Only SHA-256
+digests are sent to the admin API. Treat the CSV as a secret. The CLI creates it with owner-only permissions on Unix and
+refuses to replace an existing file.
+
+The CLI saves the complete CSV before the first upload. If an upload fails, the command exits with an error and reports
+the failed row. The CSV remains available, but some codes may not be registered. Earlier successful uploads remain in
+the registry. Verify invitation status before distributing codes from a failed upload.
+
+Allowlist an account without an invitation code:
+
+```bash
+miden-node admin --url http://127.0.0.1:50100 allowlist-account <hex-account-id>
+```
+
+The command uses the account `PUT` endpoint and inherits its funding behavior when funding is configured.
+
 ## Registration Funding
 
 Configure both options to request funding for each new account registration:
