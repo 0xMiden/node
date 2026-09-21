@@ -2,7 +2,9 @@
 //!
 //! An operator refills the funding account by sending it a public pay-to-ID note which holds the
 //! native asset. This module finds those notes. It submits nothing: the worker consumes the
-//! deposits it finds as the input notes of the next funding transaction.
+//! deposits in a separate transaction.
+
+use std::collections::HashSet;
 
 use anyhow::Result;
 use miden_protocol::account::AccountId;
@@ -10,7 +12,7 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{Note, NoteTag, NoteType};
 use miden_standards::note::{P2idNote, P2idNoteStorage};
 
-use crate::node::RpcNodeClient;
+use crate::node::FundingNode;
 
 // DEPOSIT SCANNER
 // ================================================================================================
@@ -39,43 +41,35 @@ impl DepositScanner {
         }
     }
 
-    /// Returns the unspent deposits found since the previous scan and advances the cursor.
-    ///
-    /// The cursor advances past a range whether or not the caller consumes what the scan returns.
-    /// The caller holds every deposit it is given until the deposit is spent, so a range is never
-    /// scanned twice.
-    pub async fn scan(&mut self, node: &RpcNodeClient) -> Result<Vec<Note>> {
-        let from_block = self.next_block;
+    /// Returns unspent deposits and advances the cursor after all node requests succeed.
+    pub async fn scan(&mut self, node: &impl FundingNode) -> Result<Vec<Note>> {
         let tag = NoteTag::with_account_target(self.funder);
-        let synced = node.sync_note_ids(tag, from_block).await?;
+        let synced = node.sync_note_ids(tag, self.next_block).await?;
+        let mut deposits = Vec::new();
+
+        if !synced.note_ids.is_empty() {
+            let mut seen = HashSet::new();
+            let candidates: Vec<Note> = node
+                .get_public_notes_by_id(&synced.note_ids)
+                .await?
+                .into_iter()
+                .filter(|note| is_deposit(note, self.funder, self.fee_faucet_id))
+                .filter(|note| seen.insert(note.nullifier()))
+                .collect();
+
+            if !candidates.is_empty() {
+                let nullifiers: Vec<_> = candidates.iter().map(Note::nullifier).collect();
+                // A repeated note can have a nullifier spent before this scan's range.
+                let spent = node.sync_nullifiers(&nullifiers, BlockNumber::GENESIS).await?;
+                deposits = candidates
+                    .into_iter()
+                    .filter(|note| !spent.contains(&note.nullifier()))
+                    .collect();
+            }
+        }
+
         self.next_block = synced.last_checked_block + 1;
-
-        if synced.note_ids.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let candidates: Vec<Note> = node
-            .get_public_notes_by_id(&synced.note_ids)
-            .await?
-            .into_iter()
-            .filter(|note| is_deposit(note, self.funder, self.fee_faucet_id))
-            .collect();
-
-        if candidates.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // A deposit may already be spent: an earlier run of the service consumed it, or the sender
-        // consumed it again itself. A transaction which consumes a spent note is rejected, so those
-        // notes are dropped here. The scan starts at the block the notes were found in, because a
-        // note cannot be spent before it exists.
-        let nullifiers: Vec<_> = candidates.iter().map(Note::nullifier).collect();
-        let spent = node.sync_nullifiers(&nullifiers, from_block).await?;
-
-        Ok(candidates
-            .into_iter()
-            .filter(|note| !spent.contains(&note.nullifier()))
-            .collect())
+        Ok(deposits)
     }
 }
 
@@ -187,5 +181,72 @@ mod tests {
 
         assert!(is_deposit(&note, funder, funder));
         assert!(!is_deposit(&private, funder, funder));
+    }
+
+    #[tokio::test]
+    async fn scan_retries_after_note_fetch_failure() -> Result<()> {
+        use std::sync::atomic::Ordering;
+
+        use crate::test_utils::Fixture;
+        use crate::test_utils::node::MockNode;
+        let fixture = Fixture::with_deposits(0, 0, &[50_000])?;
+        let node = MockNode::new(&fixture);
+        node.fail_note_fetch.store(true, Ordering::Relaxed);
+        let mut scanner = DepositScanner::new(fixture.funder.id(), fixture.fee_faucet_id);
+        assert!(scanner.scan(&node).await.is_err());
+        let notes = scanner.scan(&node).await?;
+        assert_eq!(notes.iter().map(Note::id).collect::<Vec<_>>(), vec![fixture.deposits[0].id()]);
+        assert!(scanner.scan(&node).await?.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scan_retries_after_nullifier_fetch_failure() -> Result<()> {
+        use std::sync::atomic::Ordering;
+
+        use crate::test_utils::Fixture;
+        use crate::test_utils::node::MockNode;
+        let fixture = Fixture::with_deposits(0, 0, &[50_000])?;
+        let node = MockNode::new(&fixture);
+        node.fail_nullifier_sync.store(true, Ordering::Relaxed);
+        let mut scanner = DepositScanner::new(fixture.funder.id(), fixture.fee_faucet_id);
+        assert!(scanner.scan(&node).await.is_err());
+        assert_eq!(scanner.scan(&node).await?.len(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn repeated_records_return_one_consumable_deposit() -> Result<()> {
+        use std::sync::atomic::Ordering;
+
+        use miden_protocol::transaction::{InputNote, InputNotes};
+
+        use crate::test_utils::Fixture;
+        use crate::test_utils::node::MockNode;
+        let fixture = Fixture::with_deposits(0, 0, &[50_000])?;
+        let node = MockNode::new(&fixture);
+        node.duplicate_records.store(true, Ordering::Relaxed);
+        let mut scanner = DepositScanner::new(fixture.funder.id(), fixture.fee_faucet_id);
+        let notes = scanner.scan(&node).await?;
+        let inputs = InputNotes::new(notes.into_iter().map(InputNote::unauthenticated).collect())?;
+        assert_eq!(inputs.num_notes(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn repeated_note_spent_before_the_scan_range_is_ignored() -> Result<()> {
+        use crate::test_utils::Fixture;
+        use crate::test_utils::node::MockNode;
+        let fixture = Fixture::with_deposits(0, 0, &[50_000])?;
+        let node = MockNode::new(&fixture);
+        let mut scanner = DepositScanner::new(fixture.funder.id(), fixture.fee_faucet_id);
+        assert_eq!(scanner.scan(&node).await?.len(), 1);
+        node.chain.lock().await.prove_next_block()?;
+        node.spent.lock().await.push((1.into(), fixture.deposits[0].nullifier()));
+        assert!(scanner.scan(&node).await?.is_empty());
+        node.chain.lock().await.prove_next_block()?;
+        node.extra_records.lock().await.push((2.into(), fixture.deposits[0].clone()));
+        assert!(scanner.scan(&node).await?.is_empty());
+        Ok(())
     }
 }

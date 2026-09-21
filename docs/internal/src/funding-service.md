@@ -16,28 +16,27 @@ The HTTP handler builds the public pay-to-ID note itself. A note needs only the 
 
 The answer is therefore optimistic: it names a note which no transaction has created yet. A requester which needs the note on chain either waits for it at the node or consumes it as an unauthenticated input note, which the node authenticates when it builds the block.
 
-The alternative, waiting until the note commits, costs at least one block interval per request and gives a requester no way to be told about a retry. The service now funds user accounts at registration, where that cost is not acceptable.
+The service keeps accepted requests and pending transactions in memory. A restart can lose an accepted request before its transaction reaches the node. Accepted requests do not have a durable delivery guarantee.
 
 ## One worker, one transaction in flight
 
-A single task owns the account. It is the only writer of that account, which is what serializes its transactions.
+A single worker owns the account. It keeps at most one batch of requests outside the bounded request channel. The batch contains at most `--max-notes-per-tx` notes. Requests stay in the channel while the batch waits for funds or a transaction remains pending. A full channel causes the HTTP handler to return 429.
 
-The worker wakes when a note is queued and on its own interval. One cycle runs the following steps.
+The worker waits for a request, a deposit scan deadline, or a transaction poll deadline. It processes work in this order:
 
-1. Do nothing when there is no transaction in flight, nothing queued, no deposit pooled, and no scan due. An idle service therefore makes no call to the node beyond the status refresher's own.
-2. Read the chain tip and a partial blockchain which proves it, then the funding account and the fee faucet at that block. Every value of the cycle comes from this one reference block.
-3. Resolve the transaction in flight. The account has one writer, so a nonce higher than the one the transaction was built on means it committed. A reference block at or past the expiration block means it did not, and its deposits and notes return to the queues.
-4. Scan for deposits when the scan interval has passed.
-5. Select the deposits and the notes of the next transaction.
-6. Execute, prove and submit one transaction which consumes the deposits and creates the notes. Anything which fails returns the deposits and the notes to the queues, and the next cycle tries again from a fresh reference block.
+1. If a transaction is pending, read the account and resolve that transaction. Do not prepare another transaction while its outcome is unknown.
+2. Otherwise, collect deposits when the scan interval is due, or take one batch of funding requests from the channel.
+3. Read the chain state, execute the transaction, and prove it.
+4. Record its ID, account nonce, expiration block, and selected notes before submitting it to the node.
+5. Wait for commitment or expiration. Restore the selected notes immediately only when the submission response proves rejection.
 
-A note keeps its serial number across a retry, so it keeps its ID. The note a requester holds is the note which is eventually created.
+A transport error can occur after the node accepts a transaction. The worker keeps that transaction pending until the chain resolves its outcome. The account has one writer, so a higher nonce means the transaction committed. If the nonce has not changed at the expiration block, the worker can retry its notes in a new transaction. The notes keep their IDs across retries.
 
-### One transaction carries both directions
+### Separate collection and payout transactions
 
-The deposits and the funding notes share one transaction. Two tasks submitting from the same account would race for the nonce, and the loser's transaction would be rejected.
+The same worker submits both kinds of transaction. A collection consumes deposits without creating funding notes. A payout creates funding notes without consuming deposits. A failed collection waits until the next scan interval, which lets payouts continue between collection attempts.
 
-The assets of an input note land in the vault before the kernel withdraws the fee. A deposit therefore pays for the notes of the same transaction, and a transaction which only consumes deposits works at a zero balance, which is the state a deposit exists to recover from.
+Input assets enter the vault before the kernel withdraws the fee. A collection can therefore pay its fee from the deposits when the account balance is zero. Payouts use the balance after collection commits. Separate transactions each pay their own fee.
 
 ### The fee faucet is a foreign account
 
@@ -47,7 +46,7 @@ The native asset is callback-enabled: the kernel loads the issuing faucet in a f
 
 The transaction pays its own fee from the same vault the notes are paid from, so the worker holds back the worst-case fee of one transaction before it spends the balance. It then admits queued notes in order and stops at the first note which does not fit, which keeps the queue first-come-first-served and stops a stream of small notes from starving a large one.
 
-A note which does not fit stays in the queue. The service already answered a requester with it, so it is created once a deposit raises the balance rather than being dropped. The worker logs a warning and waits out the deposit scan interval before it reads the chain state again, because only a deposit changes the answer.
+A note which does not fit stays in the active batch. The worker polls the balance while that batch waits for funds. It does not take another batch from the request channel until the active batch completes. Deposit scans continue on their own interval.
 
 The handler checks the amount against the balance the service last read, and refuses a request the account plainly cannot serve. That check is best effort: the balance is the one of an earlier block and does not account for the notes already queued.
 
@@ -55,9 +54,9 @@ The handler checks the amount against the balance the service last read, and ref
 
 A deposit is found by synchronizing notes by the funding account's tag. A filter keeps only the notes the account can consume: public, pay-to-ID, targeting the funding account, and holding the native asset and nothing else.
 
-A deposit which the chain already records as spent is dropped, because a transaction which consumes a spent note is rejected. The nullifier scan starts at the block the note was found in, since a note cannot be spent before it exists.
+The worker indexes deposits by nullifier. Multiple records for the same deposit enter the pool only once. The nullifier scan starts at genesis because a repeated note can have a nullifier spent before the current scan range. The worker checks the pool for spent deposits again before collection.
 
-The scan cursor advances past a range whether or not the worker consumes what it found. A deposit stays in the pool until it is spent, and a transaction which does not commit returns its deposits there, so no range has to be scanned twice. The pool is in memory, so a restart scans the chain again from genesis and finds whatever is still unspent.
+The scan cursor advances only after note retrieval and nullifier checks succeed. A failed scan retries the same range. Successful scans add deposits to the pool even if no collection is ready. A restart scans from genesis to find unspent deposits again.
 
 One transaction consumes at most a fixed number of deposits, and takes the largest ones first. The protocol allows far more input notes than that; the bound is proving time, because every input note runs its own script and lengthens the transaction the service has to prove before it can serve the next one.
 

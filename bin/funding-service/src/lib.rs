@@ -191,6 +191,12 @@ impl FundingServiceConfig {
              many note IDs one lookup may hold",
         );
 
+        anyhow::ensure!(!self.poll_interval.is_zero(), "--poll-interval must be greater than zero");
+        anyhow::ensure!(
+            !self.p2id_collection_interval.is_zero(),
+            "--p2id-collection-interval must be greater than zero",
+        );
+
         let funder_key = FunderKey::load(&self.account_file)
             .context("failed to load the funding account file")?;
 
