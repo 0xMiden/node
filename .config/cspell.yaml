@@ -13,9 +13,11 @@ ignorePaths:
   - node_modules
   - "**/package-lock.json"
 words:
+  - Buildx
   - ciphertext
   - Devnet
   - grpcurl
+  - Kache
   - Merkle
   - Miden
   - Midenscan
