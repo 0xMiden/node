@@ -14,7 +14,12 @@ pub use authenticated_tx::MockAuthenticatedTxBuilder;
 
 mod account;
 
-pub use account::{MockPrivateAccount, mock_account_id, mock_collection_account};
+pub use account::{
+    MockPrivateAccount,
+    mock_account_id,
+    mock_collection_account,
+    mock_native_faucet,
+};
 
 pub mod batch;
 

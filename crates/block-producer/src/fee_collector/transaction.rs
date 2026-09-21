@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::num::NonZeroU16;
 
+use miden_node_store::state::StateView;
 use miden_protocol::Word;
 use miden_protocol::account::{
     Account,
@@ -37,16 +38,23 @@ use miden_tx::{
     TransactionMastStore,
 };
 
+use super::faucet::FeeFaucet;
+
 /// Builds transactions that deploy the fee collector or convert fee notes into one P2ID note.
 #[derive(Clone)]
 pub(crate) struct FeeCollectorTransactionBuilder {
     account: Account,
     target: AccountId,
     authenticator: BasicAuthenticator,
+    fee_faucet: FeeFaucet,
 }
 
 impl FeeCollectorTransactionBuilder {
-    pub(crate) fn new(target: AccountId, account_file: AccountFile) -> anyhow::Result<Self> {
+    pub(crate) async fn new(
+        target: AccountId,
+        account_file: AccountFile,
+        view: &StateView,
+    ) -> anyhow::Result<Self> {
         let AccountFile { account, auth_secret_keys } = account_file;
         let auth_root = AuthTxFeeCollector::code()
             .procedure_roots()
@@ -71,8 +79,14 @@ impl FeeCollectorTransactionBuilder {
             "fee collector account file must contain its signing key",
         );
         let authenticator = BasicAuthenticator::new(&auth_secret_keys);
+        let fee_faucet = FeeFaucet::load(view).await?;
 
-        Ok(Self { account, target, authenticator })
+        Ok(Self {
+            account,
+            target,
+            authenticator,
+            fee_faucet,
+        })
     }
 
     pub(crate) async fn execute(
@@ -81,6 +95,7 @@ impl FeeCollectorTransactionBuilder {
         reference_block_header: BlockHeader,
         protocol_config: ProtocolConfig,
         partial_blockchain: PartialBlockchain,
+        view: &StateView,
     ) -> anyhow::Result<ExecutedTransaction> {
         let asset_ids = notes
             .iter()
@@ -109,6 +124,8 @@ impl FeeCollectorTransactionBuilder {
             reference_block_header,
             protocol_config,
             partial_blockchain,
+            &self.fee_faucet,
+            view,
         );
 
         Ok(TransactionExecutor::new(&data_store)
@@ -127,23 +144,28 @@ impl FeeCollectorTransactionBuilder {
     }
 }
 
-struct FeeCollectorDataStore {
+struct FeeCollectorDataStore<'a> {
     account: Account,
     reference_block_header: BlockHeader,
     protocol_config: ProtocolConfig,
     partial_blockchain: PartialBlockchain,
     mast_store: TransactionMastStore,
+    fee_faucet: &'a FeeFaucet,
+    view: &'a StateView,
 }
 
-impl FeeCollectorDataStore {
+impl<'a> FeeCollectorDataStore<'a> {
     fn new(
         account: Account,
         reference_block_header: BlockHeader,
         protocol_config: ProtocolConfig,
         partial_blockchain: PartialBlockchain,
+        fee_faucet: &'a FeeFaucet,
+        view: &'a StateView,
     ) -> Self {
         let mast_store = TransactionMastStore::new();
         mast_store.load_account_code(account.code());
+        mast_store.load_account_code(&fee_faucet.code);
 
         Self {
             account,
@@ -151,11 +173,13 @@ impl FeeCollectorDataStore {
             protocol_config,
             partial_blockchain,
             mast_store,
+            fee_faucet,
+            view,
         }
     }
 }
 
-impl DataStore for FeeCollectorDataStore {
+impl DataStore for FeeCollectorDataStore<'_> {
     fn get_transaction_inputs(
         &self,
         account_id: AccountId,
@@ -181,10 +205,22 @@ impl DataStore for FeeCollectorDataStore {
 
     fn get_foreign_account_inputs(
         &self,
-        _foreign_account_id: AccountId,
-        _ref_block: BlockNumber,
+        foreign_account_id: AccountId,
+        ref_block: BlockNumber,
     ) -> impl FutureMaybeSend<Result<AccountInputs, DataStoreError>> {
-        async { Err(DataStoreError::other("todo in followup: support native faucet callbacks")) }
+        async move {
+            if foreign_account_id != self.fee_faucet.id
+                || ref_block != self.reference_block_header.block_num()
+            {
+                return Err(DataStoreError::other("invalid native faucet request"));
+            }
+            self.fee_faucet.account_inputs(self.view, ref_block).await.map_err(|error| {
+                DataStoreError::Other {
+                    error_msg: "failed to fetch native faucet account inputs".into(),
+                    source: Some(error.into()),
+                }
+            })
+        }
     }
 
     fn get_vault_asset_witnesses(
@@ -207,11 +243,27 @@ impl DataStore for FeeCollectorDataStore {
 
     fn get_storage_map_witness(
         &self,
-        _account_id: AccountId,
-        _map_root: Word,
-        _map_key: StorageMapKey,
+        account_id: AccountId,
+        map_root: Word,
+        map_key: StorageMapKey,
     ) -> impl FutureMaybeSend<Result<StorageMapWitness, DataStoreError>> {
-        async { Err(DataStoreError::other("todo in followup: support native faucet callbacks")) }
+        async move {
+            if account_id != self.fee_faucet.id {
+                return Err(DataStoreError::other("invalid native faucet request"));
+            }
+            self.fee_faucet
+                .storage_map_witness(
+                    self.view,
+                    self.reference_block_header.block_num(),
+                    map_root,
+                    map_key,
+                )
+                .await
+                .map_err(|error| DataStoreError::Other {
+                    error_msg: "failed to fetch native faucet storage witness".into(),
+                    source: Some(error.into()),
+                })
+        }
     }
 
     fn get_note_script(
@@ -222,7 +274,7 @@ impl DataStore for FeeCollectorDataStore {
     }
 }
 
-impl MastForestStore for FeeCollectorDataStore {
+impl MastForestStore for FeeCollectorDataStore<'_> {
     fn get(&self, procedure_hash: &Word) -> Option<LoadedMastForest> {
         self.mast_store.get(procedure_hash)
     }
@@ -230,25 +282,51 @@ impl MastForestStore for FeeCollectorDataStore {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
+    use miden_node_store::state::{BlockWriter, State};
+    use miden_node_utils::genesis::GenesisBlock;
     use miden_protocol::account::auth::AuthSecretKey;
-    use miden_protocol::asset::FungibleAsset;
+    use miden_protocol::account::{AccountBuilder, AccountType};
+    use miden_protocol::asset::{AssetAmount, FungibleAsset};
+    use miden_protocol::block::{BlockSignatures, SignedBlock};
     use miden_protocol::testing::account_id::{
         ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE,
         ACCOUNT_ID_SENDER,
     };
     use miden_protocol::transaction::{OutputNote, TransactionVerifier};
+    use miden_standards::account::access::{Authority, Pausable};
+    use miden_standards::account::faucets::{FungibleFaucet, TokenName};
+    use miden_standards::account::policies::{
+        BlocklistManager,
+        BurnPolicy,
+        MintPolicy,
+        TokenPolicyManager,
+        TransferPolicy,
+    };
+    use miden_standards::code_builder::CodeBuilder;
+    use miden_standards::errors::standards::ERR_ACCOUNT_IS_BLOCKED;
     use miden_standards::note::TxFeeNote;
-    use miden_testing::{Auth, MockChain};
+    use miden_testing::{AccountState, Auth, MockChain, assert_transaction_executor_error};
+    use miden_tx::TransactionExecutorError;
 
     use super::*;
-    use crate::test_utils::mock_collection_account;
+    use crate::test_utils::{mock_collection_account, mock_native_faucet};
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn deploys_without_funds_and_collects_fee_notes_without_changing_account_state()
     -> anyhow::Result<()> {
-        let mut chain = MockChain::builder().verification_base_fee(1).build()?;
+        let faucet = mock_native_faucet();
+        let mut chain = MockChain::builder().verification_base_fee(1).fee_faucet_id(faucet.id());
+        chain.add_account(faucet.clone())?;
+        let mut chain = chain.build()?;
+        let directory = tempfile::tempdir()?;
+        bootstrap(&chain, directory.path())?;
+        let (state, mut writer, _proof_writer) = State::for_tests(directory.path()).await;
         let target = ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE.try_into()?;
-        let mut builder = FeeCollectorTransactionBuilder::new(target, mock_collection_account())?;
+        let mut builder =
+            FeeCollectorTransactionBuilder::new(target, mock_collection_account(), &state.view())
+                .await?;
         assert!(builder.account.is_new());
         assert!(builder.account.vault().is_empty());
         let executed = builder
@@ -257,6 +335,7 @@ mod tests {
                 chain.latest_block_header(),
                 chain.protocol_config().clone(),
                 chain.latest_partial_blockchain(),
+                &state.view(),
             )
             .await?;
         let deployment = FeeCollectorTransactionBuilder::prove(executed)?;
@@ -273,6 +352,8 @@ mod tests {
         );
         chain.add_pending_proven_transaction(deployment);
         chain.prove_next_block()?;
+        let (header, body, signatures, _) = chain.latest_block().into_parts();
+        writer.apply_block(SignedBlock::new(header, body, signatures)?, None).await?;
 
         for amounts in [vec![10, 20], vec![0]] {
             let notes = amounts
@@ -282,7 +363,7 @@ mod tests {
                     TxFeeNote::builder()
                         .sender(ACCOUNT_ID_SENDER.try_into().unwrap())
                         .serial_number(Word::from([u32::try_from(index).unwrap(), 2, 3, 4]))
-                        .asset(FungibleAsset::mock(*amount))
+                        .asset(FungibleAsset::new(faucet.id(), *amount).unwrap())
                         .build()
                         .map(Note::from)
                 })
@@ -297,6 +378,7 @@ mod tests {
                     chain.latest_block_header(),
                     chain.protocol_config().clone(),
                     chain.latest_partial_blockchain(),
+                    &state.view(),
                 )
                 .await?;
             let transaction = FeeCollectorTransactionBuilder::prove(executed)?;
@@ -318,22 +400,149 @@ mod tests {
             assert_eq!(output_note.recipient().digest(), expected_recipient.digest());
             assert_eq!(
                 output_note.assets().iter().copied().collect::<Vec<_>>(),
-                vec![FungibleAsset::mock(amounts.iter().sum())],
+                vec![FungibleAsset::new(faucet.id(), amounts.iter().sum())?.into()],
             );
         }
 
         Ok(())
     }
 
-    #[test]
-    fn rejects_missing_or_mismatched_signing_keys() -> anyhow::Result<()> {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fee_collection_uses_updated_native_faucet_blocklist() -> anyhow::Result<()> {
+        for blocked in [false, true] {
+            let mut collector = mock_collection_account();
+            collector.account.set_nonce(miden_protocol::ONE)?;
+            let collector_id = collector.account.id();
+            let target = ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE.try_into()?;
+            let blocked_account = if blocked { target } else { collector_id };
+            let faucet = FungibleFaucet::builder()
+                .name(TokenName::new("Native")?)
+                .symbol("NAT".try_into()?)
+                .decimals(6)
+                .max_supply(AssetAmount::new(1_000_000)?)
+                .build()?;
+            let mut chain = MockChain::builder().verification_base_fee(0);
+            let faucet = chain.add_account_from_builder(
+                Auth::basic_ecdsa(),
+                AccountBuilder::new([43; 32])
+                    .account_type(AccountType::Public)
+                    .with_component(faucet)
+                    .with_component(Authority::AuthControlled)
+                    .with_components(
+                        TokenPolicyManager::builder()
+                            .active_mint_policy(MintPolicy::allow_all())
+                            .active_burn_policy(BurnPolicy::allow_all())
+                            .active_send_policy(TransferPolicy::with_basic_blocklist([
+                                blocked_account,
+                            ]))
+                            .active_receive_policy(TransferPolicy::empty_basic_blocklist())
+                            .build(),
+                    )
+                    .with_component(Pausable::unpaused())
+                    .with_component(BlocklistManager),
+                AccountState::Exists,
+            )?;
+            chain.add_account(collector.account.clone())?;
+            let mut chain = chain.fee_faucet_id(faucet.id()).build()?;
+            let directory = tempfile::tempdir()?;
+            bootstrap(&chain, directory.path())?;
+            let (state, mut writer, _proof_writer) = State::for_tests(directory.path()).await;
+            let asset = FungibleAsset::new(faucet.id(), 20)?;
+            let note = TxFeeNote::builder()
+                .sender(ACCOUNT_ID_SENDER.try_into()?)
+                .serial_number(Word::from([1, 2, 3, 4u32]))
+                .asset(asset)
+                .build()?;
+            let builder =
+                FeeCollectorTransactionBuilder::new(target, collector, &state.view()).await?;
+            Box::pin(update_blocklist(&mut chain, &mut writer, faucet.id(), collector_id, blocked))
+                .await?;
+            let result = builder
+                .execute(
+                    vec![note.into()],
+                    chain.latest_block_header(),
+                    chain.protocol_config().clone(),
+                    chain.latest_partial_blockchain(),
+                    &state.view(),
+                )
+                .await;
+            if blocked {
+                let error = result.unwrap_err().downcast::<TransactionExecutorError>()?;
+                assert_transaction_executor_error!(Err::<(), _>(error), ERR_ACCOUNT_IS_BLOCKED);
+            } else {
+                let executed = result?;
+                assert_eq!(
+                    executed.final_account().to_commitment(),
+                    builder.account.to_commitment()
+                );
+                assert_eq!(executed.output_notes().num_notes(), 1);
+                let note = executed.output_notes().get_note(0);
+                assert_eq!(note.assets().iter().copied().collect::<Vec<_>>(), vec![asset.into()]);
+            }
+        }
+        Ok(())
+    }
+
+    async fn update_blocklist(
+        chain: &mut MockChain,
+        writer: &mut BlockWriter,
+        faucet_id: AccountId,
+        account_id: AccountId,
+        blocked: bool,
+    ) -> anyhow::Result<()> {
+        let operation = if blocked { "block_account" } else { "unblock_account" };
+        let script = CodeBuilder::with_mock_packages().compile_tx_script(format!(
+            r"
+            use miden::standards::faucets::policies::transfer::blocklist::manager
+            @transaction_script
+            pub proc main
+                padw padw padw push.0.0
+                push.{prefix}.{suffix}
+                call.manager::{operation}
+                dropw dropw dropw dropw
+            end
+            ",
+            prefix = account_id.prefix().as_felt(),
+            suffix = account_id.suffix(),
+        ))?;
+        let executed =
+            chain.build_transaction(faucet_id).tx_script(script).build()?.execute().await?;
+        chain.add_pending_executed_transaction(&executed)?;
+        chain.prove_next_block()?;
+        let (header, body, signatures, _) = chain.latest_block().into_parts();
+        writer.apply_block(SignedBlock::new(header, body, signatures)?, None).await?;
+        Ok(())
+    }
+
+    fn bootstrap(chain: &MockChain, path: &Path) -> anyhow::Result<()> {
+        let genesis = chain.latest_block();
+        State::bootstrap(
+            GenesisBlock::new(
+                SignedBlock::new(
+                    genesis.header().clone(),
+                    genesis.body().clone(),
+                    BlockSignatures::new(Vec::new())?,
+                )?,
+                chain.protocol_config().clone(),
+            )?,
+            path,
+        )
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rejects_missing_or_mismatched_signing_keys() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        bootstrap(&MockChain::builder().build()?, directory.path())?;
+        let (state, ..) = State::for_tests(directory.path()).await;
         let account = mock_collection_account().account;
         let target = ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE.try_into()?;
         for keys in [vec![], vec![AuthSecretKey::new_falcon512_poseidon2()]] {
             let result = FeeCollectorTransactionBuilder::new(
                 target,
                 AccountFile::new(account.clone(), keys),
-            );
+                &state.view(),
+            )
+            .await;
             let error = result.err().expect("the collector must require its own signing key");
             assert!(error.to_string().contains("signing key"));
         }
@@ -341,11 +550,19 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn rejects_an_ordinary_wallet_as_the_collector() -> anyhow::Result<()> {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rejects_an_ordinary_wallet_as_the_collector() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        bootstrap(&MockChain::builder().build()?, directory.path())?;
+        let (state, ..) = State::for_tests(directory.path()).await;
         let account = MockChain::builder().add_existing_wallet(Auth::basic_ecdsa())?;
         let target = ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE.try_into()?;
-        let result = FeeCollectorTransactionBuilder::new(target, AccountFile::new(account, vec![]));
+        let result = FeeCollectorTransactionBuilder::new(
+            target,
+            AccountFile::new(account, vec![]),
+            &state.view(),
+        )
+        .await;
         let error = result.err().expect("an ordinary wallet must not collect batch fees");
         assert!(error.to_string().contains("AuthTxFeeCollector"));
         Ok(())

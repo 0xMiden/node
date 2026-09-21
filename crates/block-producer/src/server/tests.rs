@@ -4,10 +4,12 @@ use std::time::Duration;
 
 use miden_node_store::GenesisState;
 use miden_node_store::state::State;
-use miden_node_utils::fee::{test_fee_params, test_protocol_config};
+use miden_node_utils::fee::test_fee_params;
 use miden_protocol::ONE;
 use miden_protocol::account::Account;
+use miden_protocol::asset::AssetId;
 use miden_protocol::block::{BlockHeader, BlockNumber, ValidatorConfig};
+use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::testing::random_secret_key::random_secret_key;
 use url::Url;
 
@@ -113,12 +115,14 @@ async fn block_producer_starts_with_store_state() {
 
 fn bootstrap_store(path: &std::path::Path, account: Account) {
     let signer = random_secret_key();
+    let faucet = crate::test_utils::mock_native_faucet();
+    let config = ProtocolConfig::current(AssetId::new_fungible(faucet.id())).unwrap();
     let genesis_state = GenesisState::new(
-        vec![account],
+        vec![account, faucet],
         test_fee_params(),
         1,
         ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
-        test_protocol_config(),
+        config,
     );
     let genesis_block = genesis_state.into_block().expect("genesis block should be created");
 

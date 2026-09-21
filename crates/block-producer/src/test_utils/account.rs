@@ -3,6 +3,7 @@ use std::sync::LazyLock;
 
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{
+    Account,
     AccountBuilder,
     AccountFile,
     AccountId,
@@ -13,6 +14,13 @@ use miden_protocol::account::{
 use miden_protocol::{Hasher, Word};
 use miden_standards::account::auth::AuthTxFeeCollector;
 use miden_standards::account::wallets::BasicWallet;
+use miden_testing::{Auth, MockChain};
+
+pub fn mock_native_faucet() -> Account {
+    MockChain::builder()
+        .add_existing_basic_faucet(Auth::basic_ecdsa(), "MIDEN", 1_000_000, None)
+        .unwrap()
+}
 
 pub fn mock_collection_account() -> AccountFile {
     let key = AuthSecretKey::new_ecdsa_k256_keccak();
