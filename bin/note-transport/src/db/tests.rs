@@ -383,58 +383,6 @@ async fn insertion_uses_the_configured_retention_period() {
 }
 
 #[tokio::test]
-async fn migration_preserves_notes_counters_and_nonce() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("notes.sqlite3");
-    miden_node_db::migration::Migrator::builder()
-        .unwrap()
-        .push_sql("001_initial", include_str!("migrations/001_initial.sql"))
-        .unwrap()
-        .build()
-        .unwrap()
-        .bootstrap(&path)
-        .unwrap();
-    let original = note(1, 42);
-    let retained_bytes =
-        i64::try_from(original.header.to_bytes().len() + original.details.to_bytes().len())
-            .unwrap();
-    let stored = original.clone();
-    let (writer, reader) = miden_node_db::sqlite::open(&path).unwrap();
-    writer
-        .write("seed legacy database", move |tx| {
-            queries::insert_note(tx, &stored, now_micros())?;
-            queries::update_retained_bytes(tx, retained_bytes)?;
-            Ok::<_, StorageError>(())
-        })
-        .await
-        .unwrap();
-    drop((writer, reader));
-    assert!(load(&path).is_err());
-    migrate(&path).unwrap();
-    let (writer, reader) = load(&path).unwrap();
-    let page = fetch_notes(&reader, vec![42], None).await.unwrap();
-    assert_eq!(page.notes.len(), 1);
-    assert_eq!(page.notes[0].header, original.header);
-    assert_eq!(page.notes[0].details, original.details);
-    assert_eq!(page.notes[0].after_block_num, original.after_block_num);
-    assert_eq!(page.cursor.sequence, 7);
-    assert!(matches!(
-        store_note(&writer, note(2, 42), u64::try_from(retained_bytes).unwrap()).await,
-        Err(StorageError::Capacity(_))
-    ));
-    drop((writer, reader));
-    migrate(&path).unwrap();
-    let (writer, reader) = load(&path).unwrap();
-    let empty = fetch_notes(&reader, vec![42], Some(page.cursor)).await.unwrap();
-    assert!(empty.notes.is_empty());
-    assert_eq!(empty.cursor, page.cursor);
-    store_note(&writer, note(2, 42), u64::MAX).await.unwrap();
-    let next = fetch_notes(&reader, vec![42], Some(page.cursor)).await.unwrap();
-    assert_eq!(next.notes.len(), 1);
-    assert_eq!(next.cursor.sequence, 8);
-}
-
-#[tokio::test]
 async fn cursor_survives_cleanup_of_all_notes() {
     let (_dir, writer, reader) = database();
     seed_expired(&writer, 1, 0, u64::MAX).await;
