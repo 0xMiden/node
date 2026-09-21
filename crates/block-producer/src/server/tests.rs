@@ -87,7 +87,6 @@ async fn block_producer_starts_with_store_state() {
         proof_writer,
         validator_urls: vec![Url::parse("http://127.0.0.1:0").unwrap()],
         validator_timeout: DEFAULT_VALIDATOR_TIMEOUT,
-        batch_prover_url: None,
         block_prover_url: None,
         batch_interval: Duration::from_hours(1),
         block_interval: Duration::from_hours(1),

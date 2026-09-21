@@ -92,7 +92,6 @@ mod tests {
             batch: BatchOptions {
                 interval: DEFAULT_BATCH_INTERVAL,
                 max_txs: NonZeroUsize::new(max_txs).unwrap(),
-                prover_url: None,
                 workers: miden_node_block_producer::DEFAULT_BATCH_WORKERS,
             },
             block: BlockOptions {
@@ -187,16 +186,6 @@ pub struct BatchOptions {
         help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
     )]
     pub max_txs: NonZeroUsize,
-
-    /// The remote batch prover gRPC URL. If unset, a local prover will be used.
-    #[arg(
-        id = "batch-prover.url",
-        long = "batch-prover.url",
-        env = "MIDEN_NODE_BATCH_PROVER_URL",
-        value_name = "URL",
-        help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
-    )]
-    pub prover_url: Option<Url>,
 
     /// Number of concurrent batch-builder workers.
     ///

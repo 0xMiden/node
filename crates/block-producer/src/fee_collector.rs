@@ -98,7 +98,7 @@ pub async fn deploy_fee_collector(
         BTreeMap::new(),
         MIN_PROOF_SECURITY_LEVEL,
     )?;
-    let proof = BatchProver::local().prove(batch).await?;
+    let proof = BatchProver::new().prove(batch).await?;
     let block = BlockBuilder::prepare_block(
         state,
         &validator,
