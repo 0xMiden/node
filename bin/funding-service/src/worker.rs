@@ -9,39 +9,32 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use miden_node_tracing::{info, warn};
-use miden_node_utils::retry::{self, Retryable};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::account::{Account, AccountId};
 use miden_protocol::asset::AssetId;
-use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::note::{Note, Nullifier};
 use miden_protocol::protocol_config::ProtocolConfig;
-use miden_protocol::transaction::{PartialBlockchain, ProvenTransaction, TransactionId};
+use miden_protocol::transaction::{PartialBlockchain, TransactionId};
 use miden_protocol::utils::serde::Serializable;
 use miden_protocol::{Felt, Word};
 use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
 
+use crate::LOG_TARGET;
 use crate::account::FunderKey;
 use crate::deposit::{DepositScanner, native_amount};
-use crate::node::{RpcNodeClient, is_transient_error};
+use crate::node::RpcNodeClient;
 use crate::prover::Prover;
 use crate::status::StatusSnapshot;
 use crate::tx::{self, ExecutionInputs};
-use crate::{COMPONENT, LOG_TARGET};
 
 // CONSTANTS
 // ================================================================================================
 
 /// How long the worker waits for more notes after the first one arrives.
 const BATCH_LINGER: Duration = Duration::from_millis(250);
-
-/// Bounds on the retries of a node request inside one cycle.
-const NODE_RETRY_MIN_DELAY: Duration = Duration::from_millis(100);
-const NODE_RETRY_MAX_DELAY: Duration = Duration::from_secs(5);
-const NODE_RETRY_MAX_TIMES: usize = 5;
 
 /// Upper bound on the fee formula's cycle multiplier: the kernel charges `verification_base_fee *
 /// (ilog2(total_cycles) + 1)` with cycles capped at `2^29`.
@@ -100,17 +93,11 @@ struct Pending {
     nonce: Felt,
     /// The block at which the transaction expires.
     expiration_block: BlockNumber,
-    /// The deposits the transaction consumes. They return to the pool if it does not commit.
-    deposits: Vec<Note>,
-    /// The notes the transaction creates. They return to the queue if it does not commit.
-    notes: Vec<Note>,
-}
-
-/// A transaction that is ready for submission.
-struct Prepared {
-    transaction: ProvenTransaction,
-    transaction_inputs: Vec<u8>,
-    nonce: Felt,
+    /// The deposits to remove from the pool after commitment.
+    deposit_nullifiers: Vec<Nullifier>,
+    /// The number of queued notes to remove after commitment. The queued prefix stays unchanged
+    /// while this transaction is pending.
+    note_count: usize,
 }
 
 /// Combines funding requests and deposits in one transaction.
@@ -201,46 +188,31 @@ impl Funder {
             return Ok(());
         }
 
-        let CycleInputs { reference_header, blockchain, funder } =
-            self.read_cycle_inputs().await.context("failed to read the chain state")?;
-        let reference_block = reference_header.block_num();
-        self.check_account_code(&funder)?;
+        let inputs = self.read_cycle_inputs().await?;
+        let reference_block = inputs.reference_header.block_num();
+        self.check_account_code(&inputs.funder)?;
 
-        let balance = self.fee_balance(&funder);
+        let balance = self.fee_balance(&inputs.funder);
         self.setup.status.update(
             balance,
             reference_block,
-            reference_header.fee_parameters().verification_base_fee(),
+            inputs.reference_header.fee_parameters().verification_base_fee(),
         );
 
         if self.pending.is_some() {
-            self.resolve_pending(&funder, reference_block);
+            self.resolve_pending(&inputs.funder, reference_block);
             return Ok(());
         }
 
         self.remove_spent_deposits().await?;
         let reserve = self.fee_reserve();
-        let Some(selection) = select(
-            &mut self.deposits,
-            &mut self.queued,
-            balance,
-            self.setup.fee_faucet_id,
-            reserve,
-        ) else {
+        let Some(selection) =
+            select(&self.deposits, &self.queued, balance, self.setup.fee_faucet_id, reserve)
+        else {
             return Ok(());
         };
 
-        let prepared =
-            Box::pin(self.prepare(reference_header, blockchain, funder, &selection)).await;
-        match prepared {
-            Ok(prepared) => self.submit_prepared(prepared, selection).await,
-            Err(err) => {
-                self.restore(selection.deposits, selection.notes);
-                return Err(err).context("failed to prepare the funding transaction");
-            },
-        }
-
-        Ok(())
+        Box::pin(self.submit(inputs, selection)).await
     }
 
     /// Keeps the transaction pending until its commitment or expiration is known.
@@ -254,9 +226,13 @@ impl Funder {
                 target: LOG_TARGET,
                 "A funding transaction committed",
                 transaction.id = pending.transaction_id,
-                note.count = pending.notes.len(),
-                deposit.count = pending.deposits.len()
+                note.count = pending.note_count,
+                deposit.count = pending.deposit_nullifiers.len()
             );
+            for nullifier in &pending.deposit_nullifiers {
+                self.deposits.remove(nullifier);
+            }
+            drop(self.queued.drain(..pending.note_count));
             self.pending = None;
 
             return;
@@ -268,16 +244,15 @@ impl Funder {
 
         warn!(
             target: LOG_TARGET,
-            "A funding transaction expired before it committed; its notes are queued again",
+            "A funding transaction expired before it committed; its notes remain queued",
             transaction.id = pending.transaction_id,
             transaction.expires_at = pending.expiration_block,
             block.number = reference_block,
-            note.count = pending.notes.len(),
-            deposit.count = pending.deposits.len()
+            note.count = pending.note_count,
+            deposit.count = pending.deposit_nullifiers.len()
         );
 
-        let pending = self.pending.take().expect("the pending transaction was read above");
-        self.restore(pending.deposits, pending.notes);
+        self.pending = None;
     }
 
     /// Adds new deposits to the pool by nullifier.
@@ -299,26 +274,15 @@ impl Funder {
         Ok(())
     }
 
-    /// Returns the deposits and the notes of a transaction which did not reach the chain.
-    fn restore(&mut self, deposits: Vec<Note>, notes: Vec<Note>) {
-        self.deposits.extend(deposits.into_iter().map(|note| (note.nullifier(), note)));
-        // The notes go back in front of everything which arrived later, which keeps the queue
-        // first-come-first-served.
-        for note in notes.into_iter().rev() {
-            self.queued.push_front(note);
-        }
-    }
-
-    /// Executes and proves one transaction without submitting it.
-    async fn prepare(
-        &mut self,
-        reference_header: BlockHeader,
-        blockchain: PartialBlockchain,
-        funder: Account,
-        selection: &Selection,
-    ) -> Result<Prepared> {
+    /// Executes and proves one transaction. Records it as pending before submission.
+    async fn submit(&mut self, inputs: CycleInputs, selection: Selection) -> Result<()> {
+        let CycleInputs { reference_header, blockchain, funder } = inputs;
         let nonce = funder.nonce();
-        let fee_faucet = self.read_fee_faucet(reference_header.block_num()).await?;
+        let fee_faucet = self
+            .node
+            .public_account(self.setup.fee_faucet_id, reference_header.block_num())
+            .await
+            .context("failed to read the fee faucet account")?;
         let inputs = ExecutionInputs {
             funder,
             secret_key: self.setup.key.secret_key().clone(),
@@ -329,14 +293,12 @@ impl Funder {
             expiration_delta: self.setup.config.expiration_delta,
         };
 
-        let executed_tx = Box::pin(tx::execute(
-            inputs,
-            selection.deposits.clone(),
-            selection.notes.clone(),
-            &mut self.rng,
-        ))
-        .await
-        .context("failed to execute the funding transaction")?;
+        let deposit_nullifiers = selection.deposits.iter().map(Note::nullifier).collect();
+        let note_count = selection.notes.len();
+        let executed_tx =
+            Box::pin(tx::execute(inputs, selection.deposits, selection.notes, &mut self.rng))
+                .await
+                .context("failed to execute the funding transaction")?;
         let transaction_inputs = executed_tx.tx_inputs().to_bytes();
         let transaction = self
             .prover
@@ -344,20 +306,14 @@ impl Funder {
             .await
             .context("failed to prove the funding transaction")?;
 
-        Ok(Prepared { transaction, transaction_inputs, nonce })
-    }
-
-    /// Records the pending transaction before the submission request can reach the node.
-    async fn submit_prepared(&mut self, prepared: Prepared, selection: Selection) {
-        let Prepared { transaction, transaction_inputs, nonce } = prepared;
         let transaction_id = transaction.id();
         let expiration_block = transaction.expiration_block_num();
         self.pending = Some(Pending {
             transaction_id,
             nonce,
             expiration_block,
-            deposits: selection.deposits,
-            notes: selection.notes,
+            deposit_nullifiers,
+            note_count,
         });
 
         match self.node.submit(&transaction, &transaction_inputs).await {
@@ -379,58 +335,23 @@ impl Funder {
                 );
             },
         }
+
+        Ok(())
     }
 
     /// Reads the chain state every cycle needs, at a fresh reference block.
     async fn read_cycle_inputs(&self) -> Result<CycleInputs> {
-        let (reference_header, blockchain) = self
-            .retry_node_call(|| self.node.tip_chain_state())
-            .await
-            .context("failed to read the chain state")?;
+        let (reference_header, blockchain) =
+            self.node.tip_chain_state().await.context("failed to read the chain state")?;
         let reference_block = reference_header.block_num();
 
         let (funder, _funder_witness) = self
-            .retry_node_call(|| self.node.public_account(self.account_id(), reference_block))
+            .node
+            .public_account(self.account_id(), reference_block)
             .await
             .context("failed to read the funding account")?;
 
         Ok(CycleInputs { reference_header, blockchain, funder })
-    }
-
-    /// Reads the fee faucet and its account-tree witness at `reference_block`.
-    ///
-    /// The native asset is callback-enabled, so the kernel loads the issuing faucet in a foreign
-    /// context whenever the asset moves. Every transaction the worker builds moves it.
-    async fn read_fee_faucet(
-        &self,
-        reference_block: BlockNumber,
-    ) -> Result<(Account, AccountWitness)> {
-        self.retry_node_call(|| self.node.public_account(self.setup.fee_faucet_id, reference_block))
-            .await
-    }
-
-    /// Retries a node request while it fails for a transient reason.
-    async fn retry_node_call<T, F, Fut>(&self, call: F) -> Result<T>
-    where
-        F: Fn() -> Fut,
-        Fut: Future<Output = Result<T>>,
-    {
-        (|| call())
-            .retry(retry::exponential_bounded(
-                NODE_RETRY_MIN_DELAY,
-                NODE_RETRY_MAX_DELAY,
-                NODE_RETRY_MAX_TIMES,
-            ))
-            .when(is_transient_error)
-            .notify(|err: &anyhow::Error, delay: Duration| {
-                warn!(
-                    err,
-                    target: COMPONENT,
-                    "A node request failed; retrying after backoff",
-                    retry.delay_ms = delay.as_millis() as u64
-                );
-            })
-            .await
     }
 
     /// Checks the account on chain against the account file, once.
@@ -477,10 +398,11 @@ struct Selection {
     notes: Vec<Note>,
 }
 
-/// Takes the largest deposits and the queued notes they can fund with the account balance.
+/// Selects the largest deposits and the queued notes they can fund with the account balance. Leaves
+/// the notes in their queues until the transaction commits.
 fn select(
-    deposits: &mut HashMap<Nullifier, Note>,
-    queued: &mut VecDeque<Note>,
+    deposits: &HashMap<Nullifier, Note>,
+    queued: &VecDeque<Note>,
     balance: u64,
     fee_faucet_id: AccountId,
     reserve: u64,
@@ -500,13 +422,9 @@ fn select(
         return None;
     }
 
-    let nullifiers: Vec<_> = candidates.into_iter().map(Note::nullifier).collect();
     Some(Selection {
-        deposits: nullifiers
-            .into_iter()
-            .filter_map(|nullifier| deposits.remove(&nullifier))
-            .collect(),
-        notes: queued.drain(..note_count).collect(),
+        deposits: candidates.into_iter().cloned().collect(),
+        notes: queued.iter().take(note_count).cloned().collect(),
     })
 }
 
@@ -572,37 +490,34 @@ mod tests {
     }
 
     #[test]
-    fn a_deposit_below_the_fee_reserve_is_not_consumed_on_its_own() {
-        let mut deposits = deposit_pool([note(1, 1)]);
-        let mut queued = VecDeque::new();
-        assert!(select(&mut deposits, &mut queued, 0, fee_faucet_id(), RESERVE).is_none());
+    fn a_deposit_below_the_fee_reserve_is_not_selected_on_its_own() {
+        let deposits = deposit_pool([note(1, 1)]);
+        let queued = VecDeque::new();
+        assert!(select(&deposits, &queued, 0, fee_faucet_id(), RESERVE).is_none());
         assert_eq!(deposits.len(), 1);
     }
 
     #[test]
-    fn a_deposit_above_the_fee_reserve_is_consumed_on_its_own() {
-        let mut deposits = deposit_pool([note(RESERVE + 1, 2)]);
-        let mut queued = VecDeque::new();
-        let selection = select(&mut deposits, &mut queued, 0, fee_faucet_id(), RESERVE).unwrap();
+    fn a_deposit_above_the_fee_reserve_is_selected_on_its_own() {
+        let deposits = deposit_pool([note(RESERVE + 1, 2)]);
+        let queued = VecDeque::new();
+        let selection = select(&deposits, &queued, 0, fee_faucet_id(), RESERVE).unwrap();
         assert_eq!(selection.deposits.len(), 1);
         assert!(selection.notes.is_empty());
-        assert!(deposits.is_empty());
     }
 
     #[test]
     fn a_small_deposit_pays_for_a_note_in_the_same_transaction() {
         let deposit = note(1_000, 3);
         let payout = note(1_000, 4);
-        let mut deposits = deposit_pool([deposit.clone()]);
-        let mut queued = VecDeque::from([payout.clone()]);
+        let deposits = deposit_pool([deposit.clone()]);
+        let queued = VecDeque::from([payout.clone()]);
 
-        let selection = select(&mut deposits, &mut queued, RESERVE, fee_faucet_id(), RESERVE)
+        let selection = select(&deposits, &queued, RESERVE, fee_faucet_id(), RESERVE)
             .expect("the deposit covers the payout and the balance covers the fee reserve");
 
         assert_eq!(selection.deposits, vec![deposit]);
         assert_eq!(selection.notes, vec![payout]);
-        assert!(deposits.is_empty());
-        assert!(queued.is_empty());
     }
 
     #[test]
@@ -610,33 +525,49 @@ mod tests {
         let deposit = note(RESERVE + 1_000, 5);
         let payout = note(1_000, 6);
         let waiting = note(1, 7);
-        let mut deposits = deposit_pool([deposit.clone()]);
-        let mut queued = VecDeque::from([payout.clone(), waiting.clone()]);
+        let deposits = deposit_pool([deposit.clone()]);
+        let queued = VecDeque::from([payout.clone(), waiting.clone()]);
 
-        let selection = select(&mut deposits, &mut queued, 0, fee_faucet_id(), RESERVE)
+        let selection = select(&deposits, &queued, 0, fee_faucet_id(), RESERVE)
             .expect("the deposit covers the first payout and one fee reserve");
 
         assert_eq!(selection.deposits, vec![deposit]);
         assert_eq!(selection.notes, vec![payout]);
-        assert!(deposits.is_empty());
-        assert_eq!(queued, VecDeque::from([waiting]));
+        assert_eq!(queued.back(), Some(&waiting));
     }
 
     #[test]
     fn payouts_can_proceed_without_deposits() {
         let payout = note(1_000, 8);
-        let mut deposits = HashMap::new();
-        let mut queued = VecDeque::from([payout.clone()]);
+        let deposits = HashMap::new();
+        let queued = VecDeque::from([payout.clone()]);
 
-        assert!(select(&mut deposits, &mut queued, RESERVE, fee_faucet_id(), RESERVE).is_none());
+        assert!(select(&deposits, &queued, RESERVE, fee_faucet_id(), RESERVE).is_none());
         assert_eq!(queued, VecDeque::from([payout.clone()]));
 
-        let selection =
-            select(&mut deposits, &mut queued, RESERVE + 1_000, fee_faucet_id(), RESERVE)
-                .expect("the account balance covers the payout and fee reserve");
+        let selection = select(&deposits, &queued, RESERVE + 1_000, fee_faucet_id(), RESERVE)
+            .expect("the account balance covers the payout and fee reserve");
         assert!(selection.deposits.is_empty());
         assert_eq!(selection.notes, vec![payout]);
-        assert!(queued.is_empty());
+    }
+
+    #[test]
+    fn selection_keeps_notes_available_for_retry() {
+        let deposit = note(RESERVE + 1_000, 9);
+        let payout = note(1_000, 10);
+        let waiting = note(1, 11);
+        let deposits = deposit_pool([deposit.clone()]);
+        let queued = VecDeque::from([payout.clone(), waiting.clone()]);
+
+        for _ in 0..2 {
+            let selection = select(&deposits, &queued, 0, fee_faucet_id(), RESERVE)
+                .expect("the same notes stay available until commitment");
+            assert_eq!(selection.deposits, vec![deposit.clone()]);
+            assert_eq!(selection.notes, vec![payout.clone()]);
+        }
+
+        assert_eq!(deposits, deposit_pool([deposit]));
+        assert_eq!(queued, VecDeque::from([payout, waiting]));
     }
 
     #[test]
@@ -647,24 +578,18 @@ mod tests {
     #[test]
     fn the_largest_deposits_are_taken_up_to_the_cap() {
         let count = u32::try_from(MAX_DEPOSITS_PER_TX).expect("the cap fits in a u32") + 2;
-        let mut deposits =
+        let deposits =
             deposit_pool((0..count).map(|index| note(u64::from(index) + RESERVE, index + 10)));
-        let mut queued = VecDeque::new();
-        let selection = select(&mut deposits, &mut queued, 0, fee_faucet_id(), RESERVE).unwrap();
+        let queued = VecDeque::new();
+        let selection = select(&deposits, &queued, 0, fee_faucet_id(), RESERVE).unwrap();
         assert_eq!(selection.deposits.len(), MAX_DEPOSITS_PER_TX);
-        assert_eq!(deposits.len(), 2);
         let smallest_taken = selection
             .deposits
             .iter()
             .map(|note| native_amount(note, fee_faucet_id()))
             .min()
             .unwrap();
-        let largest_left = deposits
-            .values()
-            .map(|note| native_amount(note, fee_faucet_id()))
-            .max()
-            .unwrap();
-        assert!(smallest_taken > largest_left);
+        assert_eq!(smallest_taken, RESERVE + 2);
     }
 
     /// Admission holds back the fee of one transaction, because the transaction pays that fee out

@@ -27,10 +27,12 @@ The worker waits for a request, a deposit scan deadline, or a transaction poll d
 1. If a transaction is pending, read the account and resolve that transaction. Do not prepare another transaction while its outcome is unknown.
 2. Otherwise, scan for deposits when the scan interval is due and fill the active batch from the request channel.
 3. Read the chain state and remove spent deposits. Select deposits and affordable payouts, then execute and prove one transaction.
-4. Record its ID, account nonce, expiration block, and selected notes before submitting it to the node.
+4. Record its ID, account nonce, expiration block, deposit nullifiers, and payout count before submitting it to the node.
 5. Wait for commitment or expiration, regardless of the submission response.
 
 A submission error can occur after the node accepts a transaction. The worker treats every submission error as an unknown outcome and keeps the transaction pending until the chain resolves it. The account has one writer, so a higher nonce means the transaction committed. If the nonce has not changed at the expiration block, the worker can retry its notes in a new transaction. The notes keep their IDs across retries. A failed RPC submission also clears the cached encryption key so the next submission fetches a fresh key.
+
+Selected notes stay in the deposit pool and request batch until commitment. Preparation failures and expiration leave those notes available for retry. On commitment, the worker removes the selected deposits and the queued payout prefix. Failed chain reads return to the event loop, which retries on its next scheduled cycle.
 
 ### Deposits and payouts in one transaction
 

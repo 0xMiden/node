@@ -426,32 +426,6 @@ impl RpcNodeClient {
     }
 }
 
-// TRANSIENT ERRORS
-// ================================================================================================
-
-/// Returns `true` for gRPC status codes that indicate a transient transport- or server-side problem
-/// worth retrying. Content-rejection codes (`InvalidArgument`, `FailedPrecondition`, ...) reflect
-/// the request itself and are not retried.
-pub fn is_transient_status(status: &tonic::Status) -> bool {
-    matches!(
-        status.code(),
-        tonic::Code::Unavailable
-            | tonic::Code::DeadlineExceeded
-            | tonic::Code::Cancelled
-            | tonic::Code::Aborted
-            | tonic::Code::Unknown
-            | tonic::Code::Internal
-            | tonic::Code::ResourceExhausted,
-    )
-}
-
-/// Returns `true` when the error chain holds a transient gRPC status.
-pub fn is_transient_error(err: &anyhow::Error) -> bool {
-    err.chain()
-        .filter_map(|cause| cause.downcast_ref::<tonic::Status>())
-        .any(is_transient_status)
-}
-
 /// The only nullifier prefix length the node supports.
 const NULLIFIER_PREFIX_LEN: u32 = 16;
 
