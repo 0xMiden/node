@@ -28,7 +28,7 @@ pub enum FeeCollectorCommand {
     /// Writes fee-collector.mac in the existing data directory. Refuses to overwrite an existing
     /// file. Creation is offline. Keep the file private because it contains the signing key.
     ///
-    /// Use `miden-node fee-collector deploy` to deploy this account before collecting batch fees.
+    /// Use `miden-node fee-collector deploy` to deploy this account before starting the sequencer.
     Create(CreateCommand),
 
     /// Deploy a fee collector account in a dedicated block.
@@ -43,7 +43,7 @@ pub enum FeeCollectorCommand {
     /// and pays no transaction fee. If the matching account is already deployed, the command
     /// succeeds without creating another block.
     ///
-    /// Keep the account file and its signing key for fee collection.
+    /// After deployment, start the sequencer with the same account file.
     Deploy(Box<DeployCommand>),
 }
 

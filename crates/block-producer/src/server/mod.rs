@@ -9,6 +9,7 @@ use miden_node_tracing::{debug, error, info, miden_instrument};
 use miden_node_utils::formatting::{format_input_notes, format_output_notes};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
+use miden_protocol::account::{AccountFile, AccountId};
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::ProvenTransaction;
@@ -53,10 +54,8 @@ impl Default for BlockProducerApiConfig {
 impl BlockProducerApiConfig {
     fn mempool_config(self) -> MempoolConfig {
         MempoolConfig {
-            batch_budget: BatchBudget {
-                transactions: self.max_txs_per_batch.get(),
-                ..BatchBudget::default()
-            },
+            batch_budget: BatchBudget::new(self.max_txs_per_batch.get()),
+            max_txs_per_batch: self.max_txs_per_batch.get(),
             block_budget: BlockBudget {
                 batches: self.max_batches_per_block.get(),
             },
@@ -100,26 +99,30 @@ pub struct Sequencer {
 
     /// The number of concurrent batch-builder workers.
     pub batch_workers: NonZeroUsize,
+
+    /// The batch builder account that receives collected fees.
+    pub builder_account_id: AccountId,
+
+    /// The deployed fee collector account and its signing key.
+    pub fee_collector_account: AccountFile,
 }
 
 // BLOCK PRODUCER
 // ================================================================================================
 
 impl Sequencer {
-    /// Spawns the sequencer tasks and returns its in-process API.
-    pub fn spawn(self, shutdown: CancellationToken) -> Result<SequencerHandle> {
+    /// Checks the deployed collector, then starts the sequencer tasks and returns its API.
+    pub async fn start(mut self, shutdown: CancellationToken) -> Result<SequencerHandle> {
         info!(target: LOG_TARGET, "Initializing sequencer");
         let state = self.state;
+        crate::fee_collector::load_deployed_collector(&state, &mut self.fee_collector_account)
+            .await?;
         let validator =
             BlockProducerValidatorClient::new(self.validator_urls.clone(), self.validator_timeout)?;
-        let chain_tip = state.committed_tip();
-
-        info!(target: LOG_TARGET, "Sequencer initialized");
-
         let block_builder = BlockBuilder::new(
             Arc::clone(&state),
             self.block_writer,
-            validator,
+            validator.clone(),
             self.block_interval,
         );
         let batch_intervals = BatchIntervals::derive_from(self.block_interval, self.batch_interval);
@@ -128,13 +131,16 @@ impl Sequencer {
             self.batch_workers,
             self.batch_prover_url,
             batch_intervals,
+            self.builder_account_id,
+            self.fee_collector_account,
+            validator,
         )?;
         let api_config = BlockProducerApiConfig {
             max_txs_per_batch: self.max_txs_per_batch,
             max_batches_per_block: self.max_batches_per_block,
             mempool_tx_capacity: self.mempool_tx_capacity,
         };
-        let mempool = Mempool::shared(chain_tip, api_config.mempool_config());
+        let mempool = Mempool::shared(state.committed_tip(), api_config.mempool_config());
         let api = BlockProducerApi::from_shared_mempool(mempool.clone(), state, shutdown.clone());
         let block_prover = if let Some(url) = self.block_prover_url {
             Arc::new(BlockProver::remote(url)?)
@@ -142,6 +148,7 @@ impl Sequencer {
             Arc::new(BlockProver::local())
         };
         let chain_tip_rx = api.state.subscribe_committed_tip();
+        info!(target: LOG_TARGET, "Sequencer initialized");
 
         // Spawn batch builder, block builder, and proof scheduler. The builders communicate
         // indirectly via a shared mempool.

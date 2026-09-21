@@ -82,7 +82,7 @@ impl BlockProducerValidatorClient {
         genesis: Word,
         validators: &ValidatorConfig,
     ) -> anyhow::Result<()> {
-        let client = self.clients.first().context("collector deployment requires a validator")?;
+        let client = self.clients.first().context("transaction validation requires a validator")?;
         let key = (|| async { client.clone().get_transaction_encryption_key(()).await })
             .retry(retry::exponential_bounded(
                 Duration::from_millis(100),
