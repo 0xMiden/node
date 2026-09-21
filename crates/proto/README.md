@@ -24,8 +24,8 @@ error.
 Registration uses a handwritten decoder to keep invitation codes out of `Debug` output.
 
 Message fields are required unless the schema marks them `optional`. A `oneof` is required unless the build
-configuration marks it optional. The account detail request permits an absent storage request. Decoded oneofs provide
-`into_<variant>()` accessors that report a conversion error when the variant does not match.
+configuration marks it optional. The account detail request permits an absent storage request. Decoded oneof fields
+provide `into_<variant>()` accessors that report a conversion error when the variant does not match.
 
 Optional, repeated, and map fields use `OptionalField`, `RepeatedField`, and `MapField` wrappers. Their conversion
 methods retain the field name and the element index or map key on failure. Set conversion requires an explicit duplicate
