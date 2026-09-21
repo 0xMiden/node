@@ -218,6 +218,9 @@ jobs:
 
       - name: Validate Docker images
         uses: WarpBuilds/bake-action@cb88c8ea0c887c0d1a3dcb534e71bd68a015e2d6 # v6.7.7
+        env:
+          # Skip build-history export. The Kache report is uploaded separately.
+          DOCKER_BUILD_SUMMARY: "false"
         with:
           source: .
           files: ./docker-bake.hcl
