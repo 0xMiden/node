@@ -21,6 +21,22 @@ pub(super) struct RequestFundsRequest {
 
     /// The amount of the native asset, in base units.
     amount: u64,
+
+    /// Whether to answer only once the note is committed in a block. A request which omits this
+    /// waits.
+    ///
+    /// A request which does not wait is answered as soon as the node accepts the transaction, and
+    /// its response carries no inclusion proof. The note is not on chain yet, so a transaction
+    /// which expires before it commits leaves that note uncreated and the requester is not told.
+    /// It suits a requester which consumes the note as an unauthenticated input and can retry the
+    /// work the note was for.
+    #[serde(default = "wait_for_commit_by_default")]
+    wait_for_commit: bool,
+}
+
+/// A request which does not say otherwise waits, which is the answer every requester can act on.
+const fn wait_for_commit_by_default() -> bool {
+    true
 }
 
 /// The body of a successful funding response.
@@ -29,8 +45,10 @@ pub(super) struct RequestFundsResponse {
     /// The serialized note, in hexadecimal.
     note: String,
 
-    /// The serialized proof that the note is in a block, in hexadecimal.
-    inclusion_proof: String,
+    /// The serialized proof that the note is in a block, in hexadecimal. Absent when the request
+    /// did not wait for the note to commit, because the proof exists only once it has.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    inclusion_proof: Option<String>,
 
     /// The transaction which created the note, in hexadecimal.
     transaction_id: String,
@@ -42,7 +60,7 @@ impl From<FundedNote> for RequestFundsResponse {
 
         Self {
             note: hex::encode(note.to_bytes()),
-            inclusion_proof: hex::encode(inclusion_proof.to_bytes()),
+            inclusion_proof: inclusion_proof.map(|proof| hex::encode(proof.to_bytes())),
             transaction_id: hex::encode(transaction_id.to_bytes()),
         }
     }
@@ -52,13 +70,17 @@ impl From<FundedNote> for RequestFundsResponse {
 // ================================================================================================
 
 /// Creates a public P2ID note which holds `amount` base units of the native asset and targets
-/// `account_id`, then waits for the note to commit.
+/// `account_id`.
+///
+/// Waits for the note to commit unless the request asks not to, in which case it answers as soon
+/// as the node accepts the transaction.
 #[miden_node_tracing::miden_instrument(
     target = COMPONENT,
     name = "request_funds",
     fields (
         account.id = request.account_id,
         asset.amount = request.amount,
+        funding_service.wait_for_commit = request.wait_for_commit,
     ),
     err,
 )]
@@ -71,7 +93,12 @@ pub(super) async fn request_funds(
     validate_amount(request.amount, state.status.max_amount())?;
 
     let (reply, response) = oneshot::channel();
-    let queued = FundingRequest { target, amount: request.amount, reply };
+    let queued = FundingRequest {
+        target,
+        amount: request.amount,
+        wait_for_commit: request.wait_for_commit,
+        reply,
+    };
 
     state.requests.try_send(queued).map_err(|err| match err {
         mpsc::error::TrySendError::Full(_) => RequestFundsError::Busy,
@@ -155,14 +182,14 @@ mod tests {
 
         let response = RequestFundsResponse::from(FundedNote {
             note: note.clone(),
-            inclusion_proof: inclusion_proof.clone(),
+            inclusion_proof: Some(inclusion_proof.clone()),
             transaction_id,
         });
 
         let decoded_note = Note::read_from_bytes(&hex::decode(&response.note).unwrap()).unwrap();
+        let encoded_proof = response.inclusion_proof.as_ref().expect("a waiting request is proven");
         let decoded_proof =
-            NoteInclusionProof::read_from_bytes(&hex::decode(&response.inclusion_proof).unwrap())
-                .unwrap();
+            NoteInclusionProof::read_from_bytes(&hex::decode(encoded_proof).unwrap()).unwrap();
         let decoded_id =
             TransactionId::read_from_bytes(&hex::decode(&response.transaction_id).unwrap())
                 .unwrap();
@@ -172,5 +199,58 @@ mod tests {
         assert_eq!(decoded_note.recipient(), note.recipient());
         assert_eq!(decoded_proof.location(), inclusion_proof.location());
         assert_eq!(decoded_id, transaction_id);
+    }
+
+    #[test]
+    fn a_request_which_omits_the_flag_waits() {
+        let request: RequestFundsRequest =
+            serde_json::from_str(r#"{"account_id":"0x1","amount":7}"#).unwrap();
+
+        assert!(request.wait_for_commit);
+    }
+
+    #[test]
+    fn a_request_can_ask_not_to_wait() {
+        let request: RequestFundsRequest =
+            serde_json::from_str(r#"{"account_id":"0x1","amount":7,"wait_for_commit":false}"#)
+                .unwrap();
+
+        assert!(!request.wait_for_commit);
+    }
+
+    /// A requester which did not wait gets the note, and the proof is left out rather than sent as
+    /// null, so a client which expects the committed shape fails to parse instead of reading a
+    /// proof that is not there.
+    #[test]
+    fn a_response_without_a_proof_omits_the_field() {
+        let faucet_id = FungibleAsset::mock_issuer();
+        let note: Note = P2idNote::builder()
+            .sender(faucet_id)
+            .target(faucet_id)
+            .serial_number(Word::from([3u32; 4]))
+            .note_type(NoteType::Public)
+            .asset(FungibleAsset::new(faucet_id, 42).unwrap())
+            .build()
+            .unwrap()
+            .into();
+
+        let response = RequestFundsResponse::from(FundedNote {
+            note: note.clone(),
+            inclusion_proof: None,
+            transaction_id: TransactionId::from_raw(Word::from([9u32; 4])),
+        });
+
+        assert!(response.inclusion_proof.is_none());
+
+        let encoded = serde_json::to_value(&response).unwrap();
+        assert!(
+            encoded.get("inclusion_proof").is_none(),
+            "the field should be omitted: {encoded}"
+        );
+        assert!(encoded.get("note").is_some());
+        assert!(encoded.get("transaction_id").is_some());
+
+        let decoded_note = Note::read_from_bytes(&hex::decode(&response.note).unwrap()).unwrap();
+        assert_eq!(decoded_note.id(), note.id());
     }
 }

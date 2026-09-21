@@ -12,6 +12,7 @@ use tracing::Value;
 const BOOLEAN_FIELD_NAMES: &[&str] = &[
     "account.updated",
     "funding_service.remote_prover",
+    "funding_service.wait_for_commit",
     "note.erased",
     "note.id_resolved",
     "panic",

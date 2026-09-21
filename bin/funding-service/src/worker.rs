@@ -57,16 +57,24 @@ pub struct FundingRequest {
     pub target: AccountId,
     /// The amount of the native asset, in base units.
     pub amount: u64,
+    /// Whether the request is answered only once its note is committed in a block.
+    ///
+    /// A request which does not wait is answered as soon as the node accepts the transaction. Its
+    /// note carries no inclusion proof and is not yet on chain, so a transaction which expires
+    /// before it commits leaves that note uncreated. A requester which cannot handle that must
+    /// wait.
+    pub wait_for_commit: bool,
     /// Where the outcome is sent.
     pub reply: oneshot::Sender<Result<FundedNote, RequestFundsError>>,
 }
 
-/// A committed funding note.
+/// A funding note the service created.
 #[derive(Debug, Clone)]
 pub struct FundedNote {
     pub note: Note,
-    /// Proof that the note is in a block.
-    pub inclusion_proof: NoteInclusionProof,
+    /// Proof that the note is in a block. Absent when the requester did not wait for the note to
+    /// commit, because the proof exists only once it has.
+    pub inclusion_proof: Option<NoteInclusionProof>,
     /// The transaction which created the note.
     pub transaction_id: TransactionId,
 }
@@ -315,7 +323,17 @@ impl Funder {
             note.count = notes.len()
         );
 
+        // Every note of the transaction is awaited below, not only the notes of the requests which
+        // wait for one. The service reads the funding account from the node before every
+        // transaction, so the next batch would build on a stale nonce if this one started before
+        // its predecessor committed.
         let note_ids: Vec<_> = notes.iter().map(Note::id).collect();
+
+        // The requests which do not wait are answered here, as soon as the node holds the
+        // transaction, and leave the batch. The failure paths below then reach only the requests
+        // which are still waiting, which are the ones an expiry can still be reported to.
+        let notes = answer_requests_which_do_not_wait(batch, notes, transaction_id);
+
         let proofs = match await_inclusion(
             &self.node,
             &note_ids,
@@ -566,6 +584,38 @@ impl BatchFailure {
 }
 
 /// Answers every request with the note built for it.
+/// Answers the requests in `batch` which do not wait for their note to commit and removes them
+/// from it, returning the notes of the requests which remain.
+///
+/// The returned notes keep the position of the request they belong to, which is what pairs a
+/// request with its note.
+fn answer_requests_which_do_not_wait(
+    batch: &mut Vec<FundingRequest>,
+    notes: Vec<Note>,
+    transaction_id: TransactionId,
+) -> Vec<Note> {
+    let mut waiting_requests = Vec::with_capacity(batch.len());
+    let mut waiting_notes = Vec::with_capacity(notes.len());
+
+    for (request, note) in std::mem::take(batch).into_iter().zip(notes) {
+        if request.wait_for_commit {
+            waiting_requests.push(request);
+            waiting_notes.push(note);
+            continue;
+        }
+
+        let _ = request.reply.send(Ok(FundedNote {
+            note,
+            inclusion_proof: None,
+            transaction_id,
+        }));
+    }
+
+    *batch = waiting_requests;
+
+    waiting_notes
+}
+
 fn reply_with_notes(
     batch: Vec<FundingRequest>,
     notes: Vec<Note>,
@@ -576,7 +626,11 @@ fn reply_with_notes(
         // `Inclusion::Committed` holds a proof for every note of the transaction, so a missing
         // proof is a broken invariant and not an expired transaction.
         let response = match proofs.remove(&note.id()) {
-            Some(inclusion_proof) => Ok(FundedNote { note, inclusion_proof, transaction_id }),
+            Some(inclusion_proof) => Ok(FundedNote {
+                note,
+                inclusion_proof: Some(inclusion_proof),
+                transaction_id,
+            }),
             None => Err(RequestFundsError::Internal(anyhow::anyhow!(
                 "no inclusion proof for note {} of committed transaction {transaction_id}",
                 note.id(),

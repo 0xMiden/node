@@ -76,7 +76,7 @@ The service serves a JSON over HTTP API on `--listen`.
 | Endpoint              | Purpose                                                                                                                                                                     |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GET /status`         | Returns the service version, the funding account's ID, its balance, the block the service is synchronized to, the configured maximum amount, and the verification base fee. |
-| `POST /request-funds` | Creates a public pay-to-ID note for an account, waits for the note to commit, and returns the note with proof of its inclusion.                                             |
+| `POST /request-funds` | Creates a public pay-to-ID note for an account and returns it, by default once the note has committed and with proof of its inclusion.                                      |
 
 A funding request names the target account and the amount in base units:
 
@@ -90,6 +90,31 @@ and the transaction that created it. Each value is the hexadecimal encoding of t
 ```json
 { "note": "...", "inclusion_proof": "...", "transaction_id": "..." }
 ```
+
+### Answering before the note commits
+
+A request may add `wait_for_commit`, which defaults to `true`:
+
+```json
+{ "account_id": "0x...", "amount": 1000000, "wait_for_commit": false }
+```
+
+The service then answers as soon as the node accepts the transaction, without waiting for the note to commit, and the
+response omits `inclusion_proof`:
+
+```json
+{ "note": "...", "transaction_id": "..." }
+```
+
+This trades a guarantee for latency. The note is not on chain when the answer arrives, so a transaction that expires
+before it commits leaves that note uncreated, and the requester is never told. Use it only where the note is consumed as
+an unauthenticated input and the work it funds can be retried, such as a test suite that funds an account and then
+spends the note in the same transaction that deploys it. A requester that must be able to act on the answer, or that
+needs the inclusion proof, leaves the field out.
+
+The service still waits for each transaction to commit before it builds the next one, because it reads the funding
+account back from the node. The flag changes when the requester is answered, not how fast the service works through its
+queue.
 
 The notes are public, so the node stores their details.
 

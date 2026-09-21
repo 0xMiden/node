@@ -19,6 +19,11 @@ note, its inclusion proof and the transaction which created it, each serialized 
 full because the requester does not know the note ID before the answer arrives. A requester which loses the answer can
 still find the note at the node, through the note tag of the target account.
 
+A request may set `wait_for_commit` to `false`, which answers as soon as the node accepts the transaction. The response
+then carries no inclusion proof, and the note is not on chain yet, so a transaction which expires before it commits
+leaves that note uncreated and the requester is not told. It suits a requester which consumes the note as an
+unauthenticated input and can retry the work the note was for.
+
 `GET /status` reports the funding account, its balance, the block that balance was read at, and the verification base
 fee of that block. An operator alerts on that balance, because the service does not refill itself.
 
