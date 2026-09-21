@@ -31,7 +31,6 @@ jobs:
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
       prerelease: ${{ steps.release.outputs.prerelease }}
-      workspace_packages: ${{ steps.release.outputs.workspace_packages }}
       publishable_crates: ${{ steps.release.outputs.publishable_crates }}
     steps:
       - name: Checkout repository
@@ -40,6 +39,9 @@ jobs:
           ref: ${{ github.ref_name }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Check Rust versions
+        uses: ./.github/actions/check-rust-versions
 
       # GitHub enforces the tag restrictions. This only guards against the
       # workflow trigger and ruleset target drifting apart.
@@ -63,17 +65,6 @@ jobs:
           version="${TAG#v}"
           metadata="$(cargo metadata --no-deps --format-version 1)"
           mapfile -t versions < <(jq -r '[.packages[] | select(.publish != []) | .version] | unique | .[]' <<< "${metadata}")
-          workspace_packages="$(
-            jq -c '
-              . as $m
-              | ($m.workspace_root + "/") as $root
-              | $m.workspace_members as $members
-              | $m.packages
-              | map(select(.id as $id | $members | index($id)))
-              | map({ name, manifest_path: (.manifest_path | ltrimstr($root)) })
-              | sort_by(.name)
-            ' <<< "${metadata}"
-          )"
           publishable_crates="$(
             jq -c '
               [.packages[] | select(.publish != []) | { name }]
@@ -106,7 +97,6 @@ jobs:
             echo "tag=${TAG}"
             echo "version=${version}"
             echo "prerelease=${prerelease}"
-            echo "workspace_packages=${workspace_packages}"
             echo "publishable_crates=${publishable_crates}"
           } >> "${GITHUB_OUTPUT}"
 
@@ -185,64 +175,6 @@ jobs:
       - name: Dry-run cargo publish without verification
         run: cargo publish --workspace --dry-run --no-verify --locked
 
-  check-msrv:
-    name: Check MSRV ${{ matrix.name }}
-    runs-on: warp-ubuntu-latest-x64-8x
-    needs: preflight
-    if: ${{ github.repository_owner == '0xMiden' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJson(needs.preflight.outputs.workspace_packages) }}
-    # Deliberately use stable Rust instead of rust-toolchain.toml because
-    # cargo-msrv itself may require a newer compiler than the repo MSRV.
-    env:
-      RUSTUP_TOOLCHAIN: stable
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ needs.preflight.outputs.tag }}
-          fetch-depth: 0
-          persist-credentials: false
-
-      - uses: ./.github/actions/install-rocksdb
-      - uses: ./.github/actions/install-protobuf-compiler
-
-      - name: Cleanup large tools for build space
-        uses: ./.github/actions/cleanup-runner
-
-      - name: Rustup
-        run: rustup toolchain install --no-self-update stable
-
-      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
-        with:
-          shared-key: release-msrv-${{ matrix.name }}
-          cache-provider: warpbuild
-          save-if: true
-
-      - name: Install cargo-binstall
-        uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
-        with:
-          tool: cargo-binstall
-
-      - name: Install cargo-msrv
-        run: cargo binstall --no-confirm cargo-msrv
-
-      - name: Show package info
-        env:
-          MANIFEST_PATH: ${{ matrix.manifest_path }}
-          PACKAGE: ${{ matrix.name }}
-        run: |
-          echo "Package: ${PACKAGE}"
-          echo "Manifest path: ${MANIFEST_PATH}"
-          cargo msrv show --manifest-path "${MANIFEST_PATH}"
-
-      - name: Check MSRV
-        env:
-          MANIFEST_PATH: ${{ matrix.manifest_path }}
-        run: cargo msrv verify --manifest-path "${MANIFEST_PATH}"
-
   stage-docker:
     name: Stage Docker bundle
     needs: preflight
@@ -261,7 +193,7 @@ jobs:
 
   publish-docker:
     name: Publish Docker bundle
-    needs: [preflight, check-crate-builds, dry-run-crates, check-msrv, stage-docker]
+    needs: [preflight, check-crate-builds, dry-run-crates, stage-docker]
     if: ${{ github.repository_owner == '0xMiden' }}
     permissions:
       attestations: write
