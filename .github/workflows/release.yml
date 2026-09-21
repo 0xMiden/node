@@ -243,36 +243,37 @@ jobs:
           MANIFEST_PATH: ${{ matrix.manifest_path }}
         run: cargo msrv verify --manifest-path "${MANIFEST_PATH}"
 
-  dry-run-docker:
-    name: Dry-run Docker bundle
+  stage-docker:
+    name: Stage Docker bundle
     needs: preflight
     if: ${{ github.repository_owner == '0xMiden' }}
     permissions:
-      # Reusable-workflow permission ceiling; dry-run jobs do not receive these writes.
+      # Reusable-workflow permission ceiling for staging jobs.
       attestations: write
       contents: read
       id-token: write
       packages: write
     uses: ./.github/workflows/docker.yml
     with:
-      mode: dry-run
+      mode: stage
       ref: ${{ needs.preflight.outputs.tag }}
       created: ${{ needs.preflight.outputs.created }}
 
   publish-docker:
     name: Publish Docker bundle
-    needs: [preflight, check-crate-builds, dry-run-crates, check-msrv, dry-run-docker]
+    needs: [preflight, check-crate-builds, dry-run-crates, check-msrv, stage-docker]
     if: ${{ github.repository_owner == '0xMiden' }}
     permissions:
-      id-token: write
-      contents: read
-      packages: write
       attestations: write
+      contents: read
+      id-token: write
+      packages: write
     uses: ./.github/workflows/docker.yml
     with:
-      mode: publish
+      mode: promote
       ref: ${{ needs.preflight.outputs.tag }}
       created: ${{ needs.preflight.outputs.created }}
+      staged_tag: ${{ needs.stage-docker.outputs.immutable_tag }}
 
   publish-github-release:
     name: Publish GitHub release

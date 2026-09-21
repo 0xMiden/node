@@ -1,14 +1,14 @@
 name: Docker
 
 # Builds and validates all Docker images and the Compose application. CI calls it
-# in dry-run mode. Release and manually dispatched publish runs validate before
-# publishing to GHCR.
+# in dry-run mode. Release runs stage the images before publishing their final
+# tags. Manually dispatched publish runs stage and publish in one call.
 
 on:
   workflow_call:
     inputs:
       mode:
-        description: "Mode: dry-run or publish"
+        description: "Mode: dry-run, stage, publish, or promote"
         required: false
         type: string
         default: dry-run
@@ -21,6 +21,15 @@ on:
         required: false
         type: string
         default: ""
+      staged_tag:
+        description: "Immutable tag produced by a prior stage run"
+        required: false
+        type: string
+        default: ""
+    outputs:
+      immutable_tag:
+        description: "Immutable tag for the staged image bundle"
+        value: ${{ jobs.preflight.outputs.immutable_tag }}
   workflow_dispatch:
     inputs:
       mode:
@@ -46,7 +55,6 @@ permissions:
 env:
   REGISTRY: ghcr.io
   REGISTRY_PREFIX: ghcr.io/0xmiden
-  DOCKER_PLATFORMS: linux/amd64,linux/arm64
   MIDEN_FAUCET_IMAGE: ghcr.io/0xmiden/miden-faucet:v0.16.0-rc.1
 
 jobs:
@@ -69,6 +77,7 @@ jobs:
           INPUT_MODE: ${{ inputs.mode }}
           INPUT_REF: ${{ inputs.ref }}
           REPOSITORY_OWNER: ${{ github.repository_owner }}
+          STAGED_TAG: ${{ inputs.staged_tag }}
         run: |
           set -euo pipefail
 
@@ -79,15 +88,20 @@ jobs:
           fi
 
           case "${mode}" in
-            dry-run | publish) ;;
+            dry-run | stage | publish | promote) ;;
             *)
               echo "::error::Unsupported Docker mode: ${mode}"
               exit 1
               ;;
           esac
 
-          if [[ "${mode}" == "publish" && "${REPOSITORY_OWNER}" != "0xMiden" ]]; then
+          if [[ "${mode}" != "dry-run" && "${REPOSITORY_OWNER}" != "0xMiden" ]]; then
             echo "::error::Docker publication is restricted to the 0xMiden repository"
+            exit 1
+          fi
+
+          if [[ "${mode}" == "promote" && -z "${STAGED_TAG}" ]]; then
+            echo "::error::Promote mode requires the immutable tag from a stage run"
             exit 1
           fi
 
@@ -99,13 +113,13 @@ jobs:
           images="$(
             jq -cn '
               [
-                {"component":"node",               "bin":"miden-node",            "port":57291, "target":"runtime"},
-                {"component":"validator",          "bin":"miden-validator",       "port":50101, "target":"runtime"},
-                {"component":"ntx-builder",        "bin":"miden-ntx-builder",     "port":50301, "target":"runtime"},
-                {"component":"remote-prover",      "bin":"miden-remote-prover",   "port":50051, "target":"runtime"},
-                {"component":"network-monitor",    "bin":"miden-network-monitor", "port":3000,  "target":"runtime"},
-                {"component":"funding-service",    "bin":"miden-funding-service", "port":50401, "target":"runtime"},
-                {"component":"node-tps-benchmark", "bin":"miden-benchmark",                     "target":"runtime-tool"}
+                "node",
+                "validator",
+                "ntx-builder",
+                "remote-prover",
+                "network-monitor",
+                "funding-service",
+                "node-tps-benchmark"
               ]
             '
           )"
@@ -125,6 +139,7 @@ jobs:
           CHECKED_OUT_COMMIT: ${{ steps.checkout.outputs.commit }}
           CREATED: ${{ inputs.created }}
           INPUT_REF: ${{ inputs.ref }}
+          STAGED_TAG: ${{ inputs.staged_tag }}
         run: |
           set -euo pipefail
 
@@ -162,16 +177,25 @@ jobs:
             created="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           fi
 
+          immutable_tag="${STAGED_TAG}"
+          if [[ -z "${immutable_tag}" ]]; then
+            immutable_tag="sha-${actual_commit:0:12}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          elif [[ ! "${immutable_tag}" =~ ^sha-${actual_commit:0:12}-[0-9]+-[0-9]+$ ]]; then
+            echo "::error::Invalid staged image tag: ${immutable_tag}"
+            exit 1
+          fi
+
           {
             echo "commit=${actual_commit}"
             echo "created=${created}"
-            echo "immutable_tag=sha-${actual_commit:0:12}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            echo "immutable_tag=${immutable_tag}"
             echo "tag=${ref_name}"
           } >> "${GITHUB_OUTPUT}"
 
   validate-images:
     name: Validate Docker images (${{ matrix.platform }})
     needs: preflight
+    if: ${{ needs.preflight.outputs.mode == 'dry-run' }}
     runs-on: warp-ubuntu-latest-x64-8x
     permissions:
       contents: read
@@ -214,6 +238,60 @@ jobs:
           path: kache-report/kache-report.md
           if-no-files-found: error
           retention-days: 1
+
+  stage-images:
+    name: Stage Docker images (${{ matrix.platform }})
+    needs: preflight
+    if: ${{ needs.preflight.outputs.mode == 'stage' || needs.preflight.outputs.mode == 'publish' }}
+    runs-on: warp-ubuntu-latest-x64-8x
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            architecture: amd64
+          - platform: linux/arm64
+            architecture: arm64
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.preflight.outputs.commit }}
+          persist-credentials: false
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and stage Docker images
+        uses: WarpBuilds/bake-action@cb88c8ea0c887c0d1a3dcb534e71bd68a015e2d6 # v6.7.7
+        with:
+          source: .
+          files: ./docker-bake.hcl
+          targets: validate
+          push: true
+          profile-name: ${{ vars.WARPBUILD_DOCKER_BUILDER_PROFILE }}
+          pull: true
+          set: |
+            *.platform=${{ matrix.platform }}
+            *.args.CREATED=${{ needs.preflight.outputs.created }}
+            *.args.VERSION=${{ needs.preflight.outputs.tag }}
+            *.args.COMMIT=${{ needs.preflight.outputs.commit }}
+            node.tags=${{ env.REGISTRY_PREFIX }}/miden-node:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
+            validator.tags=${{ env.REGISTRY_PREFIX }}/miden-validator:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
+            ntx-builder.tags=${{ env.REGISTRY_PREFIX }}/miden-ntx-builder:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
+            remote-prover.tags=${{ env.REGISTRY_PREFIX }}/miden-remote-prover:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
+            network-monitor.tags=${{ env.REGISTRY_PREFIX }}/miden-network-monitor:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
+            funding-service.tags=${{ env.REGISTRY_PREFIX }}/miden-funding-service:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
+            node-tps-benchmark.tags=${{ env.REGISTRY_PREFIX }}/miden-node-tps-benchmark:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
 
   kache-summary:
     name: Summarize Kache cache
@@ -284,27 +362,24 @@ jobs:
           registry-prefix: ${{ env.REGISTRY_PREFIX }}
           tag: ${{ needs.preflight.outputs.tag }}
 
-  publish-docker:
-    name: Publish ${{ matrix.component }}
-    needs: [preflight, validate-images, dry-run-compose]
-    if: ${{ needs.preflight.outputs.mode == 'publish' }}
-    runs-on: warp-ubuntu-latest-x64-8x
+  promote-images:
+    name: Publish Docker images
+    needs: [preflight, stage-images, dry-run-compose]
+    if: >-
+      ${{
+        always() &&
+        needs.preflight.result == 'success' &&
+        needs.dry-run-compose.result == 'success' &&
+        (
+          (needs.preflight.outputs.mode == 'publish' && needs.stage-images.result == 'success') ||
+          (needs.preflight.outputs.mode == 'promote' && needs.stage-images.result == 'skipped')
+        )
+      }}
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
-      id-token: write
       packages: write
-      attestations: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJson(needs.preflight.outputs.images) }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ needs.preflight.outputs.commit }}
-          persist-credentials: false
-
       - name: Log in to the Container registry
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
         with:
@@ -312,29 +387,41 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: Build and push Docker image
-        uses: WarpBuilds/build-push-action@ec038a9f4b87a7c7ccb50ac7a26a90d46a610a81 # v6.0.9
-        with:
-          context: .
-          push: true
-          file: ./Dockerfile
-          target: ${{ matrix.target }}
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          profile-name: ${{ vars.WARPBUILD_DOCKER_BUILDER_PROFILE }}
-          pull: false
-          build-args: |
-            BIN=${{ matrix.bin }}
-            PORT=${{ matrix.port }}
-            CREATED=${{ needs.preflight.outputs.created }}
-            VERSION=${{ needs.preflight.outputs.tag }}
-            COMMIT=${{ needs.preflight.outputs.commit }}
-          tags: |
-            ${{ env.REGISTRY_PREFIX }}/miden-${{ matrix.component }}:${{ needs.preflight.outputs.tag }}
-            ${{ env.REGISTRY_PREFIX }}/miden-${{ matrix.component }}:${{ needs.preflight.outputs.immutable_tag }}
+      - name: Publish staged images
+        env:
+          IMAGES: ${{ needs.preflight.outputs.images }}
+          IMMUTABLE_TAG: ${{ needs.preflight.outputs.immutable_tag }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          mapfile -t components < <(jq -r '.[]' <<< "${IMAGES}")
+          for component in "${components[@]}"; do
+            image="${REGISTRY_PREFIX}/miden-${component}"
+            docker buildx imagetools create --dry-run \
+              "${image}:${IMMUTABLE_TAG}-amd64" \
+              "${image}:${IMMUTABLE_TAG}-arm64" \
+              > /dev/null
+          done
+
+          for component in "${components[@]}"; do
+            image="${REGISTRY_PREFIX}/miden-${component}"
+            docker buildx imagetools create \
+              --tag "${image}:${TAG}" \
+              --tag "${image}:${IMMUTABLE_TAG}" \
+              "${image}:${IMMUTABLE_TAG}-amd64" \
+              "${image}:${IMMUTABLE_TAG}-arm64"
+          done
 
   publish-compose:
     name: Publish Compose
-    needs: [preflight, publish-docker]
+    needs: [preflight, promote-images]
+    if: >-
+      ${{
+        always() &&
+        needs.preflight.result == 'success' &&
+        needs.promote-images.result == 'success'
+      }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
