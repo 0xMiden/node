@@ -276,18 +276,9 @@ to lift. Everything else is operator configuration.
 ### The batch-builder worker pool (`--batch.workers`)
 
 `--batch.workers` (env `MIDEN_NODE_BATCH_WORKERS`) sets how many batches the block-producer keeps proving in parallel.
-Each worker is responsible for one in-flight batch proof — locally with the built-in prover, or remotely if
-`--batch-prover.url` is set. The default is **2**. Once `--batch.max-txs` and `--block.max-batches` are pushed up, this
-worker count is the single setting that determines how fast the block-producer can refill the mempool's batch slots;
-leaving it at 2 caps effective throughput well before the new block capacity becomes reachable.
-
-Rough sizing:
-
-- **With local batch proving** (no `--batch-prover.url`): raise to roughly the number of physical CPU cores on the
-  block-producer host. More than that just over-subscribes the cores running the prover.
-- **With a remote batch prover**: raise to whatever the remote service can service in parallel (i.e. its own worker
-  count). The block-producer workers are now mostly waiting on I/O, so the bound is the remote prover's capacity, not
-  local CPU.
+Each worker proves one batch at a time with the local prover. Precompile proof generation is disabled. The default
+worker count is **2**. Increase the worker count to process more batches at the same time. Use the number of physical
+CPU cores on the block-producer host as a starting point. Measure throughput before you increase the count further.
 
 ## License
 
