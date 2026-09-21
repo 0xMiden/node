@@ -274,6 +274,10 @@ impl Mempool {
         Ok(self.committed_chain_tip)
     }
 
+    /// Adds a user-proven batch to the mempool.
+    ///
+    /// The batch becomes available for block selection when its transaction dependencies are
+    /// selected.
     #[miden_instrument(
         target = COMPONENT,
         name = "mempool.add_user_batch",
@@ -282,6 +286,7 @@ impl Mempool {
         &mut self,
         txs: &[Arc<AuthenticatedTransaction>],
         parameters: BatchParameters,
+        proof: Arc<ProvenBatch>,
     ) -> Result<BlockNumber, MempoolSubmissionError> {
         assert!(!txs.is_empty(), "Cannot have a batch with no transactions");
 
@@ -300,14 +305,20 @@ impl Mempool {
             }
         }
 
+        let batch_id = BatchId::from_transactions(txs.iter().map(|tx| tx.raw_proven_transaction()));
+        if proof.id() != batch_id {
+            return Err(MempoolSubmissionError::BatchIdMismatch { proof_id: proof.id(), batch_id });
+        }
+
         for tx in txs {
             self.authentication_staleness_check(tx.authentication_height())?;
             self.expiration_check(tx.expires_at())?;
         }
 
         self.transactions
-            .append_user_batch(txs, parameters)
+            .append_user_batch(txs, parameters, proof)
             .map_err(MempoolSubmissionError::StateConflict)?;
+        self.promote_user_batches();
 
         let telemetry = self.telemetry();
         miden_span_record!(
@@ -326,7 +337,7 @@ impl Mempool {
         Ok(self.committed_chain_tip)
     }
 
-    /// Returns a set of transactions for the next batch.
+    /// Returns a set of standalone transactions for the next sequencer-built batch.
     ///
     /// Transactions are returned in a valid execution ordering.
     ///
@@ -336,11 +347,15 @@ impl Mempool {
         name = "mempool.select_any_batch",
     )]
     pub fn select_any_batch(&mut self) -> Option<SelectedBatch> {
+        self.promote_user_batches();
         let parameters = BatchParameters {
             reference_block: self.committed_chain_tip,
         };
-        let batch = self.transactions.select_any_batch(self.config.batch_budget, parameters)?;
+        let batch = self
+            .transactions
+            .select_any_internal_batch(self.config.batch_budget, parameters)?;
         let batch = self.append_selected_batch(batch);
+        self.promote_user_batches();
         let telemetry = self.telemetry();
         miden_span_record!(
             mempool.transactions.uncommitted = telemetry.uncommitted_transactions,
@@ -354,21 +369,24 @@ impl Mempool {
         Some(batch)
     }
 
-    /// Returns a full set of transactions for the next batch.
+    /// Returns a full set of standalone transactions for the next sequencer-built batch.
     ///
-    /// User batches count as full because they are externally chosen atomic batches.
-    /// Non-user batches are only returned when the selected set saturates the batch budget or when
+    /// The transactions are only returned when the selected set saturates the batch budget or when
     /// another selectable transaction cannot fit into the remaining budget.
     #[miden_instrument(
         target = COMPONENT,
         name = "mempool.select_full_batch",
     )]
     pub fn select_full_batch(&mut self) -> Option<SelectedBatch> {
+        self.promote_user_batches();
         let parameters = BatchParameters {
             reference_block: self.committed_chain_tip,
         };
-        let batch = self.transactions.select_full_batch(self.config.batch_budget, parameters)?;
+        let batch = self
+            .transactions
+            .select_full_internal_batch(self.config.batch_budget, parameters)?;
         let batch = self.append_selected_batch(batch);
+        self.promote_user_batches();
         let telemetry = self.telemetry();
         miden_span_record!(
             mempool.transactions.uncommitted = telemetry.uncommitted_transactions,
@@ -387,6 +405,14 @@ impl Mempool {
             panic!("failed to append batch to dependency graph: {}", err.as_report());
         }
         batch
+    }
+
+    /// Moves selectable user-proven batches into the batch graph.
+    fn promote_user_batches(&mut self) {
+        while let Some((batch, proof)) = self.transactions.select_user_batch() {
+            self.append_selected_batch(batch);
+            self.batches.submit_proof(proof);
+        }
     }
 
     /// Drops the proposed batch and all of its descendants.

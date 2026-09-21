@@ -9,7 +9,7 @@ use miden_node_utils::formatting::format_opt;
 use miden_protobuf::{BuildUnchecked, Verify, VerifyWith};
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
-use miden_protocol::batch::ProposedBatch;
+use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::{ProvenTransaction, TransactionId, TxAccountUpdate};
@@ -19,14 +19,15 @@ use crate::errors::{ConversionError, ConversionResultExt};
 use crate::generated::sequencer;
 
 impl VerifyWith<u32> for sequencer::DecodedAuthenticatedTransactionBatch {
-    type Verified = (ProposedBatch, Vec<TransactionInputs>);
+    type Verified = (ProvenBatch, ProposedBatch, Vec<TransactionInputs>);
     type Error = ConversionError;
 
-    /// Verify transaction proofs at the supplied security level and decode store inputs. The caller
-    /// must trust the sender's store authentication data. The mempool checks dependencies,
-    /// conflicts, and expiration.
+    /// Verify transaction proofs at the supplied security level and decode store inputs. Check the
+    /// batch proof against the proposed batch. The caller must trust the sender's store
+    /// authentication data. The mempool checks dependencies, conflicts, and expiration.
     fn verify_with(self, security_level: u32) -> Result<Self::Verified, Self::Error> {
         let batch = self.proposed_batch.verify_with(security_level).context("proposed_batch")?;
+        let proof = self.batch_proof.verify_with(&batch).context("batch_proof")?;
         if batch.transactions().len() != self.auth_inputs.as_slice().len() {
             return Err(ConversionError::message(format!(
                 "authentication input count {} does not match transaction count {}",
@@ -35,7 +36,7 @@ impl VerifyWith<u32> for sequencer::DecodedAuthenticatedTransactionBatch {
             )));
         }
         let inputs = self.auth_inputs.verify()?;
-        Ok((batch, inputs))
+        Ok((proof, batch, inputs))
     }
 }
 
