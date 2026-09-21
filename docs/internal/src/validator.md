@@ -69,3 +69,6 @@ output notes, the reference block, and the expiration block. They omit the parti
 partial blockchain, the advice witness, and the transaction arguments, so a record is evidence of a
 transaction rather than a means to execute it again. A record names its own format in
 `format_version`, and both encryption layers authenticate that version.
+
+Only format version 1 is supported. Validator databases created with the transaction inputs schema
+must be recreated. There is no migration for those databases.

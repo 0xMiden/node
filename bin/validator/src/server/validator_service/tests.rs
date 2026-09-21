@@ -70,8 +70,8 @@ use crate::metrics::InitialMetrics;
 use crate::storage_key::tests::operator_keys;
 use crate::{
     LocalX25519TransactionInputDecrypter,
-    PRIVATE_RECORD_FORMAT_V2,
     PrivateRecordCombiner,
+    PrivateRecordFormatVersion,
     PrivateRecordSealer,
     PrivateRecordShareRequest,
     StoredPrivateRecord,
@@ -1521,7 +1521,7 @@ async fn stored_record_holds_the_transaction_effects() {
         .unwrap();
 
     let record = tv.server.db.load_private_record(tx.id()).await.unwrap().unwrap();
-    assert_eq!(record.context().format_version(), PRIVATE_RECORD_FORMAT_V2);
+    assert_eq!(record.context().format_version(), PrivateRecordFormatVersion::V1);
 
     let effects = open_transaction_effects(&record);
 

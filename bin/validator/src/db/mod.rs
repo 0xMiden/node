@@ -380,10 +380,11 @@ mod tests {
     use crate::private_record::test_private_record_sealer;
     use crate::storage_key::tests::operator_keys;
     use crate::{
-        PRIVATE_RECORD_FORMAT_V1,
         PrivateRecordChainId,
         PrivateRecordCombiner,
         PrivateRecordContext,
+        PrivateRecordError,
+        PrivateRecordFormatVersion,
         PrivateRecordId,
         PrivateRecordSealer,
         PrivateRecordShareRequest,
@@ -400,25 +401,6 @@ mod tests {
 
     fn private_record(transaction_id: TransactionId, seed: u8) -> StoredPrivateRecord {
         let context = PrivateRecordContext::new(CHAIN_ID, KEY_EPOCH, transaction_id);
-        seal_record(transaction_id, seed, context)
-    }
-
-    /// Seals a record that holds transaction inputs.
-    fn private_record_v1(transaction_id: TransactionId, seed: u8) -> StoredPrivateRecord {
-        let context = PrivateRecordContext::with_format_version(
-            CHAIN_ID,
-            KEY_EPOCH,
-            transaction_id,
-            PRIVATE_RECORD_FORMAT_V1,
-        );
-        seal_record(transaction_id, seed, context)
-    }
-
-    fn seal_record(
-        transaction_id: TransactionId,
-        seed: u8,
-        context: PrivateRecordContext,
-    ) -> StoredPrivateRecord {
         let mut rng = ChaCha20Rng::from_seed([seed; 32]);
         test_private_record_sealer(KEY_EPOCH, SETUP_CONTEXT_ID)
             .seal(&mut rng, record_id(transaction_id), context, b"private transaction inputs")
@@ -468,9 +450,7 @@ mod tests {
         assert!(!db_path.exists());
     }
 
-    /// Migrating a database must keep every record readable, including records that were sealed in
-    /// an earlier format. A record authenticates its own format version, so a migration cannot
-    /// reinterpret an existing record as a later format.
+    /// The protocol configuration migration must preserve headers and private records.
     #[tokio::test]
     async fn migration_preserves_headers_and_private_records() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -487,7 +467,7 @@ mod tests {
         let config = test_protocol_config();
         let header = genesis_header(&config);
         let transaction_id = TransactionId::from_raw(Word::from([1u32, 2, 3, 4]));
-        let record = private_record_v1(transaction_id, 1);
+        let record = private_record(transaction_id, 1);
         let db = open_with_pool_size(&db_path, NonZeroUsize::new(2).unwrap()).unwrap();
         let stored_header = header.clone();
         db.writer
@@ -505,7 +485,7 @@ mod tests {
         assert_eq!(db.load_chain_tip().await.unwrap(), Some(header.clone()));
         assert_eq!(db.load_all_transactions().await.unwrap(), vec![record]);
         let migrated = db.load_private_record(transaction_id).await.unwrap().unwrap();
-        assert_eq!(migrated.context().format_version(), PRIVATE_RECORD_FORMAT_V1);
+        assert_eq!(migrated.context().format_version(), PrivateRecordFormatVersion::V1);
         migrated.verify_encrypted_record_key().unwrap();
         assert_eq!(db.load_protocol_config(config.to_commitment()).await.unwrap(), None);
 
@@ -749,6 +729,39 @@ mod tests {
 
         let by_setup = db.load_private_records_by_setup_context(SETUP_CONTEXT_ID).await.unwrap();
         assert_eq!(by_setup, vec![expected.clone()]);
+    }
+
+    #[tokio::test]
+    async fn private_record_rejects_unsupported_formats() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db = setup(temp_dir.path().join("validator.sqlite3")).await.unwrap();
+        let transaction_id = TransactionId::from_raw(Word::from([5u32, 6, 7, 8]));
+        db.insert_validated_private_transaction(private_record(transaction_id, 9))
+            .await
+            .unwrap();
+
+        for format_version in [2_u32, 3, u32::MAX] {
+            db.writer
+                .write("set unsupported record format", move |tx| {
+                    tx.execute(
+                        "UPDATE validated_transactions SET format_version = ? WHERE id = ?",
+                        &[&i64::from(format_version), &transaction_id],
+                    )
+                })
+                .await
+                .unwrap();
+
+            let error = db.load_private_record(transaction_id).await.unwrap_err();
+            assert!(matches!(
+                error,
+                DatabaseError::ConversionSqlToRust { inner: Some(source), .. }
+                    if matches!(
+                        source.downcast_ref::<PrivateRecordError>(),
+                        Some(PrivateRecordError::UnsupportedFormat(version))
+                            if *version == format_version,
+                    ),
+            ));
+        }
     }
 
     #[tokio::test]

@@ -21,7 +21,7 @@ pub fn insert_validated_private_transaction(
     let chain_id = context.chain_id().as_bytes().to_vec();
     let key_epoch = context.key_epoch().as_bytes().to_vec();
     let setup_context_id = record.setup_context_id().to_vec();
-    let format_version = i64::from(context.format_version());
+    let format_version = i64::from(context.format_version().as_u32());
     let nonce = record.nonce().to_vec();
     let encrypted_record = record.encrypted_record().to_vec();
     let encrypted_record_key = record.encrypted_record_key().to_vec();
