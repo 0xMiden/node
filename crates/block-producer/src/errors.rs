@@ -20,7 +20,6 @@ use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::TransactionId;
 use thiserror::Error;
 
-use crate::batch_builder::RemoteProverError;
 use crate::mempool::MempoolPoisonError;
 use crate::validator::ValidatorError;
 
@@ -160,9 +159,6 @@ pub enum BuildBatchError {
 
     #[error("failed to prove proposed transaction batch")]
     ProveBatchError(#[source] ProvenBatchError),
-
-    #[error("failed to prove batch with remote prover")]
-    RemoteProverClientError(#[source] RemoteProverError),
 
     #[error("batch proof security level is too low: {0} < {1}")]
     SecurityLevelTooLow(u32, u32),

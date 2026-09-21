@@ -1,4 +1,4 @@
-use miden_node_proto::errors::conversion_error_to_status;
+use miden_node_proto::errors::ConversionError;
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_node_store::{NoteSyncError, NoteSyncRecord};
 use miden_node_tracing::{debug, miden_instrument, miden_span_record};
@@ -14,7 +14,7 @@ impl proto::server::rpc_api::SyncNotes for RpcService {
     type Output = proto::rpc::SyncNotesResponse;
 
     fn decode(request: proto::rpc::SyncNotesRequest) -> tonic::Result<Self::Input> {
-        request.decode_fields().map_err(conversion_error_to_status)
+        request.decode_fields().map_err(ConversionError::into_status)
     }
 
     fn encode(output: Self::Output) -> tonic::Result<proto::rpc::SyncNotesResponse> {

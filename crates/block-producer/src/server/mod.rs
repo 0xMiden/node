@@ -67,7 +67,7 @@ impl BlockProducerApiConfig {
 
 /// The sequencer runtime configuration.
 ///
-/// Specifies how to connect to the batch prover and block prover components.
+/// Specifies how to connect to the validator and block prover components.
 pub struct Sequencer {
     /// The read-only store state shared with the block producer.
     pub state: Arc<State>,
@@ -79,8 +79,6 @@ pub struct Sequencer {
     pub validator_urls: Vec<Url>,
     /// The request timeout for calls to the validator components.
     pub validator_timeout: Duration,
-    /// The address of the batch prover component.
-    pub batch_prover_url: Option<Url>,
     /// The address of the block prover component.
     pub block_prover_url: Option<Url>,
     /// Maximum interval between batch scheduler checks.
@@ -129,7 +127,6 @@ impl Sequencer {
         let batch_builder = BatchBuilder::new(
             Arc::clone(&state),
             self.batch_workers,
-            self.batch_prover_url,
             batch_intervals,
             self.builder_account_id,
             self.fee_collector_account,

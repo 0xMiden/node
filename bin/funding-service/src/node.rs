@@ -26,7 +26,7 @@ use miden_node_proto::generated::rpc::{
     SyncNullifiersRequest,
 };
 use miden_node_proto::generated::submission::ProvenTransactionSubmission;
-use miden_node_proto::{BuildUnchecked, DecodeMessage, DecodeMessageExt, Verify, VerifyWith};
+use miden_node_proto::{DecodeMessageExt, VerifyWith};
 use miden_node_tracing::warn;
 use miden_node_utils::limiter::{
     QueryParamLimiter,
@@ -219,9 +219,7 @@ impl RpcNodeClient {
                 let note_id = proof
                     .note_id
                     .context("a note inclusion proof did not include a note ID")?
-                    .decode_fields()
-                    .context("failed to decode a synced note ID")?
-                    .verify()
+                    .decode_and_verify()
                     .context("failed to verify a synced note ID")?;
                 note_ids.push(note_id);
             }
@@ -255,11 +253,7 @@ impl RpcNodeClient {
                     continue;
                 }
 
-                let note = note
-                    .decode_fields()
-                    .context("failed to decode a committed note")?
-                    .verify()
-                    .context("failed to verify a committed note")?;
+                let note = note.decode_and_verify().context("failed to verify a committed note")?;
                 notes.push(note);
             }
         }
@@ -579,9 +573,7 @@ async fn fetch_block_header(
         .context("the block header response holds no header")?;
 
     block_header
-        .decode_fields()
-        .context("failed to decode the block header")?
-        .build_unchecked()
+        .decode_and_build_unchecked()
         .context("failed to build the block header")
 }
 
@@ -605,9 +597,7 @@ async fn fetch_genesis_header_and_config(
     let block_header: BlockHeader = response
         .block_header
         .context("the block header response holds no header")?
-        .decode_fields()
-        .context("failed to decode the block header")?
-        .build_unchecked()
+        .decode_and_build_unchecked()
         .context("failed to build the block header")?;
 
     let protocol_config = ensure_protocol_config_is_present_and_matches_header(
@@ -638,17 +628,13 @@ async fn fetch_tip_chain_state(
     let tip_header: BlockHeader = response
         .block_header
         .context("the sync_chain_mmr response did not include a block header")?
-        .decode_fields()
-        .context("failed to decode the sync target block header")?
-        .build_unchecked()
+        .decode_and_build_unchecked()
         .context("failed to build the sync target block header")?;
 
     let delta: MmrDelta = response
         .mmr_delta
         .context("the sync_chain_mmr response did not include an MMR delta")?
-        .decode_fields()
-        .context("failed to decode the MMR delta")?
-        .verify()
+        .decode_and_verify()
         .context("failed to verify the MMR delta")?;
 
     let mut mmr = PartialMmr::from_peaks(
