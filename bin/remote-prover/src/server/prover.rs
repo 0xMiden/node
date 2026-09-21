@@ -39,7 +39,7 @@ impl Prover {
     pub fn prove(&self, request: proto::ProofRequest) -> Result<proto::Proof, tonic::Status> {
         let request = request
             .decode_fields()
-            .map_err(miden_node_proto::errors::conversion_error_to_status)?
+            .map_err(miden_node_proto::errors::ConversionError::into_status)?
             .request;
 
         let proof = match (self, request) {

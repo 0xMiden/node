@@ -1,7 +1,8 @@
-use miden_node_proto::{DecodeMessage, Verify, generated as proto};
+use miden_node_proto::domain::account::RegisterAccountRequest;
+use miden_node_proto::errors::ConversionError;
+use miden_node_proto::{DecodeMessageExt, generated as proto};
 use miden_node_store::allowlist::{AllowlistError, InvitationCode};
 use miden_node_tracing::{ErrorReport, miden_instrument, miden_span_record};
-use miden_protocol::account::AccountId;
 use tonic::{Code, Request, Status};
 
 use super::{RpcBackend, RpcService};
@@ -9,11 +10,11 @@ use crate::COMPONENT;
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::RegisterAccount for RpcService {
-    type Input = proto::rpc::RegisterAccountRequest;
+    type Input = RegisterAccountRequest;
     type Output = ();
 
     fn decode(request: proto::rpc::RegisterAccountRequest) -> tonic::Result<Self::Input> {
-        Ok(request)
+        request.decode_and_verify().map_err(ConversionError::into_status)
     }
 
     fn encode((): Self::Output) -> tonic::Result<()> {
@@ -27,13 +28,7 @@ impl proto::server::rpc_api::RegisterAccount for RpcService {
         metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        let account_id: AccountId = request
-            .account_id
-            .ok_or_else(|| Status::invalid_argument("missing account_id"))?
-            .decode_fields()
-            .map_err(|_| Status::invalid_argument("invalid account_id"))?
-            .verify()
-            .map_err(|_| Status::invalid_argument("invalid account_id"))?;
+        let account_id = request.account_id;
         miden_span_record!(account.id = account_id);
 
         let invitation = InvitationCode::new(&request.invitation_code)
@@ -55,7 +50,10 @@ impl proto::server::rpc_api::RegisterAccount for RpcService {
                     Status::new(code, error.as_report())
                 }),
             RpcBackend::FullNode { source_rpc, .. } => {
-                let mut request = Request::new(request);
+                let mut request = Request::new(proto::rpc::RegisterAccountRequest {
+                    account_id: Some(account_id.into()),
+                    invitation_code: request.invitation_code,
+                });
                 if let Some(accept) = metadata.get(http::header::ACCEPT.as_str()) {
                     request.metadata_mut().insert(http::header::ACCEPT.as_str(), accept.clone());
                 }

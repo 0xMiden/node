@@ -1,7 +1,7 @@
 use std::fmt::{Debug, Formatter};
 
 use miden_node_utils::limiter::{QueryParamLimiter, QueryParamStorageMapKeyTotalLimit};
-use miden_protobuf::{ConversionResultExt, Verify};
+use miden_protobuf::{ConversionResultExt, DecodeMessage, Decoded, RequiredField, Verify, decode};
 use miden_protocol::Word;
 #[cfg(test)]
 use miden_protocol::account::StorageSlotHeader;
@@ -52,6 +52,74 @@ impl Debug for proto::rpc::RegisterAccountRequest {
         f.debug_struct("RegisterAccountRequest")
             .field("account_id", &self.account_id)
             .finish_non_exhaustive()
+    }
+}
+
+/// Decoded registration fields. The invitation code remains unvalidated.
+#[must_use = "decoded fields have not been verified"]
+pub struct DecodedRegisterAccountRequest {
+    pub invitation_code: String,
+    pub account_id: Decoded<proto::account::AccountId>,
+}
+
+impl Debug for DecodedRegisterAccountRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DecodedRegisterAccountRequest")
+            .field("account_id", &self.account_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl DecodeMessage for proto::rpc::RegisterAccountRequest {
+    type Decoded = DecodedRegisterAccountRequest;
+}
+
+impl TryFrom<proto::rpc::RegisterAccountRequest> for DecodedRegisterAccountRequest {
+    type Error = ConversionError;
+
+    fn try_from(request: proto::rpc::RegisterAccountRequest) -> Result<Self, Self::Error> {
+        Ok(Self {
+            invitation_code: request.invitation_code,
+            account_id: decode(RequiredField::<proto::rpc::RegisterAccountRequest, _>::new(
+                "account_id",
+                request.account_id,
+            ))?,
+        })
+    }
+}
+
+/// A registration request with a verified account ID. The invitation code remains unvalidated.
+pub struct RegisterAccountRequest {
+    pub invitation_code: String,
+    pub account_id: AccountId,
+}
+
+impl Debug for RegisterAccountRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RegisterAccountRequest")
+            .field("account_id", &self.account_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Verify for DecodedRegisterAccountRequest {
+    type Verified = RegisterAccountRequest;
+    type Error = ConversionError;
+
+    fn verify(self) -> Result<Self::Verified, Self::Error> {
+        Ok(RegisterAccountRequest {
+            invitation_code: self.invitation_code,
+            account_id: self.account_id.verify().context("account_id")?,
+        })
+    }
+}
+
+impl Verify for proto::rpc::DecodedIsAccountAllowedRequest {
+    type Verified = AccountId;
+    type Error = ConversionError;
+
+    fn verify(self) -> Result<Self::Verified, Self::Error> {
+        self.account_id.verify().context("account_id")
     }
 }
 

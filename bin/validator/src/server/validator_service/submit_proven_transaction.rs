@@ -111,7 +111,7 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
             // FIXME: Authenticate the reference block against the validator's chain state.
             // Re-execution currently uses the headers supplied in the sealed inputs.
             .decode_and_build_unchecked()
-            .map_err(miden_node_proto::errors::conversion_error_to_status)?;
+            .map_err(miden_node_proto::errors::ConversionError::into_status)?;
         let tx = submission.transaction;
         let sealed = submission.sealed_transaction_inputs;
         if sealed.ciphertext.is_empty() {
