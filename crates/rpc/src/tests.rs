@@ -1871,6 +1871,52 @@ async fn register_account_validates_input_and_preserves_registrations() {
 }
 
 #[tokio::test]
+async fn register_account_and_lookup_preserve_conversion_errors() {
+    let (_, addr, store, _server) = start_rpc().await;
+    let mut rpc = Builder::new(Url::parse(&format!("http://{addr}")).unwrap())
+        .without_tls()
+        .with_timeout(REQUEST_TIMEOUT)
+        .without_metadata_version()
+        .with_metadata_genesis(store.genesis_commitment())
+        .without_otel_context_injection()
+        .connect_lazy::<RpcClient>();
+    for (account_id, stage, cause) in [
+        (None, "failed to decode", "missing"),
+        (Some(proto::account::AccountId::default()), "failed to decode", "version"),
+        (
+            Some(proto::account::AccountId {
+                version: Some(proto::account::account_id::Version::V1(
+                    proto::account::AccountIdV1 {
+                        prefix: Some(proto::primitives::Felt { value: 0 }),
+                        suffix: Some(proto::primitives::Felt { value: 0 }),
+                    },
+                )),
+            }),
+            "failed to verify",
+            "not a known account ID version",
+        ),
+    ] {
+        let registration_error = rpc
+            .register_account(proto::rpc::RegisterAccountRequest {
+                account_id,
+                invitation_code: "abc".to_owned(),
+            })
+            .await
+            .unwrap_err();
+        let lookup_error = rpc
+            .is_account_allowed(proto::rpc::IsAccountAllowedRequest { account_id })
+            .await
+            .unwrap_err();
+        for error in [registration_error, lookup_error] {
+            assert_eq!(error.code(), tonic::Code::InvalidArgument);
+            assert!(error.message().contains("account_id"), "{error}");
+            assert!(error.message().starts_with(stage), "{error}");
+            assert!(error.message().contains(cause), "{error}");
+        }
+    }
+}
+
+#[tokio::test]
 async fn allowlist_database_failures_include_the_cause() {
     let (mut rpc, _addr, store, _server) = start_rpc().await;
     let path = DataDirectory::load(store.data_directory.clone())

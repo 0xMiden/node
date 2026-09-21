@@ -23,7 +23,7 @@ use miden_node_proto::generated::rpc::{
     SyncChainMmrRequest,
 };
 use miden_node_proto::generated::submission::ProvenTransactionSubmission;
-use miden_node_proto::{BuildUnchecked, DecodeMessage, DecodeMessageExt, Verify, VerifyWith};
+use miden_node_proto::{DecodeMessageExt, VerifyWith};
 use miden_node_tracing::warn;
 use miden_node_utils::retry::{self, Retryable};
 use miden_protocol::Word;
@@ -201,11 +201,7 @@ impl RpcNodeClient {
                 let proof = committed
                     .inclusion_proof
                     .context("committed note response is missing the inclusion proof")?;
-                proof
-                    .decode_fields()
-                    .context("failed to decode the note inclusion proof")?
-                    .verify()
-                    .context("failed to verify the note inclusion proof")
+                proof.decode_and_verify().context("failed to verify the note inclusion proof")
             })
             .collect()
     }
@@ -410,9 +406,7 @@ async fn fetch_block_header(
         .context("the block header response holds no header")?;
 
     block_header
-        .decode_fields()
-        .context("failed to decode the block header")?
-        .build_unchecked()
+        .decode_and_build_unchecked()
         .context("failed to build the block header")
 }
 
@@ -436,9 +430,7 @@ async fn fetch_genesis_header_and_config(
     let block_header: BlockHeader = response
         .block_header
         .context("the block header response holds no header")?
-        .decode_fields()
-        .context("failed to decode the block header")?
-        .build_unchecked()
+        .decode_and_build_unchecked()
         .context("failed to build the block header")?;
 
     let protocol_config = ensure_protocol_config_is_present_and_matches_header(
@@ -469,17 +461,13 @@ async fn fetch_tip_chain_state(
     let tip_header: BlockHeader = response
         .block_header
         .context("the sync_chain_mmr response did not include a block header")?
-        .decode_fields()
-        .context("failed to decode the sync target block header")?
-        .build_unchecked()
+        .decode_and_build_unchecked()
         .context("failed to build the sync target block header")?;
 
     let delta: MmrDelta = response
         .mmr_delta
         .context("the sync_chain_mmr response did not include an MMR delta")?
-        .decode_fields()
-        .context("failed to decode the MMR delta")?
-        .verify()
+        .decode_and_verify()
         .context("failed to verify the MMR delta")?;
 
     let mut mmr = PartialMmr::from_peaks(

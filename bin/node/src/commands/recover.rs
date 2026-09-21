@@ -3,10 +3,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
+use miden_node_proto::DecodeMessageExt;
 use miden_node_proto::clients::{Builder, ValidatorClient};
 use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
 use miden_node_proto::generated::validator::{BlockSubscriptionRequest, BlockSubscriptionResponse};
-use miden_node_proto::{BuildUnchecked, DecodeMessage};
 use miden_node_store::{BlockWriter, State, WriterTask};
 use miden_node_tracing::info;
 use miden_node_utils::shutdown::CancellationToken;
@@ -252,12 +252,10 @@ async fn read_blocks(
                 let block: SignedBlock = event
                     .block
                     .context("validator block stream response is missing block")?
-                    .decode_fields()
-                    .with_context(|| format!("failed to decode block from validator {url}"))?
                     // SAFETY: Each backup contains only one validator's signature. The coalescer
                     // assembles and verifies the full signature set against the trusted parent
                     // before the writer receives the block.
-                    .build_unchecked()
+                    .decode_and_build_unchecked()
                     .with_context(|| format!("failed to build block from validator {url}"))?;
                 let protocol_config = event
                     .protocol_config

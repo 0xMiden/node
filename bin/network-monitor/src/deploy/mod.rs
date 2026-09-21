@@ -24,7 +24,7 @@ use miden_node_proto::generated::rpc::{
     SyncChainMmrResponse,
 };
 use miden_node_proto::generated::submission::ProvenTransactionSubmission as ProtoProvenTransaction;
-use miden_node_proto::{BuildUnchecked, DecodeMessage, DecodeMessageExt, Verify, VerifyWith};
+use miden_node_proto::{DecodeMessageExt, VerifyWith};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{debug, info, miden_instrument, warn};
 use miden_node_utils::retry;
@@ -286,10 +286,8 @@ pub async fn create_genesis_aware_rpc_client(
             .ok_or_else(|| anyhow::anyhow!("No block header in response"))?;
 
         let genesis_header: BlockHeader = genesis_block_header
-            .decode_fields()
-            .context("failed to decode block header")?
             // SAFETY: Genesis has no parent. Deployment trusts the configured RPC for genesis.
-            .build_unchecked()
+            .decode_and_build_unchecked()
             .context("failed to build block header")?;
         let genesis_commitment = genesis_header.commitment();
         // Rebuild the client, this time including the required genesis metadata so that write RPCs
@@ -791,11 +789,9 @@ fn decode_chain_state(
     let tip_header: BlockHeader = response
         .block_header
         .context("sync_chain_mmr response did not include a block header")?
-        .decode_fields()
-        .context("failed to decode the sync target block header")?
         // SAFETY: Deployment trusts the configured RPC for chain state. The MMR root is checked
         // against this header below. That consistency check does not authenticate the RPC.
-        .build_unchecked()
+        .decode_and_build_unchecked()
         .context("failed to build the sync target block header")?;
 
     let protocol_config =
@@ -805,9 +801,7 @@ fn decode_chain_state(
     let delta: MmrDelta = response
         .mmr_delta
         .context("sync_chain_mmr response did not include an MMR delta")?
-        .decode_fields()
-        .context("failed to decode the MMR delta")?
-        .verify()
+        .decode_and_verify()
         .context("failed to verify the MMR delta")?;
 
     let mut mmr = PartialMmr::from_peaks(

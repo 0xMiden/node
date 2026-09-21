@@ -438,7 +438,7 @@ fn batch_proof_response_preserves_batch_and_rejects_other_requested_kinds() {
 #[test]
 fn canonical_conversion_errors_map_to_invalid_argument() {
     let error = proto::account::AccountId::default().decode_fields().unwrap_err();
-    let status = miden_node_proto::errors::conversion_error_to_status(error);
+    let status = error.into_status();
 
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
 }

@@ -29,7 +29,7 @@ impl sequencer_api::SubmitAuthenticatedTxBatch for SequencerInternalService {
         let (proof, batch, inputs) = spawn_blocking_in_current_span(move || {
             request
                 .decode_and_verify_with(miden_protocol::MIN_PROOF_SECURITY_LEVEL)
-                .map_err(miden_node_proto::errors::conversion_error_to_status)
+                .map_err(miden_node_proto::errors::ConversionError::into_status)
         })
         .await
         .map_err(|err| {

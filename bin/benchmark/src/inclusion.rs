@@ -12,7 +12,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use miden_node_proto::clients::RpcClient;
 use miden_node_proto::generated::rpc::BlockHeaderByNumberRequest;
-use miden_node_proto::{BuildUnchecked, DecodeMessage, DecodeMessageExt, generated as proto};
+use miden_node_proto::{DecodeMessageExt, generated as proto};
 use miden_protocol::block::BlockHeader;
 use miden_protocol::transaction::TransactionId;
 
@@ -228,10 +228,8 @@ pub(crate) async fn current_block_height(mut client: RpcClient) -> u32 {
     let header: BlockHeader = response
         .block_header
         .expect("no block header in response")
-        .decode_fields()
-        .expect("failed to decode block header")
         // SAFETY: The benchmark trusts the target RPC for this height measurement.
-        .build_unchecked()
+        .decode_and_build_unchecked()
         .expect("failed to build block header");
     header.block_num().as_u32()
 }
