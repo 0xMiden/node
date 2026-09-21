@@ -1,0 +1,13 @@
+{
+  "baseline": "570ac598dd48c2082b5ff87183e25b373b5075ce",
+  "candidate": "56f554234e6dbe68b81b09c0b436f45df6762ead",
+  "warmup": "5f7597c6e3cb08f39592125192ac4320874e38e4",
+  "samples": [
+    {"pr": 2563, "revision": "8602345a9701193dc5b1c598de5ab8463d81156d"},
+    {"pr": 2564, "revision": "eadbd53b0d5250a35ca8e1ea0dc3a3b8b21fae79"},
+    {"pr": 2565, "revision": "8ab89bbaff6addf97f372e12f5a3c79d7745b770"},
+    {"pr": 2568, "revision": "9ec566d8649210ae384b8a0daba9354e1f4be36a"},
+    {"pr": 2647, "revision": "c7f2bf92ea06c97aa2f79d07e869d1b315aad1c6"},
+    {"pr": 2650, "revision": "020de893ceaa8ae02dc1122ec03a6f36be075077"}
+  ]
+}

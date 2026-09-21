@@ -33,17 +33,37 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "Validate only, or validate and publish"
+        description: "Validate, publish, or benchmark Docker builds"
         required: true
         type: choice
         default: dry-run
         options:
           - dry-run
           - publish
+          - benchmark
       ref:
-        description: "Full Git commit SHA, tag name, or branch name to publish"
+        description: "Build ref; benchmark mode uses this ref's benchmark script and workload"
         required: true
         type: string
+      benchmark_profile:
+        description: "Idle builder profile; defaults to the CI builder"
+        required: false
+        type: string
+      benchmark_platform:
+        description: "Benchmark architecture"
+        type: choice
+        default: linux/amd64
+        options:
+          - linux/amd64
+          - linux/arm64
+      benchmark_rounds:
+        description: "Paired benchmark rounds; warm-up is repeated for each configuration"
+        type: choice
+        default: "1"
+        options:
+          - "1"
+          - "2"
+          - "3"
 
 concurrency:
   group: "${{ github.workflow }} @ docker @ ${{ inputs.mode == 'publish' && inputs.ref || github.sha }}"
@@ -58,8 +78,71 @@ env:
   MIDEN_FAUCET_IMAGE: ghcr.io/0xmiden/miden-faucet:v0.16.0-rc.1
 
 jobs:
+  benchmark:
+    name: Benchmark Docker throughput
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'benchmark' }}
+    runs-on: warp-ubuntu-latest-x64-8x
+    timeout-minutes: 360
+    concurrency:
+      group: docker-throughput-${{ inputs.benchmark_profile || vars.WARPBUILD_DOCKER_BUILDER_PROFILE }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout benchmark
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check benchmark inputs
+        env:
+          BUILDER_PROFILE: ${{ inputs.benchmark_profile || vars.WARPBUILD_DOCKER_BUILDER_PROFILE }}
+        run: |
+          if [[ -z "${BUILDER_PROFILE}" ]]; then
+            echo "::error::A Docker builder profile is required"
+            exit 1
+          fi
+          python3 -m unittest discover -s scripts/docker-throughput -p 'test_*.py'
+
+      - name: Configure benchmark builder
+        uses: WarpBuilds/docker-configure@ecbf49a7b0e21c97813fa9e00a689e740206dd57 # v1
+        with:
+          profile-name: ${{ inputs.benchmark_profile || vars.WARPBUILD_DOCKER_BUILDER_PROFILE }}
+
+      - name: Compare build batches
+        env:
+          BENCHMARK_PLATFORM: ${{ inputs.benchmark_platform }}
+          BENCHMARK_ROUNDS: ${{ inputs.benchmark_rounds }}
+        run: |
+          python3 scripts/docker-throughput/benchmark.py \
+            --fetch \
+            --platform "${BENCHMARK_PLATFORM}" \
+            --rounds "${BENCHMARK_ROUNDS}" \
+            --output "${RUNNER_TEMP}/docker-throughput"
+
+      - name: Add benchmark summary
+        if: ${{ always() }}
+        run: |
+          report="${RUNNER_TEMP}/docker-throughput/summary.md"
+          if [[ -f "${report}" ]]; then
+            cat "${report}" >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Upload benchmark results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: docker-throughput-${{ inputs.benchmark_platform == 'linux/arm64' && 'arm64' || 'amd64' }}
+          path: ${{ runner.temp }}/docker-throughput
+          if-no-files-found: warn
+          retention-days: 14
+
   preflight:
     name: Validate Docker inputs
+    if: ${{ inputs.mode != 'benchmark' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
