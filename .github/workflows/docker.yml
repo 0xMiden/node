@@ -216,6 +216,19 @@ jobs:
           ref: ${{ needs.preflight.outputs.commit }}
           persist-credentials: false
 
+      - name: Select build cache slot
+        id: cache-slot
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number || 0 }}
+        run: |
+          # Keep each PR on the same slot so later commits reuse its cache.
+          # The empty suffix keeps the existing cache for slot zero.
+          suffix=""
+          if (( PR_NUMBER % 2 )); then
+            suffix="-slot-1"
+          fi
+          echo "suffix=${suffix}" >> "${GITHUB_OUTPUT}"
+
       - name: Validate Docker images
         uses: WarpBuilds/bake-action@cb88c8ea0c887c0d1a3dcb534e71bd68a015e2d6 # v6.7.7
         env:
@@ -230,6 +243,7 @@ jobs:
           pull: true
           set: |
             *.platform=${{ matrix.platform }}
+            *.args.BUILD_CACHE_SUFFIX=${{ steps.cache-slot.outputs.suffix }}
             *.args.CREATED=${{ needs.preflight.outputs.created }}
             *.args.VERSION=${{ needs.preflight.outputs.tag }}
             *.args.COMMIT=${{ needs.preflight.outputs.commit }}

@@ -69,12 +69,13 @@ ENV CARGO_INCREMENTAL=0 \
     KACHE_CACHE_DIR=/var/cache/kache \
     KACHE_CONFIG=/etc/kache.toml \
     KACHE_AUTO_GC=true \
-    KACHE_MAX_SIZE=30GiB \
+    KACHE_MAX_SIZE=15GiB \
     KACHE_RUNTIME_DIR=/tmp/kache-runtime
 WORKDIR /app
 
 FROM build-base AS builder
 ARG CARGO_BUILD_JOBS
+ARG BUILD_CACHE_SUFFIX
 ARG TARGETARCH
 COPY Cargo.toml Cargo.lock ./
 COPY .cargo/config.toml .cargo/config.toml
@@ -86,23 +87,28 @@ COPY xtask/Cargo.toml xtask/Cargo.toml
 COPY xtask/src/main.rs xtask/src/main.rs
 # Kache stores compiler outputs by content. The target directory stays local to
 # this build and does not depend on source timestamps from another checkout.
-# The locks prevent concurrent builds from writing to the same cache mounts.
+# Each cache slot permits one build at a time. Separate slots can run together.
+# Keep the locks because Kache uses process IDs to identify cache writers.
+# Process IDs can repeat in separate build containers.
 #
 # An interrupted build can leave a partially extracted crate in the cached
 # registry (source dir present, `.cargo-ok` missing or empty). Cargo never
 # recovers from this, so drop any such partial extraction before building.
-# Use at most one Cargo job per 2 GiB of memory. Set CARGO_BUILD_JOBS to
-# override the calculated limit.
-RUN --mount=type=cache,sharing=locked,id=cargo-registry-${TARGETARCH},target=/usr/local/cargo/registry \
-    --mount=type=cache,sharing=locked,id=cargo-git-${TARGETARCH},target=/usr/local/cargo/git/db \
-    --mount=type=cache,sharing=locked,id=kache-v1-${TARGETARCH},target=/var/cache/kache \
+# Reserve half of the CPUs and memory for the other cache slot.
+# Use at most one Cargo job per 2 GiB within this budget.
+# Set CARGO_BUILD_JOBS to override the calculated limit.
+RUN --mount=type=cache,sharing=locked,id=cargo-registry-${TARGETARCH}${BUILD_CACHE_SUFFIX},target=/usr/local/cargo/registry \
+    --mount=type=cache,sharing=locked,id=cargo-git-${TARGETARCH}${BUILD_CACHE_SUFFIX},target=/usr/local/cargo/git/db \
+    --mount=type=cache,sharing=locked,id=kache-v1-${TARGETARCH}${BUILD_CACHE_SUFFIX},target=/var/cache/kache \
+    kache gc && \
     if [ -d /usr/local/cargo/registry/src ]; then \
         find /usr/local/cargo/registry/src -mindepth 2 -maxdepth 2 -type d \
             '!' -exec test -s '{}/.cargo-ok' ';' -exec rm -rf '{}' +; \
     fi && \
     JOBS="${CARGO_BUILD_JOBS:-$(awk -v ncpu="$(nproc)" \
-        '/MemTotal/ { j = int($2 / (2 * 1024 * 1024)); if (j < 1) j = 1; if (j > ncpu) j = ncpu; print j }' \
+        '/MemTotal/ { j = int($2 / (4 * 1024 * 1024)); c = int(ncpu / 2); if (c < 1) c = 1; if (j < 1) j = 1; if (j > c) j = c; print j }' \
         /proc/meminfo)}" && \
+    printf 'Build cache slot: %s; Cargo jobs: %s\n' "${BUILD_CACHE_SUFFIX:-default}" "${JOBS}" && \
     cargo build --release --locked --jobs "${JOBS}" \
         --bin miden-node \
         --bin miden-validator \
