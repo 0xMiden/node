@@ -182,7 +182,7 @@ impl ValidatorDbWriter {
         self.reader.clone()
     }
 
-    /// Inserts a validated transaction and its encrypted private inputs, returning the number of
+    /// Inserts a validated transaction and its encrypted private record, returning the number of
     /// inserted rows. The count is zero if the transaction was already recorded.
     #[miden_instrument(
         target = COMPONENT,
@@ -383,6 +383,8 @@ mod tests {
         PrivateRecordChainId,
         PrivateRecordCombiner,
         PrivateRecordContext,
+        PrivateRecordError,
+        PrivateRecordFormatVersion,
         PrivateRecordId,
         PrivateRecordSealer,
         PrivateRecordShareRequest,
@@ -448,6 +450,7 @@ mod tests {
         assert!(!db_path.exists());
     }
 
+    /// The protocol configuration migration must preserve headers and private records.
     #[tokio::test]
     async fn migration_preserves_headers_and_private_records() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -481,6 +484,9 @@ mod tests {
         let db = load(db_path).await.unwrap();
         assert_eq!(db.load_chain_tip().await.unwrap(), Some(header.clone()));
         assert_eq!(db.load_all_transactions().await.unwrap(), vec![record]);
+        let migrated = db.load_private_record(transaction_id).await.unwrap().unwrap();
+        assert_eq!(migrated.context().format_version(), PrivateRecordFormatVersion::V1);
+        migrated.verify_encrypted_record_key().unwrap();
         assert_eq!(db.load_protocol_config(config.to_commitment()).await.unwrap(), None);
 
         db.upsert_block_header_with_protocol_config(header, Some(config.clone()))
@@ -723,6 +729,39 @@ mod tests {
 
         let by_setup = db.load_private_records_by_setup_context(SETUP_CONTEXT_ID).await.unwrap();
         assert_eq!(by_setup, vec![expected.clone()]);
+    }
+
+    #[tokio::test]
+    async fn private_record_rejects_unsupported_formats() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db = setup(temp_dir.path().join("validator.sqlite3")).await.unwrap();
+        let transaction_id = TransactionId::from_raw(Word::from([5u32, 6, 7, 8]));
+        db.insert_validated_private_transaction(private_record(transaction_id, 9))
+            .await
+            .unwrap();
+
+        for format_version in [2_u32, 3, u32::MAX] {
+            db.writer
+                .write("set unsupported record format", move |tx| {
+                    tx.execute(
+                        "UPDATE validated_transactions SET format_version = ? WHERE id = ?",
+                        &[&i64::from(format_version), &transaction_id],
+                    )
+                })
+                .await
+                .unwrap();
+
+            let error = db.load_private_record(transaction_id).await.unwrap_err();
+            assert!(matches!(
+                error,
+                DatabaseError::ConversionSqlToRust { inner: Some(source), .. }
+                    if matches!(
+                        source.downcast_ref::<PrivateRecordError>(),
+                        Some(PrivateRecordError::UnsupportedFormat(version))
+                            if *version == format_version,
+                    ),
+            ));
+        }
     }
 
     #[tokio::test]

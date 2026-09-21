@@ -1,11 +1,12 @@
 use std::sync::atomic::Ordering;
 
 use miden_node_proto::domain::encryption::transaction_inputs_associated_data;
+use miden_node_proto::prost::Message;
 use miden_node_proto::{DecodeMessageExt, generated as grpc};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorReport, Instrument, info_span, miden_instrument, miden_span_record};
 use miden_protocol::transaction::{ProvenTransaction, TransactionId, TransactionInputs};
-use miden_tx::utils::serde::{Deserializable, Serializable};
+use miden_tx::utils::serde::Deserializable;
 use rand_core_06::OsRng;
 use tonic::Status;
 
@@ -49,8 +50,6 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
             return Ok(());
         }
 
-        let private_inputs = inputs.to_bytes();
-
         // Bound concurrent validations; see `tx_validation_semaphore`. Acquired after the
         // already-validated short-circuit so duplicate submissions never wait.
         let _permit = self
@@ -61,12 +60,18 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
             .map_err(|err| Status::internal(format!("validation semaphore closed: {err}")))?;
 
         // Validate the transaction.
-        validate_transaction(tx, inputs).await.map_err(|err| {
+        let effects = validate_transaction(tx, inputs).await.map_err(|err| {
             Status::invalid_argument(err.as_report_context("Invalid transaction"))
         })?;
 
-        // Re-encrypt the private inputs under a fresh content key. Sealing runs secp256k1 group
-        // operations, so it goes to a blocking thread rather than stalling an async worker.
+        // Encode the transaction effects in their canonical Protobuf form. The effects are the
+        // forensic record of what the transaction did. They exclude the account, blockchain and
+        // witness data that execution requires, which keeps the record small.
+        let private_record_payload =
+            grpc::transaction::TransactionEffects::from(&effects).encode_to_vec();
+
+        // Encrypt the effects under a fresh content key. Sealing runs secp256k1 group operations,
+        // so it goes to a blocking thread rather than stalling an async worker.
         let record_id = PrivateRecordId::new(tx_id, &self.signer.public_key());
         let context = PrivateRecordContext::new(
             self.private_record_chain_id,
@@ -75,12 +80,12 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
         );
         let sealer = self.private_record_sealer.clone();
         let private_record = spawn_blocking_in_current_span(move || {
-            sealer.seal(&mut OsRng, record_id, context, &private_inputs)
+            sealer.seal(&mut OsRng, record_id, context, &private_record_payload)
         })
         .await
         .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))
         .map_err(|err| {
-            Status::internal(err.as_report_context("Failed to protect transaction inputs"))
+            Status::internal(err.as_report_context("Failed to protect transaction effects"))
         })?;
 
         // Store the validated transaction and private record atomically.
