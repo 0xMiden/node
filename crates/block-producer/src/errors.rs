@@ -16,7 +16,7 @@ use miden_protocol::batch::BatchId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::utils::DeserializationError;
 use miden_protocol::errors::{ProposedBatchError, ProposedBlockError, ProvenBatchError};
-use miden_protocol::note::Nullifier;
+use miden_protocol::note::{NoteId, Nullifier};
 use miden_protocol::transaction::TransactionId;
 use thiserror::Error;
 
@@ -83,7 +83,7 @@ pub enum MempoolSubmissionError {
     #[error("transaction {transaction_id} consumes in-flight TX_FEE notes: {note_ids:?}")]
     ConsumesInflightFeeNotes {
         transaction_id: TransactionId,
-        note_ids: Vec<Word>,
+        note_ids: Vec<NoteId>,
     },
 
     #[error("mempool lock is poisoned")]
@@ -112,9 +112,9 @@ pub enum StateConflict {
     #[error("nullifiers already exist: {0:?}")]
     NullifiersAlreadyExist(Vec<Nullifier>),
     #[error("output notes already exist: {0:?}")]
-    OutputNotesAlreadyExist(Vec<Word>),
+    OutputNotesAlreadyExist(Vec<NoteId>),
     #[error("unauthenticated input notes are unknown: {0:?}")]
-    UnauthenticatedNotesMissing(Vec<Word>),
+    UnauthenticatedNotesMissing(Vec<NoteId>),
     #[error(
         "initial account commitment {expected} does not match the current commitment {current} for account {account}"
     )]

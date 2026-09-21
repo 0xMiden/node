@@ -6,6 +6,7 @@ use miden_node_tracing::{debug, miden_instrument};
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
+use miden_protocol::note::NoteHeader;
 use miden_protocol::transaction::ProvenTransaction;
 
 use crate::errors::StoreError;
@@ -36,15 +37,14 @@ pub async fn get_tx_inputs(
     proven_tx: &ProvenTransaction,
 ) -> Result<TransactionInputs, StoreError> {
     let nullifiers = proven_tx.nullifiers().collect::<Vec<_>>();
-    let unauthenticated_note_commitments =
-        proven_tx.unauthenticated_notes().map(|header| header.id().as_word()).collect();
+    let unauthenticated_note_ids = proven_tx.unauthenticated_notes().map(NoteHeader::id).collect();
 
     let (current_block_height, store_inputs) = state
         .with_view(async |view| {
             view.get_transaction_inputs(
                 proven_tx.account_id(),
                 &nullifiers,
-                unauthenticated_note_commitments,
+                unauthenticated_note_ids,
             )
             .await
             .map(|inputs| (view.tip(), inputs))

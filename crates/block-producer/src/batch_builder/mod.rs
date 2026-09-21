@@ -21,7 +21,6 @@ use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::account::{AccountFile, AccountId};
 use miden_protocol::batch::{BatchId, ProposedBatch, ProvenBatch};
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::NoteId;
 use miden_protocol::transaction::TransactionId;
 use tokio::task::{JoinError, JoinSet};
 use tokio::time::{Instant, MissedTickBehavior};
@@ -322,7 +321,6 @@ impl BatchJob {
             .iter()
             .map(Deref::deref)
             .flat_map(AuthenticatedTransaction::unauthenticated_note_ids)
-            .map(NoteId::from_raw)
             .collect();
 
         let view = self.state.view();

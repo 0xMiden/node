@@ -7,6 +7,7 @@ use miden_node_proto::domain::sequencer::{
     TransactionAuthenticationError,
     TransactionInputs,
 };
+use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify, generated};
 use miden_protocol::Word;
 use miden_protocol::account::{
     AccountId,
@@ -16,8 +17,14 @@ use miden_protocol::account::{
     AssetCallbackFlag,
 };
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::Nullifier;
-use miden_protocol::transaction::{OutputNote, ProvenTransaction, TxAccountUpdate};
+use miden_protocol::note::{Note, Nullifier};
+use miden_protocol::transaction::{
+    InputNote,
+    OutputNote,
+    PrivateOutputNote,
+    ProvenTransaction,
+    TxAccountUpdate,
+};
 
 fn account_id(seed: u8) -> AccountId {
     AccountId::dummy(
@@ -120,4 +127,54 @@ fn authentication_accepts_complete_unspent_inputs_with_pending_account_dependenc
     assert_eq!(authenticated.proven_transaction(), tx);
     assert_eq!(authenticated.store_account_state(), store_account_state);
     assert_eq!(authenticated.authentication_height(), authentication_height);
+}
+
+#[test]
+fn note_authentication_preserves_ids_across_serialization() {
+    let (tx, mut inputs) = transaction_and_inputs();
+    let input_notes = [
+        Note::mock_noop(Word::from([1u32, 0, 0, 0])),
+        Note::mock_noop(Word::from([2u32, 0, 0, 0])),
+    ];
+    let input_note_ids = input_notes.each_ref().map(Note::id);
+    let output_note = Note::mock_noop(Word::from([3u32, 0, 0, 0]));
+    let output_note_id = output_note.id();
+    let tx = ProvenTransaction::new(
+        tx.account_update().clone(),
+        input_notes.map(InputNote::unauthenticated),
+        vec![OutputNote::Private(
+            PrivateOutputNote::new(*output_note.header(), output_note.attachments().clone())
+                .unwrap(),
+        )],
+        tx.ref_block_num(),
+        tx.ref_block_commitment(),
+        tx.expiration_block_num(),
+        miden_protocol::testing::dummy_execution_proof(),
+    )
+    .unwrap();
+    inputs.nullifiers = tx.nullifiers().map(|nullifier| (nullifier, None)).collect();
+    inputs.found_unauthenticated_notes.insert(input_note_ids[0]);
+
+    let message = generated::sequencer::AuthInputs::from(inputs);
+    assert_eq!(message.found_unauthenticated_notes, vec![input_note_ids[0].as_word().into()]);
+    let inputs = message.decode_fields().and_then(Verify::verify).unwrap();
+    assert_eq!(inputs.found_unauthenticated_notes, HashSet::from([input_note_ids[0]]));
+
+    let mut authenticated = AuthenticatedTransaction::new_unchecked(Arc::new(tx), inputs).unwrap();
+    assert_eq!(authenticated.output_note_ids().collect::<Vec<_>>(), vec![output_note_id]);
+    assert_eq!(
+        authenticated.unauthenticated_note_ids().collect::<Vec<_>>(),
+        vec![input_note_ids[1]]
+    );
+
+    let message = generated::sequencer::AuthenticatedTransaction::from(authenticated.clone());
+    assert_eq!(message.notes_authenticated_by_store, vec![input_note_ids[0].as_word().into()]);
+    let decoded = message.decode_fields().and_then(BuildUnchecked::build_unchecked).unwrap();
+    assert_eq!(decoded, authenticated);
+
+    authenticated.mark_notes_authenticated([input_note_ids[1]]);
+    assert_eq!(authenticated.unauthenticated_note_ids().count(), 0);
+    let message = generated::sequencer::AuthenticatedTransaction::from(authenticated.clone());
+    let decoded = message.decode_fields().and_then(BuildUnchecked::build_unchecked).unwrap();
+    assert_eq!(decoded, authenticated);
 }
