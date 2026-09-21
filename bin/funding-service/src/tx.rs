@@ -332,11 +332,10 @@ mod tests {
         Ok(())
     }
 
-    /// One transaction consumes the deposits and creates the funding notes together. The deposits
-    /// raise the balance, and the notes and the fee lower it.
+    /// Deposits fund the output notes and the fee in one transaction from an empty account.
     #[tokio::test]
     async fn one_transaction_consumes_deposits_and_creates_notes() -> Result<()> {
-        let fixture = Fixture::new(BALANCE, TEST_BASE_FEE)?;
+        let fixture = Fixture::new(0, TEST_BASE_FEE)?;
         let mut rng = RandomCoin::new(Word::from([13u32; 4]));
 
         let targets = targets(&fixture)?;
@@ -362,17 +361,22 @@ mod tests {
         for note in &notes {
             assert!(created.contains(&note.id()), "the transaction must create note {}", note.id());
         }
+        let fee_notes = executed_tx
+            .output_notes()
+            .iter()
+            .filter(|note| {
+                note.recipient()
+                    .is_some_and(|recipient| recipient.script().root() == TxFeeNote::script_root())
+            })
+            .count();
+        assert_eq!(fee_notes, 1, "the combined transaction must pay one fee");
 
-        // The deposits land, the notes leave, and the fee is paid on top of both.
         let remaining = balance_after(&fixture, &executed_tx)?;
         assert!(
-            remaining < BALANCE + collected - requested,
+            remaining < collected - requested,
             "the fee must be paid on top of the notes: {remaining}"
         );
-        assert!(
-            remaining > BALANCE - requested,
-            "the deposits must raise the balance: {remaining}"
-        );
+        assert!(remaining > 0, "the deposits must raise the balance: {remaining}");
 
         Ok(())
     }

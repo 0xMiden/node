@@ -1,8 +1,8 @@
 //! Discovery of the deposits sent to the funding account.
 //!
 //! An operator refills the funding account by sending it a public pay-to-ID note which holds the
-//! native asset. This module finds those notes. It submits nothing: the worker consumes the
-//! deposits in a separate transaction.
+//! native asset. This module finds those notes. The worker consumes the deposits and creates
+//! queued funding notes in the same transaction.
 
 use std::collections::HashSet;
 

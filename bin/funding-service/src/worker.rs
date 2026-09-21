@@ -113,7 +113,7 @@ struct Prepared {
     nonce: Felt,
 }
 
-/// Turns funding requests and deposits into separate transactions.
+/// Combines funding requests and deposits in one transaction.
 pub struct Funder {
     node: RpcNodeClient,
     prover: Prover,
@@ -158,15 +158,14 @@ impl Funder {
         scan.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
         loop {
-            let collect_deposits = tokio::select! {
+            tokio::select! {
                 () = shutdown.cancelled() => break,
                 _ = scan.tick(), if self.pending.is_none() => {
                     if let Err(err) = self.scan_deposits().await {
                         warn!(&err, target: LOG_TARGET, "Failed to scan for deposits");
                     }
-                    true
                 },
-                _ = poll.tick(), if self.pending.is_some() || !self.queued.is_empty() => false,
+                _ = poll.tick(), if self.pending.is_some() || !self.queued.is_empty() => {},
                 note = requests.recv(), if self.pending.is_none() && self.queued.is_empty() => {
                     let Some(note) = note else { break };
                     self.queued.push_back(note);
@@ -175,18 +174,20 @@ impl Funder {
                         () = shutdown.cancelled() => break,
                         () = tokio::time::sleep(BATCH_LINGER) => {},
                     }
-                    while self.queued.len() < self.setup.config.max_notes_per_tx.get() {
-                        match requests.try_recv() {
-                            Ok(note) => self.queued.push_back(note),
-                            Err(_) => break,
-                        }
-                    }
-                    false
                 },
             };
 
+            if self.pending.is_none() {
+                while self.queued.len() < self.setup.config.max_notes_per_tx.get() {
+                    match requests.try_recv() {
+                        Ok(note) => self.queued.push_back(note),
+                        Err(_) => break,
+                    }
+                }
+            }
+
             // Transaction execution requires a large future.
-            if let Err(err) = Box::pin(self.cycle(collect_deposits)).await {
+            if let Err(err) = Box::pin(self.cycle()).await {
                 warn!(&err, target: LOG_TARGET, "A funding cycle failed");
             }
         }
@@ -195,11 +196,8 @@ impl Funder {
     }
 
     /// Resolves the pending transaction or prepares one batch of work.
-    async fn cycle(&mut self, collect_deposits: bool) -> Result<()> {
-        if self.pending.is_none()
-            && self.queued.is_empty()
-            && (!collect_deposits || self.deposits.is_empty())
-        {
+    async fn cycle(&mut self) -> Result<()> {
+        if self.pending.is_none() && self.queued.is_empty() && self.deposits.is_empty() {
             return Ok(());
         }
 
@@ -220,26 +218,17 @@ impl Funder {
             return Ok(());
         }
 
-        // Collection attempts run on scan ticks.
-        let deposits = if collect_deposits {
-            self.select_deposits().await?
-        } else {
-            Vec::new()
-        };
-        let notes = if deposits.is_empty() {
-            let count = admit(
-                self.queued.iter().map(|note| native_amount(note, self.setup.fee_faucet_id)),
-                balance,
-                self.fee_reserve(),
-            );
-            self.queued.drain(..count).collect()
-        } else {
-            Vec::new()
-        };
-        let selection = Selection { deposits, notes };
-        if selection.deposits.is_empty() && selection.notes.is_empty() {
+        self.remove_spent_deposits().await?;
+        let reserve = self.fee_reserve();
+        let Some(selection) = select(
+            &mut self.deposits,
+            &mut self.queued,
+            balance,
+            self.setup.fee_faucet_id,
+            reserve,
+        ) else {
             return Ok(());
-        }
+        };
 
         let prepared =
             Box::pin(self.prepare(reference_header, blockchain, funder, &selection)).await;
@@ -298,17 +287,16 @@ impl Funder {
         Ok(())
     }
 
-    /// Removes spent deposits and selects a collection that covers its fee.
-    async fn select_deposits(&mut self) -> Result<Vec<Note>> {
+    /// Removes deposits that the chain has already spent.
+    async fn remove_spent_deposits(&mut self) -> Result<()> {
         if self.deposits.is_empty() {
-            return Ok(Vec::new());
+            return Ok(());
         }
 
         let nullifiers: Vec<_> = self.deposits.keys().copied().collect();
         let spent = self.node.sync_nullifiers(&nullifiers, BlockNumber::GENESIS).await?;
         self.deposits.retain(|nullifier, _| !spent.contains(nullifier));
-        let reserve = self.fee_reserve();
-        Ok(select_deposits(&mut self.deposits, self.setup.fee_faucet_id, reserve))
+        Ok(())
     }
 
     /// Returns the deposits and the notes of a transaction which did not reach the chain.
@@ -489,25 +477,37 @@ struct Selection {
     notes: Vec<Note>,
 }
 
-/// Takes the largest deposits when their total amount exceeds the fee reserve.
-fn select_deposits(
+/// Takes the largest deposits and the queued notes they can fund with the account balance.
+fn select(
     deposits: &mut HashMap<Nullifier, Note>,
+    queued: &mut VecDeque<Note>,
+    balance: u64,
     fee_faucet_id: AccountId,
     reserve: u64,
-) -> Vec<Note> {
+) -> Option<Selection> {
     let mut candidates: Vec<_> = deposits.values().collect();
     candidates.sort_unstable_by_key(|note| std::cmp::Reverse(native_amount(note, fee_faucet_id)));
     candidates.truncate(MAX_DEPOSITS_PER_TX);
     let collected: u64 = candidates.iter().map(|note| native_amount(note, fee_faucet_id)).sum();
-    if collected <= reserve {
-        return Vec::new();
+    let note_count = admit(
+        queued.iter().map(|note| native_amount(note, fee_faucet_id)),
+        balance.saturating_add(collected),
+        reserve,
+    );
+
+    // A transaction with no payouts must collect more than it can spend on its fee.
+    if note_count == 0 && collected <= reserve {
+        return None;
     }
 
     let nullifiers: Vec<_> = candidates.into_iter().map(Note::nullifier).collect();
-    nullifiers
-        .into_iter()
-        .filter_map(|nullifier| deposits.remove(&nullifier))
-        .collect()
+    Some(Selection {
+        deposits: nullifiers
+            .into_iter()
+            .filter_map(|nullifier| deposits.remove(&nullifier))
+            .collect(),
+        notes: queued.drain(..note_count).collect(),
+    })
 }
 
 // ADMISSION
@@ -572,18 +572,71 @@ mod tests {
     }
 
     #[test]
-    fn a_deposit_below_the_fee_reserve_is_not_consumed() {
+    fn a_deposit_below_the_fee_reserve_is_not_consumed_on_its_own() {
         let mut deposits = deposit_pool([note(1, 1)]);
-        assert!(select_deposits(&mut deposits, fee_faucet_id(), RESERVE).is_empty());
+        let mut queued = VecDeque::new();
+        assert!(select(&mut deposits, &mut queued, 0, fee_faucet_id(), RESERVE).is_none());
         assert_eq!(deposits.len(), 1);
     }
 
     #[test]
-    fn a_deposit_above_the_fee_reserve_is_consumed() {
+    fn a_deposit_above_the_fee_reserve_is_consumed_on_its_own() {
         let mut deposits = deposit_pool([note(RESERVE + 1, 2)]);
-        let selected = select_deposits(&mut deposits, fee_faucet_id(), RESERVE);
-        assert_eq!(selected.len(), 1);
+        let mut queued = VecDeque::new();
+        let selection = select(&mut deposits, &mut queued, 0, fee_faucet_id(), RESERVE).unwrap();
+        assert_eq!(selection.deposits.len(), 1);
+        assert!(selection.notes.is_empty());
         assert!(deposits.is_empty());
+    }
+
+    #[test]
+    fn a_small_deposit_pays_for_a_note_in_the_same_transaction() {
+        let deposit = note(1_000, 3);
+        let payout = note(1_000, 4);
+        let mut deposits = deposit_pool([deposit.clone()]);
+        let mut queued = VecDeque::from([payout.clone()]);
+
+        let selection = select(&mut deposits, &mut queued, RESERVE, fee_faucet_id(), RESERVE)
+            .expect("the deposit covers the payout and the balance covers the fee reserve");
+
+        assert_eq!(selection.deposits, vec![deposit]);
+        assert_eq!(selection.notes, vec![payout]);
+        assert!(deposits.is_empty());
+        assert!(queued.is_empty());
+    }
+
+    #[test]
+    fn deposits_fund_payouts_from_an_empty_account_and_keep_one_fee_reserve() {
+        let deposit = note(RESERVE + 1_000, 5);
+        let payout = note(1_000, 6);
+        let waiting = note(1, 7);
+        let mut deposits = deposit_pool([deposit.clone()]);
+        let mut queued = VecDeque::from([payout.clone(), waiting.clone()]);
+
+        let selection = select(&mut deposits, &mut queued, 0, fee_faucet_id(), RESERVE)
+            .expect("the deposit covers the first payout and one fee reserve");
+
+        assert_eq!(selection.deposits, vec![deposit]);
+        assert_eq!(selection.notes, vec![payout]);
+        assert!(deposits.is_empty());
+        assert_eq!(queued, VecDeque::from([waiting]));
+    }
+
+    #[test]
+    fn payouts_can_proceed_without_deposits() {
+        let payout = note(1_000, 8);
+        let mut deposits = HashMap::new();
+        let mut queued = VecDeque::from([payout.clone()]);
+
+        assert!(select(&mut deposits, &mut queued, RESERVE, fee_faucet_id(), RESERVE).is_none());
+        assert_eq!(queued, VecDeque::from([payout.clone()]));
+
+        let selection =
+            select(&mut deposits, &mut queued, RESERVE + 1_000, fee_faucet_id(), RESERVE)
+                .expect("the account balance covers the payout and fee reserve");
+        assert!(selection.deposits.is_empty());
+        assert_eq!(selection.notes, vec![payout]);
+        assert!(queued.is_empty());
     }
 
     #[test]
@@ -596,11 +649,16 @@ mod tests {
         let count = u32::try_from(MAX_DEPOSITS_PER_TX).expect("the cap fits in a u32") + 2;
         let mut deposits =
             deposit_pool((0..count).map(|index| note(u64::from(index) + RESERVE, index + 10)));
-        let selected = select_deposits(&mut deposits, fee_faucet_id(), RESERVE);
-        assert_eq!(selected.len(), MAX_DEPOSITS_PER_TX);
+        let mut queued = VecDeque::new();
+        let selection = select(&mut deposits, &mut queued, 0, fee_faucet_id(), RESERVE).unwrap();
+        assert_eq!(selection.deposits.len(), MAX_DEPOSITS_PER_TX);
         assert_eq!(deposits.len(), 2);
-        let smallest_taken =
-            selected.iter().map(|note| native_amount(note, fee_faucet_id())).min().unwrap();
+        let smallest_taken = selection
+            .deposits
+            .iter()
+            .map(|note| native_amount(note, fee_faucet_id()))
+            .min()
+            .unwrap();
         let largest_left = deposits
             .values()
             .map(|note| native_amount(note, fee_faucet_id()))

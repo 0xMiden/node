@@ -20,23 +20,23 @@ The service keeps accepted requests and pending transactions in memory. A restar
 
 ## One worker, one transaction in flight
 
-A single worker owns the account. It keeps at most one batch of requests outside the bounded request channel. The batch contains at most `--max-notes-per-tx` notes. Requests stay in the channel while the batch waits for funds or a transaction remains pending. A full channel causes the HTTP handler to return 429.
+A single worker owns the account. It keeps at most one batch of requests outside the bounded request channel. The batch contains at most `--max-notes-per-tx` notes. Requests stay in the channel while the batch is full or a transaction remains pending. A full channel causes the HTTP handler to return 429.
 
 The worker waits for a request, a deposit scan deadline, or a transaction poll deadline. It processes work in this order:
 
 1. If a transaction is pending, read the account and resolve that transaction. Do not prepare another transaction while its outcome is unknown.
-2. Otherwise, collect deposits when the scan interval is due, or take one batch of funding requests from the channel.
-3. Read the chain state, execute the transaction, and prove it.
+2. Otherwise, scan for deposits when the scan interval is due and fill the active batch from the request channel.
+3. Read the chain state and remove spent deposits. Select deposits and affordable payouts, then execute and prove one transaction.
 4. Record its ID, account nonce, expiration block, and selected notes before submitting it to the node.
 5. Wait for commitment or expiration, regardless of the submission response.
 
 A submission error can occur after the node accepts a transaction. The worker treats every submission error as an unknown outcome and keeps the transaction pending until the chain resolves it. The account has one writer, so a higher nonce means the transaction committed. If the nonce has not changed at the expiration block, the worker can retry its notes in a new transaction. The notes keep their IDs across retries. A failed RPC submission also clears the cached encryption key so the next submission fetches a fresh key.
 
-### Separate collection and payout transactions
+### Deposits and payouts in one transaction
 
-The same worker submits both kinds of transaction. A collection consumes deposits without creating funding notes. A payout creates funding notes without consuming deposits. Collection attempts run on scan ticks. A collection that fails during preparation leaves payouts free to continue. Once submission starts, payouts wait until the collection commits or expires.
+The worker selects deposits and queued funding notes together. It uses the account balance plus the selected deposits to admit payouts. A transaction can consume deposits, create funding notes, or do both. The worker also takes queued requests when a scan finds deposits, up to the batch limit.
 
-Input assets enter the vault before the kernel withdraws the fee. A collection can therefore pay its fee from the deposits when the account balance is zero. Payouts use the balance after collection commits. Separate transactions each pay their own fee.
+Input assets enter the vault before the transaction creates funding notes and the kernel withdraws the fee. Deposits can therefore fund payouts and the fee in the same transaction when the account balance is zero. The combined transaction pays one fee.
 
 ### The fee faucet is a foreign account
 
@@ -44,9 +44,9 @@ The native asset is callback-enabled: the kernel loads the issuing faucet in a f
 
 ## Admission
 
-The transaction pays its own fee from the same vault the notes are paid from, so the worker holds back the worst-case fee of one transaction before it spends the balance. It then admits queued notes in order and stops at the first note which does not fit, which keeps the queue first-come-first-served and stops a stream of small notes from starving a large one.
+The worker adds the selected deposits to the account balance and holds back the worst-case fee of one transaction. It then admits queued notes in order and stops at the first note which does not fit, which keeps the queue first-come-first-served and stops a stream of small notes from starving a large one.
 
-A note which does not fit stays in the active batch. The worker polls the balance while that batch waits for funds. It does not take another batch from the request channel until the active batch completes. Deposit scans continue on their own interval.
+A note which does not fit stays in the active batch. The worker polls the balance while that batch waits for funds. It can fill unused space in the batch from the request channel while no transaction is pending. Deposit scans continue on their own interval.
 
 The handler checks the amount against the balance the service last read, and refuses a request the account plainly cannot serve. That check is best effort: the balance is the one of an earlier block and does not account for the notes already queued.
 

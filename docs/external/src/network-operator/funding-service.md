@@ -150,10 +150,9 @@ whatever they like.
 | It targets the funding account             | The tag alone does not prove the target.                                                 |
 | It holds the native asset and nothing else | Another asset would sit in the vault without the service being able to spend it.         |
 
-Deposits are consumed in separate collection transactions. Input assets enter the vault before the fee is withdrawn, so
-collection works when the balance is zero. Payouts use the balance after collection commits. Each transaction pays its
-own fee. After any submission attempt, the worker waits for the transaction to commit or expire before it processes
-another transaction. Submission errors do not cause an immediate retry.
+Deposits and queued payouts can share one transaction and one fee. Deposits can fund the payouts and the fee in that
+transaction, even when the account balance is zero. After any submission attempt, the worker waits for the transaction
+to commit or expire before it processes another transaction. Submission errors do not cause an immediate retry.
 
 The service deduplicates deposits by nullifier and checks for spent deposits before collection. If a scan fails, it
 retries the same block range.
