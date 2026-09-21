@@ -8,9 +8,7 @@ use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
 use miden_protocol::account::{Account, AccountFile, AccountId, AccountType};
 use miden_protocol::asset::{AssetAmount, FungibleAsset, TokenSymbol};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
-use miden_protocol::note::{Note, NoteType};
-use miden_protocol::transaction::RawOutputNote;
-use miden_protocol::{Felt, ONE, Word};
+use miden_protocol::{Felt, ONE};
 use miden_standards::account::access::AccessControl;
 use miden_standards::account::auth::Approver;
 use miden_standards::account::faucets::{
@@ -26,15 +24,13 @@ use miden_standards::account::policies::{
     TransferPolicy,
 };
 use miden_standards::account::wallets::create_basic_wallet;
-use miden_standards::note::{BurnNote, MintNote, P2idNote};
+use miden_standards::note::{BurnNote, MintNote};
 use miden_testing::MockChain;
 use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use tokio::sync::Mutex;
 
 use crate::account::FunderKey;
-
-pub mod node;
 
 /// The base fee used by the tests which exercise the fee path.
 pub const TEST_BASE_FEE: u32 = 500;
@@ -121,17 +117,11 @@ pub struct Fixture {
     pub funder: Account,
     pub funder_key: FunderKey,
     pub fee_faucet_id: AccountId,
-    pub deposits: Vec<Note>,
 }
 
 impl Fixture {
     /// Builds a chain which charges `base_fee` and holds a funding wallet with `balance`.
     pub fn new(balance: u64, base_fee: u32) -> Result<Self> {
-        Self::with_deposits(balance, base_fee, &[])
-    }
-
-    /// Adds public deposits for the funder to the genesis block.
-    pub fn with_deposits(balance: u64, base_fee: u32, amounts: &[u64]) -> Result<Self> {
         // The faucet's owner does not matter for these tests, so the wallet built first stands in.
         let (owner, _) = genesis_style_wallet(FungibleAsset::mock_issuer(), 0, [1; 32])?;
         let faucet = genesis_style_native_faucet(owner.id(), [7; 32])?;
@@ -145,23 +135,6 @@ impl Fixture {
             .verification_base_fee(base_fee);
         builder.add_account(faucet)?;
         builder.add_account(funder.clone())?;
-        let deposits: Vec<Note> = amounts
-            .iter()
-            .enumerate()
-            .map(|(index, &amount)| {
-                Ok(P2idNote::builder()
-                    .sender(owner.id())
-                    .target(funder.id())
-                    .asset(FungibleAsset::new(fee_faucet_id, amount)?)
-                    .note_type(NoteType::Public)
-                    .serial_number(Word::from([u32::try_from(index)? + 1; 4]))
-                    .build()?
-                    .into())
-            })
-            .collect::<Result<_>>()?;
-        for note in &deposits {
-            builder.add_output_note(RawOutputNote::Full(note.clone()));
-        }
         let chain = builder.build()?;
 
         Ok(Self {
@@ -169,7 +142,6 @@ impl Fixture {
             funder,
             funder_key,
             fee_faucet_id,
-            deposits,
         })
     }
 }

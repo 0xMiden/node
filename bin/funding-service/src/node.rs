@@ -56,32 +56,6 @@ use url::Url;
 
 use crate::COMPONENT;
 
-// NODE INTERFACE
-// ================================================================================================
-
-/// The node operations used by the funding worker.
-#[tonic::async_trait]
-pub trait FundingNode: Send + Sync {
-    async fn tip_chain_state(&self) -> Result<(BlockHeader, PartialBlockchain)>;
-    async fn public_account(
-        &self,
-        account_id: AccountId,
-        block_num: BlockNumber,
-    ) -> Result<(Account, AccountWitness)>;
-    async fn sync_note_ids(&self, tag: NoteTag, from_block: BlockNumber) -> Result<SyncedNotes>;
-    async fn get_public_notes_by_id(&self, note_ids: &[NoteId]) -> Result<Vec<Note>>;
-    async fn sync_nullifiers(
-        &self,
-        nullifiers: &[Nullifier],
-        from_block: BlockNumber,
-    ) -> Result<HashSet<Nullifier>>;
-    async fn submit(
-        &self,
-        proven_tx: &ProvenTransaction,
-        transaction_inputs: &[u8],
-    ) -> Result<BlockNumber>;
-}
-
 // RPC NODE CLIENT
 // ================================================================================================
 
@@ -473,45 +447,6 @@ impl RpcNodeClient {
         }
         *cached = Some(sealer.clone());
         Ok(sealer)
-    }
-}
-
-#[tonic::async_trait]
-impl FundingNode for RpcNodeClient {
-    async fn tip_chain_state(&self) -> Result<(BlockHeader, PartialBlockchain)> {
-        self.tip_chain_state().await
-    }
-
-    async fn public_account(
-        &self,
-        account_id: AccountId,
-        block_num: BlockNumber,
-    ) -> Result<(Account, AccountWitness)> {
-        self.public_account(account_id, block_num).await
-    }
-
-    async fn sync_note_ids(&self, tag: NoteTag, from_block: BlockNumber) -> Result<SyncedNotes> {
-        self.sync_note_ids(tag, from_block).await
-    }
-
-    async fn get_public_notes_by_id(&self, note_ids: &[NoteId]) -> Result<Vec<Note>> {
-        self.get_public_notes_by_id(note_ids).await
-    }
-
-    async fn sync_nullifiers(
-        &self,
-        nullifiers: &[Nullifier],
-        from_block: BlockNumber,
-    ) -> Result<HashSet<Nullifier>> {
-        self.sync_nullifiers(nullifiers, from_block).await
-    }
-
-    async fn submit(
-        &self,
-        proven_tx: &ProvenTransaction,
-        transaction_inputs: &[u8],
-    ) -> Result<BlockNumber> {
-        self.submit(proven_tx, transaction_inputs).await
     }
 }
 

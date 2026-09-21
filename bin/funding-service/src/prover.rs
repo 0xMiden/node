@@ -22,8 +22,6 @@ use crate::COMPONENT;
 /// The prover the service is configured with.
 #[derive(Clone)]
 pub enum Prover {
-    #[cfg(test)]
-    Dummy,
     /// Proves in this process.
     Local(LocalProver),
     /// Proves through a remote prover, and falls back to local proving on failure.
@@ -44,10 +42,6 @@ impl Prover {
     /// Proves one executed transaction.
     pub async fn prove(&self, executed_tx: ExecutedTransaction) -> Result<ProvenTransaction> {
         match self {
-            #[cfg(test)]
-            Self::Dummy => {
-                LocalTransactionProver::default().prove_dummy(executed_tx).map_err(Into::into)
-            },
             Self::Local(prover) => prover.prove(executed_tx).await,
             Self::Remote(prover) => prover.prove(executed_tx).await,
         }

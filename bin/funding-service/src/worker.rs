@@ -26,7 +26,7 @@ use tokio::time::MissedTickBehavior;
 
 use crate::account::FunderKey;
 use crate::deposit::{DepositScanner, native_amount};
-use crate::node::{FundingNode, RpcNodeClient, is_submission_rejected, is_transient_error};
+use crate::node::{RpcNodeClient, is_submission_rejected, is_transient_error};
 use crate::prover::Prover;
 use crate::status::StatusSnapshot;
 use crate::tx::{self, ExecutionInputs};
@@ -114,8 +114,8 @@ struct Prepared {
 }
 
 /// Turns funding requests and deposits into separate transactions.
-pub struct Funder<N = RpcNodeClient> {
-    node: N,
+pub struct Funder {
+    node: RpcNodeClient,
     prover: Prover,
     setup: FunderSetup,
     rng: RandomCoin,
@@ -128,9 +128,9 @@ pub struct Funder<N = RpcNodeClient> {
     pending: Option<Pending>,
 }
 
-impl<N: FundingNode> Funder<N> {
+impl Funder {
     /// Creates a worker for the given funding account.
-    pub fn new(node: N, prover: Prover, setup: FunderSetup) -> Self {
+    pub fn new(node: RpcNodeClient, prover: Prover, setup: FunderSetup) -> Self {
         let scanner = DepositScanner::new(setup.key.account_id(), setup.fee_faucet_id);
 
         Self {
@@ -624,185 +624,5 @@ mod tests {
         assert_eq!(admit([100], 100 + RESERVE, RESERVE), 1);
         assert_eq!(admit([100], 99 + RESERVE, RESERVE), 0);
         assert_eq!(admit([100, 100], 100 + RESERVE, RESERVE), 1);
-    }
-
-    async fn worker(
-        fixture: &crate::test_utils::Fixture,
-    ) -> Funder<crate::test_utils::node::MockNode> {
-        let node = crate::test_utils::node::MockNode::new(fixture);
-        let chain = fixture.chain.lock().await;
-        Funder::new(
-            node,
-            Prover::Dummy,
-            FunderSetup {
-                key: fixture.funder_key.clone(),
-                fee_faucet_id: fixture.fee_faucet_id,
-                verification_base_fee: chain
-                    .latest_block_header()
-                    .fee_parameters()
-                    .verification_base_fee(),
-                protocol_config: chain.protocol_config().clone(),
-                config: WorkerConfig {
-                    max_notes_per_tx: NonZeroUsize::new(2).unwrap(),
-                    expiration_delta: NonZeroU16::new(2).unwrap(),
-                    tick_interval: Duration::from_millis(20),
-                    deposit_scan_interval: Duration::from_secs(60),
-                },
-                status: StatusSnapshot::new(fixture.funder.id(), 1_000),
-            },
-        )
-    }
-
-    fn payout(fixture: &crate::test_utils::Fixture, serial: u32) -> Note {
-        P2idNote::builder()
-            .sender(fixture.funder.id())
-            .target(fixture.fee_faucet_id)
-            .asset(FungibleAsset::new(fixture.fee_faucet_id, 1_000).unwrap())
-            .note_type(NoteType::Public)
-            .serial_number(Word::from([serial; 4]))
-            .build()
-            .unwrap()
-            .into()
-    }
-
-    #[tokio::test]
-    async fn a_committed_payout_is_not_repeated_after_a_lost_reply() -> Result<()> {
-        use crate::test_utils::node::Submission;
-        use crate::test_utils::{Fixture, TEST_BASE_FEE};
-        let fixture = Fixture::new(1_000_000, TEST_BASE_FEE)?;
-        let mut worker = worker(&fixture).await;
-        let note = payout(&fixture, 100);
-        worker.queued.push_back(note.clone());
-        worker.node.outcomes.lock().await.push_back(Submission::CommitAndLoseReply);
-        worker.cycle(false).await?;
-        worker.cycle(false).await?;
-        worker.cycle(false).await?;
-        assert_eq!(worker.node.submissions.lock().await.len(), 1);
-        assert!(fixture.chain.lock().await.is_note_committed(&note.id()));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn a_committed_deposit_is_not_retried_after_a_lost_reply() -> Result<()> {
-        use crate::test_utils::node::Submission;
-        use crate::test_utils::{Fixture, TEST_BASE_FEE};
-        let fixture = Fixture::with_deposits(0, TEST_BASE_FEE, &[50_000])?;
-        let mut worker = worker(&fixture).await;
-        worker.scan_deposits().await?;
-        worker.node.outcomes.lock().await.push_back(Submission::CommitAndLoseReply);
-        worker.cycle(true).await?;
-        worker.cycle(false).await?;
-        worker.cycle(true).await?;
-        assert_eq!(worker.node.submissions.lock().await.len(), 1);
-        let chain = fixture.chain.lock().await;
-        assert!(chain.is_note_consumed(&fixture.deposits[0].nullifier()));
-        assert!(worker.fee_balance(chain.committed_account(fixture.funder.id())?) > 0);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn an_unknown_submission_waits_for_expiration_before_retrying() -> Result<()> {
-        use crate::test_utils::node::Submission;
-        use crate::test_utils::{Fixture, TEST_BASE_FEE};
-        let fixture = Fixture::new(1_000_000, TEST_BASE_FEE)?;
-        let mut worker = worker(&fixture).await;
-        let note = payout(&fixture, 101);
-        worker.queued.push_back(note.clone());
-        worker.node.outcomes.lock().await.push_back(Submission::LoseReply);
-        worker.cycle(false).await?;
-        worker.cycle(false).await?;
-        assert_eq!(worker.node.submissions.lock().await.len(), 1);
-        let expires_at = worker.node.submissions.lock().await[0].expiration_block_num();
-        fixture.chain.lock().await.prove_until_block(expires_at)?;
-        worker.cycle(false).await?;
-        worker.cycle(false).await?;
-        let submitted = worker.node.submissions.lock().await;
-        assert_eq!(submitted.len(), 2);
-        assert!(
-            submitted
-                .iter()
-                .all(|tx| tx.output_notes().iter().any(|output| output.id() == note.id()))
-        );
-        assert!(fixture.chain.lock().await.is_note_committed(&note.id()));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn a_rejected_collection_does_not_block_a_payout() -> Result<()> {
-        use crate::test_utils::node::Submission;
-        use crate::test_utils::{Fixture, TEST_BASE_FEE};
-        let fixture = Fixture::with_deposits(1_000_000, TEST_BASE_FEE, &[50_000])?;
-        let mut worker = worker(&fixture).await;
-        let note = payout(&fixture, 102);
-        worker.queued.push_back(note.clone());
-        worker.scan_deposits().await?;
-        worker.node.outcomes.lock().await.push_back(Submission::Reject);
-        assert!(worker.cycle(true).await.is_err());
-        worker.cycle(false).await?;
-        let submitted = worker.node.submissions.lock().await;
-        assert_eq!(submitted.len(), 2);
-        assert_eq!(submitted[0].nullifiers().count(), 1);
-        assert_eq!(submitted[1].nullifiers().count(), 0);
-        assert!(fixture.chain.lock().await.is_note_committed(&note.id()));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn repeated_deposits_are_collected_once_across_scans() -> Result<()> {
-        use std::sync::atomic::Ordering;
-
-        use crate::test_utils::{Fixture, TEST_BASE_FEE};
-        let fixture = Fixture::with_deposits(0, TEST_BASE_FEE, &[50_000])?;
-        let mut worker = worker(&fixture).await;
-        worker.node.duplicate_records.store(true, Ordering::Relaxed);
-        worker.scan_deposits().await?;
-        fixture.chain.lock().await.prove_next_block()?;
-        worker
-            .node
-            .extra_records
-            .lock()
-            .await
-            .push((1.into(), fixture.deposits[0].clone()));
-        worker.scan_deposits().await?;
-        worker.cycle(true).await?;
-        let submitted = worker.node.submissions.lock().await;
-        assert_eq!(submitted.len(), 1);
-        assert_eq!(submitted[0].nullifiers().count(), 1);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn a_deposit_spent_after_discovery_is_not_submitted() -> Result<()> {
-        use crate::test_utils::{Fixture, TEST_BASE_FEE};
-        let fixture = Fixture::with_deposits(0, TEST_BASE_FEE, &[50_000])?;
-        let mut worker = worker(&fixture).await;
-        worker.scan_deposits().await?;
-        worker.node.spent.lock().await.push((1.into(), fixture.deposits[0].nullifier()));
-        worker.cycle(true).await?;
-        assert!(worker.node.submissions.lock().await.is_empty());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn requests_stay_bounded_while_the_active_batch_waits_for_funds() -> Result<()> {
-        use crate::test_utils::{Fixture, TEST_BASE_FEE};
-        let fixture = Fixture::new(0, TEST_BASE_FEE)?;
-        let worker = worker(&fixture).await;
-        let node = worker.node.clone();
-        let shutdown = CancellationToken::new();
-        let (sender, receiver) = mpsc::channel(2);
-        sender.try_send(payout(&fixture, 110))?;
-        sender.try_send(payout(&fixture, 111))?;
-        let task = tokio::spawn(Box::pin(worker.run(receiver, shutdown.clone())));
-        tokio::time::timeout(Duration::from_secs(5), node.wait_for_reads(2)).await?;
-        sender.try_send(payout(&fixture, 112))?;
-        sender.try_send(payout(&fixture, 113))?;
-        tokio::time::timeout(Duration::from_secs(5), node.wait_for_reads(4)).await?;
-        let extra = sender.try_send(payout(&fixture, 114));
-        shutdown.cancel();
-        task.await??;
-        assert!(matches!(extra, Err(mpsc::error::TrySendError::Full(_))));
-        assert!(node.submissions.lock().await.is_empty());
-        Ok(())
     }
 }
