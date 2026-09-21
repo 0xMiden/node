@@ -15,16 +15,10 @@ impl SendNote for Server {
     type Output = ();
 
     fn decode(request: SendNoteRequest) -> tonic::Result<Self::Input> {
-        use miden_node_proto::errors::ConversionResultExt;
-
         let request = request.decode_fields().map_err(ConversionError::into_status)?;
         let mut note = decode_note(request.note)?;
-        note.after_block_num = request
-            .after_block_num
-            .map(Verify::verify)
-            .transpose()
-            .context("after_block_num")
-            .map_err(ConversionError::into_status)?;
+        note.after_block_num =
+            request.after_block_num.verify().map_err(ConversionError::into_status)?;
         Ok(note)
     }
 
