@@ -1,3 +1,3 @@
 UPDATE storage_metadata
-SET next_cursor = ?1, retained_bytes = ?2
+SET retained_bytes = ?1
 WHERE singleton = 1;

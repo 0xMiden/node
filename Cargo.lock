@@ -4448,6 +4448,7 @@ dependencies = [
  "miden-protocol",
  "prost",
  "reqwest",
+ "rusqlite",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",

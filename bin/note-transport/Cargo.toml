@@ -30,6 +30,7 @@ miden-node-tracing     = { workspace = true }
 miden-node-utils       = { workspace = true }
 miden-protocol         = { workspace = true }
 prost                  = { workspace = true }
+rusqlite               = { workspace = true }
 thiserror              = { workspace = true }
 tokio                  = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
 tokio-stream           = { features = ["net"], workspace = true }

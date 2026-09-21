@@ -169,7 +169,7 @@ async fn cursor_exhaustion_rejects_insert_without_losing_existing_notes() {
     store_note(&writer, note(1, 42), u64::MAX).await.unwrap();
     writer
         .write("exhaust cursor", |tx| {
-            tx.execute("UPDATE storage_metadata SET next_cursor = ?1", &[&i64::MAX])?;
+            tx.execute("UPDATE sqlite_sequence SET seq = ?1 WHERE name = 'notes'", &[&i64::MAX])?;
             Ok::<_, miden_node_db::DatabaseError>(())
         })
         .await
@@ -359,7 +359,7 @@ async fn cleanup_preserves_notes_at_the_retention_boundary() {
         .write("check retention boundary", |tx| {
             let removed = queries::delete_notes_created_before(tx, 2, CLEANUP_MAX_NOTES)?;
             let retained = queries::select_retained_bytes(tx)?;
-            queries::update_storage_metadata(tx, 4, retained - removed)?;
+            queries::update_storage_metadata(tx, retained - removed)?;
             Ok::<_, StorageError>(())
         })
         .await

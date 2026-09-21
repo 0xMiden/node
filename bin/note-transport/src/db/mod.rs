@@ -95,9 +95,7 @@ pub async fn store_note(
             if queries::note_exists(tx, &note.header.id())? {
                 return Ok(StoreResult::AlreadyPresent);
             }
-            let metadata = queries::select_storage_metadata(tx)?;
-            let seq = metadata.next_cursor;
-            let retained = metadata.retained_bytes;
+            let retained = queries::select_retained_bytes(tx)?;
 
             let header = note.header.to_bytes();
             let note_bytes = header
@@ -109,9 +107,6 @@ pub async fn store_note(
                         "note exceeds the {FETCH_NOTES_MAX_BYTES} byte fetch limit"
                     ))
                 })?;
-            let next_cursor = seq
-                .checked_add(1)
-                .ok_or_else(|| StorageError::Capacity("cursor exhausted".into()))?;
             let note_bytes = i64::try_from(note_bytes)
                 .map_err(|_| StorageError::Capacity("note size overflow".into()))?;
             let now = SystemTime::now()
@@ -121,7 +116,7 @@ pub async fn store_note(
                 .map_err(|err| StorageError::InvalidData(err.to_string()))?;
             let cutoff = i128::from(now) - i128::from(retention_days.get()) * 86_400_000_000;
             let cutoff = i64::try_from(cutoff).unwrap_or(i64::MIN);
-            queries::insert_note(tx, &note, seq, now)?;
+            queries::insert_note(tx, &note, now)?;
             let removed_bytes =
                 queries::delete_notes_created_before(tx, cutoff, CLEANUP_MAX_NOTES)?;
             // Apply capacity to the state that will be committed, including reclaimed space.
@@ -139,7 +134,7 @@ pub async fn store_note(
                     "accepting this note would exceed the {max_retained_bytes} byte limit"
                 )));
             }
-            queries::update_storage_metadata(tx, next_cursor, next_retained)?;
+            queries::update_storage_metadata(tx, next_retained)?;
             Ok(StoreResult::Inserted)
         })
         .await
