@@ -53,6 +53,8 @@ permissions:
   contents: read
 
 env:
+  # Skip the optional build-history export after Bake finishes.
+  DOCKER_BUILD_SUMMARY: "false"
   REGISTRY: ghcr.io
   REGISTRY_PREFIX: ghcr.io/0xmiden
   MIDEN_FAUCET_IMAGE: ghcr.io/0xmiden/miden-faucet:v0.16.0-rc.1
