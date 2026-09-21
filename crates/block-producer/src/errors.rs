@@ -11,6 +11,8 @@ use miden_node_store::{
 };
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
+use miden_protocol::asset::AssetId;
+use miden_protocol::batch::BatchId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::utils::DeserializationError;
 use miden_protocol::errors::{ProposedBatchError, ProposedBlockError, ProvenBatchError};
@@ -76,12 +78,29 @@ pub enum MempoolSubmissionError {
     #[error("the mempool is at capacity")]
     CapacityExceeded,
 
-    #[error("transaction {transaction_id} does not contain a non-zero TX_FEE output note")]
+    #[error("transaction {transaction_id} does not contain a canonical TX_FEE output note")]
     MissingFee { transaction_id: TransactionId },
+
+    #[error("transaction {transaction_id} consumes in-flight TX_FEE notes: {note_ids:?}")]
+    ConsumesInflightFeeNotes {
+        transaction_id: TransactionId,
+        note_ids: Vec<Word>,
+    },
 
     #[error("mempool lock is poisoned")]
     #[grpc(internal)]
     MempoolPoisoned(#[source] MempoolPoisonError),
+
+    #[error(
+        "transaction {transaction_id} must use only the native asset {fee_asset_id} in each TX_FEE output note"
+    )]
+    InvalidFeeAsset {
+        transaction_id: TransactionId,
+        fee_asset_id: AssetId,
+    },
+
+    #[error("user batch proof ID {proof_id} does not match transaction batch ID {batch_id}")]
+    BatchIdMismatch { proof_id: BatchId, batch_id: BatchId },
 }
 
 // Mempool submission conflicts with current state
@@ -132,6 +151,12 @@ pub enum BuildBatchError {
 
     #[error("failed to build proposed transaction batch")]
     ProposeBatchError(#[source] ProposedBatchError),
+
+    #[error("failed to build the batch fee transaction")]
+    BuildBatchFeeTransaction(#[source] anyhow::Error),
+
+    #[error("failed to validate the batch fee transaction")]
+    ValidateBatchFeeTransaction(#[source] anyhow::Error),
 
     #[error("failed to prove proposed transaction batch")]
     ProveBatchError(#[source] ProvenBatchError),
@@ -210,6 +235,8 @@ pub enum StoreError {
     GetBlockInclusionProofsFailed(#[source] GetBlockInclusionProofsError),
     #[error("failed to get block header from store")]
     GetBlockHeaderFailed(#[source] GetBlockHeaderError),
+    #[error("failed to get protocol configuration from store")]
+    GetProtocolConfigFailed(#[source] DatabaseError),
     #[error("failed to get note inclusion proofs from store")]
     GetNoteInclusionProofsFailed(#[source] GetNoteInclusionProofsError),
     #[error("failed to apply block to store")]

@@ -4,15 +4,18 @@ use std::time::Duration;
 
 use miden_node_store::GenesisState;
 use miden_node_store::state::State;
-use miden_node_utils::fee::{test_fee_params, test_protocol_config};
-use miden_protocol::batch::ProvenBatch;
+use miden_node_utils::fee::test_fee_params;
+use miden_protocol::ONE;
+use miden_protocol::account::Account;
+use miden_protocol::asset::AssetId;
 use miden_protocol::block::{BlockHeader, BlockNumber, ValidatorConfig};
+use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::testing::random_secret_key::random_secret_key;
 use url::Url;
 
 use crate::mempool::{Mempool, MempoolConfig};
 use crate::server::MempoolStats;
-use crate::test_utils::batch::TransactionBatchConstructor;
+use crate::test_utils::batch::mock_proven_batch_with_fee_collection;
 use crate::test_utils::{MockAuthenticatedTxBuilder, MockProvenTxBuilder};
 use crate::{
     DEFAULT_BATCH_WORKERS,
@@ -47,7 +50,7 @@ fn mempool_stats_track_uncommitted_work_and_the_canonical_tip() {
     assert_eq!(stats.proposed_batches, 1);
     assert_eq!(stats.proven_batches, 0);
 
-    mempool.commit_batch(Arc::new(ProvenBatch::mocked_from_transactions([
+    mempool.commit_batch(Arc::new(mock_proven_batch_with_fee_collection([
         tx.raw_proven_transaction()
     ])));
     let stats = MempoolStats::from_mempool(&mempool);
@@ -68,11 +71,15 @@ fn mempool_stats_track_uncommitted_work_and_the_canonical_tip() {
     assert_eq!(stats.proven_batches, 0);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn block_producer_starts_with_store_state() {
     let data_directory = tempfile::tempdir().expect("tempdir should be created");
-    bootstrap_store(data_directory.path());
+    let account_file = crate::test_utils::mock_collection_account();
+    let mut deployed_account = account_file.account.clone();
+    deployed_account.set_nonce(ONE).unwrap();
+    bootstrap_store(data_directory.path(), deployed_account);
     let (state, block_writer, proof_writer) = State::for_tests(data_directory.path()).await;
+    let shutdown = miden_node_utils::shutdown::CancellationToken::new();
 
     let block_producer = Sequencer {
         state,
@@ -89,23 +96,33 @@ async fn block_producer_starts_with_store_state() {
         max_concurrent_proofs: DEFAULT_MAX_CONCURRENT_PROOFS,
         mempool_tx_capacity: NonZeroUsize::new(100).unwrap(),
         batch_workers: DEFAULT_BATCH_WORKERS,
+        fee_collector_account: account_file,
+        builder_account_id:
+            miden_protocol::testing::account_id::ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE
+                .try_into()
+                .unwrap(),
     }
-    .spawn(miden_node_utils::shutdown::CancellationToken::new())
+    .start(shutdown.clone())
+    .await
     .unwrap();
 
     let status = block_producer.api().status().await;
     assert_eq!(status.status, "connected");
     assert_eq!(status.chain_tip, BlockNumber::GENESIS);
+    shutdown.cancel();
+    block_producer.wait().await.unwrap();
 }
 
-fn bootstrap_store(path: &std::path::Path) {
+fn bootstrap_store(path: &std::path::Path, account: Account) {
     let signer = random_secret_key();
+    let faucet = crate::test_utils::mock_native_faucet();
+    let config = ProtocolConfig::current(AssetId::new_fungible(faucet.id())).unwrap();
     let genesis_state = GenesisState::new(
-        vec![],
+        vec![account, faucet],
         test_fee_params(),
         1,
         ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
-        test_protocol_config(),
+        config,
     );
     let genesis_block = genesis_state.into_block().expect("genesis block should be created");
 

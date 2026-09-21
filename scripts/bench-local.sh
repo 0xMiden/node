@@ -37,6 +37,8 @@ USE_REMOTE_PROVER="${USE_REMOTE_PROVER:-0}"
 CONCURRENCY="${CONCURRENCY:-8}"
 WAIT_BLOCKS="${WAIT_BLOCKS:-30}"
 RUN_DIR="${RUN_DIR:-./bench-local-run}"
+# Send collected fees to an arbitrary non-existent account ID for now.
+BATCH_BUILDER_WALLET_ACCOUNT_ID="${BATCH_BUILDER_WALLET_ACCOUNT_ID:-0xcc0000000000dd010000ee000000ff}"
 # Insecure, hard-coded local dev validator signing key and its public key (committed at
 # genesis). Generate a fresh pair with `miden-validator keygen`.
 VALIDATOR_SIGNING_KEY_HEX="${VALIDATOR_SIGNING_KEY_HEX:-0101010101010101010101010101010101010101010101010101010101010101}"
@@ -163,6 +165,13 @@ start_bg validator miden-validator start \
     --encryption-key.hex "$ENCRYPTION_KEY_HEX"
 wait_for_port "$VALIDATOR_PORT" validator
 
+say "deploying fee collector"
+miden-node fee-collector create --data-directory "$DATA/node"
+miden-node fee-collector deploy \
+    --data-directory "$DATA/node" \
+    --validator.url "http://127.0.0.1:$VALIDATOR_PORT" \
+    > "$LOGS/deploy-fee-collector.log" 2>&1
+
 # The ntx-builder always needs a transaction prover, so start one regardless of
 # USE_REMOTE_PROVER (which only governs whether create-proofs offloads here too).
 start_bg remote-prover miden-remote-prover \
@@ -177,6 +186,7 @@ start_bg node miden-node sequencer \
     --rpc.listen                                "127.0.0.1:$RPC_PORT" \
     --validator.url                             "http://127.0.0.1:$VALIDATOR_PORT" \
     --ntx-builder.url                           "http://127.0.0.1:$NTX_PORT" \
+    --batch.builder.wallet-account-id           "$BATCH_BUILDER_WALLET_ACCOUNT_ID" \
     --batch.max-txs                             64 \
     --block.max-batches                         16 \
     --block.interval                            2s \

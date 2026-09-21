@@ -275,8 +275,18 @@ where
         self.nodes.contains_key(node)
     }
 
+    pub(super) fn get(&self, node: &N::Id) -> Option<&N> {
+        self.nodes.get(node)
+    }
+
     pub(super) fn get_mut(&mut self, node: &N::Id) -> Option<&mut N> {
         self.nodes.get_mut(node)
+    }
+
+    /// Returns the node that created the specified note.
+    pub(super) fn note_creator(&self, note: &miden_protocol::Word) -> Option<&N> {
+        let creator = self.state.note_creator(note)?;
+        self.nodes.get(&creator)
     }
 }
 

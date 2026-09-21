@@ -102,17 +102,7 @@ impl BlockBuilder {
         }
     }
 
-    /// Run the block building stages and add open-telemetry trace information where applicable.
-    ///
-    /// A failure in any stage will result in that block being rolled back.
-    ///
-    /// ## Telemetry
-    ///
-    /// - Creates a new root span which means each block gets its own complete trace.
-    /// - Important telemetry fields are added to the root span with the `block.xxx` prefix.
-    /// - Each stage has its own child span and are free to add further field data.
-    /// - A failed stage will emit an error event, and both its own span and the root span will be
-    ///   marked as errors.
+    /// Selects and builds a block from the mempool. Rolls back the selection on failure.
     #[miden_instrument(
         parent = None,
         target = COMPONENT,
@@ -122,6 +112,28 @@ impl BlockBuilder {
         use futures::TryFutureExt;
 
         let selected = Self::select_block(mempool)?;
+        let block_num = selected.block_number;
+        async {
+            let block = Self::prepare_block(&self.state, &self.validator, selected).await?;
+            self.commit_block(mempool, block).await
+        }
+        .inspect_err(|err| Span::current().set_error(err))
+        .or_else(|err| async {
+            Self::rollback_block(mempool, block_num)?;
+            Err(err)
+        })
+        .await
+    }
+
+    /// Builds a block from the selected batches and obtains validator signatures.
+    #[miden_instrument(target = COMPONENT, name = "block_builder.prepare_block", err)]
+    pub(crate) async fn prepare_block(
+        state: &State,
+        validator: &BlockProducerValidatorClient,
+        selected: SelectedBlock,
+    ) -> Result<BlockCommit, BuildBlockError> {
+        use futures::TryFutureExt;
+
         let telemetry = selected.telemetry();
         miden_span_record!(
             block.number = telemetry.block_number,
@@ -130,44 +142,28 @@ impl BlockBuilder {
             block.transaction.ids = telemetry.transaction_ids,
             block.transaction.count = telemetry.transactions_count
         );
-        let block_num = selected.block_number;
-
-        // The stages run inside one async block so that its borrows are sequential: the combinator
-        // chain's shared borrows of `self` end at its `.await`, after which `commit_block` may take
-        // `&mut self` (the block-write capability). The `?` exits only this block, so the error
-        // handling below still sees failures from every stage.
-        async {
-            let block_commit = self
-                .get_block_inputs(selected)
-                .inspect_ok(|inputs| {
-                    let telemetry = inputs.telemetry();
-                    miden_span_record!(
-                        block.updated_account.count = telemetry.updated_accounts_count,
-                        block.erased_note_proof.count = telemetry.erased_note_proofs_count
-                    );
-                })
-                .and_then(|inputs| self.propose_block(inputs))
-                .inspect_ok(|proposed_block| {
-                    let telemetry = proposed_block_telemetry(&proposed_block.proposed_block);
-                    miden_span_record!(
-                        block.nullifier.count = telemetry.nullifiers_count,
-                        block.output_note.count = telemetry.output_notes_count,
-                        block.batch.output_note.count = telemetry.batch_output_notes_count,
-                        block.erased_note.count = telemetry.erased_notes_count
-                    );
-                })
-                .and_then(|proposed_block| self.build_and_validate_block(proposed_block))
-                .await?;
-
-            self.commit_block(mempool, block_commit).await
-        }
-        // Handle errors by propagating the error to the root span and rolling back the block.
-        .inspect_err(|err| Span::current().set_error(err))
-        .or_else(|err| async {
-            Self::rollback_block(mempool, block_num)?;
-            Err(err)
-        })
-        .await
+        Self::get_block_inputs(state, selected)
+            .inspect_ok(|inputs| {
+                let telemetry = inputs.telemetry();
+                miden_span_record!(
+                    block.updated_account.count = telemetry.updated_accounts_count,
+                    block.erased_note_proof.count = telemetry.erased_note_proofs_count
+                );
+            })
+            .and_then(Self::propose_block)
+            .inspect_ok(|proposed_block| {
+                let telemetry = proposed_block_telemetry(&proposed_block.proposed_block);
+                miden_span_record!(
+                    block.nullifier.count = telemetry.nullifiers_count,
+                    block.output_note.count = telemetry.output_notes_count,
+                    block.batch.output_note.count = telemetry.batch_output_notes_count,
+                    block.erased_note.count = telemetry.erased_notes_count
+                );
+            })
+            .and_then(|proposed_block| {
+                Self::build_and_validate_block(state, validator, proposed_block)
+            })
+            .await
     }
 
     #[miden_instrument(
@@ -200,7 +196,7 @@ impl BlockBuilder {
         err,
     )]
     async fn get_block_inputs(
-        &self,
+        state: &State,
         selected_block: SelectedBlock,
     ) -> Result<BlockBatchesAndInputs, BuildBlockError> {
         let SelectedBlock { block_number, batches } = selected_block;
@@ -231,7 +227,7 @@ impl BlockBuilder {
         let created_nullifiers = created_nullifiers_iter.collect::<Vec<_>>();
         let mut block_numbers: BTreeSet<_> = block_references_iter.collect();
         let note_ids = unauthenticated_notes_iter.collect();
-        let view = self.state.view();
+        let view = state.view();
         let reference_block = *view.tip();
 
         // The reference block must be the chain tip. Its account and nullifier roots must match the
@@ -289,7 +285,6 @@ impl BlockBuilder {
         err,
     )]
     async fn propose_block(
-        &self,
         batches_inputs: BlockBatchesAndInputs,
     ) -> Result<ProposedBlockAndInputs, BuildBlockError> {
         let BlockBatchesAndInputs { batches, inputs } = batches_inputs;
@@ -308,7 +303,8 @@ impl BlockBuilder {
         err,
     )]
     async fn build_and_validate_block(
-        &self,
+        state: &State,
+        validator: &BlockProducerValidatorClient,
         proposal: ProposedBlockAndInputs,
     ) -> Result<BlockCommit, BuildBlockError> {
         let ProposedBlockAndInputs { proposed_block, block_inputs } = proposal;
@@ -324,8 +320,7 @@ impl BlockBuilder {
             .map_err(|err| BuildBlockError::other(format!("task join error: {err}")))?
             .map_err(BuildBlockError::ProposeBlockFailed)?;
         let commitment = header.protocol_config_commitment();
-        let protocol_config = self
-            .state
+        let protocol_config = state
             .view()
             .get_protocol_config(commitment)
             .await
@@ -333,8 +328,7 @@ impl BlockBuilder {
             .ok_or_else(|| {
                 BuildBlockError::other(format!("protocol config {commitment} is missing"))
             })?;
-        let responses = self
-            .validator
+        let responses = validator
             .sign_block(&proposed_block, &block_inputs, &protocol_config)
             .await
             .map_err(|err| BuildBlockError::ValidateBlockFailed(err.into()))?;
@@ -495,10 +489,10 @@ struct ProposedBlockAndInputs {
 }
 
 /// Data needed to commit a signed block and persist its proving inputs.
-struct BlockCommit {
-    ordered_batches: OrderedBatches,
-    block_inputs: BlockInputs,
-    signed_block: SignedBlock,
+pub(crate) struct BlockCommit {
+    pub(crate) ordered_batches: OrderedBatches,
+    pub(crate) block_inputs: BlockInputs,
+    pub(crate) signed_block: SignedBlock,
 }
 
 struct BlockInputsTelemetry {

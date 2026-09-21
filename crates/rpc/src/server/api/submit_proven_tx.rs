@@ -15,7 +15,7 @@ use miden_protocol::transaction::{
 };
 use tonic::{Request, Status};
 
-use super::{COMPONENT, RpcBackend, RpcService, submit_tx_to_validators};
+use super::{COMPONENT, RpcBackend, RpcService, load_protocol_config, submit_tx_to_validators};
 use crate::LOG_TARGET;
 
 #[tonic::async_trait]
@@ -76,7 +76,13 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
         let reference_header = self
             .verify_reference_commitment(tx.ref_block_num(), tx.ref_block_commitment())
             .await?;
-        ensure_transaction_has_fee(&tx, reference_header.fee_parameters()).map_err(Status::from)?;
+        let protocol_config = load_protocol_config(&self.state.view(), &reference_header).await?;
+        ensure_transaction_has_fee(
+            &tx,
+            protocol_config.fee_asset_id(),
+            reference_header.fee_parameters(),
+        )
+        .map_err(Status::from)?;
 
         // Rebuild a new ProvenTransaction with decorators removed from output notes
         let account_update = TxAccountUpdate::new(
