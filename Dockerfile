@@ -119,7 +119,7 @@ RUN --mount=type=cache,sharing=locked,id=cargo-registry-${TARGETARCH}${BUILD_CAC
         --bin miden-remote-prover \
         --bin miden-benchmark && \
     mkdir -p /app/bin && \
-    cp /app/target/release/miden-node \
+    mv /app/target/release/miden-node \
         /app/target/release/miden-validator \
         /app/target/release/miden-note-transport \
         /app/target/release/miden-ntx-builder \
