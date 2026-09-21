@@ -1,7 +1,7 @@
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 
 use miden_node_db::sqlite::{DbReader, DbWriter};
-use miden_node_proto::errors::conversion_error_to_status;
+use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::note_transport::{
     FetchNotesRequest,
     FetchNotesResponse,
@@ -134,23 +134,23 @@ impl SendNote for Server {
     fn decode(request: SendNoteRequest) -> tonic::Result<Self::Input> {
         use miden_node_proto::errors::ConversionResultExt;
 
-        let request = request.decode_fields().map_err(conversion_error_to_status)?.note;
+        let request = request.decode_fields().map_err(ConversionError::into_status)?.note;
         let header = request
             .header
             .verify()
             .context("note.header")
-            .map_err(conversion_error_to_status)?;
+            .map_err(ConversionError::into_status)?;
         let details = request
             .details
             .verify()
             .context("note.details")
-            .map_err(conversion_error_to_status)?;
+            .map_err(ConversionError::into_status)?;
         let after_block_num = request
             .after_block_num
             .map(Verify::verify)
             .transpose()
             .context("note.after_block_num")
-            .map_err(conversion_error_to_status)?;
+            .map_err(ConversionError::into_status)?;
         if details.commitment() != header.details_commitment() {
             return Err(tonic::Status::invalid_argument("note details do not match the header"));
         }
