@@ -1,8 +1,29 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use miden_protocol::account::{AccountId, AccountIdVersion, AccountType, AssetCallbackFlag};
+use miden_protocol::account::auth::AuthSecretKey;
+use miden_protocol::account::{
+    AccountBuilder,
+    AccountFile,
+    AccountId,
+    AccountIdVersion,
+    AccountType,
+    AssetCallbackFlag,
+};
 use miden_protocol::{Hasher, Word};
+use miden_standards::account::auth::AuthTxFeeCollector;
+use miden_standards::account::wallets::BasicWallet;
+
+pub fn mock_collection_account() -> AccountFile {
+    let key = AuthSecretKey::new_ecdsa_k256_keccak();
+    let account = AccountBuilder::new(rand::random())
+        .account_type(AccountType::Public)
+        .with_component(AuthTxFeeCollector::from_public_key(key.public_key()))
+        .with_component(BasicWallet)
+        .build()
+        .unwrap();
+    AccountFile::new(account, vec![key])
+}
 
 pub static MOCK_ACCOUNTS: LazyLock<std::sync::Mutex<HashMap<u32, (AccountId, Word)>>> =
     LazyLock::new(Default::default);

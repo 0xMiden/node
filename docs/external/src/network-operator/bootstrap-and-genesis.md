@@ -25,6 +25,8 @@ which provides an easy method to obtain this data. This is directly supported by
 `--network testnet` or `--network devnet`. Bootstrap commands also support passing a file directly to cover custom
 networks, or if the official URLs are not trusted.
 
+Before starting the sequencer, create and deploy its [fee collector account](./sequencer.md#fee-collection).
+
 ## Bootstrap Flow
 
 <Tabs groupId="network-operator-genesis-source" defaultValue="official">
