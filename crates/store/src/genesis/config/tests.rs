@@ -113,7 +113,7 @@ async fn genesis_accounts_have_nonce_one() -> TestResult {
     let account_files = secrets.as_account_files(&state).collect::<Result<Vec<_>, _>>()?;
     assert_eq!(account_files.len(), 2);
     for AccountFileWithName { account_file, name } in account_files {
-        assert_eq!(account_file.account.nonce(), ONE, "{name} should be deployed at genesis");
+        assert_eq!(account_file.account().nonce(), ONE, "{name} should be deployed at genesis");
     }
 
     let _block = state.into_block()?;
@@ -122,8 +122,9 @@ async fn genesis_accounts_have_nonce_one() -> TestResult {
 
 #[test]
 fn parsing_account_from_file() -> TestResult {
+    use miden_objects::account_file::AccountFile;
+    use miden_protocol::account::AccountType;
     use miden_protocol::account::auth::AuthScheme;
-    use miden_protocol::account::{AccountFile, AccountType};
     use miden_standards::account::auth::Approver;
     use miden_standards::account::wallets::create_basic_wallet;
     use tempfile::tempdir;
@@ -257,8 +258,9 @@ fn generated_native_faucet_is_a_network_account_owned_by_an_operator() -> TestRe
 
 #[test]
 fn parsing_native_faucet_from_file() -> TestResult {
+    use miden_objects::account_file::AccountFile;
     use miden_protocol::account::auth::AuthScheme;
-    use miden_protocol::account::{AccountBuilder, AccountFile, AccountType};
+    use miden_protocol::account::{AccountBuilder, AccountType};
     use miden_protocol::asset::AssetAmount;
     use miden_standards::account::auth::{Approver, AuthSingleSig};
     use miden_standards::account::policies::{BurnPolicy, MintPolicy, TokenPolicyManager};
@@ -329,8 +331,9 @@ verification_base_fee = 0
 
 #[test]
 fn native_faucet_from_file_must_be_faucet_type() -> TestResult {
+    use miden_objects::account_file::AccountFile;
+    use miden_protocol::account::AccountType;
     use miden_protocol::account::auth::AuthScheme;
-    use miden_protocol::account::{AccountFile, AccountType};
     use miden_standards::account::auth::Approver;
     use miden_standards::account::wallets::create_basic_wallet;
     use tempfile::tempdir;

@@ -7,7 +7,8 @@ use miden_node_proto::domain::account::AccountRequest;
 use miden_node_store::state::{BlockWriter, ProofWriter, State};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{info, miden_instrument, miden_span_record};
-use miden_protocol::account::{Account, AccountFile};
+use miden_objects::account_file::AccountFile;
+use miden_protocol::account::Account;
 use miden_protocol::batch::ProposedBatch;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::{MIN_PROOF_SECURITY_LEVEL, ONE};
@@ -40,25 +41,28 @@ pub async fn deploy_fee_collector(
     validator_urls: Vec<Url>,
     validator_timeout: Duration,
 ) -> anyhow::Result<()> {
-    miden_span_record!(account.id = account_file.account.id());
+    miden_span_record!(account.id = account_file.account().id());
     anyhow::ensure!(
-        account_file.account.is_new(),
+        account_file.account().is_new(),
         "fee collector deployment requires a new account",
     );
     anyhow::ensure!(
         state.proven_tip() == state.committed_tip(),
         "sync all committed block proofs before deploying a fee collector",
     );
-    let mut deployed_account = account_file.account.clone();
+    let mut deployed_account = account_file.account().clone();
     deployed_account.set_nonce(ONE)?;
     if collector_is_deployed(state, &deployed_account).await? {
         info!(target: LOG_TARGET, "Fee collector is already deployed");
         return Ok(());
     }
     // Deployment creates no output note, so the recipient is not used.
-    let builder =
-        FeeCollectorTransactionBuilder::new(account_file.account.id(), account_file, &state.view())
-            .await?;
+    let builder = FeeCollectorTransactionBuilder::new(
+        account_file.account().id(),
+        account_file,
+        &state.view(),
+    )
+    .await?;
     let validator = BlockProducerValidatorClient::new(validator_urls, validator_timeout)?;
 
     let (executed, header, blockchain, genesis) = state
@@ -130,14 +134,15 @@ pub async fn deploy_fee_collector(
 /// Checks the collector's committed state and loads its deployed nonce.
 pub(crate) async fn load_deployed_collector(
     state: &State,
-    account_file: &mut AccountFile,
-) -> anyhow::Result<()> {
-    account_file.account.set_nonce(ONE)?;
+    account_file: AccountFile,
+) -> anyhow::Result<AccountFile> {
+    let (mut account, auth_secret_keys) = account_file.into_parts();
+    account.set_nonce(ONE)?;
     anyhow::ensure!(
-        collector_is_deployed(state, &account_file.account).await?,
+        collector_is_deployed(state, &account).await?,
         "fee collector is not deployed; use miden-node fee-collector deploy",
     );
-    Ok(())
+    Ok(AccountFile::new(account, auth_secret_keys))
 }
 
 async fn collector_is_deployed(state: &State, account: &Account) -> anyhow::Result<bool> {

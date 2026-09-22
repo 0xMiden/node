@@ -54,9 +54,9 @@ async fn collector_deployment_proves_the_block_and_supports_a_new_collector() {
     let (url, server) = validator.clone().serve(shutdown.clone()).await;
     let validator_urls = vec![url];
     let account_file = mock_collection_account();
-    let mut account = account_file.clone();
-    account.account.set_nonce(ONE).unwrap();
-    assert!(!collector_is_deployed(&state, &account.account).await.unwrap());
+    let mut account = account_file.account().clone();
+    account.set_nonce(ONE).unwrap();
+    assert!(!collector_is_deployed(&state, &account).await.unwrap());
 
     assert!(
         Box::pin(deploy_fee_collector(
@@ -87,9 +87,9 @@ async fn collector_deployment_proves_the_block_and_supports_a_new_collector() {
     assert_eq!(state.committed_tip(), BlockNumber::GENESIS.child());
     assert_eq!(state.proven_tip(), state.committed_tip());
     assert!(state.load_proof(state.proven_tip()).await.unwrap().is_some());
-    assert!(collector_is_deployed(&state, &account.account).await.unwrap());
-    assert_eq!(account.account.nonce(), ONE);
-    assert!(account.account.vault().is_empty());
+    assert!(collector_is_deployed(&state, &account).await.unwrap());
+    assert_eq!(account.nonce(), ONE);
+    assert!(account.vault().is_empty());
     assert_eq!(validator.transactions.lock().unwrap().len(), 1);
     validator.reject_transaction.store(true, Ordering::SeqCst);
     Box::pin(deploy_fee_collector(
@@ -106,8 +106,8 @@ async fn collector_deployment_proves_the_block_and_supports_a_new_collector() {
     assert_eq!(state.proven_tip(), state.committed_tip());
     assert_eq!(validator.transactions.lock().unwrap().len(), 1);
     validator.reject_transaction.store(false, Ordering::SeqCst);
-    let mut replacement = mock_collection_account();
-    assert_ne!(replacement.account.id(), account.account.id());
+    let replacement = mock_collection_account();
+    assert_ne!(replacement.account().id(), account.id());
     Box::pin(deploy_fee_collector(
         &state,
         &mut writer,
@@ -121,9 +121,10 @@ async fn collector_deployment_proves_the_block_and_supports_a_new_collector() {
     assert_eq!(state.committed_tip(), BlockNumber::GENESIS.child().child());
     assert_eq!(state.proven_tip(), state.committed_tip());
     assert!(state.load_proof(state.proven_tip()).await.unwrap().is_some());
-    replacement.account.set_nonce(ONE).unwrap();
-    assert!(collector_is_deployed(&state, &replacement.account).await.unwrap());
-    assert!(collector_is_deployed(&state, &account.account).await.unwrap());
+    let (mut replacement, _) = replacement.into_parts();
+    replacement.set_nonce(ONE).unwrap();
+    assert!(collector_is_deployed(&state, &replacement).await.unwrap());
+    assert!(collector_is_deployed(&state, &account).await.unwrap());
     assert_eq!(validator.transactions.lock().unwrap().len(), 2);
 
     shutdown.cancel();
