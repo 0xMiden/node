@@ -1,5 +1,5 @@
-use miden_node_block_producer::ensure_transaction_has_fee;
 use miden_node_block_producer::store::get_tx_inputs;
+use miden_node_block_producer::{MempoolSubmissionError, ensure_transaction_has_fee};
 use miden_node_proto::clients::{SequencerClient, ValidatorClient};
 use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
 use miden_node_proto::{DecodeMessageExt, generated as proto};
@@ -195,9 +195,8 @@ impl RpcService {
         })?;
 
         let authenticated_tx =
-            AuthenticatedTransaction::new_unchecked(rebuilt_tx.into(), tx_inputs).map_err(
-                |err| Status::internal(err.as_report_context("failed to authenticate transaction")),
-            )?;
+            AuthenticatedTransaction::new_unchecked(rebuilt_tx.into(), tx_inputs)
+                .map_err(|err| MempoolSubmissionError::AuthenticationFailed(err.into()))?;
 
         // Submit to every validator.
         submit_tx_to_validators(validators, &request).await?;

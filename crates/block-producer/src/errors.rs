@@ -43,10 +43,6 @@ pub enum MempoolSubmissionError {
     #[grpc(internal)]
     StoreStateReadFailed(#[source] StoreError),
 
-    #[error("failed to authenticate transaction")]
-    #[grpc(internal)]
-    AuthenticationFailed(#[source] StateConflict),
-
     #[error("transaction input data from block {input_block} exceeds the chain tip {chain_tip}")]
     #[grpc(internal)]
     FutureInputs {
@@ -100,6 +96,10 @@ pub enum MempoolSubmissionError {
 
     #[error("user batch proof ID {proof_id} does not match transaction batch ID {batch_id}")]
     BatchIdMismatch { proof_id: BatchId, batch_id: BatchId },
+
+    // Keep new client errors at the end to preserve the gRPC error codes.
+    #[error("failed to authenticate transaction")]
+    AuthenticationFailed(#[source] StateConflict),
 }
 
 // Mempool submission conflicts with current state
@@ -237,4 +237,55 @@ pub enum StoreError {
     GetNoteInclusionProofsFailed(#[source] GetNoteInclusionProofsError),
     #[error("failed to apply block to store")]
     ApplyBlockFailed(#[source] ApplyBlockWithProvingInputsError),
+}
+
+#[cfg(test)]
+mod tests {
+    use tonic::{Code, Status};
+
+    use super::*;
+
+    #[test]
+    fn authentication_failure_returns_client_error_with_cause() {
+        let error = MempoolSubmissionError::AuthenticationFailed(
+            StateConflict::NullifiersAlreadyExist(vec![Nullifier::from_raw(Word::default())]),
+        );
+        let status = Status::from(error);
+
+        assert_eq!(status.code(), Code::InvalidArgument);
+        assert_eq!(status.details(), &[8]);
+        assert!(status.message().contains("failed to authenticate transaction"));
+        assert!(status.message().contains("nullifiers already exist"));
+    }
+
+    #[test]
+    fn submission_error_codes_remain_stable() {
+        for (error, code) in [
+            (MempoolSubmissionError::Expired { expired_at: 1.into(), limit: 2.into() }, 1),
+            (
+                MempoolSubmissionError::StateConflict(StateConflict::NullifiersAlreadyExist(vec![
+                    Nullifier::from_raw(Word::default()),
+                ])),
+                2,
+            ),
+            (MempoolSubmissionError::CapacityExceeded, 3),
+        ] {
+            let status = Status::from(error);
+            assert_eq!(status.code(), Code::InvalidArgument);
+            assert_eq!(status.details(), &[code]);
+        }
+    }
+
+    #[test]
+    fn internal_submission_failure_hides_cause() {
+        let status = Status::from(MempoolSubmissionError::StoreStateReadFailed(
+            StoreError::GetTransactionInputsFailed(DatabaseError::DataCorrupted(
+                "private database data".into(),
+            )),
+        ));
+
+        assert_eq!(status.code(), Code::Internal);
+        assert_eq!(status.details(), &[0]);
+        assert_eq!(status.message(), "Internal error");
+    }
 }
