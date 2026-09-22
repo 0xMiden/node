@@ -14,9 +14,15 @@ tracks each submitted transaction until its commitment or expiration is known. N
 while the worker processes one batch.
 
 The account is refilled by sending it a public pay-to-ID note that holds the native asset. The service scans for those
-notes and can consume them in the same transaction that creates queued funding notes. The deposits can fund the payouts
-and the transaction fee. After any submission attempt, the worker waits for the transaction to commit or expire before
-it processes another transaction. Submission errors do not cause an immediate retry.
+notes and can consume one deposit in the same transaction that creates queued funding notes. The deposit can fund the
+payouts and the transaction fee. A node rejection with state-conflict error byte `2` discards only the selected deposit.
+The payouts remain queued for retry. Accepted transactions and uncertain transport failures are monitored until
+commitment or expiration. Other node rejections and expiration retain the notes for retry.
+
+At startup, the worker discovers deposits from genesis through the recorded chain tip before it processes requests. It
+checks the recovered pool against the nullifier history to exclude spent notes. Periodic scans then continue from that
+tip without nullifier checks. The node rejects transactions that try to consume spent deposits. A restart recovers
+unspent deposits, including those sent while the service was stopped. Run only one writer for the funding account.
 
 The service reads the chain's protocol configuration from the node at startup, together with the genesis block header.
 

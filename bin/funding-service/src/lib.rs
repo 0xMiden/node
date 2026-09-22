@@ -65,7 +65,7 @@ pub const MAX_NOTES_PER_TX: NonZeroUsize = NonZeroUsize::new(100).expect("litera
 pub const DEFAULT_TX_EXPIRATION_DELTA: NonZeroU16 =
     NonZeroU16::new(50).expect("literal is non-zero");
 
-/// Default interval at which the worker runs a cycle while it has work.
+/// Default interval for processing pending notes and checking submitted transactions.
 pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Default timeout of a request to the node's RPC API.

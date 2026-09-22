@@ -334,15 +334,14 @@ mod tests {
 
     /// Deposits fund the output notes and the fee in one transaction from an empty account.
     #[tokio::test]
-    async fn one_transaction_consumes_deposits_and_creates_notes() -> Result<()> {
+    async fn one_transaction_consumes_one_deposit_and_creates_notes() -> Result<()> {
         let fixture = Fixture::new(0, TEST_BASE_FEE)?;
         let mut rng = RandomCoin::new(Word::from([13u32; 4]));
 
         let targets = targets(&fixture)?;
         let requested: u64 = targets.iter().map(|(_, amount)| amount).sum();
         let notes = funding_notes(&fixture, &targets, &mut rng)?;
-        let deposits =
-            vec![deposit_note(&fixture, 400_000, 31), deposit_note(&fixture, 600_000, 32)];
+        let deposits = vec![deposit_note(&fixture, 1_000_000, 31)];
         let collected: u64 = 1_000_000;
 
         let inputs = execution_inputs(&fixture, EXPIRATION).await?;

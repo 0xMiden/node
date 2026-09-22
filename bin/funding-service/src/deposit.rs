@@ -1,15 +1,13 @@
 //! Discovery of the deposits sent to the funding account.
 //!
 //! An operator refills the funding account by sending it a public pay-to-ID note which holds the
-//! native asset. This module finds those notes. The worker consumes the deposits and creates
+//! native asset. This module finds those notes. The worker can consume one deposit and create
 //! queued funding notes in the same transaction.
-
-use std::collections::HashSet;
 
 use anyhow::Result;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::{Note, NoteTag, NoteType};
+use miden_protocol::note::{Note, NoteType};
 use miden_standards::note::{P2idNote, P2idNoteStorage};
 
 use crate::node::RpcNodeClient;
@@ -28,11 +26,7 @@ pub struct DepositScanner {
 }
 
 impl DepositScanner {
-    /// Creates a scanner which starts at the genesis block.
-    ///
-    /// The scanner keeps no state on disk, so a restart scans the chain again from genesis. A
-    /// deposit which is already spent is dropped by the scan, so a rescan finds only the deposits
-    /// which are still there.
+    /// Creates a scanner that starts at genesis.
     pub fn new(funder: AccountId, fee_faucet_id: AccountId) -> Self {
         Self {
             funder,
@@ -41,35 +35,23 @@ impl DepositScanner {
         }
     }
 
-    /// Returns unspent deposits and advances the cursor after all node requests succeed.
-    pub async fn scan(&mut self, node: &RpcNodeClient) -> Result<Vec<Note>> {
-        let tag = NoteTag::with_account_target(self.funder);
-        let synced = node.sync_note_ids(tag, self.next_block).await?;
-        let mut deposits = Vec::new();
+    /// Returns true after all note pages through `tip` have been checked.
+    pub fn is_caught_up(&self, tip: BlockNumber) -> bool {
+        self.next_block > tip
+    }
 
-        if !synced.note_ids.is_empty() {
-            let mut seen = HashSet::new();
-            let candidates: Vec<Note> = node
-                .get_public_notes_by_id(&synced.note_ids)
-                .await?
-                .into_iter()
-                .filter(|note| is_deposit(note, self.funder, self.fee_faucet_id))
-                .filter(|note| seen.insert(note.nullifier()))
-                .collect();
-
-            if !candidates.is_empty() {
-                let nullifiers: Vec<_> = candidates.iter().map(Note::nullifier).collect();
-                // A repeated note can have a nullifier spent before this scan's range.
-                let spent = node.sync_nullifiers(&nullifiers, BlockNumber::GENESIS).await?;
-                deposits = candidates
-                    .into_iter()
-                    .filter(|note| !spent.contains(&note.nullifier()))
-                    .collect();
-            }
+    /// Returns one page of deposits. Advances the cursor after all requests succeed.
+    pub async fn scan(&mut self, node: &RpcNodeClient, tip: BlockNumber) -> Result<Vec<Note>> {
+        if self.is_caught_up(tip) {
+            return Ok(Vec::new());
         }
 
+        let synced = node
+            .sync_deposits(self.funder, self.fee_faucet_id, self.next_block, tip)
+            .await?;
+
         self.next_block = synced.last_checked_block + 1;
-        Ok(deposits)
+        Ok(synced.deposits)
     }
 }
 

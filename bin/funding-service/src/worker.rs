@@ -10,6 +10,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use miden_node_tracing::{info, warn};
 use miden_node_utils::shutdown::CancellationToken;
+use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountId};
 use miden_protocol::asset::AssetId;
 use miden_protocol::block::{BlockHeader, BlockNumber};
@@ -18,30 +19,26 @@ use miden_protocol::note::{Note, Nullifier};
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{PartialBlockchain, TransactionId};
 use miden_protocol::utils::serde::Serializable;
-use miden_protocol::{Felt, Word};
 use tokio::sync::mpsc;
-use tokio::time::MissedTickBehavior;
+use tokio::time::{Instant, MissedTickBehavior};
 
 use crate::LOG_TARGET;
 use crate::account::FunderKey;
 use crate::deposit::{DepositScanner, native_amount};
-use crate::node::RpcNodeClient;
+use crate::node::{RpcNodeClient, SubmissionOutcome, TransactionStatus};
 use crate::prover::Prover;
 use crate::status::StatusSnapshot;
 use crate::tx::{self, ExecutionInputs};
 
+#[cfg(test)]
+mod recovery_tests;
+
 // CONSTANTS
 // ================================================================================================
-
-/// How long the worker waits for more notes after the first one arrives.
-const BATCH_LINGER: Duration = Duration::from_millis(250);
 
 /// Upper bound on the fee formula's cycle multiplier: the kernel charges `verification_base_fee *
 /// (ilog2(total_cycles) + 1)` with cycles capped at `2^29`.
 pub const MAX_FEE_VERIFICATION_CYCLES: u64 = 30;
-
-/// The largest number of deposits one transaction consumes.
-const MAX_DEPOSITS_PER_TX: usize = 16;
 
 // CONFIGURATION
 // ================================================================================================
@@ -53,7 +50,7 @@ pub struct WorkerConfig {
     pub max_notes_per_tx: NonZeroUsize,
     /// How many blocks after its reference block a funding transaction expires.
     pub expiration_delta: NonZeroU16,
-    /// How often the worker runs a cycle while it has work.
+    /// How often the worker processes pending notes or checks a submitted transaction.
     pub tick_interval: Duration,
     /// How long the worker waits between two scans for deposits.
     pub deposit_scan_interval: Duration,
@@ -78,117 +75,134 @@ pub struct FunderSetup {
     pub status: StatusSnapshot,
 }
 
-/// The chain state one cycle is built against, read at one reference block.
-struct CycleInputs {
+/// The funding account and chain state at one reference block.
+struct ChainState {
     reference_header: BlockHeader,
     blockchain: PartialBlockchain,
     funder: Account,
 }
 
-/// The transaction which is in flight.
-struct Pending {
-    transaction_id: TransactionId,
-    /// The nonce of the funding account when the transaction was built. The account has one writer,
-    /// so a higher nonce on chain means this transaction committed.
-    nonce: Felt,
-    /// The block at which the transaction expires.
-    expiration_block: BlockNumber,
-    /// The deposits to remove from the pool after commitment.
-    deposit_nullifiers: Vec<Nullifier>,
-    /// The number of queued notes to remove after commitment. The queued prefix stays unchanged
-    /// while this transaction is pending.
-    note_count: usize,
-}
-
-/// Combines funding requests and deposits in one transaction.
+/// Combines at most one deposit with queued funding requests.
 pub struct Funder {
     node: RpcNodeClient,
     prover: Prover,
     setup: FunderSetup,
     rng: RandomCoin,
     account_checked: bool,
-    scanner: DepositScanner,
     /// The active batch contains at most `max_notes_per_tx` requests.
     queued: VecDeque<Note>,
-    /// Each nullifier can enter the deposit pool only once.
+    /// The deposit pool contains one note per nullifier.
     deposits: HashMap<Nullifier, Note>,
-    pending: Option<Pending>,
 }
 
 impl Funder {
     /// Creates a worker for the given funding account.
     pub fn new(node: RpcNodeClient, prover: Prover, setup: FunderSetup) -> Self {
-        let scanner = DepositScanner::new(setup.key.account_id(), setup.fee_faucet_id);
-
         Self {
             node,
             prover,
             setup,
             rng: RandomCoin::new(Word::from(rand::random::<[u32; 4]>())),
             account_checked: false,
-            scanner,
             queued: VecDeque::new(),
             deposits: HashMap::new(),
-            pending: None,
         }
     }
 
     /// Runs the worker until the request channel closes or the service shuts down.
     pub async fn run(
-        mut self,
-        mut requests: mpsc::Receiver<Note>,
+        self,
+        requests: mpsc::Receiver<Note>,
         shutdown: CancellationToken,
     ) -> Result<()> {
-        let mut poll = tokio::time::interval(self.setup.config.tick_interval);
-        poll.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        let mut scan = tokio::time::interval(self.setup.config.deposit_scan_interval);
-        scan.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        shutdown.run_until_cancelled(self.run_loop(requests)).await.unwrap_or(Ok(()))
+    }
+
+    /// Discovers deposits and completes one transaction at a time.
+    async fn run_loop(mut self, mut requests: mpsc::Receiver<Note>) -> Result<()> {
+        let tip = self
+            .node
+            .committed_tip()
+            .await
+            .context("failed to read the startup chain tip")?;
+        let mut scanner = DepositScanner::new(self.account_id(), self.setup.fee_faucet_id);
+        while let Err(err) = self.sync_initial_deposits(&mut scanner, tip).await {
+            warn!(&err, target: LOG_TARGET, "Failed to discover historical deposits; retrying");
+            tokio::time::sleep(self.setup.config.tick_interval).await;
+        }
+        let mut next_scan = Instant::now();
+        let mut tick = tokio::time::interval(self.setup.config.tick_interval);
+        tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
         loop {
-            tokio::select! {
-                () = shutdown.cancelled() => break,
-                _ = scan.tick(), if self.pending.is_none() => {
-                    if let Err(err) = self.scan_deposits().await {
-                        warn!(&err, target: LOG_TARGET, "Failed to scan for deposits");
-                    }
-                },
-                _ = poll.tick(), if self.pending.is_some() || !self.queued.is_empty() => {},
-                note = requests.recv(), if self.pending.is_none() && self.queued.is_empty() => {
-                    let Some(note) = note else { break };
-                    self.queued.push_back(note);
+            tick.tick().await;
 
-                    tokio::select! {
-                        () = shutdown.cancelled() => break,
-                        () = tokio::time::sleep(BATCH_LINGER) => {},
-                    }
-                },
-            };
+            if Instant::now() >= next_scan {
+                let scan = async {
+                    let tip = self.node.committed_tip().await?;
+                    self.discover_deposits(&mut scanner, tip).await
+                }
+                .await;
+                if let Err(err) = scan {
+                    warn!(&err, target: LOG_TARGET, "Failed to scan for deposits");
+                }
+                next_scan = Instant::now() + self.setup.config.deposit_scan_interval;
+            }
 
-            if self.pending.is_none() {
-                while self.queued.len() < self.setup.config.max_notes_per_tx.get() {
-                    match requests.try_recv() {
-                        Ok(note) => self.queued.push_back(note),
-                        Err(_) => break,
-                    }
+            while self.queued.len() < self.setup.config.max_notes_per_tx.get() {
+                match requests.try_recv() {
+                    Ok(note) => self.queued.push_back(note),
+                    Err(mpsc::error::TryRecvError::Empty) => break,
+                    Err(mpsc::error::TryRecvError::Disconnected) => {
+                        if self.queued.is_empty() {
+                            return Ok(());
+                        }
+                        break;
+                    },
                 }
             }
 
             // Transaction execution requires a large future.
-            if let Err(err) = Box::pin(self.cycle()).await {
-                warn!(&err, target: LOG_TARGET, "A funding cycle failed");
+            if let Err(err) = Box::pin(self.process_pending_notes()).await {
+                warn!(&err, target: LOG_TARGET, "Failed to process pending notes");
             }
         }
+    }
 
+    /// Recovers unspent deposits through the startup chain tip.
+    async fn sync_initial_deposits(
+        &mut self,
+        scanner: &mut DepositScanner,
+        tip: BlockNumber,
+    ) -> Result<()> {
+        self.discover_deposits(scanner, tip).await?;
+        let nullifiers: Vec<_> = self.deposits.keys().copied().collect();
+        for nullifier in self.node.spent_nullifiers(&nullifiers, tip).await? {
+            self.deposits.remove(&nullifier);
+        }
         Ok(())
     }
 
-    /// Resolves the pending transaction or prepares one batch of work.
-    async fn cycle(&mut self) -> Result<()> {
-        if self.pending.is_none() && self.queued.is_empty() && self.deposits.is_empty() {
+    /// Adds every page of deposits through a fixed chain tip.
+    async fn discover_deposits(
+        &mut self,
+        scanner: &mut DepositScanner,
+        tip: BlockNumber,
+    ) -> Result<()> {
+        while !scanner.is_caught_up(tip) {
+            let found = scanner.scan(&self.node, tip).await?;
+            self.deposits.extend(found.into_iter().map(|note| (note.nullifier(), note)));
+        }
+        Ok(())
+    }
+
+    /// Prepares one transaction and waits for commitment or expiration.
+    async fn process_pending_notes(&mut self) -> Result<()> {
+        if self.queued.is_empty() && self.deposits.is_empty() {
             return Ok(());
         }
 
-        let inputs = self.read_cycle_inputs().await?;
+        let inputs = self.read_chain_state().await?;
         let reference_block = inputs.reference_header.block_num();
         self.check_account_code(&inputs.funder)?;
 
@@ -199,85 +213,24 @@ impl Funder {
             inputs.reference_header.fee_parameters().verification_base_fee(),
         );
 
-        if self.pending.is_some() {
-            self.resolve_pending(&inputs.funder, reference_block);
-            return Ok(());
-        }
-
-        self.remove_spent_deposits().await?;
         let reserve = self.fee_reserve();
-        let Some(selection) =
-            select(&self.deposits, &self.queued, balance, self.setup.fee_faucet_id, reserve)
-        else {
+        let Some(selection) = Selection::choose(
+            &self.deposits,
+            &self.queued,
+            balance,
+            self.setup.fee_faucet_id,
+            reserve,
+        ) else {
             return Ok(());
         };
 
         Box::pin(self.submit(inputs, selection)).await
     }
 
-    /// Keeps the transaction pending until its commitment or expiration is known.
-    fn resolve_pending(&mut self, funder: &Account, reference_block: BlockNumber) {
-        let Some(pending) = &self.pending else {
-            return;
-        };
-
-        if funder.nonce().as_canonical_u64() > pending.nonce.as_canonical_u64() {
-            info!(
-                target: LOG_TARGET,
-                "A funding transaction committed",
-                transaction.id = pending.transaction_id,
-                note.count = pending.note_count,
-                deposit.count = pending.deposit_nullifiers.len()
-            );
-            for nullifier in &pending.deposit_nullifiers {
-                self.deposits.remove(nullifier);
-            }
-            drop(self.queued.drain(..pending.note_count));
-            self.pending = None;
-
-            return;
-        }
-
-        if reference_block < pending.expiration_block {
-            return;
-        }
-
-        warn!(
-            target: LOG_TARGET,
-            "A funding transaction expired before it committed; its notes remain queued",
-            transaction.id = pending.transaction_id,
-            transaction.expires_at = pending.expiration_block,
-            block.number = reference_block,
-            note.count = pending.note_count,
-            deposit.count = pending.deposit_nullifiers.len()
-        );
-
-        self.pending = None;
-    }
-
-    /// Adds new deposits to the pool by nullifier.
-    async fn scan_deposits(&mut self) -> Result<()> {
-        let found = self.scanner.scan(&self.node).await?;
-        self.deposits.extend(found.into_iter().map(|note| (note.nullifier(), note)));
-        Ok(())
-    }
-
-    /// Removes deposits that the chain has already spent.
-    async fn remove_spent_deposits(&mut self) -> Result<()> {
-        if self.deposits.is_empty() {
-            return Ok(());
-        }
-
-        let nullifiers: Vec<_> = self.deposits.keys().copied().collect();
-        let spent = self.node.sync_nullifiers(&nullifiers, BlockNumber::GENESIS).await?;
-        self.deposits.retain(|nullifier, _| !spent.contains(nullifier));
-        Ok(())
-    }
-
-    /// Executes and proves one transaction. Records it as pending before submission.
-    async fn submit(&mut self, inputs: CycleInputs, selection: Selection) -> Result<()> {
-        let CycleInputs { reference_header, blockchain, funder } = inputs;
-        let nonce = funder.nonce();
+    /// Submits one transaction and resolves its outcome.
+    async fn submit(&mut self, inputs: ChainState, selection: Selection) -> Result<()> {
+        let ChainState { reference_header, blockchain, funder } = inputs;
+        let reference_block = reference_header.block_num();
         let fee_faucet = self
             .node
             .public_account(self.setup.fee_faucet_id, reference_header.block_num())
@@ -293,10 +246,9 @@ impl Funder {
             expiration_delta: self.setup.config.expiration_delta,
         };
 
-        let deposit_nullifiers = selection.deposits.iter().map(Note::nullifier).collect();
-        let note_count = selection.notes.len();
+        let deposits = selection.deposit.iter().cloned().collect();
         let executed_tx =
-            Box::pin(tx::execute(inputs, selection.deposits, selection.notes, &mut self.rng))
+            Box::pin(tx::execute(inputs, deposits, selection.notes.clone(), &mut self.rng))
                 .await
                 .context("failed to execute the funding transaction")?;
         let transaction_inputs = executed_tx.tx_inputs().to_bytes();
@@ -308,16 +260,28 @@ impl Funder {
 
         let transaction_id = transaction.id();
         let expiration_block = transaction.expiration_block_num();
-        self.pending = Some(Pending {
+        let outcome = self.node.submit(&transaction, &transaction_inputs).await?;
+        self.resolve_submission(
+            outcome,
             transaction_id,
-            nonce,
+            reference_block,
             expiration_block,
-            deposit_nullifiers,
-            note_count,
-        });
+            selection,
+        )
+        .await
+    }
 
-        match self.node.submit(&transaction, &transaction_inputs).await {
-            Ok(_) => {
+    /// Handles rejections immediately. Resolves accepted and uncertain submissions on chain.
+    async fn resolve_submission(
+        &mut self,
+        outcome: SubmissionOutcome,
+        transaction_id: TransactionId,
+        reference_block: BlockNumber,
+        expiration_block: BlockNumber,
+        selection: Selection,
+    ) -> Result<()> {
+        match outcome {
+            SubmissionOutcome::Accepted => {
                 info!(
                     target: LOG_TARGET,
                     "Submitted a funding transaction",
@@ -325,7 +289,25 @@ impl Funder {
                     transaction.expires_at = expiration_block
                 );
             },
-            Err(err) => {
+            SubmissionOutcome::Rejected(status) => {
+                // With one writer and controlled outputs, a state conflict identifies the single
+                // selected deposit as invalid. Keep the payouts for the next attempt.
+                if status.code() == tonic::Code::InvalidArgument
+                    && status.details() == [2]
+                    && let Some(note) = &selection.deposit
+                {
+                    self.deposits.remove(&note.nullifier());
+                    warn!(
+                        &status,
+                        target: LOG_TARGET,
+                        "Discarded a deposit rejected by the node",
+                        note.id = note.id()
+                    );
+                    return Ok(());
+                }
+                return Err(status).context("the node rejected the funding transaction");
+            },
+            SubmissionOutcome::Unknown(err) => {
                 warn!(
                     &err,
                     target: LOG_TARGET,
@@ -336,11 +318,48 @@ impl Funder {
             },
         }
 
-        Ok(())
+        loop {
+            match self
+                .node
+                .transaction_status(
+                    self.account_id(),
+                    transaction_id,
+                    reference_block,
+                    expiration_block,
+                )
+                .await
+            {
+                Ok(TransactionStatus::Committed) => {
+                    info!(target: LOG_TARGET, "A funding transaction committed", transaction.id = transaction_id);
+                    if let Some(note) = selection.deposit {
+                        self.deposits.remove(&note.nullifier());
+                    }
+                    let _ = self.queued.drain(..selection.notes.len());
+                    return Ok(());
+                },
+                Ok(TransactionStatus::Expired) => {
+                    warn!(
+                        target: LOG_TARGET,
+                        "A funding transaction expired; its notes remain queued",
+                        transaction.id = transaction_id,
+                        transaction.expires_at = expiration_block
+                    );
+                    return Ok(());
+                },
+                Ok(TransactionStatus::Pending) => {},
+                Err(err) => warn!(
+                    &err,
+                    target: LOG_TARGET,
+                    "Failed to resolve the funding transaction; retrying",
+                    transaction.id = transaction_id
+                ),
+            }
+            tokio::time::sleep(self.setup.config.tick_interval).await;
+        }
     }
 
-    /// Reads the chain state every cycle needs, at a fresh reference block.
-    async fn read_cycle_inputs(&self) -> Result<CycleInputs> {
+    /// Reads the funding account and chain state at the current reference block.
+    async fn read_chain_state(&self) -> Result<ChainState> {
         let (reference_header, blockchain) =
             self.node.tip_chain_state().await.context("failed to read the chain state")?;
         let reference_block = reference_header.block_num();
@@ -351,7 +370,7 @@ impl Funder {
             .await
             .context("failed to read the funding account")?;
 
-        Ok(CycleInputs { reference_header, blockchain, funder })
+        Ok(ChainState { reference_header, blockchain, funder })
     }
 
     /// Checks the account on chain against the account file, once.
@@ -392,40 +411,38 @@ impl Funder {
 // SELECTION
 // ================================================================================================
 
-/// The deposits and the notes of one transaction.
+/// At most one deposit and the funding notes of one transaction.
+#[derive(Debug, PartialEq)]
 struct Selection {
-    deposits: Vec<Note>,
+    deposit: Option<Note>,
     notes: Vec<Note>,
 }
 
-/// Selects the largest deposits and the queued notes they can fund with the account balance. Leaves
-/// the notes in their queues until the transaction commits.
-fn select(
-    deposits: &HashMap<Nullifier, Note>,
-    queued: &VecDeque<Note>,
-    balance: u64,
-    fee_faucet_id: AccountId,
-    reserve: u64,
-) -> Option<Selection> {
-    let mut candidates: Vec<_> = deposits.values().collect();
-    candidates.sort_unstable_by_key(|note| std::cmp::Reverse(native_amount(note, fee_faucet_id)));
-    candidates.truncate(MAX_DEPOSITS_PER_TX);
-    let collected: u64 = candidates.iter().map(|note| native_amount(note, fee_faucet_id)).sum();
-    let note_count = admit(
-        queued.iter().map(|note| native_amount(note, fee_faucet_id)),
-        balance.saturating_add(collected),
-        reserve,
-    );
+impl Selection {
+    /// Selects the largest deposit and the queued notes it can fund with the account balance.
+    fn choose(
+        deposits: &HashMap<Nullifier, Note>,
+        queued: &VecDeque<Note>,
+        balance: u64,
+        fee_faucet_id: AccountId,
+        reserve: u64,
+    ) -> Option<Self> {
+        let deposit = deposits.values().max_by_key(|note| native_amount(note, fee_faucet_id));
+        let collected = deposit.map_or(0, |note| native_amount(note, fee_faucet_id));
+        let note_count = admit(
+            queued.iter().map(|note| native_amount(note, fee_faucet_id)),
+            balance.saturating_add(collected),
+            reserve,
+        );
+        if note_count == 0 && collected <= reserve {
+            return None;
+        }
 
-    // A transaction with no payouts must collect more than it can spend on its fee.
-    if note_count == 0 && collected <= reserve {
-        return None;
+        Some(Self {
+            deposit: deposit.cloned(),
+            notes: queued.iter().take(note_count).cloned().collect(),
+        })
     }
-
-    Some(Selection {
-        deposits: candidates.into_iter().cloned().collect(),
-        notes: queued.iter().take(note_count).cloned().collect(),
-    })
 }
 
 // ADMISSION
@@ -490,114 +507,81 @@ mod tests {
     }
 
     #[test]
-    fn a_deposit_below_the_fee_reserve_is_not_selected_on_its_own() {
-        let deposits = deposit_pool([note(1, 1)]);
-        let queued = VecDeque::new();
-        assert!(select(&deposits, &queued, 0, fee_faucet_id(), RESERVE).is_none());
-        assert_eq!(deposits.len(), 1);
+    fn a_deposit_without_payouts_must_be_worth_more_than_its_fee() {
+        let deposits = deposit_pool([note(RESERVE, 1), note(RESERVE, 2)]);
+        assert!(
+            Selection::choose(&deposits, &VecDeque::new(), 0, fee_faucet_id(), RESERVE).is_none()
+        );
+        assert_eq!(deposits.len(), 2);
     }
 
     #[test]
-    fn a_deposit_above_the_fee_reserve_is_selected_on_its_own() {
-        let deposits = deposit_pool([note(RESERVE + 1, 2)]);
-        let queued = VecDeque::new();
-        let selection = select(&deposits, &queued, 0, fee_faucet_id(), RESERVE).unwrap();
-        assert_eq!(selection.deposits.len(), 1);
-        assert!(selection.notes.is_empty());
-    }
+    fn combined_transaction_selects_only_the_largest_deposit() {
+        let largest = note(RESERVE + 2_000, 1);
+        let deposits = deposit_pool([note(RESERVE + 1_000, 2), largest.clone()]);
+        let queued = VecDeque::from([note(1_000, 3)]);
 
-    #[test]
-    fn a_small_deposit_pays_for_a_note_in_the_same_transaction() {
-        let deposit = note(1_000, 3);
-        let payout = note(1_000, 4);
-        let deposits = deposit_pool([deposit.clone()]);
-        let queued = VecDeque::from([payout.clone()]);
-
-        let selection = select(&deposits, &queued, RESERVE, fee_faucet_id(), RESERVE)
-            .expect("the deposit covers the payout and the balance covers the fee reserve");
-
-        assert_eq!(selection.deposits, vec![deposit]);
-        assert_eq!(selection.notes, vec![payout]);
-    }
-
-    #[test]
-    fn deposits_fund_payouts_from_an_empty_account_and_keep_one_fee_reserve() {
-        let deposit = note(RESERVE + 1_000, 5);
-        let payout = note(1_000, 6);
-        let waiting = note(1, 7);
-        let deposits = deposit_pool([deposit.clone()]);
-        let queued = VecDeque::from([payout.clone(), waiting.clone()]);
-
-        let selection = select(&deposits, &queued, 0, fee_faucet_id(), RESERVE)
-            .expect("the deposit covers the first payout and one fee reserve");
-
-        assert_eq!(selection.deposits, vec![deposit]);
-        assert_eq!(selection.notes, vec![payout]);
-        assert_eq!(queued.back(), Some(&waiting));
+        assert_eq!(
+            Selection::choose(&deposits, &queued, 0, fee_faucet_id(), RESERVE),
+            Some(Selection {
+                deposit: Some(largest),
+                notes: queued.iter().cloned().collect()
+            })
+        );
+        assert_eq!(deposits.len(), 2);
+        assert_eq!(queued.len(), 1);
     }
 
     #[test]
     fn payouts_can_proceed_without_deposits() {
-        let payout = note(1_000, 8);
-        let deposits = HashMap::new();
+        let payout = note(1_000, 2);
+        let queued = VecDeque::from([payout.clone(), note(1, 3)]);
+        assert_eq!(
+            Selection::choose(&HashMap::new(), &queued, RESERVE + 1_000, fee_faucet_id(), RESERVE),
+            Some(Selection { deposit: None, notes: vec![payout] })
+        );
+        assert_eq!(queued.len(), 2);
+    }
+
+    #[test]
+    fn a_small_deposit_can_fund_payouts_in_the_same_transaction() {
+        let deposit = note(1_000, 1);
+        let payout = note(1_000, 2);
+        let deposits = deposit_pool([deposit.clone()]);
         let queued = VecDeque::from([payout.clone()]);
-
-        assert!(select(&deposits, &queued, RESERVE, fee_faucet_id(), RESERVE).is_none());
-        assert_eq!(queued, VecDeque::from([payout.clone()]));
-
-        let selection = select(&deposits, &queued, RESERVE + 1_000, fee_faucet_id(), RESERVE)
-            .expect("the account balance covers the payout and fee reserve");
-        assert!(selection.deposits.is_empty());
-        assert_eq!(selection.notes, vec![payout]);
+        assert_eq!(
+            Selection::choose(&deposits, &queued, RESERVE, fee_faucet_id(), RESERVE),
+            Some(Selection {
+                deposit: Some(deposit),
+                notes: vec![payout]
+            })
+        );
     }
 
     #[test]
     fn selection_keeps_notes_available_for_retry() {
-        let deposit = note(RESERVE + 1_000, 9);
-        let payout = note(1_000, 10);
-        let waiting = note(1, 11);
+        let deposit = note(RESERVE + 1_000, 1);
+        let payout = note(1_000, 2);
         let deposits = deposit_pool([deposit.clone()]);
-        let queued = VecDeque::from([payout.clone(), waiting.clone()]);
-
+        let queued = VecDeque::from([payout.clone()]);
         for _ in 0..2 {
-            let selection = select(&deposits, &queued, 0, fee_faucet_id(), RESERVE)
-                .expect("the same notes stay available until commitment");
-            assert_eq!(selection.deposits, vec![deposit.clone()]);
-            assert_eq!(selection.notes, vec![payout.clone()]);
+            assert_eq!(
+                Selection::choose(&deposits, &queued, 0, fee_faucet_id(), RESERVE),
+                Some(Selection {
+                    deposit: Some(deposit.clone()),
+                    notes: vec![payout.clone()]
+                })
+            );
         }
-
         assert_eq!(deposits, deposit_pool([deposit]));
-        assert_eq!(queued, VecDeque::from([payout, waiting]));
+        assert_eq!(queued, VecDeque::from([payout]));
     }
 
     #[test]
-    fn admission_stops_at_the_first_note_which_does_not_fit() {
-        assert_eq!(admit([500, 5_000, 100], RESERVE + 1_000, RESERVE), 1);
-    }
-
-    #[test]
-    fn the_largest_deposits_are_taken_up_to_the_cap() {
-        let count = u32::try_from(MAX_DEPOSITS_PER_TX).expect("the cap fits in a u32") + 2;
-        let deposits =
-            deposit_pool((0..count).map(|index| note(u64::from(index) + RESERVE, index + 10)));
-        let queued = VecDeque::new();
-        let selection = select(&deposits, &queued, 0, fee_faucet_id(), RESERVE).unwrap();
-        assert_eq!(selection.deposits.len(), MAX_DEPOSITS_PER_TX);
-        let smallest_taken = selection
-            .deposits
-            .iter()
-            .map(|note| native_amount(note, fee_faucet_id()))
-            .min()
-            .unwrap();
-        assert_eq!(smallest_taken, RESERVE + 2);
-    }
-
-    /// Admission holds back the fee of one transaction, because the transaction pays that fee out
-    /// of the same vault the notes are paid from.
-    #[test]
-    fn admission_holds_back_the_fee_reserve() {
+    fn admission_holds_back_the_fee_and_preserves_request_order() {
         assert_eq!(admit([100], 100 + RESERVE, RESERVE), 1);
         assert_eq!(admit([100], 99 + RESERVE, RESERVE), 0);
         assert_eq!(admit([100, 100], 100 + RESERVE, RESERVE), 1);
+        assert_eq!(admit([500, 5_000, 100], RESERVE + 1_000, RESERVE), 1);
     }
 }
