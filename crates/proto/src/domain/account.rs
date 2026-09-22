@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 
 use miden_node_utils::limiter::{QueryParamLimiter, QueryParamStorageMapKeyTotalLimit};
@@ -259,7 +260,8 @@ impl Verify for proto::rpc::account_request::account_detail_request::storage_map
 }
 
 fn has_duplicate_storage_map_keys(keys: &[StorageMapKey]) -> bool {
-    keys.iter().enumerate().any(|(index, key)| keys[..index].contains(key))
+    let mut seen = HashSet::with_capacity(keys.len());
+    keys.iter().any(|key| !seen.insert(key))
 }
 
 // ACCOUNT VAULT DETAILS
