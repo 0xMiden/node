@@ -216,23 +216,9 @@ pub struct ExplorerStatusDetails {
 }
 
 /// Details of the note transport service.
-///
-/// The stats fields are sourced from the note transport's `Stats` RPC. A successful response marks
-/// the service as healthy; a failed call marks it as unhealthy and leaves the fields as `None`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NoteTransportStatusDetails {
     pub url: String,
-    /// Version reported by the note transport service; `None` when unavailable.
-    pub version: Option<String>,
-    /// Total number of notes stored by the service.
-    pub total_notes: Option<u64>,
-    /// Total number of distinct note tags seen by the service.
-    pub total_tags: Option<u64>,
-    /// Unix timestamp of the most recent note activity across all tags.
-    ///
-    /// Derived from the per-tag statistics. An empty `notes_per_tag` list produces `None`, which the
-    /// user interface renders as `-`.
-    pub last_activity: Option<u64>,
 }
 
 /// Details of the validator service.

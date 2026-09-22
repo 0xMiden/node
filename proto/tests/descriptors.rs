@@ -5,6 +5,7 @@ fn descriptors_embed_their_dependencies() {
     let descriptors = [
         miden_node_proto_build::rpc_api_descriptor(),
         miden_node_proto_build::remote_prover_api_descriptor(),
+        miden_node_proto_build::note_transport_api_descriptor(),
         #[cfg(feature = "internal")]
         miden_node_proto_build::ntx_builder_api_descriptor(),
         #[cfg(feature = "internal")]
