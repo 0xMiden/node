@@ -122,6 +122,7 @@ jobs:
                 "network-monitor",
                 "funding-service",
                 "node-tps-benchmark",
+                "usdcx-genesis",
                 "note-transport"
               ]
             '
@@ -222,6 +223,7 @@ jobs:
         with:
           ref: ${{ needs.preflight.outputs.commit }}
           persist-credentials: false
+          submodules: recursive
 
       - name: Validate Docker images
         uses: WarpBuilds/bake-action@cb88c8ea0c887c0d1a3dcb534e71bd68a015e2d6 # v6.7.7
@@ -274,6 +276,7 @@ jobs:
         with:
           ref: ${{ needs.preflight.outputs.commit }}
           persist-credentials: false
+          submodules: recursive
 
       - name: Log in to the Container registry
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
@@ -304,6 +307,7 @@ jobs:
             network-monitor.tags=${{ env.REGISTRY_PREFIX }}/miden-network-monitor:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
             funding-service.tags=${{ env.REGISTRY_PREFIX }}/miden-funding-service:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
             node-tps-benchmark.tags=${{ env.REGISTRY_PREFIX }}/miden-node-tps-benchmark:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
+            usdcx-genesis.tags=${{ env.REGISTRY_PREFIX }}/miden-usdcx-genesis:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
 
   kache-summary:
     name: Summarize Kache cache
@@ -365,6 +369,7 @@ jobs:
           MIDEN_REMOTE_PROVER_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-remote-prover:${{ needs.preflight.outputs.tag }}
           MIDEN_NETWORK_MONITOR_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-network-monitor:${{ needs.preflight.outputs.tag }}
           MIDEN_FUNDING_SERVICE_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-funding-service:${{ needs.preflight.outputs.tag }}
+          MIDEN_USDCX_GENESIS_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-usdcx-genesis:${{ needs.preflight.outputs.tag }}
           MIDEN_BENCHMARK_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-node-tps-benchmark:${{ needs.preflight.outputs.tag }}
         with:
           compose-file: docker-compose.yml
@@ -462,6 +467,7 @@ jobs:
           MIDEN_REMOTE_PROVER_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-remote-prover:${{ needs.preflight.outputs.immutable_tag }}
           MIDEN_NETWORK_MONITOR_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-network-monitor:${{ needs.preflight.outputs.immutable_tag }}
           MIDEN_FUNDING_SERVICE_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-funding-service:${{ needs.preflight.outputs.immutable_tag }}
+          MIDEN_USDCX_GENESIS_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-usdcx-genesis:${{ needs.preflight.outputs.immutable_tag }}
           MIDEN_BENCHMARK_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-node-tps-benchmark:${{ needs.preflight.outputs.immutable_tag }}
         with:
           compose-file: docker-compose.yml

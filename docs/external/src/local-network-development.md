@@ -32,6 +32,7 @@ repository state.
 git clone https://github.com/0xMiden/node.git
 cd node
 git checkout <release-tag-or-branch>
+git submodule update --init --recursive
 ```
 
 ## Run a Published Version
