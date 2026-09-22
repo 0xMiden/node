@@ -55,9 +55,11 @@ The handler checks the amount against the balance the service last read, and ref
 
 A deposit is found by synchronizing notes by the funding account's tag. A filter keeps only the notes the account can consume: public, pay-to-ID, targeting the funding account, and holding the native asset and nothing else.
 
-A deposit which the chain already records as spent is dropped, because a transaction which consumes a spent note is rejected. The nullifier scan starts at the block the note was found in, since a note cannot be spent before it exists.
+The scan ends at the reference block of the cycle, which is also the reference block of the next transaction. Every deposit the scan returns therefore exists and is unspent at the block the transaction is built against. The node answers a range in pages, and the scan reads every page up to that block, so a restart catches up in one scan.
 
-The scan cursor advances past a range whether or not the worker consumes what it found. A deposit stays in the pool until it is spent, and a transaction which does not commit returns its deposits there, so no range has to be scanned twice. The pool is in memory, so a restart scans the chain again from genesis and finds whatever is still unspent.
+A deposit which the chain already records as spent is dropped, because a transaction which consumes a spent note is rejected. The nullifier scan covers the same range as the note scan, since a note cannot be spent before it exists.
+
+The scan cursor advances only after every request of the scan succeeds, so a failed scan covers the same range again. A successful scan advances the cursor whether or not the worker consumes what it found. A deposit stays in the pool until it is spent, and a transaction which does not commit returns its deposits there, so no range has to be scanned twice. The pool is in memory, so a restart scans the chain again from genesis and finds whatever is still unspent.
 
 One transaction consumes at most a fixed number of deposits, and takes the largest ones first. The protocol allows far more input notes than that; the bound is proving time, because every input note runs its own script and lengthens the transaction the service has to prove before it can serve the next one.
 

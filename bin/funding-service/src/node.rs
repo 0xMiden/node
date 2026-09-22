@@ -174,29 +174,34 @@ impl RpcNodeClient {
         fetch_public_account(&mut self.rpc_client.clone(), account_id, block_num).await
     }
 
-    /// Fetches the IDs of the committed notes which carry `tag`, from `from_block` up to the chain
-    /// tip, alongside the block the scan reached.
+    /// Fetches the IDs of the committed notes which carry `tag`, from `from_block` up to
+    /// `to_block`.
     pub async fn sync_note_ids(
         &self,
         tag: NoteTag,
         from_block: BlockNumber,
-    ) -> Result<SyncedNotes> {
-        let tip = self.committed_tip().await?;
-        // An empty range is rejected, and there is nothing to scan past the tip anyway.
-        if from_block > tip {
-            return Ok(SyncedNotes {
-                note_ids: Vec::new(),
-                last_checked_block: tip,
-            });
-        }
+        to_block: BlockNumber,
+    ) -> Result<Vec<NoteId>> {
+        fetch_all_pages(from_block, to_block, |block_from| {
+            self.sync_note_ids_page(tag, block_from, to_block)
+        })
+        .await
+    }
 
+    /// Fetches one page of [`Self::sync_note_ids`], with the last block the node checked.
+    async fn sync_note_ids_page(
+        &self,
+        tag: NoteTag,
+        block_from: BlockNumber,
+        block_to: BlockNumber,
+    ) -> Result<(Vec<NoteId>, BlockNumber)> {
         let response = self
             .rpc_client
             .clone()
             .sync_notes(SyncNotesRequest {
                 block_range: Some(BlockRange {
-                    block_from: from_block.as_u32(),
-                    block_to: tip.as_u32(),
+                    block_from: block_from.as_u32(),
+                    block_to: block_to.as_u32(),
                 }),
                 note_tags: vec![u32::from(tag)],
             })
@@ -225,7 +230,7 @@ impl RpcNodeClient {
             }
         }
 
-        Ok(SyncedNotes { note_ids, last_checked_block })
+        Ok((note_ids, last_checked_block))
     }
 
     /// The notes among `note_ids` whose details the node stores.
@@ -262,19 +267,14 @@ impl RpcNodeClient {
     }
 
     /// The nullifiers among `nullifiers` which the node recorded as spent from `from_block` up to
-    /// the chain tip.
+    /// `to_block`.
     pub async fn sync_nullifiers(
         &self,
         nullifiers: &[Nullifier],
         from_block: BlockNumber,
+        to_block: BlockNumber,
     ) -> Result<HashSet<Nullifier>> {
         if nullifiers.is_empty() {
-            return Ok(HashSet::new());
-        }
-
-        let tip = self.committed_tip().await?;
-
-        if from_block > tip {
             return Ok(HashSet::new());
         }
 
@@ -293,73 +293,54 @@ impl RpcNodeClient {
         // The node rejects a request which carries more prefixes than it accepts, so the prefixes
         // are sent in chunks of the limit it enforces.
         for chunk in prefixes.chunks(QueryParamNullifierPrefixLimit::LIMIT) {
-            let mut block_from = from_block;
-
-            // The node may answer with a partial range. The scan continues from the block the
-            // response reached, because a nullifier in the remaining blocks would otherwise be read
-            // as unspent.
-            loop {
-                let response = self
-                    .rpc_client
-                    .clone()
-                    .sync_nullifiers(SyncNullifiersRequest {
-                        block_range: Some(BlockRange {
-                            block_from: block_from.as_u32(),
-                            block_to: tip.as_u32(),
-                        }),
-                        prefix_len: NULLIFIER_PREFIX_LEN,
-                        nullifiers: chunk.to_vec(),
-                    })
-                    .await
-                    .context("failed to synchronize nullifiers")?
-                    .into_inner();
-
-                let last_checked_block: BlockNumber = response
-                    .pagination_info
-                    .context("the sync_nullifiers response did not include pagination information")?
-                    .block_num
-                    .into();
-
-                for update in response.nullifiers {
-                    let nullifier = update
-                        .nullifier
-                        .context("a nullifier update did not include a nullifier")?;
-                    let nullifier =
-                        Word::try_from(nullifier).context("failed to convert a nullifier")?;
-                    let nullifier = Nullifier::from_raw(nullifier);
-                    if requested.contains(&nullifier) {
-                        spent.insert(nullifier);
-                    }
-                }
-
-                if last_checked_block >= tip {
-                    break;
-                }
-
-                // A response which does not advance would repeat forever.
-                anyhow::ensure!(
-                    last_checked_block >= block_from,
-                    "the node answered a nullifier scan from block {block_from} with block \
-                     {last_checked_block}",
-                );
-                block_from = last_checked_block + 1;
-            }
+            let synced = fetch_all_pages(from_block, to_block, |block_from| {
+                self.sync_nullifiers_page(chunk, block_from, to_block)
+            })
+            .await?;
+            spent.extend(synced.into_iter().filter(|nullifier| requested.contains(nullifier)));
         }
 
         Ok(spent)
     }
 
-    /// The chain tip of the node's local store.
-    pub async fn committed_tip(&self) -> Result<BlockNumber> {
-        let status = self
+    /// Fetches one page of [`Self::sync_nullifiers`] for one chunk of prefixes, with the last block
+    /// the node checked.
+    async fn sync_nullifiers_page(
+        &self,
+        prefixes: &[u32],
+        block_from: BlockNumber,
+        block_to: BlockNumber,
+    ) -> Result<(Vec<Nullifier>, BlockNumber)> {
+        let response = self
             .rpc_client
             .clone()
-            .status(())
+            .sync_nullifiers(SyncNullifiersRequest {
+                block_range: Some(BlockRange {
+                    block_from: block_from.as_u32(),
+                    block_to: block_to.as_u32(),
+                }),
+                prefix_len: NULLIFIER_PREFIX_LEN,
+                nullifiers: prefixes.to_vec(),
+            })
             .await
-            .context("failed to fetch the node status")?
+            .context("failed to synchronize nullifiers")?
             .into_inner();
 
-        Ok(status.chain_tip.into())
+        let last_checked_block = response
+            .pagination_info
+            .context("the sync_nullifiers response did not include pagination information")?
+            .block_num
+            .into();
+
+        let mut nullifiers = Vec::new();
+        for update in response.nullifiers {
+            let nullifier =
+                update.nullifier.context("a nullifier update did not include a nullifier")?;
+            let nullifier = Word::try_from(nullifier).context("failed to convert a nullifier")?;
+            nullifiers.push(Nullifier::from_raw(nullifier));
+        }
+
+        Ok((nullifiers, last_checked_block))
     }
 
     /// Seals and submits one proven transaction, and returns the block it was accepted at.
@@ -473,16 +454,48 @@ pub fn is_transient_error(err: &anyhow::Error) -> bool {
 /// The only nullifier prefix length the node supports.
 const NULLIFIER_PREFIX_LEN: u32 = 16;
 
-/// The result of one note synchronization.
-pub struct SyncedNotes {
-    /// The notes which carry the requested tag.
-    pub note_ids: Vec<NoteId>,
-    /// The last block the node checked. The next scan starts after it.
-    pub last_checked_block: BlockNumber,
-}
-
 // RPC HELPERS
 // ================================================================================================
+
+/// Fetches every page of a block range, from `from_block` up to `to_block`, and returns the items
+/// of all pages.
+///
+/// `fetch_page` requests the range from the given block up to `to_block`. It returns the items of
+/// one page and the last block the node checked. The node can stop a page before `to_block`, so the
+/// next page starts after that block. A page holds every item of the blocks it covers, so no item
+/// is read twice.
+async fn fetch_all_pages<T, F, Fut>(
+    from_block: BlockNumber,
+    to_block: BlockNumber,
+    mut fetch_page: F,
+) -> Result<Vec<T>>
+where
+    F: FnMut(BlockNumber) -> Fut,
+    Fut: Future<Output = Result<(Vec<T>, BlockNumber)>>,
+{
+    let mut items = Vec::new();
+    // The node rejects an empty range.
+    if from_block > to_block {
+        return Ok(items);
+    }
+
+    let mut block_from = from_block;
+    loop {
+        let (page, last_checked_block) = fetch_page(block_from).await?;
+        items.extend(page);
+
+        if last_checked_block >= to_block {
+            return Ok(items);
+        }
+
+        // A response which does not advance would repeat forever.
+        anyhow::ensure!(
+            last_checked_block >= block_from,
+            "the node answered a scan from block {block_from} with block {last_checked_block}",
+        );
+        block_from = last_checked_block + 1;
+    }
+}
 
 /// Backoff for the genesis-discovery handshake, so a node which is still starting does not abort
 /// the service.
@@ -755,4 +768,62 @@ async fn fetch_public_account(
     );
 
     Ok((account, witness))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::ready;
+
+    use super::*;
+
+    /// Answers like a node which holds one item per block and returns at most three blocks per
+    /// page.
+    fn paged_answer(block_from: BlockNumber, block_to: BlockNumber) -> (Vec<u32>, BlockNumber) {
+        let last = block_to.as_u32().min(block_from.as_u32() + 2);
+
+        ((block_from.as_u32()..=last).collect(), BlockNumber::from(last))
+    }
+
+    /// The node stops a page before the end of the range, so the pages are read until the range is
+    /// covered. No block is skipped or read twice.
+    #[tokio::test]
+    async fn every_block_of_the_range_is_read_once() {
+        let to_block = BlockNumber::from(10u32);
+
+        let items = fetch_all_pages(BlockNumber::from(2u32), to_block, |block_from| {
+            ready(anyhow::Ok(paged_answer(block_from, to_block)))
+        })
+        .await
+        .expect("the scan should reach the end of the range");
+
+        assert_eq!(items, (2..=10).collect::<Vec<u32>>());
+    }
+
+    /// A page which does not advance would repeat forever, so the scan fails instead.
+    #[tokio::test]
+    async fn a_page_which_does_not_advance_fails_the_scan() {
+        let result = fetch_all_pages(BlockNumber::from(5u32), BlockNumber::from(10u32), |_| {
+            ready(anyhow::Ok((Vec::<u32>::new(), BlockNumber::from(4u32))))
+        })
+        .await;
+
+        assert!(result.is_err());
+    }
+
+    /// The node rejects an empty range, so a range which ends before it starts sends no request.
+    #[tokio::test]
+    async fn an_empty_range_sends_no_request() {
+        let to_block = BlockNumber::from(5u32);
+        let mut requests = 0;
+
+        let items = fetch_all_pages(BlockNumber::from(6u32), to_block, |block_from| {
+            requests += 1;
+            ready(anyhow::Ok(paged_answer(block_from, to_block)))
+        })
+        .await
+        .expect("an empty range is not an error");
+
+        assert!(items.is_empty());
+        assert_eq!(requests, 0);
+    }
 }

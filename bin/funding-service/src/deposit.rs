@@ -39,34 +39,34 @@ impl DepositScanner {
         }
     }
 
-    /// Returns the unspent deposits found since the previous scan and advances the cursor.
+    /// Returns the deposits committed after the previous scan up to `to_block`, which are unspent
+    /// at `to_block`.
     ///
-    /// The cursor advances past a range whether or not the caller consumes what the scan returns.
-    /// The caller holds every deposit it is given until the deposit is spent, so a range is never
-    /// scanned twice.
-    pub async fn scan(&mut self, node: &RpcNodeClient) -> Result<Vec<Note>> {
+    /// The cursor advances past `to_block` only when every request of the scan succeeds, so a
+    /// failed scan covers the same range again. A successful scan advances the cursor whether or not
+    /// the caller consumes what it returns. The caller holds every deposit it is given until the
+    /// deposit is spent, so a range is never scanned twice.
+    pub async fn scan(&mut self, node: &RpcNodeClient, to_block: BlockNumber) -> Result<Vec<Note>> {
         let from_block = self.next_block;
-        let tag = NoteTag::with_account_target(self.funder);
-        let synced = node.sync_note_ids(tag, from_block).await?;
-        self.next_block = synced.last_checked_block + 1;
-
-        if synced.note_ids.is_empty() {
+        // A previous scan already covered `to_block`.
+        if from_block > to_block {
             return Ok(Vec::new());
         }
 
+        let tag = NoteTag::with_account_target(self.funder);
+        let note_ids = node.sync_note_ids(tag, from_block, to_block).await?;
+
         let candidates: Vec<Note> = node
-            .get_public_notes_by_id(&synced.note_ids)
+            .get_public_notes_by_id(&note_ids)
             .await?
             .into_iter()
             .filter(|note| is_deposit(note, self.funder, self.fee_faucet_id))
             .collect();
 
-        if candidates.is_empty() {
-            return Ok(Vec::new());
-        }
-
         let nullifiers: Vec<_> = candidates.iter().map(Note::nullifier).collect();
-        let spent = node.sync_nullifiers(&nullifiers, from_block).await?;
+        let spent = node.sync_nullifiers(&nullifiers, from_block, to_block).await?;
+
+        self.next_block = to_block + 1;
 
         Ok(candidates
             .into_iter()

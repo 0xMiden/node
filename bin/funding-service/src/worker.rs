@@ -226,7 +226,7 @@ impl Funder {
         }
 
         if self.scan_is_due() {
-            if let Err(err) = self.scan_deposits().await {
+            if let Err(err) = self.scan_deposits(reference_block).await {
                 warn!(&err, target: LOG_TARGET, "Failed to scan for deposits");
             }
         }
@@ -322,9 +322,9 @@ impl Funder {
         false
     }
 
-    /// Scans for deposits and adds the new ones to the pool.
-    async fn scan_deposits(&mut self) -> Result<()> {
-        let found = self.scanner.scan(&self.node).await?;
+    /// Scans for deposits up to `reference_block` and adds the new ones to the pool.
+    async fn scan_deposits(&mut self, reference_block: BlockNumber) -> Result<()> {
+        let found = self.scanner.scan(&self.node, reference_block).await?;
         self.last_scan = Some(Instant::now());
 
         // A deposit which is already pooled must not enter a transaction twice.
