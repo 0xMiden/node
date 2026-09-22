@@ -56,7 +56,7 @@ impl Drop for TestAdmin {
 }
 
 #[tokio::test]
-async fn exports_codes_and_uploads_digests_and_accounts() {
+async fn exports_codes_and_uploads_digests() {
     let mut server = TestAdmin::start(None).await;
     let dir = tempfile::tempdir().unwrap();
     let output = dir.path().join("invitations.csv");
@@ -96,7 +96,12 @@ async fn exports_codes_and_uploads_digests_and_accounts() {
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(fs_err::metadata(&output).unwrap().permissions().mode() & 0o777, 0o600);
     }
+    assert!(server.requests.try_recv().is_err());
+}
 
+#[tokio::test]
+async fn directly_allowlists_an_account() {
+    let mut server = TestAdmin::start(None).await;
     let account_id: AccountId = ACCOUNT_ID_PRIVATE_SENDER.try_into().unwrap();
     AdminCommand {
         url: server.url.clone(),
