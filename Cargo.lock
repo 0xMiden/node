@@ -4153,6 +4153,7 @@ dependencies = [
  "miden-protocol",
  "miden-standards",
  "rand 0.10.2",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",
