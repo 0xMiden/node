@@ -74,8 +74,8 @@ pub struct WorkerConfig {
 pub struct FunderSetup {
     /// The funding account's ID and signing key.
     pub key: FunderKey,
-    /// The faucet which issues the native asset.
-    pub fee_faucet_id: AccountId,
+    /// The native asset, which pays the fee.
+    pub fee_asset_id: AssetId,
     /// The chain's verification base fee. Zero on a chain which does not charge fees.
     pub verification_base_fee: u32,
     /// The protocol configuration of the chain, which names the fee asset.
@@ -131,7 +131,7 @@ pub struct Funder {
 impl Funder {
     /// Creates a worker for the given funding account.
     pub fn new(node: RpcNodeClient, prover: Prover, setup: FunderSetup) -> Self {
-        let scanner = DepositScanner::new(setup.key.account_id(), setup.fee_faucet_id);
+        let scanner = DepositScanner::new(setup.key.account_id(), setup.fee_asset_id);
 
         Self {
             node,
@@ -336,7 +336,7 @@ impl Funder {
             return Ok(());
         }
 
-        let total: u64 = new.iter().map(|note| native_amount(note, self.setup.fee_faucet_id)).sum();
+        let total: u64 = new.iter().map(|note| native_amount(note, self.setup.fee_asset_id)).sum();
         info!(
             target: LOG_TARGET,
             "Found deposits for the funding account",
@@ -356,7 +356,7 @@ impl Funder {
         let limits = SelectionLimits {
             balance,
             reserve: self.fee_reserve(),
-            fee_faucet_id: self.setup.fee_faucet_id,
+            fee_asset_id: self.setup.fee_asset_id,
             max_notes: self.setup.config.max_notes_per_tx.get(),
         };
         let selection = select(&mut self.deposits, &mut self.queued, limits);
@@ -479,8 +479,10 @@ impl Funder {
         &self,
         reference_block: BlockNumber,
     ) -> Result<(Account, AccountWitness)> {
-        self.retry_node_call(|| self.node.public_account(self.setup.fee_faucet_id, reference_block))
-            .await
+        self.retry_node_call(|| {
+            self.node.public_account(self.setup.fee_asset_id.faucet_id(), reference_block)
+        })
+        .await
     }
 
     /// Retries a node request while it fails for a transient reason.
@@ -533,7 +535,7 @@ impl Funder {
     fn fee_balance(&self, funder: &Account) -> u64 {
         funder
             .vault()
-            .get_balance(AssetId::new_fungible(self.setup.fee_faucet_id))
+            .get_balance(self.setup.fee_asset_id)
             .map_or(0, |amount| amount.as_u64())
     }
 
@@ -558,8 +560,8 @@ struct SelectionLimits {
     balance: u64,
     /// The fee one transaction may cost at worst.
     reserve: u64,
-    /// The faucet which issues the native asset.
-    fee_faucet_id: AccountId,
+    /// The native asset.
+    fee_asset_id: AssetId,
     /// The largest number of notes one transaction creates.
     max_notes: usize,
 }
@@ -574,7 +576,7 @@ fn select(
     queued: &mut VecDeque<Note>,
     limits: SelectionLimits,
 ) -> Option<Selection> {
-    let amount = |note: &Note| native_amount(note, limits.fee_faucet_id);
+    let amount = |note: &Note| native_amount(note, limits.fee_asset_id);
 
     // The largest deposits first, so a transaction which is capped still brings in the most.
     deposits.sort_unstable_by_key(|note| std::cmp::Reverse(amount(note)));
@@ -642,6 +644,11 @@ mod tests {
         FungibleAsset::mock_issuer()
     }
 
+    /// The native asset in these tests.
+    fn fee_asset_id() -> AssetId {
+        AssetId::new_fungible(fee_faucet_id())
+    }
+
     /// Builds a public P2ID note which holds `amount` of the native asset.
     fn note(amount: u64, serial: u32) -> Note {
         let faucet = fee_faucet_id();
@@ -661,7 +668,7 @@ mod tests {
         SelectionLimits {
             balance,
             reserve: RESERVE,
-            fee_faucet_id: fee_faucet_id(),
+            fee_asset_id: fee_asset_id(),
             max_notes: 16,
         }
     }
@@ -749,12 +756,12 @@ mod tests {
         let smallest_taken = selection
             .deposits
             .iter()
-            .map(|note| native_amount(note, fee_faucet_id()))
+            .map(|note| native_amount(note, fee_asset_id()))
             .min()
             .expect("the selection holds deposits");
         let largest_left = deposits
             .iter()
-            .map(|note| native_amount(note, fee_faucet_id()))
+            .map(|note| native_amount(note, fee_asset_id()))
             .max()
             .expect("the pool holds deposits");
         assert!(smallest_taken > largest_left);

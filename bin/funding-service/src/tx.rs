@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{Account, AccountId};
-use miden_protocol::asset::FungibleAsset;
+use miden_protocol::asset::{AssetId, FungibleAsset};
 use miden_protocol::block::BlockHeader;
 use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::crypto::rand::{FeltRng, RandomCoin};
@@ -34,13 +34,13 @@ use crate::data_store::InMemoryDataStore;
 /// Builds a public P2ID note which holds `amount` base units of the fee asset and targets `target`.
 pub fn build_funding_note(
     sender: AccountId,
-    fee_faucet_id: AccountId,
+    fee_asset_id: AssetId,
     target: AccountId,
     amount: u64,
     rng: &mut RandomCoin,
 ) -> Result<Note> {
-    let asset =
-        FungibleAsset::new(fee_faucet_id, amount).context("failed to build the funding asset")?;
+    let asset = FungibleAsset::new(fee_asset_id.faucet_id(), amount)
+        .context("failed to build the funding asset")?;
     let note: Note = P2idNote::builder()
         .sender(sender)
         .target(target)
@@ -191,7 +191,6 @@ fn build_tx_args(
 #[cfg(test)]
 mod tests {
     use miden_protocol::Word;
-    use miden_protocol::asset::AssetId;
     use miden_standards::note::TxFeeNote;
 
     use super::*;
@@ -240,7 +239,13 @@ mod tests {
         targets
             .iter()
             .map(|&(target, amount)| {
-                build_funding_note(fixture.funder.id(), fixture.fee_faucet_id, target, amount, rng)
+                build_funding_note(
+                    fixture.funder.id(),
+                    AssetId::new_fungible(fixture.fee_faucet_id),
+                    target,
+                    amount,
+                    rng,
+                )
             })
             .collect()
     }
@@ -405,7 +410,7 @@ mod tests {
 
         let note = build_funding_note(
             fixture.funder.id(),
-            fixture.fee_faucet_id,
+            AssetId::new_fungible(fixture.fee_faucet_id),
             target.id(),
             100,
             &mut rng,
@@ -442,8 +447,14 @@ mod tests {
         let (owner, _) = genesis_style_wallet(FungibleAsset::mock_issuer(), 0, [71; 32])?;
         let faucet = genesis_style_native_faucet(owner.id(), [77; 32])?;
 
-        let err = build_funding_note(owner.id(), faucet.id(), owner.id(), u64::MAX, &mut rng)
-            .expect_err("an amount above the asset maximum must be rejected");
+        let err = build_funding_note(
+            owner.id(),
+            AssetId::new_fungible(faucet.id()),
+            owner.id(),
+            u64::MAX,
+            &mut rng,
+        )
+        .expect_err("an amount above the asset maximum must be rejected");
         assert!(format!("{err:#}").contains("asset"), "unexpected error: {err:#}");
 
         Ok(())

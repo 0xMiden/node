@@ -286,12 +286,8 @@ impl FundingService {
 
         let mut tasks = Tasks::new();
 
-        let server = FundingServer::new(
-            requests,
-            status.clone(),
-            self.fee_asset_id.faucet_id(),
-            self.http_timeout,
-        );
+        let server =
+            FundingServer::new(requests, status.clone(), self.fee_asset_id, self.http_timeout);
         let server_shutdown = shutdown.clone();
         tasks.spawn("http-server", async move {
             server
@@ -320,7 +316,7 @@ impl FundingService {
             self.prover,
             FunderSetup {
                 key: self.funder_key,
-                fee_faucet_id: self.fee_asset_id.faucet_id(),
+                fee_asset_id: self.fee_asset_id,
                 verification_base_fee: self.verification_base_fee,
                 protocol_config: self.protocol_config,
                 config: self.worker_config,

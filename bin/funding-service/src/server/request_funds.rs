@@ -69,7 +69,7 @@ pub(super) async fn request_funds(
     let mut rng = RandomCoin::new(Word::from(rand::random::<[u32; 4]>()));
     let note = build_funding_note(
         state.status.account_id(),
-        state.fee_faucet_id,
+        state.fee_asset_id,
         target,
         request.amount,
         &mut rng,
@@ -172,11 +172,12 @@ mod tests {
     async fn the_answer_carries_the_queued_note() {
         let (state, mut rx) = test_state(MAX_AMOUNT);
         let funder = state.status.account_id();
-        let fee_faucet_id = state.fee_faucet_id;
+        let fee_asset_id = state.fee_asset_id;
         state.status.update(MAX_AMOUNT, BlockNumber::GENESIS, 0);
 
-        let (target, _) = crate::test_utils::genesis_style_wallet(fee_faucet_id, 0, [61; 32])
-            .expect("wallet should build");
+        let (target, _) =
+            crate::test_utils::genesis_style_wallet(fee_asset_id.faucet_id(), 0, [61; 32])
+                .expect("wallet should build");
 
         let response = test_router(state)
             .oneshot(
@@ -197,7 +198,7 @@ mod tests {
         let answered = Note::read_from_bytes(&hex::decode(&body.note).unwrap()).unwrap();
 
         assert_eq!(answered.metadata().sender(), funder);
-        assert_eq!(native_amount(&answered, fee_faucet_id), 500);
+        assert_eq!(native_amount(&answered, fee_asset_id), 500);
         let storage =
             P2idNoteStorage::try_from(answered.recipient().storage().to_elements().as_slice())
                 .unwrap();
@@ -213,8 +214,9 @@ mod tests {
     async fn an_unaffordable_request_is_refused_before_it_is_queued() {
         let (state, mut rx) = test_state(MAX_AMOUNT);
         state.status.update(10, BlockNumber::GENESIS, 0);
-        let (target, _) = crate::test_utils::genesis_style_wallet(state.fee_faucet_id, 0, [63; 32])
-            .expect("wallet should build");
+        let (target, _) =
+            crate::test_utils::genesis_style_wallet(state.fee_asset_id.faucet_id(), 0, [63; 32])
+                .expect("wallet should build");
 
         let response = test_router(state)
             .oneshot(
