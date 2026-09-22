@@ -4460,10 +4460,12 @@ dependencies = [
  "tokio-stream",
  "tonic",
  "tonic-health",
+ "tonic-prost",
  "tonic-reflection",
  "tonic-web",
  "tower",
  "tower-http",
+ "url",
 ]
 
 [[package]]

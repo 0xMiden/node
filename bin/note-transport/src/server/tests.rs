@@ -1,5 +1,14 @@
+use miden_node_proto::DecodeMessage;
 use miden_node_proto::generated::blockchain::BlockNumber;
-use miden_node_proto::generated::note_transport::{FetchNotesRequest, TransportNote};
+use miden_node_proto::generated::note_transport::{
+    FetchNotesCursor,
+    FetchNotesRequest,
+    FetchNotesResponse,
+    FetchedNote,
+    SendNoteRequest,
+    SendNoteResponse,
+    TransportNote,
+};
 use miden_node_proto::server::note_transport_api::{FetchNotes, SendNote};
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
@@ -15,26 +24,28 @@ use miden_protocol::note::{
     PartialNoteMetadata,
 };
 use miden_protocol::testing::account_id::ACCOUNT_ID_MAX_ZEROES;
+use prost::Message;
 use tonic::Request;
 
 use super::*;
 
 fn note(serial: u32, tag: u32) -> TransportNote {
+    note_with_type(serial, tag, NoteType::Private)
+}
+
+fn note_with_type(serial: u32, tag: u32, note_type: NoteType) -> TransportNote {
     let recipient = NoteRecipient::new(
         Word::from([serial, 0, 0, 0]),
         NoteScript::mock(),
         NoteStorage::new(vec![]).unwrap(),
     );
-    let metadata = PartialNoteMetadata::new(
-        AccountId::try_from(ACCOUNT_ID_MAX_ZEROES).unwrap(),
-        NoteType::Private,
-    )
-    .with_tag(NoteTag::new(tag));
+    let metadata =
+        PartialNoteMetadata::new(AccountId::try_from(ACCOUNT_ID_MAX_ZEROES).unwrap(), note_type)
+            .with_tag(NoteTag::new(tag));
     let note = Note::new(NoteAssets::default(), metadata, recipient);
     TransportNote {
         header: Some((*note.header()).into()),
         details: Some(NoteDetails::from(note).into()),
-        after_block_num: None,
     }
 }
 
@@ -46,16 +57,33 @@ fn server(config: Config) -> (tempfile::TempDir, Server) {
     (dir, Server::new(config, writer, reader).unwrap())
 }
 
+fn fetched_note(note: TransportNote, after_block_num: Option<BlockNumber>) -> FetchedNote {
+    FetchedNote {
+        header: note.header,
+        details: note.details,
+        after_block_num,
+        committed_in_block: None,
+    }
+}
+
 #[tokio::test]
 async fn send_fetch_preserves_optional_hint_presence() {
-    let (_dir, server) = server(Config::default());
-    let first = note(1, 7);
-    let mut second = note(2, 8);
-    second.after_block_num = Some(BlockNumber { block_num: 0 });
-    for note in [first.clone(), second.clone()] {
-        SendNote::full(&server, Request::new(SendNoteRequest { note: Some(note) }))
-            .await
-            .unwrap();
+    let (_dir, server) = server(test_config());
+    let cases = [None, Some(0), Some(42), Some(u32::MAX)];
+    let mut expected = Vec::new();
+    for (serial, hint) in cases.into_iter().enumerate() {
+        let note = note(u32::try_from(serial).unwrap(), 7);
+        let after_block_num = hint.map(|block_num| BlockNumber { block_num });
+        SendNote::full(
+            &server,
+            Request::new(SendNoteRequest {
+                note: Some(note.clone()),
+                after_block_num,
+            }),
+        )
+        .await
+        .unwrap();
+        expected.push(fetched_note(note, after_block_num));
     }
     let page = FetchNotes::full(
         &server,
@@ -63,7 +91,7 @@ async fn send_fetch_preserves_optional_hint_presence() {
     )
     .await
     .unwrap();
-    assert_eq!(page.notes, vec![first, second]);
+    assert_eq!(page.notes, expected);
     assert!(!page.has_more);
     assert!(page.cursor.unwrap().sequence > 0);
     let empty = FetchNotes::full(
@@ -78,41 +106,71 @@ async fn send_fetch_preserves_optional_hint_presence() {
 
 #[tokio::test]
 async fn duplicate_send_preserves_first_note_and_cursor() {
-    let (_dir, server) = server(Config::default());
-
-    let mut first = note(1, 7);
-    first.after_block_num = Some(BlockNumber { block_num: 100 });
-    SendNote::full(&server, Request::new(SendNoteRequest { note: Some(first.clone()) }))
-        .await
-        .unwrap();
+    let (_dir, server) = server(test_config());
+    let first = note(1, 7);
+    let hint = Some(BlockNumber { block_num: 100 });
+    SendNote::full(
+        &server,
+        Request::new(SendNoteRequest {
+            note: Some(first.clone()),
+            after_block_num: hint,
+        }),
+    )
+    .await
+    .unwrap();
     let request = FetchNotesRequest { tags: vec![7], cursor: None };
     let before = FetchNotes::full(&server, Request::new(request.clone())).await.unwrap();
 
-    // Retry sending the same note with a different `after_block_num` and assert that it's not
-    // updated.
-    let mut retry = first.clone();
-    retry.after_block_num = None;
-    SendNote::full(&server, Request::new(SendNoteRequest { note: Some(retry) }))
-        .await
-        .unwrap();
+    // A retry preserves the first block hint.
+    SendNote::full(
+        &server,
+        Request::new(SendNoteRequest {
+            note: Some(first.clone()),
+            after_block_num: None,
+        }),
+    )
+    .await
+    .unwrap();
     let after = FetchNotes::full(&server, Request::new(request)).await.unwrap();
-    assert_eq!(after.notes, vec![first]);
+    assert_eq!(after.notes, vec![fetched_note(first, hint)]);
     assert_eq!(after.cursor, before.cursor);
     assert!(!after.has_more);
 }
 
 #[tokio::test]
+async fn rejects_public_note_without_storage() {
+    let (_dir, server) = server(test_config());
+    let request = FetchNotesRequest { tags: vec![7], cursor: None };
+    let before = FetchNotes::full(&server, Request::new(request.clone())).await.unwrap();
+    let error = SendNote::full(
+        &server,
+        Request::new(SendNoteRequest {
+            note: Some(note_with_type(1, 7, NoteType::Public)),
+            after_block_num: None,
+        }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    assert_eq!(error.message(), "only private notes are supported");
+    assert_eq!(FetchNotes::full(&server, Request::new(request)).await.unwrap(), before);
+}
+
+#[tokio::test]
 async fn rejects_missing_note() {
-    let (_dir, server) = server(Config::default());
-    let error = SendNote::full(&server, Request::new(SendNoteRequest { note: None }))
-        .await
-        .unwrap_err();
+    let (_dir, server) = server(test_config());
+    let error = SendNote::full(
+        &server,
+        Request::new(SendNoteRequest { note: None, after_block_num: None }),
+    )
+    .await
+    .unwrap_err();
     assert_eq!(error.code(), tonic::Code::InvalidArgument);
 }
 
 #[tokio::test]
 async fn invalid_cursor_has_generic_message() {
-    let (_dir, server) = server(Config::default());
+    let (_dir, server) = server(test_config());
     let error = FetchNotes::full(
         &server,
         Request::new(FetchNotesRequest {
@@ -131,7 +189,7 @@ async fn invalid_cursor_has_generic_message() {
 
 #[tokio::test]
 async fn rejects_missing_or_mismatched_note_fields() {
-    let (_dir, server) = server(Config::default());
+    let (_dir, server) = server(test_config());
     let valid = note(1, 7);
     let mut no_header = valid.clone();
     no_header.header = None;
@@ -140,33 +198,42 @@ async fn rejects_missing_or_mismatched_note_fields() {
     let mut mismatch = valid;
     mismatch.details = note(2, 7).details;
     for note in [TransportNote::default(), no_header, no_details, mismatch] {
-        let error = SendNote::full(&server, Request::new(SendNoteRequest { note: Some(note) }))
-            .await
-            .unwrap_err();
+        let error = SendNote::full(
+            &server,
+            Request::new(SendNoteRequest { note: Some(note), after_block_num: None }),
+        )
+        .await
+        .unwrap_err();
         assert_eq!(error.code(), tonic::Code::InvalidArgument);
     }
 }
 
 #[tokio::test]
 async fn rejects_malformed_nested_note_fields() {
-    let (_dir, server) = server(Config::default());
+    let (_dir, server) = server(test_config());
     let mut note = note(1, 7);
     note.details.as_mut().unwrap().recipient = None;
-    let error = SendNote::full(&server, Request::new(SendNoteRequest { note: Some(note) }))
-        .await
-        .unwrap_err();
+    let error = SendNote::full(
+        &server,
+        Request::new(SendNoteRequest { note: Some(note), after_block_num: None }),
+    )
+    .await
+    .unwrap_err();
     assert_eq!(error.code(), tonic::Code::InvalidArgument);
 }
 
 #[tokio::test]
 async fn rejects_invalid_note_metadata() {
-    let (_dir, server) = server(Config::default());
+    let (_dir, server) = server(test_config());
     let mut note = note(1, 7);
     note.header.as_mut().unwrap().metadata.as_mut().unwrap().note_type =
         miden_node_proto::generated::note::NoteType::Unspecified.into();
-    let error = SendNote::full(&server, Request::new(SendNoteRequest { note: Some(note) }))
-        .await
-        .unwrap_err();
+    let error = SendNote::full(
+        &server,
+        Request::new(SendNoteRequest { note: Some(note), after_block_num: None }),
+    )
+    .await
+    .unwrap_err();
     assert_eq!(error.code(), tonic::Code::InvalidArgument);
 }
 
@@ -174,11 +241,17 @@ async fn rejects_invalid_note_metadata() {
 async fn rejects_oversized_notes_and_invalid_fetches() {
     let (_dir, server) = server(Config {
         max_note_size: NonZeroUsize::new(1).unwrap(),
-        ..Config::default()
+        ..test_config()
     });
-    let error = SendNote::full(&server, Request::new(SendNoteRequest { note: Some(note(1, 7)) }))
-        .await
-        .unwrap_err();
+    let error = SendNote::full(
+        &server,
+        Request::new(SendNoteRequest {
+            note: Some(note(1, 7)),
+            after_block_num: None,
+        }),
+    )
+    .await
+    .unwrap_err();
     assert_eq!(error.code(), tonic::Code::ResourceExhausted);
     for request in [
         FetchNotesRequest { tags: vec![7; 129], cursor: None },
@@ -196,11 +269,17 @@ async fn rejects_oversized_notes_and_invalid_fetches() {
 async fn capacity_failure_does_not_store_the_note() {
     let (_dir, server) = server(Config {
         max_storage_bytes: NonZeroU64::new(1).unwrap(),
-        ..Config::default()
+        ..test_config()
     });
-    let error = SendNote::full(&server, Request::new(SendNoteRequest { note: Some(note(1, 7)) }))
-        .await
-        .unwrap_err();
+    let error = SendNote::full(
+        &server,
+        Request::new(SendNoteRequest {
+            note: Some(note(1, 7)),
+            after_block_num: None,
+        }),
+    )
+    .await
+    .unwrap_err();
     assert_eq!(error.code(), tonic::Code::ResourceExhausted);
     let page =
         FetchNotes::full(&server, Request::new(FetchNotesRequest { tags: vec![7], cursor: None }))
@@ -232,7 +311,6 @@ async fn grpc_web_request(
 #[tokio::test]
 async fn grpc_health_reflection_web_and_shutdown() {
     use miden_node_proto::generated::note_transport::api_client::ApiClient;
-    use prost::Message;
     use tonic_health::pb::HealthCheckRequest;
     use tonic_health::pb::health_check_response::ServingStatus;
     use tonic_health::pb::health_client::HealthClient;
@@ -241,7 +319,7 @@ async fn grpc_health_reflection_web_and_shutdown() {
     use tonic_reflection::pb::v1::server_reflection_request::MessageRequest;
     use tonic_reflection::pb::v1::server_reflection_response::MessageResponse;
 
-    let (_dir, server) = server(Config::default());
+    let (_dir, server) = server(test_config());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let shutdown = CancellationToken::new();
@@ -263,8 +341,12 @@ async fn grpc_health_reflection_web_and_shutdown() {
 
     let mut client = ApiClient::new(channel.clone());
     let envelope = note(1, 123);
+    let hint = Some(BlockNumber { block_num: 0 });
     client
-        .send_note(SendNoteRequest { note: Some(envelope.clone()) })
+        .send_note(SendNoteRequest {
+            note: Some(envelope.clone()),
+            after_block_num: hint,
+        })
         .await
         .unwrap();
     let response = client
@@ -272,8 +354,8 @@ async fn grpc_health_reflection_web_and_shutdown() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(response.notes, vec![envelope.clone()]);
-    let error = client.send_note(SendNoteRequest { note: None }).await.unwrap_err();
+    assert_eq!(response.notes, vec![fetched_note(envelope.clone(), hint)]);
+    let error = client.send_note(SendNoteRequest::default()).await.unwrap_err();
     assert_eq!(error.code(), tonic::Code::InvalidArgument);
 
     let mut reflection = ServerReflectionClient::new(channel);
@@ -295,7 +377,15 @@ async fn grpc_health_reflection_web_and_shutdown() {
     drop(client);
     drop(health);
 
-    let web = grpc_web_request(address, "SendNote", SendNoteRequest { note: Some(envelope) }).await;
+    let web = grpc_web_request(
+        address,
+        "SendNote",
+        SendNoteRequest {
+            note: Some(envelope),
+            after_block_num: None,
+        },
+    )
+    .await;
     assert_eq!(web.status(), reqwest::StatusCode::OK);
     let frame = web.bytes().await.unwrap();
     assert_eq!(frame[0], 0);
@@ -313,12 +403,9 @@ async fn grpc_health_reflection_web_and_shutdown() {
     let frame = web.bytes().await.unwrap();
     assert_eq!(frame[0], 0);
     let length = u32::from_be_bytes(frame[1..5].try_into().unwrap()) as usize;
-    let page = miden_node_proto::generated::note_transport::FetchNotesResponse::decode(
-        &frame[5..5 + length],
-    )
-    .unwrap();
+    let page = FetchNotesResponse::decode(&frame[5..5 + length]).unwrap();
     assert_eq!(page.notes.len(), 1);
-    assert_eq!(page.cursor, response.cursor);
+    assert_eq!(page, response);
 
     shutdown.cancel();
     tokio::time::timeout(std::time::Duration::from_secs(5), task)
@@ -330,7 +417,7 @@ async fn grpc_health_reflection_web_and_shutdown() {
 
 #[tokio::test]
 async fn large_pages_fit_default_grpc_client_and_resume_without_gaps() {
-    let (_dir, server) = server(Config::default());
+    let (_dir, server) = server(test_config());
     for serial in 1_u32..=400 {
         let recipient = NoteRecipient::new(
             Word::from([serial, 0, 0, 0]),
@@ -349,8 +436,8 @@ async fn large_pages_fit_default_grpc_client_and_resume_without_gaps() {
                 note: Some(TransportNote {
                     header: Some((*note.header()).into()),
                     details: Some(NoteDetails::from(note).into()),
-                    after_block_num: None,
                 }),
+                after_block_num: None,
             }),
         )
         .await
@@ -396,8 +483,8 @@ async fn large_pages_fit_default_grpc_client_and_resume_without_gaps() {
 
 #[tokio::test]
 async fn rejects_cursor_from_another_database() {
-    let (_first_dir, first) = server(Config::default());
-    let (_second_dir, second) = server(Config::default());
+    let (_first_dir, first) = server(test_config());
+    let (_second_dir, second) = server(test_config());
     let page =
         FetchNotes::full(&first, Request::new(FetchNotesRequest { tags: vec![7], cursor: None }))
             .await
@@ -415,10 +502,16 @@ async fn rejects_cursor_from_another_database() {
 
 #[tokio::test]
 async fn cursor_survives_reopening_database() {
-    let (dir, server) = server(Config::default());
-    SendNote::full(&server, Request::new(SendNoteRequest { note: Some(note(1, 7)) }))
-        .await
-        .unwrap();
+    let (dir, server) = server(test_config());
+    SendNote::full(
+        &server,
+        Request::new(SendNoteRequest {
+            note: Some(note(1, 7)),
+            after_block_num: None,
+        }),
+    )
+    .await
+    .unwrap();
     let first =
         FetchNotes::full(&server, Request::new(FetchNotesRequest { tags: vec![7], cursor: None }))
             .await
@@ -427,7 +520,7 @@ async fn cursor_survives_reopening_database() {
     let path = dir.path().join("notes.sqlite3");
     db::migrate(&path).unwrap();
     let (writer, reader) = db::load(&path).unwrap();
-    let server = Server::new(Config::default(), writer, reader).unwrap();
+    let server = Server::new(test_config(), writer, reader).unwrap();
     let empty = FetchNotes::full(
         &server,
         Request::new(FetchNotesRequest { tags: vec![7], cursor: first.cursor }),
@@ -437,34 +530,52 @@ async fn cursor_survives_reopening_database() {
     assert!(empty.notes.is_empty());
     assert_eq!(empty.cursor, first.cursor);
     let next = note(2, 7);
-    SendNote::full(&server, Request::new(SendNoteRequest { note: Some(next.clone()) }))
-        .await
-        .unwrap();
+    SendNote::full(
+        &server,
+        Request::new(SendNoteRequest {
+            note: Some(next.clone()),
+            after_block_num: None,
+        }),
+    )
+    .await
+    .unwrap();
     let page = FetchNotes::full(
         &server,
         Request::new(FetchNotesRequest { tags: vec![7], cursor: empty.cursor }),
     )
     .await
     .unwrap();
-    assert_eq!(page.notes, vec![next]);
+    assert_eq!(page.notes, vec![fetched_note(next, None)]);
 }
 
 #[tokio::test]
 async fn stale_cursor_fails_before_and_after_sequence_catches_up() {
-    let (_first_dir, first) = server(Config::default());
-    let (_second_dir, second) = server(Config::default());
-    SendNote::full(&first, Request::new(SendNoteRequest { note: Some(note(1, 7)) }))
-        .await
-        .unwrap();
+    let (_first_dir, first) = server(test_config());
+    let (_second_dir, second) = server(test_config());
+    SendNote::full(
+        &first,
+        Request::new(SendNoteRequest {
+            note: Some(note(1, 7)),
+            after_block_num: None,
+        }),
+    )
+    .await
+    .unwrap();
     let previous =
         FetchNotes::full(&first, Request::new(FetchNotesRequest { tags: vec![7], cursor: None }))
             .await
             .unwrap();
     for count in 0..=2 {
         if count > 0 {
-            SendNote::full(&second, Request::new(SendNoteRequest { note: Some(note(count, 7)) }))
-                .await
-                .unwrap();
+            SendNote::full(
+                &second,
+                Request::new(SendNoteRequest {
+                    note: Some(note(count, 7)),
+                    after_block_num: None,
+                }),
+            )
+            .await
+            .unwrap();
         }
         let error = FetchNotes::full(
             &second,
@@ -478,13 +589,16 @@ async fn stale_cursor_fails_before_and_after_sequence_catches_up() {
         FetchNotes::full(&second, Request::new(FetchNotesRequest { tags: vec![7], cursor: None }))
             .await
             .unwrap();
-    assert_eq!(restarted.notes, vec![note(1, 7), note(2, 7)]);
+    assert_eq!(
+        restarted.notes,
+        vec![fetched_note(note(1, 7), None), fetched_note(note(2, 7), None)]
+    );
     assert_eq!(restarted.cursor.unwrap().sequence, 2);
 }
 
 #[tokio::test]
 async fn empty_pages_and_nonce_extremes_roundtrip() {
-    let (_dir, server) = server(Config::default());
+    let (_dir, server) = server(test_config());
     for nonce in [0, u64::MAX] {
         server
             .writer
@@ -532,7 +646,7 @@ async fn empty_pages_and_nonce_extremes_roundtrip() {
 
 #[tokio::test]
 async fn missing_metadata_fails_even_without_tags() {
-    let (_dir, server) = server(Config::default());
+    let (_dir, server) = server(test_config());
     server
         .writer
         .write("remove metadata", |tx| {
@@ -546,4 +660,38 @@ async fn missing_metadata_fails_even_without_tags() {
             .await
             .unwrap_err();
     assert_eq!(error.code(), tonic::Code::Internal);
+}
+
+#[tokio::test]
+async fn proof_submission_requires_a_proof_over_grpc_web() {
+    let (_dir, server) = server(test_config());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let shutdown = CancellationToken::new();
+    let task = tokio::spawn(server.serve_on(listener, shutdown.clone()));
+    // The note field has the same wire encoding in both submission requests.
+    let response = grpc_web_request(
+        address,
+        "SendNoteWithProof",
+        SendNoteRequest {
+            note: Some(note(1, 7)),
+            after_block_num: None,
+        },
+    )
+    .await;
+    let headers = response.headers().clone();
+    let body = response.bytes().await.unwrap();
+    shutdown.cancel();
+    task.await.unwrap().unwrap();
+    assert!(
+        headers.get("grpc-status").is_some_and(|status| status == "3")
+            || String::from_utf8_lossy(&body).contains("grpc-status:3"),
+        "expected INVALID_ARGUMENT, got {headers:?}, {body:?}"
+    );
+}
+
+mod proofs;
+
+fn test_config() -> Config {
+    Config::new("http://127.0.0.1:1".parse().unwrap())
 }

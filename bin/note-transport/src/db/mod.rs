@@ -25,6 +25,7 @@ pub struct NewNote {
     pub header: NoteHeader,
     pub details: NoteDetails,
     pub after_block_num: Option<BlockNumber>,
+    pub committed_in_block: Option<BlockNumber>,
 }
 
 /// A persisted note with its storage timestamp and cursor.
@@ -36,6 +37,7 @@ pub struct StoredNote {
     pub created_at: i64,
     pub seq: i64,
     pub after_block_num: Option<BlockNumber>,
+    pub committed_in_block: Option<BlockNumber>,
 }
 
 #[derive(Debug, PartialEq, Eq)]

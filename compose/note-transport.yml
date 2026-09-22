@@ -23,6 +23,7 @@ services:
     environment:
       MIDEN_NOTE_TRANSPORT_DATA_DIRECTORY: /data
       MIDEN_NOTE_TRANSPORT_LISTEN: 0.0.0.0:57292
+      MIDEN_NOTE_TRANSPORT_RPC_URL: http://sequencer:57291
       MIDEN_NOTE_TRANSPORT_MAX_STORAGE_BYTES: "1073741824"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       OTEL_RESOURCE_ATTRIBUTES: service.instance.id=note-transport
