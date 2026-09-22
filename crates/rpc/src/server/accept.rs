@@ -205,12 +205,17 @@ impl AcceptHeaderLayer {
 
             // Quality value may be set to zero, indicating that the client _does not_ want this
             // media type. So we skip those.
-            let quality = media_type
+            let quality = match media_type
                 .get_param(mediatype::names::Q)
                 .map(|value| QValue::from_str(value.unquoted_str().as_ref()))
                 .transpose()
-                .map_err(AcceptHeaderError::InvalidQValue)?
-                .unwrap_or_default();
+            {
+                Ok(quality) => quality.unwrap_or_default(),
+                Err(err) => {
+                    candidate_error.get_or_insert(AcceptHeaderError::InvalidQValue(err));
+                    continue;
+                },
+            };
 
             if quality.is_zero() {
                 continue;
@@ -252,11 +257,17 @@ impl AcceptHeaderLayer {
             }
 
             // Skip if the genesis commitment does not match, or if it is required but missing.
-            let genesis = media_type
+            let genesis = match media_type
                 .get_param(Self::GENESIS)
                 .map(|value| Word::try_from(value.unquoted_str().as_ref()))
                 .transpose()
-                .map_err(AcceptHeaderError::InvalidGenesis)?;
+            {
+                Ok(genesis) => genesis,
+                Err(err) => {
+                    candidate_error.get_or_insert(AcceptHeaderError::InvalidGenesis(err));
+                    continue;
+                },
+            };
             match (genesis_mode, genesis) {
                 (_, Some(value)) if value != self.genesis_commitment => continue,
                 (GenesisNegotiation::Mandatory, None) => continue,
@@ -465,6 +476,10 @@ mod tests {
     #[case::malformed_then_valid(
         "application/vnd.miden; version=not-a-version, application/vnd.miden"
     )]
+    #[case::malformed_genesis_then_valid(
+        "application/vnd.miden; genesis=aaa, application/vnd.miden"
+    )]
+    #[case::malformed_quality_then_valid("application/vnd.miden; q=2.0, application/vnd.miden")]
     // Parameter values may be quoted.
     #[case::quoted_quality(r#"application/vnd.miden; q="1""#)]
     #[case::quoted_version(r#"application/vnd.miden; version="0.2.3""#)]
@@ -539,6 +554,9 @@ mod tests {
     )]
     #[case::matching_network_and_version(
         "application/vnd.miden; genesis=0x00000000000000000000000000000000000000000000000000000000deadbeef; version=0.2.3"
+    )]
+    #[case::malformed_genesis_then_matching(
+        "application/vnd.miden; genesis=aaa, application/vnd.miden; genesis=0x00000000000000000000000000000000000000000000000000000000deadbeef"
     )]
     #[test]
     fn request_with_mandadory_genesis_should_pass(#[case] accept: &'static str) {
