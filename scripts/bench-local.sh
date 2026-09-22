@@ -21,6 +21,7 @@
 #   - miden-benchmark
 #
 # Usage:
+#   Export MIDEN_VALIDATOR_GENESIS_NATIVE_FAUCET and MIDEN_VALIDATOR_GENESIS_FUNDING_ACCOUNT.
 #   Export MIDEN_VALIDATOR_STORAGE_KEY_EPOCH, MIDEN_VALIDATOR_STORAGE_KEY_SETUP_CONTEXT,
 #   MIDEN_VALIDATOR_STORAGE_KEY_PUBLIC_SET, and MIDEN_VALIDATOR_STORAGE_KEY_SECRET_SHARE first.
 #   scripts/bench-local.sh                       # 5 tx pairs, local prover
@@ -108,13 +109,15 @@ for bin in "${required_bins[@]}"; do
     command -v "$bin" >/dev/null || die "$bin not on PATH"
 done
 
-required_storage_key_vars=(
+required_bootstrap_vars=(
+    MIDEN_VALIDATOR_GENESIS_NATIVE_FAUCET
+    MIDEN_VALIDATOR_GENESIS_FUNDING_ACCOUNT
     MIDEN_VALIDATOR_STORAGE_KEY_EPOCH
     MIDEN_VALIDATOR_STORAGE_KEY_SETUP_CONTEXT
     MIDEN_VALIDATOR_STORAGE_KEY_PUBLIC_SET
     MIDEN_VALIDATOR_STORAGE_KEY_SECRET_SHARE
 )
-for var in "${required_storage_key_vars[@]}"; do
+for var in "${required_bootstrap_vars[@]}"; do
     [ -n "${!var:-}" ] || die "$var is required"
 done
 
@@ -133,6 +136,8 @@ say "building genesis block"
 miden-validator genesis \
     --genesis-block-directory "$DATA/genesis" \
     --accounts-directory      "$DATA/accounts" \
+    --verification-base-fee   0 \
+    --timestamp               "$(date +%s)" \
     --validator.key           "$VALIDATOR_SIGNING_PUBLIC_KEY" \
     > "$LOGS/genesis.log" 2>&1
 say "bootstrapping validator storage from genesis"

@@ -33,7 +33,7 @@ cd "$REPO_ROOT"
 WORK_DIR="${WORK_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/large-account-harness.XXXXXX")}"
 mkdir -p "$WORK_DIR"
 SEEDED_DIR="$WORK_DIR/seeded"
-GENESIS_CONFIG_FILE="$WORK_DIR/genesis.toml"
+ACCOUNTS_CONFIG_FILE="$WORK_DIR/accounts.toml"
 BUILD_LOG="$WORK_DIR/build.log"
 SEED_LOG="$WORK_DIR/seed.log"
 OFFLINE_OUT="$WORK_DIR/offline.out"
@@ -185,27 +185,17 @@ fi
 
 # --- network -------------------------------------------------------------------------------------
 
-# Absolute account paths: run-node.sh prepends the validators list into a copy under /tmp, so
-# relative paths would resolve against /tmp rather than this work dir.
-cat > "$GENESIS_CONFIG_FILE" <<EOF
-timestamp = 1717344256
-version   = 1
-native_faucet = "$SEEDED_DIR/faucet.mac"
-
-[fee_parameters]
-# Zero, because the seeded wallet holds no assets and could not pay a fee.
-verification_base_fee = 0
-
-[[account]]
-path = "$SEEDED_DIR/wallet.mac"
-
+cat > "$ACCOUNTS_CONFIG_FILE" <<EOF
 [[account]]
 path = "$SEEDED_DIR/counter.mac"
 EOF
 
 phase "Starting the local network" "$STACK_LOG"
 STACK_START_EPOCH=$(date +%s)
-GENESIS_CONFIG="$GENESIS_CONFIG_FILE" \
+ACCOUNTS_CONFIG="$ACCOUNTS_CONFIG_FILE" \
+MIDEN_VALIDATOR_GENESIS_NATIVE_FAUCET="$SEEDED_DIR/faucet.mac" \
+MIDEN_VALIDATOR_GENESIS_FUNDING_ACCOUNT="$SEEDED_DIR/wallet.mac" \
+MIDEN_VALIDATOR_GENESIS_VERIFICATION_BASE_FEE=0 \
 ENABLE_FULL_NODES=false \
 MIDEN_NODE_BIN="$BIN_DIR/miden-node" \
 MIDEN_VALIDATOR_BIN="$VALIDATOR_BIN" \

@@ -175,49 +175,29 @@ inside the Compose network.
 MIDEN_REMOTE_PROVER_URL=http://<prover-host>:50051 make local-network-up
 ```
 
-## Genesis Config Override
+## Additional Genesis Accounts
 
-By default, the local network bootstraps from the bundled `genesis` Compose config in `compose/bootstrap.yml`. The
-bootstrap service derives the public keys of the three validator services from their signing keys and passes them to
-`miden-validator genesis` via `--validator.key` flags. The signing keys are insecure defaults defined in
-`compose/validator.yml` and must never be used outside local development.
+To include additional accounts, create a TOML file with `[[wallet]]`, `[[fungible_faucet]]`, or `[[account]]` entries.
+Mount it through a Compose override:
 
-To replace it, create a Compose override file:
-
-```yaml title="genesis.override.yml"
+```yaml title="accounts.override.yml"
+services:
+  bootstrap-validator:
+    configs:
+      - source: additional-accounts
+        target: /accounts.toml
+    environment:
+      MIDEN_VALIDATOR_GENESIS_ACCOUNTS_CONFIG: /accounts.toml
 configs:
-  genesis: !override
-    file: /absolute/path/to/genesis.toml
+  additional-accounts:
+    file: /absolute/path/to/accounts.toml
 ```
-
-Use that override with either the repository model or a published application:
 
 ```bash
-make local-network-up COMPOSE_OVERRIDE_FILE=/absolute/path/to/genesis.override.yml
-
-docker compose \
-  -f oci://ghcr.io/0xmiden/miden-local-network:vX.Y.Z \
-  -f /absolute/path/to/genesis.override.yml \
-  up -d
+make local-network-up COMPOSE_OVERRIDE_FILE=/absolute/path/to/accounts.override.yml
 ```
 
-The custom configuration is mounted into the bootstrap validator as `/genesis.toml` and passed to
-`miden-validator genesis --config`. The validator set is not part of the configuration file: the bootstrap service
-always commits the public keys corresponding to the three validator private keys via `--validator.key` flags. Override
-those private keys with `MIDEN_VALIDATOR_1_SIGNING_KEY`, `MIDEN_VALIDATOR_2_SIGNING_KEY`, and
-`MIDEN_VALIDATOR_3_SIGNING_KEY`, and the shared transaction encryption key with `MIDEN_VALIDATOR_ENCRYPTION_KEY`
-(`miden-validator keygen` generates fresh key material).
-
-The override must import the funded distributor if the funding service uses its default account file. Keep the node's
-verification base fee at `7` to match the bundled USDCx faucet configuration. Do not add `[[wallet]]` entries with USDCx
-balances: they replace the faucet's recorded supply with the generated wallets' total balance.
-
-If the local network has already been bootstrapped, delete the existing local chain data before starting with a
-different genesis configuration:
-
-```bash
-make local-network-delete
-```
+Delete the existing local chain with `make local-network-delete` before changing its genesis accounts.
 
 ## Storage Key Setup
 

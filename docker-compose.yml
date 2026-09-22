@@ -5,8 +5,8 @@
 #   bundled miden-remote-prover service at http://tx-prover:50051.
 # - MIDEN_VALIDATOR_1_SIGNING_KEY, MIDEN_VALIDATOR_2_SIGNING_KEY, and
 #   MIDEN_VALIDATOR_3_SIGNING_KEY: private signing keys for the three validators.
-#   The insecure defaults correspond to the public keys in the genesis config
-#   in compose/bootstrap.yml and are intended only for local development.
+#   Bootstrap derives the public keys from these keys. The insecure defaults
+#   are intended only for local development.
 # - MIDEN_VALIDATOR_STORAGE_KEY_EPOCH: hex-encoded 32-byte Golden key epoch.
 # - MIDEN_USDCX_INITIAL_SUPPLY: initial USDCx supply in base units (six decimal
 #   places). Defaults to 1000000000000000, or one billion USDCx.

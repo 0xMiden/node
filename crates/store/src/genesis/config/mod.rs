@@ -1,4 +1,4 @@
-//! Describe a subset of the genesis manifest in easily human readable format
+//! Additional accounts for the genesis state.
 
 use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
@@ -15,21 +15,10 @@ use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey as RpoSecretKey;
 use miden_protocol::errors::TokenSymbolError;
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::{Felt, ONE};
-use miden_standards::account::auth::{Approver, AuthSingleSig, NetworkAccountNoteAllowlist};
-use miden_standards::account::faucets::{
-    FungibleFaucet,
-    TokenName,
-    create_native_fungible_faucet_for_genesis,
-};
-use miden_standards::account::fees::BasicConstantFeePolicy;
-use miden_standards::account::policies::{
-    BurnPolicy,
-    MintPolicy,
-    TokenPolicyManager,
-    TransferPolicy,
-};
+use miden_standards::account::auth::{Approver, AuthSingleSig};
+use miden_standards::account::faucets::{FungibleFaucet, TokenName};
+use miden_standards::account::policies::{BurnPolicy, MintPolicy, TokenPolicyManager};
 use miden_standards::account::wallets::create_basic_wallet;
-use miden_standards::note::{BurnNote, FeeSponsorshipNote, MintNote};
 use rand::distr::weighted::Weight;
 use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha20Rng;
@@ -43,17 +32,15 @@ use self::errors::GenesisConfigError;
 #[cfg(test)]
 mod tests;
 
-const DEFAULT_NATIVE_FAUCET_SYMBOL: &str = "MIDEN";
-const DEFAULT_NATIVE_FAUCET_DECIMALS: u8 = 6;
-const DEFAULT_NATIVE_FAUCET_MAX_SUPPLY: u64 = 100_000_000_000_000_000;
-/// One thousand native tokens, used to bootstrap the operator's fee payments.
-const DEFAULT_FAUCET_OPERATOR_BALANCE: u64 = 1_000_000_000;
-
-/// Name of the account file written for the generated native faucet.
-pub const NATIVE_FAUCET_FILE_NAME: &str = "native_faucet.mac";
-
-/// Name of the account file written for the generated faucet operator.
-pub const FAUCET_OPERATOR_FILE_NAME: &str = "faucet_operator.mac";
+/// Required inputs for the genesis state.
+#[derive(Debug, Clone)]
+pub struct GenesisInputs {
+    pub native_faucet: Account,
+    pub funding_account: Account,
+    pub fee_parameters: FeeParameters,
+    pub timestamp: u32,
+    pub validator_config: ValidatorConfig,
+}
 
 // GENESIS CONFIG
 // ================================================================================================
@@ -68,29 +55,10 @@ struct GenericAccountConfig {
     path: PathBuf,
 }
 
-/// Specify a set of faucets and wallets with assets for easier test deployments.
-///
-/// Notice: Any faucet must be declared _before_ it's use in a wallet/regular account.
-#[derive(Debug, Clone, serde::Deserialize)]
+/// Additional faucets, wallets, and account files to include in genesis.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GenesisConfig {
-    timestamp: u32,
-    /// Override the native faucet with a custom faucet account.
-    ///
-    /// If unspecified, the native faucet is generated as a network account owned by a generated
-    /// faucet operator account, using:
-    ///
-    /// ```toml
-    /// symbol     = "MIDEN"
-    /// decimals   = 6
-    /// max_supply = 100_000_000_000_000_000
-    /// ```
-    ///
-    /// The generated operator is pre-funded with 1,000 MIDEN tokens so it can pay the fees required
-    /// to submit the first mint requests.
-    #[serde(default)]
-    native_faucet: Option<PathBuf>,
-    fee_parameters: FeeParameterConfig,
     #[serde(default)]
     wallet: Vec<WalletConfig>,
     #[serde(default)]
@@ -101,33 +69,11 @@ pub struct GenesisConfig {
     config_dir: PathBuf,
 }
 
-impl Default for GenesisConfig {
-    fn default() -> Self {
-        Self {
-            timestamp: u32::try_from(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .expect("Time does not go backwards")
-                    .as_secs(),
-            )
-            .expect("Timestamp should fit into u32"),
-            wallet: vec![],
-            native_faucet: None,
-            fee_parameters: FeeParameterConfig { verification_base_fee: 0 },
-            fungible_faucet: vec![],
-            account: vec![],
-            config_dir: PathBuf::from("."),
-        }
-    }
-}
-
 impl GenesisConfig {
-    /// Read the genesis config from a TOML file.
+    /// Read additional accounts from a TOML file.
     ///
     /// The parent directory of `path` is used to resolve relative paths for account files
     /// referenced in the configuration (e.g., `[[account]]` entries with `path` fields).
-    ///
-    /// Notice: It will generate the specified case during [`fn into_state`].
     pub fn read_toml_file(path: &Path) -> Result<Self, GenesisConfigError> {
         let toml_str = fs_err::read_to_string(path)
             .map_err(|e| GenesisConfigError::ConfigFileRead(e, path.to_path_buf()))?;
@@ -135,33 +81,32 @@ impl GenesisConfig {
         Self::read_toml(&toml_str, config_dir)
     }
 
-    /// Parse a genesis config from a TOML formatted string.
-    ///
-    /// The `config_dir` parameter is stored so that relative paths for account files
-    /// (e.g., `[[account]]` entries with `path` fields, or native faucet file references)
-    /// can be resolved later during [`Self::into_state`].
+    /// Parse additional accounts and resolve file paths relative to `config_dir`.
     fn read_toml(toml_str: &str, config_dir: &Path) -> Result<Self, GenesisConfigError> {
         let mut config: Self = toml::from_str(toml_str)?;
         config.config_dir = config_dir.to_path_buf();
         Ok(config)
     }
 
-    /// Convert the in memory representation into the new genesis state
+    /// Build the genesis state from the required inputs and additional accounts.
     ///
-    /// The given `validator_config` is the genesis validator set committed to by the genesis
-    /// header. The genesis block is not signed; the committed set is required to sign every block
-    /// after genesis.
+    /// The genesis header commits to the validator set in `inputs`.
+    /// That set must sign every block after genesis.
     ///
     /// Also returns the set of secrets for the generated accounts.
     #[expect(clippy::too_many_lines)]
     pub fn into_state(
         self,
-        validator_config: ValidatorConfig,
+        inputs: GenesisInputs,
     ) -> Result<(GenesisState, AccountSecrets), GenesisConfigError> {
-        let GenesisConfig {
-            timestamp,
+        let GenesisInputs {
             native_faucet,
+            funding_account,
             fee_parameters,
+            timestamp,
+            validator_config,
+        } = inputs;
+        let GenesisConfig {
             fungible_faucet: fungible_faucet_configs,
             wallet: wallet_configs,
             account: account_entries,
@@ -183,47 +128,29 @@ impl GenesisConfig {
         // Every asset sitting in a wallet, has to reference a faucet for that asset
         let mut faucet_accounts = IndexMap::<TokenSymbolStr, Account>::new();
 
-        // Collect the generated secret keys for the test, so one can interact with those
-        // accounts/sign transactions
+        // Keep the generated keys for account file exports.
         let mut secrets = Vec::new();
 
-        // Handle native faucet: generate a network faucet and its operator, or load from file
-        let NativeFaucet {
-            account: native_faucet_account,
-            symbol,
-            operator,
-        } = NativeFaucetConfig(native_faucet).build_account(&config_dir)?;
-        let native_faucet_account_id = native_faucet_account.id();
-
-        // Track all genesis issuance, one entry per faucet account id. A generated faucet operator
-        // is pre-funded in `NativeFaucetConfig::build_account`, so account for that allocation
-        // before adding configured wallet balances below.
-        let mut faucet_issuance = IndexMap::<AccountId, u64>::new();
-        if operator.is_some() {
-            faucet_issuance.insert(native_faucet_account_id, DEFAULT_FAUCET_OPERATOR_BALANCE);
+        let native_faucet_account_id = native_faucet.id();
+        let faucet = FungibleFaucet::try_from(&native_faucet).map_err(|_| {
+            GenesisConfigError::NativeFaucetNotFungible { account_id: native_faucet_account_id }
+        })?;
+        if funding_account.id().account_type() != AccountType::Public {
+            return Err(GenesisConfigError::FundingAccountNotPublic {
+                account_id: funding_account.id(),
+            });
+        }
+        for account in [&native_faucet, &funding_account] {
+            if account.nonce() == Felt::ZERO {
+                return Err(GenesisConfigError::UndeployedAccount { account_id: account.id() });
+            }
         }
 
-        let operator_account = match operator {
-            Some((operator, operator_secret)) => {
-                // The generated faucet is a network account and holds no key of its own, but
-                // consumers still need its state and id, so it is written out like any other
-                // generated account.
-                secrets.push((
-                    NATIVE_FAUCET_FILE_NAME.to_string(),
-                    native_faucet_account.id(),
-                    None,
-                ));
-                secrets.push((
-                    FAUCET_OPERATOR_FILE_NAME.to_string(),
-                    operator.id(),
-                    Some(AuthSecretKey::Falcon512Poseidon2(operator_secret)),
-                ));
-                Some(operator)
-            },
-            None => None,
-        };
-
-        faucet_accounts.insert(symbol.clone(), native_faucet_account);
+        // Additional wallet allocations increase the imported supply. The funding account balance
+        // does not determine that supply.
+        let mut faucet_issuance = IndexMap::<AccountId, u64>::new();
+        faucet_issuance.insert(native_faucet_account_id, faucet.token_supply().as_u64());
+        faucet_accounts.insert(TokenSymbolStr::from(faucet.symbol().clone()), native_faucet);
 
         // Setup additional fungible faucets from parameters
         for fungible_faucet_config in fungible_faucet_configs {
@@ -239,11 +166,8 @@ impl GenesisConfig {
                 faucet_account.id(),
                 Some(AuthSecretKey::Falcon512Poseidon2(secret_key)),
             ));
-            // Do _not_ collect the account, only after we know all wallet assets we know the
-            // remaining supply in the faucets.
         }
 
-        let fee_parameters = FeeParameters::new(fee_parameters.verification_base_fee);
         let protocol_config =
             ProtocolConfig::current(AssetId::new_fungible(native_faucet_account_id))?;
 
@@ -301,10 +225,10 @@ impl GenesisConfig {
         }
 
         let mut all_accounts = Vec::<Account>::new();
-        // Apply all fungible faucet adjustments to the respective faucet
+        // Set each faucet supply after all wallet allocations are known.
         for (symbol, mut faucet_account) in faucet_accounts {
             let faucet_id = faucet_account.id();
-            // If there is no account using the asset, we only bump the nonce to `ONE`.
+            // The native supply includes the amount recorded in the imported faucet.
             let total_issuance = faucet_issuance.get(&faucet_id).copied().unwrap_or_default();
 
             if total_issuance != 0 {
@@ -323,7 +247,7 @@ impl GenesisConfig {
                 faucet_account.storage_mut().set_item(slot.name(), slot.value())?;
                 debug!(
                     target: LOG_TARGET,
-                    "Reducing faucet account issuance",
+                    "Setting faucet account issuance",
                     account.id = faucet_id,
                     asset.symbol = symbol.to_string(),
                     asset.amount = total_issuance
@@ -337,26 +261,13 @@ impl GenesisConfig {
                 );
             }
 
-            // Force the account nonce to 1, marking the faucet as deployed at genesis.
-            faucet_account.set_nonce(ONE)?;
-
-            debug_assert_eq!(faucet_account.nonce(), ONE);
-
-            // sanity check the total issuance against
-            let faucet = FungibleFaucet::try_from(faucet_account.storage())?;
-            let max_supply = faucet.max_supply().as_u64();
-            if max_supply < total_issuance {
-                return Err(GenesisConfigError::MaxIssuanceExceeded {
-                    max_supply,
-                    symbol,
-                    total_issuance,
-                });
+            if faucet_id != native_faucet_account_id {
+                faucet_account.set_nonce(ONE)?;
             }
 
             all_accounts.push(faucet_account);
         }
-        // Keep the operator after the faucets because its vault references the native faucet.
-        all_accounts.extend(operator_account);
+        all_accounts.push(funding_account);
 
         // Ensure the faucets always precede the wallets referencing them
         all_accounts.extend(wallet_accounts);
@@ -364,9 +275,14 @@ impl GenesisConfig {
         // Append file-loaded accounts as-is
         all_accounts.extend(file_loaded_accounts);
 
-        // Each generated account is written to its own file, so a repeated name would make one
-        // account overwrite another. This covers every generated name: the wallets, the configured
-        // faucets, and the native faucet with its operator.
+        let mut account_ids = std::collections::HashSet::new();
+        for account in &all_accounts {
+            if !account_ids.insert(account.id()) {
+                return Err(GenesisConfigError::DuplicateAccount { account_id: account.id() });
+            }
+        }
+
+        // Each generated account needs a distinct output file.
         let mut file_names: Vec<&str> = secrets.iter().map(|(name, ..)| name.as_str()).collect();
         file_names.sort_unstable();
         if let Some(pair) = file_names.windows(2).find(|pair| pair[0] == pair[1]) {
@@ -384,156 +300,6 @@ impl GenesisConfig {
             AccountSecrets { secrets },
         ))
     }
-}
-
-// FEE PARAMETER CONFIG
-// ================================================================================================
-
-/// Represents a the fee parameters using the given asset
-///
-/// A faucet providing the `symbol` token moste exist.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct FeeParameterConfig {
-    /// Verification base fee, in units of smallest denomination.
-    verification_base_fee: u32,
-}
-
-// NATIVE FAUCET CONFIG
-// ================================================================================================
-
-/// The native faucet resolved from the configuration.
-struct NativeFaucet {
-    account: Account,
-    symbol: TokenSymbolStr,
-    /// The operator account owning the faucet, with its signing key. Only present when the faucet
-    /// is generated; an imported faucet comes with its own keys.
-    operator: Option<(Account, RpoSecretKey)>,
-}
-
-/// Wraps an optional path to a pre-built faucet account file.
-///
-/// When no path is provided, a network faucet is generated together with the operator account
-/// owning it.
-struct NativeFaucetConfig(Option<PathBuf>);
-
-impl NativeFaucetConfig {
-    /// Build or load the native faucet account.
-    ///
-    /// For `None`, generates a network faucet plus the operator account owning it, and returns the
-    /// operator alongside its signing key.
-    ///
-    /// For `Some(path)`, loads the account from disk and validates it is a fungible faucet.
-    fn build_account(self, config_dir: &Path) -> Result<NativeFaucet, GenesisConfigError> {
-        match self.0 {
-            None => {
-                // The operator is built first, since the faucet it owns commits to its id.
-                let (mut operator, operator_secret) = build_faucet_operator()?;
-                let (account, symbol) = build_native_faucet(operator.id())?;
-                // Now that the faucet id is known, pre-fund the operator so it can pay fees for the
-                // first mint requests. Genesis issuance is updated in `into_state`.
-                let operator_asset =
-                    FungibleAsset::new(account.id(), DEFAULT_FAUCET_OPERATOR_BALANCE)?;
-                operator.vault_mut().add_asset(operator_asset.into())?;
-                Ok(NativeFaucet {
-                    account,
-                    symbol,
-                    operator: Some((operator, operator_secret)),
-                })
-            },
-            Some(path) => {
-                let full_path = config_dir.join(&path);
-                let account_file = AccountFile::read(&full_path)
-                    .map_err(|e| GenesisConfigError::AccountFileRead(e, full_path.clone()))?;
-                let (account, _) = account_file.into_parts();
-
-                let faucet = FungibleFaucet::try_from(&account).map_err(|_| {
-                    GenesisConfigError::NativeFaucetNotFungible { path: full_path.clone() }
-                })?;
-                let symbol = TokenSymbolStr::from(faucet.symbol().clone());
-                Ok(NativeFaucet { account, symbol, operator: None })
-            },
-        }
-    }
-}
-
-// FAUCET OPERATOR
-// ================================================================================================
-
-/// Builds the initially assetless faucet operator account and returns it with its signing key.
-///
-/// Its nonce is set to `1`, marking it as deployed at genesis. The operator is funded after the
-/// native faucet is built, because its asset id is not known before then.
-fn build_faucet_operator() -> Result<(Account, RpoSecretKey), GenesisConfigError> {
-    let mut rng = ChaCha20Rng::from_seed(rand::random());
-
-    let secret_key = RpoSecretKey::with_rng(&mut rng);
-    let auth = Approver::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
-    let init_seed: [u8; 32] = rng.random();
-    let mut operator = create_basic_wallet(init_seed, auth, AccountType::Public)?;
-    operator.set_nonce(ONE)?;
-
-    Ok((operator, secret_key))
-}
-
-// NATIVE FAUCET
-// ================================================================================================
-
-/// Builds the native faucet as a network account owned by `operator_id`.
-///
-/// The faucet is authenticated as a network account and therefore carries no signing key of its
-/// own; only the operator can mint from it.
-fn build_native_faucet(
-    operator_id: AccountId,
-) -> Result<(Account, TokenSymbolStr), GenesisConfigError> {
-    let mut rng = ChaCha20Rng::from_seed(rand::random());
-
-    let symbol = TokenSymbolStr::from_str(DEFAULT_NATIVE_FAUCET_SYMBOL)?;
-    let faucet_component = FungibleFaucet::builder()
-        .name(
-            TokenName::new(DEFAULT_NATIVE_FAUCET_SYMBOL)
-                .expect("token symbol fits within token name byte limit"),
-        )
-        .symbol(symbol.as_ref().clone())
-        .decimals(DEFAULT_NATIVE_FAUCET_DECIMALS)
-        .max_supply(AssetAmount::new(DEFAULT_NATIVE_FAUCET_MAX_SUPPLY)?)
-        .build()?;
-
-    let policies = TokenPolicyManager::builder()
-        .active_mint_policy(MintPolicy::owner_only())
-        .active_burn_policy(BurnPolicy::allow_all())
-        .active_send_policy(TransferPolicy::allow_all())
-        .active_receive_policy(TransferPolicy::allow_all())
-        .build();
-
-    let fee_policy = BasicConstantFeePolicy::new().with_fees([
-        (MintNote::script_root(), AssetAmount::ZERO),
-        (BurnNote::script_root(), AssetAmount::ZERO),
-    ]);
-
-    // The faucet charges fees in its own asset; the genesis constructor resolves the self-reference
-    // by patching the fee-asset slot after the account id is derived.
-    let faucet_seed: [u8; 32] = rng.random();
-    let faucet = create_native_fungible_faucet_for_genesis(
-        faucet_seed,
-        faucet_component,
-        operator_id,
-        policies,
-        fee_policy,
-    )?;
-
-    debug_assert_eq!(faucet.nonce(), ONE);
-
-    // The faucet's note allowlist must cover the fee sponsorship note, otherwise the network
-    // transaction builder will not work.
-    debug_assert!(
-        NetworkAccountNoteAllowlist::try_from(faucet.storage()).is_ok_and(|allowlist| {
-            allowlist.allowed_script_roots().contains(&FeeSponsorshipNote::script_root())
-        }),
-        "network faucet's note allowlist must cover the fee sponsorship note"
-    );
-
-    Ok((faucet, symbol))
 }
 
 // FUNGIBLE FAUCET CONFIG
@@ -694,8 +460,7 @@ impl AccountSecrets {
 // HELPERS
 // ================================================================================================
 
-/// Process wallet assets and return them as a fungible asset delta. Track the negative adjustments
-/// for the respective faucets.
+/// Build wallet assets and add their amounts to each faucet's supply.
 fn prepare_fungible_asset_update(
     assets: impl IntoIterator<Item = AssetEntry>,
     faucets: &IndexMap<TokenSymbolStr, Account>,

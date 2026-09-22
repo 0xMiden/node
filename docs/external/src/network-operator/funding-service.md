@@ -14,23 +14,9 @@ that source, and it gives an operator a single account to keep funded.
 
 ## Provision the funding account
 
-The funding account is created at genesis. Add a named wallet to the genesis configuration:
-
-```toml
-[[wallet]]
-account_type = "public"
-assets       = [{ amount = 1_000_000_000_000, symbol = "MIDEN" }]
-name         = "funding_service"
-```
-
-The name is required, and `miden-validator genesis` writes the account file to
-`<accounts-directory>/funding_service.mac`, so the service loads it from a fixed path. The account must be public: the
-service reads the account's vault and nonce back from the node, which only stores the full state of a public account.
-
-The amount is in base units of the native asset, which has six decimals. The example is one million MIDEN. Size it for
-the lifetime of the network: on a development or test network a pre-funded balance large enough to last for years avoids
-any manual top-up. Note that the total issuance of all genesis accounts must stay within the native faucet's maximum
-supply.
+Prepare a public account with a nonzero nonce and a balance of the native asset. Pass its account file to
+`miden-validator genesis --funding-account`. Pass the same account, including its signing key, to this service through
+`--account-file`. The service reads the current vault and nonce from the node.
 
 ## Start
 

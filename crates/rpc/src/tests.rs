@@ -27,7 +27,7 @@ use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify};
 use miden_node_store::DataDirectory;
 use miden_node_store::allowlist::{AccountAllowlist, InvitationCode, InvitationEntry};
 use miden_node_store::genesis::GenesisBlock;
-use miden_node_store::genesis::config::GenesisConfig;
+use miden_node_store::genesis::config::{GenesisConfig, GenesisInputs};
 use miden_node_store::state::State;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::clap::GrpcOptions;
@@ -202,8 +202,20 @@ impl TestStore {
                 .expect("test signing key should decode")
                 .public_key();
         let validator_config = ValidatorConfig::new(vec![validator_key], 1).unwrap();
-        let (mut genesis_state, _) = config.into_state(validator_config).unwrap();
-        genesis_state.fee_parameters = FeeParameters::new(verification_base_fee);
+        let mut builder = MockChainBuilder::new();
+        let funding_account = builder.add_existing_wallet(Auth::basic_ecdsa()).unwrap();
+        let native_faucet = builder
+            .add_existing_basic_faucet(Auth::basic_ecdsa(), "USDCX", 1_000_000, Some(1_000))
+            .unwrap();
+        let (genesis_state, _) = config
+            .into_state(GenesisInputs {
+                native_faucet,
+                funding_account,
+                fee_parameters: FeeParameters::new(verification_base_fee),
+                timestamp: 1717344256,
+                validator_config,
+            })
+            .unwrap();
         let genesis_block =
             genesis_state.clone().into_block().expect("genesis block should be created");
         let genesis_commitment = genesis_block.inner().header().commitment();

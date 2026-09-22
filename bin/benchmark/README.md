@@ -155,6 +155,9 @@ Install the binaries:
 make install-node install-validator install-ntx-builder install-remote-prover
 ```
 
+Prepare the native faucet and public funding account files with nonzero nonces. The benchmark requires a zero-fee
+network.
+
 Bootstrap a fresh data directory (one-time). Generate the validator key material first (`keygen` prints the signing
 secret, its public key, and the shared transaction encryption key), then the validator creates the genesis block —
 committing the signing public key — and every component bootstraps its storage from it:
@@ -167,6 +170,10 @@ miden-validator keygen   # note the printed signing-key, validator-key, and encr
 miden-validator genesis \
   --genesis-block-directory "$DATA/genesis" \
   --accounts-directory      "$DATA/accounts" \
+  --native-faucet           /path/to/native-faucet.mac \
+  --funding-account         /path/to/funding-account.mac \
+  --verification-base-fee   0 \
+  --timestamp               "$(date +%s)" \
   --validator.key           "<validator-key-hex>"
 
 miden-validator bootstrap \
