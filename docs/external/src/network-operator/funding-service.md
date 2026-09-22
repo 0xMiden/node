@@ -113,14 +113,14 @@ A failed request answers with a JSON body that holds the reason:
 
 The status code tells a client whether to change the request, add funds, or send the request again.
 
-| Status                      | Meaning                                                                                          |
-| --------------------------- | ------------------------------------------------------------------------------------------------ |
-| `400 Bad Request`           | The account ID is malformed, the requested amount is zero, or the amount exceeds `--max-amount`. |
-| `408 Request Timeout`       | The request ran longer than `--http.timeout`.                                                    |
-| `412 Precondition Failed`   | The balance the service last read does not cover the request plus the fee of one transaction.    |
-| `429 Too Many Requests`     | Too many notes are queued.                                                                       |
-| `500 Internal Server Error` | The service failed for a reason the client cannot act on.                                        |
-| `503 Service Unavailable`   | The service is shutting down.                                                                    |
+| Status                      | Meaning                                                                                                                       |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `400 Bad Request`           | The account ID is malformed or names the funding account, the requested amount is zero, or the amount exceeds `--max-amount`. |
+| `408 Request Timeout`       | The request ran longer than `--http.timeout`.                                                                                 |
+| `412 Precondition Failed`   | The balance the service last read does not cover the request plus the fee of one transaction.                                 |
+| `429 Too Many Requests`     | Too many notes are queued.                                                                                                    |
+| `500 Internal Server Error` | The service failed for a reason the client cannot act on.                                                                     |
+| `503 Service Unavailable`   | The service is shutting down.                                                                                                 |
 
 A request that fails created no note, and a client may send it again as it is. The service builds the note before it
 answers, so a request that answers with 200 always names a note the service goes on to create.

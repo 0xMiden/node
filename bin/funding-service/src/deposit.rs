@@ -65,10 +65,6 @@ impl DepositScanner {
             return Ok(Vec::new());
         }
 
-        // A deposit may already be spent: an earlier run of the service consumed it, or the sender
-        // consumed it again itself. A transaction which consumes a spent note is rejected, so those
-        // notes are dropped here. The scan starts at the block the notes were found in, because a
-        // note cannot be spent before it exists.
         let nullifiers: Vec<_> = candidates.iter().map(Note::nullifier).collect();
         let spent = node.sync_nullifiers(&nullifiers, from_block).await?;
 

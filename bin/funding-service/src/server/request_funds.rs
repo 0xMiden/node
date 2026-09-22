@@ -60,6 +60,7 @@ pub(super) async fn request_funds(
 ) -> Result<Json<RequestFundsResponse>, RequestFundsError> {
     let target = AccountId::from_hex(&request.account_id)
         .map_err(|_| RequestFundsError::InvalidAccountId)?;
+    validate_target(target, state.status.account_id())?;
     validate_amount(request.amount, state.status.max_amount())?;
     validate_balance(request.amount, state.status.balance(), state.status.verification_base_fee())?;
 
@@ -85,6 +86,15 @@ pub(super) async fn request_funds(
     })?;
 
     Ok(Json(response))
+}
+
+/// Checks that the note does not target the funding account.
+fn validate_target(target: AccountId, funder: AccountId) -> Result<(), RequestFundsError> {
+    if target == funder {
+        return Err(RequestFundsError::TargetIsFundingAccount);
+    }
+
+    Ok(())
 }
 
 /// Checks the requested amount against the configured maximum.
@@ -118,7 +128,6 @@ fn validate_balance(
 mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use miden_protocol::asset::FungibleAsset;
     use miden_protocol::block::BlockNumber;
     use miden_protocol::utils::serde::Deserializable;
     use miden_standards::note::P2idNoteStorage;
@@ -204,7 +213,8 @@ mod tests {
     async fn an_unaffordable_request_is_refused_before_it_is_queued() {
         let (state, mut rx) = test_state(MAX_AMOUNT);
         state.status.update(10, BlockNumber::GENESIS, 0);
-        let target = FungibleAsset::mock_issuer();
+        let (target, _) = crate::test_utils::genesis_style_wallet(state.fee_faucet_id, 0, [63; 32])
+            .expect("wallet should build");
 
         let response = test_router(state)
             .oneshot(
@@ -212,7 +222,7 @@ mod tests {
                     .header("content-type", "application/json")
                     .body(Body::from(format!(
                         r#"{{"account_id":"{}","amount":500}}"#,
-                        target.to_hex()
+                        target.id().to_hex()
                     )))
                     .unwrap(),
             )
@@ -220,6 +230,31 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+        assert!(rx.try_recv().is_err(), "no note should reach the worker");
+    }
+
+    /// A note which targets the funding account would return to it as a deposit, so the request
+    /// must not reach the worker even when the balance covers it.
+    #[tokio::test]
+    async fn a_request_for_the_funding_account_is_refused_before_it_is_queued() {
+        let (state, mut rx) = test_state(MAX_AMOUNT);
+        state.status.update(MAX_AMOUNT, BlockNumber::GENESIS, 0);
+        let funder = state.status.account_id();
+
+        let response = test_router(state)
+            .oneshot(
+                Request::post(REQUEST_FUNDS_PATH)
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"account_id":"{}","amount":500}}"#,
+                        funder.to_hex()
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert!(rx.try_recv().is_err(), "no note should reach the worker");
     }
 }
