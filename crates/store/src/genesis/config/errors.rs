@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use miden_objects::account_file::AccountFileError;
 use miden_protocol::account::AccountId;
 use miden_protocol::errors::{
     AccountDeltaError,
@@ -22,7 +23,7 @@ pub enum GenesisConfigError {
     #[error("failed to read config file at {1}")]
     ConfigFileRead(#[source] std::io::Error, PathBuf),
     #[error("failed to read account file at {1}")]
-    AccountFileRead(#[source] std::io::Error, PathBuf),
+    AccountFileRead(#[source] AccountFileError, PathBuf),
     #[error("native faucet from file {path} is not a fungible faucet")]
     NativeFaucetNotFungible { path: PathBuf },
     #[error("account translation from config to state failed")]

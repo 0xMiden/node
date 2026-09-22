@@ -3,9 +3,10 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use miden_objects::account_file::AccountFile;
 use miden_protocol::Word;
 use miden_protocol::account::auth::AuthSecretKey;
-use miden_protocol::account::{AccountFile, AccountId, AccountType};
+use miden_protocol::account::{AccountId, AccountType};
 
 // FUNDER KEY
 // ================================================================================================
@@ -24,11 +25,11 @@ impl FunderKey {
         let account_file = AccountFile::read(path)
             .with_context(|| format!("failed to read the account file at {}", path.display()))?;
 
-        let secret_key = account_file.auth_secret_keys.first().cloned().with_context(|| {
+        let secret_key = account_file.auth_secret_keys().first().cloned().with_context(|| {
             format!("the account file at {} holds no secret key", path.display())
         })?;
 
-        let account = account_file.account;
+        let account = account_file.account();
         anyhow::ensure!(
             account.id().account_type() == AccountType::Public,
             "the funding account {} is not public: the service reads its state from the node, \

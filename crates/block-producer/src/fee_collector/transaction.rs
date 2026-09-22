@@ -2,10 +2,10 @@ use std::collections::BTreeSet;
 use std::num::NonZeroU16;
 
 use miden_node_store::state::StateView;
+use miden_objects::account_file::AccountFile;
 use miden_protocol::Word;
 use miden_protocol::account::{
     Account,
-    AccountFile,
     AccountId,
     PartialAccount,
     StorageMapKey,
@@ -55,7 +55,7 @@ impl FeeCollectorTransactionBuilder {
         account_file: AccountFile,
         view: &StateView,
     ) -> anyhow::Result<Self> {
-        let AccountFile { account, auth_secret_keys } = account_file;
+        let (account, auth_secret_keys) = account_file.into_parts();
         let auth_root = AuthTxFeeCollector::code()
             .procedure_roots()
             .next()
@@ -410,9 +410,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn fee_collection_uses_updated_native_faucet_blocklist() -> anyhow::Result<()> {
         for blocked in [false, true] {
-            let mut collector = mock_collection_account();
-            collector.account.set_nonce(miden_protocol::ONE)?;
-            let collector_id = collector.account.id();
+            let (mut account, auth_secret_keys) = mock_collection_account().into_parts();
+            account.set_nonce(miden_protocol::ONE)?;
+            let collector = AccountFile::new(account, auth_secret_keys);
+            let collector_id = collector.account().id();
             let target = ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE.try_into()?;
             let blocked_account = if blocked { target } else { collector_id };
             let faucet = FungibleFaucet::builder()
@@ -442,7 +443,7 @@ mod tests {
                     .with_component(BlocklistManager),
                 AccountState::Exists,
             )?;
-            chain.add_account(collector.account.clone())?;
+            chain.add_account(collector.account().clone())?;
             let mut chain = chain.fee_faucet_id(faucet.id()).build()?;
             let directory = tempfile::tempdir()?;
             bootstrap(&chain, directory.path())?;
@@ -534,7 +535,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         bootstrap(&MockChain::builder().build()?, directory.path())?;
         let (state, ..) = State::for_tests(directory.path()).await;
-        let account = mock_collection_account().account;
+        let (account, _) = mock_collection_account().into_parts();
         let target = ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE.try_into()?;
         for keys in [vec![], vec![AuthSecretKey::new_falcon512_poseidon2()]] {
             let result = FeeCollectorTransactionBuilder::new(
