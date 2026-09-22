@@ -7,7 +7,7 @@ use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::note_transport::DecodedTransportNote;
 use miden_node_tracing::grpc::grpc_trace_fn;
 use miden_node_tracing::panic::catch_panic_layer_fn;
-use miden_node_tracing::{error, info};
+use miden_node_tracing::{debug, error, info};
 use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::shutdown::CancellationToken;
@@ -166,7 +166,7 @@ impl Server {
         )
         .await
         .map_err(storage_status)?;
-        info!(target: LOG_TARGET, "Note accepted",
+        debug!(target: LOG_TARGET, "Note accepted",
             note.id = id,
             note_transport.payload_bytes = size,
             note_transport.inserted = result == db::StoreResult::Inserted);
