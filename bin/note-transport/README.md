@@ -3,34 +3,6 @@
 The note transport service stores private note envelopes for recipients that poll by note tag. It is part of the Miden
 node workspace and uses the workspace license.
 
-## Run the service
-
-Create the database before starting the service:
-
-```sh
-miden-note-transport bootstrap --data-directory ./note-transport-data
-miden-note-transport start --data-directory ./note-transport-data --max-storage-bytes 1073741824
-```
-
-The default listener is `127.0.0.1:57292`. Use `--listen` to change it. Set `MIDEN_NOTE_TRANSPORT_DATA_DIRECTORY`,
-`MIDEN_NOTE_TRANSPORT_LISTEN`, and `MIDEN_NOTE_TRANSPORT_MAX_STORAGE_BYTES` instead of the corresponding flags if
-needed. Use `--enable-otel` to export traces. The service uses the same OpenTelemetry environment variables and log
-filters as the other node binaries.
-
-Start verifies the schema and does not create or migrate the database. Use
-`migrate --data-directory ./note-transport-data` to apply pending migrations. The database file is `notes.sqlite3`
-inside the required data directory. Bootstrap creates the directory if it does not exist and rejects a directory that is
-not empty.
-
-The service retains notes for 30 days by default. Set `--retention-days` or `MIDEN_NOTE_TRANSPORT_RETENTION_DAYS` to
-change this period. All size, capacity, connection, and retention limits must be greater than zero.
-
-Each new insertion deletes at most 10 expired notes, ordered by timestamp and then cursor. Duplicate retries, reads, and
-idle periods do not trigger cleanup. There is no background cleanup or manual cleanup command.
-
-The insertion, cleanup, and final storage capacity check use one atomic transaction. Cleanup can reclaim space for the
-new note. If there is still insufficient space, the transaction rolls back the insertion and all deletions. Cleanup
-keeps the durable cursor counter. This retention policy requires no schema migration.
 
 ## API
 
