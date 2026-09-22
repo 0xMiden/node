@@ -1,16 +1,10 @@
-use miden_node_proto::errors::ConversionError;
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_node_store::{NoteSyncRecord, TransactionRecord};
 use miden_node_tracing::{debug, miden_instrument, miden_span_record};
 use miden_node_utils::limiter::QueryParamAccountIdLimit;
 
-use super::{
-    RpcInvalidBlockRange,
-    RpcService,
-    check,
-    database_error_to_status,
-    invalid_block_range_to_status,
-};
+use super::error_codes::SyncTransactionsErrorCode;
+use super::{RpcService, check, database_error_to_status, invalid_block_range_to_status};
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
@@ -20,7 +14,9 @@ impl proto::server::rpc_api::SyncTransactions for RpcService {
 
     fn decode(request: proto::rpc::SyncTransactionsRequest) -> tonic::Result<Self::Input> {
         check::<QueryParamAccountIdLimit>(request.account_ids.as_slice().len())?;
-        request.decode_fields().map_err(ConversionError::into_status)
+        request
+            .decode_fields()
+            .map_err(|err| SyncTransactionsErrorCode::DeserializationFailed.invalid_argument(err))
     }
 
     fn encode(output: Self::Output) -> tonic::Result<proto::rpc::SyncTransactionsResponse> {
@@ -40,7 +36,9 @@ impl proto::server::rpc_api::SyncTransactions for RpcService {
     ) -> tonic::Result<Self::Output> {
         let range = request.block_range;
         let n_accounts = request.account_ids.as_slice().len();
-        let account_ids = request.account_ids.verify().map_err(ConversionError::into_status)?;
+        let account_ids = request.account_ids.verify().map_err(|err| {
+            SyncTransactionsErrorCode::DeserializationFailed.invalid_argument(err)
+        })?;
         let logged_account_ids = &account_ids[..account_ids.len().min(10)];
 
         miden_span_record!(
@@ -59,10 +57,7 @@ impl proto::server::rpc_api::SyncTransactions for RpcService {
             account.ids.count = n_accounts
         );
 
-        let block_range = range
-            .verify()
-            .map_err(RpcInvalidBlockRange::from)
-            .map_err(invalid_block_range_to_status)?;
+        let block_range = range.verify().map_err(invalid_block_range_to_status)?;
         let (chain_tip, (last_block_included, transaction_records_db)) = self
             .state
             .with_view(async |view| {

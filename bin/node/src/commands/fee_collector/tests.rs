@@ -11,13 +11,16 @@ fn saves_the_collector_signing_key_without_overwriting_existing_files() -> anyho
     let account_file = AccountFile::read(&path)?;
     let loaded = FeeCollectorAccountOptions { account: None }.read(directory.path())?;
     assert_eq!(loaded.to_bytes(), account_file.to_bytes());
-    assert!(account_file.account.is_new());
-    assert!(account_file.account.is_public());
-    assert!(account_file.account.vault().is_empty());
-    assert_eq!(account_file.auth_secret_keys.len(), 1);
+    assert!(account_file.account().is_new());
+    assert!(account_file.account().is_public());
+    assert!(account_file.account().vault().is_empty());
+    assert_eq!(account_file.auth_secret_keys().len(), 1);
     assert_eq!(
-        account_file.account.storage().get_item(AuthTxFeeCollector::public_key_slot())?,
-        miden_protocol::Word::from(account_file.auth_secret_keys[0].public_key().to_commitment()),
+        account_file
+            .account()
+            .storage()
+            .get_item(AuthTxFeeCollector::public_key_slot())?,
+        miden_protocol::Word::from(account_file.auth_secret_keys()[0].public_key().to_commitment()),
     );
     let contents = fs_err::read(&path)?;
     assert!(
@@ -55,7 +58,7 @@ fn explicit_account_file_overrides_the_data_directory_default() -> anyhow::Resul
     let account =
         FeeCollectorAccountOptions { account: Some(custom_path.clone()) }.read(directory.path())?;
     assert_eq!(account.to_bytes(), custom_contents);
-    assert_ne!(account.account.id(), AccountFile::read(&default_path)?.account.id());
+    assert_ne!(account.account().id(), AccountFile::read(&default_path)?.account().id());
     assert_eq!(fs_err::read(default_path)?, default_contents);
     assert_eq!(fs_err::read(custom_path)?, custom_contents);
     Ok(())

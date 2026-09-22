@@ -61,6 +61,7 @@ RUN printf '%s\n' \
         > /etc/kache.toml
 
 ENV CARGO_INCREMENTAL=0 \
+    CARGO_PROFILE_RELEASE_DEBUG=line-tables-only \
     RUSTC_WRAPPER=kache \
     CC="kache cc" \
     CXX="kache c++" \
@@ -113,7 +114,7 @@ RUN --mount=type=cache,sharing=locked,id=cargo-registry-${TARGETARCH},target=/us
         --bin miden-remote-prover \
         --bin miden-benchmark && \
     mkdir -p /app/bin && \
-    cp /app/target/release/miden-node \
+    mv /app/target/release/miden-node \
         /app/target/release/miden-validator \
         /app/target/release/miden-note-transport \
         /app/target/release/miden-ntx-builder \

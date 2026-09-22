@@ -5,6 +5,7 @@ use miden_node_tracing::{debug, miden_instrument, miden_span_record};
 use miden_node_utils::limiter::QueryParamNoteIdLimit;
 use miden_protocol::note::NoteId;
 
+use super::error_codes::GetNotesByIdErrorCode;
 use super::{RpcService, check, database_error_to_status};
 use crate::{COMPONENT, LOG_TARGET};
 
@@ -17,7 +18,7 @@ impl proto::server::rpc_api::GetNotesById for RpcService {
         check::<QueryParamNoteIdLimit>(request.note_ids.len())?;
         request
             .decode_fields()
-            .map_err(miden_node_proto::errors::ConversionError::into_status)
+            .map_err(|err| GetNotesByIdErrorCode::DeserializationFailed.invalid_argument(err))
     }
 
     fn encode(notes: Self::Output) -> tonic::Result<proto::rpc::NotesByIdResponse> {

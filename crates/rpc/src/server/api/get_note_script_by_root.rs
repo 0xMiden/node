@@ -1,9 +1,9 @@
-use miden_node_proto::errors::ConversionError;
 use miden_node_proto::{DecodeMessage, generated as proto};
 use miden_node_tracing::{debug, miden_instrument, miden_span_record};
 use miden_protocol::Word;
 use miden_protocol::note::NoteScript;
 
+use super::error_codes::GetNoteScriptByRootErrorCode;
 use super::{RpcService, database_error_to_status};
 use crate::{COMPONENT, LOG_TARGET};
 
@@ -13,7 +13,12 @@ impl proto::server::rpc_api::GetNoteScriptByRoot for RpcService {
     type Output = Option<NoteScript>;
 
     fn decode(request: proto::rpc::NoteScriptByRootRequest) -> tonic::Result<Self::Input> {
-        Ok(request.decode_fields().map_err(ConversionError::into_status)?.root)
+        Ok(request
+            .decode_fields()
+            .map_err(|err| {
+                GetNoteScriptByRootErrorCode::DeserializationFailed.invalid_argument(err)
+            })?
+            .root)
     }
 
     fn encode(output: Self::Output) -> tonic::Result<proto::rpc::MaybeNoteScript> {

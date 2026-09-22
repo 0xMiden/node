@@ -23,6 +23,7 @@ fs-err           = { workspace = true }
 hex              = { workspace = true }
 humantime        = { workspace = true }
 miden-node-proto = { workspace = true }
+miden-objects    = { workspace = true }
 miden-protocol   = { features = ["std"], workspace = true }
 miden-standards  = { workspace = true }
 miden-tx         = { workspace = true }

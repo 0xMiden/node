@@ -28,6 +28,7 @@ humantime          = { workspace = true }
 miden-node-proto   = { workspace = true }
 miden-node-tracing = { workspace = true }
 miden-node-utils   = { workspace = true }
+miden-objects      = { workspace = true }
 miden-protocol     = { features = ["std"], workspace = true }
 miden-standards    = { workspace = true }
 miden-tx           = { features = ["concurrent", "std"], workspace = true }

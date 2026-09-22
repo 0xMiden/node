@@ -4,8 +4,9 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use miden_objects::account_file::AccountFile;
 use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
-use miden_protocol::account::{Account, AccountFile, AccountId, AccountType};
+use miden_protocol::account::{Account, AccountId, AccountType};
 use miden_protocol::asset::{AssetAmount, FungibleAsset, TokenSymbol};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
 use miden_protocol::{Felt, ONE};

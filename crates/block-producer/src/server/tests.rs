@@ -75,7 +75,7 @@ fn mempool_stats_track_uncommitted_work_and_the_canonical_tip() {
 async fn block_producer_starts_with_store_state() {
     let data_directory = tempfile::tempdir().expect("tempdir should be created");
     let account_file = crate::test_utils::mock_collection_account();
-    let mut deployed_account = account_file.account.clone();
+    let mut deployed_account = account_file.account().clone();
     deployed_account.set_nonce(ONE).unwrap();
     bootstrap_store(data_directory.path(), deployed_account);
     let (state, block_writer, proof_writer) = State::for_tests(data_directory.path()).await;

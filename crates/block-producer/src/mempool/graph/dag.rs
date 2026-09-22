@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::Hash;
 
 use miden_protocol::block::BlockNumber;
+use miden_protocol::note::NoteId;
 
 use crate::mempool::StateConflict;
 use crate::mempool::graph::edges::Edges;
@@ -284,7 +285,7 @@ where
     }
 
     /// Returns the node that created the specified note.
-    pub(super) fn note_creator(&self, note: &miden_protocol::Word) -> Option<&N> {
+    pub(super) fn note_creator(&self, note: &NoteId) -> Option<&N> {
         let creator = self.state.note_creator(note)?;
         self.nodes.get(&creator)
     }

@@ -28,6 +28,14 @@ pub struct InvitationEntry {
     pub account_id: Option<AccountId>,
 }
 
+/// Changes made by an invitation import.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InvitationImportOutcome {
+    pub invitation_added: bool,
+    /// The account registered by this import. Identical retries return `None`.
+    pub registered_account: Option<AccountId>,
+}
+
 /// The registration state of an invitation code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InvitationStatus {
@@ -203,7 +211,7 @@ impl AccountAllowlist {
     }
 
     /// Imports an invitation code with an optional account registration.
-    /// Returns true if the invitation entry is new.
+    /// Returns whether the invitation is new and which account the import registered.
     ///
     /// An entry without an account preserves any existing registration for its invitation code.
     /// An entry with an account can register an unused invitation code. An identical registration has no effect.
@@ -214,7 +222,10 @@ impl AccountAllowlist {
         fields(account.id = entry.account_id),
         err,
     )]
-    pub async fn import_invitation(&self, entry: InvitationEntry) -> Result<bool, AllowlistError> {
+    pub async fn import_invitation(
+        &self,
+        entry: InvitationEntry,
+    ) -> Result<InvitationImportOutcome, AllowlistError> {
         self.transact("allowlist.import_invitation", move |tx| {
             queries::import_invitation(tx, &entry)
         })
