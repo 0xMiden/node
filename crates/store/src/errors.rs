@@ -83,6 +83,8 @@ pub enum DatabaseError {
     QueryParamLimit(#[from] QueryLimitError),
     #[error(transparent)]
     RangeBeyondTip(#[from] RangeBeyondTip),
+    #[error(transparent)]
+    RangeBelowRetention(#[from] RangeBelowRetention),
 
     // OTHER ERRORS
     // ---------------------------------------------------------------------------------------------
@@ -268,6 +270,14 @@ pub enum ApplyBlockWithProvingInputsError {
 #[error("block_to ({block_to}) is greater than chain tip ({chain_tip})")]
 pub struct RangeBeyondTip {
     pub chain_tip: BlockNumber,
+    pub block_to: BlockNumber,
+}
+
+/// A requested block range ends below the oldest block for which the store keeps account history.
+#[derive(Error, Debug)]
+#[error("block_to ({block_to}) is older than the oldest retained block ({oldest_retained})")]
+pub struct RangeBelowRetention {
+    pub oldest_retained: BlockNumber,
     pub block_to: BlockNumber,
 }
 
