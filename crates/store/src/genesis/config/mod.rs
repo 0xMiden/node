@@ -1,6 +1,7 @@
 //! Describe a subset of the genesis manifest in easily human readable format
 
 use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -363,6 +364,14 @@ impl GenesisConfig {
 
         // Append file-loaded accounts as-is
         all_accounts.extend(file_loaded_accounts);
+
+        // The account tree holds one entry for each account ID. An account file can be listed more
+        // than once, or can repeat the native faucet file, so check all accounts together.
+        let mut account_ids = HashSet::with_capacity(all_accounts.len());
+        if let Some(account) = all_accounts.iter().find(|account| !account_ids.insert(account.id()))
+        {
+            return Err(GenesisConfigError::DuplicateAccount { account_id: account.id() });
+        }
 
         // Each generated account is written to its own file, so a repeated name would make one
         // account overwrite another. This covers every generated name: the wallets, the configured

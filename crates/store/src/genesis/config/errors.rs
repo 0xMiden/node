@@ -78,6 +78,8 @@ pub enum GenesisConfigError {
     UnsupportedSignerConfig,
     #[error("account file name '{name}' is used more than once")]
     DuplicateAccountFileName { name: String },
+    #[error("account {account_id} is included in the genesis state more than once")]
+    DuplicateAccount { account_id: AccountId },
     #[error("account name '{name}' is not a plain file name")]
     InvalidAccountFileName { name: String },
     #[error("failed to generate a key for the configured authentication scheme")]

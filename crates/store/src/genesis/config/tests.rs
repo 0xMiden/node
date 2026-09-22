@@ -467,3 +467,54 @@ assets = []
         assert_eq!(name, "funding_service.mac");
     });
 }
+
+/// Two entries that load the same account would give the account tree two values for one key.
+#[test]
+fn duplicate_account_files_are_rejected() -> TestResult {
+    use miden_objects::account_file::AccountFile;
+    use miden_protocol::account::auth::AuthScheme;
+    use tempfile::tempdir;
+
+    let temp_dir = tempdir()?;
+    let config_dir = temp_dir.path();
+
+    let mut rng = rand_chacha::ChaCha20Rng::from_seed(rand::random());
+    let secret_key = SecretKey::with_rng(&mut rng);
+    let auth = Approver::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
+    let account = create_basic_wallet(rand::random(), auth, AccountType::Public)?;
+    let account_id = account.id();
+    AccountFile::new(account, vec![]).write(config_dir.join("wallet.mac"))?;
+
+    let toml_content = r#"
+timestamp = 1717344256
+
+[fee_parameters]
+verification_base_fee = 0
+
+[[account]]
+path = "wallet.mac"
+
+[[account]]
+path = "wallet.mac"
+"#;
+    let config_path = write_toml_file(config_dir, toml_content);
+    let gcfg = GenesisConfig::read_toml_file(&config_path)?;
+
+    let err = gcfg.into_state(dev_validator_config()).unwrap_err();
+    assert_matches!(err, GenesisConfigError::DuplicateAccount { account_id: id } => {
+        assert_eq!(id, account_id);
+    });
+
+    Ok(())
+}
+
+/// A genesis state with a repeated account must fail to build a block instead of panicking.
+#[test]
+fn genesis_block_with_duplicate_accounts_returns_an_error() {
+    let (mut state, _secrets) =
+        GenesisConfig::default().into_state(dev_validator_config()).unwrap();
+    let duplicate = state.accounts[0].clone();
+    state.accounts.push(duplicate);
+
+    assert!(state.into_block().is_err());
+}

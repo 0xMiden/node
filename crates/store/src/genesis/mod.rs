@@ -1,3 +1,4 @@
+use anyhow::Context;
 use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountPatch, AccountUpdateDetails};
 use miden_protocol::block::account_tree::{AccountIdKey, AccountTree};
@@ -84,10 +85,11 @@ impl GenesisState {
             )
         });
 
-        let smt =
-            Smt::with_entries(smt_entries).expect("Failed to create LargeSmt for genesis accounts");
+        let smt = Smt::with_entries(smt_entries)
+            .context("failed to create the account SMT for the genesis accounts")?;
 
-        let account_smt = AccountTree::new(smt).expect("Failed to create AccountTree for genesis");
+        let account_smt =
+            AccountTree::new(smt).context("failed to create the account tree for genesis")?;
 
         let empty_nullifiers: Vec<Nullifier> = Vec::new();
         let empty_nullifier_tree = Smt::new();
