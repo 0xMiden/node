@@ -59,13 +59,13 @@ async fn send_fetch_preserves_optional_hint_presence() {
     }
     let page = FetchNotes::full(
         &server,
-        Request::new(FetchNotesRequest { tags: vec![8, 7, 7], cursor: 0 }),
+        Request::new(FetchNotesRequest { tags: vec![8, 7, 7], cursor: None }),
     )
     .await
     .unwrap();
     assert_eq!(page.notes, vec![first, second]);
     assert!(!page.has_more);
-    assert!(page.cursor > 0);
+    assert!(page.cursor.unwrap().sequence > 0);
     let empty = FetchNotes::full(
         &server,
         Request::new(FetchNotesRequest { tags: vec![7, 8], cursor: page.cursor }),
@@ -85,7 +85,7 @@ async fn duplicate_send_preserves_first_note_and_cursor() {
     SendNote::full(&server, Request::new(SendNoteRequest { note: Some(first.clone()) }))
         .await
         .unwrap();
-    let request = FetchNotesRequest { tags: vec![7], cursor: 0 };
+    let request = FetchNotesRequest { tags: vec![7], cursor: None };
     let before = FetchNotes::full(&server, Request::new(request.clone())).await.unwrap();
 
     // Retry sending the same note with a different `after_block_num` and assert that it's not
@@ -115,7 +115,10 @@ async fn invalid_cursor_has_generic_message() {
     let (_dir, server) = server(Config::default());
     let error = FetchNotes::full(
         &server,
-        Request::new(FetchNotesRequest { tags: vec![7], cursor: u64::MAX }),
+        Request::new(FetchNotesRequest {
+            tags: vec![7],
+            cursor: Some(FetchNotesCursor { nonce: 0, sequence: u64::MAX }),
+        }),
     )
     .await
     .unwrap_err();
@@ -178,8 +181,11 @@ async fn rejects_oversized_notes_and_invalid_fetches() {
         .unwrap_err();
     assert_eq!(error.code(), tonic::Code::ResourceExhausted);
     for request in [
-        FetchNotesRequest { tags: vec![7; 129], cursor: 0 },
-        FetchNotesRequest { tags: vec![], cursor: u64::MAX },
+        FetchNotesRequest { tags: vec![7; 129], cursor: None },
+        FetchNotesRequest {
+            tags: vec![],
+            cursor: Some(FetchNotesCursor { nonce: 0, sequence: u64::MAX }),
+        },
     ] {
         let error = FetchNotes::full(&server, Request::new(request)).await.unwrap_err();
         assert_eq!(error.code(), tonic::Code::InvalidArgument);
@@ -197,7 +203,7 @@ async fn capacity_failure_does_not_store_the_note() {
         .unwrap_err();
     assert_eq!(error.code(), tonic::Code::ResourceExhausted);
     let page =
-        FetchNotes::full(&server, Request::new(FetchNotesRequest { tags: vec![7], cursor: 0 }))
+        FetchNotes::full(&server, Request::new(FetchNotesRequest { tags: vec![7], cursor: None }))
             .await
             .unwrap();
     assert!(page.notes.is_empty());
@@ -262,7 +268,7 @@ async fn grpc_health_reflection_web_and_shutdown() {
         .await
         .unwrap();
     let response = client
-        .fetch_notes(FetchNotesRequest { tags: vec![123], cursor: 0 })
+        .fetch_notes(FetchNotesRequest { tags: vec![123], cursor: None })
         .await
         .unwrap()
         .into_inner();
@@ -296,9 +302,12 @@ async fn grpc_health_reflection_web_and_shutdown() {
     let length = u32::from_be_bytes(frame[1..5].try_into().unwrap()) as usize;
     assert_eq!(SendNoteResponse::decode(&frame[5..5 + length]).unwrap(), SendNoteResponse {});
 
-    let web =
-        grpc_web_request(address, "FetchNotes", FetchNotesRequest { tags: vec![123], cursor: 0 })
-            .await;
+    let web = grpc_web_request(
+        address,
+        "FetchNotes",
+        FetchNotesRequest { tags: vec![123], cursor: None },
+    )
+    .await;
     assert_eq!(web.status(), reqwest::StatusCode::OK);
     assert_eq!(web.headers()["access-control-allow-origin"], "*");
     let frame = web.bytes().await.unwrap();
@@ -357,7 +366,7 @@ async fn large_pages_fit_default_grpc_client_and_resume_without_gaps() {
     .await
     .unwrap();
     let first = client
-        .fetch_notes(FetchNotesRequest { tags: vec![77], cursor: 0 })
+        .fetch_notes(FetchNotesRequest { tags: vec![77], cursor: None })
         .await
         .unwrap()
         .into_inner();
@@ -383,4 +392,158 @@ async fn large_pages_fit_default_grpc_client_and_resume_without_gaps() {
     drop(client);
     shutdown.cancel();
     task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn rejects_cursor_from_another_database() {
+    let (_first_dir, first) = server(Config::default());
+    let (_second_dir, second) = server(Config::default());
+    let page =
+        FetchNotes::full(&first, Request::new(FetchNotesRequest { tags: vec![7], cursor: None }))
+            .await
+            .unwrap();
+    for tags in [vec![7], vec![]] {
+        let error = FetchNotes::full(
+            &second,
+            Request::new(FetchNotesRequest { tags, cursor: page.cursor }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+    }
+}
+
+#[tokio::test]
+async fn cursor_survives_reopening_database() {
+    let (dir, server) = server(Config::default());
+    SendNote::full(&server, Request::new(SendNoteRequest { note: Some(note(1, 7)) }))
+        .await
+        .unwrap();
+    let first =
+        FetchNotes::full(&server, Request::new(FetchNotesRequest { tags: vec![7], cursor: None }))
+            .await
+            .unwrap();
+    drop(server);
+    let path = dir.path().join("notes.sqlite3");
+    db::migrate(&path).unwrap();
+    let (writer, reader) = db::load(&path).unwrap();
+    let server = Server::new(Config::default(), writer, reader).unwrap();
+    let empty = FetchNotes::full(
+        &server,
+        Request::new(FetchNotesRequest { tags: vec![7], cursor: first.cursor }),
+    )
+    .await
+    .unwrap();
+    assert!(empty.notes.is_empty());
+    assert_eq!(empty.cursor, first.cursor);
+    let next = note(2, 7);
+    SendNote::full(&server, Request::new(SendNoteRequest { note: Some(next.clone()) }))
+        .await
+        .unwrap();
+    let page = FetchNotes::full(
+        &server,
+        Request::new(FetchNotesRequest { tags: vec![7], cursor: empty.cursor }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(page.notes, vec![next]);
+}
+
+#[tokio::test]
+async fn stale_cursor_fails_before_and_after_sequence_catches_up() {
+    let (_first_dir, first) = server(Config::default());
+    let (_second_dir, second) = server(Config::default());
+    SendNote::full(&first, Request::new(SendNoteRequest { note: Some(note(1, 7)) }))
+        .await
+        .unwrap();
+    let previous =
+        FetchNotes::full(&first, Request::new(FetchNotesRequest { tags: vec![7], cursor: None }))
+            .await
+            .unwrap();
+    for count in 0..=2 {
+        if count > 0 {
+            SendNote::full(&second, Request::new(SendNoteRequest { note: Some(note(count, 7)) }))
+                .await
+                .unwrap();
+        }
+        let error = FetchNotes::full(
+            &second,
+            Request::new(FetchNotesRequest { tags: vec![7], cursor: previous.cursor }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+    }
+    let restarted =
+        FetchNotes::full(&second, Request::new(FetchNotesRequest { tags: vec![7], cursor: None }))
+            .await
+            .unwrap();
+    assert_eq!(restarted.notes, vec![note(1, 7), note(2, 7)]);
+    assert_eq!(restarted.cursor.unwrap().sequence, 2);
+}
+
+#[tokio::test]
+async fn empty_pages_and_nonce_extremes_roundtrip() {
+    let (_dir, server) = server(Config::default());
+    for nonce in [0, u64::MAX] {
+        server
+            .writer
+            .write("set database nonce", move |tx| {
+                tx.execute(
+                    "UPDATE storage_metadata SET nonce = ?1",
+                    &[&nonce.to_le_bytes().to_vec()],
+                )?;
+                Ok::<_, db::StorageError>(())
+            })
+            .await
+            .unwrap();
+        for tags in [vec![7], vec![]] {
+            let initial = FetchNotes::full(
+                &server,
+                Request::new(FetchNotesRequest { tags: tags.clone(), cursor: None }),
+            )
+            .await
+            .unwrap();
+            assert!(initial.notes.is_empty());
+            assert!(!initial.has_more);
+            assert_eq!(initial.cursor, Some(FetchNotesCursor { nonce, sequence: 0 }));
+            let response = FetchNotesResponse::decode(initial.encode_to_vec().as_slice()).unwrap();
+            let request = FetchNotesRequest {
+                tags: tags.clone(),
+                cursor: response.cursor,
+            };
+            let request = FetchNotesRequest::decode(request.encode_to_vec().as_slice()).unwrap();
+            let next = FetchNotes::full(&server, Request::new(request)).await.unwrap();
+            assert_eq!(next.cursor, initial.cursor);
+            assert!(next.notes.is_empty());
+            let error = FetchNotes::full(
+                &server,
+                Request::new(FetchNotesRequest {
+                    tags,
+                    cursor: Some(FetchNotesCursor { nonce: nonce ^ 1, sequence: 0 }),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+        }
+    }
+}
+
+#[tokio::test]
+async fn missing_metadata_fails_even_without_tags() {
+    let (_dir, server) = server(Config::default());
+    server
+        .writer
+        .write("remove metadata", |tx| {
+            tx.execute("DELETE FROM storage_metadata", &[])?;
+            Ok::<_, db::StorageError>(())
+        })
+        .await
+        .unwrap();
+    let error =
+        FetchNotes::full(&server, Request::new(FetchNotesRequest { tags: vec![], cursor: None }))
+            .await
+            .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::Internal);
 }

@@ -3,6 +3,7 @@ use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use miden_node_db::sqlite::{DbReader, DbWriter};
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::note_transport::{
+    FetchNotesCursor,
     FetchNotesRequest,
     FetchNotesResponse,
     SendNoteRequest,
@@ -198,7 +199,7 @@ impl FetchNotes for Server {
         if request.tags.len() > 128 {
             return Err(tonic::Status::invalid_argument("at most 128 tags are allowed"));
         }
-        if request.cursor > i64::MAX as u64 {
+        if request.cursor.is_some_and(|cursor| cursor.sequence > i64::MAX as u64) {
             return Err(tonic::Status::invalid_argument("invalid cursor"));
         }
         request.tags.sort_unstable();
@@ -217,15 +218,27 @@ impl FetchNotes for Server {
         _: &MetadataMap,
         _: &Extensions,
     ) -> tonic::Result<Self::Output> {
-        let page = db::fetch_notes(&self.reader, request.tags, request.cursor)
+        let cursor = request.cursor.map(|cursor| db::Cursor {
+            nonce: cursor.nonce,
+            sequence: cursor.sequence,
+        });
+        let page = db::fetch_notes(&self.reader, request.tags, cursor)
             .await
             .map_err(storage_status)?;
 
-        let mut cursor = request.cursor;
+        let mut cursor = FetchNotesCursor {
+            nonce: page.cursor.nonce,
+            sequence: cursor.map_or(0, |cursor| cursor.sequence),
+        };
         let mut notes = Vec::with_capacity(page.notes.len());
         let mut has_more = page.has_more;
-        // Reserve the fixed64 cursor and the boolean continuation field.
-        let mut response_bytes = 11;
+        // Reserve space for a nonzero sequence and a continuation flag.
+        let mut response_bytes = FetchNotesResponse {
+            notes: vec![],
+            cursor: Some(FetchNotesCursor { sequence: u64::MAX, ..cursor }),
+            has_more: true,
+        }
+        .encoded_len();
         for note in page.notes {
             let next_cursor = u64::try_from(note.seq).map_err(|error| {
                 error!(error, target: LOG_TARGET, "Invalid stored note cursor");
@@ -253,19 +266,22 @@ impl FetchNotes for Server {
                 break;
             }
             response_bytes += field_bytes;
-            cursor = next_cursor;
+            cursor.sequence = next_cursor;
             notes.push(note);
         }
         info!(target: LOG_TARGET, "Notes fetched",
-            note_transport.returned = notes.len(), note_transport.cursor = cursor,
+            note_transport.returned = notes.len(), note_transport.cursor = cursor.sequence,
             note_transport.has_more = has_more);
-        Ok(FetchNotesResponse { notes, cursor, has_more })
+        Ok(FetchNotesResponse { notes, cursor: Some(cursor), has_more })
     }
 }
 
 fn storage_status(error: db::StorageError) -> tonic::Status {
     match error {
         db::StorageError::Capacity(message) => tonic::Status::resource_exhausted(message),
+        db::StorageError::StaleCursor => tonic::Status::failed_precondition(
+            "cursor belongs to another database generation; clear the cursor and retry",
+        ),
         db::StorageError::InvalidCursor => tonic::Status::invalid_argument("invalid cursor"),
         error => {
             error!(error, target: LOG_TARGET, "Note storage operation failed");

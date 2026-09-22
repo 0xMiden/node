@@ -11,6 +11,10 @@ repository.workspace   = true
 rust-version.workspace = true
 version.workspace      = true
 
+[package.metadata.cargo-shear]
+# The build script links migrations through the generated migrator.
+ignored-paths = ["src/db/migrations/*.rs"]
+
 [lints]
 workspace = true
 
@@ -30,6 +34,7 @@ miden-node-tracing     = { workspace = true }
 miden-node-utils       = { workspace = true }
 miden-protocol         = { workspace = true }
 prost                  = { workspace = true }
+rand                   = { workspace = true }
 rusqlite               = { workspace = true }
 thiserror              = { workspace = true }
 tokio                  = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
