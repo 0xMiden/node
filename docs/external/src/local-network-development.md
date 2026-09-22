@@ -6,13 +6,12 @@ sidebar_position: 1
 # Local Network Development
 
 Use this guide to start a disposable Miden network for local development and testing. The provided Docker Compose setup
-includes a sequencer, three validators, a transaction prover, a network transaction builder, and optional block
-explorer, faucet, monitoring, and trace services, so you can develop against a working environment without wiring the
-network services manually.
+includes a sequencer, three validators, a transaction prover, a network transaction builder, and a funding service.
+Optional services provide a block explorer, monitoring, and traces.
 
-The Compose model lives in `docker-compose.yml` and uses profiles for optional explorer, faucet, telemetry, and
-monitoring services. The guide uses `make` targets as shorthand for the underlying Docker image builds and Docker
-Compose commands; check the `Makefile` when you need the exact command.
+The Compose model lives in `docker-compose.yml` and uses profiles for optional explorer, telemetry, and monitoring
+services. The guide uses `make` targets as shorthand for the underlying Docker image builds and Docker Compose commands;
+check the `Makefile` when you need the exact command.
 
 This is not a production deployment guide and it is not the path for independent full node runners on an existing
 network.
@@ -50,12 +49,11 @@ docker compose -f "${COMPOSE_APPLICATION}" down -v
 ```
 
 The application includes an OpenTelemetry Collector that receives traces from the Miden services. Enable the optional
-faucet, Midenscan explorer, Tempo, Grafana, and network monitor services with Compose profiles:
+Midenscan explorer, Tempo, Grafana, and network monitor services with Compose profiles:
 
 ```bash
 docker compose \
   -f "${COMPOSE_APPLICATION}" \
-  --profile faucet \
   --profile explorer \
   --profile telemetry \
   --profile monitor \
@@ -116,8 +114,6 @@ Existing direct ports remain available for native gRPC clients, automation, and 
 | Transaction prover | `http://prover.localhost`           | Not published directly            |
 | Note transport     | `http://ntl.localhost`              | `localhost:57292` for native gRPC |
 | Funding service    | `http://funding.localhost`          | `http://localhost:50401`          |
-| Faucet frontend    | `http://faucet.localhost`           | `http://localhost:8081`           |
-| Faucet API         | `http://faucet.localhost/api`       | `http://localhost:8000`           |
 | Block explorer     | `http://explorer.localhost`         | `http://localhost:8080`           |
 | Explorer GraphQL   | `http://explorer.localhost/graphql` | `http://localhost:8199/graphql`   |
 | Grafana            | `http://grafana.localhost`          | `http://localhost:3000`           |
@@ -150,23 +146,13 @@ Its browser-facing gRPC-Web endpoint is `http://ntl.localhost`. Native gRPC clie
 initializes the database on first use and persists notes in the `note-transport-data` volume. The service limits stored
 note data to 1 GiB. Set `MIDEN_NOTE_TRANSPORT_IMAGE` to select a different workspace image.
 
-## Faucet
+## Funding
 
-The faucet is maintained in the separate [0xMiden/faucet](https://github.com/0xMiden/faucet) repository and can lag
-behind the node's protocol version. It is therefore excluded from the default stack. Enable its profile explicitly:
+The funding service distributes the USDCx held by the distributor account. Use its HTTP API at
+`http://funding.localhost`. See the [funding service guide](./network-operator/funding-service.md) for the request
+format.
 
-```bash
-docker compose --profile faucet build faucet
-docker compose --profile faucet up -d
-```
-
-For a repository checkout, the first run builds the exact upstream commit pinned in `compose/faucet.yml`. Node releases
-publish an image built from the same pin, so the published Compose application can pull it without requiring a source
-build.
-
-On its first successful start, the service imports the native `MIDEN` faucet account created at genesis and stores its
-client state in the `faucet-data` volume. Later starts reuse that state. The API is available at
-`http://faucet.localhost/api` and the frontend at `http://faucet.localhost`.
+The faucet service is disabled. The local network does not mint additional USDCx.
 
 ## Monitoring and Traces
 
@@ -222,8 +208,12 @@ those private keys with `MIDEN_VALIDATOR_1_SIGNING_KEY`, `MIDEN_VALIDATOR_2_SIGN
 `MIDEN_VALIDATOR_3_SIGNING_KEY`, and the shared transaction encryption key with `MIDEN_VALIDATOR_ENCRYPTION_KEY`
 (`miden-validator keygen` generates fresh key material).
 
-This only affects validator bootstrap. If the local network has already been bootstrapped, delete the existing local
-chain data before starting with a different genesis configuration:
+The override must import the funded distributor if the funding service uses its default account file. Keep the node's
+verification base fee at `7` to match the bundled USDCx faucet configuration. Do not add `[[wallet]]` entries with USDCx
+balances: they replace the faucet's recorded supply with the generated wallets' total balance.
+
+If the local network has already been bootstrapped, delete the existing local chain data before starting with a
+different genesis configuration:
 
 ```bash
 make local-network-delete

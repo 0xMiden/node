@@ -1,4 +1,63 @@
 services:
+  bootstrap-usdcx:
+    image: ${MIDEN_USDCX_GENESIS_IMAGE:-ghcr.io/0xmiden/miden-usdcx-genesis:x.y.z}
+    pull_policy: missing
+    network_mode: none
+    environment:
+      # USDCx has six decimal places. This amount is one billion USDCx.
+      MIDEN_USDCX_INITIAL_SUPPLY: ${MIDEN_USDCX_INITIAL_SUPPLY:-1000000000000000}
+    volumes:
+      - node-data:/data
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        if [ -f /data/usdcx/.bootstrapped ]; then
+          echo "USDCx already bootstrapped."
+          exit 0
+        fi
+        if [ -d /data/usdcx ] || [ -d /data/genesis ]; then
+          echo "Reset the local network with make local-network-delete before bootstrap." >&2
+          exit 1
+        fi
+
+        mkdir /data/usdcx
+        cd /data/usdcx
+
+        echo "Creating the bootstrap admin and funding account..."
+        DISTRIBUTOR_OUTPUT="$$(xusdc-genesis new-distributor)"
+        printf '%s\n' "$${DISTRIBUTOR_OUTPUT}"
+        DISTRIBUTOR_ID="$$(printf '%s\n' "$${DISTRIBUTOR_OUTPUT}" | sed -n 's/^  hex: *//p')"
+        if [ -z "$${DISTRIBUTOR_ID}" ]; then
+          echo "USDCx genesis did not report the distributor account ID." >&2
+          exit 1
+        fi
+
+        cat > config.json <<EOF
+        {
+          "accounts": {
+            "owner": "$${DISTRIBUTOR_ID}",
+            "attest_admins": [],
+            "pausers": [],
+            "unpausers": [],
+            "blocklist_managers": []
+          },
+          "faucet": {
+            "seed": "0x55534443582d4641554345540000000000000000000000000000000000000000",
+            "token_supply": $${MIDEN_USDCX_INITIAL_SUPPLY},
+            "domain": 10007,
+            "min_burn_amount": 1,
+            "verification_base_fee": 7,
+            "attesters": []
+          }
+        }
+        EOF
+
+        echo "Creating the native USDCx faucet and prefunding the distributor..."
+        xusdc-genesis faucet
+        xusdc-genesis prefund
+        touch /data/usdcx/.bootstrapped
+
   bootstrap-validator:
     image: ${MIDEN_VALIDATOR_IMAGE:-miden-validator}
     pull_policy: missing
@@ -23,6 +82,9 @@ services:
       MIDEN_VALIDATOR_3_SIGNING_KEY: ${MIDEN_VALIDATOR_3_SIGNING_KEY:-0404040404040404040404040404040404040404040404040404040404040404}
     volumes:
       - node-data:/data
+    depends_on:
+      bootstrap-usdcx:
+        condition: service_completed_successfully
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -34,15 +96,7 @@ services:
           exit 0
         fi
 
-        echo "Cleaning incomplete network bootstrap state..."
-        rm -rf \
-          /data/accounts \
-          /data/genesis \
-          /data/node \
-          /data/ntx-builder \
-          /data/storage-key-dkg \
-          /data/validators
-        mkdir -p /data/genesis /data/validators /data/accounts
+        mkdir /data/genesis /data/validators /data/accounts
 
         echo "Building genesis block..."
         # The validator set consists of the public keys derived from the three
@@ -204,9 +258,7 @@ services:
           exit 0
         fi
 
-        echo "Cleaning incomplete node bootstrap state..."
-        rm -rf /data/node
-        mkdir -p /data/node
+        mkdir /data/node
 
         echo "Bootstrapping node..."
         miden-node bootstrap \
@@ -263,9 +315,7 @@ services:
           exit 0
         fi
 
-        echo "Cleaning incomplete network transaction builder bootstrap state..."
-        rm -rf /data/ntx-builder
-        mkdir -p /data/ntx-builder
+        mkdir /data/ntx-builder
 
         echo "Bootstrapping network transaction builder..."
         miden-ntx-builder bootstrap \
@@ -278,13 +328,10 @@ configs:
   genesis:
     content: |
       timestamp = 1717344256
+      native_faucet = "/data/usdcx/usdcx-faucet.mac"
 
       [fee_parameters]
-      verification_base_fee = 0
+      verification_base_fee = 7
 
-      # Funds the funding service. The name makes the genesis step write the account file to
-      # `/data/accounts/funding_service.mac`, which the service loads from a fixed path.
-      [[wallet]]
-      account_type = "public"
-      assets       = [{ amount = 1_000_000_000_000, symbol = "MIDEN" }]
-      name         = "funding_service"
+      [[account]]
+      path = "/data/usdcx/distributor.genesis.mac"
