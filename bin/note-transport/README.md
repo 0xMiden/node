@@ -3,7 +3,6 @@
 The note transport service stores private note envelopes for recipients that poll by note tag. It is part of the Miden
 node workspace and uses the workspace license.
 
-
 ## API
 
 The public `note_transport.Api` service is defined in the workspace protobuf crate. It supports `SendNote` and

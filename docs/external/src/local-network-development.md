@@ -149,7 +149,6 @@ Its browser-facing gRPC-Web endpoint is `http://ntl.localhost`. Native gRPC clie
 initializes the database on first use and persists notes in the `note-transport-data` volume. The service limits stored
 note data to 1 GiB. Set `MIDEN_NOTE_TRANSPORT_IMAGE` to select a different workspace image.
 
-
 ## Faucet
 
 The faucet is maintained in the separate [0xMiden/faucet](https://github.com/0xMiden/faucet) repository and can lag
