@@ -4,6 +4,7 @@ use assert_matches::assert_matches;
 use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
 use miden_protocol::Word;
 use miden_protocol::block::BlockHeader;
+use miden_protocol::note::NoteId;
 use miden_protocol::transaction::{OutputNote, PublicOutputNote};
 
 use crate::errors::{MempoolSubmissionError, StateConflict};
@@ -353,9 +354,9 @@ fn committed_fee_note_consumption_is_accepted() {
     uut.add_transaction(consumer).unwrap();
 }
 
-fn fee_note_dependency() -> (Arc<AuthenticatedTransaction>, Arc<AuthenticatedTransaction>, Word) {
+fn fee_note_dependency() -> (Arc<AuthenticatedTransaction>, Arc<AuthenticatedTransaction>, NoteId) {
     let fee_note = mock_fee_note(100);
-    let fee_note_id = fee_note.id().as_word();
+    let fee_note_id = fee_note.id();
     let producer = MockProvenTxBuilder::with_account_index(100)
         .output_notes(vec![OutputNote::Public(PublicOutputNote::new(fee_note.clone()).unwrap())])
         .build();

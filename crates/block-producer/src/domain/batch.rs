@@ -7,7 +7,7 @@ use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::batch::BatchId;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::Note;
+use miden_protocol::note::{Note, NoteId};
 use miden_protocol::transaction::OutputNote;
 use miden_standards::note::TxFeeNote;
 
@@ -63,7 +63,7 @@ pub(crate) struct SelectedBatch {
     id: SelectedBatchId,
     parameters: BatchParameters,
     account_updates: HashMap<AccountId, (Word, Word, Option<Word>)>,
-    unauthenticated_notes: HashSet<Word>,
+    unauthenticated_notes: HashSet<NoteId>,
     collectible_fee_notes: Vec<Note>,
 }
 
@@ -109,7 +109,7 @@ impl SelectedBatch {
             .map(|(account, (from, to, store))| (*account, *from, *to, *store))
     }
 
-    pub(crate) fn unauthenticated_note_commitments(&self) -> impl Iterator<Item = Word> {
+    pub(crate) fn unauthenticated_note_ids(&self) -> impl Iterator<Item = NoteId> {
         self.unauthenticated_notes.iter().copied()
     }
 

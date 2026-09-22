@@ -5,7 +5,7 @@ use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::batch::{BatchId, ProvenBatch};
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::Nullifier;
+use miden_protocol::note::{NoteId, Nullifier};
 
 use crate::domain::batch::{SelectedBatch, SelectedBatchId};
 use crate::errors::StateConflict;
@@ -24,12 +24,12 @@ impl GraphNode for SelectedBatch {
         Box::new(self.transactions().iter().flat_map(|tx| tx.nullifiers()))
     }
 
-    fn output_notes(&self) -> Box<dyn Iterator<Item = Word> + '_> {
+    fn output_notes(&self) -> Box<dyn Iterator<Item = NoteId> + '_> {
         Box::new(self.transactions().iter().flat_map(|tx| tx.output_note_ids()))
     }
 
-    fn unauthenticated_notes(&self) -> Box<dyn Iterator<Item = Word> + '_> {
-        Box::new(self.unauthenticated_note_commitments())
+    fn unauthenticated_notes(&self) -> Box<dyn Iterator<Item = NoteId> + '_> {
+        Box::new(self.unauthenticated_note_ids())
     }
 
     fn account_updates(
