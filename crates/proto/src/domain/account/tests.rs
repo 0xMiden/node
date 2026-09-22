@@ -3,17 +3,30 @@ use miden_protocol::account::{AccountIdVersion, AccountType, AssetCallbackFlag, 
 use miden_protocol::block::account_tree::AccountTree;
 
 use super::*;
-use crate::{DecodeMessage as _, Verify};
+use crate::Verify;
 
 #[test]
 fn registration_request_debug_hides_invitation_code() {
     let code = "private invitation code";
+    let account_id = AccountId::dummy(
+        [7; 15],
+        AccountIdVersion::Version1,
+        AccountType::Public,
+        AssetCallbackFlag::Disabled,
+    );
     let request = proto::rpc::RegisterAccountRequest {
         invitation_code: code.to_owned(),
-        account_id: None,
+        account_id: Some(account_id.into()),
     };
     let debug = format!("{request:?}");
     assert!(!debug.contains(code));
+
+    let decoded = request.decode_fields().unwrap();
+    assert!(!format!("{decoded:?}").contains(code));
+    let verified = decoded.verify().unwrap();
+    assert!(!format!("{verified:?}").contains(code));
+    assert_eq!(verified.invitation_code, code);
+    assert_eq!(verified.account_id, account_id);
 }
 
 fn word_from_u32(arr: [u32; 4]) -> Word {

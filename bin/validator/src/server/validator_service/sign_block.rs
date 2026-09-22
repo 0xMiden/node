@@ -70,7 +70,7 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
                     // kernel does not bind these fields, and transaction headers omit reference
                     // blocks and expiration. Full validation needs more data or protocol support.
                     .decode_and_build_unchecked()
-                    .map_err(miden_node_proto::errors::conversion_error_to_status)?;
+                    .map_err(miden_node_proto::errors::ConversionError::into_status)?;
                 let protocol_config = request.protocol_config;
                 let protocol_config_commitment = request.block_header.protocol_config_commitment();
                 let proposed_block = ProposedBlock::new_at(

@@ -34,7 +34,7 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
             // on every submission path. Forwarding skips the local nullifier check, and
             // expiration is checked later by the sequencer mempool.
             .decode_and_build_unchecked()
-            .map_err(miden_node_proto::errors::conversion_error_to_status)
+            .map_err(miden_node_proto::errors::ConversionError::into_status)
     }
 
     fn encode(output: Self::Output) -> tonic::Result<proto::blockchain::BlockNumber> {

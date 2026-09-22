@@ -1,10 +1,9 @@
 use miden_node_proto::generated::rpc::CommittedNote;
-use miden_node_proto::{DecodeMessage, Verify, generated as proto};
+use miden_node_proto::{DecodeMessage, generated as proto};
 use miden_node_store::NoteRecord;
 use miden_node_tracing::{debug, miden_instrument, miden_span_record};
 use miden_node_utils::limiter::QueryParamNoteIdLimit;
 use miden_protocol::note::NoteId;
-use tonic::Status;
 
 use super::{RpcService, check, database_error_to_status};
 use crate::{COMPONENT, LOG_TARGET};
@@ -18,7 +17,7 @@ impl proto::server::rpc_api::GetNotesById for RpcService {
         check::<QueryParamNoteIdLimit>(request.note_ids.len())?;
         request
             .decode_fields()
-            .map_err(miden_node_proto::errors::conversion_error_to_status)
+            .map_err(miden_node_proto::errors::ConversionError::into_status)
     }
 
     fn encode(notes: Self::Output) -> tonic::Result<proto::rpc::NotesByIdResponse> {
@@ -36,13 +35,7 @@ impl proto::server::rpc_api::GetNotesById for RpcService {
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        let note_ids: Vec<NoteId> = request
-            .note_ids
-            .into_inner()
-            .into_iter()
-            .map(Verify::verify)
-            .collect::<Result<_, _>>()
-            .map_err(|err| Status::invalid_argument(format!("invalid note ID: {err}")))?;
+        let note_ids: Vec<NoteId> = request.note_ids.verify_infallible();
         miden_span_record!(
             note.ids = &note_ids[..note_ids.len().min(10)],
             note.count = note_ids.len()

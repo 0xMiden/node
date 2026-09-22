@@ -1,4 +1,4 @@
-use miden_node_proto::errors::{ConversionResultExt, conversion_error_to_status};
+use miden_node_proto::errors::ConversionError;
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_node_store::{NoteSyncRecord, TransactionRecord};
 use miden_node_tracing::{debug, miden_instrument, miden_span_record};
@@ -20,7 +20,7 @@ impl proto::server::rpc_api::SyncTransactions for RpcService {
 
     fn decode(request: proto::rpc::SyncTransactionsRequest) -> tonic::Result<Self::Input> {
         check::<QueryParamAccountIdLimit>(request.account_ids.as_slice().len())?;
-        request.decode_fields().map_err(conversion_error_to_status)
+        request.decode_fields().map_err(ConversionError::into_status)
     }
 
     fn encode(output: Self::Output) -> tonic::Result<proto::rpc::SyncTransactionsResponse> {
@@ -40,14 +40,7 @@ impl proto::server::rpc_api::SyncTransactions for RpcService {
     ) -> tonic::Result<Self::Output> {
         let range = request.block_range;
         let n_accounts = request.account_ids.as_slice().len();
-        let account_ids = request
-            .account_ids
-            .into_inner()
-            .into_iter()
-            .enumerate()
-            .map(|(index, id)| id.verify().with_context(|| format!("account_ids[{index}]")))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(conversion_error_to_status)?;
+        let account_ids = request.account_ids.verify().map_err(ConversionError::into_status)?;
         let logged_account_ids = &account_ids[..account_ids.len().min(10)];
 
         miden_span_record!(

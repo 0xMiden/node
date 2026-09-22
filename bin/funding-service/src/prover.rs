@@ -4,9 +4,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use miden_node_proto::clients::{Builder, RemoteProverClient};
-use miden_node_proto::generated::remote_prover::ProofRequest;
-use miden_node_proto::generated::remote_prover::proof::Proof as ProofVariant;
 use miden_node_proto::generated::remote_prover::proof_request::Request as ProofRequestVariant;
+use miden_node_proto::generated::remote_prover::{DecodedProof, ProofRequest};
 use miden_node_proto::{BuildUnchecked, DecodeMessage};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorReport, warn};
@@ -108,14 +107,10 @@ impl RemoteProver {
             .await
             .context("the remote prover rejected the transaction")?;
 
-        let proof = match response.into_inner().proof {
-            Some(ProofVariant::Transaction(proof)) => proof,
-            Some(_) => anyhow::bail!("the remote prover answered with a proof of another kind"),
-            None => anyhow::bail!("the remote prover response holds no proof"),
-        };
-
-        proof
+        response
+            .into_inner()
             .decode_fields()
+            .and_then(DecodedProof::into_transaction)
             .context("failed to decode the response of the remote transaction prover")?
             .build_unchecked()
             .context("failed to build the response of the remote transaction prover")

@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::Context;
 use miden_node_proto::clients::RpcClient;
 use miden_node_proto::generated::rpc::{BlockSubscriptionRequest, ProofSubscriptionRequest};
-use miden_node_proto::{DecodeMessage, VerifyWith};
+use miden_node_proto::{DecodeMessage, DecodeMessageExt};
 use miden_node_store::state::{BlockWriter, ProofWriter, State};
 use miden_node_tracing::{Instrument, debug, info, info_span, miden_instrument, warn};
 use miden_node_utils::retry::{self, RetryableWithContext};
@@ -232,9 +232,7 @@ impl BlockSync {
                 return Ok(());
             };
             let (block, upstream_tip, protocol_config) = result?
-                .decode_fields()
-                .context("failed to decode block from upstream")?
-                .verify_with(&parent)
+                .decode_and_verify_with(&parent)
                 .context("failed to verify block from upstream")?;
             let next_parent = block.header().clone();
             // Each synced block gets its own root span: the surrounding `sync` span lives for the
