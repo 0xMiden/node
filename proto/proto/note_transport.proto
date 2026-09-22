@@ -6,42 +6,82 @@ import "block_number.proto";
 
 // Delivers private notes to recipients that poll by tag.
 service Api {
-    // Stores a note. A retry with the same note ID keeps the first envelope.
+    // Stores a private note. A retry with the same note ID keeps the first envelope.
+    // Rejects non-private notes with INVALID_ARGUMENT.
     rpc SendNote(SendNoteRequest) returns (SendNoteResponse) {}
+    // Verifies inclusion against the trusted node before storage, including on retries.
+    // Accepts only private notes. Rejects non-private notes with INVALID_ARGUMENT.
+    // A retry with the same note ID keeps the first envelope.
+    rpc SendNoteWithProof(SendNoteWithProofRequest) returns (SendNoteResponse) {}
     // Returns notes after the cursor, ordered by their storage cursor.
     rpc FetchNotes(FetchNotesRequest) returns (FetchNotesResponse) {}
 }
 
 message SendNoteRequest {
     TransportNote note = 1;
+    // Unverified lower bound for the inclusion block. An absent value differs from block zero.
+    optional blockchain.BlockNumber after_block_num = 2;
 }
 
 message SendNoteResponse {}
 
+message SendNoteWithProofRequest {
+    // Required. The inclusion proof supplies the exact inclusion block.
+    TransportNote note = 1;
+    // Required. The service verifies this proof but does not store it.
+    note.NoteInclusionProof inclusion_proof = 2;
+}
+
 message TransportNote {
     note.NoteHeader header = 1;
     note.NoteDetails details = 2;
-    // Sender-supplied lower bound for the inclusion block. The service does not verify it.
+}
+
+// A stored note. At most one of the block fields is present.
+message FetchedNote {
+    note.NoteHeader header = 1;
+    note.NoteDetails details = 2;
+    // Optional unverified lower bound supplied through SendNote.
     // An absent value differs from block zero.
     optional blockchain.BlockNumber after_block_num = 3;
+    // Exact inclusion block verified through SendNoteWithProof.
+    // This field is absent for notes stored through SendNote.
+    optional blockchain.BlockNumber committed_in_block = 4;
+}
+
+// Identifies a position in a stable sequence of stored notes.
+message FetchNotesCursor {
+    // Random nonce that identifies the sequence. Service restarts and note cleanup preserve it.
+    // Recreating the database assigns a new nonce and invalidates previous cursors.
+    // All unsigned 64-bit values are valid.
+    fixed64 nonce = 1;
+    // Exclusive lower bound. Zero starts from the first retained note.
+    fixed64 sequence = 2;
 }
 
 message FetchNotesRequest {
-    // At most 128 tags. Duplicate tags do not duplicate results.
+    // Tags to fetch notes for. Accepts up to 128 tags.
+    // Duplicate tags do not cause duplicate results.
     repeated fixed32 tags = 1;
-    // Exclusive lower bound. Zero starts from the first retained note.
-    // The cursor belongs to the requested set of tags.
-    // Reset it to zero when you add or remove tags.
-    // Reordering tags or changing duplicate tags does not change the set.
-    // A restart can return notes that you fetched before.
-    // Use note IDs to remove duplicate results.
-    fixed64 cursor = 2;
+
+    // Continue from the cursor returned by the previous response.
+    // Omit the cursor to start from the first retained note.
+    //
+    // Reuse the cursor only for the same set of tags. Clear it when you add or remove a tag.
+    // Reordering tags or adding or removing duplicate tags does not require a reset.
+    //
+    // If the cursor nonce does not match the database nonce, the request returns
+    // FAILED_PRECONDITION. Clear the cursor and retry from the first retained note.
+    // This restart can return notes already fetched. Use note IDs to remove duplicates.
+    FetchNotesCursor cursor = 2;
 }
 
 message FetchNotesResponse {
-    repeated TransportNote notes = 1;
-    // Cursor of the last returned note. An empty page keeps the request cursor.
-    fixed64 cursor = 2;
+    repeated FetchedNote notes = 1;
+    // Always present. Contains the sequence of the last returned note.
+    // An empty page keeps the validated request cursor.
+    // An initial empty page returns the current nonce and sequence zero.
+    FetchNotesCursor cursor = 2;
     // Indicates that another page is available for these tags.
     bool has_more = 3;
 }

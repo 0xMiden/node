@@ -4451,6 +4451,7 @@ dependencies = [
  "miden-node-utils",
  "miden-protocol",
  "prost",
+ "rand 0.10.2",
  "reqwest",
  "rusqlite",
  "tempfile",
@@ -4459,10 +4460,12 @@ dependencies = [
  "tokio-stream",
  "tonic",
  "tonic-health",
+ "tonic-prost",
  "tonic-reflection",
  "tonic-web",
  "tower",
  "tower-http",
+ "url",
 ]
 
 [[package]]
