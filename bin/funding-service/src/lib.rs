@@ -71,8 +71,8 @@ pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// Default timeout of a request to the node's RPC API.
 pub const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Default interval between two collections of the pay-to-ID notes sent to the funding account.
-pub const DEFAULT_P2ID_COLLECTION_INTERVAL: Duration = Duration::from_secs(60);
+/// Default interval between two scans for the deposits sent to the funding account.
+pub const DEFAULT_DEPOSIT_SCAN_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Default timeout of a request to the remote prover.
 pub const DEFAULT_TX_PROVER_TIMEOUT: Duration = Duration::from_secs(60);
@@ -95,7 +95,7 @@ pub struct FundingServiceConfig {
     account_file: PathBuf,
     validator_signing_public_keys: Vec<ValidatorPublicKey>,
     tx_prover_url: Option<Url>,
-    p2id_collection_interval: Duration,
+    deposit_scan_interval: Duration,
     http_timeout: Duration,
     rpc_timeout: Duration,
     tx_prover_timeout: Duration,
@@ -117,7 +117,7 @@ impl FundingServiceConfig {
             account_file,
             validator_signing_public_keys,
             tx_prover_url: None,
-            p2id_collection_interval: DEFAULT_P2ID_COLLECTION_INTERVAL,
+            deposit_scan_interval: DEFAULT_DEPOSIT_SCAN_INTERVAL,
             http_timeout: DEFAULT_HTTP_TIMEOUT,
             rpc_timeout: DEFAULT_RPC_TIMEOUT,
             tx_prover_timeout: DEFAULT_TX_PROVER_TIMEOUT,
@@ -136,8 +136,8 @@ impl FundingServiceConfig {
     }
 
     #[must_use]
-    pub fn with_p2id_collection_interval(mut self, interval: Duration) -> Self {
-        self.p2id_collection_interval = interval;
+    pub fn with_deposit_scan_interval(mut self, interval: Duration) -> Self {
+        self.deposit_scan_interval = interval;
         self
     }
 
@@ -248,7 +248,7 @@ impl FundingServiceConfig {
                 max_notes_per_tx: self.max_notes_per_tx,
                 expiration_delta: self.tx_expiration_delta,
                 tick_interval: self.poll_interval,
-                deposit_scan_interval: self.p2id_collection_interval,
+                deposit_scan_interval: self.deposit_scan_interval,
             },
             max_amount: self.max_amount,
             http_timeout: self.http_timeout,

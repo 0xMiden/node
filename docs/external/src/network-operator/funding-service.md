@@ -54,7 +54,7 @@ miden-funding-service start \
 | `--max-notes-per-tx`             | `16`         | Largest number of notes one transaction creates. Must not exceed 100.                                                                                                   |
 | `--tx-expiration-delta`          | `50`         | Largest number of blocks after its reference block at which a funding transaction expires.                                                                              |
 | `--poll-interval`                | `1s`         | How often the funding worker runs a cycle while it has work.                                                                                                            |
-| `--p2id-collection-interval`     | `1m`         | How often the service scans for the pay-to-ID notes sent to the funding account.                                                                                        |
+| `--deposit-scan-interval`        | `1m`         | How often the service scans for the pay-to-ID notes sent to the funding account.                                                                                        |
 | `--http.timeout`                 | `30s`        | Largest duration allocated to one HTTP request.                                                                                                                         |
 | `--rpc.timeout`                  | `10s`        | Timeout of a request to the node.                                                                                                                                       |
 | `--tx-prover.timeout`            | `1m`         | Timeout of a request to the remote prover.                                                                                                                              |
@@ -135,7 +135,7 @@ operator action, which is what the status code reports.
 
 To refill the account, send it a **public** pay-to-ID note that holds the native asset. The service scans for those
 notes and consumes them on its own, so no operator action is needed beyond sending the note. The scan runs every
-`--p2id-collection-interval`, which defaults to one minute. The scan starts at the genesis block after a restart, so a
+`--deposit-scan-interval`, which defaults to one minute. The scan starts at the genesis block after a restart, so a
 deposit sent while the service was down is still found.
 
 A note is only collected when all of the following hold. Anything else is ignored, because the note tag encodes only the
