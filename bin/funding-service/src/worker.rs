@@ -63,8 +63,8 @@ pub struct WorkerConfig {
 pub struct FunderSetup {
     /// The funding account's ID and signing key.
     pub key: FunderKey,
-    /// The faucet which issues the native asset.
-    pub fee_faucet_id: AccountId,
+    /// The native asset, which pays the fee.
+    pub fee_asset_id: AssetId,
     /// The chain's verification base fee. Zero on a chain which does not charge fees.
     pub verification_base_fee: u32,
     /// The protocol configuration of the chain, which names the fee asset.
@@ -125,7 +125,7 @@ impl Funder {
             .committed_tip()
             .await
             .context("failed to read the startup chain tip")?;
-        let mut scanner = DepositScanner::new(self.account_id(), self.setup.fee_faucet_id);
+        let mut scanner = DepositScanner::new(self.account_id(), self.setup.fee_asset_id);
         while let Err(err) = self.sync_initial_deposits(&mut scanner, tip).await {
             warn!(&err, target: LOG_TARGET, "Failed to discover historical deposits; retrying");
             tokio::time::sleep(self.setup.config.tick_interval).await;
@@ -218,7 +218,7 @@ impl Funder {
             &self.deposits,
             &self.queued,
             balance,
-            self.setup.fee_faucet_id,
+            self.setup.fee_asset_id,
             reserve,
         ) else {
             return Ok(());
@@ -233,7 +233,7 @@ impl Funder {
         let reference_block = reference_header.block_num();
         let fee_faucet = self
             .node
-            .public_account(self.setup.fee_faucet_id, reference_header.block_num())
+            .public_account(self.setup.fee_asset_id.faucet_id(), reference_header.block_num())
             .await
             .context("failed to read the fee faucet account")?;
         let inputs = ExecutionInputs {
@@ -399,7 +399,7 @@ impl Funder {
     fn fee_balance(&self, funder: &Account) -> u64 {
         funder
             .vault()
-            .get_balance(AssetId::new_fungible(self.setup.fee_faucet_id))
+            .get_balance(self.setup.fee_asset_id)
             .map_or(0, |amount| amount.as_u64())
     }
 
@@ -424,13 +424,13 @@ impl Selection {
         deposits: &HashMap<Nullifier, Note>,
         queued: &VecDeque<Note>,
         balance: u64,
-        fee_faucet_id: AccountId,
+        fee_asset_id: AssetId,
         reserve: u64,
     ) -> Option<Self> {
-        let deposit = deposits.values().max_by_key(|note| native_amount(note, fee_faucet_id));
-        let collected = deposit.map_or(0, |note| native_amount(note, fee_faucet_id));
+        let deposit = deposits.values().max_by_key(|note| native_amount(note, fee_asset_id));
+        let collected = deposit.map_or(0, |note| native_amount(note, fee_asset_id));
         let note_count = admit(
-            queued.iter().map(|note| native_amount(note, fee_faucet_id)),
+            queued.iter().map(|note| native_amount(note, fee_asset_id)),
             balance.saturating_add(collected),
             reserve,
         );
@@ -487,6 +487,11 @@ mod tests {
         FungibleAsset::mock_issuer()
     }
 
+    /// The native asset in these tests.
+    fn fee_asset_id() -> AssetId {
+        AssetId::new_fungible(fee_faucet_id())
+    }
+
     /// Builds a public P2ID note which holds `amount` of the native asset.
     fn note(amount: u64, serial: u32) -> Note {
         let faucet = fee_faucet_id();
@@ -510,7 +515,7 @@ mod tests {
     fn a_deposit_without_payouts_must_be_worth_more_than_its_fee() {
         let deposits = deposit_pool([note(RESERVE, 1), note(RESERVE, 2)]);
         assert!(
-            Selection::choose(&deposits, &VecDeque::new(), 0, fee_faucet_id(), RESERVE).is_none()
+            Selection::choose(&deposits, &VecDeque::new(), 0, fee_asset_id(), RESERVE).is_none()
         );
         assert_eq!(deposits.len(), 2);
     }
@@ -522,7 +527,7 @@ mod tests {
         let queued = VecDeque::from([note(1_000, 3)]);
 
         assert_eq!(
-            Selection::choose(&deposits, &queued, 0, fee_faucet_id(), RESERVE),
+            Selection::choose(&deposits, &queued, 0, fee_asset_id(), RESERVE),
             Some(Selection {
                 deposit: Some(largest),
                 notes: queued.iter().cloned().collect()
@@ -537,7 +542,7 @@ mod tests {
         let payout = note(1_000, 2);
         let queued = VecDeque::from([payout.clone(), note(1, 3)]);
         assert_eq!(
-            Selection::choose(&HashMap::new(), &queued, RESERVE + 1_000, fee_faucet_id(), RESERVE),
+            Selection::choose(&HashMap::new(), &queued, RESERVE + 1_000, fee_asset_id(), RESERVE),
             Some(Selection { deposit: None, notes: vec![payout] })
         );
         assert_eq!(queued.len(), 2);
@@ -550,7 +555,7 @@ mod tests {
         let deposits = deposit_pool([deposit.clone()]);
         let queued = VecDeque::from([payout.clone()]);
         assert_eq!(
-            Selection::choose(&deposits, &queued, RESERVE, fee_faucet_id(), RESERVE),
+            Selection::choose(&deposits, &queued, RESERVE, fee_asset_id(), RESERVE),
             Some(Selection {
                 deposit: Some(deposit),
                 notes: vec![payout]
@@ -566,7 +571,7 @@ mod tests {
         let queued = VecDeque::from([payout.clone()]);
         for _ in 0..2 {
             assert_eq!(
-                Selection::choose(&deposits, &queued, 0, fee_faucet_id(), RESERVE),
+                Selection::choose(&deposits, &queued, 0, fee_asset_id(), RESERVE),
                 Some(Selection {
                     deposit: Some(deposit.clone()),
                     notes: vec![payout.clone()]

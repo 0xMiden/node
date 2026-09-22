@@ -15,6 +15,11 @@ pub enum RequestFundsError {
     #[error("the account ID is malformed")]
     InvalidAccountId,
 
+    /// The request targets the funding account. The note would return to the funding account as a
+    /// deposit, and the service would pay one fee to create it and another fee to collect it.
+    #[error("the account ID is the funding account")]
+    TargetIsFundingAccount,
+
     /// A note must hold a non-zero amount.
     #[error("the requested amount must not be zero")]
     InvalidAmount,
@@ -50,9 +55,10 @@ impl RequestFundsError {
     pub(crate) fn status_code(&self) -> StatusCode {
         match self {
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            Self::InvalidAccountId | Self::InvalidAmount | Self::AmountExceedsMaximum { .. } => {
-                StatusCode::BAD_REQUEST
-            },
+            Self::InvalidAccountId
+            | Self::TargetIsFundingAccount
+            | Self::InvalidAmount
+            | Self::AmountExceedsMaximum { .. } => StatusCode::BAD_REQUEST,
             Self::InsufficientFunds { .. } => StatusCode::PRECONDITION_FAILED,
             Self::NotReady(_) => StatusCode::SERVICE_UNAVAILABLE,
             Self::Busy => StatusCode::TOO_MANY_REQUESTS,

@@ -44,7 +44,7 @@ use miden_protocol::account::{
     StorageSlot,
     StorageSlotType,
 };
-use miden_protocol::asset::AssetVault;
+use miden_protocol::asset::{AssetId, AssetVault};
 use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::block::{BlockHeader, BlockNumber, FeeParameters};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
@@ -183,7 +183,7 @@ impl RpcNodeClient {
     pub async fn sync_deposits(
         &self,
         funder: AccountId,
-        fee_faucet_id: AccountId,
+        fee_asset_id: AssetId,
         from_block: BlockNumber,
         to_block: BlockNumber,
     ) -> Result<SyncedDeposits> {
@@ -230,7 +230,7 @@ impl RpcNodeClient {
             .get_public_notes_by_id(&note_ids)
             .await?
             .into_iter()
-            .filter(|note| is_deposit(note, funder, fee_faucet_id))
+            .filter(|note| is_deposit(note, funder, fee_asset_id))
             .collect();
 
         Ok(SyncedDeposits { deposits, last_checked_block })

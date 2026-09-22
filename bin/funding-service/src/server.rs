@@ -8,7 +8,7 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use miden_node_tracing::info;
 use miden_node_utils::shutdown::CancellationToken;
-use miden_protocol::account::AccountId;
+use miden_protocol::asset::AssetId;
 use miden_protocol::note::Note;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
@@ -36,8 +36,8 @@ pub(crate) struct FundingState {
     /// Where a handler puts the note it built, for the worker to create.
     pub(crate) requests: mpsc::Sender<Note>,
     pub(crate) status: StatusSnapshot,
-    /// The faucet which issues the native asset the notes hold.
-    pub(crate) fee_faucet_id: AccountId,
+    /// The native asset the notes hold.
+    pub(crate) fee_asset_id: AssetId,
 }
 
 /// The HTTP service of the funding service.
@@ -50,11 +50,11 @@ impl FundingServer {
     pub(crate) fn new(
         requests: mpsc::Sender<Note>,
         status: StatusSnapshot,
-        fee_faucet_id: AccountId,
+        fee_asset_id: AssetId,
         request_timeout: Duration,
     ) -> Self {
         Self {
-            state: FundingState { requests, status, fee_faucet_id },
+            state: FundingState { requests, status, fee_asset_id },
             request_timeout,
         }
     }
@@ -114,7 +114,14 @@ pub(crate) mod tests {
         let fee_faucet_id = FungibleAsset::mock_issuer();
         let status = StatusSnapshot::new(fee_faucet_id, max_amount);
 
-        (FundingState { requests, status, fee_faucet_id }, rx)
+        (
+            FundingState {
+                requests,
+                status,
+                fee_asset_id: AssetId::new_fungible(fee_faucet_id),
+            },
+            rx,
+        )
     }
 
     pub(crate) fn test_router(state: FundingState) -> Router {

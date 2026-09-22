@@ -383,7 +383,10 @@ async fn discovery_recovers_historical_deposits_and_continues_with_new_blocks() 
     chain.notes = vec![(3, first.clone()), (10, second.clone())];
     chain.unavailable = Some("GetNotesById");
     let server = TestServer::start(chain).await;
-    let mut scanner = DepositScanner::new(TestChain::account_id(), TestChain::account_id());
+    let mut scanner = DepositScanner::new(
+        TestChain::account_id(),
+        AssetId::new_fungible(TestChain::account_id()),
+    );
 
     assert!(scanner.scan(&server.node, 12.into()).await.is_err());
     server.chain.lock().unwrap().unavailable = None;
@@ -447,7 +450,10 @@ async fn invalid_note_pagination_does_not_skip_deposits() {
     chain.notes = vec![(3, deposit.clone())];
     chain.invalid_checked = Some(13);
     let server = TestServer::start(chain).await;
-    let mut scanner = DepositScanner::new(TestChain::account_id(), TestChain::account_id());
+    let mut scanner = DepositScanner::new(
+        TestChain::account_id(),
+        AssetId::new_fungible(TestChain::account_id()),
+    );
 
     assert!(scanner.scan(&server.node, 12.into()).await.is_err());
     server.chain.lock().unwrap().invalid_checked = None;

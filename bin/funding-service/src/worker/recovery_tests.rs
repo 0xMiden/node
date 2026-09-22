@@ -12,7 +12,7 @@ impl FunderSetup {
         let (account, key) = genesis_style_wallet(fee_faucet_id, 0, [71; 32]).unwrap();
         Self {
             key: funder_key_from(&account, &key).unwrap(),
-            fee_faucet_id,
+            fee_asset_id: AssetId::new_fungible(fee_faucet_id),
             verification_base_fee: 0,
             protocol_config: ProtocolConfig::current(AssetId::new_fungible(fee_faucet_id)).unwrap(),
             config: WorkerConfig {
@@ -27,9 +27,9 @@ impl FunderSetup {
 
     fn deposit(&self, serial: u32) -> Note {
         P2idNote::builder()
-            .sender(self.fee_faucet_id)
+            .sender(self.fee_asset_id.faucet_id())
             .target(self.key.account_id())
-            .asset(FungibleAsset::new(self.fee_faucet_id, 1_000).unwrap())
+            .asset(FungibleAsset::new(self.fee_asset_id.faucet_id(), 1_000).unwrap())
             .note_type(NoteType::Public)
             .serial_number(Word::from([serial; 4]))
             .build()
@@ -48,7 +48,7 @@ async fn startup_recovers_unspent_deposits_after_a_failed_scan() {
     chain.spent = vec![(4, spent.nullifier())];
     chain.unavailable = Some("SyncNullifiers");
     let server = TestServer::start(chain).await;
-    let mut scanner = DepositScanner::new(setup.key.account_id(), setup.fee_faucet_id);
+    let mut scanner = DepositScanner::new(setup.key.account_id(), setup.fee_asset_id);
     let mut funder = Funder::new(server.node.clone(), Prover::local(), setup);
 
     assert!(funder.sync_initial_deposits(&mut scanner, 12.into()).await.is_err());

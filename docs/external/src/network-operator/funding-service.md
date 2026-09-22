@@ -54,7 +54,7 @@ miden-funding-service start \
 | `--max-notes-per-tx`             | `16`         | Largest number of notes one transaction creates. Must not exceed 100.                                                                                                   |
 | `--tx-expiration-delta`          | `50`         | Largest number of blocks after its reference block at which a funding transaction expires.                                                                              |
 | `--poll-interval`                | `1s`         | Interval for processing pending notes and checking submitted transactions.                                                                                              |
-| `--p2id-collection-interval`     | `1m`         | How often the service scans for the pay-to-ID notes sent to the funding account.                                                                                        |
+| `--deposit-scan-interval`        | `1m`         | How often the service scans for the pay-to-ID notes sent to the funding account.                                                                                        |
 | `--http.timeout`                 | `30s`        | Largest duration allocated to one HTTP request.                                                                                                                         |
 | `--rpc.timeout`                  | `10s`        | Timeout of a request to the node.                                                                                                                                       |
 | `--tx-prover.timeout`            | `1m`         | Timeout of a request to the remote prover.                                                                                                                              |
@@ -114,14 +114,14 @@ A failed request answers with a JSON body that holds the reason:
 
 The status code tells a client whether to change the request, add funds, or send the request again.
 
-| Status                      | Meaning                                                                                          |
-| --------------------------- | ------------------------------------------------------------------------------------------------ |
-| `400 Bad Request`           | The account ID is malformed, the requested amount is zero, or the amount exceeds `--max-amount`. |
-| `408 Request Timeout`       | The request ran longer than `--http.timeout`.                                                    |
-| `412 Precondition Failed`   | The balance the service last read does not cover the request plus the fee of one transaction.    |
-| `429 Too Many Requests`     | Too many notes are queued.                                                                       |
-| `500 Internal Server Error` | The service failed for a reason the client cannot act on.                                        |
-| `503 Service Unavailable`   | The service is shutting down.                                                                    |
+| Status                      | Meaning                                                                                                                       |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `400 Bad Request`           | The account ID is malformed or names the funding account, the requested amount is zero, or the amount exceeds `--max-amount`. |
+| `408 Request Timeout`       | The request ran longer than `--http.timeout`.                                                                                 |
+| `412 Precondition Failed`   | The balance the service last read does not cover the request plus the fee of one transaction.                                 |
+| `429 Too Many Requests`     | Too many notes are queued.                                                                                                    |
+| `500 Internal Server Error` | The service failed for a reason the client cannot act on.                                                                     |
+| `503 Service Unavailable`   | The service is shutting down.                                                                                                 |
 
 A request that fails created no note, and a client may send it again as it is. The service builds the note before it
 answers. A 200 response names the queued note, but does not guarantee delivery across a service restart.
@@ -136,7 +136,7 @@ operator action, which is what the status code reports.
 
 To refill the account, send it a **public** pay-to-ID note that holds the native asset. The service scans for those
 notes and consumes them on its own, so no operator action is needed beyond sending the note. The scan runs every
-`--p2id-collection-interval`, which defaults to one minute. At startup, the worker first scans from genesis through the
+`--deposit-scan-interval`, which defaults to one minute. At startup, the worker first scans from genesis through the
 current chain tip. It completes that discovery before it processes funding requests. A restart recovers unspent
 deposits, including deposits sent while the service was stopped. Periodic scans continue from the saved cursor.
 

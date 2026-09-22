@@ -6,6 +6,7 @@
 
 use anyhow::Result;
 use miden_protocol::account::AccountId;
+use miden_protocol::asset::AssetId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{Note, NoteType};
 use miden_standards::note::{P2idNote, P2idNoteStorage};
@@ -19,18 +20,18 @@ use crate::node::RpcNodeClient;
 pub struct DepositScanner {
     /// The funding account the deposits target.
     funder: AccountId,
-    /// The faucet which issues the chain's native asset.
-    fee_faucet_id: AccountId,
+    /// The native asset of the chain.
+    fee_asset_id: AssetId,
     /// The block the next scan starts at.
     next_block: BlockNumber,
 }
 
 impl DepositScanner {
     /// Creates a scanner that starts at genesis.
-    pub fn new(funder: AccountId, fee_faucet_id: AccountId) -> Self {
+    pub fn new(funder: AccountId, fee_asset_id: AssetId) -> Self {
         Self {
             funder,
-            fee_faucet_id,
+            fee_asset_id,
             next_block: BlockNumber::GENESIS,
         }
     }
@@ -46,9 +47,8 @@ impl DepositScanner {
             return Ok(Vec::new());
         }
 
-        let synced = node
-            .sync_deposits(self.funder, self.fee_faucet_id, self.next_block, tip)
-            .await?;
+        let synced =
+            node.sync_deposits(self.funder, self.fee_asset_id, self.next_block, tip).await?;
 
         self.next_block = synced.last_checked_block + 1;
         Ok(synced.deposits)
@@ -63,7 +63,7 @@ impl DepositScanner {
 /// A deposit is a public pay-to-ID note which targets `funder` and holds nothing but the native
 /// asset. Only the native asset is collected, because a note holding anything else would put an
 /// asset the service cannot spend into the vault.
-pub fn is_deposit(note: &Note, funder: AccountId, fee_faucet_id: AccountId) -> bool {
+pub fn is_deposit(note: &Note, funder: AccountId, fee_asset_id: AssetId) -> bool {
     if note.metadata().note_type() != NoteType::Public {
         return false;
     }
@@ -78,17 +78,17 @@ pub fn is_deposit(note: &Note, funder: AccountId, fee_faucet_id: AccountId) -> b
         return false;
     }
 
-    note.assets().num_assets() == 1 && native_amount(note, fee_faucet_id) > 0
+    note.assets().num_assets() == 1 && native_amount(note, fee_asset_id) > 0
 }
 
 /// The amount of the native asset the note holds.
-pub fn native_amount(note: &Note, fee_faucet_id: AccountId) -> u64 {
+pub fn native_amount(note: &Note, fee_asset_id: AssetId) -> u64 {
     note.assets()
         .iter()
         .filter_map(|asset| {
             asset
                 .as_fungible()
-                .filter(|asset| asset.faucet_id() == fee_faucet_id)
+                .filter(|asset| asset.id() == fee_asset_id)
                 .map(|asset| asset.amount().as_u64())
         })
         .sum()
@@ -101,6 +101,11 @@ mod tests {
 
     use super::*;
     use crate::test_utils::genesis_style_wallet;
+
+    /// The native asset in these tests, which the mock faucet issues.
+    fn fee_asset_id() -> AssetId {
+        AssetId::new_fungible(FungibleAsset::mock_issuer())
+    }
 
     /// Builds a public P2ID note which holds `amount` of `faucet_id` and targets `target`.
     fn deposit_note(
@@ -127,8 +132,8 @@ mod tests {
         let funder = FungibleAsset::mock_issuer();
         let note = deposit_note(funder, funder, 5_000, 1, NoteType::Public);
 
-        assert!(is_deposit(&note, funder, funder));
-        assert_eq!(native_amount(&note, funder), 5_000);
+        assert!(is_deposit(&note, funder, fee_asset_id()));
+        assert_eq!(native_amount(&note, fee_asset_id()), 5_000);
     }
 
     /// Only the native asset is collected: anything else would leave an asset in the vault which
@@ -139,8 +144,8 @@ mod tests {
         let (other, _) = genesis_style_wallet(funder, 0, [3; 32]).expect("wallet should build");
         let note = deposit_note(funder, other.id(), 5_000, 2, NoteType::Public);
 
-        assert!(!is_deposit(&note, funder, funder));
-        assert_eq!(native_amount(&note, funder), 0);
+        assert!(!is_deposit(&note, funder, fee_asset_id()));
+        assert_eq!(native_amount(&note, fee_asset_id()), 0);
     }
 
     /// The note tag only encodes the leading bits of an account ID, so notes for other accounts
@@ -151,7 +156,7 @@ mod tests {
         let (other, _) = genesis_style_wallet(funder, 0, [5; 32]).expect("wallet should build");
         let note = deposit_note(other.id(), funder, 5_000, 3, NoteType::Public);
 
-        assert!(!is_deposit(&note, funder, funder));
+        assert!(!is_deposit(&note, funder, fee_asset_id()));
     }
 
     /// The node stores no details for a private note, so it cannot be consumed.
@@ -161,7 +166,7 @@ mod tests {
         let note = deposit_note(funder, funder, 5_000, 4, NoteType::Public);
         let private = deposit_note(funder, funder, 5_000, 4, NoteType::Private);
 
-        assert!(is_deposit(&note, funder, funder));
-        assert!(!is_deposit(&private, funder, funder));
+        assert!(is_deposit(&note, funder, fee_asset_id()));
+        assert!(!is_deposit(&private, funder, fee_asset_id()));
     }
 }
