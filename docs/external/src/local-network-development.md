@@ -139,19 +139,15 @@ components are intended for local development and are not part of the Miden node
 
 ## Note Transport
 
-The [Miden Note Transport service](https://github.com/0xMiden/note-transport-service) exchanges private notes between
-clients. Enable its optional profile explicitly:
+The workspace `miden-note-transport` service exchanges private notes between clients. Enable its optional profile:
 
 ```bash
 docker compose --profile note-transport up -d
 ```
 
-Its browser-facing gRPC-Web endpoint is `http://ntl.localhost`; native gRPC clients can use `localhost:57292`. Notes are
-persisted in the `note-transport-data` volume.
-
-The pinned Gateway FM image currently supports only `linux/amd64`. Compose selects that platform explicitly, allowing
-Docker to run it through emulation on ARM hosts. To use a compatible native build instead, set both
-`MIDEN_NOTE_TRANSPORT_IMAGE` and `MIDEN_NOTE_TRANSPORT_PLATFORM`.
+Its browser-facing gRPC-Web endpoint is `http://ntl.localhost`. Native gRPC clients can use `localhost:57292`. Compose
+initializes the database on first use and persists notes in the `note-transport-data` volume. The service limits stored
+note data to 1 GiB. Set `MIDEN_NOTE_TRANSPORT_IMAGE` to select a different workspace image.
 
 ## Faucet
 

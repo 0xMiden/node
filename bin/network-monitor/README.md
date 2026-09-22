@@ -34,6 +34,9 @@ On a chain with a non-zero verification base fee, network transaction checks add
 balance up automatically when it runs low. Without it the monitor refuses to start its network transaction checks on
 such chains. `MIDEN_MONITOR_FAUCET_URL` is only used for the faucet checks.
 
+The note transport check uses the standard gRPC health service for `note_transport.Api`. Only a `SERVING` response marks
+the service as healthy. Its dashboard card shows the service URL.
+
 Use the binary help output for the current command and configuration surface. The help output is the source of truth for
 flags and environment variables.
 
