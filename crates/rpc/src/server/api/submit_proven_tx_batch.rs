@@ -59,7 +59,7 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
         } = spawn_blocking_in_current_span(move || submission.decode_and_verify())
             .await
             .map_err(|err| Status::internal(format!("batch decoding task failed: {err}")))?
-            .map_err(miden_node_proto::errors::conversion_error_to_status)?;
+            .map_err(miden_node_proto::errors::ConversionError::into_status)?;
 
         miden_span_record!(
             batch.id = proven_batch.id(),

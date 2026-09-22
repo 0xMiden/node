@@ -16,7 +16,7 @@ use miden_node_proto::domain::encryption::{
     TrustedTransactionEncryptionState,
 };
 use miden_node_proto::generated::rpc::BlockHeaderByNumberRequest;
-use miden_node_proto::{BuildUnchecked, DecodeMessage, VerifyWith};
+use miden_node_proto::{DecodeMessageExt, VerifyWith};
 use miden_protocol::Word;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
@@ -178,10 +178,8 @@ async fn discover_genesis(rpc_url: &Url, timeout: Duration) -> Result<Word> {
         .ok_or_else(|| anyhow::anyhow!("No block header in response"))?;
 
     let genesis_header: BlockHeader = genesis_block_header
-        .decode_fields()
-        .context("Failed to decode block header")?
         // SAFETY: Genesis has no parent. This benchmark trusts the configured RPC for genesis.
-        .build_unchecked()
+        .decode_and_build_unchecked()
         .context("Failed to build block header")?;
 
     Ok(genesis_header.commitment())

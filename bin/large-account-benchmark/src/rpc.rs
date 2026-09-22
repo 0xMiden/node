@@ -18,7 +18,7 @@ use miden_node_proto::generated::rpc::{
     BlockHeaderByNumberResponse,
 };
 use miden_node_proto::generated::submission::ProvenTransactionSubmission as ProtoProvenTransaction;
-use miden_node_proto::{BuildUnchecked, DecodeMessage, DecodeMessageExt, VerifyWith};
+use miden_node_proto::{DecodeMessageExt, VerifyWith};
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::account_tree::AccountWitness;
@@ -335,10 +335,8 @@ fn decode_genesis_block_state(
     let header = response
         .block_header
         .context("RPC returned no genesis block header")?
-        .decode_fields()
-        .context("failed to decode the genesis block header")?
         // SAFETY: Genesis has no parent. This benchmark trusts the configured RPC for genesis.
-        .build_unchecked()
+        .decode_and_build_unchecked()
         .context("failed to build the genesis block header")?;
     let protocol_config =
         ensure_protocol_config_is_present_and_matches_header(response.protocol_config, &header)

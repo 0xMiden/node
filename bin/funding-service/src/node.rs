@@ -221,7 +221,7 @@ impl RpcNodeClient {
                     .note_id
                     .context("a note inclusion proof did not include a note ID")?
                     .decode_and_verify()
-                    .context("failed to convert a synced note ID")?;
+                    .context("failed to verify a synced note ID")?;
                 note_ids.push(note_id);
             }
         }
@@ -261,8 +261,7 @@ impl RpcNodeClient {
                     continue;
                 }
 
-                let note =
-                    note.decode_and_verify().context("failed to convert a committed note")?;
+                let note = note.decode_and_verify().context("failed to verify a committed note")?;
                 notes.push(note);
             }
         }
@@ -596,7 +595,7 @@ async fn fetch_block_header(
 
     block_header
         .decode_and_build_unchecked()
-        .context("failed to convert the block header")
+        .context("failed to build the block header")
 }
 
 /// Fetches the genesis block header and the protocol configuration it commits to.
@@ -620,7 +619,7 @@ async fn fetch_genesis_header_and_config(
         .block_header
         .context("the block header response holds no header")?
         .decode_and_build_unchecked()
-        .context("failed to convert the block header")?;
+        .context("failed to build the block header")?;
 
     let protocol_config = ensure_protocol_config_is_present_and_matches_header(
         response.protocol_config,
@@ -651,13 +650,13 @@ async fn fetch_tip_chain_state(
         .block_header
         .context("the sync_chain_mmr response did not include a block header")?
         .decode_and_build_unchecked()
-        .context("failed to convert the sync target block header")?;
+        .context("failed to build the sync target block header")?;
 
     let delta: MmrDelta = response
         .mmr_delta
         .context("the sync_chain_mmr response did not include an MMR delta")?
         .decode_and_verify()
-        .context("failed to convert the MMR delta")?;
+        .context("failed to verify the MMR delta")?;
 
     let mut mmr = PartialMmr::from_peaks(
         MmrPeaks::new(Forest::new(0).context("an empty forest should be valid")?, Vec::new())

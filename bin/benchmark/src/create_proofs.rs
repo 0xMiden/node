@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use miden_node_proto::{BuildUnchecked, DecodeMessage};
+use miden_node_proto::DecodeMessageExt;
 use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
 use miden_protocol::account::{
     Account,
@@ -188,8 +188,7 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
         .block_header
         .expect("RPC returned no block header");
     // SAFETY: Genesis has no parent. This benchmark trusts the configured RPC for genesis.
-    let genesis_header: BlockHeader =
-        genesis_header_proto.decode_fields().unwrap().build_unchecked().unwrap();
+    let genesis_header: BlockHeader = genesis_header_proto.decode_and_build_unchecked().unwrap();
     println!("Fetching chain tip state...");
     let (ref_block_header, protocol_config, partial_blockchain) =
         fetch_chain_tip_state(&mut rpc_client, &genesis_header)

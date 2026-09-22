@@ -1,4 +1,5 @@
-use miden_node_proto::{DecodeMessage, Verify, generated as proto};
+use miden_node_proto::errors::ConversionError;
+use miden_node_proto::{DecodeMessageExt, generated as proto};
 use miden_node_tracing::{ErrorReport, miden_instrument, miden_span_record};
 use miden_protocol::account::AccountId;
 use tonic::{Request, Status};
@@ -12,13 +13,7 @@ impl proto::server::rpc_api::IsAccountAllowed for RpcService {
     type Output = bool;
 
     fn decode(request: proto::rpc::IsAccountAllowedRequest) -> tonic::Result<Self::Input> {
-        request
-            .account_id
-            .ok_or_else(|| Status::invalid_argument("missing account_id"))?
-            .decode_fields()
-            .map_err(|_| Status::invalid_argument("invalid account_id"))?
-            .verify()
-            .map_err(|_| Status::invalid_argument("invalid account_id"))
+        request.decode_and_verify().map_err(ConversionError::into_status)
     }
 
     fn encode(allowed: Self::Output) -> tonic::Result<proto::rpc::IsAccountAllowedResponse> {

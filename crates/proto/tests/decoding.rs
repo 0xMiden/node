@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::error::Error;
 
 use miden_node_proto::domain::account::AccountStorageRequest;
-use miden_node_proto::errors::{ConversionError, conversion_error_to_status};
-use miden_node_proto::{DecodeMessage, Verify, generated as proto};
+use miden_node_proto::errors::ConversionError;
+use miden_node_proto::{DecodeMessage, DecodeMessageExt, Verify, generated as proto};
 use miden_protocol::Word;
 use miden_protocol::account::{AccountId, AccountIdVersion, AccountType, AssetCallbackFlag};
 use miden_protocol::utils::serde::DeserializationError;
@@ -28,9 +28,7 @@ fn account_request_preserves_optional_fields_on_the_wire() {
     let request = account_request();
     let decoded = proto::rpc::AccountRequest::decode(request.encode_to_vec().as_slice())
         .unwrap()
-        .decode_fields()
-        .unwrap()
-        .verify()
+        .decode_and_verify()
         .unwrap();
     assert!(decoded.block_num.is_none());
     assert!(decoded.details.is_none());
@@ -45,9 +43,7 @@ fn account_request_preserves_optional_fields_on_the_wire() {
     };
     let decoded = proto::rpc::AccountRequest::decode(request.encode_to_vec().as_slice())
         .unwrap()
-        .decode_fields()
-        .unwrap()
-        .verify()
+        .decode_and_verify()
         .unwrap();
     assert_eq!(decoded.block_num.unwrap().as_u32(), 0);
     let details = decoded.details.unwrap();
@@ -58,10 +54,10 @@ fn account_request_preserves_optional_fields_on_the_wire() {
 
 #[test]
 fn missing_account_id_is_an_invalid_argument() {
-    let error = proto::rpc::AccountRequest::default().decode_fields().unwrap_err();
-    assert!(error.to_string().starts_with("account_id:"), "{error}");
-    let status = conversion_error_to_status(error);
+    let error = proto::rpc::AccountRequest::default().decode_and_verify().unwrap_err();
+    let status = error.into_status();
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert!(status.message().starts_with("failed to decode: account_id:"), "{status}");
     assert!(status.message().contains("missing"));
 }
 
@@ -73,7 +69,7 @@ fn conversion_status_preserves_field_context_and_nested_causes() {
     )
     .context("transaction");
 
-    let status = conversion_error_to_status(error);
+    let status = error.into_status();
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
     assert!(status.message().starts_with("transaction: invalid object"));
     assert!(status.message().contains("underlying validation failure"));

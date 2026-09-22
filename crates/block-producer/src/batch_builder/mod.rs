@@ -25,7 +25,6 @@ use miden_protocol::note::NoteId;
 use miden_protocol::transaction::TransactionId;
 use tokio::task::{JoinError, JoinSet};
 use tokio::time::{Instant, MissedTickBehavior};
-use url::Url;
 
 use crate::domain::batch::{SelectedBatch, SelectedBatchId};
 use crate::errors::{BuildBatchError, StoreError};
@@ -34,9 +33,8 @@ use crate::mempool::SharedMempool;
 use crate::validator::BlockProducerValidatorClient;
 use crate::{COMPONENT, LOG_TARGET};
 
-mod remote_prover;
-pub(crate) use remote_prover::BatchProver;
-pub use remote_prover::RemoteProverError;
+mod prover;
+pub(crate) use prover::BatchProver;
 
 // BATCH BUILDER
 // ================================================================================================
@@ -51,9 +49,6 @@ pub struct BatchBuilder {
     active_jobs: JoinSet<Result<(), BuildBatchError>>,
     num_workers: NonZeroUsize,
     intervals: BatchIntervals,
-    /// The batch prover to use.
-    ///
-    /// If not provided, a local batch prover is used.
     batch_prover: BatchProver,
     fee_collector: FeeCollectorTransactionBuilder,
     validator: BlockProducerValidatorClient,
@@ -86,21 +81,15 @@ impl BatchIntervals {
 }
 
 impl BatchBuilder {
-    /// Creates a new [`BatchBuilder`] with the given batch prover URL and maximum concurrent batch
-    /// building workers.
-    ///
-    /// If no batch prover URL is provided, a local batch prover is used instead.
+    /// Creates a new [`BatchBuilder`] with the given maximum number of concurrent workers.
     pub async fn new(
         state: Arc<State>,
         num_workers: NonZeroUsize,
-        batch_prover_url: Option<Url>,
         intervals: BatchIntervals,
         builder_account_id: AccountId,
         fee_collector_account: AccountFile,
         validator: BlockProducerValidatorClient,
     ) -> anyhow::Result<Self> {
-        let batch_prover =
-            batch_prover_url.map_or(Ok(BatchProver::local()), BatchProver::remote)?;
         let fee_collector = FeeCollectorTransactionBuilder::new(
             builder_account_id,
             fee_collector_account,
@@ -112,7 +101,7 @@ impl BatchBuilder {
             active_jobs: JoinSet::new(),
             num_workers,
             intervals,
-            batch_prover,
+            batch_prover: BatchProver::new(),
             fee_collector,
             validator,
             state,
@@ -557,7 +546,7 @@ mod tests {
             FeeCollectorTransactionBuilder::new(wallet.id(), collector, &state.view()).await?;
         let job = BatchJob {
             state,
-            batch_prover: BatchProver::local(),
+            batch_prover: BatchProver::new(),
             fee_collector,
             validator: BlockProducerValidatorClient::new(Vec::new(), Duration::from_secs(1))?,
             mempool,

@@ -77,10 +77,6 @@ pub struct SequencerCommand {
 }
 
 impl SequencerCommand {
-    #[expect(
-        clippy::too_many_lines,
-        reason = "Keep sequencer service startup and task supervision together"
-    )]
     pub async fn handle(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         self.log_starting();
         let runtime = self.runtime.runtime_config(&self.store);
@@ -91,8 +87,6 @@ impl SequencerCommand {
             self.external_services.validator_clients_and_monitors()?;
         let (ntx_builder_client, ntx_builder_monitor) =
             self.external_services.ntx_builder_client_and_monitor()?;
-        let batch_prover_monitor =
-            remote_prover_monitor(self.block_producer.batch.prover_url.as_ref())?;
         let block_prover_monitor =
             remote_prover_monitor(self.block_producer.block_prover.url.as_ref())?;
         let allowlist = Arc::new(self.load_allowlist()?);
@@ -112,7 +106,6 @@ impl SequencerCommand {
             proof_writer,
             validator_urls: self.external_services.validator_urls.clone(),
             validator_timeout: self.external_services.validator_timeout,
-            batch_prover_url: self.block_producer.batch.prover_url,
             block_prover_url: self.block_producer.block_prover.url,
             batch_interval: self.block_producer.batch.interval,
             block_interval: self.block_producer.block.interval,
@@ -161,13 +154,6 @@ impl SequencerCommand {
             "ntx-builder connection monitor",
             ntx_builder_monitor.monitor::<NtxBuilderClient>("ntx-builder", shutdown.clone()),
         );
-        if let Some(batch_prover_monitor) = batch_prover_monitor {
-            tasks.spawn_infallible(
-                "batch prover connection monitor",
-                batch_prover_monitor
-                    .monitor::<RemoteProverClient>("batch-prover", shutdown.clone()),
-            );
-        }
         if let Some(block_prover_monitor) = block_prover_monitor {
             tasks.spawn_infallible(
                 "block prover connection monitor",
