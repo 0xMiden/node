@@ -40,9 +40,49 @@ This flow supports initial storage-key bootstrap only. The validator loads one s
 shares, and validator-set changes are not yet supported. Keep each operator bundle available for as long as records from
 its epoch may need to be decrypted.
 
-First, each operator creates a DKG identity for the agreed storage-key epoch and sends `registration.toml` to the
-coordinator. The registration proves ownership of the DKG identity secret. The signing key must match one key in
-genesis. Use `--signing-key.hex` instead of KMS only for local or private deployments.
+For the normal ceremony, one operator starts the durable Iroh bulletin board:
+
+```bash
+miden-validator dkg board \
+  --data-directory storage-key-board \
+  --genesis genesis.dat \
+  --threshold 2 \
+  --epoch <32-byte-hex-epoch> \
+  --ticket-directory storage-key-board-tickets
+```
+
+The command writes one ticket per genesis validator. Each ticket contains the board's Iroh address, a shared read-only
+document capability, and permission to upload only to that participant's slots. It contains no private DKG share. Send
+each file through an authenticated and confidential bootstrap channel. A ticket holder can stop the ceremony by
+uploading a conflicting value to that participant's slot. Keep the board running until every validator reports ceremony
+completion, then stop it with Ctrl-C.
+
+The current command uses Iroh's public discovery and relay services. The board and validators need outbound network
+access. This is a setup flow run before validator startup, not an isolated network transport.
+
+Each validator then runs the full ceremony with its own signing key and private work directory:
+
+```bash
+miden-validator dkg run \
+  --board-file <board-ticket-file> \
+  --genesis genesis.dat \
+  --threshold 2 \
+  --epoch <32-byte-hex-epoch> \
+  --signing-key.kms-id <validator-kms-key-id> \
+  --work-directory storage-key-work \
+  --output-directory storage-key
+```
+
+Both commands can restart with the same data and work directories. Give `--ticket-directory` a new path when restarting
+the board because it will not overwrite a ticket directory. Each validator collects the signed registrations and derives
+the common files from its expected threshold and epoch. It rejects different board copies, checks every later artifact,
+and validates its storage key bundle against the transcript accepted by every validator. A board directory from an older
+format cannot be reopened; start that ceremony again in a new directory.
+
+The commands below provide a manual recovery path. First, each operator creates a DKG identity for the agreed
+storage-key epoch and sends `registration.toml` to the coordinator. The registration proves ownership of the DKG
+identity secret. The signing key must match one key in genesis. Use `--signing-key.hex` instead of KMS only for local or
+private deployments.
 
 ```bash
 miden-validator dkg identity \

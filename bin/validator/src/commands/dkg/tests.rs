@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use golden_core::wire::from_wire_bytes;
 use golden_ehtdh1::wire::from_wire_bytes as from_ehtdh1_wire_bytes;
 use golden_ehtdh1::{
@@ -895,5 +897,136 @@ async fn deal_rejects_unknown_identity_and_existing_output() -> TestResult {
         )
         .is_err()
     );
+    Ok(())
+}
+#[tokio::test]
+/// Proves a validator can resume from its saved identity after its ceremony process stops.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the test runs every ceremony phase for three validators"
+)]
+async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let genesis = write_genesis(root.path())?;
+    let board_directory = root.path().join("board");
+    let (board, tickets) =
+        board::BoardNode::create_with_network(&board_directory, 3, false).await?;
+    let timeout = Duration::from_mins(2);
+    let restart_checkpoint_timeout = Duration::from_secs(10);
+    let epoch = "66".repeat(32);
+    let first_work = root.path().join("work-1");
+    fs_err::create_dir(&first_work)?;
+    let first_signer = ValidatorSigner::new_local(genesis.signing_keys[0].clone());
+
+    let interrupted = tokio::spawn({
+        let genesis_path = genesis.path.clone();
+        let first_work = first_work.clone();
+        let epoch = epoch.clone();
+        async move {
+            runner::prepare_local_identity(&genesis_path, &epoch, &first_signer, &first_work)
+                .await?;
+            std::future::pending::<anyhow::Result<()>>().await
+        }
+    });
+    let registration = first_work.join("identity").join(REGISTRATION_FILE);
+    tokio::time::timeout(restart_checkpoint_timeout, async {
+        while !registration.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    interrupted.abort();
+    assert!(interrupted.await.unwrap_err().is_cancelled());
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let signers = genesis
+        .signing_keys
+        .iter()
+        .cloned()
+        .map(ValidatorSigner::new_local)
+        .collect::<Vec<_>>();
+    let trusted_genesis = read_trusted_genesis(&genesis.path)?;
+    let validator_keys = trusted_genesis.inner().header().validator_config().keys();
+    let tickets = signers
+        .iter()
+        .map(|signer| {
+            let position = validator_keys
+                .iter()
+                .position(|key| *key == signer.public_key())
+                .context("test signer is missing from genesis")?;
+            Ok(tickets[position].clone())
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let work_directories = (1..=3)
+        .map(|participant| root.path().join(format!("work-{participant}")))
+        .collect::<Vec<_>>();
+    let bundle_directories = (1..=3)
+        .map(|participant| root.path().join(format!("bundle-{participant}")))
+        .collect::<Vec<_>>();
+    let coordinate = runner::coordinate_common_files(
+        &board,
+        &board_directory,
+        &genesis.path,
+        2,
+        &epoch,
+        timeout,
+    );
+    let first = runner::run_validator_with_network::<ShareOpeningBackend>(
+        tickets[0].clone(),
+        &genesis.path,
+        &signers[0],
+        2,
+        &epoch,
+        &work_directories[0],
+        &bundle_directories[0],
+        false,
+        timeout,
+    );
+    let second = runner::run_validator_with_network::<ShareOpeningBackend>(
+        tickets[1].clone(),
+        &genesis.path,
+        &signers[1],
+        2,
+        &epoch,
+        &work_directories[1],
+        &bundle_directories[1],
+        false,
+        timeout,
+    );
+    let third = runner::run_validator_with_network::<ShareOpeningBackend>(
+        tickets[2].clone(),
+        &genesis.path,
+        &signers[2],
+        2,
+        &epoch,
+        &work_directories[2],
+        &bundle_directories[2],
+        false,
+        timeout,
+    );
+    tokio::try_join!(coordinate, first, second, third)?;
+
+    let shared_setup = fs_err::read(bundle_directories[0].join(SETUP_CONTEXT_FILE))?;
+    let shared_public_keys = fs_err::read(bundle_directories[0].join(PUBLIC_KEY_SET_FILE))?;
+    let secret_shares = bundle_directories
+        .iter()
+        .map(|bundle| fs_err::read(bundle.join(SECRET_SHARE_FILE)))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert!(bundle_directories.iter().all(|bundle| {
+        fs_err::read(bundle.join(SETUP_CONTEXT_FILE)).unwrap() == shared_setup
+            && fs_err::read(bundle.join(PUBLIC_KEY_SET_FILE)).unwrap() == shared_public_keys
+    }));
+    assert_ne!(secret_shares[0], secret_shares[1]);
+    assert_ne!(secret_shares[1], secret_shares[2]);
+    assert_ne!(secret_shares[0], secret_shares[2]);
+    let common_files = [MANIFEST_FILE, DECRYPTION_CONFIG_FILE, CONTEXT_CONFIG_FILE];
+    assert!(common_files.iter().all(|name| {
+        let expected = fs_err::read(board_directory.join("ceremony").join(name)).unwrap();
+        work_directories
+            .iter()
+            .all(|work| fs_err::read(work.join("ceremony").join(name)).unwrap() == expected)
+    }));
+
+    board.shutdown().await?;
     Ok(())
 }

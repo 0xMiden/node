@@ -15,6 +15,124 @@ x-validator: &validator
     - --admin.listen=0.0.0.0:50102
 
 services:
+  # Opt-in end-to-end check for the Iroh exchange. Validator bootstrap is defined in node.yml.
+  storage-key-dkg-check:
+    profiles: ["storage-key-dkg"]
+    image: ${MIDEN_VALIDATOR_IMAGE:-miden-validator}
+    pull_policy: missing
+    volumes:
+      - node-data:/data
+    environment:
+      MIDEN_VALIDATOR_STORAGE_KEY_EPOCH: ${MIDEN_VALIDATOR_STORAGE_KEY_EPOCH:-0909090909090909090909090909090909090909090909090909090909090909}
+    depends_on:
+      bootstrap-validator:
+        condition: service_completed_successfully
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        ROOT=/data/storage-key-dkg-check
+        TICKETS="$${ROOT}/board-tickets"
+        GENESIS=/data/genesis/genesis.dat
+        EPOCH="$${MIDEN_VALIDATOR_STORAGE_KEY_EPOCH}"
+        rm -rf "$${ROOT}"
+        mkdir -p "$${ROOT}"
+
+        miden-validator dkg board \
+          --data-directory "$${ROOT}/board" \
+          --genesis "$${GENESIS}" \
+          --threshold 2 \
+          --epoch "$${EPOCH}" \
+          --ticket-directory "$${TICKETS}" &
+        BOARD_PID=$$!
+        RUNNER_PIDS=""
+        cleanup() {
+          for PID in $${RUNNER_PIDS}; do
+            kill -TERM "$${PID}" 2>/dev/null || true
+          done
+          kill -INT "$${BOARD_PID}" 2>/dev/null || true
+          for PID in $${RUNNER_PIDS}; do
+            wait "$${PID}" 2>/dev/null || true
+          done
+          wait "$${BOARD_PID}" 2>/dev/null || true
+        }
+        trap cleanup EXIT INT TERM
+
+        while [ ! -s "$${TICKETS}/participant-1.ticket" ]; do
+          kill -0 "$${BOARD_PID}" 2>/dev/null
+          sleep 1
+        done
+        run_validator() {
+          PARTICIPANT="$$1"
+          SIGNING_KEY="$$2"
+          exec miden-validator dkg run \
+            --board-file "$${TICKETS}/participant-$${PARTICIPANT}.ticket" \
+            --genesis "$${GENESIS}" \
+            --threshold 2 \
+            --epoch "$${EPOCH}" \
+            --signing-key.hex "$${SIGNING_KEY}" \
+            --work-directory "$${ROOT}/validator-$${PARTICIPANT}/work" \
+            --output-directory "$${ROOT}/validator-$${PARTICIPANT}/bundle"
+        }
+
+        run_checked() {
+          PARTICIPANT="$$1"
+          SIGNING_KEY="$$2"
+          run_validator "$${PARTICIPANT}" "$${SIGNING_KEY}" &
+          VALIDATOR_PID=$$!
+          terminate_validator() {
+            kill -TERM "$${VALIDATOR_PID}" 2>/dev/null || true
+            wait "$${VALIDATOR_PID}" 2>/dev/null || true
+            echo 143 > "$${ROOT}/status-$${PARTICIPANT}"
+            exit 143
+          }
+          trap terminate_validator INT TERM
+          set +e
+          wait "$${VALIDATOR_PID}"
+          STATUS=$$?
+          set -e
+          trap - INT TERM
+          echo "$${STATUS}" > "$${ROOT}/status-$${PARTICIPANT}"
+          exit "$${STATUS}"
+        }
+
+        run_checked 1 0101010101010101010101010101010101010101010101010101010101010101 &
+        FIRST_PID=$$!
+        run_checked 2 0303030303030303030303030303030303030303030303030303030303030303 &
+        SECOND_PID=$$!
+        run_checked 3 0404040404040404040404040404040404040404040404040404040404040404 &
+        THIRD_PID=$$!
+        RUNNER_PIDS="$${FIRST_PID} $${SECOND_PID} $${THIRD_PID}"
+
+        while :; do
+          COMPLETE=0
+          for PARTICIPANT in 1 2 3; do
+            STATUS_FILE="$${ROOT}/status-$${PARTICIPANT}"
+            if [ -f "$${STATUS_FILE}" ]; then
+              STATUS="$$(cat "$${STATUS_FILE}")"
+              [ "$${STATUS}" -eq 0 ] || exit "$${STATUS}"
+              COMPLETE=$$((COMPLETE + 1))
+            fi
+          done
+          [ "$${COMPLETE}" -eq 3 ] && break
+          sleep 1
+        done
+        wait "$${FIRST_PID}"
+        wait "$${SECOND_PID}"
+        wait "$${THIRD_PID}"
+
+        for PARTICIPANT in 2 3; do
+          cmp "$${ROOT}/validator-1/bundle/epoch.hex" \
+            "$${ROOT}/validator-$${PARTICIPANT}/bundle/epoch.hex"
+          cmp "$${ROOT}/validator-1/bundle/setup-context.wire" \
+            "$${ROOT}/validator-$${PARTICIPANT}/bundle/setup-context.wire"
+          cmp "$${ROOT}/validator-1/bundle/public-key-set.wire" \
+            "$${ROOT}/validator-$${PARTICIPANT}/bundle/public-key-set.wire"
+          ! cmp -s "$${ROOT}/validator-1/bundle/secret-share.wire" \
+            "$${ROOT}/validator-$${PARTICIPANT}/bundle/secret-share.wire"
+        done
+        echo "storage key DKG completed over the Iroh document."
+
   validator-1:
     <<: *validator
     environment:
