@@ -8,22 +8,33 @@ use miden_protocol::transaction::TxAccountUpdate;
 use miden_standards::account::auth::NetworkAccount;
 use tonic::Status;
 
-use crate::{COMPONENT, LOG_TARGET};
+use crate::{COMPONENT, FundingClient, LOG_TARGET};
 
 /// Account creation policy shared by the public and internal sequencer APIs.
 #[derive(Clone)]
 pub struct AccountAdmission {
     pub(crate) allowlist: Arc<AccountAllowlist>,
+    pub(crate) funding: Option<FundingClient>,
     disabled: bool,
 }
 
 impl AccountAdmission {
     pub fn enabled(allowlist: Arc<AccountAllowlist>) -> Self {
-        Self { allowlist, disabled: false }
+        Self {
+            allowlist,
+            funding: None,
+            disabled: false,
+        }
     }
 
     pub fn disabled(allowlist: Arc<AccountAllowlist>) -> Self {
-        Self { allowlist, disabled: true }
+        Self { allowlist, funding: None, disabled: true }
+    }
+
+    #[must_use]
+    pub fn with_funding_client(mut self, client: Option<FundingClient>) -> Self {
+        self.funding = client;
+        self
     }
 
     /// Returns true if enforcement is disabled or the account is allowlisted.

@@ -1,3 +1,4 @@
+mod admin;
 mod block_producer;
 mod fee_collector;
 mod lifecycle;
@@ -8,6 +9,7 @@ mod runtime;
 pub(crate) mod section;
 mod store;
 
+pub use admin::AdminCommand;
 use clap::Subcommand;
 pub use fee_collector::FeeCollectorCommand;
 pub use lifecycle::{BootstrapCommand, MigrateCommand};
@@ -20,6 +22,9 @@ const ENV_DATA_DIRECTORY: &str = "MIDEN_NODE_DATA_DIRECTORY";
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
+    /// Manage account registrations through the sequencer's private admin API.
+    Admin(AdminCommand),
+
     /// Start the node in sequencer mode.
     ///
     /// Each network has exactly one sequencer, operated by that network's operator. All other
@@ -87,7 +92,8 @@ impl Command {
             Command::Full(_) => OpenTelemetry::from_env()
                 .with_name("node")
                 .with_attribute("miden.node.role", "full"),
-            Command::Bootstrap(_)
+            Command::Admin(_)
+            | Command::Bootstrap(_)
             | Command::FeeCollector(_)
             | Command::Migrate(_)
             | Command::Recover(_) => OpenTelemetry::Disabled,
@@ -96,6 +102,7 @@ impl Command {
 
     pub(crate) async fn execute(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         match self {
+            Command::Admin(admin_command) => admin_command.handle().await,
             Command::Bootstrap(bootstrap_command) => bootstrap_command.handle().await,
             Command::FeeCollector(command) => command.handle(shutdown).await,
             Command::Migrate(migrate_command) => migrate_command.handle(),

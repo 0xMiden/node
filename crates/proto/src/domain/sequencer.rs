@@ -11,8 +11,8 @@ use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::Nullifier;
-use miden_protocol::transaction::{ProvenTransaction, TransactionId, TxAccountUpdate};
+use miden_protocol::note::{NoteHeader, NoteId, Nullifier};
+use miden_protocol::transaction::{OutputNote, ProvenTransaction, TransactionId, TxAccountUpdate};
 use thiserror::Error;
 
 use crate::errors::{ConversionError, ConversionResultExt};
@@ -51,10 +51,10 @@ pub struct TransactionInputs {
     ///
     /// The wire format uses 0 to encode `None`.
     pub nullifiers: HashMap<Nullifier, Option<NonZeroU32>>,
-    /// Unauthenticated note commitments that are present in the store.
+    /// IDs of unauthenticated notes that are present in the store.
     ///
     /// These notes were committed after the transaction was created.
-    pub found_unauthenticated_notes: HashSet<Word>,
+    pub found_unauthenticated_notes: HashSet<NoteId>,
     /// The current block height.
     pub current_block_height: BlockNumber,
 }
@@ -75,7 +75,7 @@ impl From<TransactionInputs> for sequencer::AuthInputs {
             found_unauthenticated_notes: value
                 .found_unauthenticated_notes
                 .into_iter()
-                .map(Into::into)
+                .map(|note_id| note_id.as_word().into())
                 .collect(),
             current_block_height: value.current_block_height.as_u32(),
         }
@@ -104,6 +104,7 @@ impl Verify for sequencer::DecodedAuthInputs {
                 .found_unauthenticated_notes
                 .into_inner()
                 .into_iter()
+                .map(NoteId::from_raw)
                 .collect(),
             current_block_height: self.current_block_height.into(),
         })
@@ -164,7 +165,7 @@ pub struct AuthenticatedTransaction {
     store_account_state: Option<Word>,
     /// Input notes that were unauthenticated when the transaction was proven. Store inputs or
     /// committed mempool history have since authenticated these notes.
-    notes_authenticated_by_store: HashSet<Word>,
+    notes_authenticated_by_store: HashSet<NoteId>,
     /// The chain height at authentication.
     ///
     /// FIXME: Include the block commitment to identify the exact state used for authentication.
@@ -241,8 +242,8 @@ impl AuthenticatedTransaction {
         self.inner.nullifiers()
     }
 
-    pub fn output_note_ids(&self) -> impl Iterator<Item = Word> + '_ {
-        self.inner.output_notes().iter().map(|n| n.id().as_word())
+    pub fn output_note_ids(&self) -> impl Iterator<Item = NoteId> + '_ {
+        self.inner.output_notes().iter().map(OutputNote::id)
     }
 
     pub fn output_note_count(&self) -> usize {
@@ -258,16 +259,16 @@ impl AuthenticatedTransaction {
     }
 
     /// Return input note IDs that neither the transaction nor committed state authenticates.
-    pub fn unauthenticated_note_ids(&self) -> impl Iterator<Item = Word> + '_ {
+    pub fn unauthenticated_note_ids(&self) -> impl Iterator<Item = NoteId> + '_ {
         self.inner
             .unauthenticated_notes()
-            .map(|h| h.id().as_word())
-            .filter(|commitment| !self.notes_authenticated_by_store.contains(commitment))
+            .map(NoteHeader::id)
+            .filter(|note_id| !self.notes_authenticated_by_store.contains(note_id))
     }
 
-    /// Mark these note commitments as authenticated by committed state. The caller must check that
-    /// the notes belong to committed state.
-    pub fn mark_notes_authenticated(&mut self, notes: impl IntoIterator<Item = Word>) {
+    /// Mark these note IDs as authenticated by committed state. The caller must check that the
+    /// notes belong to committed state.
+    pub fn mark_notes_authenticated(&mut self, notes: impl IntoIterator<Item = NoteId>) {
         self.notes_authenticated_by_store.extend(notes);
     }
 
@@ -295,7 +296,7 @@ impl From<AuthenticatedTransaction> for sequencer::AuthenticatedTransaction {
             notes_authenticated_by_store: value
                 .notes_authenticated_by_store
                 .into_iter()
-                .map(Into::into)
+                .map(|note_id| note_id.as_word().into())
                 .collect(),
             authentication_height: value.authentication_height.as_u32(),
         }
@@ -319,6 +320,7 @@ impl BuildUnchecked for sequencer::DecodedAuthenticatedTransaction {
                 .notes_authenticated_by_store
                 .into_inner()
                 .into_iter()
+                .map(NoteId::from_raw)
                 .collect(),
             authentication_height: self.authentication_height.into(),
         })

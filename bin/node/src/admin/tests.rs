@@ -2,6 +2,7 @@ use axum::body::{Body, to_bytes};
 use axum::http::Request;
 use miden_protocol::testing::account_id::{
     ACCOUNT_ID_PRIVATE_SENDER,
+    ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE,
 };
 use serde_json::{Value, json};
@@ -16,7 +17,7 @@ fn setup() -> (tempfile::TempDir, Arc<AccountAllowlist>, Router) {
     let path = dir.path().join("allowlist.sqlite3");
     AccountAllowlist::bootstrap(&path).unwrap();
     let allowlist = Arc::new(AccountAllowlist::load(path).unwrap());
-    let app = router(Arc::clone(&allowlist));
+    let app = router(Arc::clone(&allowlist), None);
     (dir, allowlist, app)
 }
 
@@ -55,7 +56,34 @@ async fn request(
 
 #[tokio::test]
 async fn admin_registration_workflow() {
-    let (_dir, allowlist, app) = setup();
+    let (_dir, allowlist, _) = setup();
+    let rejected: AccountId = ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap();
+    let (requests, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let funding_api = Router::new().route(
+        "/funding/request-funds",
+        axum::routing::post(move |Json(body): Json<Value>| {
+            let status = if body["account_id"] == rejected.to_hex() {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::OK
+            };
+            requests.send(body).unwrap();
+            async move { status }
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url =
+        url::Url::parse(&format!("http://{}/funding", listener.local_addr().unwrap())).unwrap();
+    let shutdown = CancellationToken::new();
+    let server_shutdown = shutdown.clone();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, funding_api)
+            .with_graceful_shutdown(server_shutdown.cancelled_owned())
+            .await
+            .unwrap();
+    });
+    let funding = FundingClient::new(url, std::num::NonZeroU64::new(42).unwrap()).unwrap();
+    let app = router(Arc::clone(&allowlist), Some(funding));
     let path = format!("/admin/allowlist/invitations/{INVITATION_DIGEST}");
     let (status, body) = request(&app, "GET", &path, None).await;
     assert_eq!(status, StatusCode::OK);
@@ -99,6 +127,27 @@ async fn admin_registration_workflow() {
         info["allowlisted_at"].as_i64(),
         allowlist.allowlisted_at(account(1)).await.unwrap()
     );
+
+    let path = format!("/admin/allowlist/invitations/{}", "00".repeat(32));
+    let body = json!({"account_id": rejected.to_hex()});
+    let (status, error) = request(&app, "PUT", &path, Some(body.clone())).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(error["error"].as_str().unwrap().contains("400 Bad Request"));
+    assert!(allowlist.contains_account(rejected).await.unwrap());
+    assert_eq!(request(&app, "PUT", &path, Some(body)).await.0, StatusCode::NO_CONTENT);
+
+    for account in [account(0), account(1), rejected] {
+        assert_eq!(
+            received.try_recv().unwrap(),
+            json!({"account_id": account.to_hex(), "amount": 42})
+        );
+    }
+    assert!(matches!(
+        received.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+    shutdown.cancel();
+    server.await.unwrap();
 }
 
 #[tokio::test]

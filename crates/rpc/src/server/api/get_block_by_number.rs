@@ -3,8 +3,8 @@ use miden_node_tracing::{debug, miden_instrument};
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use miden_protocol::utils::serde::Deserializable;
 use miden_protocol::vm::ExecutionProof;
-use tonic::Status;
 
+use super::error_codes::internal_error;
 use super::{RpcService, database_error_to_status};
 use crate::{COMPONENT, LOG_TARGET};
 
@@ -52,7 +52,7 @@ impl proto::server::rpc_api::GetBlockByNumber for RpcService {
             .map(|bytes| {
                 SignedBlock::read_from_bytes(&bytes)
                     .map(Into::into)
-                    .map_err(|err| Status::internal(format!("invalid stored block: {err}")))
+                    .map_err(|err| internal_error(format!("invalid stored block: {err}")))
             })
             .transpose()?;
         let proof = if request.include_proof.unwrap_or_default() {
@@ -63,7 +63,7 @@ impl proto::server::rpc_api::GetBlockByNumber for RpcService {
                 .map(|bytes| {
                     ExecutionProof::read_from_bytes(&bytes)
                         .map(Into::into)
-                        .map_err(|err| Status::internal(format!("invalid stored proof: {err}")))
+                        .map_err(|err| internal_error(format!("invalid stored proof: {err}")))
                 })
                 .transpose()?
         } else {

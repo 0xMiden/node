@@ -6,7 +6,7 @@ use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::batch::{BatchId, ProvenBatch};
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::Nullifier;
+use miden_protocol::note::{NoteId, Nullifier};
 use miden_protocol::transaction::{OutputNote, TransactionId};
 
 use crate::domain::batch::{BatchParameters, SelectedBatch};
@@ -41,11 +41,11 @@ impl GraphNode for Arc<AuthenticatedTransaction> {
         Box::new(self.as_ref().nullifiers())
     }
 
-    fn output_notes(&self) -> Box<dyn Iterator<Item = Word> + '_> {
+    fn output_notes(&self) -> Box<dyn Iterator<Item = NoteId> + '_> {
         Box::new(self.output_note_ids())
     }
 
-    fn unauthenticated_notes(&self) -> Box<dyn Iterator<Item = Word> + '_> {
+    fn unauthenticated_notes(&self) -> Box<dyn Iterator<Item = NoteId> + '_> {
         Box::new(self.unauthenticated_note_ids())
     }
 
@@ -135,13 +135,13 @@ impl TransactionGraph {
     }
 
     /// Returns the transaction and output note that created the specified note ID.
-    pub fn output_note(&self, note_id: Word) -> Option<(TransactionId, &OutputNote)> {
+    pub fn output_note(&self, note_id: NoteId) -> Option<(TransactionId, &OutputNote)> {
         let creator = self.inner.note_creator(&note_id)?;
         let output_note = creator
             .raw_proven_transaction()
             .output_notes()
             .iter()
-            .find(|note| note.id().as_word() == note_id)
+            .find(|note| note.id() == note_id)
             .expect("the note creator must contain the indexed output note");
 
         Some((creator.id(), output_note))

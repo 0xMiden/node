@@ -200,6 +200,10 @@ jobs:
     needs: preflight
     if: ${{ needs.preflight.outputs.mode == 'dry-run' }}
     runs-on: warp-ubuntu-latest-x64-8x
+    concurrency:
+      group: docker-build-${{ vars.WARPBUILD_DOCKER_BUILDER_PROFILE }}-${{ matrix.architecture }}
+      cancel-in-progress: false
+      queue: max
     permissions:
       contents: read
       # WarpBuild uses OIDC to authenticate its remote builder.
@@ -247,6 +251,10 @@ jobs:
     needs: preflight
     if: ${{ needs.preflight.outputs.mode == 'stage' || needs.preflight.outputs.mode == 'publish' }}
     runs-on: warp-ubuntu-latest-x64-8x
+    concurrency:
+      group: docker-build-${{ vars.WARPBUILD_DOCKER_BUILDER_PROFILE }}-${{ matrix.architecture }}
+      cancel-in-progress: false
+      queue: max
     permissions:
       attestations: write
       contents: read

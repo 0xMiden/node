@@ -586,24 +586,19 @@ impl Db {
         .await
     }
 
-    /// Returns all note commitments from the DB that match the provided ones and were committed at
-    /// or before `up_to_block`.
+    /// Returns the requested note IDs that the database contains at or before `up_to_block`.
     #[miden_instrument(
         level = "debug",
         target = COMPONENT,
         err,
     )]
-    pub async fn select_existing_note_commitments(
+    pub async fn select_existing_note_ids(
         &self,
-        note_commitments: Vec<Word>,
+        note_ids: Vec<NoteId>,
         up_to_block: ScopedBlockNum,
-    ) -> Result<HashSet<Word>> {
-        self.transact("note by commitment", move |conn| {
-            queries::select_existing_note_commitments(
-                conn,
-                note_commitments.as_slice(),
-                *up_to_block,
-            )
+    ) -> Result<HashSet<NoteId>> {
+        self.transact("existing note IDs", move |conn| {
+            queries::select_existing_note_ids(conn, note_ids.as_slice(), *up_to_block)
         })
         .await
     }

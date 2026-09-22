@@ -110,6 +110,61 @@ and retry behavior.
 Back up the registry separately. It is not replicated with blocks. Restore it before starting a replacement sequencer to
 preserve invitations and registrations. Without a restored registry, the replacement starts with an empty allowlist.
 
+### Admin CLI
+
+Use `miden-node admin` to call the private administration API. Set its base URL with `--url` or `MIDEN_NODE_ADMIN_URL`.
+The CLI does not need the sequencer's data directory.
+
+Create 100 invitation codes and save them to a new CSV file:
+
+```bash
+miden-node admin --url http://127.0.0.1:50100 create-invites \
+  --count 100 --output invitations.csv
+```
+
+Each code contains 12 random ASCII alphanumeric characters (`A-Z`, `a-z`, and `0-9`). Codes are unique within the
+generated batch. The CSV has one column, `invitation_code`, with the original codes to give to users. Only SHA-256
+digests are sent to the admin API. Treat the CSV as a secret. The CLI creates it with owner-only permissions on Unix and
+refuses to replace an existing file.
+
+The CLI saves the complete CSV before the first upload. If an upload fails, the command exits with an error and reports
+the failed row. The CSV remains available, but some codes may not be registered. Earlier successful uploads remain in
+the registry. Verify invitation status before distributing codes from a failed upload.
+
+Allowlist an account without an invitation code:
+
+```bash
+miden-node admin --url http://127.0.0.1:50100 allowlist-account <hex-account-id>
+```
+
+The command uses the account `PUT` endpoint and inherits its funding behavior when funding is configured.
+
+## Registration Funding
+
+Configure both options to request funding for each new account registration:
+
+```bash
+--funding-service.url http://funding-service:50401 \
+--funding-service.amount 1000000
+```
+
+The amount is a positive number of native-asset base units. The corresponding environment variables are
+`MIDEN_NODE_FUNDING_SERVICE_URL` and `MIDEN_NODE_FUNDING_SERVICE_AMOUNT`. Funding is disabled when both options are
+absent. Keep the funding service on the operator network. It does not authenticate requests.
+
+The sequencer sends `POST /request-funds` to the service for each new registration through `RegisterAccount` or the
+administration API. This includes an admin binding an existing invitation to an account. The sequencer commits the
+registration before it requests funding, then waits for the funding response. Repeated registration requests do not
+request more funds. Existing registrations are not funded at startup. Disabling allowlist enforcement does not disable
+funding for accounts that register.
+
+The service creates a public P2ID note. The account owner can retrieve it through the account's note tag after the note
+commits. The registration response does not include the note.
+
+Funding failures return gRPC `UNAVAILABLE` or HTTP `503`. They do not undo registration. Requests are not retried or
+persisted. Repeating registration after a funding failure does not make another funding request. Operators can use the
+funding service directly to fund an account after a failed or interrupted request.
+
 ## Failover
 
 Full nodes replicate the committed sequencer state from their upstream block source. Because of this, a full node can be
