@@ -44,6 +44,8 @@ applies to all methods in the table, `GetBlockByNumber`, and `GetBlockHeaderByNu
 |                                              | `AccountNotPublic`      | `3`   | `INVALID_ARGUMENT` |
 |                                              | `UnknownBlock`          | `4`   | `INVALID_ARGUMENT` |
 |                                              | `BlockPruned`           | `5`   | `INVALID_ARGUMENT` |
+|                                              | `StorageSlotNotFound`   | `6`   | `INVALID_ARGUMENT` |
+|                                              | `StorageSlotNotMap`     | `7`   | `INVALID_ARGUMENT` |
 |                                              |                         |       |                    |
 | **`GetNotesById`**                           | `DeserializationFailed` | `1`   | `INVALID_ARGUMENT` |
 |                                              |                         |       |                    |
@@ -81,6 +83,9 @@ applies to all methods in the table, `GetBlockByNumber`, and `GetBlockHeaderByNu
 `InvalidBlockRange` includes a range whose start exceeds its end. It also includes a range that extends beyond the chain
 tip, except for `SyncNotes`, which returns `FutureBlock`. `SyncChainMmr` returns `FutureBlock` when the client height
 exceeds the requested chain tip. `SyncNullifiers` returns `DeserializationFailed` for a prefix that exceeds 16 bits.
+
+`GetAccount` returns `StorageSlotNotFound` when a storage map request names a slot that the account does not have at
+the requested block. It returns `StorageSlotNotMap` when the named slot is a value slot.
 
 Unused values remain reserved. Clients must accept unknown detail codes and fall back to the gRPC status code.
 
