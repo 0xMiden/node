@@ -1,14 +1,9 @@
-use miden_node_proto::errors::{ConversionError, ConversionResultExt};
+use miden_node_proto::errors::ConversionResultExt;
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_node_tracing::{debug, miden_instrument, miden_span_record};
-use tonic::Status;
 
-use super::{
-    RpcInvalidBlockRange,
-    RpcService,
-    database_error_to_status,
-    invalid_block_range_to_status,
-};
+use super::error_codes::SyncAccountStorageMapsErrorCode;
+use super::{RpcService, database_error_to_status, invalid_block_range_to_status};
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
@@ -17,7 +12,9 @@ impl proto::server::rpc_api::SyncAccountStorageMaps for RpcService {
     type Output = proto::rpc::SyncAccountStorageMapsResponse;
 
     fn decode(request: proto::rpc::SyncAccountStorageMapsRequest) -> tonic::Result<Self::Input> {
-        request.decode_fields().map_err(ConversionError::into_status)
+        request.decode_fields().map_err(|err| {
+            SyncAccountStorageMapsErrorCode::DeserializationFailed.invalid_argument(err)
+        })
     }
 
     fn encode(output: Self::Output) -> tonic::Result<proto::rpc::SyncAccountStorageMapsResponse> {
@@ -35,11 +32,9 @@ impl proto::server::rpc_api::SyncAccountStorageMaps for RpcService {
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        let account_id = request
-            .account_id
-            .verify()
-            .context("account_id")
-            .map_err(ConversionError::into_status)?;
+        let account_id = request.account_id.verify().context("account_id").map_err(|err| {
+            SyncAccountStorageMapsErrorCode::DeserializationFailed.invalid_argument(err)
+        })?;
         let range = request.block_range;
 
         miden_span_record!(
@@ -57,12 +52,10 @@ impl proto::server::rpc_api::SyncAccountStorageMaps for RpcService {
         );
 
         if !account_id.is_public() {
-            return Err(Status::invalid_argument(format!("account {account_id} is not public")));
+            return Err(SyncAccountStorageMapsErrorCode::AccountNotPublic
+                .invalid_argument(format!("account {account_id} is not public")));
         }
-        let block_range = range
-            .verify()
-            .map_err(RpcInvalidBlockRange::from)
-            .map_err(invalid_block_range_to_status)?;
+        let block_range = range.verify().map_err(invalid_block_range_to_status)?;
         let (chain_tip, storage_maps_page) = self
             .state
             .with_view(async |view| {

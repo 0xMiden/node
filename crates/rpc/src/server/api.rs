@@ -27,6 +27,7 @@ use tokio::sync::Semaphore;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Status};
 
+use self::error_codes::{SyncErrorCode, internal_error};
 use crate::COMPONENT;
 use crate::server::api::subscription::{IpBanList, MAX_REPLICA_SUBSCRIPTIONS};
 use crate::server::{AccountAdmission, NetworkTxAuth, RpcBackend};
@@ -71,6 +72,7 @@ pub(crate) async fn submit_batch_to_validators(
 // API METHODS
 // ================================================================================================
 
+mod error_codes;
 mod get_account;
 mod get_block_by_number;
 mod get_block_header_by_number;
@@ -97,14 +99,6 @@ mod sync_transactions;
 // ================================================================================================
 
 const NETWORK_TX_AUTH_HEADER_NAME: &str = "x-miden-network-tx-auth";
-
-struct RpcInvalidBlockRange(InvalidBlockRange);
-
-impl From<InvalidBlockRange> for RpcInvalidBlockRange {
-    fn from(value: InvalidBlockRange) -> Self {
-        Self(value)
-    }
-}
 
 // RPC SERVICE
 // ================================================================================================
@@ -261,7 +255,7 @@ pub(crate) struct SequencerInternalService {
 fn get_block_header_error_to_status(err: GetBlockHeaderError) -> Status {
     match err {
         GetBlockHeaderError::DatabaseError(err) => database_error_to_status(&err),
-        GetBlockHeaderError::MmrError(err) => Status::internal(err.to_string()),
+        GetBlockHeaderError::MmrError(err) => internal_error(err.to_string()),
     }
 }
 
@@ -272,13 +266,15 @@ fn database_error_to_status(err: &DatabaseError) -> Status {
         | DatabaseError::AccountsNotFoundInDb(_)
         | DatabaseError::AccountNotPublic(_) => Status::not_found(message),
         DatabaseError::TransactionPageExceedsPayloadLimit { .. } => Status::out_of_range(message),
-        DatabaseError::RangeBeyondTip(_) => Status::invalid_argument(message),
-        _ => Status::internal(message),
+        DatabaseError::RangeBeyondTip(_) | DatabaseError::InvalidBlockRange { .. } => {
+            SyncErrorCode::InvalidBlockRange.invalid_argument(message)
+        },
+        _ => internal_error(message),
     }
 }
 
-fn invalid_block_range_to_status(RpcInvalidBlockRange(err): RpcInvalidBlockRange) -> Status {
-    Status::invalid_argument(err.to_string())
+fn invalid_block_range_to_status(err: InvalidBlockRange) -> Status {
+    SyncErrorCode::InvalidBlockRange.invalid_argument(err)
 }
 
 /// Loads the configuration committed to by a stored header.
@@ -289,8 +285,8 @@ async fn load_protocol_config(
     let commitment = header.protocol_config_commitment();
     view.get_protocol_config(commitment)
         .await
-        .map_err(|err| Status::internal(err.to_string()))?
-        .ok_or_else(|| Status::internal(format!("protocol config {commitment} is missing")))
+        .map_err(|err| internal_error(err.to_string()))?
+        .ok_or_else(|| internal_error(format!("protocol config {commitment} is missing")))
 }
 
 // LIMIT HELPERS
@@ -354,5 +350,17 @@ mod tests {
     #[test]
     fn get_limits_decodes_unit_request() {
         assert_eq!(RpcService::decode(()).unwrap(), ());
+    }
+
+    #[test]
+    fn internal_store_errors_include_error_code() {
+        let error = DatabaseError::DataCorrupted("invalid stored value".into());
+        let status = database_error_to_status(&error);
+        assert_eq!(status.code(), tonic::Code::Internal);
+        assert_eq!(status.details(), &[0]);
+
+        let status = get_block_header_error_to_status(GetBlockHeaderError::DatabaseError(error));
+        assert_eq!(status.code(), tonic::Code::Internal);
+        assert_eq!(status.details(), &[0]);
     }
 }

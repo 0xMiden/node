@@ -1,11 +1,11 @@
-use miden_node_proto::errors::ConversionError;
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_node_store::{NoteSyncError, NoteSyncRecord};
 use miden_node_tracing::{debug, miden_instrument, miden_span_record};
 use miden_node_utils::limiter::QueryParamNoteTagLimit;
 use tonic::Status;
 
-use super::{RpcInvalidBlockRange, RpcService, check, invalid_block_range_to_status};
+use super::error_codes::{SyncErrorCode, SyncNotesErrorCode, internal_error};
+use super::{RpcService, check, invalid_block_range_to_status};
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
@@ -14,7 +14,9 @@ impl proto::server::rpc_api::SyncNotes for RpcService {
     type Output = proto::rpc::SyncNotesResponse;
 
     fn decode(request: proto::rpc::SyncNotesRequest) -> tonic::Result<Self::Input> {
-        request.decode_fields().map_err(ConversionError::into_status)
+        request
+            .decode_fields()
+            .map_err(|err| SyncNotesErrorCode::DeserializationFailed.invalid_argument(err))
     }
 
     fn encode(output: Self::Output) -> tonic::Result<proto::rpc::SyncNotesResponse> {
@@ -53,10 +55,7 @@ impl proto::server::rpc_api::SyncNotes for RpcService {
 
         check::<QueryParamNoteTagLimit>(note_tags.len())?;
 
-        let block_range = range
-            .verify()
-            .map_err(RpcInvalidBlockRange::from)
-            .map_err(invalid_block_range_to_status)?;
+        let block_range = range.verify().map_err(invalid_block_range_to_status)?;
         let (chain_tip, (results, last_block_checked)) = self
             .state
             .with_view(async |view| {
@@ -129,12 +128,18 @@ fn note_sync_error_to_status(err: NoteSyncError) -> Status {
     let message = err.to_string();
     match err {
         NoteSyncError::DatabaseError(err) => super::database_error_to_status(&err),
-        NoteSyncError::InvalidBlockRange(_)
-        | NoteSyncError::RangeBeyondTip(_)
-        | NoteSyncError::DeserializationFailed(_) => Status::invalid_argument(message),
+        NoteSyncError::InvalidBlockRange(_) => {
+            SyncErrorCode::InvalidBlockRange.invalid_argument(message)
+        },
+        NoteSyncError::RangeBeyondTip(_) => {
+            SyncNotesErrorCode::FutureBlock.invalid_argument(message)
+        },
+        NoteSyncError::DeserializationFailed(err) => {
+            SyncNotesErrorCode::DeserializationFailed.invalid_argument(err)
+        },
         NoteSyncError::UnderlyingDatabaseError(_)
         | NoteSyncError::EmptyBlockHeadersTable
-        | NoteSyncError::MmrError(_) => Status::internal(message),
+        | NoteSyncError::MmrError(_) => internal_error(message),
     }
 }
 

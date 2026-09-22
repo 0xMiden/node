@@ -97,6 +97,7 @@ use crate::server::api::{RpcService, SequencerInternalService};
 use crate::{AccountAdmission, PreAuthSubmission, Rpc, RpcMode, ValidatorClients};
 
 mod allowlist;
+mod error_details;
 
 /// Global registry of temp directories. Held for the lifetime of the test binary so that `RocksDB`
 /// can always flush on drop regardless of test outcome or drop ordering.
@@ -2167,6 +2168,7 @@ async fn sync_endpoints_preserve_account_verification_context() {
         (transactions_error, "account_ids[1]:"),
     ] {
         assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert_eq!(error.details(), &[2]);
         assert!(error.message().starts_with(field), "{error}");
         assert!(error.message().contains("not a known account ID version"), "{error}");
     }
@@ -2565,6 +2567,7 @@ async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
         .await
         .expect_err("sync_nullifiers should reject block_to beyond chain tip");
     assert_beyond_tip(&status, "sync_nullifiers");
+    assert_eq!(status.details(), &[1]);
 
     let status = rpc_client
         .sync_notes(proto::rpc::SyncNotesRequest {
@@ -2574,6 +2577,7 @@ async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
         .await
         .expect_err("sync_notes should reject block_to beyond chain tip");
     assert_beyond_tip(&status, "sync_notes");
+    assert_eq!(status.details(), &[2]);
 
     let status = rpc_client
         .sync_account_storage_maps(proto::rpc::SyncAccountStorageMapsRequest {
@@ -2583,6 +2587,7 @@ async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
         .await
         .expect_err("sync_account_storage_maps should reject block_to beyond chain tip");
     assert_beyond_tip(&status, "sync_account_storage_maps");
+    assert_eq!(status.details(), &[1]);
 
     let status = rpc_client
         .sync_account_vault(proto::rpc::SyncAccountVaultRequest {
@@ -2592,6 +2597,7 @@ async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
         .await
         .expect_err("sync_account_vault should reject block_to beyond chain tip");
     assert_beyond_tip(&status, "sync_account_vault");
+    assert_eq!(status.details(), &[1]);
 
     let status = rpc_client
         .sync_transactions(proto::rpc::SyncTransactionsRequest {
@@ -2601,4 +2607,5 @@ async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
         .await
         .expect_err("sync_transactions should reject block_to beyond chain tip");
     assert_beyond_tip(&status, "sync_transactions");
+    assert_eq!(status.details(), &[1]);
 }
