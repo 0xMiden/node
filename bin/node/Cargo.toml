@@ -29,9 +29,11 @@ miden-node-rpc            = { workspace = true }
 miden-node-store          = { workspace = true }
 miden-node-tracing        = { workspace = true }
 miden-node-utils          = { workspace = true }
+miden-objects             = { workspace = true }
 miden-protocol            = { workspace = true }
 miden-standards           = { workspace = true }
 rand                      = { workspace = true }
+reqwest                   = { features = ["json"], workspace = true }
 serde                     = { features = ["derive"], workspace = true }
 serde_json                = { workspace = true }
 thiserror                 = { workspace = true }

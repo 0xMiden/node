@@ -8,6 +8,7 @@ use super::{
     AllowlistError,
     InvitationCode,
     InvitationEntry,
+    InvitationImportOutcome,
     InvitationInfo,
     InvitationStatus,
     RegistrationOutcome,
@@ -86,7 +87,7 @@ pub(super) fn add_account(tx: &WriteTx<'_>, account_id: AccountId) -> Result<boo
 pub(super) fn import_invitation(
     tx: &WriteTx<'_>,
     entry: &InvitationEntry,
-) -> Result<bool, AllowlistError> {
+) -> Result<InvitationImportOutcome, AllowlistError> {
     match invitation_status(tx, &entry.invitation_code)
         .map_err(crate::DatabaseError::DatabaseError)
         .map_err(AllowlistError::Database)?
@@ -105,13 +106,20 @@ pub(super) fn import_invitation(
                         &current_timestamp(),
                     ],
                 )
-                .map(|inserted| inserted != 0)
+                .map(|inserted| InvitationImportOutcome {
+                    invitation_added: inserted != 0,
+                    registered_account: entry.account_id,
+                })
                 .map_err(crate::DatabaseError::DatabaseError)
                 .map_err(AllowlistError::Database);
         },
         InvitationStatus::Unused => {
             if let Some(account_id) = entry.account_id {
                 bind_invitation(tx, &entry.invitation_code, account_id)?;
+                return Ok(InvitationImportOutcome {
+                    invitation_added: false,
+                    registered_account: Some(account_id),
+                });
             }
         },
         InvitationStatus::Registered(account_id) => {
@@ -120,7 +128,10 @@ pub(super) fn import_invitation(
             }
         },
     }
-    Ok(false)
+    Ok(InvitationImportOutcome {
+        invitation_added: false,
+        registered_account: None,
+    })
 }
 
 pub(super) fn register_account(

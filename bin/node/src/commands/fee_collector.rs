@@ -8,9 +8,9 @@ use miden_node_store::{DataDirectory, State};
 use miden_node_tracing::info;
 use miden_node_utils::clap::duration_to_human_readable_string;
 use miden_node_utils::shutdown::CancellationToken;
+use miden_objects::account_file::AccountFile;
 use miden_protocol::account::auth::AuthSecretKey;
-use miden_protocol::account::{AccountBuilder, AccountFile, AccountType};
-use miden_protocol::utils::serde::Serializable;
+use miden_protocol::account::{AccountBuilder, AccountType};
 use miden_standards::account::auth::AuthTxFeeCollector;
 use miden_standards::account::wallets::BasicWallet;
 use url::Url;
@@ -87,7 +87,7 @@ impl CreateCommand {
         info!(
             target: crate::LOG_TARGET,
             "Saved new fee collector account",
-            account.id = account_file.account.id(),
+            account.id = account_file.account().id(),
             account.file = output.as_path()
         );
         Ok(())

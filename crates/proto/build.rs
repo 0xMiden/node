@@ -5,6 +5,7 @@ use std::process::Command;
 use codegen::{Function, Impl, Module, Trait, Type};
 use fs_err as fs;
 use miden_node_proto_build::{
+    note_transport_api_descriptor,
     ntx_builder_api_descriptor,
     remote_prover_api_descriptor,
     rpc_api_descriptor,
@@ -26,6 +27,7 @@ fn main() -> miette::Result<()> {
         .wrap_err("creating destination folder")?;
 
     let descriptor_sets = [
+        note_transport_api_descriptor(),
         rpc_api_descriptor(),
         remote_prover_api_descriptor(),
         validator_api_descriptor(),

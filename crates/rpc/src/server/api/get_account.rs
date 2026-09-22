@@ -6,13 +6,13 @@ use miden_node_proto::domain::account::{
     AccountStorageRequest,
     SlotData,
 };
-use miden_node_proto::errors::ConversionError;
 use miden_node_proto::{DecodeMessageExt, generated as proto};
 use miden_node_store::GetAccountError;
 use miden_node_tracing::{debug, info_span, miden_instrument, miden_span_record};
 use miden_node_utils::limiter::{QueryParamStorageMapKeyTotalLimit, QueryParamStorageMapSlotLimit};
 use tonic::Status;
 
+use super::error_codes::GetAccountErrorCode;
 use super::{RpcService, check};
 use crate::{COMPONENT, LOG_TARGET};
 
@@ -22,7 +22,9 @@ impl proto::server::rpc_api::GetAccount for RpcService {
     type Output = AccountResponse;
 
     fn decode(request: proto::rpc::AccountRequest) -> tonic::Result<Self::Input> {
-        request.decode_and_verify().map_err(ConversionError::into_status)
+        request
+            .decode_and_verify()
+            .map_err(|err| GetAccountErrorCode::DeserializationFailed.invalid_argument(err))
     }
 
     fn encode(output: Self::Output) -> tonic::Result<proto::rpc::AccountResponse> {
@@ -88,7 +90,7 @@ fn validate_storage_request(storage_request: &AccountStorageRequest) -> Result<(
     let mut seen = HashSet::with_capacity(requests.len());
     for request in requests {
         if !seen.insert(&request.slot_name) {
-            return Err(Status::invalid_argument(format!(
+            return Err(GetAccountErrorCode::DeserializationFailed.invalid_argument(format!(
                 "duplicate storage map slot in request: {}",
                 request.slot_name
             )));
@@ -111,11 +113,21 @@ fn get_account_error_to_status(err: GetAccountError) -> Status {
     let message = err.to_string();
     match err {
         GetAccountError::DatabaseError(err) => super::database_error_to_status(&err),
-        GetAccountError::DeserializationFailed(_)
-        | GetAccountError::AccountNotFound(..)
-        | GetAccountError::AccountNotPublic(_)
-        | GetAccountError::UnknownBlock(_)
-        | GetAccountError::BlockPruned(_) => Status::invalid_argument(message),
+        GetAccountError::DeserializationFailed(err) => {
+            GetAccountErrorCode::DeserializationFailed.invalid_argument(err)
+        },
+        GetAccountError::AccountNotFound(..) => {
+            GetAccountErrorCode::AccountNotFound.invalid_argument(message)
+        },
+        GetAccountError::AccountNotPublic(_) => {
+            GetAccountErrorCode::AccountNotPublic.invalid_argument(message)
+        },
+        GetAccountError::UnknownBlock(_) => {
+            GetAccountErrorCode::UnknownBlock.invalid_argument(message)
+        },
+        GetAccountError::BlockPruned(_) => {
+            GetAccountErrorCode::BlockPruned.invalid_argument(message)
+        },
     }
 }
 
@@ -130,6 +142,13 @@ mod tests {
     use tonic::Code;
 
     use super::*;
+
+    #[test]
+    fn pruned_block_error_includes_error_code() {
+        let status = get_account_error_to_status(GetAccountError::BlockPruned(1.into()));
+        assert_eq!(status.code(), Code::InvalidArgument);
+        assert_eq!(status.details(), &[5]);
+    }
 
     fn slot_request(name: &str, slot_data: SlotData) -> StorageMapRequest {
         StorageMapRequest {
@@ -175,6 +194,7 @@ mod tests {
         let status = validate_storage_request(&AccountStorageRequest::Explicit(requests))
             .expect_err("duplicate slot must be rejected");
         assert_eq!(status.code(), Code::InvalidArgument);
+        assert_eq!(status.details(), &[1]);
     }
 
     #[test]

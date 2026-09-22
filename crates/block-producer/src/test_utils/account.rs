@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+use miden_objects::account_file::AccountFile;
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{
     Account,
     AccountBuilder,
-    AccountFile,
     AccountId,
     AccountIdVersion,
     AccountType,

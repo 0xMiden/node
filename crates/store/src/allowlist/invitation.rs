@@ -34,6 +34,11 @@ impl InvitationCode {
         Ok(Self::from_digest(digest))
     }
 
+    /// Returns the SHA-256 digest as lowercase hexadecimal without a prefix.
+    pub fn to_hex_digest(&self) -> String {
+        hex::encode(self.0)
+    }
+
     pub(crate) fn digest(&self) -> &[u8] {
         &self.0
     }

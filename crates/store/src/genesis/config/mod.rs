@@ -6,8 +6,9 @@ use std::str::FromStr;
 
 use indexmap::IndexMap;
 use miden_node_tracing::debug;
+use miden_objects::account_file::AccountFile;
 use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
-use miden_protocol::account::{Account, AccountBuilder, AccountFile, AccountId, AccountType};
+use miden_protocol::account::{Account, AccountBuilder, AccountId, AccountType};
 use miden_protocol::asset::{Asset, AssetAmount, AssetId, FungibleAsset, TokenSymbol};
 use miden_protocol::block::{FeeParameters, ValidatorConfig};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey as RpoSecretKey;
@@ -174,7 +175,7 @@ impl GenesisConfig {
                 let full_path = config_dir.join(&acc.path);
                 let account_file = AccountFile::read(&full_path)
                     .map_err(|e| GenesisConfigError::AccountFileRead(e, full_path.clone()))?;
-                Ok(account_file.account)
+                Ok(account_file.into_parts().0)
             })
             .collect::<Result<Vec<_>, GenesisConfigError>>()?;
 
@@ -444,7 +445,7 @@ impl NativeFaucetConfig {
                 let full_path = config_dir.join(&path);
                 let account_file = AccountFile::read(&full_path)
                     .map_err(|e| GenesisConfigError::AccountFileRead(e, full_path.clone()))?;
-                let account = account_file.account;
+                let (account, _) = account_file.into_parts();
 
                 let faucet = FungibleFaucet::try_from(&account).map_err(|_| {
                     GenesisConfigError::NativeFaucetNotFungible { path: full_path.clone() }

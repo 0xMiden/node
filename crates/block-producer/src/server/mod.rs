@@ -9,7 +9,8 @@ use miden_node_tracing::{debug, error, info, miden_instrument};
 use miden_node_utils::formatting::{format_input_notes, format_output_notes};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
-use miden_protocol::account::{AccountFile, AccountId};
+use miden_objects::account_file::AccountFile;
+use miden_protocol::account::AccountId;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::ProvenTransaction;
@@ -110,11 +111,12 @@ pub struct Sequencer {
 
 impl Sequencer {
     /// Checks the deployed collector, then starts the sequencer tasks and returns its API.
-    pub async fn start(mut self, shutdown: CancellationToken) -> Result<SequencerHandle> {
+    pub async fn start(self, shutdown: CancellationToken) -> Result<SequencerHandle> {
         info!(target: LOG_TARGET, "Initializing sequencer");
         let state = self.state;
-        crate::fee_collector::load_deployed_collector(&state, &mut self.fee_collector_account)
-            .await?;
+        let fee_collector_account =
+            crate::fee_collector::load_deployed_collector(&state, self.fee_collector_account)
+                .await?;
         let validator =
             BlockProducerValidatorClient::new(self.validator_urls.clone(), self.validator_timeout)?;
         let block_builder = BlockBuilder::new(
@@ -129,7 +131,7 @@ impl Sequencer {
             self.batch_workers,
             batch_intervals,
             self.builder_account_id,
-            self.fee_collector_account,
+            fee_collector_account,
             validator,
         )
         .await?;

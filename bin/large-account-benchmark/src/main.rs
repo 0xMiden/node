@@ -14,9 +14,10 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use miden_objects::account_file::AccountFile;
 use miden_protocol::ONE;
+use miden_protocol::account::Account;
 use miden_protocol::account::auth::AuthSecretKey;
-use miden_protocol::account::{Account, AccountFile};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
@@ -331,7 +332,7 @@ fn load_pair(dir: &Path) -> Result<(Account, SecretKey, Account)> {
         AccountFile::read(dir.join(COUNTER_FILE)).context("failed to read counter.mac")?;
 
     let secret_key = wallet_file
-        .auth_secret_keys
+        .auth_secret_keys()
         .iter()
         .find_map(|key| match key {
             AuthSecretKey::Falcon512Poseidon2(sk) => Some(sk.clone()),
@@ -339,7 +340,7 @@ fn load_pair(dir: &Path) -> Result<(Account, SecretKey, Account)> {
         })
         .context("wallet.mac does not contain a Falcon512Poseidon2 secret key")?;
 
-    Ok((wallet_file.account, secret_key, counter_file.account))
+    Ok((wallet_file.into_parts().0, secret_key, counter_file.into_parts().0))
 }
 
 /// Writes the wallet and its signing key to `wallet.mac`, replacing any existing file.

@@ -17,11 +17,11 @@ use miden_node_tracing::{
     miden_span_record,
 };
 use miden_node_utils::shutdown::CancellationToken;
+use miden_objects::account_file::AccountFile;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
-use miden_protocol::account::{AccountFile, AccountId};
+use miden_protocol::account::AccountId;
 use miden_protocol::batch::{BatchId, ProposedBatch, ProvenBatch};
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::NoteId;
 use miden_protocol::transaction::TransactionId;
 use tokio::task::{JoinError, JoinSet};
 use tokio::time::{Instant, MissedTickBehavior};
@@ -322,7 +322,6 @@ impl BatchJob {
             .iter()
             .map(Deref::deref)
             .flat_map(AuthenticatedTransaction::unauthenticated_note_ids)
-            .map(NoteId::from_raw)
             .collect();
 
         let view = self.state.view();
@@ -511,12 +510,13 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn builds_batches_without_fee_notes() -> anyhow::Result<()> {
-        let mut collector = mock_collection_account();
-        collector.account.set_nonce(ONE)?;
+        let (mut account, auth_secret_keys) = mock_collection_account().into_parts();
+        account.set_nonce(ONE)?;
+        let collector = AccountFile::new(account, auth_secret_keys);
         let faucet = mock_native_faucet();
         let mut chain = MockChain::builder().verification_base_fee(0).fee_faucet_id(faucet.id());
         chain.add_account(faucet)?;
-        chain.add_account(collector.account.clone())?;
+        chain.add_account(collector.account().clone())?;
         let wallet = chain.add_existing_wallet(Auth::basic_ecdsa())?;
         let chain = chain.build()?;
         let executed = chain.build_transaction(wallet.id()).build()?.execute().await?;

@@ -121,7 +121,8 @@ jobs:
                 "remote-prover",
                 "network-monitor",
                 "funding-service",
-                "node-tps-benchmark"
+                "node-tps-benchmark",
+                "note-transport"
               ]
             '
           )"
@@ -199,6 +200,10 @@ jobs:
     needs: preflight
     if: ${{ needs.preflight.outputs.mode == 'dry-run' }}
     runs-on: warp-ubuntu-latest-x64-8x
+    concurrency:
+      group: docker-build-${{ vars.WARPBUILD_DOCKER_BUILDER_PROFILE }}-${{ matrix.architecture }}
+      cancel-in-progress: false
+      queue: max
     permissions:
       contents: read
       # WarpBuild uses OIDC to authenticate its remote builder.
@@ -246,6 +251,10 @@ jobs:
     needs: preflight
     if: ${{ needs.preflight.outputs.mode == 'stage' || needs.preflight.outputs.mode == 'publish' }}
     runs-on: warp-ubuntu-latest-x64-8x
+    concurrency:
+      group: docker-build-${{ vars.WARPBUILD_DOCKER_BUILDER_PROFILE }}-${{ matrix.architecture }}
+      cancel-in-progress: false
+      queue: max
     permissions:
       attestations: write
       contents: read
@@ -348,14 +357,13 @@ jobs:
         # Pin independently so the checked-out caller-provided ref cannot replace this action's code.
         uses: 0xMiden/node/.github/actions/publish-compose@3df9adbec870c8039d38cc946b2dc79ec9cf7e59
         env:
+          MIDEN_NOTE_TRANSPORT_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-note-transport:${{ needs.preflight.outputs.tag }}
           MIDEN_NODE_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-node:${{ needs.preflight.outputs.tag }}
           MIDEN_VALIDATOR_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-validator:${{ needs.preflight.outputs.tag }}
           MIDEN_NTX_BUILDER_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-ntx-builder:${{ needs.preflight.outputs.tag }}
           MIDEN_REMOTE_PROVER_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-remote-prover:${{ needs.preflight.outputs.tag }}
-          MIDEN_NETWORK_MONITOR_IMAGE:
-            ${{ env.REGISTRY_PREFIX }}/miden-network-monitor:${{ needs.preflight.outputs.tag }}
-          MIDEN_FUNDING_SERVICE_IMAGE:
-            ${{ env.REGISTRY_PREFIX }}/miden-funding-service:${{ needs.preflight.outputs.tag }}
+          MIDEN_NETWORK_MONITOR_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-network-monitor:${{ needs.preflight.outputs.tag }}
+          MIDEN_FUNDING_SERVICE_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-funding-service:${{ needs.preflight.outputs.tag }}
           MIDEN_BENCHMARK_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-node-tps-benchmark:${{ needs.preflight.outputs.tag }}
         with:
           compose-file: docker-compose.yml
@@ -446,18 +454,14 @@ jobs:
         # Pin independently so the checked-out caller-provided ref cannot replace this action's code.
         uses: 0xMiden/node/.github/actions/publish-compose@3df9adbec870c8039d38cc946b2dc79ec9cf7e59
         env:
+          MIDEN_NOTE_TRANSPORT_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-note-transport:${{ needs.preflight.outputs.immutable_tag }}
           MIDEN_NODE_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-node:${{ needs.preflight.outputs.immutable_tag }}
           MIDEN_VALIDATOR_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-validator:${{ needs.preflight.outputs.immutable_tag }}
-          MIDEN_NTX_BUILDER_IMAGE:
-            ${{ env.REGISTRY_PREFIX }}/miden-ntx-builder:${{ needs.preflight.outputs.immutable_tag }}
-          MIDEN_REMOTE_PROVER_IMAGE:
-            ${{ env.REGISTRY_PREFIX }}/miden-remote-prover:${{ needs.preflight.outputs.immutable_tag }}
-          MIDEN_NETWORK_MONITOR_IMAGE:
-            ${{ env.REGISTRY_PREFIX }}/miden-network-monitor:${{ needs.preflight.outputs.immutable_tag }}
-          MIDEN_FUNDING_SERVICE_IMAGE:
-            ${{ env.REGISTRY_PREFIX }}/miden-funding-service:${{ needs.preflight.outputs.immutable_tag }}
-          MIDEN_BENCHMARK_IMAGE:
-            ${{ env.REGISTRY_PREFIX }}/miden-node-tps-benchmark:${{ needs.preflight.outputs.immutable_tag }}
+          MIDEN_NTX_BUILDER_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-ntx-builder:${{ needs.preflight.outputs.immutable_tag }}
+          MIDEN_REMOTE_PROVER_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-remote-prover:${{ needs.preflight.outputs.immutable_tag }}
+          MIDEN_NETWORK_MONITOR_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-network-monitor:${{ needs.preflight.outputs.immutable_tag }}
+          MIDEN_FUNDING_SERVICE_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-funding-service:${{ needs.preflight.outputs.immutable_tag }}
+          MIDEN_BENCHMARK_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-node-tps-benchmark:${{ needs.preflight.outputs.immutable_tag }}
         with:
           compose-file: docker-compose.yml
           mode: publish
