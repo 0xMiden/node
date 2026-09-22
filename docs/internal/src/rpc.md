@@ -56,5 +56,4 @@ The read and sync handlers use explicit codes from `crates/rpc/src/server/api/er
 `GrpcError` derive macro. This macro assigns codes in variant order and maps internal errors to code `0`. Add new
 client-error variants at the end of the mempool error enum to preserve existing codes.
 
-See [Errors and Limits](../../external/src/rpc/errors-and-limits.md) for the supported codes. Clients must also accept
-statuses without details and unknown detail codes.
+Clients must also accept statuses without details and unknown detail codes.
