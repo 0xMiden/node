@@ -357,19 +357,8 @@ impl NtxContext {
     /// Filters the candidate's bundles down to those that can execute together, and classifies
     /// the rest.
     ///
-    /// [`NoteConsumptionChecker`] eliminates one note at a time. Fee collection runs in the
-    /// account's auth procedure, so an uncovered fee fails in the epilogue and drops the checker
-    /// into that search, where a feature note and its sponsorship are each invalid alone. Valid
-    /// pairs are discarded along with the note that actually failed.
-    ///
-    /// So the batch is checked once, then every bundle the checker did not prove is re-offered on
-    /// top of what it did, trying the most sponsorships first. A trial is kept only if the checker
-    /// proves that exact set, so the result never regresses. For `[F0, S0, F1]` - a feature note,
-    /// its sponsorship, and an unsponsored feature note - the checker fails all three; the retry
-    /// proves `[F0, S0]` and records only `F1`.
-    ///
-    /// TODO: drop this once the checker can test a bundle atomically, see
-    /// <https://github.com/0xMiden/protocol/issues/3710>.
+    /// [`NoteConsumptionChecker`] groups each feature note with the sponsorships bound to it. When
+    /// it searches for an executable set, it adds or rejects each group as a unit.
     ///
     /// # Guarantees
     ///
@@ -392,29 +381,7 @@ impl NtxContext {
         sponsored_notes: Vec<SponsoredFeatureNote>,
     ) -> NtxResult<FilteredNotes> {
         let all_notes = sponsored_notes.iter().flat_map(bundled_notes).collect::<Vec<_>>();
-        let (mut successful_notes, batch_failed) =
-            self.check_consumability(data_store, all_notes).await?;
-
-        // An epilogue failure sends the note checker through a greedy search that adds one note at
-        // a time. It cannot rediscover a feature and sponsorship that only execute together. Keep
-        // the checker's proven-successful set as a monotonic baseline and re-offer each missing
-        // dependency-closed variant on top of it. A failed retry never replaces that baseline.
-        successful_notes = retry_sponsored_notes(
-            &sponsored_notes,
-            successful_notes,
-            |trial: Vec<Note>| async move {
-                let trial_len = trial.len();
-                let (trial_successful, trial_failed) =
-                    self.check_consumability(data_store, trial).await?;
-
-                // The checker first executes the exact trial. No failures and a matching
-                // cardinality therefore prove that complete set; otherwise its fallback result is
-                // not allowed to replace the previously proven baseline.
-                Ok((trial_failed.is_empty() && trial_successful.len() == trial_len)
-                    .then_some(trial_successful))
-            },
-        )
-        .await?;
+        let (successful_notes, failed) = self.check_consumability(data_store, all_notes).await?;
         let successful_ids = successful_notes.iter().map(Note::id).collect::<BTreeSet<_>>();
 
         let sponsor_to_feature = sponsored_notes
@@ -428,11 +395,10 @@ impl NtxContext {
             })
             .collect::<HashMap<_, _>>();
 
-        // The batch failure list partitions the original input, so removing every note rescued by a
-        // retry yields the final failures. If a feature executes without one of its optional
-        // sponsorships, suppress that sponsorship's failure too: charging it to the feature would
-        // penalize a note which is being submitted successfully.
-        let failed = batch_failed
+        // The checker can eliminate a single sponsorship and still accept its feature note. Do not
+        // record the failure of that sponsorship. The failure is charged to the feature note, and
+        // the feature note is submitted successfully.
+        let failed = failed
             .into_iter()
             .filter(|failed| {
                 should_record_failure(failed.note().id(), &successful_ids, &sponsor_to_feature)
@@ -625,76 +591,15 @@ fn bundled_notes(sponsored: &SponsoredFeatureNote) -> Vec<Note> {
         .collect()
 }
 
-/// Returns the missing, dependency-closed additions to try for `sponsored` as successively smaller
-/// sponsorship prefixes in candidate order.
-///
-/// This is intentionally linear in the number of sponsorships rather than an exhaustive subset
-/// search. It relies on sponsorship ingestion rejecting structurally invalid notes. Notes already
-/// in `successful` are never re-offered or removed.
-fn retry_variants(
-    sponsored: &SponsoredFeatureNote,
-    successful: &BTreeSet<NoteId>,
-) -> Vec<Vec<Note>> {
-    let feature = sponsored.feature.as_note();
-    if successful.contains(&feature.id()) {
-        return Vec::new();
-    }
-
-    let missing_sponsorships = sponsored
-        .sponsorships
-        .iter()
-        .filter(|sponsorship| !successful.contains(&sponsorship.id()))
-        .cloned()
-        .collect::<Vec<_>>();
-
-    (0..=missing_sponsorships.len())
-        .rev()
-        .map(|prefix_len| {
-            std::iter::once(feature.clone())
-                .chain(missing_sponsorships[..prefix_len].iter().cloned())
-                .collect()
-        })
-        .collect()
-}
-
-/// Re-offers each unproven bundle on top of `successful_notes`, returning the largest set the
-/// checker proved. A failed trial never replaces the baseline.
-///
-/// `check_exact` runs one trial and returns the proven set, or `None` when the checker did not
-/// prove that exact set. It is a parameter so the retry order can be tested without a VM.
-async fn retry_sponsored_notes(
-    sponsored_notes: &[SponsoredFeatureNote],
-    mut successful_notes: Vec<Note>,
-    mut check_exact: impl AsyncFnMut(Vec<Note>) -> NtxResult<Option<Vec<Note>>>,
-) -> NtxResult<Vec<Note>> {
-    let mut successful_ids = successful_notes.iter().map(Note::id).collect::<BTreeSet<_>>();
-
-    for sponsored in sponsored_notes {
-        for additions in retry_variants(sponsored, &successful_ids) {
-            let mut trial = successful_notes.clone();
-            trial.extend(additions);
-
-            if let Some(trial_successful) = check_exact(trial).await? {
-                successful_notes = trial_successful;
-                successful_ids = successful_notes.iter().map(Note::id).collect::<BTreeSet<_>>();
-                break;
-            }
-        }
-    }
-
-    Ok(successful_notes)
-}
-
-/// Returns whether a batch-check failure still applies after bundle retries have completed.
+/// Returns `false` if `failed_note` is a sponsorship and its feature note is in `successful`.
 fn should_record_failure(
     failed_note: NoteId,
     successful: &BTreeSet<NoteId>,
     sponsor_to_feature: &HashMap<NoteId, NoteId>,
 ) -> bool {
-    !successful.contains(&failed_note)
-        && sponsor_to_feature
-            .get(&failed_note)
-            .is_none_or(|feature| !successful.contains(feature))
+    sponsor_to_feature
+        .get(&failed_note)
+        .is_none_or(|feature| !successful.contains(feature))
 }
 
 /// Splits failed notes into `(cycle_limited, genuine)`.
@@ -1025,11 +930,9 @@ impl MastForestStore for NtxDataStore {
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeSet, HashMap};
-    use std::future::ready;
     use std::sync::Arc;
     use std::time::Duration;
 
-    use miden_protocol::note::Note;
     use miden_protocol::protocol_config::ProtocolConfig;
     use miden_tx::{
         DataStore,
@@ -1041,21 +944,17 @@ mod tests {
 
     use super::{
         NtxDataStore,
-        NtxError,
         RpcError,
         SponsoredFeatureNote,
         is_transient_rpc_error,
         is_transient_status,
         partition_cycle_limited,
-        retry_sponsored_notes,
-        retry_variants,
         should_record_failure,
     };
     use crate::test_utils::{
         mock_network_account,
         mock_network_account_id,
         mock_single_target_note,
-        mock_sponsorship_note,
         mock_sponsorship_note_with_amount,
     };
 
@@ -1109,57 +1008,6 @@ mod tests {
     }
 
     #[test]
-    fn retry_variants_preserve_sponsorship_order() {
-        let sponsored = sponsored_note_with_two_sponsorships();
-        let variants = retry_variants(&sponsored, &BTreeSet::new());
-
-        assert_eq!(variants.iter().map(Vec::len).collect::<Vec<_>>(), [3, 2, 1]);
-        assert!(variants.iter().all(|variant| {
-            variant.iter().any(|note| note.id() == sponsored.feature.as_note().id())
-        }));
-        assert_eq!(variants[0][1].id(), sponsored.sponsorships[0].id());
-        assert_eq!(variants[0][2].id(), sponsored.sponsorships[1].id());
-        assert_eq!(variants[1][1].id(), sponsored.sponsorships[0].id());
-    }
-
-    #[test]
-    fn retry_variants_do_nothing_when_feature_is_proven() {
-        let sponsored = sponsored_note_with_two_sponsorships();
-        let successful =
-            BTreeSet::from([sponsored.feature.as_note().id(), sponsored.sponsorships[0].id()]);
-        let variants = retry_variants(&sponsored, &successful);
-
-        assert!(variants.is_empty());
-    }
-
-    #[tokio::test]
-    async fn retry_sponsored_notes_recovers_pair_from_poisoned_batch() {
-        let account_id = mock_network_account_id();
-        let feature_0 = mock_single_target_note(account_id, 10);
-        let sponsorship_0 = mock_sponsorship_note(account_id, feature_0.as_note().id(), 11);
-        let feature_1 = mock_single_target_note(account_id, 12);
-        let sponsored_notes = vec![
-            SponsoredFeatureNote {
-                feature: feature_0.clone(),
-                sponsorships: vec![sponsorship_0.clone()],
-            },
-            SponsoredFeatureNote { feature: feature_1, sponsorships: vec![] },
-        ];
-        let intact_ids = BTreeSet::from([feature_0.as_note().id(), sponsorship_0.id()]);
-
-        // Model the exact-set result established by the protocol test: the pair succeeds by itself,
-        // while adding the uncovered second feature poisons the complete batch.
-        let recovered = retry_sponsored_notes(&sponsored_notes, vec![], |trial: Vec<Note>| {
-            let trial_ids = trial.iter().map(Note::id).collect::<BTreeSet<_>>();
-            ready(Ok::<_, NtxError>((trial_ids == intact_ids).then_some(trial)))
-        })
-        .await
-        .unwrap();
-
-        assert_eq!(recovered.iter().map(Note::id).collect::<BTreeSet<_>>(), intact_ids);
-    }
-
-    #[test]
     fn successful_feature_suppresses_its_sponsorship_failures() {
         let sponsored = sponsored_note_with_two_sponsorships();
         let feature_id = sponsored.feature.as_note().id();
@@ -1167,10 +1015,10 @@ mod tests {
         let sponsor_to_feature = HashMap::from([(sponsorship_id, feature_id)]);
 
         assert!(should_record_failure(sponsorship_id, &BTreeSet::new(), &sponsor_to_feature,));
+        assert!(should_record_failure(feature_id, &BTreeSet::new(), &sponsor_to_feature));
 
         let successful = BTreeSet::from([feature_id]);
         assert!(!should_record_failure(sponsorship_id, &successful, &sponsor_to_feature,));
-        assert!(!should_record_failure(feature_id, &successful, &sponsor_to_feature));
     }
 
     /// `partition_cycle_limited` must route notes carrying a cycle count (`num_cycles = Some`) into
