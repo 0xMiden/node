@@ -1055,7 +1055,10 @@ async fn protocol_config_transition_is_streamed_and_used_for_next_signature() {
     );
     tv.server
         .block_store
-        .save_block(transitioned_header.block_num(), &transitioned_block.to_bytes())
+        .save_block(
+            transitioned_header.block_num(),
+            &miden_node_persistence::encode(&transitioned_block),
+        )
         .await
         .unwrap();
     tv.server
@@ -1523,6 +1526,8 @@ async fn stored_record_holds_the_transaction_effects() {
     let record = tv.server.db.load_private_record(tx.id()).await.unwrap().unwrap();
     assert_eq!(record.context().format_version(), PrivateRecordFormatVersion::V1);
 
+    let record: StoredPrivateRecord =
+        miden_node_persistence::decode(&miden_node_persistence::encode(&record)).unwrap();
     let effects = open_transaction_effects(&record);
 
     assert_eq!(effects.transaction_id(), tx.id());
@@ -1629,4 +1634,89 @@ async fn failed_batch_item_does_not_store_inputs() {
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
     tv.assert_transaction_absent(rejected_tx.id(), 1).await;
     assert!(tv.transaction_exists(valid_tx.id()).await);
+}
+
+#[tokio::test]
+async fn single_signature_backup_reopens_and_streams_with_multiple_validators() {
+    use tokio_stream::StreamExt;
+
+    let key = random_secret_key();
+    let other_key = random_secret_key();
+    let config = test_protocol_config();
+    let genesis = GenesisState::new(
+        vec![],
+        test_fee_params(),
+        0,
+        ValidatorConfig::new(vec![key.public_key(), other_key.public_key()], 2).unwrap(),
+        config.clone(),
+    )
+    .into_block()
+    .unwrap();
+    let parent = genesis.inner().header().clone();
+    let dir = tempfile::tempdir().unwrap();
+    let db = setup(dir.path().join("validator.sqlite3")).await.unwrap();
+    db.upsert_block_header_with_protocol_config(parent.clone(), Some(config.clone()))
+        .await
+        .unwrap();
+    let store_path = dir.path().join("blocks");
+    let store = BlockStore::bootstrap(store_path.clone(), &genesis).unwrap();
+    let service = ValidatorService::new(
+        ValidatorSigner::new_local(key.clone()),
+        db,
+        std::sync::Arc::new(test_decrypter()),
+        PrivateRecordSealer::from_operator_key(&operator_keys().remove(0)),
+        store,
+        InitialMetrics::default(),
+    )
+    .await
+    .unwrap();
+    let chain = PartialBlockchain::default();
+    let proposed = empty_block(&parent, &chain);
+    let (header, _) = proposed.into_header_and_body().unwrap();
+    let request = SignBlockRequest {
+        tx_batches: OrderedBatches::new(vec![]),
+        block_header: header.clone(),
+        block_inputs: BlockInputs::new(
+            parent,
+            chain,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+        ),
+        protocol_config: Some(config),
+    };
+    validator_api::SignBlock::full(&service, tonic::Request::new(request.into()))
+        .await
+        .unwrap();
+    drop(service);
+    let db = crate::db::load(dir.path().join("validator.sqlite3")).await.unwrap();
+    let store = BlockStore::load(store_path).unwrap();
+    let bytes = store.load_block(1.into()).await.unwrap().unwrap();
+    let backed_up: SignedBlock = miden_node_persistence::decode(&bytes).unwrap();
+    assert_eq!(backed_up.signatures().len(), 1);
+    assert_eq!(backed_up.header().validator_config().keys().len(), 2);
+    let service = ValidatorService::new(
+        ValidatorSigner::new_local(key),
+        db,
+        std::sync::Arc::new(test_decrypter()),
+        PrivateRecordSealer::from_operator_key(&operator_keys().remove(0)),
+        store,
+        InitialMetrics {
+            chain_tip: 1,
+            ..InitialMetrics::default()
+        },
+    )
+    .await
+    .unwrap();
+    let mut stream = validator_api::BlockSubscription::full(
+        &service,
+        tonic::Request::new(proto::validator::BlockSubscriptionRequest { block_from: 1 }),
+    )
+    .await
+    .unwrap();
+    let item = stream.next().await.unwrap().unwrap();
+    let streamed: SignedBlock = item.block.unwrap().decode_and_build_unchecked().unwrap();
+    assert_eq!(streamed, backed_up);
+    assert_eq!(streamed.header(), &header);
+    assert!(stream.next().await.is_none());
 }

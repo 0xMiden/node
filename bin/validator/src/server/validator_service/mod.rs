@@ -288,7 +288,7 @@ impl ValidatorService {
             SignedBlock::new_unchecked(proposed_header, proposed_body, own_signature);
         // Serializing the full block also scales with its contents; run it on a blocking thread.
         let (signed_block, signed_block_bytes) = spawn_blocking_in_current_span(move || {
-            let bytes = signed_block.to_bytes();
+            let bytes = miden_node_persistence::encode(&signed_block);
             (signed_block, bytes)
         })
         .await

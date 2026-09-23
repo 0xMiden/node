@@ -2,10 +2,8 @@
 //!
 //! Each subcommand's body lives in its own module (`create_proofs`, `submit`).
 //! `main.rs` is just the clap CLI + dispatch + a few shared utilities both
-//! orchestrators need (RPC client setup with genesis metadata, file I/O
-//! helpers, and the proofs-bundle directory).
+//! orchestrators need (RPC client setup with genesis metadata and the proofs-bundle directory).
 
-use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -20,9 +18,9 @@ use miden_node_proto::{DecodeMessageExt, VerifyWith};
 use miden_protocol::Word;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
-use miden_protocol::utils::serde::{Deserializable, Serializable};
 use url::Url;
 
+mod artifacts;
 mod create_proofs;
 mod inclusion;
 mod prover;
@@ -242,17 +240,4 @@ pub(crate) fn get_genesis_header_request() -> BlockHeaderByNumberRequest {
         include_mmr_proof: None,
         include_protocol_config: None,
     }
-}
-
-pub(crate) fn read_from_file<T: Deserializable>(path: &Path) -> T {
-    let bytes = fs_err::read(path).unwrap_or_else(|_| {
-        panic!("failed to read {} — run `create-proofs` first", path.display())
-    });
-    T::read_from_bytes(&bytes)
-        .unwrap_or_else(|_| panic!("failed to deserialize {}", path.display()))
-}
-
-pub(crate) fn write_to_file<T: Serializable>(path: &Path, value: &T) {
-    fs_err::write(path, value.to_bytes())
-        .unwrap_or_else(|err| panic!("failed to write {}: {err}", path.display()));
 }
