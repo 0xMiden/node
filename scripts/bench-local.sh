@@ -215,6 +215,7 @@ wait_for_port "$REMOTE_PROVER_PORT" remote-prover
 
 start_bg node miden-node sequencer \
     --data-directory                            "$DATA/node" \
+    --disable-account-allowlist \
     --rpc.listen                                "127.0.0.1:$RPC_PORT" \
     --validator.url                             "http://127.0.0.1:$VALIDATOR_PORT" \
     --ntx-builder.url                           "http://127.0.0.1:$NTX_PORT" \
@@ -259,6 +260,7 @@ miden-benchmark run-benchmark \
     --validator-signing-public-key "$VALIDATOR_SIGNING_PUBLIC_KEY" \
     --concurrency                  "$CONCURRENCY" \
     --wait-blocks                  "$WAIT_BLOCKS" \
+    --fail-on-error \
     2>&1 | tee "$LOGS/run-benchmark.log"
 
 say "done. logs in $LOGS/"

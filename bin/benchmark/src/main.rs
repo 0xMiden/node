@@ -87,6 +87,10 @@ pub enum Command {
         /// many blocks to fully include.
         #[arg(long, default_value_t = 30)]
         wait_blocks: u32,
+        /// Exit with an error if no transactions were generated, a submission fails, or a consume
+        /// transaction is not included within the block limit.
+        #[arg(long)]
+        fail_on_error: bool,
         /// Hex-encoded validator signing public key trusted to attest the transaction encryption
         /// key.
         #[arg(long)]
@@ -95,13 +99,13 @@ pub enum Command {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
     let cli = Cli::parse();
-    cli.run().await;
+    cli.run().await
 }
 
 impl Cli {
-    async fn run(self) {
+    async fn run(self) -> Result<()> {
         match self.command {
             Command::CreateProofs {
                 rpc_url,
@@ -115,6 +119,7 @@ impl Cli {
                 concurrency,
                 connections,
                 wait_blocks,
+                fail_on_error,
                 validator_signing_public_key,
             } => {
                 submit::run(
@@ -123,10 +128,12 @@ impl Cli {
                     connections,
                     wait_blocks,
                     validator_signing_public_key,
+                    fail_on_error,
                 )
-                .await;
+                .await?;
             },
         }
+        Ok(())
     }
 }
 
