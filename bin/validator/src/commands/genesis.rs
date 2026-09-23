@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::Context;
@@ -91,6 +92,10 @@ impl GenesisCommand {
             })?
             .into_parts()
             .0;
+        let mut account_names = HashMap::from([
+            (native_faucet.id(), "Native faucet".to_owned()),
+            (funding_account.id(), "Funding".to_owned()),
+        ]);
         let (genesis_state, secrets) = config.into_state(GenesisInputs {
             native_faucet,
             funding_account,
@@ -101,7 +106,7 @@ impl GenesisCommand {
 
         for item in secrets.as_account_files(&genesis_state) {
             let AccountFileWithName { account_file, name } = item?;
-            let account_path = accounts_directory.join(name);
+            let account_path = accounts_directory.join(&name);
             // Do not override existing account files.
             fs_err::OpenOptions::new()
                 .create_new(true)
@@ -109,9 +114,8 @@ impl GenesisCommand {
                 .open(&account_path)
                 .context("account file already exists")?;
             account_file.write(account_path)?;
+            account_names.insert(account_file.account().id(), name);
         }
-
-        let native_faucet_id = genesis_state.protocol_config.fee_asset_id().faucet_id();
 
         let genesis_block =
             genesis_state.into_block().context("failed to build the genesis block")?;
@@ -122,7 +126,11 @@ impl GenesisCommand {
 
         println!("Genesis block written to {}.", genesis_block_path.display());
         println!();
-        println!("Native faucet account id: {}", native_faucet_id.to_hex());
+        for account in genesis_block.inner().body().updated_accounts() {
+            let account_id = account.account_id();
+            let name = account_names.get(&account_id).map_or("Imported", String::as_str);
+            println!("{name} account id: {}", account_id.to_hex());
+        }
         println!();
         println!("Seed each validator's database with:");
         println!();
