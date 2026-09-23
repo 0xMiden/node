@@ -318,7 +318,7 @@ docker-build-remote-prover: ## Builds the remote prover using Docker
                  -t miden-remote-prover .
 
 .PHONY: docker-build-benchmark
-docker-build-benchmark: ## Builds the benchmark and seed tool image using Docker
+docker-build-benchmark: ## Builds the benchmark image using Docker
 	@CREATED=$$(date -u +'%Y-%m-%dT%H:%M:%SZ') && \
 	VERSION="$(DOCKER_VERSION)" && \
 	COMMIT=$$(git rev-parse HEAD) && \

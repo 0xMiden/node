@@ -3,6 +3,8 @@ services:
     profiles: [monitor]
     image: ${MIDEN_NETWORK_MONITOR_IMAGE:-miden-network-monitor}
     pull_policy: missing
+    volumes:
+      - node-data:/data:ro
     depends_on:
       funding-service:
         condition: service_started
@@ -10,9 +12,11 @@ services:
         condition: service_started
       sequencer:
         condition: service_started
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - miden-network-monitor
-      - start
+      - |
+        exec miden-network-monitor start \
+          --validator-signing-public-key="$$(cat /data/genesis/validator-signing-public-keys)"
     environment:
       MIDEN_MONITOR_RPC_URL: http://sequencer:57291
       # The monitor pays transaction fees from notes this service sends it. Only used on a chain
@@ -20,8 +24,6 @@ services:
       MIDEN_MONITOR_FUNDING_SERVICE_URL: http://funding-service:50401
       MIDEN_MONITOR_PORT: "3001"
       MIDEN_MONITOR_NETWORK_NAME: Localhost
-      # Public key for validator 1's insecure default development signing key.
-      MIDEN_MONITOR_VALIDATOR_SIGNING_PUBLIC_KEY: 031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
     ports:
       - "127.0.0.1:3001:3001"

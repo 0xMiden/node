@@ -57,7 +57,6 @@ env:
   DOCKER_BUILD_SUMMARY: "false"
   REGISTRY: ghcr.io
   REGISTRY_PREFIX: ghcr.io/0xmiden
-  MIDEN_FAUCET_IMAGE: ghcr.io/0xmiden/miden-faucet:v0.16.0-rc.1
 
 jobs:
   preflight:
@@ -402,7 +401,6 @@ jobs:
           MIDEN_NETWORK_MONITOR_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-network-monitor:${{ needs.preflight.outputs.tag }}
           MIDEN_FUNDING_SERVICE_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-funding-service:${{ needs.preflight.outputs.tag }}
           MIDEN_USDCX_GENESIS_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-usdcx-genesis:${{ needs.preflight.outputs.tag }}
-          MIDEN_BENCHMARK_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-node-tps-benchmark:${{ needs.preflight.outputs.tag }}
         with:
           compose-file: docker-compose.yml
           mode: dry-run
@@ -500,7 +498,6 @@ jobs:
           MIDEN_NETWORK_MONITOR_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-network-monitor:${{ needs.preflight.outputs.immutable_tag }}
           MIDEN_FUNDING_SERVICE_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-funding-service:${{ needs.preflight.outputs.immutable_tag }}
           MIDEN_USDCX_GENESIS_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-usdcx-genesis:${{ needs.preflight.outputs.immutable_tag }}
-          MIDEN_BENCHMARK_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-node-tps-benchmark:${{ needs.preflight.outputs.immutable_tag }}
         with:
           compose-file: docker-compose.yml
           mode: publish

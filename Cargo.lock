@@ -4988,6 +4988,7 @@ dependencies = [
  "miden-node-store",
  "miden-node-tracing",
  "miden-node-utils",
+ "miden-objects",
  "miden-protocol",
  "miden-testing",
  "miden-tx",
