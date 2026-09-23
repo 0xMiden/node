@@ -1,6 +1,6 @@
 services:
   bootstrap-usdcx:
-    image: ${MIDEN_USDCX_GENESIS_IMAGE:-ghcr.io/0xmiden/miden-usdcx-genesis:x.y.z}
+    image: ${MIDEN_USDCX_GENESIS_IMAGE:-miden-usdcx-genesis}
     pull_policy: missing
     network_mode: none
     environment:

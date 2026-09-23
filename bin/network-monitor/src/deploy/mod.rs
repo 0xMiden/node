@@ -123,18 +123,18 @@ impl TransactionSubmissionClient {
         self.genesis_commitment
     }
 
-    /// Connects to RPC and pins the validator key trusted for encryption-key attestations.
+    /// Connects to RPC and pins the validator keys trusted for encryption-key attestations.
     pub async fn connect(
         rpc_url: &Url,
         timeout: Duration,
-        trusted_validator_signing_key: ValidatorPublicKey,
+        trusted_validator_signing_keys: Vec<ValidatorPublicKey>,
     ) -> Result<Self> {
         let (rpc_client, genesis_commitment) =
             create_genesis_aware_rpc_client(rpc_url, timeout).await?;
         let client = Self {
             rpc_client,
             genesis_commitment,
-            trusted_validator_signing_keys: Arc::from([trusted_validator_signing_key]),
+            trusted_validator_signing_keys: Arc::from(trusted_validator_signing_keys),
             sealer: Arc::new(Mutex::new(None)),
         };
         client.sealer().await?;
