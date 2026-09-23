@@ -53,8 +53,9 @@ miden-funding-service start \
 | `--max-amount`                   | `1000000000` | Largest amount one request may ask for, in base units.                                                                                                                  |
 | `--max-notes-per-tx`             | `16`         | Largest number of notes one transaction creates. Must not exceed 100.                                                                                                   |
 | `--tx-expiration-delta`          | `50`         | Largest number of blocks after its reference block at which a funding transaction expires.                                                                              |
-| `--poll-interval`                | `1s`         | How often the service asks the node whether its notes are committed.                                                                                                    |
-| `--http.timeout`                 | `5m`         | Largest duration allocated to one HTTP request.                                                                                                                         |
+| `--poll-interval`                | `1s`         | How often the funding worker runs a cycle while it has work.                                                                                                            |
+| `--deposit-scan-interval`        | `1m`         | How often the service scans for the pay-to-ID notes sent to the funding account.                                                                                        |
+| `--http.timeout`                 | `30s`        | Largest duration allocated to one HTTP request.                                                                                                                         |
 | `--rpc.timeout`                  | `10s`        | Timeout of a request to the node.                                                                                                                                       |
 | `--tx-prover.timeout`            | `1m`         | Timeout of a request to the remote prover.                                                                                                                              |
 
@@ -62,9 +63,7 @@ miden-funding-service start \
 and the protocol lowers the expiration delta of a transaction which reads mutable state. A funding transaction therefore
 expires at or before the requested block.
 
-A funding request blocks until the note is committed, so `--http.timeout` must exceed the proving time plus the
-expiration window (`--tx-expiration-delta` multiplied by the chain's block interval). Raise it where proving is slow. A
-client must set a matching deadline of its own.
+A funding request is answered without a call to the node, so `--http.timeout` only has to cover the service's own work.
 
 Every option also reads from an environment variable named `MIDEN_FUNDING_<OPTION>`, for example
 `MIDEN_FUNDING_ACCOUNT_FILE`.
@@ -76,7 +75,7 @@ The service serves a JSON over HTTP API on `--listen`.
 | Endpoint              | Purpose                                                                                                                                                                     |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GET /status`         | Returns the service version, the funding account's ID, its balance, the block the service is synchronized to, the configured maximum amount, and the verification base fee. |
-| `POST /request-funds` | Creates a public pay-to-ID note for an account, waits for the note to commit, and returns the note with proof of its inclusion.                                             |
+| `POST /request-funds` | Creates a public pay-to-ID note for an account, returns it at once, and queues it for the next funding transaction.                                                         |
 
 A funding request names the target account and the amount in base units:
 
@@ -84,19 +83,22 @@ A funding request names the target account and the amount in base units:
 { "account_id": "0x...", "amount": 1000000 }
 ```
 
-The account ID is hexadecimal with a `0x` prefix. The response carries the note, the proof that the note is in a block,
-and the transaction that created it. Each value is the hexadecimal encoding of the serialized object, without a prefix:
+The account ID is hexadecimal with a `0x` prefix. The response carries the note as the hexadecimal encoding of the
+serialized object, without a prefix:
 
 ```json
-{ "note": "...", "inclusion_proof": "...", "transaction_id": "..." }
+{ "note": "..." }
 ```
 
-The notes are public, so the node stores their details.
+The service answers **before** it submits the transaction that creates the note, so the note is not on chain yet. The
+service keeps retrying until the note commits. A client that needs the note on chain either polls the node for the note
+ID or consumes the note as an unauthenticated input note, which the node authenticates when it builds the block. The
+notes are public, so the node stores their details once they commit.
 
 The service does not authenticate requests. Restrict access to the API with a proxy or a load balancer.
 
 Requests that arrive while a transaction is in progress share the next transaction, up to `--max-notes-per-tx`. A client
-that tops up several accounts at once therefore waits for one transaction rather than one per account.
+that tops up several accounts at once is therefore served by one transaction rather than one per account.
 
 ## Health and errors
 
@@ -111,26 +113,49 @@ A failed request answers with a JSON body that holds the reason:
 
 The status code tells a client whether to change the request, add funds, or send the request again.
 
-| Status                      | Meaning                                                                                                   |
-| --------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `400 Bad Request`           | The account ID is malformed, the requested amount is zero, or the amount exceeds `--max-amount`.          |
-| `408 Request Timeout`       | The request ran longer than `--http.timeout`.                                                             |
-| `409 Conflict`              | The funding transaction did not commit before it expired, or the node rejected it. No note was created.   |
-| `412 Precondition Failed`   | The funding account cannot cover the request plus the fee of one transaction. An operator must add funds. |
-| `429 Too Many Requests`     | Too many requests are queued.                                                                             |
-| `500 Internal Server Error` | The service failed for a reason the client cannot act on.                                                 |
-| `503 Service Unavailable`   | The node is unreachable, or the service is shutting down. The transaction may have reached the node.      |
+| Status                      | Meaning                                                                                                                       |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `400 Bad Request`           | The account ID is malformed or names the funding account, the requested amount is zero, or the amount exceeds `--max-amount`. |
+| `408 Request Timeout`       | The request ran longer than `--http.timeout`.                                                                                 |
+| `412 Precondition Failed`   | The balance the service last read does not cover the request plus the fee of one transaction.                                 |
+| `429 Too Many Requests`     | Too many notes are queued.                                                                                                    |
+| `500 Internal Server Error` | The service failed for a reason the client cannot act on.                                                                     |
+| `503 Service Unavailable`   | The service is shutting down.                                                                                                 |
 
-A request that fails with 400, 409, 412, or 429 created no note, and a client may send it again as it is. Either the
-service never built a transaction, or the node rejected it, or the transaction expired, and an expired transaction
-cannot commit later.
+A request that fails created no note, and a client may send it again as it is. The service builds the note before it
+answers, so a request that answers with 200 always names a note the service goes on to create.
 
-A request that fails with 408, 500, or 503 may still have created the note. The service loses contact with the node
-after it submits the transaction, so it cannot tell whether the node accepted the transaction. A client that sends the
-request again may fund the account twice.
+The 412 check is best effort. It reads the balance of an earlier block and does not account for the notes already
+queued, so a request it admits can still wait in the queue until a deposit raises the balance. Raising the balance is an
+operator action, which is what the status code reports.
 
 ## Keep the account funded
 
-`GET /status` reports the funding account's balance, which is the value to alert on. The service does not refill itself.
-Send a pay-to-ID note that holds the native asset to the funding account to top it up, and consume it with a client that
-holds the account's key.
+`GET /status` reports the funding account's balance, which is the value to alert on.
+
+To refill the account, send it a **public** pay-to-ID note that holds the native asset. The service scans for those
+notes and consumes them on its own, so no operator action is needed beyond sending the note. The scan runs every
+`--deposit-scan-interval`, which defaults to one minute. The scan starts at the genesis block after a restart, so a
+deposit sent while the service was down is still found.
+
+A note is only collected when all of the following hold. Anything else is ignored, because the note tag encodes only the
+leading bits of an account ID, so notes for other accounts reach the service too, and anyone can send a note that holds
+whatever they like.
+
+| Requirement                                | Why                                                                                      |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| The note is public                         | The node does not store the details of a private note, so the service cannot consume it. |
+| It is a pay-to-ID note                     | Any other script may not release its assets to the account.                              |
+| It targets the funding account             | The tag alone does not prove the target.                                                 |
+| It holds the native asset and nothing else | Another asset would sit in the vault without the service being able to spend it.         |
+
+A deposit is consumed as an input note of the next funding transaction, alongside the notes that transaction creates.
+The assets of an input note land before the fee is withdrawn, so a deposit pays for the notes of the same transaction
+and the collection works even when the balance has reached zero.
+
+A deposit already spent is never consumed again: the service checks each candidate's nullifier against the chain before
+it uses the note.
+
+One transaction consumes at most 16 deposits, the largest ones first, which bounds its proving time. A transaction that
+consumes deposits and creates no note is only submitted when those deposits are worth more than the fee, so a note
+holding a single base unit cannot be used to make the account spend more than it gains.

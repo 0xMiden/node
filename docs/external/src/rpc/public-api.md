@@ -41,9 +41,10 @@ another account, or an account already registered with another entry, returns `A
 `INVALID_ARGUMENT`. These errors do not consume an invitation.
 
 If the sequencer has registration funding configured, a new registration also requests a public P2ID funding note. The
-call waits for the funding service to confirm that the note committed. Retrieve the note through the target account's
-note tag. A funding failure returns `UNAVAILABLE`, but the account remains registered and the invitation remains
-consumed. Repeating registration does not request funding again. Contact the network operator if funding fails.
+call waits for the funding service to queue the note. A successful response does not confirm that the note committed.
+Retrieve the note through the target account's note tag after it commits. A failed funding request returns
+`UNAVAILABLE`, but the account remains registered and the invitation remains consumed. Repeating registration does not
+request funding again. Contact the network operator if funding fails.
 
 Include the network's `genesis` parameter in the `Accept` header, as for transaction submission. Use TLS when sending
 invitation codes over a network. Do not log invitation codes. Full nodes forward registration to the sequencer.
