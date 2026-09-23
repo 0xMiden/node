@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
+use anyhow::{Result, ensure};
 use miden_node_proto::clients::RpcClient;
 use miden_node_proto::domain::encryption::TransactionInputsSealer;
 use miden_node_proto::generated as proto;
@@ -39,7 +40,8 @@ pub(crate) async fn run(
     connections: usize,
     wait_blocks: u32,
     validator_signing_public_key: String,
-) {
+    fail_on_error: bool,
+) -> Result<()> {
     let in_dir = PathBuf::from(PROOFS_DIR);
 
     println!("Loading mint txs from {}", in_dir.join("mint_txs.bin").display());
@@ -102,6 +104,30 @@ pub(crate) async fn run(
         scan_with_drain(pool[0].clone(), h_start, wait_blocks, ack_by_id).await;
 
     print_summary(h_start, h_final, &mint_stats, &consume_stats, concurrency, &inclusion);
+
+    if fail_on_error {
+        ensure!(
+            !mint_stats.outcomes.is_empty() && !consume_stats.outcomes.is_empty(),
+            "benchmark requires mint and consume transactions"
+        );
+        ensure!(
+            mint_stats.err_count() == 0,
+            "{} mint submissions failed",
+            mint_stats.err_count()
+        );
+        ensure!(
+            consume_stats.err_count() == 0,
+            "{} consume submissions failed",
+            consume_stats.err_count()
+        );
+        ensure!(
+            inclusion.included_count == consume_ids.len() as u64,
+            "only {} of {} consume transactions were included",
+            inclusion.included_count,
+            consume_ids.len()
+        );
+    }
+    Ok(())
 }
 
 // SUBMISSION STATS

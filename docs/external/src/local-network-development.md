@@ -6,13 +6,12 @@ sidebar_position: 1
 # Local Network Development
 
 Use this guide to start a disposable Miden network for local development and testing. The provided Docker Compose setup
-includes a sequencer, three validators, a transaction prover, a network transaction builder, and optional block
-explorer, faucet, monitoring, and trace services, so you can develop against a working environment without wiring the
-network services manually.
+includes a sequencer, three validators, a transaction prover, a network transaction builder, and a funding service.
+Optional services provide a block explorer, monitoring, and traces.
 
-The Compose model lives in `docker-compose.yml` and uses profiles for optional explorer, faucet, telemetry, and
-monitoring services. The guide uses `make` targets as shorthand for the underlying Docker image builds and Docker
-Compose commands; check the `Makefile` when you need the exact command.
+The Compose model lives in `docker-compose.yml` and uses profiles for optional explorer, telemetry, and monitoring
+services. The guide uses `make` targets as shorthand for the underlying Docker image builds and Docker Compose commands;
+check the `Makefile` when you need the exact command.
 
 This is not a production deployment guide and it is not the path for independent full node runners on an existing
 network.
@@ -32,6 +31,7 @@ repository state.
 git clone https://github.com/0xMiden/node.git
 cd node
 git checkout <release-tag-or-branch>
+git submodule update --init --recursive
 ```
 
 ## Run a Published Version
@@ -49,12 +49,11 @@ docker compose -f "${COMPOSE_APPLICATION}" down -v
 ```
 
 The application includes an OpenTelemetry Collector that receives traces from the Miden services. Enable the optional
-faucet, Midenscan explorer, Tempo, Grafana, and network monitor services with Compose profiles:
+Midenscan explorer, Tempo, Grafana, and network monitor services with Compose profiles:
 
 ```bash
 docker compose \
   -f "${COMPOSE_APPLICATION}" \
-  --profile faucet \
   --profile explorer \
   --profile telemetry \
   --profile monitor \
@@ -115,8 +114,6 @@ Existing direct ports remain available for native gRPC clients, automation, and 
 | Transaction prover | `http://prover.localhost`           | Not published directly            |
 | Note transport     | `http://ntl.localhost`              | `localhost:57292` for native gRPC |
 | Funding service    | `http://funding.localhost`          | `http://localhost:50401`          |
-| Faucet frontend    | `http://faucet.localhost`           | `http://localhost:8081`           |
-| Faucet API         | `http://faucet.localhost/api`       | `http://localhost:8000`           |
 | Block explorer     | `http://explorer.localhost`         | `http://localhost:8080`           |
 | Explorer GraphQL   | `http://explorer.localhost/graphql` | `http://localhost:8199/graphql`   |
 | Grafana            | `http://grafana.localhost`          | `http://localhost:3000`           |
@@ -149,23 +146,13 @@ Its browser-facing gRPC-Web endpoint is `http://ntl.localhost`. Native gRPC clie
 initializes the database on first use and persists notes in the `note-transport-data` volume. The service limits stored
 note data to 1 GiB. Set `MIDEN_NOTE_TRANSPORT_IMAGE` to select a different workspace image.
 
-## Faucet
+## Funding
 
-The faucet is maintained in the separate [0xMiden/faucet](https://github.com/0xMiden/faucet) repository and can lag
-behind the node's protocol version. It is therefore excluded from the default stack. Enable its profile explicitly:
+The funding service distributes the USDCx held by the distributor account. Use its HTTP API at
+`http://funding.localhost`. See the [funding service guide](./network-operator/funding-service.md) for the request
+format.
 
-```bash
-docker compose --profile faucet build faucet
-docker compose --profile faucet up -d
-```
-
-For a repository checkout, the first run builds the exact upstream commit pinned in `compose/faucet.yml`. Node releases
-publish an image built from the same pin, so the published Compose application can pull it without requiring a source
-build.
-
-On its first successful start, the service imports the native `MIDEN` faucet account created at genesis and stores its
-client state in the `faucet-data` volume. Later starts reuse that state. The API is available at
-`http://faucet.localhost/api` and the frontend at `http://faucet.localhost`.
+The faucet service is disabled. The local network does not mint additional USDCx.
 
 ## Monitoring and Traces
 
@@ -188,45 +175,29 @@ inside the Compose network.
 MIDEN_REMOTE_PROVER_URL=http://<prover-host>:50051 make local-network-up
 ```
 
-## Genesis Config Override
+## Additional Genesis Accounts
 
-By default, the local network bootstraps from the bundled `genesis` Compose config in `compose/bootstrap.yml`. The
-bootstrap service derives the public keys of the three validator services from their signing keys and passes them to
-`miden-validator genesis` via `--validator.key` flags. The signing keys are insecure defaults defined in
-`compose/validator.yml` and must never be used outside local development.
+To include additional accounts, create a TOML file with `[[wallet]]`, `[[fungible_faucet]]`, or `[[account]]` entries.
+Mount it through a Compose override:
 
-To replace it, create a Compose override file:
-
-```yaml title="genesis.override.yml"
+```yaml title="accounts.override.yml"
+services:
+  bootstrap-validator:
+    configs:
+      - source: additional-accounts
+        target: /accounts.toml
+    environment:
+      MIDEN_VALIDATOR_GENESIS_ACCOUNTS_CONFIG: /accounts.toml
 configs:
-  genesis: !override
-    file: /absolute/path/to/genesis.toml
+  additional-accounts:
+    file: /absolute/path/to/accounts.toml
 ```
-
-Use that override with either the repository model or a published application:
 
 ```bash
-make local-network-up COMPOSE_OVERRIDE_FILE=/absolute/path/to/genesis.override.yml
-
-docker compose \
-  -f oci://ghcr.io/0xmiden/miden-local-network:vX.Y.Z \
-  -f /absolute/path/to/genesis.override.yml \
-  up -d
+make local-network-up COMPOSE_OVERRIDE_FILE=/absolute/path/to/accounts.override.yml
 ```
 
-The custom configuration is mounted into the bootstrap validator as `/genesis.toml` and passed to
-`miden-validator genesis --config`. The validator set is not part of the configuration file: the bootstrap service
-always commits the public keys corresponding to the three validator private keys via `--validator.key` flags. Override
-those private keys with `MIDEN_VALIDATOR_1_SIGNING_KEY`, `MIDEN_VALIDATOR_2_SIGNING_KEY`, and
-`MIDEN_VALIDATOR_3_SIGNING_KEY`, and the shared transaction encryption key with `MIDEN_VALIDATOR_ENCRYPTION_KEY`
-(`miden-validator keygen` generates fresh key material).
-
-This only affects validator bootstrap. If the local network has already been bootstrapped, delete the existing local
-chain data before starting with a different genesis configuration:
-
-```bash
-make local-network-delete
-```
+Delete the existing local chain with `make local-network-delete` before changing its genesis accounts.
 
 ## Storage Key Setup
 

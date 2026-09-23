@@ -57,7 +57,6 @@ env:
   DOCKER_BUILD_SUMMARY: "false"
   REGISTRY: ghcr.io
   REGISTRY_PREFIX: ghcr.io/0xmiden
-  MIDEN_FAUCET_IMAGE: ghcr.io/0xmiden/miden-faucet:v0.16.0-rc.1
 
 jobs:
   preflight:
@@ -122,6 +121,7 @@ jobs:
                 "network-monitor",
                 "funding-service",
                 "node-tps-benchmark",
+                "usdcx-genesis",
                 "note-transport"
               ]
             '
@@ -135,6 +135,38 @@ jobs:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
           persist-credentials: false
+          submodules: recursive
+
+      - name: Check USDCx protocol compatibility
+        shell: python3 {0}
+        run: |
+          from pathlib import Path
+          import sys
+          import tomllib
+
+          def protocol_versions(path):
+              with path.open("rb") as lockfile:
+                  packages = tomllib.load(lockfile).get("package", [])
+              versions = {}
+              for name in ("miden-protocol", "miden-standards"):
+                  matches = [package["version"] for package in packages if package["name"] == name]
+                  if len(matches) != 1:
+                      sys.exit(f"::error file={path}::Expected one {name} version, found {matches}")
+                  versions[name] = matches[0]
+              return versions
+
+          node = protocol_versions(Path("Cargo.lock"))
+          usdcx = protocol_versions(Path("vendor/miden-usdcx/Cargo.lock"))
+          mismatches = [
+              f"{name}: node={version}, USDCx={usdcx[name]}"
+              for name, version in node.items()
+              if version != usdcx[name]
+          ]
+          if mismatches:
+              sys.exit("::error::USDCx protocol versions do not match the node: " + "; ".join(mismatches))
+          print("USDCx protocol versions match the node: " + ", ".join(
+              f"{name}={version}" for name, version in node.items()
+          ))
 
       - name: Resolve ref and prepare metadata
         id: metadata
@@ -222,6 +254,7 @@ jobs:
         with:
           ref: ${{ needs.preflight.outputs.commit }}
           persist-credentials: false
+          submodules: recursive
 
       - name: Validate Docker images
         uses: WarpBuilds/bake-action@cb88c8ea0c887c0d1a3dcb534e71bd68a015e2d6 # v6.7.7
@@ -274,6 +307,7 @@ jobs:
         with:
           ref: ${{ needs.preflight.outputs.commit }}
           persist-credentials: false
+          submodules: recursive
 
       - name: Log in to the Container registry
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
@@ -304,6 +338,7 @@ jobs:
             network-monitor.tags=${{ env.REGISTRY_PREFIX }}/miden-network-monitor:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
             funding-service.tags=${{ env.REGISTRY_PREFIX }}/miden-funding-service:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
             node-tps-benchmark.tags=${{ env.REGISTRY_PREFIX }}/miden-node-tps-benchmark:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
+            usdcx-genesis.tags=${{ env.REGISTRY_PREFIX }}/miden-usdcx-genesis:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
 
   kache-summary:
     name: Summarize Kache cache
@@ -365,7 +400,7 @@ jobs:
           MIDEN_REMOTE_PROVER_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-remote-prover:${{ needs.preflight.outputs.tag }}
           MIDEN_NETWORK_MONITOR_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-network-monitor:${{ needs.preflight.outputs.tag }}
           MIDEN_FUNDING_SERVICE_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-funding-service:${{ needs.preflight.outputs.tag }}
-          MIDEN_BENCHMARK_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-node-tps-benchmark:${{ needs.preflight.outputs.tag }}
+          MIDEN_USDCX_GENESIS_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-usdcx-genesis:${{ needs.preflight.outputs.tag }}
         with:
           compose-file: docker-compose.yml
           mode: dry-run
@@ -462,7 +497,7 @@ jobs:
           MIDEN_REMOTE_PROVER_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-remote-prover:${{ needs.preflight.outputs.immutable_tag }}
           MIDEN_NETWORK_MONITOR_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-network-monitor:${{ needs.preflight.outputs.immutable_tag }}
           MIDEN_FUNDING_SERVICE_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-funding-service:${{ needs.preflight.outputs.immutable_tag }}
-          MIDEN_BENCHMARK_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-node-tps-benchmark:${{ needs.preflight.outputs.immutable_tag }}
+          MIDEN_USDCX_GENESIS_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-usdcx-genesis:${{ needs.preflight.outputs.immutable_tag }}
         with:
           compose-file: docker-compose.yml
           mode: publish
