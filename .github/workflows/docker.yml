@@ -298,6 +298,7 @@ jobs:
             *.args.COMMIT=${{ needs.preflight.outputs.commit }}
             node.tags=${{ env.REGISTRY_PREFIX }}/miden-node:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
             validator.tags=${{ env.REGISTRY_PREFIX }}/miden-validator:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
+            note-transport.tags=${{ env.REGISTRY_PREFIX }}/miden-note-transport:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
             ntx-builder.tags=${{ env.REGISTRY_PREFIX }}/miden-ntx-builder:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
             remote-prover.tags=${{ env.REGISTRY_PREFIX }}/miden-remote-prover:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
             network-monitor.tags=${{ env.REGISTRY_PREFIX }}/miden-network-monitor:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
