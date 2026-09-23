@@ -19,9 +19,9 @@
 #   - miden-ntx-builder
 #   - miden-remote-prover
 #   - miden-benchmark
+#   - xusdc-genesis (install from vendor/miden-usdcx/crates/xusdc-genesis)
 #
 # Usage:
-#   Export MIDEN_VALIDATOR_GENESIS_NATIVE_FAUCET and MIDEN_VALIDATOR_GENESIS_FUNDING_ACCOUNT.
 #   Export MIDEN_VALIDATOR_STORAGE_KEY_EPOCH, MIDEN_VALIDATOR_STORAGE_KEY_SETUP_CONTEXT,
 #   MIDEN_VALIDATOR_STORAGE_KEY_PUBLIC_SET, and MIDEN_VALIDATOR_STORAGE_KEY_SECRET_SHARE first.
 #   scripts/bench-local.sh                       # 5 tx pairs, local prover
@@ -48,10 +48,10 @@ VALIDATOR_SIGNING_PUBLIC_KEY="${VALIDATOR_SIGNING_PUBLIC_KEY:-031b84c5567b126440
 ENCRYPTION_KEY_HEX="${ENCRYPTION_KEY_HEX:-0303030303030303030303030303030303030303030303030303030303030303}"
 
 # --- ports --------------------------------------------------------------------
-VALIDATOR_PORT=50101
-RPC_PORT=57291
-NTX_PORT=50301
-REMOTE_PROVER_PORT=50051
+VALIDATOR_PORT="${VALIDATOR_PORT:-50101}"
+RPC_PORT="${RPC_PORT:-57291}"
+NTX_PORT="${NTX_PORT:-50301}"
+REMOTE_PROVER_PORT="${REMOTE_PROVER_PORT:-50051}"
 
 # --- paths --------------------------------------------------------------------
 DATA="$RUN_DIR/data"
@@ -104,25 +104,23 @@ wait_for_port() {
 }
 
 # --- preflight ----------------------------------------------------------------
-required_bins=(miden-node miden-validator miden-ntx-builder miden-remote-prover miden-benchmark)
+required_bins=(miden-node miden-validator miden-ntx-builder miden-remote-prover miden-benchmark xusdc-genesis)
 for bin in "${required_bins[@]}"; do
     command -v "$bin" >/dev/null || die "$bin not on PATH"
 done
 
-required_bootstrap_vars=(
-    MIDEN_VALIDATOR_GENESIS_NATIVE_FAUCET
-    MIDEN_VALIDATOR_GENESIS_FUNDING_ACCOUNT
+required_storage_key_vars=(
     MIDEN_VALIDATOR_STORAGE_KEY_EPOCH
     MIDEN_VALIDATOR_STORAGE_KEY_SETUP_CONTEXT
     MIDEN_VALIDATOR_STORAGE_KEY_PUBLIC_SET
     MIDEN_VALIDATOR_STORAGE_KEY_SECRET_SHARE
 )
-for var in "${required_bootstrap_vars[@]}"; do
+for var in "${required_storage_key_vars[@]}"; do
     [ -n "${!var:-}" ] || die "$var is required"
 done
 
 if [ -e "$DATA/node" ] || [ -e "$DATA/validator" ] || [ -e "$DATA/genesis" ] \
-    || [ -e "$DATA/ntx-builder" ]; then
+    || [ -e "$DATA/ntx-builder" ] || [ -e "$DATA/usdcx" ]; then
     say "wiping previous data dir $DATA"
     rm -rf "$DATA"
     mkdir -p "$DATA"
@@ -132,10 +130,39 @@ rm -f "$LOGS"/*.log "$PIDS"/*.pid
 GENESIS_FILE="$DATA/genesis/genesis.dat"
 
 # --- bootstrap ----------------------------------------------------------------
+say "creating the native USDCx faucet and funding account"
+mkdir "$DATA/usdcx"
+(
+    cd "$DATA/usdcx"
+    DISTRIBUTOR_OUTPUT="$(xusdc-genesis new-distributor)"
+    printf '%s\n' "$DISTRIBUTOR_OUTPUT"
+    DISTRIBUTOR_ID="$(printf '%s\n' "$DISTRIBUTOR_OUTPUT" | sed -n 's/^  hex: *//p')"
+    [ -n "$DISTRIBUTOR_ID" ] || die "USDCx genesis did not report the distributor account ID"
+
+    # Benchmark accounts have no native assets to pay transaction fees.
+    cat > config.json <<EOF
+{
+  "accounts": { "owner": "$DISTRIBUTOR_ID" },
+  "faucet": {
+    "seed": "0x55534443582d4641554345540000000000000000000000000000000000000000",
+    "token_supply": 1000000000000000,
+    "domain": 10007,
+    "min_burn_amount": 1,
+    "verification_base_fee": 0,
+    "attesters": []
+  }
+}
+EOF
+    xusdc-genesis faucet
+    xusdc-genesis prefund
+) > "$LOGS/bootstrap-usdcx.log" 2>&1
+
 say "building genesis block"
 miden-validator genesis \
     --genesis-block-directory "$DATA/genesis" \
     --accounts-directory      "$DATA/accounts" \
+    --native-faucet            "$DATA/usdcx/usdcx-faucet.mac" \
+    --funding-account          "$DATA/usdcx/distributor.genesis.mac" \
     --verification-base-fee   0 \
     --timestamp               "$(date +%s)" \
     --validator.key           "$VALIDATOR_SIGNING_PUBLIC_KEY" \

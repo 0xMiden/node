@@ -125,6 +125,8 @@ prover, runs `create-proofs` then `run-benchmark`, and tears everything down on 
 
 ```sh
 make install-node install-validator install-ntx-builder install-remote-prover install-benchmark
+git submodule update --init --recursive
+cargo install --locked --path vendor/miden-usdcx/crates/xusdc-genesis
 
 scripts/bench-local.sh                       # 5 tx pairs, local prover
 N_TXS=20 scripts/bench-local.sh              # 20 tx pairs
@@ -132,6 +134,9 @@ USE_REMOTE_PROVER=1 scripts/bench-local.sh   # offload create-proofs to the remo
 ```
 
 Logs and data land under `./bench-local-run/`.
+
+The script creates the native USDCx faucet and funding account before genesis. It uses a zero verification base fee
+because the benchmark accounts have no native assets.
 
 ### Option B: docker-compose
 
