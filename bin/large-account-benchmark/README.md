@@ -43,6 +43,7 @@ all three account ids. Include the counter in the additional accounts file:
 
 ```toml
 [[account]]
+name = "counter"
 path = "seeded/counter.mac"
 ```
 

@@ -52,6 +52,7 @@ pub struct GenesisInputs {
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct GenericAccountConfig {
+    name: String,
     path: PathBuf,
 }
 
@@ -84,6 +85,9 @@ impl GenesisConfig {
     /// Parse additional accounts and resolve file paths relative to `config_dir`.
     fn read_toml(toml_str: &str, config_dir: &Path) -> Result<Self, GenesisConfigError> {
         let mut config: Self = toml::from_str(toml_str)?;
+        if config.account.iter().any(|account| account.name.trim().is_empty()) {
+            return Err(GenesisConfigError::EmptyImportedAccountName);
+        }
         config.config_dir = config_dir.to_path_buf();
         Ok(config)
     }
@@ -93,12 +97,12 @@ impl GenesisConfig {
     /// The genesis header commits to the validator set in `inputs`.
     /// That set must sign every block after genesis.
     ///
-    /// Also returns the set of secrets for the generated accounts.
+    /// Also returns account names and the keys for generated accounts.
     #[expect(clippy::too_many_lines)]
     pub fn into_state(
         self,
         inputs: GenesisInputs,
-    ) -> Result<(GenesisState, AccountSecrets), GenesisConfigError> {
+    ) -> Result<(GenesisState, GenesisAccountMetadata), GenesisConfigError> {
         let GenesisInputs {
             native_faucet,
             funding_account,
@@ -113,13 +117,19 @@ impl GenesisConfig {
             config_dir,
         } = self;
 
-        // Load account files from disk
+        let mut names = IndexMap::from([
+            (native_faucet.id(), "Native faucet".to_owned()),
+            (funding_account.id(), "Funding".to_owned()),
+        ]);
+
+        // Load account files from disk.
         let file_loaded_accounts = account_entries
             .into_iter()
             .map(|acc| {
                 let full_path = config_dir.join(&acc.path);
                 let account_file = AccountFile::read(&full_path)
                     .map_err(|e| GenesisConfigError::AccountFileRead(e, full_path.clone()))?;
+                names.insert(account_file.account().id(), acc.name);
                 Ok(account_file.into_parts().0)
             })
             .collect::<Result<Vec<_>, GenesisConfigError>>()?;
@@ -288,6 +298,7 @@ impl GenesisConfig {
         if let Some(pair) = file_names.windows(2).find(|pair| pair[0] == pair[1]) {
             return Err(GenesisConfigError::DuplicateAccountFileName { name: pair[0].to_string() });
         }
+        names.extend(secrets.iter().map(|(name, id, _)| (*id, name.clone())));
 
         Ok((
             GenesisState {
@@ -297,7 +308,7 @@ impl GenesisConfig {
                 validator_config,
                 protocol_config,
             },
-            AccountSecrets { secrets },
+            GenesisAccountMetadata { names, secrets },
         ))
     }
 }
@@ -425,18 +436,16 @@ pub struct AccountFileWithName {
     pub account_file: AccountFile,
 }
 
-/// Secrets generated during the state generation
+/// Account names and generated signing keys for genesis.
 #[derive(Debug, Clone)]
-pub struct AccountSecrets {
+pub struct GenesisAccountMetadata {
+    pub names: IndexMap<AccountId, String>,
     // name, account, private key of the account, if it has one
     pub secrets: Vec<(String, AccountId, Option<AuthSecretKey>)>,
 }
 
-impl AccountSecrets {
-    /// Convert the internal tuple into an `AccountFile`
-    ///
-    /// If no name is present, a new one is generated based on the current time
-    /// and the index in
+impl GenesisAccountMetadata {
+    /// Export generated accounts with their signing keys.
     pub fn as_account_files(
         &self,
         genesis_state: &GenesisState,

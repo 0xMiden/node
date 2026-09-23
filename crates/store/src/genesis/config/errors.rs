@@ -22,6 +22,8 @@ pub enum GenesisConfigError {
     Toml(#[from] toml::de::Error),
     #[error("failed to read config file at {1}")]
     ConfigFileRead(#[source] std::io::Error, PathBuf),
+    #[error("imported account name must not be empty")]
+    EmptyImportedAccountName,
     #[error("failed to read account file at {1}")]
     AccountFileRead(#[source] AccountFileError, PathBuf),
     #[error("native faucet {account_id} is not a fungible faucet")]

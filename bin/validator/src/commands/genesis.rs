@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::Context;
@@ -92,11 +91,7 @@ impl GenesisCommand {
             })?
             .into_parts()
             .0;
-        let mut account_names = HashMap::from([
-            (native_faucet.id(), "Native faucet".to_owned()),
-            (funding_account.id(), "Funding".to_owned()),
-        ]);
-        let (genesis_state, secrets) = config.into_state(GenesisInputs {
+        let (genesis_state, accounts) = config.into_state(GenesisInputs {
             native_faucet,
             funding_account,
             fee_parameters: FeeParameters::new(verification_base_fee),
@@ -104,9 +99,9 @@ impl GenesisCommand {
             validator_config,
         })?;
 
-        for item in secrets.as_account_files(&genesis_state) {
+        for item in accounts.as_account_files(&genesis_state) {
             let AccountFileWithName { account_file, name } = item?;
-            let account_path = accounts_directory.join(&name);
+            let account_path = accounts_directory.join(name);
             // Do not override existing account files.
             fs_err::OpenOptions::new()
                 .create_new(true)
@@ -114,7 +109,6 @@ impl GenesisCommand {
                 .open(&account_path)
                 .context("account file already exists")?;
             account_file.write(account_path)?;
-            account_names.insert(account_file.account().id(), name);
         }
 
         let genesis_block =
@@ -128,7 +122,7 @@ impl GenesisCommand {
         println!();
         for account in genesis_block.inner().body().updated_accounts() {
             let account_id = account.account_id();
-            let name = account_names.get(&account_id).map_or("Imported", String::as_str);
+            let name = &accounts.names[&account_id];
             println!("{name} account id: {}", account_id.to_hex());
         }
         println!();

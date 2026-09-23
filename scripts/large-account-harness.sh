@@ -187,6 +187,7 @@ fi
 
 cat > "$ACCOUNTS_CONFIG_FILE" <<EOF
 [[account]]
+name = "counter"
 path = "$SEEDED_DIR/counter.mac"
 EOF
 

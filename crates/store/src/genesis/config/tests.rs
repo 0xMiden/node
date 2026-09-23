@@ -155,11 +155,28 @@ fn additional_account_paths_are_relative_to_the_config() -> TestResult {
     let account = inputs().funding_account;
     AccountFile::new(account.clone(), vec![]).write(dir.path().join("extra.mac"))?;
     let config_path = dir.path().join("accounts.toml");
-    fs_err::write(&config_path, "[[account]]\npath = 'extra.mac'\n")?;
+    fs_err::write(&config_path, "[[account]]\nname = 'treasury'\npath = 'extra.mac'\n")?;
     let config = GenesisConfig::read_toml_file(&config_path)?;
-    let (state, _) = config.into_state(inputs())?;
+    let (state, metadata) = config.into_state(inputs())?;
     assert!(state.accounts.contains(&account));
+    assert_eq!(metadata.names[&account.id()], "treasury");
+    assert!(metadata.as_account_files(&state).next().is_none());
     Ok(())
+}
+
+#[test]
+fn imported_accounts_require_names() {
+    let error =
+        GenesisConfig::read_toml("[[account]]\npath = 'extra.mac'", Path::new(".")).unwrap_err();
+    assert!(error.to_string().contains("missing field `name`"));
+
+    for name in ["", "   "] {
+        let config = format!("[[account]]\nname = '{name}'\npath = 'extra.mac'");
+        assert_matches!(
+            GenesisConfig::read_toml(&config, Path::new(".")),
+            Err(GenesisConfigError::EmptyImportedAccountName)
+        );
+    }
 }
 
 #[test]
@@ -225,7 +242,10 @@ fn duplicate_imported_accounts_are_rejected() -> TestResult {
     let dir = tempfile::tempdir()?;
     AccountFile::new(inputs.funding_account.clone(), vec![])
         .write(dir.path().join("funding.mac"))?;
-    let config = GenesisConfig::read_toml("[[account]]\npath = 'funding.mac'", dir.path())?;
+    let config = GenesisConfig::read_toml(
+        "[[account]]\nname = 'funding_copy'\npath = 'funding.mac'",
+        dir.path(),
+    )?;
     assert_matches!(config.into_state(inputs), Err(GenesisConfigError::DuplicateAccount { .. }));
     Ok(())
 }
@@ -247,7 +267,7 @@ assets = [{ amount = 1_000_000_000, symbol = "USDCX" }]
 
 #[test]
 fn missing_account_file_returns_error() {
-    let config = parse("[[account]]\npath = 'does_not_exist.mac'");
+    let config = parse("[[account]]\nname = 'missing'\npath = 'does_not_exist.mac'");
     assert_matches!(config.into_state(inputs()), Err(GenesisConfigError::AccountFileRead(..)));
 }
 
