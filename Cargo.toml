@@ -13,6 +13,7 @@ members = [
   "crates/block-producer",
   "crates/db",
   "crates/grpc-error-macro",
+  "crates/persistence",
   "crates/proto",
   "crates/rpc",
   "crates/store",
@@ -49,6 +50,7 @@ debug = true
 miden-node-block-producer   = { path = "crates/block-producer", version = "0.17.0-rc.2" }
 miden-node-db               = { path = "crates/db", version = "0.17.0-rc.2" }
 miden-node-grpc-error-macro = { path = "crates/grpc-error-macro", version = "0.17.0-rc.2" }
+miden-node-persistence      = { path = "crates/persistence", version = "0.17.0-rc.2" }
 miden-node-proto            = { path = "crates/proto", version = "0.17.0-rc.2" }
 miden-node-proto-build      = { path = "proto", version = "0.17.0-rc.2" }
 miden-node-rpc              = { path = "crates/rpc", version = "0.17.0-rc.2" }
@@ -107,6 +109,7 @@ proc-macro2        = { version = "1.0" }
 # lockstep, nor are they adhering to semver semantics. We keep this
 # to avoid future breakage.
 prost              = { default-features = false, version = "=0.14.3" }
+prost-build        = { version = "=0.14.3" }
 prost-types        = { default-features = false, version = "=0.14.3" }
 protox             = { version = "=0.9.1" }
 quote              = { version = "1.0" }

@@ -2,7 +2,7 @@ use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl, Sqlite
 use miden_protocol::Word;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::protocol_config::ProtocolConfig;
-use miden_protocol::utils::serde::{ByteReader, Deserializable, Serializable, SliceReader};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 
 use crate::db::schema::protocol_configs;
 use crate::errors::DatabaseError;
@@ -17,7 +17,7 @@ pub(crate) fn insert_protocol_config(
         .values((
             protocol_configs::block_number.eq(i64::from(block_number.as_u32())),
             protocol_configs::commitment.eq(protocol_config.to_commitment().to_bytes()),
-            protocol_configs::protocol_config.eq(protocol_config.to_bytes()),
+            protocol_configs::protocol_config.eq(miden_node_persistence::encode(protocol_config)),
         ))
         .execute(conn)
         .map_err(Into::into)
@@ -39,13 +39,7 @@ pub(crate) fn select_protocol_config_by_commitment(
         return Ok(None);
     };
 
-    let mut reader = SliceReader::new(&bytes);
-    let protocol_config = ProtocolConfig::read_from(&mut reader)?;
-    if reader.has_more_bytes() {
-        return Err(DatabaseError::DataCorrupted(format!(
-            "protocol config {commitment} has trailing bytes"
-        )));
-    }
+    let protocol_config: ProtocolConfig = miden_node_persistence::decode(&bytes)?;
     let calculated = protocol_config.to_commitment();
     if calculated != commitment {
         return Err(DatabaseError::ProtocolConfigCommitmentMismatch {
@@ -180,7 +174,7 @@ mod tests {
             .values((
                 protocol_configs::block_number.eq(0_i64),
                 protocol_configs::commitment.eq(expected.to_bytes()),
-                protocol_configs::protocol_config.eq(config.to_bytes()),
+                protocol_configs::protocol_config.eq(miden_node_persistence::encode(&config)),
             ))
             .execute(&mut conn)
             .unwrap();
@@ -213,16 +207,16 @@ mod tests {
         );
         assert!(matches!(
             select_protocol_config_by_commitment(&mut conn, commitment),
-            Err(DatabaseError::DeserializationError(_))
+            Err(DatabaseError::Persistence(_))
         ));
     }
 
     #[test]
-    fn rejects_trailing_serialized_bytes() {
+    fn rejects_malformed_protobuf_suffix() {
         let mut conn = connection();
         let config = test_protocol_config();
         let commitment = config.to_commitment();
-        let mut bytes = config.to_bytes();
+        let mut bytes = miden_node_persistence::encode(&config);
         bytes.push(0xff);
         diesel::insert_into(protocol_configs::table)
             .values((
@@ -235,7 +229,7 @@ mod tests {
 
         assert!(matches!(
             select_protocol_config_by_commitment(&mut conn, commitment),
-            Err(DatabaseError::DataCorrupted(_))
+            Err(DatabaseError::Persistence(_))
         ));
     }
 }

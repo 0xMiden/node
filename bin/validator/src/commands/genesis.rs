@@ -6,7 +6,6 @@ use miden_node_utils::fs::ensure_empty_directory;
 use miden_objects::account_file::AccountFile;
 use miden_protocol::block::{FeeParameters, ValidatorConfig};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
-use miden_protocol::utils::serde::Serializable;
 
 /// Name of the genesis block file written to the genesis block directory.
 const GENESIS_BLOCK_FILE_NAME: &str = "genesis.dat";
@@ -115,7 +114,7 @@ impl GenesisCommand {
             genesis_state.into_block().context("failed to build the genesis block")?;
 
         let genesis_block_path = genesis_block_directory.join(GENESIS_BLOCK_FILE_NAME);
-        fs_err::write(&genesis_block_path, genesis_block.to_bytes())
+        fs_err::write(&genesis_block_path, miden_node_persistence::encode(&genesis_block))
             .context("failed to write genesis block")?;
 
         println!("Genesis block written to {}.", genesis_block_path.display());

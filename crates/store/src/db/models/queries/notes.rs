@@ -317,7 +317,7 @@ pub(crate) fn select_note_inclusion_proofs(
                 BlockNoteIndex::new(raw_sql_to_idx(*batch_index), raw_sql_to_idx(*note_index))
                     .expect("batch and note index from DB should be valid")
                     .leaf_index_value();
-            let merkle_path = SparseMerklePath::read_from_bytes(&merkle_path[..])?;
+            let merkle_path = miden_node_persistence::decode::<SparseMerklePath>(&merkle_path[..])?;
             let proof = NoteInclusionProof::new(block_num, node_index_in_block, merkle_path)?;
             Ok((note_id, proof))
         })
@@ -437,7 +437,7 @@ pub(crate) fn select_note_script_by_root(
         .optional()?;
 
     raw.as_ref()
-        .map(|bytes| NoteScript::from_bytes(bytes))
+        .map(|bytes| miden_node_persistence::decode::<NoteScript>(bytes))
         .transpose()
         .map_err(Into::into)
 }
@@ -499,7 +499,8 @@ impl TryInto<NoteSyncRecord> for NoteSyncRecordRawRow {
         let note_index = self.block_note_index.try_into()?;
 
         let note_id = NoteId::from_raw(Word::read_from_bytes(&self.note_id[..])?);
-        let inclusion_path = SparseMerklePath::read_from_bytes(&self.inclusion_path[..])?;
+        let inclusion_path =
+            miden_node_persistence::decode::<SparseMerklePath>(&self.inclusion_path[..])?;
         let (metadata, attachments) = self.metadata.try_into()?;
         Ok(NoteSyncRecord {
             block_num,
@@ -616,14 +617,16 @@ impl TryInto<NoteRecord> for NoteRecordWithScriptRawJoined {
         let (metadata, attachments) = metadata.try_into()?;
         let committed_at = BlockNumber::from_raw_sql(committed_at)?;
         let note_id = Word::read_from_bytes(&note_id[..])?;
-        let script = script.map(|script| NoteScript::read_from_bytes(&script[..])).transpose()?;
+        let script = script
+            .map(|script| miden_node_persistence::decode::<NoteScript>(&script[..]))
+            .transpose()?;
         let details = if let NoteDetailsRawRow {
             assets: Some(assets),
             storage: Some(storage),
             serial_num: Some(serial_num),
         } = details
         {
-            let storage = NoteStorage::read_from_bytes(&storage[..])?;
+            let storage = miden_node_persistence::decode::<NoteStorage>(&storage[..])?;
             let serial_num = Word::read_from_bytes(&serial_num[..])?;
             let script =
                 script.ok_or_else(|| {
@@ -634,12 +637,13 @@ impl TryInto<NoteRecord> for NoteRecordWithScriptRawJoined {
                     >(None)
                 })?;
             let recipient = NoteRecipient::new(serial_num, script, storage);
-            let assets = NoteAssets::read_from_bytes(&assets[..])?;
+            let assets = miden_node_persistence::decode::<NoteAssets>(&assets[..])?;
             Some(NoteDetails::new(assets, recipient))
         } else {
             None
         };
-        let inclusion_path = SparseMerklePath::read_from_bytes(&inclusion_path[..])?;
+        let inclusion_path =
+            miden_node_persistence::decode::<SparseMerklePath>(&inclusion_path[..])?;
         let note_index = index.try_into()?;
         Ok(NoteRecord {
             block_num: committed_at,
@@ -693,11 +697,7 @@ impl TryInto<(NoteMetadata, NoteAttachments)> for NoteMetadataRawRow {
         let note_type = NoteType::try_from(self.note_type as u8)
             .map_err(miden_node_db::DatabaseError::conversiont_from_sql::<NoteType, _, _>)?;
         let tag = NoteTag::new(self.tag as u32);
-        let attachments = if self.attachment.is_empty() {
-            NoteAttachments::empty()
-        } else {
-            NoteAttachments::read_from_bytes(&self.attachment)?
-        };
+        let attachments = miden_node_persistence::decode::<NoteAttachments>(&self.attachment)?;
         let partial = PartialNoteMetadata::new(sender, note_type).with_tag(tag);
         let metadata = NoteMetadata::new(partial, &attachments);
         Ok((metadata, attachments))
@@ -782,7 +782,8 @@ pub(crate) fn insert_scripts<'a>(
             let note_details = note.details.as_ref()?;
             Some((
                 schema::note_scripts::script_root.eq(note_details.script().root().to_bytes()),
-                schema::note_scripts::script.eq(note_details.script().to_bytes()),
+                schema::note_scripts::script
+                    .eq(miden_node_persistence::encode(note_details.script())),
             ))
         })
         .collect::<Vec<_>>();
@@ -828,7 +829,7 @@ impl From<(NoteRecord, Option<Nullifier>)> for NoteInsertRow {
             NetworkNoteType::None
         };
 
-        let attachment_bytes = note.attachments.to_bytes();
+        let attachment_bytes = miden_node_persistence::encode(&note.attachments);
 
         Self {
             committed_at: note.block_num.to_raw_sql(),
@@ -841,11 +842,11 @@ impl From<(NoteRecord, Option<Nullifier>)> for NoteInsertRow {
             network_note_type: network_note_type.into(),
             target_account_id: target_account_id.map(|t| t.target_id().to_bytes()),
             attachment: attachment_bytes,
-            inclusion_path: note.inclusion_path.to_bytes(),
+            inclusion_path: miden_node_persistence::encode(&note.inclusion_path),
             consumed_at: None::<i64>, // New notes are always unconsumed.
             nullifier: nullifier.as_ref().map(Nullifier::to_bytes),
-            assets: note.details.as_ref().map(|d| d.assets().to_bytes()),
-            storage: note.details.as_ref().map(|d| d.storage().to_bytes()),
+            assets: note.details.as_ref().map(|d| miden_node_persistence::encode(d.assets())),
+            storage: note.details.as_ref().map(|d| miden_node_persistence::encode(d.storage())),
             script_root: note.details.as_ref().map(|d| d.script().root().to_bytes()),
             serial_num: note.details.as_ref().map(|d| d.serial_num().to_bytes()),
         }

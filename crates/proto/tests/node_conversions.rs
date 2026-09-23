@@ -209,13 +209,9 @@ fn nonempty_block_request() -> BlockProofRequest {
 #[test]
 fn nonempty_block_proof_roundtrip_preserves_header_order_and_witnesses() {
     let request = nonempty_block_request();
-    let message = generated::block_proving::BlockProofRequest::from(&request);
-    let wire = message.encode_to_vec();
-    let decoded = generated::block_proving::BlockProofRequest::decode(wire.as_slice())
-        .unwrap()
-        .decode_fields()
-        .and_then(BuildUnchecked::build_unchecked)
-        .unwrap();
+    let mut wire = miden_node_persistence::encode(&request);
+    wire.extend_from_slice(&[0xa0, 0x06, 0x01]);
+    let decoded: BlockProofRequest = miden_node_persistence::decode(&wire).unwrap();
 
     assert_eq!(decoded.block_header, request.block_header);
     assert_eq!(decoded.block_header.commitment(), request.block_header.commitment());

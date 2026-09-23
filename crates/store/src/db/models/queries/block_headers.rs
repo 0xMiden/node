@@ -15,7 +15,6 @@ use miden_crypto::Word;
 use miden_node_tracing::miden_instrument;
 use miden_node_utils::limiter::{QueryParamBlockLimit, QueryParamLimiter};
 use miden_protocol::block::{BlockHeader, BlockNumber, BlockSignatures};
-use miden_protocol::utils::serde::{Deserializable, Serializable};
 
 use super::DatabaseError;
 use crate::COMPONENT;
@@ -195,8 +194,8 @@ impl TryInto<BlockHeader> for BlockHeaderRawRow {
 impl TryInto<(BlockHeader, BlockSignatures)> for BlockHeaderRawRow {
     type Error = DatabaseError;
     fn try_into(self) -> Result<(BlockHeader, BlockSignatures), Self::Error> {
-        let block_header = BlockHeader::read_from_bytes(&self.block_header[..])?;
-        let signatures = BlockSignatures::read_from_bytes(&self.signature[..])?;
+        let block_header = miden_node_persistence::decode::<BlockHeader>(&self.block_header[..])?;
+        let signatures = miden_node_persistence::decode::<BlockSignatures>(&self.signature[..])?;
         Ok((block_header, signatures))
     }
 }
@@ -232,8 +231,8 @@ pub(crate) fn insert_block_header(
 ) -> Result<usize, DatabaseError> {
     let row = BlockHeaderInsert {
         block_num: block_header.block_num().to_raw_sql(),
-        block_header: block_header.to_bytes(),
-        signature: signatures.to_bytes(),
+        block_header: miden_node_persistence::encode(block_header),
+        signature: miden_node_persistence::encode(signatures),
         commitment: BlockHeaderCommitment::new(block_header).to_raw_sql(),
     };
     let count = diesel::insert_into(schema::block_headers::table).values(&[row]).execute(conn)?;

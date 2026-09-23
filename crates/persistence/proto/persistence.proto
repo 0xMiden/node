@@ -1,0 +1,70 @@
+syntax = "proto3";
+package persistence;
+import "block.proto";
+import "protocol_config.proto";
+import "primitives.proto";
+import "asset.proto";
+import "note.proto";
+import "transaction.proto";
+import "transaction_inputs.proto";
+
+// Identifies the block store format in blocks/format.pb.
+// The store checks this marker before it opens an existing block directory.
+message StorageFormat { uint32 version = 1; }
+
+// Stores the genesis block and its protocol configuration in genesis.dat.
+// Node components read this file to bootstrap their state.
+message GenesisFile {
+  uint32 version = 1;
+  blockchain.SignedBlock block = 2;
+  protocol_config.ProtocolConfig protocol_config = 3;
+}
+
+// Stores a block's signatures in the store database's block_headers.signature column.
+message BlockSignatures { repeated primitives.Signature signatures = 1; }
+
+// Stores a note's assets in the store database's notes.assets column.
+message NoteAssets { repeated asset.Asset assets = 1; }
+
+// Stores a transaction's input note commitments in the store database's
+// transactions.input_notes column.
+message InputNoteCommitments { repeated transaction.InputNoteCommitment notes = 1; }
+
+// Stores a transaction's output note headers in the store database's
+// transactions.output_notes column.
+message NoteHeaders { repeated note.NoteHeader notes = 1; }
+
+// Stores the ordered genesis validator keys in the ntx-builder database's
+// chain_state.genesis_validator_keys column. These keys establish the trust root
+// for transaction encryption.
+message ValidatorKeys { repeated primitives.PublicKey keys = 1; }
+
+// Stores proven transactions in the benchmark's mint_txs.bin and consume_txs.bin files.
+// The create-proofs command writes these files. The run-benchmark command reads them.
+message BenchmarkTransactions {
+  repeated transaction.ProvenTransaction transactions = 1;
+}
+
+// Stores transaction inputs in the benchmark's mint_tx_inputs.bin and
+// consume_tx_inputs.bin files. Each entry corresponds to the transaction at the same
+// index in the matching BenchmarkTransactions file.
+// The create-proofs command writes these files. The run-benchmark command reads them.
+message BenchmarkTransactionInputs {
+  repeated transaction.TransactionInputs inputs = 1;
+}
+
+// Exports one validator's stored private record to a file for decryption share issuance.
+// The file contains encrypted transaction effects, the encrypted content key, and
+// the context that binds the record to its transaction and validator.
+message PrivateRecordFile {
+  uint32 version = 1;
+  uint32 record_format_version = 2;
+  bytes chain_id = 3;
+  bytes key_epoch = 4;
+  transaction.TransactionId transaction_id = 5;
+  bytes validator_id = 6;
+  bytes setup_context_id = 7;
+  bytes nonce = 8;
+  bytes encrypted_record = 9;
+  bytes encrypted_record_key = 10;
+}

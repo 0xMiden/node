@@ -947,7 +947,7 @@ mod tests {
         )
         .await;
         assert_eq!(
-            miden_validator::StoredPrivateRecord::read_from_bytes(
+            miden_node_persistence::decode::<miden_validator::StoredPrivateRecord>(
                 &fs_err::read(&target_file).unwrap()
             )
             .unwrap(),

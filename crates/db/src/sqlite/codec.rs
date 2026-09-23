@@ -4,8 +4,7 @@
 //! They operate on [`DbValue`]/[`DbValueRef`], thin wrappers over rusqlite's value types, so that
 //! crates implementing a codec for their own types never have to name `rusqlite` directly.
 //!
-//! Most node types are stored as a BLOB via their `Serializable`/`Deserializable` impls; the
-//! [`impl_blob_codec!`](crate::impl_blob_codec) macro generates both traits for such a type. Scalar
+//! Structured BLOBs use protobuf. Fixed-width keys retain their native byte encoding. Scalar
 //! types map onto an SQLite `INTEGER`/`TEXT` and implement the traits directly (see the impls ported
 //! from the legacy `SqlTypeConvert` below).
 //!
@@ -317,10 +316,9 @@ impl FromSqlValue for Felt {
 /// [`FromSqlValue`](crate::sqlite::FromSqlValue) for types stored as a BLOB via their
 /// `Serializable`/`Deserializable` impls.
 ///
-/// The generated impls call the exact same `to_bytes()`/`read_from_bytes()` used elsewhere, so the
-/// on-disk byte layout is unchanged.
+/// Use this codec for fixed-width keys and indexed values.
 #[macro_export]
-macro_rules! impl_blob_codec {
+macro_rules! impl_raw_blob_codec {
     ($($t:ty),+ $(,)?) => {
         $(
             impl $crate::sqlite::ToSqlValue for $t {
@@ -346,31 +344,55 @@ macro_rules! impl_blob_codec {
     };
 }
 
+/// Implements SQLite conversion for a structured protobuf value.
+#[macro_export]
+macro_rules! impl_protobuf_codec {
+    ($($t:ty),+ $(,)?) => {
+        $(
+            impl $crate::sqlite::ToSqlValue for $t {
+                fn to_sql_value(&self) -> $crate::sqlite::DbValue {
+                    $crate::sqlite::DbValue::blob($crate::persistence::encode(self))
+                }
+            }
+            impl $crate::sqlite::FromSqlValue for $t {
+                fn from_sql_value(value: $crate::sqlite::DbValueRef<'_>) -> Result<Self, $crate::DatabaseError> {
+                    $crate::persistence::decode(value.as_blob()?).map_err(|err| {
+                        $crate::DatabaseError::deserialization(stringify!($t), err)
+                    })
+                }
+            }
+        )+
+    };
+}
+
 // Codec for the common protocol types stored as BLOBs. Shared by all node crates so that the orphan
 // rule does not force each consumer to redeclare them.
-impl_blob_codec!(
+impl_raw_blob_codec!(
+    miden_protocol::account::AccountId,
+    miden_protocol::account::StorageMapKey,
+    miden_protocol::transaction::TransactionId,
+    miden_protocol::note::NoteId,
+    miden_protocol::note::Nullifier,
+    miden_protocol::Word,
+);
+
+impl_protobuf_codec!(
     miden_protocol::block::BlockHeader,
     miden_protocol::block::BlockSignatures,
     miden_protocol::account::Account,
     miden_protocol::account::AccountCode,
-    miden_protocol::account::AccountId,
     miden_protocol::account::AccountStorageHeader,
-    miden_protocol::account::StorageMapKey,
     miden_protocol::asset::Asset,
-    miden_protocol::transaction::TransactionId,
     miden_protocol::note::Note,
     miden_protocol::note::NoteAssets,
     miden_protocol::note::NoteAttachments,
-    miden_protocol::note::NoteId,
     miden_protocol::note::NoteHeader,
     miden_protocol::note::NoteDetails,
     miden_protocol::note::NoteScript,
     miden_protocol::note::NoteStorage,
-    miden_protocol::note::Nullifier,
     miden_protocol::protocol_config::ProtocolConfig,
     miden_protocol::crypto::merkle::SparseMerklePath,
     miden_protocol::crypto::merkle::mmr::PartialMmr,
-    miden_protocol::Word,
 );
 
 // TESTS
@@ -523,6 +545,79 @@ mod tests {
         assert_matches::assert_matches!(
             Word::from_sql_value(DbValueRef::new(ValueRef::Blob(&[0xff]))),
             Err(DatabaseError::ConversionSqlToRust { to: "miden_protocol::Word", .. })
+        );
+    }
+    #[test]
+    fn structured_blobs_are_protobuf() {
+        use miden_protocol::crypto::merkle::mmr::PartialMmr;
+        let value = PartialMmr::default();
+        let DbValue::Single(Value::Blob(bytes)) = value.to_sql_value() else {
+            panic!("expected blob")
+        };
+        let decoded: PartialMmr = miden_node_persistence::decode(&bytes).unwrap();
+        assert_eq!(decoded, value);
+        assert_eq!(
+            PartialMmr::from_sql_value(DbValueRef::new(ValueRef::Blob(&bytes))).unwrap(),
+            value
+        );
+    }
+
+    #[test]
+    fn raw_keys_keep_their_byte_encoding_and_order() {
+        use miden_protocol::utils::serde::Serializable;
+        fn check<T: ToSqlValue + FromSqlValue + Serializable + std::fmt::Debug + PartialEq>(
+            values: Vec<T>,
+        ) {
+            let conn = rusqlite::Connection::open_in_memory().unwrap();
+            conn.execute_batch("CREATE TABLE keys (value BLOB PRIMARY KEY);").unwrap();
+            let mut expected = Vec::new();
+            for value in values {
+                let DbValue::Single(Value::Blob(bytes)) = value.to_sql_value() else {
+                    panic!("expected blob")
+                };
+                assert_eq!(bytes, value.to_bytes());
+                assert_eq!(
+                    T::from_sql_value(DbValueRef::new(ValueRef::Blob(&bytes))).unwrap(),
+                    value
+                );
+                conn.execute("INSERT INTO keys VALUES (?1)", [&bytes]).unwrap();
+                expected.push(bytes);
+            }
+            expected.sort();
+            let mut stmt = conn.prepare("SELECT value FROM keys ORDER BY value").unwrap();
+            let actual = stmt
+                .query_map([], |row| row.get::<_, Vec<u8>>(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            assert_eq!(actual, expected);
+        }
+        let words: Vec<_> =
+            [256, 1, 42_u32].into_iter().map(|n| Word::from([n, 0, 0, 0])).collect();
+        check(words.clone());
+        check::<miden_protocol::account::AccountId>(
+            [
+                miden_protocol::testing::account_id::ACCOUNT_ID_MAX_ZEROES,
+                miden_protocol::testing::account_id::ACCOUNT_ID_MAX_ONES,
+            ]
+            .into_iter()
+            .map(|id| id.try_into().unwrap())
+            .collect(),
+        );
+        check(
+            words
+                .iter()
+                .copied()
+                .map(miden_protocol::transaction::TransactionId::from_raw)
+                .collect(),
+        );
+        check(words.iter().copied().map(miden_protocol::note::NoteId::from_raw).collect());
+        check(words.iter().copied().map(miden_protocol::note::Nullifier::from_raw).collect());
+        check(
+            words
+                .into_iter()
+                .map(miden_protocol::account::StorageMapKey::from_raw)
+                .collect(),
         );
     }
 }

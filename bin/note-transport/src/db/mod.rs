@@ -3,10 +3,11 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use miden_node_db::sqlite::{DbReader, DbWriter};
+use miden_node_persistence::ProtobufValue;
+use miden_node_persistence::prost::Message;
 use miden_node_tracing::{info, miden_instrument};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{NoteDetails, NoteHeader, NoteTag};
-use miden_protocol::utils::serde::Serializable;
 
 use crate::{COMPONENT, LOG_TARGET};
 
@@ -93,6 +94,11 @@ pub fn load(path: &Path) -> anyhow::Result<(DbWriter, DbReader)> {
     Ok(miden_node_db::sqlite::open(path)?)
 }
 
+/// Returns the size of the stored protobuf payloads.
+pub fn encoded_note_payload_len(header: &NoteHeader, details: &NoteDetails) -> Option<usize> {
+    header.to_proto().encoded_len().checked_add(details.to_proto().encoded_len())
+}
+
 /// Stores a validated note and removes up to ten expired notes in the same transaction. A retry
 /// preserves the first record for the note ID and does not remove expired notes.
 #[miden_instrument(target = COMPONENT, err)]
@@ -109,10 +115,7 @@ pub async fn store_note(
             }
             let retained = queries::select_retained_bytes(tx)?;
 
-            let header = note.header.to_bytes();
-            let note_bytes = header
-                .len()
-                .checked_add(note.details.to_bytes().len())
+            let note_bytes = encoded_note_payload_len(&note.header, &note.details)
                 .filter(|size| *size <= FETCH_NOTES_MAX_BYTES)
                 .ok_or_else(|| {
                     StorageError::Capacity(format!(

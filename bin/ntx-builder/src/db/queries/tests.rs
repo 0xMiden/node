@@ -557,3 +557,43 @@ async fn discard_notes_pins_attempts_to_cap_and_drops_from_pending() {
         "an account whose only note was discarded must not count as pending",
     );
 }
+
+#[tokio::test]
+async fn account_and_tracked_mmr_survive_reopen() {
+    use miden_protocol::account::{Account, AccountCode, AccountStorage};
+    use miden_protocol::asset::AssetVault;
+    let (db, dir) = test_setup().await;
+    let template = mock_account(mock_network_account_id());
+    let account = Account::new_existing(
+        template.id(),
+        AssetVault::mock(),
+        AccountStorage::mock(),
+        AccountCode::mock(),
+        miden_protocol::Felt::ONE,
+    );
+    db.upsert_account_for_test(account.id(), account.clone(), mock_transaction_id(1))
+        .await
+        .unwrap();
+    let header = mock_block_header(BlockNumber::GENESIS);
+    db.insert_genesis_chain_state(header.clone(), header.commitment())
+        .await
+        .unwrap();
+    let mut mmr = PartialMmr::default();
+    for index in 0..7 {
+        mmr.add(Word::from([index, 0, 0, 0_u32]), index % 2 == 0).unwrap();
+    }
+    db.update_chain_state_tip(header.clone(), mmr.clone()).await.unwrap();
+    drop(db);
+    let db = crate::db::load(dir.path().join("test.sqlite3")).await.unwrap();
+    assert_eq!(db.get_account(account.id()).await.unwrap().unwrap(), account);
+    let (_, restored_header, mut restored_mmr) = db.select_chain_state().await.unwrap().unwrap();
+    assert_eq!(restored_header, header);
+    assert_eq!(restored_mmr, mmr);
+    let leaf = Word::from([9, 0, 0, 0_u32]);
+    mmr.add(leaf, true).unwrap();
+    restored_mmr.add(leaf, true).unwrap();
+    assert_eq!(restored_mmr, mmr);
+    for index in [0, 2, 4, 6, 7] {
+        assert_eq!(restored_mmr.open(index).unwrap(), mmr.open(index).unwrap());
+    }
+}

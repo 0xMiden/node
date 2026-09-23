@@ -35,6 +35,7 @@ golden-evrf            = { workspace = true }
 golden-halo2curves     = { workspace = true }
 hex                    = { workspace = true }
 miden-node-db          = { workspace = true }
+miden-node-persistence = { workspace = true }
 miden-node-proto       = { workspace = true }
 miden-node-proto-build = { features = ["internal"], workspace = true }
 miden-node-store       = { workspace = true }

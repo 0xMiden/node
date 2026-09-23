@@ -1,7 +1,6 @@
 use miden_node_proto::generated as proto;
 use miden_node_tracing::{debug, miden_instrument};
 use miden_protocol::block::{BlockNumber, SignedBlock};
-use miden_protocol::utils::serde::Deserializable;
 use miden_protocol::vm::ExecutionProof;
 
 use super::error_codes::internal_error;
@@ -50,7 +49,7 @@ impl proto::server::rpc_api::GetBlockByNumber for RpcService {
             .await
             .map_err(|err| database_error_to_status(&err))?
             .map(|bytes| {
-                SignedBlock::read_from_bytes(&bytes)
+                miden_node_persistence::decode::<SignedBlock>(&bytes)
                     .map(Into::into)
                     .map_err(|err| internal_error(format!("invalid stored block: {err}")))
             })

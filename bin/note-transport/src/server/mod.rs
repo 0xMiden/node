@@ -13,7 +13,6 @@ use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::Word;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::utils::serde::Serializable;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 use tower::limit::GlobalConcurrencyLimitLayer;
@@ -148,7 +147,8 @@ impl Server {
 
 impl Server {
     fn check_note_size(&self, note: &db::NewNote) -> tonic::Result<usize> {
-        let size = note.header.to_bytes().len() + note.details.to_bytes().len();
+        let size = db::encoded_note_payload_len(&note.header, &note.details)
+            .ok_or_else(|| tonic::Status::resource_exhausted("note size overflow"))?;
         if size > self.config.max_note_size.get() {
             return Err(tonic::Status::resource_exhausted("note exceeds max-note-size"));
         }
