@@ -40,6 +40,10 @@ Retrying the same code and account succeeds without changes. An unknown code ret
 another account, or an account already registered with another entry, returns `ALREADY_EXISTS`. Invalid input returns
 `INVALID_ARGUMENT`. These errors do not consume an invitation.
 
+If allowlist enforcement is disabled, `RegisterAccount` accepts any invitation code, including an empty code. It adds
+the account directly to the registry without storing or consuming the code. Existing invitations remain unchanged.
+Repeating registration for the same account succeeds with any code and does not request funding again.
+
 If the sequencer has registration funding configured, a new registration also requests a public P2ID funding note. The
 call waits for the funding service to queue the note. A successful response does not confirm that the note committed.
 Retrieve the note through the target account's note tag after it commits. A failed funding request returns
