@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::{StreamExt, stream};
-use miden_node_proto::domain::account::AccountRequest;
+use miden_node_proto::DecodeMessageExt;
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::state::State;
 use miden_node_utils::clap::StorageOptions;
@@ -11,7 +11,6 @@ use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::NoteTag;
-use miden_protocol::utils::serde::Serializable;
 use rand::RngExt;
 use rand::seq::SliceRandom;
 use tokio::fs;
@@ -126,7 +125,7 @@ async fn get_account(
     let request = get_account_request(account_id, storage_map_slot);
 
     let start = Instant::now();
-    let request = AccountRequest::try_from(request).expect("request should be valid");
+    let request = request.decode_and_verify().expect("request should be valid");
     let response: proto::rpc::AccountResponse =
         state.view().get_account(request).await.unwrap().into();
     let duration = start.elapsed();
@@ -174,11 +173,11 @@ fn get_account_request(
     };
 
     proto::rpc::AccountRequest {
-        account_id: Some(proto::account::AccountId { id: account_id.to_bytes() }),
+        account_id: Some(account_id.into()),
         block_num: None,
         details: Some(AccountDetailRequest {
             code_commitment: None,
-            asset_vault_commitment: Some(proto::primitives::Digest::from(Word::empty())),
+            asset_vault_commitment: Some(proto::primitives::Word::from(Word::empty())),
             storage_request: Some(StorageRequest::StorageMaps(StorageMapDetailRequests {
                 storage_maps: vec![StorageMapDetailRequest {
                     slot_name: storage_map_slot,
@@ -661,9 +660,9 @@ fn transaction_record_to_proto(
     let output_note_proofs = record
         .output_note_proofs
         .into_iter()
-        .map(|note| proto::note::NoteInclusionInBlockProof {
+        .map(|note| proto::note::NoteInclusionProof {
             note_id: Some((&note.note_id).into()),
-            block_num: note.block_num.as_u32(),
+            block_num: Some(note.block_num.into()),
             note_index_in_block: note.note_index.leaf_index_value().into(),
             inclusion_path: Some(note.inclusion_path.into()),
         })
@@ -673,7 +672,7 @@ fn transaction_record_to_proto(
         .consumed_note_refs
         .into_iter()
         .map(|(nullifier, note_id)| proto::rpc::ConsumedNoteRef {
-            nullifier: Some(nullifier.into()),
+            nullifier: Some(nullifier.as_word().into()),
             note_id: Some((&note_id).into()),
         })
         .collect();

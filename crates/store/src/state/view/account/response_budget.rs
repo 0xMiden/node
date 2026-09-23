@@ -17,7 +17,7 @@ use miden_node_proto::generated as proto;
 use miden_node_proto::prost::Message as _;
 use miden_node_proto::prost::encoding::{encoded_len_varint, key_len};
 use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
-use miden_protocol::account::{AccountHeader, AccountStorageHeader, StorageSlotName};
+use miden_protocol::account::{AccountCode, AccountHeader, AccountStorageHeader, StorageSlotName};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::block::account_tree::AccountWitness;
 
@@ -30,8 +30,7 @@ const STORAGE_MAP_LIMIT_EXCEEDED_FIELD_MAX_LEN: usize = 263;
 pub(super) const MAX_ALL_STORAGE_MAPS_RESPONSE_PAYLOAD_WITH_BUDGET_RESERVED_FOR_LIMIT_EXCEEDED_SLOTS: usize =
     MAX_RESPONSE_PAYLOAD_BYTES - 256 * STORAGE_MAP_LIMIT_EXCEEDED_FIELD_MAX_LEN - 8192;
 
-// Conservative max length for storage map entries: key-value pairs, each one is four `fixed64`
-// values plus Protobuf overhead.
+// Each entry contains two canonical 32-byte words and Protobuf framing.
 const STORAGE_MAP_ENTRY_MAX_LEN: usize = 78;
 
 fn protobuf_bytes_field_len(field_number: u32, len: usize) -> usize {
@@ -71,7 +70,7 @@ pub(super) fn apply_all_storage_maps_response_budget(
     block_num: BlockNumber,
     witness: &AccountWitness,
     account_header: AccountHeader,
-    account_code: Option<Vec<u8>>,
+    account_code: Option<AccountCode>,
     vault_details: AccountVaultDetails,
     storage_header: AccountStorageHeader,
     ordered_map_details: Vec<AccountStorageMapDetails>,

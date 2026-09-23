@@ -31,10 +31,10 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use http::header::ACCEPT;
-use miden_node_utils::tracing::grpc::OtelInterceptor;
+use miden_node_tracing::grpc::OtelInterceptor;
+use miden_node_tracing::{debug, info, warn};
 use miden_protocol::Word;
 use miden_protocol::batch::ProposedBatch;
-use miden_protocol::utils::serde::Serializable;
 use tonic::metadata::AsciiMetadataValue;
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint, Error as TransportError};
@@ -89,7 +89,7 @@ impl Interceptor {
             (None, Some(genesis)) => format!("{}; {}={genesis}", Self::MEDIA_TYPE, Self::GENESIS),
             (Some(version), None) => format!("{}; {}={version}", Self::MEDIA_TYPE, Self::VERSION),
             (Some(version), Some(genesis)) => format!(
-                "{}; {}={version}, {}={genesis}",
+                "{}; {}={version}; {}={genesis}",
                 Self::MEDIA_TYPE,
                 Self::VERSION,
                 Self::GENESIS
@@ -149,7 +149,7 @@ mod tests {
 
         assert_eq!(
             request.metadata().get(ACCEPT.as_str()).and_then(|value| value.to_str().ok()),
-            Some("application/vnd.miden; version=9.9, genesis=0xabcd"),
+            Some("application/vnd.miden; version=9.9; genesis=0xabcd"),
         );
     }
 
@@ -179,20 +179,24 @@ mod tests {
 
 type InterceptedChannel = InterceptedService<Channel, Interceptor>;
 type GeneratedRpcClient = generated::rpc::api_client::ApiClient<InterceptedChannel>;
+type GeneratedNoteTransportClient =
+    generated::note_transport::api_client::ApiClient<InterceptedChannel>;
 type GeneratedProxyStatusClient =
     generated::remote_prover::proxy_status_api_client::ProxyStatusApiClient<InterceptedChannel>;
 type GeneratedProverClient = generated::remote_prover::api_client::ApiClient<InterceptedChannel>;
 type GeneratedValidatorClient = generated::validator::api_client::ApiClient<InterceptedChannel>;
 type GeneratedNtxBuilderClient = generated::ntx_builder::api_client::ApiClient<InterceptedChannel>;
 type GeneratedSequencerClient = generated::sequencer::api_client::ApiClient<InterceptedChannel>;
-type GeneratedProvenTransaction = generated::transaction::ProvenTransaction;
-type SealedTransactionInputs = generated::transaction::SealedTransactionInputs;
+type GeneratedProvenTransaction = generated::submission::ProvenTransactionSubmission;
+type SealedTransactionInputs = generated::submission::SealedTransactionInputs;
 
 // gRPC CLIENTS
 // ================================================================================================
 
 #[derive(Debug, Clone)]
 pub struct RpcClient(GeneratedRpcClient);
+#[derive(Debug, Clone)]
+pub struct NoteTransportClient(GeneratedNoteTransportClient);
 #[derive(Debug, Clone)]
 pub struct RemoteProverProxyStatusClient(GeneratedProxyStatusClient);
 #[derive(Debug, Clone)]
@@ -299,6 +303,26 @@ pub trait GrpcClient {
 impl GrpcClient for RpcClient {
     fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
         Self(GeneratedRpcClient::new(InterceptedService::new(channel, interceptor)))
+    }
+}
+
+impl Deref for NoteTransportClient {
+    type Target = GeneratedNoteTransportClient;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for NoteTransportClient {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl GrpcClient for NoteTransportClient {
+    fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
+        Self(GeneratedNoteTransportClient::new(InterceptedService::new(channel, interceptor)))
     }
 }
 
@@ -568,44 +592,44 @@ impl Builder<WantsConnection> {
 
             match result {
                 Ok(Ok(_client)) => {
-                    tracing::info!(
-                        dependency.name = dependency_name,
-                        dependency.endpoint = %endpoint,
+                    info!(
                         "Configured service reachable",
+                        dependency.name = dependency_name,
+                        dependency.endpoint = endpoint.as_str()
                     );
                     shutdown.cancelled().await;
                     return;
                 },
                 Ok(Err(err)) if first_failure => {
-                    tracing::warn!(
-                        dependency.name = dependency_name,
-                        dependency.endpoint = %endpoint,
-                        %err,
+                    warn!(
+                        &err,
                         "Configured service unreachable",
+                        dependency.name = dependency_name,
+                        dependency.endpoint = endpoint.as_str()
                     );
                 },
                 Err(_elapsed) if first_failure => {
-                    tracing::warn!(
-                        dependency.name = dependency_name,
-                        dependency.endpoint = %endpoint,
-                        timeout = ?CONNECT_TIMEOUT,
+                    warn!(
                         "Configured service connection timed out",
+                        dependency.name = dependency_name,
+                        dependency.endpoint = endpoint.as_str(),
+                        timeout.ms = CONNECT_TIMEOUT.as_millis() as u64
                     );
                 },
                 Ok(Err(err)) => {
-                    tracing::debug!(
-                        dependency.name = dependency_name,
-                        dependency.endpoint = %endpoint,
-                        %err,
+                    debug!(
+                        &err,
                         "Configured service still unreachable",
+                        dependency.name = dependency_name,
+                        dependency.endpoint = endpoint.as_str()
                     );
                 },
                 Err(_elapsed) => {
-                    tracing::debug!(
-                        dependency.name = dependency_name,
-                        dependency.endpoint = %endpoint,
-                        timeout = ?CONNECT_TIMEOUT,
+                    debug!(
                         "Configured service connection still timing out",
+                        dependency.name = dependency_name,
+                        dependency.endpoint = endpoint.as_str(),
+                        timeout.ms = CONNECT_TIMEOUT.as_millis() as u64
                     );
                 },
             }
@@ -652,7 +676,7 @@ impl ValidatorClient {
         }
         for (tx, inputs) in proposed_batch.transactions().iter().zip(sealed_transaction_inputs) {
             let proven_tx = GeneratedProvenTransaction {
-                transaction: tx.to_bytes(),
+                transaction: Some(tx.as_ref().into()),
                 sealed_transaction_inputs: Some(inputs.clone()),
             };
             self.submit_proven_transaction(proven_tx).await?;

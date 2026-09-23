@@ -1,0 +1,54 @@
+syntax = "proto3";
+package block_proving;
+
+import "account.proto";
+import "batch.proto";
+import "block.proto";
+import "note.proto";
+import "partial_blockchain.proto";
+import "primitives.proto";
+
+// The requested account ID paired with the canonical account-tree witness.
+message AccountWitnessRecord {
+  // The account ID for which the witness was requested.
+  account.AccountId account_id = 1;
+  // The canonical account-tree witness for the requested account ID.
+  account.AccountWitness witness = 2;
+}
+
+// A nullifier and its canonical SMT opening.
+message NullifierWitness {
+  // The nullifier for which the opening was requested.
+  primitives.Word nullifier = 1;
+  // The canonical SMT opening for the nullifier.
+  primitives.SmtOpening opening = 2;
+}
+
+// The state required to propose a block.
+message BlockInputs {
+  // The header of the block that precedes the proposed block.
+  blockchain.BlockHeader prev_block_header = 1;
+  // The partial blockchain required to validate the proposed block.
+  blockchain.PartialBlockchain partial_blockchain = 2;
+  // The account-tree witnesses for accounts referenced by the proposed block.
+  repeated AccountWitnessRecord account_witnesses = 3;
+  // The nullifier-tree openings for nullifiers referenced by the proposed block.
+  repeated NullifierWitness nullifier_witnesses = 4;
+  // The inclusion proofs for unauthenticated notes consumed by the proposed block.
+  repeated note.NoteInclusionProof unauthenticated_note_proofs = 5;
+}
+
+// The inputs required to reconstruct and prove a proposed block.
+message BlockProofRequest {
+  // The proven transaction batches in block order.
+  repeated transaction.ProvenBatch batches = 1;
+  // The chain state and witnesses required to reconstruct the proposed block.
+  BlockInputs block_inputs = 2;
+  // The timestamp of the proposed block.
+  fixed32 timestamp = 3;
+  // The next validator configuration included in the proposed block header.
+  blockchain.ValidatorConfig next_validator_config = 4;
+  // The optional next protocol configuration included in the proposed block header.
+  optional blockchain.NextProtocolConfig next_protocol_config = 5;
+
+}

@@ -1,7 +1,7 @@
 //! Inserts the notes created by a block.
 
 use miden_node_db::sqlite::{DbValue, ToSqlValue, WriteTx};
-use miden_node_utils::tracing::miden_instrument;
+use miden_node_tracing::miden_instrument;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;

@@ -2,8 +2,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use clap::ArgGroup;
+use miden_node_store::allowlist::AccountAllowlist;
 use miden_node_store::genesis::GenesisBlock;
 use miden_node_store::{DataDirectory, Db, State};
+use miden_node_tracing::info;
 use miden_node_utils::fs::ensure_empty_directory;
 use miden_node_utils::genesis::{OfficialNetwork, fetch_genesis_block, read_genesis_block};
 
@@ -35,36 +37,32 @@ pub struct BootstrapCommand {
 
 impl BootstrapCommand {
     pub async fn handle(self) -> anyhow::Result<()> {
-        tracing::info!(
+        info!(
             target: crate::LOG_TARGET,
-            {
-                service.name = "miden-node",
-                service.version = env!("CARGO_PKG_VERSION"),
-                genesis.source.kind =
-                    if self.genesis_block_file.is_some() { "file" } else { "network" },
-                genesis.source = %self.genesis_block_file.as_ref().map_or_else(
-                    || self.network.map_or_else(
-                        || "custom".to_owned(),
-                        |network| network.to_string(),
-                    ),
-                    |path| path.display().to_string(),
-                ),
-                data.directory = %self.data_directory.display(),
-            },
             "Bootstrapping node",
+            service.name = "miden-node",
+            service.version = env!("CARGO_PKG_VERSION"),
+            genesis.source.kind =
+                if self.genesis_block_file.is_some() { "file" } else { "network" },
+            genesis.source = self.genesis_block_file.as_ref().map_or_else(
+                || self.network.map_or_else(
+                    || "custom".to_owned(),
+                    |network| network.to_string(),
+                ),
+                |path| path.display().to_string(),
+            ),
+            data.directory = self.data_directory.as_path()
         );
         ensure_empty_directory(&self.data_directory)?;
         let genesis_block =
             read_bootstrap_genesis_block(self.genesis_block_file.as_deref(), self.network).await?;
         let genesis_commitment = genesis_block.inner().header().commitment();
         State::bootstrap(genesis_block, &self.data_directory).await?;
-        tracing::info!(
+        info!(
             target: crate::LOG_TARGET,
-            {
-                genesis.commitment = %genesis_commitment,
-                data.directory = %self.data_directory.display(),
-            },
             "Node bootstrap complete",
+            genesis.commitment = genesis_commitment,
+            data.directory = self.data_directory.as_path()
         );
         Ok(())
     }
@@ -75,12 +73,11 @@ async fn read_bootstrap_genesis_block(
     genesis_block_file: Option<&Path>,
     network: Option<OfficialNetwork>,
 ) -> anyhow::Result<GenesisBlock> {
-    let signed_block = match (genesis_block_file, network) {
-        (Some(path), None) => read_genesis_block(path)?,
-        (None, Some(network)) => fetch_genesis_block(network).await?,
+    match (genesis_block_file, network) {
+        (Some(path), None) => read_genesis_block(path),
+        (None, Some(network)) => fetch_genesis_block(network).await,
         _ => unreachable!("clap requires exactly one genesis block source"),
-    };
-    GenesisBlock::try_from(signed_block)
+    }
 }
 
 // MIGRATE
@@ -102,6 +99,14 @@ impl MigrateCommand {
 
         Db::migrate(data_directory.database_path())
             .context("failed to apply store database migrations")?;
+
+        // Only sequencer startup creates this optional database. Migration must also work for full
+        // nodes that do not have it.
+        let allowlist_path = data_directory.allowlist_database_path();
+        if fs_err::exists(&allowlist_path).context("failed to check account allowlist database")? {
+            AccountAllowlist::migrate(allowlist_path)
+                .context("failed to apply account allowlist migrations")?;
+        }
 
         Ok(())
     }

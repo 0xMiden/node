@@ -13,7 +13,7 @@ use miden_node_proto::domain::account::{
     StorageMapEntries,
     StorageMapRequest,
 };
-use miden_node_utils::tracing::miden_instrument;
+use miden_node_tracing::miden_instrument;
 use miden_protocol::account::{AccountId, AccountStorageHeader, StorageSlotName, StorageSlotType};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::block::account_tree::AccountWitness;

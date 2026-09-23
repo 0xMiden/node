@@ -1,8 +1,7 @@
 use miden_node_proto::generated as proto;
-use miden_node_utils::tracing::{miden_instrument, miden_span_record};
+use miden_node_tracing::{debug, miden_instrument, miden_span_record};
 use miden_protocol::Word;
 use tonic::Request;
-use tracing::debug;
 
 use super::{RpcBackend, RpcService};
 use crate::{COMPONENT, LOG_TARGET};
@@ -39,14 +38,14 @@ impl proto::server::rpc_api::GetNetworkNoteStatus for RpcService {
     ) -> tonic::Result<Self::Output> {
         let original_accept_header = metadata.get(http::header::ACCEPT.as_str()).cloned();
 
-        tracing::trace!(target: LOG_TARGET, ?request);
-
         let note_id = request;
-        miden_span_record!(
-            note.id = %note_id,
-        );
+        miden_span_record!(note.id = note_id);
 
-        debug!(target: LOG_TARGET, "Getting network note status");
+        debug!(
+            target: LOG_TARGET,
+            "Getting network note status",
+            note.id = note_id
+        );
 
         let mut forwarded_request = Request::new(note_id.as_word().into());
         if let Some(accept) = original_accept_header {

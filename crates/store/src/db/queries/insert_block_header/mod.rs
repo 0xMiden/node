@@ -1,7 +1,7 @@
 //! Inserts a block header and the signatures that committed it.
 
 use miden_node_db::sqlite::WriteTx;
-use miden_node_utils::tracing::miden_instrument;
+use miden_node_tracing::miden_instrument;
 use miden_protocol::block::{BlockHeader, BlockSignatures};
 
 use crate::COMPONENT;

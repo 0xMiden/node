@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::Context;
+use miden_node_tracing::{debug, error, info, miden_instrument, warn};
 use miden_node_utils::shutdown::CancellationToken;
-use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::TransactionId;
@@ -143,28 +143,27 @@ impl Coordinator {
     /// processing transactions and managing state for the network account.
     #[miden_instrument(
         name = "ntx.builder.spawn_actor",
-        fields(account.id = %account_id),
+        fields(account.id = account_id),
     )]
     pub fn spawn_actor(&mut self, account_id: AccountId) {
         if let Some(&count) = self.crash_counts.get(&account_id)
             && count >= self.max_account_crashes
         {
-            tracing::warn!(
+            warn!(
                 target: LOG_TARGET,
-                {
-                    account.id = %account_id,
-                    crash_count = count,
-                },
-                "Account deactivated due to repeated crashes, skipping actor spawn"
+                "Account deactivated due to repeated crashes, skipping actor spawn",
+                account.id = account_id,
+                account.crashes.count = count
             );
             return;
         }
 
         if self.actor_registry.contains_key(&account_id) {
-            tracing::error!(
+            error!(
+                anyhow::anyhow!("account actor already exists"),
                 target: LOG_TARGET,
-                { account.id = %account_id },
                 "Account actor already exists",
+                account.id = account_id
             );
             return;
         }
@@ -185,10 +184,10 @@ impl Coordinator {
         }));
 
         self.actor_registry.insert(account_id, handle);
-        tracing::debug!(
+        debug!(
             target: LOG_TARGET,
-            { account.id = %account_id },
-            "Created actor for account"
+            "Created actor for account",
+            account.id = account_id
         );
     }
 
@@ -216,10 +215,10 @@ impl Coordinator {
         if committed {
             self.spawn_actor(account_id);
         } else {
-            tracing::info!(
+            info!(
                 target: LOG_TARGET,
-                { account.id = %account_id },
                 "deferring actor spawn until the account's creation is committed",
+                account.id = account_id
             );
             self.pending_spawns.insert(account_id);
         }
@@ -230,9 +229,15 @@ impl Coordinator {
     /// committed state exists (deferring the rest until their creation commits), releases deferred
     /// spawns for accounts created by this block, and pushes a fresh [`AccountView`] to every
     /// active actor so it can re-evaluate its state in memory.
+    ///
+    /// `sponsored_accounts` names the accounts whose pending feature notes gained a sponsorship in
+    /// this block (one entry per sponsorship, resolved by `apply_committed_block`). They are woken
+    /// exactly like accounts targeted by a new network note: a feature note that selection skipped
+    /// for lacking a sponsorship becomes viable when its sponsorship arrives.
     pub async fn handle_committed_block(
         &mut self,
         effects: &CommittedBlockEffects,
+        sponsored_accounts: &[AccountId],
     ) -> anyhow::Result<()> {
         // Accounts created by this block release any spawn deferred on their creation.
         for account_id in effects.created_network_accounts() {
@@ -241,11 +246,12 @@ impl Coordinator {
             }
         }
 
-        let targeted: HashSet<AccountId> = effects
+        let mut targeted: HashSet<AccountId> = effects
             .network_notes
             .iter()
             .map(AccountTargetNetworkNote::target_account_id)
             .collect();
+        targeted.extend(sponsored_accounts.iter().copied());
         for account_id in &targeted {
             self.spawn_actor_when_committed(*account_id).await?;
         }
@@ -253,12 +259,16 @@ impl Coordinator {
         // Push the block's effects to every active actor. The latest transaction per account is the
         // same map `apply_committed_block` uses for `accounts.last_tx_id`, so the pushed
         // `last_committed_tx` agrees with the persisted state; the per-account note counts feed the
-        // `notes_seen` work counter.
+        // `notes_seen` work counter. A sponsorship for a pending feature note counts as work just
+        // like a new note.
         let chain_tip = effects.header.block_num();
         let latest_tx = effects.latest_tx_per_account();
         let mut new_notes: HashMap<AccountId, u64> = HashMap::new();
         for note in &effects.network_notes {
             *new_notes.entry(note.target_account_id()).or_default() += 1;
+        }
+        for account_id in sponsored_accounts {
+            *new_notes.entry(*account_id).or_default() += 1;
         }
 
         for (account_id, handle) in &self.actor_registry {
@@ -296,19 +306,17 @@ impl Coordinator {
             Some(Ok((account_id, Err(err)))) => {
                 let count = self.crash_counts.entry(account_id).or_insert(0);
                 *count += 1;
-                tracing::error!(
+                error!(
+                    &err,
                     target: LOG_TARGET,
-                    {
-                        account.id = %account_id,
-                        error = %format!("{err:#}"),
-                    },
-                    "Account actor crashed"
+                    "Account actor crashed",
+                    account.id = account_id
                 );
                 self.actor_registry.remove(&account_id);
                 Ok(None)
             },
             Some(Err(err)) => {
-                tracing::error!(target: LOG_TARGET, error = %err, "Actor task failed");
+                error!(&err, target: LOG_TARGET, "Actor task failed");
                 Ok(None)
             },
             None => {
@@ -401,12 +409,13 @@ mod tests {
         let effects = CommittedBlockEffects {
             header: mock_block_header(1_u32.into()),
             network_notes: vec![note],
+            sponsorship_notes: vec![],
             nullifiers: vec![],
             network_account_updates: vec![],
             account_transactions: vec![],
         };
 
-        coordinator.handle_committed_block(&effects).await.unwrap();
+        coordinator.handle_committed_block(&effects, &[]).await.unwrap();
 
         assert!(
             coordinator.actor_registry.contains_key(&target_id),
@@ -426,11 +435,12 @@ mod tests {
         let effects = CommittedBlockEffects {
             header: mock_block_header(1_u32.into()),
             network_notes: vec![note],
+            sponsorship_notes: vec![],
             nullifiers: vec![],
             network_account_updates: vec![],
             account_transactions: vec![],
         };
-        coordinator.handle_committed_block(&effects).await.unwrap();
+        coordinator.handle_committed_block(&effects, &[]).await.unwrap();
 
         assert!(
             !coordinator.actor_registry.contains_key(&account_id),
@@ -449,11 +459,12 @@ mod tests {
         let effects = CommittedBlockEffects {
             header: mock_block_header(2_u32.into()),
             network_notes: vec![],
+            sponsorship_notes: vec![],
             nullifiers: vec![],
             network_account_updates: vec![(account_id, details)],
             account_transactions: vec![],
         };
-        coordinator.handle_committed_block(&effects).await.unwrap();
+        coordinator.handle_committed_block(&effects, &[]).await.unwrap();
 
         assert!(
             coordinator.actor_registry.contains_key(&account_id),
@@ -473,6 +484,7 @@ mod tests {
         let effects = CommittedBlockEffects {
             header: mock_block_header(1_u32.into()),
             network_notes: vec![],
+            sponsorship_notes: vec![],
             nullifiers: vec![],
             network_account_updates: vec![(
                 updated_id,
@@ -481,7 +493,7 @@ mod tests {
             account_transactions: vec![],
         };
 
-        coordinator.handle_committed_block(&effects).await.unwrap();
+        coordinator.handle_committed_block(&effects, &[]).await.unwrap();
 
         assert!(
             !coordinator.actor_registry.contains_key(&updated_id),
@@ -536,12 +548,13 @@ mod tests {
         let effects = CommittedBlockEffects {
             header: mock_block_header(1_u32.into()),
             network_notes: vec![note],
+            sponsorship_notes: vec![],
             nullifiers: vec![],
             network_account_updates: vec![],
             account_transactions: vec![],
         };
 
-        coordinator.handle_committed_block(&effects).await.unwrap();
+        coordinator.handle_committed_block(&effects, &[]).await.unwrap();
 
         assert!(
             bystander_rx.has_changed().unwrap(),
@@ -575,12 +588,13 @@ mod tests {
         let effects = CommittedBlockEffects {
             header: mock_block_header(3_u32.into()),
             network_notes: vec![note],
+            sponsorship_notes: vec![],
             nullifiers: vec![],
             network_account_updates: vec![],
             account_transactions: vec![(account_id, tx_id)],
         };
 
-        coordinator.handle_committed_block(&effects).await.unwrap();
+        coordinator.handle_committed_block(&effects, &[]).await.unwrap();
 
         let view = rx.borrow_and_update();
         assert_eq!(view.chain_tip, 3_u32.into());
@@ -590,5 +604,35 @@ mod tests {
             "the account's latest committed tx is pushed for in-memory landing detection",
         );
         assert_eq!(view.notes_seen, 1, "one note targeting the account bumps the work counter");
+    }
+
+    /// A sponsorship arriving for an account's pending feature note counts as new work: the feature
+    /// note may have been skipped for lacking a sponsorship, and this wakes the actor for a
+    /// re-selection.
+    #[tokio::test]
+    async fn handle_committed_block_sponsorship_wakeup_bumps_notes_seen() {
+        let (mut coordinator, _db, _dir, _rx) = Coordinator::test().await;
+
+        let account_id = mock_network_account_id();
+        let mut rx = register_dummy_actor(&mut coordinator, account_id);
+        let _ = rx.borrow_and_update();
+
+        // The block carries no network note for the account; only a sponsorship resolved to it.
+        let effects = CommittedBlockEffects {
+            header: mock_block_header(1_u32.into()),
+            network_notes: vec![],
+            sponsorship_notes: vec![],
+            nullifiers: vec![],
+            network_account_updates: vec![],
+            account_transactions: vec![],
+        };
+
+        coordinator.handle_committed_block(&effects, &[account_id]).await.unwrap();
+
+        let view = rx.borrow_and_update();
+        assert_eq!(
+            view.notes_seen, 1,
+            "a sponsorship for a pending feature note bumps the work counter",
+        );
     }
 }

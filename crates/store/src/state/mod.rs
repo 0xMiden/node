@@ -21,7 +21,7 @@ pub use lifecycle::LoadedState;
 use miden_protocol::block::BlockNumber;
 pub use replica::{BlockCache, BlockNotification, ProofCache, ProofNotification};
 use tokio::sync::watch;
-pub use view::{ScopedBlockNum, ScopedBlockRange, StateView, TransactionInputs};
+pub use view::{ScopedBlockNum, ScopedBlockRange, StateView, StateWitnesses, TransactionInputs};
 use view::{SnapshotGuard, StateSnapshot};
 pub use writer::{BlockWriter, ProofWriter, WriterTask};
 

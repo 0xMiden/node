@@ -38,6 +38,9 @@ miden-benchmark create-proofs \
   --num-transactions 100
 ```
 
+The benchmark obtains the active protocol configuration from RPC and verifies it against the reference block before it
+generates transactions.
+
 Writes the bundle to `./benchmark-proofs/`:
 
 - `mint_txs.bin`, `mint_tx_inputs.bin`
@@ -198,6 +201,11 @@ nohup miden-validator start \
   --encryption-key.hex "<encryption-key-hex>" \
   > logs/validator.log 2>&1 &
 
+miden-node fee-collector create --data-directory "$DATA/node"
+miden-node fee-collector deploy \
+  --data-directory "$DATA/node" \
+  --validator.url http://127.0.0.1:50101
+
 # The ntx-builder needs a transaction prover, so start one regardless.
 nohup miden-remote-prover \
   --port     50051 \
@@ -207,11 +215,14 @@ nohup miden-remote-prover \
   > logs/remote-prover.log 2>&1 &
 
 # The node runs store + block-producer + RPC in a single sequencer process.
+# Send collected fees to an arbitrary non-existent account ID for now.
+BATCH_BUILDER_WALLET_ACCOUNT_ID=0xcc0000000000dd010000ee000000ff
 nohup miden-node sequencer \
   --data-directory                            "$DATA/node" \
   --rpc.listen                                127.0.0.1:57291 \
   --validator.url                             http://127.0.0.1:50101 \
   --ntx-builder.url                           http://127.0.0.1:50301 \
+  --batch.builder.wallet-account-id           "$BATCH_BUILDER_WALLET_ACCOUNT_ID" \
   --batch.max-txs                             1024 \
   --block.max-batches                         64 \
   --block.interval                            2s \
@@ -224,6 +235,7 @@ nohup miden-node sequencer \
 nohup miden-ntx-builder start \
   --listen         127.0.0.1:50301 \
   --rpc.url        http://127.0.0.1:57291 \
+  --rpc.timeout    300s \
   --tx-prover.url  http://127.0.0.1:50051 \
   --data-directory "$DATA/ntx-builder" \
   > logs/ntx-builder.log 2>&1 &
@@ -264,18 +276,9 @@ to lift. Everything else is operator configuration.
 ### The batch-builder worker pool (`--batch.workers`)
 
 `--batch.workers` (env `MIDEN_NODE_BATCH_WORKERS`) sets how many batches the block-producer keeps proving in parallel.
-Each worker is responsible for one in-flight batch proof — locally with the built-in prover, or remotely if
-`--batch-prover.url` is set. The default is **2**. Once `--batch.max-txs` and `--block.max-batches` are pushed up, this
-worker count is the single setting that determines how fast the block-producer can refill the mempool's batch slots;
-leaving it at 2 caps effective throughput well before the new block capacity becomes reachable.
-
-Rough sizing:
-
-- **With local batch proving** (no `--batch-prover.url`): raise to roughly the number of physical CPU cores on the
-  block-producer host. More than that just over-subscribes the cores running the prover.
-- **With a remote batch prover**: raise to whatever the remote service can service in parallel (i.e. its own worker
-  count). The block-producer workers are now mostly waiting on I/O, so the bound is the remote prover's capacity, not
-  local CPU.
+Each worker proves one batch at a time with the local prover. Precompile proof generation is disabled. The default
+worker count is **2**. Increase the worker count to process more batches at the same time. Use the number of physical
+CPU cores on the block-producer host as a starting point. Measure throughput before you increase the count further.
 
 ## License
 

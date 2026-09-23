@@ -1,4 +1,6 @@
 # Environment variables:
+# - MIDEN_NODE_DISABLE_ACCOUNT_ALLOWLIST: allow unrestricted account creation.
+#   Defaults to true for local development. Set to false to require registration.
 # - MIDEN_REMOTE_PROVER_URL: remote transaction prover URL. Defaults to the
 #   bundled miden-remote-prover service at http://tx-prover:50051.
 # - MIDEN_VALIDATOR_1_SIGNING_KEY, MIDEN_VALIDATOR_2_SIGNING_KEY, and
@@ -11,11 +13,11 @@
 #   seed service.
 # - MIDEN_NODE_IMAGE, MIDEN_VALIDATOR_IMAGE, MIDEN_NTX_BUILDER_IMAGE,
 #   MIDEN_REMOTE_PROVER_IMAGE, MIDEN_NETWORK_MONITOR_IMAGE,
-#   MIDEN_BENCHMARK_IMAGE, MIDEN_FAUCET_IMAGE, and MIDEN_NOTE_TRANSPORT_IMAGE:
+#   MIDEN_FUNDING_SERVICE_IMAGE, MIDEN_BENCHMARK_IMAGE, MIDEN_FAUCET_IMAGE, and
+#   MIDEN_NOTE_TRANSPORT_IMAGE:
 #   container images used by the local network. The core images default to the
 #   unqualified names built by the Makefile. Optional external images default
 #   to their pinned versions in the corresponding Compose files.
-# - MIDEN_NOTE_TRANSPORT_PLATFORM: platform used by the note transport image.
 #   Defaults to linux/amd64 because the pinned image is not multi-architecture.
 # - OTEL_EXPORTER_OTLP_ENDPOINT: optional additional OTLP/gRPC endpoint. Traces
 #   are always sent to the bundled collector, which forwards them to this
@@ -28,6 +30,7 @@ include:
   - compose/validator.yml
   - compose/node.yml
   - compose/ntx-builder.yml
+  - compose/funding-service.yml
   - compose/tx-prover.yml
   - compose/seed.yml
   - compose/note-transport.yml

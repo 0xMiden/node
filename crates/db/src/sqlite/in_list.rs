@@ -32,6 +32,31 @@ impl InList {
     pub fn from_blobs<'a>(items: impl IntoIterator<Item = &'a [u8]>) -> Self {
         Self(items.into_iter().map(|bytes| Value::Blob(bytes.to_vec())).collect())
     }
+
+    /// Builds an `IN` list from typed keys, binding each through its column codec. Pair with
+    /// `... IN (SELECT value FROM rarray(?))`.
+    ///
+    /// Prefer this over [`Self::from_i64s`] and [`Self::from_blobs`] whenever the keys are typed.
+    /// Going through [`ToSqlValue`] binds exactly what the column stores - a BLOB for the types
+    /// carrying a blob codec, an `INTEGER` for the scalar ones - so the list cannot disagree with
+    /// the column it is compared against. Serializing every key to bytes instead would bind blobs
+    /// against an `INTEGER` column and silently match nothing.
+    ///
+    /// The codec also produces the bound value directly, so the caller does not have to
+    /// materialize a `Vec<Vec<u8>>` to keep borrowed slices alive across the query. A blanket impl
+    /// covers references, so a `&[T]` slice of keys can be passed as-is.
+    pub fn from_values<T: ToSqlValue>(items: impl IntoIterator<Item = T>) -> Self {
+        let mut values = Vec::new();
+        for item in items {
+            match item.to_sql_value() {
+                DbValue::Single(value) => values.push(value),
+                // Only an `InList` binds an array value. SQLite has no nested arrays, so splicing
+                // is the only reading `rarray` can express.
+                DbValue::Array(nested) => values.extend(nested.iter().cloned()),
+            }
+        }
+        Self(values)
+    }
 }
 
 impl ToSqlValue for InList {
@@ -54,6 +79,22 @@ mod tests {
             vec![Value::Integer(1), Value::Integer(2), Value::Integer(3)]
         );
         assert_eq!(InList::from_i64s(std::iter::empty()).0, Vec::<Value>::new());
+    }
+
+    #[test]
+    fn in_list_values_bind_each_key_through_its_codec() {
+        use miden_protocol::Word;
+        use miden_protocol::block::BlockNumber;
+        use miden_protocol::utils::serde::Serializable;
+
+        // A blob-backed key binds a BLOB holding exactly what the column stores.
+        let word = Word::from([1_u32, 2, 3, 4]);
+        assert_eq!(InList::from_values([word]).0, vec![Value::Blob(word.to_bytes())]);
+
+        // A key whose codec maps onto an `INTEGER` column binds an integer, not its serialization.
+        assert_eq!(InList::from_values([BlockNumber::from(7_u32)]).0, vec![Value::Integer(7)]);
+
+        assert_eq!(InList::from_values(std::iter::empty::<u32>()).0, Vec::<Value>::new());
     }
 
     #[test]

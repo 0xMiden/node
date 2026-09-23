@@ -1,6 +1,6 @@
 ---
 title: "Monitoring"
-sidebar_position: 8
+sidebar_position: 9
 ---
 
 # Monitoring
@@ -18,8 +18,14 @@ configuration, it can check RPC freshness, validator health, remote prover statu
 availability, note transport, and end-to-end network transaction flows.
 
 End-to-end transaction checks require the validator's signing public key. Set
-`MIDEN_MONITOR_VALIDATOR_SIGNING_PUBLIC_KEY` to its hex encoding. The monitor uses this key to verify the validator's
-transaction encryption key before it submits private inputs.
+`MIDEN_MONITOR_VALIDATOR_SIGNING_PUBLIC_KEY` to the validator key's hex encoding. The monitor uses this key to verify
+the validator's transaction encryption key before it submits private inputs. It obtains the active fee asset from RPC
+and verifies the returned protocol configuration against each transaction's reference block. Remote transaction-prover
+probes use the same RPC configuration discovery.
+
+On a chain that charges fees, those checks also need the native asset, because the monitor's accounts pay their own
+transaction fees. Set `MIDEN_MONITOR_FUNDING_SERVICE_URL` to the [funding service](./funding-service.md), which is the
+only source the monitor pays fees from. `MIDEN_MONITOR_FAUCET_URL` configures the faucet checks and does not fund fees.
 
 Use the binary help output for the current configuration surface:
 

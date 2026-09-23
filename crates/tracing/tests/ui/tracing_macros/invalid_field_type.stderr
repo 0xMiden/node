@@ -1,0 +1,21 @@
+error[E0080]: evaluation panicked: tracing field `account.id` is not allowed for this attribute type
+ --> tests/ui/tracing_macros/invalid_field_type.rs:5:5
+  |
+5 |     miden_span_record!(account.id = 42_u32);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `records_field_with_wrong_type::__miden_assert_field_name::<u32>::{constant#0}` failed here
+
+note: erroneous constant encountered
+ --> tests/ui/tracing_macros/invalid_field_type.rs:5:5
+  |
+5 |     miden_span_record!(account.id = 42_u32);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this note originates in the macro `miden_span_record` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+note: the above error was encountered while instantiating `fn __miden_assert_field_name::<u32>`
+ --> tests/ui/tracing_macros/invalid_field_type.rs:5:5
+  |
+5 |     miden_span_record!(account.id = 42_u32);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this note originates in the macro `miden_span_record` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -1,11 +1,10 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use metrics::SeedingMetrics;
-use miden_node_proto::domain::batch::BatchInputs;
 use miden_node_store::{BlockWriter, DataDirectory, GenesisState, State, WriterTask};
 use miden_node_utils::clap::StorageOptions;
 use miden_node_utils::shutdown::CancellationToken;
@@ -29,7 +28,7 @@ use miden_protocol::account::{
     StorageSlotName,
     StorageSlotPatch,
 };
-use miden_protocol::asset::{Asset, FungibleAsset, TokenSymbol};
+use miden_protocol::asset::{Asset, AssetId, FungibleAsset, TokenSymbol};
 use miden_protocol::batch::{BatchAccountUpdate, BatchId, ProvenBatch};
 use miden_protocol::block::{
     BlockHeader,
@@ -39,12 +38,13 @@ use miden_protocol::block::{
     FeeParameters,
     ProposedBlock,
     SignedBlock,
-    ValidatorKeys,
+    ValidatorConfig,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey as EcdsaSecretKey;
 use miden_protocol::crypto::dsa::falcon512_poseidon2::{PublicKey, SecretKey};
 use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::note::{Note, NoteAssets, NoteId, NoteInclusionProof};
+use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{
     InputNote,
     InputNoteCommitment,
@@ -57,7 +57,6 @@ use miden_protocol::transaction::{
     TxAccountUpdate,
 };
 use miden_protocol::utils::serde::Serializable;
-use miden_protocol::vm::ExecutionProof;
 use miden_protocol::{ACCOUNT_UPDATE_MAX_SIZE, Felt, ONE, Word};
 use miden_standards::account::auth::{Approver, AuthSingleSig};
 use miden_standards::account::faucets::{FungibleFaucet, TokenName};
@@ -223,14 +222,16 @@ pub async fn seed_store_with_readers(
         });
     let mut genesis_accounts = benchmark_faucets;
     genesis_accounts.extend(genesis_benchmark_accounts);
-    let fee_params = FeeParameters::new(faucet.id(), 0);
+    let fee_params = FeeParameters::new(0);
     let signer = EcdsaSecretKey::new();
+    let protocol_config = ProtocolConfig::current(AssetId::new_fungible(faucet.id()))
+        .expect("benchmark faucet should define a valid protocol configuration");
     let genesis_state = GenesisState::new(
         genesis_accounts,
         fee_params,
         1,
-        1,
-        ValidatorKeys::new(vec![signer.public_key()]).unwrap(),
+        ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
+        protocol_config,
     );
     let genesis_block = genesis_state.into_block().expect("genesis block should be created");
     let genesis_header = genesis_block.inner().header().clone();
@@ -471,12 +472,13 @@ async fn generate_blocks(
             .extend(pending_consumed_accounts.into_iter().map(|account| (account.id(), account)));
 
         // create the consume notes txs to be used in the next block
-        let batch_inputs = get_batch_inputs(state, &prev_block_header, &notes, &mut metrics).await;
+        let note_inclusion_proofs =
+            get_note_inclusion_proofs(state, &prev_block_header, &notes, &mut metrics).await;
         (pending_consumed_accounts, consume_notes_txs) = create_consume_note_txs(
             &prev_block_header,
             accounts,
             notes,
-            &batch_inputs.note_proofs,
+            &note_inclusion_proofs,
             None,
         );
         pending_public_accounts = batch.public;
@@ -547,7 +549,8 @@ async fn generate_blocks(
         )
         .await;
 
-        let batch_inputs = get_batch_inputs(state, &prev_block_header, &notes, &mut metrics).await;
+        let note_inclusion_proofs =
+            get_note_inclusion_proofs(state, &prev_block_header, &notes, &mut metrics).await;
         let accounts = selected_account_ids
             .iter()
             .map(|account_id| {
@@ -560,7 +563,7 @@ async fn generate_blocks(
             &prev_block_header,
             accounts,
             notes,
-            &batch_inputs.note_proofs,
+            &note_inclusion_proofs,
             Some(BenchmarkStorageUpdate {
                 block_index: update_block_index,
                 storage_map_entries,
@@ -688,7 +691,7 @@ fn create_accounts_and_notes(
 fn create_note(faucet_ids: &[AccountId], target_id: AccountId, rng: &mut RandomCoin) -> Note {
     let assets: Vec<Asset> = faucet_ids
         .iter()
-        .map(|faucet_id| Asset::Fungible(FungibleAsset::new(*faucet_id, 10).unwrap()))
+        .map(|faucet_id| Asset::from(FungibleAsset::new(*faucet_id, 10).unwrap()))
         .collect();
     let sender = faucet_ids.first().copied().unwrap_or(target_id);
     P2idNote::builder()
@@ -895,7 +898,7 @@ fn create_batch(txs: &[ProvenTransaction], block_ref: &BlockHeader) -> ProvenBat
         output_notes,
         BlockNumber::MAX,
         OrderedTransactionHeaders::new_unchecked(txs.iter().map(TransactionHeader::from).collect()),
-        ExecutionProof::new_dummy(),
+        miden_protocol::testing::dummy_execution_proof(),
     )
     .unwrap()
 }
@@ -978,7 +981,7 @@ fn create_consume_note_tx(
         block_ref.block_num(),
         block_ref.commitment(),
         u32::MAX.into(),
-        ExecutionProof::new_dummy(),
+        miden_protocol::testing::dummy_execution_proof(),
     )
     .unwrap();
 
@@ -1012,10 +1015,11 @@ fn create_existing_account_patch(
                 benchmark_storage_map_update_value(storage_update.block_index, tx_index, key_index),
             );
             let map_patch = StorageMapPatch::Update { entries };
-            AccountStoragePatch::from_raw(BTreeMap::from_iter([(
-                benchmark_storage_map_slot(),
-                StorageSlotPatch::Map(map_patch),
-            )]))
+            AccountStoragePatch::from_raw(
+                [(benchmark_storage_map_slot(), StorageSlotPatch::Map(map_patch))]
+                    .into_iter()
+                    .collect::<BTreeMap<_, _>>(),
+            )
             .unwrap()
         },
         _ => AccountStoragePatch::new(),
@@ -1064,31 +1068,26 @@ fn create_emit_note_tx(
         block_ref.block_num(),
         block_ref.commitment(),
         u32::MAX.into(),
-        ExecutionProof::new_dummy(),
+        miden_protocol::testing::dummy_execution_proof(),
     )
     .unwrap()
 }
 
-/// Gets the batch inputs from the store and tracks the query time on the metrics.
-async fn get_batch_inputs(
+/// Gets note inclusion proofs from the store and tracks the query time on the metrics.
+async fn get_note_inclusion_proofs(
     state: &State,
     block_ref: &BlockHeader,
     notes: &[Note],
     metrics: &mut SeedingMetrics,
-) -> BatchInputs {
+) -> BTreeMap<NoteId, NoteInclusionProof> {
     let start = Instant::now();
-    // Mark every note as unauthenticated, so that the store returns the inclusion proofs for all of
-    // them
-    let batch_inputs = state
+    let note_inclusion_proofs = state
         .view()
-        .get_batch_inputs(
-            [block_ref.block_num()].into_iter().collect(),
-            notes.iter().map(|note| note.id().as_word()).collect(),
-        )
+        .get_note_inclusion_proofs(block_ref.block_num(), notes.iter().map(Note::id).collect())
         .await
         .unwrap();
-    metrics.add_get_batch_inputs(start.elapsed());
-    batch_inputs
+    metrics.add_get_note_inclusion_proofs(start.elapsed());
+    note_inclusion_proofs
 }
 
 /// Gets the block inputs from the store and tracks the query time on the metrics.
@@ -1098,24 +1097,40 @@ async fn get_block_inputs(
     metrics: &mut SeedingMetrics,
 ) -> BlockInputs {
     let start = Instant::now();
-    let inputs = state
-        .view()
-        .get_block_inputs(
-            batches.iter().flat_map(ProvenBatch::updated_accounts).collect(),
-            batches.iter().flat_map(ProvenBatch::created_nullifiers).collect(),
-            batches
-                .iter()
-                .flat_map(|batch| {
-                    batch
-                        .input_notes()
-                        .into_iter()
-                        .filter_map(|note| note.header().map(|header| header.id().as_word()))
-                })
-                .collect(),
-            batches.iter().map(ProvenBatch::reference_block_num).collect(),
-        )
+    let account_ids = batches.iter().flat_map(ProvenBatch::updated_accounts).collect::<Vec<_>>();
+    let nullifiers = batches.iter().flat_map(ProvenBatch::created_nullifiers).collect::<Vec<_>>();
+    let mut block_numbers: BTreeSet<_> =
+        batches.iter().map(ProvenBatch::reference_block_num).collect();
+    let note_ids = batches
+        .iter()
+        .flat_map(|batch| {
+            batch
+                .input_notes()
+                .into_iter()
+                .filter_map(|note| note.header().map(miden_protocol::note::NoteHeader::id))
+        })
+        .collect();
+    let view = state.view();
+    let reference_block = *view.tip();
+    let note_inclusion_proofs =
+        view.get_note_inclusion_proofs(reference_block, note_ids).await.unwrap();
+    block_numbers.extend(note_inclusion_proofs.values().map(|proof| proof.location().block_num()));
+    let partial_blockchain =
+        view.get_block_inclusion_proofs(reference_block, block_numbers).await.unwrap();
+    let reference_block_header = view
+        .get_block_header(Some(reference_block), false)
         .await
-        .unwrap();
+        .unwrap()
+        .0
+        .expect("reference block header should exist");
+    let state_witnesses = view.get_state_witnesses(&account_ids, &nullifiers);
+    let inputs = BlockInputs::new(
+        reference_block_header,
+        partial_blockchain,
+        state_witnesses.account_witnesses,
+        state_witnesses.nullifier_witnesses,
+        note_inclusion_proofs,
+    );
     let get_block_inputs_time = start.elapsed();
     metrics.add_get_block_inputs(get_block_inputs_time);
     inputs
@@ -1125,8 +1140,7 @@ async fn get_block_inputs(
 ///
 /// Intended for benches that run until process exit and never need the storage released
 /// deterministically; use [`load_state`] when the writer must be joined. The write capability is
-/// leaked to keep the block writer alive for the process lifetime, as before the read/write
-/// split.
+/// leaked to keep the block writer alive for the process lifetime.
 pub async fn start_store(data_directory: PathBuf) -> Arc<State> {
     let (state, block_writer, _writer_task) = load_state(data_directory).await;
     std::mem::forget(block_writer);

@@ -1,7 +1,7 @@
 //! Deletes account history that can no longer serve a read inside the retention window.
 
 use miden_node_db::sqlite::WriteTx;
-use miden_node_utils::tracing::miden_instrument;
+use miden_node_tracing::miden_instrument;
 use miden_protocol::block::BlockNumber;
 
 use crate::COMPONENT;
@@ -52,7 +52,7 @@ pub(crate) fn prune_history(
     prune_tip: BlockNumber,
 ) -> Result<(usize, usize, usize), DatabaseError> {
     let cutoff_block = i64::from(prune_tip.as_u32().saturating_sub(HISTORICAL_BLOCK_RETENTION));
-    tracing::Span::current().record("cutoff_block", cutoff_block);
+    miden_node_tracing::Span::current().record("cutoff_block", cutoff_block);
 
     let vault_deleted = tx.execute(SQL_VAULT_ASSETS, &[&cutoff_block])?;
     let storage_deleted = tx.execute(SQL_STORAGE_MAP_VALUES, &[&cutoff_block])?;

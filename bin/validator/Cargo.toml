@@ -15,7 +15,7 @@ version.workspace      = true
 workspace = true
 
 [features]
-tracing-forest = ["miden-node-utils/tracing-forest"]
+tracing-forest = ["miden-node-tracing/tracing-forest"]
 
 [lib]
 doctest = false
@@ -23,7 +23,7 @@ doctest = false
 [dependencies]
 anyhow                 = { workspace = true }
 aws-config             = { version = "1.8.14" }
-aws-sdk-kms            = { version = "1.100" }
+aws-sdk-kms            = { default-features = false, features = ["default-https-client", "rt-tokio"], version = "1.100" }
 axum                   = { workspace = true }
 base64                 = { version = "0.22" }
 chacha20poly1305       = { workspace = true }
@@ -38,6 +38,7 @@ miden-node-db          = { workspace = true }
 miden-node-proto       = { workspace = true }
 miden-node-proto-build = { features = ["internal"], workspace = true }
 miden-node-store       = { workspace = true }
+miden-node-tracing     = { workspace = true }
 miden-node-utils       = { features = ["testing"], workspace = true }
 miden-protocol         = { workspace = true }
 miden-tx               = { features = ["concurrent"], workspace = true }
@@ -52,7 +53,6 @@ toml                   = { workspace = true }
 tonic                  = { default-features = true, features = ["transport"], workspace = true }
 tonic-reflection       = { workspace = true }
 tower-http             = { features = ["util"], workspace = true }
-tracing                = { workspace = true }
 zeroize                = { workspace = true }
 
 [build-dependencies]
@@ -61,7 +61,7 @@ miden-node-db = { workspace = true }
 
 [dev-dependencies]
 miden-node-store = { workspace = true }
-miden-node-utils = { features = ["testing"], workspace = true }
+miden-node-utils = { features = ["testing-prover"], workspace = true }
 miden-protocol   = { default-features = true, features = ["testing"], workspace = true }
 miden-testing    = { workspace = true }
 miden-tx         = { features = ["concurrent", "testing"], workspace = true }

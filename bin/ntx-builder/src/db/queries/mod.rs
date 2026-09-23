@@ -8,6 +8,7 @@
 use miden_node_db::DatabaseError;
 use miden_node_db::sqlite::WriteTx;
 use miden_protocol::Word;
+use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::merkle::mmr::PartialMmr;
 use miden_protocol::transaction::TransactionId;
@@ -55,11 +56,17 @@ pub use insert_network_notes::insert_network_notes;
 mod insert_note_scripts;
 pub use insert_note_scripts::insert_note_script;
 
+mod insert_sponsorship_notes;
+pub use insert_sponsorship_notes::insert_sponsorship_notes;
+
 mod lookup_note_script;
 pub use lookup_note_script::lookup_note_script;
 
 mod mark_notes_consumed;
 pub use mark_notes_consumed::mark_notes_consumed;
+
+mod mark_sponsorships_consumed;
+pub use mark_sponsorships_consumed::mark_sponsorships_consumed;
 
 mod notes_failed;
 pub use notes_failed::notes_failed;
@@ -72,6 +79,12 @@ pub use select_genesis_commitment::select_genesis_commitment;
 
 mod select_genesis_validator_keys;
 pub use select_genesis_validator_keys::select_genesis_validator_keys;
+
+mod sponsored_accounts;
+pub use sponsored_accounts::get_target_account_ids_for_sponsor_notes;
+
+mod sponsorships_for_pending_notes;
+pub use sponsorships_for_pending_notes::select_sponsorships_for_pending_notes;
 
 mod update_chain_state_tip;
 pub use update_chain_state_tip::update_chain_state_tip;
@@ -89,12 +102,17 @@ mod tests;
 ///
 /// - Upserts each touched network account: new full-state path insert, partial patches apply to
 ///   the existing committed row.
-/// - Inserts each network note (`INSERT OR IGNORE` to tolerate redeliveries).
-/// - Marks any of our pending notes whose nullifiers appear in this block as `committed_at =
-///   block_num`, preserving the row so the `GetNetworkNoteStatus` endpoint can report the full
-///   lifecycle.
+/// - Inserts each network note and `FEE_SPONSORSHIP` note (`INSERT OR IGNORE` to tolerate
+///   redeliveries).
+/// - Marks any of our pending notes (feature and sponsorship alike) whose nullifiers appear in
+///   this block as `committed_at = block_num`, preserving the row so the `GetNetworkNoteStatus`
+///   endpoint can report the full lifecycle.
 /// - Updates the singleton `chain_state` row's tip with the new block header and the
 ///   post-application chain MMR.
+///
+/// Returns the accounts whose pending feature notes gained a sponsorship in this block (one entry
+/// per sponsorship), so the coordinator can wake their actors: a feature note skipped for lacking a
+/// sponsorship becomes viable when its sponsorship arrives later.
 ///
 /// The account upserts apply each block's network-account effects to the local store so an actor's
 /// post-expiry reload sees the authoritative committed state. The recorded `accounts.last_tx_id` and
@@ -104,17 +122,14 @@ pub fn apply_committed_block(
     tx: &WriteTx<'_>,
     effects: &CommittedBlockEffects,
     chain_mmr: &PartialMmr,
-) -> Result<(), DatabaseError> {
-    // The latest transaction in this block per account, from the same source the coordinator uses
-    // for each `AccountView`'s `last_committed_tx`, so the persisted `accounts.last_tx_id` and the
-    // pushed landing state agree. For block-producer output every committed account update
-    // originates from a transaction in the same block, so each upserted account has an entry here.
-    // The genesis block is the sole exception: it commits account state directly with no
-    // transactions, so genesis accounts fall back to the zero sentinel below.
+) -> Result<Vec<AccountId>, DatabaseError> {
+    // Derive each account's latest transaction from the effects that the coordinator uses. The
+    // stored `accounts.last_tx_id` and `AccountView::last_committed_tx` values must agree. Each
+    // non-genesis account update has an originating transaction in the same block. Genesis account
+    // updates use the zero sentinel because genesis contains no transactions.
     //
-    // `accounts.last_tx_id` is persisted but no longer read by landing detection, which now compares
-    // against the in-memory `AccountView`. The column is retained as the committed-state record and
-    // is exercised only by the `account_last_tx` test accessor (see `queries::accounts`).
+    // Landing detection reads `AccountView::last_committed_tx`. The database column records the
+    // same committed state.
     let last_tx = effects.latest_tx_per_account();
     let is_genesis = effects.header.block_num() == BlockNumber::GENESIS;
 
@@ -149,10 +164,16 @@ pub fn apply_committed_block(
     }
 
     insert_network_notes(tx, &effects.network_notes)?;
+    insert_sponsorship_notes(tx, &effects.sponsorship_notes)?;
 
     mark_notes_consumed(tx, &effects.nullifiers, effects.header.block_num())?;
+    mark_sponsorships_consumed(tx, &effects.nullifiers, effects.header.block_num())?;
+
+    // Resolved after the consumption marks so a feature note consumed in this same block does not
+    // produce a wakeup.
+    let sponsored = get_target_account_ids_for_sponsor_notes(tx, &effects.sponsorship_notes)?;
 
     update_chain_state_tip(tx, effects.header.block_num(), &effects.header, chain_mmr)?;
 
-    Ok(())
+    Ok(sponsored)
 }

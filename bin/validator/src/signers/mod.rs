@@ -4,7 +4,7 @@ use miden_node_proto::domain::encryption::{
     TransactionEncryptionKeyInfo,
     TransactionEncryptionScheme,
 };
-use miden_node_utils::spawn::spawn_blocking_in_current_span;
+use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_protocol::Word;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature, SigningKey};
 use miden_protocol::crypto::dsa::eddsa_25519_sha512::{

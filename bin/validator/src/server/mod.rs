@@ -4,10 +4,11 @@ use anyhow::Context;
 use miden_node_proto::server::validator_api;
 use miden_node_proto_build::validator_api_descriptor;
 use miden_node_store::BlockStore;
+use miden_node_tracing::grpc::grpc_trace_fn;
+use miden_node_tracing::info;
+use miden_node_tracing::panic::catch_panic_layer_fn;
 use miden_node_utils::clap::GrpcOptions;
-use miden_node_utils::panic::catch_panic_layer_fn;
 use miden_node_utils::shutdown::CancellationToken;
-use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::catch_panic::CatchPanicLayer;
@@ -86,13 +87,11 @@ impl ValidatorAdminServer {
     ) -> anyhow::Result<()> {
         let endpoint =
             listener.local_addr().context("failed to read validator admin listen address")?;
-        tracing::info!(
+        info!(
             target: LOG_TARGET,
-            {
-                service.name = "miden-validator-admin",
-                validator.admin_listen = %endpoint,
-            },
             "Validator admin server ready",
+            service.name = "miden-validator-admin",
+            validator.admin_listen = endpoint.to_string()
         );
 
         axum::serve(listener, admin_service::router(self.operator_key, self.reader))
@@ -139,15 +138,13 @@ impl ValidatorServer {
         .await
         .context("failed to initialize validator server")?;
         let endpoint = listener.local_addr().context("failed to read validator listen address")?;
-        tracing::info!(
+        info!(
             target: LOG_TARGET,
-            {
-                service.name = "miden-validator",
-                service.version = env!("CARGO_PKG_VERSION"),
-                validator.listen = %endpoint,
-                block.number = metrics.chain_tip,
-            },
             "Validator ready",
+            service.name = "miden-validator",
+            service.version = env!("CARGO_PKG_VERSION"),
+            validator.listen = endpoint.to_string(),
+            block.number = metrics.chain_tip
         );
 
         // Build the gRPC server with the API service and trace layer.

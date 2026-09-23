@@ -1,7 +1,6 @@
 use miden_node_proto::generated as grpc;
-use miden_node_utils::ErrorReport;
-use miden_node_utils::spawn::spawn_blocking_in_current_span;
-use miden_node_utils::tracing::{miden_instrument, miden_span_record};
+use miden_node_tracing::spawn::spawn_blocking_in_current_span;
+use miden_node_tracing::{ErrorReport, miden_instrument, miden_span_record};
 
 use crate::COMPONENT;
 use crate::server::proof_kind::ProofKind;
@@ -23,9 +22,7 @@ impl grpc::server::remote_prover_api::Prove for ProverService {
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        miden_span_record!(
-            request.kind = %proof_kind,
-        );
+        miden_span_record!(request.kind = proof_kind);
 
         // Reject unsupported proof types early so they don't clog the queue.
         if !self.is_supported(proof_kind) {
@@ -51,13 +48,16 @@ impl grpc::server::remote_prover_api::Prove for ProverService {
     }
 
     fn decode(request: grpc::remote_prover::ProofRequest) -> tonic::Result<Self::Input> {
-        // Check that the proof type is supported. Protobuf enums return a default value if the enum
-        // is set to an unknown value. This round trip checks that the value is valid.
-        if request.proof_type() as i32 != request.proof_type {
-            return Err(tonic::Status::invalid_argument("unknown proof_type value"));
-        }
+        use grpc::remote_prover::proof_request::Request;
 
-        Ok((ProofKind::from(request.proof_type()), request))
+        let proof_kind = match request.request.as_ref() {
+            Some(Request::Transaction(_)) => ProofKind::Transaction,
+            Some(Request::Batch(_)) => ProofKind::Batch,
+            Some(Request::Block(_)) => ProofKind::Block,
+            None => return Err(tonic::Status::invalid_argument("missing proof request")),
+        };
+
+        Ok((proof_kind, request))
     }
 
     fn encode(output: Self::Output) -> tonic::Result<grpc::remote_prover::Proof> {

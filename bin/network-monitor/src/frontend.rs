@@ -12,9 +12,8 @@ use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use maud::Markup;
-use miden_node_utils::tracing::miden_instrument;
+use miden_node_tracing::{info, miden_instrument};
 use tokio::sync::watch;
-use tracing::info;
 
 use crate::config::MonitorConfig;
 use crate::status::{NetworkStatus, ServiceStatus};
@@ -48,8 +47,12 @@ pub async fn serve(server_state: ServerState, config: MonitorConfig) {
         .with_state(server_state);
 
     let bind_address = format!("0.0.0.0:{}", config.port);
-    info!(target: LOG_TARGET, %bind_address, "Starting web server");
-    info!(target: LOG_TARGET, "Dashboard available at: http://localhost:{}/", config.port);
+    info!(
+        target: LOG_TARGET,
+        "Starting web server",
+        network_monitor.listen = bind_address.as_str()
+    );
+    info!(target: LOG_TARGET, "Dashboard available", port = config.port);
     let listener = tokio::net::TcpListener::bind(&bind_address)
         .await
         .expect("Failed to bind to address");

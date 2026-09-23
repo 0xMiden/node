@@ -4,8 +4,8 @@ use std::sync::atomic::AtomicU64;
 use miden_node_db::DatabaseError;
 use miden_node_proto::domain::encryption::TransactionEncryptionKeyInfo;
 use miden_node_store::BlockStore;
-use miden_node_utils::spawn::spawn_blocking_in_current_span;
-use miden_node_utils::tracing::{miden_instrument, miden_span_record};
+use miden_node_tracing::spawn::spawn_blocking_in_current_span;
+use miden_node_tracing::{miden_instrument, miden_span_record};
 use miden_protocol::Word;
 use miden_protocol::block::{
     BlockHeader,
@@ -143,7 +143,7 @@ impl ValidatorService {
             .map_err(ValidatorError::DatabaseError)?
             .ok_or(ValidatorError::NoChainTip)?;
         let signing_key = signer.public_key();
-        if !chain_tip.validator_keys().as_keys().contains(&signing_key) {
+        if !chain_tip.validator_config().keys().contains(&signing_key) {
             return Err(ValidatorError::ValidatorKeyNotInSet { actual: signing_key });
         }
 
@@ -205,7 +205,7 @@ impl ValidatorService {
         proposed_block: ProposedBlock,
         chain_tip: BlockHeader,
     ) -> Result<(Signature, BlockHeader), ValidatorError> {
-        miden_span_record!(tip.number = chain_tip.block_num().as_u32(),);
+        miden_span_record!(tip.number = chain_tip.block_num());
 
         // Search for any proposed transactions that have not previously been validated.
         let proposed_tx_ids =
@@ -230,8 +230,8 @@ impl ValidatorService {
                 .map_err(ValidatorError::BlockBuildingFailed)?;
 
         miden_span_record!(
-            block.number = proposed_header.block_num().as_u32(),
-            block.commitment = %proposed_header.commitment(),
+            block.number = proposed_header.block_num(),
+            block.commitment = proposed_header.commitment()
         );
 
         // If the proposed block has the same block number as the current chain tip, this is a
@@ -270,7 +270,7 @@ impl ValidatorService {
         // Otherwise we would be producing a signature that cannot be placed in the block's
         // signature set.
         let signing_key = self.signer.public_key();
-        if !prev.validator_keys().as_keys().contains(&signing_key) {
+        if !prev.validator_config().keys().contains(&signing_key) {
             return Err(ValidatorError::ValidatorKeyNotInSet { actual: signing_key });
         }
 
@@ -308,7 +308,7 @@ impl ValidatorService {
         name = "sign_block",
         err,
         fields(
-            block.number = header.block_num().as_u32(),
+            block.number = header.block_num(),
         ),
     )]
     async fn sign_header(&self, header: &BlockHeader) -> Result<Signature, ValidatorError> {

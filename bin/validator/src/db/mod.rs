@@ -1,10 +1,12 @@
+use std::io;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use miden_node_db::DatabaseError;
 use miden_node_db::sqlite::{DbReader, DbWriter};
-use miden_node_utils::tracing::miden_instrument;
+use miden_node_tracing::{info, miden_instrument};
 use miden_protocol::block::{BlockHeader, BlockNumber};
+use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::TransactionId;
 
 use crate::db::migrations::{bootstrap_database, migrate_database, verify_latest_schema};
@@ -68,6 +70,16 @@ impl ValidatorDbReader {
     ) -> Result<Option<BlockHeader>, DatabaseError> {
         self.reader
             .read("load_block_header", move |tx| queries::load_block_header(tx, block_num))
+            .await
+    }
+
+    /// Loads the protocol configuration with the given commitment.
+    pub async fn load_protocol_config(
+        &self,
+        commitment: miden_protocol::Word,
+    ) -> Result<Option<ProtocolConfig>, DatabaseError> {
+        self.reader
+            .read("load_protocol_config", move |tx| queries::load_protocol_config(tx, commitment))
             .await
     }
 
@@ -170,7 +182,7 @@ impl ValidatorDbWriter {
         self.reader.clone()
     }
 
-    /// Inserts a validated transaction and its encrypted private inputs, returning the number of
+    /// Inserts a validated transaction and its encrypted private record, returning the number of
     /// inserted rows. The count is zero if the transaction was already recorded.
     #[miden_instrument(
         target = COMPONENT,
@@ -186,18 +198,73 @@ impl ValidatorDbWriter {
             .await
     }
 
-    /// Persists a block header, replacing any header already stored at the same height.
+    /// Persists a block header and its configuration activation in one transaction.
+    ///
+    /// Records an activation if the configuration differs from the preceding activation.
+    /// A replacement at the current tip must retain its active configuration.
+    /// Callers must validate block order before this method runs.
+    ///
+    /// If `protocol_config` is absent, the configuration must already be stored
+    /// otherwise an error is returned.
     #[miden_instrument(
         target = COMPONENT,
     )]
-    pub(crate) async fn upsert_block_header(
+    pub(crate) async fn upsert_block_header_with_protocol_config(
         &self,
         header: BlockHeader,
+        protocol_config: Option<ProtocolConfig>,
     ) -> Result<(), DatabaseError> {
         self.writer
-            .write("upsert_block_header", move |tx| queries::upsert_block_header(tx, &header))
+            .write("upsert_block_header_with_protocol_config", move |tx| {
+                let commitment = header.protocol_config_commitment();
+                let config = if let Some(config) = protocol_config {
+                    let calculated = config.to_commitment();
+                    if calculated != commitment {
+                        return Err(invalid_protocol_config(format!(
+                            "protocol config commitment mismatch: expected {commitment}, got \
+                             {calculated}"
+                        )));
+                    }
+                    config
+                } else {
+                    queries::load_protocol_config(tx, commitment)?.ok_or_else(|| {
+                        invalid_protocol_config(format!(
+                            "protocol config {commitment} is not stored"
+                        ))
+                    })?
+                };
+
+                let block_number = header.block_num();
+                let previous = queries::load_protocol_config_commitment_before(tx, block_number)?;
+                if previous != Some(commitment) {
+                    queries::insert_protocol_config(tx, &config, block_number)?;
+                }
+
+                queries::upsert_block_header(tx, &header)
+            })
             .await
     }
+}
+
+fn invalid_protocol_config(message: String) -> DatabaseError {
+    DatabaseError::deserialization(
+        "ProtocolConfig",
+        io::Error::new(io::ErrorKind::InvalidData, message),
+    )
+}
+
+/// Deletes a stored protocol configuration for a test.
+#[cfg(test)]
+pub(crate) async fn delete_protocol_config_for_test(
+    db: &ValidatorDbWriter,
+    commitment: miden_protocol::Word,
+) -> Result<(), DatabaseError> {
+    db.writer
+        .write("delete_protocol_config_for_test", move |tx| {
+            tx.execute("DELETE FROM protocol_configs WHERE commitment = ?1", &[&commitment])?;
+            Ok::<_, DatabaseError>(())
+        })
+        .await
 }
 
 // LIFECYCLE
@@ -252,17 +319,19 @@ async fn setup_with_pool_size(
 /// Returns an error if the database has already been bootstrapped.
 #[miden_instrument(
     target = COMPONENT,
-    fields(path = %database_filepath.display()),
+    fields(path = database_filepath),
     err,
 )]
 pub async fn bootstrap(
     database_filepath: PathBuf,
     connection_pool_size: NonZeroUsize,
     genesis_header: BlockHeader,
+    protocol_config: ProtocolConfig,
 ) -> Result<(), DatabaseError> {
     let db = setup_with_pool_size(database_filepath, connection_pool_size).await?;
 
-    db.upsert_block_header(genesis_header).await
+    db.upsert_block_header_with_protocol_config(genesis_header, Some(protocol_config))
+        .await
 }
 
 /// Applies all pending migrations to an existing DB.
@@ -280,11 +349,11 @@ fn open_with_pool_size(
 ) -> Result<ValidatorDbWriter, DatabaseError> {
     let (writer, reader) =
         miden_node_db::sqlite::open_with_pool_size(database_filepath, connection_pool_size)?;
-    tracing::info!(
+    info!(
         target: LOG_TARGET,
-        sqlite= %database_filepath.display(),
-        connection_pool_size = %connection_pool_size,
-        "Connected to the database"
+        "Connected to the database",
+        path = database_filepath,
+        db.sqlite.connection_pool_size = connection_pool_size.get()
     );
     Ok(ValidatorDbWriter {
         writer,
@@ -294,8 +363,15 @@ fn open_with_pool_size(
 
 #[cfg(test)]
 mod tests {
+    mod protocol_config_history;
+
+    use miden_node_utils::fee::{test_fee_params, test_protocol_config};
     use miden_protocol::Word;
+    use miden_protocol::asset::AssetId;
+    use miden_protocol::block::{BlockHeader, ValidatorConfig};
     use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
+    use miden_protocol::protocol_config::ProtocolConfig;
+    use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1;
     use miden_protocol::utils::serde::Deserializable;
     use rand_chacha_03::ChaCha20Rng;
     use rand_chacha_03::rand_core::SeedableRng;
@@ -307,6 +383,8 @@ mod tests {
         PrivateRecordChainId,
         PrivateRecordCombiner,
         PrivateRecordContext,
+        PrivateRecordError,
+        PrivateRecordFormatVersion,
         PrivateRecordId,
         PrivateRecordSealer,
         PrivateRecordShareRequest,
@@ -329,6 +407,38 @@ mod tests {
             .unwrap()
     }
 
+    fn genesis_header(config: &miden_protocol::protocol_config::ProtocolConfig) -> BlockHeader {
+        miden_node_store::GenesisState::new(
+            vec![],
+            test_fee_params(),
+            0,
+            ValidatorConfig::new(vec![SigningKey::new().public_key()], 1).unwrap(),
+            config.clone(),
+        )
+        .into_block()
+        .unwrap()
+        .inner()
+        .header()
+        .clone()
+    }
+
+    fn header_with_next_timestamp(header: &BlockHeader) -> BlockHeader {
+        BlockHeader::new(
+            header.prev_block_commitment(),
+            header.block_num(),
+            header.chain_commitment(),
+            header.account_root(),
+            header.nullifier_root(),
+            header.note_root(),
+            header.tx_commitment(),
+            header.validator_config().clone(),
+            header.fee_parameters().clone(),
+            header.protocol_config_commitment(),
+            header.next_protocol_config().cloned(),
+            header.timestamp() + 1,
+        )
+    }
+
     #[test]
     fn migrate_rejects_missing_database() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
@@ -340,6 +450,55 @@ mod tests {
         assert!(!db_path.exists());
     }
 
+    /// The protocol configuration migration must preserve headers and private records.
+    #[tokio::test]
+    async fn migration_preserves_headers_and_private_records() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("validator.sqlite3");
+        miden_node_db::migration::Migrator::builder()
+            .unwrap()
+            .push_sql("001_initial", include_str!("migrations/001_initial.sql"))
+            .unwrap()
+            .build()
+            .unwrap()
+            .bootstrap(&db_path)
+            .unwrap();
+
+        let config = test_protocol_config();
+        let header = genesis_header(&config);
+        let transaction_id = TransactionId::from_raw(Word::from([1u32, 2, 3, 4]));
+        let record = private_record(transaction_id, 1);
+        let db = open_with_pool_size(&db_path, NonZeroUsize::new(2).unwrap()).unwrap();
+        let stored_header = header.clone();
+        db.writer
+            .write("seed legacy header", move |tx| queries::upsert_block_header(tx, &stored_header))
+            .await
+            .unwrap();
+        db.insert_validated_private_transaction(record.clone()).await.unwrap();
+        drop(db);
+
+        assert!(load(db_path.clone()).await.is_err(), "the old schema requires migration");
+        migrate(&db_path).unwrap();
+        migrate(&db_path).expect("migration should also accept the latest schema");
+
+        let db = load(db_path).await.unwrap();
+        assert_eq!(db.load_chain_tip().await.unwrap(), Some(header.clone()));
+        assert_eq!(db.load_all_transactions().await.unwrap(), vec![record]);
+        let migrated = db.load_private_record(transaction_id).await.unwrap().unwrap();
+        assert_eq!(migrated.context().format_version(), PrivateRecordFormatVersion::V1);
+        migrated.verify_encrypted_record_key().unwrap();
+        assert_eq!(db.load_protocol_config(config.to_commitment()).await.unwrap(), None);
+
+        db.upsert_block_header_with_protocol_config(header, Some(config.clone()))
+            .await
+            .unwrap();
+        assert_eq!(
+            protocol_config_history::history(&db).await,
+            vec![(0, config.to_commitment(), config.clone())]
+        );
+        assert_eq!(db.load_protocol_config(config.to_commitment()).await.unwrap(), Some(config));
+    }
+
     #[tokio::test]
     async fn setup_creates_database_that_load_accepts() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
@@ -347,6 +506,149 @@ mod tests {
 
         setup(db_path.clone()).await.expect("setup should bootstrap the database");
         load(db_path).await.expect("load should accept a bootstrapped database");
+    }
+
+    #[tokio::test]
+    async fn setup_creates_protocol_config_storage() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
+        let db = setup(temp_dir.path().join("validator.sqlite3")).await.unwrap();
+
+        let row_count = db
+            .reader
+            .reader
+            .read("protocol_config_storage", |tx| {
+                Ok::<_, DatabaseError>(
+                    tx.query("SELECT COUNT(*) FROM protocol_configs", &[], |row| {
+                        row.get::<i64>(0)
+                    })?
+                    .into_iter()
+                    .next()
+                    .expect("COUNT always returns one row"),
+                )
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(row_count, 0);
+    }
+
+    #[tokio::test]
+    async fn block_header_and_protocol_config_are_persisted_together() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
+        let db = setup(temp_dir.path().join("validator.sqlite3")).await.unwrap();
+        let config = test_protocol_config();
+        let header = genesis_header(&config);
+
+        db.upsert_block_header_with_protocol_config(header.clone(), Some(config.clone()))
+            .await
+            .unwrap();
+
+        assert_eq!(db.load_chain_tip().await.unwrap(), Some(header));
+        assert_eq!(db.load_protocol_config(config.to_commitment()).await.unwrap(), Some(config));
+    }
+
+    #[tokio::test]
+    async fn duplicate_supplied_protocol_config_is_accepted() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
+        let db = setup(temp_dir.path().join("validator.sqlite3")).await.unwrap();
+        let config = test_protocol_config();
+        let header = genesis_header(&config);
+        let replacement = header_with_next_timestamp(&header);
+
+        db.upsert_block_header_with_protocol_config(header.clone(), Some(config.clone()))
+            .await
+            .unwrap();
+        db.upsert_block_header_with_protocol_config(replacement.clone(), Some(config.clone()))
+            .await
+            .expect("a duplicate supplied protocol config should be accepted");
+
+        assert_eq!(db.load_block_header(header.block_num()).await.unwrap(), Some(replacement));
+        assert_eq!(db.load_protocol_config(config.to_commitment()).await.unwrap(), Some(config));
+    }
+
+    #[tokio::test]
+    async fn known_protocol_config_can_be_omitted() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
+        let db = setup(temp_dir.path().join("validator.sqlite3")).await.unwrap();
+        let config = test_protocol_config();
+        let header = genesis_header(&config);
+        let replacement = header_with_next_timestamp(&header);
+
+        db.upsert_block_header_with_protocol_config(header.clone(), Some(config.clone()))
+            .await
+            .unwrap();
+        db.upsert_block_header_with_protocol_config(replacement.clone(), None)
+            .await
+            .expect("a stored protocol config should not need to be supplied again");
+
+        assert_eq!(db.load_block_header(header.block_num()).await.unwrap(), Some(replacement));
+        assert_eq!(db.load_protocol_config(config.to_commitment()).await.unwrap(), Some(config));
+    }
+
+    #[tokio::test]
+    async fn unknown_protocol_config_rolls_back_block_header() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
+        let db = setup(temp_dir.path().join("validator.sqlite3")).await.unwrap();
+        let config = test_protocol_config();
+        let header = genesis_header(&config);
+
+        db.upsert_block_header_with_protocol_config(header.clone(), None)
+            .await
+            .expect_err("an unknown protocol config must reject the header");
+
+        assert_eq!(db.load_block_header(header.block_num()).await.unwrap(), None);
+        assert_eq!(db.load_protocol_config(config.to_commitment()).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn mismatched_protocol_config_rolls_back_block_header() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
+        let db = setup(temp_dir.path().join("validator.sqlite3")).await.unwrap();
+        let expected = test_protocol_config();
+        let header = genesis_header(&expected);
+        let mismatched = ProtocolConfig::current(AssetId::new_fungible(
+            ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1.try_into().unwrap(),
+        ))
+        .unwrap();
+
+        db.upsert_block_header_with_protocol_config(header.clone(), Some(mismatched.clone()))
+            .await
+            .expect_err("a mismatched config must reject the header transaction");
+
+        assert_eq!(db.load_block_header(header.block_num()).await.unwrap(), None);
+        assert_eq!(db.load_protocol_config(expected.to_commitment()).await.unwrap(), None);
+        assert_eq!(db.load_protocol_config(mismatched.to_commitment()).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn block_header_insertion_failure_rolls_back_new_protocol_config() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
+        let db = setup(temp_dir.path().join("validator.sqlite3")).await.unwrap();
+        let config = test_protocol_config();
+        let commitment = config.to_commitment();
+        let header = genesis_header(&config);
+
+        db.writer
+            .write("reject_block_header_inserts", |tx| {
+                tx.execute(
+                    "CREATE TRIGGER reject_block_header_insert
+                     BEFORE INSERT ON block_headers
+                     BEGIN
+                         SELECT RAISE(ABORT, 'block header insertion rejected');
+                     END;",
+                    &[],
+                )?;
+                Ok::<_, DatabaseError>(())
+            })
+            .await
+            .unwrap();
+
+        db.upsert_block_header_with_protocol_config(header.clone(), Some(config))
+            .await
+            .expect_err("a block header insertion failure must reject the transaction");
+
+        assert_eq!(db.load_block_header(header.block_num()).await.unwrap(), None);
+        assert_eq!(db.load_protocol_config(commitment).await.unwrap(), None);
     }
 
     #[tokio::test]
@@ -427,6 +729,39 @@ mod tests {
 
         let by_setup = db.load_private_records_by_setup_context(SETUP_CONTEXT_ID).await.unwrap();
         assert_eq!(by_setup, vec![expected.clone()]);
+    }
+
+    #[tokio::test]
+    async fn private_record_rejects_unsupported_formats() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db = setup(temp_dir.path().join("validator.sqlite3")).await.unwrap();
+        let transaction_id = TransactionId::from_raw(Word::from([5u32, 6, 7, 8]));
+        db.insert_validated_private_transaction(private_record(transaction_id, 9))
+            .await
+            .unwrap();
+
+        for format_version in [2_u32, 3, u32::MAX] {
+            db.writer
+                .write("set unsupported record format", move |tx| {
+                    tx.execute(
+                        "UPDATE validated_transactions SET format_version = ? WHERE id = ?",
+                        &[&i64::from(format_version), &transaction_id],
+                    )
+                })
+                .await
+                .unwrap();
+
+            let error = db.load_private_record(transaction_id).await.unwrap_err();
+            assert!(matches!(
+                error,
+                DatabaseError::ConversionSqlToRust { inner: Some(source), .. }
+                    if matches!(
+                        source.downcast_ref::<PrivateRecordError>(),
+                        Some(PrivateRecordError::UnsupportedFormat(version))
+                            if *version == format_version,
+                    ),
+            ));
+        }
     }
 
     #[tokio::test]

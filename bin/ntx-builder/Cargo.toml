@@ -27,6 +27,7 @@ miden-node-db          = { workspace = true }
 miden-node-proto       = { workspace = true }
 miden-node-proto-build = { features = ["internal"], workspace = true }
 miden-node-store       = { workspace = true }
+miden-node-tracing     = { workspace = true }
 miden-node-utils       = { workspace = true }
 miden-protocol         = { default-features = true, workspace = true }
 miden-standards        = { workspace = true }
@@ -37,7 +38,6 @@ tokio-stream           = { features = ["net"], workspace = true }
 tonic                  = { workspace = true }
 tonic-reflection       = { workspace = true }
 tower-http             = { workspace = true }
-tracing                = { workspace = true }
 url                    = { workspace = true }
 
 [build-dependencies]
@@ -45,6 +45,7 @@ build-rs      = { workspace = true }
 miden-node-db = { workspace = true }
 
 [dev-dependencies]
+fs-err           = { workspace = true }
 miden-node-utils = { features = ["testing"], workspace = true }
 miden-protocol   = { default-features = true, features = ["testing"], workspace = true }
 miden-standards  = { features = ["testing"], workspace = true }

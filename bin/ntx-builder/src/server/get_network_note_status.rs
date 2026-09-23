@@ -1,4 +1,5 @@
 use miden_node_proto::generated::{self as grpc, rpc};
+use miden_node_tracing::error;
 use miden_protocol::Word;
 
 use super::NtxBuilderRpcServer;
@@ -20,11 +21,11 @@ impl grpc::server::ntx_builder_api::GetNetworkNoteStatus for NtxBuilderRpcServer
         Ok(miden_protocol::note::NoteId::from_raw(note_id_digest))
     }
 
-    #[miden_node_utils::tracing::miden_instrument(
+    #[miden_node_tracing::miden_instrument(
         target = COMPONENT,
         name = "get_network_note_status",
         fields (
-            note.id = %note_id,
+            note.id = note_id,
         ),
         err,
     )]
@@ -34,12 +35,14 @@ impl grpc::server::ntx_builder_api::GetNetworkNoteStatus for NtxBuilderRpcServer
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        let row = self
-            .db.get_note_status(note_id).await
-            .map_err(|err| {
-                tracing::error!(target: LOG_TARGET, error = %err, "Failed to query note status from DB");
-                tonic::Status::internal("database error")
-            })?;
+        let row = self.db.get_note_status(note_id).await.map_err(|err| {
+            error!(
+                &err,
+                target: LOG_TARGET,
+                "Failed to query note status from DB"
+            );
+            tonic::Status::internal("database error")
+        })?;
 
         let Some(row) = row else {
             return Err(tonic::Status::not_found("note not found in ntx-builder database"));

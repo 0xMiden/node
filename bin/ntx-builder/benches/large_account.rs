@@ -106,7 +106,7 @@ fn network_auth_component() -> AuthNetworkAccount {
     // Nothing here executes a transaction, so the mock manager's empty fee schedule is enough: it
     // only has to make the component constructible and install the three fee-policy slots.
     AuthNetworkAccount::new(
-        BTreeSet::from_iter([root]),
+        [root].into_iter().collect::<BTreeSet<_>>(),
         FeePolicyManager::mock(FungibleAsset::mock_issuer()),
     )
     .expect("non-empty allowlist should construct")

@@ -1,7 +1,7 @@
 //! Inserts the note scripts held by a block's notes.
 
 use miden_node_db::sqlite::WriteTx;
-use miden_node_utils::tracing::miden_instrument;
+use miden_node_tracing::miden_instrument;
 use miden_protocol::Word;
 
 use crate::COMPONENT;

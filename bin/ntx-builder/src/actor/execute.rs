@@ -3,11 +3,17 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use backon::ExponentialBuilder;
-use miden_node_utils::ErrorReport;
+use miden_node_tracing::spawn::spawn_blocking_in_current_span;
+use miden_node_tracing::{
+    ErrorSpanExt,
+    Instrument,
+    info,
+    miden_instrument,
+    miden_span_record,
+    warn,
+};
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::retry::{self, Retryable};
-use miden_node_utils::spawn::spawn_blocking_in_current_span;
-use miden_node_utils::tracing::{ErrorSpanExt, miden_instrument, miden_span_record};
 use miden_protocol::Word;
 use miden_protocol::account::{
     Account,
@@ -22,8 +28,9 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::{AssetId, AssetWitness};
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::errors::TransactionInputError;
-use miden_protocol::note::{Note, NoteScript, NoteScriptRoot};
+use miden_protocol::errors::{AccountError, AssetError, TransactionInputError};
+use miden_protocol::note::{Note, NoteId, NoteScript, NoteScriptRoot};
+use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{
     AccountInputs,
     ExecutedTransaction,
@@ -36,7 +43,7 @@ use miden_protocol::transaction::{
     TransactionInputs,
 };
 use miden_protocol::vm::FutureMaybeSend;
-use miden_standards::note::AccountTargetNetworkNote;
+use miden_standards::account::fees::FeePolicyManager;
 use miden_tx::auth::UnreachableAuth;
 use miden_tx::{
     DataStore,
@@ -52,9 +59,8 @@ use miden_tx::{
     TransactionMastStore,
     TransactionProverError,
 };
-use tracing::Instrument;
 
-use crate::actor::candidate::TransactionCandidate;
+use crate::actor::candidate::{SponsoredFeatureNote, TransactionCandidate};
 use crate::clients::{RemoteTransactionProver, RpcClient, RpcError};
 use crate::db::NtxDbReader;
 use crate::{COMPONENT, LOG_TARGET};
@@ -73,6 +79,14 @@ pub enum NtxError {
     Proving(#[source] TransactionProverError),
     #[error("failed to submit transaction")]
     Submission(#[source] tonic::Status),
+    #[error("failed to read the fee asset ID from the network account")]
+    FeeAssetStorage(#[source] AccountError),
+    #[error("invalid fee asset ID in the network account")]
+    FeeAsset(#[source] AssetError),
+    #[error("network account fee asset does not match the protocol configuration")]
+    FeeAssetMismatch,
+    #[error("protocol configuration does not match the reference block")]
+    ProtocolConfigCommitmentMismatch,
 }
 
 type NtxResult<T> = Result<T, NtxError>;
@@ -109,13 +123,17 @@ fn request_backoff(initial: Duration, max: Duration) -> ExponentialBuilder {
 }
 
 /// Emits a structured warning for a transient NTX request failure that is about to be retried.
-fn log_transient_retry<E: std::error::Error>(operation: &'static str, err: &E, sleep: Duration) {
-    tracing::warn!(
+fn log_transient_retry<E: std::error::Error + 'static>(
+    operation: &'static str,
+    err: &E,
+    sleep: Duration,
+) {
+    warn!(
+        err,
         target: COMPONENT,
-        operation,
-        err = %err.as_report(),
-        sleep_ms = sleep.as_millis() as u64,
         "ntx transient request failure; retrying after backoff",
+        operation.name = operation,
+        retry.delay_ms = sleep.as_millis() as u64
     );
 }
 
@@ -262,42 +280,34 @@ impl NtxContext {
         self,
         tx: TransactionCandidate,
     ) -> impl FutureMaybeSend<NtxResult<NtxExecutionResult>> {
-        let TransactionCandidate {
-            account,
-            notes,
-            chain_tip_header,
-            chain_mmr,
-        } = tx;
+        let num_notes = tx.num_notes();
+        let TransactionCandidate { account, notes, chain_state } = tx;
         miden_span_record!(
-            account.id = %account.id(),
-            account.id.network_prefix = %account.id().prefix(),
-            notes.count = notes.len(),
-            reference_block.number = %chain_tip_header.block_num(),
+            account.id = account.id(),
+            account.id.network_prefix = account.id().prefix(),
+            note.count = num_notes,
+            reference_block.number = chain_state.chain_tip_header.block_num()
         );
 
         async move {
             Box::pin(async move {
-                let notes =
-                    notes.into_iter().map(AccountTargetNetworkNote::into_note).collect::<Vec<_>>();
-
                 // VM execution (note filtering + transaction execution) is CPU-intensive and may
                 // not yield between await points. Run it on a dedicated blocking thread while using
                 // the parent runtime handle to drive async RPC callbacks.
                 let ctx = self.clone();
                 let handle = tokio::runtime::Handle::current();
-                let span = tracing::Span::current();
+                let span = miden_node_tracing::Span::current();
 
                 let (executed_tx, failed_notes, deferred_notes, oversized_notes, scripts_to_cache) =
                     spawn_blocking_in_current_span(move || {
                         let data_store = NtxDataStore::new(
                             account,
-                            chain_tip_header,
-                            chain_mmr,
+                            chain_state,
                             ctx.rpc.clone(),
                             ctx.script_cache.clone(),
                             ctx.db.clone(),
                             ctx.request_backoff,
-                        );
+                        )?;
                         handle.block_on(
                             async {
                                 let FilteredNotes { successful, failed, deferred, oversized } =
@@ -340,17 +350,26 @@ impl NtxContext {
             })
             .in_current_span()
             .await
-            .inspect_err(|err| tracing::Span::current().set_error(err))
+            .inspect_err(|err| miden_node_tracing::Span::current().set_error(err))
         }
     }
 
-    /// Filters a collection of notes, returning only those that can be successfully executed
-    /// against the given network account.
+    /// Filters the candidate's bundles down to those that can execute together, and classifies
+    /// the rest.
     ///
-    /// This function performs a consumability check on each provided note and partitions them into
-    /// two sets:
-    /// - Successful notes: notes that can be executed and are returned wrapped in [`InputNotes`].
-    /// - Failed notes: notes that cannot be executed.
+    /// [`NoteConsumptionChecker`] eliminates one note at a time. Fee collection runs in the
+    /// account's auth procedure, so an uncovered fee fails in the epilogue and drops the checker
+    /// into that search, where a feature note and its sponsorship are each invalid alone. Valid
+    /// pairs are discarded along with the note that actually failed.
+    ///
+    /// So the batch is checked once, then every bundle the checker did not prove is re-offered on
+    /// top of what it did, trying the most sponsorships first. A trial is kept only if the checker
+    /// proves that exact set, so the result never regresses. For `[F0, S0, F1]` - a feature note,
+    /// its sponsorship, and an unsponsored feature note - the checker fails all three; the retry
+    /// proves `[F0, S0]` and records only `F1`.
+    ///
+    /// TODO: drop this once the checker can test a bundle atomically, see
+    /// <https://github.com/0xMiden/protocol/issues/3710>.
     ///
     /// # Guarantees
     ///
@@ -370,52 +389,110 @@ impl NtxContext {
     async fn filter_notes(
         &self,
         data_store: &NtxDataStore,
-        notes: Vec<Note>,
+        sponsored_notes: Vec<SponsoredFeatureNote>,
     ) -> NtxResult<FilteredNotes> {
+        let all_notes = sponsored_notes.iter().flat_map(bundled_notes).collect::<Vec<_>>();
+        let (mut successful_notes, batch_failed) =
+            self.check_consumability(data_store, all_notes).await?;
+
+        // An epilogue failure sends the note checker through a greedy search that adds one note at
+        // a time. It cannot rediscover a feature and sponsorship that only execute together. Keep
+        // the checker's proven-successful set as a monotonic baseline and re-offer each missing
+        // dependency-closed variant on top of it. A failed retry never replaces that baseline.
+        successful_notes = retry_sponsored_notes(
+            &sponsored_notes,
+            successful_notes,
+            |trial: Vec<Note>| async move {
+                let trial_len = trial.len();
+                let (trial_successful, trial_failed) =
+                    self.check_consumability(data_store, trial).await?;
+
+                // The checker first executes the exact trial. No failures and a matching
+                // cardinality therefore prove that complete set; otherwise its fallback result is
+                // not allowed to replace the previously proven baseline.
+                Ok((trial_failed.is_empty() && trial_successful.len() == trial_len)
+                    .then_some(trial_successful))
+            },
+        )
+        .await?;
+        let successful_ids = successful_notes.iter().map(Note::id).collect::<BTreeSet<_>>();
+
+        let sponsor_to_feature = sponsored_notes
+            .iter()
+            .flat_map(|sponsored| {
+                let feature_id = sponsored.feature.as_note().id();
+                sponsored
+                    .sponsorships
+                    .iter()
+                    .map(move |sponsorship| (sponsorship.id(), feature_id))
+            })
+            .collect::<HashMap<_, _>>();
+
+        // The batch failure list partitions the original input, so removing every note rescued by a
+        // retry yields the final failures. If a feature executes without one of its optional
+        // sponsorships, suppress that sponsorship's failure too: charging it to the feature would
+        // penalize a note which is being submitted successfully.
+        let failed = batch_failed
+            .into_iter()
+            .filter(|failed| {
+                should_record_failure(failed.note().id(), &successful_ids, &sponsor_to_feature)
+            })
+            .collect::<Vec<_>>();
+
+        for failed_note in &failed {
+            if let Some(error) = failed_note.error() {
+                info!(
+                    error,
+                    target: LOG_TARGET,
+                    "note failed consumability check",
+                    note.id = failed_note.note().id(),
+                    note.nullifier = failed_note.note().nullifier()
+                );
+            } else {
+                info!(
+                    target: LOG_TARGET,
+                    "note rejected with its bundle",
+                    note.id = failed_note.note().id(),
+                    note.nullifier = failed_note.note().nullifier()
+                );
+            }
+        }
+
+        let successful = InputNotes::from_unauthenticated_notes(successful_notes)
+            .map_err(NtxError::InputNotes)?;
+
+        // If none are successful, abort.
+        if successful.is_empty() {
+            return Err(NtxError::AllNotesFailed(failed));
+        }
+
+        let (cycle_limited, failed) = partition_cycle_limited(failed);
+        let (deferred, oversized) = self.classify_cycle_limited(data_store, cycle_limited).await;
+
+        Ok(FilteredNotes { successful, failed, deferred, oversized })
+    }
+
+    /// Runs the consumability checker over `notes` and returns the notes it accepted alongside the
+    /// notes it rejected.
+    async fn check_consumability(
+        &self,
+        data_store: &NtxDataStore,
+        notes: Vec<Note>,
+    ) -> NtxResult<(Vec<Note>, Vec<FailedNote>)> {
         let executor = self.create_executor(data_store);
         let checker = NoteConsumptionChecker::new(&executor);
 
-        match Box::pin(checker.check_notes_consumability(
+        let consumption_info = Box::pin(checker.check_notes_consumability(
             data_store.account.id(),
             data_store.reference_block.block_num(),
             notes,
-            TransactionArgs::default(),
+            self.tx_args.clone(),
         ))
         .await
-        {
-            Ok(consumption_info) => {
-                let (successful, failed) = consumption_info.into_parts();
-                for failed_note in &failed {
-                    tracing::info!(
-                        target: LOG_TARGET,
-                        {
-                            note.id = %failed_note.note().id(),
-                            nullifier = %failed_note.note().nullifier(),
-                            err = %failed_note.error().as_report(),
-                        },
-                        "note failed consumability check",
-                    );
-                }
+        .map_err(NtxError::NoteFilter)?;
 
-                // Map successful notes to input notes.
-                let successful_notes =
-                    successful.into_iter().map(|s| s.note().clone()).collect::<Vec<_>>();
-                let successful = InputNotes::from_unauthenticated_notes(successful_notes)
-                    .map_err(NtxError::InputNotes)?;
-
-                // If none are successful, abort.
-                if successful.is_empty() {
-                    return Err(NtxError::AllNotesFailed(failed));
-                }
-
-                let (cycle_limited, failed) = partition_cycle_limited(failed);
-                let (deferred, oversized) =
-                    self.classify_cycle_limited(data_store, cycle_limited).await;
-
-                Ok(FilteredNotes { successful, failed, deferred, oversized })
-            },
-            Err(err) => return Err(NtxError::NoteFilter(err)),
-        }
+        let (successful, failed) = consumption_info.into_parts();
+        Ok((successful.into_iter().map(|s| s.note().clone()).collect(), failed))
     }
 
     /// Splits cycle-limited failed notes into `(deferred, oversized)` by re-checking each one on
@@ -447,7 +524,7 @@ impl NtxContext {
             data_store.account.id(),
             data_store.reference_block.block_num(),
             vec![note.clone()],
-            TransactionArgs::default(),
+            self.tx_args.clone(),
         ))
         .await
         {
@@ -457,13 +534,11 @@ impl NtxContext {
                 successful.is_empty() && failed.iter().any(|f| f.num_cycles().is_some())
             },
             Err(err) => {
-                tracing::warn!(
+                warn!(
+                    &err,
                     target: LOG_TARGET,
-                    {
-                        note.id = %note.id(),
-                        err = %err.as_report(),
-                    },
                     "isolation re-check for a cycle-limited note failed; treating it as deferrable",
+                    note.id = note.id()
                 );
                 false
             },
@@ -543,6 +618,85 @@ impl NtxContext {
     }
 }
 
+/// Returns a bundle's notes: the feature note followed by the sponsorships that pay its fee.
+fn bundled_notes(sponsored: &SponsoredFeatureNote) -> Vec<Note> {
+    std::iter::once(sponsored.feature.as_note().clone())
+        .chain(sponsored.sponsorships.iter().cloned())
+        .collect()
+}
+
+/// Returns the missing, dependency-closed additions to try for `sponsored` as successively smaller
+/// sponsorship prefixes in candidate order.
+///
+/// This is intentionally linear in the number of sponsorships rather than an exhaustive subset
+/// search. It relies on sponsorship ingestion rejecting structurally invalid notes. Notes already
+/// in `successful` are never re-offered or removed.
+fn retry_variants(
+    sponsored: &SponsoredFeatureNote,
+    successful: &BTreeSet<NoteId>,
+) -> Vec<Vec<Note>> {
+    let feature = sponsored.feature.as_note();
+    if successful.contains(&feature.id()) {
+        return Vec::new();
+    }
+
+    let missing_sponsorships = sponsored
+        .sponsorships
+        .iter()
+        .filter(|sponsorship| !successful.contains(&sponsorship.id()))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    (0..=missing_sponsorships.len())
+        .rev()
+        .map(|prefix_len| {
+            std::iter::once(feature.clone())
+                .chain(missing_sponsorships[..prefix_len].iter().cloned())
+                .collect()
+        })
+        .collect()
+}
+
+/// Re-offers each unproven bundle on top of `successful_notes`, returning the largest set the
+/// checker proved. A failed trial never replaces the baseline.
+///
+/// `check_exact` runs one trial and returns the proven set, or `None` when the checker did not
+/// prove that exact set. It is a parameter so the retry order can be tested without a VM.
+async fn retry_sponsored_notes(
+    sponsored_notes: &[SponsoredFeatureNote],
+    mut successful_notes: Vec<Note>,
+    mut check_exact: impl AsyncFnMut(Vec<Note>) -> NtxResult<Option<Vec<Note>>>,
+) -> NtxResult<Vec<Note>> {
+    let mut successful_ids = successful_notes.iter().map(Note::id).collect::<BTreeSet<_>>();
+
+    for sponsored in sponsored_notes {
+        for additions in retry_variants(sponsored, &successful_ids) {
+            let mut trial = successful_notes.clone();
+            trial.extend(additions);
+
+            if let Some(trial_successful) = check_exact(trial).await? {
+                successful_notes = trial_successful;
+                successful_ids = successful_notes.iter().map(Note::id).collect::<BTreeSet<_>>();
+                break;
+            }
+        }
+    }
+
+    Ok(successful_notes)
+}
+
+/// Returns whether a batch-check failure still applies after bundle retries have completed.
+fn should_record_failure(
+    failed_note: NoteId,
+    successful: &BTreeSet<NoteId>,
+    sponsor_to_feature: &HashMap<NoteId, NoteId>,
+) -> bool {
+    !successful.contains(&failed_note)
+        && sponsor_to_feature
+            .get(&failed_note)
+            .is_none_or(|feature| !successful.contains(feature))
+}
+
 /// Splits failed notes into `(cycle_limited, genuine)`.
 fn partition_cycle_limited(failed: Vec<FailedNote>) -> (Vec<FailedNote>, Vec<FailedNote>) {
     failed.into_iter().partition(|note| note.num_cycles().is_some())
@@ -563,6 +717,7 @@ struct NtxDataStore {
     /// The native account, shared with the actor via `Arc` to avoid a deep clone per transaction.
     account: Arc<Account>,
     reference_block: BlockHeader,
+    protocol_config: Arc<ProtocolConfig>,
     /// The chain MMR, wrapped in `Arc` to avoid expensive clones when reading the chain state.
     chain_mmr: Arc<PartialBlockchain>,
     mast_store: TransactionMastStore,
@@ -575,27 +730,17 @@ struct NtxDataStore {
     /// Scripts fetched from the remote RPC service during execution, to be persisted by the
     /// coordinator.
     fetched_scripts: Arc<Mutex<Vec<(Word, NoteScript)>>>,
-    /// Mapping of storage map roots to storage slot names observed during various calls.
+    /// Maps storage map roots to storage slot names.
     ///
-    /// The registered slot names are subsequently used to retrieve storage map witnesses from the
-    /// RPC service. We need this because the RPC interface (and the underlying SMT forest) use storage
-    /// slot names, but the `DataStore` interface works with tree roots. To get around this problem
-    /// we populate this map when:
-    /// - The the native account is loaded (in `get_transaction_inputs()`).
-    /// - When a foreign account is loaded (in `get_foreign_account_inputs`).
+    /// The RPC service identifies maps by slot name. The [`DataStore`] interface identifies maps by
+    /// root. Native and foreign account loading populate this map before witness retrieval.
     ///
-    /// The assumption here are:
-    /// - Once an account is loaded, the mapping between `(account_id, map_root)` and slot names do
-    ///   not change. This is always the case.
-    /// - New storage slots created during transaction execution will not be accesses in the same
-    ///   transaction. The mechanism for adding new storage slots is not implemented yet, but the
-    ///   plan for it is consistent with this assumption.
+    /// The mapping for a loaded account remains stable during transaction execution. A transaction
+    /// cannot access a storage slot that it creates during the same execution.
     ///
-    /// One nuance worth mentioning: it is possible that there could be a root collision where an
-    /// account has two storage maps with the same root. In this case, the map will contain only a
-    /// single entry with the storage slot name that was added last. Thus, technically, requests
-    /// to the RPC service could be "wrong", but given that two identical maps have identical witnesses
-    /// this does not cause issues in practice.
+    /// Two storage maps can have the same root. In this case, the last inserted slot name replaces
+    /// the other slot name. Identical maps have identical witnesses, so the selected slot does not
+    /// change the witness.
     storage_slots: Arc<Mutex<HashMap<(AccountId, Word), StorageSlotName>>>,
     /// Per-request retry backoff for transient RPC failures.
     request_backoff: ExponentialBuilder,
@@ -605,19 +750,33 @@ impl NtxDataStore {
     /// Creates a new `NtxDataStore` with default cache size.
     fn new(
         account: Arc<Account>,
-        reference_block: BlockHeader,
-        chain_mmr: Arc<PartialBlockchain>,
+        chain_state: crate::chain_state::ChainState,
         rpc: RpcClient,
         script_cache: LruCache<Word, NoteScript>,
         db: NtxDbReader,
         request_backoff: ExponentialBuilder,
-    ) -> Self {
+    ) -> NtxResult<Self> {
         let mast_store = TransactionMastStore::new();
         mast_store.load_account_code(account.code());
+        let (reference_block, chain_mmr, protocol_config) = chain_state.into_parts();
 
-        Self {
+        if protocol_config.to_commitment() != reference_block.protocol_config_commitment() {
+            return Err(NtxError::ProtocolConfigCommitmentMismatch);
+        }
+        let fee_asset_id: AssetId = account
+            .storage()
+            .get_item(FeePolicyManager::fee_asset_id_slot())
+            .map_err(NtxError::FeeAssetStorage)?
+            .try_into()
+            .map_err(NtxError::FeeAsset)?;
+        if fee_asset_id != protocol_config.fee_asset_id() {
+            return Err(NtxError::FeeAssetMismatch);
+        }
+
+        Ok(Self {
             account,
             reference_block,
+            protocol_config,
             chain_mmr,
             mast_store,
             rpc,
@@ -626,7 +785,7 @@ impl NtxDataStore {
             fetched_scripts: Arc::new(Mutex::new(Vec::new())),
             storage_slots: Arc::new(Mutex::new(HashMap::default())),
             request_backoff,
-        }
+        })
     }
 
     /// Returns the [`ExponentialBuilder`] used for per-request retry backoff against the RPC
@@ -666,8 +825,9 @@ impl DataStore for NtxDataStore {
         &self,
         account_id: AccountId,
         ref_blocks: BTreeSet<BlockNumber>,
-    ) -> impl FutureMaybeSend<Result<(PartialAccount, BlockHeader, PartialBlockchain), DataStoreError>>
-    {
+    ) -> impl FutureMaybeSend<
+        Result<(PartialAccount, BlockHeader, ProtocolConfig, PartialBlockchain), DataStoreError>,
+    > {
         async move {
             if self.account.id() != account_id {
                 return Err(DataStoreError::AccountNotFound(account_id));
@@ -684,7 +844,12 @@ impl DataStore for NtxDataStore {
             self.register_storage_map_slots(account_id, &self.account.storage().to_header());
 
             let partial_account = PartialAccount::from(self.account.as_ref());
-            Ok((partial_account, self.reference_block.clone(), (*self.chain_mmr).clone()))
+            Ok((
+                partial_account,
+                self.reference_block.clone(),
+                self.protocol_config.as_ref().clone(),
+                (*self.chain_mmr).clone(),
+            ))
         }
     }
 
@@ -859,10 +1024,154 @@ impl MastForestStore for NtxDataStore {
 
 #[cfg(test)]
 mod tests {
-    use miden_tx::{FailedNote, TransactionExecutorError, TransactionProverError};
+    use std::collections::{BTreeSet, HashMap};
+    use std::future::ready;
+    use std::sync::Arc;
+    use std::time::Duration;
 
-    use super::{RpcError, is_transient_rpc_error, is_transient_status, partition_cycle_limited};
-    use crate::test_utils::{mock_network_account_id, mock_single_target_note};
+    use miden_protocol::note::Note;
+    use miden_protocol::protocol_config::ProtocolConfig;
+    use miden_tx::{
+        DataStore,
+        FailedNote,
+        NoteFailure,
+        TransactionExecutorError,
+        TransactionProverError,
+    };
+
+    use super::{
+        NtxDataStore,
+        NtxError,
+        RpcError,
+        SponsoredFeatureNote,
+        is_transient_rpc_error,
+        is_transient_status,
+        partition_cycle_limited,
+        retry_sponsored_notes,
+        retry_variants,
+        should_record_failure,
+    };
+    use crate::test_utils::{
+        mock_network_account,
+        mock_network_account_id,
+        mock_single_target_note,
+        mock_sponsorship_note,
+        mock_sponsorship_note_with_amount,
+    };
+
+    /// Transaction inputs must use the verified snapshot config without deriving it from account
+    /// storage.
+    #[tokio::test]
+    async fn data_store_returns_snapshot_protocol_config() {
+        let (db, _dir) = crate::db::test_setup().await;
+        let actor_context = crate::actor::AccountActorContext::test(&db.reader());
+        let allowed_root =
+            mock_single_target_note(mock_network_account_id(), 77).as_note().script().root();
+        let account = Arc::new(mock_network_account([allowed_root]));
+        let block_header = crate::test_utils::mock_block_header(0_u32.into());
+        let protocol_config = Arc::new(ProtocolConfig::mock());
+        let chain_state = crate::chain_state::ChainState::new(
+            block_header.clone(),
+            miden_protocol::crypto::merkle::mmr::PartialMmr::default(),
+            protocol_config.as_ref().clone(),
+        );
+        let data_store = NtxDataStore::new(
+            Arc::clone(&account),
+            chain_state,
+            actor_context.clients.rpc,
+            actor_context.state.script_cache,
+            db.reader(),
+            miden_node_utils::retry::exponential(
+                Duration::from_millis(1),
+                Duration::from_millis(10),
+            ),
+        )
+        .unwrap();
+
+        let (_, returned_header, returned_config, _) = data_store
+            .get_transaction_inputs(account.id(), BTreeSet::from([block_header.block_num()]))
+            .await
+            .unwrap();
+
+        assert_eq!(returned_header, block_header);
+        assert_eq!(returned_config, *protocol_config);
+    }
+
+    fn sponsored_note_with_two_sponsorships() -> SponsoredFeatureNote {
+        let account_id = mock_network_account_id();
+        let feature = mock_single_target_note(account_id, 1);
+        let feature_id = feature.as_note().id();
+        let sponsorships = vec![
+            mock_sponsorship_note_with_amount(account_id, feature_id, 2, 1),
+            mock_sponsorship_note_with_amount(account_id, feature_id, 3, 100),
+        ];
+        SponsoredFeatureNote { feature, sponsorships }
+    }
+
+    #[test]
+    fn retry_variants_preserve_sponsorship_order() {
+        let sponsored = sponsored_note_with_two_sponsorships();
+        let variants = retry_variants(&sponsored, &BTreeSet::new());
+
+        assert_eq!(variants.iter().map(Vec::len).collect::<Vec<_>>(), [3, 2, 1]);
+        assert!(variants.iter().all(|variant| {
+            variant.iter().any(|note| note.id() == sponsored.feature.as_note().id())
+        }));
+        assert_eq!(variants[0][1].id(), sponsored.sponsorships[0].id());
+        assert_eq!(variants[0][2].id(), sponsored.sponsorships[1].id());
+        assert_eq!(variants[1][1].id(), sponsored.sponsorships[0].id());
+    }
+
+    #[test]
+    fn retry_variants_do_nothing_when_feature_is_proven() {
+        let sponsored = sponsored_note_with_two_sponsorships();
+        let successful =
+            BTreeSet::from([sponsored.feature.as_note().id(), sponsored.sponsorships[0].id()]);
+        let variants = retry_variants(&sponsored, &successful);
+
+        assert!(variants.is_empty());
+    }
+
+    #[tokio::test]
+    async fn retry_sponsored_notes_recovers_pair_from_poisoned_batch() {
+        let account_id = mock_network_account_id();
+        let feature_0 = mock_single_target_note(account_id, 10);
+        let sponsorship_0 = mock_sponsorship_note(account_id, feature_0.as_note().id(), 11);
+        let feature_1 = mock_single_target_note(account_id, 12);
+        let sponsored_notes = vec![
+            SponsoredFeatureNote {
+                feature: feature_0.clone(),
+                sponsorships: vec![sponsorship_0.clone()],
+            },
+            SponsoredFeatureNote { feature: feature_1, sponsorships: vec![] },
+        ];
+        let intact_ids = BTreeSet::from([feature_0.as_note().id(), sponsorship_0.id()]);
+
+        // Model the exact-set result established by the protocol test: the pair succeeds by itself,
+        // while adding the uncovered second feature poisons the complete batch.
+        let recovered = retry_sponsored_notes(&sponsored_notes, vec![], |trial: Vec<Note>| {
+            let trial_ids = trial.iter().map(Note::id).collect::<BTreeSet<_>>();
+            ready(Ok::<_, NtxError>((trial_ids == intact_ids).then_some(trial)))
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(recovered.iter().map(Note::id).collect::<BTreeSet<_>>(), intact_ids);
+    }
+
+    #[test]
+    fn successful_feature_suppresses_its_sponsorship_failures() {
+        let sponsored = sponsored_note_with_two_sponsorships();
+        let feature_id = sponsored.feature.as_note().id();
+        let sponsorship_id = sponsored.sponsorships[0].id();
+        let sponsor_to_feature = HashMap::from([(sponsorship_id, feature_id)]);
+
+        assert!(should_record_failure(sponsorship_id, &BTreeSet::new(), &sponsor_to_feature,));
+
+        let successful = BTreeSet::from([feature_id]);
+        assert!(!should_record_failure(sponsorship_id, &successful, &sponsor_to_feature,));
+        assert!(!should_record_failure(feature_id, &successful, &sponsor_to_feature));
+    }
 
     /// `partition_cycle_limited` must route notes carrying a cycle count (`num_cycles = Some`) into
     /// the cycle-limited bucket (which is then isolation-re-checked) and notes without one
@@ -879,9 +1188,12 @@ mod tests {
         let err = || TransactionExecutorError::AccountUpdateCommitment("test error");
         let failed = vec![
             // Dropped because a per-tx cycle budget was exhausted: carries a cycle count.
-            FailedNote::new(cycle_limited_note, err(), Some(1234)),
+            FailedNote::new(
+                cycle_limited_note,
+                NoteFailure::Blamed { error: err(), num_cycles: Some(1234) },
+            ),
             // A genuine consumability failure: no cycle count.
-            FailedNote::new(genuine_note, err(), None),
+            FailedNote::new(genuine_note, NoteFailure::Blamed { error: err(), num_cycles: None }),
         ];
 
         let (cycle_limited, genuine) = partition_cycle_limited(failed);
@@ -931,9 +1243,8 @@ mod tests {
         let terminal_grpc = RpcError::GrpcClientError(tonic::Status::invalid_argument("bad input"));
         assert!(!is_transient_rpc_error(&terminal_grpc));
 
-        let non_grpc = RpcError::Deserialize(
-            miden_protocol::utils::serde::DeserializationError::InvalidValue("bad".into()),
-        );
+        let non_grpc =
+            RpcError::Conversion(miden_node_proto::errors::ConversionError::message("bad input"));
         assert!(!is_transient_rpc_error(&non_grpc));
     }
 

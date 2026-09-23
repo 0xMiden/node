@@ -1,11 +1,14 @@
 use std::path::PathBuf;
 
+use miden_objects::account_file::AccountFileError;
 use miden_protocol::account::AccountId;
 use miden_protocol::errors::{
     AccountDeltaError,
     AccountError,
     AssetError,
     AssetVaultError,
+    AuthSchemeError,
+    ProtocolConfigError,
     TokenSymbolError,
 };
 use miden_protocol::utils::serde::DeserializationError;
@@ -20,7 +23,7 @@ pub enum GenesisConfigError {
     #[error("failed to read config file at {1}")]
     ConfigFileRead(#[source] std::io::Error, PathBuf),
     #[error("failed to read account file at {1}")]
-    AccountFileRead(#[source] std::io::Error, PathBuf),
+    AccountFileRead(#[source] AccountFileError, PathBuf),
     #[error("native faucet from file {path} is not a fungible faucet")]
     NativeFaucetNotFungible { path: PathBuf },
     #[error("account translation from config to state failed")]
@@ -31,6 +34,8 @@ pub enum GenesisConfigError {
     AccountDelta(#[from] AccountDeltaError),
     #[error("adding assets to account vault failed")]
     AssetVault(#[from] AssetVaultError),
+    #[error("protocol config construction failed")]
+    ProtocolConfig(#[from] ProtocolConfigError),
     #[error(
         "the defined asset '{symbol}' has no corresponding faucet, or the faucet was provided as an account file"
     )]
@@ -71,4 +76,10 @@ pub enum GenesisConfigError {
     InvalidSecretKey(#[from] DeserializationError),
     #[error("provided signer config is not supported")]
     UnsupportedSignerConfig,
+    #[error("account file name '{name}' is used more than once")]
+    DuplicateAccountFileName { name: String },
+    #[error("account name '{name}' is not a plain file name")]
+    InvalidAccountFileName { name: String },
+    #[error("failed to generate a key for the configured authentication scheme")]
+    AuthScheme(#[from] AuthSchemeError),
 }

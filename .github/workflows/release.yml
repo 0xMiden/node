@@ -31,7 +31,6 @@ jobs:
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
       prerelease: ${{ steps.release.outputs.prerelease }}
-      workspace_packages: ${{ steps.release.outputs.workspace_packages }}
       publishable_crates: ${{ steps.release.outputs.publishable_crates }}
     steps:
       - name: Checkout repository
@@ -40,6 +39,9 @@ jobs:
           ref: ${{ github.ref_name }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Check Rust versions
+        uses: ./.github/actions/check-rust-versions
 
       # GitHub enforces the tag restrictions. This only guards against the
       # workflow trigger and ruleset target drifting apart.
@@ -63,17 +65,6 @@ jobs:
           version="${TAG#v}"
           metadata="$(cargo metadata --no-deps --format-version 1)"
           mapfile -t versions < <(jq -r '[.packages[] | select(.publish != []) | .version] | unique | .[]' <<< "${metadata}")
-          workspace_packages="$(
-            jq -c '
-              . as $m
-              | ($m.workspace_root + "/") as $root
-              | $m.workspace_members as $members
-              | $m.packages
-              | map(select(.id as $id | $members | index($id)))
-              | map({ name, manifest_path: (.manifest_path | ltrimstr($root)) })
-              | sort_by(.name)
-            ' <<< "${metadata}"
-          )"
           publishable_crates="$(
             jq -c '
               [.packages[] | select(.publish != []) | { name }]
@@ -106,7 +97,6 @@ jobs:
             echo "tag=${TAG}"
             echo "version=${version}"
             echo "prerelease=${prerelease}"
-            echo "workspace_packages=${workspace_packages}"
             echo "publishable_crates=${publishable_crates}"
           } >> "${GITHUB_OUTPUT}"
 
@@ -151,9 +141,9 @@ jobs:
 
       - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
-          shared-key: release-dry-run-crates
+          shared-key: release-crate-${{ matrix.name }}
           cache-provider: warpbuild
-          save-if: false
+          save-if: true
 
       - name: Check package builds
         env:
@@ -180,99 +170,42 @@ jobs:
         with:
           shared-key: release-dry-run-crates
           cache-provider: warpbuild
-          save-if: false
+          save-if: true
 
       - name: Dry-run cargo publish without verification
         run: cargo publish --workspace --dry-run --no-verify --locked
 
-  check-msrv:
-    name: Check MSRV ${{ matrix.name }}
-    runs-on: warp-ubuntu-latest-x64-8x
-    needs: preflight
-    if: ${{ github.repository_owner == '0xMiden' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJson(needs.preflight.outputs.workspace_packages) }}
-    # Deliberately use stable Rust instead of rust-toolchain.toml because
-    # cargo-msrv itself may require a newer compiler than the repo MSRV.
-    env:
-      RUSTUP_TOOLCHAIN: stable
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ needs.preflight.outputs.tag }}
-          fetch-depth: 0
-          persist-credentials: false
-
-      - uses: ./.github/actions/install-rocksdb
-      - uses: ./.github/actions/install-protobuf-compiler
-
-      - name: Cleanup large tools for build space
-        uses: ./.github/actions/cleanup-runner
-
-      - name: Rustup
-        run: rustup toolchain install --no-self-update stable
-
-      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
-        with:
-          shared-key: release-msrv
-          cache-provider: warpbuild
-          save-if: false
-
-      - name: Install cargo-binstall
-        uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
-        with:
-          tool: cargo-binstall
-
-      - name: Install cargo-msrv
-        run: cargo binstall --no-confirm cargo-msrv
-
-      - name: Show package info
-        env:
-          MANIFEST_PATH: ${{ matrix.manifest_path }}
-          PACKAGE: ${{ matrix.name }}
-        run: |
-          echo "Package: ${PACKAGE}"
-          echo "Manifest path: ${MANIFEST_PATH}"
-          cargo msrv show --manifest-path "${MANIFEST_PATH}"
-
-      - name: Check MSRV
-        env:
-          MANIFEST_PATH: ${{ matrix.manifest_path }}
-        run: cargo msrv verify --manifest-path "${MANIFEST_PATH}"
-
-  dry-run-docker:
-    name: Dry-run Docker bundle
+  stage-docker:
+    name: Stage Docker bundle
     needs: preflight
     if: ${{ github.repository_owner == '0xMiden' }}
     permissions:
-      # Reusable-workflow permission ceiling; dry-run jobs do not receive these writes.
+      # Reusable-workflow permission ceiling for staging jobs.
       attestations: write
       contents: read
       id-token: write
       packages: write
     uses: ./.github/workflows/docker.yml
     with:
-      mode: dry-run
+      mode: stage
       ref: ${{ needs.preflight.outputs.tag }}
       created: ${{ needs.preflight.outputs.created }}
 
   publish-docker:
     name: Publish Docker bundle
-    needs: [preflight, check-crate-builds, dry-run-crates, check-msrv, dry-run-docker]
+    needs: [preflight, check-crate-builds, dry-run-crates, stage-docker]
     if: ${{ github.repository_owner == '0xMiden' }}
     permissions:
-      id-token: write
-      contents: read
-      packages: write
       attestations: write
+      contents: read
+      id-token: write
+      packages: write
     uses: ./.github/workflows/docker.yml
     with:
-      mode: publish
+      mode: promote
       ref: ${{ needs.preflight.outputs.tag }}
       created: ${{ needs.preflight.outputs.created }}
+      staged_tag: ${{ needs.stage-docker.outputs.immutable_tag }}
 
   publish-github-release:
     name: Publish GitHub release
@@ -320,9 +253,13 @@ jobs:
             prerelease_flag=(--prerelease)
           fi
 
-          cargo xtask changelog render \
+          if ! cargo xtask changelog render \
             --release-tag "${TAG}" \
-            > "${RUNNER_TEMP}/release-notes.md"
+            > "${RUNNER_TEMP}/release-notes.md"; then
+            echo "::warning title=Release notes generation failed::Using fallback release notes."
+            printf 'Release %s\n\nRelease notes could not be generated automatically.\n' "${TAG}" \
+              > "${RUNNER_TEMP}/release-notes.md"
+          fi
 
           gh release create "${TAG}" \
             --repo "${REPO}" \
@@ -331,7 +268,7 @@ jobs:
             --notes-file "${RUNNER_TEMP}/release-notes.md" \
             "${prerelease_flag[@]}"
 
-      - name: Trigger post-release publishing workflows
+      - name: Trigger crates.io publishing
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -339,15 +276,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          # The GitHub release is created with GITHUB_TOKEN, so its release
-          # event does not start follow-up workflows. workflow_dispatch events
-          # are allowed for GITHUB_TOKEN, so trigger those workflows directly.
+          # GITHUB_TOKEN creates the release, so the release event does not start workflows.
+          # Use workflow_dispatch to start crates.io publishing with GITHUB_TOKEN.
           gh workflow run publish-crates.yml \
-            --repo "${REPO}" \
-            --ref "${TAG}" \
-            --field "version=${TAG}"
-
-          gh workflow run publish-debian-all.yml \
             --repo "${REPO}" \
             --ref "${TAG}" \
             --field "version=${TAG}"

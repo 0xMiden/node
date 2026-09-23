@@ -1,29 +1,21 @@
 pub mod account;
-pub mod batch;
 pub mod block;
-pub mod digest;
 pub mod encryption;
-pub mod merkle;
 pub mod note;
-pub mod nullifier;
 pub mod proof_request;
-pub mod transaction;
+pub mod protocol_config;
+pub mod remote_prover;
+pub mod sequencer;
+pub mod sign_block_request;
+pub mod submission;
+pub mod validator;
 
-// UTILITIES
-// ================================================================================================
+use miden_node_tracing::{RecordAttribute, Value};
 
-pub fn convert<T, From, To>(from: T) -> impl Iterator<Item = To>
-where
-    T: IntoIterator<Item = From>,
-    From: Into<To>,
-{
-    from.into_iter().map(Into::into)
-}
+impl RecordAttribute for crate::generated::rpc::FinalityLevel {
+    const FIELD_NAMES: &'static [&'static str] = &["finality_level"];
 
-pub fn try_convert<T, E, From, To>(from: T) -> impl Iterator<Item = Result<To, E>>
-where
-    T: IntoIterator<Item = From>,
-    From: TryInto<To, Error = E>,
-{
-    from.into_iter().map(TryInto::try_into)
+    fn record_attribute(&self) -> impl Value + '_ {
+        self.as_str_name()
+    }
 }

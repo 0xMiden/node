@@ -205,9 +205,8 @@ pub(super) fn apply_storage_patch(
 
 /// Applies a storage patch to an existing storage header using precomputed map roots.
 ///
-/// This mirrors the legacy storage patch path for value-slot updates, map-slot removal, no-op map
-/// updates, and slot creation. For map slots whose final root is needed, it uses the root supplied
-/// by the caller instead of loading the previous map entries and reconstructing the map.
+/// Applies value-slot updates, map-slot removal, no-op map updates, and slot creation. Uses the map
+/// roots supplied by the caller. It does not load or reconstruct the map entries.
 pub(super) fn apply_storage_patch_with_roots(
     header: &AccountStorageHeader,
     patch: &AccountStoragePatch,
@@ -257,8 +256,10 @@ fn build_patched_header(
     mut map_updates: HashMap<&StorageSlotName, Word>,
     removed: &HashSet<&StorageSlotName>,
 ) -> Result<AccountStorageHeader, DatabaseError> {
-    let mut slots =
-        Vec::from_iter(header.slots().filter(|slot| !removed.contains(slot.name())).map(|slot| {
+    let mut slots = header
+        .slots()
+        .filter(|slot| !removed.contains(slot.name()))
+        .map(|slot| {
             let slot_name = slot.name();
             if let Some(new_value) = value_updates.remove(slot_name) {
                 StorageSlotHeader::new(slot_name.clone(), slot.slot_type(), new_value)
@@ -267,7 +268,8 @@ fn build_patched_header(
             } else {
                 slot.clone()
             }
-        }));
+        })
+        .collect::<Vec<_>>();
 
     // Any updates left over belong to slots created by the patch.
     for (slot_name, value) in value_updates {

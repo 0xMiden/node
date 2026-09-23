@@ -1,7 +1,7 @@
 //! Inserts the transactions included in a block.
 
 use miden_node_db::sqlite::WriteTx;
-use miden_node_utils::tracing::miden_instrument;
+use miden_node_tracing::miden_instrument;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::NoteHeader;
 use miden_protocol::transaction::{

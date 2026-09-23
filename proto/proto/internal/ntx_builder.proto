@@ -3,7 +3,7 @@ syntax = "proto3";
 package ntx_builder;
 
 import "rpc.proto";
-import "types/note.proto";
+import "note.proto";
 
 // NTX BUILDER API
 // ================================================================================================

@@ -6,14 +6,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context;
-use miden_node_db::sqlite::{DbReader, DbWriter};
+use miden_node_db::sqlite::{DbReader, DbWriter, WriteTx};
 use miden_node_proto::domain::account::AccountInfo;
+use miden_node_tracing::{info, miden_instrument, warn};
 use miden_node_utils::limiter::{
     MAX_RESPONSE_PAYLOAD_BYTES,
     QueryParamLimiter,
     QueryParamNoteCommitmentLimit,
 };
-use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountHeader, AccountId, AccountStorageHeader, StorageMapKey};
 use miden_protocol::asset::{Asset, AssetId};
@@ -34,9 +34,9 @@ use miden_protocol::note::{
     NoteScript,
     Nullifier,
 };
+use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::TransactionHeader;
 use miden_protocol::utils::serde::Deserializable;
-use tracing::info;
 
 use crate::db::migrations::{migrate_database, verify_latest_schema};
 use crate::db::models::conv::SqlTypeConvert;
@@ -120,6 +120,14 @@ pub struct Db {
     diesel: miden_node_db::Db,
     writer: DbWriter,
     reader: DbReader,
+}
+
+/// Inserts the genesis block and the protocol configuration that it activates.
+fn insert_genesis(tx: &WriteTx<'_>, genesis: GenesisBlock) -> Result<()> {
+    let (genesis_block, protocol_config) = genesis.into_parts();
+    queries::insert_protocol_config(tx, &protocol_config, BlockNumber::GENESIS)?;
+    queries::apply_block(tx, &genesis_block, &[], &PrecomputedPublicAccountStates::new())?;
+    Ok(())
 }
 
 impl Deref for Db {
@@ -246,7 +254,7 @@ impl Db {
     #[miden_instrument(
         target = COMPONENT,
         name = "store.database.bootstrap",
-        fields(path=%database_filepath.display())
+        fields(path = database_filepath),
         err,
     )]
     pub async fn bootstrap(
@@ -260,16 +268,8 @@ impl Db {
             .context("failed to open a database connection")?;
 
         // Insert genesis block data.
-        let genesis_block = genesis.into_inner();
         writer
-            .write::<_, DatabaseError, _>("insert genesis block", move |tx| {
-                queries::apply_block(
-                    tx,
-                    &genesis_block,
-                    &[],
-                    &PrecomputedPublicAccountStates::new(),
-                )
-            })
+            .write("insert genesis block", move |tx| insert_genesis(tx, genesis))
             .await
             .context("failed to insert genesis block")?;
         Ok(())
@@ -300,9 +300,9 @@ impl Db {
             miden_node_db::sqlite::open_with_pool_size(&database_filepath, connection_pool_size)?;
         info!(
             target: LOG_TARGET,
-            sqlite= %database_filepath.display(),
-            connection_pool_size = %connection_pool_size,
-            "Connected to the database"
+            "Connected to the database",
+            path = database_filepath,
+            db.sqlite.connection_pool_size = connection_pool_size.get()
         );
 
         Ok(Self { diesel: db, writer, reader })
@@ -312,6 +312,33 @@ impl Db {
     #[cfg(test)]
     pub(crate) fn writer(&self) -> &DbWriter {
         &self.writer
+    }
+
+    /// Selects a protocol configuration by its commitment.
+    #[miden_instrument(
+        level = "debug",
+        target = COMPONENT,
+        err,
+    )]
+    pub async fn select_protocol_config_by_commitment(
+        &self,
+        commitment: Word,
+    ) -> Result<Option<ProtocolConfig>> {
+        self.transact("protocol config by commitment", move |conn| {
+            diesel_queries::select_protocol_config_by_commitment(conn, commitment)
+        })
+        .await
+    }
+
+    /// Selects the configuration commitment active at the specified block.
+    pub async fn select_protocol_config_commitment_at(
+        &self,
+        block_number: ScopedBlockNum,
+    ) -> Result<Option<Word>> {
+        self.transact("protocol config commitment at block", move |conn| {
+            diesel_queries::select_protocol_config_commitment_at(conn, *block_number)
+        })
+        .await
     }
 
     /// Applies all pending migrations to an existing DB.
@@ -346,7 +373,7 @@ impl Db {
         target = COMPONENT,
         fields(
             prefix_len,
-            prefixes = nullifier_prefixes.len(),
+            prefix.count = nullifier_prefixes.len(),
         ),
         err,
     )]
@@ -361,7 +388,7 @@ impl Db {
 
         self.transact("nullifieres by prefix", move |conn| {
             let nullifier_prefixes =
-                Vec::from_iter(nullifier_prefixes.into_iter().map(|prefix| prefix as u16));
+                nullifier_prefixes.into_iter().map(|prefix| prefix as u16).collect::<Vec<_>>();
             diesel_queries::select_nullifiers_by_prefix(
                 conn,
                 prefix_len as u8,
@@ -390,6 +417,14 @@ impl Db {
                 maybe_block_number.map(|block_number| *block_number),
             )?;
             Ok(val)
+        })
+        .await
+    }
+
+    /// Selects the genesis block header for state initialization.
+    pub(crate) async fn select_genesis_block_header(&self) -> Result<Option<BlockHeader>> {
+        self.transact("genesis block header", |conn| {
+            diesel_queries::select_block_header_by_block_num(conn, Some(BlockNumber::GENESIS))
         })
         .await
     }
@@ -538,9 +573,12 @@ impl Db {
     pub async fn select_account_code_by_commitment(
         &self,
         code_commitment: Word,
-    ) -> Result<Option<Vec<u8>>> {
+    ) -> Result<Option<miden_protocol::account::AccountCode>> {
         self.transact("Get account code by commitment", move |conn| {
-            diesel_queries::select_account_code_by_commitment(conn, code_commitment)
+            diesel_queries::select_account_code_by_commitment(conn, code_commitment)?
+                .map(|bytes| miden_protocol::account::AccountCode::read_from_bytes(&bytes))
+                .transpose()
+                .map_err(DatabaseError::from)
         })
         .await
     }
@@ -602,24 +640,19 @@ impl Db {
         .await
     }
 
-    /// Returns all note commitments from the DB that match the provided ones and were committed at
-    /// or before `up_to_block`.
+    /// Returns the requested note IDs that the database contains at or before `up_to_block`.
     #[miden_instrument(
         level = "debug",
         target = COMPONENT,
         err,
     )]
-    pub async fn select_existing_note_commitments(
+    pub async fn select_existing_note_ids(
         &self,
-        note_commitments: Vec<Word>,
+        note_ids: Vec<NoteId>,
         up_to_block: ScopedBlockNum,
-    ) -> Result<HashSet<Word>> {
-        self.transact("note by commitment", move |conn| {
-            diesel_queries::select_existing_note_commitments(
-                conn,
-                note_commitments.as_slice(),
-                *up_to_block,
-            )
+    ) -> Result<HashSet<NoteId>> {
+        self.transact("existing note IDs", move |conn| {
+            diesel_queries::select_existing_note_ids(conn, note_ids.as_slice(), *up_to_block)
         })
         .await
     }
@@ -664,6 +697,7 @@ impl Db {
     pub(crate) async fn apply_block(
         &self,
         signed_block: SignedBlock,
+        activated_protocol_config: Option<ProtocolConfig>,
         notes: Vec<(NoteRecord, Option<Nullifier>)>,
         precomputed_public_states: PrecomputedPublicAccountStates,
         unresolved_note_nullifiers: Vec<Nullifier>,
@@ -671,6 +705,13 @@ impl Db {
     ) -> Result<BTreeMap<Nullifier, NoteId>> {
         self.writer
             .write::<_, DatabaseError, _>("apply block", move |tx| {
+                if let Some(protocol_config) = activated_protocol_config.as_ref() {
+                    queries::insert_protocol_config(
+                        tx,
+                        protocol_config,
+                        signed_block.header().block_num(),
+                    )?;
+                }
                 queries::apply_block(tx, &signed_block, &notes, &precomputed_public_states)?;
                 queries::prune_history(tx, prune_tip)?;
                 Ok(())
@@ -701,11 +742,11 @@ impl Db {
             match result {
                 Ok(note_ids) => resolved_note_ids.extend(note_ids),
                 Err(err) => {
-                    tracing::warn!(
+                    warn!(
+                        &err,
                         target: COMPONENT,
-                        %err,
-                        nullifiers.count = count,
                         "Failed to resolve consumed note IDs for lifecycle events",
+                        note.nullifier.count = count
                     );
                     break;
                 },
@@ -827,7 +868,7 @@ impl Db {
             return Ok(AccountStorageMapDetails::limit_exceeded(slot_name));
         }
 
-        let entries = Vec::from_iter(latest_values.into_iter());
+        let entries = latest_values.into_iter().collect::<Vec<_>>();
         Ok(AccountStorageMapDetails {
             slot_name,
             entries: StorageMapEntries::AllEntries(entries),

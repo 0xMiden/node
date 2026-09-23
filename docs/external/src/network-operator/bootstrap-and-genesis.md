@@ -25,6 +25,8 @@ which provides an easy method to obtain this data. This is directly supported by
 `--network testnet` or `--network devnet`. Bootstrap commands also support passing a file directly to cover custom
 networks, or if the official URLs are not trusted.
 
+Before starting the sequencer, create and deploy its [fee collector account](./sequencer.md#fee-collection).
+
 ## Bootstrap Flow
 
 <Tabs groupId="network-operator-genesis-source" defaultValue="official">
@@ -55,11 +57,16 @@ miden-validator genesis \
 
 Unless the configuration sets `native_faucet` to a pre-built account file, the native faucet is generated as a network
 account and holds no key of its own; minting from it is restricted to the faucet operator account generated alongside
-it. Both are written to the accounts directory as `native_faucet.mac` and `faucet_operator.mac`, and the faucet account
-id is printed. The operator file carries the only signing key permitted to mint, so treat it as a secret.
+it. The operator starts with 1,000 MIDEN tokens so it can pay fees for the first mint requests. Both accounts are
+written to the accounts directory as `native_faucet.mac` and `faucet_operator.mac`, and the faucet account id is
+printed. The operator file carries the only signing key permitted to mint, so treat it as a secret.
 
 To run a faucet against the network, pass `faucet_operator.mac` to the faucet's `init --import`, and the faucet account
 id to `--faucet-account-id`.
+
+Every `[[wallet]]` entry needs a `name`, which is written to the accounts directory as `<name>.mac`. The name must be a
+plain file name, and no two generated accounts may share a name. The name keeps the path of a wallet stable, which a
+service that loads its account from a fixed path needs; see the [funding service](./funding-service.md).
 
 Upload `genesis-data/genesis.dat` so it is served at:
 

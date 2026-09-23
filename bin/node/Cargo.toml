@@ -19,19 +19,30 @@ tracing-forest = ["miden-node-block-producer/tracing-forest"]
 
 [dependencies]
 anyhow                    = { workspace = true }
+axum                      = { workspace = true }
 clap                      = { features = ["env", "string"], workspace = true }
+fs-err                    = { workspace = true }
 humantime                 = { workspace = true }
 miden-node-block-producer = { workspace = true }
 miden-node-proto          = { workspace = true }
 miden-node-rpc            = { workspace = true }
 miden-node-store          = { workspace = true }
+miden-node-tracing        = { workspace = true }
 miden-node-utils          = { workspace = true }
+miden-objects             = { workspace = true }
 miden-protocol            = { workspace = true }
+miden-standards           = { workspace = true }
+rand                      = { workspace = true }
+reqwest                   = { features = ["json"], workspace = true }
+serde                     = { features = ["derive"], workspace = true }
+serde_json                = { workspace = true }
+thiserror                 = { workspace = true }
 tokio                     = { features = ["macros", "net", "rt-multi-thread", "sync"], workspace = true }
 tokio-stream              = { workspace = true }
 tonic                     = { default-features = false, workspace = true }
-tracing                   = { workspace = true }
 url                       = { workspace = true }
 
 [dev-dependencies]
-miden-node-utils = { features = ["tracing-forest"], workspace = true }
+miden-node-tracing = { features = ["tracing-forest"], workspace = true }
+tempfile           = { workspace = true }
+tower              = { features = ["util"], workspace = true }

@@ -11,7 +11,7 @@ pub use conv::{DatabaseTypeConversionError, SqlTypeConvert};
 use diesel::{RunQueryDsl, SqliteConnection};
 pub use errors::{DatabaseError, SchemaVerificationError};
 pub use manager::{ConnectionManager, ConnectionManagerError, configure_connection_on_creation};
-use tracing::Instrument;
+use miden_node_tracing::Instrument;
 
 pub type Result<T, E = DatabaseError> = std::result::Result<T, E>;
 
@@ -68,9 +68,7 @@ impl Db {
     /// Create and commit a transaction with the queries added in the provided closure
     pub async fn transact<R, E, Q, M>(&self, msg: M, query: Q) -> std::result::Result<R, E>
     where
-        Q: Send
-            + for<'a, 't> FnOnce(&'a mut SqliteConnection) -> std::result::Result<R, E>
-            + 'static,
+        Q: Send + for<'a> FnOnce(&'a mut SqliteConnection) -> std::result::Result<R, E> + 'static,
         R: Send + 'static,
         M: Send + ToString,
         E: From<diesel::result::Error>,
@@ -108,16 +106,14 @@ impl PinnedConnection {
     /// the pinned connection.
     pub async fn transact<R, E, Q, M>(&self, msg: M, query: Q) -> std::result::Result<R, E>
     where
-        Q: Send
-            + for<'a, 't> FnOnce(&'a mut SqliteConnection) -> std::result::Result<R, E>
-            + 'static,
+        Q: Send + for<'a> FnOnce(&'a mut SqliteConnection) -> std::result::Result<R, E> + 'static,
         R: Send + 'static,
         M: Send + ToString,
         E: From<diesel::result::Error>,
         E: From<DatabaseError>,
         E: std::error::Error + Send + Sync + 'static,
     {
-        let span = tracing::Span::current();
+        let span = miden_node_tracing::Span::current();
         self.conn
             .interact(move |conn| {
                 let _guard = span.enter();
@@ -136,7 +132,7 @@ impl PinnedConnection {
         E: From<DatabaseError>,
         E: std::error::Error + Send + Sync + 'static,
     {
-        let span = tracing::Span::current();
+        let span = miden_node_tracing::Span::current();
         self.conn
             .interact(move |conn| {
                 let _guard = span.enter();

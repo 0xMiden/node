@@ -1,10 +1,10 @@
 timestamp = 1717344256
-version   = 1
 
 # No `native_faucet` is set below, so the native MIDEN faucet is generated as a network account
 # owned by a generated operator account that holds the only key permitted to mint. Both are written
-# to the accounts directory as `native_faucet.mac` and `faucet_operator.mac`. Wallet balances below
-# are funded directly in the genesis state and do not require minting.
+# to the accounts directory as `native_faucet.mac` and `faucet_operator.mac`. The operator is
+# pre-funded with 1,000 MIDEN tokens to bootstrap fee payments. Wallet balances below are funded
+# directly in the genesis state and do not require minting.
 
 # The genesis validator set is not part of this configuration: the hex-encoded public keys (see
 # `miden-validator pubkey`) are passed to `miden-validator genesis` via `--validator.key` flags.
@@ -21,11 +21,19 @@ symbol       = "WHAT"
 [[wallet]]
 account_type = "private"
 assets       = [{ amount = 999_000, symbol = "MIDEN" }]
+name         = "wallet_treasury"
 
 [[wallet]]
 account_type = "private"
 assets       = [{ amount = 777, symbol = "MIDEN" }]
+name         = "wallet_user"
 
 [[wallet]]
 account_type = "private"
 assets       = [{ amount = 1, symbol = "WHAT" }]
+name         = "wallet_what"
+
+[[wallet]]
+account_type = "public"
+assets       = [{ amount = 1_000_000_000, symbol = "MIDEN" }]
+name         = "funding_service"

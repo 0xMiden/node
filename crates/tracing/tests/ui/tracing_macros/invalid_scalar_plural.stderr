@@ -1,0 +1,21 @@
+error[E0080]: evaluation panicked: tracing field `account.ids` is not allowed for this attribute type
+  --> tests/ui/tracing_macros/invalid_scalar_plural.rs:15:5
+   |
+15 |     miden_span_record!(account.ids = AccountId);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `records_scalar_with_plural_field::__miden_assert_field_name::<AccountId>::{constant#0}` failed here
+
+note: erroneous constant encountered
+  --> tests/ui/tracing_macros/invalid_scalar_plural.rs:15:5
+   |
+15 |     miden_span_record!(account.ids = AccountId);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this note originates in the macro `miden_span_record` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+note: the above error was encountered while instantiating `fn __miden_assert_field_name::<AccountId>`
+  --> tests/ui/tracing_macros/invalid_scalar_plural.rs:15:5
+   |
+15 |     miden_span_record!(account.ids = AccountId);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this note originates in the macro `miden_span_record` (in Nightly builds, run with -Z macro-backtrace for more info)

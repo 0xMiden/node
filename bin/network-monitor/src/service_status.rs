@@ -8,8 +8,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use miden_node_proto::generated as proto;
 use miden_node_proto::generated::rpc::{BlockProducerStatus, RpcStatus};
+use miden_node_tracing::warn;
 use serde::{Deserialize, Serialize};
-use tracing::warn;
 
 use crate::LOG_TARGET;
 use crate::faucet::FaucetTestDetails;
@@ -168,6 +168,11 @@ pub struct IncrementDetails {
     pub last_tx_id: Option<String>,
     /// Last measured latency in blocks from submission to state update.
     pub last_latency_blocks: Option<u32>,
+    /// The wallet's fee-asset balance in base units; `None` on zero-fee chains.
+    pub fee_balance: Option<u64>,
+    /// Error from the most recent faucet top-up attempt; `None` when it succeeded or none was
+    /// needed.
+    pub fee_topup_error: Option<String>,
 }
 
 /// Details about an in-flight latency measurement.
@@ -214,7 +219,6 @@ pub struct ExplorerStatusDetails {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NoteTransportStatusDetails {
     pub url: String,
-    pub serving_status: String,
 }
 
 /// Details of the validator service.
@@ -336,9 +340,9 @@ impl From<proto::remote_prover::ProxyWorkerStatus> for WorkerStatusDetails {
             |_| {
                 warn!(
                     target: LOG_TARGET,
-                    raw = value.status,
-                    worker = %value.name,
-                    "Unknown worker health status discriminant"
+                    "Unknown worker health status discriminant",
+                    worker.status.raw = value.status,
+                    worker.name = value.name.as_str()
                 );
                 Status::Unknown
             },
@@ -362,8 +366,8 @@ impl RemoteProverStatusDetails {
                 |_| {
                     warn!(
                         target: LOG_TARGET,
-                        raw = status.supported_proof_type,
-                        "Unknown supported proof type discriminant"
+                        "Unknown supported proof type discriminant",
+                        prover.proof_type.raw = status.supported_proof_type
                     );
                     ProofType::Unknown
                 },

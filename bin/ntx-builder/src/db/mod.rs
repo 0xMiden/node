@@ -1,24 +1,28 @@
+use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use miden_node_db::DatabaseError;
 use miden_node_db::sqlite::{DbReader, DbWriter};
-use miden_node_utils::tracing::miden_instrument;
+use miden_node_tracing::{info, miden_instrument};
 use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountId};
-use miden_protocol::block::{BlockHeader, BlockNumber, SignedBlock, ValidatorKeys};
+use miden_protocol::block::{BlockHeader, BlockNumber, SignedBlock, ValidatorConfig};
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
 use miden_protocol::crypto::merkle::mmr::PartialMmr;
-use miden_protocol::note::{NoteId, NoteScript, Nullifier};
+use miden_protocol::note::{Note, NoteId, NoteScript, Nullifier};
 #[cfg(test)]
 use miden_protocol::transaction::TransactionId;
+use miden_protocol::utils::serde::{ByteReader, ByteWriter, Deserializable, Serializable};
 #[cfg(test)]
 use miden_standards::note::AccountTargetNetworkNote;
-use tracing::info;
 
 use crate::committed_block::CommittedBlockEffects;
 use crate::db::migrations::{bootstrap_database, migrate_database, verify_latest_schema};
 use crate::db::queries::NoteStatusRow;
+#[cfg(test)]
+use crate::sponsorship::SponsorshipNote;
 use crate::{COMPONENT, NoteError, db};
 
 pub(crate) mod queries;
@@ -29,6 +33,49 @@ mod migrations;
 /// budget on its own.
 pub(crate) const OVERSIZED_NOTE_DISCARD_REASON: &str =
     "note consumption exceeds the per-transaction cycle budget; it can never be consumed";
+
+/// Genesis validator keys persisted in the pre-0.17 native encoding.
+///
+/// The transaction-encryption trust root only needs the ordered keys, not the quorum newly carried
+/// by [`ValidatorConfig`]. Keeping this wrapper encoded as `Vec<PublicKey>` preserves the existing
+/// database representation while the runtime block header uses `ValidatorConfig`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GenesisValidatorKeys(Vec<ValidatorPublicKey>);
+
+impl GenesisValidatorKeys {
+    fn from_validator_config(config: &ValidatorConfig) -> Self {
+        Self(config.keys().to_vec())
+    }
+
+    pub(crate) fn keys(&self) -> &[ValidatorPublicKey] {
+        &self.0
+    }
+}
+
+impl Serializable for GenesisValidatorKeys {
+    fn write_into<W: ByteWriter>(&self, target: &mut W) {
+        self.0.write_into(target);
+    }
+}
+
+impl Deserializable for GenesisValidatorKeys {
+    fn read_from<R: ByteReader>(
+        source: &mut R,
+    ) -> Result<Self, miden_protocol::utils::serde::DeserializationError> {
+        let keys = Vec::<ValidatorPublicKey>::read_from(source)?;
+        let quorum = u16::try_from(keys.len()).map_err(|_| {
+            miden_protocol::utils::serde::DeserializationError::InvalidValue(
+                "validator key count does not fit in u16".into(),
+            )
+        })?;
+        ValidatorConfig::new(keys.clone(), quorum).map_err(|err| {
+            miden_protocol::utils::serde::DeserializationError::InvalidValue(err.to_string())
+        })?;
+        Ok(Self(keys))
+    }
+}
+
+miden_node_db::impl_blob_codec!(GenesisValidatorKeys);
 
 // NTX BUILDER DATABASE
 // ================================================================================================
@@ -53,7 +100,7 @@ impl NtxDbReader {
     /// Reads the validator signing keys persisted from the genesis header.
     pub(crate) async fn select_genesis_validator_keys(
         &self,
-    ) -> Result<Option<ValidatorKeys>, DatabaseError> {
+    ) -> Result<Option<GenesisValidatorKeys>, DatabaseError> {
         self.reader
             .read("select_genesis_validator_keys", db::queries::select_genesis_validator_keys)
             .await
@@ -155,6 +202,20 @@ impl NtxDbReader {
             .read("get_note_status", move |tx| crate::db::queries::get_note_status(tx, note_id))
             .await
     }
+
+    /// Returns the unconsumed `FEE_SPONSORSHIP` notes bound to the account's unconsumed feature
+    /// notes, grouped by feature note id. Used by transaction selection to attach each feature
+    /// note's sponsorships to its group.
+    pub(crate) async fn sponsorships_for_pending_notes(
+        &self,
+        account_id: AccountId,
+    ) -> Result<HashMap<NoteId, Vec<Note>>, DatabaseError> {
+        self.reader
+            .read("sponsorships_for_pending_notes", move |tx| {
+                queries::select_sponsorships_for_pending_notes(tx, account_id)
+            })
+            .await
+    }
 }
 
 /// Write handle to the ntx-builder database.
@@ -194,11 +255,14 @@ impl NtxDbWriter {
             .await
     }
 
+    /// Applies a committed block's effects and returns the accounts whose pending feature notes
+    /// gained a sponsorship in this block (one entry per sponsorship), so the coordinator can wake
+    /// their actors.
     pub(crate) async fn apply_committed_block(
         &self,
         effects: CommittedBlockEffects,
         chain_mmr: PartialMmr,
-    ) -> Result<(), DatabaseError> {
+    ) -> Result<Vec<AccountId>, DatabaseError> {
         self.writer
             .write("apply_committed_block", move |tx| {
                 queries::apply_committed_block(tx, &effects, &chain_mmr)
@@ -255,7 +319,7 @@ impl NtxDbWriter {
 #[miden_instrument(
     target = COMPONENT,
     name = "ntx_builder.database.load",
-    fields(path=%database_filepath.display()),
+    fields(path = database_filepath),
     err,
 )]
 pub async fn load(database_filepath: PathBuf) -> anyhow::Result<NtxDbWriter> {
@@ -267,7 +331,7 @@ pub async fn load(database_filepath: PathBuf) -> anyhow::Result<NtxDbWriter> {
 #[miden_instrument(
     target = COMPONENT,
     name = "ntx_builder.database.load",
-    fields(path=%database_filepath.display()),
+    fields(path = database_filepath),
     err,
 )]
 pub async fn load_with_pool_size(
@@ -296,9 +360,9 @@ fn open_with_pool_size(
 
     info!(
         target: COMPONENT,
-        sqlite = %database_filepath.display(),
-        connection_pool_size = %connection_pool_size,
-        "Connected to the database"
+        "Connected to the database",
+        path = database_filepath,
+        db.sqlite.connection_pool_size = connection_pool_size.get()
     );
 
     Ok(NtxDbWriter { writer, reader: NtxDbReader { reader } })
@@ -315,7 +379,7 @@ fn open_with_pool_size(
 #[miden_instrument(
     target = COMPONENT,
     name = "ntx_builder.database.bootstrap",
-    fields(path=%database_filepath.display()),
+    fields(path = database_filepath),
     err,
 )]
 pub async fn bootstrap(database_filepath: PathBuf, genesis: &SignedBlock) -> anyhow::Result<()> {
@@ -381,6 +445,10 @@ impl NtxDbReader {
     pub(crate) async fn count_chain_state(&self) -> i64 {
         self.count("SELECT COUNT(*) FROM chain_state").await
     }
+
+    pub(crate) async fn count_sponsorship_notes(&self) -> i64 {
+        self.count("SELECT COUNT(*) FROM sponsorship_notes").await
+    }
 }
 
 /// Test-only write helpers.
@@ -422,6 +490,29 @@ impl NtxDbWriter {
         self.writer
             .write("mark_notes_consumed", move |tx| {
                 queries::mark_notes_consumed(tx, &nullifiers, block_num)
+            })
+            .await
+    }
+
+    pub(crate) async fn insert_sponsorship_notes(
+        &self,
+        notes: Vec<SponsorshipNote>,
+    ) -> Result<(), DatabaseError> {
+        self.writer
+            .write("insert_sponsorship_notes", move |tx| {
+                queries::insert_sponsorship_notes(tx, &notes)
+            })
+            .await
+    }
+
+    pub(crate) async fn mark_sponsorships_consumed(
+        &self,
+        nullifiers: Vec<Nullifier>,
+        block_num: BlockNumber,
+    ) -> Result<(), DatabaseError> {
+        self.writer
+            .write("mark_sponsorships_consumed", move |tx| {
+                queries::mark_sponsorships_consumed(tx, &nullifiers, block_num)
             })
             .await
     }
@@ -483,7 +574,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("failed to create temp directory");
         let db_path = dir.path().join("ntx-builder.sqlite3");
         let genesis = mock_genesis_block();
-        let expected_validator_keys = genesis.header().validator_keys().clone();
+        let expected_validator_keys =
+            GenesisValidatorKeys::from_validator_config(genesis.header().validator_config());
 
         bootstrap(db_path.clone(), &genesis)
             .await

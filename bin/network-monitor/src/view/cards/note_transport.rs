@@ -1,8 +1,8 @@
-//! Renders the note-transport card (URL + gRPC serving status).
+//! Renders the note transport service URL.
 
 use maud::{Markup, html};
 
-use super::super::helpers::{copy_button, metric_row};
+use super::super::helpers::copy_button;
 use crate::status::NoteTransportStatusDetails;
 
 pub(in crate::view) fn render_note_transport(
@@ -25,7 +25,7 @@ pub(in crate::view) fn render_note_transport(
                             (details.url) (copy_button(&details.url, "URL"))
                         }
                     }
-                    (metric_row("Serving Status:", &details.serving_status))
+
                 }
             }
         }

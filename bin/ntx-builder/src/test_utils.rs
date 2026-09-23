@@ -3,7 +3,7 @@
 use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountComponent, AccountId, AccountType};
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::NoteScriptRoot;
+use miden_protocol::note::{NoteId, NoteScriptRoot};
 use miden_protocol::testing::account_id::{
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE,
     AccountIdBuilder,
@@ -63,6 +63,85 @@ pub fn mock_single_target_note_with_code(
     AccountTargetNetworkNote::try_from(note).expect("note should be single-target network note")
 }
 
+/// Creates a `FEE_SPONSORSHIP` [`Note`](miden_protocol::note::Note) sponsoring `feature_note_id`,
+/// tagged for `target_account_id`. Reclaim is left disabled.
+pub fn mock_sponsorship_note(
+    target_account_id: AccountId,
+    feature_note_id: NoteId,
+    seed: u8,
+) -> miden_protocol::note::Note {
+    mock_sponsorship_note_with_amount(target_account_id, feature_note_id, seed, 100)
+}
+
+/// Creates a `FEE_SPONSORSHIP` note carrying `amount` units of its fungible fee asset.
+pub fn mock_sponsorship_note_with_amount(
+    target_account_id: AccountId,
+    feature_note_id: NoteId,
+    seed: u8,
+    amount: u64,
+) -> miden_protocol::note::Note {
+    use miden_protocol::asset::FungibleAsset;
+
+    mock_sponsorship_note_with_faucet_and_amount(
+        target_account_id,
+        feature_note_id,
+        seed,
+        FungibleAsset::mock_issuer(),
+        amount,
+    )
+}
+
+/// Creates a `FEE_SPONSORSHIP` note carrying `amount` units issued by `fee_faucet_id`.
+pub fn mock_sponsorship_note_with_faucet_and_amount(
+    target_account_id: AccountId,
+    feature_note_id: NoteId,
+    seed: u8,
+    fee_faucet_id: AccountId,
+    amount: u64,
+) -> miden_protocol::note::Note {
+    use miden_protocol::asset::FungibleAsset;
+    use miden_standards::note::FeeSponsorshipNote;
+
+    let mut rng = ChaCha20Rng::from_seed([seed; 32]);
+    let sender = AccountIdBuilder::new()
+        .account_type(AccountType::Private)
+        .build_with_rng(&mut rng);
+    let asset =
+        FungibleAsset::new(fee_faucet_id, amount).expect("mock fungible asset should be valid");
+
+    FeeSponsorshipNote::builder()
+        .sender(sender)
+        .target_account(target_account_id)
+        .feature_note_id(feature_note_id)
+        .asset(asset)
+        .serial_number(Word::from([u32::from(seed), 0, 0, 1]))
+        .build()
+        .expect("sponsorship note should build for a public target")
+        .into()
+}
+
+/// Creates a decoded [`SponsorshipNote`](crate::sponsorship::SponsorshipNote) sponsoring
+/// `feature_note_id`, tagged for `target_account_id`.
+pub fn mock_sponsorship(
+    target_account_id: AccountId,
+    feature_note_id: miden_protocol::note::NoteId,
+    seed: u8,
+) -> crate::sponsorship::SponsorshipNote {
+    let note = mock_sponsorship_note(target_account_id, feature_note_id, seed);
+    crate::sponsorship::SponsorshipNote::try_from(note).expect("mock sponsorship note must decode")
+}
+
+/// Creates a decoded sponsorship carrying `amount` units of its fungible fee asset.
+pub fn mock_sponsorship_with_amount(
+    target_account_id: AccountId,
+    feature_note_id: miden_protocol::note::NoteId,
+    seed: u8,
+    amount: u64,
+) -> crate::sponsorship::SponsorshipNote {
+    let note = mock_sponsorship_note_with_amount(target_account_id, feature_note_id, seed, amount);
+    crate::sponsorship::SponsorshipNote::try_from(note).expect("mock sponsorship note must decode")
+}
+
 /// Creates a mock `Account` for a network account.
 ///
 /// Uses `AccountBuilder` with minimal components needed for serialization.
@@ -108,7 +187,7 @@ pub fn mock_network_account(
 
     mock_account_with_auth_component(
         AuthNetworkAccount::new(
-            BTreeSet::from_iter(allowed_script_roots),
+            allowed_script_roots.into_iter().collect::<BTreeSet<_>>(),
             FeePolicyManager::mock(FungibleAsset::mock_issuer()),
         )
         .expect("non-empty allowlist should construct"),
@@ -117,7 +196,7 @@ pub fn mock_network_account(
 
 /// Creates a mock `BlockHeader` for the given block number.
 pub fn mock_block_header(block_num: BlockNumber) -> miden_protocol::block::BlockHeader {
-    miden_protocol::block::BlockHeader::mock(block_num, None, None, &[], Word::default())
+    miden_protocol::block::BlockHeader::mock(block_num, None, None, &[])
 }
 
 /// Creates a mock genesis [`SignedBlock`] with an empty body.
@@ -163,7 +242,8 @@ pub fn mock_genesis_block_with_network_account() -> (miden_protocol::block::Sign
 
     let (account, details) = mock_network_account_update();
     let account_id = account.id();
-    let update = BlockAccountUpdate::new(account_id, account.to_commitment(), details);
+    let update = BlockAccountUpdate::new(account_id, account.to_commitment(), details)
+        .expect("test account update should be valid");
 
     let header = mock_block_header(BlockNumber::GENESIS);
     let body = BlockBody::new_unchecked(

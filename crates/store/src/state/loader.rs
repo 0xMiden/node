@@ -22,8 +22,10 @@ use miden_crypto::merkle::smt::{
     SmtStorageReader,
 };
 #[cfg(feature = "rocksdb")]
+use miden_node_tracing::info;
+use miden_node_tracing::miden_instrument;
+#[cfg(feature = "rocksdb")]
 use miden_node_utils::clap::RocksDbOptions;
-use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::account::{AccountId, AccountStorageHeader, StorageSlotType};
 use miden_protocol::block::account_tree::{AccountIdKey, AccountTree};
 use miden_protocol::block::nullifier_tree::NullifierTree;
@@ -32,8 +34,6 @@ use miden_protocol::block::{BlockHeader, BlockNumber, Blockchain};
 use miden_protocol::crypto::merkle::smt::MemoryStorage;
 use miden_protocol::crypto::merkle::smt::{LargeSmt, LargeSmtError, SmtStorage};
 use miden_protocol::{Felt, Word};
-#[cfg(feature = "rocksdb")]
-use tracing::info;
 
 use crate::COMPONENT;
 #[cfg(feature = "rocksdb")]
@@ -83,7 +83,7 @@ pub type TreeStorageReader = <TreeStorage as SmtStorage>::Reader;
 
 /// Converts a `LargeSmtError` into a `StateInitializationError`.
 pub fn account_tree_large_smt_error_to_init_error(e: LargeSmtError) -> StateInitializationError {
-    use miden_node_utils::ErrorReport;
+    use miden_node_tracing::ErrorReport;
     match e {
         LargeSmtError::Merkle(merkle_error) => {
             StateInitializationError::DatabaseError(DatabaseError::MerkleError(merkle_error))
@@ -411,7 +411,7 @@ impl AccountForestLoader for ForestInMemoryBackend {
     #[miden_instrument(
         target = COMPONENT,
         fields(
-            block.number = %block_num,
+            block.number = block_num,
         ),
     )]
     async fn load_account_state_forest(
@@ -464,7 +464,7 @@ impl AccountForestLoader for ForestPersistentBackend {
     #[miden_instrument(
         target = COMPONENT,
         fields(
-            block.number = %block_num,
+            block.number = block_num,
         ),
     )]
     async fn load_account_state_forest(
@@ -548,7 +548,7 @@ fn verify_chain_mmr_consistency(
 #[miden_instrument(
     target = COMPONENT,
     fields(
-        block.number = %block_num,
+        block.number = block_num,
     ),
 )]
 pub async fn rebuild_account_state_forest(
@@ -753,8 +753,7 @@ mod tests {
 
         for block_num in 0..count {
             let chain_commitment = mmr.peaks().hash_peaks();
-            let header =
-                BlockHeader::mock(block_num, Some(chain_commitment), None, &[], Word::default());
+            let header = BlockHeader::mock(block_num, Some(chain_commitment), None, &[]);
             mmr.add(header.commitment()).expect("test MMR should accept block commitment");
             headers.push(header);
         }

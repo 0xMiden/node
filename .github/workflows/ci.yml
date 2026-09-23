@@ -321,6 +321,79 @@ jobs:
   # Jobs that don't require caching to be efficient
   # ===============================================================================================
 
+  rust-versions:
+    name: lint - Rust versions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/check-rust-versions
+
+  audit:
+    name: lint - dependency audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install cargo-binstall
+        uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
+        with:
+          tool: cargo-binstall
+      - name: Install cargo-audit
+        run: cargo binstall --no-confirm cargo-audit@0.22.2
+      - name: Check dependencies
+        run: |
+          set +e
+          # Ignore RUSTSEC-2024-0388 because only inactive ruint compatibility features use derivative.
+          # Ignore RUSTSEC-2024-0436 because upstream crates do not provide releases without paste.
+          cargo audit --color always \
+            --deny yanked \
+            --deny unsound \
+            --ignore RUSTSEC-2024-0388 \
+            --ignore RUSTSEC-2024-0436 2>&1 \
+            | tee "${RUNNER_TEMP}/cargo-audit.ansi"
+          audit_status=${PIPESTATUS[0]}
+          set -e
+
+          sed $'s/\033\\[[0-9;]*m//g' "${RUNNER_TEMP}/cargo-audit.ansi" \
+            > "${RUNNER_TEMP}/cargo-audit.txt"
+
+          has_unmaintained=false
+          if grep -Eqi "Warning:[[:space:]]+unmaintained" "${RUNNER_TEMP}/cargo-audit.txt"; then
+            has_unmaintained=true
+          fi
+
+          {
+            echo "## Dependency audit"
+            echo
+
+            if (( audit_status != 0 )); then
+              echo "> [!CAUTION]"
+              echo "> The dependency audit failed. Review the report below."
+            elif [[ "${has_unmaintained}" == true ]]; then
+              echo "> [!WARNING]"
+              echo "> The audit passed, but it found unmaintained dependencies."
+            else
+              echo "> [!TIP]"
+              echo "> The dependency audit passed."
+            fi
+
+            echo
+            echo "<details>"
+            echo "<summary>Full cargo-audit report</summary>"
+            echo
+            echo '```console'
+            cat "${RUNNER_TEMP}/cargo-audit.txt"
+            echo '```'
+            echo "</details>"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          exit "${audit_status}"
+
   typos:
     name: lint - spelling
     runs-on: ubuntu-24.04
@@ -405,7 +478,7 @@ jobs:
         with:
           tool: cargo-binstall
       - name: Install workspace inheritance checker
-        run: cargo binstall --no-confirm cargo-workspace-inheritance-check@1.2.0
+        run: cargo binstall --no-confirm cargo-workspace-inheritance-check@1.3.0
       - name: Check workspace inheritance
         run: cargo workspace-inheritance-check --promotion-threshold 2 --promotion-failure
 
@@ -416,9 +489,13 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - name: Install cargo-shear
+      - name: Install cargo-binstall
         uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
         with:
-          tool: cargo-shear@1.12.4
+          tool: cargo-binstall
+      - name: Install cargo-shear
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: cargo binstall --locked --no-confirm cargo-shear@1.12.4
       - name: Check for unused dependencies
         run: make shear

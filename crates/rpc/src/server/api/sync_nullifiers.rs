@@ -1,26 +1,20 @@
-use miden_node_proto::decode::read_block_range;
-use miden_node_proto::generated as proto;
+use miden_node_proto::{DecodeMessage, Verify, generated as proto};
+use miden_node_tracing::{debug, miden_instrument, miden_span_record};
 use miden_node_utils::limiter::QueryParamNullifierPrefixLimit;
-use miden_node_utils::tracing::{miden_instrument, miden_span_record};
-use tonic::Status;
-use tracing::debug;
 
-use super::{
-    RpcInvalidBlockRange,
-    RpcService,
-    check,
-    database_error_to_status,
-    invalid_block_range_to_status,
-};
+use super::error_codes::SyncNullifiersErrorCode;
+use super::{RpcService, check, database_error_to_status, invalid_block_range_to_status};
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::SyncNullifiers for RpcService {
-    type Input = proto::rpc::SyncNullifiersRequest;
+    type Input = proto::rpc::DecodedSyncNullifiersRequest;
     type Output = proto::rpc::SyncNullifiersResponse;
 
     fn decode(request: proto::rpc::SyncNullifiersRequest) -> tonic::Result<Self::Input> {
-        Ok(request)
+        request
+            .decode_fields()
+            .map_err(|err| SyncNullifiersErrorCode::DeserializationFailed.invalid_argument(err))
     }
 
     fn encode(output: Self::Output) -> tonic::Result<proto::rpc::SyncNullifiersResponse> {
@@ -38,29 +32,48 @@ impl proto::server::rpc_api::SyncNullifiers for RpcService {
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        tracing::trace!(target: LOG_TARGET, ?request);
+        let range = request.block_range;
+        let nullifiers = request.nullifiers.into_inner();
 
-        let range = read_block_range::<Status>(request.block_range, "SyncNullifiersRequest")?;
+        miden_span_record!(
+            block_range.from = range.block_from,
+            block_range.to = range.block_to,
+            prefix_len = request.prefix_len,
+            prefixes = nullifiers.as_slice() #[nonstandard]
+        );
 
-        miden_span_record!(block_range.from = range.block_from, block_range.to = range.block_to,);
+        debug!(
+            target: LOG_TARGET,
+            "Syncing nullifiers",
+            block_range.from = range.block_from,
+            block_range.to = range.block_to,
+            prefix_len = request.prefix_len,
+            prefixes = nullifiers.as_slice() #[nonstandard]
+        );
 
-        debug!(target: LOG_TARGET, "Syncing nullifiers");
-
-        check::<QueryParamNullifierPrefixLimit>(request.nullifiers.len())?;
+        check::<QueryParamNullifierPrefixLimit>(nullifiers.len())?;
 
         if request.prefix_len != 16 {
-            return Err(Status::invalid_argument(format!(
+            return Err(SyncNullifiersErrorCode::InvalidPrefixLength.invalid_argument(format!(
                 "unsupported prefix length: {} (only 16-bit prefixes are supported)",
                 request.prefix_len
             )));
         }
-        let block_range = range
-            .into_inclusive_range::<RpcInvalidBlockRange>()
-            .map_err(invalid_block_range_to_status)?;
+
+        // Every prefix must fit in the requested 16-bit prefix length. The store narrows prefixes
+        // with `prefix as u16`, which would otherwise silently truncate an out-of-range value (e.g.
+        // 65536 -> 0) and query a different prefix than the client requested.
+        if let Some(&prefix) = nullifiers.iter().find(|&&prefix| prefix > u32::from(u16::MAX)) {
+            return Err(SyncNullifiersErrorCode::DeserializationFailed.invalid_argument(format!(
+                "nullifier prefix {prefix} does not fit in the requested prefix length of 16 bits"
+            )));
+        }
+
+        let block_range = range.verify().map_err(invalid_block_range_to_status)?;
         let (chain_tip, (nullifiers, block_num)) = self
             .state
             .with_view(async |view| {
-                view.sync_nullifiers(request.prefix_len, request.nullifiers, block_range)
+                view.sync_nullifiers(request.prefix_len, nullifiers, block_range)
                     .await
                     .map(|nullifiers| (view.tip(), nullifiers))
                     .map_err(|err| database_error_to_status(&err))
@@ -69,7 +82,7 @@ impl proto::server::rpc_api::SyncNullifiers for RpcService {
         let nullifiers = nullifiers
             .into_iter()
             .map(|nullifier_info| proto::rpc::sync_nullifiers_response::NullifierUpdate {
-                nullifier: Some(nullifier_info.nullifier.into()),
+                nullifier: Some(nullifier_info.nullifier.as_word().into()),
                 block_num: nullifier_info.block_num.as_u32(),
             })
             .collect();

@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
+use miden_node_tracing::{debug, warn};
 use miden_protocol::block::nullifier_tree::NullifierTree;
 use miden_protocol::block::{BlockNumber, Blockchain};
 use miden_protocol::crypto::merkle::smt::LargeSmt;
@@ -161,21 +162,21 @@ impl Drop for SnapshotGuard {
             superseded_for.filter(|held| *held > SNAPSHOT_SUPERSEDED_WARN_THRESHOLD)
         {
             let superseded_for_ms = u64::try_from(superseded_for.as_millis()).unwrap_or(u64::MAX);
-            tracing::warn!(
+            warn!(
                 target: COMPONENT,
-                block_num,
+                "State snapshot held for excessive time after supersession",
+                block.number = block_num,
                 snapshot.lifetime_ms = lifetime_ms,
                 snapshot.superseded_for_ms = superseded_for_ms,
-                snapshots.live = remaining,
-                "state snapshot held for excessive time after supersession",
+                snapshots.live = remaining
             );
         } else {
-            tracing::debug!(
+            debug!(
                 target: COMPONENT,
-                block_num,
+                "State snapshot released",
+                block.number = block_num,
                 snapshot.lifetime_ms = lifetime_ms,
-                snapshots.live = remaining,
-                "state snapshot released",
+                snapshots.live = remaining
             );
         }
     }

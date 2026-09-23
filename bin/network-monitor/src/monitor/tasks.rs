@@ -6,19 +6,24 @@ use std::time::Duration;
 use anyhow::Result;
 use backon::{ExponentialBuilder, Retryable};
 use miden_node_proto::clients::RemoteProverClient;
+use miden_node_tracing::{debug, error, warn};
 use miden_node_utils::tasks::Tasks as SupervisedTasks;
 use miden_tx::LocalTransactionProver;
 use tokio::sync::watch::Receiver;
 use tokio::sync::{Mutex, watch};
-use tracing::{debug, warn};
 
 use crate::LOG_TARGET;
 use crate::config::MonitorConfig;
 use crate::counter::{CounterTrackingService, IncrementService, LatencyState, TrackedAccounts};
-use crate::deploy::{TransactionSubmissionClient, create_and_deploy_accounts};
+use crate::deploy::{
+    TransactionSubmissionClient,
+    UnsupportedChainError,
+    create_and_deploy_accounts,
+};
 use crate::explorer::ExplorerService;
 use crate::faucet::FaucetService;
 use crate::frontend::{ServerState, serve};
+use crate::funding::funding_client_from_config;
 use crate::note_transport::NoteTransportService;
 use crate::remote_prover::ProverStatusService;
 use crate::service::{Service, build_tls_client};
@@ -98,6 +103,8 @@ impl Tasks {
     /// (and keeps alive) a probe task that acquires its test payload from the RPC and runs
     /// proof-test probes on the test cadence.
     pub fn spawn_prover_tasks(&mut self, config: &MonitorConfig) -> Vec<Receiver<ServiceStatus>> {
+        // The probe payload's creation transaction pays its fee from the funding service.
+        let funding = funding_client_from_config(config);
         let mut prover_rxs = Vec::new();
         for (i, prover_url) in config.remote_prover_urls.iter().enumerate() {
             let name = format!("Remote Prover ({})", i + 1);
@@ -108,6 +115,7 @@ impl Tasks {
                 name,
                 prover_url.clone(),
                 config.rpc_url.clone(),
+                funding.clone(),
                 config.status_check_interval,
                 config.request_timeout,
                 config.remote_prover_test_interval,
@@ -147,7 +155,7 @@ impl Tasks {
 
         let config = config.clone();
         self.handles.spawn_infallible("ntx", run_ntx(config, increment_tx, tracking_tx));
-        debug!(target: LOG_TARGET, service = "ntx", "Spawned service");
+        debug!(target: LOG_TARGET, "Spawned service", service.name = "ntx");
 
         (increment_rx, tracking_rx)
     }
@@ -161,7 +169,7 @@ impl Tasks {
         let service_name = svc.name().to_string();
         self.handles
             .spawn_infallible(service_name.clone(), async move { svc.run(tx).await });
-        debug!(target: LOG_TARGET, service = %service_name, "Spawned service");
+        debug!(target: LOG_TARGET, "Spawned service", service.name = service_name);
         rx
     }
 
@@ -195,9 +203,9 @@ fn ntx_seed_status(name: &str, details: ServiceDetails) -> ServiceStatus {
 ///
 /// Deployment is retried forever with exponential backoff, publishing an unhealthy status on both
 /// channels after each failed attempt, so a network that is down at startup degrades the cards
-/// instead of aborting the monitor. Once bootstrapped, both services run on separate tasks; if
-/// either exits or panics, this supervised task ends and [`Tasks::handle_failure`] treats it as
-/// fatal, the same semantics they had when spawned directly.
+/// instead of aborting the monitor. The exception is an [`UnsupportedChainError`], which cannot
+/// resolve by retrying and ends this supervised task; [`Tasks::handle_failure`] treats that as
+/// fatal. Once bootstrapped, both services run on separate tasks with the same semantics.
 async fn run_ntx(
     config: MonitorConfig,
     increment_tx: watch::Sender<ServiceStatus>,
@@ -210,29 +218,46 @@ async fn run_ntx(
         .with_jitter()
         .without_max_times();
 
-    let (increment_svc, tracking_svc) = (|| async { bootstrap_ntx(&config).await })
+    let publish_unhealthy = |err: &anyhow::Error| {
+        let msg = format!("deploying monitor accounts failed: {err:#}");
+        increment_tx.send_replace(ServiceStatus::unhealthy(
+            IncrementService::NAME,
+            &msg,
+            ServiceDetails::NtxIncrement(IncrementDetails::default()),
+        ));
+        tracking_tx.send_replace(ServiceStatus::unhealthy(
+            CounterTrackingService::NAME,
+            &msg,
+            ServiceDetails::NtxTracking(CounterTrackingDetails::default()),
+        ));
+    };
+
+    let result = (|| async { Box::pin(bootstrap_ntx(&config)).await })
         .retry(backoff)
+        .when(|err: &anyhow::Error| err.downcast_ref::<UnsupportedChainError>().is_none())
         .notify(|err: &anyhow::Error, sleep: Duration| {
             warn!(
+                err,
                 target: LOG_TARGET,
-                err = ?err,
-                sleep_ms = sleep.as_millis() as u64,
                 "NTX bootstrap failed; retrying after backoff",
+                retry.delay_ms = sleep.as_millis() as u64
             );
-            let msg = format!("deploying monitor accounts failed: {err:#}");
-            increment_tx.send_replace(ServiceStatus::unhealthy(
-                IncrementService::NAME,
-                &msg,
-                ServiceDetails::NtxIncrement(IncrementDetails::default()),
-            ));
-            tracking_tx.send_replace(ServiceStatus::unhealthy(
-                CounterTrackingService::NAME,
-                &msg,
-                ServiceDetails::NtxTracking(CounterTrackingDetails::default()),
-            ));
+            publish_unhealthy(err);
         })
-        .await
-        .expect("unbounded retry only resolves on success");
+        .await;
+
+    let (increment_svc, tracking_svc) = match result {
+        Ok(services) => services,
+        Err(err) => {
+            error!(
+                &err,
+                target: LOG_TARGET,
+                "NTX bootstrap hit a permanent configuration error; aborting the monitor"
+            );
+            publish_unhealthy(&err);
+            return;
+        },
+    };
 
     // Run the services on their own tasks (a shared task would serialize the increment service's
     // local proving with the tracking polls). The first one to finish ends this supervised task;
@@ -260,7 +285,10 @@ async fn bootstrap_ntx(
         trusted_validator_signing_key,
     )
     .await?;
-    let accounts = create_and_deploy_accounts(&submission_client, &prover).await?;
+    // The funding service pays fees; whether it is needed is decided during deployment.
+    let funding = funding_client_from_config(config);
+    let accounts =
+        Box::pin(create_and_deploy_accounts(&submission_client, &prover, funding.as_ref())).await?;
 
     let (accounts_tx, accounts_rx) = watch::channel(TrackedAccounts {
         wallet: accounts.wallet.clone(),
@@ -276,6 +304,7 @@ async fn bootstrap_ntx(
         submission_client,
         accounts_tx,
         latency_state.clone(),
+        funding,
     )?;
     let tracking_svc =
         CounterTrackingService::new(config.clone(), accounts_rx, latency_state).await?;

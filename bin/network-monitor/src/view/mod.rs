@@ -432,6 +432,8 @@ mod tests {
             failure_count: 0,
             last_tx_id: Some("abc123".to_string()),
             last_latency_blocks: Some(2),
+            fee_balance: None,
+            fee_topup_error: None,
         };
         let html = render(vec![healthy("ntx-inc", ServiceDetails::NtxIncrement(details))]);
         assert!(html.contains("Local Transactions"));
@@ -471,14 +473,10 @@ mod tests {
 
     #[test]
     fn renders_note_transport_card() {
-        let details = NoteTransportStatusDetails {
-            url: "https://nt.example".to_string(),
-            serving_status: "SERVING".to_string(),
-        };
+        let details = NoteTransportStatusDetails { url: "https://nt.example".to_string() };
         let html =
             render(vec![healthy("note-transport", ServiceDetails::NoteTransportStatus(details))]);
         assert!(html.contains("Note Transport"));
-        assert!(html.contains("SERVING"));
     }
 
     #[test]

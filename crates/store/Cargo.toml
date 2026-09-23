@@ -18,32 +18,34 @@ workspace = true
 doctest = false
 
 [dependencies]
-anyhow           = { workspace = true }
-arc-swap         = { workspace = true }
-deadpool         = { features = ["managed", "rt_tokio_1"], workspace = true }
-deadpool-diesel  = { features = ["sqlite"], workspace = true }
-diesel           = { features = ["numeric", "sqlite"], workspace = true }
-fs-err           = { workspace = true }
-hex              = { workspace = true }
-indexmap         = { workspace = true }
-libsqlite3-sys   = { workspace = true }
-miden-crypto     = { features = ["concurrent"], workspace = true }
-miden-node-db    = { workspace = true }
-miden-node-proto = { workspace = true }
-miden-node-utils = { workspace = true }
-miden-standards  = { workspace = true }
-# TODO remove `testing` from `miden-protocol`, required for `BlockProof::new_dummy`
+anyhow             = { workspace = true }
+arc-swap           = { workspace = true }
+deadpool           = { features = ["managed", "rt_tokio_1"], workspace = true }
+deadpool-diesel    = { features = ["sqlite"], workspace = true }
+diesel             = { features = ["numeric", "sqlite"], workspace = true }
+fs-err             = { workspace = true }
+hex                = { workspace = true }
+indexmap           = { workspace = true }
+libsqlite3-sys     = { workspace = true }
+miden-crypto       = { features = ["concurrent"], workspace = true }
+miden-node-db      = { workspace = true }
+miden-node-proto   = { workspace = true }
+miden-node-tracing = { workspace = true }
+miden-node-utils   = { workspace = true }
+miden-objects      = { workspace = true }
+miden-standards    = { workspace = true }
+# `BlockProof::new_dummy` requires the `testing` feature.
 miden-protocol    = { features = ["std", "testing"], workspace = true }
 pretty_assertions = { workspace = true }
 rand              = { workspace = true }
 rand_chacha       = { workspace = true }
 rayon             = { workspace = true }
 serde             = { workspace = true }
+sha2              = { workspace = true }
 thiserror         = { workspace = true }
 thread-priority   = { workspace = true }
 tokio             = { features = ["fs", "rt-multi-thread"], workspace = true }
 toml              = { workspace = true }
-tracing           = { workspace = true }
 
 [build-dependencies]
 build-rs        = { workspace = true }
@@ -57,7 +59,8 @@ assert_matches        = { workspace = true }
 criterion             = "0.8"
 fs-err                = { workspace = true }
 miden-node-test-macro = { workspace = true }
-miden-node-utils      = { features = ["testing", "tracing-forest"], workspace = true }
+miden-node-tracing    = { features = ["tracing-forest"], workspace = true }
+miden-node-utils      = { features = ["testing"], workspace = true }
 miden-protocol        = { default-features = true, features = ["testing"], workspace = true }
 miden-standards       = { features = ["testing"], workspace = true }
 rand                  = { workspace = true }

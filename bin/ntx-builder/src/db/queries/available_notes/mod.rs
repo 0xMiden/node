@@ -149,7 +149,7 @@ fn note_recheck_block(
 /// leaving the caller's next-block default.
 fn hint_next_consumable_block(hint: NoteExecutionHint, from: BlockNumber) -> Option<BlockNumber> {
     match hint {
-        NoteExecutionHint::None | NoteExecutionHint::Always => None,
+        NoteExecutionHint::None | NoteExecutionHint::Always | NoteExecutionHint::Unknown(_) => None,
         NoteExecutionHint::AfterBlock { block_num } => Some(block_num),
         NoteExecutionHint::OnBlockSlot { round_len, slot_len, slot_offset } => {
             let block = u64::from(from.as_u32());

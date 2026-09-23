@@ -1,20 +1,16 @@
 # syntax=docker/dockerfile:1
 
-ARG RUST_VERSION=1.96
-ARG DEBIAN_RELEASE=bookworm
+ARG RUST_VERSION=1.98.1
+ARG DEBIAN_RELEASE=trixie
+ARG KACHE_VERSION=0.16.0
 ARG BIN
 ARG PORT
-# Builder stage the runtime binary is copied from: `builder-ci` compiles one
-# binary per image (concurrent CI matrix builds), `builder-local` compiles
-# every binary in one invocation (sequential local builds).
-ARG BUILDER=builder-ci
 
 FROM rust:${RUST_VERSION}-slim-${DEBIAN_RELEASE} AS build-base
-# Disable incremental compilation: its reuse depends on the same mtime-based
-# fingerprinting that the shared CI target cache cannot make safe (see
-# builder-ci below), and release builds gain nothing from it anyway. Dep
-# .rlibs in the /app/target cache mount still accelerate builds.
-ENV CARGO_INCREMENTAL=0
+ARG KACHE_VERSION
+ARG TARGETARCH
+# Code generation requires rustfmt.
+RUN rustup component add rustfmt
 # Install build dependencies. RocksDB is compiled from source by librocksdb-sys.
 RUN apt-get update && \
     apt-get -y upgrade && \
@@ -25,79 +21,82 @@ RUN apt-get update && \
         cmake \
         pkg-config \
         libssl-dev \
+        curl \
         ca-certificates && \
     rm -rf /var/lib/apt/lists/*
+
+# Verify the release archive before Kache becomes a compiler wrapper.
+RUN case "${TARGETARCH}" in \
+        amd64) \
+            KACHE_ARCH=x86_64; \
+            KACHE_SHA256=caee657c662379475af2a0a7611ad32a6d053822036c1ec191bb8fd1c826d54b \
+            ;; \
+        arm64) \
+            KACHE_ARCH=aarch64; \
+            KACHE_SHA256=6eabb67867022eecdbfffe43c16e75b5c5b561983742bda3c900a4cb4c50e4a7 \
+            ;; \
+        *) \
+            echo "Unsupported target architecture: ${TARGETARCH}" >&2; \
+            exit 1 \
+            ;; \
+    esac && \
+    KACHE_ARCHIVE="kache-${KACHE_ARCH}-unknown-linux-musl.tar.gz" && \
+    curl --fail --location --silent --show-error \
+        --retry 5 --retry-max-time 120 \
+        "https://github.com/kunobi-ninja/kache/releases/download/v${KACHE_VERSION}/${KACHE_ARCHIVE}" \
+        --output "/tmp/${KACHE_ARCHIVE}" && \
+    printf '%s  %s\n' "${KACHE_SHA256}" "/tmp/${KACHE_ARCHIVE}" | \
+        sha256sum --check --strict && \
+    tar -xzf "/tmp/${KACHE_ARCHIVE}" -C /usr/local/bin kache && \
+    rm "/tmp/${KACHE_ARCHIVE}"
+
+# These flags are stable build inputs. Kache must classify them before it can
+# cache native objects from RocksDB and the other C and C++ dependencies.
+RUN printf '%s\n' \
+        '[cc]' \
+        'extra_allowlist_flags = [' \
+        '    "-fmerge-all-constants",' \
+        '    "-mno-omit-leaf-frame-pointer",' \
+        ']' \
+        > /etc/kache.toml
+
+ENV CARGO_INCREMENTAL=0 \
+    CARGO_PROFILE_RELEASE_DEBUG=line-tables-only \
+    RUSTC_WRAPPER=kache \
+    CC="kache cc" \
+    CXX="kache c++" \
+    CC_KNOWN_WRAPPER_CUSTOM=kache \
+    KACHE_BASE_DIR=/app \
+    KACHE_CACHE_DIR=/var/cache/kache \
+    KACHE_CONFIG=/etc/kache.toml \
+    KACHE_AUTO_GC=true \
+    KACHE_MAX_SIZE=30GiB \
+    KACHE_RUNTIME_DIR=/tmp/kache-runtime
 WORKDIR /app
 
-FROM build-base AS builder-ci
-ARG BIN
-# All cache mounts are keyed by BIN and TARGETARCH. The arch keying keeps
-# amd64/arm64 artifacts apart. The BIN keying serves two purposes: for the
-# target mount, each binary enables different feature sets on shared deps, so
-# a shared locked mount would only serialize matrix builds on artifacts they
-# cannot reuse; for the registry/git-db mounts, two concurrent cargo processes
-# extracting the same crate race on creating `.cargo-ok`, and the loser fails
-# the build ("failed to open .cargo-ok ... File exists") — keying by BIN
-# removes all concurrency on a mount, since builds of the same binary are
-# already serialized by the locked target mount. The cost is one registry
-# copy per binary per arch.
-#
-# The target mount is sharing=locked because the touch-then-build sequence
-# below must not interleave with another build's writes; the registry/git-db
-# mounts stay sharing=shared since the keying already guarantees exclusivity.
+FROM build-base AS builder
+ARG CARGO_BUILD_JOBS
 ARG TARGETARCH
-COPY . .
-# Cargo fingerprints workspace path crates by mtime: a crate is rebuilt only
-# if a source file is newer than the cached artifact. The /app/target mount is
-# shared across branches and PRs on the persistent builder, so a source mtime
-# older than another build's artifacts (warm checkouts, git-derived
-# timestamps) makes Cargo silently link a stale, incompatible .rlib. Touch all
-# sources so workspace crates always rebuild; external deps are fingerprinted
-# by checksum and stay cached. The touch must happen after the locked target
-# mount is acquired — a concurrent build of another branch could otherwise
-# write artifacts newer than our sources after we touch them — and prunes
-# ./target from the walk so cached artifacts keep their mtimes.
-#
-# Cargo's git DB is cached but checkout worktrees stay ephemeral; shared
-# checkouts are fragile under concurrent or interrupted builds.
+COPY Cargo.toml Cargo.lock ./
+COPY .cargo/config.toml .cargo/config.toml
+COPY bin/ bin/
+COPY crates/ crates/
+COPY proto/ proto/
+# Cargo loads each workspace member before it selects the requested binaries.
+COPY xtask/Cargo.toml xtask/Cargo.toml
+COPY xtask/src/main.rs xtask/src/main.rs
+# Kache stores compiler outputs by content. The target directory stays local to
+# this build and does not depend on source timestamps from another checkout.
+# The locks prevent concurrent builds from writing to the same cache mounts.
 #
 # An interrupted build can leave a partially extracted crate in the cached
 # registry (source dir present, `.cargo-ok` missing or empty). Cargo never
 # recovers from this, so drop any such partial extraction before building.
-RUN --mount=type=cache,sharing=shared,id=cargo-registry-${BIN}-${TARGETARCH},target=/usr/local/cargo/registry \
-    --mount=type=cache,sharing=shared,id=cargo-git-${BIN}-${TARGETARCH},target=/usr/local/cargo/git/db \
-    --mount=type=cache,sharing=locked,id=app-target-${BIN}-${TARGETARCH},target=/app/target \
-    if [ -d /usr/local/cargo/registry/src ]; then \
-        find /usr/local/cargo/registry/src -mindepth 2 -maxdepth 2 -type d \
-            '!' -exec test -s '{}/.cargo-ok' ';' -exec rm -rf '{}' +; \
-    fi && \
-    find . -path ./target -prune -o -type f -exec touch {} + && \
-    cargo build --release --locked --bin ${BIN} && \
-    mkdir -p /app/bin && \
-    cp /app/target/release/${BIN} /app/bin/${BIN}
-
-# Local builder: compiles every image's binary in one cargo invocation. Local
-# images are built sequentially on one machine, so the per-BIN mount keying
-# above would only multiply work (each binary compiling its own copy of the
-# dependency tree, including RocksDB). This stage never references BIN, so its
-# layers are identical across all image builds: the first build compiles and
-# the rest hit cache.
-#
-# Sources are not touched here: a local context preserves real mtimes and git
-# updates the mtime of anything it changes, so Cargo's fingerprinting is sound
-# and rebuilds are genuinely incremental. The `.cargo-ok` heal is kept — an
-# interrupted (Ctrl-C) build corrupts the cached registry just like in CI.
-#
-# Parallelism is capped at ~2GiB of memory per job: the release profile
-# carries full debug info, and an uncapped build OOMs the default ~8GiB
-# Docker Desktop VM. Pass CARGO_BUILD_JOBS to override.
-FROM build-base AS builder-local
-ARG TARGETARCH
-ARG CARGO_BUILD_JOBS
-COPY . .
-RUN --mount=type=cache,sharing=shared,id=cargo-registry-local-${TARGETARCH},target=/usr/local/cargo/registry \
-    --mount=type=cache,sharing=shared,id=cargo-git-local-${TARGETARCH},target=/usr/local/cargo/git/db \
-    --mount=type=cache,sharing=locked,id=app-target-local-${TARGETARCH},target=/app/target \
+# Use at most one Cargo job per 2 GiB of memory. Set CARGO_BUILD_JOBS to
+# override the calculated limit.
+RUN --mount=type=cache,sharing=locked,id=cargo-registry-${TARGETARCH},target=/usr/local/cargo/registry \
+    --mount=type=cache,sharing=locked,id=cargo-git-${TARGETARCH},target=/usr/local/cargo/git/db \
+    --mount=type=cache,sharing=locked,id=kache-v1-${TARGETARCH},target=/var/cache/kache \
     if [ -d /usr/local/cargo/registry/src ]; then \
         find /usr/local/cargo/registry/src -mindepth 2 -maxdepth 2 -type d \
             '!' -exec test -s '{}/.cargo-ok' ';' -exec rm -rf '{}' +; \
@@ -105,24 +104,31 @@ RUN --mount=type=cache,sharing=shared,id=cargo-registry-local-${TARGETARCH},targ
     JOBS="${CARGO_BUILD_JOBS:-$(awk -v ncpu="$(nproc)" \
         '/MemTotal/ { j = int($2 / (2 * 1024 * 1024)); if (j < 1) j = 1; if (j > ncpu) j = ncpu; print j }' \
         /proc/meminfo)}" && \
-    cargo build --release --locked --jobs "$JOBS" \
+    cargo build --release --locked --jobs "${JOBS}" \
         --bin miden-node \
         --bin miden-validator \
+        --bin miden-note-transport \
         --bin miden-ntx-builder \
         --bin miden-network-monitor \
+        --bin miden-funding-service \
         --bin miden-remote-prover \
         --bin miden-benchmark && \
     mkdir -p /app/bin && \
-    cp /app/target/release/miden-node \
+    mv /app/target/release/miden-node \
         /app/target/release/miden-validator \
+        /app/target/release/miden-note-transport \
         /app/target/release/miden-ntx-builder \
         /app/target/release/miden-network-monitor \
+        /app/target/release/miden-funding-service \
         /app/target/release/miden-remote-prover \
         /app/target/release/miden-benchmark \
-        /app/bin/
+        /app/bin/ && \
+    kache report --format github --output /app/kache-report.md && \
+    rm -rf /app/target && \
+    kache gc
 
-# Alias stage so the runtime COPY below can select a builder via build arg.
-FROM ${BUILDER} AS build-result
+FROM scratch AS build-report
+COPY --from=builder /app/kache-report.md /kache-report.md
 
 # Baseline runtime image with runtime dependencies installed.
 FROM debian:${DEBIAN_RELEASE}-slim AS runtime-base
@@ -143,7 +149,7 @@ RUN groupadd --gid 10001 miden && \
 
 FROM runtime-base AS runtime-common
 ARG BIN
-COPY --from=build-result /app/bin/${BIN} /usr/local/bin/${BIN}
+COPY --from=builder /app/bin/${BIN} /usr/local/bin/${BIN}
 LABEL org.opencontainers.image.authors=devops@miden.team \
     org.opencontainers.image.url=https://0xMiden.github.io/ \
     org.opencontainers.image.documentation=https://github.com/0xMiden/node \

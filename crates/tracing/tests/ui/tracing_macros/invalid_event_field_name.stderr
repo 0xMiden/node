@@ -1,0 +1,21 @@
+error[E0080]: evaluation panicked: tracing field `tx_id` is not allowed for this attribute type
+ --> tests/ui/tracing_macros/invalid_event_field_name.rs:4:5
+  |
+4 |     info!("test.event", tx_id = "0x1234");
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `main::__miden_assert_field_name::<&str>::{constant#0}` failed here
+
+note: erroneous constant encountered
+ --> tests/ui/tracing_macros/invalid_event_field_name.rs:4:5
+  |
+4 |     info!("test.event", tx_id = "0x1234");
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this note originates in the macro `info` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+note: the above error was encountered while instantiating `fn main::__miden_assert_field_name::<&str>`
+ --> tests/ui/tracing_macros/invalid_event_field_name.rs:4:5
+  |
+4 |     info!("test.event", tx_id = "0x1234");
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this note originates in the macro `info` (in Nightly builds, run with -Z macro-backtrace for more info)

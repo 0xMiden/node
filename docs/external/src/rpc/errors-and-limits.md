@@ -24,34 +24,91 @@ else:
     # Fall back to the gRPC status code and message.
 ```
 
-Only method-specific failures with documented additional codes set the details byte. Other validation errors, including
-malformed requests, unsupported content negotiation, missing genesis data, and failed proof checks, return ordinary gRPC
-statuses without a Miden error detail code. The error message remains applicable in all cases, but should be considered
-unstable and it is not recommended to match on it.
+Only method-specific failures with documented additional codes set the details byte. Other errors, including request
+limits, unsupported content negotiation, missing genesis data, and failed proof checks, can return gRPC statuses without
+a Miden error detail code. The error message remains applicable in all cases. Do not match on the error message because
+it can change.
 
 If you are missing specific error information that could be useful, please open an issue in the
 [Node Repository](https://github.com/0xMiden/node).
 
+## Method-Specific Error Codes
+
+Codes are specific to each method. Code `0` identifies an internal failure with the `INTERNAL` gRPC status. This code
+applies to all methods in the table, `GetBlockByNumber`, and `GetBlockHeaderByNumber`.
+
+| Method                                       | Error                   | Value | gRPC status        |
+| -------------------------------------------- | ----------------------- | ----- | ------------------ |
+| **`GetAccount`**                             | `DeserializationFailed` | `1`   | `INVALID_ARGUMENT` |
+|                                              | `AccountNotFound`       | `2`   | `INVALID_ARGUMENT` |
+|                                              | `AccountNotPublic`      | `3`   | `INVALID_ARGUMENT` |
+|                                              | `UnknownBlock`          | `4`   | `INVALID_ARGUMENT` |
+|                                              | `BlockPruned`           | `5`   | `INVALID_ARGUMENT` |
+|                                              |                         |       |                    |
+| **`GetNotesById`**                           | `DeserializationFailed` | `1`   | `INVALID_ARGUMENT` |
+|                                              |                         |       |                    |
+| **`GetNoteScriptByRoot`**                    | `DeserializationFailed` | `1`   | `INVALID_ARGUMENT` |
+|                                              |                         |       |                    |
+| **`SyncNotes`**                              | `InvalidBlockRange`     | `1`   | `INVALID_ARGUMENT` |
+|                                              | `FutureBlock`           | `2`   | `INVALID_ARGUMENT` |
+|                                              | `DeserializationFailed` | `3`   | `INVALID_ARGUMENT` |
+|                                              |                         |       |                    |
+| **`SyncNullifiers`**                         | `InvalidBlockRange`     | `1`   | `INVALID_ARGUMENT` |
+|                                              | `InvalidPrefixLength`   | `2`   | `INVALID_ARGUMENT` |
+|                                              | `DeserializationFailed` | `3`   | `INVALID_ARGUMENT` |
+|                                              |                         |       |                    |
+| **`SyncAccountVault`**                       | `InvalidBlockRange`     | `1`   | `INVALID_ARGUMENT` |
+|                                              | `DeserializationFailed` | `2`   | `INVALID_ARGUMENT` |
+|                                              | `AccountNotPublic`      | `3`   | `INVALID_ARGUMENT` |
+|                                              |                         |       |                    |
+| **`SyncAccountStorageMaps`**                 | `InvalidBlockRange`     | `1`   | `INVALID_ARGUMENT` |
+|                                              | `DeserializationFailed` | `2`   | `INVALID_ARGUMENT` |
+|                                              | `AccountNotPublic`      | `4`   | `INVALID_ARGUMENT` |
+|                                              |                         |       |                    |
+| **`SyncTransactions`**                       | `InvalidBlockRange`     | `1`   | `INVALID_ARGUMENT` |
+|                                              | `DeserializationFailed` | `2`   | `INVALID_ARGUMENT` |
+|                                              |                         |       |                    |
+| **`SyncChainMmr`**                           | `FutureBlock`           | `2`   | `INVALID_ARGUMENT` |
+|                                              |                         |       |                    |
+| **`SubmitProvenTx` / `SubmitProvenTxBatch`** | `Internal`              | `0`   | `INTERNAL`         |
+|                                              | `Expired`               | `1`   | `INVALID_ARGUMENT` |
+|                                              | `StateConflict`         | `2`   | `INVALID_ARGUMENT` |
+|                                              | `CapacityExceeded`      | `3`   | `INVALID_ARGUMENT` |
+|                                              | `MissingFee`            | `4`   | `INVALID_ARGUMENT` |
+|                                              | `InvalidFeeAsset`       | `6`   | `INVALID_ARGUMENT` |
+|                                              | `AuthenticationFailed`  | `8`   | `INVALID_ARGUMENT` |
+
+`InvalidBlockRange` includes a range whose start exceeds its end. It also includes a range that extends beyond the chain
+tip, except for `SyncNotes`, which returns `FutureBlock`. `SyncChainMmr` returns `FutureBlock` when the client height
+exceeds the requested chain tip. `SyncNullifiers` returns `DeserializationFailed` for a prefix that exceeds 16 bits.
+
+Unused values remain reserved. Clients must accept unknown detail codes and fall back to the gRPC status code.
+
 ## Transaction Submission Errors
 
-`SubmitProvenTx` and `SubmitProvenTxBatch` may return the following detail codes when a transaction or batch reaches the
-sequencer's mempool and is rejected.
-
-| Error              | Value | gRPC status        | Meaning                     |
-| ------------------ | ----- | ------------------ | --------------------------- |
-| `Internal`         | `0`   | `INTERNAL`         | Internal submission failure |
-| `Expired`          | `1`   | `INVALID_ARGUMENT` | Transaction expired         |
-| `StateConflict`    | `2`   | `INVALID_ARGUMENT` | State conflict              |
-| `CapacityExceeded` | `3`   | `INVALID_ARGUMENT` | Mempool capacity exceeded   |
+`SubmitProvenTx` and `SubmitProvenTxBatch` share the submission codes in the table above. These codes identify failures
+during submission validation or in the sequencer's mempool.
 
 `Expired` means the transaction or batch has expired, or will expire too soon for the sequencer to consider accepting
 it.
 
-`StateConflict` is intentionally coarse. It can represent spent nullifiers, duplicate output notes, missing
-unauthenticated input notes, or an account initial commitment mismatch. Use the status message for the specific
-conflict, and use the detail byte when a client needs stable branching between broad submission failure classes.
+`StateConflict` means the transaction conflicts with the chain or mempool state. It can represent spent nullifiers,
+duplicate output notes, missing unauthenticated input notes, or an account initial commitment mismatch. Use the status
+message for the specific conflict, and use the detail byte when a client needs stable branching between broad submission
+failure classes.
 
 `CapacityExceeded` means the mempool capacity has been exhausted and is under load.
+
+`AuthenticationFailed` means the transaction failed authentication against the chain state. For example, an input
+nullifier already exists. The status message includes the cause.
+
+`MissingFee` means that a standalone transaction submitted through `SubmitProvenTx` does not contain an output note with
+the `TX_FEE` script when the reference block's verification base fee is nonzero. A transaction can omit the fee note
+when that base fee is zero. Each fee note must contain exactly one native asset, as specified by the reference block's
+protocol configuration, even when fees are zero. `InvalidFeeAsset` means that a fee note does not meet this asset
+requirement. The internal `SubmitAuthenticatedTx` endpoint applies the same checks. Transactions within user-submitted
+batches are exempt because those batches handle their own fee collection. These checks do not establish that the fee
+amount is sufficient. A fee note can contain a zero-valued native asset when the required fee is zero.
 
 ### Encrypted input errors
 

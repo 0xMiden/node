@@ -1,6 +1,5 @@
 use miden_node_proto::generated as proto;
-use miden_node_utils::tracing::miden_instrument;
-use tracing::debug;
+use miden_node_tracing::{debug, miden_instrument};
 
 use super::{Request, RpcBackend, RpcService};
 use crate::{COMPONENT, LOG_TARGET};
@@ -8,13 +7,13 @@ use crate::{COMPONENT, LOG_TARGET};
 #[tonic::async_trait]
 impl proto::server::rpc_api::GetTransactionEncryptionKey for RpcService {
     type Input = ();
-    type Output = proto::transaction::TransactionEncryptionKey;
+    type Output = proto::submission::TransactionEncryptionKey;
 
     fn decode(request: ()) -> tonic::Result<Self::Input> {
         Ok(request)
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::transaction::TransactionEncryptionKey> {
+    fn encode(output: Self::Output) -> tonic::Result<proto::submission::TransactionEncryptionKey> {
         Ok(output)
     }
 

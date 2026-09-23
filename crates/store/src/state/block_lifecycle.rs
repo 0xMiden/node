@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use miden_node_utils::tracing::miden_instrument;
+use miden_node_tracing::{debug, miden_instrument};
 use miden_protocol::Word;
 use miden_protocol::account::{
     AccountId,
@@ -93,56 +93,38 @@ impl BlockLifecycle {
     )]
     pub(super) fn emit(self, resolved_note_ids: &BTreeMap<Nullifier, NoteId>) {
         for account in self.registered_accounts {
-            tracing::debug!(
+            debug!(
                 target: LOG_TARGET,
-                {
-                    account.id = %account.account_id,
-                    block.number = %self.block_num,
-                    transaction.id = %account.transaction_id,
-                },
                 "Account registered",
+                account.id = account.account_id,
+                block.number = self.block_num,
+                transaction.id = account.transaction_id
             );
         }
 
         for note in self.created_notes {
-            tracing::debug!(
+            debug!(
                 target: LOG_TARGET,
-                {
-                    note.id = %note.note_id,
-                    note.sender = %note.sender,
-                    note.erased = note.erased,
-                    block.number = %self.block_num,
-                    transaction.id = %note.transaction_id,
-                },
                 "Note created",
+                note.id = note.note_id,
+                note.sender = note.sender,
+                note.erased = note.erased,
+                block.number = self.block_num,
+                transaction.id = note.transaction_id
             );
         }
 
         for note in self.consumed_notes {
             let note_id = note.note_id.or_else(|| resolved_note_ids.get(&note.nullifier).copied());
-            if let Some(note_id) = note_id {
-                tracing::debug!(
-                    target: LOG_TARGET,
-                    {
-                        note.id = %note_id,
-                        note.nullifier = %note.nullifier,
-                        block.number = %self.block_num,
-                        transaction.id = %note.transaction_id,
-                    },
-                    "Note consumed",
-                );
-            } else {
-                tracing::debug!(
-                    target: LOG_TARGET,
-                    {
-                        note.nullifier = %note.nullifier,
-                        note.id_resolved = false,
-                        block.number = %self.block_num,
-                        transaction.id = %note.transaction_id,
-                    },
-                    "Note consumed",
-                );
-            }
+            debug!(
+                target: LOG_TARGET,
+                "Note consumed",
+                note.id = note_id,
+                note.id_resolved = note_id.is_some(),
+                note.nullifier = note.nullifier,
+                block.number = self.block_num,
+                transaction.id = note.transaction_id
+            );
         }
 
         for change in self.storage_changes {
@@ -153,7 +135,7 @@ impl BlockLifecycle {
 
 /// Returns whether any subscriber is interested in user-facing lifecycle events.
 pub(super) fn lifecycle_events_enabled() -> bool {
-    tracing::enabled!(target: LOG_TARGET, tracing::Level::DEBUG)
+    miden_node_tracing::enabled!(target: LOG_TARGET, miden_node_tracing::Level::DEBUG)
 }
 
 struct RegisteredAccount {
@@ -205,17 +187,15 @@ impl StorageChange {
                 operation,
                 value: Some(value),
             } => {
-                tracing::debug!(
+                debug!(
                     target: LOG_TARGET,
-                    {
-                        account.id = %account_id,
-                        account.storage.slot = %slot_name,
-                        account.storage.kind = "value",
-                        account.storage.operation = storage_operation(operation),
-                        account.storage.value = %value,
-                        block.number = %block_num,
-                    },
                     "Account storage updated",
+                    account.id = account_id,
+                    account.storage.slot = slot_name,
+                    account.storage.kind = "value",
+                    account.storage.operation = storage_operation(operation),
+                    account.storage.value = value,
+                    block.number = block_num
                 );
             },
             StorageChange::Value {
@@ -224,16 +204,14 @@ impl StorageChange {
                 operation,
                 value: None,
             } => {
-                tracing::debug!(
+                debug!(
                     target: LOG_TARGET,
-                    {
-                        account.id = %account_id,
-                        account.storage.slot = %slot_name,
-                        account.storage.kind = "value",
-                        account.storage.operation = storage_operation(operation),
-                        block.number = %block_num,
-                    },
                     "Account storage updated",
+                    account.id = account_id,
+                    account.storage.slot = slot_name,
+                    account.storage.kind = "value",
+                    account.storage.operation = storage_operation(operation),
+                    block.number = block_num
                 );
             },
             StorageChange::MapEntry {
@@ -243,20 +221,18 @@ impl StorageChange {
                 key,
                 value,
             } => {
-                tracing::debug!(
+                debug!(
                     target: LOG_TARGET,
-                    {
-                        account.id = %account_id,
-                        account.storage.slot = %slot_name,
-                        account.storage.kind = "map",
-                        account.storage.operation = storage_operation(operation),
-                        account.storage.map.key = %key,
-                        account.storage.map.entry.operation =
-                            if value.is_empty() { "remove" } else { "set" },
-                        account.storage.value = %value,
-                        block.number = %block_num,
-                    },
                     "Account storage updated",
+                    account.id = account_id,
+                    account.storage.slot = slot_name,
+                    account.storage.kind = "map",
+                    account.storage.operation = storage_operation(operation),
+                    account.storage.map.key = key,
+                    account.storage.map.entry.operation =
+                        if value.is_empty() { "remove" } else { "set" },
+                    account.storage.value = value,
+                    block.number = block_num
                 );
             },
             StorageChange::MapSlot {
@@ -265,17 +241,15 @@ impl StorageChange {
                 operation,
                 entries_count,
             } => {
-                tracing::debug!(
+                debug!(
                     target: LOG_TARGET,
-                    {
-                        account.id = %account_id,
-                        account.storage.slot = %slot_name,
-                        account.storage.kind = "map",
-                        account.storage.operation = storage_operation(operation),
-                        account.storage.map.entries.count = entries_count,
-                        block.number = %block_num,
-                    },
                     "Account storage updated",
+                    account.id = account_id,
+                    account.storage.slot = slot_name,
+                    account.storage.kind = "map",
+                    account.storage.operation = storage_operation(operation),
+                    account.storage.map.entries.count = entries_count,
+                    block.number = block_num
                 );
             },
         }
@@ -385,11 +359,12 @@ mod tests {
         let account_id = AccountId::try_from(ACCOUNT_ID_SENDER).unwrap();
         let persisted_header = note_header(account_id, 1);
         let erased_header = note_header(account_id, 2);
+        let consumed_header = note_header(account_id, 3);
         let unresolved_nullifier = Nullifier::from_raw(word(3));
         let resolved_nullifier = Nullifier::from_raw(word(4));
         let input_notes = InputNotes::new_unchecked(vec![
             InputNoteCommitment::from(unresolved_nullifier),
-            InputNoteCommitment::from_parts_unchecked(resolved_nullifier, Some(erased_header)),
+            InputNoteCommitment::from_parts_unchecked(resolved_nullifier, Some(consumed_header)),
         ]);
         let transaction = TransactionHeader::new(
             account_id,
@@ -397,7 +372,8 @@ mod tests {
             word(5),
             input_notes,
             vec![persisted_header, erased_header],
-        );
+        )
+        .expect("test transaction header should be valid");
         let transaction_id = transaction.id();
         let output_note = OutputNote::Private(
             PrivateOutputNote::new(persisted_header, NoteAttachments::default()).unwrap(),
@@ -419,7 +395,7 @@ mod tests {
         assert!(lifecycle.created_notes[1].erased);
         assert_eq!(lifecycle.consumed_notes.len(), 2);
         assert_eq!(lifecycle.consumed_notes[0].note_id, None);
-        assert_eq!(lifecycle.consumed_notes[1].note_id, Some(erased_header.id()));
+        assert_eq!(lifecycle.consumed_notes[1].note_id, Some(consumed_header.id()));
         assert_eq!(lifecycle.unresolved_note_nullifiers(), vec![unresolved_nullifier],);
     }
 
@@ -449,7 +425,8 @@ mod tests {
         )
         .unwrap();
         let update =
-            BlockAccountUpdate::new(account_id, word(10), AccountUpdateDetails::Public(patch));
+            BlockAccountUpdate::new(account_id, word(10), AccountUpdateDetails::Public(patch))
+                .expect("test account update should be valid");
         let body = BlockBody::new_unchecked(
             vec![update],
             Vec::new(),

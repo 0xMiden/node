@@ -1,7 +1,6 @@
 use miden_node_block_producer::{BlockProducerStatus, MempoolStats};
 use miden_node_proto::generated as proto;
-use miden_node_utils::tracing::miden_instrument;
-use tracing::debug;
+use miden_node_tracing::{debug, miden_instrument};
 
 use super::{ProtoMempoolStats, Request, RpcBackend, RpcService};
 use crate::{COMPONENT, LOG_TARGET};

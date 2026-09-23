@@ -115,7 +115,7 @@ pub fn select_block_headers(
     // <https://doc.rust-lang.org/src/core/iter/adapters/chain.rs.html#184>
     QueryParamBlockLimit::check(blocks.size_hint().0)?;
 
-    let blocks = Vec::from_iter(blocks.map(SqlTypeConvert::to_raw_sql));
+    let blocks = blocks.map(SqlTypeConvert::to_raw_sql).collect::<Vec<_>>();
     let raw_block_headers =
         QueryDsl::select(schema::block_headers::table, BlockHeaderRawRow::as_select())
             .filter(schema::block_headers::block_num.eq_any(blocks))
@@ -143,8 +143,10 @@ pub fn select_all_block_header_commitments(
         QueryDsl::select(schema::block_headers::table, schema::block_headers::commitment)
             .order(schema::block_headers::block_num.asc())
             .load::<Vec<u8>>(conn)?;
-    let commitments =
-        Result::from_iter(raw_commitments.into_iter().map(BlockHeaderCommitment::from_raw_sql))?;
+    let commitments = raw_commitments
+        .into_iter()
+        .map(BlockHeaderCommitment::from_raw_sql)
+        .collect::<Result<_, _>>()?;
     Ok(commitments)
 }
 

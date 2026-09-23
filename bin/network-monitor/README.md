@@ -24,9 +24,18 @@ configured.
 The monitor is an observer and test client, not a node component required for block production. Its network transaction
 checks create fresh in-memory accounts on startup and do not persist account state to disk.
 
-Network transaction checks also require `MIDEN_MONITOR_VALIDATOR_SIGNING_PUBLIC_KEY`. It must contain the hex-encoded
-validator key that signs transaction encryption key attestations. The monitor will not submit a transaction unless it
-can verify the advertised encryption key.
+Network transaction checks require `MIDEN_MONITOR_VALIDATOR_SIGNING_PUBLIC_KEY`. The signing key must contain the
+hex-encoded validator key that signs transaction encryption key attestations. The monitor will not submit a transaction
+unless it can verify the advertised encryption key. The monitor obtains the active fee asset from the protocol
+configuration returned by RPC and verifies it against the transaction's reference block.
+
+On a chain with a non-zero verification base fee, network transaction checks additionally require
+`MIDEN_MONITOR_FUNDING_SERVICE_URL`: the monitor funds its in-memory accounts from the funding service and tops the
+balance up automatically when it runs low. Without it the monitor refuses to start its network transaction checks on
+such chains. `MIDEN_MONITOR_FAUCET_URL` is only used for the faucet checks.
+
+The note transport check uses the standard gRPC health service for `note_transport.Api`. Only a `SERVING` response marks
+the service as healthy. Its dashboard card shows the service URL.
 
 Use the binary help output for the current command and configuration surface. The help output is the source of truth for
 flags and environment variables.

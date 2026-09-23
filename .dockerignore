@@ -10,6 +10,7 @@
 **/.env
 **/.git
 **/.gitignore
+/.github
 **/.project
 **/.settings
 **/.toolstarget
@@ -26,10 +27,13 @@
 **/npm-debug.log
 **/secrets.dev.yaml
 **/values.dev.yaml
+/docs
+/AGENTS.md
+/CLAUDE.md
 ./target
 /target
 LICENSE
-README.md
+**/README.md
 accounts
 genesis.dat
 miden-store.*

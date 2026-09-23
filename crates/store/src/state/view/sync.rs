@@ -1,6 +1,6 @@
 use std::ops::RangeInclusive;
 
-use miden_node_utils::tracing::miden_instrument;
+use miden_node_tracing::miden_instrument;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockHeader, BlockNumber, BlockSignatures};
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta, MmrProof};

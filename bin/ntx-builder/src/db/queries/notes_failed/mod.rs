@@ -2,7 +2,7 @@
 
 use miden_node_db::sqlite::WriteTx;
 use miden_node_db::{DatabaseError, SqlTypeConvert};
-use miden_node_utils::ErrorReport;
+use miden_node_tracing::ErrorReport;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
 

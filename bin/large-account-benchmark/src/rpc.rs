@@ -5,23 +5,28 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use miden_node_proto::clients::{Builder, RpcClient};
-use miden_node_proto::domain::account::AccountResponse;
 use miden_node_proto::domain::encryption::{
     TransactionInputsSealer,
     TrustedTransactionEncryptionState,
-    verify_transaction_encryption_key,
 };
-use miden_node_proto::generated::account::AccountId as ProtoAccountId;
+use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
+use miden_node_proto::generated::account::account_storage_header::storage_slot::Content as SlotContent;
 use miden_node_proto::generated::rpc::account_request::AccountDetailRequest;
-use miden_node_proto::generated::rpc::{AccountRequest, BlockHeaderByNumberRequest};
-use miden_node_proto::generated::transaction::ProvenTransaction as ProtoProvenTransaction;
+use miden_node_proto::generated::rpc::{
+    AccountRequest,
+    BlockHeaderByNumberRequest,
+    BlockHeaderByNumberResponse,
+};
+use miden_node_proto::generated::submission::ProvenTransactionSubmission as ProtoProvenTransaction;
+use miden_node_proto::{DecodeMessageExt, VerifyWith};
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
+use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::ProvenTransaction;
-use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::utils::serde::Deserializable;
 use tokio::sync::Mutex;
 use url::Url;
 
@@ -29,6 +34,7 @@ use url::Url;
 pub struct SubmissionClient {
     rpc: RpcClient,
     genesis_header: BlockHeader,
+    genesis_protocol_config: ProtocolConfig,
     genesis_commitment: Word,
     trusted_validator_keys: Arc<[ValidatorPublicKey]>,
     sealer: Mutex<Option<TransactionInputsSealer>>,
@@ -77,7 +83,7 @@ impl SubmissionClient {
             .await
             .context("failed to connect to RPC for genesis discovery")?;
 
-        let genesis_header = genesis_block_header(&mut discovery).await?;
+        let (genesis_header, genesis_protocol_config) = genesis_block_state(&mut discovery).await?;
         let genesis_commitment = genesis_header.commitment();
 
         // Step two: the real client, carrying the genesis commitment so writes are accepted.
@@ -99,6 +105,7 @@ impl SubmissionClient {
         let client = Self {
             rpc,
             genesis_header,
+            genesis_protocol_config,
             genesis_commitment,
             trusted_validator_keys: Arc::from(trusted_keys),
             sealer: Mutex::new(None),
@@ -114,6 +121,11 @@ impl SubmissionClient {
     /// The genesis block header, used as the reference block for every increment transaction.
     pub fn genesis_header(&self) -> &BlockHeader {
         &self.genesis_header
+    }
+
+    /// Returns the configuration committed by the genesis header.
+    pub fn genesis_protocol_config(&self) -> &ProtocolConfig {
+        &self.genesis_protocol_config
     }
 
     /// Reads the current chain tip height.
@@ -139,9 +151,8 @@ impl SubmissionClient {
     /// this tool submitted, while the counter account's slot only advances when the ntx-builder has
     /// actually loaded the large account and consumed a network note.
     pub async fn slot_value(&self, account_id: AccountId, slot_name: &str) -> Result<Option<u64>> {
-        let id_bytes: [u8; 15] = account_id.into();
         let request = AccountRequest {
-            account_id: Some(ProtoAccountId { id: id_bytes.to_vec() }),
+            account_id: Some(account_id.into()),
             block_num: None,
             details: Some(AccountDetailRequest {
                 code_commitment: None,
@@ -173,12 +184,15 @@ impl SubmissionClient {
             .find(|slot| slot.slot_name == slot_name)
             .with_context(|| format!("account has no storage slot named '{slot_name}'"))?;
 
-        let value: Word = slot
-            .commitment
-            .as_ref()
-            .context("storage slot carries no value")?
-            .try_into()
-            .context("failed to decode the storage slot value")?;
+        let value: Word = match slot.content.as_ref() {
+            Some(SlotContent::Value(value)) => {
+                value.try_into().context("failed to decode the storage slot value")?
+            },
+            Some(SlotContent::MapRoot(_)) => {
+                anyhow::bail!("storage slot '{slot_name}' is a storage map")
+            },
+            None => anyhow::bail!("storage slot carries no value"),
+        };
 
         // A value slot holds the number in the word's first element.
         Ok(Some(
@@ -200,9 +214,8 @@ impl SubmissionClient {
         account_id: AccountId,
         block_num: BlockNumber,
     ) -> Result<AccountWitness> {
-        let id_bytes: [u8; 15] = account_id.into();
         let request = AccountRequest {
-            account_id: Some(ProtoAccountId { id: id_bytes.to_vec() }),
+            account_id: Some(account_id.into()),
             block_num: Some(block_num.into()),
             details: None,
         };
@@ -216,7 +229,7 @@ impl SubmissionClient {
             .into_inner();
 
         let response =
-            AccountResponse::try_from(response).context("failed to decode the account response")?;
+            response.decode_and_verify().context("failed to decode the account response")?;
 
         // An account-ID prefix collision makes the tree return a witness for the *other* account,
         // and the data store keys witnesses by the account they prove.
@@ -244,16 +257,14 @@ impl SubmissionClient {
             .context("failed to fetch the transaction encryption key")?
             .into_inner();
 
-        let verified = verify_transaction_encryption_key(
-            key,
-            TrustedTransactionEncryptionState::new(
+        let verified = key
+            .verify_with(TrustedTransactionEncryptionState::new(
                 self.genesis_commitment,
                 &self.trusted_validator_keys,
-            ),
-        )
-        .context(
-            "the node's transaction encryption key is not attested by the trusted validator",
-        )?;
+            ))
+            .context(
+                "the node's transaction encryption key is not attested by the trusted validator",
+            )?;
 
         let sealer = TransactionInputsSealer::new(verified);
         *cached = Some(sealer.clone());
@@ -296,7 +307,7 @@ impl SubmissionClient {
             .rpc
             .clone()
             .submit_proven_tx(ProtoProvenTransaction {
-                transaction: proven_tx.to_bytes(),
+                transaction: Some(proven_tx.into()),
                 sealed_transaction_inputs: Some(sealed),
             })
             .await
@@ -308,21 +319,38 @@ impl SubmissionClient {
 
 /// Reads the genesis block header, which anchors both the client metadata and transaction
 /// execution.
-async fn genesis_block_header(rpc: &mut RpcClient) -> Result<BlockHeader> {
+async fn genesis_block_state(rpc: &mut RpcClient) -> Result<(BlockHeader, ProtocolConfig)> {
     let response = rpc
-        .get_block_header_by_number(BlockHeaderByNumberRequest {
-            block_num: Some(BlockNumber::GENESIS.as_u32()),
-            include_mmr_proof: None,
-        })
+        .get_block_header_by_number(genesis_header_request())
         .await
         .context("failed to read the genesis block header")?
         .into_inner();
 
-    response
+    decode_genesis_block_state(response)
+}
+
+fn decode_genesis_block_state(
+    response: BlockHeaderByNumberResponse,
+) -> Result<(BlockHeader, ProtocolConfig)> {
+    let header = response
         .block_header
         .context("RPC returned no genesis block header")?
-        .try_into()
-        .context("failed to decode the genesis block header")
+        // SAFETY: Genesis has no parent. This benchmark trusts the configured RPC for genesis.
+        .decode_and_build_unchecked()
+        .context("failed to build the genesis block header")?;
+    let protocol_config =
+        ensure_protocol_config_is_present_and_matches_header(response.protocol_config, &header)
+            .context("RPC returned no valid genesis protocol configuration")?;
+
+    Ok((header, protocol_config))
+}
+
+fn genesis_header_request() -> BlockHeaderByNumberRequest {
+    BlockHeaderByNumberRequest {
+        block_num: Some(BlockNumber::GENESIS.as_u32()),
+        include_mmr_proof: None,
+        include_protocol_config: Some(true),
+    }
 }
 
 /// True when the node rejected a submission because our sealed inputs used a stale encryption key.
@@ -332,4 +360,37 @@ fn is_stale_key(err: &anyhow::Error) -> bool {
             .downcast_ref::<tonic::Status>()
             .is_some_and(|status| status.code() == tonic::Code::FailedPrecondition)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use miden_node_proto::generated::rpc::BlockHeaderByNumberResponse;
+    use miden_protocol::account::AccountId;
+    use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1;
+    use miden_testing::MockChain;
+
+    use super::decode_genesis_block_state;
+
+    #[test]
+    fn genesis_response_rejects_mismatched_protocol_config() {
+        let chain = MockChain::builder().build().expect("chain should build");
+        let other = MockChain::builder()
+            .fee_faucet_id(
+                AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1)
+                    .expect("test faucet ID is valid"),
+            )
+            .build()
+            .expect("chain should build");
+        let response = BlockHeaderByNumberResponse {
+            block_header: Some(chain.genesis_block_header().into()),
+            mmr_path: None,
+            chain_length: None,
+            protocol_config: Some(other.protocol_config().into()),
+        };
+
+        let error = decode_genesis_block_state(response)
+            .expect_err("the genesis configuration must match its header");
+
+        assert!(format!("{error:#}").contains("does not match header commitment"));
+    }
 }

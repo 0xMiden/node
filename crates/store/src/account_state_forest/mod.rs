@@ -10,9 +10,8 @@ use miden_node_proto::domain::account::{
     AccountVaultDetails,
     StorageMapEntries,
 };
-use miden_node_utils::ErrorReport;
+use miden_node_tracing::{ErrorReport, miden_instrument, trace};
 use miden_node_utils::lru_cache::LruCache;
-use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::account::{
     AccountId,
     AccountPatch,
@@ -24,6 +23,7 @@ use miden_protocol::account::{
 use miden_protocol::asset::{Asset, AssetId, AssetIdHash};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::merkle::smt::{
+    ForestConfig,
     LargeSmtForest,
     LargeSmtForestError,
     LineageId,
@@ -132,34 +132,24 @@ struct AccountUpdateForestLineages {
 #[cfg(test)]
 impl AccountStateForest<ForestInMemoryBackend> {
     pub(crate) fn new() -> Self {
-        Self {
-            forest: Self::create_forest(),
-            storage_map_key_cache: LruCache::new(
-                NonZeroUsize::new(HASHED_STORAGE_MAP_KEY_CACHE_CAPACITY)
-                    .expect("storage map key cache capacity must be non-zero"),
-            ),
-            vault_key_cache: LruCache::new(
-                NonZeroUsize::new(HASHED_VAULT_KEY_CACHE_CAPACITY)
-                    .expect("vault key cache capacity must be non-zero"),
-            ),
-        }
+        Self::from_backend(ForestInMemoryBackend::new())
+            .expect("in-memory backend should initialize")
     }
 
     /// Returns the root of an empty SMT.
     pub(crate) const fn empty_smt_root() -> Word {
         empty_smt_root()
     }
-
-    fn create_forest() -> LargeSmtForest<ForestInMemoryBackend> {
-        let backend = ForestInMemoryBackend::new();
-        LargeSmtForest::new(backend).expect("in-memory backend should initialize")
-    }
 }
 
 impl<B: BackendReader> AccountStateForest<B> {
     pub(crate) fn from_backend(backend: B) -> Result<Self, LargeSmtForestError> {
+        // Each lineage has at most one version per block. The latest version does not count toward
+        // the history limit.
+        let config =
+            ForestConfig::default().with_max_history_versions(HISTORICAL_BLOCK_RETENTION as usize);
         Ok(Self {
-            forest: LargeSmtForest::new(backend)?,
+            forest: LargeSmtForest::with_config(backend, config)?,
             storage_map_key_cache: LruCache::new(
                 NonZeroUsize::new(HASHED_STORAGE_MAP_KEY_CACHE_CAPACITY)
                     .expect("storage map key cache capacity must be non-zero"),
@@ -237,11 +227,10 @@ impl<B: BackendReader> AccountStateForest<B> {
 
     /// Builds the leaf removals needed to replace a storage-map lineage with an empty tree.
     ///
-    /// `LargeSmtForest` does not currently expose a lineage reset or replacement mutation, so this
-    /// operation enumerates the latest tree and costs O(n) in its number of entries. A removed map
-    /// remains the latest version of its lineage until it is recreated; pruning cannot discard that
-    /// latest version. The `account_state_forest` benchmark tracks the resulting recreation cost so
-    /// this fallback remains visible until the forest API provides a constant-size reset primitive.
+    /// `LargeSmtForest` has no lineage reset operation. This operation enumerates the latest tree
+    /// and costs O(n) in its number of entries. A removed map remains the latest version of its
+    /// lineage until code recreates it. Pruning cannot discard the latest version. The
+    /// `account_state_forest` benchmark measures the recreation cost.
     fn build_current_tree_removal_operations(
         &self,
         lineage: LineageId,
@@ -307,17 +296,16 @@ impl<B: BackendReader> AccountStateForest<B> {
     ) -> Result<(), AccountStateForestUpdateError> {
         let account_id = patch.id();
         for (slot_name, map_patch) in patch.storage().maps() {
-            let raw_map_entries = Vec::from_iter(
-                map_patch
-                    .entries()
-                    .into_iter()
-                    .flat_map(|entries| entries.as_map().iter())
-                    .filter_map(
-                        |(&key, &value)| {
-                            if value == EMPTY_WORD { None } else { Some((key, value)) }
-                        },
-                    ),
-            );
+            let raw_map_entries = map_patch
+                .entries()
+                .into_iter()
+                .flat_map(|entries| entries.as_map().iter())
+                .filter_map(
+                    |(&key, &value)| {
+                        if value == EMPTY_WORD { None } else { Some((key, value)) }
+                    },
+                )
+                .collect::<Vec<_>>();
             let operations = Self::build_forest_operations(
                 raw_map_entries.iter().map(|(raw_key, value)| (raw_key.hash().into(), *value)),
             );
@@ -611,7 +599,7 @@ impl<B: BackendReader> AccountStateForest<B> {
             .flatten()
             .zip(hashed_entries)
             .map(|(raw_key, (_hashed_key, value))| {
-                Asset::from_id_and_value(raw_key, value).map_err(WitnessError::from)
+                Asset::new(raw_key, value).map_err(WitnessError::from)
             })
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -639,10 +627,13 @@ impl<B: BackendReader> AccountStateForest<B> {
             RootInfo::Missing => return None,
         };
 
-        let proofs = Result::from_iter(raw_keys.iter().map(|raw_key| {
-            let key_hashed = raw_key.hash().into();
-            self.forest.open(tree, key_hashed).map_err(Self::map_forest_error)
-        }));
+        let proofs = raw_keys
+            .iter()
+            .map(|raw_key| {
+                let key_hashed = raw_key.hash().into();
+                self.forest.open(tree, key_hashed).map_err(Self::map_forest_error)
+            })
+            .collect::<Result<_, _>>();
 
         Some(proofs.and_then(|proofs| {
             AccountStorageMapDetails::from_proofs(slot_name, map_root, raw_keys, proofs)
@@ -834,12 +825,12 @@ impl<B: Backend> AccountStateForest<B> {
         for patch in &account_patches {
             self.cache_hashed_keys_from_patch(patch);
 
-            tracing::trace!(
+            trace!(
                 target: crate::LOG_TARGET,
-                account_id = %patch.id(),
-                %block_num,
-                is_full_state = patch.is_full_state(),
-                "Updated forest with account patch"
+                "Updated forest with account patch",
+                account.id = patch.id(),
+                block.number = block_num,
+                account.updated = patch.is_full_state()
             );
         }
 
@@ -867,7 +858,7 @@ impl<B: Backend> AccountStateForest<B> {
         self.apply_precomputed_update(block_num, update)?;
 
         let number_of_pruned_blocks = self.prune(block_num);
-        tracing::Span::current().record("num_pruned", number_of_pruned_blocks);
+        miden_node_tracing::Span::current().record("num_pruned", number_of_pruned_blocks);
 
         Ok(())
     }

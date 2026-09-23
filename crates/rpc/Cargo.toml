@@ -26,11 +26,15 @@ miden-node-block-producer = { workspace = true }
 miden-node-proto          = { workspace = true }
 miden-node-proto-build    = { workspace = true }
 miden-node-store          = { workspace = true }
+miden-node-tracing        = { workspace = true }
 miden-node-utils          = { workspace = true }
 miden-protocol            = { default-features = true, workspace = true }
+miden-standards           = { workspace = true }
 miden-tx-batch            = { workspace = true }
 rand                      = { workspace = true }
+reqwest                   = { features = ["json"], workspace = true }
 semver                    = { workspace = true }
+serde                     = { features = ["derive"], workspace = true }
 thiserror                 = { workspace = true }
 tokio                     = { features = ["macros", "net", "rt-multi-thread", "time"], workspace = true }
 tokio-stream              = { features = ["net"], workspace = true }
@@ -40,14 +44,17 @@ tonic-reflection          = { workspace = true }
 tonic-web                 = { workspace = true }
 tower                     = { workspace = true }
 tower-http                = { features = ["trace"], workspace = true }
-tracing                   = { workspace = true }
 url                       = { workspace = true }
 
 [dev-dependencies]
-miden-node-utils = { features = ["testing", "tracing-forest"], workspace = true }
-miden-protocol   = { default-features = true, features = ["testing"], workspace = true }
-miden-standards  = { workspace = true }
-reqwest          = { workspace = true }
-rstest           = { workspace = true }
-tempfile         = { workspace = true }
-tokio            = { features = ["test-util"], workspace = true }
+axum               = { workspace = true }
+fs-err             = { workspace = true }
+miden-node-tracing = { features = ["tracing-forest"], workspace = true }
+miden-node-utils   = { features = ["testing-prover"], workspace = true }
+miden-protocol     = { default-features = true, features = ["testing"], workspace = true }
+miden-testing      = { workspace = true }
+miden-tx           = { features = ["concurrent", "testing"], workspace = true }
+rstest             = { workspace = true }
+serde_json         = { workspace = true }
+tempfile           = { workspace = true }
+tokio              = { features = ["test-util"], workspace = true }

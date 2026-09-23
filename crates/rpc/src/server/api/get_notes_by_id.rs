@@ -1,28 +1,28 @@
-use miden_node_proto::decode::convert_digests_to_words;
-use miden_node_proto::generated as proto;
-use miden_node_proto::generated::note::CommittedNote;
+use miden_node_proto::generated::rpc::CommittedNote;
+use miden_node_proto::{DecodeMessage, generated as proto};
 use miden_node_store::NoteRecord;
+use miden_node_tracing::{debug, miden_instrument, miden_span_record};
 use miden_node_utils::limiter::QueryParamNoteIdLimit;
-use miden_node_utils::tracing::miden_instrument;
-use miden_protocol::Word;
 use miden_protocol::note::NoteId;
-use miden_protocol::utils::serde::Serializable;
-use tonic::Status;
 
+use super::error_codes::GetNotesByIdErrorCode;
 use super::{RpcService, check, database_error_to_status};
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::GetNotesById for RpcService {
-    type Input = proto::note::NoteIdList;
+    type Input = proto::rpc::DecodedNotesByIdRequest;
     type Output = Vec<CommittedNote>;
 
-    fn decode(request: proto::note::NoteIdList) -> tonic::Result<Self::Input> {
-        Ok(request)
+    fn decode(request: proto::rpc::NotesByIdRequest) -> tonic::Result<Self::Input> {
+        check::<QueryParamNoteIdLimit>(request.note_ids.len())?;
+        request
+            .decode_fields()
+            .map_err(|err| GetNotesByIdErrorCode::DeserializationFailed.invalid_argument(err))
     }
 
-    fn encode(notes: Self::Output) -> tonic::Result<proto::note::CommittedNoteList> {
-        Ok(proto::note::CommittedNoteList { notes })
+    fn encode(notes: Self::Output) -> tonic::Result<proto::rpc::NotesByIdResponse> {
+        Ok(proto::rpc::NotesByIdResponse { notes })
     }
 
     #[miden_instrument(
@@ -36,12 +36,17 @@ impl proto::server::rpc_api::GetNotesById for RpcService {
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        tracing::trace!(target: LOG_TARGET, ?request);
-
-        check::<QueryParamNoteIdLimit>(request.ids.len())?;
-
-        let note_ids: Vec<Word> = convert_digests_to_words::<Status, _>(request.ids)?;
-        let note_ids: Vec<NoteId> = note_ids.into_iter().map(NoteId::from_raw).collect();
+        let note_ids: Vec<NoteId> = request.note_ids.verify_infallible();
+        miden_span_record!(
+            note.ids = &note_ids[..note_ids.len().min(10)],
+            note.count = note_ids.len()
+        );
+        debug!(
+            target: LOG_TARGET,
+            "Getting notes by ID",
+            note.ids = &note_ids[..note_ids.len().min(10)],
+            note.count = note_ids.len()
+        );
 
         let notes = self
             .state
@@ -60,17 +65,17 @@ impl proto::server::rpc_api::GetNotesById for RpcService {
 // HELPERS
 // ================================================================================================
 
-fn note_record_to_proto(note: NoteRecord) -> proto::note::CommittedNote {
-    let inclusion_proof = Some(proto::note::NoteInclusionInBlockProof {
+fn note_record_to_proto(note: NoteRecord) -> proto::rpc::CommittedNote {
+    let inclusion_proof = Some(proto::note::NoteInclusionProof {
         note_id: Some(note.note_id.into()),
-        block_num: note.block_num.as_u32(),
+        block_num: Some(note.block_num.into()),
         note_index_in_block: note.note_index.leaf_index_value().into(),
         inclusion_path: Some(note.inclusion_path.into()),
     });
     let note = Some(proto::note::Note {
-        metadata: Some(note.metadata.into()),
-        details: note.details.map(|details| details.to_bytes()),
-        attachments: note.attachments.to_bytes(),
+        metadata: Some(note.metadata.into_partial_metadata().into()),
+        note_details: note.details.map(Into::into),
+        note_attachments: Some(note.attachments.into()),
     });
-    proto::note::CommittedNote { inclusion_proof, note }
+    proto::rpc::CommittedNote { inclusion_proof, note }
 }

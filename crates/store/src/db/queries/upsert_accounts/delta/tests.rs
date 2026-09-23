@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use assert_matches::assert_matches;
-use miden_node_utils::fee::test_fee_params;
+use miden_node_utils::fee::{test_fee_params, test_protocol_config};
 use miden_protocol::account::auth::{AuthScheme, PublicKeyCommitment};
 use miden_protocol::account::component::AccountComponentMetadata;
 use miden_protocol::account::{
@@ -35,7 +35,7 @@ use miden_protocol::block::{
     BlockHeader,
     BlockNumber,
     BlockSignatures,
-    ValidatorKeys,
+    ValidatorConfig,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::testing::account_id::{
@@ -54,6 +54,15 @@ use crate::db::queries::{
 };
 use crate::db::{Result, TestDb};
 use crate::errors::DatabaseError;
+
+fn block_account_update(
+    account_id: AccountId,
+    final_state_commitment: Word,
+    details: AccountUpdateDetails,
+) -> BlockAccountUpdate {
+    BlockAccountUpdate::new(account_id, final_state_commitment, details)
+        .expect("test account update should be valid")
+}
 
 // QUERY DRIVERS
 // ================================================================================================
@@ -99,7 +108,6 @@ fn select_account_header_with_storage_header_at_block(
 fn insert_block_header(db: &TestDb, block_num: BlockNumber) {
     let secret_key = SigningKey::new();
     let block_header = BlockHeader::new(
-        1_u8.into(),
         Word::default(),
         block_num,
         Word::default(),
@@ -107,10 +115,11 @@ fn insert_block_header(db: &TestDb, block_num: BlockNumber) {
         Word::default(),
         Word::default(),
         Word::default(),
-        Word::default(),
-        ValidatorKeys::new(vec![secret_key.public_key()]).unwrap(),
+        ValidatorConfig::new(vec![secret_key.public_key()], 1).unwrap(),
         test_fee_params(),
-        0_u8.into(),
+        test_protocol_config().to_commitment(),
+        None,
+        0,
     );
     let signatures =
         BlockSignatures::new(vec![secret_key.sign(block_header.commitment())]).unwrap();
@@ -156,10 +165,9 @@ fn precomputed_state_from_account(account: &Account) -> PrecomputedPublicAccount
 }
 
 fn precomputed_states_from_account(account: &Account) -> PrecomputedPublicAccountStates {
-    PrecomputedPublicAccountStates::from_iter([(
-        account.id(),
-        precomputed_state_from_account(account),
-    )])
+    [(account.id(), precomputed_state_from_account(account))]
+        .into_iter()
+        .collect::<PrecomputedPublicAccountStates>()
 }
 
 fn callback_enabled_faucet_id() -> AccountId {
@@ -199,7 +207,7 @@ fn insert_public_account(db: &TestDb, block_num: BlockNumber, account: &Account)
     let patch_initial = AccountPatch::try_from(account.clone()).unwrap();
     upsert_accounts(
         db,
-        &[BlockAccountUpdate::new(
+        &[block_account_update(
             account.id(),
             account.to_commitment(),
             AccountUpdateDetails::Public(patch_initial),
@@ -220,13 +228,13 @@ fn apply_callback_delta(
 ) -> Account {
     let prev = select_full_account(db, account_id).expect("load account");
     let callback_template = FungibleAsset::new(faucet_id, amount).unwrap();
-    let prev_amount = match prev.vault().get(callback_template.id()) {
-        Some(Asset::Fungible(f)) => f.amount().as_u64(),
-        _ => 0,
-    };
+    let prev_amount = prev
+        .vault()
+        .get(callback_template.id())
+        .and_then(|asset| asset.as_fungible())
+        .map_or(0, |asset| asset.amount().as_u64());
 
-    let absolute_asset =
-        Asset::Fungible(FungibleAsset::new(faucet_id, prev_amount + amount).unwrap());
+    let absolute_asset = Asset::from(FungibleAsset::new(faucet_id, prev_amount + amount).unwrap());
     let mut vault_patch = AccountVaultPatch::default();
     vault_patch.insert_asset(absolute_asset);
     let final_nonce = Felt::new_unchecked(prev.nonce().as_canonical_u64() + nonce_delta);
@@ -245,7 +253,7 @@ fn apply_callback_delta(
 
     upsert_accounts(
         db,
-        &[BlockAccountUpdate::new(
+        &[block_account_update(
             account_id,
             expected.to_commitment(),
             AccountUpdateDetails::Public(patch),
@@ -335,7 +343,7 @@ fn optimized_delta_matches_full_account_method() {
 
     // Insert the initial account at block 1 (full state) - no vault assets
     let patch_initial = AccountPatch::try_from(account.clone()).unwrap();
-    let account_update_initial = BlockAccountUpdate::new(
+    let account_update_initial = block_account_update(
         account.id(),
         account.to_commitment(),
         AccountUpdateDetails::Public(patch_initial),
@@ -376,16 +384,18 @@ fn optimized_delta_matches_full_account_method() {
 
     // Build the storage delta (value slot update only)
     let storage_patch = {
-        let deltas = BTreeMap::from_iter([(
+        let deltas = [(
             value_slot_name.clone(),
             StorageSlotPatch::Value(StorageValuePatch::Update { value: new_slot_value }),
-        )]);
+        )]
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
         AccountStoragePatch::from_raw(deltas).unwrap()
     };
 
     // Build the vault patch (the absolute end-state is 500 tokens, starting from an empty vault)
     let vault_patch = {
-        let asset = Asset::Fungible(FungibleAsset::new(faucet_id, VAULT_AMOUNT).unwrap());
+        let asset = Asset::from(FungibleAsset::new(faucet_id, VAULT_AMOUNT).unwrap());
         AccountVaultPatch::with_assets([asset])
     };
 
@@ -417,7 +427,7 @@ fn optimized_delta_matches_full_account_method() {
     let precomputed_public_states = precomputed_states_from_account(&final_account_for_commitment);
 
     // ----- Apply the partial patch via upsert_accounts (optimized path) -----
-    let account_update = BlockAccountUpdate::new(
+    let account_update = block_account_update(
         account.id(),
         final_commitment,
         AccountUpdateDetails::Public(partial_patch),
@@ -460,10 +470,9 @@ fn optimized_delta_matches_full_account_method() {
         select_vault_at_block(&db, account.id(), block_2).expect("Query vault should succeed");
 
     assert_eq!(vault_assets_after.len(), 1, "Should have 1 vault asset");
-    assert_matches!(&vault_assets_after[0], Asset::Fungible(f) => {
-        assert_eq!(f.faucet_id(), faucet_id, "Faucet ID should match");
-        assert_eq!(f.amount().as_u64(), VAULT_AMOUNT, "Amount should be 500");
-    });
+    let fungible_asset = vault_assets_after[0].unwrap_fungible();
+    assert_eq!(fungible_asset.faucet_id(), faucet_id, "Faucet ID should match");
+    assert_eq!(fungible_asset.amount().as_u64(), VAULT_AMOUNT, "Amount should be 500");
 
     // Verify the account commitment matches
     assert_eq!(
@@ -509,7 +518,7 @@ fn optimized_delta_updates_non_empty_vault() {
 
     let faucet_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
     let faucet_id_1 = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap();
-    let initial_asset = Asset::Fungible(FungibleAsset::new(faucet_id, INITIAL_AMOUNT).unwrap());
+    let initial_asset = Asset::from(FungibleAsset::new(faucet_id, INITIAL_AMOUNT).unwrap());
 
     let component_storage =
         vec![StorageSlot::with_value(StorageSlotName::mock(SLOT_INDEX), EMPTY_WORD)];
@@ -545,7 +554,7 @@ fn optimized_delta_updates_non_empty_vault() {
 
     // Block 1: insert full-state patch (initial account with 700 tokens of faucet_id)
     let patch_initial = AccountPatch::try_from(account.clone()).unwrap();
-    let account_update_initial = BlockAccountUpdate::new(
+    let account_update_initial = block_account_update(
         account.id(),
         account.to_commitment(),
         AccountUpdateDetails::Public(patch_initial),
@@ -562,9 +571,8 @@ fn optimized_delta_updates_non_empty_vault() {
         select_full_account(&db, account.id()).expect("Failed to load full account");
 
     // Block 2: partial patch — remove faucet_id (700), add faucet_id_1 (250)
-    let removed_asset = Asset::Fungible(FungibleAsset::new(faucet_id, INITIAL_AMOUNT).unwrap());
-    let added_asset =
-        Asset::Fungible(FungibleAsset::new(faucet_id_1, ADDED_AMOUNT_BLOCK_2).unwrap());
+    let removed_asset = Asset::from(FungibleAsset::new(faucet_id, INITIAL_AMOUNT).unwrap());
+    let added_asset = Asset::from(FungibleAsset::new(faucet_id_1, ADDED_AMOUNT_BLOCK_2).unwrap());
     let mut vault_patch = AccountVaultPatch::default();
     vault_patch.insert_asset(added_asset);
     vault_patch.remove_asset(removed_asset.id());
@@ -586,7 +594,7 @@ fn optimized_delta_updates_non_empty_vault() {
     let expected_vault_root = expected_account.vault().root();
     let precomputed_public_states = precomputed_states_from_account(&expected_account);
 
-    let account_update = BlockAccountUpdate::new(
+    let account_update = block_account_update(
         account.id(),
         expected_commitment,
         AccountUpdateDetails::Public(partial_patch),
@@ -598,10 +606,9 @@ fn optimized_delta_updates_non_empty_vault() {
         select_vault_at_block(&db, account.id(), block_2).expect("Query vault should succeed");
 
     assert_eq!(vault_assets_after.len(), 1, "Should have 1 vault asset");
-    assert_matches!(&vault_assets_after[0], Asset::Fungible(f) => {
-        assert_eq!(f.faucet_id(), faucet_id_1, "Faucet ID should match");
-        assert_eq!(f.amount().as_u64(), ADDED_AMOUNT_BLOCK_2, "Amount should match");
-    });
+    let fungible_asset = vault_assets_after[0].unwrap_fungible();
+    assert_eq!(fungible_asset.faucet_id(), faucet_id_1, "Faucet ID should match");
+    assert_eq!(fungible_asset.amount().as_u64(), ADDED_AMOUNT_BLOCK_2, "Amount should match");
 
     let full_account_after =
         select_full_account(&db, account.id()).expect("Failed to load full account after update");
@@ -611,7 +618,7 @@ fn optimized_delta_updates_non_empty_vault() {
 
     // Block 3: partial patch — add more of faucet_id_1 (150 more, total = 400)
     let mut vault_patch_3 = AccountVaultPatch::default();
-    vault_patch_3.insert_asset(Asset::Fungible(
+    vault_patch_3.insert_asset(Asset::from(
         FungibleAsset::new(faucet_id_1, ADDED_AMOUNT_BLOCK_2 + ADDED_AMOUNT_BLOCK_3).unwrap(),
     ));
 
@@ -632,7 +639,7 @@ fn optimized_delta_updates_non_empty_vault() {
     let expected_vault_root_3 = expected_after_3.vault().root();
     let precomputed_public_states_3 = precomputed_states_from_account(&expected_after_3);
 
-    let account_update_3 = BlockAccountUpdate::new(
+    let account_update_3 = block_account_update(
         account.id(),
         commitment_3,
         AccountUpdateDetails::Public(partial_patch_3),
@@ -645,10 +652,13 @@ fn optimized_delta_updates_non_empty_vault() {
 
     let final_assets: Vec<Asset> = full_account_final.vault().assets().collect();
     assert_eq!(final_assets.len(), 1, "Should have exactly 1 vault asset");
-    assert_matches!(&final_assets[0], Asset::Fungible(f) => {
-        assert_eq!(f.faucet_id(), faucet_id_1);
-        assert_eq!(f.amount().as_u64(), ADDED_AMOUNT_BLOCK_2 + ADDED_AMOUNT_BLOCK_3, "Expected total of 400");
-    });
+    let fungible_asset = final_assets[0].unwrap_fungible();
+    assert_eq!(fungible_asset.faucet_id(), faucet_id_1);
+    assert_eq!(
+        fungible_asset.amount().as_u64(),
+        ADDED_AMOUNT_BLOCK_2 + ADDED_AMOUNT_BLOCK_3,
+        "Expected total of 400"
+    );
 
     assert_eq!(full_account_final.vault().root(), expected_vault_root_3);
     assert_eq!(full_account_final.to_commitment(), commitment_3);
@@ -690,15 +700,14 @@ fn optimized_delta_updates_preserve_callback_flag() {
 
     let final_assets: Vec<Asset> = final_account.vault().assets().collect();
     assert_eq!(final_assets.len(), 1, "Should have exactly 1 vault asset");
-    assert_matches!(&final_assets[0], Asset::Fungible(f) => {
-        assert_eq!(f.faucet_id(), faucet_id);
-        assert_eq!(
-            f.callbacks(),
-            AssetCallbackFlag::Enabled,
-            "callback flag must be preserved through delta application"
-        );
-        assert_eq!(f.amount().as_u64(), ADDED_AMOUNT_BLOCK_2 + ADDED_AMOUNT_BLOCK_3);
-    });
+    let fungible_asset = final_assets[0].unwrap_fungible();
+    assert_eq!(fungible_asset.faucet_id(), faucet_id);
+    assert_eq!(
+        fungible_asset.callbacks(),
+        AssetCallbackFlag::Enabled,
+        "callback flag must be preserved through delta application"
+    );
+    assert_eq!(fungible_asset.amount().as_u64(), ADDED_AMOUNT_BLOCK_2 + ADDED_AMOUNT_BLOCK_3);
 }
 
 #[test]
@@ -770,7 +779,7 @@ fn optimized_delta_updates_storage_map_header() {
     insert_block_header(&db, block_2);
 
     let patch_initial = AccountPatch::try_from(account.clone()).unwrap();
-    let account_update_initial = BlockAccountUpdate::new(
+    let account_update_initial = block_account_update(
         account.id(),
         account.to_commitment(),
         AccountUpdateDetails::Public(patch_initial),
@@ -787,10 +796,11 @@ fn optimized_delta_updates_storage_map_header() {
         select_full_account(&db, account.id()).expect("Failed to load full account");
 
     let map_patch = StorageMapPatch::from_iters([], [(map_key, map_value_updated)]);
-    let storage_patch = AccountStoragePatch::from_raw(BTreeMap::from_iter([(
-        StorageSlotName::mock(SLOT_INDEX_MAP),
-        StorageSlotPatch::Map(map_patch),
-    )]))
+    let storage_patch = AccountStoragePatch::from_raw(
+        [(StorageSlotName::mock(SLOT_INDEX_MAP), StorageSlotPatch::Map(map_patch))]
+            .into_iter()
+            .collect::<BTreeMap<_, _>>(),
+    )
     .unwrap();
 
     let final_nonce =
@@ -810,7 +820,7 @@ fn optimized_delta_updates_storage_map_header() {
     let expected_storage_commitment = expected_account.storage().to_commitment();
     let precomputed_public_states = precomputed_states_from_account(&expected_account);
 
-    let account_update = BlockAccountUpdate::new(
+    let account_update = block_account_update(
         account.id(),
         expected_commitment,
         AccountUpdateDetails::Public(partial_patch),
@@ -853,12 +863,16 @@ fn apply_storage_patch_with_roots_uses_precomputed_map_root() {
         old_root,
     )])
     .unwrap();
-    let patch = AccountStoragePatch::from_raw(BTreeMap::from_iter([(
-        slot_name.clone(),
-        StorageSlotPatch::Map(StorageMapPatch::from_iters([], [(key, new_value)])),
-    )]))
+    let patch = AccountStoragePatch::from_raw(
+        [(
+            slot_name.clone(),
+            StorageSlotPatch::Map(StorageMapPatch::from_iters([], [(key, new_value)])),
+        )]
+        .into_iter()
+        .collect::<BTreeMap<_, _>>(),
+    )
     .unwrap();
-    let precomputed_roots = BTreeMap::from_iter([(slot_name.clone(), new_root)]);
+    let precomputed_roots = [(slot_name.clone(), new_root)].into_iter().collect::<BTreeMap<_, _>>();
 
     let new_header = apply_storage_patch_with_roots(&header, &patch, &precomputed_roots).unwrap();
 
@@ -905,7 +919,7 @@ fn partial_public_upsert_requires_precomputed_state() {
     let patch_initial = AccountPatch::try_from(account.clone()).unwrap();
     upsert_accounts(
         &db,
-        &[BlockAccountUpdate::new(
+        &[block_account_update(
             account.id(),
             account.to_commitment(),
             AccountUpdateDetails::Public(patch_initial),
@@ -928,7 +942,7 @@ fn partial_public_upsert_requires_precomputed_state() {
 
     let err = upsert_accounts(
         &db,
-        &[BlockAccountUpdate::new(
+        &[block_account_update(
             account.id(),
             current_account.to_commitment(),
             AccountUpdateDetails::Public(patch),
@@ -976,7 +990,7 @@ fn partial_public_upsert_rejects_bad_precomputed_root() {
     let patch_initial = AccountPatch::try_from(account.clone()).unwrap();
     upsert_accounts(
         &db,
-        &[BlockAccountUpdate::new(
+        &[block_account_update(
             account.id(),
             account.to_commitment(),
             AccountUpdateDetails::Public(patch_initial),
@@ -1003,7 +1017,7 @@ fn partial_public_upsert_rejects_bad_precomputed_root() {
 
     let err = upsert_accounts(
         &db,
-        &[BlockAccountUpdate::new(
+        &[block_account_update(
             account.id(),
             expected_account.to_commitment(),
             AccountUpdateDetails::Public(patch),
@@ -1052,7 +1066,7 @@ fn upsert_private_account() {
 
     // Insert as private account
     let account_update =
-        BlockAccountUpdate::new(account_id, account_commitment, AccountUpdateDetails::Private);
+        block_account_update(account_id, account_commitment, AccountUpdateDetails::Private);
 
     upsert_accounts(&db, &[account_update], block_num, &PrecomputedPublicAccountStates::new())
         .expect("Private account upsert failed");
@@ -1122,7 +1136,7 @@ fn upsert_full_state_delta() {
     let patch = AccountPatch::try_from(account.clone()).unwrap();
     assert!(patch.is_full_state(), "Patch should be full state");
 
-    let account_update = BlockAccountUpdate::new(
+    let account_update = block_account_update(
         account.id(),
         account.to_commitment(),
         AccountUpdateDetails::Public(patch),
@@ -1191,24 +1205,28 @@ fn apply_storage_patch_handles_create_update_and_remove() {
     slots.sort_by_key(StorageSlotHeader::id);
     let header = AccountStorageHeader::new(slots).unwrap();
 
-    let patch = AccountStoragePatch::from_raw(BTreeMap::from_iter([
-        (removed_value_name.clone(), StorageSlotPatch::Value(StorageValuePatch::Remove)),
-        (removed_map_name.clone(), StorageSlotPatch::Map(StorageMapPatch::Remove)),
-        (
-            updated_value_name.clone(),
-            StorageSlotPatch::Value(StorageValuePatch::Update { value: updated_value }),
-        ),
-        (
-            created_value_name.clone(),
-            StorageSlotPatch::Value(StorageValuePatch::Create { value: created_value }),
-        ),
-        (
-            created_map_name.clone(),
-            StorageSlotPatch::Map(StorageMapPatch::Create {
-                entries: StorageMapPatchEntries::new(),
-            }),
-        ),
-    ]))
+    let patch = AccountStoragePatch::from_raw(
+        [
+            (removed_value_name.clone(), StorageSlotPatch::Value(StorageValuePatch::Remove)),
+            (removed_map_name.clone(), StorageSlotPatch::Map(StorageMapPatch::Remove)),
+            (
+                updated_value_name.clone(),
+                StorageSlotPatch::Value(StorageValuePatch::Update { value: updated_value }),
+            ),
+            (
+                created_value_name.clone(),
+                StorageSlotPatch::Value(StorageValuePatch::Create { value: created_value }),
+            ),
+            (
+                created_map_name.clone(),
+                StorageSlotPatch::Map(StorageMapPatch::Create {
+                    entries: StorageMapPatchEntries::new(),
+                }),
+            ),
+        ]
+        .into_iter()
+        .collect::<BTreeMap<_, _>>(),
+    )
     .unwrap();
 
     let new_header =

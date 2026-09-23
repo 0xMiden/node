@@ -54,18 +54,17 @@ use std::collections::VecDeque;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, LockResult, Mutex, MutexGuard};
 
-use miden_node_utils::ErrorReport;
-use miden_node_utils::tracing::{miden_instrument, miden_span_record};
+use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
+use miden_node_tracing::{ErrorReport, debug, miden_instrument, miden_span_record};
 use miden_protocol::batch::{BatchId, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::transaction::TransactionHeader;
+use miden_protocol::transaction::{OutputNote, TransactionHeader, TransactionId};
+use miden_standards::note::TxFeeNote;
 use thiserror::Error;
 
 use crate::block_builder::SelectedBlock;
-use crate::domain::batch::SelectedBatch;
-use crate::domain::transaction::AuthenticatedTransaction;
+use crate::domain::batch::{BatchParameters, SelectedBatch, SelectedBatchId};
 use crate::errors::{MempoolSubmissionError, StateConflict};
-use crate::mempool::budget::BudgetStatus;
 use crate::{
     COMPONENT,
     DEFAULT_MEMPOOL_TX_CAPACITY,
@@ -99,6 +98,9 @@ pub struct MempoolConfig {
 
     /// The constraints each proposed batch must adhere to.
     pub batch_budget: BatchBudget,
+
+    /// The maximum number of transactions allowed in a batch.
+    pub max_txs_per_batch: usize,
 
     /// How close to the chain tip the mempool will allow submitted transactions and batches to
     /// expire.
@@ -138,6 +140,7 @@ impl Default for MempoolConfig {
         Self {
             block_budget: BlockBudget::default(),
             batch_budget: BatchBudget::default(),
+            max_txs_per_batch: crate::DEFAULT_MAX_TXS_PER_BATCH.get(),
             expiration_slack: SERVER_MEMPOOL_EXPIRATION_SLACK,
             state_retention: SERVER_MEMPOOL_STATE_RETENTION,
             tx_capacity: DEFAULT_MEMPOOL_TX_CAPACITY,
@@ -252,6 +255,7 @@ impl Mempool {
 
         self.authentication_staleness_check(tx.authentication_height())?;
         self.expiration_check(tx.expires_at())?;
+        self.fee_note_consumption_check(&tx)?;
 
         // Insert the transaction node.
         self.transactions
@@ -259,20 +263,24 @@ impl Mempool {
             .map_err(MempoolSubmissionError::StateConflict)?;
         let telemetry = self.telemetry();
         miden_span_record!(
-            transaction.id = %tx.id(),
+            transaction.id = tx.id(),
             mempool.transactions.uncommitted = telemetry.uncommitted_transactions,
             mempool.transactions.unbatched = telemetry.unbatched_transactions,
             mempool.batches.proposed = telemetry.proposed_batches,
             mempool.batches.proven = telemetry.proven_batches,
             mempool.accounts = telemetry.accounts,
             mempool.nullifiers = telemetry.nullifiers,
-            mempool.output_notes = telemetry.output_notes,
+            mempool.output_notes = telemetry.output_notes
         );
         emit_transaction_added(&tx);
 
         Ok(self.committed_chain_tip)
     }
 
+    /// Adds a user-proven batch to the mempool.
+    ///
+    /// The batch becomes available for block selection when its transaction dependencies are
+    /// selected.
     #[miden_instrument(
         target = COMPONENT,
         name = "mempool.add_user_batch",
@@ -280,6 +288,8 @@ impl Mempool {
     pub fn add_user_batch(
         &mut self,
         txs: &[Arc<AuthenticatedTransaction>],
+        parameters: BatchParameters,
+        proof: Arc<ProvenBatch>,
     ) -> Result<BlockNumber, MempoolSubmissionError> {
         assert!(!txs.is_empty(), "Cannot have a batch with no transactions");
 
@@ -289,23 +299,25 @@ impl Mempool {
             return Err(MempoolSubmissionError::CapacityExceeded);
         }
 
-        // Ensure the batch doesn't exceed the mempool budget for batches.
-        let mut budget = self.config.batch_budget;
-        for tx in txs {
-            if budget.check_then_subtract(tx) == BudgetStatus::Exceeded {
-                // TODO: better error plox.
-                return Err(MempoolSubmissionError::CapacityExceeded);
-            }
+        if txs.len() > self.config.max_txs_per_batch {
+            return Err(MempoolSubmissionError::CapacityExceeded);
+        }
+
+        let batch_id = BatchId::from_transactions(txs.iter().map(|tx| tx.raw_proven_transaction()));
+        if proof.id() != batch_id {
+            return Err(MempoolSubmissionError::BatchIdMismatch { proof_id: proof.id(), batch_id });
         }
 
         for tx in txs {
             self.authentication_staleness_check(tx.authentication_height())?;
             self.expiration_check(tx.expires_at())?;
+            self.fee_note_consumption_check(tx)?;
         }
 
         self.transactions
-            .append_user_batch(txs)
+            .append_user_batch(txs, parameters, proof)
             .map_err(MempoolSubmissionError::StateConflict)?;
+        self.promote_user_batches();
 
         let telemetry = self.telemetry();
         miden_span_record!(
@@ -315,7 +327,7 @@ impl Mempool {
             mempool.batches.proven = telemetry.proven_batches,
             mempool.accounts = telemetry.accounts,
             mempool.nullifiers = telemetry.nullifiers,
-            mempool.output_notes = telemetry.output_notes,
+            mempool.output_notes = telemetry.output_notes
         );
         for tx in txs {
             emit_transaction_added(tx);
@@ -324,7 +336,7 @@ impl Mempool {
         Ok(self.committed_chain_tip)
     }
 
-    /// Returns a set of transactions for the next batch.
+    /// Returns a set of standalone transactions for the next sequencer-built batch.
     ///
     /// Transactions are returned in a valid execution ordering.
     ///
@@ -334,8 +346,15 @@ impl Mempool {
         name = "mempool.select_any_batch",
     )]
     pub fn select_any_batch(&mut self) -> Option<SelectedBatch> {
-        let batch = self.transactions.select_any_batch(self.config.batch_budget)?;
+        self.promote_user_batches();
+        let parameters = BatchParameters {
+            reference_block: self.committed_chain_tip,
+        };
+        let batch = self
+            .transactions
+            .select_any_internal_batch(self.config.batch_budget.clone(), parameters)?;
         let batch = self.append_selected_batch(batch);
+        self.promote_user_batches();
         let telemetry = self.telemetry();
         miden_span_record!(
             mempool.transactions.uncommitted = telemetry.uncommitted_transactions,
@@ -344,23 +363,29 @@ impl Mempool {
             mempool.batches.proven = telemetry.proven_batches,
             mempool.accounts = telemetry.accounts,
             mempool.nullifiers = telemetry.nullifiers,
-            mempool.output_notes = telemetry.output_notes,
+            mempool.output_notes = telemetry.output_notes
         );
         Some(batch)
     }
 
-    /// Returns a full set of transactions for the next batch.
+    /// Returns a full set of standalone transactions for the next sequencer-built batch.
     ///
-    /// User batches count as full because they are externally chosen atomic batches.
-    /// Non-user batches are only returned when the selected set saturates the batch budget or when
+    /// The transactions are only returned when the selected set saturates the batch budget or when
     /// another selectable transaction cannot fit into the remaining budget.
     #[miden_instrument(
         target = COMPONENT,
         name = "mempool.select_full_batch",
     )]
     pub fn select_full_batch(&mut self) -> Option<SelectedBatch> {
-        let batch = self.transactions.select_full_batch(self.config.batch_budget)?;
+        self.promote_user_batches();
+        let parameters = BatchParameters {
+            reference_block: self.committed_chain_tip,
+        };
+        let batch = self
+            .transactions
+            .select_full_internal_batch(self.config.batch_budget.clone(), parameters)?;
         let batch = self.append_selected_batch(batch);
+        self.promote_user_batches();
         let telemetry = self.telemetry();
         miden_span_record!(
             mempool.transactions.uncommitted = telemetry.uncommitted_transactions,
@@ -369,7 +394,7 @@ impl Mempool {
             mempool.batches.proven = telemetry.proven_batches,
             mempool.accounts = telemetry.accounts,
             mempool.nullifiers = telemetry.nullifiers,
-            mempool.output_notes = telemetry.output_notes,
+            mempool.output_notes = telemetry.output_notes
         );
         Some(batch)
     }
@@ -381,6 +406,15 @@ impl Mempool {
         batch
     }
 
+    /// Moves selectable user-proven batches into the batch graph.
+    fn promote_user_batches(&mut self) {
+        while let Some((batch, proof)) = self.transactions.select_user_batch() {
+            if let Err(err) = self.batches.append_user_batch(batch, proof) {
+                panic!("failed to append user batch to dependency graph: {}", err.as_report());
+            }
+        }
+    }
+
     /// Drops the proposed batch and all of its descendants.
     ///
     /// The transactions are re-queued for inclusion in a batch. Additionally, the batch's
@@ -390,7 +424,7 @@ impl Mempool {
         target = COMPONENT,
         name = "mempool.rollback_batch",
     )]
-    pub fn rollback_batch(&mut self, batch: BatchId) {
+    pub(crate) fn rollback_batch(&mut self, batch: SelectedBatchId) {
         // Guards against bugs in the proof scheduler where a retry results in multiple results
         // coming back for the same batch. If the batch previously succeeded, then yanking it would
         // corrupt the mempool since the batch might be in a block.
@@ -401,7 +435,7 @@ impl Mempool {
             return;
         }
 
-        let reverted_batches = self.batches.revert_batch_and_descendants(batch);
+        let reverted_batches = self.batches.revert_selected_batch_and_descendants(batch);
         for reverted in &reverted_batches {
             self.transactions.requeue_transactions(reverted);
         }
@@ -430,7 +464,7 @@ impl Mempool {
             mempool.batches.proven = telemetry.proven_batches,
             mempool.accounts = telemetry.accounts,
             mempool.nullifiers = telemetry.nullifiers,
-            mempool.output_notes = telemetry.output_notes,
+            mempool.output_notes = telemetry.output_notes
         );
         emit_transaction_evictions(&evicted, "failure_limit", "dependency_evicted");
     }
@@ -450,7 +484,7 @@ impl Mempool {
             mempool.batches.proven = telemetry.proven_batches,
             mempool.accounts = telemetry.accounts,
             mempool.nullifiers = telemetry.nullifiers,
-            mempool.output_notes = telemetry.output_notes,
+            mempool.output_notes = telemetry.output_notes
         );
     }
 
@@ -486,7 +520,7 @@ impl Mempool {
             mempool.batches.proven = telemetry.proven_batches,
             mempool.accounts = telemetry.accounts,
             mempool.nullifiers = telemetry.nullifiers,
-            mempool.output_notes = telemetry.output_notes,
+            mempool.output_notes = telemetry.output_notes
         );
         block
     }
@@ -527,7 +561,7 @@ impl Mempool {
             mempool.batches.proven = telemetry.proven_batches,
             mempool.accounts = telemetry.accounts,
             mempool.nullifiers = telemetry.nullifiers,
-            mempool.output_notes = telemetry.output_notes,
+            mempool.output_notes = telemetry.output_notes
         );
         emit_transaction_expirations(&expired, self.committed_chain_tip);
     }
@@ -546,9 +580,8 @@ impl Mempool {
         name = "mempool.rollback_block",
     )]
     pub fn rollback_block(&mut self, block: BlockNumber) {
-        // FIXME: We should consider a more robust check here to identify the block by a hash.
-        //        If multiple jobs are possible, then so are multiple variants with the same
-        //        block number.
+        // A block number identifies the pending block while only one block job can exist. Multiple
+        // block variants at the same height would require identification by block commitment.
         let block = self
             .pending_block
             .take_if(|pending| pending.block_number == block)
@@ -558,7 +591,7 @@ impl Mempool {
         //
         // Transactions which have failed excessively are also reverted.
         for batch in &block.batches {
-            let reverted = self.batches.revert_batch_and_descendants(batch.id());
+            let reverted = self.batches.revert_proven_batch_and_descendants(batch.id());
 
             for batch in reverted {
                 self.transactions.requeue_transactions(&batch);
@@ -567,8 +600,11 @@ impl Mempool {
         let failed_txs = block
             .batches
             .iter()
-            .flat_map(|batch| batch.transactions().as_slice().iter().map(TransactionHeader::id));
-        let evicted = self.transactions.increment_failure_count(failed_txs);
+            .flat_map(|batch| batch.transactions().as_slice())
+            .map(TransactionHeader::id)
+            .filter(|transaction| self.transactions.contains(transaction))
+            .collect::<Vec<_>>();
+        let evicted = self.transactions.increment_failure_count(failed_txs.into_iter());
         let telemetry = self.telemetry();
         miden_span_record!(
             mempool.transactions.uncommitted = telemetry.uncommitted_transactions,
@@ -577,7 +613,7 @@ impl Mempool {
             mempool.batches.proven = telemetry.proven_batches,
             mempool.accounts = telemetry.accounts,
             mempool.nullifiers = telemetry.nullifiers,
-            mempool.output_notes = telemetry.output_notes,
+            mempool.output_notes = telemetry.output_notes
         );
         emit_transaction_evictions(&evicted, "failure_limit", "dependency_evicted");
     }
@@ -596,8 +632,9 @@ impl Mempool {
             .committed_blocks
             .iter()
             .flat_map(|block| block.batches.iter())
-            .map(|batch| batch.transactions().as_slice().len())
-            .sum::<usize>();
+            .flat_map(|batch| batch.transactions().as_slice())
+            .filter(|transaction| self.transactions.contains(&transaction.id()))
+            .count();
 
         self.transactions
             .count()
@@ -717,37 +754,73 @@ impl Mempool {
 
         Ok(())
     }
+
+    /// Rejects transactions that consume an uncommitted `TX_FEE` note.
+    fn fee_note_consumption_check(
+        &self,
+        tx: &AuthenticatedTransaction,
+    ) -> Result<(), MempoolSubmissionError> {
+        let fee_script_root = TxFeeNote::script_root();
+        let is_fee_note = |note: &OutputNote| {
+            note.recipient()
+                .is_some_and(|recipient| recipient.script().root() == fee_script_root)
+        };
+
+        let note_ids = tx
+            .unauthenticated_note_ids()
+            .filter(|note_id| {
+                let Some((creator, note)) = self.transactions.output_note(*note_id) else {
+                    return false;
+                };
+
+                is_fee_note(note) && !self.transaction_is_committed(creator)
+            })
+            .collect::<Vec<_>>();
+
+        if note_ids.is_empty() {
+            Ok(())
+        } else {
+            Err(MempoolSubmissionError::ConsumesInflightFeeNotes {
+                transaction_id: tx.id(),
+                note_ids,
+            })
+        }
+    }
+
+    fn transaction_is_committed(&self, transaction_id: TransactionId) -> bool {
+        self.committed_blocks
+            .iter()
+            .flat_map(|block| block.batches.iter())
+            .flat_map(|batch| batch.transactions().as_slice())
+            .any(|transaction| transaction.id() == transaction_id)
+    }
 }
 
 fn emit_transaction_added(tx: &AuthenticatedTransaction) {
-    if !tracing::enabled!(target: LOG_TARGET, tracing::Level::DEBUG) {
+    if !miden_node_tracing::enabled!(target: LOG_TARGET, miden_node_tracing::Level::DEBUG) {
         return;
     }
 
-    tracing::debug!(
+    debug!(
         target: LOG_TARGET,
-        {
-            transaction.id = %tx.id(),
-            account.id = %tx.account_id(),
-            transaction.expires_at = %tx.expires_at(),
-        },
         "Transaction added to mempool",
+        transaction.id = tx.id(),
+        account.id = tx.account_id(),
+        transaction.expires_at = tx.expires_at()
     );
 }
 
 fn emit_transaction_expirations(removal: &graph::TransactionRemoval, chain_tip: BlockNumber) {
-    if !tracing::enabled!(target: LOG_TARGET, tracing::Level::DEBUG) {
+    if !miden_node_tracing::enabled!(target: LOG_TARGET, miden_node_tracing::Level::DEBUG) {
         return;
     }
 
     for transaction_id in removal.direct() {
-        tracing::debug!(
+        debug!(
             target: LOG_TARGET,
-            {
-                transaction.id = %transaction_id,
-                block.number = %chain_tip,
-            },
             "Transaction expired from mempool",
+            transaction.id = transaction_id,
+            block.number = chain_tip
         );
     }
 
@@ -759,18 +832,16 @@ fn emit_transaction_evictions(
     direct_reason: &'static str,
     dependent_reason: &'static str,
 ) {
-    if !tracing::enabled!(target: LOG_TARGET, tracing::Level::DEBUG) {
+    if !miden_node_tracing::enabled!(target: LOG_TARGET, miden_node_tracing::Level::DEBUG) {
         return;
     }
 
     for transaction_id in removal.direct() {
-        tracing::debug!(
+        debug!(
             target: LOG_TARGET,
-            {
-                transaction.id = %transaction_id,
-                mempool.removal.reason = direct_reason,
-            },
             "Transaction evicted from mempool",
+            transaction.id = transaction_id,
+            mempool.removal.reason = direct_reason
         );
     }
 
@@ -779,13 +850,11 @@ fn emit_transaction_evictions(
 
 fn emit_dependent_transaction_evictions(removal: &graph::TransactionRemoval, reason: &'static str) {
     for transaction_id in removal.dependents() {
-        tracing::debug!(
+        debug!(
             target: LOG_TARGET,
-            {
-                transaction.id = %transaction_id,
-                mempool.removal.reason = reason,
-            },
             "Transaction evicted from mempool",
+            transaction.id = transaction_id,
+            mempool.removal.reason = reason
         );
     }
 }

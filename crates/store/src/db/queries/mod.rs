@@ -64,6 +64,12 @@ struct InvalidNetworkAccountType(i64);
 mod insert_block_header;
 pub(crate) use insert_block_header::insert_block_header;
 
+// PROTOCOL CONFIG QUERIES
+// =================================================================================================
+
+mod insert_protocol_config;
+pub(crate) use insert_protocol_config::insert_protocol_config;
+
 // NOTE QUERIES
 // =================================================================================================
 

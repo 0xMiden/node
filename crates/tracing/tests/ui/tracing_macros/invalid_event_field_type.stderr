@@ -1,0 +1,21 @@
+error[E0080]: evaluation panicked: tracing field `account.id` is not allowed for this attribute type
+ --> tests/ui/tracing_macros/invalid_event_field_type.rs:4:5
+  |
+4 |     debug!("invalid.field.type", account.id = 42_u32);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `main::__miden_assert_field_name::<u32>::{constant#0}` failed here
+
+note: erroneous constant encountered
+ --> tests/ui/tracing_macros/invalid_event_field_type.rs:4:5
+  |
+4 |     debug!("invalid.field.type", account.id = 42_u32);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this note originates in the macro `debug` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+note: the above error was encountered while instantiating `fn main::__miden_assert_field_name::<u32>`
+ --> tests/ui/tracing_macros/invalid_event_field_type.rs:4:5
+  |
+4 |     debug!("invalid.field.type", account.id = 42_u32);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this note originates in the macro `debug` (in Nightly builds, run with -Z macro-backtrace for more info)

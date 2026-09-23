@@ -4,9 +4,9 @@ use std::task::{Context, Poll};
 
 use miden_node_proto::generated as grpc;
 use miden_node_proto::generated::validator::BlockSubscriptionResponse;
-use miden_node_utils::ErrorReport;
-use miden_node_utils::tracing::{miden_instrument, miden_span_record};
-use miden_protocol::block::BlockNumber;
+use miden_node_tracing::{ErrorReport, error, info, miden_instrument, miden_span_record};
+use miden_protocol::block::{BlockNumber, SignedBlock};
+use miden_protocol::utils::serde::Deserializable;
 use tokio::sync::OwnedRwLockWriteGuard;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Status;
@@ -56,7 +56,7 @@ impl grpc::server::validator_api::BlockSubscription for ValidatorService {
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::ItemStream> {
-        miden_span_record!(block.from = request.block_from,);
+        miden_span_record!(block.from = request.block_from);
 
         let committed_tip = *self.committed_tip.borrow();
         if request.block_from > committed_tip.as_u32() {
@@ -74,27 +74,61 @@ impl grpc::server::validator_api::BlockSubscription for ValidatorService {
         let from = BlockNumber::from(request.block_from);
         // The tip should never move since we are in recovery mode and therefore there is no active
         // sequencer.
-        miden_span_record!(tip.number = %committed_tip);
+        miden_span_record!(tip.number = committed_tip);
 
         let (tx, rx) = tokio::sync::mpsc::channel(32);
 
         tokio::spawn({
             let store = self.block_store.clone();
+            let db = self.db.reader();
             async move {
+                let mut previous_config_commitment = None;
                 for block in from.as_u32()..=committed_tip.as_u32() {
                     let response = match store.load_block(block.into()).await {
-                        Ok(Some(block)) => Ok(BlockSubscriptionResponse {
-                            block,
-                            committed_chain_tip: committed_tip.as_u32(),
-                        }),
+                        Ok(Some(bytes)) => match SignedBlock::read_from_bytes(&bytes) {
+                            Ok(signed_block) => {
+                                let commitment = signed_block.header().protocol_config_commitment();
+                                let protocol_config = if previous_config_commitment
+                                    == Some(commitment)
+                                {
+                                    Ok(None)
+                                } else {
+                                    match db.load_protocol_config(commitment).await {
+                                        Ok(Some(config)) => {
+                                            previous_config_commitment = Some(commitment);
+                                            Ok(Some((&config).into()))
+                                        },
+                                        Ok(None) => Err(tonic::Status::internal(format!(
+                                            "protocol config {commitment} not found"
+                                        ))),
+                                        Err(err) => Err(tonic::Status::internal(
+                                            err.as_report_context("failed to load protocol config"),
+                                        )),
+                                    }
+                                };
+                                protocol_config.map(|protocol_config| BlockSubscriptionResponse {
+                                    block: Some(signed_block.into()),
+                                    committed_chain_tip: committed_tip.as_u32(),
+                                    protocol_config,
+                                })
+                            },
+                            Err(err) => Err(tonic::Status::internal(
+                                err.as_report_context("failed to decode backed-up block"),
+                            )),
+                        },
                         Ok(None) => {
                             Err(tonic::Status::not_found(format!("block {block} not found")))
-                        }
+                        },
                         Err(err) => Err(tonic::Status::internal(
                             err.as_report_context("failed to load block"),
                         )),
-                    }.inspect_err(|err| {
-                        tracing::error!(block.number = %block, message = %err.message(), "failed to load block in validator recovery stream");
+                    }
+                    .inspect_err(|err| {
+                        error!(
+                            err,
+                            "failed to load block in validator recovery stream",
+                            block.number = block
+                        );
                     });
 
                     // Errors are not recoverable so we abort the stream after informing the client.
@@ -105,7 +139,7 @@ impl grpc::server::validator_api::BlockSubscription for ValidatorService {
                     // and prevent the sending of the error response.
                     let is_err = response.is_err();
                     if tx.send(response).await.is_err() || is_err {
-                        tracing::info!("validator recovery stream closing");
+                        info!("validator recovery stream closing");
                         return;
                     }
                 }

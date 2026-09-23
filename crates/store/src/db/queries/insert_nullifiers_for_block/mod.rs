@@ -1,10 +1,9 @@
 //! Records the nullifiers created by a block and marks the notes they consume.
 
 use miden_node_db::sqlite::{InList, WriteTx};
-use miden_node_utils::tracing::miden_instrument;
+use miden_node_tracing::miden_instrument;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
-use miden_protocol::utils::serde::Serializable;
 
 use crate::COMPONENT;
 use crate::db::utils::get_nullifier_prefix;
@@ -33,8 +32,7 @@ pub(crate) fn insert_nullifiers_for_block(
     nullifiers: &[Nullifier],
     block_num: BlockNumber,
 ) -> Result<usize, DatabaseError> {
-    let serialized = Vec::from_iter(nullifiers.iter().map(Serializable::to_bytes));
-    let consumed = InList::from_blobs(serialized.iter().map(Vec::as_slice));
+    let consumed = InList::from_values(nullifiers);
 
     let mut count = tx.execute(SQL_MARK_NOTES_CONSUMED, &[&block_num, &consumed])?;
 

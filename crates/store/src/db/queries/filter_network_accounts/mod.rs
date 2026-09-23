@@ -5,7 +5,6 @@ use std::collections::HashSet;
 use miden_node_db::sqlite::{InList, ReadTx};
 use miden_node_utils::limiter::{QueryParamAccountIdLimit, QueryParamLimiter};
 use miden_protocol::account::AccountId;
-use miden_protocol::utils::serde::Serializable;
 
 use crate::db::queries::{NetworkAccountType, VALID_FOREVER};
 use crate::errors::DatabaseError;
@@ -21,8 +20,7 @@ pub(crate) fn filter_network_accounts(
 ) -> Result<HashSet<AccountId>, DatabaseError> {
     QueryParamAccountIdLimit::check(account_ids.len())?;
 
-    let id_bytes = Vec::from_iter(account_ids.iter().map(Serializable::to_bytes));
-    let ids = InList::from_blobs(id_bytes.iter().map(Vec::as_slice));
+    let ids = InList::from_values(account_ids);
 
     Ok(tx
         .query(SQL, &[&ids, &NetworkAccountType::Network, &VALID_FOREVER], |row| {

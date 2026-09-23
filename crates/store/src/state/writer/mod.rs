@@ -17,9 +17,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use miden_node_utils::ErrorReport;
-use miden_node_utils::tracing::miden_instrument;
+use miden_node_tracing::{ErrorReport, miden_instrument};
 use miden_protocol::block::SignedBlock;
+use miden_protocol::protocol_config::ProtocolConfig;
 use tokio::sync::{mpsc, oneshot};
 pub(in crate::state) use worker::WriteWorker;
 
@@ -90,10 +90,11 @@ impl Future for WriterTask {
 /// A request to apply a block, paired with a one-shot channel for the result.
 pub(super) struct WriteRequest {
     signed_block: SignedBlock,
+    protocol_config: Option<ProtocolConfig>,
     result_tx: oneshot::Sender<Result<(), ApplyBlockError>>,
     /// Span of the `apply_block` caller. The worker runs the write under it, keeping the write path
     /// in the caller's trace across the channel hop.
-    span: tracing::Span,
+    span: miden_node_tracing::Span,
 }
 
 impl BlockWriter {
@@ -122,6 +123,11 @@ impl BlockWriter {
 
     /// Apply changes of a new block to the DB and in-memory data structures.
     ///
+    /// Supply the active configuration if its commitment is not yet stored. The configuration
+    /// must match the block header. New configurations are committed with the block.
+    /// If the configuration is omitted and its commitment is not stored, this method returns
+    /// `DatabaseError::ProtocolConfigNotFound` through `ApplyBlockError`.
+    ///
     /// Blocks are forwarded to the store's write worker task, which processes them one at a
     /// time.
     /// Readers are unaffected while a block is being applied: they keep reading from the previous
@@ -130,13 +136,18 @@ impl BlockWriter {
         target = COMPONENT,
         err,
     )]
-    pub async fn apply_block(&mut self, signed_block: SignedBlock) -> Result<(), ApplyBlockError> {
+    pub async fn apply_block(
+        &mut self,
+        signed_block: SignedBlock,
+        protocol_config: Option<ProtocolConfig>,
+    ) -> Result<(), ApplyBlockError> {
         let (result_tx, result_rx) = oneshot::channel();
         self.write_tx
             .send(WriteRequest {
                 signed_block,
+                protocol_config,
                 result_tx,
-                span: tracing::Span::current(),
+                span: miden_node_tracing::Span::current(),
             })
             .await
             .map_err(|e| ApplyBlockError::WriterTaskSendFailed(e.as_report()))?;

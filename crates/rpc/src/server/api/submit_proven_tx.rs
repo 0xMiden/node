@@ -1,10 +1,10 @@
-use miden_node_block_producer::AuthenticatedTransaction;
 use miden_node_block_producer::store::get_tx_inputs;
+use miden_node_block_producer::{MempoolSubmissionError, ensure_transaction_has_fee};
 use miden_node_proto::clients::{SequencerClient, ValidatorClient};
-use miden_node_proto::generated as proto;
-use miden_node_utils::ErrorReport;
-use miden_node_utils::spawn::spawn_blocking_in_current_span;
-use miden_node_utils::tracing::{miden_instrument, miden_span_record};
+use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
+use miden_node_proto::{DecodeMessageExt, generated as proto};
+use miden_node_tracing::spawn::spawn_blocking_in_current_span;
+use miden_node_tracing::{ErrorReport, debug, miden_instrument, miden_span_record, trace};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::transaction::{
     OutputNote,
@@ -13,20 +13,28 @@ use miden_protocol::transaction::{
     TransactionVerifier,
     TxAccountUpdate,
 };
-use miden_protocol::utils::serde::{Deserializable, Serializable};
 use tonic::{Request, Status};
-use tracing::debug;
 
-use super::{COMPONENT, RpcBackend, RpcService, submit_tx_to_validators};
+use super::{COMPONENT, RpcBackend, RpcService, load_protocol_config, submit_tx_to_validators};
 use crate::LOG_TARGET;
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::SubmitProvenTx for RpcService {
-    type Input = proto::transaction::ProvenTransaction;
+    type Input = miden_node_proto::ProvenTransactionSubmission;
     type Output = proto::blockchain::BlockNumber;
 
-    fn decode(request: proto::transaction::ProvenTransaction) -> tonic::Result<Self::Input> {
-        Ok(request)
+    fn decode(
+        request: proto::submission::ProvenTransactionSubmission,
+    ) -> tonic::Result<Self::Input> {
+        request
+            // SAFETY: The handler checks the reference block and proof before forwarding. Decoding
+            // does not authenticate the transaction against current chain state.
+            //
+            // FIXME: Check committed nullifiers and expiration against one local state snapshot
+            // on every submission path. Forwarding skips the local nullifier check, and
+            // expiration is checked later by the sequencer mempool.
+            .decode_and_build_unchecked()
+            .map_err(miden_node_proto::errors::ConversionError::into_status)
     }
 
     fn encode(output: Self::Output) -> tonic::Result<proto::blockchain::BlockNumber> {
@@ -44,29 +52,37 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
         metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        let mut request = input;
+        let tx = input.transaction;
         let is_authorized_network_tx = self.is_authorized_network_tx(metadata);
         let original_accept_header = metadata.get(http::header::ACCEPT.as_str()).cloned();
 
-        tracing::trace!(target: LOG_TARGET, "Received transaction submission");
-
-        let tx = ProvenTransaction::read_from_bytes(&request.transaction).map_err(|err| {
-            Status::invalid_argument(err.as_report_context("invalid transaction"))
-        })?;
+        trace!(target: LOG_TARGET, "Received transaction submission");
 
         miden_span_record!(
-            transaction.id = %tx.id(),
-            account.id = %tx.account_id(),
-            transaction.expires_at = %tx.expiration_block_num(),
-            transaction.reference_block.number = %tx.ref_block_num(),
-            transaction.reference_block.commitment = %tx.ref_block_commitment(),
+            transaction.id = tx.id(),
+            account.id = tx.account_id(),
+            transaction.expires_at = tx.expiration_block_num(),
+            transaction.reference_block.number = tx.ref_block_num(),
+            transaction.reference_block.commitment = tx.ref_block_commitment()
         );
 
         debug!(target: LOG_TARGET, "Submitting transaction");
 
+        if let RpcBackend::Sequencer { account_admission, .. } = &self.backend {
+            account_admission.check(tx.account_update()).await?;
+        }
+
         // Verify the reference block is actually part of the chain.
-        self.verify_reference_commitment(tx.ref_block_num(), tx.ref_block_commitment())
+        let reference_header = self
+            .verify_reference_commitment(tx.ref_block_num(), tx.ref_block_commitment())
             .await?;
+        let protocol_config = load_protocol_config(&self.state.view(), &reference_header).await?;
+        ensure_transaction_has_fee(
+            &tx,
+            protocol_config.fee_asset_id(),
+            reference_header.fee_parameters(),
+        )
+        .map_err(Status::from)?;
 
         // Rebuild a new ProvenTransaction with decorators removed from output notes
         let account_update = TxAccountUpdate::new(
@@ -89,7 +105,10 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
             tx.proof().clone(),
         )
         .map_err(|e| Status::invalid_argument(e.to_string()))?;
-        request.transaction = rebuilt_tx.to_bytes();
+        let request = proto::submission::ProvenTransactionSubmission {
+            transaction: Some((&rebuilt_tx).into()),
+            sealed_transaction_inputs: Some(input.sealed_transaction_inputs),
+        };
 
         // Block post-deployment network-account transactions from user RPC. First-deployment txs
         // are exempt because the protocol-level allowlist only kicks in once the account exists,
@@ -104,7 +123,9 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
         }
 
         let tx_id = tx.id();
-        spawn_blocking_in_current_span(move || {
+        // The verifier checks deferred witnesses and their binding to the VM proof. Batch proving
+        // settles the remaining precompile obligation.
+        let _verification_outcome = spawn_blocking_in_current_span(move || {
             TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL).verify(&tx).map_err(|err| {
                 Status::invalid_argument(format!(
                     "Invalid proof for transaction {}: {}",
@@ -119,7 +140,7 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
         })??;
 
         match &self.backend {
-            RpcBackend::Sequencer { block_producer, validators } => {
+            RpcBackend::Sequencer { block_producer, validators, .. } => {
                 submit_tx_to_validators(validators.as_slice(), &request).await?;
                 block_producer
                     .submit_proven_tx(rebuilt_tx)
@@ -139,7 +160,8 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
                 .await
             },
             RpcBackend::FullNode { source_rpc, pre_auth: None, .. } => {
-                // Unauthenticated transactions: forward the request to the source verbatim.
+                // FIXME: Preserve and forward the original request. This request contains the
+                // transaction rebuilt above with output-note decorators removed.
                 let mut forwarded_request = Request::new(request);
                 if let Some(accept) = original_accept_header {
                     forwarded_request.metadata_mut().insert(http::header::ACCEPT.as_str(), accept);
@@ -165,7 +187,7 @@ impl RpcService {
         &self,
         validators: &[ValidatorClient],
         sequencer: SequencerClient,
-        request: proto::transaction::ProvenTransaction,
+        request: proto::submission::ProvenTransactionSubmission,
         rebuilt_tx: ProvenTransaction,
     ) -> tonic::Result<proto::blockchain::BlockNumber> {
         let tx_inputs = get_tx_inputs(&self.state, &rebuilt_tx).await.map_err(|err| {
@@ -173,9 +195,8 @@ impl RpcService {
         })?;
 
         let authenticated_tx =
-            AuthenticatedTransaction::new_unchecked(rebuilt_tx.into(), tx_inputs).map_err(
-                |err| Status::internal(err.as_report_context("failed to authenticate transaction")),
-            )?;
+            AuthenticatedTransaction::new_unchecked(rebuilt_tx.into(), tx_inputs)
+                .map_err(|err| MempoolSubmissionError::AuthenticationFailed(err.into()))?;
 
         // Submit to every validator.
         submit_tx_to_validators(validators, &request).await?;
