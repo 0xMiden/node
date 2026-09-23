@@ -31,27 +31,33 @@ impl proto::server::rpc_api::RegisterAccount for RpcService {
         let account_id = request.account_id;
         miden_span_record!(account.id = account_id);
 
-        let invitation = InvitationCode::new(&request.invitation_code)
-            .map_err(|error| Status::invalid_argument(error.to_string()))?;
-
         match &self.backend {
             RpcBackend::Sequencer { account_admission, .. } => {
-                let outcome = account_admission
-                    .allowlist
-                    .register_account(invitation, account_id)
-                    .await
-                    .map_err(|error| {
-                        let code = match &error {
-                            AllowlistError::InvitationNotFound => Code::NotFound,
-                            AllowlistError::InvitationAlreadyUsed
-                            | AllowlistError::AccountAlreadyRegistered(_) => Code::AlreadyExists,
-                            AllowlistError::Database(_) => Code::Internal,
-                        };
-                        Status::new(code, error.as_report())
-                    })?;
-                if outcome == RegistrationOutcome::Registered
-                    && let Some(funding) = &account_admission.funding
-                {
+                let registered = if account_admission.is_disabled() {
+                    account_admission.allowlist.add_account(account_id).await.map_err(|error| {
+                        Status::internal(AllowlistError::Database(error).as_report())
+                    })?
+                } else {
+                    let invitation = InvitationCode::new(&request.invitation_code)
+                        .map_err(|error| Status::invalid_argument(error.to_string()))?;
+                    let outcome = account_admission
+                        .allowlist
+                        .register_account(invitation, account_id)
+                        .await
+                        .map_err(|error| {
+                            let code = match &error {
+                                AllowlistError::InvitationNotFound => Code::NotFound,
+                                AllowlistError::InvitationAlreadyUsed
+                                | AllowlistError::AccountAlreadyRegistered(_) => {
+                                    Code::AlreadyExists
+                                },
+                                AllowlistError::Database(_) => Code::Internal,
+                            };
+                            Status::new(code, error.as_report())
+                        })?;
+                    outcome == RegistrationOutcome::Registered
+                };
+                if registered && let Some(funding) = &account_admission.funding {
                     funding
                         .fund(account_id)
                         .await
