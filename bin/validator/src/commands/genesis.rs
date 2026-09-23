@@ -167,7 +167,7 @@ pub(super) mod tests {
             native_faucet: faucet_path,
             funding_account: funding_path,
             verification_base_fee: 7,
-            timestamp: 1717344256,
+            timestamp: 1_717_344_256,
             validator_keys,
         })
     }
@@ -189,12 +189,12 @@ pub(super) mod tests {
         let genesis = read_genesis_block(&root.path().join("genesis/genesis.dat"))?;
         assert_eq!(genesis.protocol_config().fee_asset_id().faucet_id(), native_id);
         assert_eq!(genesis.inner().header().fee_parameters().verification_base_fee(), 7);
-        assert_eq!(genesis.inner().header().timestamp(), 1717344256);
+        assert_eq!(genesis.inner().header().timestamp(), 1_717_344_256);
         assert!(genesis.inner().body().updated_accounts().iter().any(|update| {
             update.account_id() == funding.id()
                 && update.final_state_commitment() == funding.to_commitment()
         }));
-        let extra = AccountFile::read(&root.path().join("accounts/extra.mac"))?;
+        let extra = AccountFile::read(root.path().join("accounts/extra.mac"))?;
         assert_eq!(
             extra
                 .account()

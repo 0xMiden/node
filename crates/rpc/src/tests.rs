@@ -212,7 +212,7 @@ impl TestStore {
                 native_faucet,
                 funding_account,
                 fee_parameters: FeeParameters::new(verification_base_fee),
-                timestamp: 1717344256,
+                timestamp: 1_717_344_256,
                 validator_config,
             })
             .unwrap();

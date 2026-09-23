@@ -38,7 +38,7 @@ fn inputs() -> GenesisInputs {
         native_faucet,
         funding_account,
         fee_parameters: FeeParameters::new(7),
-        timestamp: 1717344256,
+        timestamp: 1_717_344_256,
         validator_config: ValidatorConfig::new(vec![validator_key], 1).unwrap(),
     }
 }
