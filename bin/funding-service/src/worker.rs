@@ -26,7 +26,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::account::FunderKey;
 use crate::error::RequestFundsError;
-use crate::inclusion::{Inclusion, await_inclusion};
+use crate::inclusion::{AccountTransition, Inclusion, await_inclusion};
 use crate::node::{RpcNodeClient, is_transient_error};
 use crate::prover::Prover;
 use crate::status::StatusSnapshot;
@@ -89,7 +89,7 @@ pub struct WorkerConfig {
     pub max_notes_per_tx: NonZeroUsize,
     /// How many blocks after its reference block a funding transaction expires.
     pub expiration_delta: NonZeroU16,
-    /// How often the worker asks the node whether the notes are committed.
+    /// How often the worker asks the node whether the funding transaction is committed.
     pub poll_interval: Duration,
 }
 
@@ -323,40 +323,19 @@ impl Funder {
             note.count = notes.len()
         );
 
-        // Every note of the transaction is awaited below, not only the notes of the requests which
-        // wait for one. The service reads the funding account from the node before every
-        // transaction, so the next batch would build on a stale nonce if this one started before
-        // its predecessor committed.
-        let note_ids: Vec<_> = notes.iter().map(Note::id).collect();
+        let note_count = notes.len();
 
         // The requests which do not wait are answered here, as soon as the node holds the
         // transaction, and leave the batch. The failure paths below then reach only the requests
         // which are still waiting, which are the ones an expiry can still be reported to.
         let notes = answer_requests_which_do_not_wait(batch, notes, transaction_id);
 
-        let proofs = match await_inclusion(
-            &self.node,
-            &note_ids,
-            expiration_block,
-            self.setup.config.poll_interval,
-            shutdown,
-        )
-        .await
-        {
-            Inclusion::Committed(proofs) => proofs,
-            Inclusion::Expired => {
-                warn!(
-                    target: LOG_TARGET,
-                    "The funding transaction expired before it committed",
-                    transaction.id = transaction_id,
-                    transaction.expires_at = expiration_block,
-                    note.count = note_ids.len()
-                );
-                return Err(BatchFailure::Expired(expiration_block));
-            },
-            Inclusion::ShuttingDown => return Err(BatchFailure::ShuttingDown),
-        };
+        // The transaction is awaited even when no request waits for it. The service reads the
+        // funding account from the node before every transaction, so the next batch would build on
+        // a stale nonce if this one started before its predecessor committed.
+        self.await_commit(&proven_tx, note_count, shutdown).await?;
 
+        let proofs = self.proofs_for_waiting_requests(&notes, transaction_id).await;
         reply_with_notes(std::mem::take(batch), notes, proofs, transaction_id);
 
         Ok(())
@@ -474,6 +453,84 @@ impl Funder {
                 );
             })
             .await
+    }
+
+    /// Waits until `proven_tx` commits, and maps every other outcome to a batch failure.
+    async fn await_commit(
+        &self,
+        proven_tx: &ProvenTransaction,
+        note_count: usize,
+        shutdown: &CancellationToken,
+    ) -> Result<(), BatchFailure> {
+        let transaction_id = proven_tx.id();
+        let expiration_block = proven_tx.expiration_block_num();
+        let transition = AccountTransition {
+            account_id: self.account_id(),
+            initial: proven_tx.account_update().initial_state_commitment(),
+            final_: proven_tx.account_update().final_state_commitment(),
+            expiration: expiration_block,
+        };
+
+        match await_inclusion(&self.node, transition, self.setup.config.poll_interval, shutdown)
+            .await
+        {
+            Inclusion::Committed => Ok(()),
+            Inclusion::Expired => {
+                warn!(
+                    target: LOG_TARGET,
+                    "The funding transaction expired before it committed",
+                    transaction.id = transaction_id,
+                    transaction.expires_at = expiration_block,
+                    note.count = note_count
+                );
+                Err(BatchFailure::Expired(expiration_block))
+            },
+            Inclusion::Diverged { observed, block } => {
+                let err = anyhow::anyhow!(
+                    "the funding account is at state {observed} at block {block}, which neither \
+                     precedes nor follows funding transaction {transaction_id}"
+                );
+                error!(
+                    &err,
+                    target: LOG_TARGET,
+                    "The funding account changed outside the funding transaction",
+                    transaction.id = transaction_id
+                );
+                Err(BatchFailure::Internal(err.as_report()))
+            },
+            Inclusion::ShuttingDown => Err(BatchFailure::ShuttingDown),
+        }
+    }
+
+    /// Reads the inclusion proofs of `notes`, which belong to the requests that wait for the commit,
+    /// from a committed transaction.
+    ///
+    /// Only the notes of waiting requests are read. A requester which did not wait can consume its
+    /// note in the block which creates it, and that block erases the note. A waiting requester
+    /// receives its note only after the commit, so its note cannot be erased. A note which is
+    /// still missing fails only its own request, in `reply_with_notes`.
+    async fn proofs_for_waiting_requests(
+        &self,
+        notes: &[Note],
+        transaction_id: TransactionId,
+    ) -> HashMap<NoteId, NoteInclusionProof> {
+        if notes.is_empty() {
+            return HashMap::new();
+        }
+
+        let note_ids: Vec<NoteId> = notes.iter().map(Note::id).collect();
+        match self.retry_node_call(|| self.node.committed_notes(&note_ids)).await {
+            Ok(proofs) => proofs,
+            Err(err) => {
+                error!(
+                    &err,
+                    target: LOG_TARGET,
+                    "Failed to read the inclusion proofs of a committed funding transaction",
+                    transaction.id = transaction_id
+                );
+                HashMap::new()
+            },
+        }
     }
 
     /// Checks the account on chain against the account file, once.
@@ -623,8 +680,8 @@ fn reply_with_notes(
     transaction_id: TransactionId,
 ) {
     for (request, note) in batch.into_iter().zip(notes) {
-        // `Inclusion::Committed` holds a proof for every note of the transaction, so a missing
-        // proof is a broken invariant and not an expired transaction.
+        // The transaction committed, so a missing proof is not an expiry. It fails only this
+        // request.
         let response = match proofs.remove(&note.id()) {
             Some(inclusion_proof) => Ok(FundedNote {
                 note,
@@ -644,5 +701,121 @@ fn reply_with_notes(
 fn fail_all(batch: Vec<FundingRequest>, error: impl Fn() -> RequestFundsError) {
     for request in batch {
         let _ = request.reply.send(Err(error()));
+    }
+}
+
+// TESTS
+// ================================================================================================
+
+#[cfg(test)]
+mod tests {
+    use miden_protocol::asset::FungibleAsset;
+    use miden_protocol::crypto::merkle::{MerklePath, SparseMerklePath};
+    use miden_protocol::note::NoteType;
+    use miden_standards::note::P2idNote;
+
+    use super::*;
+
+    type Reply = oneshot::Receiver<Result<FundedNote, RequestFundsError>>;
+
+    fn note(serial: u32) -> Note {
+        let faucet_id = FungibleAsset::mock_issuer();
+        P2idNote::builder()
+            .sender(faucet_id)
+            .target(faucet_id)
+            .serial_number(Word::from([serial; 4]))
+            .note_type(NoteType::Public)
+            .asset(FungibleAsset::new(faucet_id, 42).unwrap())
+            .build()
+            .unwrap()
+            .into()
+    }
+
+    fn proof(index: u16) -> NoteInclusionProof {
+        NoteInclusionProof::new(
+            7.into(),
+            index,
+            SparseMerklePath::try_from(MerklePath::new(vec![Word::from([1u32; 4])])).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn request(wait_for_commit: bool) -> (FundingRequest, Reply) {
+        let (reply, receiver) = oneshot::channel();
+        let request = FundingRequest {
+            target: FungibleAsset::mock_issuer(),
+            amount: 42,
+            wait_for_commit,
+            reply,
+        };
+        (request, receiver)
+    }
+
+    fn transaction_id() -> TransactionId {
+        TransactionId::from_raw(Word::from([9u32; 4]))
+    }
+
+    #[test]
+    fn requests_which_do_not_wait_are_answered_without_a_proof() {
+        let (waiting, mut waiting_reply) = request(true);
+        let (early, mut early_reply) = request(false);
+        let mut batch = vec![waiting, early];
+
+        let waiting_notes =
+            answer_requests_which_do_not_wait(&mut batch, vec![note(1), note(2)], transaction_id());
+
+        let answer = early_reply.try_recv().unwrap().unwrap();
+        assert_eq!(answer.note.id(), note(2).id());
+        assert!(answer.inclusion_proof.is_none());
+
+        assert_eq!(batch.len(), 1);
+        assert!(waiting_reply.try_recv().is_err(), "a waiting request is not answered yet");
+        assert_eq!(waiting_notes.iter().map(Note::id).collect::<Vec<_>>(), vec![note(1).id()]);
+    }
+
+    #[test]
+    fn a_batch_where_no_request_waits_keeps_no_note_to_prove() {
+        let (first, _first_reply) = request(false);
+        let (second, _second_reply) = request(false);
+        let mut batch = vec![first, second];
+
+        let waiting_notes =
+            answer_requests_which_do_not_wait(&mut batch, vec![note(1), note(2)], transaction_id());
+
+        assert!(batch.is_empty());
+        assert!(waiting_notes.is_empty());
+    }
+
+    #[test]
+    fn waiting_requests_receive_their_own_proof() {
+        let (first, mut first_reply) = request(true);
+        let (second, mut second_reply) = request(true);
+        let proofs = HashMap::from([(note(1).id(), proof(1)), (note(2).id(), proof(2))]);
+
+        reply_with_notes(vec![first, second], vec![note(1), note(2)], proofs, transaction_id());
+
+        let first = first_reply.try_recv().unwrap().unwrap();
+        let second = second_reply.try_recv().unwrap().unwrap();
+        assert_eq!(first.note.id(), note(1).id());
+        assert_eq!(first.inclusion_proof.unwrap().location(), proof(1).location());
+        assert_eq!(second.note.id(), note(2).id());
+        assert_eq!(second.inclusion_proof.unwrap().location(), proof(2).location());
+    }
+
+    /// A missing proof must not fail the other requests of the transaction, which committed.
+    #[test]
+    fn a_missing_proof_fails_only_its_own_request() {
+        let (proven, mut proven_reply) = request(true);
+        let (unproven, mut unproven_reply) = request(true);
+        let proofs = HashMap::from([(note(1).id(), proof(1))]);
+
+        reply_with_notes(vec![proven, unproven], vec![note(1), note(2)], proofs, transaction_id());
+
+        let proven = proven_reply.try_recv().unwrap().unwrap();
+        assert_eq!(proven.inclusion_proof.unwrap().location(), proof(1).location());
+        assert!(matches!(
+            unproven_reply.try_recv().unwrap(),
+            Err(RequestFundsError::Internal(_))
+        ));
     }
 }

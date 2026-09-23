@@ -166,20 +166,44 @@ impl RpcNodeClient {
         fetch_public_account(&mut self.rpc_client.clone(), account_id, block_num).await
     }
 
-    /// The chain tip of the node's local store.
-    pub async fn committed_tip(&self) -> Result<BlockNumber> {
-        let status = self
+    /// The state commitment of an account at the chain tip, with the block the node read it at.
+    ///
+    /// The commitment and the block come from one response, so the commitment is the account state
+    /// at exactly that block.
+    pub async fn committed_account_commitment(
+        &self,
+        account_id: AccountId,
+    ) -> Result<(Word, BlockNumber)> {
+        let request = ProtoAccountRequest {
+            account_id: Some(account_id.into()),
+            // Without a block number the node answers at its chain tip.
+            block_num: None,
+            details: None,
+        };
+
+        let response = self
             .rpc_client
             .clone()
-            .status(())
+            .get_account(request)
             .await
-            .context("failed to fetch the node status")?
+            .with_context(|| format!("failed to fetch account {account_id}"))?
             .into_inner();
+        let response =
+            response.decode_and_verify().context("failed to convert the account response")?;
 
-        Ok(status.chain_tip.into())
+        anyhow::ensure!(
+            response.witness.id() == account_id,
+            "the account tree returned a witness for {} when {account_id} was requested",
+            response.witness.id(),
+        );
+
+        Ok((response.witness.state_commitment(), response.block_num))
     }
 
     /// The inclusion proofs of the notes which are committed, keyed by note ID.
+    ///
+    /// A note which is created and consumed in the same block is erased and never committed, so the
+    /// result can omit notes of a committed transaction.
     pub async fn committed_notes(
         &self,
         note_ids: &[NoteId],
