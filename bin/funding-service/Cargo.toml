@@ -48,6 +48,8 @@ miden-testing   = { workspace = true }
 miden-tx        = { features = ["concurrent", "std", "testing"], workspace = true }
 rand            = { workspace = true }
 rand_chacha     = { workspace = true }
+rstest          = { workspace = true }
 serde_json      = { workspace = true }
 tempfile        = { workspace = true }
+tonic-prost     = { workspace = true }
 tower           = { features = ["util"], workspace = true }

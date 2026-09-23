@@ -65,7 +65,7 @@ pub const MAX_NOTES_PER_TX: NonZeroUsize = NonZeroUsize::new(100).expect("litera
 pub const DEFAULT_TX_EXPIRATION_DELTA: NonZeroU16 =
     NonZeroU16::new(50).expect("literal is non-zero");
 
-/// Default interval at which the worker runs a cycle while it has work.
+/// Default interval for processing pending notes and checking submitted transactions.
 pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Default timeout of a request to the node's RPC API.
@@ -189,6 +189,12 @@ impl FundingServiceConfig {
             self.max_notes_per_tx <= MAX_NOTES_PER_TX,
             "--max-notes-per-tx must not exceed {MAX_NOTES_PER_TX} because the node limits how \
              many note IDs one lookup may hold",
+        );
+
+        anyhow::ensure!(!self.poll_interval.is_zero(), "--poll-interval must be greater than zero");
+        anyhow::ensure!(
+            !self.deposit_scan_interval.is_zero(),
+            "--deposit-scan-interval must be greater than zero",
         );
 
         let funder_key = FunderKey::load(&self.account_file)

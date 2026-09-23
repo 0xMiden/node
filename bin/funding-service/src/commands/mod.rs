@@ -117,7 +117,7 @@ pub enum FundingServiceCommand {
         )]
         tx_expiration_delta: NonZeroU16,
 
-        /// Interval at which the funding worker runs a cycle while it has work.
+        /// Interval for processing pending notes and checking submitted transactions.
         #[arg(
             long = "poll-interval",
             env = ENV_POLL_INTERVAL,

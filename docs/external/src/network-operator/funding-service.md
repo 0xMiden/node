@@ -53,7 +53,7 @@ miden-funding-service start \
 | `--max-amount`                   | `1000000000` | Largest amount one request may ask for, in base units.                                                                                                                  |
 | `--max-notes-per-tx`             | `16`         | Largest number of notes one transaction creates. Must not exceed 100.                                                                                                   |
 | `--tx-expiration-delta`          | `50`         | Largest number of blocks after its reference block at which a funding transaction expires.                                                                              |
-| `--poll-interval`                | `1s`         | How often the funding worker runs a cycle while it has work.                                                                                                            |
+| `--poll-interval`                | `1s`         | Interval for processing pending notes and checking submitted transactions.                                                                                              |
 | `--deposit-scan-interval`        | `1m`         | How often the service scans for the pay-to-ID notes sent to the funding account.                                                                                        |
 | `--http.timeout`                 | `30s`        | Largest duration allocated to one HTTP request.                                                                                                                         |
 | `--rpc.timeout`                  | `10s`        | Timeout of a request to the node.                                                                                                                                       |
@@ -91,9 +91,10 @@ serialized object, without a prefix:
 ```
 
 The service answers **before** it submits the transaction that creates the note, so the note is not on chain yet. The
-service keeps retrying until the note commits. A client that needs the note on chain either polls the node for the note
-ID or consumes the note as an unauthenticated input note, which the node authenticates when it builds the block. The
-notes are public, so the node stores their details once they commit.
+service retries requests while it runs. Accepted requests are held in memory and can be lost on restart. A client that
+needs the note on chain either polls the node for the note ID or consumes the note as an unauthenticated input note,
+which the node authenticates when it builds the block. The notes are public, so the node stores their details once they
+commit.
 
 The service does not authenticate requests. Restrict access to the API with a proxy or a load balancer.
 
@@ -123,7 +124,7 @@ The status code tells a client whether to change the request, add funds, or send
 | `503 Service Unavailable`   | The service is shutting down.                                                                                                 |
 
 A request that fails created no note, and a client may send it again as it is. The service builds the note before it
-answers, so a request that answers with 200 always names a note the service goes on to create.
+answers. A 200 response names the queued note, but does not guarantee delivery across a service restart.
 
 The 412 check is best effort. It reads the balance of an earlier block and does not account for the notes already
 queued, so a request it admits can still wait in the queue until a deposit raises the balance. Raising the balance is an
@@ -135,8 +136,9 @@ operator action, which is what the status code reports.
 
 To refill the account, send it a **public** pay-to-ID note that holds the native asset. The service scans for those
 notes and consumes them on its own, so no operator action is needed beyond sending the note. The scan runs every
-`--deposit-scan-interval`, which defaults to one minute. The scan starts at the genesis block after a restart, so a
-deposit sent while the service was down is still found.
+`--deposit-scan-interval`, which defaults to one minute. At startup, the worker first scans from genesis through the
+current chain tip. It completes that discovery before it processes funding requests. A restart recovers unspent
+deposits, including deposits sent while the service was stopped. Periodic scans continue from the saved cursor.
 
 A note is only collected when all of the following hold. Anything else is ignored, because the note tag encodes only the
 leading bits of an account ID, so notes for other accounts reach the service too, and anyone can send a note that holds
@@ -149,13 +151,16 @@ whatever they like.
 | It targets the funding account             | The tag alone does not prove the target.                                                 |
 | It holds the native asset and nothing else | Another asset would sit in the vault without the service being able to spend it.         |
 
-A deposit is consumed as an input note of the next funding transaction, alongside the notes that transaction creates.
-The assets of an input note land before the fee is withdrawn, so a deposit pays for the notes of the same transaction
-and the collection works even when the balance has reached zero.
+A deposit and queued payouts can share one transaction and one fee, even when the account balance is zero. The worker
+handles node rejections immediately. A state-conflict rejection with error byte `2` discards only the selected deposit.
+The payouts remain queued. Accepted transactions and uncertain transport failures are monitored until commitment or
+expiration. Other rejections and expiration retain the notes for retry.
 
-A deposit already spent is never consumed again: the service checks each candidate's nullifier against the chain before
-it uses the note.
+Run only one writer for the funding account. The service deduplicates deposits by nullifier within its deposit pool. It
+checks the recovered pool against the full nullifier history at startup. Periodic discovery does not check nullifiers;
+the node rejects transactions with spent inputs. Failed note lookups retry the same page. Failed startup nullifier
+checks retry against the recovered pool without scanning the notes again.
 
-One transaction consumes at most 16 deposits, the largest ones first, which bounds its proving time. A transaction that
-consumes deposits and creates no note is only submitted when those deposits are worth more than the fee, so a note
-holding a single base unit cannot be used to make the account spend more than it gains.
+One transaction consumes at most one deposit, selected by largest amount. A transaction that consumes a deposit and
+creates no funding note is only submitted when that deposit is worth more than the fee, so a note holding a single base
+unit cannot be used to make the account spend more than it gains.

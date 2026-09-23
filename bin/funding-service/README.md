@@ -4,15 +4,25 @@
 
 ## Operation
 
-The service holds no chain state. It reads the funding account from the node before every transaction, so a restart
-needs no recovery. Only the account file, which holds the account ID and its signing key, is on disk.
+The service reads the funding account from the node before every transaction. Only the account file, which holds the
+account ID and its signing key, is on disk. Accepted requests and pending transactions are held in memory. A restart can
+lose accepted requests whose transactions have not reached the node.
 
 Each request creates a public pay-to-ID note for the requested account. The service answers with the note at once, then
 creates it on chain in a later transaction. A single worker owns the account, keeps one transaction in flight, and
-retries until every note it answered with is committed.
+tracks each submitted transaction until its commitment or expiration is known. New requests stay in a bounded channel
+while the worker processes one batch.
 
 The account is refilled by sending it a public pay-to-ID note that holds the native asset. The service scans for those
-notes and consumes them as the input notes of its next transaction.
+notes and can consume one deposit in the same transaction that creates queued funding notes. The deposit can fund the
+payouts and the transaction fee. A node rejection with state-conflict error byte `2` discards only the selected deposit.
+The payouts remain queued for retry. Accepted transactions and uncertain transport failures are monitored until
+commitment or expiration. Other node rejections and expiration retain the notes for retry.
+
+At startup, the worker discovers deposits from genesis through the recorded chain tip before it processes requests. It
+checks the recovered pool against the nullifier history to exclude spent notes. Periodic scans then continue from that
+tip without nullifier checks. The node rejects transactions that try to consume spent deposits. A restart recovers
+unspent deposits, including those sent while the service was stopped. Run only one writer for the funding account.
 
 The service reads the chain's protocol configuration from the node at startup, together with the genesis block header.
 

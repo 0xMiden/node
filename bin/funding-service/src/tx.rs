@@ -337,18 +337,16 @@ mod tests {
         Ok(())
     }
 
-    /// One transaction consumes the deposits and creates the funding notes together. The deposits
-    /// raise the balance, and the notes and the fee lower it.
+    /// Deposits fund the output notes and the fee in one transaction from an empty account.
     #[tokio::test]
-    async fn one_transaction_consumes_deposits_and_creates_notes() -> Result<()> {
-        let fixture = Fixture::new(BALANCE, TEST_BASE_FEE)?;
+    async fn one_transaction_consumes_one_deposit_and_creates_notes() -> Result<()> {
+        let fixture = Fixture::new(0, TEST_BASE_FEE)?;
         let mut rng = RandomCoin::new(Word::from([13u32; 4]));
 
         let targets = targets(&fixture)?;
         let requested: u64 = targets.iter().map(|(_, amount)| amount).sum();
         let notes = funding_notes(&fixture, &targets, &mut rng)?;
-        let deposits =
-            vec![deposit_note(&fixture, 400_000, 31), deposit_note(&fixture, 600_000, 32)];
+        let deposits = vec![deposit_note(&fixture, 1_000_000, 31)];
         let collected: u64 = 1_000_000;
 
         let inputs = execution_inputs(&fixture, EXPIRATION).await?;
@@ -367,17 +365,22 @@ mod tests {
         for note in &notes {
             assert!(created.contains(&note.id()), "the transaction must create note {}", note.id());
         }
+        let fee_notes = executed_tx
+            .output_notes()
+            .iter()
+            .filter(|note| {
+                note.recipient()
+                    .is_some_and(|recipient| recipient.script().root() == TxFeeNote::script_root())
+            })
+            .count();
+        assert_eq!(fee_notes, 1, "the combined transaction must pay one fee");
 
-        // The deposits land, the notes leave, and the fee is paid on top of both.
         let remaining = balance_after(&fixture, &executed_tx)?;
         assert!(
-            remaining < BALANCE + collected - requested,
+            remaining < collected - requested,
             "the fee must be paid on top of the notes: {remaining}"
         );
-        assert!(
-            remaining > BALANCE - requested,
-            "the deposits must raise the balance: {remaining}"
-        );
+        assert!(remaining > 0, "the deposits must raise the balance: {remaining}");
 
         Ok(())
     }
