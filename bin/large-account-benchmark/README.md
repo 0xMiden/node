@@ -39,19 +39,11 @@ miden-large-account-benchmark seed --output-dir ./seeded --counter-map-entries 1
 ```
 
 This writes `faucet.mac`, `wallet.mac` (both carrying their signing key) and `counter.mac` into `./seeded`, and prints
-all three account ids. Reference them from a genesis configuration:
+all three account ids. Include the counter in the additional accounts file:
 
 ```toml
-native_faucet = "seeded/faucet.mac"
-validators = ["<miden-validator pubkey>"]
-
-[fee_parameters]
-verification_base_fee = 0
-
 [[account]]
-path = "seeded/wallet.mac"
-
-[[account]]
+name = "counter"
 path = "seeded/counter.mac"
 ```
 
@@ -60,7 +52,9 @@ service from it:
 
 ```bash
 miden-validator genesis --genesis-block-directory ./genesis --accounts-directory ./accounts \
-  --config ./genesis.toml
+  --native-faucet ./seeded/faucet.mac --funding-account ./seeded/wallet.mac \
+  --verification-base-fee 0 --timestamp "$(date +%s)" \
+  --accounts-config ./accounts.toml --validator.key <validator-public-key>
 miden-validator   bootstrap --data-directory ./data/validator   --genesis ./genesis/genesis.dat
 miden-node        bootstrap --data-directory ./data/node        --genesis ./genesis/genesis.dat
 miden-ntx-builder bootstrap --data-directory ./data/ntx-builder --genesis ./genesis/genesis.dat

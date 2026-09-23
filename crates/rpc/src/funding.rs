@@ -40,8 +40,8 @@ impl FundingClient {
         Ok(Self { http, url, amount })
     }
 
-    /// Requests the configured amount and waits for the funding note to commit. This method does
-    /// not retry failed requests.
+    /// Requests the configured amount and waits for the funding service to queue the note. This
+    /// method does not retry failed requests.
     #[miden_instrument(
         target = COMPONENT,
         name = "account.funding",

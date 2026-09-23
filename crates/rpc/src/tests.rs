@@ -27,7 +27,7 @@ use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify};
 use miden_node_store::DataDirectory;
 use miden_node_store::allowlist::{AccountAllowlist, InvitationCode, InvitationEntry};
 use miden_node_store::genesis::GenesisBlock;
-use miden_node_store::genesis::config::GenesisConfig;
+use miden_node_store::genesis::config::{GenesisConfig, GenesisInputs};
 use miden_node_store::state::State;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::clap::GrpcOptions;
@@ -203,8 +203,20 @@ impl TestStore {
                 .expect("test signing key should decode")
                 .public_key();
         let validator_config = ValidatorConfig::new(vec![validator_key], 1).unwrap();
-        let (mut genesis_state, _) = config.into_state(validator_config).unwrap();
-        genesis_state.fee_parameters = FeeParameters::new(verification_base_fee);
+        let mut builder = MockChainBuilder::new();
+        let funding_account = builder.add_existing_wallet(Auth::basic_ecdsa()).unwrap();
+        let native_faucet = builder
+            .add_existing_basic_faucet(Auth::basic_ecdsa(), "USDCX", 1_000_000, Some(1_000))
+            .unwrap();
+        let (genesis_state, _) = config
+            .into_state(GenesisInputs {
+                native_faucet,
+                funding_account,
+                fee_parameters: FeeParameters::new(verification_base_fee),
+                timestamp: 1_717_344_256,
+                validator_config,
+            })
+            .unwrap();
         let genesis_block =
             genesis_state.clone().into_block().expect("genesis block should be created");
         let genesis_commitment = genesis_block.inner().header().commitment();
@@ -1718,9 +1730,20 @@ async fn connect_rpc(url: Url) -> RpcClient {
 /// Binds a socket on an available port, runs the RPC server on it, and returns a client to talk to
 /// the server, along with the socket address.
 async fn start_rpc() -> (RpcClient, std::net::SocketAddr, TestStore, TestServerGuard) {
+    start_rpc_with_allowlist(false).await
+}
+
+async fn start_rpc_with_allowlist(
+    disabled: bool,
+) -> (RpcClient, std::net::SocketAddr, TestStore, TestServerGuard) {
     let grpc_options = GrpcOptions::test();
     let store = TestStore::start().await;
     let allowlist = store.bootstrap_allowlist();
+    let account_admission = if disabled {
+        AccountAdmission::disabled(allowlist)
+    } else {
+        AccountAdmission::enabled(allowlist)
+    };
     let block_producer_dir = new_tempdir();
     TestStore::bootstrap(&block_producer_dir).await;
     let (block_producer_state, ..) = State::for_tests(&block_producer_dir).await;
@@ -1754,7 +1777,7 @@ async fn start_rpc() -> (RpcClient, std::net::SocketAddr, TestStore, TestServerG
                 mode: RpcMode::sequencer(
                     block_producer,
                     ValidatorClients::new(vec![validator]).unwrap(),
-                    AccountAdmission::enabled(allowlist),
+                    account_admission,
                 ),
                 ntx_builder: None,
                 grpc_options,
@@ -1922,9 +1945,12 @@ async fn register_account_and_lookup_preserve_conversion_errors() {
     }
 }
 
+#[rstest::rstest]
+#[case::enabled(false)]
+#[case::disabled(true)]
 #[tokio::test]
-async fn allowlist_database_failures_include_the_cause() {
-    let (mut rpc, _addr, store, _server) = start_rpc().await;
+async fn allowlist_database_failures_include_the_cause(#[case] disabled: bool) {
+    let (mut rpc, _addr, store, _server) = start_rpc_with_allowlist(disabled).await;
     let path = DataDirectory::load(store.data_directory.clone())
         .unwrap()
         .allowlist_database_path();
@@ -1952,9 +1978,13 @@ async fn allowlist_database_failures_include_the_cause() {
     assert!(error.message().contains("unable to open database file"), "{error}");
 
     let query = proto::rpc::IsAccountAllowedRequest { account_id: Some(account.into()) };
-    let error = rpc.is_account_allowed(query).await.unwrap_err();
-    assert_eq!(error.code(), tonic::Code::Internal);
-    assert!(error.message().contains("unable to open database file"), "{error}");
+    if disabled {
+        assert!(rpc.is_account_allowed(query).await.unwrap().into_inner().allowed);
+    } else {
+        let error = rpc.is_account_allowed(query).await.unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Internal);
+        assert!(error.message().contains("unable to open database file"), "{error}");
+    }
 }
 
 #[tokio::test]

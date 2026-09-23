@@ -85,6 +85,8 @@ COPY proto/ proto/
 # Cargo loads each workspace member before it selects the requested binaries.
 COPY xtask/Cargo.toml xtask/Cargo.toml
 COPY xtask/src/main.rs xtask/src/main.rs
+COPY vendor/miden-usdcx/Cargo.toml vendor/miden-usdcx/Cargo.lock vendor/miden-usdcx/
+COPY vendor/miden-usdcx/crates/ vendor/miden-usdcx/crates/
 # Kache stores compiler outputs by content. The target directory stays local to
 # this build and does not depend on source timestamps from another checkout.
 # The locks prevent concurrent builds from writing to the same cache mounts.
@@ -113,6 +115,10 @@ RUN --mount=type=cache,sharing=locked,id=cargo-registry-${TARGETARCH},target=/us
         --bin miden-funding-service \
         --bin miden-remote-prover \
         --bin miden-benchmark && \
+    cargo build --release --locked --jobs "${JOBS}" \
+        --manifest-path vendor/miden-usdcx/Cargo.toml \
+        --target-dir /app/target \
+        --package xusdc-genesis --bin xusdc-genesis && \
     mkdir -p /app/bin && \
     mv /app/target/release/miden-node \
         /app/target/release/miden-validator \
@@ -122,6 +128,7 @@ RUN --mount=type=cache,sharing=locked,id=cargo-registry-${TARGETARCH},target=/us
         /app/target/release/miden-funding-service \
         /app/target/release/miden-remote-prover \
         /app/target/release/miden-benchmark \
+        /app/target/release/xusdc-genesis \
         /app/bin/ && \
     kache report --format github --output /app/kache-report.md && \
     rm -rf /app/target && \

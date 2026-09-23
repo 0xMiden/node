@@ -77,13 +77,10 @@ mod tests {
         let validator_key = SigningKey::read_from_bytes(&[7; 32])
             .expect("test signing key should decode")
             .public_key();
-        super::super::genesis::generate(
-            &genesis_directory,
-            &accounts_directory,
-            None,
-            vec![validator_key],
-        )
-        .expect("genesis should complete");
+        super::super::genesis::tests::command(root.path(), vec![validator_key])
+            .unwrap()
+            .execute()
+            .expect("genesis should complete");
 
         bootstrap(
             &data_directory,
@@ -121,15 +118,8 @@ mod tests {
         );
 
         assert!(
-            fs_err::read_dir(&accounts_directory)
-                .expect("accounts directory should be readable")
-                .next()
-                .is_some(),
-            "genesis should write generated account files",
-        );
-        assert!(
-            accounts_directory.join("native_faucet.mac").is_file(),
-            "genesis should write the generated native faucet account file",
+            fs_err::read_dir(&accounts_directory).unwrap().next().is_none(),
+            "imported accounts do not generate account secret files",
         );
     }
 

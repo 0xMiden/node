@@ -43,7 +43,11 @@ VALIDATOR_INSECURE_STORAGE_KEY_PUBLIC_KEY_SET="${VALIDATOR_INSECURE_STORAGE_KEY_
 VALIDATOR_1_INSECURE_STORAGE_KEY_SECRET_SHARE="${VALIDATOR_INSECURE_STORAGE_KEY_DIRECTORY}/validator-1/secret-share.wire"
 VALIDATOR_2_INSECURE_STORAGE_KEY_SECRET_SHARE="${VALIDATOR_INSECURE_STORAGE_KEY_DIRECTORY}/validator-2/secret-share.wire"
 
-GENESIS_CONFIG="${GENESIS_CONFIG:-crates/store/src/genesis/config/samples/01-simple.toml}"
+ACCOUNTS_CONFIG="${ACCOUNTS_CONFIG:-}"
+if [[ "$SKIP_BOOTSTRAP" != "true" ]]; then
+    : "${MIDEN_VALIDATOR_GENESIS_NATIVE_FAUCET:?Set the native faucet account file}"
+    : "${MIDEN_VALIDATOR_GENESIS_FUNDING_ACCOUNT:?Set the funding account file}"
+fi
 NODE_DIR="/tmp/node"
 FULL_NODE_1_DIR="/tmp/full-node-1"
 FULL_NODE_2_DIR="/tmp/full-node-2"
@@ -165,12 +169,18 @@ if [[ "$SKIP_BOOTSTRAP" != "true" ]]; then
         VALIDATOR_2_PUBKEY=$("$VALIDATOR_BINARY" pubkey --signing-key.hex "$VALIDATOR_2_KEY_HEX")
     fi
 
-    "$VALIDATOR_BINARY" genesis \
-        --genesis-block-directory "$GENESIS_DIR" \
-        --accounts-directory "$ACCOUNTS_DIR" \
-        --config "$GENESIS_CONFIG" \
-        --validator.key "$VALIDATOR_1_PUBKEY" \
+    GENESIS_ARGS=(
+        --genesis-block-directory "$GENESIS_DIR"
+        --accounts-directory "$ACCOUNTS_DIR"
+        --verification-base-fee "${MIDEN_VALIDATOR_GENESIS_VERIFICATION_BASE_FEE:-7}"
+        --timestamp "${MIDEN_VALIDATOR_GENESIS_TIMESTAMP:-$(date +%s)}"
+        --validator.key "$VALIDATOR_1_PUBKEY"
         --validator.key "$VALIDATOR_2_PUBKEY"
+    )
+    if [[ -n "$ACCOUNTS_CONFIG" ]]; then
+        GENESIS_ARGS+=(--accounts-config "$ACCOUNTS_CONFIG")
+    fi
+    "$VALIDATOR_BINARY" genesis "${GENESIS_ARGS[@]}"
 
     echo "Bootstrapping validator 1 (seeds from the genesis block)..."
     "$VALIDATOR_BINARY" bootstrap \
