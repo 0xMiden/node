@@ -1168,9 +1168,9 @@ dependencies = [
 
 [[package]]
 name = "bulletproofs-cycle"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "196fdc67113cd56eec82296e6df7c2b6fd9da0ae42e17ed6aa258d9aff362e40"
+checksum = "226252889b1f548d1ecb22e1f94f1d3b97122c88478af52c3056f389f2cb0b8d"
 dependencies = [
  "digest 0.10.7",
  "ff 0.13.1",
@@ -1179,6 +1179,7 @@ dependencies = [
  "p3-maybe-rayon 0.6.3",
  "rand_core 0.6.4",
  "sha3 0.10.9",
+ "smallvec",
  "subtle",
  "thiserror 2.0.20",
 ]
@@ -2544,10 +2545,11 @@ dependencies = [
 
 [[package]]
 name = "golden-core"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03c4f49eba27846f56d307941d428dd6e8d1e811eac6f0458d927743fbd37406"
+checksum = "6f7dfb89634c6c93f15688d3fe9e4cd2df15e7b8c13988ebbaaadd4358e75107"
 dependencies = [
+ "p3-maybe-rayon 0.6.3",
  "rand_core 0.6.4",
  "sha2 0.10.9",
  "subtle",
@@ -2557,9 +2559,9 @@ dependencies = [
 
 [[package]]
 name = "golden-ehtdh1"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a41410f2058829a91e85cb98223cd5587f724cac1df456591a94e37cbbcc258"
+checksum = "32500dcc66b527cf3bd7d783d0d6d24d69a7ba268c891187ab16262f8ee3c0d8"
 dependencies = [
  "chacha20 0.9.1",
  "golden-core",
@@ -2572,9 +2574,9 @@ dependencies = [
 
 [[package]]
 name = "golden-evrf"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "072bee9a9f759abf4818bd23b3d7acf649fa50909fee25edc1ff4156c52a6ea6"
+checksum = "7c12d7ebda07abb20ac05869614c53825cc3263358d663b68625966523be443d"
 dependencies = [
  "bulletproofs-cycle",
  "ff 0.13.1",
@@ -2583,6 +2585,7 @@ dependencies = [
  "group 0.13.0",
  "halo2curves",
  "merlin",
+ "p3-maybe-rayon 0.6.3",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
  "sha2 0.10.9",
@@ -2590,9 +2593,9 @@ dependencies = [
 
 [[package]]
 name = "golden-halo2curves"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fe0dca8e35bcae90197a6697d36ccc4992c805824b6fd09143321d2c7455cda"
+checksum = "7263227290778c09b7a31d7b3b5331fae141aed084062b9e5d265b1bec140250"
 dependencies = [
  "bulletproofs-cycle",
  "ff 0.13.1",
