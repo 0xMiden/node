@@ -57,6 +57,24 @@ pub struct MonitorConfig {
     )]
     pub faucet_url: Option<Url>,
 
+    /// The URL of the funding service (optional).
+    #[arg(
+        long = "funding-service-url",
+        env = "MIDEN_MONITOR_FUNDING_SERVICE_URL",
+        help = "The URL of the funding service (optional)"
+    )]
+    pub funding_service_url: Option<Url>,
+
+    /// Timeout for a funding request to the funding service.
+    #[arg(
+        long = "funding-request-timeout",
+        env = "MIDEN_MONITOR_FUNDING_REQUEST_TIMEOUT",
+        default_value = "2m",
+        value_parser = humantime::parse_duration,
+        help = "Timeout for a funding request to the funding service"
+    )]
+    pub funding_request_timeout: Duration,
+
     /// The interval at which to test the remote provers services.
     #[arg(
         long = "remote-prover-test-interval",
@@ -111,15 +129,17 @@ pub struct MonitorConfig {
     )]
     pub disable_ntx_service: bool,
 
-    /// Hex-encoded validator signing public key trusted to attest the transaction encryption key.
+    /// Hex-encoded validator signing public keys trusted to attest the transaction encryption key.
     ///
+    /// Accepts repeated arguments or a comma-separated list.
     /// Required when network transaction checks are enabled.
     #[arg(
         long = "validator-signing-public-key",
         env = "MIDEN_MONITOR_VALIDATOR_SIGNING_PUBLIC_KEY",
+        value_delimiter = ',',
         value_name = "HEX"
     )]
-    pub validator_signing_public_key: Option<String>,
+    pub validator_signing_public_keys: Vec<String>,
 
     /// The interval at which to send the increment counter transaction.
     #[arg(
@@ -202,14 +222,62 @@ pub struct MonitorConfig {
 }
 
 impl MonitorConfig {
-    /// Decodes the validator signing key required by transaction submission checks.
-    pub fn trusted_validator_signing_key(&self) -> Result<ValidatorPublicKey> {
-        let encoded = self.validator_signing_public_key.as_deref().context(
-            "--validator-signing-public-key is required when network transaction checks are enabled",
-        )?;
-        let bytes =
-            hex::decode(encoded).context("validator signing public key must be hex encoded")?;
-        ValidatorPublicKey::read_from_bytes(&bytes)
-            .context("validator signing public key must be a valid K256 public key")
+    /// Decodes the validator signing keys required by transaction submission checks.
+    pub fn trusted_validator_signing_keys(&self) -> Result<Vec<ValidatorPublicKey>> {
+        anyhow::ensure!(
+            !self.validator_signing_public_keys.is_empty(),
+            "--validator-signing-public-key is required when network transaction checks are enabled"
+        );
+        self.validator_signing_public_keys
+            .iter()
+            .map(|encoded| {
+                let bytes = hex::decode(encoded)
+                    .context("validator signing public key must be hex encoded")?;
+                ValidatorPublicKey::read_from_bytes(&bytes)
+                    .context("validator signing public key must be a valid K256 public key")
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
+    use miden_protocol::utils::serde::Serializable;
+
+    use super::*;
+
+    #[test]
+    fn accepts_all_configured_validator_keys() {
+        let keys =
+            [1, 3, 4].map(|seed| SigningKey::read_from_bytes(&[seed; 32]).unwrap().public_key());
+        let encoded = keys.each_ref().map(|key| hex::encode(key.to_bytes()));
+        for arguments in [
+            vec!["--validator-signing-public-key".to_owned(), encoded.join(",")],
+            encoded
+                .iter()
+                .flat_map(|key| ["--validator-signing-public-key".to_owned(), key.clone()])
+                .collect(),
+        ] {
+            let config = MonitorConfig::parse_from(
+                ["miden-network-monitor".to_owned()].into_iter().chain(arguments),
+            );
+            assert_eq!(config.trusted_validator_signing_keys().unwrap(), keys);
+        }
+    }
+
+    #[test]
+    fn rejects_missing_or_invalid_validator_keys() {
+        let missing = MonitorConfig::parse_from(["miden-network-monitor"]);
+        assert!(missing.trusted_validator_signing_keys().is_err());
+
+        for key in ["not-hex", "00"] {
+            let config = MonitorConfig::parse_from([
+                "miden-network-monitor",
+                "--validator-signing-public-key",
+                key,
+            ]);
+            assert!(config.trusted_validator_signing_keys().is_err());
+        }
     }
 }

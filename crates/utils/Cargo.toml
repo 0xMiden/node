@@ -20,7 +20,8 @@ doctest = false
 [features]
 rocksdb = ["dep:miden-crypto", "miden-crypto/rocksdb"]
 # Enables test-only utilities.
-testing = ["miden-protocol/testing"]
+testing        = ["miden-protocol/testing"]
+testing-prover = ["dep:miden-processor", "dep:miden-standards", "dep:miden-testing", "dep:miden-tx", "testing"]
 
 [dependencies]
 anyhow             = { workspace = true }
@@ -32,7 +33,11 @@ humantime          = { workspace = true }
 itertools          = { workspace = true }
 lru                = { workspace = true }
 miden-node-tracing = { workspace = true }
+miden-processor    = { optional = true, workspace = true }
 miden-protocol     = { workspace = true }
+miden-standards    = { optional = true, workspace = true }
+miden-testing      = { optional = true, workspace = true }
+miden-tx           = { optional = true, workspace = true }
 reqwest            = { workspace = true }
 thiserror          = { workspace = true }
 tokio              = { features = ["macros", "rt", "signal", "time"], workspace = true }
@@ -45,3 +50,7 @@ url                = { workspace = true }
 
 # RocksDbConfig is needed due to orphan rules
 miden-crypto = { optional = true, workspace = true }
+
+[dev-dependencies]
+miden-protocol = { features = ["testing"], workspace = true }
+tempfile       = { workspace = true }

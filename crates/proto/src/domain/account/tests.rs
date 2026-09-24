@@ -1,6 +1,33 @@
-use miden_protocol::account::StorageMapKey;
+use miden_protocol::Felt;
+use miden_protocol::account::{AccountIdVersion, AccountType, AssetCallbackFlag, StorageMapKey};
+use miden_protocol::block::account_tree::AccountTree;
 
 use super::*;
+use crate::Verify;
+
+#[test]
+fn registration_request_debug_hides_invitation_code() {
+    let code = "private invitation code";
+    let account_id = AccountId::dummy(
+        [7; 15],
+        AccountIdVersion::Version1,
+        AccountType::Public,
+        AssetCallbackFlag::Disabled,
+    );
+    let request = proto::rpc::RegisterAccountRequest {
+        invitation_code: code.to_owned(),
+        account_id: Some(account_id.into()),
+    };
+    let debug = format!("{request:?}");
+    assert!(!debug.contains(code));
+
+    let decoded = request.decode_fields().unwrap();
+    assert!(!format!("{decoded:?}").contains(code));
+    let verified = decoded.verify().unwrap();
+    assert!(!format!("{verified:?}").contains(code));
+    assert_eq!(verified.invitation_code, code);
+    assert_eq!(verified.account_id, account_id);
+}
 
 fn word_from_u32(arr: [u32; 4]) -> Word {
     Word::from(arr)
@@ -8,6 +35,111 @@ fn word_from_u32(arr: [u32; 4]) -> Word {
 
 fn test_slot_name() -> StorageSlotName {
     StorageSlotName::new("miden::test::storage::slot").unwrap()
+}
+
+fn account_response() -> proto::rpc::AccountResponse {
+    let id = AccountId::dummy(
+        [7; 15],
+        AccountIdVersion::Version1,
+        AccountType::Public,
+        AssetCallbackFlag::Disabled,
+    );
+    let code = AccountCode::mock();
+    let storage = AccountStorageHeader::new(vec![StorageSlotHeader::new(
+        test_slot_name(),
+        StorageSlotType::Value,
+        Word::from([1u32, 2, 3, 4]),
+    )])
+    .unwrap();
+    let header = AccountHeader::new(
+        id,
+        Felt::ONE,
+        Word::empty(),
+        storage.to_commitment(),
+        code.commitment(),
+    );
+    let witness = AccountTree::with_entries([(id, header.to_commitment())]).unwrap().open(id);
+    AccountResponse {
+        block_num: BlockNumber::from(1),
+        witness,
+        details: Some(AccountDetails {
+            account_header: header,
+            account_code: Some(code),
+            vault_details: AccountVaultDetails::Assets(Vec::new()),
+            storage_details: AccountStorageDetails { header: storage, map_details: Vec::new() },
+        }),
+    }
+    .into()
+}
+
+#[test]
+fn account_response_accepts_matching_details_and_omitted_optional_data() {
+    let response = account_response();
+    for include_code in [true, false] {
+        let mut message = response.clone();
+        if !include_code {
+            message.details.as_mut().unwrap().code = None;
+        }
+        let decoded = message.decode_fields().and_then(Verify::verify).unwrap();
+        let details = decoded.details.unwrap();
+        assert_eq!(details.account_code.is_some(), include_code);
+        assert_eq!(details.account_header.id(), decoded.witness.id());
+        assert_eq!(details.account_header.to_commitment(), decoded.witness.state_commitment());
+    }
+
+    let message = proto::rpc::AccountResponse { details: None, ..response };
+    assert!(message.decode_fields().and_then(Verify::verify).unwrap().details.is_none());
+}
+
+#[test]
+fn account_response_rejects_storage_that_does_not_match_header() {
+    let mut message = account_response();
+    message.details.as_mut().unwrap().storage_details.as_mut().unwrap().header =
+        Some(AccountStorageHeader::new(Vec::new()).unwrap().into());
+
+    let error = message.decode_fields().and_then(Verify::verify).err().unwrap();
+    assert!(error.to_string().starts_with("details.storage_details.header:"), "{error}");
+    assert!(error.to_string().contains("storage commitment does not match"), "{error}");
+}
+
+#[test]
+fn account_response_rejects_code_that_does_not_match_header() {
+    let mut message = account_response();
+    message.details.as_mut().unwrap().header.as_mut().unwrap().code_commitment =
+        Some(Word::empty().into());
+
+    let error = message.decode_fields().and_then(Verify::verify).err().unwrap();
+    assert!(error.to_string().starts_with("details.code:"), "{error}");
+    assert!(error.to_string().contains("code commitment does not match"), "{error}");
+}
+
+#[test]
+fn account_response_rejects_details_for_another_account() {
+    let mut message = account_response();
+    let other_id = AccountId::dummy(
+        [8; 15],
+        AccountIdVersion::Version1,
+        AccountType::Public,
+        AssetCallbackFlag::Disabled,
+    );
+    message.details.as_mut().unwrap().header.as_mut().unwrap().account_id = Some(other_id.into());
+
+    let error = message.decode_fields().and_then(Verify::verify).err().unwrap();
+    assert!(error.to_string().starts_with("details.header.account_id:"), "{error}");
+    assert!(error.to_string().contains("account ID does not match witness"), "{error}");
+}
+
+#[test]
+fn account_response_rejects_details_for_another_account_state() {
+    let mut message = account_response();
+    message.details.as_mut().unwrap().header.as_mut().unwrap().nonce += 1;
+
+    let error = message.decode_fields().and_then(Verify::verify).err().unwrap();
+    assert!(error.to_string().starts_with("details.header:"), "{error}");
+    assert!(
+        error.to_string().contains("account commitment does not match witness"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -63,7 +195,7 @@ fn account_storage_map_details_partial_map_round_trip() {
     .unwrap();
     let encoded: crate::generated::rpc::account_storage_details::AccountStorageMapDetails =
         details.clone().into();
-    let decoded = AccountStorageMapDetails::try_from(encoded).unwrap();
+    let decoded = encoded.decode_fields().and_then(Verify::verify).unwrap();
 
     assert_eq!(decoded, details);
     assert_matches::assert_matches!(
@@ -101,7 +233,7 @@ fn account_storage_map_details_rejects_missing_result() {
         result: None,
     };
 
-    let err = AccountStorageMapDetails::try_from(encoded).unwrap_err();
+    let err = encoded.decode_fields().and_then(Verify::verify).unwrap_err();
     assert!(err.to_string().contains("result"));
 }
 
@@ -114,7 +246,7 @@ fn account_storage_map_details_rejects_false_limit_marker() {
         result: Some(Result::TooManyEntries(false)),
     };
 
-    let err = AccountStorageMapDetails::try_from(encoded).unwrap_err();
+    let err = encoded.decode_fields().and_then(Verify::verify).unwrap_err();
     assert!(err.to_string().contains("must be true"));
 }
 
@@ -139,7 +271,7 @@ fn account_storage_details_rejects_partial_map_root_mismatch() {
     let encoded: crate::generated::rpc::AccountStorageDetails =
         AccountStorageDetails { header, map_details: vec![map_details] }.into();
 
-    let err = AccountStorageDetails::try_from(encoded).unwrap_err();
+    let err = encoded.decode_fields().and_then(Verify::verify).unwrap_err();
     assert!(err.to_string().contains("does not match storage header"));
 }
 
@@ -153,7 +285,7 @@ fn account_detail_request_converts_all_storage_maps() {
         storage_request: Some(StorageRequest::AllStorageMaps(true)),
     };
 
-    let request = AccountDetailRequest::try_from(request).unwrap();
+    let request = request.decode_fields().and_then(Verify::verify).unwrap();
 
     assert_eq!(request.storage_request, AccountStorageRequest::AllStorageMaps);
 }
@@ -168,7 +300,7 @@ fn account_detail_request_rejects_false_all_storage_maps() {
         storage_request: Some(StorageRequest::AllStorageMaps(false)),
     };
 
-    let err = AccountDetailRequest::try_from(request).unwrap_err();
+    let err = request.decode_fields().and_then(Verify::verify).unwrap_err();
 
     assert!(err.to_string().contains("all_storage_maps"));
 }
@@ -193,7 +325,7 @@ fn account_detail_request_converts_explicit_storage_maps() {
         })),
     };
 
-    let request = AccountDetailRequest::try_from(request).unwrap();
+    let request = request.decode_fields().and_then(Verify::verify).unwrap();
 
     assert!(matches!(
         request.storage_request,
@@ -211,7 +343,7 @@ fn account_detail_request_rejects_duplicate_storage_map_keys() {
     };
     use crate::generated::rpc::account_request::account_detail_request::storage_map_detail_request::MapKeys;
 
-    let map_key: crate::generated::primitives::Digest = Word::from([1, 2, 3, 4u32]).into();
+    let map_key: crate::generated::primitives::Word = Word::from([1, 2, 3, 4u32]).into();
     let request = crate::generated::rpc::account_request::AccountDetailRequest {
         code_commitment: None,
         asset_vault_commitment: None,
@@ -219,13 +351,13 @@ fn account_detail_request_rejects_duplicate_storage_map_keys() {
             storage_maps: vec![StorageMapDetailRequest {
                 slot_name: "miden::test::storage::slot".to_string(),
                 slot_data: Some(storage_map_detail_request::SlotData::MapKeys(MapKeys {
-                    map_keys: vec![map_key, map_key],
+                    map_keys: vec![map_key.clone(), map_key],
                 })),
             }],
         })),
     };
 
-    let err = AccountDetailRequest::try_from(request).unwrap_err();
+    let err = request.decode_fields().and_then(Verify::verify).unwrap_err();
 
     assert!(err.to_string().contains("duplicate keys"));
 }
@@ -238,7 +370,7 @@ fn account_detail_request_allows_no_storage_slot_data() {
         storage_request: None,
     };
 
-    let request = AccountDetailRequest::try_from(request).unwrap();
+    let request = request.decode_fields().and_then(Verify::verify).unwrap();
 
     assert_eq!(request.storage_request, AccountStorageRequest::None);
 }

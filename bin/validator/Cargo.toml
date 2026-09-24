@@ -40,6 +40,7 @@ miden-node-proto-build = { features = ["internal"], workspace = true }
 miden-node-store       = { workspace = true }
 miden-node-tracing     = { workspace = true }
 miden-node-utils       = { features = ["testing"], workspace = true }
+miden-objects          = { workspace = true }
 miden-protocol         = { workspace = true }
 miden-tx               = { features = ["concurrent"], workspace = true }
 rand_core_06           = { workspace = true }
@@ -61,7 +62,7 @@ miden-node-db = { workspace = true }
 
 [dev-dependencies]
 miden-node-store = { workspace = true }
-miden-node-utils = { features = ["testing"], workspace = true }
+miden-node-utils = { features = ["testing-prover"], workspace = true }
 miden-protocol   = { default-features = true, features = ["testing"], workspace = true }
 miden-testing    = { workspace = true }
 miden-tx         = { features = ["concurrent", "testing"], workspace = true }

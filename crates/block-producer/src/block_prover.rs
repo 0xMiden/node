@@ -1,18 +1,26 @@
-use miden_block_prover::{BlockProverError as LocalBlockProverError, LocalBlockProver};
+use miden_block_prover::{
+    BlockExecutor,
+    BlockProverError as LocalBlockProverError,
+    LocalBlockProver,
+};
 use miden_node_proto::clients::{Builder, RemoteProverClient};
-use miden_node_proto::generated::remote_prover::{ProofRequest, ProofType};
+use miden_node_proto::generated::remote_prover::proof_request::Request;
+use miden_node_proto::generated::remote_prover::{DecodedProof, ProofRequest};
+use miden_node_proto::{BlockProofRequest, DecodeMessage};
 use miden_node_tracing::miden_instrument;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_protocol::batch::OrderedBatches;
-use miden_protocol::block::{BlockHeader, BlockInputs, BlockProof, ProposedBlock};
+use miden_protocol::block::{BlockHeader, BlockInputs, ProposedBlock};
 use miden_protocol::errors::ProposedBlockError;
-use miden_protocol::utils::serde::{Deserializable, DeserializationError, Serializable};
+use miden_protocol::vm::ExecutionProof;
 use url::Url;
 
 use crate::COMPONENT;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProverError {
+    #[error("failed to build proposed block")]
+    ProposeBlock(#[source] ProposedBlockError),
     #[error("local proving failed")]
     LocalProvingFailed(#[source] LocalBlockProverError),
     #[error("remote proving failed")]
@@ -24,12 +32,10 @@ pub enum ProverError {
 /// Errors returned by [`RemoteBlockProver`].
 #[derive(Debug, thiserror::Error)]
 pub enum RemoteProverError {
-    #[error("failed to build proposed block")]
-    ProposeBlock(#[source] ProposedBlockError),
     #[error("remote prover request failed")]
     Grpc(#[source] tonic::Status),
-    #[error("failed to deserialize block proof from remote prover")]
-    Deserialize(#[source] DeserializationError),
+    #[error("failed to decode block proof from remote prover")]
+    Conversion(#[source] miden_node_proto::errors::ConversionError),
 }
 
 // BLOCK PROVER
@@ -37,7 +43,7 @@ pub enum RemoteProverError {
 
 /// Block prover which allows for proving via either local or remote backend.
 ///
-/// The local proving variant is intended for development and testing purposes.
+/// The local proving variant supports one-time deployments, development, and testing.
 /// The remote proving variant is intended for production use.
 pub enum BlockProver {
     Local(LocalBlockProver),
@@ -46,7 +52,7 @@ pub enum BlockProver {
 
 impl BlockProver {
     pub fn local() -> Self {
-        Self::Local(LocalBlockProver::new(0))
+        Self::Local(LocalBlockProver::default())
     }
 
     pub fn remote(url: Url) -> anyhow::Result<Self> {
@@ -62,24 +68,36 @@ impl BlockProver {
         tx_batches: OrderedBatches,
         block_inputs: BlockInputs,
         block_header: &BlockHeader,
-    ) -> Result<BlockProof, ProverError> {
+    ) -> Result<ExecutionProof, ProverError> {
         match self {
             Self::Local(prover) => {
                 let prover = prover.clone();
-                let block_header = block_header.clone();
+                let proposed_block = ProposedBlock::new_at(
+                    block_inputs,
+                    tx_batches.into_vec(),
+                    block_header.timestamp(),
+                )
+                .map_err(ProverError::ProposeBlock)?
+                .with_next_validator_config(block_header.validator_config().clone())
+                .with_next_protocol_config(block_header.next_protocol_config().cloned());
 
                 spawn_blocking_in_current_span(move || {
-                    prover
-                        .prove(tx_batches, &block_header, block_inputs)
-                        .map_err(ProverError::LocalProvingFailed)
+                    let executed_block = BlockExecutor::new()
+                        .execute(proposed_block)
+                        .map_err(ProverError::LocalProvingFailed)?;
+                    prover.prove(executed_block).map_err(ProverError::LocalProvingFailed)
                 })
                 .await
                 .map_err(ProverError::LocalProvingTaskJoin)?
             },
-            Self::Remote(prover) => prover
-                .prove(tx_batches, block_header, block_inputs)
-                .await
-                .map_err(ProverError::RemoteProvingFailed),
+            Self::Remote(prover) => {
+                let request = BlockProofRequest {
+                    tx_batches,
+                    block_header: block_header.clone(),
+                    block_inputs,
+                };
+                prover.prove(request).await.map_err(ProverError::RemoteProvingFailed)
+            },
         }
     }
 }
@@ -111,24 +129,17 @@ impl RemoteBlockProver {
         Ok(Self { client })
     }
 
-    async fn prove(
-        &self,
-        tx_batches: OrderedBatches,
-        block_header: &BlockHeader,
-        block_inputs: BlockInputs,
-    ) -> Result<BlockProof, RemoteProverError> {
-        let proposed_block =
-            ProposedBlock::new_at(block_inputs, tx_batches.into_vec(), block_header.timestamp())
-                .map_err(RemoteProverError::ProposeBlock)?;
-
+    async fn prove(&self, request: BlockProofRequest) -> Result<ExecutionProof, RemoteProverError> {
         let request = tonic::Request::new(ProofRequest {
-            proof_type: ProofType::Block.into(),
-            payload: proposed_block.to_bytes(),
+            request: Some(Request::Block(request.into())),
         });
 
         let response = self.client.clone().prove(request).await.map_err(RemoteProverError::Grpc)?;
 
-        BlockProof::read_from_bytes(&response.into_inner().payload)
-            .map_err(RemoteProverError::Deserialize)
+        response
+            .into_inner()
+            .decode_fields()
+            .and_then(DecodedProof::into_block)
+            .map_err(RemoteProverError::Conversion)
     }
 }

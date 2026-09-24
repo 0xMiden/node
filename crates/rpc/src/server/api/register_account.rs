@@ -1,0 +1,80 @@
+use miden_node_proto::domain::account::RegisterAccountRequest;
+use miden_node_proto::errors::ConversionError;
+use miden_node_proto::{DecodeMessageExt, generated as proto};
+use miden_node_store::allowlist::{AllowlistError, InvitationCode, RegistrationOutcome};
+use miden_node_tracing::{ErrorReport, miden_instrument, miden_span_record};
+use tonic::{Code, Request, Status};
+
+use super::{RpcBackend, RpcService};
+use crate::COMPONENT;
+
+#[tonic::async_trait]
+impl proto::server::rpc_api::RegisterAccount for RpcService {
+    type Input = RegisterAccountRequest;
+    type Output = ();
+
+    fn decode(request: proto::rpc::RegisterAccountRequest) -> tonic::Result<Self::Input> {
+        request.decode_and_verify().map_err(ConversionError::into_status)
+    }
+
+    fn encode((): Self::Output) -> tonic::Result<()> {
+        Ok(())
+    }
+
+    #[miden_instrument(target = COMPONENT, name = "register_account", err)]
+    async fn handle(
+        &self,
+        request: Self::Input,
+        metadata: &tonic::metadata::MetadataMap,
+        _extensions: &tonic::codegen::http::Extensions,
+    ) -> tonic::Result<Self::Output> {
+        let account_id = request.account_id;
+        miden_span_record!(account.id = account_id);
+
+        match &self.backend {
+            RpcBackend::Sequencer { account_admission, .. } => {
+                let registered = if account_admission.is_disabled() {
+                    account_admission.allowlist.add_account(account_id).await.map_err(|error| {
+                        Status::internal(AllowlistError::Database(error).as_report())
+                    })?
+                } else {
+                    let invitation = InvitationCode::new(&request.invitation_code)
+                        .map_err(|error| Status::invalid_argument(error.to_string()))?;
+                    let outcome = account_admission
+                        .allowlist
+                        .register_account(invitation, account_id)
+                        .await
+                        .map_err(|error| {
+                            let code = match &error {
+                                AllowlistError::InvitationNotFound => Code::NotFound,
+                                AllowlistError::InvitationAlreadyUsed
+                                | AllowlistError::AccountAlreadyRegistered(_) => {
+                                    Code::AlreadyExists
+                                },
+                                AllowlistError::Database(_) => Code::Internal,
+                            };
+                            Status::new(code, error.as_report())
+                        })?;
+                    outcome == RegistrationOutcome::Registered
+                };
+                if registered && let Some(funding) = &account_admission.funding {
+                    funding
+                        .fund(account_id)
+                        .await
+                        .map_err(|error| Status::unavailable(error.as_report()))?;
+                }
+                Ok(())
+            },
+            RpcBackend::FullNode { source_rpc, .. } => {
+                let mut request = Request::new(proto::rpc::RegisterAccountRequest {
+                    account_id: Some(account_id.into()),
+                    invitation_code: request.invitation_code,
+                });
+                if let Some(accept) = metadata.get(http::header::ACCEPT.as_str()) {
+                    request.metadata_mut().insert(http::header::ACCEPT.as_str(), accept.clone());
+                }
+                source_rpc.as_ref().clone().register_account(request).await.map(|_| ())
+            },
+        }
+    }
+}

@@ -157,6 +157,10 @@ install-note-transport: ## Installs note transport
 install-ntx-builder: ## Installs ntx-builder
 	cargo install --path bin/ntx-builder --locked
 
+.PHONY: install-funding-service
+install-funding-service: ## Installs funding service
+	cargo install --path bin/funding-service --locked
+
 .PHONY: install-remote-prover
 install-remote-prover: ## Install remote prover's CLI
 	cargo install --path bin/remote-prover --bin miden-remote-prover --locked
@@ -216,8 +220,10 @@ docker-build: docker-build-node \
               docker-build-note-transport \
               docker-build-ntx-builder \
               docker-build-monitor \
+              docker-build-funding-service \
               docker-build-remote-prover \
-              docker-build-benchmark
+              docker-build-benchmark \
+              docker-build-usdcx-genesis
 
 .PHONY: docker-build-node
 docker-build-node: ## Builds the Miden node using Docker
@@ -285,6 +291,19 @@ docker-build-monitor: ## Builds the network monitor using Docker
                  --build-arg PORT=3000 \
                  -t miden-network-monitor .
 
+.PHONY: docker-build-funding-service
+docker-build-funding-service: ## Builds the funding service using Docker
+	@CREATED=$$(date -u +'%Y-%m-%dT%H:%M:%SZ') && \
+	VERSION="$(DOCKER_VERSION)" && \
+	COMMIT=$$(git rev-parse HEAD) && \
+	$(DOCKER_COMMAND) build $(DOCKER_PULL_ARG) $(DOCKER_PLATFORM_ARG) \
+                 --build-arg CREATED="$$CREATED" \
+                 --build-arg VERSION="$$VERSION" \
+                 --build-arg COMMIT="$$COMMIT" \
+                 --build-arg BIN=miden-funding-service \
+                 --build-arg PORT=50401 \
+                 -t miden-funding-service .
+
 .PHONY: docker-build-remote-prover
 docker-build-remote-prover: ## Builds the remote prover using Docker
 	@CREATED=$$(date -u +'%Y-%m-%dT%H:%M:%SZ') && \
@@ -299,7 +318,7 @@ docker-build-remote-prover: ## Builds the remote prover using Docker
                  -t miden-remote-prover .
 
 .PHONY: docker-build-benchmark
-docker-build-benchmark: ## Builds the benchmark and seed tool image using Docker
+docker-build-benchmark: ## Builds the benchmark image using Docker
 	@CREATED=$$(date -u +'%Y-%m-%dT%H:%M:%SZ') && \
 	VERSION="$(DOCKER_VERSION)" && \
 	COMMIT=$$(git rev-parse HEAD) && \
@@ -310,6 +329,19 @@ docker-build-benchmark: ## Builds the benchmark and seed tool image using Docker
                  --build-arg BIN=miden-benchmark \
                  --target runtime-tool \
                  -t miden-node-tps-benchmark .
+
+.PHONY: docker-build-usdcx-genesis
+docker-build-usdcx-genesis: ## Builds the USDCx genesis image using Docker
+	@CREATED=$$(date -u +'%Y-%m-%dT%H:%M:%SZ') && \
+	VERSION="$(DOCKER_VERSION)" && \
+	COMMIT=$$(git rev-parse HEAD) && \
+	$(DOCKER_COMMAND) build $(DOCKER_PULL_ARG) $(DOCKER_PLATFORM_ARG) \
+                 --build-arg CREATED="$$CREATED" \
+                 --build-arg VERSION="$$VERSION" \
+                 --build-arg COMMIT="$$COMMIT" \
+                 --build-arg BIN=xusdc-genesis \
+                 --target runtime-tool \
+                 -t miden-usdcx-genesis .
 
 ## --- setup --------------------------------------------------------------------------------------
 

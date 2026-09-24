@@ -16,13 +16,13 @@ workspace = true
 
 [dependencies]
 anyhow                      = { workspace = true }
-hex                         = { workspace = true }
 http                        = { workspace = true }
 miden-node-grpc-error-macro = { workspace = true }
 miden-node-tracing          = { workspace = true }
 miden-node-utils            = { workspace = true }
+miden-objects               = { workspace = true }
+miden-protobuf              = { features = ["tonic"], workspace = true }
 miden-protocol              = { workspace = true }
-miden-standards             = { workspace = true }
 prost                       = { workspace = true }
 rand                        = { workspace = true }
 thiserror                   = { workspace = true }
@@ -35,13 +35,14 @@ url                         = { workspace = true }
 [dev-dependencies]
 assert_matches = { workspace = true }
 miden-protocol = { features = ["testing"], workspace = true }
-proptest       = { version = "1.7" }
 
 [build-dependencies]
 build-rs               = { workspace = true }
 codegen                = { workspace = true }
 fs-err                 = { workspace = true }
 miden-node-proto-build = { features = ["internal"], workspace = true }
+miden-objects          = { workspace = true }
+miden-protobuf         = { features = ["build"], workspace = true }
 miette                 = { workspace = true }
 prost-types            = { workspace = true }
 tonic-prost-build      = { workspace = true }
@@ -54,5 +55,6 @@ ignored = [
 
 [package.metadata.cargo-shear]
 ignored = [
-  "tower", # used in generated OUT_DIR code
+  "tonic-prost", # used in generated OUT_DIR code
+  "tower",       # used in generated OUT_DIR code
 ]

@@ -1,10 +1,67 @@
 services:
+  bootstrap-usdcx:
+    image: ${MIDEN_USDCX_GENESIS_IMAGE:-miden-usdcx-genesis}
+    pull_policy: missing
+    network_mode: none
+    environment:
+      # USDCx has six decimal places. This amount is one billion USDCx.
+      MIDEN_USDCX_INITIAL_SUPPLY: ${MIDEN_USDCX_INITIAL_SUPPLY:-1000000000000000}
+    volumes:
+      - node-data:/data
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        if [ -f /data/usdcx/.bootstrapped ]; then
+          echo "USDCx already bootstrapped."
+          exit 0
+        fi
+        if [ -d /data/usdcx ] || [ -d /data/genesis ]; then
+          echo "Reset the local network with make local-network-delete before bootstrap." >&2
+          exit 1
+        fi
+
+        mkdir /data/usdcx
+        cd /data/usdcx
+
+        echo "Creating the bootstrap admin and funding account..."
+        DISTRIBUTOR_OUTPUT="$$(xusdc-genesis new-distributor)"
+        printf '%s\n' "$${DISTRIBUTOR_OUTPUT}"
+        DISTRIBUTOR_ID="$$(printf '%s\n' "$${DISTRIBUTOR_OUTPUT}" | sed -n 's/^  hex: *//p')"
+        if [ -z "$${DISTRIBUTOR_ID}" ]; then
+          echo "USDCx genesis did not report the distributor account ID." >&2
+          exit 1
+        fi
+
+        cat > config.json <<EOF
+        {
+          "accounts": {
+            "owner": "$${DISTRIBUTOR_ID}",
+            "attest_admins": [],
+            "pausers": [],
+            "unpausers": [],
+            "blocklist_managers": []
+          },
+          "faucet": {
+            "seed": "0x55534443582d4641554345540000000000000000000000000000000000000000",
+            "token_supply": $${MIDEN_USDCX_INITIAL_SUPPLY},
+            "domain": 10007,
+            "min_burn_amount": 1,
+            "verification_base_fee": 7,
+            "attesters": []
+          }
+        }
+        EOF
+
+        echo "Creating the native USDCx faucet and prefunding the distributor..."
+        xusdc-genesis faucet
+        xusdc-genesis prefund
+        touch /data/usdcx/.bootstrapped
+
   bootstrap-validator:
     image: ${MIDEN_VALIDATOR_IMAGE:-miden-validator}
     pull_policy: missing
     configs:
-      - source: genesis
-        target: /genesis.toml
       - source: validator-storage-key-setup-context
         target: /fixtures/storage-key/setup-context.wire
       - source: validator-storage-key-public-set
@@ -23,35 +80,54 @@ services:
       MIDEN_VALIDATOR_3_SIGNING_KEY: ${MIDEN_VALIDATOR_3_SIGNING_KEY:-0404040404040404040404040404040404040404040404040404040404040404}
     volumes:
       - node-data:/data
+    depends_on:
+      bootstrap-usdcx:
+        condition: service_completed_successfully
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         set -e
-        if [ -f /data/validators/.bootstrapped ]; then
+        if [ -f /data/validators/.bootstrapped ] &&
+           [ -s /data/genesis/native-faucet-id ] &&
+           [ -s /data/genesis/validator-signing-public-keys ]; then
           echo "Validators already bootstrapped."
           exit 0
         fi
 
-        echo "Cleaning incomplete network bootstrap state..."
-        rm -rf \
-          /data/accounts \
-          /data/genesis \
-          /data/node \
-          /data/ntx-builder \
-          /data/storage-key-dkg \
-          /data/validators
-        mkdir -p /data/genesis /data/validators /data/accounts
+        mkdir /data/genesis /data/validators /data/accounts
 
         echo "Building genesis block..."
         # The validator set consists of the public keys derived from the three
         # signing keys configured in validator.yml, ordered by validator service.
-        miden-validator genesis \
-          --genesis-block-directory /data/genesis \
-          --accounts-directory /data/accounts \
-          --config /genesis.toml \
-          --validator.key "$$(miden-validator pubkey --signing-key.hex "$${MIDEN_VALIDATOR_1_SIGNING_KEY}")" \
-          --validator.key "$$(miden-validator pubkey --signing-key.hex "$${MIDEN_VALIDATOR_2_SIGNING_KEY}")" \
-          --validator.key "$$(miden-validator pubkey --signing-key.hex "$${MIDEN_VALIDATOR_3_SIGNING_KEY}")"
+        VALIDATOR_1_PUBLIC_KEY="$$(miden-validator pubkey --signing-key.hex "$${MIDEN_VALIDATOR_1_SIGNING_KEY}")"
+        VALIDATOR_2_PUBLIC_KEY="$$(miden-validator pubkey --signing-key.hex "$${MIDEN_VALIDATOR_2_SIGNING_KEY}")"
+        VALIDATOR_3_PUBLIC_KEY="$$(miden-validator pubkey --signing-key.hex "$${MIDEN_VALIDATOR_3_SIGNING_KEY}")"
+        GENESIS_OUTPUT="$$(
+          miden-validator genesis \
+            --genesis-block-directory /data/genesis \
+            --accounts-directory /data/accounts \
+            --native-faucet /data/usdcx/usdcx-faucet.mac \
+            --funding-account /data/usdcx/distributor.genesis.mac \
+            --verification-base-fee 7 \
+            --timestamp 1717344256 \
+            --validator.key "$${VALIDATOR_1_PUBLIC_KEY}" \
+            --validator.key "$${VALIDATOR_2_PUBLIC_KEY}" \
+            --validator.key "$${VALIDATOR_3_PUBLIC_KEY}"
+        )"
+        printf '%s\n' "$${GENESIS_OUTPUT}"
+        NATIVE_FAUCET_ID="$$(
+          printf '%s\n' "$${GENESIS_OUTPUT}" | sed -n 's/^Native faucet account id: //p'
+        )"
+        if [ -z "$${NATIVE_FAUCET_ID}" ]; then
+          echo "Genesis did not report the native faucet account ID." >&2
+          exit 1
+        fi
+        printf '%s\n' "$${NATIVE_FAUCET_ID}" > /data/genesis/native-faucet-id
+
+        printf '%s,%s,%s\n' \
+          "$${VALIDATOR_1_PUBLIC_KEY}" \
+          "$${VALIDATOR_2_PUBLIC_KEY}" \
+          "$${VALIDATOR_3_PUBLIC_KEY}" > /data/genesis/validator-signing-public-keys
 
         for VALIDATOR in 1 2 3; do
           echo "Bootstrapping validator $${VALIDATOR}..."
@@ -183,9 +259,7 @@ services:
           exit 0
         fi
 
-        echo "Cleaning incomplete node bootstrap state..."
-        rm -rf /data/node
-        mkdir -p /data/node
+        mkdir /data/node
 
         echo "Bootstrapping node..."
         miden-node bootstrap \
@@ -193,6 +267,37 @@ services:
           --genesis /data/genesis/genesis.dat
 
         touch /data/node/.bootstrapped
+
+  deploy-fee-collector:
+    image: ${MIDEN_NODE_IMAGE:-miden-node}
+    pull_policy: missing
+    volumes:
+      - node-data:/data
+    depends_on:
+      bootstrap-node:
+        condition: service_completed_successfully
+      validator-1:
+        condition: service_started
+      validator-2:
+        condition: service_started
+      validator-3:
+        condition: service_started
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        if [ -f /data/node/.fee-collector-deployed ]; then
+          exit 0
+        fi
+        if [ ! -f /data/node/fee-collector.mac ]; then
+          miden-node fee-collector create --data-directory /data/node
+        fi
+        miden-node fee-collector deploy \
+          --data-directory /data/node \
+          --validator.url http://validator-1:50101 \
+          --validator.url http://validator-2:50101 \
+          --validator.url http://validator-3:50101
+        touch /data/node/.fee-collector-deployed
 
   bootstrap-ntx-builder:
     image: ${MIDEN_NTX_BUILDER_IMAGE:-miden-ntx-builder}
@@ -211,9 +316,7 @@ services:
           exit 0
         fi
 
-        echo "Cleaning incomplete network transaction builder bootstrap state..."
-        rm -rf /data/ntx-builder
-        mkdir -p /data/ntx-builder
+        mkdir /data/ntx-builder
 
         echo "Bootstrapping network transaction builder..."
         miden-ntx-builder bootstrap \
@@ -221,12 +324,3 @@ services:
           --genesis /data/genesis/genesis.dat
 
         touch /data/ntx-builder/.bootstrapped
-
-configs:
-  genesis:
-    content: |
-      timestamp = 1717344256
-      version = 1
-
-      [fee_parameters]
-      verification_base_fee = 0

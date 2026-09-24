@@ -52,7 +52,10 @@ pub struct FaucetTestDetails {
 struct PowChallengeResponse {
     challenge: String,
     target: u64,
-    #[expect(dead_code)] // Timestamp is part of API response but not used
+    #[expect(
+        dead_code,
+        reason = "Part of the API response, unused but required for `deny_unknown_fields`"
+    )]
     timestamp: u64,
 }
 
@@ -61,6 +64,10 @@ struct PowChallengeResponse {
 #[serde(deny_unknown_fields)]
 pub(crate) struct GetTokensResponse {
     pub(crate) tx_id: String,
+    #[expect(
+        dead_code,
+        reason = "Part of the API response, unused but required for `deny_unknown_fields`"
+    )]
     pub(crate) note_id: String,
 }
 
@@ -196,7 +203,6 @@ impl Service for FaucetService {
     target = COMPONENT,
     name = "network_monitor.faucet.fetch_faucet_metadata",
     level = "info",
-    ret(level = "debug"),
     err,
 )]
 pub(crate) async fn fetch_faucet_metadata(
@@ -221,7 +227,6 @@ pub(crate) async fn fetch_faucet_metadata(
     target = COMPONENT,
     name = "network_monitor.faucet.request_tokens",
     level = "info",
-    ret(level = "debug"),
     err,
 )]
 pub(crate) async fn request_tokens(
@@ -337,7 +342,6 @@ where
     target = COMPONENT,
     name = "network_monitor.faucet.solve_pow_challenge",
     level = "info",
-    ret(level = "debug"),
     err,
 )]
 fn solve_pow_challenge(challenge: &str, target: u64, timeout: Duration) -> anyhow::Result<u64> {

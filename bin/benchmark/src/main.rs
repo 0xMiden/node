@@ -14,9 +14,9 @@ use miden_node_proto::clients::{Builder, RpcClient};
 use miden_node_proto::domain::encryption::{
     TransactionInputsSealer,
     TrustedTransactionEncryptionState,
-    verify_transaction_encryption_key,
 };
 use miden_node_proto::generated::rpc::BlockHeaderByNumberRequest;
+use miden_node_proto::{DecodeMessageExt, VerifyWith};
 use miden_protocol::Word;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
@@ -87,6 +87,10 @@ pub enum Command {
         /// many blocks to fully include.
         #[arg(long, default_value_t = 30)]
         wait_blocks: u32,
+        /// Exit with an error if no transactions were generated, a submission fails, or a consume
+        /// transaction is not included within the block limit.
+        #[arg(long)]
+        fail_on_error: bool,
         /// Hex-encoded validator signing public key trusted to attest the transaction encryption
         /// key.
         #[arg(long)]
@@ -95,13 +99,13 @@ pub enum Command {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
     let cli = Cli::parse();
-    cli.run().await;
+    cli.run().await
 }
 
 impl Cli {
-    async fn run(self) {
+    async fn run(self) -> Result<()> {
         match self.command {
             Command::CreateProofs {
                 rpc_url,
@@ -115,6 +119,7 @@ impl Cli {
                 concurrency,
                 connections,
                 wait_blocks,
+                fail_on_error,
                 validator_signing_public_key,
             } => {
                 submit::run(
@@ -123,10 +128,12 @@ impl Cli {
                     connections,
                     wait_blocks,
                     validator_signing_public_key,
+                    fail_on_error,
                 )
-                .await;
+                .await?;
             },
         }
+        Ok(())
     }
 }
 
@@ -177,8 +184,10 @@ async fn discover_genesis(rpc_url: &Url, timeout: Duration) -> Result<Word> {
         .block_header
         .ok_or_else(|| anyhow::anyhow!("No block header in response"))?;
 
-    let genesis_header: BlockHeader =
-        genesis_block_header.try_into().context("Failed to convert block header")?;
+    let genesis_header: BlockHeader = genesis_block_header
+        // SAFETY: Genesis has no parent. This benchmark trusts the configured RPC for genesis.
+        .decode_and_build_unchecked()
+        .context("Failed to build block header")?;
 
     Ok(genesis_header.commitment())
 }
@@ -220,11 +229,9 @@ pub(crate) async fn create_genesis_aware_rpc_client_pool(
         .context("Failed to fetch the transaction encryption key")?
         .into_inner();
     let trusted_keys = [trusted_validator_signing_key];
-    let verified = verify_transaction_encryption_key(
-        key,
-        TrustedTransactionEncryptionState::new(genesis, &trusted_keys),
-    )
-    .context("Untrusted transaction encryption key")?;
+    let verified = key
+        .verify_with(TrustedTransactionEncryptionState::new(genesis, &trusted_keys))
+        .context("Untrusted transaction encryption key")?;
 
     Ok((pool, TransactionInputsSealer::new(verified)))
 }
@@ -233,6 +240,7 @@ pub(crate) fn get_genesis_header_request() -> BlockHeaderByNumberRequest {
     BlockHeaderByNumberRequest {
         block_num: Some(BlockNumber::GENESIS.as_u32()),
         include_mmr_proof: None,
+        include_protocol_config: None,
     }
 }
 

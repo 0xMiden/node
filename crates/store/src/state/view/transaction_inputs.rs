@@ -6,7 +6,7 @@ use std::ops::ControlFlow;
 use miden_node_tracing::miden_instrument;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
-use miden_protocol::note::Nullifier;
+use miden_protocol::note::{NoteId, Nullifier};
 
 use super::StateView;
 use crate::COMPONENT;
@@ -18,7 +18,7 @@ use crate::errors::DatabaseError;
 pub struct TransactionInputs {
     pub account_commitment: Word,
     pub nullifiers: Vec<NullifierInfo>,
-    pub found_unauthenticated_notes: HashSet<Word>,
+    pub found_unauthenticated_notes: HashSet<NoteId>,
     pub new_account_id_prefix_is_unique: Option<bool>,
 }
 
@@ -35,7 +35,7 @@ impl StateView {
         &self,
         account_id: AccountId,
         nullifiers: &[Nullifier],
-        unauthenticated_note_commitments: Vec<Word>,
+        unauthenticated_note_ids: Vec<NoteId>,
     ) -> Result<TransactionInputs, DatabaseError> {
         let tree_inputs = self.with_inner_read_blocking(|inner| {
             let account_commitment = inner.account_tree.get_latest_commitment(account_id);
@@ -76,10 +76,8 @@ impl StateView {
         // Scope the note lookup by the view's tip so the result is consistent with the tree reads
         // above: mid-apply, the DB may already contain notes from a block the snapshot does not
         // include yet.
-        let found_unauthenticated_notes = self
-            .db
-            .select_existing_note_commitments(unauthenticated_note_commitments, self.tip())
-            .await?;
+        let found_unauthenticated_notes =
+            self.db.select_existing_note_ids(unauthenticated_note_ids, self.tip()).await?;
 
         Ok(TransactionInputs {
             account_commitment,

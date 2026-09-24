@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
-ARG RUST_VERSION=1.98
-ARG DEBIAN_RELEASE=bookworm
+ARG RUST_VERSION=1.98.1
+ARG DEBIAN_RELEASE=trixie
 ARG KACHE_VERSION=0.16.0
 ARG BIN
 ARG PORT
@@ -9,7 +9,7 @@ ARG PORT
 FROM rust:${RUST_VERSION}-slim-${DEBIAN_RELEASE} AS build-base
 ARG KACHE_VERSION
 ARG TARGETARCH
-# Used by our codegen code.
+# Code generation requires rustfmt.
 RUN rustup component add rustfmt
 # Install build dependencies. RocksDB is compiled from source by librocksdb-sys.
 RUN apt-get update && \
@@ -42,6 +42,7 @@ RUN case "${TARGETARCH}" in \
     esac && \
     KACHE_ARCHIVE="kache-${KACHE_ARCH}-unknown-linux-musl.tar.gz" && \
     curl --fail --location --silent --show-error \
+        --retry 5 --retry-max-time 120 \
         "https://github.com/kunobi-ninja/kache/releases/download/v${KACHE_VERSION}/${KACHE_ARCHIVE}" \
         --output "/tmp/${KACHE_ARCHIVE}" && \
     printf '%s  %s\n' "${KACHE_SHA256}" "/tmp/${KACHE_ARCHIVE}" | \
@@ -60,6 +61,7 @@ RUN printf '%s\n' \
         > /etc/kache.toml
 
 ENV CARGO_INCREMENTAL=0 \
+    CARGO_PROFILE_RELEASE_DEBUG=line-tables-only \
     RUSTC_WRAPPER=kache \
     CC="kache cc" \
     CXX="kache c++" \
@@ -83,6 +85,8 @@ COPY proto/ proto/
 # Cargo loads each workspace member before it selects the requested binaries.
 COPY xtask/Cargo.toml xtask/Cargo.toml
 COPY xtask/src/main.rs xtask/src/main.rs
+COPY vendor/miden-usdcx/Cargo.toml vendor/miden-usdcx/Cargo.lock vendor/miden-usdcx/
+COPY vendor/miden-usdcx/crates/ vendor/miden-usdcx/crates/
 # Kache stores compiler outputs by content. The target directory stays local to
 # this build and does not depend on source timestamps from another checkout.
 # The locks prevent concurrent builds from writing to the same cache mounts.
@@ -108,16 +112,23 @@ RUN --mount=type=cache,sharing=locked,id=cargo-registry-${TARGETARCH},target=/us
         --bin miden-note-transport \
         --bin miden-ntx-builder \
         --bin miden-network-monitor \
+        --bin miden-funding-service \
         --bin miden-remote-prover \
         --bin miden-benchmark && \
+    cargo build --release --locked --jobs "${JOBS}" \
+        --manifest-path vendor/miden-usdcx/Cargo.toml \
+        --target-dir /app/target \
+        --package xusdc-genesis --bin xusdc-genesis && \
     mkdir -p /app/bin && \
-    cp /app/target/release/miden-node \
+    mv /app/target/release/miden-node \
         /app/target/release/miden-validator \
         /app/target/release/miden-note-transport \
         /app/target/release/miden-ntx-builder \
         /app/target/release/miden-network-monitor \
+        /app/target/release/miden-funding-service \
         /app/target/release/miden-remote-prover \
         /app/target/release/miden-benchmark \
+        /app/target/release/xusdc-genesis \
         /app/bin/ && \
     kache report --format github --output /app/kache-report.md && \
     rm -rf /app/target && \

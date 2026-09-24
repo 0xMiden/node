@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::TryFutureExt;
+use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
 use miden_node_store::state::State;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{
@@ -16,24 +17,24 @@ use miden_node_tracing::{
     miden_span_record,
 };
 use miden_node_utils::shutdown::CancellationToken;
+use miden_objects::account_file::AccountFile;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
+use miden_protocol::account::AccountId;
 use miden_protocol::batch::{BatchId, ProposedBatch, ProvenBatch};
-use miden_protocol::note::NoteId;
+use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::TransactionId;
-use miden_tx_batch::BatchExecutor;
 use tokio::task::{JoinError, JoinSet};
 use tokio::time::{Instant, MissedTickBehavior};
-use url::Url;
 
-use crate::domain::batch::SelectedBatch;
-use crate::domain::transaction::AuthenticatedTransaction;
+use crate::domain::batch::{SelectedBatch, SelectedBatchId};
 use crate::errors::{BuildBatchError, StoreError};
+use crate::fee_collector::FeeCollectorTransactionBuilder;
 use crate::mempool::SharedMempool;
+use crate::validator::BlockProducerValidatorClient;
 use crate::{COMPONENT, LOG_TARGET};
 
-mod remote_prover;
-use remote_prover::BatchProver;
-pub use remote_prover::RemoteProverError;
+mod prover;
+pub(crate) use prover::BatchProver;
 
 // BATCH BUILDER
 // ================================================================================================
@@ -48,10 +49,9 @@ pub struct BatchBuilder {
     active_jobs: JoinSet<Result<(), BuildBatchError>>,
     num_workers: NonZeroUsize,
     intervals: BatchIntervals,
-    /// The batch prover to use.
-    ///
-    /// If not provided, a local batch prover is used.
     batch_prover: BatchProver,
+    fee_collector: FeeCollectorTransactionBuilder,
+    validator: BlockProducerValidatorClient,
     state: Arc<State>,
 }
 
@@ -81,24 +81,29 @@ impl BatchIntervals {
 }
 
 impl BatchBuilder {
-    /// Creates a new [`BatchBuilder`] with the given batch prover URL and maximum concurrent batch
-    /// building workers.
-    ///
-    /// If no batch prover URL is provided, a local batch prover is used instead.
-    pub fn new(
+    /// Creates a new [`BatchBuilder`] with the given maximum number of concurrent workers.
+    pub async fn new(
         state: Arc<State>,
         num_workers: NonZeroUsize,
-        batch_prover_url: Option<Url>,
         intervals: BatchIntervals,
+        builder_account_id: AccountId,
+        fee_collector_account: AccountFile,
+        validator: BlockProducerValidatorClient,
     ) -> anyhow::Result<Self> {
-        let batch_prover =
-            batch_prover_url.map_or(Ok(BatchProver::local()), BatchProver::remote)?;
+        let fee_collector = FeeCollectorTransactionBuilder::new(
+            builder_account_id,
+            fee_collector_account,
+            &state.view(),
+        )
+        .await?;
 
         Ok(Self {
             active_jobs: JoinSet::new(),
             num_workers,
             intervals,
-            batch_prover,
+            batch_prover: BatchProver::new(),
+            fee_collector,
+            validator,
             state,
         })
     }
@@ -169,10 +174,12 @@ impl BatchBuilder {
             state: self.state.clone(),
             mempool,
             batch_prover: self.batch_prover.clone(),
+            fee_collector: self.fee_collector.clone(),
+            validator: self.validator.clone(),
         };
 
         self.active_jobs.spawn(
-            async move { job.build_batch(batch).await }
+            async move { Box::pin(job.build_batch(batch)).await }
                 .instrument(miden_node_tracing::Span::current()),
         );
     }
@@ -251,6 +258,8 @@ impl BatchBuilder {
 struct BatchJob {
     state: Arc<State>,
     batch_prover: BatchProver,
+    fee_collector: FeeCollectorTransactionBuilder,
+    validator: BlockProducerValidatorClient,
     mempool: SharedMempool,
 }
 
@@ -263,8 +272,7 @@ impl BatchJob {
     async fn build_batch(&self, batch: SelectedBatch) -> Result<(), BuildBatchError> {
         let batch_id = batch.id();
 
-        let result = self
-            .get_batch_inputs(batch)
+        let result = Box::pin(self.get_batch_inputs(batch))
             .inspect_ok(|proposed| {
                 let telemetry = proposed_batch_telemetry(proposed);
                 miden_span_record!(
@@ -274,8 +282,8 @@ impl BatchJob {
                     batch.output_note.count = telemetry.output_notes_count
                 );
             })
-            .and_then(|proposed| self.prove_batch(proposed))
-            .and_then(|proven_batch| async { self.commit_batch(proven_batch) })
+            .and_then(|proposed| self.batch_prover.prove(proposed))
+            .and_then(|proven_batch| async { self.commit_batch(Arc::new(proven_batch)) })
             // Handle errors by propagating the error to the root span and rolling back the batch.
             .inspect_err(|err| Span::current().set_error(err))
             .instrument(Span::current())
@@ -300,6 +308,7 @@ impl BatchJob {
         &self,
         selected: SelectedBatch,
     ) -> Result<ProposedBatch, BuildBatchError> {
+        let fee_notes = selected.collectible_fee_notes().to_vec();
         let mut block_numbers: BTreeSet<_> = selected
             .transactions()
             .iter()
@@ -313,7 +322,6 @@ impl BatchJob {
             .iter()
             .map(Deref::deref)
             .flat_map(AuthenticatedTransaction::unauthenticated_note_ids)
-            .map(NoteId::from_raw)
             .collect();
 
         let view = self.state.view();
@@ -337,11 +345,58 @@ impl BatchJob {
             .0
             .expect("reference block header should exist");
 
-        let transactions = selected
+        let mut transactions: Vec<_> = selected
             .into_transactions()
             .into_iter()
             .map(|tx| tx.proven_transaction())
             .collect();
+
+        // A deployed collector must consume at least one note to prevent replay.
+        if !fee_notes.is_empty() {
+            let protocol_config = view
+                .get_protocol_config(reference_block_header.protocol_config_commitment())
+                .await
+                .map_err(StoreError::GetProtocolConfigFailed)
+                .map_err(BuildBatchError::FetchBatchInputsFailed)?
+                .expect("the reference block's protocol configuration should exist");
+            let genesis = view
+                .get_block_header(Some(BlockNumber::GENESIS), false)
+                .await
+                .map_err(StoreError::GetBlockHeaderFailed)
+                .map_err(BuildBatchError::FetchBatchInputsFailed)?
+                .0
+                .expect("the genesis block header should exist")
+                .commitment();
+
+            let fee_collector = self.fee_collector.clone();
+            let executed_fee_collection_tx = fee_collector
+                .execute(
+                    fee_notes,
+                    reference_block_header.clone(),
+                    protocol_config,
+                    partial_blockchain.clone(),
+                    &view,
+                )
+                .await
+                .map_err(BuildBatchError::BuildBatchFeeTransaction)?;
+            let inputs = executed_fee_collection_tx.tx_inputs().clone();
+            let fee_collection_tx = spawn_blocking_in_current_span(move || {
+                FeeCollectorTransactionBuilder::prove(executed_fee_collection_tx)
+            })
+            .await
+            .map_err(BuildBatchError::JoinError)?
+            .map_err(BuildBatchError::BuildBatchFeeTransaction)?;
+            self.validator
+                .validate_transaction(
+                    &fee_collection_tx,
+                    &inputs,
+                    genesis,
+                    reference_block_header.validator_config(),
+                )
+                .await
+                .map_err(BuildBatchError::ValidateBatchFeeTransaction)?;
+            transactions.push(Arc::new(fee_collection_tx));
+        }
 
         ProposedBatch::new(
             transactions,
@@ -351,45 +406,6 @@ impl BatchJob {
             MIN_PROOF_SECURITY_LEVEL,
         )
         .map_err(BuildBatchError::ProposeBatchError)
-    }
-
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "batch_builder.prove_batch",
-        err,
-    )]
-    async fn prove_batch(
-        &self,
-        proposed_batch: ProposedBatch,
-    ) -> Result<Arc<ProvenBatch>, BuildBatchError> {
-        miden_span_record!(prover.kind = self.batch_prover.kind());
-
-        let proven_batch = match &self.batch_prover {
-            BatchProver::Remote(prover) => prover
-                .prove(proposed_batch)
-                .await
-                .map_err(BuildBatchError::RemoteProverClientError),
-            BatchProver::Local(prover) => {
-                let prover = prover.clone();
-                spawn_blocking_in_current_span(move || {
-                    let executed_batch = BatchExecutor::new()
-                        .execute(proposed_batch)
-                        .map_err(BuildBatchError::ProveBatchError)?;
-                    prover.prove(executed_batch).map_err(BuildBatchError::ProveBatchError)
-                })
-                .await
-                .map_err(BuildBatchError::JoinError)?
-            },
-        }?;
-
-        if proven_batch.proof_security_level() < MIN_PROOF_SECURITY_LEVEL {
-            Err(BuildBatchError::SecurityLevelTooLow(
-                proven_batch.proof_security_level(),
-                MIN_PROOF_SECURITY_LEVEL,
-            ))
-        } else {
-            Ok(Arc::new(proven_batch))
-        }
     }
 
     #[miden_instrument(
@@ -408,7 +424,7 @@ impl BatchJob {
         target = COMPONENT,
         name = "batch_builder.rollback_batch",
     )]
-    fn rollback_batch(&self, batch_id: BatchId) -> Result<(), BuildBatchError> {
+    fn rollback_batch(&self, batch_id: SelectedBatchId) -> Result<(), BuildBatchError> {
         self.mempool
             .lock()
             .map_err(BuildBatchError::MempoolPoisoned)?
@@ -450,7 +466,7 @@ impl SelectedBatch {
                 },
             );
         SelectedBatchTelemetry {
-            batch_id: self.id(),
+            batch_id: self.id().as_batch_id(),
             transactions_count: self.transactions().len(),
             transaction_ids: tx_ids,
             input_notes_count,
@@ -481,7 +497,67 @@ mod tests {
     use std::future::pending;
     use std::time::Duration;
 
+    use miden_node_utils::genesis::GenesisBlock;
+    use miden_protocol::ONE;
+    use miden_protocol::block::{BlockSignatures, SignedBlock};
+    use miden_testing::{Auth, MockChain};
+    use miden_tx::LocalTransactionProver;
+
     use super::*;
+    use crate::mempool::{Mempool, MempoolConfig};
+    use crate::store::get_tx_inputs;
+    use crate::test_utils::{mock_collection_account, mock_native_faucet};
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn builds_batches_without_fee_notes() -> anyhow::Result<()> {
+        let (mut account, auth_secret_keys) = mock_collection_account().into_parts();
+        account.set_nonce(ONE)?;
+        let collector = AccountFile::new(account, auth_secret_keys);
+        let faucet = mock_native_faucet();
+        let mut chain = MockChain::builder().verification_base_fee(0).fee_faucet_id(faucet.id());
+        chain.add_account(faucet)?;
+        chain.add_account(collector.account().clone())?;
+        let wallet = chain.add_existing_wallet(Auth::basic_ecdsa())?;
+        let chain = chain.build()?;
+        let executed = chain.build_transaction(wallet.id()).build()?.execute().await?;
+        let transaction = LocalTransactionProver::default().prove(executed)?;
+        assert_eq!(transaction.output_notes().num_notes(), 0);
+
+        let directory = tempfile::tempdir()?;
+        let genesis = chain.latest_block();
+        let genesis = GenesisBlock::new(
+            SignedBlock::new(
+                genesis.header().clone(),
+                genesis.body().clone(),
+                BlockSignatures::new(Vec::new())?,
+            )?,
+            chain.protocol_config().clone(),
+        )?;
+        State::bootstrap(genesis, directory.path())?;
+        let (state, ..) = State::for_tests(directory.path()).await;
+        let inputs = get_tx_inputs(&state, &transaction).await?;
+        let transaction =
+            Arc::new(AuthenticatedTransaction::new_unchecked(Arc::new(transaction), inputs)?);
+        let mempool = Mempool::shared(BlockNumber::GENESIS, MempoolConfig::default());
+        mempool.lock().unwrap().add_transaction(transaction)?;
+        let selected = mempool.lock().unwrap().select_any_batch().unwrap();
+        let selected_id = selected.id().as_batch_id();
+        let fee_collector =
+            FeeCollectorTransactionBuilder::new(wallet.id(), collector, &state.view()).await?;
+        let job = BatchJob {
+            state,
+            batch_prover: BatchProver::new(),
+            fee_collector,
+            validator: BlockProducerValidatorClient::new(Vec::new(), Duration::from_secs(1))?,
+            mempool,
+        };
+
+        let proposed = Box::pin(job.get_batch_inputs(selected)).await?;
+        assert_eq!(proposed.id(), selected_id);
+        assert_eq!(proposed.transactions().len(), 1);
+        assert!(proposed.output_notes().is_empty());
+        Ok(())
+    }
 
     #[tokio::test]
     async fn abort_active_jobs_cancels_batch_jobs_without_waiting_for_completion() {

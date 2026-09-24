@@ -13,8 +13,8 @@ use std::time::{Duration, Instant};
 
 use miden_node_proto::clients::{RemoteProverClient, RemoteProverProxyStatusClient};
 use miden_node_proto::generated as proto;
+use miden_node_proto::prost::Message;
 use miden_node_tracing::{debug, miden_instrument, warn};
-use miden_protocol::utils::serde::Serializable;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -24,7 +24,7 @@ use url::Url;
 
 use crate::COMPONENT;
 use crate::deploy::UnsupportedChainError;
-use crate::funding::FaucetClient;
+use crate::funding::FundingClient;
 use crate::service::{Service, build_tls_client};
 use crate::service_status::{
     ProverTestOutcome,
@@ -91,8 +91,8 @@ pub struct ProbeSnapshot {
 struct ProbeSpawner {
     client: RemoteProverClient,
     rpc_url: Url,
-    /// Faucet access for funding the probe payload's fee payment on fee-charging chains.
-    funding: Option<FaucetClient>,
+    /// The funding service client for the probe payload's fee payment on fee-charging chains.
+    funding: Option<FundingClient>,
     interval: Duration,
     probe_tx: watch::Sender<ProbeSnapshot>,
     name: String,
@@ -136,7 +136,7 @@ impl ProverStatusService {
         name: String,
         prover_url: Url,
         rpc_url: Url,
-        funding: Option<FaucetClient>,
+        funding: Option<FundingClient>,
         interval: Duration,
         request_timeout: Duration,
         probe_interval: Duration,
@@ -231,23 +231,35 @@ impl ProverStatusService {
             test: test_outcome.clone(),
         });
 
-        // Most recent status poll failed; report unhealthy but keep last known status details.
-        if let Some(err) = &self.last_status_err {
-            return ServiceStatus::unhealthy(&self.name, err.clone(), details);
-        }
-
-        if let Some(outcome) = &test_outcome {
+        let mut service_status = if let Some(outcome) = &test_outcome {
             if outcome.status == Status::Unhealthy {
                 let msg = outcome.error.clone().unwrap_or_else(|| "prover test failed".to_string());
-                return ServiceStatus::unhealthy(&self.name, msg, details);
+                ServiceStatus::unhealthy(&self.name, msg, details.clone())
+            } else {
+                self.worker_status(&status_details, details.clone())
             }
+        } else {
+            self.worker_status(&status_details, details.clone())
+        };
+
+        // Most recent status poll failure takes precedence while retaining the last known details.
+        if let Some(err) = &self.last_status_err {
+            service_status = ServiceStatus::unhealthy(&self.name, err.clone(), details);
         }
 
+        service_status
+    }
+
+    fn worker_status(
+        &self,
+        status_details: &RemoteProverStatusDetails,
+        details: ServiceDetails,
+    ) -> ServiceStatus {
         let unhealthy_workers: Vec<_> = status_details
             .workers
             .iter()
-            .filter(|w| w.status != Status::Healthy)
-            .map(|w| w.name.clone())
+            .filter(|worker| worker.status != Status::Healthy)
+            .map(|worker| worker.name.clone())
             .collect();
 
         if status_details.workers.is_empty() {
@@ -282,7 +294,6 @@ impl Service for ProverStatusService {
         target = COMPONENT,
         name = "network_monitor.prover.status_check",
         level = "info",
-        ret(level = "debug"),
         fields(
             prover = self.name,
         ),
@@ -376,7 +387,7 @@ const PAYLOAD_RETRY_DELAY: Duration = Duration::from_secs(30);
 async fn run_prover_test(
     mut client: RemoteProverClient,
     rpc_url: Url,
-    funding: Option<FaucetClient>,
+    funding: Option<FundingClient>,
     interval: Duration,
     probe_tx: watch::Sender<ProbeSnapshot>,
     name: String,
@@ -432,13 +443,17 @@ async fn run_prover_test(
 
         let start = Instant::now();
         let request = Request::new(payload.clone());
-        match client.prove(request).await {
-            Ok(response) => {
+        match client
+            .prove(request)
+            .await
+            .and_then(|response| transaction_proof_size(response.into_inner()))
+        {
+            Ok(proof_size_bytes) => {
                 state.success_count += 1;
                 state.latest = Some(ProverTestOutcome {
                     details: ProverTestDetails {
                         test_duration_ms: start.elapsed().as_millis() as u64,
-                        proof_size_bytes: response.into_inner().payload.len(),
+                        proof_size_bytes,
                         success_count: state.success_count,
                         failure_count: state.failure_count,
                         proof_type: ProofType::Transaction,
@@ -519,18 +534,28 @@ fn tonic_status_to_json(status: &tonic::Status) -> String {
     target = COMPONENT,
     name = "network_monitor.remote_prover.generate_prover_test_payload",
     level = "info",
-    ret(level = "debug"),
     err,
 )]
 async fn generate_prover_test_payload(
     rpc_url: &Url,
-    funding: Option<&FaucetClient>,
+    funding: Option<&FundingClient>,
 ) -> anyhow::Result<proto::remote_prover::ProofRequest> {
     let tx_inputs = crate::deploy::build_probe_transaction_inputs(rpc_url, funding).await?;
     Ok(proto::remote_prover::ProofRequest {
-        proof_type: proto::remote_prover::ProofType::Transaction.into(),
-        payload: tx_inputs.to_bytes(),
+        request: Some(proto::remote_prover::proof_request::Request::Transaction(tx_inputs.into())),
     })
+}
+
+fn transaction_proof_size(response: proto::remote_prover::Proof) -> Result<usize, tonic::Status> {
+    use proto::remote_prover::proof::Proof;
+
+    match response.proof {
+        Some(Proof::Transaction(proof)) => Ok(proof.encoded_len()),
+        Some(_) => Err(tonic::Status::internal(
+            "remote prover response variant does not match transaction request",
+        )),
+        None => Err(tonic::Status::internal("remote prover response is missing proof variant")),
+    }
 }
 
 // TESTS
@@ -539,6 +564,26 @@ async fn generate_prover_test_payload(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_probe_response_variant_is_a_protocol_error() {
+        let error =
+            transaction_proof_size(proto::remote_prover::Proof { proof: None }).unwrap_err();
+
+        assert_eq!(error.code(), tonic::Code::Internal);
+    }
+
+    #[test]
+    fn mismatched_probe_response_variant_is_a_protocol_error() {
+        let response = proto::remote_prover::Proof {
+            proof: Some(proto::remote_prover::proof::Proof::Block(
+                proto::primitives::ExecutionProof::default(),
+            )),
+        };
+        let error = transaction_proof_size(response).unwrap_err();
+
+        assert_eq!(error.code(), tonic::Code::Internal);
+    }
 
     fn outcome(status: Status, error: Option<&str>) -> ProverTestOutcome {
         ProverTestOutcome {

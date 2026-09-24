@@ -19,6 +19,7 @@
 #   - miden-ntx-builder
 #   - miden-remote-prover
 #   - miden-benchmark
+#   - xusdc-genesis (install from vendor/miden-usdcx/crates/xusdc-genesis)
 #
 # Usage:
 #   Export MIDEN_VALIDATOR_STORAGE_KEY_EPOCH, MIDEN_VALIDATOR_STORAGE_KEY_SETUP_CONTEXT,
@@ -37,6 +38,8 @@ USE_REMOTE_PROVER="${USE_REMOTE_PROVER:-0}"
 CONCURRENCY="${CONCURRENCY:-8}"
 WAIT_BLOCKS="${WAIT_BLOCKS:-30}"
 RUN_DIR="${RUN_DIR:-./bench-local-run}"
+# Send collected fees to an arbitrary non-existent account ID for now.
+BATCH_BUILDER_WALLET_ACCOUNT_ID="${BATCH_BUILDER_WALLET_ACCOUNT_ID:-0xcc0000000000dd010000ee000000ff}"
 # Insecure, hard-coded local dev validator signing key and its public key (committed at
 # genesis). Generate a fresh pair with `miden-validator keygen`.
 VALIDATOR_SIGNING_KEY_HEX="${VALIDATOR_SIGNING_KEY_HEX:-0101010101010101010101010101010101010101010101010101010101010101}"
@@ -45,10 +48,10 @@ VALIDATOR_SIGNING_PUBLIC_KEY="${VALIDATOR_SIGNING_PUBLIC_KEY:-031b84c5567b126440
 ENCRYPTION_KEY_HEX="${ENCRYPTION_KEY_HEX:-0303030303030303030303030303030303030303030303030303030303030303}"
 
 # --- ports --------------------------------------------------------------------
-VALIDATOR_PORT=50101
-RPC_PORT=57291
-NTX_PORT=50301
-REMOTE_PROVER_PORT=50051
+VALIDATOR_PORT="${VALIDATOR_PORT:-50101}"
+RPC_PORT="${RPC_PORT:-57291}"
+NTX_PORT="${NTX_PORT:-50301}"
+REMOTE_PROVER_PORT="${REMOTE_PROVER_PORT:-50051}"
 
 # --- paths --------------------------------------------------------------------
 DATA="$RUN_DIR/data"
@@ -101,7 +104,7 @@ wait_for_port() {
 }
 
 # --- preflight ----------------------------------------------------------------
-required_bins=(miden-node miden-validator miden-ntx-builder miden-remote-prover miden-benchmark)
+required_bins=(miden-node miden-validator miden-ntx-builder miden-remote-prover miden-benchmark xusdc-genesis)
 for bin in "${required_bins[@]}"; do
     command -v "$bin" >/dev/null || die "$bin not on PATH"
 done
@@ -117,7 +120,7 @@ for var in "${required_storage_key_vars[@]}"; do
 done
 
 if [ -e "$DATA/node" ] || [ -e "$DATA/validator" ] || [ -e "$DATA/genesis" ] \
-    || [ -e "$DATA/ntx-builder" ]; then
+    || [ -e "$DATA/ntx-builder" ] || [ -e "$DATA/usdcx" ]; then
     say "wiping previous data dir $DATA"
     rm -rf "$DATA"
     mkdir -p "$DATA"
@@ -127,13 +130,43 @@ rm -f "$LOGS"/*.log "$PIDS"/*.pid
 GENESIS_FILE="$DATA/genesis/genesis.dat"
 
 # --- bootstrap ----------------------------------------------------------------
+say "creating the native USDCx faucet and funding account"
+mkdir "$DATA/usdcx"
+(
+    cd "$DATA/usdcx"
+    DISTRIBUTOR_OUTPUT="$(xusdc-genesis new-distributor)"
+    printf '%s\n' "$DISTRIBUTOR_OUTPUT"
+    DISTRIBUTOR_ID="$(printf '%s\n' "$DISTRIBUTOR_OUTPUT" | sed -n 's/^  hex: *//p')"
+    [ -n "$DISTRIBUTOR_ID" ] || die "USDCx genesis did not report the distributor account ID"
+
+    # Benchmark accounts have no native assets to pay transaction fees.
+    cat > config.json <<EOF
+{
+  "accounts": { "owner": "$DISTRIBUTOR_ID" },
+  "faucet": {
+    "seed": "0x55534443582d4641554345540000000000000000000000000000000000000000",
+    "token_supply": 1000000000000000,
+    "domain": 10007,
+    "min_burn_amount": 1,
+    "verification_base_fee": 0,
+    "attesters": []
+  }
+}
+EOF
+    xusdc-genesis faucet
+    xusdc-genesis prefund
+) > "$LOGS/bootstrap-usdcx.log" 2>&1
+
 say "building genesis block"
 miden-validator genesis \
     --genesis-block-directory "$DATA/genesis" \
     --accounts-directory      "$DATA/accounts" \
+    --native-faucet            "$DATA/usdcx/usdcx-faucet.mac" \
+    --funding-account          "$DATA/usdcx/distributor.genesis.mac" \
+    --verification-base-fee   0 \
+    --timestamp               "$(date +%s)" \
     --validator.key           "$VALIDATOR_SIGNING_PUBLIC_KEY" \
     > "$LOGS/genesis.log" 2>&1
-
 say "bootstrapping validator storage from genesis"
 miden-validator bootstrap \
     --data-directory "$DATA/validator" \
@@ -164,6 +197,13 @@ start_bg validator miden-validator start \
     --encryption-key.hex "$ENCRYPTION_KEY_HEX"
 wait_for_port "$VALIDATOR_PORT" validator
 
+say "deploying fee collector"
+miden-node fee-collector create --data-directory "$DATA/node"
+miden-node fee-collector deploy \
+    --data-directory "$DATA/node" \
+    --validator.url "http://127.0.0.1:$VALIDATOR_PORT" \
+    > "$LOGS/deploy-fee-collector.log" 2>&1
+
 # The ntx-builder always needs a transaction prover, so start one regardless of
 # USE_REMOTE_PROVER (which only governs whether create-proofs offloads here too).
 start_bg remote-prover miden-remote-prover \
@@ -175,9 +215,11 @@ wait_for_port "$REMOTE_PROVER_PORT" remote-prover
 
 start_bg node miden-node sequencer \
     --data-directory                            "$DATA/node" \
+    --disable-account-allowlist \
     --rpc.listen                                "127.0.0.1:$RPC_PORT" \
     --validator.url                             "http://127.0.0.1:$VALIDATOR_PORT" \
     --ntx-builder.url                           "http://127.0.0.1:$NTX_PORT" \
+    --batch.builder.wallet-account-id           "$BATCH_BUILDER_WALLET_ACCOUNT_ID" \
     --batch.max-txs                             64 \
     --block.max-batches                         16 \
     --block.interval                            2s \
@@ -218,6 +260,7 @@ miden-benchmark run-benchmark \
     --validator-signing-public-key "$VALIDATOR_SIGNING_PUBLIC_KEY" \
     --concurrency                  "$CONCURRENCY" \
     --wait-blocks                  "$WAIT_BLOCKS" \
+    --fail-on-error \
     2>&1 | tee "$LOGS/run-benchmark.log"
 
 say "done. logs in $LOGS/"

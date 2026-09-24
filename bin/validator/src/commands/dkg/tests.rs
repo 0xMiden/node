@@ -63,28 +63,13 @@ fn write_genesis_with_validator_count(
 ) -> TestResultWith<TestGenesis> {
     let signing_keys = (0..validator_count).map(|_| SigningKey::new()).collect::<Vec<_>>();
     let validators = signing_keys.iter().map(SigningKey::public_key).collect::<Vec<_>>();
-    let config = concat!(
-        "version = 1\n",
-        "timestamp = 1717344256\n",
-        "\n[fee_parameters]\n",
-        "verification_base_fee = 0\n",
-    );
-    let config_path = root.join("genesis.toml");
-    fs_err::write(&config_path, config)?;
     let genesis_directory = root.join("genesis");
-    let accounts_directory = root.join("accounts");
-    super::super::genesis::generate(
-        &genesis_directory,
-        &accounts_directory,
-        Some(&config_path),
-        validators,
-    )?;
-    let genesis =
-        GenesisBlock::try_from(read_genesis_block(&genesis_directory.join("genesis.dat"))?)?;
+    super::super::genesis::tests::command(root, validators)?.execute()?;
+    let genesis = read_genesis_block(&genesis_directory.join("genesis.dat"))?;
     Ok(TestGenesis {
         path: genesis_directory.join("genesis.dat"),
         signing_keys,
-        validator_keys: genesis.inner().header().validator_keys().as_keys().to_vec(),
+        validator_keys: genesis.inner().header().validator_config().keys().to_vec(),
     })
 }
 

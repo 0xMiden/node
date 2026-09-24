@@ -1,9 +1,10 @@
-use std::sync::{Arc, Mutex};
+use std::collections::HashSet;
+use std::sync::{Arc, LazyLock, Mutex};
 
 use assert_matches::assert_matches;
-use diesel::{Connection, SqliteConnection};
+use diesel::{Connection, ExpressionMethods, QueryDsl, RunQueryDsl, SqliteConnection};
 use miden_node_proto::domain::account::{AccountSummary, StorageMapEntries};
-use miden_node_utils::fee::test_fee_params;
+use miden_node_utils::fee::{test_fee_params, test_protocol_config};
 use miden_protocol::account::auth::{AuthScheme, PublicKeyCommitment};
 use miden_protocol::account::component::AccountComponentMetadata;
 use miden_protocol::account::{
@@ -34,7 +35,7 @@ use miden_protocol::block::{
     BlockNoteTree,
     BlockNumber,
     BlockSignatures,
-    ValidatorKeys,
+    ValidatorConfig,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::crypto::merkle::SparseMerklePath;
@@ -101,9 +102,72 @@ fn create_db() -> SqliteConnection {
     crate::db::migrations::test_connection()
 }
 
+fn empty_genesis_block() -> crate::genesis::GenesisBlock {
+    use crate::genesis::GenesisState;
+
+    let signer = random_secret_key();
+    GenesisState::new(
+        Vec::new(),
+        test_fee_params(),
+        0,
+        ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
+        test_protocol_config(),
+    )
+    .into_block()
+    .unwrap()
+}
+
+#[tokio::test]
+async fn bootstrap_stores_protocol_config_across_reopen() {
+    let temp_dir = tempdir().unwrap();
+    let db_path = temp_dir.path().join("store.sqlite");
+    let genesis = empty_genesis_block();
+    let commitment = genesis.protocol_config().to_commitment();
+    let expected = genesis.protocol_config().clone();
+
+    super::Db::bootstrap(db_path.clone(), genesis).unwrap();
+    let db = super::Db::load(db_path).await.unwrap();
+
+    assert_eq!(
+        db.select_protocol_config_by_commitment(commitment).await.unwrap(),
+        Some(expected)
+    );
+}
+
+#[test]
+fn bootstrap_rolls_back_protocol_config_when_genesis_insert_fails() {
+    let temp_dir = tempdir().unwrap();
+    let db_path = temp_dir.path().join("store.sqlite");
+    crate::db::migrations::bootstrap_database(&db_path).unwrap();
+    let mut conn = SqliteConnection::establish(db_path.to_str().unwrap()).unwrap();
+    let first = empty_genesis_block();
+    let commitment = first.protocol_config().to_commitment();
+    super::insert_genesis(&mut conn, first).unwrap();
+    diesel::delete(
+        crate::db::schema::protocol_configs::table
+            .filter(crate::db::schema::protocol_configs::commitment.eq(commitment.to_bytes())),
+    )
+    .execute(&mut conn)
+    .unwrap();
+
+    assert!(super::insert_genesis(&mut conn, empty_genesis_block()).is_err());
+    assert_eq!(
+        queries::select_protocol_config_by_commitment(&mut conn, commitment).unwrap(),
+        None
+    );
+}
+
+fn block_account_update(
+    account_id: AccountId,
+    final_state_commitment: Word,
+    details: AccountUpdateDetails,
+) -> BlockAccountUpdate {
+    BlockAccountUpdate::new(account_id, final_state_commitment, details)
+        .expect("test account update should be valid")
+}
+
 fn create_block(conn: &mut SqliteConnection, block_num: BlockNumber) {
     let block_header = BlockHeader::new(
-        1_u8.into(),
         num_to_word(2),
         block_num,
         num_to_word(4),
@@ -111,10 +175,11 @@ fn create_block(conn: &mut SqliteConnection, block_num: BlockNumber) {
         num_to_word(6),
         num_to_word(7),
         num_to_word(8),
-        num_to_word(9),
-        ValidatorKeys::new(vec![SigningKey::new().public_key()]).unwrap(),
+        ValidatorConfig::new(vec![SigningKey::new().public_key()], 1).unwrap(),
         test_fee_params(),
-        11_u8.into(),
+        test_protocol_config().to_commitment(),
+        None,
+        11,
     );
 
     let dummy_signature =
@@ -235,7 +300,7 @@ pub fn create_note(account_id: AccountId) -> Note {
     P2idNote::builder()
         .sender(account_id)
         .target(account_id)
-        .asset(Asset::Fungible(
+        .asset(Asset::from(
             FungibleAsset::new(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap(), 10).unwrap(),
         ))
         .note_type(NoteType::Public)
@@ -303,7 +368,7 @@ fn make_account_and_note(
         let account_id = account.id();
         queries::upsert_accounts(
             conn,
-            &[BlockAccountUpdate::new(
+            &[block_account_update(
                 account_id,
                 account.to_commitment(),
                 AccountUpdateDetails::Public(AccountPatch::try_from(account.clone()).unwrap()),
@@ -351,7 +416,7 @@ fn sql_select_accounts() {
 
         let res = queries::upsert_accounts(
             conn,
-            &[BlockAccountUpdate::new(
+            &[block_account_update(
                 account_id,
                 account_commitment,
                 AccountUpdateDetails::Private,
@@ -385,19 +450,13 @@ fn sync_account_vault_basic_validation() {
     create_block(conn, block_to);
 
     for block in [block_from, block_mid, block_to] {
-        queries::upsert_accounts(
-            conn,
-            &[mock_block_account_update(public_account_id, 0)],
-            block,
-            &queries::PrecomputedPublicAccountStates::new(),
-        )
-        .unwrap();
+        upsert_mock_account(conn, public_account_id, 0, block).unwrap();
     }
 
     // Create test vault assets from two different faucets to get different vault keys.
     let faucet_id_2 = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap();
-    let fungible_asset_1 = Asset::Fungible(FungibleAsset::new(public_account_id, 1000).unwrap());
-    let fungible_asset_2 = Asset::Fungible(FungibleAsset::new(faucet_id_2, 2000).unwrap());
+    let fungible_asset_1 = Asset::from(FungibleAsset::new(public_account_id, 1000).unwrap());
+    let fungible_asset_2 = Asset::from(FungibleAsset::new(faucet_id_2, 2000).unwrap());
     let vault_key_1 = fungible_asset_1.id();
     let vault_key_2 = fungible_asset_2.id();
 
@@ -421,7 +480,7 @@ fn sync_account_vault_basic_validation() {
 
     // Update an existing vault asset (sets previous as not latest)
     let updated_fungible_asset_1 =
-        Asset::Fungible(FungibleAsset::new(public_account_id, 1500).unwrap());
+        Asset::from(FungibleAsset::new(public_account_id, 1500).unwrap());
     queries::insert_account_vault_asset(
         conn,
         public_account_id,
@@ -639,7 +698,6 @@ fn db_block_header() {
     assert!(res.is_none());
 
     let block_header = BlockHeader::new(
-        1_u8.into(),
         num_to_word(2),
         3.into(),
         num_to_word(4),
@@ -647,10 +705,11 @@ fn db_block_header() {
         num_to_word(6),
         num_to_word(7),
         num_to_word(8),
-        num_to_word(9),
-        ValidatorKeys::new(vec![SigningKey::new().public_key()]).unwrap(),
+        ValidatorConfig::new(vec![SigningKey::new().public_key()], 1).unwrap(),
         test_fee_params(),
-        11_u8.into(),
+        test_protocol_config().to_commitment(),
+        None,
+        11,
     );
     // test insertion
 
@@ -673,7 +732,6 @@ fn db_block_header() {
     assert_eq!(res.unwrap(), block_header);
 
     let block_header2 = BlockHeader::new(
-        11_u8.into(),
         num_to_word(12),
         13.into(),
         num_to_word(14),
@@ -681,10 +739,11 @@ fn db_block_header() {
         num_to_word(16),
         num_to_word(17),
         num_to_word(18),
-        num_to_word(19),
-        ValidatorKeys::new(vec![SigningKey::new().public_key()]).unwrap(),
+        ValidatorConfig::new(vec![SigningKey::new().public_key()], 1).unwrap(),
         test_fee_params(),
-        21_u8.into(),
+        test_protocol_config().to_commitment(),
+        None,
+        21,
     );
 
     let dummy_signature =
@@ -813,6 +872,45 @@ fn notes() {
     let note_1 = res[1].clone();
     assert_eq!(note_0.details, note.details);
     assert_eq!(note_1.details, None);
+}
+
+#[test]
+fn existing_note_ids_respect_requested_ids_and_block_limit() {
+    let mut conn = create_db();
+    let notes = [
+        Note::mock_noop(Word::from([1u32, 0, 0, 0])),
+        Note::mock_noop(Word::from([2u32, 0, 0, 0])),
+        Note::mock_noop(Word::from([3u32, 0, 0, 0])),
+    ];
+    let note_ids = notes.each_ref().map(Note::id);
+
+    for (note, block_num) in notes.into_iter().zip([1u32, 2, 3]) {
+        let block_num = BlockNumber::from(block_num);
+        create_block(&mut conn, block_num);
+        let record = NoteRecord {
+            block_num,
+            note_index: BlockNoteIndex::new(0, 0).unwrap(),
+            note_id: note.id().as_word(),
+            metadata: *note.metadata(),
+            details: None,
+            attachments: note.attachments().clone(),
+            inclusion_path: SparseMerklePath::default(),
+        };
+        queries::insert_notes(&mut conn, &[(record, None)]).unwrap();
+    }
+
+    let missing_id = NoteId::from_raw(Word::from([4u32, 0, 0, 0]));
+    let requested_ids = [note_ids[1], note_ids[2], missing_id, note_ids[1]];
+    for (block_num, expected) in [
+        (1u32, HashSet::new()),
+        (2, HashSet::from([note_ids[1]])),
+        (3, HashSet::from([note_ids[1], note_ids[2]])),
+    ] {
+        let found =
+            queries::select_existing_note_ids(&mut conn, &requested_ids, block_num.into()).unwrap();
+        assert_eq!(found, expected);
+    }
+    assert!(queries::select_existing_note_ids(&mut conn, &[], 3.into()).unwrap().is_empty());
 }
 
 /// Creates notes across 3 blocks, then calls `get_note_sync_multi` once and verifies all 3 blocks'
@@ -1080,20 +1178,8 @@ fn sql_account_storage_map_values_insertion() {
     let account_id =
         AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2).unwrap();
 
-    queries::upsert_accounts(
-        conn,
-        &[mock_block_account_update(account_id, 0)],
-        block1,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
-    queries::upsert_accounts(
-        conn,
-        &[mock_block_account_update(account_id, 0)],
-        block2,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
+    upsert_mock_account(conn, account_id, 0, block1).unwrap();
+    upsert_mock_account(conn, account_id, 0, block2).unwrap();
 
     let slot_name = StorageSlotName::mock(3);
     let key1 = StorageMapKey::new(Word::from([1u32, 2, 3, 4]));
@@ -1187,13 +1273,7 @@ fn select_storage_map_sync_values() {
     let block3 = BlockNumber::from(3);
 
     for block in [block1, block2, block3] {
-        queries::upsert_accounts(
-            &mut conn,
-            &[mock_block_account_update(account_id, 0)],
-            block,
-            &queries::PrecomputedPublicAccountStates::new(),
-        )
-        .unwrap();
+        upsert_mock_account(&mut conn, account_id, 0, block).unwrap();
     }
 
     // Insert data across multiple blocks using individual inserts Block 1: key1 -> value1, key2 ->
@@ -1334,27 +1414,9 @@ fn select_storage_map_sync_values_paginates_until_last_block() {
     create_block(&mut conn, block2);
     create_block(&mut conn, block3);
 
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 0)],
-        block1,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 1)],
-        block2,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 2)],
-        block3,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
+    upsert_mock_account(&mut conn, account_id, 0, block1).unwrap();
+    upsert_mock_account(&mut conn, account_id, 1, block2).unwrap();
+    upsert_mock_account(&mut conn, account_id, 2, block3).unwrap();
 
     queries::insert_account_storage_map_value(
         &mut conn,
@@ -1408,13 +1470,7 @@ fn select_storage_map_sync_values_all_entries_in_genesis_block() {
     let genesis = BlockNumber::GENESIS;
     create_block(&mut conn, genesis);
 
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 0)],
-        genesis,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
+    upsert_mock_account(&mut conn, account_id, 0, genesis).unwrap();
 
     // Insert 3 entries, all in genesis block
     for i in 0..3u32 {
@@ -1455,13 +1511,7 @@ fn select_storage_map_sync_values_all_entries_in_single_non_genesis_block() {
     let block5 = BlockNumber::from(5);
     create_block(&mut conn, block5);
 
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 0)],
-        block5,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
+    upsert_mock_account(&mut conn, account_id, 0, block5).unwrap();
 
     for i in 0..3u32 {
         queries::insert_account_storage_map_value(
@@ -1611,27 +1661,9 @@ fn select_storage_map_sync_values_multi_block_pagination() {
     create_block(&mut conn, block2);
     create_block(&mut conn, block3);
 
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 0)],
-        block1,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 1)],
-        block2,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 2)],
-        block3,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
+    upsert_mock_account(&mut conn, account_id, 0, block1).unwrap();
+    upsert_mock_account(&mut conn, account_id, 1, block2).unwrap();
+    upsert_mock_account(&mut conn, account_id, 2, block3).unwrap();
 
     // 1 entry in block 1, 1 in block 2, 1 in block 3
     queries::insert_account_storage_map_value(
@@ -1697,24 +1729,9 @@ async fn reconstruct_storage_map_from_db_pages_until_latest() {
             create_block(db_conn, block2);
             create_block(db_conn, block3);
 
-            queries::upsert_accounts(
-                db_conn,
-                &[mock_block_account_update(account_id, 0)],
-                block1,
-                &queries::PrecomputedPublicAccountStates::new(),
-            )?;
-            queries::upsert_accounts(
-                db_conn,
-                &[mock_block_account_update(account_id, 1)],
-                block2,
-                &queries::PrecomputedPublicAccountStates::new(),
-            )?;
-            queries::upsert_accounts(
-                db_conn,
-                &[mock_block_account_update(account_id, 2)],
-                block3,
-                &queries::PrecomputedPublicAccountStates::new(),
-            )?;
+            upsert_mock_account(db_conn, account_id, 0, block1)?;
+            upsert_mock_account(db_conn, account_id, 1, block2)?;
+            upsert_mock_account(db_conn, account_id, 2, block3)?;
 
             queries::insert_account_storage_map_value(
                 db_conn,
@@ -1783,12 +1800,7 @@ async fn reconstruct_storage_map_from_db_returns_limit_exceeded_for_single_block
         db_conn.transaction(|db_conn| {
             create_block(db_conn, block5);
 
-            queries::upsert_accounts(
-                db_conn,
-                &[mock_block_account_update(account_id, 0)],
-                block5,
-                &queries::PrecomputedPublicAccountStates::new(),
-            )?;
+            upsert_mock_account(db_conn, account_id, 0, block5)?;
 
             // Insert 3 entries, all in the same block
             for i in 1..=3 {
@@ -1837,7 +1849,47 @@ fn num_to_nullifier(n: u64) -> Nullifier {
 }
 
 fn mock_block_account_update(account_id: AccountId, num: u64) -> BlockAccountUpdate {
-    BlockAccountUpdate::new(account_id, num_to_word(num), AccountUpdateDetails::Private)
+    if account_id.is_private() {
+        return block_account_update(account_id, num_to_word(num), AccountUpdateDetails::Private);
+    }
+
+    let template = &*MOCK_PUBLIC_ACCOUNT_TEMPLATE;
+    let account = Account::new(
+        account_id,
+        template.vault().clone(),
+        template.storage().clone(),
+        template.code().clone(),
+        Felt::new(num.checked_add(1).expect("mock account nonce should not overflow"))
+            .expect("mock account nonce should fit into a felt"),
+        None,
+    )
+    .expect("mock public account should be valid");
+    let final_state_commitment = account.to_commitment();
+    let patch = AccountPatch::try_from(account).expect("existing account should produce a patch");
+
+    block_account_update(account_id, final_state_commitment, AccountUpdateDetails::Public(patch))
+}
+
+static MOCK_PUBLIC_ACCOUNT_TEMPLATE: LazyLock<Account> =
+    LazyLock::new(|| mock_account_code_and_storage(AccountType::Public, [], Some([42; 32])));
+
+fn upsert_mock_account(
+    conn: &mut SqliteConnection,
+    account_id: AccountId,
+    num: u64,
+    block_num: BlockNumber,
+) -> Result<usize, DatabaseError> {
+    let update = mock_block_account_update(account_id, num);
+    let precomputed_states = match update.details() {
+        AccountUpdateDetails::Private => PrecomputedPublicAccountStates::new(),
+        AccountUpdateDetails::Public(patch) => {
+            let account =
+                Account::try_from(patch).expect("mock update should contain full public state");
+            precomputed_states_from_account(&account)
+        },
+    };
+
+    queries::upsert_accounts(conn, &[update], block_num, &precomputed_states)
 }
 
 // Helper function to create account with specific code for tests
@@ -1872,8 +1924,6 @@ fn create_account_with_code(code_str: &str, seed: [u8; 32]) -> Account {
 fn mock_block_transaction(account_id: AccountId, num: u64) -> TransactionHeader {
     let initial_state_commitment = Word::try_from([num, 0, 0, 0]).unwrap();
     let final_account_commitment = Word::try_from([0, num, 0, 0]).unwrap();
-    let input_notes_commitment = Word::try_from([0, 0, num, 0]).unwrap();
-    let output_notes_commitment = Word::try_from([0, 0, 0, num]).unwrap();
 
     let notes = vec![InputNoteCommitment::from(num_to_nullifier(num))];
     let input_notes = InputNotes::new_unchecked(notes);
@@ -1887,19 +1937,14 @@ fn mock_block_transaction(account_id: AccountId, num: u64) -> TransactionHeader 
         ),
     )];
 
-    TransactionHeader::new_unchecked(
-        TransactionId::new(
-            initial_state_commitment,
-            final_account_commitment,
-            input_notes_commitment,
-            output_notes_commitment,
-        ),
+    TransactionHeader::new(
         account_id,
         initial_state_commitment,
         final_account_commitment,
         input_notes,
         output_notes,
     )
+    .expect("test transaction header should be valid")
 }
 
 /// Like [`mock_block_transaction`], but emits `num_output_notes` output notes so the recorded
@@ -1911,8 +1956,6 @@ fn mock_block_transaction_with_output_notes(
 ) -> TransactionHeader {
     let initial_state_commitment = Word::try_from([num, 0, 0, 0]).unwrap();
     let final_account_commitment = Word::try_from([0, num, 0, 0]).unwrap();
-    let input_notes_commitment = Word::try_from([0, 0, num, 0]).unwrap();
-    let output_notes_commitment = Word::try_from([0, 0, 0, num]).unwrap();
 
     let notes = vec![InputNoteCommitment::from(num_to_nullifier(num))];
     let input_notes = InputNotes::new_unchecked(notes);
@@ -1930,19 +1973,14 @@ fn mock_block_transaction_with_output_notes(
         })
         .collect();
 
-    TransactionHeader::new_unchecked(
-        TransactionId::new(
-            initial_state_commitment,
-            final_account_commitment,
-            input_notes_commitment,
-            output_notes_commitment,
-        ),
+    TransactionHeader::new(
         account_id,
         initial_state_commitment,
         final_account_commitment,
         input_notes,
         output_notes,
     )
+    .expect("test transaction header should be valid")
 }
 
 fn insert_transactions(conn: &mut SqliteConnection) -> usize {
@@ -2040,7 +2078,7 @@ fn test_select_account_code_by_commitment() {
     // Insert the account at block 1
     queries::upsert_accounts(
         &mut conn,
-        &[BlockAccountUpdate::new(
+        &[block_account_update(
             account.id(),
             account.to_commitment(),
             AccountUpdateDetails::Public(AccountPatch::try_from(account.clone()).unwrap()),
@@ -2090,7 +2128,7 @@ fn test_select_account_code_by_commitment_multiple_codes() {
     // Insert the account at block 1
     queries::upsert_accounts(
         &mut conn,
-        &[BlockAccountUpdate::new(
+        &[block_account_update(
             account_v1.id(),
             account_v1.to_commitment(),
             AccountUpdateDetails::Public(AccountPatch::try_from(account_v1.clone()).unwrap()),
@@ -2125,7 +2163,7 @@ fn test_select_account_code_by_commitment_multiple_codes() {
     // Insert the updated account at block 2
     queries::upsert_accounts(
         &mut conn,
-        &[BlockAccountUpdate::new(
+        &[block_account_update(
             account_v2.id(),
             account_v2.to_commitment(),
             AccountUpdateDetails::Public(AccountPatch::try_from(account_v2.clone()).unwrap()),
@@ -2187,9 +2225,9 @@ async fn genesis_with_account_assets() {
     let genesis_state = GenesisState::new(
         vec![account],
         test_fee_params(),
-        1,
         0,
-        ValidatorKeys::new(vec![signer.public_key()]).unwrap(),
+        ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
+        test_protocol_config(),
     );
     let genesis_block = genesis_state.into_block().unwrap();
 
@@ -2259,9 +2297,9 @@ async fn genesis_with_account_storage_map() {
     let genesis_state = GenesisState::new(
         vec![account],
         test_fee_params(),
-        1,
         0,
-        ValidatorKeys::new(vec![signer.public_key()]).unwrap(),
+        ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
+        test_protocol_config(),
     );
     let genesis_block = genesis_state.into_block().unwrap();
 
@@ -2324,9 +2362,9 @@ async fn genesis_with_account_assets_and_storage() {
     let genesis_state = GenesisState::new(
         vec![account],
         test_fee_params(),
-        1,
         0,
-        ValidatorKeys::new(vec![signer.public_key()]).unwrap(),
+        ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
+        test_protocol_config(),
     );
     let genesis_block = genesis_state.into_block().unwrap();
 
@@ -2425,9 +2463,9 @@ async fn genesis_with_multiple_accounts() {
     let genesis_state = GenesisState::new(
         vec![account1, account2, account3],
         test_fee_params(),
-        1,
         0,
-        ValidatorKeys::new(vec![signer.public_key()]).unwrap(),
+        ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
+        test_protocol_config(),
     );
     let genesis_block = genesis_state.into_block().unwrap();
 
@@ -2457,7 +2495,7 @@ fn regression_1461_full_state_delta_inserts_vault_assets() {
     let account_patch = AccountPatch::try_from(account.clone()).unwrap();
     assert!(account_patch.is_full_state());
 
-    let block_update = BlockAccountUpdate::new(
+    let block_update = block_account_update(
         account_id,
         account.to_commitment(),
         AccountUpdateDetails::Public(account_patch),
@@ -2529,7 +2567,6 @@ fn serialization_symmetry_core_types() {
 #[test]
 fn serialization_symmetry_block_header() {
     let block_header = BlockHeader::new(
-        1_u8.into(),
         num_to_word(2),
         3.into(),
         num_to_word(4),
@@ -2537,10 +2574,11 @@ fn serialization_symmetry_block_header() {
         num_to_word(6),
         num_to_word(7),
         num_to_word(8),
-        num_to_word(9),
-        ValidatorKeys::new(vec![SigningKey::new().public_key()]).unwrap(),
+        ValidatorConfig::new(vec![SigningKey::new().public_key()], 1).unwrap(),
         test_fee_params(),
-        11_u8.into(),
+        test_protocol_config().to_commitment(),
+        None,
+        11,
     );
 
     let bytes = block_header.to_bytes();
@@ -2616,7 +2654,6 @@ fn db_roundtrip_block_header() {
     let mut conn = create_db();
 
     let block_header = BlockHeader::new(
-        1_u8.into(),
         num_to_word(2),
         BlockNumber::from(42),
         num_to_word(4),
@@ -2624,10 +2661,11 @@ fn db_roundtrip_block_header() {
         num_to_word(6),
         num_to_word(7),
         num_to_word(8),
-        num_to_word(9),
-        ValidatorKeys::new(vec![SigningKey::new().public_key()]).unwrap(),
+        ValidatorConfig::new(vec![SigningKey::new().public_key()], 1).unwrap(),
         test_fee_params(),
-        11_u8.into(),
+        test_protocol_config().to_commitment(),
+        None,
+        11,
     );
 
     // Insert
@@ -2679,7 +2717,7 @@ fn db_roundtrip_account() {
 
     // Insert with full patch (like genesis)
     let account_patch = AccountPatch::try_from(account.clone()).unwrap();
-    let block_update = BlockAccountUpdate::new(
+    let block_update = block_account_update(
         account_id,
         account_commitment,
         AccountUpdateDetails::Public(account_patch),
@@ -2774,13 +2812,7 @@ fn db_roundtrip_vault_assets() {
     let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
 
     // Create account first
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 0)],
-        block_num,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
+    upsert_mock_account(&mut conn, account_id, 0, block_num).unwrap();
 
     let fungible_asset = FungibleAsset::new(faucet_id, 5000).unwrap();
     let asset: Asset = fungible_asset.into();
@@ -2814,24 +2846,12 @@ fn db_roundtrip_storage_map_values() {
     create_block(&mut conn, block_num);
 
     let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 0)],
-        block_num,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
+    upsert_mock_account(&mut conn, account_id, 0, block_num).unwrap();
     let slot_name = StorageSlotName::mock(5);
     let key = StorageMapKey::from_index(12345u32);
     let value = num_to_word(67890);
 
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 1)],
-        block_num,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
+    upsert_mock_account(&mut conn, account_id, 1, block_num).unwrap();
 
     // Insert
     queries::insert_account_storage_map_value(
@@ -2927,7 +2947,7 @@ fn db_roundtrip_account_storage_with_maps() {
 
     // Insert the account (this should store header + map values separately)
     let account_patch = AccountPatch::try_from(account.clone()).unwrap();
-    let block_update = BlockAccountUpdate::new(
+    let block_update = block_account_update(
         account_id,
         account.to_commitment(),
         AccountUpdateDetails::Public(account_patch),
@@ -3082,28 +3102,22 @@ fn test_prune_history() {
 
     // Create account
     for block in [block_0, block_old, block_cutoff, block_update, block_tip] {
-        queries::upsert_accounts(
-            conn,
-            &[mock_block_account_update(public_account_id, 0)],
-            block,
-            &queries::PrecomputedPublicAccountStates::new(),
-        )
-        .unwrap();
+        upsert_mock_account(conn, public_account_id, 0, block).unwrap();
     }
 
     // Insert vault assets at different blocks - use different faucets for different vault keys.
     let faucet_2 = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap();
     let faucet_3 = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_2).unwrap();
-    let asset_1 = Asset::Fungible(FungibleAsset::new(public_account_id, 1000).unwrap());
-    let asset_2 = Asset::Fungible(FungibleAsset::new(faucet_2, 2000).unwrap());
-    let asset_3 = Asset::Fungible(FungibleAsset::new(faucet_3, 3000).unwrap());
+    let asset_1 = Asset::from(FungibleAsset::new(public_account_id, 1000).unwrap());
+    let asset_2 = Asset::from(FungibleAsset::new(faucet_2, 2000).unwrap());
+    let asset_3 = Asset::from(FungibleAsset::new(faucet_3, 3000).unwrap());
     let vault_key_old = asset_1.id();
     let vault_key_cutoff = asset_2.id();
     let vault_key_recent = asset_3.id();
 
     // Stale entry at block_0, superseded at block_old which is also below the cutoff — should be
     // deleted.
-    let stale_asset = Asset::Fungible(FungibleAsset::new(public_account_id, 500).unwrap());
+    let stale_asset = Asset::from(FungibleAsset::new(public_account_id, 500).unwrap());
     queries::insert_account_vault_asset(
         conn,
         public_account_id,
@@ -3145,7 +3159,7 @@ fn test_prune_history() {
     .unwrap();
 
     // Update an entry to create a non-latest version
-    let updated_asset = Asset::Fungible(FungibleAsset::new(public_account_id, 1500).unwrap());
+    let updated_asset = Asset::from(FungibleAsset::new(public_account_id, 1500).unwrap());
     queries::insert_account_vault_asset(
         conn,
         public_account_id,
@@ -3332,7 +3346,7 @@ fn test_prune_history() {
     // Test that open-ended (current) entries are never deleted, even if old: insert an entry at
     // block 0 that is never superseded.
     let faucet_4 = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_3).unwrap();
-    let asset_old = Asset::Fungible(FungibleAsset::new(faucet_4, 9999).unwrap());
+    let asset_old = Asset::from(FungibleAsset::new(faucet_4, 9999).unwrap());
     let vault_key_old_latest = asset_old.id();
     queries::insert_account_vault_asset(
         conn,
@@ -3436,27 +3450,9 @@ fn account_state_forest_matches_db_storage_map_roots_across_updates() {
     create_block(&mut conn, block2);
     create_block(&mut conn, block3);
 
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 0)],
-        block1,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 1)],
-        block2,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 2)],
-        block3,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
+    upsert_mock_account(&mut conn, account_id, 0, block1).unwrap();
+    upsert_mock_account(&mut conn, account_id, 1, block2).unwrap();
+    upsert_mock_account(&mut conn, account_id, 2, block3).unwrap();
 
     let slot_map = StorageSlotName::mock(1);
     let slot_value = StorageSlotName::mock(2);
@@ -3960,6 +3956,45 @@ fn db_roundtrip_transactions() {
 
     // Verify database roundtrip
     assert_eq!(*record, expected);
+}
+
+#[test]
+fn select_transactions_records_rejects_a_corrupted_transaction_id() {
+    let mut conn = create_db();
+    let block_num = BlockNumber::from(1);
+    create_block(&mut conn, block_num);
+
+    let bob = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    queries::upsert_accounts(
+        &mut conn,
+        &[mock_block_account_update(bob, 0)],
+        block_num,
+        &queries::PrecomputedPublicAccountStates::new(),
+    )
+    .unwrap();
+
+    let tx = mock_block_transaction(bob, 1);
+    queries::insert_transactions(
+        &mut conn,
+        block_num,
+        &OrderedTransactionHeaders::new_unchecked(vec![tx]),
+    )
+    .unwrap();
+
+    diesel::update(crate::db::schema::transactions::table)
+        .set(crate::db::schema::transactions::transaction_id.eq(num_to_word(999).to_bytes()))
+        .execute(&mut conn)
+        .unwrap();
+
+    let err =
+        queries::select_transactions_records(&mut conn, &[bob], BlockNumber::GENESIS..=block_num)
+            .expect_err("a stored transaction ID that does not match its header must be rejected");
+
+    assert_matches!(
+        err,
+        DatabaseError::DataCorrupted(message)
+            if message.contains("transaction ID") && message.contains("does not match")
+    );
 }
 
 #[test]

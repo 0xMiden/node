@@ -1,17 +1,15 @@
 use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock};
-use std::time::Duration;
 
 use anyhow::Context as AnyhowContext;
 use miden_node_block_producer::BlockProducerApi;
 use miden_node_proto::clients::NtxBuilderClient;
 use miden_node_proto::domain::block::InvalidBlockRange;
 use miden_node_proto::generated::rpc::MempoolStats as ProtoMempoolStats;
-use miden_node_proto::generated::rpc::api_server::Api;
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::state::State;
 use miden_node_store::{DatabaseError, GetBlockHeaderError};
-use miden_node_tracing::{miden_instrument, warn};
+use miden_node_tracing::miden_instrument;
 use miden_node_utils::limiter::{
     QueryParamAccountIdLimit,
     QueryParamLimiter,
@@ -22,17 +20,17 @@ use miden_node_utils::limiter::{
     QueryParamStorageMapSlotLimit,
 };
 use miden_node_utils::lru_cache::LruCache;
-use miden_node_utils::retry::{self, Retryable};
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use tokio::sync::Semaphore;
 use tonic::metadata::MetadataMap;
-use tonic::{IntoRequest, Request, Status};
+use tonic::{Request, Status};
 
+use self::error_codes::{SyncErrorCode, internal_error};
+use crate::COMPONENT;
 use crate::server::api::subscription::{IpBanList, MAX_REPLICA_SUBSCRIPTIONS};
-use crate::server::{NetworkTxAuth, RpcBackend};
-use crate::{COMPONENT, LOG_TARGET};
+use crate::server::{AccountAdmission, NetworkTxAuth, RpcBackend};
 
 // VALIDATOR FAN-OUT
 // ================================================================================================
@@ -44,7 +42,7 @@ use crate::{COMPONENT, LOG_TARGET};
 /// call.
 pub(crate) async fn submit_tx_to_validators(
     validators: &[miden_node_proto::clients::ValidatorClient],
-    request: &proto::transaction::ProvenTransaction,
+    request: &proto::submission::ProvenTransactionSubmission,
 ) -> tonic::Result<()> {
     futures::future::try_join_all(validators.iter().map(|validator| {
         let mut validator = validator.clone();
@@ -61,7 +59,7 @@ pub(crate) async fn submit_tx_to_validators(
 pub(crate) async fn submit_batch_to_validators(
     validators: &[miden_node_proto::clients::ValidatorClient],
     proposed_batch: &miden_protocol::batch::ProposedBatch,
-    sealed_transaction_inputs: &[proto::transaction::SealedTransactionInputs],
+    sealed_transaction_inputs: &[proto::submission::SealedTransactionInputs],
 ) -> tonic::Result<()> {
     futures::future::try_join_all(validators.iter().map(|validator| {
         let mut validator = validator.clone();
@@ -74,6 +72,7 @@ pub(crate) async fn submit_batch_to_validators(
 // API METHODS
 // ================================================================================================
 
+mod error_codes;
 mod get_account;
 mod get_block_by_number;
 mod get_block_header_by_number;
@@ -82,6 +81,8 @@ mod get_network_note_status;
 mod get_note_script_by_root;
 mod get_notes_by_id;
 mod get_transaction_encryption_key;
+mod is_account_allowed;
+mod register_account;
 mod status;
 mod submit_auth_tx;
 mod submit_auth_tx_batch;
@@ -98,14 +99,6 @@ mod sync_transactions;
 // ================================================================================================
 
 const NETWORK_TX_AUTH_HEADER_NAME: &str = "x-miden-network-tx-auth";
-
-struct RpcInvalidBlockRange(InvalidBlockRange);
-
-impl From<InvalidBlockRange> for RpcInvalidBlockRange {
-    fn from(value: InvalidBlockRange) -> Self {
-        Self(value)
-    }
-}
 
 // RPC SERVICE
 // ================================================================================================
@@ -155,35 +148,15 @@ impl RpcService {
         Ok(())
     }
 
-    /// Fetches the genesis block header from the store.
-    ///
-    /// Automatically retries until the store connection becomes available.
-    pub async fn get_genesis_header_with_retry(&self) -> anyhow::Result<BlockHeader> {
-        // Retry with exponential backoff (base 500ms, max 30s) while the store is unavailable.
-        let header = (|| async {
-            self.get_block_header_by_number(
-                proto::rpc::BlockHeaderByNumberRequest {
-                    block_num: Some(BlockNumber::GENESIS.as_u32()),
-                    include_mmr_proof: None,
-                }
-                .into_request(),
-            )
+    /// Reads the genesis block header from the local store.
+    pub async fn get_genesis_header(&self) -> anyhow::Result<BlockHeader> {
+        let (header, _) = self
+            .state
+            .view()
+            .get_block_header(Some(BlockNumber::GENESIS), false)
             .await
-        })
-        .retry(retry::exponential(Duration::from_millis(500), Duration::from_secs(30)))
-        .when(|err| err.code() == tonic::Code::Unavailable)
-        .notify(|err, backoff| {
-            warn!(
-                err,
-                target: LOG_TARGET,
-                "connection failed while fetching genesis header, retrying",
-                retry.delay_ms = backoff.as_millis() as u64
-            );
-        })
-        .await?;
-
-        let header = header.into_inner().block_header.context("response is missing the header")?;
-        BlockHeader::try_from(header).context("failed to parse response")
+            .context("failed to read genesis block header")?;
+        header.context("genesis block header is missing")
     }
 
     /// Returns the given block's onchain header.
@@ -273,6 +246,7 @@ impl RpcService {
 pub(crate) struct SequencerInternalService {
     pub(crate) state: Arc<State>,
     pub(crate) block_producer: BlockProducerApi,
+    pub(crate) account_admission: AccountAdmission,
 }
 
 // HELPERS
@@ -281,7 +255,7 @@ pub(crate) struct SequencerInternalService {
 fn get_block_header_error_to_status(err: GetBlockHeaderError) -> Status {
     match err {
         GetBlockHeaderError::DatabaseError(err) => database_error_to_status(&err),
-        GetBlockHeaderError::MmrError(err) => Status::internal(err.to_string()),
+        GetBlockHeaderError::MmrError(err) => internal_error(err.to_string()),
     }
 }
 
@@ -292,14 +266,28 @@ fn database_error_to_status(err: &DatabaseError) -> Status {
         | DatabaseError::AccountsNotFoundInDb(_)
         | DatabaseError::AccountNotPublic(_) => Status::not_found(message),
         DatabaseError::TransactionPageExceedsPayloadLimit { .. }
-        | DatabaseError::AccountSyncPageExceedsPayloadLimit { .. } => Status::out_of_range(message),
-        DatabaseError::RangeBeyondTip(_) => Status::invalid_argument(message),
-        _ => Status::internal(message),
+| DatabaseError::AccountSyncPageExceedsPayloadLimit { .. } => Status::out_of_range(message),
+DatabaseError::RangeBeyondTip(_) | DatabaseError::InvalidBlockRange { .. } => {
+    SyncErrorCode::InvalidBlockRange.invalid_argument(message)
+},
+_ => internal_error(message),
     }
 }
 
-fn invalid_block_range_to_status(RpcInvalidBlockRange(err): RpcInvalidBlockRange) -> Status {
-    Status::invalid_argument(err.to_string())
+fn invalid_block_range_to_status(err: InvalidBlockRange) -> Status {
+    SyncErrorCode::InvalidBlockRange.invalid_argument(err)
+}
+
+/// Loads the configuration committed to by a stored header.
+async fn load_protocol_config(
+    view: &miden_node_store::state::StateView,
+    header: &BlockHeader,
+) -> tonic::Result<miden_protocol::protocol_config::ProtocolConfig> {
+    let commitment = header.protocol_config_commitment();
+    view.get_protocol_config(commitment)
+        .await
+        .map_err(|err| internal_error(err.to_string()))?
+        .ok_or_else(|| internal_error(format!("protocol config {commitment} is missing")))
 }
 
 // LIMIT HELPERS
@@ -363,5 +351,17 @@ mod tests {
     #[test]
     fn get_limits_decodes_unit_request() {
         assert_eq!(RpcService::decode(()).unwrap(), ());
+    }
+
+    #[test]
+    fn internal_store_errors_include_error_code() {
+        let error = DatabaseError::DataCorrupted("invalid stored value".into());
+        let status = database_error_to_status(&error);
+        assert_eq!(status.code(), tonic::Code::Internal);
+        assert_eq!(status.details(), &[0]);
+
+        let status = get_block_header_error_to_status(GetBlockHeaderError::DatabaseError(error));
+        assert_eq!(status.code(), tonic::Code::Internal);
+        assert_eq!(status.details(), &[0]);
     }
 }

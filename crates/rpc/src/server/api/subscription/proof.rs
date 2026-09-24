@@ -2,6 +2,7 @@ use miden_node_proto::generated as proto;
 use miden_node_tracing::{debug, miden_instrument};
 use miden_node_utils::grpc::ClientIp;
 use miden_protocol::block::BlockNumber;
+use miden_protocol::vm::ExecutionProof;
 
 use super::super::{COMPONENT, RpcService};
 use super::stream::{StreamItem, SubscriptionStream};
@@ -18,9 +19,11 @@ impl proto::server::rpc_api::ProofSubscription for RpcService {
     }
 
     fn encode(event: Self::Item) -> tonic::Result<proto::rpc::ProofSubscriptionResponse> {
+        let proof = ExecutionProof::read_from_bytes(&event.data)
+            .map_err(|err| tonic::Status::internal(format!("invalid stored proof: {err}")))?;
         Ok(proto::rpc::ProofSubscriptionResponse {
             block_num: event.block.as_u32(),
-            proof: event.data,
+            proof: Some(proof.into()),
             proven_chain_tip: event.tip.as_u32(),
         })
     }

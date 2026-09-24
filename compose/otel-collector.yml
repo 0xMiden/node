@@ -80,9 +80,7 @@ configs:
           traces/local-null:
             receivers: [otlp/null]
             exporters: [file/null]
-          # The note transport service exports metrics whenever OTLP is
-          # enabled. Accept and discard them until this stack has a metrics
-          # backend, rather than returning an unimplemented response.
+          # Accept and discard metrics because this stack has no metrics backend.
           metrics/local-null:
             receivers: [otlp]
             exporters: [file/null]

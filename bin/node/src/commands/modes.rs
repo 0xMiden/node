@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,9 +14,18 @@ use miden_node_proto::clients::{
     ValidatorClient,
     WantsConnection,
 };
-use miden_node_rpc::{PreAuthSubmission, Rpc, RpcMode, SequencerInternal, ValidatorClients};
-use miden_node_store::{BlockWriter, ProofWriter, State, WriterTask};
-use miden_node_tracing::info;
+use miden_node_rpc::{
+    AccountAdmission,
+    FundingClient,
+    PreAuthSubmission,
+    Rpc,
+    RpcMode,
+    SequencerInternal,
+    ValidatorClients,
+};
+use miden_node_store::allowlist::AccountAllowlist;
+use miden_node_store::{BlockWriter, DataDirectory, ProofWriter, State, WriterTask};
+use miden_node_tracing::{info, warn};
 use miden_node_utils::clap::duration_to_human_readable_string;
 use miden_node_utils::formatting::format_endpoint;
 use miden_node_utils::shutdown::CancellationToken;
@@ -24,9 +34,11 @@ use tokio::net::TcpListener;
 use url::Url;
 
 use super::block_producer::BlockProducerOptions;
+use super::fee_collector::FeeCollectorAccountOptions;
 use super::rpc::SyncOptions;
 use super::runtime::{RuntimeConfig, RuntimeOptions};
 use super::store::StoreOptions;
+use crate::admin::AdminServer;
 
 // RUNTIME MODES
 // ================================================================================================
@@ -35,6 +47,9 @@ use super::store::StoreOptions;
 pub struct SequencerCommand {
     #[command(flatten)]
     pub runtime: RuntimeOptions,
+
+    #[command(flatten)]
+    pub fee_collector: FeeCollectorAccountOptions,
 
     #[command(flatten)]
     pub external_services: SequencerExternalServiceOptions,
@@ -49,9 +64,18 @@ pub struct SequencerCommand {
     #[arg(
         long = "internal.listen",
         env = "MIDEN_NODE_SEQUENCER_INTERNAL_LISTEN",
-        value_name = "LISTEN"
+        value_name = "IP:PORT"
     )]
     pub internal: Option<SocketAddr>,
+
+    /// IP address and port for the private administration API (for example, 127.0.0.1:50100).
+    /// Require external authentication and network isolation.
+    #[arg(long = "admin.listen", env = "MIDEN_NODE_ADMIN_LISTEN", value_name = "IP:PORT")]
+    pub admin_listen: Option<SocketAddr>,
+
+    /// Allow unrestricted account creation. Use only on development networks.
+    #[arg(long, env = "MIDEN_NODE_DISABLE_ACCOUNT_ALLOWLIST")]
+    pub disable_account_allowlist: bool,
 }
 
 impl SequencerCommand {
@@ -59,15 +83,17 @@ impl SequencerCommand {
         self.log_starting();
         let runtime = self.runtime.runtime_config(&self.store);
         self.block_producer.validate()?;
+        let fee_collector_account = self.fee_collector.read(&runtime.data_directory)?;
         let network_tx_auth = self.runtime.rpc.network_tx_auth()?;
         let (validator_clients, validator_monitors) =
             self.external_services.validator_clients_and_monitors()?;
         let (ntx_builder_client, ntx_builder_monitor) =
             self.external_services.ntx_builder_client_and_monitor()?;
-        let batch_prover_monitor =
-            remote_prover_monitor(self.block_producer.batch.prover_url.as_ref())?;
         let block_prover_monitor =
             remote_prover_monitor(self.block_producer.block_prover.url.as_ref())?;
+        let allowlist = Arc::new(self.load_allowlist()?);
+        let funding = self.external_services.funding_client()?;
+        let account_admission = self.account_admission(Arc::clone(&allowlist), funding.clone());
         let (state, block_writer, proof_writer, writer_task) =
             load_state(&runtime, shutdown.clone()).await?;
         let _disk_monitor = state.spawn_disk_monitor(shutdown.clone());
@@ -78,7 +104,6 @@ impl SequencerCommand {
             proof_writer,
             validator_urls: self.external_services.validator_urls.clone(),
             validator_timeout: self.external_services.validator_timeout,
-            batch_prover_url: self.block_producer.batch.prover_url,
             block_prover_url: self.block_producer.block_prover.url,
             batch_interval: self.block_producer.batch.interval,
             block_interval: self.block_producer.block.interval,
@@ -87,15 +112,22 @@ impl SequencerCommand {
             max_concurrent_proofs: self.block_producer.block.max_concurrent_proofs,
             mempool_tx_capacity: self.block_producer.mempool.tx_capacity,
             batch_workers: self.block_producer.batch.workers,
+            builder_account_id: self.block_producer.builder.wallet_account_id,
+            fee_collector_account,
         }
-        .spawn(shutdown.clone())
-        .context("failed to spawn sequencer")?;
+        .start(shutdown.clone())
+        .await
+        .context("failed to start sequencer")?;
         let block_producer = sequencer.api();
 
         let rpc = Rpc {
             listener: bind_rpc(runtime.rpc_listen).await?,
             state: Arc::clone(&state),
-            mode: RpcMode::sequencer(block_producer.clone(), validator_clients),
+            mode: RpcMode::sequencer(
+                block_producer.clone(),
+                validator_clients,
+                account_admission.clone(),
+            ),
             ntx_builder: Some(ntx_builder_client),
             grpc_options: runtime.grpc_options,
             network_tx_auth,
@@ -104,6 +136,12 @@ impl SequencerCommand {
         tasks.spawn("sequencer", sequencer.wait());
         tasks.spawn("RPC server", rpc.serve(shutdown.clone()));
         tasks.spawn("store block writer", join_store_writer(writer_task));
+        if let Some(address) = self.admin_listen {
+            let shutdown = shutdown.clone();
+            tasks.spawn("sequencer admin API", async move {
+                AdminServer::bind(address, allowlist, funding).await?.serve(shutdown).await
+            });
+        }
         for (index, validator_monitor) in validator_monitors.into_iter().enumerate() {
             tasks.spawn_infallible(
                 format!("validator {index} connection monitor"),
@@ -114,13 +152,6 @@ impl SequencerCommand {
             "ntx-builder connection monitor",
             ntx_builder_monitor.monitor::<NtxBuilderClient>("ntx-builder", shutdown.clone()),
         );
-        if let Some(batch_prover_monitor) = batch_prover_monitor {
-            tasks.spawn_infallible(
-                "batch prover connection monitor",
-                batch_prover_monitor
-                    .monitor::<RemoteProverClient>("batch-prover", shutdown.clone()),
-            );
-        }
         if let Some(block_prover_monitor) = block_prover_monitor {
             tasks.spawn_infallible(
                 "block prover connection monitor",
@@ -133,12 +164,39 @@ impl SequencerCommand {
                 listener: bind_rpc(internal_listen).await?,
                 state,
                 block_producer,
+                account_admission,
                 grpc_options: runtime.grpc_options,
             };
             tasks.spawn("sequencer internal server", sequencer_internal.serve(shutdown.clone()));
         }
 
         tasks.join_next_or_cancelled(shutdown).await
+    }
+
+    fn account_admission(
+        &self,
+        allowlist: Arc<AccountAllowlist>,
+        funding: Option<FundingClient>,
+    ) -> AccountAdmission {
+        if self.disable_account_allowlist {
+            warn!(target: crate::LOG_TARGET, "Account allowlist enforcement is disabled");
+            AccountAdmission::disabled(allowlist)
+        } else {
+            AccountAdmission::enabled(allowlist)
+        }
+        .with_funding_client(funding)
+    }
+
+    fn load_allowlist(&self) -> anyhow::Result<AccountAllowlist> {
+        let data_directory = DataDirectory::load(self.runtime.data_directory.clone())?;
+        // Chain bootstrap does not create the allowlist database. A promoted full node can reach
+        // sequencer startup without it.
+        let allowlist_path = data_directory.allowlist_database_path();
+        if !fs_err::exists(&allowlist_path).context("failed to check account allowlist database")? {
+            AccountAllowlist::bootstrap(&allowlist_path)
+                .context("failed to bootstrap account allowlist database")?;
+        }
+        AccountAllowlist::load(allowlist_path).context("failed to load account allowlist database")
     }
 
     fn log_starting(&self) {
@@ -203,9 +261,35 @@ pub struct SequencerExternalServiceOptions {
     /// The network transaction builder service gRPC URL.
     #[arg(long = "ntx-builder.url", env = "MIDEN_NODE_NTX_BUILDER_URL", value_name = "URL")]
     pub ntx_builder_url: Url,
+
+    /// Base URL of the funding service for new account registrations.
+    #[arg(
+        long = "funding-service.url",
+        env = "MIDEN_NODE_FUNDING_SERVICE_URL",
+        value_name = "URL",
+        requires = "funding_service_amount"
+    )]
+    pub funding_service_url: Option<Url>,
+
+    /// Amount of the native asset to request per new registration, in base units.
+    #[arg(
+        long = "funding-service.amount",
+        env = "MIDEN_NODE_FUNDING_SERVICE_AMOUNT",
+        value_name = "AMOUNT",
+        requires = "funding_service_url"
+    )]
+    pub funding_service_amount: Option<NonZeroU64>,
 }
 
 impl SequencerExternalServiceOptions {
+    fn funding_client(&self) -> anyhow::Result<Option<FundingClient>> {
+        match (&self.funding_service_url, self.funding_service_amount) {
+            (Some(url), Some(amount)) => FundingClient::new(url.clone(), amount).map(Some),
+            (None, None) => Ok(None),
+            _ => anyhow::bail!("funding service URL and amount must be configured together"),
+        }
+    }
+
     fn validator_clients_and_monitors(
         &self,
     ) -> anyhow::Result<(ValidatorClients, Vec<Builder<WantsConnection>>)> {

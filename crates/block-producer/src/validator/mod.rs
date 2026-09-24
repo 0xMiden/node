@@ -1,13 +1,20 @@
 use std::time::Duration;
 
+use anyhow::Context;
 use miden_node_proto::clients::{Builder, ValidatorClient};
-use miden_node_proto::decode::GrpcDecodeExt;
+use miden_node_proto::domain::encryption::{
+    TransactionInputsSealer,
+    TrustedTransactionEncryptionState,
+};
+use miden_node_proto::domain::validator::SignBlockResponse;
 use miden_node_proto::errors::ConversionError;
-use miden_node_proto::{decode, generated as proto};
+use miden_node_proto::{DecodeMessageExt, VerifyWith, generated as proto};
 use miden_node_tracing::{info, miden_instrument};
+use miden_node_utils::retry::{self, Retryable};
 use miden_protocol::Word;
-use miden_protocol::block::ProposedBlock;
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
+use miden_protocol::block::{BlockInputs, ProposedBlock, ValidatorConfig};
+use miden_protocol::protocol_config::ProtocolConfig;
+use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
 use miden_protocol::utils::serde::Serializable;
 use thiserror::Error;
 use url::Url;
@@ -23,17 +30,6 @@ pub enum ValidatorError {
     Transport(#[from] tonic::Status),
     #[error("failed to convert block signature response: {0}")]
     Conversion(#[from] ConversionError),
-}
-
-// SIGN BLOCK RESPONSE
-// ================================================================================================
-
-/// A single validator's response to a `sign_block` request.
-#[derive(Debug, Clone)]
-pub struct SignBlockResponse {
-    pub signature: Signature,
-    pub block_commitment: Word,
-    pub public_key: PublicKey,
 }
 
 // VALIDATOR CLIENT
@@ -77,6 +73,49 @@ impl BlockProducerValidatorClient {
         Ok(Self { clients })
     }
 
+    /// Validates a transaction with every validator before it can appear in a signed block.
+    #[miden_instrument(target = COMPONENT, name = "validator.client.validate_transaction", err)]
+    pub(crate) async fn validate_transaction(
+        &self,
+        transaction: &ProvenTransaction,
+        inputs: &TransactionInputs,
+        genesis: Word,
+        validators: &ValidatorConfig,
+    ) -> anyhow::Result<()> {
+        let client = self.clients.first().context("transaction validation requires a validator")?;
+        let key = (|| async { client.clone().get_transaction_encryption_key(()).await })
+            .retry(retry::exponential_bounded(
+                Duration::from_millis(100),
+                Duration::from_secs(2),
+                10,
+            ))
+            .when(|error| error.code() == tonic::Code::Unavailable)
+            .await?
+            .into_inner()
+            .verify_with(TrustedTransactionEncryptionState::new(genesis, validators.keys()))?;
+        let sealed =
+            TransactionInputsSealer::new(key).seal(transaction.id(), &inputs.to_bytes())?;
+        let request = proto::submission::ProvenTransactionSubmission {
+            transaction: Some(transaction.into()),
+            sealed_transaction_inputs: Some(sealed),
+        };
+        futures::future::try_join_all(self.clients.iter().map(|client| {
+            let request = request.clone();
+            async move {
+                (|| async { client.clone().submit_proven_transaction(request.clone()).await })
+                    .retry(retry::exponential_bounded(
+                        Duration::from_millis(100),
+                        Duration::from_secs(2),
+                        10,
+                    ))
+                    .when(|error| error.code() == tonic::Code::Unavailable)
+                    .await
+            }
+        }))
+        .await?;
+        Ok(())
+    }
+
     /// Signs the proposed block via every validator concurrently, returning each validator's
     /// signature, the block commitment it reports having signed (for cross-checking against the
     /// locally built block), and its public key (so the caller can place the signature at the
@@ -91,10 +130,17 @@ impl BlockProducerValidatorClient {
     )]
     pub async fn sign_block(
         &self,
-        proposed_block: ProposedBlock,
+        proposed_block: &ProposedBlock,
+        block_inputs: &BlockInputs,
+        protocol_config: &ProtocolConfig,
     ) -> Result<Vec<SignBlockResponse>, ValidatorError> {
-        let message = proto::blockchain::ProposedBlock {
-            proposed_block: proposed_block.to_bytes(),
+        let message = proto::validator::SignBlockRequest {
+            protocol_config: Some(protocol_config.into()),
+            batches: proposed_block.batches().as_slice().iter().map(Into::into).collect(),
+            block_inputs: Some(block_inputs.into()),
+            timestamp: proposed_block.timestamp(),
+            next_validator_config: Some(proposed_block.next_validator_config().into()),
+            next_protocol_config: proposed_block.next_protocol_config().map(Into::into),
         };
 
         let responses = futures::future::try_join_all(self.clients.iter().map(|client| {
@@ -103,23 +149,15 @@ impl BlockProducerValidatorClient {
             async move {
                 let request = tonic::Request::new(message);
                 let response = client.sign_block(request).await?.into_inner();
-                Self::decode_response(response)
+                response
+                    // SAFETY: The block builder matches the commitment to its proposed block and
+                    // verifies the signatures against the trusted parent validator set.
+                    .decode_and_build_unchecked()
+                    .map_err(ValidatorError::Conversion)
             }
         }))
         .await?;
 
         Ok(responses)
-    }
-
-    /// Decodes a single validator's `sign_block` response.
-    fn decode_response(
-        response: proto::blockchain::SignBlockResponse,
-    ) -> Result<SignBlockResponse, ValidatorError> {
-        let decoder = response.decoder();
-        let signature: Signature = decode!(decoder, response.signature)?;
-        let block_commitment = decode!(decoder, response.block_commitment)?;
-        let public_key = decode!(decoder, response.public_key)?;
-
-        Ok(SignBlockResponse { signature, block_commitment, public_key })
     }
 }

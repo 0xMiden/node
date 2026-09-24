@@ -5,6 +5,8 @@ set -euo pipefail
 SKIP_BOOTSTRAP="${SKIP_BOOTSTRAP:-false}"
 ENABLE_FULL_NODES="${ENABLE_FULL_NODES:-true}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
+# Send collected fees to an arbitrary non-existent account ID for now.
+BATCH_BUILDER_WALLET_ACCOUNT_ID="${BATCH_BUILDER_WALLET_ACCOUNT_ID:-0xcc0000000000dd010000ee000000ff}"
 # Shared secret authorizing the ntx-builder to submit network transactions to the sequencer's RPC.
 # Must match on both the sequencer (--rpc.network-tx-auth-header-value) and the ntx-builder
 # (--rpc.auth-header-value), otherwise network transactions are rejected with
@@ -41,7 +43,11 @@ VALIDATOR_INSECURE_STORAGE_KEY_PUBLIC_KEY_SET="${VALIDATOR_INSECURE_STORAGE_KEY_
 VALIDATOR_1_INSECURE_STORAGE_KEY_SECRET_SHARE="${VALIDATOR_INSECURE_STORAGE_KEY_DIRECTORY}/validator-1/secret-share.wire"
 VALIDATOR_2_INSECURE_STORAGE_KEY_SECRET_SHARE="${VALIDATOR_INSECURE_STORAGE_KEY_DIRECTORY}/validator-2/secret-share.wire"
 
-GENESIS_CONFIG="${GENESIS_CONFIG:-crates/store/src/genesis/config/samples/01-simple.toml}"
+ACCOUNTS_CONFIG="${ACCOUNTS_CONFIG:-}"
+if [[ "$SKIP_BOOTSTRAP" != "true" ]]; then
+    : "${MIDEN_VALIDATOR_GENESIS_NATIVE_FAUCET:?Set the native faucet account file}"
+    : "${MIDEN_VALIDATOR_GENESIS_FUNDING_ACCOUNT:?Set the funding account file}"
+fi
 NODE_DIR="/tmp/node"
 FULL_NODE_1_DIR="/tmp/full-node-1"
 FULL_NODE_2_DIR="/tmp/full-node-2"
@@ -163,12 +169,18 @@ if [[ "$SKIP_BOOTSTRAP" != "true" ]]; then
         VALIDATOR_2_PUBKEY=$("$VALIDATOR_BINARY" pubkey --signing-key.hex "$VALIDATOR_2_KEY_HEX")
     fi
 
-    "$VALIDATOR_BINARY" genesis \
-        --genesis-block-directory "$GENESIS_DIR" \
-        --accounts-directory "$ACCOUNTS_DIR" \
-        --config "$GENESIS_CONFIG" \
-        --validator.key "$VALIDATOR_1_PUBKEY" \
+    GENESIS_ARGS=(
+        --genesis-block-directory "$GENESIS_DIR"
+        --accounts-directory "$ACCOUNTS_DIR"
+        --verification-base-fee "${MIDEN_VALIDATOR_GENESIS_VERIFICATION_BASE_FEE:-7}"
+        --timestamp "${MIDEN_VALIDATOR_GENESIS_TIMESTAMP:-$(date +%s)}"
+        --validator.key "$VALIDATOR_1_PUBKEY"
         --validator.key "$VALIDATOR_2_PUBKEY"
+    )
+    if [[ -n "$ACCOUNTS_CONFIG" ]]; then
+        GENESIS_ARGS+=(--accounts-config "$ACCOUNTS_CONFIG")
+    fi
+    "$VALIDATOR_BINARY" genesis "${GENESIS_ARGS[@]}"
 
     echo "Bootstrapping validator 1 (seeds from the genesis block)..."
     "$VALIDATOR_BINARY" bootstrap \
@@ -229,11 +241,24 @@ echo "Starting validator 2..."
     "${KMS_START_ARGS_2[@]}" &
 PIDS+=($!)
 
-# Give the validators a moment to bind before the sequencer starts producing blocks.
-sleep 2
+if [[ ! -f "$NODE_DIR/fee-collector.mac" ]]; then
+    echo "Creating fee collector account..."
+    "$NODE_BINARY" fee-collector create --data-directory "$NODE_DIR"
+fi
+
+echo "Waiting for validators before deploying the fee collector..."
+wait_for_port "$VALIDATOR_1_PORT"
+wait_for_port "$VALIDATOR_2_PORT"
+
+echo "Deploying fee collector..."
+"$NODE_BINARY" fee-collector deploy \
+    --data-directory "$NODE_DIR" \
+    --validator.url "http://127.0.0.1:$VALIDATOR_1_PORT" \
+    --validator.url "http://127.0.0.1:$VALIDATOR_2_PORT"
 
 echo "Starting sequencer..."
 OTEL_RESOURCE_ATTRIBUTES="$(node_resource_attributes sequencer)" \
+    MIDEN_NODE_DISABLE_ACCOUNT_ALLOWLIST="${MIDEN_NODE_DISABLE_ACCOUNT_ALLOWLIST:-true}" \
     "$NODE_BINARY" sequencer \
     --rpc.listen "0.0.0.0:$RPC_PORT" \
     --rpc.network-tx-auth-header-value "$NETWORK_TX_AUTH" \
@@ -241,6 +266,7 @@ OTEL_RESOURCE_ATTRIBUTES="$(node_resource_attributes sequencer)" \
     --validator.url "http://127.0.0.1:$VALIDATOR_1_PORT" \
     --validator.url "http://127.0.0.1:$VALIDATOR_2_PORT" \
     --ntx-builder.url "http://127.0.0.1:$NTX_BUILDER_PORT" \
+    --batch.builder.wallet-account-id "$BATCH_BUILDER_WALLET_ACCOUNT_ID" \
     --internal.listen "0.0.0.0:$SEQUENCER_INTERNAL_PORT" \
     $EXTRA_ARGS &
 PIDS+=($!)

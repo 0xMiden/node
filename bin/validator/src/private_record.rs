@@ -17,8 +17,31 @@ use zeroize::Zeroizing;
 
 use crate::{GoldenOperatorKey, StorageKeyEpoch};
 
-/// Version of the first private record context and encryption format.
-pub const PRIVATE_RECORD_FORMAT_V1: u32 = 1;
+/// Supported private record formats.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum PrivateRecordFormatVersion {
+    /// Protobuf transaction effects encrypted with XChaCha20-Poly1305.
+    V1 = 1,
+}
+
+impl PrivateRecordFormatVersion {
+    /// Returns the version number used in storage and encrypted record contexts.
+    pub const fn as_u32(self) -> u32 {
+        self as u32
+    }
+}
+
+impl TryFrom<u32> for PrivateRecordFormatVersion {
+    type Error = PrivateRecordError;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(Self::V1),
+            other => Err(PrivateRecordError::UnsupportedFormat(other)),
+        }
+    }
+}
 
 const CONTEXT_DOMAIN_V1: &[u8] = b"miden-private-record-context-v1";
 const PRIVATE_RECORD_BUNDLE_MAGIC: &[u8] = b"miden-private-record-bundle-v1";
@@ -84,21 +107,48 @@ impl PrivateRecordId {
 }
 
 /// Values bound to one private record and its Golden decryption shares.
+///
+/// The format version is part of the context, so both encryption layers authenticate it. A record
+/// that holds one format cannot be read as another format.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PrivateRecordContext {
     chain_id: PrivateRecordChainId,
     key_epoch: StorageKeyEpoch,
     transaction_id: TransactionId,
+    format_version: PrivateRecordFormatVersion,
 }
 
 impl PrivateRecordContext {
-    /// Creates a schema version 1 context.
+    /// Creates a context for a new record in the current format.
     pub const fn new(
         chain_id: PrivateRecordChainId,
         key_epoch: StorageKeyEpoch,
         transaction_id: TransactionId,
     ) -> Self {
-        Self { chain_id, key_epoch, transaction_id }
+        Self::with_format_version(
+            chain_id,
+            key_epoch,
+            transaction_id,
+            PrivateRecordFormatVersion::V1,
+        )
+    }
+
+    /// Creates a context for a stored record in the given format.
+    ///
+    /// The caller must supply the version that the record was sealed with. A different version
+    /// produces a context that fails to authenticate the record.
+    pub const fn with_format_version(
+        chain_id: PrivateRecordChainId,
+        key_epoch: StorageKeyEpoch,
+        transaction_id: TransactionId,
+        format_version: PrivateRecordFormatVersion,
+    ) -> Self {
+        Self {
+            chain_id,
+            key_epoch,
+            transaction_id,
+            format_version,
+        }
     }
 
     /// Returns the chain identifier.
@@ -117,8 +167,8 @@ impl PrivateRecordContext {
     }
 
     /// Returns the record format version.
-    pub const fn format_version(&self) -> u32 {
-        PRIVATE_RECORD_FORMAT_V1
+    pub const fn format_version(&self) -> PrivateRecordFormatVersion {
+        self.format_version
     }
 
     /// Returns the canonical context used by the record cipher and Golden.
@@ -129,7 +179,7 @@ impl PrivateRecordContext {
         context.extend_from_slice(self.chain_id.as_bytes());
         context.extend_from_slice(self.key_epoch.as_bytes());
         context.extend_from_slice(&transaction_id);
-        context.extend_from_slice(&PRIVATE_RECORD_FORMAT_V1.to_be_bytes());
+        context.extend_from_slice(&self.format_version.as_u32().to_be_bytes());
         context
     }
 }
@@ -329,10 +379,8 @@ pub(crate) fn test_private_record_sealer(
 pub struct PrivateRecordStorageFields {
     /// Operational identity used to find and export the record.
     pub record_id: PrivateRecordId,
-    /// Values bound into both encryption layers.
+    /// Values bound into both encryption layers, including the record format version.
     pub context: PrivateRecordContext,
-    /// Version of the context and encryption format.
-    pub format_version: u32,
     /// Golden setup context identifier.
     pub setup_context_id: [u8; 32],
     /// Public record cipher nonce.
@@ -359,9 +407,6 @@ impl StoredPrivateRecord {
     pub fn from_storage_fields(
         fields: PrivateRecordStorageFields,
     ) -> Result<Self, PrivateRecordError> {
-        if fields.format_version != PRIVATE_RECORD_FORMAT_V1 {
-            return Err(PrivateRecordError::UnsupportedFormat(fields.format_version));
-        }
         let nonce = fields.nonce.try_into().map_err(|nonce: Vec<u8>| {
             PrivateRecordError::InvalidNonceLength { actual: nonce.len() }
         })?;
@@ -389,7 +434,6 @@ impl StoredPrivateRecord {
         PrivateRecordStorageFields {
             record_id: self.record_id,
             context: self.context,
-            format_version: self.context.format_version(),
             setup_context_id: self.setup_context_id,
             nonce: self.nonce.to_vec(),
             encrypted_record: self.encrypted_record,
@@ -474,7 +518,7 @@ impl Serializable for StoredPrivateRecord {
     fn write_into<W: ByteWriter>(&self, target: &mut W) {
         let context = self.context();
         target.write_bytes(PRIVATE_RECORD_BUNDLE_MAGIC);
-        target.write_u32(context.format_version());
+        target.write_u32(context.format_version().as_u32());
         target.write_bytes(context.chain_id().as_bytes());
         target.write_bytes(context.key_epoch().as_bytes());
         context.transaction_id().write_into(target);
@@ -506,7 +550,8 @@ impl Deserializable for StoredPrivateRecord {
             ));
         }
 
-        let format_version = source.read_u32()?;
+        let format_version = PrivateRecordFormatVersion::try_from(source.read_u32()?)
+            .map_err(|err| DeserializationError::InvalidValue(err.to_string()))?;
         let chain_id = source.read_array::<32>()?;
         let key_epoch = source.read_array::<32>()?;
         let transaction_id = TransactionId::read_from(source)?;
@@ -522,12 +567,12 @@ impl Deserializable for StoredPrivateRecord {
 
         Self::from_storage_fields(PrivateRecordStorageFields {
             record_id,
-            context: PrivateRecordContext::new(
+            context: PrivateRecordContext::with_format_version(
                 PrivateRecordChainId::new(chain_id),
                 StorageKeyEpoch::new(key_epoch),
                 transaction_id,
+                format_version,
             ),
-            format_version,
             setup_context_id,
             nonce,
             encrypted_record,
@@ -576,7 +621,7 @@ pub enum PrivateRecordError {
     /// Golden rejected the provided share set.
     #[error("failed to combine Golden decryption shares")]
     ShareCombination(#[source] golden_ehtdh1::CombineError),
-    /// The Golden ciphertext does not wrap one schema version 1 content key.
+    /// The Golden ciphertext does not wrap a content key of the expected size.
     #[error("Golden ciphertext has the wrong content key size")]
     InvalidEncryptedRecordKey,
     /// The stored record format is not supported.
@@ -686,7 +731,7 @@ mod tests {
             &bytes[CONTEXT_DOMAIN_V1.len() + 64..CONTEXT_DOMAIN_V1.len() + 96],
             transaction_id,
         );
-        assert_eq!(&bytes[CONTEXT_DOMAIN_V1.len() + 96..], &PRIVATE_RECORD_FORMAT_V1.to_be_bytes(),);
+        assert_eq!(&bytes[CONTEXT_DOMAIN_V1.len() + 96..], &1_u32.to_be_bytes());
     }
 
     #[test]
@@ -754,7 +799,12 @@ mod tests {
                 .unwrap();
 
         assert_eq!(actual, expected);
-        assert_eq!(StoredPrivateRecord::read_from_bytes(&expected.to_bytes()).unwrap(), expected);
+        let bytes = expected.to_bytes();
+        assert_eq!(
+            &bytes[PRIVATE_RECORD_BUNDLE_MAGIC.len()..PRIVATE_RECORD_BUNDLE_MAGIC.len() + 4],
+            &1_u32.to_le_bytes(),
+        );
+        assert_eq!(StoredPrivateRecord::read_from_bytes(&bytes).unwrap(), expected);
     }
 
     #[test]
@@ -774,18 +824,30 @@ mod tests {
     }
 
     #[test]
-    fn storage_fields_reject_invalid_metadata() {
+    fn private_record_bundle_rejects_unsupported_formats() {
         let mut rng = ChaCha20Rng::from_seed([13; 32]);
         let record = sealer()
             .seal(&mut rng, record_id(transaction_id()), context(), b"record")
             .unwrap();
 
-        let mut wrong_format = record.clone().into_storage_fields();
-        wrong_format.format_version = 2;
-        assert!(matches!(
-            StoredPrivateRecord::from_storage_fields(wrong_format),
-            Err(PrivateRecordError::UnsupportedFormat(2)),
-        ));
+        for format_version in [0_u32, 2, 3, u32::MAX] {
+            let mut bytes = record.to_bytes();
+            let offset = PRIVATE_RECORD_BUNDLE_MAGIC.len();
+            bytes[offset..offset + 4].copy_from_slice(&format_version.to_le_bytes());
+            assert!(matches!(
+                StoredPrivateRecord::read_from_bytes(&bytes),
+                Err(DeserializationError::InvalidValue(message))
+                    if message == PrivateRecordError::UnsupportedFormat(format_version).to_string(),
+            ));
+        }
+    }
+
+    #[test]
+    fn storage_fields_reject_invalid_metadata() {
+        let mut rng = ChaCha20Rng::from_seed([13; 32]);
+        let record = sealer()
+            .seal(&mut rng, record_id(transaction_id()), context(), b"record")
+            .unwrap();
 
         let mut wrong_nonce = record.clone().into_storage_fields();
         wrong_nonce.nonce.pop();

@@ -2,9 +2,9 @@ use miden_node_proto::generated as proto;
 use miden_node_store::StateSyncError;
 use miden_node_tracing::{debug, miden_instrument};
 use miden_protocol::block::BlockNumber;
-use tonic::Status;
 
 use super::RpcService;
+use super::error_codes::{SyncChainMmrErrorCode, internal_error};
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
@@ -50,21 +50,44 @@ impl proto::server::rpc_api::SyncChainMmr for RpcService {
         };
 
         if current_client_block_height > sync_target {
-            return Err(Status::invalid_argument(format!(
+            return Err(SyncChainMmrErrorCode::FutureBlock.invalid_argument(format!(
                 "start block is not known: current client block height {current_client_block_height} is greater than chain tip {sync_target}"
             )));
         }
 
         let block_range = current_client_block_height..=sync_target;
+        let view = self.state.view();
         let (mmr_delta, block_header, block_signatures) =
-            self.state.view().sync_chain_mmr(block_range.clone()).await.map_err(
-                |err| match err {
-                    StateSyncError::RangeBeyondTip(_) => Status::invalid_argument(err.to_string()),
-                    _ => Status::internal(err.to_string()),
+            view.sync_chain_mmr(block_range.clone()).await.map_err(|err| match err {
+                StateSyncError::RangeBeyondTip(_) => {
+                    SyncChainMmrErrorCode::FutureBlock.invalid_argument(err)
                 },
-            )?;
+                _ => internal_error(err.to_string()),
+            })?;
+
+        let protocol_config_required = if current_client_block_height == BlockNumber::GENESIS {
+            true
+        } else if current_client_block_height == sync_target {
+            false
+        } else {
+            let commitment_at_start = view
+                .get_protocol_config_commitment_at(current_client_block_height)
+                .await
+                .map_err(|err| internal_error(err.to_string()))?;
+            let commitment_at_start = commitment_at_start.ok_or_else(|| {
+                internal_error("starting protocol configuration activation is missing")
+            })?;
+            commitment_at_start != block_header.protocol_config_commitment()
+        };
+
+        let protocol_config = if protocol_config_required {
+            Some(super::load_protocol_config(&view, &block_header).await?.into())
+        } else {
+            None
+        };
 
         Ok(proto::rpc::SyncChainMmrResponse {
+            protocol_config,
             block_range: Some(proto::rpc::BlockRange {
                 block_from: block_range.start().as_u32(),
                 block_to: block_range.end().as_u32(),

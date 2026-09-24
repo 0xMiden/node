@@ -8,12 +8,19 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use miden_node_proto::DecodeMessageExt;
 use miden_node_proto::clients::RpcClient;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{debug, error, info, miden_instrument, warn};
 use miden_protocol::account::auth::AuthSecretKey;
-use miden_protocol::account::{Account, AccountCode, AccountId, AccountPatch};
-use miden_protocol::asset::{AssetId, AssetVault};
+use miden_protocol::account::{
+    Account,
+    AccountId,
+    AccountPatch,
+    AccountStorageHeader,
+    StorageSlotType,
+};
+use miden_protocol::asset::AssetId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
 use miden_protocol::crypto::rand::{FeltRng, RandomCoin};
@@ -30,7 +37,7 @@ use miden_protocol::note::{
     PartialNoteMetadata,
 };
 use miden_protocol::transaction::{InputNote, InputNotes, TransactionArgs, TransactionScript};
-use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::utils::serde::Serializable;
 use miden_protocol::{Felt, Word};
 use miden_standards::account::auth::{FeeConversionInfo, commit_fee_conversion_info};
 use miden_standards::code_builder::CodeBuilder;
@@ -49,8 +56,10 @@ use crate::deploy::{
     TransactionSubmissionClient,
     create_and_deploy_accounts,
     create_genesis_aware_rpc_client,
+    fetch_account_at_tip,
+    refresh_counter_anchor,
 };
-use crate::funding::{FaucetClient, FeeFunder, wallet_funding_amount, wallet_topup_threshold};
+use crate::funding::{FeeFunder, FundingClient, wallet_funding_amount, wallet_topup_threshold};
 use crate::service::Service;
 use crate::status::{
     CounterTrackingDetails,
@@ -193,8 +202,8 @@ pub struct IncrementService {
     accounts_sender: watch::Sender<TrackedAccounts>,
     /// Shared client for attestation verification, sealing, and transaction submission.
     submission_client: TransactionSubmissionClient,
-    /// Faucet access for fee funding; `None` when no faucet is configured (zero-fee chains only).
-    funding: Option<FaucetClient>,
+    /// The funding service client; `None` when none is configured (zero-fee chains only).
+    funding: Option<FundingClient>,
     /// Committed faucet note to be consumed by the next increment. Cleared once consumed.
     pending_funding_note: Option<Note>,
 }
@@ -211,7 +220,7 @@ impl IncrementService {
         submission_client: TransactionSubmissionClient,
         accounts_sender: watch::Sender<TrackedAccounts>,
         latency_state: Arc<Mutex<LatencyState>>,
-        funding: Option<FaucetClient>,
+        funding: Option<FundingClient>,
     ) -> Result<Self> {
         let rpc_client = submission_client.rpc_client();
         let pending_funding_note = accounts.wallet_funding_note;
@@ -277,25 +286,20 @@ impl IncrementService {
         err,
     )]
     async fn try_resync_wallet_account(&mut self) -> Result<()> {
-        let fresh_account = fetch_wallet_account(&mut self.rpc_client, self.tx.wallet_account.id())
-            .await
-            .inspect_err(|e| {
-                error!(
-                    e,
-                    target: LOG_TARGET,
-                    "Failed to re-sync wallet account from RPC",
-                    account.id = self.tx.wallet_account.id()
-                );
-            })?
-            .context("wallet account not found on-chain during re-sync")
-            .inspect_err(|e| {
-                error!(
-                    e,
-                    target: LOG_TARGET,
-                    "Wallet account not found on-chain during re-sync",
-                    account.id = self.tx.wallet_account.id()
-                );
-            })?;
+        let fresh_account = fetch_account_at_tip(
+            &mut self.rpc_client,
+            self.tx.wallet_account.id(),
+            self.submission_client.genesis_commitment(),
+        )
+        .await
+        .inspect_err(|e| {
+            error!(
+                e,
+                target: LOG_TARGET,
+                "Failed to re-sync wallet account from RPC",
+                account.id = self.tx.wallet_account.id()
+            );
+        })?;
 
         debug!(
             target: LOG_TARGET,
@@ -359,10 +363,18 @@ impl IncrementService {
         target = COMPONENT,
         name = "network_monitor.counter.submit_increment",
         level = "info",
-        ret(level = "debug"),
         err,
     )]
     async fn submit_increment(&mut self) -> Result<(String, AccountPatch, BlockNumber)> {
+        let anchor = refresh_counter_anchor(
+            &mut self.rpc_client,
+            self.tx.counter_id,
+            self.submission_client.genesis_commitment(),
+        )
+        .await
+        .context("failed to refresh the counter anchor")?;
+        self.tx.counter_anchor = Arc::new(anchor);
+
         let (network_note, note_recipient) = create_network_note(
             &self.tx.wallet_account,
             self.tx.counter_id,
@@ -377,7 +389,7 @@ impl IncrementService {
 
         let mut tx_args = TransactionArgs::default().with_tx_script(script);
         let (auth_args, conversion_info_preimage) = fee_conversion_auth_args(
-            self.tx.counter_anchor.block_header.fee_parameters().fee_faucet_id(),
+            self.tx.counter_anchor.protocol_config.fee_asset_id().faucet_id(),
             &mut self.tx.rng,
         );
         tx_args = tx_args.with_auth_args(auth_args);
@@ -399,8 +411,11 @@ impl IncrementService {
         let (proven_tx, tx_inputs, account_patch) = spawn_blocking_in_current_span(move || {
             let account_id = wallet_account.id();
             let block_num = anchor.block_header.block_num();
-            let mut data_store =
-                MonitorDataStore::new(anchor.block_header.clone(), anchor.blockchain.clone());
+            let mut data_store = MonitorDataStore::new(
+                anchor.block_header.clone(),
+                anchor.protocol_config.clone(),
+                anchor.blockchain.clone(),
+            );
             data_store.add_account(wallet_account);
             data_store.add_foreign_account(anchor.counter_account.clone(), anchor.witness.clone());
             // Moving the callback-enabled fee asset loads the issuing faucet.
@@ -448,8 +463,8 @@ impl IncrementService {
     /// No-op on zero-fee chains. A top-up failure flips the card instead of failing the
     /// increment: the wallet keeps transacting on its remaining balance.
     async fn maybe_topup_fee_funding(&mut self) {
-        let fee_parameters = self.tx.counter_anchor.block_header.fee_parameters().clone();
-        let verification_base_fee = fee_parameters.verification_base_fee();
+        let verification_base_fee =
+            self.tx.counter_anchor.block_header.fee_parameters().verification_base_fee();
         if verification_base_fee == 0 {
             return;
         }
@@ -458,7 +473,8 @@ impl IncrementService {
             return;
         };
 
-        let fee_asset = AssetId::new_fungible(fee_parameters.fee_faucet_id());
+        let fee_faucet_id = self.tx.counter_anchor.protocol_config.fee_asset_id().faucet_id();
+        let fee_asset = AssetId::new_fungible(fee_faucet_id);
         let balance = self
             .tx
             .wallet_account
@@ -482,8 +498,7 @@ impl IncrementService {
             account.id = self.tx.wallet_account.id(),
             asset.balance = balance
         );
-        let mut funder =
-            FeeFunder::new(funding, self.rpc_client.clone(), fee_parameters.fee_faucet_id());
+        let mut funder = FeeFunder::new(funding, fee_faucet_id);
         match funder
             .fund(self.tx.wallet_account.id(), wallet_funding_amount(verification_base_fee))
             .await
@@ -975,7 +990,7 @@ fn update_expected_and_pending(
 async fn fetch_account_storage_header(
     rpc_client: &mut RpcClient,
     account_id: AccountId,
-) -> Result<Option<miden_node_proto::generated::account::AccountStorageHeader>> {
+) -> Result<Option<AccountStorageHeader>> {
     let request = build_account_request(account_id, false);
     let resp = rpc_client.get_account(request).await?.into_inner();
 
@@ -983,10 +998,8 @@ async fn fetch_account_storage_header(
         return Ok(None);
     };
 
-    let storage_details = details.storage_details.context("missing storage details")?;
-    let storage_header = storage_details.header.context("missing storage header")?;
-
-    Ok(Some(storage_header))
+    let details = details.decode_and_verify().context("invalid account details")?;
+    Ok(Some(details.storage_details.header))
 }
 
 /// Fetch the u64 value held in the named value slot of the given account from RPC.
@@ -1003,17 +1016,14 @@ async fn fetch_slot_value(
     };
 
     let slot = storage_header
-        .slots
-        .iter()
-        .find(|slot| slot.slot_name == slot_name)
+        .slots()
+        .find(|slot| slot.name().as_str() == slot_name)
         .context(format!("slot '{slot_name}' not found"))?;
-
-    let slot_value: Word = slot
-        .commitment
-        .as_ref()
-        .context("missing storage slot value")?
-        .try_into()
-        .context("failed to convert slot value to word")?;
+    anyhow::ensure!(
+        slot.slot_type() == StorageSlotType::Value,
+        "slot '{slot_name}' is a storage map"
+    );
+    let slot_value = slot.value();
 
     let value = slot_value
         .as_elements()
@@ -1032,13 +1042,11 @@ fn build_account_request(
     account_id: AccountId,
     include_code_and_vault: bool,
 ) -> miden_node_proto::generated::rpc::AccountRequest {
-    let id_bytes: [u8; 15] = account_id.into();
-    let account_id_proto =
-        miden_node_proto::generated::account::AccountId { id: id_bytes.to_vec() };
+    let account_id_proto: miden_node_proto::generated::account::AccountId = account_id.into();
 
     let (code_commitment, asset_vault_commitment) = if include_code_and_vault {
-        let dummy: miden_node_proto::generated::primitives::Digest = Word::default().into();
-        (Some(dummy), Some(dummy))
+        let dummy: miden_node_proto::generated::primitives::Word = Word::default().into();
+        (Some(dummy.clone()), Some(dummy))
     } else {
         (None, None)
     };
@@ -1052,145 +1060,6 @@ fn build_account_request(
             storage_request: None,
         }),
     }
-}
-
-/// Fetch an account from RPC and reconstruct the full Account.
-///
-/// Uses dummy commitments to force the server to return all data (code, vault, storage header).
-/// Only supports accounts with value slots; returns an error if storage maps are present.
-async fn fetch_wallet_account(
-    rpc_client: &mut RpcClient,
-    account_id: AccountId,
-) -> Result<Option<Account>> {
-    let request = build_account_request(account_id, true);
-
-    let response = match rpc_client.get_account(request).await {
-        Ok(response) => response.into_inner(),
-        Err(e) => {
-            warn!(
-                &e,
-                target: LOG_TARGET,
-                "Failed to fetch wallet account via RPC",
-                account.id = account_id
-            );
-            return Ok(None);
-        },
-    };
-
-    let Some(details) = response.details else {
-        if response.witness.is_some() {
-            info!(
-                target: LOG_TARGET,
-                "account found on-chain but cannot reconstruct full account from RPC response",
-                account.id = account_id
-            );
-        }
-        return Ok(None);
-    };
-
-    let header = details.header.context("missing account header")?;
-    let nonce: u64 = header.nonce;
-
-    let code = details
-        .code
-        .map(|code_bytes| AccountCode::read_from_bytes(&code_bytes))
-        .transpose()
-        .context("failed to deserialize account code")?
-        .context("server did not return account code")?;
-
-    let vault = match details.vault_details {
-        Some(vault_details) if vault_details.too_many_assets => {
-            anyhow::bail!("account {account_id} has too many assets, cannot fetch full account");
-        },
-        Some(vault_details) => {
-            let assets: Vec<miden_protocol::asset::Asset> = vault_details
-                .assets
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()
-                .context("failed to convert assets")?;
-            AssetVault::new(&assets).context("failed to create vault")?
-        },
-        None => anyhow::bail!("server did not return asset vault for account {account_id}"),
-    };
-
-    let storage_details = details.storage_details.context("missing storage details")?;
-    let storage = build_account_storage(storage_details)?;
-
-    let account = Account::new(account_id, vault, storage, code, Felt::new_unchecked(nonce), None)
-        .context("failed to create account")?;
-
-    // Sanity check: verify reconstructed account matches header commitments
-    let expected_code_commitment: Word = header
-        .code_commitment
-        .context("missing code commitment in header")?
-        .try_into()
-        .context("invalid code commitment")?;
-    let expected_vault_root: Word = header
-        .vault_root
-        .context("missing vault root in header")?
-        .try_into()
-        .context("invalid vault root")?;
-    let expected_storage_commitment: Word = header
-        .storage_commitment
-        .context("missing storage commitment in header")?
-        .try_into()
-        .context("invalid storage commitment")?;
-
-    anyhow::ensure!(
-        account.code().commitment() == expected_code_commitment,
-        "code commitment mismatch: rebuilt={:?}, expected={:?}",
-        account.code().commitment(),
-        expected_code_commitment
-    );
-    anyhow::ensure!(
-        account.vault().root() == expected_vault_root,
-        "vault root mismatch: rebuilt={:?}, expected={:?}",
-        account.vault().root(),
-        expected_vault_root
-    );
-    anyhow::ensure!(
-        account.storage().to_commitment() == expected_storage_commitment,
-        "storage commitment mismatch: rebuilt={:?}, expected={:?}",
-        account.storage().to_commitment(),
-        expected_storage_commitment
-    );
-
-    info!(target: LOG_TARGET, "Fetched wallet account from RPC", account.id = account_id);
-    Ok(Some(account))
-}
-
-/// Build account storage from the storage details returned by the server.
-///
-/// This function only supports accounts with value slots. If any storage map slots
-/// are encountered, an error is returned since the monitor only uses simple accounts.
-fn build_account_storage(
-    storage_details: miden_node_proto::generated::rpc::AccountStorageDetails,
-) -> Result<miden_protocol::account::AccountStorage> {
-    use miden_protocol::account::{AccountStorage, StorageSlot};
-
-    let storage_header = storage_details.header.context("missing storage header")?;
-
-    let mut slots = Vec::new();
-    for slot in storage_header.slots {
-        let slot_name = miden_protocol::account::StorageSlotName::new(slot.slot_name.clone())
-            .context("invalid slot name")?;
-        let value: Word = slot
-            .commitment
-            .context("missing slot value")?
-            .try_into()
-            .context("invalid slot value")?;
-
-        // slot_type: 0 = Value, 1 = Map
-        anyhow::ensure!(
-            slot.slot_type == 0,
-            "storage map slots are not supported for this account"
-        );
-
-        slots.push(StorageSlot::with_value(slot_name, value));
-    }
-
-    AccountStorage::new(slots).context("failed to create account storage")
 }
 
 /// Create the increment procedure script.
@@ -1423,6 +1292,7 @@ mod tests {
         let creation_tx = execute_counter_genesis_tx(
             &counter,
             bootstrap_chain.latest_block_header(),
+            bootstrap_chain.protocol_config().clone(),
             bootstrap_chain.latest_partial_blockchain(),
             None,
             None,
@@ -1453,13 +1323,16 @@ mod tests {
 
         let mut tx_args = TransactionArgs::default().with_tx_script(script);
         let (auth_args, preimage) =
-            fee_conversion_auth_args(block_header.fee_parameters().fee_faucet_id(), &mut rng);
+            fee_conversion_auth_args(chain.protocol_config().fee_asset_id().faucet_id(), &mut rng);
         tx_args = tx_args.with_auth_args(auth_args);
         tx_args.extend_advice_map([(auth_args, preimage)]);
         tx_args.add_output_note_recipient(Box::new(note_recipient));
 
-        let mut data_store =
-            MonitorDataStore::new(block_header.clone(), chain.latest_partial_blockchain());
+        let mut data_store = MonitorDataStore::new(
+            block_header.clone(),
+            chain.protocol_config().clone(),
+            chain.latest_partial_blockchain(),
+        );
         data_store.add_account(wallet.clone());
         data_store.add_foreign_account(committed_counter, witness);
 
@@ -1554,6 +1427,7 @@ mod tests {
         let err = execute_counter_genesis_tx(
             &counter,
             chain.latest_block_header(),
+            chain.protocol_config().clone(),
             chain.latest_partial_blockchain(),
             Some(note.clone()),
             None,
@@ -1577,6 +1451,7 @@ mod tests {
         let creation_tx = execute_counter_genesis_tx(
             &counter,
             chain.latest_block_header(),
+            chain.protocol_config().clone(),
             chain.latest_partial_blockchain(),
             Some(note),
             Some((committed_faucet, witness)),
@@ -1615,6 +1490,7 @@ mod tests {
         let creation_tx = execute_counter_genesis_tx(
             &counter,
             bootstrap_chain.latest_block_header(),
+            bootstrap_chain.protocol_config().clone(),
             bootstrap_chain.latest_partial_blockchain(),
             Some(counter_funding),
             None,
@@ -1647,13 +1523,16 @@ mod tests {
 
         let mut tx_args = TransactionArgs::default().with_tx_script(script);
         let (auth_args, preimage) =
-            fee_conversion_auth_args(block_header.fee_parameters().fee_faucet_id(), &mut rng);
+            fee_conversion_auth_args(chain.protocol_config().fee_asset_id().faucet_id(), &mut rng);
         tx_args = tx_args.with_auth_args(auth_args);
         tx_args.extend_advice_map([(auth_args, preimage)]);
         tx_args.add_output_note_recipient(Box::new(note_recipient));
 
-        let mut data_store =
-            MonitorDataStore::new(block_header.clone(), chain.latest_partial_blockchain());
+        let mut data_store = MonitorDataStore::new(
+            block_header.clone(),
+            chain.protocol_config().clone(),
+            chain.latest_partial_blockchain(),
+        );
         data_store.add_account(wallet.clone());
         data_store.add_foreign_account(committed_counter, witness);
 

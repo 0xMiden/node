@@ -66,13 +66,14 @@ use crate::errors::NoteSyncError;
 
 /// Estimated byte size of a [`NoteSyncUpdate`] excluding its notes.
 ///
-/// `BlockHeader` (~341 bytes) + MMR proof with 32 siblings (~1216 bytes).
-pub(crate) const NOTE_SYNC_BLOCK_OVERHEAD_BYTES: usize = 1600;
+/// Includes a canonical header with validator keys, a scheduled protocol configuration, and an
+/// MMR proof with 32 siblings.
+pub(crate) const NOTE_SYNC_BLOCK_OVERHEAD_BYTES: usize = 1800;
 
 /// Estimated byte size of a single [`NoteSyncRecord`].
 ///
-/// Note ID (~38 bytes) + index + sync metadata with up to four attachment entries (~200 bytes) +
-/// sparse merkle path with 16 siblings (~608 bytes).
+/// Includes a note ID, an index, compact metadata with four attachment entries, and a sparse
+/// Merkle path with 16 siblings.
 pub(crate) const NOTE_SYNC_RECORD_BYTES: usize = 900;
 
 // NETWORK NOTE TYPE
@@ -221,37 +222,36 @@ pub(crate) fn select_notes_by_id(
     Ok(records)
 }
 
-/// Select the subset of note commitments that already exist in the notes table and were
-/// committed at or before `up_to_block`.
+/// Select the requested note IDs that the notes table contains at or before `up_to_block`.
 ///
 /// # Raw SQL
 ///
 /// ```sql
 /// SELECT
-///     notes.note_commitment
+///     notes.note_id
 /// FROM notes
-/// WHERE note_commitment IN (?1) AND committed_at <= ?2
+/// WHERE note_id IN (?1) AND committed_at <= ?2
 /// ```
-pub(crate) fn select_existing_note_commitments(
+pub(crate) fn select_existing_note_ids(
     conn: &mut SqliteConnection,
-    note_commitments: &[Word],
+    note_ids: &[NoteId],
     up_to_block: BlockNumber,
-) -> Result<HashSet<Word>, DatabaseError> {
-    QueryParamNoteCommitmentLimit::check(note_commitments.len())?;
+) -> Result<HashSet<NoteId>, DatabaseError> {
+    QueryParamNoteCommitmentLimit::check(note_ids.len())?;
 
-    let note_commitments = serialize_vec(note_commitments.iter());
+    let note_ids = serialize_vec(note_ids);
 
-    let raw_commitments = SelectDsl::select(schema::notes::table, schema::notes::note_id)
-        .filter(schema::notes::note_id.eq_any(&note_commitments))
+    let raw_note_ids = SelectDsl::select(schema::notes::table, schema::notes::note_id)
+        .filter(schema::notes::note_id.eq_any(&note_ids))
         .filter(schema::notes::committed_at.le(up_to_block.to_raw_sql()))
         .load::<Vec<u8>>(conn)?;
 
-    let commitments = raw_commitments
+    let note_ids = raw_note_ids
         .into_iter()
-        .map(|commitment| Word::read_from_bytes(&commitment[..]))
+        .map(|note_id| NoteId::read_from_bytes(&note_id))
         .collect::<Result<HashSet<_>, _>>()?;
 
-    Ok(commitments)
+    Ok(note_ids)
 }
 
 /// Select note inclusion proofs matching the note commitments, restricted to notes committed at

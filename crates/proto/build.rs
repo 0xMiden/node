@@ -5,6 +5,7 @@ use std::process::Command;
 use codegen::{Function, Impl, Module, Trait, Type};
 use fs_err as fs;
 use miden_node_proto_build::{
+    note_transport_api_descriptor,
     ntx_builder_api_descriptor,
     remote_prover_api_descriptor,
     rpc_api_descriptor,
@@ -12,7 +13,7 @@ use miden_node_proto_build::{
     validator_api_descriptor,
 };
 use miette::{Context, IntoDiagnostic};
-use prost_types::{MethodDescriptorProto, ServiceDescriptorProto};
+use prost_types::{DescriptorProto, MethodDescriptorProto, ServiceDescriptorProto};
 use tonic_prost_build::FileDescriptorSet;
 
 /// Generates Rust protobuf bindings using `miden-node-proto-build`.
@@ -26,6 +27,7 @@ fn main() -> miette::Result<()> {
         .wrap_err("creating destination folder")?;
 
     let descriptor_sets = [
+        note_transport_api_descriptor(),
         rpc_api_descriptor(),
         remote_prover_api_descriptor(),
         validator_api_descriptor(),
@@ -58,7 +60,37 @@ fn main() -> miette::Result<()> {
 /// destination directory.
 fn generate_bindings(file_descriptors: &FileDescriptorSet, dst_dir: &Path) -> miette::Result<()> {
     let mut prost_config = tonic_prost_build::Config::new();
-    prost_config.skip_debug(["AccountId", "Digest"]);
+    for &(proto_path, rust_path) in miden_objects::EXTERN_PATHS {
+        prost_config.extern_path(proto_path, rust_path);
+    }
+    prost_config.skip_debug(["RegisterAccountRequest"]);
+
+    let mut messages = Vec::new();
+    for file in &file_descriptors.file {
+        let package = file.package();
+        if package == "google.protobuf"
+            || miden_objects::EXTERN_PATHS
+                .iter()
+                .any(|(path, _)| path.trim_start_matches('.') == package)
+        {
+            continue;
+        }
+        collect_message_names(package, &file.message_type, &mut messages);
+    }
+    miden_protobuf::build::configure_proto_decode_fields(
+        &mut prost_config,
+        file_descriptors,
+        messages.iter().map(String::as_str),
+    )
+    .into_diagnostic()
+    .wrap_err("configuring protobuf decoding")?;
+
+    // Protobuf does not support the optional keyword on a oneof. Use a suffix match so the
+    // attribute does not apply to the variants.
+    prost_config.field_attribute(
+        "rpc.AccountRequest.AccountDetailRequest.storage_request",
+        "#[proto_decode(optional)]",
+    );
 
     // Generate the stub of the user facing server from its proto file
     tonic_prost_build::configure()
@@ -73,6 +105,18 @@ fn generate_bindings(file_descriptors: &FileDescriptorSet, dst_dir: &Path) -> mi
         .wrap_err("compiling protobufs")?;
 
     Ok(())
+}
+
+fn collect_message_names(parent: &str, descriptors: &[DescriptorProto], names: &mut Vec<String>) {
+    for descriptor in descriptors {
+        let name = format!("{parent}.{}", descriptor.name());
+        // The derive adds Debug without field redaction. Keep invitation codes out of Debug output.
+        if name == "rpc.RegisterAccountRequest" {
+            continue;
+        }
+        collect_message_names(&name, &descriptor.nested_type, names);
+        names.push(name);
+    }
 }
 
 fn rustfmt_generated(dir: &Path) -> miette::Result<()> {

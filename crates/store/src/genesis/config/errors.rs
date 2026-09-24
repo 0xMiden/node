@@ -1,11 +1,14 @@
 use std::path::PathBuf;
 
+use miden_objects::account_file::AccountFileError;
 use miden_protocol::account::AccountId;
 use miden_protocol::errors::{
     AccountDeltaError,
     AccountError,
     AssetError,
     AssetVaultError,
+    AuthSchemeError,
+    ProtocolConfigError,
     TokenSymbolError,
 };
 use miden_protocol::utils::serde::DeserializationError;
@@ -19,10 +22,18 @@ pub enum GenesisConfigError {
     Toml(#[from] toml::de::Error),
     #[error("failed to read config file at {1}")]
     ConfigFileRead(#[source] std::io::Error, PathBuf),
+    #[error("imported account name must not be empty")]
+    EmptyImportedAccountName,
     #[error("failed to read account file at {1}")]
-    AccountFileRead(#[source] std::io::Error, PathBuf),
-    #[error("native faucet from file {path} is not a fungible faucet")]
-    NativeFaucetNotFungible { path: PathBuf },
+    AccountFileRead(#[source] AccountFileError, PathBuf),
+    #[error("native faucet {account_id} is not a fungible faucet")]
+    NativeFaucetNotFungible { account_id: AccountId },
+    #[error("funding account {account_id} is not public")]
+    FundingAccountNotPublic { account_id: AccountId },
+    #[error("account {account_id} must have a nonzero nonce for genesis")]
+    UndeployedAccount { account_id: AccountId },
+    #[error("account {account_id} is included more than once in genesis")]
+    DuplicateAccount { account_id: AccountId },
     #[error("account translation from config to state failed")]
     Account(#[from] AccountError),
     #[error("asset translation from config to state failed")]
@@ -31,6 +42,8 @@ pub enum GenesisConfigError {
     AccountDelta(#[from] AccountDeltaError),
     #[error("adding assets to account vault failed")]
     AssetVault(#[from] AssetVaultError),
+    #[error("protocol config construction failed")]
+    ProtocolConfig(#[from] ProtocolConfigError),
     #[error(
         "the defined asset '{symbol}' has no corresponding faucet, or the faucet was provided as an account file"
     )]
@@ -71,4 +84,10 @@ pub enum GenesisConfigError {
     InvalidSecretKey(#[from] DeserializationError),
     #[error("provided signer config is not supported")]
     UnsupportedSignerConfig,
+    #[error("account file name '{name}' is used more than once")]
+    DuplicateAccountFileName { name: String },
+    #[error("account name '{name}' is not a plain file name")]
+    InvalidAccountFileName { name: String },
+    #[error("failed to generate a key for the configured authentication scheme")]
+    AuthScheme(#[from] AuthSchemeError),
 }

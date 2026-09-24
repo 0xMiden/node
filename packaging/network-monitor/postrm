@@ -1,9 +1,0 @@
-#!/bin/bash
-#
-###############
-# Remove miden-network-monitor installs
-##############
-sudo rm -rf /lib/systemd/system/miden-network-monitor.service
-sudo rm -rf /etc/opt/miden-network-monitor
-sudo deluser miden-network-monitor
-sudo systemctl daemon-reload

@@ -1,15 +1,15 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
+use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
-use miden_protocol::batch::BatchId;
+use miden_protocol::batch::{BatchId, ProvenBatch};
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::Nullifier;
-use miden_protocol::transaction::TransactionId;
+use miden_protocol::note::{NoteId, Nullifier};
+use miden_protocol::transaction::{OutputNote, TransactionId};
 
 use crate::domain::batch::{BatchParameters, SelectedBatch};
-use crate::domain::transaction::AuthenticatedTransaction;
 use crate::errors::StateConflict;
 use crate::mempool::BatchBudget;
 use crate::mempool::budget::BudgetStatus;
@@ -41,11 +41,11 @@ impl GraphNode for Arc<AuthenticatedTransaction> {
         Box::new(self.as_ref().nullifiers())
     }
 
-    fn output_notes(&self) -> Box<dyn Iterator<Item = Word> + '_> {
+    fn output_notes(&self) -> Box<dyn Iterator<Item = NoteId> + '_> {
         Box::new(self.output_note_ids())
     }
 
-    fn unauthenticated_notes(&self) -> Box<dyn Iterator<Item = Word> + '_> {
+    fn unauthenticated_notes(&self) -> Box<dyn Iterator<Item = NoteId> + '_> {
         Box::new(self.unauthenticated_note_ids())
     }
 
@@ -73,7 +73,7 @@ impl GraphNode for Arc<AuthenticatedTransaction> {
 // TRANSACTION GRAPH
 // ================================================================================================
 
-/// Tracks all [`AuthenticatedTransaction`]s that are waiting to be included in a batch.
+/// Tracks standalone transactions and transactions from user-proven batches.
 ///
 /// Each transaction is a node in the underlying [`Graph`]. A directed edge from transaction `P`
 /// to transaction `C` exists when `C` depends on state produced by `P` — for example, `C`
@@ -134,13 +134,27 @@ impl TransactionGraph {
         self.inner.append(tx)
     }
 
-    /// Appends the transactions into the graph as an atomic unit.
+    /// Returns the transaction and output note that created the specified note ID.
+    pub fn output_note(&self, note_id: NoteId) -> Option<(TransactionId, &OutputNote)> {
+        let creator = self.inner.note_creator(&note_id)?;
+        let output_note = creator
+            .raw_proven_transaction()
+            .output_notes()
+            .iter()
+            .find(|note| note.id() == note_id)
+            .expect("the note creator must contain the indexed output note");
+
+        Some((creator.id(), output_note))
+    }
+
+    /// Appends a user-proven batch to the graph as an atomic unit.
     ///
     /// These transactions can only be selected as a batch, and are reverted and pruned together.
     pub fn append_user_batch(
         &mut self,
         batch: &[Arc<AuthenticatedTransaction>],
         parameters: BatchParameters,
+        proof: Arc<ProvenBatch>,
     ) -> Result<(), StateConflict> {
         let batch_id =
             BatchId::from_transactions(batch.iter().map(|tx| tx.raw_proven_transaction()));
@@ -160,29 +174,24 @@ impl TransactionGraph {
         }
 
         let txs = batch.iter().map(GraphNode::id).collect::<Vec<_>>();
-        self.user_batches.insert(batch_id, txs, parameters);
+        self.user_batches.insert(batch_id, txs, parameters, proof);
 
         Ok(())
     }
 
-    pub fn select_any_batch(
+    pub fn select_any_internal_batch(
         &mut self,
         budget: BatchBudget,
         internal_parameters: BatchParameters,
     ) -> Option<SelectedBatch> {
-        self.select_user_batch()
-            .or_else(|| self.select_internal_batch(budget, internal_parameters).into_batch())
+        self.select_internal_batch(budget, internal_parameters).into_batch()
     }
 
-    pub fn select_full_batch(
+    pub fn select_full_internal_batch(
         &mut self,
         budget: BatchBudget,
         internal_parameters: BatchParameters,
     ) -> Option<SelectedBatch> {
-        if let Some(user_batch) = self.select_user_batch() {
-            return Some(user_batch);
-        }
-
         match self.select_internal_batch(budget, internal_parameters) {
             BatchSelection::Full(batch) => Some(batch),
             BatchSelection::Partial(batch) => {
@@ -200,7 +209,7 @@ impl TransactionGraph {
         }
     }
 
-    fn select_user_batch(&mut self) -> Option<SelectedBatch> {
+    pub fn select_user_batch(&mut self) -> Option<(SelectedBatch, Arc<ProvenBatch>)> {
         let candidate_batches = self.user_batches.batches().copied().collect::<HashSet<_>>();
         for candidate in candidate_batches {
             if let Some(batch) = self.try_select_user_batch_candidate(candidate) {
@@ -219,8 +228,12 @@ impl TransactionGraph {
     ///
     /// Transactions can fail selection if they depend on any external transactions that have
     /// not yet been selected.
-    fn try_select_user_batch_candidate(&mut self, candidate: BatchId) -> Option<SelectedBatch> {
-        let (txs, parameters) = self.user_batches.get(&candidate)?;
+    fn try_select_user_batch_candidate(
+        &mut self,
+        candidate: BatchId,
+    ) -> Option<(SelectedBatch, Arc<ProvenBatch>)> {
+        let (txs, parameters, proof) = self.user_batches.get(&candidate)?;
+        let proof = Arc::clone(proof);
         let mut selected = SelectedBatch::builder(parameters);
 
         for tx in txs {
@@ -239,7 +252,7 @@ impl TransactionGraph {
         }
 
         assert!(!selected.is_empty(), "User batch should not be empty");
-        Some(selected.build())
+        Some((selected.build(), proof))
     }
 
     fn select_internal_batch(
@@ -422,7 +435,7 @@ impl TransactionGraph {
             self.inner.prune(tx.id());
             self.failures.remove(&tx.id());
         }
-        self.user_batches.remove(&batch.id());
+        self.user_batches.remove(&batch.id().as_batch_id());
     }
 
     fn mark_committed_notes_authenticated_for_descendants(
@@ -453,6 +466,10 @@ impl TransactionGraph {
         self.inner.node_count()
     }
 
+    pub fn contains(&self, transaction: &TransactionId) -> bool {
+        self.inner.contains(transaction)
+    }
+
     pub fn accounts_count(&self) -> usize {
         self.inner.account_count()
     }
@@ -480,14 +497,21 @@ struct BatchTxMap {
 struct UserBatch {
     txs: Vec<TransactionId>,
     parameters: BatchParameters,
+    proof: Arc<ProvenBatch>,
 }
 
 impl BatchTxMap {
-    fn insert(&mut self, batch: BatchId, txs: Vec<TransactionId>, parameters: BatchParameters) {
+    fn insert(
+        &mut self,
+        batch: BatchId,
+        txs: Vec<TransactionId>,
+        parameters: BatchParameters,
+        proof: Arc<ProvenBatch>,
+    ) {
         for tx in &txs {
             assert!(self.by_tx.insert(*tx, batch).is_none());
         }
-        assert!(self.by_batch.insert(batch, UserBatch { txs, parameters }).is_none());
+        assert!(self.by_batch.insert(batch, UserBatch { txs, parameters, proof }).is_none());
     }
 
     fn remove(&mut self, batch: &BatchId) -> Vec<TransactionId> {
@@ -509,8 +533,13 @@ impl BatchTxMap {
         self.by_tx.get(tx)
     }
 
-    fn get(&self, batch: &BatchId) -> Option<(&[TransactionId], BatchParameters)> {
-        self.by_batch.get(batch).map(|batch| (batch.txs.as_slice(), batch.parameters))
+    fn get(
+        &self,
+        batch: &BatchId,
+    ) -> Option<(&[TransactionId], BatchParameters, &Arc<ProvenBatch>)> {
+        self.by_batch
+            .get(batch)
+            .map(|batch| (batch.txs.as_slice(), batch.parameters, &batch.proof))
     }
 
     fn contains_tx(&self, tx: &TransactionId) -> bool {

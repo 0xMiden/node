@@ -35,7 +35,6 @@ const ENV_SIGNING_KEY: &str = "MIDEN_VALIDATOR_SIGNING_KEY";
 const ENV_SIGNING_KEY_KMS_ID: &str = "MIDEN_VALIDATOR_SIGNING_KEY_KMS_ID";
 const ENV_ENCRYPTION_KEY: &str = "MIDEN_VALIDATOR_ENCRYPTION_KEY";
 const ENV_ENCRYPTION_KEY_KMS_CIPHERTEXT: &str = "MIDEN_VALIDATOR_ENCRYPTION_KEY_KMS_CIPHERTEXT";
-const ENV_GENESIS_CONFIG: &str = "MIDEN_VALIDATOR_GENESIS_CONFIG";
 const ENV_GENESIS_VALIDATOR_KEYS: &str = "MIDEN_VALIDATOR_GENESIS_VALIDATOR_KEYS";
 const ENV_SQLITE_CONNECTION_POOL_SIZE: &str = "MIDEN_VALIDATOR_SQLITE_CONNECTION_POOL_SIZE";
 const ENV_STORAGE_KEY_EPOCH: &str = "MIDEN_VALIDATOR_STORAGE_KEY_EPOCH";
@@ -85,49 +84,12 @@ pub struct PrivateRecordExportOptions {
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 pub enum ValidatorCommand {
-    /// Builds the genesis block from a genesis configuration.
+    /// Builds the genesis block from required accounts and optional additional accounts.
     ///
-    /// Creates accounts from the genesis configuration, builds the genesis block, and writes the
-    /// block and account secret files to disk.
-    ///
-    /// The genesis block is the chain's trust root and is not signed: its header commits to the
-    /// full validator set — the public keys passed via `--validator.key` — and that set is
-    /// required to sign every block after genesis. Building the genesis block needs no signing
-    /// access to any validator's key, so one operator — who need not be a validator — runs this
-    /// once and distributes the genesis block file.
-    ///
-    /// Every validator then seeds its database from the genesis block file with `bootstrap`.
-    Genesis {
-        /// Directory in which to write the genesis block file.
-        #[arg(long, value_name = "DIR")]
-        genesis_block_directory: PathBuf,
-        /// Directory to write the account secret files (.mac) to.
-        #[arg(long, value_name = "DIR")]
-        accounts_directory: PathBuf,
-        /// Use the given configuration file to construct the genesis state from.
-        ///
-        /// If not provided, the built-in development configuration is used.
-        #[arg(long = "config", env = ENV_GENESIS_CONFIG, value_name = "GENESIS_CONFIG")]
-        genesis_config_file: Option<PathBuf>,
-        /// Hex-encoded public keys of the genesis validator set, committed to by the genesis
-        /// header.
-        ///
-        /// Repeat the flag once per validator (`--validator.key <KEY> --validator.key <KEY>`);
-        /// the environment variable takes a comma-separated list. The genesis block itself is not
-        /// signed; the committed set must sign every block after genesis.
-        ///
-        /// Each validator operator prints their public key with `pubkey`; `keygen` generates a
-        /// fresh key-pair for local networks.
-        #[arg(
-            long = "validator.key",
-            env = ENV_GENESIS_VALIDATOR_KEYS,
-            value_name = "VALIDATOR_PUBLIC_KEY",
-            value_delimiter = ',',
-            required = true,
-            value_parser = parse_validator_public_key
-        )]
-        validator_keys: Vec<PublicKey>,
-    },
+    /// Writes the unsigned genesis block and generated account files to disk. The genesis header
+    /// commits to the full validator set. Those validators must sign every subsequent block.
+    /// Each validator seeds its database from the genesis block with `bootstrap`.
+    Genesis(genesis::GenesisCommand),
 
     /// Seeds this validator's database from a genesis block file.
     ///
@@ -192,11 +154,11 @@ pub enum ValidatorCommand {
     /// Starts the validator component.
     Start {
         /// Socket address at which to serve the gRPC API.
-        #[arg(long = "listen", env = ENV_LISTEN, value_name = "LISTEN")]
+        #[arg(long = "listen", env = ENV_LISTEN, value_name = "IP:PORT")]
         listen: std::net::SocketAddr,
 
-        /// Socket address at which to serve the private administration API.
-        #[arg(long = "admin.listen", env = ENV_ADMIN_LISTEN, value_name = "LISTEN")]
+        /// IP address and port for the private administration API (for example, 127.0.0.1:50102).
+        #[arg(long = "admin.listen", env = ENV_ADMIN_LISTEN, value_name = "IP:PORT")]
         admin_listen: Option<std::net::SocketAddr>,
 
         #[command(flatten)]
@@ -232,17 +194,7 @@ pub enum ValidatorCommand {
 impl ValidatorCommand {
     pub async fn handle(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         match self {
-            Self::Genesis {
-                genesis_block_directory,
-                accounts_directory,
-                genesis_config_file,
-                validator_keys,
-            } => genesis::generate(
-                &genesis_block_directory,
-                &accounts_directory,
-                genesis_config_file.as_ref(),
-                validator_keys,
-            ),
+            Self::Genesis(command) => command.execute(),
             Self::Bootstrap {
                 data_directory,
                 sqlite_connection_pool_size,
@@ -329,7 +281,7 @@ impl ValidatorCommand {
     pub fn open_telemetry(&self) -> OpenTelemetry {
         match self {
             Self::Start { .. } => OpenTelemetry::from_env().with_name("validator"),
-            Self::Genesis { .. }
+            Self::Genesis(_)
             | Self::Bootstrap { .. }
             | Self::Pubkey { .. }
             | Self::Keygen
@@ -684,13 +636,21 @@ mod tests {
         .unwrap();
     }
 
-    const BASE_GENESIS_ARGS: [&str; 6] = [
+    const BASE_GENESIS_ARGS: [&str; 14] = [
         "miden-validator",
         "genesis",
         "--genesis-block-directory",
         "/tmp/genesis",
         "--accounts-directory",
         "/tmp/accounts",
+        "--native-faucet",
+        "/tmp/native-faucet.mac",
+        "--funding-account",
+        "/tmp/funding-account.mac",
+        "--verification-base-fee",
+        "7",
+        "--timestamp",
+        "1717344256",
     ];
 
     fn parse_genesis(extra: &[&str]) -> Result<ValidatorCommand, clap::Error> {
@@ -708,10 +668,10 @@ mod tests {
         let command =
             parse_genesis(&["--validator.key", &hex_keys[0], "--validator.key", &hex_keys[1]])
                 .expect("genesis with explicit validator keys must parse");
-        let ValidatorCommand::Genesis { validator_keys, .. } = command else {
+        let ValidatorCommand::Genesis(command) = command else {
             panic!("expected the genesis command");
         };
-        assert_eq!(validator_keys, keys.map(|key| key.public_key()).to_vec());
+        assert_eq!(command.validator_keys, keys.map(|key| key.public_key()).to_vec());
     }
 
     #[test]
@@ -723,8 +683,29 @@ mod tests {
 
         let key = SigningKey::read_from_bytes(&[7; 32]).expect("test signing key should decode");
         let key_hex = hex::encode(key.public_key().to_bytes());
-        parse_genesis(&["--config", "/tmp/genesis.toml", "--validator.key", &key_hex])
-            .expect("--config with an explicit validator set must parse");
+        parse_genesis(&["--accounts-config", "/tmp/accounts.toml", "--validator.key", &key_hex])
+            .expect("additional accounts with an explicit validator set must parse");
+    }
+
+    #[test]
+    fn genesis_requires_explicit_accounts_fee_and_timestamp() {
+        let key = SigningKey::new();
+        let key_hex = hex::encode(key.public_key().to_bytes());
+        for flag in
+            ["--native-faucet", "--funding-account", "--verification-base-fee", "--timestamp"]
+        {
+            let position = BASE_GENESIS_ARGS.iter().position(|value| *value == flag).unwrap();
+            let args = BASE_GENESIS_ARGS
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != position && *index != position + 1)
+                .map(|(_, value)| *value)
+                .chain(["--validator.key", key_hex.as_str()]);
+            let Err(error) = ValidatorCommand::try_parse_from(args) else {
+                panic!("genesis must require {flag}");
+            };
+            assert_eq!(error.kind(), clap::error::ErrorKind::MissingRequiredArgument, "{flag}");
+        }
     }
 
     #[test]

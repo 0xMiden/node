@@ -32,6 +32,7 @@ miden-node-db      = { workspace = true }
 miden-node-proto   = { workspace = true }
 miden-node-tracing = { workspace = true }
 miden-node-utils   = { workspace = true }
+miden-objects      = { workspace = true }
 miden-standards    = { workspace = true }
 # `BlockProof::new_dummy` requires the `testing` feature.
 miden-protocol    = { features = ["std", "testing"], workspace = true }
@@ -40,6 +41,7 @@ rand              = { workspace = true }
 rand_chacha       = { workspace = true }
 rayon             = { workspace = true }
 serde             = { workspace = true }
+sha2              = { workspace = true }
 thiserror         = { workspace = true }
 thread-priority   = { workspace = true }
 tokio             = { features = ["fs", "rt-multi-thread"], workspace = true }

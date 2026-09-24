@@ -23,7 +23,7 @@ use crate::deploy::{
 use crate::explorer::ExplorerService;
 use crate::faucet::FaucetService;
 use crate::frontend::{ServerState, serve};
-use crate::funding::FaucetClient;
+use crate::funding::funding_client_from_config;
 use crate::note_transport::NoteTransportService;
 use crate::remote_prover::ProverStatusService;
 use crate::service::{Service, build_tls_client};
@@ -103,8 +103,8 @@ impl Tasks {
     /// (and keeps alive) a probe task that acquires its test payload from the RPC and runs
     /// proof-test probes on the test cadence.
     pub fn spawn_prover_tasks(&mut self, config: &MonitorConfig) -> Vec<Receiver<ServiceStatus>> {
-        // The probe payload's creation transaction pays its fee from the faucet.
-        let funding = FaucetClient::from_config(config);
+        // The probe payload's creation transaction pays its fee from the funding service.
+        let funding = funding_client_from_config(config);
         let mut prover_rxs = Vec::new();
         for (i, prover_url) in config.remote_prover_urls.iter().enumerate() {
             let name = format!("Remote Prover ({})", i + 1);
@@ -278,15 +278,15 @@ async fn bootstrap_ntx(
     config: &MonitorConfig,
 ) -> Result<(IncrementService, CounterTrackingService)> {
     let prover = LocalTransactionProver::default();
-    let trusted_validator_signing_key = config.trusted_validator_signing_key()?;
+    let trusted_validator_signing_keys = config.trusted_validator_signing_keys()?;
     let submission_client = TransactionSubmissionClient::connect(
         &config.rpc_url,
         config.request_timeout,
-        trusted_validator_signing_key,
+        trusted_validator_signing_keys,
     )
     .await?;
-    // The faucet funds fee payments; whether it is needed is decided during deployment.
-    let funding = FaucetClient::from_config(config);
+    // The funding service pays fees; whether it is needed is decided during deployment.
+    let funding = funding_client_from_config(config);
     let accounts =
         Box::pin(create_and_deploy_accounts(&submission_client, &prover, funding.as_ref())).await?;
 

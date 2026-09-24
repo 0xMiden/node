@@ -278,6 +278,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+          submodules: recursive
       - name: Rustup
         run: rustup toolchain install --no-self-update
       - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
@@ -293,6 +294,10 @@ jobs:
             --bin miden-ntx-builder \
             --bin miden-remote-prover \
             --bin miden-benchmark
+          cargo build --release --locked \
+            --manifest-path vendor/miden-usdcx/Cargo.toml \
+            --target-dir target \
+            --package xusdc-genesis --bin xusdc-genesis
       - name: Run benchmark with N=5
         env:
           N_TXS: "5"
@@ -320,6 +325,16 @@ jobs:
   # ===============================================================================================
   # Jobs that don't require caching to be efficient
   # ===============================================================================================
+
+  rust-versions:
+    name: lint - Rust versions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/check-rust-versions
 
   audit:
     name: lint - dependency audit
@@ -468,7 +483,7 @@ jobs:
         with:
           tool: cargo-binstall
       - name: Install workspace inheritance checker
-        run: cargo binstall --no-confirm cargo-workspace-inheritance-check@1.2.0
+        run: cargo binstall --no-confirm cargo-workspace-inheritance-check@1.3.0
       - name: Check workspace inheritance
         run: cargo workspace-inheritance-check --promotion-threshold 2 --promotion-failure
 
@@ -484,6 +499,8 @@ jobs:
         with:
           tool: cargo-binstall
       - name: Install cargo-shear
-        run: cargo binstall --no-confirm cargo-shear@1.12.4
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: cargo binstall --locked --no-confirm cargo-shear@1.12.4
       - name: Check for unused dependencies
         run: make shear

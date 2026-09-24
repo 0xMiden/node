@@ -11,7 +11,10 @@ use tracing::Value;
 
 const BOOLEAN_FIELD_NAMES: &[&str] = &[
     "account.updated",
+    "funding_service.remote_prover",
     "note.erased",
+    "note_transport.inserted",
+    "note_transport.has_more",
     "note.id_resolved",
     "panic",
     "request.include_mmr_proof",
@@ -24,6 +27,8 @@ const NUMBER_FIELD_NAMES: &[&str] = &[
     "account.index",
     "asset.amount",
     "asset.balance",
+    "asset.collected",
+    "asset.reserve",
     "batch.expiration_height",
     "batch.expires_at",
     "batch.reference_block.number",
@@ -31,6 +36,7 @@ const NUMBER_FIELD_NAMES: &[&str] = &[
     "block.from",
     "block.number",
     "block.protocol.version",
+    "deposit.count",
     "block.size",
     "block.timestamp",
     "block_range.from",
@@ -51,6 +57,10 @@ const NUMBER_FIELD_NAMES: &[&str] = &[
     "db.sqlite.wal.size",
     "dice_roll",
     "failure_rate",
+    "fee.verification_base_fee",
+    "funding_service.max_amount",
+    "funding_service.max_notes_per_tx",
+    "funding_service.tx_expiration_delta",
     "inputs_size",
     "mempool.accounts",
     "mempool.batches.proposed",
@@ -59,7 +69,16 @@ const NUMBER_FIELD_NAMES: &[&str] = &[
     "mempool.output_notes",
     "mempool.transactions.unbatched",
     "mempool.transactions.uncommitted",
+    "note.after_block_num",
+    "note.committed",
+    "note.count",
     "note.tag",
+    "note_transport.payload_bytes",
+    "note_transport.returned",
+    "note_transport.cursor.sequence",
+    "note_transport.cursor.nonce",
+    "note_transport.deleted",
+    "note_transport.retained_bytes",
     "ntx_builder.max_cycles",
     "ntx_builder.tx_expiration_delta",
     "port",
@@ -102,14 +121,19 @@ const STRING_FIELD_NAMES: &[&str] = &[
     "account.storage.kind",
     "account.storage.map.entry.operation",
     "account.storage.operation",
+    "admin.listen",
     "asset.symbol",
     "batch.interval",
     "block.interval",
     "dependency.endpoint",
     "dependency.name",
+    "funding_service.deposit_scan_interval",
+    "funding_service.listen",
+    "funding_service.poll_interval",
     "genesis.source",
     "genesis.source.kind",
     "grpc.timeout",
+    "http.timeout",
     "internal.listen",
     "mempool.removal.reason",
     "network_monitor.listen",
@@ -130,6 +154,7 @@ const STRING_FIELD_NAMES: &[&str] = &[
     "rpc.timeout",
     "sequencer.endpoint",
     "service.name",
+    "service.readiness.reason",
     "service.version",
     "shutdown.signal",
     "sync.block_source.endpoint",
@@ -296,7 +321,8 @@ impl<T: RecordAttribute> RecordAttribute for Option<T> {
 }
 
 impl RecordAttribute for Path {
-    const FIELD_NAMES: &'static [&'static str] = &["data.directory", "genesis.file", "path"];
+    const FIELD_NAMES: &'static [&'static str] =
+        &["account.file", "data.directory", "genesis.file", "path"];
 
     fn record_attribute(&self) -> impl Value + '_ {
         tracing::field::display(self.display())
@@ -322,6 +348,7 @@ impl RecordAttribute for BlockNumber {
         "block_range.to",
         "cutoff_block",
         "current_client_block_height",
+        "note.after_block_num",
         "reference_block.number",
         "snapshot.block_num",
         "sync.upstream_block",
@@ -352,6 +379,7 @@ impl_display_attribute!(
     AccountId,
     &[
         "account.id",
+        "asset.faucet_id",
         "counter.account.id.new",
         "counter.account.id.old",
         "note.sender",

@@ -1,23 +1,20 @@
-use miden_node_proto::decode::{read_account_id, read_block_range};
-use miden_node_proto::generated as proto;
+use miden_node_proto::errors::ConversionResultExt;
+use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_node_tracing::{debug, miden_instrument, miden_span_record};
-use tonic::Status;
 
-use super::{
-    RpcInvalidBlockRange,
-    RpcService,
-    database_error_to_status,
-    invalid_block_range_to_status,
-};
+use super::error_codes::SyncAccountStorageMapsErrorCode;
+use super::{RpcService, database_error_to_status, invalid_block_range_to_status};
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::SyncAccountStorageMaps for RpcService {
-    type Input = proto::rpc::SyncAccountStorageMapsRequest;
+    type Input = proto::rpc::DecodedSyncAccountStorageMapsRequest;
     type Output = proto::rpc::SyncAccountStorageMapsResponse;
 
     fn decode(request: proto::rpc::SyncAccountStorageMapsRequest) -> tonic::Result<Self::Input> {
-        Ok(request)
+        request.decode_fields().map_err(|err| {
+            SyncAccountStorageMapsErrorCode::DeserializationFailed.invalid_argument(err)
+        })
     }
 
     fn encode(output: Self::Output) -> tonic::Result<proto::rpc::SyncAccountStorageMapsResponse> {
@@ -35,11 +32,10 @@ impl proto::server::rpc_api::SyncAccountStorageMaps for RpcService {
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        let account_id = read_account_id::<proto::rpc::SyncAccountStorageMapsRequest, Status>(
-            request.account_id.clone(),
-        )?;
-        let range =
-            read_block_range::<Status>(request.block_range, "SyncAccountStorageMapsRequest")?;
+        let account_id = request.account_id.verify().context("account_id").map_err(|err| {
+            SyncAccountStorageMapsErrorCode::DeserializationFailed.invalid_argument(err)
+        })?;
+        let range = request.block_range;
 
         miden_span_record!(
             account.id = account_id,
@@ -56,11 +52,10 @@ impl proto::server::rpc_api::SyncAccountStorageMaps for RpcService {
         );
 
         if !account_id.is_public() {
-            return Err(Status::invalid_argument(format!("account {account_id} is not public")));
+            return Err(SyncAccountStorageMapsErrorCode::AccountNotPublic
+                .invalid_argument(format!("account {account_id} is not public")));
         }
-        let block_range = range
-            .into_inclusive_range::<RpcInvalidBlockRange>()
-            .map_err(invalid_block_range_to_status)?;
+        let block_range = range.verify().map_err(invalid_block_range_to_status)?;
         let (chain_tip, storage_maps_page) = self
             .state
             .with_view(async |view| {
@@ -75,7 +70,7 @@ impl proto::server::rpc_api::SyncAccountStorageMaps for RpcService {
             .into_iter()
             .map(|map_value| proto::rpc::StorageMapUpdate {
                 slot_name: map_value.slot_name.to_string(),
-                key: Some(map_value.key.into()),
+                key: Some(map_value.key.as_word().into()),
                 value: Some(map_value.value.into()),
                 block_num: map_value.block_num.as_u32(),
             })
