@@ -564,47 +564,71 @@ async fn three_validators_complete_dkg_and_recover_with_any_two_shares() -> Test
 }
 
 #[tokio::test]
-async fn one_validator_completes_dkg_and_recovers_with_one_share() -> TestResult {
+async fn two_validators_complete_dkg_and_recover_with_either_share() -> TestResult {
     let root = tempfile::tempdir()?;
-    let ceremony = prepare_test_ceremony(root.path(), 1, 1).await?;
+    let ceremony = prepare_test_ceremony(root.path(), 2, 1).await?;
     let dealings = deal_for_all::<SecpSecqBackend>(root.path(), &ceremony)?;
     let accepted = accept_for_all::<SecpSecqBackend>(root.path(), &ceremony, &dealings).await?;
-    let bundle =
-        finalize_test_bundle::<SecpSecqBackend>(root.path(), &ceremony, &dealings, &accepted, 0)?;
-    validate_bundle(
-        &ceremony.genesis.path,
-        &ceremony.ceremony,
-        &hex::encode(ceremony.genesis.signing_keys[0].public_key().to_bytes()),
-        &bundle,
-    )?;
+    let mut bundles = Vec::new();
+    for position in 0..2 {
+        let bundle = finalize_test_bundle::<SecpSecqBackend>(
+            root.path(),
+            &ceremony,
+            &dealings,
+            &accepted,
+            position,
+        )?;
+        validate_bundle(
+            &ceremony.genesis.path,
+            &ceremony.ceremony,
+            &hex::encode(ceremony.genesis.signing_keys[position].public_key().to_bytes()),
+            &bundle,
+        )?;
+        bundles.push(bundle);
+    }
 
-    let setup: SetupContext =
-        from_ehtdh1_wire_bytes(&fs_err::read(bundle.join(SETUP_CONTEXT_FILE))?)?;
-    let public_keys: PublicKeySet<StorageGroup> =
-        from_ehtdh1_wire_bytes(&fs_err::read(bundle.join(PUBLIC_KEY_SET_FILE))?)?;
-    let secret_share: SecretShare<StorageGroup> =
-        from_ehtdh1_wire_bytes(&fs_err::read(bundle.join(SECRET_SHARE_FILE))?)?;
+    let shared_setup = fs_err::read(bundles[0].join(SETUP_CONTEXT_FILE))?;
+    let shared_public_keys = fs_err::read(bundles[0].join(PUBLIC_KEY_SET_FILE))?;
+    assert!(bundles.iter().all(|bundle| {
+        fs_err::read(bundle.join(SETUP_CONTEXT_FILE)).unwrap() == shared_setup
+            && fs_err::read(bundle.join(PUBLIC_KEY_SET_FILE)).unwrap() == shared_public_keys
+    }));
+
+    let setup: SetupContext = from_ehtdh1_wire_bytes(&shared_setup)?;
+    let public_keys: PublicKeySet<StorageGroup> = from_ehtdh1_wire_bytes(&shared_public_keys)?;
+    let secret_shares = bundles
+        .iter()
+        .map(|bundle| fs_err::read(bundle.join(SECRET_SHARE_FILE)))
+        .collect::<Result<Vec<_>, _>>()?;
+    let secret_shares = secret_shares
+        .iter()
+        .map(|bytes| from_ehtdh1_wire_bytes::<SecretShare<StorageGroup>>(bytes))
+        .collect::<Result<Vec<_>, _>>()?;
     let sealing_key = SealingKey::new(public_keys.joint_public_key)?;
     let context = b"transaction-inputs/test";
     let content_key = [0x5a; 32];
     let mut rng = ChaCha20Rng::from_seed([42; 32]);
     let ciphertext =
         sealing_key.seal_bytes_with_associated_data(&mut rng, &content_key, context)?;
-    let share = UnsealingShare::new(secret_share).decrypt_share_with_associated_data(
-        &mut rng,
-        &setup,
-        &ciphertext,
-        context,
-        context,
-    )?;
-    let recovered = Combiner::new(public_keys, setup)?.combine_exact_with_associated_data(
-        &ciphertext,
-        context,
-        context,
-        &[share],
-    )?;
+    let shares = secret_shares
+        .into_iter()
+        .map(|secret| {
+            UnsealingShare::new(secret).decrypt_share_with_associated_data(
+                &mut rng,
+                &setup,
+                &ciphertext,
+                context,
+                context,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let combiner = Combiner::new(public_keys, setup)?;
+    for share in shares {
+        let recovered =
+            combiner.combine_exact_with_associated_data(&ciphertext, context, context, &[share])?;
+        assert_eq!(recovered, content_key);
+    }
 
-    assert_eq!(recovered, content_key);
     Ok(())
 }
 
