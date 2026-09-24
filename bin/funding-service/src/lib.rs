@@ -17,6 +17,7 @@ use miden_protocol::asset::{AssetId, FungibleAsset};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
 use miden_protocol::note::Note;
 use miden_protocol::protocol_config::ProtocolConfig;
+use miden_standards::account::faucets::FungibleFaucet;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use url::Url;
@@ -25,7 +26,7 @@ use crate::account::FunderKey;
 use crate::node::RpcNodeClient;
 use crate::prover::Prover;
 use crate::server::FundingServer;
-use crate::status::{StatusRefresher, StatusSnapshot};
+use crate::status::{NativeAsset, StatusRefresher, StatusSnapshot};
 use crate::worker::{Funder, FunderSetup, WorkerConfig};
 
 mod account;
@@ -219,6 +220,20 @@ impl FundingServiceConfig {
             .context("failed to read the fee parameters from the node")?;
         let verification_base_fee = fee_parameters.verification_base_fee();
 
+        // The native faucet cannot change the symbol, the decimals or the name of its asset, so the
+        // service reads them once.
+        let chain_tip = node
+            .committed_tip()
+            .await
+            .context("failed to read the chain tip from the node")?;
+        let (native_faucet, _) = node
+            .public_account(fee_asset_id.faucet_id(), chain_tip)
+            .await
+            .context("failed to read the native faucet account")?;
+        let native_asset = FungibleFaucet::try_from(&native_faucet)
+            .map(|faucet| NativeAsset::new(fee_asset_id, &faucet))
+            .context("the native faucet account is not a fungible faucet")?;
+
         // A note holds the amount as a fungible asset, so an amount the asset type cannot express
         // must fail at startup instead of on every request.
         FungibleAsset::new(fee_asset_id.faucet_id(), self.max_amount)
@@ -248,6 +263,7 @@ impl FundingServiceConfig {
             prover,
             funder_key,
             fee_asset_id,
+            native_asset,
             verification_base_fee,
             protocol_config,
             worker_config: WorkerConfig {
@@ -271,6 +287,7 @@ pub struct FundingService {
     prover: Prover,
     funder_key: FunderKey,
     fee_asset_id: AssetId,
+    native_asset: NativeAsset,
     verification_base_fee: u32,
     protocol_config: ProtocolConfig,
     worker_config: WorkerConfig,
@@ -285,7 +302,8 @@ impl FundingService {
         listener: TcpListener,
         shutdown: CancellationToken,
     ) -> anyhow::Result<()> {
-        let status = StatusSnapshot::new(self.funder_key.account_id(), self.max_amount);
+        let status =
+            StatusSnapshot::new(self.funder_key.account_id(), self.native_asset, self.max_amount);
         let (requests, request_receiver) = mpsc::channel::<Note>(
             QUEUE_CAPACITY_PER_TX * self.worker_config.max_notes_per_tx.get(),
         );
