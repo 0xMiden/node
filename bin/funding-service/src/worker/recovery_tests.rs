@@ -4,7 +4,7 @@ use miden_standards::note::P2idNote;
 
 use super::*;
 use crate::node::tests::{TestChain, TestServer};
-use crate::test_utils::{funder_key_from, genesis_style_wallet};
+use crate::test_utils::{funder_key_from, genesis_style_wallet, test_native_asset};
 
 impl FunderSetup {
     fn fixture() -> Self {
@@ -21,7 +21,7 @@ impl FunderSetup {
                 tick_interval: Duration::from_millis(1),
                 deposit_scan_interval: Duration::from_secs(60),
             },
-            status: StatusSnapshot::new(account.id(), 1_000),
+            status: StatusSnapshot::new(account.id(), test_native_asset(), 1_000),
         }
     }
 
