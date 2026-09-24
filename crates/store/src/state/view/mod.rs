@@ -20,7 +20,8 @@ use miden_protocol::block::{BlockNumber, Blockchain};
 
 use crate::account_state_forest::{AccountStateForest, AccountStateForestBackendReader};
 use crate::db::Db;
-use crate::errors::RangeBeyondTip;
+use crate::db::models::queries::HISTORICAL_BLOCK_RETENTION;
+use crate::errors::{DatabaseError, RangeBelowRetention, RangeBeyondTip};
 use crate::state::State;
 
 mod scoped;
@@ -142,6 +143,25 @@ impl StateView {
             return Err(RangeBeyondTip { chain_tip: tip, block_to: *range.end() });
         }
         Ok(ScopedBlockRange::new(range))
+    }
+
+    /// Validates `range` like [`Self::scope_range`], and also validates that `range` ends inside
+    /// the account history retention window.
+    ///
+    /// The store deletes account history rows that stop being valid at or below
+    /// `tip - HISTORICAL_BLOCK_RETENTION`. A range that ends below that block can miss updates, so
+    /// account state sync reads must use this check.
+    fn scope_retained_range(
+        &self,
+        range: RangeInclusive<BlockNumber>,
+    ) -> Result<ScopedBlockRange, DatabaseError> {
+        let range = self.scope_range(range)?;
+        let oldest_retained =
+            BlockNumber::from(self.tip().as_u32().saturating_sub(HISTORICAL_BLOCK_RETENTION));
+        if range.end() < oldest_retained {
+            return Err(RangeBelowRetention { oldest_retained, block_to: range.end() }.into());
+        }
+        Ok(range)
     }
 
     /// Runs a synchronous read-only operation over the pinned state snapshot on Tokio's blocking

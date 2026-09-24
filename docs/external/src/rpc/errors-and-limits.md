@@ -79,8 +79,10 @@ applies to all methods in the table, `GetBlockByNumber`, and `GetBlockHeaderByNu
 |                                              | `AuthenticationFailed`  | `8`   | `INVALID_ARGUMENT` |
 
 `InvalidBlockRange` includes a range whose start exceeds its end. It also includes a range that extends beyond the chain
-tip, except for `SyncNotes`, which returns `FutureBlock`. `SyncChainMmr` returns `FutureBlock` when the client height
-exceeds the requested chain tip. `SyncNullifiers` returns `DeserializationFailed` for a prefix that exceeds 16 bits.
+tip, except for `SyncNotes`, which returns `FutureBlock`. For `SyncAccountVault` and `SyncAccountStorageMaps`, it also
+includes a range whose `block_to` is more than 50 blocks behind the chain tip, because the node does not keep the
+account history for older blocks. `SyncChainMmr` returns `FutureBlock` when the client height exceeds the requested
+chain tip. `SyncNullifiers` returns `DeserializationFailed` for a prefix that exceeds 16 bits.
 
 Unused values remain reserved. Clients must accept unknown detail codes and fall back to the gRPC status code.
 

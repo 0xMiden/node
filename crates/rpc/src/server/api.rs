@@ -266,7 +266,9 @@ fn database_error_to_status(err: &DatabaseError) -> Status {
         | DatabaseError::AccountsNotFoundInDb(_)
         | DatabaseError::AccountNotPublic(_) => Status::not_found(message),
         DatabaseError::TransactionPageExceedsPayloadLimit { .. } => Status::out_of_range(message),
-        DatabaseError::RangeBeyondTip(_) | DatabaseError::InvalidBlockRange { .. } => {
+        DatabaseError::RangeBeyondTip(_)
+        | DatabaseError::RangeBelowRetention(_)
+        | DatabaseError::InvalidBlockRange { .. } => {
             SyncErrorCode::InvalidBlockRange.invalid_argument(message)
         },
         _ => internal_error(message),
@@ -362,5 +364,16 @@ mod tests {
         let status = get_block_header_error_to_status(GetBlockHeaderError::DatabaseError(error));
         assert_eq!(status.code(), tonic::Code::Internal);
         assert_eq!(status.details(), &[0]);
+    }
+
+    #[test]
+    fn range_below_retention_is_an_invalid_block_range() {
+        let error = DatabaseError::from(miden_node_store::RangeBelowRetention {
+            oldest_retained: BlockNumber::from(50),
+            block_to: BlockNumber::from(49),
+        });
+        let status = database_error_to_status(&error);
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert_eq!(status.details(), &[SyncErrorCode::InvalidBlockRange as u8]);
     }
 }
