@@ -32,8 +32,9 @@ The service serves a JSON HTTP API.
 serialized note, in hexadecimal. A requester which loses the answer can still find the note at the node, through the
 note tag of the target account.
 
-`GET /status` reports the funding account, its balance, the block that balance was read at, and the verification base
-fee of that block. An operator alerts on that balance, because the service never mints.
+`GET /status` reports the funding account, the asset ID, symbol, decimals and name of the native asset, the balance, the
+block that balance was read at, and the verification base fee of that block. An operator alerts on that balance, because
+the service never mints.
 
 The service does not authenticate requests. An operator must restrict access to its HTTP API at the infrastructure
 level.

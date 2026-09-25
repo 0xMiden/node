@@ -112,7 +112,8 @@ pub(crate) mod tests {
     pub(crate) fn test_state(max_amount: u64) -> (FundingState, mpsc::Receiver<Note>) {
         let (requests, rx) = mpsc::channel(4);
         let fee_faucet_id = FungibleAsset::mock_issuer();
-        let status = StatusSnapshot::new(fee_faucet_id, max_amount);
+        let status =
+            StatusSnapshot::new(fee_faucet_id, crate::test_utils::test_native_asset(), max_amount);
 
         (
             FundingState {
