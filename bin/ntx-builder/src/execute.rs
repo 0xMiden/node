@@ -60,7 +60,7 @@ use miden_tx::{
     TransactionProverError,
 };
 
-use crate::actor::candidate::{SponsoredFeatureNote, TransactionCandidate};
+use crate::candidate::{SponsoredFeatureNote, TransactionCandidate};
 use crate::clients::{RemoteTransactionProver, RpcClient, RpcError};
 use crate::db::NtxDbReader;
 use crate::{COMPONENT, LOG_TARGET};

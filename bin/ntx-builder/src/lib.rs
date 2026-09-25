@@ -25,12 +25,16 @@ use crate::db::NtxDbReader;
 pub(crate) type NoteError = Arc<dyn ErrorReport + Send + Sync>;
 
 mod actor;
+mod allowlist;
 mod builder;
+mod candidate;
 mod chain_state;
 mod clients;
 mod committed_block;
 mod coordinator;
 pub(crate) mod db;
+mod execute;
+mod selection;
 pub mod server;
 mod sponsorship;
 
@@ -547,7 +551,7 @@ impl NtxBuilderConfig {
         shutdown: CancellationToken,
     ) -> anyhow::Result<(Coordinator, mpsc::Receiver<actor::ActorRequest>)> {
         let (request_tx, actor_request_rx) = mpsc::channel(self.account_channel_capacity);
-        let tx_args = actor::build_tx_args(self.tx_expiration_delta);
+        let tx_args = selection::build_tx_args(self.tx_expiration_delta);
         let actor_context = AccountActorContext {
             clients: GrpcClients {
                 rpc,
