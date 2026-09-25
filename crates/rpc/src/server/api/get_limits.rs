@@ -7,13 +7,13 @@ use crate::{COMPONENT, LOG_TARGET};
 #[tonic::async_trait]
 impl proto::server::rpc_api::GetLimits for RpcService {
     type Input = ();
-    type Output = proto::rpc::RpcLimits;
+    type Output = proto::rpc::GetLimitsResponse;
 
-    fn decode(request: ()) -> tonic::Result<Self::Input> {
-        Ok(request)
+    fn decode(_request: proto::rpc::GetLimitsRequest) -> tonic::Result<Self::Input> {
+        Ok(())
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::RpcLimits> {
+    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::GetLimitsResponse> {
         Ok(output)
     }
 

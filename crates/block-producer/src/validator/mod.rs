@@ -83,16 +83,25 @@ impl BlockProducerValidatorClient {
         validators: &ValidatorConfig,
     ) -> anyhow::Result<()> {
         let client = self.clients.first().context("transaction validation requires a validator")?;
-        let key = (|| async { client.clone().get_transaction_encryption_key(()).await })
-            .retry(retry::exponential_bounded(
-                Duration::from_millis(100),
-                Duration::from_secs(2),
-                10,
-            ))
-            .when(|error| error.code() == tonic::Code::Unavailable)
-            .await?
-            .into_inner()
-            .verify_with(TrustedTransactionEncryptionState::new(genesis, validators.keys()))?;
+        let key = (|| async {
+            client
+                .clone()
+                .get_transaction_encryption_key(
+                    proto::validator::GetTransactionEncryptionKeyRequest {},
+                )
+                .await
+        })
+        .retry(retry::exponential_bounded(
+            Duration::from_millis(100),
+            Duration::from_secs(2),
+            10,
+        ))
+        .when(|error| error.code() == tonic::Code::Unavailable)
+        .await?
+        .into_inner()
+        .key
+        .ok_or_else(|| tonic::Status::internal("missing transaction encryption key"))?
+        .verify_with(TrustedTransactionEncryptionState::new(genesis, validators.keys()))?;
         let sealed =
             TransactionInputsSealer::new(key).seal(transaction.id(), &inputs.to_bytes())?;
         let request = proto::submission::ProvenTransactionSubmission {
@@ -102,14 +111,23 @@ impl BlockProducerValidatorClient {
         futures::future::try_join_all(self.clients.iter().map(|client| {
             let request = request.clone();
             async move {
-                (|| async { client.clone().submit_proven_transaction(request.clone()).await })
-                    .retry(retry::exponential_bounded(
-                        Duration::from_millis(100),
-                        Duration::from_secs(2),
-                        10,
-                    ))
-                    .when(|error| error.code() == tonic::Code::Unavailable)
-                    .await
+                (|| async {
+                    client
+                        .clone()
+                        .submit_proven_transaction(
+                            proto::validator::SubmitProvenTransactionRequest {
+                                submission: Some(request.clone()),
+                            },
+                        )
+                        .await
+                })
+                .retry(retry::exponential_bounded(
+                    Duration::from_millis(100),
+                    Duration::from_secs(2),
+                    10,
+                ))
+                .when(|error| error.code() == tonic::Code::Unavailable)
+                .await
             }
         }))
         .await?;

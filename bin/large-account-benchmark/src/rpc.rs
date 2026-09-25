@@ -11,11 +11,11 @@ use miden_node_proto::domain::encryption::{
 };
 use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
 use miden_node_proto::generated::account::account_storage_header::storage_slot::Content as SlotContent;
-use miden_node_proto::generated::rpc::account_request::AccountDetailRequest;
+use miden_node_proto::generated::rpc::get_account_request::AccountDetailRequest;
 use miden_node_proto::generated::rpc::{
-    AccountRequest,
-    BlockHeaderByNumberRequest,
-    BlockHeaderByNumberResponse,
+    GetAccountRequest,
+    GetBlockHeaderByNumberRequest,
+    GetBlockHeaderByNumberResponse,
 };
 use miden_node_proto::generated::submission::ProvenTransactionSubmission as ProtoProvenTransaction;
 use miden_node_proto::{DecodeMessageExt, VerifyWith};
@@ -136,7 +136,7 @@ impl SubmissionClient {
         let status = self
             .rpc
             .clone()
-            .status(())
+            .status(miden_node_proto::generated::rpc::StatusRequest {})
             .await
             .context("failed to read node status")?
             .into_inner();
@@ -151,7 +151,7 @@ impl SubmissionClient {
     /// this tool submitted, while the counter account's slot only advances when the ntx-builder has
     /// actually loaded the large account and consumed a network note.
     pub async fn slot_value(&self, account_id: AccountId, slot_name: &str) -> Result<Option<u64>> {
-        let request = AccountRequest {
+        let request = GetAccountRequest {
             account_id: Some(account_id.into()),
             block_num: None,
             details: Some(AccountDetailRequest {
@@ -214,7 +214,7 @@ impl SubmissionClient {
         account_id: AccountId,
         block_num: BlockNumber,
     ) -> Result<AccountWitness> {
-        let request = AccountRequest {
+        let request = GetAccountRequest {
             account_id: Some(account_id.into()),
             block_num: Some(block_num.into()),
             details: None,
@@ -252,10 +252,14 @@ impl SubmissionClient {
         let key = self
             .rpc
             .clone()
-            .get_transaction_encryption_key(())
+            .get_transaction_encryption_key(
+                miden_node_proto::generated::rpc::GetTransactionEncryptionKeyRequest {},
+            )
             .await
             .context("failed to fetch the transaction encryption key")?
-            .into_inner();
+            .into_inner()
+            .key
+            .ok_or_else(|| tonic::Status::internal("missing transaction encryption key"))?;
 
         let verified = key
             .verify_with(TrustedTransactionEncryptionState::new(
@@ -306,9 +310,11 @@ impl SubmissionClient {
         let response = self
             .rpc
             .clone()
-            .submit_proven_tx(ProtoProvenTransaction {
-                transaction: Some(proven_tx.into()),
-                sealed_transaction_inputs: Some(sealed),
+            .submit_proven_tx(miden_node_proto::generated::rpc::SubmitProvenTxRequest {
+                submission: Some(ProtoProvenTransaction {
+                    transaction: Some(proven_tx.into()),
+                    sealed_transaction_inputs: Some(sealed),
+                }),
             })
             .await
             .context("failed to submit the proven transaction")?;
@@ -330,7 +336,7 @@ async fn genesis_block_state(rpc: &mut RpcClient) -> Result<(BlockHeader, Protoc
 }
 
 fn decode_genesis_block_state(
-    response: BlockHeaderByNumberResponse,
+    response: GetBlockHeaderByNumberResponse,
 ) -> Result<(BlockHeader, ProtocolConfig)> {
     let header = response
         .block_header
@@ -345,8 +351,8 @@ fn decode_genesis_block_state(
     Ok((header, protocol_config))
 }
 
-fn genesis_header_request() -> BlockHeaderByNumberRequest {
-    BlockHeaderByNumberRequest {
+fn genesis_header_request() -> GetBlockHeaderByNumberRequest {
+    GetBlockHeaderByNumberRequest {
         block_num: Some(BlockNumber::GENESIS.as_u32()),
         include_mmr_proof: None,
         include_protocol_config: Some(true),
@@ -364,7 +370,7 @@ fn is_stale_key(err: &anyhow::Error) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use miden_node_proto::generated::rpc::BlockHeaderByNumberResponse;
+    use miden_node_proto::generated::rpc::GetBlockHeaderByNumberResponse;
     use miden_protocol::account::AccountId;
     use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1;
     use miden_testing::MockChain;
@@ -381,7 +387,7 @@ mod tests {
             )
             .build()
             .expect("chain should build");
-        let response = BlockHeaderByNumberResponse {
+        let response = GetBlockHeaderByNumberResponse {
             block_header: Some(chain.genesis_block_header().into()),
             mmr_path: None,
             chain_length: None,

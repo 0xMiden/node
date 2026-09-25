@@ -5,9 +5,9 @@ use std::time::Duration;
 
 use assert_matches::assert_matches;
 use miden_node_proto::generated::remote_prover::api_client::ApiClient;
-use miden_node_proto::generated::remote_prover::proof::Proof as ProofVariant;
-use miden_node_proto::generated::remote_prover::proof_request::Request;
-use miden_node_proto::generated::remote_prover::{Proof, ProofRequest};
+use miden_node_proto::generated::remote_prover::prove_request::Request;
+use miden_node_proto::generated::remote_prover::prove_response::Proof as ProofVariant;
+use miden_node_proto::generated::remote_prover::{ProveRequest, ProveResponse};
 use miden_node_proto::{BlockProofRequest, BuildUnchecked, DecodeMessage, VerifyWith};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
@@ -42,36 +42,39 @@ impl Client {
         Self { inner }
     }
 
-    async fn submit_request(&mut self, request: ProofRequest) -> Result<Proof, tonic::Status> {
+    async fn submit_request(
+        &mut self,
+        request: ProveRequest,
+    ) -> Result<ProveResponse, tonic::Status> {
         self.inner.prove(request).await.map(tonic::Response::into_inner)
     }
 }
 
 trait ProofRequestExt {
     /// Generates a proof request for a transaction using [`MockChain`].
-    fn from_tx(tx: &ExecutedTransaction) -> ProofRequest;
-    fn from_batch(batch: &ProposedBatch) -> ProofRequest;
-    fn for_empty_block() -> ProofRequest;
+    fn from_tx(tx: &ExecutedTransaction) -> ProveRequest;
+    fn from_batch(batch: &ProposedBatch) -> ProveRequest;
+    fn for_empty_block() -> ProveRequest;
     async fn mock_tx() -> ExecutedTransaction;
     async fn mock_batch() -> ProposedBatch;
 }
 
-impl ProofRequestExt for ProofRequest {
-    fn from_tx(tx: &ExecutedTransaction) -> ProofRequest {
+impl ProofRequestExt for ProveRequest {
+    fn from_tx(tx: &ExecutedTransaction) -> ProveRequest {
         let tx_inputs = tx.tx_inputs().clone();
 
-        ProofRequest {
+        ProveRequest {
             request: Some(Request::Transaction(tx_inputs.into())),
         }
     }
 
-    fn from_batch(batch: &ProposedBatch) -> ProofRequest {
-        ProofRequest {
+    fn from_batch(batch: &ProposedBatch) -> ProveRequest {
+        ProveRequest {
             request: Some(Request::Batch(batch.into())),
         }
     }
 
-    fn for_empty_block() -> ProofRequest {
+    fn for_empty_block() -> ProveRequest {
         let partial_blockchain = PartialBlockchain::default();
         let block_inputs = BlockInputs::new(
             BlockHeader::mock(0, Some(partial_blockchain.peaks().hash_peaks()), None, &[]),
@@ -93,7 +96,7 @@ impl ProofRequestExt for ProofRequest {
             block_inputs,
         };
 
-        ProofRequest {
+        ProveRequest {
             request: Some(Request::Block(request.into())),
         }
     }
@@ -221,7 +224,7 @@ async fn legacy_behaviour_with_capacity_1() {
         .await
         .expect("server should spawn");
 
-    let request = ProofRequest::from_tx(&ProofRequest::mock_tx().await);
+    let request = ProveRequest::from_tx(&ProveRequest::mock_tx().await);
 
     let mut client_a = Client::connect(port).await;
     let mut client_b = client_a.clone();
@@ -256,7 +259,7 @@ async fn capacity_is_respected() {
         .await
         .expect("server should spawn");
 
-    let request = ProofRequest::from_tx(&ProofRequest::mock_tx().await);
+    let request = ProveRequest::from_tx(&ProveRequest::mock_tx().await);
     let mut client_a = Client::connect(port).await;
     let mut client_b = client_a.clone();
     let mut client_c = client_a.clone();
@@ -294,7 +297,7 @@ async fn timeout_is_respected() {
         .await
         .expect("server should spawn");
 
-    let request = ProofRequest::from_tx(&ProofRequest::mock_tx().await);
+    let request = ProveRequest::from_tx(&ProveRequest::mock_tx().await);
 
     let mut client_a = Client::connect(port).await;
     let mut client_b = Client::connect(port).await;
@@ -324,7 +327,7 @@ async fn missing_request_variant_is_rejected() {
         .expect("server should spawn");
 
     let mut client = Client::connect(port).await;
-    let response = client.submit_request(ProofRequest { request: None }).await;
+    let response = client.submit_request(ProveRequest { request: None }).await;
     let err = response.unwrap_err();
 
     assert_eq!(err.code(), tonic::Code::InvalidArgument);
@@ -341,7 +344,7 @@ async fn malformed_transaction_inputs_are_rejected() {
         .await
         .expect("server should spawn");
 
-    let request = ProofRequest {
+    let request = ProveRequest {
         request: Some(Request::Transaction(
             miden_node_proto::generated::transaction::TransactionInputs::default(),
         )),
@@ -363,7 +366,7 @@ async fn malformed_batch_inputs_are_rejected() {
         .await
         .expect("server should spawn");
 
-    let request = ProofRequest {
+    let request = ProveRequest {
         request: Some(Request::Batch(
             miden_node_proto::generated::transaction::ProposedBatch::default(),
         )),
@@ -385,7 +388,7 @@ async fn malformed_block_inputs_are_rejected() {
         .await
         .expect("server should spawn");
 
-    let request = ProofRequest {
+    let request = ProveRequest {
         request: Some(Request::Block(
             miden_node_proto::generated::block_proving::BlockProofRequest::default(),
         )),
@@ -410,7 +413,7 @@ async fn unsupported_proof_kind_is_rejected() {
         .await
         .expect("server should spawn");
 
-    let request = ProofRequest::from_tx(&ProofRequest::mock_tx().await);
+    let request = ProveRequest::from_tx(&ProveRequest::mock_tx().await);
 
     let mut client = Client::connect(port).await;
     let response = client.submit_request(request).await;
@@ -433,8 +436,8 @@ async fn transaction_proof_is_correct() {
         .await
         .expect("server should spawn");
 
-    let tx = ProofRequest::mock_tx().await;
-    let request = ProofRequest::from_tx(&tx);
+    let tx = ProveRequest::mock_tx().await;
+    let request = ProveRequest::from_tx(&tx);
 
     let mut client = Client::connect(port).await;
     let response = client.submit_request(request).await.unwrap();
@@ -463,8 +466,8 @@ async fn batch_proof_is_correct() {
         .await
         .expect("server should spawn");
 
-    let batch = ProofRequest::mock_batch().await;
-    let request = ProofRequest::from_batch(&batch);
+    let batch = ProveRequest::mock_batch().await;
+    let request = ProveRequest::from_batch(&batch);
 
     let mut client = Client::connect(port).await;
     let response = client.submit_request(request).await.unwrap();
@@ -488,7 +491,7 @@ async fn block_proof_is_canonical_execution_proof() {
         .await
         .expect("server should spawn");
 
-    let request = ProofRequest::for_empty_block();
+    let request = ProveRequest::for_empty_block();
     let mut client = Client::connect(port).await;
     let response = client.submit_request(request).await.unwrap();
     let proof = match response.proof.unwrap() {

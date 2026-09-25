@@ -47,7 +47,13 @@ pub(crate) async fn submit_tx_to_validators(
     futures::future::try_join_all(validators.iter().map(|validator| {
         let mut validator = validator.clone();
         let request = request.clone();
-        async move { validator.submit_proven_transaction(request).await }
+        async move {
+            validator
+                .submit_proven_transaction(proto::validator::SubmitProvenTransactionRequest {
+                    submission: Some(request),
+                })
+                .await
+        }
     }))
     .await?;
     Ok(())
@@ -310,7 +316,7 @@ fn endpoint_limits(params: &[(&str, usize)]) -> proto::rpc::EndpointLimits {
 }
 
 /// Cached RPC query parameter limits.
-static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
+static RPC_LIMITS: LazyLock<proto::rpc::GetLimitsResponse> = LazyLock::new(|| {
     use QueryParamAccountIdLimit as AccountId;
     use QueryParamNoteIdLimit as NoteId;
     use QueryParamNoteTagLimit as NoteTag;
@@ -318,7 +324,7 @@ static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
     use QueryParamStorageMapKeyTotalLimit as StorageMapKeyTotal;
     use QueryParamStorageMapSlotLimit as StorageMapSlot;
 
-    proto::rpc::RpcLimits {
+    proto::rpc::GetLimitsResponse {
         endpoints: std::collections::HashMap::from([
             (
                 "SyncNullifiers".into(),
@@ -348,8 +354,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn get_limits_decodes_unit_request() {
-        assert_eq!(RpcService::decode(()).unwrap(), ());
+    fn get_limits_decodes_empty_request() {
+        assert_eq!(RpcService::decode(proto::rpc::GetLimitsRequest {}).unwrap(), ());
+    }
+
+    #[test]
+    fn endpoint_requests_reject_missing_payloads() {
+        use proto::server::{rpc_api, sequencer_api};
+
+        let errors = [
+            <RpcService as rpc_api::SubmitProvenTx>::decode(proto::rpc::SubmitProvenTxRequest {
+                submission: None,
+            })
+            .expect_err("submission is required"),
+            <RpcService as rpc_api::SubmitProvenTxBatch>::decode(
+                proto::rpc::SubmitProvenTxBatchRequest { submission: None },
+            )
+            .expect_err("submission is required"),
+            <SequencerInternalService as sequencer_api::SubmitAuthenticatedTx>::decode(
+                proto::sequencer::SubmitAuthenticatedTxRequest { transaction: None },
+            )
+            .expect_err("transaction is required"),
+            <SequencerInternalService as sequencer_api::SubmitAuthenticatedTxBatch>::decode(
+                proto::sequencer::SubmitAuthenticatedTxBatchRequest { batch: None },
+            )
+            .expect_err("batch is required"),
+            <RpcService as rpc_api::GetNetworkNoteStatus>::decode(
+                proto::rpc::GetNetworkNoteStatusRequest { note_id: None },
+            )
+            .expect_err("note ID is required"),
+        ];
+        for error in errors {
+            assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        }
     }
 
     #[test]

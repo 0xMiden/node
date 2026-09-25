@@ -88,7 +88,7 @@ fn generate_bindings(file_descriptors: &FileDescriptorSet, dst_dir: &Path) -> mi
     // Protobuf does not support the optional keyword on a oneof. Use a suffix match so the
     // attribute does not apply to the variants.
     prost_config.field_attribute(
-        "rpc.AccountRequest.AccountDetailRequest.storage_request",
+        "rpc.GetAccountRequest.AccountDetailRequest.storage_request",
         "#[proto_decode(optional)]",
     );
 

@@ -12,7 +12,12 @@ impl sequencer_api::SubmitAuthenticatedTx for SequencerInternalService {
     type Input = AuthenticatedTransaction;
     type Output = proto::blockchain::BlockNumber;
 
-    fn decode(request: proto::sequencer::AuthenticatedTransaction) -> tonic::Result<Self::Input> {
+    fn decode(
+        request: proto::sequencer::SubmitAuthenticatedTxRequest,
+    ) -> tonic::Result<Self::Input> {
+        let request = request
+            .transaction
+            .ok_or_else(|| tonic::Status::invalid_argument("missing transaction"))?;
         request
             // SAFETY: Network isolation must restrict this endpoint to trusted full nodes. The
             // sender supplies proof and store validation. The handler checks the reference block
@@ -23,8 +28,10 @@ impl sequencer_api::SubmitAuthenticatedTx for SequencerInternalService {
             })
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::blockchain::BlockNumber> {
-        Ok(output)
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<proto::sequencer::SubmitAuthenticatedTxResponse> {
+        Ok(proto::sequencer::SubmitAuthenticatedTxResponse { block_num: output.block_num })
     }
 
     async fn handle(

@@ -12,7 +12,7 @@ impl proto::server::rpc_api::GetNoteScriptByRoot for RpcService {
     type Input = Word;
     type Output = Option<NoteScript>;
 
-    fn decode(request: proto::rpc::NoteScriptByRootRequest) -> tonic::Result<Self::Input> {
+    fn decode(request: proto::rpc::GetNoteScriptByRootRequest) -> tonic::Result<Self::Input> {
         Ok(request
             .decode_fields()
             .map_err(|err| {
@@ -21,8 +21,8 @@ impl proto::server::rpc_api::GetNoteScriptByRoot for RpcService {
             .root)
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::MaybeNoteScript> {
-        Ok(proto::rpc::MaybeNoteScript { script: output.map(Into::into) })
+    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::GetNoteScriptByRootResponse> {
+        Ok(proto::rpc::GetNoteScriptByRootResponse { script: output.map(Into::into) })
     }
 
     #[miden_instrument(

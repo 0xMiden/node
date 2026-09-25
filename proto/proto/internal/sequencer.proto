@@ -5,7 +5,6 @@ syntax = "proto3";
 package sequencer;
 
 import "account.proto";
-import "block_number.proto";
 import "primitives.proto";
 import "transaction.proto";
 import "batch.proto";
@@ -16,11 +15,11 @@ import "batch.proto";
 service Api {
     // Submits an already-authenticated transaction directly to the mempool. Returns the node's
     // current block height.
-    rpc SubmitAuthenticatedTx(AuthenticatedTransaction) returns (blockchain.BlockNumber) {}
+    rpc SubmitAuthenticatedTx(SubmitAuthenticatedTxRequest) returns (SubmitAuthenticatedTxResponse) {}
 
     // Submits a batch of already-authenticated transactions directly to the mempool. Returns the
     // node's current block height.
-    rpc SubmitAuthenticatedTxBatch(AuthenticatedTransactionBatch) returns (blockchain.BlockNumber) {}
+    rpc SubmitAuthenticatedTxBatch(SubmitAuthenticatedTxBatchRequest) returns (SubmitAuthenticatedTxBatchResponse) {}
 }
 
 // MESSAGES
@@ -86,4 +85,20 @@ message NullifierRecord {
 
     // The block number in which the nullifier was consumed; 0 if it is unspent.
     fixed32 block_num = 2;
+}
+
+message SubmitAuthenticatedTxRequest {
+    AuthenticatedTransaction transaction = 1;
+}
+
+message SubmitAuthenticatedTxResponse {
+    fixed32 block_num = 1;
+}
+
+message SubmitAuthenticatedTxBatchRequest {
+    AuthenticatedTransactionBatch batch = 1;
+}
+
+message SubmitAuthenticatedTxBatchResponse {
+    fixed32 block_num = 1;
 }

@@ -679,7 +679,12 @@ impl ValidatorClient {
                 transaction: Some(tx.as_ref().into()),
                 sealed_transaction_inputs: Some(inputs.clone()),
             };
-            self.submit_proven_transaction(proven_tx).await?;
+            self.submit_proven_transaction(
+                crate::generated::validator::SubmitProvenTransactionRequest {
+                    submission: Some(proven_tx),
+                },
+            )
+            .await?;
         }
         Ok(())
     }

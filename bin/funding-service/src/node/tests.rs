@@ -106,8 +106,8 @@ impl TestChain {
         }
     }
 
-    fn notes_by_id(&self, request: &NotesByIdRequest) -> rpc::NotesByIdResponse {
-        rpc::NotesByIdResponse {
+    fn notes_by_id(&self, request: &GetNotesByIdRequest) -> rpc::GetNotesByIdResponse {
+        rpc::GetNotesByIdResponse {
             notes: request
                 .note_ids
                 .iter()
@@ -223,10 +223,12 @@ impl Service<http::Request<Body>> for RpcFixture {
             return Box::pin(async { Ok(tonic::Status::unavailable("retry").into_http()) });
         }
         match method {
-            "Status" => self.respond(request, |chain, _: &()| rpc::RpcStatus {
-                chain_tip: chain.tip,
-                ..Default::default()
-            }),
+            "Status" => {
+                self.respond(request, |chain, _: &rpc::StatusRequest| rpc::StatusResponse {
+                    chain_tip: chain.tip,
+                    ..Default::default()
+                })
+            },
             "SyncTransactions" => self.respond(request, TestChain::sync_transactions),
             "SyncNotes" => self.respond(request, TestChain::sync_notes),
             "GetNotesById" => self.respond(request, TestChain::notes_by_id),

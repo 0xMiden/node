@@ -16,12 +16,14 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
     type Input = proto::submission::TransactionBatch;
     type Output = proto::blockchain::BlockNumber;
 
-    fn decode(request: proto::submission::TransactionBatch) -> tonic::Result<Self::Input> {
-        Ok(request)
+    fn decode(request: proto::rpc::SubmitProvenTxBatchRequest) -> tonic::Result<Self::Input> {
+        request
+            .submission
+            .ok_or_else(|| tonic::Status::invalid_argument("missing submission"))
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::blockchain::BlockNumber> {
-        Ok(output)
+    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::SubmitProvenTxBatchResponse> {
+        Ok(proto::rpc::SubmitProvenTxBatchResponse { block_num: output.block_num })
     }
 
     #[miden_instrument(
@@ -138,9 +140,13 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
                 source_rpc
                     .as_ref()
                     .clone()
-                    .submit_proven_tx_batch(forwarded_request)
+                    .submit_proven_tx_batch(forwarded_request.map(|payload| {
+                        proto::rpc::SubmitProvenTxBatchRequest { submission: Some(payload) }
+                    }))
                     .await
-                    .map(tonic::Response::into_inner)
+                    .map(|response| proto::blockchain::BlockNumber {
+                        block_num: response.into_inner().block_num,
+                    })
             },
         }
     }
@@ -176,9 +182,13 @@ impl RpcService {
             batch_proof: Some((&proven_batch).into()),
         };
         sequencer
-            .submit_authenticated_tx_batch(authenticated_batch)
+            .submit_authenticated_tx_batch(proto::sequencer::SubmitAuthenticatedTxBatchRequest {
+                batch: Some(authenticated_batch),
+            })
             .await
-            .map(tonic::Response::into_inner)
+            .map(|response| proto::blockchain::BlockNumber {
+                block_num: response.into_inner().block_num,
+            })
     }
 }
 

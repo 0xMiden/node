@@ -17,8 +17,8 @@ impl proto::server::rpc_api::RegisterAccount for RpcService {
         request.decode_and_verify().map_err(ConversionError::into_status)
     }
 
-    fn encode((): Self::Output) -> tonic::Result<()> {
-        Ok(())
+    fn encode((): Self::Output) -> tonic::Result<proto::rpc::RegisterAccountResponse> {
+        Ok(proto::rpc::RegisterAccountResponse {})
     }
 
     #[miden_instrument(target = COMPONENT, name = "register_account", err)]

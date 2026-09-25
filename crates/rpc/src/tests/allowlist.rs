@@ -496,22 +496,38 @@ async fn submission_endpoints_reject_unregistered_creation_without_partial_batch
 
     for result in [
         public
-            .submit_proven_tx(Request::new(proto::submission::ProvenTransactionSubmission {
-                transaction: Some(transactions[1].as_ref().into()),
-                sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
+            .submit_proven_tx(Request::new(proto::rpc::SubmitProvenTxRequest {
+                submission: Some(proto::submission::ProvenTransactionSubmission {
+                    transaction: Some(transactions[1].as_ref().into()),
+                    sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
+                }),
             }))
-            .await,
+            .await
+            .map(|_| ()),
         public
-            .submit_proven_tx_batch(Request::new(proto::submission::TransactionBatch {
-                batch: Some((&proven_batch).into()),
-                proposed_batch: Some((&batch).into()),
-                sealed_transaction_inputs: vec![test_sealed_transaction_inputs(); 2],
+            .submit_proven_tx_batch(Request::new(proto::rpc::SubmitProvenTxBatchRequest {
+                submission: Some(proto::submission::TransactionBatch {
+                    batch: Some((&proven_batch).into()),
+                    proposed_batch: Some((&batch).into()),
+                    sealed_transaction_inputs: vec![test_sealed_transaction_inputs(); 2],
+                }),
             }))
-            .await,
-        internal.submit_authenticated_tx(Request::new(tx)).await,
+            .await
+            .map(|_| ()),
         internal
-            .submit_authenticated_tx_batch(Request::new(authenticated_batch.clone()))
-            .await,
+            .submit_authenticated_tx(Request::new(proto::sequencer::SubmitAuthenticatedTxRequest {
+                transaction: Some(tx),
+            }))
+            .await
+            .map(|_| ()),
+        internal
+            .submit_authenticated_tx_batch(Request::new(
+                proto::sequencer::SubmitAuthenticatedTxBatchRequest {
+                    batch: Some(authenticated_batch.clone()),
+                },
+            ))
+            .await
+            .map(|_| ()),
     ] {
         let status = result.unwrap_err();
         assert_eq!(status.code(), tonic::Code::PermissionDenied, "{status}");
@@ -521,7 +537,11 @@ async fn submission_endpoints_reject_unregistered_creation_without_partial_batch
     // The retry must not conflict with a partially admitted transaction from the rejected batch.
     allowlist.add_account(transactions[1].account_id()).await.unwrap();
     internal
-        .submit_authenticated_tx_batch(Request::new(authenticated_batch))
+        .submit_authenticated_tx_batch(Request::new(
+            proto::sequencer::SubmitAuthenticatedTxBatchRequest {
+                batch: Some(authenticated_batch),
+            },
+        ))
         .await
         .unwrap();
 }
