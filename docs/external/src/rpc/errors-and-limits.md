@@ -143,6 +143,22 @@ The limits are returned in `json` format as follows:
 }
 ```
 
+## Historical State Retention
+
+`GetAccount` can return the state of a public account as of a specific past block. The node keeps this history only for
+the most recent `50` blocks: vault assets, storage map values, and account code that can no longer affect any block
+inside that window are pruned as new blocks are applied. The window is a compile-time constant of the store
+(`HISTORICAL_BLOCK_RETENTION`) rather than a runtime option, and it is measured in blocks, so its wall-clock duration
+depends on the network's block time.
+
+Requesting a block that has fallen outside the window fails with `INVALID_ARGUMENT` and a message stating that the block
+has been pruned. This is one of the ordinary-status cases described above: it carries no Miden error detail code, and
+the message should not be matched on. The effective boundary may also lag the chain tip by a few blocks while in-flight
+reads still pin older snapshots, so treat the window as approximate rather than exact.
+
+Flows that execute against a captured reference block, such as collecting several signatures before submitting a
+transaction, must complete within this window or re-anchor to a newer block.
+
 ## Content Negotiation
 
 The RPC server checks the `Accept` header for Miden-specific media parameters:
