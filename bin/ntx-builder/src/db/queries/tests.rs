@@ -251,6 +251,89 @@ async fn sponsorships_for_pending_notes_binds_by_feature_note_not_tag() {
     assert_eq!(pending[&feature.as_note().id()].len(), 1);
 }
 
+/// The note status reports every sponsorship bound to the feature note, consumed or not, and no
+/// sponsorship bound to another feature note.
+#[tokio::test]
+async fn get_note_status_reports_bound_sponsorships() {
+    let (db, _dir) = test_setup().await;
+    let account_id = mock_network_account_id();
+    let feature = mock_single_target_note(account_id, 1);
+    let other_feature = mock_single_target_note(account_id, 2);
+    let pending = sponsorship_for(account_id, feature.as_note().id(), 3);
+    let consumed = sponsorship_for(account_id, feature.as_note().id(), 4);
+    let unrelated = sponsorship_for(account_id, other_feature.as_note().id(), 5);
+
+    db.insert_network_notes(vec![feature.clone(), other_feature.clone()])
+        .await
+        .unwrap();
+    db.insert_sponsorship_notes(vec![pending.clone(), consumed.clone(), unrelated])
+        .await
+        .unwrap();
+    db.mark_sponsorships_consumed(vec![consumed.nullifier()], BlockNumber::from(7))
+        .await
+        .unwrap();
+
+    let status = db.get_note_status(feature.as_note().id()).await.unwrap().unwrap();
+    let mut reported: Vec<_> = status
+        .sponsorships
+        .iter()
+        .map(|row| (row.note.id(), row.committed_at))
+        .collect();
+    reported.sort_by_key(|(id, _)| *id);
+    let mut expected = vec![(pending.id(), None), (consumed.id(), Some(BlockNumber::from(7)))];
+    expected.sort_by_key(|(id, _)| *id);
+    assert_eq!(reported, expected);
+
+    let other = db.get_note_status(other_feature.as_note().id()).await.unwrap().unwrap();
+    assert_eq!(other.sponsorships.len(), 1);
+
+    let unsponsored = mock_single_target_note(account_id, 6);
+    db.insert_network_notes(vec![unsponsored.clone()]).await.unwrap();
+    let status = db.get_note_status(unsponsored.as_note().id()).await.unwrap().unwrap();
+    assert!(status.sponsorships.is_empty());
+}
+
+/// A sponsorship failure is stored on the sponsorship row, keeps only the latest error, and does
+/// not change the attempt tracking of the feature note.
+#[tokio::test]
+async fn sponsorships_failed_records_latest_error_on_sponsorship() {
+    let (db, _dir) = test_setup().await;
+    let account_id = mock_network_account_id();
+    let feature = mock_single_target_note(account_id, 1);
+    let failing = sponsorship_for(account_id, feature.as_note().id(), 2);
+    let healthy = sponsorship_for(account_id, feature.as_note().id(), 3);
+
+    db.insert_network_notes(vec![feature.clone()]).await.unwrap();
+    db.insert_sponsorship_notes(vec![failing.clone(), healthy.clone()])
+        .await
+        .unwrap();
+
+    db.sponsorships_failed(
+        vec![(failing.nullifier(), test_note_error("first"))],
+        BlockNumber::from(5),
+    )
+    .await
+    .unwrap();
+    db.sponsorships_failed(
+        vec![(failing.nullifier(), test_note_error("second"))],
+        BlockNumber::from(6),
+    )
+    .await
+    .unwrap();
+
+    let status = db.get_note_status(feature.as_note().id()).await.unwrap().unwrap();
+    assert_eq!(status.attempt_count, 0);
+    assert_eq!(status.last_error, None);
+
+    let failing_row = status.sponsorships.iter().find(|row| row.note.id() == failing.id()).unwrap();
+    assert_eq!(failing_row.last_attempt, Some(BlockNumber::from(6)));
+    assert!(failing_row.last_error.as_deref().is_some_and(|error| error.contains("second")));
+
+    let healthy_row = status.sponsorships.iter().find(|row| row.note.id() == healthy.id()).unwrap();
+    assert_eq!(healthy_row.last_attempt, None);
+    assert_eq!(healthy_row.last_error, None);
+}
+
 /// `apply_committed_block` reports one wakeup per sponsorship whose feature note is known and still
 /// pending; sponsorships for consumed or unknown feature notes wake nobody.
 #[tokio::test]

@@ -1473,6 +1473,14 @@ async fn full_node_forwards_get_network_note_status_to_source_rpc() {
         last_error: Some("execution failed".to_string()),
         attempt_count: 7,
         last_attempt_block_num: Some(42),
+        sponsorships: vec![proto::rpc::NetworkNoteSponsorship {
+            note_id: Some(Word::empty().into()),
+            fee_asset: None,
+            reclaim_height: Some(100),
+            committed_block_num: Some(41),
+            last_error: Some("sponsorship failed".to_string()),
+            last_attempt_block_num: Some(40),
+        }],
     };
     let (ntx_builder, ntx_builder_call_count, _last_accept, _ntx_builder_server) =
         start_ntx_builder(expected.clone()).await;
@@ -1504,6 +1512,7 @@ async fn full_node_preserves_original_accept_metadata_when_forwarding() {
         last_error: Some("execution failed".to_string()),
         attempt_count: 7,
         last_attempt_block_num: Some(42),
+        sponsorships: Vec::new(),
     };
     let (ntx_builder, _ntx_builder_call_count, last_accept, _ntx_builder_server) =
         start_ntx_builder(expected.clone()).await;

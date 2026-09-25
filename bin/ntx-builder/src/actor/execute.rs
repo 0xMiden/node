@@ -155,6 +155,9 @@ pub struct NtxExecutionResult {
     /// Notes whose own consumption exceeds the per-tx cycle budget. They can never be consumed in
     /// any transaction and should be discarded immediately.
     pub oversized_notes: Vec<FailedNote>,
+    /// Sponsorship notes that failed while their feature note was consumed without them. Their
+    /// errors are recorded on the sponsorship. Their feature notes are not charged.
+    pub dropped_sponsorships: Vec<FailedNote>,
     /// Note scripts fetched from the remote RPC service that should be persisted to the local DB
     /// cache.
     pub fetched_scripts: Vec<(Word, NoteScript)>,
@@ -167,6 +170,7 @@ struct FilteredNotes {
     failed: Vec<FailedNote>,
     deferred: Vec<FailedNote>,
     oversized: Vec<FailedNote>,
+    dropped_sponsorships: Vec<FailedNote>,
 }
 
 // NETWORK TRANSACTION CONTEXT
@@ -298,36 +302,48 @@ impl NtxContext {
                 let handle = tokio::runtime::Handle::current();
                 let span = miden_node_tracing::Span::current();
 
-                let (executed_tx, failed_notes, deferred_notes, oversized_notes, scripts_to_cache) =
-                    spawn_blocking_in_current_span(move || {
-                        let data_store = NtxDataStore::new(
-                            account,
-                            chain_state,
-                            ctx.rpc.clone(),
-                            ctx.script_cache.clone(),
-                            ctx.db.clone(),
-                            ctx.request_backoff,
-                        )?;
-                        handle.block_on(
-                            async {
-                                let FilteredNotes { successful, failed, deferred, oversized } =
-                                    ctx.filter_notes(&data_store, notes).await?;
-                                let executed_tx =
-                                    Box::pin(ctx.execute(&data_store, successful)).await?;
-                                let scripts_to_cache = data_store.take_fetched_scripts();
-                                Ok::<_, NtxError>((
-                                    executed_tx,
-                                    failed,
-                                    deferred,
-                                    oversized,
-                                    scripts_to_cache,
-                                ))
-                            }
-                            .instrument(span),
-                        )
-                    })
-                    .await
-                    .unwrap_or_else(|err| std::panic::resume_unwind(err.into_panic()))?;
+                let (
+                    executed_tx,
+                    failed_notes,
+                    deferred_notes,
+                    oversized_notes,
+                    dropped_sponsorships,
+                    scripts_to_cache,
+                ) = spawn_blocking_in_current_span(move || {
+                    let data_store = NtxDataStore::new(
+                        account,
+                        chain_state,
+                        ctx.rpc.clone(),
+                        ctx.script_cache.clone(),
+                        ctx.db.clone(),
+                        ctx.request_backoff,
+                    )?;
+                    handle.block_on(
+                        async {
+                            let FilteredNotes {
+                                successful,
+                                failed,
+                                deferred,
+                                oversized,
+                                dropped_sponsorships,
+                            } = ctx.filter_notes(&data_store, notes).await?;
+                            let executed_tx =
+                                Box::pin(ctx.execute(&data_store, successful)).await?;
+                            let scripts_to_cache = data_store.take_fetched_scripts();
+                            Ok::<_, NtxError>((
+                                executed_tx,
+                                failed,
+                                deferred,
+                                oversized,
+                                dropped_sponsorships,
+                                scripts_to_cache,
+                            ))
+                        }
+                        .instrument(span),
+                    )
+                })
+                .await
+                .unwrap_or_else(|err| std::panic::resume_unwind(err.into_panic()))?;
 
                 // Destructure the executed tx into its parts; the actor applies the account patch
                 // to its in-memory account once this transaction lands in a committed block.
@@ -345,6 +361,7 @@ impl NtxContext {
                     failed_notes,
                     deferred_notes,
                     oversized_notes,
+                    dropped_sponsorships,
                     fetched_scripts: scripts_to_cache,
                 })
             })
@@ -396,14 +413,12 @@ impl NtxContext {
             .collect::<HashMap<_, _>>();
 
         // The checker can eliminate a single sponsorship and still accept its feature note. Do not
-        // record the failure of that sponsorship. The failure is charged to the feature note, and
-        // the feature note is submitted successfully.
-        let failed = failed
-            .into_iter()
-            .filter(|failed| {
+        // charge the feature note for that failure, because the feature note is submitted
+        // successfully. Return the sponsorship separately so that it records its own error.
+        let (failed, dropped_sponsorships): (Vec<_>, Vec<_>) =
+            failed.into_iter().partition(|failed| {
                 should_record_failure(failed.note().id(), &successful_ids, &sponsor_to_feature)
-            })
-            .collect::<Vec<_>>();
+            });
 
         for failed_note in &failed {
             if let Some(error) = failed_note.error() {
@@ -435,7 +450,13 @@ impl NtxContext {
         let (cycle_limited, failed) = partition_cycle_limited(failed);
         let (deferred, oversized) = self.classify_cycle_limited(data_store, cycle_limited).await;
 
-        Ok(FilteredNotes { successful, failed, deferred, oversized })
+        Ok(FilteredNotes {
+            successful,
+            failed,
+            deferred,
+            oversized,
+            dropped_sponsorships,
+        })
     }
 
     /// Runs the consumability checker over `notes` and returns the notes it accepted alongside the
