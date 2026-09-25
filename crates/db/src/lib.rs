@@ -142,3 +142,6 @@ impl PinnedConnection {
             .map_err(|err| E::from(DatabaseError::interact(&msg.to_string(), &err)))?
     }
 }
+
+#[doc(hidden)]
+pub use miden_node_persistence as persistence;

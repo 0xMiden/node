@@ -18,6 +18,7 @@ workspace = true
 anyhow                      = { workspace = true }
 http                        = { workspace = true }
 miden-node-grpc-error-macro = { workspace = true }
+miden-node-persistence      = { workspace = true }
 miden-node-tracing          = { workspace = true }
 miden-node-utils            = { workspace = true }
 miden-objects               = { workspace = true }

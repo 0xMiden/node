@@ -2,16 +2,10 @@ use std::fmt;
 use std::path::Path;
 
 use anyhow::Context;
+use miden_node_persistence::miden_protobuf::ConversionError;
+use miden_node_persistence::{PersistenceError, ProtobufValue, check_version};
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use miden_protocol::protocol_config::ProtocolConfig;
-use miden_protocol::utils::serde::{
-    ByteReader,
-    ByteWriter,
-    Deserializable,
-    DeserializationError,
-    Serializable,
-    SliceReader,
-};
 
 /// A validated genesis block and its protocol configuration.
 ///
@@ -63,19 +57,30 @@ impl GenesisBlock {
     }
 }
 
-impl Serializable for GenesisBlock {
-    fn write_into<W: ByteWriter>(&self, target: &mut W) {
-        self.block.write_into(target);
-        self.protocol_config.write_into(target);
-    }
-}
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+struct InvalidGenesis(anyhow::Error);
 
-impl Deserializable for GenesisBlock {
-    fn read_from<R: ByteReader>(source: &mut R) -> Result<Self, DeserializationError> {
-        let block = source.read()?;
-        let protocol_config = source.read()?;
-        Self::new(block, protocol_config)
-            .map_err(|err| DeserializationError::InvalidValue(err.to_string()))
+impl ProtobufValue for GenesisBlock {
+    type Message = miden_node_persistence::generated::GenesisFile;
+
+    fn to_proto(&self) -> Self::Message {
+        Self::Message {
+            version: 1,
+            block: Some(self.block.to_proto()),
+            protocol_config: Some(self.protocol_config.to_proto()),
+        }
+    }
+
+    fn from_proto(message: Self::Message) -> Result<Self, PersistenceError> {
+        check_version("genesis file", message.version)?;
+        let block =
+            message.block.ok_or_else(|| ConversionError::message("missing genesis block"))?;
+        let config = message
+            .protocol_config
+            .ok_or_else(|| ConversionError::message("missing genesis protocol configuration"))?;
+        Self::new(SignedBlock::from_proto(block)?, ProtocolConfig::from_proto(config)?)
+            .map_err(|error| ConversionError::new(InvalidGenesis(error)).into())
     }
 }
 
@@ -128,12 +133,9 @@ pub async fn fetch_genesis_block(network: OfficialNetwork) -> anyhow::Result<Gen
 }
 
 fn deserialize_genesis_block(bytes: &[u8]) -> anyhow::Result<GenesisBlock> {
-    let mut reader = SliceReader::new(bytes);
-    let genesis = GenesisBlock::read_from(&mut reader).context(
-        "failed to deserialize genesis block and protocol configuration; the genesis may have been produced by an incompatible node version; regenerate genesis.dat",
-    )?;
-    anyhow::ensure!(!reader.has_more_bytes(), "unexpected trailing bytes in genesis file");
-    Ok(genesis)
+    miden_node_persistence::decode(bytes).context(
+        "failed to deserialize genesis block and protocol configuration; regenerate genesis.dat with the current node",
+    )
 }
 
 #[cfg(test)]

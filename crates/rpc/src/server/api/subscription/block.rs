@@ -6,7 +6,6 @@ use miden_node_proto::generated as proto;
 use miden_node_tracing::{debug, miden_instrument};
 use miden_node_utils::grpc::ClientIp;
 use miden_protocol::block::{BlockNumber, SignedBlock};
-use miden_protocol::utils::serde::Deserializable;
 
 use super::super::{COMPONENT, RpcService};
 use super::stream::SubscriptionStream;
@@ -52,9 +51,10 @@ impl proto::server::rpc_api::BlockSubscription for RpcService {
                 let Some(event) = stream.try_next().await? else {
                     return Ok(None);
                 };
-                let block = SignedBlock::read_from_bytes(&event.data).map_err(|err| {
-                    tonic::Status::internal(format!("invalid stored block: {err}"))
-                })?;
+                let block =
+                    miden_node_persistence::decode::<SignedBlock>(&event.data).map_err(|err| {
+                        tonic::Status::internal(format!("invalid stored block: {err}"))
+                    })?;
                 let commitment = block.header().protocol_config_commitment();
                 let protocol_config = if previous == Some(commitment) {
                     None

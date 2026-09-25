@@ -68,7 +68,6 @@ mod bootstrap_tests {
     #[tokio::test]
     async fn bootstrap_accepts_genesis_artifact_with_protocol_config() {
         use miden_node_utils::genesis::read_genesis_block;
-        use miden_protocol::utils::serde::Serializable;
 
         let genesis = GenesisState::new(
             Vec::new(),
@@ -81,7 +80,7 @@ mod bootstrap_tests {
         .unwrap();
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("genesis.dat");
-        fs_err::write(&path, genesis.to_bytes()).unwrap();
+        fs_err::write(&path, miden_node_persistence::encode(&genesis)).unwrap();
         let decoded = read_genesis_block(&path).unwrap();
         assert_eq!(decoded.protocol_config(), genesis.protocol_config());
         let database_path = root.path().join("ntx.sqlite3");

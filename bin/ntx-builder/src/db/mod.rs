@@ -14,7 +14,6 @@ use miden_protocol::crypto::merkle::mmr::PartialMmr;
 use miden_protocol::note::{Note, NoteId, NoteScript, Nullifier};
 #[cfg(test)]
 use miden_protocol::transaction::TransactionId;
-use miden_protocol::utils::serde::{ByteReader, ByteWriter, Deserializable, Serializable};
 #[cfg(test)]
 use miden_standards::note::AccountTargetNetworkNote;
 
@@ -34,11 +33,10 @@ mod migrations;
 pub(crate) const OVERSIZED_NOTE_DISCARD_REASON: &str =
     "note consumption exceeds the per-transaction cycle budget; it can never be consumed";
 
-/// Genesis validator keys persisted in the pre-0.17 native encoding.
+/// Ordered genesis validator keys stored as protobuf.
 ///
-/// The transaction-encryption trust root only needs the ordered keys, not the quorum newly carried
-/// by [`ValidatorConfig`]. Keeping this wrapper encoded as `Vec<PublicKey>` preserves the existing
-/// database representation while the runtime block header uses `ValidatorConfig`.
+/// The transaction-encryption trust root uses the ordered validator keys.
+/// The protobuf payload omits the block-signing quorum.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GenesisValidatorKeys(Vec<ValidatorPublicKey>);
 
@@ -52,30 +50,25 @@ impl GenesisValidatorKeys {
     }
 }
 
-impl Serializable for GenesisValidatorKeys {
-    fn write_into<W: ByteWriter>(&self, target: &mut W) {
-        self.0.write_into(target);
+impl miden_node_persistence::ProtobufValue for GenesisValidatorKeys {
+    type Message = miden_node_persistence::generated::ValidatorKeys;
+    fn to_proto(&self) -> Self::Message {
+        Self::Message {
+            keys: self.0.iter().map(Into::into).collect(),
+        }
     }
-}
-
-impl Deserializable for GenesisValidatorKeys {
-    fn read_from<R: ByteReader>(
-        source: &mut R,
-    ) -> Result<Self, miden_protocol::utils::serde::DeserializationError> {
-        let keys = Vec::<ValidatorPublicKey>::read_from(source)?;
-        let quorum = u16::try_from(keys.len()).map_err(|_| {
-            miden_protocol::utils::serde::DeserializationError::InvalidValue(
-                "validator key count does not fit in u16".into(),
-            )
-        })?;
-        ValidatorConfig::new(keys.clone(), quorum).map_err(|err| {
-            miden_protocol::utils::serde::DeserializationError::InvalidValue(err.to_string())
-        })?;
+    fn from_proto(
+        message: Self::Message,
+    ) -> Result<Self, miden_node_persistence::PersistenceError> {
+        use miden_node_persistence::miden_protobuf::{ConversionError, DecodeMessage};
+        let keys = message.decode_fields()?.keys.verify_infallible();
+        let quorum = u16::try_from(keys.len()).map_err(ConversionError::new)?;
+        ValidatorConfig::new(keys.clone(), quorum).map_err(ConversionError::new)?;
         Ok(Self(keys))
     }
 }
 
-miden_node_db::impl_blob_codec!(GenesisValidatorKeys);
+miden_node_db::impl_protobuf_codec!(GenesisValidatorKeys);
 
 // NTX BUILDER DATABASE
 // ================================================================================================

@@ -87,11 +87,11 @@ impl SqlTypeConvert for BlockHeader {
     type Raw = Vec<u8>;
 
     fn from_raw_sql(raw: Self::Raw) -> Result<Self, DatabaseTypeConversionError> {
-        <Self as Deserializable>::read_from_bytes(raw.as_slice()).map_err(Self::map_err)
+        miden_node_persistence::decode(raw.as_slice()).map_err(Self::map_err)
     }
 
     fn to_raw_sql(self) -> Self::Raw {
-        miden_crypto::utils::Serializable::to_bytes(&self)
+        miden_node_persistence::encode(&self)
     }
 }
 

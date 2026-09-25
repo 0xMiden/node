@@ -76,7 +76,7 @@ pub(crate) fn select_account_header_with_storage_header_at_block(
     };
 
     let storage_header = match &storage_header_blob {
-        Some(blob) => AccountStorageHeader::read_from_bytes(blob)?,
+        Some(blob) => miden_node_persistence::decode::<AccountStorageHeader>(blob)?,
         None => AccountStorageHeader::new(Vec::new())?,
     };
 
