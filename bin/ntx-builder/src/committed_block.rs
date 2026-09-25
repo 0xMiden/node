@@ -6,13 +6,12 @@ use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::{OutputNote, TransactionId};
 use miden_standards::note::AccountTargetNetworkNote;
 
-use crate::db::queries::account_effect::NetworkAccountEffect;
 use crate::sponsorship::SponsorshipNote;
 
 /// Network-relevant state extracted from a committed [`SignedBlock`].
 ///
-/// Produced once per committed block on the ntx-builder side. Downstream code (DB layer,
-/// coordinator) applies the contained effects to local state.
+/// Produced once per committed block on the ntx-builder side. The DB layer applies the contained
+/// effects to local state, and the scheduler reads them to resolve its in-flight transactions.
 #[derive(Debug, Clone)]
 pub struct CommittedBlockEffects {
     pub header: BlockHeader,
@@ -24,7 +23,7 @@ pub struct CommittedBlockEffects {
     pub network_account_updates: Vec<(AccountId, AccountUpdateDetails)>,
     /// Transaction id paired with the account it updated, for every transaction in the block.
     /// `apply_committed_block` uses this to record the latest landed transaction per network
-    /// account so actors can confirm their own submitted transaction landed.
+    /// account, and the scheduler uses it to confirm that its own submission landed.
     pub account_transactions: Vec<(AccountId, TransactionId)>,
 }
 
@@ -91,26 +90,12 @@ impl CommittedBlockEffects {
         }
     }
 
-    /// Returns the ids of the network accounts created by this block.
-    ///
-    /// The coordinator uses this to release actor spawns that were deferred until the account's
-    /// creation transaction committed.
-    pub fn created_network_accounts(&self) -> impl Iterator<Item = AccountId> + '_ {
-        self.network_account_updates.iter().filter_map(|(account_id, details)| {
-            matches!(
-                NetworkAccountEffect::from_protocol(details),
-                Some(NetworkAccountEffect::Created(_))
-            )
-            .then_some(*account_id)
-        })
-    }
-
     /// The latest transaction committed against each account in this block.
     ///
     /// `account_transactions` is in block order, so collecting into a map keeps the last
     /// transaction per account. Both `apply_committed_block` (to persist `accounts.last_tx_id`) and
-    /// the coordinator (to populate each [`AccountView`](crate::coordinator)'s `last_committed_tx`)
-    /// derive landing state from this single definition, so the two never disagree.
+    /// the scheduler (to detect that a submitted transaction landed) derive landing state from this
+    /// single definition, so the two never disagree.
     pub fn latest_tx_per_account(&self) -> HashMap<AccountId, TransactionId> {
         self.account_transactions.iter().copied().collect()
     }

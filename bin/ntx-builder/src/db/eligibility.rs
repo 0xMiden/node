@@ -1,4 +1,4 @@
-//! When a network note becomes eligible for a transaction attempt.
+//! When a network note becomes eligible for consumption.
 //!
 //! Two things delay a note: its execution hint, which sets the first block at which the note may be
 //! consumed, and the exponential backoff applied after a failed attempt. This module computes both,
@@ -10,16 +10,6 @@ use miden_standards::note::NoteExecutionHint;
 
 /// Block number stored for a note that can never become eligible again.
 pub const NEVER_ELIGIBLE: BlockNumber = BlockNumber::MAX;
-
-/// Returns the block at which a note becomes eligible again after `attempts` failed attempts, the
-/// latest of which was recorded at `last_attempt`.
-pub fn eligible_block_after_failure(
-    hint: NoteExecutionHint,
-    attempts: usize,
-    last_attempt: BlockNumber,
-) -> BlockNumber {
-    hint_floor(hint).max(backoff_ready_block(Some(last_attempt), attempts))
-}
 
 /// Checks if the backoff block period has passed.
 #[expect(clippy::cast_precision_loss, clippy::cast_sign_loss)]
@@ -123,8 +113,8 @@ mod tests {
     #[case(20)]
     fn stored_block_after_failure_matches_the_backoff_check(#[case] attempts: usize) {
         let last_attempt = BlockNumber::from(100);
-        let stored =
-            eligible_block_after_failure(NoteExecutionHint::Always, attempts, last_attempt);
+        let stored = hint_floor(NoteExecutionHint::Always)
+            .max(backoff_ready_block(Some(last_attempt), attempts));
 
         assert!(
             has_backoff_passed(stored, Some(last_attempt), attempts),
@@ -146,13 +136,12 @@ mod tests {
     fn stored_block_takes_the_later_of_backoff_and_hint() {
         let last_attempt = BlockNumber::from(10);
 
+        let backoff = backoff_ready_block(Some(last_attempt), 1);
+
         let hint = NoteExecutionHint::after_block(BlockNumber::from(500));
-        assert_eq!(eligible_block_after_failure(hint, 1, last_attempt), BlockNumber::from(500),);
+        assert_eq!(hint_floor(hint).max(backoff), BlockNumber::from(500));
 
         let hint = NoteExecutionHint::after_block(BlockNumber::from(1));
-        assert_eq!(
-            eligible_block_after_failure(hint, 1, last_attempt),
-            backoff_ready_block(Some(last_attempt), 1),
-        );
+        assert_eq!(hint_floor(hint).max(backoff), backoff);
     }
 }

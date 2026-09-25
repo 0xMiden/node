@@ -1,4 +1,5 @@
--- Materializes note eligibility so the scheduler can ask for the ready accounts.
+-- Materializes note eligibility so the scheduler can ask for the ready accounts with one indexed
+-- query.
 ALTER TABLE notes ADD COLUMN next_eligible_block BIGINT NOT NULL DEFAULT 0
     CHECK (next_eligible_block BETWEEN 0 AND 0xFFFFFFFF);
 

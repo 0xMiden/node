@@ -8,7 +8,7 @@ use miden_protocol::note::{Note, Nullifier};
 use miden_standards::note::AccountTargetNetworkNote;
 
 use crate::NoteError;
-use crate::db::eligibility::eligible_block_after_failure;
+use crate::db::eligibility::{backoff_ready_block, hint_floor};
 
 const SQL: &str = include_str!("note_failed.sql");
 const SELECT_ATTEMPT_STATE_SQL: &str = include_str!("select_note_attempt_state.sql");
@@ -49,9 +49,6 @@ fn eligibility_after_failure(
         DatabaseError::deserialization("failed to convert to network note", source)
     })?;
 
-    Ok(eligible_block_after_failure(
-        note.execution_hint(),
-        attempt_count + 1,
-        block_num,
-    ))
+    Ok(hint_floor(note.execution_hint())
+        .max(backoff_ready_block(Some(block_num), attempt_count + 1)))
 }
