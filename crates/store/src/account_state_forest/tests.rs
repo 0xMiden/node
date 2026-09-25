@@ -1030,7 +1030,126 @@ fn storage_map_all_entries_returns_cache_miss_when_raw_key_is_not_cached() {
 
 const TEST_CHAIN_LENGTH: u32 = 100;
 const TEST_AMOUNT_MULTIPLIER: u32 = 100;
-const TEST_PRUNE_CHAIN_TIP: u32 = HISTORICAL_BLOCK_RETENTION + 5;
+
+/// Frequent changes must not evict state inside the block retention window.
+#[test]
+fn account_state_history_survives_frequent_updates() {
+    for forest in [
+        AccountStateForest::new(),
+        AccountStateForest::from_backend(ForestInMemoryBackend::new()).unwrap(),
+    ] {
+        check_account_state_history_retention(forest, false);
+    }
+}
+
+/// An unchanged block at the retention cutoff must use the preceding version.
+#[test]
+fn account_state_history_retains_cutoff_predecessor() {
+    for forest in [
+        AccountStateForest::new(),
+        AccountStateForest::from_backend(ForestInMemoryBackend::new()).unwrap(),
+    ] {
+        check_account_state_history_retention(forest, true);
+    }
+}
+
+fn check_account_state_history_retention(mut forest: AccountStateForest, skip_second_update: bool) {
+    use miden_protocol::account::{StorageMapPatch, StorageSlotPatch};
+
+    let account_id = dummy_account();
+    let faucet_id = dummy_faucet();
+    let slot_name = StorageSlotName::mock(7);
+    let key = StorageMapKey::from_index(1);
+    let mut expected = Vec::new();
+
+    for tip in 1..=HISTORICAL_BLOCK_RETENTION + 2 {
+        let block = BlockNumber::from(tip);
+        let amount = if skip_second_update && tip == 2 { 1 } else { tip };
+        let patches = if skip_second_update && tip == 2 {
+            vec![]
+        } else {
+            let mut vault_patch = AccountVaultPatch::default();
+            vault_patch.insert_asset(dummy_fungible_asset(faucet_id, u64::from(amount)));
+            let map_patch = StorageMapPatch::from_iters([], [(key, Word::from([amount, 0, 0, 0]))]);
+            let storage_patch = AccountStoragePatch::from_raw(
+                [(slot_name.clone(), StorageSlotPatch::Map(map_patch))].into_iter().collect(),
+            )
+            .unwrap();
+            vec![dummy_partial_patch(account_id, vault_patch, storage_patch)]
+        };
+
+        // Apply canonical blocks so that each update also runs block-based pruning.
+        let update = forest.compute_block_update_mutations(block, patches).unwrap();
+        forest.apply_precomputed_block_update(block, update).unwrap();
+        // Save each root while its state is current. Later queries must reconstruct the same root.
+        expected.push((
+            amount,
+            forest.get_vault_root(account_id, block).unwrap(),
+            forest.get_storage_map_root(account_id, &slot_name, block).unwrap(),
+        ));
+
+        let cutoff = tip.saturating_sub(HISTORICAL_BLOCK_RETENTION).max(1);
+        // The snapshot must retain block 1 when it is exactly at the retention cutoff.
+        let reader = (tip == HISTORICAL_BLOCK_RETENTION + 1).then(|| forest.reader().unwrap());
+        for retained in cutoff..=tip {
+            let (amount, vault_root, map_root) = expected[(retained - 1) as usize];
+            assert_retained_account_state(
+                &forest,
+                BlockNumber::from(retained),
+                amount,
+                vault_root,
+                map_root,
+            );
+            if let Some(reader) = &reader {
+                assert_retained_account_state(
+                    reader,
+                    BlockNumber::from(retained),
+                    amount,
+                    vault_root,
+                    map_root,
+                );
+            }
+        }
+    }
+
+    // The final cutoff is block 2. If block 2 has no update, block 1 must remain available.
+    if !skip_second_update {
+        let expired = BlockNumber::from(1);
+        assert!(forest.get_vault_root(account_id, expired).is_none());
+        assert!(forest.get_storage_map_root(account_id, &slot_name, expired).is_none());
+    }
+}
+
+fn assert_retained_account_state(
+    forest: &AccountStateForest<impl BackendReader>,
+    block: BlockNumber,
+    amount: u32,
+    vault_root: Word,
+    map_root: Word,
+) {
+    let account_id = dummy_account();
+    let slot_name = StorageSlotName::mock(7);
+    let key = StorageMapKey::from_index(1);
+    assert_eq!(
+        forest.get_vault_details(account_id, block).unwrap().unwrap(),
+        AccountVaultDetails::Assets(vec![dummy_fungible_asset(dummy_faucet(), u64::from(amount))]),
+        "vault contents at block {block}"
+    );
+    assert_eq!(forest.get_vault_root(account_id, block), Some(vault_root));
+    let details = forest
+        .get_storage_map_details_for_keys(account_id, slot_name, block, vec![key])
+        .unwrap()
+        .unwrap();
+    assert_matches!(details.entries, StorageMapEntries::PartialMap { map_keys, partial_smt } => {
+        assert_eq!(map_keys, vec![key]);
+        assert_eq!(partial_smt.root(), map_root, "storage root at block {block}");
+        assert_eq!(
+            partial_smt.get_value(&key.hash().as_word()).unwrap(),
+            Word::from([amount, 0, 0, 0]),
+            "storage value at block {block}"
+        );
+    });
+}
 
 #[test]
 fn prune_handles_empty_forest() {
@@ -1052,42 +1171,42 @@ fn prune_removes_smt_roots_from_forest() {
     let faucet_id = dummy_faucet();
     let slot_name = StorageSlotName::mock(7);
 
-    for i in 1..=TEST_PRUNE_CHAIN_TIP {
+    // Keep the version count below the history limit to isolate explicit pruning.
+    for i in 1..=3u32 {
         let block_num = BlockNumber::from(i);
 
         let mut vault_patch = AccountVaultPatch::default();
         vault_patch
             .insert_asset(dummy_fungible_asset(faucet_id, (i * TEST_AMOUNT_MULTIPLIER).into()));
-        let storage_patch = if i.is_multiple_of(3) {
-            let map_patch = StorageMapPatch::from_iters(
-                [],
-                [(
-                    StorageMapKey::new(Word::from([1u32, 0, 0, 0])),
-                    Word::from([99u32, i, i * i, i * i * i]),
-                )],
-            );
-            AccountStoragePatch::from_raw(
-                [(slot_name.clone(), StorageSlotPatch::Map(map_patch))]
-                    .into_iter()
-                    .collect::<BTreeMap<_, _>>(),
-            )
-            .unwrap()
-        } else {
-            AccountStoragePatch::default()
-        };
+        let map_patch = StorageMapPatch::from_iters(
+            [],
+            [(
+                StorageMapKey::new(Word::from([1u32, 0, 0, 0])),
+                Word::from([99u32, i, i * i, i * i * i]),
+            )],
+        );
+        let storage_patch = AccountStoragePatch::from_raw(
+            [(slot_name.clone(), StorageSlotPatch::Map(map_patch))]
+                .into_iter()
+                .collect::<BTreeMap<_, _>>(),
+        )
+        .unwrap();
 
         let patch = dummy_partial_patch(account_id, vault_patch, storage_patch);
         forest.update_account(block_num, &patch);
     }
 
-    let retained_block = BlockNumber::from(TEST_PRUNE_CHAIN_TIP);
-    let pruned_block = BlockNumber::from(3u32);
+    let retained_block = BlockNumber::from(3u32);
+    let pruned_block = BlockNumber::from(1u32);
 
-    let total_roots_removed = forest.prune(retained_block);
-    assert_eq!(total_roots_removed, 0);
+    // A cutoff at block 3 removes two historical versions from each lineage.
+    let total_roots_removed = forest.prune(BlockNumber::from(HISTORICAL_BLOCK_RETENTION + 3));
+    assert_eq!(total_roots_removed, 4);
     assert!(forest.get_vault_root(account_id, retained_block).is_some());
-    assert!(forest.get_vault_root(account_id, pruned_block).is_none());
-    assert!(forest.get_storage_map_root(account_id, &slot_name, pruned_block).is_none());
+    for expired in [BlockNumber::from(1), BlockNumber::from(2)] {
+        assert!(forest.get_vault_root(account_id, expired).is_none());
+        assert!(forest.get_storage_map_root(account_id, &slot_name, expired).is_none());
+    }
     assert!(forest.get_storage_map_root(account_id, &slot_name, retained_block).is_some());
 
     let asset_key: Word = FungibleAsset::new(faucet_id, 0).unwrap().id().into();
@@ -1119,7 +1238,7 @@ fn prune_respects_retention_boundary() {
     let total_roots_removed = forest.prune(BlockNumber::from(HISTORICAL_BLOCK_RETENTION));
 
     assert_eq!(total_roots_removed, 0);
-    assert_eq!(forest.forest.tree_count(), 11);
+    assert_eq!(forest.forest.tree_count(), HISTORICAL_BLOCK_RETENTION as usize);
 }
 
 #[test]
@@ -1154,13 +1273,15 @@ fn prune_roots_removes_old_entries() {
         forest.update_account(block_num, &patch);
     }
 
-    assert_eq!(forest.forest.tree_count(), 22);
+    // Both lineages retain the history window plus their latest version.
+    assert_eq!(forest.forest.tree_count(), 2 * (HISTORICAL_BLOCK_RETENTION as usize + 1));
 
+    // Automatic eviction has already removed every version below this cutoff.
     let total_roots_removed = forest.prune(BlockNumber::from(TEST_CHAIN_LENGTH));
 
     assert_eq!(total_roots_removed, 0);
 
-    assert_eq!(forest.forest.tree_count(), 22);
+    assert_eq!(forest.forest.tree_count(), 2 * (HISTORICAL_BLOCK_RETENTION as usize + 1));
 }
 
 #[test]
@@ -1185,15 +1306,13 @@ fn prune_handles_multiple_accounts() {
         forest.update_account(block_num, &patch2);
     }
 
-    assert_eq!(forest.forest.tree_count(), 22);
+    assert_eq!(forest.forest.tree_count(), 2 * (HISTORICAL_BLOCK_RETENTION as usize + 1));
 
     let total_roots_removed = forest.prune(BlockNumber::from(TEST_CHAIN_LENGTH));
 
-    let expected_removed_per_account = (TEST_CHAIN_LENGTH - HISTORICAL_BLOCK_RETENTION) as usize;
     assert_eq!(total_roots_removed, 0);
-    assert!(total_roots_removed <= expected_removed_per_account * 2);
 
-    assert_eq!(forest.forest.tree_count(), 22);
+    assert_eq!(forest.forest.tree_count(), 2 * (HISTORICAL_BLOCK_RETENTION as usize + 1));
 }
 
 #[test]
@@ -1228,14 +1347,14 @@ fn prune_handles_multiple_slots() {
         forest.update_account(block_num, &patch);
     }
 
-    assert_eq!(forest.forest.tree_count(), 22);
+    assert_eq!(forest.forest.tree_count(), 2 * (HISTORICAL_BLOCK_RETENTION as usize + 1));
 
     let chain_tip = BlockNumber::from(TEST_CHAIN_LENGTH);
     let total_roots_removed = forest.prune(chain_tip);
 
     assert_eq!(total_roots_removed, 0);
 
-    assert_eq!(forest.forest.tree_count(), 22);
+    assert_eq!(forest.forest.tree_count(), 2 * (HISTORICAL_BLOCK_RETENTION as usize + 1));
 }
 
 #[test]

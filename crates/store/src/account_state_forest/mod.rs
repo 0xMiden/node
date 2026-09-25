@@ -23,6 +23,7 @@ use miden_protocol::account::{
 use miden_protocol::asset::{Asset, AssetId, AssetIdHash};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::merkle::smt::{
+    ForestConfig,
     LargeSmtForest,
     LargeSmtForestError,
     LineageId,
@@ -131,34 +132,24 @@ struct AccountUpdateForestLineages {
 #[cfg(test)]
 impl AccountStateForest<ForestInMemoryBackend> {
     pub(crate) fn new() -> Self {
-        Self {
-            forest: Self::create_forest(),
-            storage_map_key_cache: LruCache::new(
-                NonZeroUsize::new(HASHED_STORAGE_MAP_KEY_CACHE_CAPACITY)
-                    .expect("storage map key cache capacity must be non-zero"),
-            ),
-            vault_key_cache: LruCache::new(
-                NonZeroUsize::new(HASHED_VAULT_KEY_CACHE_CAPACITY)
-                    .expect("vault key cache capacity must be non-zero"),
-            ),
-        }
+        Self::from_backend(ForestInMemoryBackend::new())
+            .expect("in-memory backend should initialize")
     }
 
     /// Returns the root of an empty SMT.
     pub(crate) const fn empty_smt_root() -> Word {
         empty_smt_root()
     }
-
-    fn create_forest() -> LargeSmtForest<ForestInMemoryBackend> {
-        let backend = ForestInMemoryBackend::new();
-        LargeSmtForest::new(backend).expect("in-memory backend should initialize")
-    }
 }
 
 impl<B: BackendReader> AccountStateForest<B> {
     pub(crate) fn from_backend(backend: B) -> Result<Self, LargeSmtForestError> {
+        // Each lineage has at most one version per block. The latest version does not count toward
+        // the history limit.
+        let config =
+            ForestConfig::default().with_max_history_versions(HISTORICAL_BLOCK_RETENTION as usize);
         Ok(Self {
-            forest: LargeSmtForest::new(backend)?,
+            forest: LargeSmtForest::with_config(backend, config)?,
             storage_map_key_cache: LruCache::new(
                 NonZeroUsize::new(HASHED_STORAGE_MAP_KEY_CACHE_CAPACITY)
                     .expect("storage map key cache capacity must be non-zero"),
