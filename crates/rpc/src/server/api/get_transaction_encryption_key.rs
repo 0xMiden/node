@@ -9,12 +9,16 @@ impl proto::server::rpc_api::GetTransactionEncryptionKey for RpcService {
     type Input = ();
     type Output = proto::submission::TransactionEncryptionKey;
 
-    fn decode(request: ()) -> tonic::Result<Self::Input> {
-        Ok(request)
+    fn decode(
+        _request: proto::rpc::GetTransactionEncryptionKeyRequest,
+    ) -> tonic::Result<Self::Input> {
+        Ok(())
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::submission::TransactionEncryptionKey> {
-        Ok(output)
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<proto::rpc::GetTransactionEncryptionKeyResponse> {
+        Ok(proto::rpc::GetTransactionEncryptionKeyResponse { key: Some(output) })
     }
 
     #[miden_instrument(
@@ -46,15 +50,29 @@ impl proto::server::rpc_api::GetTransactionEncryptionKey for RpcService {
                 return source_rpc
                     .as_ref()
                     .clone()
-                    .get_transaction_encryption_key(forwarded_request)
+                    .get_transaction_encryption_key(
+                        forwarded_request
+                            .map(|()| proto::rpc::GetTransactionEncryptionKeyRequest {}),
+                    )
                     .await
-                    .map(tonic::Response::into_inner);
+                    .and_then(|response| {
+                        response.into_inner().key.ok_or_else(|| {
+                            tonic::Status::internal("missing transaction encryption key")
+                        })
+                    });
             },
         };
         validator
             .clone()
-            .get_transaction_encryption_key(forwarded_request)
+            .get_transaction_encryption_key(
+                forwarded_request.map(|()| proto::validator::GetTransactionEncryptionKeyRequest {}),
+            )
             .await
-            .map(tonic::Response::into_inner)
+            .and_then(|response| {
+                response
+                    .into_inner()
+                    .key
+                    .ok_or_else(|| tonic::Status::internal("missing transaction encryption key"))
+            })
     }
 }

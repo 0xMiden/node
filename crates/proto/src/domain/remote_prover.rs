@@ -4,7 +4,7 @@ use miden_protocol::vm::ExecutionProof;
 
 use crate::generated as proto;
 
-impl proto::remote_prover::DecodedProof {
+impl proto::remote_prover::DecodedProveResponse {
     /// Extract the transaction fields without verifying the transaction.
     pub fn into_transaction(
         self,
@@ -23,7 +23,7 @@ impl proto::remote_prover::DecodedProof {
     }
 }
 
-impl VerifyWith<&ProposedBatch> for proto::remote_prover::DecodedProof {
+impl VerifyWith<&ProposedBatch> for proto::remote_prover::DecodedProveResponse {
     type Verified = ProvenBatch;
     type Error = ConversionError;
 
@@ -41,15 +41,18 @@ mod tests {
 
     use super::*;
 
-    fn block_response() -> proto::remote_prover::Proof {
-        proto::remote_prover::Proof {
-            proof: Some(proto::remote_prover::proof::Proof::Block(dummy_execution_proof().into())),
+    fn block_response() -> proto::remote_prover::ProveResponse {
+        proto::remote_prover::ProveResponse {
+            proof: Some(proto::remote_prover::prove_response::Proof::Block(
+                dummy_execution_proof().into(),
+            )),
         }
     }
 
     #[test]
     fn missing_proof_is_rejected() {
-        let error = proto::remote_prover::Proof { proof: None }.decode_fields().unwrap_err();
+        let error =
+            proto::remote_prover::ProveResponse { proof: None }.decode_fields().unwrap_err();
         assert!(error.to_string().contains("proof"));
     }
 
@@ -71,8 +74,8 @@ mod tests {
 
     #[test]
     fn malformed_proof_retains_field_context() {
-        let response = proto::remote_prover::Proof {
-            proof: Some(proto::remote_prover::proof::Proof::Transaction(
+        let response = proto::remote_prover::ProveResponse {
+            proof: Some(proto::remote_prover::prove_response::Proof::Transaction(
                 proto::transaction::ProvenTransaction::default(),
             )),
         };

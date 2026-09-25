@@ -129,15 +129,15 @@ impl Verify for proto::rpc::DecodedIsAccountAllowedRequest {
 
 /// Represents a request for an account proof.
 #[derive(Debug)]
-pub struct AccountRequest {
+pub struct GetAccountRequest {
     pub account_id: AccountId,
     // If not present, the latest account proof references the latest available
     pub block_num: Option<BlockNumber>,
     pub details: Option<AccountDetailRequest>,
 }
 
-impl Verify for proto::rpc::DecodedAccountRequest {
-    type Verified = AccountRequest;
+impl Verify for proto::rpc::DecodedGetAccountRequest {
+    type Verified = GetAccountRequest;
     type Error = ConversionError;
 
     fn verify(self) -> Result<Self::Verified, Self::Error> {
@@ -148,7 +148,7 @@ impl Verify for proto::rpc::DecodedAccountRequest {
 
         let details = details.verify()?;
 
-        Ok(AccountRequest { account_id, block_num, details })
+        Ok(GetAccountRequest { account_id, block_num, details })
     }
 }
 
@@ -167,12 +167,12 @@ pub enum AccountStorageRequest {
     Explicit(Vec<StorageMapRequest>),
 }
 
-impl Verify for proto::rpc::account_request::DecodedAccountDetailRequest {
+impl Verify for proto::rpc::get_account_request::DecodedAccountDetailRequest {
     type Verified = AccountDetailRequest;
     type Error = ConversionError;
 
     fn verify(self) -> Result<Self::Verified, Self::Error> {
-        use proto::rpc::account_request::account_detail_request::DecodedStorageRequest as ProtoStorageRequest;
+        use proto::rpc::get_account_request::account_detail_request::DecodedStorageRequest as ProtoStorageRequest;
 
         let Self {
             code_commitment,
@@ -210,7 +210,7 @@ pub struct StorageMapRequest {
 }
 
 impl Verify
-    for proto::rpc::account_request::account_detail_request::DecodedStorageMapDetailRequest
+    for proto::rpc::get_account_request::account_detail_request::DecodedStorageMapDetailRequest
 {
     type Verified = StorageMapRequest;
     type Error = ConversionError;
@@ -232,12 +232,12 @@ pub enum SlotData {
     MapKeys(Vec<StorageMapKey>),
 }
 
-impl Verify for proto::rpc::account_request::account_detail_request::storage_map_detail_request::DecodedSlotData {
+impl Verify for proto::rpc::get_account_request::account_detail_request::storage_map_detail_request::DecodedSlotData {
     type Verified = SlotData;
     type Error = ConversionError;
 
     fn verify(self) -> Result<Self::Verified, Self::Error> {
-        use proto::rpc::account_request::account_detail_request::storage_map_detail_request::DecodedSlotData as ProtoSlotData;
+        use proto::rpc::get_account_request::account_detail_request::storage_map_detail_request::DecodedSlotData as ProtoSlotData;
 
         Ok(match self {
             ProtoSlotData::AllEntries(true) => SlotData::All,
@@ -652,14 +652,14 @@ impl From<AccountStorageDetails> for proto::rpc::AccountStorageDetails {
 //================================================================================================
 
 /// Represents the response to an account proof request.
-pub struct AccountResponse {
+pub struct GetAccountResponse {
     pub block_num: BlockNumber,
     pub witness: AccountWitness,
     pub details: Option<AccountDetails>,
 }
 
-impl Verify for proto::rpc::DecodedAccountResponse {
-    type Verified = AccountResponse;
+impl Verify for proto::rpc::DecodedGetAccountResponse {
+    type Verified = GetAccountResponse;
     type Error = ConversionError;
 
     /// Check that supplied details match the account witness. The caller must authenticate the
@@ -684,13 +684,13 @@ impl Verify for proto::rpc::DecodedAccountResponse {
             }
         }
 
-        Ok(AccountResponse { block_num, witness, details })
+        Ok(GetAccountResponse { block_num, witness, details })
     }
 }
 
-impl From<AccountResponse> for proto::rpc::AccountResponse {
-    fn from(value: AccountResponse) -> Self {
-        let AccountResponse { block_num, witness, details } = value;
+impl From<GetAccountResponse> for proto::rpc::GetAccountResponse {
+    fn from(value: GetAccountResponse) -> Self {
+        let GetAccountResponse { block_num, witness, details } = value;
 
         Self {
             witness: Some(witness.into()),
@@ -729,7 +729,7 @@ impl AccountDetails {
     }
 }
 
-impl Verify for proto::rpc::account_response::DecodedAccountDetails {
+impl Verify for proto::rpc::get_account_response::DecodedAccountDetails {
     type Verified = AccountDetails;
     type Error = ConversionError;
 
@@ -771,7 +771,7 @@ impl Verify for proto::rpc::account_response::DecodedAccountDetails {
     }
 }
 
-impl From<AccountDetails> for proto::rpc::account_response::AccountDetails {
+impl From<AccountDetails> for proto::rpc::get_account_response::AccountDetails {
     fn from(value: AccountDetails) -> Self {
         let AccountDetails {
             account_header,

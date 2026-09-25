@@ -11,18 +11,18 @@ use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::GetNotesById for RpcService {
-    type Input = proto::rpc::DecodedNotesByIdRequest;
+    type Input = proto::rpc::DecodedGetNotesByIdRequest;
     type Output = Vec<CommittedNote>;
 
-    fn decode(request: proto::rpc::NotesByIdRequest) -> tonic::Result<Self::Input> {
+    fn decode(request: proto::rpc::GetNotesByIdRequest) -> tonic::Result<Self::Input> {
         check::<QueryParamNoteIdLimit>(request.note_ids.len())?;
         request
             .decode_fields()
             .map_err(|err| GetNotesByIdErrorCode::DeserializationFailed.invalid_argument(err))
     }
 
-    fn encode(notes: Self::Output) -> tonic::Result<proto::rpc::NotesByIdResponse> {
-        Ok(proto::rpc::NotesByIdResponse { notes })
+    fn encode(notes: Self::Output) -> tonic::Result<proto::rpc::GetNotesByIdResponse> {
+        Ok(proto::rpc::GetNotesByIdResponse { notes })
     }
 
     #[miden_instrument(

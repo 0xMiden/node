@@ -8,8 +8,8 @@ use crate::server::service::ProverService;
 
 #[tonic::async_trait]
 impl grpc::server::remote_prover_api::Prove for ProverService {
-    type Input = (ProofKind, grpc::remote_prover::ProofRequest);
-    type Output = grpc::remote_prover::Proof;
+    type Input = (ProofKind, grpc::remote_prover::ProveRequest);
+    type Output = grpc::remote_prover::ProveResponse;
 
     #[miden_instrument(
         target = COMPONENT,
@@ -47,8 +47,8 @@ impl grpc::server::remote_prover_api::Prove for ProverService {
         .map_err(|e| tonic::Status::internal(e.as_report_context(task_panic_context)))?
     }
 
-    fn decode(request: grpc::remote_prover::ProofRequest) -> tonic::Result<Self::Input> {
-        use grpc::remote_prover::proof_request::Request;
+    fn decode(request: grpc::remote_prover::ProveRequest) -> tonic::Result<Self::Input> {
+        use grpc::remote_prover::prove_request::Request;
 
         let proof_kind = match request.request.as_ref() {
             Some(Request::Transaction(_)) => ProofKind::Transaction,
@@ -60,7 +60,7 @@ impl grpc::server::remote_prover_api::Prove for ProverService {
         Ok((proof_kind, request))
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<grpc::remote_prover::Proof> {
+    fn encode(output: Self::Output) -> tonic::Result<grpc::remote_prover::ProveResponse> {
         Ok(output)
     }
 }

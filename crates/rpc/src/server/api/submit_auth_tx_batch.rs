@@ -11,13 +11,15 @@ impl sequencer_api::SubmitAuthenticatedTxBatch for SequencerInternalService {
     type Output = proto::blockchain::BlockNumber;
 
     fn decode(
-        request: proto::sequencer::AuthenticatedTransactionBatch,
+        request: proto::sequencer::SubmitAuthenticatedTxBatchRequest,
     ) -> tonic::Result<Self::Input> {
-        Ok(request)
+        request.batch.ok_or_else(|| tonic::Status::invalid_argument("missing batch"))
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::blockchain::BlockNumber> {
-        Ok(output)
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<proto::sequencer::SubmitAuthenticatedTxBatchResponse> {
+        Ok(proto::sequencer::SubmitAuthenticatedTxBatchResponse { block_num: output.block_num })
     }
 
     async fn handle(

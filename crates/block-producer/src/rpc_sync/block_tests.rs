@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use miden_node_proto::clients::Builder;
 use miden_node_proto::generated as proto;
-use miden_node_proto::generated::rpc::{BlockSubscriptionResponse, RpcStatus};
+use miden_node_proto::generated::rpc::{BlockSubscriptionResponse, StatusResponse};
 use miden_node_proto::generated::server::rpc_api;
 use miden_node_store::GenesisState;
 use miden_node_utils::clap::StorageOptions;
@@ -28,13 +28,13 @@ struct Upstream(Vec<SignedBlock>);
 #[tonic::async_trait]
 impl rpc_api::Status for Upstream {
     type Input = ();
-    type Output = RpcStatus;
+    type Output = StatusResponse;
 
-    fn decode(request: ()) -> tonic::Result<Self::Input> {
-        Ok(request)
+    fn decode(_request: proto::rpc::StatusRequest) -> tonic::Result<Self::Input> {
+        Ok(())
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<RpcStatus> {
+    fn encode(output: Self::Output) -> tonic::Result<StatusResponse> {
         Ok(output)
     }
 
@@ -44,7 +44,7 @@ impl rpc_api::Status for Upstream {
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        Ok(RpcStatus {
+        Ok(StatusResponse {
             chain_tip: self.0.last().unwrap().header().block_num().as_u32(),
             ..Default::default()
         })
@@ -235,30 +235,38 @@ macro_rules! unused_rpc {
     };
 }
 
-unused_rpc!(GetLimits, (), proto::rpc::RpcLimits);
-unused_rpc!(GetAccount, proto::rpc::AccountRequest, proto::rpc::AccountResponse);
-unused_rpc!(GetBlockByNumber, proto::rpc::BlockRequest, proto::rpc::MaybeBlock);
+unused_rpc!(GetLimits, proto::rpc::GetLimitsRequest, proto::rpc::GetLimitsResponse);
+unused_rpc!(GetAccount, proto::rpc::GetAccountRequest, proto::rpc::GetAccountResponse);
+unused_rpc!(
+    GetBlockByNumber,
+    proto::rpc::GetBlockByNumberRequest,
+    proto::rpc::GetBlockByNumberResponse
+);
 unused_rpc!(
     GetBlockHeaderByNumber,
-    proto::rpc::BlockHeaderByNumberRequest,
-    proto::rpc::BlockHeaderByNumberResponse
+    proto::rpc::GetBlockHeaderByNumberRequest,
+    proto::rpc::GetBlockHeaderByNumberResponse
 );
-unused_rpc!(GetNotesById, proto::rpc::NotesByIdRequest, proto::rpc::NotesByIdResponse);
+unused_rpc!(GetNotesById, proto::rpc::GetNotesByIdRequest, proto::rpc::GetNotesByIdResponse);
 unused_rpc!(
     GetNoteScriptByRoot,
-    proto::rpc::NoteScriptByRootRequest,
-    proto::rpc::MaybeNoteScript
+    proto::rpc::GetNoteScriptByRootRequest,
+    proto::rpc::GetNoteScriptByRootResponse
 );
-unused_rpc!(GetTransactionEncryptionKey, (), proto::submission::TransactionEncryptionKey);
+unused_rpc!(
+    GetTransactionEncryptionKey,
+    proto::rpc::GetTransactionEncryptionKeyRequest,
+    proto::rpc::GetTransactionEncryptionKeyResponse
+);
 unused_rpc!(
     SubmitProvenTx,
-    proto::submission::ProvenTransactionSubmission,
-    proto::blockchain::BlockNumber
+    proto::rpc::SubmitProvenTxRequest,
+    proto::rpc::SubmitProvenTxResponse
 );
 unused_rpc!(
     SubmitProvenTxBatch,
-    proto::submission::TransactionBatch,
-    proto::blockchain::BlockNumber
+    proto::rpc::SubmitProvenTxBatchRequest,
+    proto::rpc::SubmitProvenTxBatchResponse
 );
 unused_rpc!(
     SyncTransactions,
@@ -282,7 +290,11 @@ unused_rpc!(
     proto::rpc::SyncAccountStorageMapsResponse
 );
 unused_rpc!(SyncChainMmr, proto::rpc::SyncChainMmrRequest, proto::rpc::SyncChainMmrResponse);
-unused_rpc!(RegisterAccount, proto::rpc::RegisterAccountRequest, ());
+unused_rpc!(
+    RegisterAccount,
+    proto::rpc::RegisterAccountRequest,
+    proto::rpc::RegisterAccountResponse
+);
 unused_rpc!(
     IsAccountAllowed,
     proto::rpc::IsAccountAllowedRequest,
@@ -290,7 +302,7 @@ unused_rpc!(
 );
 unused_rpc!(
     GetNetworkNoteStatus,
-    proto::note::NoteId,
+    proto::rpc::GetNetworkNoteStatusRequest,
     proto::rpc::GetNetworkNoteStatusResponse
 );
 

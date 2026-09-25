@@ -37,7 +37,7 @@ fn test_slot_name() -> StorageSlotName {
     StorageSlotName::new("miden::test::storage::slot").unwrap()
 }
 
-fn account_response() -> proto::rpc::AccountResponse {
+fn account_response() -> proto::rpc::GetAccountResponse {
     let id = AccountId::dummy(
         [7; 15],
         AccountIdVersion::Version1,
@@ -59,7 +59,7 @@ fn account_response() -> proto::rpc::AccountResponse {
         code.commitment(),
     );
     let witness = AccountTree::with_entries([(id, header.to_commitment())]).unwrap().open(id);
-    AccountResponse {
+    GetAccountResponse {
         block_num: BlockNumber::from(1),
         witness,
         details: Some(AccountDetails {
@@ -87,7 +87,7 @@ fn account_response_accepts_matching_details_and_omitted_optional_data() {
         assert_eq!(details.account_header.to_commitment(), decoded.witness.state_commitment());
     }
 
-    let message = proto::rpc::AccountResponse { details: None, ..response };
+    let message = proto::rpc::GetAccountResponse { details: None, ..response };
     assert!(message.decode_fields().and_then(Verify::verify).unwrap().details.is_none());
 }
 
@@ -277,9 +277,9 @@ fn account_storage_details_rejects_partial_map_root_mismatch() {
 
 #[test]
 fn account_detail_request_converts_all_storage_maps() {
-    use crate::generated::rpc::account_request::account_detail_request::StorageRequest;
+    use crate::generated::rpc::get_account_request::account_detail_request::StorageRequest;
 
-    let request = crate::generated::rpc::account_request::AccountDetailRequest {
+    let request = crate::generated::rpc::get_account_request::AccountDetailRequest {
         code_commitment: None,
         asset_vault_commitment: None,
         storage_request: Some(StorageRequest::AllStorageMaps(true)),
@@ -292,9 +292,9 @@ fn account_detail_request_converts_all_storage_maps() {
 
 #[test]
 fn account_detail_request_rejects_false_all_storage_maps() {
-    use crate::generated::rpc::account_request::account_detail_request::StorageRequest;
+    use crate::generated::rpc::get_account_request::account_detail_request::StorageRequest;
 
-    let request = crate::generated::rpc::account_request::AccountDetailRequest {
+    let request = crate::generated::rpc::get_account_request::AccountDetailRequest {
         code_commitment: None,
         asset_vault_commitment: None,
         storage_request: Some(StorageRequest::AllStorageMaps(false)),
@@ -307,14 +307,14 @@ fn account_detail_request_rejects_false_all_storage_maps() {
 
 #[test]
 fn account_detail_request_converts_explicit_storage_maps() {
-    use crate::generated::rpc::account_request::account_detail_request::{
+    use crate::generated::rpc::get_account_request::account_detail_request::{
         StorageMapDetailRequest,
         StorageMapDetailRequests,
         StorageRequest,
         storage_map_detail_request,
     };
 
-    let request = crate::generated::rpc::account_request::AccountDetailRequest {
+    let request = crate::generated::rpc::get_account_request::AccountDetailRequest {
         code_commitment: None,
         asset_vault_commitment: None,
         storage_request: Some(StorageRequest::StorageMaps(StorageMapDetailRequests {
@@ -335,16 +335,16 @@ fn account_detail_request_converts_explicit_storage_maps() {
 
 #[test]
 fn account_detail_request_rejects_duplicate_storage_map_keys() {
-    use crate::generated::rpc::account_request::account_detail_request::{
+    use crate::generated::rpc::get_account_request::account_detail_request::{
         StorageMapDetailRequest,
         StorageMapDetailRequests,
         StorageRequest,
         storage_map_detail_request,
     };
-    use crate::generated::rpc::account_request::account_detail_request::storage_map_detail_request::MapKeys;
+    use crate::generated::rpc::get_account_request::account_detail_request::storage_map_detail_request::MapKeys;
 
     let map_key: crate::generated::primitives::Word = Word::from([1, 2, 3, 4u32]).into();
-    let request = crate::generated::rpc::account_request::AccountDetailRequest {
+    let request = crate::generated::rpc::get_account_request::AccountDetailRequest {
         code_commitment: None,
         asset_vault_commitment: None,
         storage_request: Some(StorageRequest::StorageMaps(StorageMapDetailRequests {
@@ -364,7 +364,7 @@ fn account_detail_request_rejects_duplicate_storage_map_keys() {
 
 #[test]
 fn account_detail_request_allows_no_storage_slot_data() {
-    let request = crate::generated::rpc::account_request::AccountDetailRequest {
+    let request = crate::generated::rpc::get_account_request::AccountDetailRequest {
         code_commitment: None,
         asset_vault_commitment: None,
         storage_request: None,

@@ -420,8 +420,8 @@ fn batch_submission_rejects_proof_that_does_not_match_proposal() {
 #[test]
 fn batch_proof_response_preserves_batch_and_rejects_other_requested_kinds() {
     let batch = nonempty_block_request().tx_batches.as_slice()[0].clone();
-    let response = generated::remote_prover::Proof {
-        proof: Some(generated::remote_prover::proof::Proof::Batch((&batch).into())),
+    let response = generated::remote_prover::ProveResponse {
+        proof: Some(generated::remote_prover::prove_response::Proof::Batch((&batch).into())),
     };
     assert!(response.clone().decode_fields().unwrap().into_transaction().is_err());
     assert!(response.clone().decode_fields().unwrap().into_block().is_err());

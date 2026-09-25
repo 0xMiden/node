@@ -2,7 +2,6 @@
 syntax = "proto3";
 package rpc;
 
-import "google/protobuf/empty.proto";
 import "account.proto";
 import "asset.proto";
 import "batch.proto";
@@ -20,17 +19,17 @@ import "types/submission.proto";
 // RPC API for the RPC component
 service Api {
     // Returns the status info of the node.
-    rpc Status(google.protobuf.Empty) returns (RpcStatus) {}
+    rpc Status(StatusRequest) returns (StatusResponse) {}
 
     // Returns the query parameter limits configured for RPC methods.
     //
     // These define the maximum number of each parameter a method will accept.
     // Exceeding the limit will result in the request being rejected and you should instead send
     // multiple smaller requests.
-    rpc GetLimits(google.protobuf.Empty) returns (RpcLimits) {}
+    rpc GetLimits(GetLimitsRequest) returns (GetLimitsResponse) {}
 
     // Returns the latest details of the specified account.
-    rpc GetAccount(AccountRequest) returns (AccountResponse) {}
+    rpc GetAccount(GetAccountRequest) returns (GetAccountResponse) {}
 
     // Registers an account with an invitation code on the sequencer.
     // A retry with the same code and account succeeds without changes.
@@ -42,23 +41,23 @@ service Api {
     // If registration funding is configured, waits for the funding note to commit.
     // Returns UNAVAILABLE if funding fails. The account remains registered and retries do not
     // request funding again.
-    rpc RegisterAccount(RegisterAccountRequest) returns (google.protobuf.Empty) {}
+    rpc RegisterAccount(RegisterAccountRequest) returns (RegisterAccountResponse) {}
 
     // Returns true if account allowlist enforcement is disabled or the account is allowlisted.
     rpc IsAccountAllowed(IsAccountAllowedRequest) returns (IsAccountAllowedResponse) {}
 
     // Returns block data for the specified block number, optionally including the block proof.
-    rpc GetBlockByNumber(BlockRequest) returns (MaybeBlock) {}
+    rpc GetBlockByNumber(GetBlockByNumberRequest) returns (GetBlockByNumberResponse) {}
 
     // Retrieves block header by given block number. Optionally, it also returns the MMR path
     // and current chain length to authenticate the block's inclusion.
-    rpc GetBlockHeaderByNumber(BlockHeaderByNumberRequest) returns (BlockHeaderByNumberResponse) {}
+    rpc GetBlockHeaderByNumber(GetBlockHeaderByNumberRequest) returns (GetBlockHeaderByNumberResponse) {}
 
     // Returns a list of notes matching the provided note IDs.
-    rpc GetNotesById(NotesByIdRequest) returns (NotesByIdResponse) {}
+    rpc GetNotesById(GetNotesByIdRequest) returns (GetNotesByIdResponse) {}
 
     // Returns the script for a note by its root.
-    rpc GetNoteScriptByRoot(NoteScriptByRootRequest) returns (MaybeNoteScript) {}
+    rpc GetNoteScriptByRoot(GetNoteScriptByRootRequest) returns (GetNoteScriptByRootResponse) {}
 
     // TRANSACTION SUBMISSION ENDPOINTS
     // --------------------------------------------------------------------------------------------
@@ -71,17 +70,17 @@ service Api {
     // validator attestations, currently containing a single one. Since all validators vouch for
     // the same key, an attestation verifiable against any chain-recognized validator signing key
     // is sufficient.
-    rpc GetTransactionEncryptionKey(google.protobuf.Empty) returns (submission.TransactionEncryptionKey) {}
+    rpc GetTransactionEncryptionKey(GetTransactionEncryptionKeyRequest) returns (GetTransactionEncryptionKeyResponse) {}
 
     // Submits proven transaction to the Miden network. Returns the node's current block height.
-    rpc SubmitProvenTx(submission.ProvenTransactionSubmission) returns (blockchain.BlockNumber) {}
+    rpc SubmitProvenTx(SubmitProvenTxRequest) returns (SubmitProvenTxResponse) {}
 
     // Submits a batch of transactions to the Miden network.
     //
     // All transactions in this batch will be considered atomic, and be committed together or not all.
     //
     // Returns the node's current block height.
-    rpc SubmitProvenTxBatch(submission.TransactionBatch) returns (blockchain.BlockNumber) {}
+    rpc SubmitProvenTxBatch(SubmitProvenTxBatchRequest) returns (SubmitProvenTxBatchResponse) {}
 
     // STATE SYNCHRONIZATION ENDPOINTS
     // --------------------------------------------------------------------------------------------
@@ -137,7 +136,7 @@ service Api {
     // many failed attempts.
     //
     // Returns `NOT_FOUND` if the note ID is not tracked by the network transaction builder.
-    rpc GetNetworkNoteStatus(note.NoteId) returns (GetNetworkNoteStatusResponse) {}
+    rpc GetNetworkNoteStatus(GetNetworkNoteStatusRequest) returns (GetNetworkNoteStatusResponse) {}
 }
 
 // REGISTER ACCOUNT
@@ -151,6 +150,8 @@ message RegisterAccountRequest {
     // The account to register. Registration does not create the account on chain.
     account.AccountId account_id = 2;
 }
+
+message RegisterAccountResponse {}
 
 // IS ACCOUNT ALLOWED
 // ================================================================================================
@@ -209,8 +210,10 @@ message ProofSubscriptionResponse {
 // RPC STATUS
 // ================================================================================================
 
+message StatusRequest {}
+
 // Represents the status of the node.
-message RpcStatus {
+message StatusResponse {
     // The rpc component's running version.
     string version = 1;
 
@@ -267,7 +270,7 @@ message MempoolStats {
 // path and current forest which validate the block's inclusion in the chain.
 //
 // The Merkle path is an MMR proof for the block's leaf, based on the current chain length.
-message BlockHeaderByNumberRequest {
+message GetBlockHeaderByNumberRequest {
     // The target block height, defaults to latest if not provided.
     optional uint32 block_num = 1;
     // Whether or not to return authentication data for the block header.
@@ -277,7 +280,7 @@ message BlockHeaderByNumberRequest {
 }
 
 // Represents the result of getting a block header by block number.
-message BlockHeaderByNumberResponse {
+message GetBlockHeaderByNumberResponse {
     // The requested block header.
     blockchain.BlockHeader block_header = 1;
 
@@ -295,13 +298,13 @@ message BlockHeaderByNumberResponse {
 // ================================================================================================
 
 // Request for a block, with an optional execution proof.
-message BlockRequest {
+message GetBlockByNumberRequest {
     fixed32 block_num = 1;
     optional bool include_proof = 2;
 }
 
 // A block and, when requested and available, its execution proof.
-message MaybeBlock {
+message GetBlockByNumberResponse {
     optional blockchain.SignedBlock block = 1;
     optional primitives.ExecutionProof proof = 2;
 }
@@ -310,7 +313,7 @@ message MaybeBlock {
 // ================================================================================================
 
 // A list of note IDs to retrieve.
-message NotesByIdRequest {
+message GetNotesByIdRequest {
     repeated note.NoteId note_ids = 1;
 }
 
@@ -321,19 +324,19 @@ message CommittedNote {
 }
 
 // Notes returned from a note ID query.
-message NotesByIdResponse {
+message GetNotesByIdResponse {
     repeated CommittedNote notes = 1;
 }
 
 // GET NOTE SCRIPT BY ROOT
 // ================================================================================================
 
-message NoteScriptByRootRequest {
+message GetNoteScriptByRootRequest {
     primitives.Word root = 1;
 }
 
 // Represents a note script or nothing.
-message MaybeNoteScript {
+message GetNoteScriptByRootResponse {
     // The script for a note by its root.
     optional note.NoteScript script = 1;
 }
@@ -342,7 +345,7 @@ message MaybeNoteScript {
 // ================================================================================================
 
 // Defines the request for account details.
-message AccountRequest {
+message GetAccountRequest {
     // Request the details for a public account.
     message AccountDetailRequest {
         // Represents a storage slot index and the associated map keys.
@@ -411,7 +414,7 @@ message AccountRequest {
 }
 
 // Represents the result of getting account proof.
-message AccountResponse {
+message GetAccountResponse {
     message AccountDetails {
         // Account header.
         account.AccountHeader header = 1;
@@ -437,7 +440,7 @@ message AccountResponse {
     optional AccountDetails details = 3;
 }
 
-// Account vault details for AccountResponse
+// Account vault details for GetAccountResponse
 message AccountVaultDetails {
     // A flag that is set to true if the account contains too many assets. This indicates
     // to the user that `SyncAccountVault` endpoint should be used to retrieve the
@@ -449,7 +452,7 @@ message AccountVaultDetails {
     repeated asset.Asset assets = 2;
 }
 
-// Account storage details for AccountResponse
+// Account storage details for GetAccountResponse
 message AccountStorageDetails {
     message AccountStorageMapDetails {
         // Wrapper for repeated storage map entries (without proofs).
@@ -857,6 +860,10 @@ enum NetworkNoteStatus {
     NETWORK_NOTE_STATUS_NULLIFIER_COMMITTED = 4;
 }
 
+message GetNetworkNoteStatusRequest {
+    note.NoteId note_id = 1;
+}
+
 // Response containing the lifecycle status and latest execution error for a network note.
 message GetNetworkNoteStatusResponse {
     // Current lifecycle status of the note.
@@ -872,8 +879,10 @@ message GetNetworkNoteStatusResponse {
 // RPC LIMITS
 // ================================================================================================
 
+message GetLimitsRequest {}
+
 // Represents the query parameter limits for RPC endpoints.
-message RpcLimits {
+message GetLimitsResponse {
     // Maps RPC endpoint names to their parameter limits.
     // Key: endpoint name (e.g., "SyncNullifiers")
     // Value: map of parameter names to their limit values
@@ -886,4 +895,26 @@ message EndpointLimits {
     // Key: parameter name (e.g., "nullifier", "account_id")
     // Value: limit value
     map<string, uint32> parameters = 1;
+}
+
+message GetTransactionEncryptionKeyRequest {}
+
+message GetTransactionEncryptionKeyResponse {
+    submission.TransactionEncryptionKey key = 1;
+}
+
+message SubmitProvenTxRequest {
+    submission.ProvenTransactionSubmission submission = 1;
+}
+
+message SubmitProvenTxResponse {
+    fixed32 block_num = 1;
+}
+
+message SubmitProvenTxBatchRequest {
+    submission.TransactionBatch submission = 1;
+}
+
+message SubmitProvenTxBatchResponse {
+    fixed32 block_num = 1;
 }

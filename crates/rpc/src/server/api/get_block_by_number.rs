@@ -10,14 +10,14 @@ use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::GetBlockByNumber for RpcService {
-    type Input = proto::rpc::BlockRequest;
-    type Output = proto::rpc::MaybeBlock;
+    type Input = proto::rpc::GetBlockByNumberRequest;
+    type Output = proto::rpc::GetBlockByNumberResponse;
 
-    fn decode(request: proto::rpc::BlockRequest) -> tonic::Result<Self::Input> {
+    fn decode(request: proto::rpc::GetBlockByNumberRequest) -> tonic::Result<Self::Input> {
         Ok(request)
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::MaybeBlock> {
+    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::GetBlockByNumberResponse> {
         Ok(output)
     }
 
@@ -70,6 +70,6 @@ impl proto::server::rpc_api::GetBlockByNumber for RpcService {
             None
         };
 
-        Ok(proto::rpc::MaybeBlock { block, proof })
+        Ok(proto::rpc::GetBlockByNumberResponse { block, proof })
     }
 }

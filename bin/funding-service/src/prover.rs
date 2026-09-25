@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use miden_node_proto::clients::{Builder, RemoteProverClient};
-use miden_node_proto::generated::remote_prover::proof_request::Request as ProofRequestVariant;
-use miden_node_proto::generated::remote_prover::{DecodedProof, ProofRequest};
+use miden_node_proto::generated::remote_prover::prove_request::Request as ProofRequestVariant;
+use miden_node_proto::generated::remote_prover::{DecodedProveResponse, ProveRequest};
 use miden_node_proto::{BuildUnchecked, DecodeMessage};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorReport, warn};
@@ -96,7 +96,7 @@ impl RemoteProver {
 
     /// Proves one transaction on the remote prover.
     async fn prove_remotely(&self, executed_tx: &ExecutedTransaction) -> Result<ProvenTransaction> {
-        let request = tonic::Request::new(ProofRequest {
+        let request = tonic::Request::new(ProveRequest {
             request: Some(ProofRequestVariant::Transaction(executed_tx.tx_inputs().into())),
         });
 
@@ -110,7 +110,7 @@ impl RemoteProver {
         response
             .into_inner()
             .decode_fields()
-            .and_then(DecodedProof::into_transaction)
+            .and_then(DecodedProveResponse::into_transaction)
             .context("failed to decode the response of the remote transaction prover")?
             .build_unchecked()
             .context("failed to build the response of the remote transaction prover")

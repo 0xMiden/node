@@ -7,7 +7,7 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use miden_node_proto::generated as proto;
-use miden_node_proto::generated::rpc::{BlockProducerStatus, RpcStatus};
+use miden_node_proto::generated::rpc::{BlockProducerStatus, StatusResponse};
 use miden_node_tracing::warn;
 use serde::{Deserialize, Serialize};
 
@@ -358,7 +358,10 @@ impl From<proto::remote_prover::ProxyWorkerStatus> for WorkerStatusDetails {
 }
 
 impl RemoteProverStatusDetails {
-    pub fn from_proxy_status(status: proto::remote_prover::ProxyStatus, url: String) -> Self {
+    pub fn from_proxy_status(
+        status: proto::remote_prover::ProxyStatusResponse,
+        url: String,
+    ) -> Self {
         // An out-of-range discriminant (e.g. from a newer prover version) degrades to Unknown
         // instead of panicking the checker task.
         let proof_type = proto::remote_prover::ProofType::try_from(status.supported_proof_type)
@@ -387,8 +390,8 @@ impl RemoteProverStatusDetails {
 }
 
 impl RpcStatusDetails {
-    /// Creates `RpcStatusDetails` from a gRPC `RpcStatus` response and the configured URL.
-    pub fn from_rpc_status(status: RpcStatus, url: String) -> Self {
+    /// Creates `RpcStatusDetails` from a gRPC `StatusResponse` response and the configured URL.
+    pub fn from_rpc_status(status: StatusResponse, url: String) -> Self {
         Self {
             url,
             version: status.version,
@@ -448,7 +451,7 @@ mod tests {
 
     #[test]
     fn proxy_status_with_unknown_proof_type_degrades_to_unknown() {
-        let proto_status = proto::remote_prover::ProxyStatus {
+        let proto_status = proto::remote_prover::ProxyStatusResponse {
             version: "1.0".to_string(),
             supported_proof_type: 99,
             workers: vec![proto::remote_prover::ProxyWorkerStatus {

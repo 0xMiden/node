@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use miden_node_proto::clients::{Builder, RemoteProverClient};
 use miden_node_proto::errors::ConversionError;
-use miden_node_proto::generated::remote_prover::proof_request::Request;
-use miden_node_proto::generated::remote_prover::{DecodedProof, ProofRequest};
+use miden_node_proto::generated::remote_prover::prove_request::Request;
+use miden_node_proto::generated::remote_prover::{DecodedProveResponse, ProveRequest};
 use miden_node_proto::{BuildUnchecked, DecodeMessage};
 use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
 use miden_tx::TransactionProverError;
@@ -37,7 +37,7 @@ impl RemoteTransactionProver {
         &self,
         tx_inputs: &TransactionInputs,
     ) -> Result<ProvenTransaction, TransactionProverError> {
-        let request = tonic::Request::new(ProofRequest {
+        let request = tonic::Request::new(ProveRequest {
             request: Some(Request::Transaction(tx_inputs.into())),
         });
 
@@ -48,7 +48,7 @@ impl RemoteTransactionProver {
         response
             .into_inner()
             .decode_fields()
-            .and_then(DecodedProof::into_transaction)
+            .and_then(DecodedProveResponse::into_transaction)
             // SAFETY: Construction checks transaction structure. The RPC checks the proof at
             // submission.
             //

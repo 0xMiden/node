@@ -9,12 +9,16 @@ impl grpc::server::validator_api::GetTransactionEncryptionKey for ValidatorServi
     type Input = ();
     type Output = grpc::submission::TransactionEncryptionKey;
 
-    fn decode(request: ()) -> tonic::Result<Self::Input> {
-        Ok(request)
+    fn decode(
+        _request: grpc::validator::GetTransactionEncryptionKeyRequest,
+    ) -> tonic::Result<Self::Input> {
+        Ok(())
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<grpc::submission::TransactionEncryptionKey> {
-        Ok(output)
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<grpc::validator::GetTransactionEncryptionKeyResponse> {
+        Ok(grpc::validator::GetTransactionEncryptionKeyResponse { key: Some(output) })
     }
 
     #[miden_instrument(

@@ -12,7 +12,7 @@ service Api {
     // Verifies inclusion against the trusted node before storage, including on retries.
     // Accepts only private notes. Rejects non-private notes with INVALID_ARGUMENT.
     // A retry with the same note ID keeps the first envelope.
-    rpc SendNoteWithProof(SendNoteWithProofRequest) returns (SendNoteResponse) {}
+    rpc SendNoteWithProof(SendNoteWithProofRequest) returns (SendNoteWithProofResponse) {}
     // Returns notes after the cursor, ordered by their storage cursor.
     rpc FetchNotes(FetchNotesRequest) returns (FetchNotesResponse) {}
 }
@@ -31,6 +31,8 @@ message SendNoteWithProofRequest {
     // Required. The service verifies this proof but does not store it.
     note.NoteInclusionProof inclusion_proof = 2;
 }
+
+message SendNoteWithProofResponse {}
 
 message TransportNote {
     note.NoteHeader header = 1;

@@ -9,14 +9,14 @@ use miden_protocol::account::{AccountId, AccountIdVersion, AccountType, AssetCal
 use miden_protocol::utils::serde::DeserializationError;
 use prost::Message;
 
-fn account_request() -> proto::rpc::AccountRequest {
+fn get_account_request() -> proto::rpc::GetAccountRequest {
     let account_id = AccountId::dummy(
         [7; 15],
         AccountIdVersion::Version1,
         AccountType::Public,
         AssetCallbackFlag::Disabled,
     );
-    proto::rpc::AccountRequest {
+    proto::rpc::GetAccountRequest {
         account_id: Some(account_id.into()),
         block_num: None,
         details: None,
@@ -25,23 +25,23 @@ fn account_request() -> proto::rpc::AccountRequest {
 
 #[test]
 fn account_request_preserves_optional_fields_on_the_wire() {
-    let request = account_request();
-    let decoded = proto::rpc::AccountRequest::decode(request.encode_to_vec().as_slice())
+    let request = get_account_request();
+    let decoded = proto::rpc::GetAccountRequest::decode(request.encode_to_vec().as_slice())
         .unwrap()
         .decode_and_verify()
         .unwrap();
     assert!(decoded.block_num.is_none());
     assert!(decoded.details.is_none());
 
-    let request = proto::rpc::AccountRequest {
+    let request = proto::rpc::GetAccountRequest {
         block_num: Some(miden_protocol::block::BlockNumber::GENESIS.into()),
-        details: Some(proto::rpc::account_request::AccountDetailRequest {
+        details: Some(proto::rpc::get_account_request::AccountDetailRequest {
             code_commitment: Some(Word::empty().into()),
             ..Default::default()
         }),
-        ..account_request()
+        ..get_account_request()
     };
-    let decoded = proto::rpc::AccountRequest::decode(request.encode_to_vec().as_slice())
+    let decoded = proto::rpc::GetAccountRequest::decode(request.encode_to_vec().as_slice())
         .unwrap()
         .decode_and_verify()
         .unwrap();
@@ -54,7 +54,7 @@ fn account_request_preserves_optional_fields_on_the_wire() {
 
 #[test]
 fn missing_account_id_is_an_invalid_argument() {
-    let error = proto::rpc::AccountRequest::default().decode_and_verify().unwrap_err();
+    let error = proto::rpc::GetAccountRequest::default().decode_and_verify().unwrap_err();
     let status = error.into_status();
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
     assert!(status.message().starts_with("failed to decode: account_id:"), "{status}");
@@ -79,10 +79,10 @@ fn conversion_status_preserves_field_context_and_nested_causes() {
 #[test]
 fn nested_map_keys_report_the_field_index_and_original_error() {
     use detail::storage_map_detail_request::{MapKeys, SlotData};
-    use proto::rpc::account_request::account_detail_request as detail;
+    use proto::rpc::get_account_request::account_detail_request as detail;
 
-    let request = proto::rpc::AccountRequest {
-        details: Some(proto::rpc::account_request::AccountDetailRequest {
+    let request = proto::rpc::GetAccountRequest {
+        details: Some(proto::rpc::get_account_request::AccountDetailRequest {
             storage_request: Some(detail::StorageRequest::StorageMaps(
                 detail::StorageMapDetailRequests {
                     storage_maps: vec![detail::StorageMapDetailRequest {
@@ -98,7 +98,7 @@ fn nested_map_keys_report_the_field_index_and_original_error() {
             )),
             ..Default::default()
         }),
-        ..account_request()
+        ..get_account_request()
     };
     let error = request.decode_fields().unwrap_err();
     assert!(error.to_string().starts_with(
@@ -109,7 +109,7 @@ fn nested_map_keys_report_the_field_index_and_original_error() {
 
 #[test]
 fn account_details_require_vault_data_but_allow_absent_code() {
-    let account_id = account_request().decode_fields().unwrap().verify().unwrap().account_id;
+    let account_id = get_account_request().decode_fields().unwrap().verify().unwrap().account_id;
     let storage = miden_protocol::account::AccountStorageHeader::new(Vec::new()).unwrap();
     let header = miden_protocol::account::AccountHeader::new(
         account_id,
@@ -118,7 +118,7 @@ fn account_details_require_vault_data_but_allow_absent_code() {
         storage.to_commitment(),
         Word::empty(),
     );
-    let details = proto::rpc::account_response::AccountDetails {
+    let details = proto::rpc::get_account_response::AccountDetails {
         header: Some(header.into()),
         storage_details: Some(proto::rpc::AccountStorageDetails {
             header: Some(storage.into()),
@@ -130,7 +130,7 @@ fn account_details_require_vault_data_but_allow_absent_code() {
     let decoded = details.clone().decode_fields().unwrap().verify().unwrap();
     assert!(decoded.account_code.is_none());
 
-    let error = proto::rpc::account_response::AccountDetails { vault_details: None, ..details }
+    let error = proto::rpc::get_account_response::AccountDetails { vault_details: None, ..details }
         .decode_fields()
         .unwrap_err();
     assert!(error.to_string().starts_with("vault_details:"), "{error}");
@@ -138,11 +138,11 @@ fn account_details_require_vault_data_but_allow_absent_code() {
 
 #[test]
 fn absent_blocks_and_scripts_remain_optional() {
-    let block = proto::rpc::MaybeBlock::default().decode_fields().unwrap();
+    let block = proto::rpc::GetBlockByNumberResponse::default().decode_fields().unwrap();
     assert!(block.block.as_ref().is_none());
     assert!(block.proof.as_ref().is_none());
     assert!(
-        proto::rpc::MaybeNoteScript::default()
+        proto::rpc::GetNoteScriptByRootResponse::default()
             .decode_fields()
             .unwrap()
             .script
@@ -153,20 +153,20 @@ fn absent_blocks_and_scripts_remain_optional() {
 
 #[test]
 fn prover_requires_a_request_variant() {
-    let error = proto::remote_prover::ProofRequest::default().decode_fields().unwrap_err();
+    let error = proto::remote_prover::ProveRequest::default().decode_fields().unwrap_err();
     assert!(error.to_string().starts_with("request:"), "{error}");
 }
 
 #[test]
 fn rpc_limits_preserve_endpoint_and_parameter_names() {
     let parameters = HashMap::from([("max_items".to_string(), 10), ("max_bytes".to_string(), 0)]);
-    let message = proto::rpc::RpcLimits {
+    let message = proto::rpc::GetLimitsResponse {
         endpoints: HashMap::from([(
             "SyncNotes".to_string(),
             proto::rpc::EndpointLimits { parameters: parameters.clone() },
         )]),
     };
-    let decoded = proto::rpc::RpcLimits::decode(message.encode_to_vec().as_slice())
+    let decoded = proto::rpc::GetLimitsResponse::decode(message.encode_to_vec().as_slice())
         .unwrap()
         .decode_fields()
         .unwrap();
@@ -176,9 +176,9 @@ fn rpc_limits_preserve_endpoint_and_parameter_names() {
 
 #[test]
 fn rpc_limits_preserve_empty_maps() {
-    let decoded = proto::rpc::RpcLimits::default().decode_fields().unwrap();
+    let decoded = proto::rpc::GetLimitsResponse::default().decode_fields().unwrap();
     assert!(decoded.endpoints.as_ref().is_empty());
-    let message = proto::rpc::RpcLimits {
+    let message = proto::rpc::GetLimitsResponse {
         endpoints: HashMap::from([(
             "SyncNotes".to_string(),
             proto::rpc::EndpointLimits::default(),
