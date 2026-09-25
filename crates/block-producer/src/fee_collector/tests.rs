@@ -44,7 +44,7 @@ async fn collector_deployment_proves_the_block_and_supports_a_new_collector() {
         transactions: Arc::new(Mutex::new(BTreeSet::new())),
         reject_transaction: Arc::new(AtomicBool::new(true)),
     };
-    State::bootstrap(genesis, directory.path()).unwrap();
+    State::bootstrap(genesis, directory.path()).await.unwrap();
     let shutdown = CancellationToken::new();
     let (state, mut writer, mut proof_writer, writer_task) =
         State::load(directory.path(), StorageOptions::default())

@@ -42,8 +42,8 @@ use miden_protocol::{EMPTY_WORD, Word};
 use thiserror::Error;
 
 use crate::COMPONENT;
-pub use crate::db::models::queries::HISTORICAL_BLOCK_RETENTION;
-use crate::db::models::queries::{PrecomputedPublicAccountState, PrecomputedPublicAccountStates};
+pub use crate::db::HISTORICAL_BLOCK_RETENTION;
+use crate::db::{PrecomputedPublicAccountState, PrecomputedPublicAccountStates};
 use crate::errors::AccountStateForestUpdateError;
 
 #[cfg(test)]

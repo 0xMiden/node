@@ -663,7 +663,9 @@ mod tests {
         )
         .into_block()
         .expect("genesis block should be created");
-        State::bootstrap(genesis, temp_dir.path()).expect("store should bootstrap");
+        State::bootstrap(genesis, temp_dir.path())
+            .await
+            .expect("store should bootstrap");
 
         let (state, block_writer, _proof_writer, writer_task) =
             State::load(temp_dir.path(), StorageOptions::default())
@@ -849,14 +851,13 @@ mod tests {
         bytes.push(0xff);
         state
             .db
-            .query("corrupt protocol config", move |conn| {
-                diesel::update(
-                    protocol_configs::table
-                        .filter(protocol_configs::commitment.eq(commitment.to_bytes())),
-                )
-                .set(protocol_configs::protocol_config.eq(bytes))
-                .execute(conn)?;
-                Ok::<_, DatabaseError>(())
+            .writer()
+            .write::<_, DatabaseError, _>("corrupt protocol config", move |tx| {
+                tx.execute(
+                    "UPDATE protocol_configs SET protocol_config = ?1 WHERE commitment = ?2",
+                    &[&bytes, &commitment],
+                )?;
+                Ok(())
             })
             .await
             .unwrap();
@@ -876,13 +877,14 @@ mod tests {
         let block = empty_block(&state, &protocol_config).await;
         state
             .db
-            .query("reject block inserts", |conn| {
-                diesel::sql_query(
+            .writer()
+            .write::<_, DatabaseError, _>("reject block inserts", |tx| {
+                tx.execute(
                     "CREATE TRIGGER reject_block_insert BEFORE INSERT ON block_headers \
                      BEGIN SELECT RAISE(ABORT, 'test block rejection'); END",
-                )
-                .execute(conn)?;
-                Ok::<_, DatabaseError>(())
+                    &[],
+                )?;
+                Ok(())
             })
             .await
             .unwrap();

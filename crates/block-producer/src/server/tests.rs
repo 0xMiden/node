@@ -77,7 +77,7 @@ async fn block_producer_starts_with_store_state() {
     let account_file = crate::test_utils::mock_collection_account();
     let mut deployed_account = account_file.account().clone();
     deployed_account.set_nonce(ONE).unwrap();
-    bootstrap_store(data_directory.path(), deployed_account);
+    bootstrap_store(data_directory.path(), deployed_account).await;
     let (state, block_writer, proof_writer) = State::for_tests(data_directory.path()).await;
     let shutdown = miden_node_utils::shutdown::CancellationToken::new();
 
@@ -112,7 +112,7 @@ async fn block_producer_starts_with_store_state() {
     block_producer.wait().await.unwrap();
 }
 
-fn bootstrap_store(path: &std::path::Path, account: Account) {
+async fn bootstrap_store(path: &std::path::Path, account: Account) {
     let signer = random_secret_key();
     let faucet = crate::test_utils::mock_native_faucet();
     let config = ProtocolConfig::current(AssetId::new_fungible(faucet.id())).unwrap();
@@ -125,5 +125,5 @@ fn bootstrap_store(path: &std::path::Path, account: Account) {
     );
     let genesis_block = genesis_state.into_block().expect("genesis block should be created");
 
-    State::bootstrap(genesis_block, path).expect("store should bootstrap");
+    State::bootstrap(genesis_block, path).await.expect("store should bootstrap");
 }

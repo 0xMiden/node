@@ -64,20 +64,4 @@ pub fn verify_latest_schema(database_filepath: &Path) -> std::result::Result<(),
 }
 
 #[cfg(test)]
-pub(crate) fn test_connection() -> diesel::SqliteConnection {
-    use diesel::{Connection, SqliteConnection};
-
-    let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
-    let database_filepath = temp_dir.path().join("test.sqlite3");
-    bootstrap_database(&database_filepath).expect("database should bootstrap");
-
-    let conn = SqliteConnection::establish(
-        database_filepath.to_str().expect("temp database path should be valid UTF-8"),
-    )
-    .expect("temp file sqlite should always work");
-    let _kept_dir = temp_dir.keep();
-    conn
-}
-
-#[cfg(test)]
 mod tests;

@@ -93,7 +93,9 @@ async fn sync_blocks(
     blocks: Vec<SignedBlock>,
 ) -> (anyhow::Result<()>, BlockHeader) {
     let directory = tempfile::tempdir().unwrap();
-    State::bootstrap(genesis.clone().into_block().unwrap(), directory.path()).unwrap();
+    State::bootstrap(genesis.clone().into_block().unwrap(), directory.path())
+        .await
+        .unwrap();
     let (state, writer, _proof_writer, writer_task) =
         State::load(directory.path(), StorageOptions::default())
             .await

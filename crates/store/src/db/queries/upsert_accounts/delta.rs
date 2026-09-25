@@ -10,8 +10,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use diesel::query_dsl::methods::SelectDsl;
-use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl, SqliteConnection};
+use miden_node_db::sqlite::ReadTx;
 #[cfg(test)]
 use miden_protocol::EMPTY_WORD;
 use miden_protocol::account::{
@@ -28,60 +27,53 @@ use miden_protocol::account::{
 #[cfg(test)]
 use miden_protocol::account::{StorageMap, StorageMapKey};
 use miden_protocol::block::BlockNumber;
-use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_protocol::{Felt, Word};
 
-use super::{NetworkAccountType, VALID_FOREVER};
-use crate::db::models::conv::{SqlTypeConvert, raw_sql_to_nonce};
-use crate::db::schema;
+use crate::db::queries::{NetworkAccountType, VALID_FOREVER};
 use crate::errors::DatabaseError;
 
 #[cfg(test)]
 mod tests;
 
+const SQL_LATEST_ACCOUNT_STATE: &str = include_str!("select_latest_account_state.sql");
+
 // TYPES
 // ================================================================================================
 
 /// Latest account row fields needed by account update preparation.
-#[derive(diesel::prelude::Queryable)]
 pub(super) struct LatestAccountStateRow {
-    created_at_block: i64,
-    network_account_type: i32,
-    nonce: Option<i64>,
-    code_commitment: Option<Vec<u8>>,
-    storage_header: Option<Vec<u8>>,
+    created_at_block: BlockNumber,
+    network_account_type: NetworkAccountType,
+    nonce: Option<Felt>,
+    code_commitment: Option<Word>,
+    storage_header: Option<AccountStorageHeader>,
 }
 
 impl LatestAccountStateRow {
-    pub(super) fn created_at_block(&self) -> Result<BlockNumber, DatabaseError> {
-        Ok(BlockNumber::from_raw_sql(self.created_at_block)?)
+    pub(super) fn created_at_block(&self) -> BlockNumber {
+        self.created_at_block
     }
 
-    pub(super) fn network_account_type(&self) -> Result<NetworkAccountType, DatabaseError> {
-        Ok(NetworkAccountType::from_raw_sql(self.network_account_type)?)
+    pub(super) fn network_account_type(&self) -> NetworkAccountType {
+        self.network_account_type
     }
 
     pub(super) fn state_headers(
         &self,
         account_id: AccountId,
     ) -> Result<AccountStateHeadersForDelta, DatabaseError> {
-        let nonce = raw_sql_to_nonce(self.nonce.ok_or_else(|| {
+        let nonce = self.nonce.ok_or_else(|| {
             DatabaseError::DataCorrupted(format!("No nonce found for account {account_id}"))
-        })?);
+        })?;
 
-        let code_commitment = self
-            .code_commitment
-            .as_deref()
-            .map(Word::read_from_bytes)
-            .transpose()?
-            .ok_or_else(|| {
-                DatabaseError::DataCorrupted(format!(
-                    "No code_commitment found for account {account_id}"
-                ))
-            })?;
+        let code_commitment = self.code_commitment.ok_or_else(|| {
+            DatabaseError::DataCorrupted(format!(
+                "No code_commitment found for account {account_id}"
+            ))
+        })?;
 
-        let storage_header = match self.storage_header.as_deref() {
-            Some(bytes) => AccountStorageHeader::read_from_bytes(bytes)?,
+        let storage_header = match self.storage_header.clone() {
+            Some(header) => header,
             None => AccountStorageHeader::new(Vec::new())?,
         };
 
@@ -135,40 +127,22 @@ pub(super) enum AccountStateForInsert {
 // ================================================================================================
 
 /// Selects the latest account state needed to prepare any account update.
-///
-/// The query fetches:
-/// - `created_at_block` and `network_account_type` for every update
-/// - `nonce` (preserved when a partial patch omits its final nonce)
-/// - `code_commitment` (unchanged in partial deltas)
-/// - `storage_header` (to apply storage delta)
-///
-/// # Raw SQL
-///
-/// ```sql
-/// SELECT created_at_block, network_account_type, nonce, code_commitment, storage_header
-/// FROM accounts
-/// WHERE account_id = ?1 AND valid_until = {VALID_FOREVER}
-/// ```
 pub(super) fn select_latest_account_state(
-    conn: &mut SqliteConnection,
+    tx: &ReadTx<'_>,
     account_id: AccountId,
 ) -> Result<Option<LatestAccountStateRow>, DatabaseError> {
-    let row = SelectDsl::select(
-        schema::accounts::table,
-        (
-            schema::accounts::created_at_block,
-            schema::accounts::network_account_type,
-            schema::accounts::nonce,
-            schema::accounts::code_commitment,
-            schema::accounts::storage_header,
-        ),
-    )
-    .filter(schema::accounts::account_id.eq(account_id.to_bytes()))
-    .filter(schema::accounts::valid_until.eq(VALID_FOREVER))
-    .get_result(conn)
-    .optional()?;
-
-    Ok(row)
+    Ok(tx
+        .query(SQL_LATEST_ACCOUNT_STATE, &[&account_id, &VALID_FOREVER], |row| {
+            Ok(LatestAccountStateRow {
+                created_at_block: row.get::<BlockNumber>(0)?,
+                network_account_type: row.get::<NetworkAccountType>(1)?,
+                nonce: row.get::<Option<Felt>>(2)?,
+                code_commitment: row.get::<Option<Word>>(3)?,
+                storage_header: row.get::<Option<AccountStorageHeader>>(4)?,
+            })
+        })?
+        .into_iter()
+        .next())
 }
 
 // HELPER FUNCTIONS
@@ -226,34 +200,7 @@ pub(super) fn apply_storage_patch(
         map_updates.insert(slot_name, storage_map.root());
     }
 
-    let mut slots = header
-        .slots()
-        .filter(|slot| !removed.contains(slot.name()))
-        .map(|slot| {
-            let slot_name = slot.name();
-            if let Some(new_value) = value_updates.remove(slot_name) {
-                StorageSlotHeader::new(slot_name.clone(), slot.slot_type(), new_value)
-            } else if let Some(new_root) = map_updates.remove(slot_name) {
-                StorageSlotHeader::new(slot_name.clone(), slot.slot_type(), new_root)
-            } else {
-                slot.clone()
-            }
-        })
-        .collect::<Vec<_>>();
-
-    // Any updates left over belong to slots created by the patch.
-    for (slot_name, value) in value_updates {
-        slots.push(StorageSlotHeader::new(slot_name.clone(), StorageSlotType::Value, value));
-    }
-    for (slot_name, root) in map_updates {
-        slots.push(StorageSlotHeader::new(slot_name.clone(), StorageSlotType::Map, root));
-    }
-
-    slots.sort_by_key(StorageSlotHeader::id);
-
-    AccountStorageHeader::new(slots).map_err(|e| {
-        DatabaseError::DataCorrupted(format!("Failed to create storage header: {e:?}"))
-    })
+    build_patched_header(header, value_updates, map_updates, &removed)
 }
 
 /// Applies a storage patch to an existing storage header using precomputed map roots.
@@ -299,6 +246,16 @@ pub(super) fn apply_storage_patch_with_roots(
         map_updates.insert(slot_name, root);
     }
 
+    build_patched_header(header, value_updates, map_updates, &removed)
+}
+
+/// Rebuilds a storage header from the patch's value updates, map roots, and removals.
+fn build_patched_header(
+    header: &AccountStorageHeader,
+    mut value_updates: HashMap<&StorageSlotName, Word>,
+    mut map_updates: HashMap<&StorageSlotName, Word>,
+    removed: &HashSet<&StorageSlotName>,
+) -> Result<AccountStorageHeader, DatabaseError> {
     let mut slots = header
         .slots()
         .filter(|slot| !removed.contains(slot.name()))

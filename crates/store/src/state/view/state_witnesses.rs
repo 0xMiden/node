@@ -57,7 +57,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn state_witnesses_include_requested_nullifiers() {
         let data_directory = tempfile::tempdir().expect("tempdir should be created");
-        bootstrap_store(data_directory.path());
+        bootstrap_store(data_directory.path()).await;
         let (state, _block_writer, _proof_writer) = State::for_tests(data_directory.path()).await;
 
         let nullifier = Nullifier::from_raw(Word::from([1_u32, 2, 3, 4]));
@@ -67,7 +67,7 @@ mod tests {
         assert!(witnesses.nullifier_witnesses.contains_key(&nullifier));
     }
 
-    fn bootstrap_store(path: &std::path::Path) {
+    async fn bootstrap_store(path: &std::path::Path) {
         let signer = random_secret_key();
         let genesis_state = GenesisState::new(
             vec![],
@@ -79,6 +79,6 @@ mod tests {
         );
         let genesis_block = genesis_state.into_block().expect("genesis block should be created");
 
-        State::bootstrap(genesis_block, path).expect("store should bootstrap");
+        State::bootstrap(genesis_block, path).await.expect("store should bootstrap");
     }
 }

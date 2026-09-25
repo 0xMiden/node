@@ -112,7 +112,7 @@ mod tests {
     #[tokio::test]
     async fn block_inclusion_proofs_use_the_requested_block() {
         let data_directory = tempfile::tempdir().expect("tempdir should be created");
-        bootstrap_store(data_directory.path());
+        bootstrap_store(data_directory.path()).await;
         let (state, _block_writer, _proof_writer) = State::for_tests(data_directory.path()).await;
 
         let partial_blockchain = state
@@ -160,7 +160,7 @@ mod tests {
     #[tokio::test]
     async fn note_inclusion_proofs_reject_a_reference_block_after_the_tip() {
         let data_directory = tempfile::tempdir().expect("tempdir should be created");
-        bootstrap_store(data_directory.path());
+        bootstrap_store(data_directory.path()).await;
         let (state, _block_writer, _proof_writer) = State::for_tests(data_directory.path()).await;
 
         let error = state
@@ -178,7 +178,7 @@ mod tests {
         ));
     }
 
-    fn bootstrap_store(path: &std::path::Path) {
+    async fn bootstrap_store(path: &std::path::Path) {
         let signer = random_secret_key();
         let genesis_state = GenesisState::new(
             vec![],
@@ -190,6 +190,6 @@ mod tests {
         );
         let genesis_block = genesis_state.into_block().expect("genesis block should be created");
 
-        State::bootstrap(genesis_block, path).expect("store should bootstrap");
+        State::bootstrap(genesis_block, path).await.expect("store should bootstrap");
     }
 }

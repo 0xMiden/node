@@ -1,6 +1,6 @@
 use std::ops::RangeInclusive;
 
-use diesel::prelude::{Insertable, Queryable};
+use diesel::prelude::Queryable;
 use diesel::query_dsl::methods::SelectDsl;
 use diesel::{
     BoolExpressionMethods,
@@ -12,7 +12,6 @@ use diesel::{
     SelectableHelper,
     SqliteConnection,
 };
-use miden_node_tracing::miden_instrument;
 use miden_node_utils::limiter::{
     MAX_RESPONSE_PAYLOAD_BYTES,
     QueryParamAccountIdLimit,
@@ -25,14 +24,12 @@ use miden_protocol::note::{NoteHeader, NoteId, Nullifier};
 use miden_protocol::transaction::{
     InputNoteCommitment,
     InputNotes,
-    OrderedTransactionHeaders,
     TransactionHeader,
     TransactionId,
 };
-use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::utils::serde::Deserializable;
 
 use super::{DatabaseError, select_note_ids_by_nullifier, select_note_sync_records};
-use crate::COMPONENT;
 use crate::db::models::conv::SqlTypeConvert;
 use crate::db::models::serialize_vec;
 use crate::db::schema;
@@ -49,102 +46,6 @@ pub struct TransactionRecordRaw {
     input_notes: Vec<u8>,
     output_notes: Vec<u8>,
     size_in_bytes: i64,
-}
-
-/// Insert transactions to the DB using the given [`SqliteConnection`].
-///
-/// # Returns
-///
-/// The number of affected rows.
-///
-/// # Note
-///
-/// The [`SqliteConnection`] object is not consumed. It's up to the caller to commit or rollback the
-/// transaction.
-#[miden_instrument(
-    target = COMPONENT,
-    err,
-)]
-pub(crate) fn insert_transactions(
-    conn: &mut SqliteConnection,
-    block_num: BlockNumber,
-    transactions: &OrderedTransactionHeaders,
-) -> Result<usize, DatabaseError> {
-    let rows: Vec<_> = transactions
-        .as_slice()
-        .iter()
-        .map(|tx| TransactionSummaryRowInsert::new(tx, block_num))
-        .collect();
-
-    let count = diesel::insert_into(schema::transactions::table).values(rows).execute(conn)?;
-    Ok(count)
-}
-
-#[derive(Debug, Clone, PartialEq, Insertable)]
-#[diesel(table_name = schema::transactions)]
-#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
-pub struct TransactionSummaryRowInsert {
-    transaction_id: Vec<u8>,
-    account_id: Vec<u8>,
-    block_num: i64,
-    initial_state_commitment: Vec<u8>,
-    final_state_commitment: Vec<u8>,
-    input_notes: Vec<u8>,
-    output_notes: Vec<u8>,
-    size_in_bytes: i64,
-}
-
-impl TransactionSummaryRowInsert {
-    #[expect(
-        clippy::cast_possible_wrap,
-        reason = "We will not approach the item count where i64 and usize cause issues"
-    )]
-    fn new(
-        transaction_header: &miden_protocol::transaction::TransactionHeader,
-        block_num: BlockNumber,
-    ) -> Self {
-        const HEADER_BASE_SIZE_BYTES: usize = 4 + 32 + 16 + 64;
-        const INPUT_NOTE_COMMITMENT_SIZE_BYTES: usize = 64;
-        const OUTPUT_NOTE_SYNC_RECORD_SIZE_BYTES: usize = 700;
-        // Worst case, every input note resolves to a consumed-note reference (nullifier + note id)
-        // in the sync response. Counting it per input keeps input-heavy transactions under the cap.
-        const CONSUMED_NOTE_REF_SIZE_BYTES: usize = 64;
-
-        // Serialize input notes as full InputNoteCommitments (nullifier + optional NoteHeader).
-        let input_notes: Vec<InputNoteCommitment> =
-            transaction_header.input_notes().iter().cloned().collect();
-        let input_notes_binary = input_notes.to_bytes();
-
-        // Serialize output notes as full NoteHeaders (NoteId + NoteMetadata).
-        let output_notes: Vec<NoteHeader> = transaction_header.output_notes().to_vec();
-        let output_notes_binary = output_notes.to_bytes();
-
-        // Manually calculate the estimated size of the transaction header to avoid
-        // the cost of serialization. The size estimation includes:
-        // - 4 bytes for block number
-        // - 32 bytes for transaction ID
-        // - 16 bytes for account ID
-        // - 64 bytes for initial + final state commitments (32 bytes each)
-        // - ~64 bytes per input note (nullifier + optional NoteHeader)
-        // - ~64 bytes per input note for its possible consumed-note reference
-        // - ~700 bytes per output note sync record (metadata header + inclusion proof)
-        let input_notes_size = (transaction_header.input_notes().num_notes() as usize)
-            * (INPUT_NOTE_COMMITMENT_SIZE_BYTES + CONSUMED_NOTE_REF_SIZE_BYTES);
-        let output_notes_size =
-            transaction_header.output_notes().len() * OUTPUT_NOTE_SYNC_RECORD_SIZE_BYTES;
-        let size_in_bytes = (HEADER_BASE_SIZE_BYTES + input_notes_size + output_notes_size) as i64;
-
-        Self {
-            transaction_id: transaction_header.id().to_bytes(),
-            account_id: transaction_header.account_id().to_bytes(),
-            block_num: block_num.to_raw_sql(),
-            initial_state_commitment: transaction_header.initial_state_commitment().to_bytes(),
-            final_state_commitment: transaction_header.final_state_commitment().to_bytes(),
-            input_notes: input_notes_binary,
-            output_notes: output_notes_binary,
-            size_in_bytes,
-        }
-    }
 }
 
 /// Select complete transaction records for the given accounts and block range.

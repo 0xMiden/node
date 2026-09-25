@@ -1,4 +1,3 @@
-use diesel::prelude::Insertable;
 use diesel::query_dsl::methods::SelectDsl;
 use diesel::{
     ExpressionMethods,
@@ -11,17 +10,14 @@ use diesel::{
     SelectableHelper,
     SqliteConnection,
 };
-use miden_crypto::Word;
-use miden_node_tracing::miden_instrument;
 use miden_node_utils::limiter::{QueryParamBlockLimit, QueryParamLimiter};
 use miden_protocol::block::{BlockHeader, BlockNumber, BlockSignatures};
-use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::utils::serde::Deserializable;
 
 use super::DatabaseError;
-use crate::COMPONENT;
 use crate::db::models::conv::SqlTypeConvert;
 use crate::db::models::vec_raw_try_into;
-use crate::db::schema;
+use crate::db::{BlockHeaderCommitment, schema};
 
 /// Select a [`BlockHeader`] from the DB by its `block_num` using the given [`SqliteConnection`].
 ///
@@ -154,19 +150,6 @@ pub fn select_all_block_header_commitments(
     Ok(commitments)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(transparent)]
-pub struct BlockHeaderCommitment(pub(crate) Word);
-
-impl BlockHeaderCommitment {
-    pub fn new(header: &BlockHeader) -> Self {
-        Self(header.commitment())
-    }
-    pub fn word(self) -> Word {
-        self.0
-    }
-}
-
 #[derive(Debug, Clone, Queryable, QueryableByName, Selectable)]
 #[diesel(table_name = schema::block_headers)]
 #[diesel(check_for_backend(diesel::sqlite::Sqlite))]
@@ -199,43 +182,4 @@ impl TryInto<(BlockHeader, BlockSignatures)> for BlockHeaderRawRow {
         let signatures = BlockSignatures::read_from_bytes(&self.signature[..])?;
         Ok((block_header, signatures))
     }
-}
-
-#[derive(Debug, Clone, Insertable)]
-#[diesel(table_name = schema::block_headers)]
-#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
-pub struct BlockHeaderInsert {
-    pub block_num: i64,
-    pub block_header: Vec<u8>,
-    pub signature: Vec<u8>,
-    pub commitment: Vec<u8>,
-}
-
-/// Insert a [`BlockHeader`] to the DB using the given [`SqliteConnection`].
-///
-/// # Returns
-///
-/// The number of affected rows.
-///
-/// # Note
-///
-/// The [`SqliteConnection`] object is not consumed. It's up to the caller to commit or rollback the
-/// transaction
-#[miden_instrument(
-    target = COMPONENT,
-    err,
-)]
-pub(crate) fn insert_block_header(
-    conn: &mut SqliteConnection,
-    block_header: &BlockHeader,
-    signatures: &BlockSignatures,
-) -> Result<usize, DatabaseError> {
-    let row = BlockHeaderInsert {
-        block_num: block_header.block_num().to_raw_sql(),
-        block_header: block_header.to_bytes(),
-        signature: signatures.to_bytes(),
-        commitment: BlockHeaderCommitment::new(block_header).to_raw_sql(),
-    };
-    let count = diesel::insert_into(schema::block_headers::table).values(&[row]).execute(conn)?;
-    Ok(count)
 }

@@ -4,7 +4,6 @@
 use std::collections::BTreeMap;
 
 use assert_matches::assert_matches;
-use diesel::{ExpressionMethods, QueryDsl, RunQueryDsl, SqliteConnection};
 use miden_node_utils::fee::{test_fee_params, test_protocol_config};
 use miden_protocol::account::auth::{AuthScheme, PublicKeyCommitment};
 use miden_protocol::account::component::AccountComponentMetadata;
@@ -12,9 +11,11 @@ use miden_protocol::account::{
     Account,
     AccountBuilder,
     AccountComponent,
+    AccountHeader,
     AccountId,
     AccountIdVersion,
     AccountPatch,
+    AccountStorageHeader,
     AccountStoragePatch,
     AccountType,
     AccountUpdateDetails,
@@ -29,27 +30,29 @@ use miden_protocol::account::{
     StorageValuePatch,
 };
 use miden_protocol::asset::{Asset, FungibleAsset};
-use miden_protocol::block::{BlockAccountUpdate, BlockHeader, BlockNumber, ValidatorConfig};
+use miden_protocol::block::{
+    BlockAccountUpdate,
+    BlockHeader,
+    BlockNumber,
+    BlockSignatures,
+    ValidatorConfig,
+};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::testing::account_id::{
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1,
 };
-use miden_protocol::utils::serde::Serializable;
 use miden_protocol::{EMPTY_WORD, Felt, Word};
 use miden_standards::account::auth::{Approver, AuthSingleSig};
 use miden_standards::code_builder::CodeBuilder;
 
-use crate::db::models::queries::accounts::{
+use crate::db::queries::{
+    self,
     PrecomputedPublicAccountState,
     PrecomputedPublicAccountStates,
     VALID_FOREVER,
-    select_account_header_with_storage_header_at_block,
-    select_account_vault_at_block,
-    select_full_account,
-    upsert_accounts,
 };
-use crate::db::schema::accounts;
+use crate::db::{Result, TestDb};
 use crate::errors::DatabaseError;
 
 fn block_account_update(
@@ -61,13 +64,48 @@ fn block_account_update(
         .expect("test account update should be valid")
 }
 
-fn setup_test_db() -> SqliteConnection {
-    crate::db::migrations::test_connection()
+// QUERY DRIVERS
+// ================================================================================================
+//
+// Each driver runs one query function on the test database, so a test body reads the same as the
+// production call site with the transaction handle replaced by the test handle.
+
+fn upsert_accounts(
+    db: &TestDb,
+    accounts: &[BlockAccountUpdate],
+    block_num: BlockNumber,
+    precomputed_public_states: &PrecomputedPublicAccountStates,
+) -> Result<usize> {
+    let accounts = accounts.to_vec();
+    let precomputed_public_states = precomputed_public_states.clone();
+    db.write(move |tx| {
+        queries::upsert_accounts(tx, &accounts, block_num, &precomputed_public_states)
+    })
 }
 
-fn insert_block_header(conn: &mut SqliteConnection, block_num: BlockNumber) {
-    use crate::db::schema::block_headers;
+fn select_full_account(db: &TestDb, account_id: AccountId) -> Result<Account> {
+    db.read(move |tx| queries::select_full_account(tx, account_id))
+}
 
+fn select_vault_at_block(
+    db: &TestDb,
+    account_id: AccountId,
+    block_num: BlockNumber,
+) -> Result<Vec<Asset>> {
+    db.read(move |tx| queries::select_vault_at_block(tx, account_id, block_num))
+}
+
+fn select_account_header_with_storage_header_at_block(
+    db: &TestDb,
+    account_id: AccountId,
+    block_num: BlockNumber,
+) -> Result<Option<(AccountHeader, AccountStorageHeader)>> {
+    db.read(move |tx| {
+        queries::select_account_header_with_storage_header_at_block(tx, account_id, block_num)
+    })
+}
+
+fn insert_block_header(db: &TestDb, block_num: BlockNumber) {
     let secret_key = SigningKey::new();
     let block_header = BlockHeader::new(
         Word::default(),
@@ -83,17 +121,30 @@ fn insert_block_header(conn: &mut SqliteConnection, block_num: BlockNumber) {
         None,
         0,
     );
-    let signature = secret_key.sign(block_header.commitment());
+    let signatures =
+        BlockSignatures::new(vec![secret_key.sign(block_header.commitment())]).unwrap();
 
-    diesel::insert_into(block_headers::table)
-        .values((
-            block_headers::block_num.eq(i64::from(block_num.as_u32())),
-            block_headers::block_header.eq(block_header.to_bytes()),
-            block_headers::signature.eq(signature.to_bytes()),
-            block_headers::commitment.eq(block_header.commitment().to_bytes()),
-        ))
-        .execute(conn)
-        .expect("Failed to insert block header");
+    db.write::<_, DatabaseError, _>(move |tx| {
+        queries::insert_block_header(tx, &block_header, &signatures)
+    })
+    .expect("Failed to insert block header");
+}
+
+/// Returns the current `accounts` row's commitment, nonce, and code commitment.
+fn latest_account_row(db: &TestDb, account_id: AccountId) -> (Word, Option<Felt>, Option<Word>) {
+    const SQL: &str = "SELECT account_commitment, nonce, code_commitment \
+                       FROM accounts WHERE account_id = ?1 AND valid_until = ?2";
+
+    db.read::<_, DatabaseError, _>(move |tx| {
+        Ok(tx
+            .query(SQL, &[&account_id, &VALID_FOREVER], |row| {
+                Ok((row.get::<Word>(0)?, row.get::<Option<Felt>>(1)?, row.get::<Option<Word>>(2)?))
+            })?
+            .into_iter()
+            .next())
+    })
+    .expect("query should succeed")
+    .expect("Account should exist in DB")
 }
 
 fn precomputed_state_from_account(account: &Account) -> PrecomputedPublicAccountState {
@@ -152,10 +203,10 @@ fn callback_delta_test_account(seed: [u8; 32], slot_index: usize) -> Account {
         .unwrap()
 }
 
-fn insert_public_account(conn: &mut SqliteConnection, block_num: BlockNumber, account: &Account) {
+fn insert_public_account(db: &TestDb, block_num: BlockNumber, account: &Account) {
     let patch_initial = AccountPatch::try_from(account.clone()).unwrap();
     upsert_accounts(
-        conn,
+        db,
         &[block_account_update(
             account.id(),
             account.to_commitment(),
@@ -168,14 +219,14 @@ fn insert_public_account(conn: &mut SqliteConnection, block_num: BlockNumber, ac
 }
 
 fn apply_callback_delta(
-    conn: &mut SqliteConnection,
+    db: &TestDb,
     account_id: AccountId,
     faucet_id: AccountId,
     block: BlockNumber,
     amount: u64,
     nonce_delta: u64,
 ) -> Account {
-    let prev = select_full_account(conn, account_id).expect("load account");
+    let prev = select_full_account(db, account_id).expect("load account");
     let callback_template = FungibleAsset::new(faucet_id, amount).unwrap();
     let prev_amount = prev
         .vault()
@@ -201,7 +252,7 @@ fn apply_callback_delta(
     let precomputed_public_states = precomputed_states_from_account(&expected);
 
     upsert_accounts(
-        conn,
+        db,
         &[block_account_update(
             account_id,
             expected.to_commitment(),
@@ -212,7 +263,7 @@ fn apply_callback_delta(
     )
     .expect("partial delta upsert failed");
 
-    let after = select_full_account(conn, account_id).expect("load account after");
+    let after = select_full_account(db, account_id).expect("load account after");
     assert_eq!(after.vault().root(), expected.vault().root(), "vault root mismatch");
     assert_eq!(after.to_commitment(), expected.to_commitment(), "commitment mismatch");
     after
@@ -249,7 +300,7 @@ fn optimized_delta_matches_full_account_method() {
     const NONCE_DELTA: u64 = 5;
     const VAULT_AMOUNT: u64 = 500;
 
-    let mut conn = setup_test_db();
+    let db = TestDb::new();
 
     // Create an account with value slots only (no map slots to avoid SmtForest complexity)
     let slot_value_initial = Word::from([
@@ -287,8 +338,8 @@ fn optimized_delta_matches_full_account_method() {
 
     let block_1 = BlockNumber::from(BLOCK_NUM_1);
     let block_2 = BlockNumber::from(BLOCK_NUM_2);
-    insert_block_header(&mut conn, block_1);
-    insert_block_header(&mut conn, block_2);
+    insert_block_header(&db, block_1);
+    insert_block_header(&db, block_2);
 
     // Insert the initial account at block 1 (full state) - no vault assets
     let patch_initial = AccountPatch::try_from(account.clone()).unwrap();
@@ -298,7 +349,7 @@ fn optimized_delta_matches_full_account_method() {
         AccountUpdateDetails::Public(patch_initial),
     );
     upsert_accounts(
-        &mut conn,
+        &db,
         &[account_update_initial],
         block_1,
         &precomputed_states_from_account(&account),
@@ -307,7 +358,7 @@ fn optimized_delta_matches_full_account_method() {
 
     // Verify initial state
     let full_account_before =
-        select_full_account(&mut conn, account.id()).expect("Failed to load full account");
+        select_full_account(&db, account.id()).expect("Failed to load full account");
     assert_eq!(full_account_before.nonce(), account.nonce());
     assert!(
         full_account_before.vault().assets().next().is_none(),
@@ -381,13 +432,13 @@ fn optimized_delta_matches_full_account_method() {
         final_commitment,
         AccountUpdateDetails::Public(partial_patch),
     );
-    upsert_accounts(&mut conn, &[account_update], block_2, &precomputed_public_states)
+    upsert_accounts(&db, &[account_update], block_2, &precomputed_public_states)
         .expect("Partial delta upsert failed");
 
     // ----- VERIFY: Query the DB and check that optimized path produced correct results -----
 
     let (header_after, storage_header_after) =
-        select_account_header_with_storage_header_at_block(&mut conn, account.id(), block_2)
+        select_account_header_with_storage_header_at_block(&db, account.id(), block_2)
             .expect("Query should succeed")
             .expect("Account should exist");
 
@@ -415,8 +466,8 @@ fn optimized_delta_matches_full_account_method() {
     );
 
     // Verify vault assets
-    let vault_assets_after = select_account_vault_at_block(&mut conn, account.id(), block_2)
-        .expect("Query vault should succeed");
+    let vault_assets_after =
+        select_vault_at_block(&db, account.id(), block_2).expect("Query vault should succeed");
 
     assert_eq!(vault_assets_after.len(), 1, "Should have 1 vault asset");
     let fungible_asset = vault_assets_after[0].unwrap_fungible();
@@ -431,8 +482,8 @@ fn optimized_delta_matches_full_account_method() {
     );
 
     // Also verify we can load the full account and it has correct state
-    let full_account_after = select_full_account(&mut conn, account.id())
-        .expect("Failed to load full account after update");
+    let full_account_after =
+        select_full_account(&db, account.id()).expect("Failed to load full account after update");
 
     assert_eq!(full_account_after.nonce(), expected_nonce, "Full account nonce mismatch");
     assert_eq!(
@@ -463,7 +514,7 @@ fn optimized_delta_updates_non_empty_vault() {
     const ADDED_AMOUNT_BLOCK_3: u64 = 150;
     const SLOT_INDEX: usize = 0;
 
-    let mut conn = setup_test_db();
+    let db = TestDb::new();
 
     let faucet_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
     let faucet_id_1 = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap();
@@ -497,9 +548,9 @@ fn optimized_delta_updates_non_empty_vault() {
     let block_1 = BlockNumber::from(BLOCK_NUM_1);
     let block_2 = BlockNumber::from(BLOCK_NUM_2);
     let block_3 = BlockNumber::from(BLOCK_NUM_3);
-    insert_block_header(&mut conn, block_1);
-    insert_block_header(&mut conn, block_2);
-    insert_block_header(&mut conn, block_3);
+    insert_block_header(&db, block_1);
+    insert_block_header(&db, block_2);
+    insert_block_header(&db, block_3);
 
     // Block 1: insert full-state patch (initial account with 700 tokens of faucet_id)
     let patch_initial = AccountPatch::try_from(account.clone()).unwrap();
@@ -509,7 +560,7 @@ fn optimized_delta_updates_non_empty_vault() {
         AccountUpdateDetails::Public(patch_initial),
     );
     upsert_accounts(
-        &mut conn,
+        &db,
         &[account_update_initial],
         block_1,
         &precomputed_states_from_account(&account),
@@ -517,7 +568,7 @@ fn optimized_delta_updates_non_empty_vault() {
     .expect("Initial upsert failed");
 
     let full_account_before =
-        select_full_account(&mut conn, account.id()).expect("Failed to load full account");
+        select_full_account(&db, account.id()).expect("Failed to load full account");
 
     // Block 2: partial patch — remove faucet_id (700), add faucet_id_1 (250)
     let removed_asset = Asset::from(FungibleAsset::new(faucet_id, INITIAL_AMOUNT).unwrap());
@@ -548,19 +599,19 @@ fn optimized_delta_updates_non_empty_vault() {
         expected_commitment,
         AccountUpdateDetails::Public(partial_patch),
     );
-    upsert_accounts(&mut conn, &[account_update], block_2, &precomputed_public_states)
+    upsert_accounts(&db, &[account_update], block_2, &precomputed_public_states)
         .expect("Partial delta upsert failed");
 
-    let vault_assets_after = select_account_vault_at_block(&mut conn, account.id(), block_2)
-        .expect("Query vault should succeed");
+    let vault_assets_after =
+        select_vault_at_block(&db, account.id(), block_2).expect("Query vault should succeed");
 
     assert_eq!(vault_assets_after.len(), 1, "Should have 1 vault asset");
     let fungible_asset = vault_assets_after[0].unwrap_fungible();
     assert_eq!(fungible_asset.faucet_id(), faucet_id_1, "Faucet ID should match");
     assert_eq!(fungible_asset.amount().as_u64(), ADDED_AMOUNT_BLOCK_2, "Amount should match");
 
-    let full_account_after = select_full_account(&mut conn, account.id())
-        .expect("Failed to load full account after update");
+    let full_account_after =
+        select_full_account(&db, account.id()).expect("Failed to load full account after update");
 
     assert_eq!(full_account_after.vault().root(), expected_vault_root);
     assert_eq!(full_account_after.to_commitment(), expected_commitment);
@@ -593,11 +644,11 @@ fn optimized_delta_updates_non_empty_vault() {
         commitment_3,
         AccountUpdateDetails::Public(partial_patch_3),
     );
-    upsert_accounts(&mut conn, &[account_update_3], block_3, &precomputed_public_states_3)
+    upsert_accounts(&db, &[account_update_3], block_3, &precomputed_public_states_3)
         .expect("Block 3 upsert failed");
 
     let full_account_final =
-        select_full_account(&mut conn, account.id()).expect("Failed to load after block 3");
+        select_full_account(&db, account.id()).expect("Failed to load after block 3");
 
     let final_assets: Vec<Asset> = full_account_final.vault().assets().collect();
     assert_eq!(final_assets.len(), 1, "Should have exactly 1 vault asset");
@@ -624,29 +675,22 @@ fn optimized_delta_updates_preserve_callback_flag() {
     const ADDED_AMOUNT_BLOCK_3: u64 = 150;
     const SLOT_INDEX: usize = 0;
 
-    let mut conn = setup_test_db();
+    let db = TestDb::new();
 
     let block_1 = BlockNumber::from(1u32);
     let block_2 = BlockNumber::from(2u32);
     let block_3 = BlockNumber::from(3u32);
-    insert_block_header(&mut conn, block_1);
-    insert_block_header(&mut conn, block_2);
-    insert_block_header(&mut conn, block_3);
+    insert_block_header(&db, block_1);
+    insert_block_header(&db, block_2);
+    insert_block_header(&db, block_3);
 
     let faucet_id = callback_enabled_faucet_id();
     let account = callback_delta_test_account(ACCOUNT_SEED, SLOT_INDEX);
-    insert_public_account(&mut conn, block_1, &account);
+    insert_public_account(&db, block_1, &account);
 
-    apply_callback_delta(
-        &mut conn,
-        account.id(),
-        faucet_id,
-        block_2,
-        ADDED_AMOUNT_BLOCK_2,
-        NONCE_DELTA,
-    );
+    apply_callback_delta(&db, account.id(), faucet_id, block_2, ADDED_AMOUNT_BLOCK_2, NONCE_DELTA);
     let final_account = apply_callback_delta(
-        &mut conn,
+        &db,
         account.id(),
         faucet_id,
         block_3,
@@ -683,7 +727,7 @@ fn optimized_delta_updates_storage_map_header() {
     // Use nonzero nonce delta (required when storage/vault changes).
     const NONCE_DELTA: u64 = 1;
 
-    let mut conn = setup_test_db();
+    let db = TestDb::new();
 
     let map_key = StorageMapKey::new(Word::from([
         Felt::new_unchecked(MAP_KEY_VALUES[0]),
@@ -731,8 +775,8 @@ fn optimized_delta_updates_storage_map_header() {
 
     let block_1 = BlockNumber::from(BLOCK_NUM_1);
     let block_2 = BlockNumber::from(BLOCK_NUM_2);
-    insert_block_header(&mut conn, block_1);
-    insert_block_header(&mut conn, block_2);
+    insert_block_header(&db, block_1);
+    insert_block_header(&db, block_2);
 
     let patch_initial = AccountPatch::try_from(account.clone()).unwrap();
     let account_update_initial = block_account_update(
@@ -741,7 +785,7 @@ fn optimized_delta_updates_storage_map_header() {
         AccountUpdateDetails::Public(patch_initial),
     );
     upsert_accounts(
-        &mut conn,
+        &db,
         &[account_update_initial],
         block_1,
         &precomputed_states_from_account(&account),
@@ -749,7 +793,7 @@ fn optimized_delta_updates_storage_map_header() {
     .expect("Initial upsert failed");
 
     let full_account_before =
-        select_full_account(&mut conn, account.id()).expect("Failed to load full account");
+        select_full_account(&db, account.id()).expect("Failed to load full account");
 
     let map_patch = StorageMapPatch::from_iters([], [(map_key, map_value_updated)]);
     let storage_patch = AccountStoragePatch::from_raw(
@@ -781,11 +825,11 @@ fn optimized_delta_updates_storage_map_header() {
         expected_commitment,
         AccountUpdateDetails::Public(partial_patch),
     );
-    upsert_accounts(&mut conn, &[account_update], block_2, &precomputed_public_states)
+    upsert_accounts(&db, &[account_update], block_2, &precomputed_public_states)
         .expect("Partial delta upsert failed");
 
     let (header_after, storage_header_after) =
-        select_account_header_with_storage_header_at_block(&mut conn, account.id(), block_2)
+        select_account_header_with_storage_header_at_block(&db, account.id(), block_2)
             .expect("Query should succeed")
             .expect("Account should exist");
 
@@ -842,11 +886,11 @@ fn partial_public_upsert_requires_precomputed_state() {
     const ACCOUNT_SEED: [u8; 32] = [80u8; 32];
     const SLOT_INDEX: usize = 0;
 
-    let mut conn = setup_test_db();
+    let db = TestDb::new();
     let block_1 = BlockNumber::from(1u32);
     let block_2 = BlockNumber::from(2u32);
-    insert_block_header(&mut conn, block_1);
-    insert_block_header(&mut conn, block_2);
+    insert_block_header(&db, block_1);
+    insert_block_header(&db, block_2);
 
     let component_storage =
         vec![StorageSlot::with_value(StorageSlotName::mock(SLOT_INDEX), EMPTY_WORD)];
@@ -874,7 +918,7 @@ fn partial_public_upsert_requires_precomputed_state() {
 
     let patch_initial = AccountPatch::try_from(account.clone()).unwrap();
     upsert_accounts(
-        &mut conn,
+        &db,
         &[block_account_update(
             account.id(),
             account.to_commitment(),
@@ -885,7 +929,7 @@ fn partial_public_upsert_requires_precomputed_state() {
     )
     .expect("initial full-state upsert failed");
 
-    let mut current_account = select_full_account(&mut conn, account.id()).unwrap();
+    let mut current_account = select_full_account(&db, account.id()).unwrap();
     let patch = AccountPatch::new(
         account.id(),
         AccountStoragePatch::new(),
@@ -897,7 +941,7 @@ fn partial_public_upsert_requires_precomputed_state() {
     current_account.apply_patch(&patch).unwrap();
 
     let err = upsert_accounts(
-        &mut conn,
+        &db,
         &[block_account_update(
             account.id(),
             current_account.to_commitment(),
@@ -916,11 +960,11 @@ fn partial_public_upsert_rejects_bad_precomputed_root() {
     const ACCOUNT_SEED: [u8; 32] = [81u8; 32];
     const SLOT_INDEX: usize = 0;
 
-    let mut conn = setup_test_db();
+    let db = TestDb::new();
     let block_1 = BlockNumber::from(1u32);
     let block_2 = BlockNumber::from(2u32);
-    insert_block_header(&mut conn, block_1);
-    insert_block_header(&mut conn, block_2);
+    insert_block_header(&db, block_1);
+    insert_block_header(&db, block_2);
 
     let component_storage =
         vec![StorageSlot::with_value(StorageSlotName::mock(SLOT_INDEX), EMPTY_WORD)];
@@ -945,7 +989,7 @@ fn partial_public_upsert_rejects_bad_precomputed_root() {
 
     let patch_initial = AccountPatch::try_from(account.clone()).unwrap();
     upsert_accounts(
-        &mut conn,
+        &db,
         &[block_account_update(
             account.id(),
             account.to_commitment(),
@@ -956,7 +1000,7 @@ fn partial_public_upsert_rejects_bad_precomputed_root() {
     )
     .expect("initial full-state upsert failed");
 
-    let mut expected_account = select_full_account(&mut conn, account.id()).unwrap();
+    let mut expected_account = select_full_account(&db, account.id()).unwrap();
     let patch = AccountPatch::new(
         account.id(),
         AccountStoragePatch::new(),
@@ -972,7 +1016,7 @@ fn partial_public_upsert_rejects_bad_precomputed_root() {
         Word::from([Felt::new_unchecked(999); 4]);
 
     let err = upsert_accounts(
-        &mut conn,
+        &db,
         &[block_account_update(
             account.id(),
             expected_account.to_commitment(),
@@ -1000,10 +1044,10 @@ fn upsert_private_account() {
     // Use fixed commitment values to validate storage behavior.
     const COMMITMENT_WORDS: [u64; 4] = [1, 2, 3, 4];
 
-    let mut conn = setup_test_db();
+    let db = TestDb::new();
 
     let block_num = BlockNumber::from(BLOCK_NUM);
-    insert_block_header(&mut conn, block_num);
+    insert_block_header(&db, block_num);
 
     // Create a private account ID
     let account_id = AccountId::dummy(
@@ -1024,29 +1068,14 @@ fn upsert_private_account() {
     let account_update =
         block_account_update(account_id, account_commitment, AccountUpdateDetails::Private);
 
-    upsert_accounts(
-        &mut conn,
-        &[account_update],
-        block_num,
-        &PrecomputedPublicAccountStates::new(),
-    )
-    .expect("Private account upsert failed");
+    upsert_accounts(&db, &[account_update], block_num, &PrecomputedPublicAccountStates::new())
+        .expect("Private account upsert failed");
 
     // Verify the account exists and commitment matches
 
-    let (stored_commitment, stored_nonce, stored_code): (Vec<u8>, Option<i64>, Option<Vec<u8>>) =
-        accounts::table
-            .filter(accounts::account_id.eq(account_id.to_bytes()))
-            .filter(accounts::valid_until.eq(VALID_FOREVER))
-            .select((accounts::account_commitment, accounts::nonce, accounts::code_commitment))
-            .first(&mut conn)
-            .expect("Account should exist in DB");
+    let (stored_commitment, stored_nonce, stored_code) = latest_account_row(&db, account_id);
 
-    assert_eq!(
-        stored_commitment,
-        account_commitment.to_bytes(),
-        "Stored commitment should match"
-    );
+    assert_eq!(stored_commitment, account_commitment, "Stored commitment should match");
 
     // Private accounts have NULL for nonce, code_commitment, storage_header, vault_root
     assert!(stored_nonce.is_none(), "Private account should have NULL nonce");
@@ -1067,10 +1096,10 @@ fn upsert_full_state_delta() {
     // Use explicit slot index to avoid magic numbers.
     const SLOT_INDEX: usize = 0;
 
-    let mut conn = setup_test_db();
+    let db = TestDb::new();
 
     let block_num = BlockNumber::from(BLOCK_NUM);
-    insert_block_header(&mut conn, block_num);
+    insert_block_header(&db, block_num);
 
     // Create an account with storage
     let slot_value = Word::from([
@@ -1113,17 +1142,12 @@ fn upsert_full_state_delta() {
         AccountUpdateDetails::Public(patch),
     );
 
-    upsert_accounts(
-        &mut conn,
-        &[account_update],
-        block_num,
-        &precomputed_states_from_account(&account),
-    )
-    .expect("Full-state delta upsert failed");
+    upsert_accounts(&db, &[account_update], block_num, &precomputed_states_from_account(&account))
+        .expect("Full-state delta upsert failed");
 
     // Verify the account state was stored correctly
     let (header, storage_header) =
-        select_account_header_with_storage_header_at_block(&mut conn, account.id(), block_num)
+        select_account_header_with_storage_header_at_block(&db, account.id(), block_num)
             .expect("Query should succeed")
             .expect("Account should exist");
 
@@ -1140,8 +1164,7 @@ fn upsert_full_state_delta() {
     );
 
     // Verify we can load the full account back
-    let loaded_account =
-        select_full_account(&mut conn, account.id()).expect("Should load full account");
+    let loaded_account = select_full_account(&db, account.id()).expect("Should load full account");
 
     assert_eq!(loaded_account.nonce(), account.nonce());
     assert_eq!(loaded_account.code().commitment(), account.code().commitment());

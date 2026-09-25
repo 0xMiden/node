@@ -165,7 +165,7 @@ impl TestStore {
     async fn start_with_base_fee(verification_base_fee: u32) -> Self {
         let data_directory = new_tempdir();
         let genesis_commitment =
-            Self::bootstrap_with_base_fee(&data_directory, verification_base_fee);
+            Self::bootstrap_with_base_fee(&data_directory, verification_base_fee).await;
         let (state, writer, ..) = State::for_tests(&data_directory).await;
         Self {
             state,
@@ -181,7 +181,8 @@ impl TestStore {
     ) -> Self {
         let data_directory = new_tempdir();
         let genesis_commitment =
-            Self::bootstrap_from_mock_genesis(&data_directory, genesis_block, protocol_config);
+            Self::bootstrap_from_mock_genesis(&data_directory, genesis_block, protocol_config)
+                .await;
         let (state, writer, ..) = State::for_tests(&data_directory).await;
         Self {
             state,
@@ -191,11 +192,11 @@ impl TestStore {
         }
     }
 
-    fn bootstrap(path: &std::path::Path) -> Word {
-        Self::bootstrap_with_base_fee(path, 0)
+    async fn bootstrap(path: &std::path::Path) -> Word {
+        Self::bootstrap_with_base_fee(path, 0).await
     }
 
-    fn bootstrap_with_base_fee(path: &std::path::Path, verification_base_fee: u32) -> Word {
+    async fn bootstrap_with_base_fee(path: &std::path::Path, verification_base_fee: u32) -> Word {
         let config = GenesisConfig::default();
         let validator_key =
             miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey::read_from_bytes(&[7; 32])
@@ -220,12 +221,12 @@ impl TestStore {
             genesis_state.clone().into_block().expect("genesis block should be created");
         let genesis_commitment = genesis_block.inner().header().commitment();
 
-        State::bootstrap(genesis_block, path).expect("store should bootstrap");
+        State::bootstrap(genesis_block, path).await.expect("store should bootstrap");
 
         genesis_commitment
     }
 
-    fn bootstrap_from_mock_genesis(
+    async fn bootstrap_from_mock_genesis(
         path: &std::path::Path,
         genesis_block: &ProvenBlock,
         protocol_config: &ProtocolConfig,
@@ -241,7 +242,9 @@ impl TestStore {
             .expect("mock genesis should become a store genesis block after stripping signatures");
         let genesis_commitment = genesis_block.inner().header().commitment();
 
-        State::bootstrap(genesis_block, path).expect("store should bootstrap from mock genesis");
+        State::bootstrap(genesis_block, path)
+            .await
+            .expect("store should bootstrap from mock genesis");
 
         genesis_commitment
     }
@@ -813,7 +816,7 @@ async fn rpc_server_forwards_valid_deferred_proofs_and_rejects_missing_witnesses
     let genesis =
         GenesisBlock::new(fixture.genesis.clone(), fixture.inputs.protocol_config().clone())
             .unwrap();
-    State::bootstrap(genesis, &data_directory).unwrap();
+    State::bootstrap(genesis, &data_directory).await.unwrap();
     let (state, ..) = State::for_tests(&data_directory).await;
     let submissions = Arc::new(std::sync::Mutex::new(Vec::new()));
     let (validator, _, _, _guard) =
@@ -934,7 +937,8 @@ async fn rpc_rejects_post_deployment_network_account_tx() {
     miden_node_store::test_support::seed_network_account(
         &store.data_directory_path().join("miden-store.sqlite3"),
         network_account_id,
-    );
+    )
+    .await;
 
     // Build a non-deployment tx for that account.
     let (account, _) = build_test_account([0; 32]);
@@ -1093,10 +1097,11 @@ async fn start_source_rpc_with_genesis(
                 &block_producer_dir,
                 genesis_block,
                 protocol_config,
-            );
+            )
+            .await;
         },
         None => {
-            TestStore::bootstrap(&block_producer_dir);
+            TestStore::bootstrap(&block_producer_dir).await;
         },
     }
     let (block_producer_state, ..) = State::for_tests(&block_producer_dir).await;
@@ -1740,7 +1745,7 @@ async fn start_rpc_with_allowlist(
         AccountAdmission::enabled(allowlist)
     };
     let block_producer_dir = new_tempdir();
-    TestStore::bootstrap(&block_producer_dir);
+    TestStore::bootstrap(&block_producer_dir).await;
     let (block_producer_state, ..) = State::for_tests(&block_producer_dir).await;
     let state = Arc::clone(&store.state);
 

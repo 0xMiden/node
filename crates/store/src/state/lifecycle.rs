@@ -364,7 +364,7 @@ impl State {
 
 #[cfg(test)]
 mod tests {
-    use diesel::{Connection, ExpressionMethods, QueryDsl, RunQueryDsl, SqliteConnection};
+    use miden_node_db::sqlite::DbWriter;
     use miden_node_utils::clap::StorageOptions;
     use miden_node_utils::fee::{test_fee_params, test_protocol_config};
     use miden_protocol::block::ValidatorConfig;
@@ -373,11 +373,10 @@ mod tests {
 
     use super::State;
     use crate::DataDirectory;
-    use crate::db::schema::protocol_configs;
     use crate::errors::{DatabaseError, StateInitializationError};
     use crate::genesis::GenesisState;
 
-    fn bootstrap_store(path: &std::path::Path) -> miden_protocol::Word {
+    async fn bootstrap_store(path: &std::path::Path) -> miden_protocol::Word {
         let signer = random_secret_key();
         let genesis = GenesisState::new(
             Vec::new(),
@@ -389,25 +388,27 @@ mod tests {
         .into_block()
         .unwrap();
         let commitment = genesis.protocol_config().to_commitment();
-        State::bootstrap(genesis, path).unwrap();
+        State::bootstrap(genesis, path).await.unwrap();
         commitment
     }
 
-    fn database_connection(path: &std::path::Path) -> SqliteConnection {
+    fn database_writer(path: &std::path::Path) -> DbWriter {
         let database_path = DataDirectory::load(path.to_path_buf()).unwrap().database_path();
-        SqliteConnection::establish(database_path.to_str().unwrap()).unwrap()
+        let (writer, _reader) = miden_node_db::sqlite::open(&database_path).unwrap();
+        writer
     }
 
     #[tokio::test]
     async fn load_rejects_missing_genesis_protocol_config() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let commitment = bootstrap_store(temp_dir.path());
-        let mut conn = database_connection(temp_dir.path());
-        diesel::delete(
-            protocol_configs::table.filter(protocol_configs::commitment.eq(commitment.to_bytes())),
-        )
-        .execute(&mut conn)
-        .unwrap();
+        let commitment = bootstrap_store(temp_dir.path()).await;
+        database_writer(temp_dir.path())
+            .write::<_, DatabaseError, _>("delete genesis protocol config", move |tx| {
+                tx.execute("DELETE FROM protocol_configs WHERE commitment = ?1", &[&commitment])?;
+                Ok(())
+            })
+            .await
+            .unwrap();
 
         let error = State::load(temp_dir.path(), StorageOptions::default())
             .await
@@ -423,16 +424,19 @@ mod tests {
     #[tokio::test]
     async fn load_rejects_corrupt_genesis_protocol_config() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let commitment = bootstrap_store(temp_dir.path());
-        let mut conn = database_connection(temp_dir.path());
+        let commitment = bootstrap_store(temp_dir.path()).await;
         let mut bytes = test_protocol_config().to_bytes();
         bytes.push(0xff);
-        diesel::update(
-            protocol_configs::table.filter(protocol_configs::commitment.eq(commitment.to_bytes())),
-        )
-        .set(protocol_configs::protocol_config.eq(bytes))
-        .execute(&mut conn)
-        .unwrap();
+        database_writer(temp_dir.path())
+            .write::<_, DatabaseError, _>("corrupt genesis protocol config", move |tx| {
+                tx.execute(
+                    "UPDATE protocol_configs SET protocol_config = ?1 WHERE commitment = ?2",
+                    &[&bytes, &commitment],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
 
         let error = State::load(temp_dir.path(), StorageOptions::default())
             .await
@@ -447,7 +451,7 @@ mod tests {
     #[tokio::test]
     async fn state_view_returns_genesis_protocol_config() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let commitment = bootstrap_store(temp_dir.path());
+        let commitment = bootstrap_store(temp_dir.path()).await;
 
         let loaded = State::load(temp_dir.path(), StorageOptions::default()).await.unwrap();
         let protocol_config = loaded.state.view().get_protocol_config(commitment).await.unwrap();

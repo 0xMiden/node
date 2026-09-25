@@ -136,7 +136,7 @@ impl StateView {
         account_id: AccountId,
         block_num: ScopedBlockNum,
     ) -> Result<AccountVaultDetails, DatabaseError> {
-        let assets = self.db.select_account_vault_at_block(account_id, block_num).await?;
+        let assets = self.db.select_vault_at_block(account_id, block_num).await?;
 
         if assets.len() > AccountVaultDetails::MAX_RETURN_ENTRIES {
             return Ok(AccountVaultDetails::LimitExceeded);
@@ -407,6 +407,6 @@ impl StateView {
         &self,
         account_ids: &[AccountId],
     ) -> Result<HashSet<AccountId>, DatabaseError> {
-        self.db.select_network_accounts_subset(account_ids.to_vec()).await
+        self.db.filter_network_accounts(account_ids.to_vec()).await
     }
 }
