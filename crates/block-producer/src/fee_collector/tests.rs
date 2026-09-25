@@ -179,12 +179,16 @@ impl validator_api::GetTransactionEncryptionKey for Validator {
     type Input = ();
     type Output = proto::submission::TransactionEncryptionKey;
 
-    fn decode(input: ()) -> tonic::Result<Self::Input> {
-        Ok(input)
+    fn decode(
+        _request: proto::validator::GetTransactionEncryptionKeyRequest,
+    ) -> tonic::Result<Self::Input> {
+        Ok(())
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<Self::Output> {
-        Ok(output)
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<proto::validator::GetTransactionEncryptionKeyResponse> {
+        Ok(proto::validator::GetTransactionEncryptionKeyResponse { key: Some(output) })
     }
 
     async fn handle(
@@ -219,12 +223,18 @@ impl validator_api::SubmitProvenTransaction for Validator {
     type Input = proto::submission::ProvenTransactionSubmission;
     type Output = ();
 
-    fn decode(input: Self::Input) -> tonic::Result<Self::Input> {
-        Ok(input)
+    fn decode(
+        request: proto::validator::SubmitProvenTransactionRequest,
+    ) -> tonic::Result<Self::Input> {
+        request
+            .submission
+            .ok_or_else(|| tonic::Status::invalid_argument("missing submission"))
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<Self::Output> {
-        Ok(output)
+    fn encode(
+        (): Self::Output,
+    ) -> tonic::Result<proto::validator::SubmitProvenTransactionResponse> {
+        Ok(proto::validator::SubmitProvenTransactionResponse {})
     }
 
     async fn handle(
@@ -305,10 +315,10 @@ impl validator_api::SignBlock for Validator {
 #[tonic::async_trait]
 impl validator_api::Status for Validator {
     type Input = ();
-    type Output = proto::validator::ValidatorStatus;
+    type Output = proto::validator::StatusResponse;
 
-    fn decode(input: ()) -> tonic::Result<Self::Input> {
-        Ok(input)
+    fn decode(_request: proto::validator::StatusRequest) -> tonic::Result<Self::Input> {
+        Ok(())
     }
 
     fn encode(output: Self::Output) -> tonic::Result<Self::Output> {

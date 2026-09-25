@@ -4,8 +4,8 @@ use miden_block_prover::{
     LocalBlockProver,
 };
 use miden_node_proto::clients::{Builder, RemoteProverClient};
-use miden_node_proto::generated::remote_prover::proof_request::Request;
-use miden_node_proto::generated::remote_prover::{DecodedProof, ProofRequest};
+use miden_node_proto::generated::remote_prover::prove_request::Request;
+use miden_node_proto::generated::remote_prover::{DecodedProveResponse, ProveRequest};
 use miden_node_proto::{BlockProofRequest, DecodeMessage};
 use miden_node_tracing::miden_instrument;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
@@ -130,7 +130,7 @@ impl RemoteBlockProver {
     }
 
     async fn prove(&self, request: BlockProofRequest) -> Result<ExecutionProof, RemoteProverError> {
-        let request = tonic::Request::new(ProofRequest {
+        let request = tonic::Request::new(ProveRequest {
             request: Some(Request::Block(request.into())),
         });
 
@@ -139,7 +139,7 @@ impl RemoteBlockProver {
         response
             .into_inner()
             .decode_fields()
-            .and_then(DecodedProof::into_block)
+            .and_then(DecodedProveResponse::into_block)
             .map_err(RemoteProverError::Conversion)
     }
 }

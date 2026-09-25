@@ -8,7 +8,6 @@ import "primitives.proto";
 import "protocol_config.proto";
 import "types/block_proving.proto";
 import "types/submission.proto";
-import "google/protobuf/empty.proto";
 
 // VALIDATOR API
 // ================================================================================================
@@ -16,10 +15,10 @@ import "google/protobuf/empty.proto";
 // Validator API for the Validator component.
 service Api {
    // Returns the status info of the validator.
-   rpc Status(google.protobuf.Empty) returns (ValidatorStatus) {}
+   rpc Status(StatusRequest) returns (StatusResponse) {}
 
    // Submits a transaction to the validator.
-   rpc SubmitProvenTransaction(submission.ProvenTransactionSubmission) returns (google.protobuf.Empty) {}
+   rpc SubmitProvenTransaction(SubmitProvenTransactionRequest) returns (SubmitProvenTransactionResponse) {}
 
    // Validates and signs a proposed block.
    rpc SignBlock(SignBlockRequest) returns (SignBlockResponse) {}
@@ -37,7 +36,7 @@ service Api {
    // The encryption key is shared across the whole validator set, so the returned public key is
    // identical regardless of which validator serves the request. The attestation carried in the
    // response is specific to this validator.
-   rpc GetTransactionEncryptionKey(google.protobuf.Empty) returns (submission.TransactionEncryptionKey) {}
+   rpc GetTransactionEncryptionKey(GetTransactionEncryptionKeyRequest) returns (GetTransactionEncryptionKeyResponse) {}
 }
 
 // SIGN BLOCK REQUEST AND RESPONSE
@@ -91,8 +90,10 @@ message BlockSubscriptionResponse {
 // VALIDATOR STATUS
 // ================================================================================================
 
+message StatusRequest {}
+
 // Represents the status of the validator.
-message ValidatorStatus {
+message StatusResponse {
     // The validator's running version.
     string version = 1;
 
@@ -107,4 +108,16 @@ message ValidatorStatus {
 
     // The total number of blocks signed by this validator.
     fixed64 signed_blocks_count = 5;
+}
+
+message SubmitProvenTransactionRequest {
+    submission.ProvenTransactionSubmission submission = 1;
+}
+
+message SubmitProvenTransactionResponse {}
+
+message GetTransactionEncryptionKeyRequest {}
+
+message GetTransactionEncryptionKeyResponse {
+    submission.TransactionEncryptionKey key = 1;
 }

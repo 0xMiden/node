@@ -17,9 +17,9 @@ use miden_node_proto::domain::encryption::{
 };
 use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
 use miden_node_proto::generated::rpc::{
-    AccountRequest as ProtoAccountRequest,
-    BlockHeaderByNumberRequest,
     FinalityLevel,
+    GetAccountRequest as ProtoAccountRequest,
+    GetBlockHeaderByNumberRequest,
     SyncChainMmrRequest,
     SyncChainMmrResponse,
 };
@@ -155,10 +155,14 @@ impl TransactionSubmissionClient {
         let key = self
             .rpc_client
             .clone()
-            .get_transaction_encryption_key(())
+            .get_transaction_encryption_key(
+                miden_node_proto::generated::rpc::GetTransactionEncryptionKeyRequest {},
+            )
             .await
             .context("Failed to fetch the transaction encryption key")?
-            .into_inner();
+            .into_inner()
+            .key
+            .ok_or_else(|| tonic::Status::internal("missing transaction encryption key"))?;
         let verified = key
             .verify_with(TrustedTransactionEncryptionState::new(
                 self.genesis_commitment,
@@ -232,9 +236,11 @@ impl TransactionSubmissionClient {
                     .context("Failed to seal the transaction inputs")?;
                 self.rpc_client
                     .clone()
-                    .submit_proven_tx(ProtoProvenTransaction {
-                        transaction: Some(transaction),
-                        sealed_transaction_inputs: Some(sealed),
+                    .submit_proven_tx(miden_node_proto::generated::rpc::SubmitProvenTxRequest {
+                        submission: Some(ProtoProvenTransaction {
+                            transaction: Some(transaction),
+                            sealed_transaction_inputs: Some(sealed),
+                        }),
                     })
                     .await
                     .context("Failed to submit proven transaction to RPC")
@@ -313,7 +319,7 @@ pub async fn create_genesis_aware_rpc_client(
             .await
             .context("Failed to create RPC client for genesis discovery")?;
 
-        let block_header_request = BlockHeaderByNumberRequest {
+        let block_header_request = GetBlockHeaderByNumberRequest {
             block_num: Some(BlockNumber::GENESIS.as_u32()),
             include_mmr_proof: None,
             include_protocol_config: None,
@@ -502,8 +508,8 @@ pub(crate) async fn fetch_foreign_account_inputs(
     account_id: AccountId,
     block_num: BlockNumber,
 ) -> Result<(Account, AccountWitness)> {
-    use miden_node_proto::generated::rpc::account_request::AccountDetailRequest;
-    use miden_node_proto::generated::rpc::account_request::account_detail_request::StorageRequest;
+    use miden_node_proto::generated::rpc::get_account_request::AccountDetailRequest;
+    use miden_node_proto::generated::rpc::get_account_request::account_detail_request::StorageRequest;
 
     // Dummy commitments force the server to include code and vault data in the response.
     let dummy: miden_node_proto::generated::primitives::Word = Word::default().into();

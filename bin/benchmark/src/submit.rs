@@ -218,7 +218,10 @@ async fn submit_all(
                 sealed_transaction_inputs: Some(sealed_inputs),
             };
             let t0 = Instant::now();
-            let outcome = match client.submit_proven_tx(request).await {
+            let outcome = match client
+                .submit_proven_tx(proto::rpc::SubmitProvenTxRequest { submission: Some(request) })
+                .await
+            {
                 Ok(_) => SubmitOutcome {
                     index: i,
                     result: Ok(t0.elapsed()),
@@ -278,7 +281,10 @@ async fn submit_sequential(
         };
 
         let t0 = Instant::now();
-        let outcome = match client.submit_proven_tx(request).await {
+        let outcome = match client
+            .submit_proven_tx(proto::rpc::SubmitProvenTxRequest { submission: Some(request) })
+            .await
+        {
             Ok(_) => SubmitOutcome {
                 index: i,
                 result: Ok(t0.elapsed()),

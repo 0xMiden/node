@@ -12,7 +12,7 @@ use futures::{Stream, StreamExt};
 use miden_node_proto::clients::{Builder, RpcClient as InnerRpcClient};
 use miden_node_proto::VerifyWith;
 use miden_node_proto::domain::account::{
-    AccountDetails, AccountResponse, AccountVaultDetails, StorageMapEntries
+    AccountDetails, GetAccountResponse, AccountVaultDetails, StorageMapEntries
 };
 use miden_node_proto::domain::encryption::{
     TransactionInputsSealer,
@@ -20,11 +20,11 @@ use miden_node_proto::domain::encryption::{
 };
 use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
 use miden_node_proto::errors::ConversionError;
-use miden_node_proto::generated::rpc::account_request::account_detail_request::{StorageMapDetailRequest, StorageMapDetailRequests, StorageRequest, storage_map_detail_request};
-use miden_node_proto::generated::rpc::account_request::account_detail_request::storage_map_detail_request::MapKeys;
+use miden_node_proto::generated::rpc::get_account_request::account_detail_request::{StorageMapDetailRequest, StorageMapDetailRequests, StorageRequest, storage_map_detail_request};
+use miden_node_proto::generated::rpc::get_account_request::account_detail_request::storage_map_detail_request::MapKeys;
 use miden_node_proto::generated::rpc::{
-    BlockHeaderByNumberRequest,
-    BlockHeaderByNumberResponse,
+    GetBlockHeaderByNumberRequest,
+    GetBlockHeaderByNumberResponse,
     BlockSubscriptionRequest,
 };
 use miden_node_proto::generated::{self as proto};
@@ -211,7 +211,14 @@ impl RpcClient {
             return Ok(sealer);
         }
 
-        let key = self.inner.clone().get_transaction_encryption_key(()).await?.into_inner();
+        let key = self
+            .inner
+            .clone()
+            .get_transaction_encryption_key(proto::rpc::GetTransactionEncryptionKeyRequest {})
+            .await?
+            .into_inner()
+            .key
+            .ok_or_else(|| tonic::Status::internal("missing transaction encryption key"))?;
         let verified = key
             .verify_with(TrustedTransactionEncryptionState::new(
                 self.genesis_commitment,
@@ -457,9 +464,11 @@ impl RpcClient {
                     )
                 })?;
                 client
-                    .submit_proven_tx(proto::submission::ProvenTransactionSubmission {
-                        transaction: Some(transaction),
-                        sealed_transaction_inputs: Some(sealed),
+                    .submit_proven_tx(proto::rpc::SubmitProvenTxRequest {
+                        submission: Some(proto::submission::ProvenTransactionSubmission {
+                            transaction: Some(transaction),
+                            sealed_transaction_inputs: Some(sealed),
+                        }),
                     })
                     .await
             }
@@ -480,8 +489,8 @@ impl RpcClient {
     }
 }
 
-fn startup_header_request(block_num: BlockNumber) -> BlockHeaderByNumberRequest {
-    BlockHeaderByNumberRequest {
+fn startup_header_request(block_num: BlockNumber) -> GetBlockHeaderByNumberRequest {
+    GetBlockHeaderByNumberRequest {
         block_num: Some(block_num.as_u32()),
         include_mmr_proof: None,
         include_protocol_config: Some(true),
@@ -489,7 +498,7 @@ fn startup_header_request(block_num: BlockNumber) -> BlockHeaderByNumberRequest 
 }
 
 fn decode_startup_header_response(
-    response: BlockHeaderByNumberResponse,
+    response: GetBlockHeaderByNumberResponse,
     expected_header: &miden_protocol::block::BlockHeader,
 ) -> Result<ProtocolConfig, RpcError> {
     let header: miden_protocol::block::BlockHeader = response
@@ -523,11 +532,11 @@ impl RpcClient {
         block_num: BlockNumber,
     ) -> Result<AccountInputs, RpcError> {
         // Only request account code
-        let request = proto::rpc::AccountRequest {
+        let request = proto::rpc::GetAccountRequest {
             account_id: Some(account_id.into()),
             block_num: Some(block_num.into()),
             // TODO: should these commitments be cached on the NTX builder?
-            details: Some(proto::rpc::account_request::AccountDetailRequest {
+            details: Some(proto::rpc::get_account_request::AccountDetailRequest {
                 code_commitment: Some(Word::default().into()),
                 asset_vault_commitment: None, //
                 storage_request: None,
@@ -554,10 +563,10 @@ impl RpcClient {
             return Ok(Vec::new());
         }
 
-        let request = proto::rpc::AccountRequest {
+        let request = proto::rpc::GetAccountRequest {
             account_id: Some(account_id.into()),
             block_num: block_num.map(Into::into),
-            details: Some(proto::rpc::account_request::AccountDetailRequest {
+            details: Some(proto::rpc::get_account_request::AccountDetailRequest {
                 code_commitment: None,
                 asset_vault_commitment: Some(Word::default().into()),
                 storage_request: None,
@@ -592,10 +601,10 @@ impl RpcClient {
         map_key: StorageMapKey,
         block_num: Option<BlockNumber>,
     ) -> Result<StorageMapWitness, RpcError> {
-        let request = proto::rpc::AccountRequest {
+        let request = proto::rpc::GetAccountRequest {
             account_id: Some(account_id.into()),
             block_num: block_num.map(Into::into),
-            details: Some(proto::rpc::account_request::AccountDetailRequest {
+            details: Some(proto::rpc::get_account_request::AccountDetailRequest {
                 code_commitment: None,
                 asset_vault_commitment: None,
                 storage_request: Some(StorageRequest::StorageMaps(StorageMapDetailRequests {
@@ -657,7 +666,7 @@ impl RpcClient {
         &self,
         script_root: Word,
     ) -> Result<Option<NoteScript>, RpcError> {
-        let request = proto::rpc::NoteScriptByRootRequest { root: Some(script_root.into()) };
+        let request = proto::rpc::GetNoteScriptByRootRequest { root: Some(script_root.into()) };
 
         self.inner
             .clone()
@@ -669,11 +678,12 @@ impl RpcClient {
             .map_err(RpcError::Conversion)
     }
 
-    /// Issues a `GetAccount` request and decodes the response into the domain [`AccountResponse`].
+    /// Issues a `GetAccount` request and decodes the response into the domain
+    /// [`GetAccountResponse`].
     async fn get_account(
         &self,
-        request: proto::rpc::AccountRequest,
-    ) -> Result<AccountResponse, RpcError> {
+        request: proto::rpc::GetAccountRequest,
+    ) -> Result<GetAccountResponse, RpcError> {
         let response = self
             .inner
             .clone()
@@ -726,8 +736,8 @@ pub enum RpcError {
 mod protocol_config_tests {
     use miden_node_proto::generated::protocol_config::ProtocolConfig as ProtoProtocolConfig;
     use miden_node_proto::generated::rpc::{
-        BlockHeaderByNumberResponse,
         BlockSubscriptionResponse,
+        GetBlockHeaderByNumberResponse,
     };
     use miden_node_proto::{BuildUnchecked, DecodeMessage};
     use miden_node_store::genesis::GenesisState;
@@ -840,7 +850,7 @@ mod protocol_config_tests {
     fn startup_decoder_rejects_missing_protocol_config() {
         let config = test_protocol_config();
         let header = header_for_config(42, &config);
-        let response = BlockHeaderByNumberResponse {
+        let response = GetBlockHeaderByNumberResponse {
             block_header: Some((&header).into()),
             chain_length: None,
             mmr_path: None,
@@ -856,7 +866,7 @@ mod protocol_config_tests {
         let config = test_protocol_config();
         let other = other_protocol_config();
         let header = header_for_config(42, &config);
-        let response = BlockHeaderByNumberResponse {
+        let response = GetBlockHeaderByNumberResponse {
             block_header: Some((&header).into()),
             chain_length: None,
             mmr_path: None,
@@ -872,7 +882,7 @@ mod protocol_config_tests {
         let config = test_protocol_config();
         let local = header_for_config(42, &config);
         let remote = header_for_config(43, &config);
-        let response = BlockHeaderByNumberResponse {
+        let response = GetBlockHeaderByNumberResponse {
             block_header: Some((&remote).into()),
             chain_length: None,
             mmr_path: None,

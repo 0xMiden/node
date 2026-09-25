@@ -7,14 +7,14 @@ use crate::LOG_TARGET;
 
 #[tonic::async_trait]
 impl proto::server::rpc_api::GetBlockHeaderByNumber for RpcService {
-    type Input = proto::rpc::BlockHeaderByNumberRequest;
-    type Output = proto::rpc::BlockHeaderByNumberResponse;
+    type Input = proto::rpc::GetBlockHeaderByNumberRequest;
+    type Output = proto::rpc::GetBlockHeaderByNumberResponse;
 
-    fn decode(request: proto::rpc::BlockHeaderByNumberRequest) -> tonic::Result<Self::Input> {
+    fn decode(request: proto::rpc::GetBlockHeaderByNumberRequest) -> tonic::Result<Self::Input> {
         Ok(request)
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::BlockHeaderByNumberResponse> {
+    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::GetBlockHeaderByNumberResponse> {
         Ok(output)
     }
 
@@ -54,7 +54,7 @@ impl proto::server::rpc_api::GetBlockHeaderByNumber for RpcService {
             _ => None,
         };
 
-        Ok(proto::rpc::BlockHeaderByNumberResponse {
+        Ok(proto::rpc::GetBlockHeaderByNumberResponse {
             protocol_config,
             block_header: block_header.map(Into::into),
             chain_length: mmr_proof.as_ref().map(|p| p.forest().num_leaves() as u32),

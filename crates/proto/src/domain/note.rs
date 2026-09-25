@@ -3,7 +3,7 @@ use miden_protocol::note::NoteScript;
 
 use crate::generated as proto;
 
-impl Verify for proto::rpc::DecodedMaybeNoteScript {
+impl Verify for proto::rpc::DecodedGetNoteScriptByRootResponse {
     type Verified = Option<NoteScript>;
     type Error = ConversionError;
 

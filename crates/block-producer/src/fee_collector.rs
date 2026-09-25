@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use miden_node_proto::domain::account::AccountRequest;
+use miden_node_proto::domain::account::GetAccountRequest;
 use miden_node_store::state::{BlockWriter, ProofWriter, State};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{info, miden_instrument, miden_span_record};
@@ -148,7 +148,7 @@ pub(crate) async fn load_deployed_collector(
 async fn collector_is_deployed(state: &State, account: &Account) -> anyhow::Result<bool> {
     let response = state
         .view()
-        .get_account(AccountRequest {
+        .get_account(GetAccountRequest {
             account_id: account.id(),
             block_num: None,
             details: None,

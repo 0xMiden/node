@@ -1,7 +1,10 @@
 use std::time::Duration;
 
 use miden_node_proto::errors::ConversionResultExt;
-use miden_node_proto::generated::rpc::{BlockHeaderByNumberRequest, BlockHeaderByNumberResponse};
+use miden_node_proto::generated::rpc::{
+    GetBlockHeaderByNumberRequest,
+    GetBlockHeaderByNumberResponse,
+};
 use miden_node_proto::{BuildUnchecked, DecodeMessage};
 use miden_node_tracing::{error, miden_instrument, miden_span_record};
 use miden_protocol::Word;
@@ -42,7 +45,7 @@ impl Server {
     async fn request_block_header(
         &self,
         block_num: BlockNumber,
-    ) -> tonic::Result<BlockHeaderByNumberResponse> {
+    ) -> tonic::Result<GetBlockHeaderByNumberResponse> {
         const MAX_ATTEMPTS: u32 = 3;
 
         // All attempts and backoff share one budget. Reserve the rest for validation and storage.
@@ -56,7 +59,7 @@ impl Server {
                 attempt += 1;
                 let response = tokio::time::timeout(
                     attempt_timeout,
-                    rpc.get_block_header_by_number(BlockHeaderByNumberRequest {
+                    rpc.get_block_header_by_number(GetBlockHeaderByNumberRequest {
                         block_num: Some(block_num.as_u32()),
                         include_mmr_proof: Some(false),
                         include_protocol_config: Some(false),

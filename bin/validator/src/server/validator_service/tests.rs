@@ -147,7 +147,14 @@ impl TestValidator {
             transaction: Some(tx.into()),
             sealed_transaction_inputs: Some(sealed),
         });
-        validator_api::SubmitProvenTransaction::full(&self.server, request).await
+        validator_api::SubmitProvenTransaction::full(
+            &self.server,
+            request.map(|submission| proto::validator::SubmitProvenTransactionRequest {
+                submission: Some(submission),
+            }),
+        )
+        .await
+        .map(|_| ())
     }
 
     /// Seals `plaintext` exactly as a well-behaved client would: against the key this validator
@@ -234,10 +241,13 @@ impl TestValidator {
     }
 
     /// Calls the `status` endpoint on the validator server.
-    async fn call_status(&self) -> proto::validator::ValidatorStatus {
-        validator_api::Status::full(&self.server, tonic::Request::new(()))
-            .await
-            .expect("status should always be available")
+    async fn call_status(&self) -> proto::validator::StatusResponse {
+        validator_api::Status::full(
+            &self.server,
+            tonic::Request::new(proto::validator::StatusRequest {}),
+        )
+        .await
+        .expect("status should always be available")
     }
 
     /// Returns whether `tx_id` has a validated transaction marker.
@@ -264,9 +274,14 @@ impl TestValidator {
     async fn call_get_transaction_encryption_key(
         &self,
     ) -> proto::submission::TransactionEncryptionKey {
-        validator_api::GetTransactionEncryptionKey::full(&self.server, tonic::Request::new(()))
-            .await
-            .expect("encryption key should always be available")
+        validator_api::GetTransactionEncryptionKey::full(
+            &self.server,
+            tonic::Request::new(proto::validator::GetTransactionEncryptionKeyRequest {}),
+        )
+        .await
+        .expect("encryption key should always be available")
+        .key
+        .expect("transaction encryption key")
     }
 
     /// Asserts that opening a backup subscription is rejected with `resource_exhausted`. The
@@ -1355,6 +1370,18 @@ async fn encryption_key_available_during_backup() {
 // SUBMIT PATH: TRANSACTION INPUT SEALING
 // ================================================================================================
 
+#[tokio::test]
+async fn submit_rejects_missing_submission() {
+    let tv = TestValidator::new().await;
+    let request =
+        tonic::Request::new(proto::validator::SubmitProvenTransactionRequest { submission: None });
+    let status = validator_api::SubmitProvenTransaction::full(&tv.server, request)
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert_eq!(tv.validated_transaction_count().await, 0);
+}
+
 /// A submission with no encrypted inputs is rejected before validation.
 #[tokio::test]
 async fn submit_rejects_missing_encrypted_inputs() {
@@ -1365,9 +1392,14 @@ async fn submit_rejects_missing_encrypted_inputs() {
         sealed_transaction_inputs: None,
     });
 
-    let status = validator_api::SubmitProvenTransaction::full(&tv.server, request)
-        .await
-        .unwrap_err();
+    let status = validator_api::SubmitProvenTransaction::full(
+        &tv.server,
+        request.map(|submission| proto::validator::SubmitProvenTransactionRequest {
+            submission: Some(submission),
+        }),
+    )
+    .await
+    .unwrap_err();
 
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
     assert!(status.message().contains("sealed_transaction_inputs:"), "{}", status.message());

@@ -3,12 +3,12 @@ use std::collections::HashSet;
 use miden_node_proto::domain::account::{
     AccountDetailRequest,
     AccountDetails,
-    AccountRequest,
-    AccountResponse,
     AccountStorageDetails,
     AccountStorageMapDetails,
     AccountStorageRequest,
     AccountVaultDetails,
+    GetAccountRequest,
+    GetAccountResponse,
     SlotData,
     StorageMapEntries,
     StorageMapRequest,
@@ -38,9 +38,9 @@ impl StateView {
     )]
     pub async fn get_account(
         &self,
-        account_request: AccountRequest,
-    ) -> Result<AccountResponse, GetAccountError> {
-        let AccountRequest { block_num, account_id, details } = account_request;
+        get_account_request: GetAccountRequest,
+    ) -> Result<GetAccountResponse, GetAccountError> {
+        let GetAccountRequest { block_num, account_id, details } = get_account_request;
 
         if details.is_some() && !account_id.is_public() {
             return Err(GetAccountError::AccountNotPublic(account_id));
@@ -57,7 +57,7 @@ impl StateView {
             None
         };
 
-        Ok(AccountResponse {
+        Ok(GetAccountResponse {
             block_num: *scoped_block,
             witness,
             details,

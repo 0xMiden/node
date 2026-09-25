@@ -8,13 +8,13 @@ use crate::{COMPONENT, LOG_TARGET};
 #[tonic::async_trait]
 impl proto::server::rpc_api::Status for RpcService {
     type Input = ();
-    type Output = proto::rpc::RpcStatus;
+    type Output = proto::rpc::StatusResponse;
 
-    fn decode(request: ()) -> tonic::Result<Self::Input> {
-        Ok(request)
+    fn decode(_request: proto::rpc::StatusRequest) -> tonic::Result<Self::Input> {
+        Ok(())
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::RpcStatus> {
+    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::StatusResponse> {
         Ok(output)
     }
 
@@ -36,7 +36,7 @@ impl proto::server::rpc_api::Status for RpcService {
             RpcBackend::FullNode { source_rpc, .. } => source_rpc
                 .as_ref()
                 .clone()
-                .status(Request::new(()))
+                .status(Request::new(proto::rpc::StatusRequest {}))
                 .await
                 .ok()
                 .and_then(|response| response.into_inner().block_producer),
@@ -44,7 +44,7 @@ impl proto::server::rpc_api::Status for RpcService {
 
         debug!(target: LOG_TARGET, "Getting status");
 
-        Ok(proto::rpc::RpcStatus {
+        Ok(proto::rpc::StatusResponse {
             version: env!("CARGO_PKG_VERSION").to_string(),
             chain_tip: self.state.committed_tip().as_u32(),
             block_producer: block_producer_status.or(Some(proto::rpc::BlockProducerStatus {

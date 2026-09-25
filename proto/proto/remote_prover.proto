@@ -2,7 +2,6 @@
 syntax = "proto3";
 package remote_prover;
 
-import "google/protobuf/empty.proto";
 import "batch.proto";
 import "primitives.proto";
 import "transaction.proto";
@@ -14,7 +13,7 @@ import "types/block_proving.proto";
 
 service Api {
     // Generates a proof for the requested payload.
-    rpc Prove(ProofRequest) returns (Proof) {}
+    rpc Prove(ProveRequest) returns (ProveResponse) {}
 }
 
 // Enumeration of supported proof types.
@@ -30,7 +29,7 @@ enum ProofType {
 }
 
 // Request message for proof generation.
-message ProofRequest {
+message ProveRequest {
     oneof request {
         transaction.TransactionInputs transaction = 1;
         transaction.ProposedBatch batch = 2;
@@ -39,7 +38,7 @@ message ProofRequest {
 }
 
 // Response message containing the generated proof.
-message Proof {
+message ProveResponse {
     oneof proof {
         transaction.ProvenTransaction transaction = 1;
         transaction.ProvenBatch batch = 2;
@@ -52,7 +51,7 @@ message Proof {
 
 service ProxyStatusApi {
     // Returns the status of the proxy.
-    rpc Status(google.protobuf.Empty) returns (ProxyStatus) {}
+    rpc Status(ProxyStatusRequest) returns (ProxyStatusResponse) {}
 }
 
 // Status of an individual worker in the proxy.
@@ -79,8 +78,10 @@ enum WorkerHealthStatus {
     UNHEALTHY = 2;
 }
 
+message ProxyStatusRequest {}
+
 // Response message containing the status of the proxy.
-message ProxyStatus {
+message ProxyStatusResponse {
     // The version of the proxy.
     string version = 1;
     // The proof type supported by this proxy.
@@ -94,11 +95,13 @@ message ProxyStatus {
 
 service WorkerStatusApi {
     // Returns the status of the worker.
-    rpc Status(google.protobuf.Empty) returns (WorkerStatus) {}
+    rpc Status(WorkerStatusRequest) returns (WorkerStatusResponse) {}
 }
 
+message WorkerStatusRequest {}
+
 // Response message containing the status of the worker.
-message WorkerStatus {
+message WorkerStatusResponse {
     // The version of the worker.
     string version = 1;
     // The proof type supported by this worker.

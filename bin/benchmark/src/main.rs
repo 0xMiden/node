@@ -15,7 +15,7 @@ use miden_node_proto::domain::encryption::{
     TransactionInputsSealer,
     TrustedTransactionEncryptionState,
 };
-use miden_node_proto::generated::rpc::BlockHeaderByNumberRequest;
+use miden_node_proto::generated::rpc::GetBlockHeaderByNumberRequest;
 use miden_node_proto::{DecodeMessageExt, VerifyWith};
 use miden_protocol::Word;
 use miden_protocol::block::{BlockHeader, BlockNumber};
@@ -224,10 +224,14 @@ pub(crate) async fn create_genesis_aware_rpc_client_pool(
     }
     let key = pool[0]
         .clone()
-        .get_transaction_encryption_key(())
+        .get_transaction_encryption_key(
+            miden_node_proto::generated::rpc::GetTransactionEncryptionKeyRequest {},
+        )
         .await
         .context("Failed to fetch the transaction encryption key")?
-        .into_inner();
+        .into_inner()
+        .key
+        .ok_or_else(|| tonic::Status::internal("missing transaction encryption key"))?;
     let trusted_keys = [trusted_validator_signing_key];
     let verified = key
         .verify_with(TrustedTransactionEncryptionState::new(genesis, &trusted_keys))
@@ -236,8 +240,8 @@ pub(crate) async fn create_genesis_aware_rpc_client_pool(
     Ok((pool, TransactionInputsSealer::new(verified)))
 }
 
-pub(crate) fn get_genesis_header_request() -> BlockHeaderByNumberRequest {
-    BlockHeaderByNumberRequest {
+pub(crate) fn get_genesis_header_request() -> GetBlockHeaderByNumberRequest {
+    GetBlockHeaderByNumberRequest {
         block_num: Some(BlockNumber::GENESIS.as_u32()),
         include_mmr_proof: None,
         include_protocol_config: None,

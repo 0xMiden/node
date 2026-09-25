@@ -504,7 +504,7 @@ async fn rpc_server_accepts_requests_without_accept_header() {
     };
 
     // Send any request to the RPC.
-    let request = proto::rpc::BlockHeaderByNumberRequest {
+    let request = proto::rpc::GetBlockHeaderByNumberRequest {
         block_num: Some(0),
         include_mmr_proof: None,
         include_protocol_config: None,
@@ -639,7 +639,9 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
         sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
     };
 
-    let response = rpc_client.submit_proven_tx(request).await;
+    let response = rpc_client
+        .submit_proven_tx(proto::rpc::SubmitProvenTxRequest { submission: Some(request) })
+        .await;
 
     // Assert that the server rejected our request.
     assert!(response.is_err());
@@ -684,7 +686,12 @@ async fn rpc_server_checks_transaction_fee_notes(
         None,
     );
 
-    let status = service.submit_proven_tx(Request::new(request)).await.unwrap_err();
+    let status = service
+        .submit_proven_tx(Request::new(proto::rpc::SubmitProvenTxRequest {
+            submission: Some(request),
+        }))
+        .await
+        .unwrap_err();
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
     assert_eq!(status.details(), expected_details);
     assert!(
@@ -732,7 +739,9 @@ async fn sequencer_authenticated_rpc_rejects_transactions_without_native_fees(
     };
 
     let status = service
-        .submit_authenticated_tx(Request::new(proto::sequencer::AuthenticatedTransaction::from(tx)))
+        .submit_authenticated_tx(Request::new(proto::sequencer::SubmitAuthenticatedTxRequest {
+            transaction: Some(proto::sequencer::AuthenticatedTransaction::from(tx)),
+        }))
         .await
         .unwrap_err();
 
@@ -772,7 +781,9 @@ async fn sequencer_authenticated_rpc_accepts_transactions_without_notes_when_fee
     };
 
     service
-        .submit_authenticated_tx(Request::new(proto::sequencer::AuthenticatedTransaction::from(tx)))
+        .submit_authenticated_tx(Request::new(proto::sequencer::SubmitAuthenticatedTxRequest {
+            transaction: Some(proto::sequencer::AuthenticatedTransaction::from(tx)),
+        }))
         .await
         .expect("zero-fee transactions do not require output notes");
 }
@@ -801,7 +812,12 @@ async fn rpc_server_rejects_invalid_deferred_transaction_proofs() {
         None,
     );
 
-    let status = service.submit_proven_tx(Request::new(request)).await.unwrap_err();
+    let status = service
+        .submit_proven_tx(Request::new(proto::rpc::SubmitProvenTxRequest {
+            submission: Some(request),
+        }))
+        .await
+        .unwrap_err();
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
     assert!(status.message().contains("Invalid proof for transaction"));
 }
@@ -843,7 +859,12 @@ async fn rpc_server_forwards_valid_deferred_proofs_and_rejects_missing_witnesses
         transaction: Some((&fixture.transaction).into()),
         sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
     };
-    let status = service.submit_proven_tx(Request::new(request)).await.unwrap_err();
+    let status = service
+        .submit_proven_tx(Request::new(proto::rpc::SubmitProvenTxRequest {
+            submission: Some(request),
+        }))
+        .await
+        .unwrap_err();
     // The stub rejects submissions after it records them.
     assert_eq!(status.code(), tonic::Code::Unimplemented, "{status}");
     {
@@ -873,7 +894,12 @@ async fn rpc_server_forwards_valid_deferred_proofs_and_rejects_missing_witnesses
         transaction: Some((&invalid_tx).into()),
         sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
     };
-    let status = service.submit_proven_tx(Request::new(request)).await.unwrap_err();
+    let status = service
+        .submit_proven_tx(Request::new(proto::rpc::SubmitProvenTxRequest {
+            submission: Some(request),
+        }))
+        .await
+        .unwrap_err();
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
     assert!(status.message().contains("Invalid proof for transaction"), "{status}");
     assert_eq!(submissions.lock().unwrap().len(), 1);
@@ -905,7 +931,9 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_reference_block() {
         sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
     };
 
-    let response = rpc_client.submit_proven_tx(request).await;
+    let response = rpc_client
+        .submit_proven_tx(proto::rpc::SubmitProvenTxRequest { submission: Some(request) })
+        .await;
 
     // Assert that the server rejected our request.
     assert!(response.is_err());
@@ -957,7 +985,11 @@ async fn rpc_rejects_post_deployment_network_account_tx() {
         None,
     );
 
-    let response = service.submit_proven_tx(Request::new(request)).await;
+    let response = service
+        .submit_proven_tx(Request::new(proto::rpc::SubmitProvenTxRequest {
+            submission: Some(request),
+        }))
+        .await;
     assert!(response.is_err());
     let err = response.as_ref().unwrap_err().message();
     assert!(
@@ -978,6 +1010,7 @@ fn source_rpc_client() -> RpcClient {
 
 #[derive(Clone)]
 struct FixedNtxBuilder {
+    expected_note_id: proto::note::NoteId,
     response: proto::rpc::GetNetworkNoteStatusResponse,
     call_count: Arc<AtomicUsize>,
     last_accept: Arc<std::sync::Mutex<Option<String>>>,
@@ -988,20 +1021,32 @@ impl ntx_builder_api::GetNetworkNoteStatus for FixedNtxBuilder {
     type Input = proto::note::NoteId;
     type Output = proto::rpc::GetNetworkNoteStatusResponse;
 
-    fn decode(request: proto::note::NoteId) -> tonic::Result<Self::Input> {
-        Ok(request)
+    fn decode(
+        request: proto::ntx_builder::GetNetworkNoteStatusRequest,
+    ) -> tonic::Result<Self::Input> {
+        request
+            .note_id
+            .ok_or_else(|| tonic::Status::invalid_argument("missing note ID"))
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::GetNetworkNoteStatusResponse> {
-        Ok(output)
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<proto::ntx_builder::GetNetworkNoteStatusResponse> {
+        Ok(proto::ntx_builder::GetNetworkNoteStatusResponse {
+            status: output.status,
+            last_error: output.last_error,
+            attempt_count: output.attempt_count,
+            last_attempt_block_num: output.last_attempt_block_num,
+        })
     }
 
     async fn handle(
         &self,
-        _input: Self::Input,
+        input: Self::Input,
         metadata: &MetadataMap,
         _extensions: &Extensions,
     ) -> tonic::Result<Self::Output> {
+        assert_eq!(input, self.expected_note_id);
         self.call_count.fetch_add(1, Ordering::SeqCst);
         let accept = metadata
             .get(ACCEPT.as_str())
@@ -1014,6 +1059,7 @@ impl ntx_builder_api::GetNetworkNoteStatus for FixedNtxBuilder {
 }
 
 async fn start_ntx_builder(
+    expected_note_id: proto::note::NoteId,
     response: proto::rpc::GetNetworkNoteStatusResponse,
 ) -> (
     NtxBuilderClient,
@@ -1026,6 +1072,7 @@ async fn start_ntx_builder(
     let call_count = Arc::new(AtomicUsize::new(0));
     let last_accept = Arc::new(std::sync::Mutex::new(None));
     let service = FixedNtxBuilder {
+        expected_note_id,
         response,
         call_count: Arc::clone(&call_count),
         last_accept: Arc::clone(&last_accept),
@@ -1164,12 +1211,16 @@ impl validator_api::GetTransactionEncryptionKey for FixedValidator {
     type Input = ();
     type Output = proto::submission::TransactionEncryptionKey;
 
-    fn decode(request: ()) -> tonic::Result<Self::Input> {
-        Ok(request)
+    fn decode(
+        _request: proto::validator::GetTransactionEncryptionKeyRequest,
+    ) -> tonic::Result<Self::Input> {
+        Ok(())
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::submission::TransactionEncryptionKey> {
-        Ok(output)
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<proto::validator::GetTransactionEncryptionKeyResponse> {
+        Ok(proto::validator::GetTransactionEncryptionKeyResponse { key: Some(output) })
     }
 
     async fn handle(
@@ -1192,13 +1243,13 @@ impl validator_api::GetTransactionEncryptionKey for FixedValidator {
 #[tonic::async_trait]
 impl validator_api::Status for FixedValidator {
     type Input = ();
-    type Output = proto::validator::ValidatorStatus;
+    type Output = proto::validator::StatusResponse;
 
-    fn decode(request: ()) -> tonic::Result<Self::Input> {
-        Ok(request)
+    fn decode(_request: proto::validator::StatusRequest) -> tonic::Result<Self::Input> {
+        Ok(())
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::validator::ValidatorStatus> {
+    fn encode(output: Self::Output) -> tonic::Result<proto::validator::StatusResponse> {
         Ok(output)
     }
 
@@ -1218,13 +1269,17 @@ impl validator_api::SubmitProvenTransaction for FixedValidator {
     type Output = ();
 
     fn decode(
-        request: proto::submission::ProvenTransactionSubmission,
+        request: proto::validator::SubmitProvenTransactionRequest,
     ) -> tonic::Result<Self::Input> {
-        Ok(request)
+        request
+            .submission
+            .ok_or_else(|| tonic::Status::invalid_argument("missing submission"))
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<()> {
-        Ok(output)
+    fn encode(
+        (): Self::Output,
+    ) -> tonic::Result<proto::validator::SubmitProvenTransactionResponse> {
+        Ok(proto::validator::SubmitProvenTransactionResponse {})
     }
 
     async fn handle(
@@ -1384,16 +1439,22 @@ async fn full_node_with_validator_forwards_get_transaction_encryption_key() {
     );
 
     let response = full_node
-        .get_transaction_encryption_key(Request::new(()))
+        .get_transaction_encryption_key(Request::new(
+            proto::rpc::GetTransactionEncryptionKeyRequest {},
+        ))
         .await
         .expect("full-node RPC should forward the encryption key request to its validator")
-        .into_inner();
+        .into_inner()
+        .key
+        .expect("transaction encryption key");
 
     assert_eq!(response, expected);
     assert_eq!(validator_call_count.load(Ordering::SeqCst), 1);
 
     full_node
-        .get_transaction_encryption_key(Request::new(()))
+        .get_transaction_encryption_key(Request::new(
+            proto::rpc::GetTransactionEncryptionKeyRequest {},
+        ))
         .await
         .expect("each encryption key request should reach the validator");
     assert_eq!(
@@ -1420,10 +1481,14 @@ async fn full_node_forwards_get_transaction_encryption_key_to_source_rpc() {
     );
 
     let response = full_node
-        .get_transaction_encryption_key(Request::new(()))
+        .get_transaction_encryption_key(Request::new(
+            proto::rpc::GetTransactionEncryptionKeyRequest {},
+        ))
         .await
         .expect("full-node RPC should forward the encryption key request to its source")
-        .into_inner();
+        .into_inner()
+        .key
+        .expect("transaction encryption key");
 
     assert_eq!(response, expected);
     assert_eq!(validator_call_count.load(Ordering::SeqCst), 1);
@@ -1450,14 +1515,16 @@ async fn full_node_preserves_original_accept_metadata_when_forwarding_encryption
         env!("CARGO_PKG_VERSION"),
         source_store.genesis_commitment().to_hex(),
     );
-    let mut request = Request::new(());
+    let mut request = Request::new(proto::rpc::GetTransactionEncryptionKeyRequest {});
     request.metadata_mut().insert(ACCEPT.as_str(), original_accept.parse().unwrap());
 
     let response = full_node
         .get_transaction_encryption_key(request)
         .await
         .expect("full-node RPC should forward the encryption key request")
-        .into_inner();
+        .into_inner()
+        .key
+        .expect("transaction encryption key");
 
     assert_eq!(response, expected);
     assert_eq!(
@@ -1468,6 +1535,7 @@ async fn full_node_preserves_original_accept_metadata_when_forwarding_encryption
 
 #[tokio::test]
 async fn full_node_forwards_get_network_note_status_to_source_rpc() {
+    let note_id = Word::from([1u32, 2, 3, 4]);
     let expected = proto::rpc::GetNetworkNoteStatusResponse {
         status: proto::rpc::NetworkNoteStatus::Discarded.into(),
         last_error: Some("execution failed".to_string()),
@@ -1475,7 +1543,7 @@ async fn full_node_forwards_get_network_note_status_to_source_rpc() {
         last_attempt_block_num: Some(42),
     };
     let (ntx_builder, ntx_builder_call_count, _last_accept, _ntx_builder_server) =
-        start_ntx_builder(expected.clone()).await;
+        start_ntx_builder(note_id.into(), expected.clone()).await;
     let (source_rpc, _source_store, _source_server) =
         start_source_rpc(ntx_builder, dummy_client::<ValidatorClient>()).await;
     let local_store = TestStore::start().await;
@@ -1488,7 +1556,9 @@ async fn full_node_forwards_get_network_note_status_to_source_rpc() {
     );
 
     let response = full_node
-        .get_network_note_status(Request::new(Word::empty().into()))
+        .get_network_note_status(Request::new(proto::rpc::GetNetworkNoteStatusRequest {
+            note_id: Some(note_id.into()),
+        }))
         .await
         .expect("full-node RPC should forward network note status request")
         .into_inner();
@@ -1499,6 +1569,7 @@ async fn full_node_forwards_get_network_note_status_to_source_rpc() {
 
 #[tokio::test]
 async fn full_node_preserves_original_accept_metadata_when_forwarding() {
+    let note_id = Word::from([1u32, 2, 3, 4]);
     let expected = proto::rpc::GetNetworkNoteStatusResponse {
         status: proto::rpc::NetworkNoteStatus::Discarded.into(),
         last_error: Some("execution failed".to_string()),
@@ -1506,7 +1577,7 @@ async fn full_node_preserves_original_accept_metadata_when_forwarding() {
         last_attempt_block_num: Some(42),
     };
     let (ntx_builder, _ntx_builder_call_count, last_accept, _ntx_builder_server) =
-        start_ntx_builder(expected.clone()).await;
+        start_ntx_builder(note_id.into(), expected.clone()).await;
     let (source_rpc, source_store, _source_server) =
         start_source_rpc(ntx_builder, dummy_client::<ValidatorClient>()).await;
     let local_store = TestStore::start().await;
@@ -1523,7 +1594,8 @@ async fn full_node_preserves_original_accept_metadata_when_forwarding() {
         env!("CARGO_PKG_VERSION"),
         source_store.genesis_commitment().to_hex(),
     );
-    let mut request = Request::new(Word::empty().into());
+    let mut request =
+        Request::new(proto::rpc::GetNetworkNoteStatusRequest { note_id: Some(note_id.into()) });
     request.metadata_mut().insert(ACCEPT.as_str(), original_accept.parse().unwrap());
 
     let response = full_node
@@ -1566,14 +1638,18 @@ async fn full_node_forwards_complete_transaction_batch_to_source_rpc(#[case] inc
     let mut malformed = fixture.request.clone();
     malformed.sealed_transaction_inputs.clear();
     let error = full_node
-        .submit_proven_tx_batch(Request::new(malformed))
+        .submit_proven_tx_batch(Request::new(proto::rpc::SubmitProvenTxBatchRequest {
+            submission: Some(malformed),
+        }))
         .await
         .expect_err("batch submission must require one sealed input per transaction");
     assert_eq!(error.code(), tonic::Code::InvalidArgument);
     assert!(error.message().contains("sealed transaction input count"), "{error}");
 
     let response = full_node
-        .submit_proven_tx_batch(Request::new(fixture.request))
+        .submit_proven_tx_batch(Request::new(proto::rpc::SubmitProvenTxBatchRequest {
+            submission: Some(fixture.request),
+        }))
         .await
         .expect("full-node RPC should forward both structured batch fields to its source")
         .into_inner();
@@ -1609,7 +1685,9 @@ async fn sequencer_authenticated_rpc_accepts_user_batch_without_fee_notes() {
     };
 
     let response = service
-        .submit_authenticated_tx_batch(Request::new(request))
+        .submit_authenticated_tx_batch(Request::new(
+            proto::sequencer::SubmitAuthenticatedTxBatchRequest { batch: Some(request) },
+        ))
         .await
         .expect("the sequencer should accept a user batch without fee output notes")
         .into_inner();
@@ -1624,11 +1702,10 @@ async fn authenticated_batch_defers_validation_to_async_handler() {
         auth_inputs: Vec::new(),
         batch_proof: None,
     };
-    let input =
-        <SequencerInternalService as sequencer_api::SubmitAuthenticatedTxBatch>::decode(request)
-            .expect(
-                "wire decoding should defer proof-bearing batch conversion to the async handler",
-            );
+    let input = <SequencerInternalService as sequencer_api::SubmitAuthenticatedTxBatch>::decode(
+        proto::sequencer::SubmitAuthenticatedTxBatchRequest { batch: Some(request) },
+    )
+    .expect("wire decoding should defer proof-bearing batch conversion to the async handler");
 
     let store = TestStore::start().await;
     let shutdown = CancellationToken::new();
@@ -1686,7 +1763,9 @@ async fn rpc_server_rejects_tx_submissions_without_genesis() {
         sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
     };
 
-    let response = rpc_client.submit_proven_tx(request).await;
+    let response = rpc_client
+        .submit_proven_tx(proto::rpc::SubmitProvenTxRequest { submission: Some(request) })
+        .await;
 
     // Assert that the server rejected our request.
     assert!(response.is_err());
@@ -1704,8 +1783,9 @@ async fn rpc_server_rejects_tx_submissions_without_genesis() {
 /// Sends an arbitrary / irrelevant request to the RPC.
 async fn send_request(
     rpc_client: &mut RpcClient,
-) -> std::result::Result<tonic::Response<proto::rpc::BlockHeaderByNumberResponse>, tonic::Status> {
-    let request = proto::rpc::BlockHeaderByNumberRequest {
+) -> std::result::Result<tonic::Response<proto::rpc::GetBlockHeaderByNumberResponse>, tonic::Status>
+{
+    let request = proto::rpc::GetBlockHeaderByNumberRequest {
         block_num: Some(0),
         include_mmr_proof: None,
         include_protocol_config: None,
@@ -2078,7 +2158,10 @@ async fn get_limits_endpoint() {
     let (mut rpc_client, _rpc_addr, _store, _server) = start_rpc().await;
 
     // Call the get_limits endpoint
-    let response = rpc_client.get_limits(()).await.expect("get_limits should succeed");
+    let response = rpc_client
+        .get_limits(proto::rpc::GetLimitsRequest {})
+        .await
+        .expect("get_limits should succeed");
     let limits = response.into_inner();
 
     // Verify the response contains expected endpoints and limits
@@ -2260,7 +2343,7 @@ async fn header_protocol_config_is_opt_in() {
     let (mut client, _, _store, _server) = start_rpc().await;
     for include in [None, Some(false), Some(true)] {
         let response = client
-            .get_block_header_by_number(proto::rpc::BlockHeaderByNumberRequest {
+            .get_block_header_by_number(proto::rpc::GetBlockHeaderByNumberRequest {
                 block_num: Some(0),
                 include_mmr_proof: Some(true),
                 include_protocol_config: include,
@@ -2283,7 +2366,7 @@ async fn header_protocol_config_is_opt_in() {
         }
     }
     let response = client
-        .get_block_header_by_number(proto::rpc::BlockHeaderByNumberRequest {
+        .get_block_header_by_number(proto::rpc::GetBlockHeaderByNumberRequest {
             block_num: Some(1),
             include_mmr_proof: None,
             include_protocol_config: Some(true),

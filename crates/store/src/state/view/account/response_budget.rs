@@ -7,10 +7,10 @@
 
 use miden_node_proto::domain::account::{
     AccountDetails,
-    AccountResponse,
     AccountStorageDetails,
     AccountStorageMapDetails,
     AccountVaultDetails,
+    GetAccountResponse,
     StorageMapEntries,
 };
 use miden_node_proto::generated as proto;
@@ -79,7 +79,7 @@ pub(super) fn apply_all_storage_maps_response_budget(
 ) -> AccountDetails {
     let mut accepted_map_details = Vec::with_capacity(ordered_map_details.len());
     let base_response_size_without_map_details =
-        proto::rpc::AccountResponse::from(AccountResponse {
+        proto::rpc::GetAccountResponse::from(GetAccountResponse {
             block_num,
             witness: witness.clone(),
             details: Some(AccountDetails {
@@ -130,11 +130,11 @@ pub(super) fn apply_all_storage_maps_response_budget(
 mod tests {
     use miden_node_proto::domain::account::{
         AccountDetails,
-        AccountResponse,
         AccountStorageDetails,
         AccountStorageMapDetails,
         AccountStorageRequest,
         AccountVaultDetails,
+        GetAccountResponse,
         SlotData,
         StorageMapEntries,
         StorageMapRequest,
@@ -283,7 +283,7 @@ mod tests {
         let storage_header = storage_header();
         let slot_1 = StorageSlotName::mock(1);
         let slot_2 = StorageSlotName::mock(2);
-        let marker_only_budget = super::proto::rpc::AccountResponse::from(AccountResponse {
+        let marker_only_budget = super::proto::rpc::GetAccountResponse::from(GetAccountResponse {
             block_num: BlockNumber::GENESIS,
             witness: witness.clone(),
             details: Some(AccountDetails {
@@ -347,24 +347,25 @@ mod tests {
                 .collect(),
         )
         .unwrap();
-        let marker_only_hard_cap = super::proto::rpc::AccountResponse::from(AccountResponse {
-            block_num: BlockNumber::GENESIS,
-            witness: witness.clone(),
-            details: Some(AccountDetails {
-                account_header: header.clone(),
-                account_code: None,
-                vault_details: AccountVaultDetails::empty(),
-                storage_details: AccountStorageDetails {
-                    header: storage_header.clone(),
-                    map_details: slot_names
-                        .iter()
-                        .cloned()
-                        .map(AccountStorageMapDetails::limit_exceeded)
-                        .collect(),
-                },
-            }),
-        })
-        .encoded_len();
+        let marker_only_hard_cap =
+            super::proto::rpc::GetAccountResponse::from(GetAccountResponse {
+                block_num: BlockNumber::GENESIS,
+                witness: witness.clone(),
+                details: Some(AccountDetails {
+                    account_header: header.clone(),
+                    account_code: None,
+                    vault_details: AccountVaultDetails::empty(),
+                    storage_details: AccountStorageDetails {
+                        header: storage_header.clone(),
+                        map_details: slot_names
+                            .iter()
+                            .cloned()
+                            .map(AccountStorageMapDetails::limit_exceeded)
+                            .collect(),
+                    },
+                }),
+            })
+            .encoded_len();
 
         let details = apply_all_storage_maps_response_budget(
             BlockNumber::GENESIS,
@@ -391,7 +392,7 @@ mod tests {
                 .all(|details| details.entries == StorageMapEntries::LimitExceeded)
         );
         assert!(
-            super::proto::rpc::AccountResponse::from(AccountResponse {
+            super::proto::rpc::GetAccountResponse::from(GetAccountResponse {
                 block_num: BlockNumber::GENESIS,
                 witness,
                 details: Some(details),
