@@ -515,11 +515,22 @@ pub(crate) fn select_account_vault_assets(
     account_id: AccountId,
     block_range: RangeInclusive<BlockNumber>,
 ) -> Result<(BlockNumber, Vec<AccountVaultValue>), DatabaseError> {
-    use schema::account_vault_assets as t;
     // The protocol does not define these limits. Derive a conservative row limit from the response
     // payload limit.
     const ROW_OVERHEAD_BYTES: usize = 2 * size_of::<Word>() + size_of::<u32>(); // key + asset + block_num
     const MAX_ROWS: usize = MAX_RESPONSE_PAYLOAD_BYTES / ROW_OVERHEAD_BYTES;
+
+    select_account_vault_assets_with_row_limit(conn, account_id, block_range, MAX_ROWS)
+}
+
+/// Like [`select_account_vault_assets`], but with an explicit row cap for pagination tests.
+pub(crate) fn select_account_vault_assets_with_row_limit(
+    conn: &mut SqliteConnection,
+    account_id: AccountId,
+    block_range: RangeInclusive<BlockNumber>,
+    max_rows: usize,
+) -> Result<(BlockNumber, Vec<AccountVaultValue>), DatabaseError> {
+    use schema::account_vault_assets as t;
 
     if !account_id.is_public() {
         return Err(DatabaseError::AccountNotPublic(account_id));
@@ -541,13 +552,13 @@ pub(crate) fn select_account_vault_assets(
                     .and(t::block_num.le(block_range.end().to_raw_sql())),
             )
             .order(t::block_num.asc())
-            .limit(i64::try_from(MAX_ROWS + 1).expect("should fit within i64"))
+            .limit(i64::try_from(max_rows + 1).expect("should fit within i64"))
             .load::<(i64, Vec<u8>, Option<Vec<u8>>)>(conn)?;
 
     // If we got more rows than the limit, the last block may be incomplete so we drop it entirely
     // and derive last_block_included from the remaining rows.
     let (last_block_included, values) = if let Some(&(last_block_num, ..)) = raw.last()
-        && raw.len() > MAX_ROWS
+        && raw.len() > max_rows
     {
         let values = raw
             .into_iter()
@@ -555,7 +566,9 @@ pub(crate) fn select_account_vault_assets(
             .map(AccountVaultValue::from_raw_row)
             .collect::<Result<Vec<_>, DatabaseError>>()?;
 
-        let last_block_included = values.last().map_or(*block_range.start(), |v| v.block_num);
+        ensure_account_sync_page_made_progress(last_block_num, &values)?;
+
+        let last_block_included = values.last().expect("non-empty after progress check").block_num;
 
         (last_block_included, values)
     } else {
@@ -566,6 +579,20 @@ pub(crate) fn select_account_vault_assets(
     };
 
     Ok((last_block_included, values))
+}
+
+/// Returns an error when block-based pagination drops every row in the overflow block.
+fn ensure_account_sync_page_made_progress<T>(
+    truncation_block_num: i64,
+    values: &[T],
+) -> Result<(), DatabaseError> {
+    if values.is_empty() {
+        return Err(DatabaseError::AccountSyncPageExceedsPayloadLimit {
+            block_num: BlockNumber::from_raw_sql(truncation_block_num)?,
+        });
+    }
+
+    Ok(())
 }
 
 /// Query vault assets at a specific block by finding the most recent update for each `vault_key`.
@@ -777,7 +804,9 @@ pub(crate) fn select_account_storage_map_values_paged(
             .map(StorageMapValue::from_raw_row)
             .collect::<Result<Vec<_>, DatabaseError>>()?;
 
-        let last_block_included = values.last().map_or(*block_range.start(), |v| v.block_num);
+        ensure_account_sync_page_made_progress(last_block_num, &values)?;
+
+        let last_block_included = values.last().expect("non-empty after progress check").block_num;
 
         (last_block_included, values)
     } else {
