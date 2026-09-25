@@ -207,6 +207,16 @@ pub struct MonitorConfig {
     )]
     pub validator_url: Option<Url>,
 
+    /// The base URL of the agglayer-monitor API.
+    ///
+    /// The monitor reads the Agglayer bridge status from `GET /v1/status` on this URL.
+    #[arg(
+        long = "agglayer-monitor-url",
+        env = "MIDEN_MONITOR_AGGLAYER_MONITOR_URL",
+        help = "The base URL of the agglayer-monitor API"
+    )]
+    pub agglayer_monitor_url: Option<Url>,
+
     /// Maximum time without a chain tip update before marking RPC as unhealthy.
     ///
     /// If the chain tip does not increment within this duration, the RPC service will be

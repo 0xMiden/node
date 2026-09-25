@@ -55,6 +55,11 @@ pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
     let validator_rx =
         config.validator_url.is_some().then(|| tasks.spawn_validator_checker(&config));
 
+    let agglayer_rx = config
+        .agglayer_monitor_url
+        .is_some()
+        .then(|| tasks.spawn_agglayer_checker(&config));
+
     // Build the flat services Vec in the order the dashboard expects to render cards.
     let services = std::iter::once(rpc_rx)
         .chain(prover_rxs)
@@ -64,6 +69,7 @@ pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
         .chain(ntx_tracking_rx)
         .chain(note_transport_rx)
         .chain(validator_rx)
+        .chain(agglayer_rx)
         .collect();
 
     let server_state = ServerState {

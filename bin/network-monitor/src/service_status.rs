@@ -18,10 +18,11 @@ use crate::remote_prover::{ProofType, ProverTestDetails};
 // STATUS
 // ================================================================================================
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Status {
     Healthy,
     Unhealthy,
+    #[default]
     Unknown,
 }
 
@@ -138,6 +139,7 @@ pub enum ServiceDetails {
     ExplorerStatus(ExplorerStatusDetails),
     NoteTransportStatus(NoteTransportStatusDetails),
     ValidatorStatus(ValidatorStatusDetails),
+    AgglayerStatus(AgglayerStatusDetails),
     Error,
 }
 
@@ -229,6 +231,35 @@ pub struct ValidatorStatusDetails {
     pub chain_tip: u32,
     pub validated_transactions_count: u64,
     pub signed_blocks_count: u64,
+}
+
+/// Details of the Agglayer bridge, as reported by the agglayer-monitor status endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgglayerStatusDetails {
+    pub url: String,
+    /// Reason for the overall status. The agglayer-monitor sets no reason when it is healthy.
+    pub reason_code: Option<String>,
+    pub runner_status: String,
+    pub heartbeat_at: u64,
+    /// Bridge-in route, from L1 to Miden.
+    pub inbound: AgglayerDirectionDetails,
+    /// Bridge-out route, from Miden to L1.
+    pub outbound: AgglayerDirectionDetails,
+}
+
+/// Latest E2E test results for one bridge direction.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgglayerDirectionDetails {
+    pub status: Status,
+    pub reason_code: Option<String>,
+    pub last_success_at: Option<u64>,
+    pub last_success_duration_ms: Option<u64>,
+    pub last_failure_at: Option<u64>,
+    pub last_failure_code: Option<String>,
+    /// Phase of the run that is in progress, if there is one.
+    pub current_phase: Option<String>,
+    pub success_count: u64,
+    pub failure_count: u64,
 }
 
 // RPC STATUS DETAILS
