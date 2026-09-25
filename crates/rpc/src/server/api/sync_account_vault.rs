@@ -1,5 +1,6 @@
 use miden_node_proto::errors::ConversionResultExt;
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
+use miden_node_store::DatabaseError;
 use miden_node_tracing::{debug, miden_instrument, miden_span_record};
 use miden_protocol::Word;
 
@@ -63,7 +64,12 @@ impl proto::server::rpc_api::SyncAccountVault for RpcService {
                 view.sync_account_vault(account_id, block_range)
                     .await
                     .map(|updates| (view.tip(), updates))
-                    .map_err(|err| database_error_to_status(&err))
+                    .map_err(|err| match err {
+                        DatabaseError::RangeBeyondTip(_) => {
+                            SyncAccountVaultErrorCode::FutureBlock.invalid_argument(err)
+                        },
+                        err => database_error_to_status(&err),
+                    })
             })
             .await?;
         let updates = updates
