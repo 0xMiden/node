@@ -43,7 +43,7 @@ struct Inflight {
 // ================================================================================================
 
 /// Configuration knobs of the [`Scheduler`].
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct SchedulerConfig {
     /// Maximum number of network transactions built concurrently.
     pub max_concurrent_txs: usize,
@@ -52,6 +52,10 @@ pub struct SchedulerConfig {
     /// of an in-flight transaction at submission, and must match the expiration delta the
     /// transaction carries on-chain.
     pub tx_expiration_delta: NonZeroU16,
+
+    /// Accounts served before every other account. Each one still holds at most one slot, because
+    /// an account with a running build is excluded from selection.
+    pub priority_accounts: Vec<AccountId>,
 }
 
 // SCHEDULER
@@ -120,9 +124,16 @@ impl Scheduler {
         let ready = self
             .ctx
             .db
-            .ready_accounts(self.ctx.config.max_note_attempts, block_num, busy, free)
+            .ready_accounts(
+                self.ctx.config.max_note_attempts,
+                block_num,
+                busy,
+                self.config.priority_accounts.clone(),
+                free,
+            )
             .await
             .context("failed to query accounts ready for a network transaction")?;
+        let dispatched = ready.len();
         for account_id in ready {
             let ctx = self.ctx.clone();
             let chain = chain.clone();
@@ -134,6 +145,18 @@ impl Scheduler {
                 reference_block.number = block_num
             );
         }
+
+        // Neither the build concurrency nor the submitted-but-uncommitted backlog is otherwise
+        // observable from outside the process.
+        debug!(
+            target: LOG_TARGET,
+            "network transaction pipeline",
+            reference_block.number = block_num,
+            build.dispatched.count = dispatched,
+            build.running.count = self.tasks.len(),
+            transaction.in_flight.count = self.in_flight.len(),
+            build.slots.count = self.config.max_concurrent_txs
+        );
 
         Ok(())
     }
@@ -311,6 +334,7 @@ mod tests {
         let config = SchedulerConfig {
             max_concurrent_txs: 4,
             tx_expiration_delta: NonZeroU16::new(30).unwrap(),
+            priority_accounts: Vec::new(),
         };
         (Scheduler::new(ctx, config), db, dir)
     }
@@ -427,6 +451,7 @@ mod tests {
                 30,
                 BlockNumber::from(1),
                 vec![in_flight_account],
+                Vec::new(),
                 scheduler.config.max_concurrent_txs,
             )
             .await
@@ -447,7 +472,10 @@ mod tests {
             .unwrap();
 
         assert!(
-            db.ready_accounts(30, BlockNumber::from(1), vec![], 4).await.unwrap().is_empty(),
+            db.ready_accounts(30, BlockNumber::from(1), vec![], vec![], 4)
+                .await
+                .unwrap()
+                .is_empty(),
             "a note targeting an account with no committed state is not dispatchable",
         );
 
@@ -460,7 +488,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            db.ready_accounts(30, BlockNumber::from(1), vec![], 4).await.unwrap(),
+            db.ready_accounts(30, BlockNumber::from(1), vec![], vec![], 4).await.unwrap(),
             vec![account_id],
             "the account becomes dispatchable once its state is committed",
         );

@@ -125,11 +125,12 @@ impl NtxDbReader {
         max_note_attempts: usize,
         block_num: BlockNumber,
         busy: Vec<AccountId>,
+        priority: Vec<AccountId>,
         limit: usize,
     ) -> Result<Vec<AccountId>, DatabaseError> {
         self.reader
             .read("ready_accounts", move |tx| {
-                queries::ready_accounts(tx, max_note_attempts, block_num, &busy, limit)
+                queries::ready_accounts(tx, max_note_attempts, block_num, &busy, &priority, limit)
             })
             .await
     }
