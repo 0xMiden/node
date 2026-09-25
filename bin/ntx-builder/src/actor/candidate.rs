@@ -16,9 +16,8 @@ use crate::chain_state::ChainState;
 /// A feature note bundled with the `FEE_SPONSORSHIP` notes that pay its fee.
 ///
 /// Transaction selection packs a bundle as a unit because a sponsorship note may only be consumed
-/// with its feature note. Consumability filtering may retain a valid subset: a feature can execute
-/// without every selected sponsorship when its required fee is otherwise covered. A bundle with no
-/// sponsorships is a plain network note.
+/// with its feature note. Consumability filtering can remove a sponsorship that fails on its own
+/// and keep the rest of the bundle. A bundle with no sponsorships is a plain network note.
 #[derive(Clone, Debug)]
 pub struct SponsoredFeatureNote {
     /// The network note targeted at the account.
