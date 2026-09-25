@@ -136,6 +136,8 @@ service Api {
     // processed (consumed by a transaction in the mempool), or discarded after too
     // many failed attempts.
     //
+    // The response also lists the FEE_SPONSORSHIP notes that pay the fee for the note.
+    //
     // Returns `NOT_FOUND` if the note ID is not tracked by the network transaction builder.
     rpc GetNetworkNoteStatus(note.NoteId) returns (GetNetworkNoteStatusResponse) {}
 }
@@ -867,6 +869,25 @@ message GetNetworkNoteStatusResponse {
     uint32 attempt_count = 3;
     // Block number of the last failed attempt, if any.
     optional fixed32 last_attempt_block_num = 4;
+    // FEE_SPONSORSHIP notes bound to this note.
+    repeated NetworkNoteSponsorship sponsorships = 5;
+}
+
+// A FEE_SPONSORSHIP note that pays the fee for a network note.
+message NetworkNoteSponsorship {
+    // ID of the sponsorship note.
+    note.NoteId note_id = 1;
+    // Fee asset that the sponsorship note carries.
+    asset.Asset fee_asset = 2;
+    // Block height at or after which the reclaimer can reclaim the note. Not set when reclaim is
+    // disabled.
+    optional fixed32 reclaim_height = 3;
+    // Block number in which the sponsorship note was consumed. Not set while it is unconsumed.
+    optional fixed32 committed_block_num = 4;
+    // The latest execution error of the sponsorship note, if any.
+    optional string last_error = 5;
+    // Block number of the last failed attempt of the sponsorship note, if any.
+    optional fixed32 last_attempt_block_num = 6;
 }
 
 // RPC LIMITS

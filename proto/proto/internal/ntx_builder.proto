@@ -16,6 +16,8 @@ service Api {
     // processed (consumed by a transaction in the mempool), or discarded after too
     // many failed attempts.
     //
+    // The response also lists the FEE_SPONSORSHIP notes that pay the fee for the note.
+    //
     // Returns `NOT_FOUND` if the note ID is not tracked by the network transaction builder.
     rpc GetNetworkNoteStatus(note.NoteId) returns (rpc.GetNetworkNoteStatusResponse) {}
 }

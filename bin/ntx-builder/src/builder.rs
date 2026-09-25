@@ -304,10 +304,20 @@ async fn handle_actor_request(
     max_note_attempts: usize,
 ) -> anyhow::Result<()> {
     match request {
-        ActorRequest::NotesFailed { failed_notes, block_num, ack_tx } => {
+        ActorRequest::NotesFailed {
+            failed_notes,
+            failed_sponsorships,
+            block_num,
+            ack_tx,
+        } => {
             db.notes_failed(failed_notes, block_num)
                 .await
                 .context("failed to persist note failure")?;
+            if !failed_sponsorships.is_empty() {
+                db.sponsorships_failed(failed_sponsorships, block_num)
+                    .await
+                    .context("failed to persist sponsorship failure")?;
+            }
             let _ = ack_tx.send(());
         },
         ActorRequest::NotesDiscarded { nullifiers, block_num, ack_tx } => {

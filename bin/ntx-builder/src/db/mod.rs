@@ -280,6 +280,18 @@ impl NtxDbWriter {
             .await
     }
 
+    pub(crate) async fn sponsorships_failed(
+        &self,
+        failed_sponsorships: Vec<(Nullifier, NoteError)>,
+        block_num: BlockNumber,
+    ) -> Result<(), DatabaseError> {
+        self.writer
+            .write("sponsorships_failed", move |tx| {
+                queries::sponsorships_failed(tx, &failed_sponsorships, block_num)
+            })
+            .await
+    }
+
     pub(crate) async fn discard_notes(
         &self,
         nullifiers: Vec<Nullifier>,

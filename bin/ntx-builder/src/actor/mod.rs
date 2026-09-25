@@ -61,6 +61,9 @@ pub enum ActorRequest {
     /// the failure is persisted.
     NotesFailed {
         failed_notes: Vec<(Nullifier, NoteError)>,
+        /// Failed `FEE_SPONSORSHIP` notes, keyed by the nullifier of each sponsorship. Only the
+        /// latest error is recorded for them. Their attempts are charged through `failed_notes`.
+        failed_sponsorships: Vec<(Nullifier, NoteError)>,
         block_num: BlockNumber,
         ack_tx: tokio::sync::oneshot::Sender<()>,
     },
@@ -556,7 +559,7 @@ impl AccountActor {
                 account.id = account_id,
                 note.rejected.count = failed_notes.len()
             );
-            self.mark_notes_failed(&failed_notes, block_num).await;
+            self.mark_notes_failed(&failed_notes, &[], block_num).await;
         }
 
         // Attach each feature note's pending sponsorships: the bundle is the atomic selection unit,
@@ -691,6 +694,7 @@ impl AccountActor {
                 failed_notes,
                 deferred_notes,
                 oversized_notes,
+                dropped_sponsorships,
                 fetched_scripts,
             }) => {
                 // `filter_notes` has already partitioned the failed notes:
@@ -725,8 +729,13 @@ impl AccountActor {
 
                 let mut to_penalize = failed_notes;
                 to_penalize.extend(oversized_sponsorships);
+                // A dropped sponsorship records its own error, but its feature note is not charged.
+                let mut failed_sponsorships =
+                    sponsorship_failures(&to_penalize, &sponsor_to_feature);
+                failed_sponsorships
+                    .extend(sponsorship_failures(&dropped_sponsorships, &sponsor_to_feature));
                 let failed_notes = attribute_failed_notes(to_penalize, &sponsor_to_feature);
-                self.mark_notes_failed(&failed_notes, block_num).await;
+                self.mark_notes_failed(&failed_notes, &failed_sponsorships, block_num).await;
 
                 let nullifiers = log_oversized_notes(oversized_features);
                 self.discard_notes(&nullifiers, block_num).await;
@@ -758,16 +767,18 @@ impl AccountActor {
                 let submission_rejected = matches!(err, execute::NtxError::Submission(_));
 
                 // For `AllNotesFailed`, use the per-note errors which contain the specific reason
-                // each note failed (e.g. consumability check details). Whole-transaction errors are
-                // recorded against the feature notes only: sponsorships have no row in the `notes`
-                // table.
-                let failed_notes: Vec<_> = match err {
+                // each note failed (e.g. consumability check details). A failed sponsorship also
+                // records the error on its own row. Whole-transaction errors are recorded against
+                // the feature notes only, because no single sponsorship causes them.
+                let (failed_notes, failed_sponsorships): (Vec<_>, Vec<_>) = match err {
                     execute::NtxError::AllNotesFailed(per_note) => {
-                        attribute_failed_notes(per_note, &sponsor_to_feature)
+                        let failed_sponsorships =
+                            sponsorship_failures(&per_note, &sponsor_to_feature);
+                        (attribute_failed_notes(per_note, &sponsor_to_feature), failed_sponsorships)
                     },
                     other => {
                         let error: NoteError = Arc::new(other);
-                        sponsored_notes
+                        let failed_notes: Vec<_> = sponsored_notes
                             .iter()
                             .map(|sponsored| {
                                 let feature = sponsored.feature.as_note();
@@ -780,10 +791,11 @@ impl AccountActor {
                                 );
                                 (feature.nullifier(), error.clone())
                             })
-                            .collect()
+                            .collect();
+                        (failed_notes, Vec::new())
                     },
                 };
-                self.mark_notes_failed(&failed_notes, block_num).await;
+                self.mark_notes_failed(&failed_notes, &failed_sponsorships, block_num).await;
 
                 if submission_rejected {
                     if let Some(latest) = self
@@ -827,11 +839,12 @@ impl AccountActor {
     async fn mark_notes_failed(
         &self,
         failed_notes: &[(Nullifier, NoteError)],
+        failed_sponsorships: &[(Nullifier, NoteError)],
         block_num: BlockNumber,
     ) {
         // Avoid an empty coordinator round-trip (and DB write-transaction) on the common
         // no-failures path.
-        if failed_notes.is_empty() {
+        if failed_notes.is_empty() && failed_sponsorships.is_empty() {
             return;
         }
         let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
@@ -839,6 +852,7 @@ impl AccountActor {
             .request
             .send(ActorRequest::NotesFailed {
                 failed_notes: failed_notes.to_vec(),
+                failed_sponsorships: failed_sponsorships.to_vec(),
                 block_num,
                 ack_tx,
             })
@@ -920,8 +934,10 @@ fn log_deferred_notes(deferred: Vec<FailedNote>) {
 /// Logs each failed note and returns `(nullifier, error)` pairs keyed by the nullifier the failure
 /// is recorded under: a feature note fails under its own nullifier, while a sponsorship's failure
 /// is charged to the feature note of its bundle (sponsorship notes have no row in the `notes`
-/// table). Multiple failures attributed to the same feature note collapse to a single entry, so a
-/// bundle never burns more than one attempt per round.
+/// table). The error of a sponsorship's failure starts with the ID of the sponsorship note, so the
+/// feature note's `last_error` identifies the sponsorship. Multiple failures attributed to the same
+/// feature note collapse to a single entry, so a bundle never burns more than one attempt per
+/// round.
 fn attribute_failed_notes(
     failed: Vec<FailedNote>,
     sponsor_to_feature: &HashMap<NoteId, Nullifier>,
@@ -946,16 +962,36 @@ fn attribute_failed_notes(
             note.id = f.note().id(),
             note.nullifier = f.note().nullifier()
         );
-        let nullifier = sponsor_to_feature
-            .get(&f.note().id())
-            .copied()
-            .unwrap_or_else(|| f.note().nullifier());
+        let (nullifier, error_msg) = match sponsor_to_feature.get(&f.note().id()) {
+            Some(feature_nullifier) => (
+                *feature_nullifier,
+                format!("sponsorship note {} failed: {error_msg}", f.note().id()),
+            ),
+            None => (f.note().nullifier(), error_msg),
+        };
         if seen.insert(nullifier) {
             let error: NoteError = Arc::new(std::io::Error::other(error_msg));
             attributed.push((nullifier, error));
         }
     }
     attributed
+}
+
+/// Returns `(nullifier, error)` pairs for the failed sponsorship notes in `failed`, keyed by the
+/// nullifier of each sponsorship. Each pair records the error on the sponsorship row. A sponsorship
+/// rejected only because its bundle was rejected has no error of its own and is skipped.
+fn sponsorship_failures(
+    failed: &[FailedNote],
+    sponsor_to_feature: &HashMap<NoteId, Nullifier>,
+) -> Vec<(Nullifier, NoteError)> {
+    failed
+        .iter()
+        .filter(|f| sponsor_to_feature.contains_key(&f.note().id()))
+        .filter_map(|f| {
+            let error: NoteError = Arc::new(std::io::Error::other(f.error()?.as_report()));
+            Some((f.note().nullifier(), error))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -998,6 +1034,7 @@ mod tests {
         assert_eq!(attributed.len(), 1);
         assert_eq!(attributed[0].0, nullifier);
         assert!(attributed[0].1.to_string().contains("consumability failure"));
+        assert!(!attributed[0].1.to_string().contains("sponsorship note"));
     }
 
     #[test]
@@ -1038,7 +1075,49 @@ mod tests {
         let attributed = attribute_failed_notes(failed, &sponsors);
         assert_eq!(attributed.len(), 1);
         assert_eq!(attributed[0].0, feature.nullifier());
-        assert!(attributed[0].1.to_string().contains("first failure"));
+        let error = attributed[0].1.to_string();
+        assert!(error.contains("first failure"));
+        assert!(error.starts_with(&format!("sponsorship note {blamed_by} failed: ")));
+    }
+
+    /// Each blamed sponsorship keeps its own error under its own nullifier. The feature note and
+    /// the collateral sponsorship produce no entry.
+    #[test]
+    fn sponsorship_failures_are_keyed_by_each_sponsorship() {
+        let account_id = mock_network_account_id();
+        let feature = crate::test_utils::mock_single_target_note(account_id, 1).into_note();
+        let collateral = crate::test_utils::mock_sponsorship_note(account_id, feature.id(), 2);
+        let first = crate::test_utils::mock_sponsorship_note(account_id, feature.id(), 3);
+        let second = crate::test_utils::mock_sponsorship_note(account_id, feature.id(), 4);
+        let sponsors = HashMap::from([
+            (collateral.id(), feature.nullifier()),
+            (first.id(), feature.nullifier()),
+            (second.id(), feature.nullifier()),
+        ]);
+        let blamed = |error| miden_tx::NoteFailure::Blamed {
+            error: miden_tx::TransactionExecutorError::AccountUpdateCommitment(error),
+            num_cycles: None,
+        };
+        let expected =
+            [(first.nullifier(), "first failure"), (second.nullifier(), "second failure")];
+        let failed = vec![
+            FailedNote::new(feature.clone(), blamed("feature failure")),
+            FailedNote::new(
+                collateral,
+                miden_tx::NoteFailure::Collateral { blamed_by: first.id() },
+            ),
+            FailedNote::new(first, blamed("first failure")),
+            FailedNote::new(second, blamed("second failure")),
+        ];
+
+        let failures = sponsorship_failures(&failed, &sponsors);
+        assert_eq!(failures.len(), expected.len());
+        for ((nullifier, error), (expected_nullifier, expected_error)) in
+            failures.iter().zip(expected)
+        {
+            assert_eq!(*nullifier, expected_nullifier);
+            assert!(error.to_string().contains(expected_error));
+        }
     }
 
     /// Builds a valid nonce-only [`AccountPatch`] that advances `account` by a single nonce.
