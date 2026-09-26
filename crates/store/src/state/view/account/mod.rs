@@ -221,6 +221,12 @@ impl StateView {
         let should_apply_response_budget =
             matches!(&storage_request, AccountStorageRequest::AllStorageMaps);
         let storage_requests = expand_account_storage_request(storage_request, &storage_header);
+        validate_storage_map_requests(
+            account_id,
+            scoped_block,
+            &storage_requests,
+            &storage_header,
+        )?;
 
         let account_code = match code_commitment {
             Some(commitment) if commitment == account_header.code_commitment() => None,
@@ -392,6 +398,35 @@ fn expand_account_storage_request(
     }
 }
 
+/// Validates that each requested slot exists in the account storage and is a map slot.
+///
+/// A request for a missing slot or a value slot is a client error. The forest has no map root for
+/// such a slot, so a forest lookup cannot tell this case apart from a missing storage root.
+fn validate_storage_map_requests(
+    account_id: AccountId,
+    block_num: ScopedBlockNum,
+    requests: &[StorageMapRequest],
+    storage_header: &AccountStorageHeader,
+) -> Result<(), GetAccountError> {
+    for StorageMapRequest { slot_name, .. } in requests {
+        let slot = storage_header.find_slot_header_by_name(slot_name).ok_or_else(|| {
+            GetAccountError::StorageSlotNotFound {
+                account_id,
+                slot_name: slot_name.clone(),
+                block_num: *block_num,
+            }
+        })?;
+        if slot.slot_type() != StorageSlotType::Map {
+            return Err(GetAccountError::StorageSlotNotMap {
+                account_id,
+                slot_name: slot_name.clone(),
+                block_num: *block_num,
+            });
+        }
+    }
+    Ok(())
+}
+
 mod response_budget;
 use response_budget::{
     MAX_ALL_STORAGE_MAPS_RESPONSE_PAYLOAD_WITH_BUDGET_RESERVED_FOR_LIMIT_EXCEEDED_SLOTS,
@@ -408,5 +443,160 @@ impl StateView {
         account_ids: &[AccountId],
     ) -> Result<HashSet<AccountId>, DatabaseError> {
         self.db.select_network_accounts_subset(account_ids.to_vec()).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use miden_node_utils::fee::{test_fee_params, test_protocol_config};
+    use miden_protocol::account::auth::{AuthScheme, PublicKeyCommitment};
+    use miden_protocol::account::component::AccountComponentMetadata;
+    use miden_protocol::account::{
+        Account,
+        AccountBuilder,
+        AccountComponent,
+        AccountType,
+        StorageMap,
+        StorageMapKey,
+        StorageSlot,
+    };
+    use miden_protocol::block::ValidatorConfig;
+    use miden_protocol::testing::random_secret_key::random_secret_key;
+    use miden_protocol::{EMPTY_WORD, Word};
+    use miden_standards::account::auth::{Approver, AuthSingleSig};
+    use miden_standards::code_builder::CodeBuilder;
+
+    use super::*;
+    use crate::GenesisState;
+    use crate::state::State;
+
+    fn value_slot_name() -> StorageSlotName {
+        StorageSlotName::new("test::value").unwrap()
+    }
+
+    fn map_slot_name() -> StorageSlotName {
+        StorageSlotName::new("test::map").unwrap()
+    }
+
+    /// Returns a public account with one value slot and one map slot.
+    fn account_with_value_and_map_slots() -> Account {
+        let storage_map = StorageMap::with_entries(vec![(
+            StorageMapKey::from_index(1),
+            Word::from([1u32, 2, 3, 4]),
+        )])
+        .unwrap();
+        let component_storage = vec![
+            StorageSlot::with_value(value_slot_name(), Word::from([5u32, 6, 7, 8])),
+            StorageSlot::with_map(map_slot_name(), storage_map),
+        ];
+        let component_code = CodeBuilder::default()
+            .compile_component_code(
+                "test::interface",
+                "@account_procedure pub proc test push.1 end",
+            )
+            .unwrap();
+        let component = AccountComponent::new(
+            component_code,
+            component_storage,
+            AccountComponentMetadata::new("test"),
+        )
+        .unwrap();
+
+        AccountBuilder::new([3u8; 32])
+            .account_type(AccountType::Public)
+            .with_component(component)
+            .with_component(AuthSingleSig::new(Approver::new(
+                PublicKeyCommitment::from(EMPTY_WORD),
+                AuthScheme::Falcon512Poseidon2,
+            )))
+            .build_existing()
+            .unwrap()
+    }
+
+    fn bootstrap_store(path: &std::path::Path, account: Account) {
+        let signer = random_secret_key();
+        let genesis_block = GenesisState::new(
+            vec![account],
+            test_fee_params(),
+            1,
+            ValidatorConfig::new(vec![signer.public_key()], 1)
+                .expect("validator config should be valid"),
+            test_protocol_config(),
+        )
+        .into_block()
+        .expect("genesis block should be created");
+
+        State::bootstrap(genesis_block, path).expect("store should bootstrap");
+    }
+
+    fn storage_request(account_id: AccountId, request: StorageMapRequest) -> AccountRequest {
+        AccountRequest {
+            account_id,
+            block_num: None,
+            details: Some(AccountDetailRequest {
+                code_commitment: None,
+                asset_vault_commitment: None,
+                storage_request: AccountStorageRequest::Explicit(vec![request]),
+            }),
+        }
+    }
+
+    /// A storage request that names a missing slot, or a value slot, is a client error. It must not
+    /// surface as a database inconsistency.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn explicit_storage_request_for_an_invalid_slot_is_a_request_error() {
+        let account = account_with_value_and_map_slots();
+        let account_id = account.id();
+        let data_directory = tempfile::tempdir().expect("tempdir should be created");
+        bootstrap_store(data_directory.path(), account);
+        let (state, _block_writer, _proof_writer) = State::for_tests(data_directory.path()).await;
+
+        let missing_slot = StorageSlotName::new("test::missing").unwrap();
+        let map_keys = SlotData::MapKeys(vec![StorageMapKey::from_index(1)]);
+
+        for slot_data in [SlotData::All, map_keys.clone()] {
+            let request = StorageMapRequest {
+                slot_name: missing_slot.clone(),
+                slot_data: slot_data.clone(),
+            };
+            let result = state.view().get_account(storage_request(account_id, request)).await;
+            assert!(
+                matches!(
+                    &result,
+                    Err(GetAccountError::StorageSlotNotFound { account_id: id, slot_name, .. })
+                        if *id == account_id && *slot_name == missing_slot
+                ),
+                "missing slot with {slot_data:?} must be a request error, got {:?}",
+                result.map(|_| ())
+            );
+
+            let request = StorageMapRequest {
+                slot_name: value_slot_name(),
+                slot_data: slot_data.clone(),
+            };
+            let result = state.view().get_account(storage_request(account_id, request)).await;
+            assert!(
+                matches!(
+                    &result,
+                    Err(GetAccountError::StorageSlotNotMap { account_id: id, slot_name, .. })
+                        if *id == account_id && *slot_name == value_slot_name()
+                ),
+                "value slot with {slot_data:?} must be a request error, got {:?}",
+                result.map(|_| ())
+            );
+        }
+
+        // Requests for the map slot still succeed.
+        for slot_data in [SlotData::All, map_keys] {
+            let request = StorageMapRequest { slot_name: map_slot_name(), slot_data };
+            let response = state
+                .view()
+                .get_account(storage_request(account_id, request))
+                .await
+                .expect("map slot request should succeed");
+            let details = response.details.expect("details should be returned");
+            assert_eq!(details.storage_details.map_details.len(), 1);
+            assert_eq!(details.storage_details.map_details[0].slot_name, map_slot_name());
+        }
     }
 }

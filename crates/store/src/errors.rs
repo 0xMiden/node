@@ -4,7 +4,7 @@ use miden_node_proto::domain::block::InvalidBlockRange;
 use miden_node_proto::errors::ConversionError;
 use miden_node_utils::limiter::QueryLimitError;
 use miden_protocol::Word;
-use miden_protocol::account::AccountId;
+use miden_protocol::account::{AccountId, StorageSlotName};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::merkle::MerkleError;
 use miden_protocol::crypto::merkle::mmr::MmrError;
@@ -365,6 +365,20 @@ pub enum GetAccountError {
     UnknownBlock(BlockNumber),
     #[error("block {0} has been pruned")]
     BlockPruned(BlockNumber),
+    #[error("account {account_id} has no storage slot {slot_name} at block {block_num}")]
+    StorageSlotNotFound {
+        account_id: AccountId,
+        slot_name: StorageSlotName,
+        block_num: BlockNumber,
+    },
+    #[error(
+        "storage slot {slot_name} of account {account_id} is not a map slot at block {block_num}"
+    )]
+    StorageSlotNotMap {
+        account_id: AccountId,
+        slot_name: StorageSlotName,
+        block_num: BlockNumber,
+    },
 }
 
 // Do not scope for `cfg(test)` - if it the traitbounds don't suffice the issue will already appear
