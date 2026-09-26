@@ -542,8 +542,8 @@ message SyncNullifiersResponse {
 message SyncAccountVaultRequest {
     // Block range from which to start synchronizing.
     //
-    // If the `block_to` is specified, this block must be close to the chain tip (i.e., within 30 blocks),
-    // otherwise an error will be returned.
+    // If the `block_to` is specified, it must not be beyond the current chain tip, otherwise an
+    // error will be returned.
     BlockRange block_range = 1;
 
     // Account for which we want to sync asset vault.
@@ -720,8 +720,8 @@ message SyncChainMmrResponse {
 message SyncAccountStorageMapsRequest {
     // Block range from which to start synchronizing.
     //
-    // If the `block_to` is specified, this block must be close to the chain tip (i.e., within 30 blocks),
-    // otherwise an error will be returned.
+    // If the `block_to` is specified, it must not be beyond the current chain tip, otherwise an
+    // error will be returned.
     BlockRange block_range = 1;
 
     // Account for which we want to sync storage maps.
