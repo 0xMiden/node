@@ -1,5 +1,6 @@
 use miden_node_proto::errors::ConversionResultExt;
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
+use miden_node_store::DatabaseError;
 use miden_node_tracing::{debug, miden_instrument, miden_span_record};
 
 use super::error_codes::SyncAccountStorageMapsErrorCode;
@@ -62,7 +63,12 @@ impl proto::server::rpc_api::SyncAccountStorageMaps for RpcService {
                 view.sync_account_storage_maps(account_id, block_range)
                     .await
                     .map(|page| (view.tip(), page))
-                    .map_err(|err| database_error_to_status(&err))
+                    .map_err(|err| match err {
+                        DatabaseError::RangeBeyondTip(_) => {
+                            SyncAccountStorageMapsErrorCode::FutureBlock.invalid_argument(err)
+                        },
+                        err => database_error_to_status(&err),
+                    })
             })
             .await?;
         let updates = storage_maps_page

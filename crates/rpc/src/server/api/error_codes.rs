@@ -45,20 +45,24 @@ error_codes!(SyncNotesErrorCode {
 error_codes!(SyncNullifiersErrorCode {
     InvalidPrefixLength = 2,
     DeserializationFailed = 3,
+    FutureBlock = 4,
 });
 
 error_codes!(SyncAccountVaultErrorCode {
     DeserializationFailed = 2,
     AccountNotPublic = 3,
+    FutureBlock = 4,
 });
 
 error_codes!(SyncAccountStorageMapsErrorCode {
     DeserializationFailed = 2,
     AccountNotPublic = 4,
+    FutureBlock = 5,
 });
 
 error_codes!(SyncTransactionsErrorCode {
     DeserializationFailed = 2,
+    FutureBlock = 5,
 });
 
 error_codes!(SyncChainMmrErrorCode { FutureBlock = 2 });

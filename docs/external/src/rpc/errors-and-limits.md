@@ -56,17 +56,21 @@ applies to all methods in the table, `GetBlockByNumber`, and `GetBlockHeaderByNu
 | **`SyncNullifiers`**                         | `InvalidBlockRange`     | `1`   | `INVALID_ARGUMENT` |
 |                                              | `InvalidPrefixLength`   | `2`   | `INVALID_ARGUMENT` |
 |                                              | `DeserializationFailed` | `3`   | `INVALID_ARGUMENT` |
+|                                              | `FutureBlock`           | `4`   | `INVALID_ARGUMENT` |
 |                                              |                         |       |                    |
 | **`SyncAccountVault`**                       | `InvalidBlockRange`     | `1`   | `INVALID_ARGUMENT` |
 |                                              | `DeserializationFailed` | `2`   | `INVALID_ARGUMENT` |
 |                                              | `AccountNotPublic`      | `3`   | `INVALID_ARGUMENT` |
+|                                              | `FutureBlock`           | `4`   | `INVALID_ARGUMENT` |
 |                                              |                         |       |                    |
 | **`SyncAccountStorageMaps`**                 | `InvalidBlockRange`     | `1`   | `INVALID_ARGUMENT` |
 |                                              | `DeserializationFailed` | `2`   | `INVALID_ARGUMENT` |
 |                                              | `AccountNotPublic`      | `4`   | `INVALID_ARGUMENT` |
+|                                              | `FutureBlock`           | `5`   | `INVALID_ARGUMENT` |
 |                                              |                         |       |                    |
 | **`SyncTransactions`**                       | `InvalidBlockRange`     | `1`   | `INVALID_ARGUMENT` |
 |                                              | `DeserializationFailed` | `2`   | `INVALID_ARGUMENT` |
+|                                              | `FutureBlock`           | `5`   | `INVALID_ARGUMENT` |
 |                                              |                         |       |                    |
 | **`SyncChainMmr`**                           | `FutureBlock`           | `2`   | `INVALID_ARGUMENT` |
 |                                              |                         |       |                    |
@@ -78,9 +82,10 @@ applies to all methods in the table, `GetBlockByNumber`, and `GetBlockHeaderByNu
 |                                              | `InvalidFeeAsset`       | `6`   | `INVALID_ARGUMENT` |
 |                                              | `AuthenticationFailed`  | `8`   | `INVALID_ARGUMENT` |
 
-`InvalidBlockRange` includes a range whose start exceeds its end. It also includes a range that extends beyond the chain
-tip, except for `SyncNotes`, which returns `FutureBlock`. `SyncChainMmr` returns `FutureBlock` when the client height
-exceeds the requested chain tip. `SyncNullifiers` returns `DeserializationFailed` for a prefix that exceeds 16 bits.
+`InvalidBlockRange` means that the start of the range exceeds its end. `SyncNotes`, `SyncNullifiers`,
+`SyncAccountVault`, `SyncAccountStorageMaps`, and `SyncTransactions` return `FutureBlock` when the range extends beyond
+the chain tip. `SyncChainMmr` returns `FutureBlock` when the client height exceeds the requested chain tip.
+`SyncNullifiers` returns `DeserializationFailed` for a prefix that exceeds 16 bits.
 
 Unused values remain reserved. Clients must accept unknown detail codes and fall back to the gRPC status code.
 
