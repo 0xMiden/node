@@ -9,6 +9,7 @@ use miden_node_tracing::grpc::grpc_trace_fn;
 use miden_node_tracing::panic::catch_panic_layer_fn;
 use miden_node_tracing::{debug, error, info};
 use miden_node_utils::clap::GrpcOptions;
+use miden_node_utils::grpc;
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::Word;
@@ -138,6 +139,7 @@ impl Server {
                     .expose_headers(Any),
             )
             .layer(tonic_web::GrpcWebLayer::new())
+            .layer(grpc::ResolveClientIpLayer)
             .layer(GlobalConcurrencyLimitLayer::new(self.config.max_connections.get()))
             .timeout(self.config.grpc.request_timeout)
             .add_service(health_service)
