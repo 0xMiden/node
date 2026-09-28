@@ -2597,7 +2597,7 @@ async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
         .await
         .expect_err("sync_nullifiers should reject block_to beyond chain tip");
     assert_beyond_tip(&status, "sync_nullifiers");
-    assert_eq!(status.details(), &[1]);
+    assert_eq!(status.details(), &[4]);
 
     let status = rpc_client
         .sync_notes(proto::rpc::SyncNotesRequest {
@@ -2617,7 +2617,7 @@ async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
         .await
         .expect_err("sync_account_storage_maps should reject block_to beyond chain tip");
     assert_beyond_tip(&status, "sync_account_storage_maps");
-    assert_eq!(status.details(), &[1]);
+    assert_eq!(status.details(), &[5]);
 
     let status = rpc_client
         .sync_account_vault(proto::rpc::SyncAccountVaultRequest {
@@ -2627,7 +2627,7 @@ async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
         .await
         .expect_err("sync_account_vault should reject block_to beyond chain tip");
     assert_beyond_tip(&status, "sync_account_vault");
-    assert_eq!(status.details(), &[1]);
+    assert_eq!(status.details(), &[4]);
 
     let status = rpc_client
         .sync_transactions(proto::rpc::SyncTransactionsRequest {
@@ -2637,5 +2637,5 @@ async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
         .await
         .expect_err("sync_transactions should reject block_to beyond chain tip");
     assert_beyond_tip(&status, "sync_transactions");
-    assert_eq!(status.details(), &[1]);
+    assert_eq!(status.details(), &[5]);
 }
