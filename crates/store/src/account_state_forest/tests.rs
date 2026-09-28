@@ -3,6 +3,7 @@ use miden_node_proto::domain::account::{AccountVaultDetails, StorageMapEntries};
 use miden_protocol::Felt;
 use miden_protocol::account::{
     AccountCode,
+    AccountCodePatch,
     AccountStoragePatch,
     AccountType,
     AccountVaultPatch,
@@ -47,11 +48,18 @@ fn dummy_partial_patch(
     } else {
         Some(Felt::new_unchecked(2))
     };
-    AccountPatch::new(account_id, storage_patch, vault_patch, None, final_nonce).unwrap()
+    AccountPatch::new(
+        account_id,
+        storage_patch,
+        vault_patch,
+        AccountCodePatch::default(),
+        final_nonce,
+    )
+    .unwrap()
 }
 
-/// Creates a full-state `AccountPatch` (with code) for testing DB reconstruction.
-fn dummy_full_state_patch(account_id: AccountId, assets: &[Asset]) -> AccountPatch {
+/// Creates an account-creating `AccountPatch` (with code) for testing DB reconstruction.
+fn dummy_account_creation_patch(account_id: AccountId, assets: &[Asset]) -> AccountPatch {
     use miden_protocol::account::{Account, AccountStorage};
 
     let vault = AssetVault::new(assets).unwrap();
@@ -120,8 +128,8 @@ fn vault_partial_vs_full_state_produces_same_root() {
 
     // Full-state patch (DB reconstruction)
     let mut forest_full = AccountStateForest::new();
-    let full_patch = dummy_full_state_patch(account_id, &[asset]);
-    forest_full.update_account(block_num, &full_patch);
+    let full_patch = dummy_account_creation_patch(account_id, &[asset]);
+    forest_full.create_account(block_num, &full_patch);
 
     let root_partial = forest_partial.get_vault_root(account_id, block_num).unwrap();
     let root_full = forest_full.get_vault_root(account_id, block_num).unwrap();
@@ -164,10 +172,11 @@ fn vault_incremental_updates_with_add_and_remove() {
 
     assert_ne!(root_after_150, root_after_120);
 
-    // Verify by comparing to full-state patch
+    // Verify by comparing to an account-creating patch
     let mut fresh_forest = AccountStateForest::new();
-    let full_patch = dummy_full_state_patch(account_id, &[dummy_fungible_asset(faucet_id, 120)]);
-    fresh_forest.update_account(block_3, &full_patch);
+    let full_patch =
+        dummy_account_creation_patch(account_id, &[dummy_fungible_asset(faucet_id, 120)]);
+    fresh_forest.create_account(block_3, &full_patch);
     let root_full_state_120 = fresh_forest.get_vault_root(account_id, block_3).unwrap();
 
     assert_eq!(root_after_120, root_full_state_120);
@@ -181,8 +190,8 @@ fn vault_details_returns_latest_and_historical_assets() {
 
     let block_1 = BlockNumber::GENESIS.child();
     let asset_100 = dummy_fungible_asset(faucet_id, 100);
-    let full_patch = dummy_full_state_patch(account_id, &[asset_100]);
-    forest.update_account(block_1, &full_patch);
+    let full_patch = dummy_account_creation_patch(account_id, &[asset_100]);
+    forest.create_account(block_1, &full_patch);
 
     let block_2 = block_1.child();
     let mut vault_patch_2 = AccountVaultPatch::default();
@@ -213,8 +222,8 @@ fn vault_details_limit_exceeded_for_large_vault() {
         })
         .collect::<Vec<_>>();
 
-    let full_patch = dummy_full_state_patch(account_id, &assets);
-    forest.update_account(block_num, &full_patch);
+    let full_patch = dummy_account_creation_patch(account_id, &assets);
+    forest.create_account(block_num, &full_patch);
 
     assert_eq!(
         forest.get_vault_details(account_id, block_num).unwrap().unwrap(),
@@ -284,7 +293,9 @@ fn compute_block_update_mutations_does_not_mutate_forest() {
     .unwrap();
     let patch = dummy_partial_patch(account_id, vault_patch, storage_patch);
 
-    let prepared = forest.compute_block_update_mutations(block_num, [patch]).unwrap();
+    let prepared = forest
+        .compute_block_update_mutations(block_num, [patch], &BTreeSet::new())
+        .unwrap();
     let prepared_account_state = prepared.account_states.get(&account_id).unwrap();
 
     assert!(forest.get_vault_root(account_id, block_num).is_none());
@@ -326,7 +337,9 @@ fn precompute_partial_empty_storage_map_create_records_empty_root() {
     .unwrap();
     let patch = dummy_partial_patch(account_id, AccountVaultPatch::default(), storage_patch);
 
-    let prepared = forest.compute_block_update_mutations(block_num, [patch]).unwrap();
+    let prepared = forest
+        .compute_block_update_mutations(block_num, [patch], &BTreeSet::new())
+        .unwrap();
     let prepared_account_state = prepared.account_states.get(&account_id).unwrap();
     let expected_root = AccountStateForest::empty_smt_root();
 
@@ -385,7 +398,7 @@ fn storage_map_remove_resets_forest_lineage_for_later_create() {
         .unwrap(),
     );
     let prepared_remove = forest
-        .compute_block_update_mutations(BlockNumber::from(2u32), [remove_patch])
+        .compute_block_update_mutations(BlockNumber::from(2u32), [remove_patch], &BTreeSet::new())
         .unwrap();
     assert!(prepared_remove.account_states[&account_id].storage_map_roots.is_empty());
     let lineage =
@@ -410,7 +423,7 @@ fn storage_map_remove_resets_forest_lineage_for_later_create() {
         .unwrap(),
     );
     let prepared_create = forest
-        .compute_block_update_mutations(BlockNumber::from(3u32), [new_patch])
+        .compute_block_update_mutations(BlockNumber::from(3u32), [new_patch], &BTreeSet::new())
         .unwrap();
     let recreated_root = prepared_create.account_states[&account_id].storage_map_roots[&slot_name];
     let expected_root = StorageMap::with_entries([(new_key, new_value)]).unwrap().root();
@@ -451,7 +464,9 @@ fn precomputed_and_applied_roots_match_protocol_state() {
     .unwrap();
     let patch_1 = dummy_partial_patch(account_id, vault_patch_1, storage_patch_1);
 
-    let prepared_1 = forest.compute_block_update_mutations(block_1, [patch_1.clone()]).unwrap();
+    let prepared_1 = forest
+        .compute_block_update_mutations(block_1, [patch_1.clone()], &BTreeSet::new())
+        .unwrap();
 
     let account_state_1 = prepared_1.account_states.get(&account_id).unwrap();
     assert_eq!(account_state_1.vault_root, expected_vault_root_1);
@@ -480,7 +495,9 @@ fn precomputed_and_applied_roots_match_protocol_state() {
     .unwrap();
     let patch_2 = dummy_partial_patch(account_id, vault_patch_2, storage_patch_2);
 
-    let prepared_2 = forest.compute_block_update_mutations(block_2, [patch_2.clone()]).unwrap();
+    let prepared_2 = forest
+        .compute_block_update_mutations(block_2, [patch_2.clone()], &BTreeSet::new())
+        .unwrap();
 
     let account_state_2 = prepared_2.account_states.get(&account_id).unwrap();
     assert_eq!(account_state_2.vault_root, expected_vault_root_2);
@@ -505,8 +522,8 @@ fn rebuild_updates_accept_disjoint_accounts_at_the_same_version() {
     let expected_root_1 = AssetVault::new(&[asset_1]).unwrap().root();
     let expected_root_2 = AssetVault::new(&[asset_2]).unwrap().root();
     let patches = [
-        dummy_full_state_patch(account_1, &[asset_1]),
-        dummy_full_state_patch(account_2, &[asset_2]),
+        dummy_account_creation_patch(account_1, &[asset_1]),
+        dummy_account_creation_patch(account_2, &[asset_2]),
     ];
     let mut forest = AccountStateForest::new();
 
@@ -517,7 +534,7 @@ fn rebuild_updates_accept_disjoint_accounts_at_the_same_version() {
 }
 
 #[test]
-fn compute_block_update_mutations_rejects_full_state_existing_lineages() {
+fn compute_block_update_mutations_rejects_new_account_existing_lineages() {
     use std::collections::BTreeMap;
 
     use miden_protocol::account::{StorageMapPatch, StorageMapPatchEntries, StorageSlotPatch};
@@ -536,19 +553,21 @@ fn compute_block_update_mutations_rejects_full_state_existing_lineages() {
         dummy_partial_patch(account_id, vault_patch, AccountStoragePatch::default());
     vault_forest.update_account(block_1, &initial_vault_patch);
 
-    let duplicate_vault_full_state = AccountPatch::new(
+    let duplicate_vault_creation = AccountPatch::new(
         account_id,
         AccountStoragePatch::default(),
         AccountVaultPatch::default(),
-        Some(AccountCode::mock()),
+        AccountCodePatch::new(Some(AccountCode::mock())),
         Some(Felt::ONE),
     )
     .unwrap();
 
-    let Err(err) =
-        vault_forest.compute_block_update_mutations(block_2, [duplicate_vault_full_state])
-    else {
-        panic!("duplicate full-state vault lineage should fail");
+    let Err(err) = vault_forest.compute_block_update_mutations(
+        block_2,
+        [duplicate_vault_creation],
+        &BTreeSet::from([account_id]),
+    ) else {
+        panic!("duplicate vault lineage of a new account should fail");
     };
     assert_matches!(
         err,
@@ -578,19 +597,21 @@ fn compute_block_update_mutations_rejects_full_state_existing_lineages() {
             .collect::<BTreeMap<_, _>>(),
     )
     .unwrap();
-    let duplicate_storage_full_state = AccountPatch::new(
+    let duplicate_storage_creation = AccountPatch::new(
         account_id,
         duplicate_storage_patch,
         AccountVaultPatch::default(),
-        Some(AccountCode::mock()),
+        AccountCodePatch::new(Some(AccountCode::mock())),
         Some(Felt::ONE),
     )
     .unwrap();
 
-    let Err(err) =
-        storage_forest.compute_block_update_mutations(block_2, [duplicate_storage_full_state])
-    else {
-        panic!("duplicate full-state storage lineage should fail");
+    let Err(err) = storage_forest.compute_block_update_mutations(
+        block_2,
+        [duplicate_storage_creation],
+        &BTreeSet::from([account_id]),
+    ) else {
+        panic!("duplicate storage lineage of a new account should fail");
     };
     assert_matches!(
         err,
@@ -640,9 +661,8 @@ fn vault_full_state_with_empty_vault_records_root() {
     let full_patch = AccountPatch::try_from(account).unwrap();
 
     assert!(full_patch.vault().is_empty());
-    assert!(full_patch.is_full_state());
 
-    forest.update_account(block_num, &full_patch);
+    forest.create_account(block_num, &full_patch);
 
     let recorded_root = forest.get_vault_root(account_id, block_num);
     assert_eq!(recorded_root, Some(AccountStateForest::empty_smt_root()));
@@ -892,9 +912,8 @@ fn storage_map_empty_entries_query() {
 
     let account_id = account.id();
     let full_patch = AccountPatch::try_from(account).unwrap();
-    assert!(full_patch.is_full_state());
 
-    forest.update_account(block_num, &full_patch);
+    forest.create_account(block_num, &full_patch);
 
     let root = forest.get_storage_map_root(account_id, &slot_name, block_num);
     assert_eq!(root, Some(AccountStateForest::empty_smt_root()));
@@ -1079,7 +1098,8 @@ fn check_account_state_history_retention(mut forest: AccountStateForest, skip_se
         };
 
         // Apply canonical blocks so that each update also runs block-based pruning.
-        let update = forest.compute_block_update_mutations(block, patches).unwrap();
+        let update =
+            forest.compute_block_update_mutations(block, patches, &BTreeSet::new()).unwrap();
         forest.apply_precomputed_block_update(block, update).unwrap();
         // Save each root while its state is current. Later queries must reconstruct the same root.
         expected.push((

@@ -1,7 +1,7 @@
 //!
 //! Tests for delta update functionality.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use assert_matches::assert_matches;
 use diesel::{ExpressionMethods, QueryDsl, RunQueryDsl, SqliteConnection};
@@ -11,6 +11,7 @@ use miden_protocol::account::component::AccountComponentMetadata;
 use miden_protocol::account::{
     Account,
     AccountBuilder,
+    AccountCodePatch,
     AccountComponent,
     AccountId,
     AccountIdVersion,
@@ -166,6 +167,7 @@ fn insert_public_account(conn: &mut SqliteConnection, block_num: BlockNumber, ac
         )],
         block_num,
         &precomputed_states_from_account(account),
+        &BTreeSet::from([account.id()]),
     )
     .expect("initial upsert failed");
 }
@@ -194,7 +196,7 @@ fn apply_callback_delta(
         account_id,
         AccountStoragePatch::new(),
         vault_patch,
-        None,
+        AccountCodePatch::default(),
         Some(final_nonce),
     )
     .unwrap();
@@ -212,6 +214,7 @@ fn apply_callback_delta(
         )],
         block,
         &precomputed_public_states,
+        &BTreeSet::new(),
     )
     .expect("partial delta upsert failed");
 
@@ -305,6 +308,7 @@ fn optimized_delta_matches_full_account_method() {
         &[account_update_initial],
         block_1,
         &precomputed_states_from_account(&account),
+        &BTreeSet::from([account.id()]),
     )
     .expect("Initial upsert failed");
 
@@ -360,11 +364,10 @@ fn optimized_delta_matches_full_account_method() {
         full_account_before.id(),
         storage_patch,
         vault_patch,
-        None,
+        AccountCodePatch::default(),
         Some(expected_nonce),
     )
     .unwrap();
-    assert!(!partial_patch.is_full_state(), "Patch should be partial, not full state");
 
     // Construct the expected final account by applying the patch
     let expected_code_commitment = full_account_before.code().commitment();
@@ -384,8 +387,14 @@ fn optimized_delta_matches_full_account_method() {
         final_commitment,
         AccountUpdateDetails::Public(partial_patch),
     );
-    upsert_accounts(&mut conn, &[account_update], block_2, &precomputed_public_states)
-        .expect("Partial delta upsert failed");
+    upsert_accounts(
+        &mut conn,
+        &[account_update],
+        block_2,
+        &precomputed_public_states,
+        &BTreeSet::new(),
+    )
+    .expect("Partial delta upsert failed");
 
     // ----- VERIFY: Query the DB and check that optimized path produced correct results -----
 
@@ -516,6 +525,7 @@ fn optimized_delta_updates_non_empty_vault() {
         &[account_update_initial],
         block_1,
         &precomputed_states_from_account(&account),
+        &BTreeSet::from([account.id()]),
     )
     .expect("Initial upsert failed");
 
@@ -535,7 +545,7 @@ fn optimized_delta_updates_non_empty_vault() {
         account.id(),
         AccountStoragePatch::new(),
         vault_patch,
-        None,
+        AccountCodePatch::default(),
         Some(final_nonce),
     )
     .unwrap();
@@ -551,8 +561,14 @@ fn optimized_delta_updates_non_empty_vault() {
         expected_commitment,
         AccountUpdateDetails::Public(partial_patch),
     );
-    upsert_accounts(&mut conn, &[account_update], block_2, &precomputed_public_states)
-        .expect("Partial delta upsert failed");
+    upsert_accounts(
+        &mut conn,
+        &[account_update],
+        block_2,
+        &precomputed_public_states,
+        &BTreeSet::new(),
+    )
+    .expect("Partial delta upsert failed");
 
     let vault_assets_after = select_account_vault_at_block(&mut conn, account.id(), block_2)
         .expect("Query vault should succeed");
@@ -580,7 +596,7 @@ fn optimized_delta_updates_non_empty_vault() {
         account.id(),
         AccountStoragePatch::new(),
         vault_patch_3,
-        None,
+        AccountCodePatch::default(),
         Some(final_nonce_3),
     )
     .unwrap();
@@ -596,8 +612,14 @@ fn optimized_delta_updates_non_empty_vault() {
         commitment_3,
         AccountUpdateDetails::Public(partial_patch_3),
     );
-    upsert_accounts(&mut conn, &[account_update_3], block_3, &precomputed_public_states_3)
-        .expect("Block 3 upsert failed");
+    upsert_accounts(
+        &mut conn,
+        &[account_update_3],
+        block_3,
+        &precomputed_public_states_3,
+        &BTreeSet::new(),
+    )
+    .expect("Block 3 upsert failed");
 
     let full_account_final =
         select_full_account(&mut conn, account.id()).expect("Failed to load after block 3");
@@ -748,6 +770,7 @@ fn optimized_delta_updates_storage_map_header() {
         &[account_update_initial],
         block_1,
         &precomputed_states_from_account(&account),
+        &BTreeSet::from([account.id()]),
     )
     .expect("Initial upsert failed");
 
@@ -768,7 +791,7 @@ fn optimized_delta_updates_storage_map_header() {
         account.id(),
         storage_patch,
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(final_nonce),
     )
     .unwrap();
@@ -784,8 +807,14 @@ fn optimized_delta_updates_storage_map_header() {
         expected_commitment,
         AccountUpdateDetails::Public(partial_patch),
     );
-    upsert_accounts(&mut conn, &[account_update], block_2, &precomputed_public_states)
-        .expect("Partial delta upsert failed");
+    upsert_accounts(
+        &mut conn,
+        &[account_update],
+        block_2,
+        &precomputed_public_states,
+        &BTreeSet::new(),
+    )
+    .expect("Partial delta upsert failed");
 
     let (header_after, storage_header_after) =
         select_account_header_with_storage_header_at_block(&mut conn, account.id(), block_2)
@@ -885,6 +914,7 @@ fn partial_public_upsert_requires_precomputed_state() {
         )],
         block_1,
         &precomputed_states_from_account(&account),
+        &BTreeSet::from([account.id()]),
     )
     .expect("initial full-state upsert failed");
 
@@ -893,7 +923,7 @@ fn partial_public_upsert_requires_precomputed_state() {
         account.id(),
         AccountStoragePatch::new(),
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(current_account.nonce().as_canonical_u64() + 1)),
     )
     .unwrap();
@@ -908,6 +938,7 @@ fn partial_public_upsert_requires_precomputed_state() {
         )],
         block_2,
         &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::new(),
     )
     .expect_err("partial public upsert should require precomputed roots");
 
@@ -956,6 +987,7 @@ fn partial_public_upsert_rejects_bad_precomputed_root() {
         )],
         block_1,
         &precomputed_states_from_account(&account),
+        &BTreeSet::from([account.id()]),
     )
     .expect("initial full-state upsert failed");
 
@@ -964,7 +996,7 @@ fn partial_public_upsert_rejects_bad_precomputed_root() {
         account.id(),
         AccountStoragePatch::new(),
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(expected_account.nonce().as_canonical_u64() + 1)),
     )
     .unwrap();
@@ -983,6 +1015,7 @@ fn partial_public_upsert_rejects_bad_precomputed_root() {
         )],
         block_2,
         &precomputed,
+        &BTreeSet::new(),
     )
     .expect_err("bad precomputed roots should be validated against the final commitment");
 
@@ -1032,6 +1065,7 @@ fn upsert_private_account() {
         &[account_update],
         block_num,
         &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([account_id]),
     )
     .expect("Private account upsert failed");
 
@@ -1108,7 +1142,6 @@ fn upsert_full_state_delta() {
 
     // Create a full-state patch from the account
     let patch = AccountPatch::try_from(account.clone()).unwrap();
-    assert!(patch.is_full_state(), "Patch should be full state");
 
     let account_update = block_account_update(
         account.id(),
@@ -1121,6 +1154,7 @@ fn upsert_full_state_delta() {
         &[account_update],
         block_num,
         &precomputed_states_from_account(&account),
+        &BTreeSet::from([account.id()]),
     )
     .expect("Full-state delta upsert failed");
 

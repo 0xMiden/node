@@ -100,8 +100,8 @@ mod tests;
 
 /// Applies a committed block's effects to the database in a single transaction:
 ///
-/// - Upserts each touched network account: new full-state path insert, partial patches apply to
-///   the existing committed row.
+/// - Upserts each touched network account: creations insert the new account, updates apply to the
+///   existing committed row.
 /// - Inserts each network note and `FEE_SPONSORSHIP` note (`INSERT OR IGNORE` to tolerate
 ///   redeliveries).
 /// - Marks any of our pending notes (feature and sponsorship alike) whose nullifiers appear in
@@ -133,10 +133,7 @@ pub fn apply_committed_block(
     let last_tx = effects.latest_tx_per_account();
     let is_genesis = effects.header.block_num() == BlockNumber::GENESIS;
 
-    for (account_id, details) in &effects.network_account_updates {
-        let Some(effect) = NetworkAccountEffect::from_protocol(details) else {
-            continue;
-        };
+    for (account_id, effect) in &effects.network_account_updates {
         // Genesis seeds account state with no originating transaction, so it stores a zero
         // `TransactionId` sentinel.
         let last_tx_id = last_tx.get(account_id).copied().unwrap_or_else(|| {
@@ -148,7 +145,7 @@ pub fn apply_committed_block(
         });
         match effect {
             NetworkAccountEffect::Created(account) => {
-                upsert_account(tx, *account_id, &account, last_tx_id)?;
+                upsert_account(tx, *account_id, account, last_tx_id)?;
             },
             NetworkAccountEffect::Updated(patch) => {
                 // If the account is not already tracked locally, skip it.
@@ -156,7 +153,7 @@ pub fn apply_committed_block(
                     continue;
                 };
                 current
-                    .apply_patch(&patch)
+                    .apply_patch(patch)
                     .expect("network account patch should apply since the block was committed");
                 upsert_account(tx, *account_id, &current, last_tx_id)?;
             },

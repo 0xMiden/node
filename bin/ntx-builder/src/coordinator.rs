@@ -373,7 +373,10 @@ impl Coordinator {
 
 #[cfg(test)]
 mod tests {
+    use miden_protocol::account::AccountPatch;
+
     use super::*;
+    use crate::db::queries::account_effect::NetworkAccountEffect;
     use crate::test_utils::*;
 
     /// Registers a dummy actor handle (no real actor task) in the coordinator's registry and
@@ -461,7 +464,11 @@ mod tests {
             network_notes: vec![],
             sponsorship_notes: vec![],
             nullifiers: vec![],
-            network_account_updates: vec![(account_id, details)],
+            network_account_updates: vec![(
+                account_id,
+                NetworkAccountEffect::from_account_creation(&details)
+                    .expect("the mock account should be a network account"),
+            )],
             account_transactions: vec![],
         };
         coordinator.handle_committed_block(&effects, &[]).await.unwrap();
@@ -488,7 +495,7 @@ mod tests {
             nullifiers: vec![],
             network_account_updates: vec![(
                 updated_id,
-                miden_protocol::account::AccountUpdateDetails::Private,
+                NetworkAccountEffect::Updated(AccountPatch::empty(updated_id)),
             )],
             account_transactions: vec![],
         };

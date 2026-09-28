@@ -3,7 +3,7 @@ use std::sync::Arc;
 use miden_node_store::DatabaseError;
 use miden_node_store::allowlist::AccountAllowlist;
 use miden_node_tracing::{error, miden_instrument};
-use miden_protocol::account::{Account, AccountId, AccountUpdateDetails};
+use miden_protocol::account::{AccountId, AccountUpdateDetails};
 use miden_protocol::transaction::TxAccountUpdate;
 use miden_standards::account::auth::NetworkAccount;
 use tonic::Status;
@@ -67,7 +67,8 @@ impl AccountAdmission {
         // New public accounts include their full state. Use the store's network-account
         // classification rule before the account exists on chain.
         if let AccountUpdateDetails::Public(patch) = update.details() {
-            let account = Account::try_from(patch)
+            let account = patch
+                .try_to_new_account()
                 .map_err(|error| Status::invalid_argument(error.to_string()))?;
             if NetworkAccount::new(account).is_ok() {
                 return Ok(());

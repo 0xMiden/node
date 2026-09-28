@@ -962,7 +962,13 @@ fn attribute_failed_notes(
 mod tests {
     use std::num::NonZeroU16;
 
-    use miden_protocol::account::{Account, AccountPatch, AccountStoragePatch, AccountVaultPatch};
+    use miden_protocol::account::{
+        Account,
+        AccountCodePatch,
+        AccountPatch,
+        AccountStoragePatch,
+        AccountVaultPatch,
+    };
     use miden_protocol::{Felt, ONE};
     use tokio::sync::watch;
 
@@ -1047,7 +1053,7 @@ mod tests {
             account.id(),
             AccountStoragePatch::default(),
             AccountVaultPatch::default(),
-            None,
+            AccountCodePatch::default(),
             Some(account.nonce() + ONE),
         )
         .expect("a nonce-only patch is valid")

@@ -18,6 +18,7 @@ use miden_protocol::Word;
 use miden_protocol::account::{AccountHeader, AccountId, AccountStorageHeader, StorageMapKey};
 use miden_protocol::asset::{Asset, AssetId};
 use miden_protocol::block::{
+    BlockAccountUpdate,
     BlockHeader,
     BlockNoteIndex,
     BlockNumber,
@@ -105,6 +106,13 @@ pub struct Db {
 
 fn insert_genesis(conn: &mut SqliteConnection, genesis: GenesisBlock) -> Result<()> {
     let (genesis_block, protocol_config) = genesis.into_parts();
+    // The genesis block has no transactions, but it creates every account it contains.
+    let new_account_ids = genesis_block
+        .body()
+        .updated_accounts()
+        .iter()
+        .map(BlockAccountUpdate::account_id)
+        .collect();
     conn.transaction(move |conn| {
         models::queries::insert_protocol_config(conn, &protocol_config, BlockNumber::GENESIS)?;
         models::queries::apply_block(
@@ -112,6 +120,7 @@ fn insert_genesis(conn: &mut SqliteConnection, genesis: GenesisBlock) -> Result<
             &genesis_block,
             &[],
             &PrecomputedPublicAccountStates::new(),
+            &new_account_ids,
         )
     })?;
     Ok(())
@@ -638,6 +647,10 @@ impl Db {
     /// lifecycle events and never affects block application. `unresolved_note_nullifiers` is empty
     /// when neither INFO nor DEBUG lifecycle events are enabled.
     // TODO: This span is logged in a root span, we should connect it to the parent one.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the arguments are the block and the state that the writer precomputed for it"
+    )]
     #[miden_instrument(
         target = COMPONENT,
         err,
@@ -648,6 +661,7 @@ impl Db {
         activated_protocol_config: Option<ProtocolConfig>,
         notes: Vec<(NoteRecord, Option<Nullifier>)>,
         precomputed_public_states: PrecomputedPublicAccountStates,
+        new_account_ids: BTreeSet<AccountId>,
         unresolved_note_nullifiers: Vec<Nullifier>,
         prune_tip: BlockNumber,
     ) -> Result<BTreeMap<Nullifier, NoteId>> {
@@ -659,7 +673,13 @@ impl Db {
                     signed_block.header().block_num(),
                 )?;
             }
-            models::queries::apply_block(conn, &signed_block, &notes, &precomputed_public_states)?;
+            models::queries::apply_block(
+                conn,
+                &signed_block,
+                &notes,
+                &precomputed_public_states,
+                &new_account_ids,
+            )?;
             models::queries::prune_history(conn, prune_tip)?;
 
             let mut resolved_note_ids = BTreeMap::new();

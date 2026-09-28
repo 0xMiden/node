@@ -1,5 +1,6 @@
 //! The write worker: single-task owner of the store's mutable trees.
 
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Once};
 
@@ -14,7 +15,7 @@ use miden_node_tracing::{
 };
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::Word;
-use miden_protocol::account::AccountUpdateDetails;
+use miden_protocol::account::{AccountId, AccountUpdateDetails};
 use miden_protocol::block::account_tree::AccountMutationSet;
 use miden_protocol::block::nullifier_tree::{NullifierMutationSet, NullifierTree};
 use miden_protocol::block::{BlockBody, BlockHeader, BlockNumber, Blockchain, SignedBlock};
@@ -91,6 +92,9 @@ struct PreparedBlockUpdate {
     nullifier_tree_update: NullifierMutationSet,
     account_tree_update: AccountMutationSet,
     account_forest_update: PreparedAccountStateForestBlockUpdate<AccountStateForestBackend>,
+    /// The accounts that the block creates. The forest and the database both use this set, so they
+    /// cannot make different decisions for the same account.
+    new_account_ids: BTreeSet<AccountId>,
 }
 
 impl WriteWorker {
@@ -246,6 +250,7 @@ impl WriteWorker {
             nullifier_tree_update,
             account_tree_update,
             account_forest_update,
+            new_account_ids,
         } = prepared;
         let precomputed_public_states = account_forest_update.account_states.clone();
 
@@ -269,6 +274,7 @@ impl WriteWorker {
                 activated_protocol_config,
                 notes,
                 precomputed_public_states,
+                new_account_ids,
                 unresolved_note_nullifiers,
                 prune_tip,
             )
@@ -367,9 +373,14 @@ impl WriteWorker {
                     AccountUpdateDetails::Public(patch) => Some(patch.clone()),
                     AccountUpdateDetails::Private => None,
                 });
+            let new_account_ids = body.transactions().created_account_ids().collect();
             let account_forest_update = self
                 .forest
-                .compute_block_update_mutations(header.block_num(), account_patches)
+                .compute_block_update_mutations(
+                    header.block_num(),
+                    account_patches,
+                    &new_account_ids,
+                )
                 .map_err(ApplyBlockError::AccountStateForestPreparation)?;
 
             let prepared = PreparedBlockUpdate {
@@ -377,6 +388,7 @@ impl WriteWorker {
                 nullifier_tree_update,
                 account_tree_update,
                 account_forest_update,
+                new_account_ids,
             };
             Ok((prepared, miden_node_persistence::encode(signed_block)))
         })

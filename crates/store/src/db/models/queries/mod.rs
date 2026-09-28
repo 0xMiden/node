@@ -25,7 +25,10 @@
 //! transaction, any nesting of further `transaction(conn, || {})` has no effect and should be
 //! considered unnecessary boilerplate by default.
 
+use std::collections::BTreeSet;
+
 use diesel::SqliteConnection;
+use miden_protocol::account::AccountId;
 use miden_protocol::block::SignedBlock;
 use miden_protocol::note::Nullifier;
 
@@ -56,6 +59,7 @@ pub(crate) fn apply_block(
     block: &SignedBlock,
     notes: &[(NoteRecord, Option<Nullifier>)],
     precomputed_public_states: &PrecomputedPublicAccountStates,
+    new_account_ids: &BTreeSet<AccountId>,
 ) -> Result<usize, DatabaseError> {
     let mut count = 0;
     // Note: ordering here is important as the relevant tables have FK dependencies.
@@ -65,6 +69,7 @@ pub(crate) fn apply_block(
         block.body().updated_accounts(),
         block.header().block_num(),
         precomputed_public_states,
+        new_account_ids,
     )?;
     count += insert_scripts(conn, notes.iter().map(|(note, _)| note))?;
     count += insert_notes(conn, notes)?;

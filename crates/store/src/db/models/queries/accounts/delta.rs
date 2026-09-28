@@ -108,7 +108,7 @@ pub(super) struct PartialAccountState {
     pub vault_root: Word,
 }
 
-/// Full account state assembled from a full-state patch and precomputed Merkle roots.
+/// Full account state assembled from an account-creating patch and precomputed Merkle roots.
 #[derive(Debug, Clone)]
 pub(super) struct PrecomputedFullAccountState {
     pub nonce: Felt,
@@ -123,7 +123,7 @@ pub(super) struct PrecomputedFullAccountState {
 pub(super) enum AccountStateForInsert {
     /// Private account - no public state stored
     Private,
-    /// Full account state (from full-state delta, i.e., new account)
+    /// Full account state of a new account
     FullAccount(Account),
     /// Full account state assembled without reconstructing its vault and storage maps.
     PrecomputedFullState(PrecomputedFullAccountState),

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
 
@@ -1109,7 +1109,7 @@ fn prepare_full_account_update(
 ///
 /// # Errors
 ///
-/// Returns an error if the full-state patch is missing its code or nonce, a required precomputed
+/// Returns an error if the account-creating patch is missing its code or nonce, a required precomputed
 /// storage root is absent, an asset is invalid, or the reconstructed account header does not match
 /// the update's final state commitment.
 fn prepare_precomputed_full_account_update(
@@ -1118,14 +1118,14 @@ fn prepare_precomputed_full_account_update(
     precomputed: &PrecomputedPublicAccountState,
 ) -> Result<(AccountStateForInsert, PendingStorageInserts, PendingAssetInserts), DatabaseError> {
     let account_id = patch.id();
-    let code = patch.code().cloned().ok_or_else(|| {
+    let code = patch.code().as_code().cloned().ok_or_else(|| {
         DatabaseError::DataCorrupted(format!(
-            "full-state patch for account {account_id} is missing account code"
+            "account-creating patch for account {account_id} is missing account code"
         ))
     })?;
     let nonce = patch.final_nonce().ok_or_else(|| {
         DatabaseError::DataCorrupted(format!(
-            "full-state patch for account {account_id} is missing final nonce"
+            "account-creating patch for account {account_id} is missing final nonce"
         ))
     })?;
 
@@ -1170,9 +1170,9 @@ fn prepare_precomputed_full_account_update(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    // The patch carries full state, so it can be turned back into an account and classified with
-    // the canonical check.
-    let is_network_account = NetworkAccount::new(Account::try_from(patch)?).is_ok();
+    // The patch creates the account, so it can be turned into an account and classified with the
+    // canonical check.
+    let is_network_account = NetworkAccount::new(patch.try_to_new_account()?).is_ok();
     let state = PrecomputedFullAccountState {
         nonce,
         code,
@@ -1240,10 +1240,16 @@ fn prepare_partial_account_update(
     // --- Compute updated account state for the accounts row. --- Use the absolute final nonce.
     let new_nonce = patch.final_nonce().unwrap_or(state_headers.nonce);
 
+    // A code upgrade replaces the code. The caller inserts the new code into `account_codes`.
+    let new_code_commitment = patch
+        .code()
+        .as_code()
+        .map_or(state_headers.code_commitment, AccountCode::commitment);
+
     // Create minimal account state data for the row insert.
     let account_state = PartialAccountState {
         nonce: new_nonce,
-        code_commitment: state_headers.code_commitment,
+        code_commitment: new_code_commitment,
         storage_header: new_storage_header,
         vault_root: new_vault_root,
     };
@@ -1298,7 +1304,15 @@ pub(crate) fn select_network_accounts_subset(
         .collect()
 }
 
+/// `new_account_ids` identifies the updates that create an account. A patch alone cannot tell a
+/// creation from a code upgrade, because both carry code.
+///
 /// Attention: Assumes the account details are NOT null! The schema explicitly allows this though!
+///
+/// # Errors
+///
+/// Returns an error if an account in `new_account_ids` already exists or another account does not
+/// exist yet.
 #[miden_instrument(
     target = COMPONENT,
     err,
@@ -1308,6 +1322,7 @@ pub(crate) fn upsert_accounts(
     accounts: &[BlockAccountUpdate],
     block_num: BlockNumber,
     precomputed_public_states: &PrecomputedPublicAccountStates,
+    new_account_ids: &BTreeSet<AccountId>,
 ) -> Result<usize, DatabaseError> {
     let mut count = 0;
     for update in accounts {
@@ -1317,7 +1332,12 @@ pub(crate) fn upsert_accounts(
         // Pull the latest row once. Partial updates consume the state headers below, while every
         // update carries forward creation metadata.
         let existing = select_latest_account_state(conn, account_id)?;
-        let account_is_new = existing.is_none();
+        let account_is_new = new_account_ids.contains(&account_id);
+        match (account_is_new, existing.is_some()) {
+            (true, true) => return Err(DatabaseError::AccountAlreadyExistsInDb(account_id)),
+            (false, false) => return Err(DatabaseError::AccountNotFoundInDb(account_id)),
+            _ => {},
+        }
 
         let created_at_block = match &existing {
             Some(row) => row.created_at_block()?,
@@ -1332,12 +1352,9 @@ pub(crate) fn upsert_accounts(
         {
             AccountUpdateDetails::Private => (AccountStateForInsert::Private, vec![], vec![]),
 
-            // New account is always a full account, but also comes as an update
-            AccountUpdateDetails::Public(patch) if patch.is_full_state() => {
+            AccountUpdateDetails::Public(patch) if account_is_new => {
                 if block_num == BlockNumber::GENESIS {
-                    let account = Account::try_from(patch)
-                        .expect("Patch to full account always works for full state patches");
-                    debug_assert_eq!(account_id, account.id());
+                    let account = patch.try_to_new_account()?;
                     prepare_full_account_update(update, account)?
                 } else {
                     let precomputed =
@@ -1350,7 +1367,6 @@ pub(crate) fn upsert_accounts(
                 }
             },
 
-            // Update of an existing account
             AccountUpdateDetails::Public(patch) => {
                 let precomputed = precomputed_public_states.get(&account_id).ok_or_else(|| {
                     DatabaseError::DataCorrupted(format!(
@@ -1380,23 +1396,13 @@ pub(crate) fn upsert_accounts(
             },
         };
 
-        // Insert account _code_ for full accounts (new account creation)
-        if let AccountStateForInsert::FullAccount(ref account) = account_state {
-            let code = account.code();
+        // The patch carries the code of a new or upgraded account.
+        if let AccountUpdateDetails::Public(patch) = update.details()
+            && let Some(code) = patch.code().as_code()
+        {
             let code_value = AccountCodeRowInsert {
                 code_commitment: code.commitment().to_bytes(),
                 code: miden_node_persistence::encode(code),
-            };
-            diesel::insert_into(schema::account_codes::table)
-                .values(&code_value)
-                .on_conflict(schema::account_codes::code_commitment)
-                .do_nothing()
-                .execute(conn)?;
-        }
-        if let AccountStateForInsert::PrecomputedFullState(ref state) = account_state {
-            let code_value = AccountCodeRowInsert {
-                code_commitment: state.code.commitment().to_bytes(),
-                code: miden_node_persistence::encode(&state.code),
             };
             diesel::insert_into(schema::account_codes::table)
                 .values(&code_value)

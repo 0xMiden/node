@@ -12,6 +12,7 @@ use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::account::{
     Account,
     AccountBuilder,
+    AccountCodePatch,
     AccountComponent,
     AccountComponentMetadata,
     AccountId,
@@ -204,9 +205,7 @@ pub async fn seed_store_with_readers(
     let seed_public_accounts_at_genesis =
         account_update_may_exceed_protocol_limit(storage_map_entries, vault_entries);
     let genesis_account_key_pair = if seed_public_accounts_at_genesis {
-        let coin_seed: [u64; 4] = rand::rng().random();
-        let mut rng = RandomCoin::new(coin_seed.map(Felt::new_unchecked).into());
-        Some(SecretKey::with_rng(&mut rng))
+        Some(SecretKey::with_rng(&mut rand::rng()))
     } else {
         None
     };
@@ -390,10 +389,7 @@ async fn generate_blocks(
     // share random coin seed and key pair for all accounts to avoid key generation overhead
     let coin_seed: [u64; 4] = rand::rng().random();
     let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.map(Felt::new_unchecked).into())));
-    let key_pair = {
-        let mut rng = rng.lock().unwrap();
-        SecretKey::with_rng(&mut *rng)
-    };
+    let key_pair = SecretKey::with_rng(&mut rand::rng());
 
     let mut prev_block_header = genesis_header;
     let mut next_account_index = first_account_index;
@@ -848,9 +844,7 @@ fn create_benchmark_faucets(vault_entries: usize) -> Vec<Account> {
 }
 
 fn create_faucet_with_seed(index: u64) -> Account {
-    let coin_seed: [u64; 4] = rand::rng().random();
-    let mut rng = RandomCoin::new(coin_seed.map(Felt::new_unchecked).into());
-    let key_pair = SecretKey::with_rng(&mut rng);
+    let key_pair = SecretKey::with_rng(&mut rand::rng());
     let init_seed: Vec<_> = index.to_be_bytes().into_iter().chain([0u8; 24]).collect();
 
     let token_symbol = TokenSymbol::new("TEST").unwrap();
@@ -1023,8 +1017,14 @@ fn create_existing_account_patch(
         _ => AccountStoragePatch::new(),
     };
 
-    AccountPatch::new(account.id(), storage_patch, vault_patch, None, Some(account.nonce()))
-        .unwrap()
+    AccountPatch::new(
+        account.id(),
+        storage_patch,
+        vault_patch,
+        AccountCodePatch::default(),
+        Some(account.nonce()),
+    )
+    .unwrap()
 }
 
 /// Creates a transaction from the faucet that creates the given output notes. Updates the faucet
