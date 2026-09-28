@@ -5,6 +5,10 @@ pub enum PersistenceError {
     Wire(#[from] prost::DecodeError),
     #[error("invalid persisted domain value")]
     Conversion(#[from] miden_protobuf::ConversionError),
+    #[error("invalid persisted MAST forest")]
+    MastForest(#[from] miden_protocol::utils::serde::DeserializationError),
+    #[error("invalid persisted account code")]
+    AccountCode(#[from] miden_protocol::errors::AccountError),
     #[error("unsupported {format} version {version}; recreate this data with the current node")]
     UnsupportedVersion { format: &'static str, version: u32 },
 }
