@@ -1,13 +1,10 @@
-#![expect(
-    clippy::cast_possible_wrap,
-    reason = "We will not approach the item count where i64 and usize cause issues"
-)]
-
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ops::RangeInclusive;
 
+use diesel::dsl::sql;
 use diesel::prelude::{ExpressionMethods, QueryDsl, Queryable, QueryableByName, Selectable};
 use diesel::query_dsl::methods::SelectDsl;
+use diesel::sql_types::BigInt;
 use diesel::sqlite::Sqlite;
 use diesel::{
     JoinOnDsl,
@@ -112,13 +109,16 @@ pub(crate) fn select_notes_since_block_by_tag(
     block_range: RangeInclusive<BlockNumber>,
 ) -> Result<Vec<NoteSyncRecord>, DatabaseError> {
     QueryParamNoteTagLimit::check(note_tags.len())?;
-    let desired_note_tags: Vec<i32> = note_tags.iter().map(|tag| *tag as i32).collect();
+    let desired_note_tags: Vec<i64> = note_tags.iter().copied().map(i64::from).collect();
+    // The column stores tags as unsigned 32-bit values. The Diesel schema declares the column as a
+    // 32-bit `Integer`, which cannot bind tags at or above 2^31.
+    let tag_column = sql::<BigInt>("notes.tag");
     let start_block_num = block_range.start().to_raw_sql();
     let end_block_num = block_range.end().to_raw_sql();
 
     let Some(desired_block_num): Option<i64> =
         SelectDsl::select(schema::notes::table, schema::notes::committed_at)
-            .filter(schema::notes::tag.eq_any(&desired_note_tags))
+            .filter(tag_column.clone().eq_any(&desired_note_tags))
             .filter(schema::notes::committed_at.ge(start_block_num))
             .filter(schema::notes::committed_at.le(end_block_num))
             .order_by(schema::notes::committed_at.asc())
@@ -131,7 +131,7 @@ pub(crate) fn select_notes_since_block_by_tag(
 
     let notes = SelectDsl::select(schema::notes::table, NoteSyncRecordRawRow::as_select())
         .filter(schema::notes::committed_at.eq(desired_block_num))
-        .filter(schema::notes::tag.eq_any(&desired_note_tags))
+        .filter(tag_column.eq_any(&desired_note_tags))
         .order_by((
             schema::notes::committed_at.asc(),
             schema::notes::batch_index.asc(),
