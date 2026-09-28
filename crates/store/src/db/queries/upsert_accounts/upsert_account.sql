@@ -1,8 +1,7 @@
 -- Writes an account's state at `block_num` as its current, open-ended version.
 --
--- Re-applying the same block overwrites that block's row rather than failing, so an interrupted
--- block application can be replayed. The key columns are excluded from the update: they are what
--- the conflict matched on.
+-- If a row for the same account and block exists, the statement replaces its non-key columns with
+-- the new values.
 INSERT INTO accounts (
     account_id,
     network_account_type,
