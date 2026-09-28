@@ -15,7 +15,7 @@ configuration.
 
 `miden-network-monitor` is an observer and test client. It is not required for block production. Depending on
 configuration, it can check RPC freshness, validator health, remote prover status, faucet availability, explorer
-availability, note transport, and end-to-end network transaction flows.
+availability, note transport, Agglayer bridge status, and end-to-end network transaction flows.
 
 End-to-end transaction checks require the validator's signing public key. Set
 `MIDEN_MONITOR_VALIDATOR_SIGNING_PUBLIC_KEY` to the validator key's hex encoding. The monitor uses this key to verify

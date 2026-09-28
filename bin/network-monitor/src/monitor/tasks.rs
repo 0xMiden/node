@@ -13,6 +13,7 @@ use tokio::sync::watch::Receiver;
 use tokio::sync::{Mutex, watch};
 
 use crate::LOG_TARGET;
+use crate::agglayer::AgglayerService;
 use crate::config::MonitorConfig;
 use crate::counter::{CounterTrackingService, IncrementService, LatencyState, TrackedAccounts};
 use crate::deploy::{
@@ -90,6 +91,18 @@ impl Tasks {
         let validator_url = config.validator_url.clone().expect("Validator URL exists");
         let svc = ValidatorService::new(
             validator_url,
+            config.status_check_interval,
+            config.request_timeout,
+        );
+        self.spawn_service(svc)
+    }
+
+    /// Spawn the Agglayer bridge status checker task.
+    pub fn spawn_agglayer_checker(&mut self, config: &MonitorConfig) -> Receiver<ServiceStatus> {
+        let agglayer_monitor_url =
+            config.agglayer_monitor_url.clone().expect("Agglayer monitor URL exists");
+        let svc = AgglayerService::new(
+            agglayer_monitor_url,
             config.status_check_interval,
             config.request_timeout,
         );
