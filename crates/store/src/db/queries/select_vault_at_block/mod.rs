@@ -22,10 +22,5 @@ pub(crate) fn select_vault_at_block(
     let limit =
         i64::try_from(AccountVaultDetails::MAX_RETURN_ENTRIES + 1).expect("should fit within i64");
 
-    // A NULL asset marks a removal, and is filtered out here.
-    Ok(tx
-        .query(SQL, &[&account_id, &block_num, &limit], |row| row.get::<Option<Asset>>(0))?
-        .into_iter()
-        .flatten()
-        .collect())
+    Ok(tx.query(SQL, &[&account_id, &block_num, &limit], |row| row.get::<Asset>(0))?)
 }

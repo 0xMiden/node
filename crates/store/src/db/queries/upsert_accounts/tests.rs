@@ -1247,6 +1247,58 @@ fn select_vault_at_block_with_deletion() {
     assert_eq!(assets_at_block_3[0].unwrap_fungible().amount().as_u64(), 2000);
 }
 
+/// Tests that removed assets do not count against the read limit, so they cannot hide live assets.
+#[test]
+fn select_vault_at_block_limit_ignores_removed_assets() {
+    let db = TestDb::new();
+    let (account, _) = create_test_account_with_storage();
+    let account_id = account.id();
+
+    let block_1 = BlockNumber::from_epoch(0);
+    let block_2 = BlockNumber::from_epoch(1);
+    insert_block_header(&db, block_1);
+    insert_block_header(&db, block_2);
+
+    let patch = AccountPatch::try_from(account.clone()).unwrap();
+    let account_update = block_account_update(
+        account_id,
+        account.to_commitment(),
+        AccountUpdateDetails::Public(patch),
+    );
+    for block in [block_1, block_2] {
+        upsert_accounts(
+            &db,
+            std::slice::from_ref(&account_update),
+            block,
+            &precomputed_states_from_account(&account),
+        )
+        .expect("upsert_accounts failed");
+    }
+
+    let faucet_id = AccountIdBuilder::new()
+        .account_type(AccountType::Public)
+        .build_with_seed([7; 32]);
+    let non_fungible_asset = |i: usize| {
+        let details = NonFungibleAssetDetails::new(faucet_id, vec![i as u8, (i >> 8) as u8]);
+        Asset::from(NonFungibleAsset::new(&details))
+    };
+
+    // Record more removals than the read limit at block 1.
+    let removed_count = AccountVaultDetails::MAX_RETURN_ENTRIES + 1;
+    for i in 0..removed_count {
+        insert_vault_asset(&db, account_id, block_1, non_fungible_asset(i).id(), None)
+            .expect("insert vault asset removal failed");
+    }
+
+    // Add one live asset at block 2.
+    let live_asset = non_fungible_asset(removed_count);
+    insert_vault_asset(&db, account_id, block_2, live_asset.id(), Some(live_asset))
+        .expect("insert vault asset failed");
+
+    let assets = select_vault_at_block(&db, account_id, block_2).expect("query should succeed");
+    assert_eq!(assets, vec![live_asset]);
+}
+
 // ACCOUNT CODE PRUNING TESTS
 // ================================================================================================
 
