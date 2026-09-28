@@ -18,6 +18,7 @@ use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 use tower::limit::GlobalConcurrencyLimitLayer;
 use tower_http::catch_panic::CatchPanicLayer;
+use tower_http::classify::{GrpcCode, GrpcErrorsAsFailures, SharedClassifier};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use url::Url;
@@ -118,7 +119,17 @@ impl Server {
         tonic::transport::Server::builder()
             .accept_http1(true)
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
-            .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
+            .layer(
+                TraceLayer::new(SharedClassifier::new(
+                    GrpcErrorsAsFailures::new()
+                        .with_success(GrpcCode::InvalidArgument)
+                        .with_success(GrpcCode::NotFound)
+                        .with_success(GrpcCode::ResourceExhausted)
+                        .with_success(GrpcCode::Unimplemented)
+                        .with_success(GrpcCode::Unknown),
+                ))
+                .make_span_with(grpc_trace_fn),
+            )
             .layer(
                 CorsLayer::new()
                     .allow_origin(Any)
