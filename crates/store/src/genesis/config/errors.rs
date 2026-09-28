@@ -22,10 +22,18 @@ pub enum GenesisConfigError {
     Toml(#[from] toml::de::Error),
     #[error("failed to read config file at {1}")]
     ConfigFileRead(#[source] std::io::Error, PathBuf),
+    #[error("imported account name must not be empty")]
+    EmptyImportedAccountName,
     #[error("failed to read account file at {1}")]
     AccountFileRead(#[source] AccountFileError, PathBuf),
-    #[error("native faucet from file {path} is not a fungible faucet")]
-    NativeFaucetNotFungible { path: PathBuf },
+    #[error("native faucet {account_id} is not a fungible faucet")]
+    NativeFaucetNotFungible { account_id: AccountId },
+    #[error("funding account {account_id} is not public")]
+    FundingAccountNotPublic { account_id: AccountId },
+    #[error("account {account_id} must have a nonzero nonce for genesis")]
+    UndeployedAccount { account_id: AccountId },
+    #[error("account {account_id} is included more than once in genesis")]
+    DuplicateAccount { account_id: AccountId },
     #[error("account translation from config to state failed")]
     Account(#[from] AccountError),
     #[error("asset translation from config to state failed")]

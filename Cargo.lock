@@ -531,7 +531,7 @@ dependencies = [
  "bytes",
  "fastrand",
  "hex",
- "http 1.5.0",
+ "http",
  "sha1",
  "time",
  "tokio",
@@ -577,9 +577,9 @@ dependencies = [
 
 [[package]]
 name = "aws-runtime"
-version = "1.9.4"
+version = "1.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25b43ad47adc2517efe3d706559d94b97e50e80e0321b3cadbc9f77cee88adcd"
+checksum = "2b8a9911551b4ea6ca13805ef52ed96f7d2bbb43cc3b4a14cb0776a71f33cfaa"
 dependencies = [
  "aws-credential-types",
  "aws-sigv4",
@@ -592,7 +592,7 @@ dependencies = [
  "bytes",
  "bytes-utils",
  "fastrand",
- "http 1.5.0",
+ "http",
  "http-body",
  "percent-encoding",
  "pin-project-lite",
@@ -602,9 +602,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-kms"
-version = "1.120.0"
+version = "1.121.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6b0fe38fee2ba5b6cd24d32d08365b314ae1adea123649e061a7eb6300b6f5b"
+checksum = "9febf0461c7441895de457dcff49dd7fa8f013793367f6b81d422c64e939e1cc"
 dependencies = [
  "arc-swap",
  "aws-credential-types",
@@ -620,17 +620,16 @@ dependencies = [
  "aws-types",
  "bytes",
  "fastrand",
- "http 0.2.12",
- "http 1.5.0",
+ "http",
  "regex-lite",
  "tracing",
 ]
 
 [[package]]
 name = "aws-sdk-sso"
-version = "1.111.0"
+version = "1.112.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65700d75f6da78c89a61a49f1539979400a4609d3329376b1dc2133d7a1b2b90"
+checksum = "d3d59c47556b283bb2d20fc0b416df7d9d9a3d6f5fa0e77867167a3f2efc23b9"
 dependencies = [
  "arc-swap",
  "aws-credential-types",
@@ -646,17 +645,16 @@ dependencies = [
  "aws-types",
  "bytes",
  "fastrand",
- "http 0.2.12",
- "http 1.5.0",
+ "http",
  "regex-lite",
  "tracing",
 ]
 
 [[package]]
 name = "aws-sdk-ssooidc"
-version = "1.113.0"
+version = "1.114.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb1147c254af7b6cee3ace90ae7da6f21366ce9a9b899035fa8a0fdf586eb75a"
+checksum = "eceb9f31b46ba6da21f666e456395624824a2a086caed940b13d78832fa3ee02"
 dependencies = [
  "arc-swap",
  "aws-credential-types",
@@ -672,17 +670,16 @@ dependencies = [
  "aws-types",
  "bytes",
  "fastrand",
- "http 0.2.12",
- "http 1.5.0",
+ "http",
  "regex-lite",
  "tracing",
 ]
 
 [[package]]
 name = "aws-sdk-sts"
-version = "1.116.0"
+version = "1.117.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "035c7392e751d20bf1060d625d023587eb14099646110a9cff7c697bfe4b253a"
+checksum = "9291df9ea767ab5e77d08a53f4f22daa917909a34ed7a22c1a4b82d193a423ad"
 dependencies = [
  "arc-swap",
  "aws-credential-types",
@@ -699,17 +696,16 @@ dependencies = [
  "aws-smithy-xml",
  "aws-types",
  "fastrand",
- "http 0.2.12",
- "http 1.5.0",
+ "http",
  "regex-lite",
  "tracing",
 ]
 
 [[package]]
 name = "aws-sigv4"
-version = "1.5.3"
+version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31d955e76ff96acd555bf06fa0fa6d5bf9335fa84ae7c64481b20ae61d231f70"
+checksum = "2312577f088c9fbf4206dfdb884cf1de9407b43e1a923cbed5237775116fc24b"
 dependencies = [
  "aws-credential-types",
  "aws-smithy-http",
@@ -719,8 +715,7 @@ dependencies = [
  "form_urlencoded",
  "hex",
  "hmac 0.13.0",
- "http 0.2.12",
- "http 1.5.0",
+ "http",
  "percent-encoding",
  "sha2 0.11.0",
  "time",
@@ -750,7 +745,7 @@ dependencies = [
  "bytes-utils",
  "futures-core",
  "futures-util",
- "http 1.5.0",
+ "http",
  "http-body",
  "http-body-util",
  "percent-encoding",
@@ -769,7 +764,7 @@ dependencies = [
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "h2",
- "http 1.5.0",
+ "http",
  "hyper",
  "hyper-rustls",
  "hyper-util",
@@ -831,7 +826,7 @@ dependencies = [
  "aws-smithy-types",
  "bytes",
  "fastrand",
- "http 1.5.0",
+ "http",
  "http-body",
  "http-body-util",
  "pin-project-lite",
@@ -850,7 +845,7 @@ dependencies = [
  "aws-smithy-runtime-api-macros",
  "aws-smithy-types",
  "bytes",
- "http 1.5.0",
+ "http",
  "pin-project-lite",
  "tokio",
  "tracing",
@@ -876,7 +871,7 @@ checksum = "e8f395d93304280b64b7632fea798d177e74897fe7f063416ce627cd6fa24829"
 dependencies = [
  "aws-smithy-runtime-api",
  "aws-smithy-types",
- "http 1.5.0",
+ "http",
 ]
 
 [[package]]
@@ -889,7 +884,7 @@ dependencies = [
  "bytes",
  "bytes-utils",
  "futures-core",
- "http 1.5.0",
+ "http",
  "http-body",
  "http-body-util",
  "itoa",
@@ -940,7 +935,7 @@ dependencies = [
  "bytes",
  "form_urlencoded",
  "futures-util",
- "http 1.5.0",
+ "http",
  "http-body",
  "http-body-util",
  "hyper",
@@ -971,7 +966,7 @@ checksum = "08c78f31d7b1291f7ee735c1c6780ccde7785daae9a9206026862dab7d8792d1"
 dependencies = [
  "bytes",
  "futures-core",
- "http 1.5.0",
+ "http",
  "http-body",
  "http-body-util",
  "mime",
@@ -1168,9 +1163,9 @@ dependencies = [
 
 [[package]]
 name = "bulletproofs-cycle"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "196fdc67113cd56eec82296e6df7c2b6fd9da0ae42e17ed6aa258d9aff362e40"
+checksum = "226252889b1f548d1ecb22e1f94f1d3b97122c88478af52c3056f389f2cb0b8d"
 dependencies = [
  "digest 0.10.7",
  "ff 0.13.1",
@@ -1179,8 +1174,9 @@ dependencies = [
  "p3-maybe-rayon 0.6.3",
  "rand_core 0.6.4",
  "sha3 0.10.9",
+ "smallvec",
  "subtle",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1861,7 +1857,7 @@ version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "10d60334b3b2e7c9d91ef8150abfb6fa4c1c39ebbcf4a81c2e346aad939fee3e"
 dependencies = [
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2124,13 +2120,12 @@ dependencies = [
 
 [[package]]
 name = "encoding_rs"
-version = "0.8.41"
+version = "0.8.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b5ef0006ac9ab233c38522f5ae99cae3625151de8f706cacee1cba4b8e2832a"
+checksum = "8e985e0451871ad22fb8d2b6b076e2028a502a0d3950998c2c5c0a4f9b5d9679"
 dependencies = [
  "cfg-if",
  "core_detect",
- "multiversion",
  "multiversion_no_op",
  "rustversion",
  "scopeguard",
@@ -2544,37 +2539,38 @@ dependencies = [
 
 [[package]]
 name = "golden-core"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03c4f49eba27846f56d307941d428dd6e8d1e811eac6f0458d927743fbd37406"
+checksum = "6f7dfb89634c6c93f15688d3fe9e4cd2df15e7b8c13988ebbaaadd4358e75107"
 dependencies = [
+ "p3-maybe-rayon 0.6.3",
  "rand_core 0.6.4",
  "sha2 0.10.9",
  "subtle",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "zeroize",
 ]
 
 [[package]]
 name = "golden-ehtdh1"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a41410f2058829a91e85cb98223cd5587f724cac1df456591a94e37cbbcc258"
+checksum = "32500dcc66b527cf3bd7d783d0d6d24d69a7ba268c891187ab16262f8ee3c0d8"
 dependencies = [
  "chacha20 0.9.1",
  "golden-core",
  "hkdf 0.12.4",
  "rand_core 0.6.4",
  "sha2 0.10.9",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "zeroize",
 ]
 
 [[package]]
 name = "golden-evrf"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "072bee9a9f759abf4818bd23b3d7acf649fa50909fee25edc1ff4156c52a6ea6"
+checksum = "7c12d7ebda07abb20ac05869614c53825cc3263358d663b68625966523be443d"
 dependencies = [
  "bulletproofs-cycle",
  "ff 0.13.1",
@@ -2583,6 +2579,7 @@ dependencies = [
  "group 0.13.0",
  "halo2curves",
  "merlin",
+ "p3-maybe-rayon 0.6.3",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
  "sha2 0.10.9",
@@ -2590,9 +2587,9 @@ dependencies = [
 
 [[package]]
 name = "golden-halo2curves"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fe0dca8e35bcae90197a6697d36ccc4992c805824b6fd09143321d2c7455cda"
+checksum = "7263227290778c09b7a31d7b3b5331fae141aed084062b9e5d265b1bec140250"
 dependencies = [
  "bulletproofs-cycle",
  "ff 0.13.1",
@@ -2659,7 +2656,7 @@ dependencies = [
  "fnv",
  "futures-core",
  "futures-sink",
- "http 1.5.0",
+ "http",
  "indexmap 2.14.2",
  "slab",
  "tokio",
@@ -2823,17 +2820,6 @@ dependencies = [
 
 [[package]]
 name = "http"
-version = "0.2.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "601cbb57e577e2f5ef5be8e7b83f0f63994f25aa94d673e54a92d5c516d101f1"
-dependencies = [
- "bytes",
- "fnv",
- "itoa",
-]
-
-[[package]]
-name = "http"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "918d3568bebf352712bc2ef3d46a8bcf1a75b373be6539de198e9105cbbf9ce0"
@@ -2849,7 +2835,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ca2a8f2913ee65f60facd6a5905613afaa448497a0230cc41ce022d93290bc2c"
 dependencies = [
  "bytes",
- "http 1.5.0",
+ "http",
 ]
 
 [[package]]
@@ -2860,7 +2846,7 @@ checksum = "23169fe34a5fbcdd3f3862e78fb9b6fccd5f02a6dc6f732547005d45631ce71c"
 dependencies = [
  "bytes",
  "futures-core",
- "http 1.5.0",
+ "http",
  "http-body",
  "pin-project-lite",
 ]
@@ -2905,7 +2891,7 @@ dependencies = [
  "futures-channel",
  "futures-core",
  "h2",
- "http 1.5.0",
+ "http",
  "http-body",
  "httparse",
  "httpdate",
@@ -2922,7 +2908,7 @@ version = "0.27.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfa8e654703247911e29c23fbeaa261834bd9bb74efba2f9acddc37bfb127f53"
 dependencies = [
- "http 1.5.0",
+ "http",
  "hyper",
  "hyper-util",
  "rustls",
@@ -2955,7 +2941,7 @@ dependencies = [
  "bytes",
  "futures-channel",
  "futures-util",
- "http 1.5.0",
+ "http",
  "http-body",
  "hyper",
  "ipnet",
@@ -3336,7 +3322,7 @@ dependencies = [
  "jni-sys",
  "log",
  "simd_cesu8",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "walkdir",
  "windows-link",
 ]
@@ -3618,9 +3604,9 @@ dependencies = [
 
 [[package]]
 name = "lru"
-version = "0.18.4"
+version = "0.18.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff9840bcc50b71349309900da0ce7279aa336ae71d73250b07998932c7d97c25"
+checksum = "ef9ac18847474e638e3702b76c65d4eb93428471a74778ef0f1be711717f89b5"
 
 [[package]]
 name = "lru-slab"
@@ -3671,7 +3657,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8156733e27020ea5c684db5beac5d1d611e1272ab17901a49466294b84fc217e"
 dependencies = [
  "axum-core",
- "http 1.5.0",
+ "http",
  "itoa",
  "maud_macros",
 ]
@@ -3722,14 +3708,14 @@ dependencies = [
  "miden-core",
  "miden-crypto",
  "miden-field",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "miden-agglayer"
-version = "0.17.0-rc.6"
+version = "0.17.0-rc.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ea327cadee7adcc06b38ce467733effe22d1ecbc73c489023e6ef51d6220788"
+checksum = "aa3f36911ff1716656089150e798a971c5274eac02bb774ecbac3f2832dc07e6"
 dependencies = [
  "alloy-sol-types",
  "fs-err",
@@ -3743,7 +3729,7 @@ dependencies = [
  "miden-protocol-build-utils",
  "miden-standards",
  "miden-utils-sync",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3759,7 +3745,7 @@ dependencies = [
  "p3-field",
  "p3-security",
  "proptest",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tracing",
 ]
 
@@ -3778,7 +3764,7 @@ dependencies = [
  "miden-project",
  "proptest",
  "smallvec",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3801,7 +3787,7 @@ dependencies = [
  "semver 1.0.28",
  "serde",
  "smallvec",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3817,7 +3803,7 @@ dependencies = [
 
 [[package]]
 name = "miden-benchmark"
-version = "0.17.0-rc.2"
+version = "0.17.0-rc.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -3837,14 +3823,14 @@ dependencies = [
 
 [[package]]
 name = "miden-block-prover"
-version = "0.17.0-rc.6"
+version = "0.17.0-rc.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b366a0bb6ad44c17edfef62f6f9daaf424bccede96a774be7eb35c35bf3cf872"
+checksum = "192afc7213a29ed76b22821b47b381b08b4861893810396f5e1e7a6513409810"
 dependencies = [
  "miden-processor",
  "miden-protocol",
  "miden-prover",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3873,7 +3859,7 @@ dependencies = [
  "miden-utils-indexing",
  "miden-utils-sync",
  "proptest",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3894,7 +3880,7 @@ dependencies = [
  "miden-precompiles",
  "miden-processor",
  "miden-utils-sync",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3947,7 +3933,7 @@ dependencies = [
  "sha2 0.11.0",
  "sha3 0.12.0",
  "subtle",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "x25519-dalek",
 ]
 
@@ -3977,7 +3963,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_spanned",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "zerocopy",
 ]
 
@@ -3997,7 +3983,7 @@ dependencies = [
  "rand 0.10.3",
  "serde",
  "subtle",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4011,7 +3997,7 @@ dependencies = [
 
 [[package]]
 name = "miden-funding-service"
-version = "0.17.0-rc.2"
+version = "0.17.0-rc.3"
 dependencies = [
  "anyhow",
  "axum",
@@ -4030,11 +4016,14 @@ dependencies = [
  "miden-tx",
  "rand 0.10.3",
  "rand_chacha 0.10.0",
+ "rstest",
  "serde",
+ "serde_json",
  "tempfile",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "tonic",
+ "tonic-prost",
  "tower",
  "tower-http",
  "url",
@@ -4042,7 +4031,7 @@ dependencies = [
 
 [[package]]
 name = "miden-large-account-benchmark"
-version = "0.17.0-rc.2"
+version = "0.17.0-rc.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -4073,7 +4062,7 @@ dependencies = [
  "p3-field",
  "p3-matrix",
  "p3-util",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4095,7 +4084,7 @@ dependencies = [
  "p3-util",
  "rand 0.10.3",
  "serde",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tracing",
 ]
 
@@ -4112,7 +4101,7 @@ dependencies = [
  "miden-utils-indexing",
  "rustc-hash",
  "serde",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "zerocopy",
 ]
 
@@ -4136,7 +4125,7 @@ dependencies = [
  "strip-ansi-escapes",
  "syn 2.0.119",
  "textwrap",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "trybuild",
  "unicode-width 0.1.14",
 ]
@@ -4154,7 +4143,7 @@ dependencies = [
 
 [[package]]
 name = "miden-network-monitor"
-version = "0.17.0-rc.2"
+version = "0.17.0-rc.3"
 dependencies = [
  "anyhow",
  "axum",
@@ -4187,7 +4176,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node"
-version = "0.17.0-rc.2"
+version = "0.17.0-rc.3"
 dependencies = [
  "anyhow",
  "axum",
@@ -4208,7 +4197,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-stream",
  "tonic",
@@ -4218,7 +4207,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-block-producer"
-version = "0.17.0-rc.2"
+version = "0.17.0-rc.3"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -4240,7 +4229,7 @@ dependencies = [
  "rand_chacha 0.10.0",
  "serial_test",
  "tempfile",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-stream",
  "tonic",
@@ -4250,7 +4239,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-db"
-version = "0.17.0-rc.2"
+version = "0.17.0-rc.3"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -4266,13 +4255,13 @@ dependencies = [
  "rusqlite",
  "sha2 0.10.9",
  "tempfile",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
 ]
 
 [[package]]
 name = "miden-node-grpc-error-macro"
-version = "0.17.0-rc.2"
+version = "0.17.0-rc.3"
 dependencies = [
  "quote",
  "syn 2.0.119",
@@ -4280,14 +4269,14 @@ dependencies = [
 
 [[package]]
 name = "miden-node-proto"
-version = "0.17.0-rc.2"
+version = "0.17.0-rc.3"
 dependencies = [
  "anyhow",
  "assert_matches",
  "build-rs",
  "codegen",
  "fs-err",
- "http 1.5.0",
+ "http",
  "miden-node-grpc-error-macro",
  "miden-node-proto-build",
  "miden-node-tracing",
@@ -4299,7 +4288,7 @@ dependencies = [
  "prost",
  "prost-types",
  "rand 0.10.3",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "tonic",
  "tonic-prost",
@@ -4310,7 +4299,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-proto-build"
-version = "0.17.0-rc.2"
+version = "0.17.0-rc.3"
 dependencies = [
  "build-rs",
  "codegen",
@@ -4323,13 +4312,13 @@ dependencies = [
 
 [[package]]
 name = "miden-node-rpc"
-version = "0.17.0-rc.2"
+version = "0.17.0-rc.3"
 dependencies = [
  "anyhow",
  "axum",
  "fs-err",
  "futures",
- "http 1.5.0",
+ "http",
  "mediatype",
  "miden-node-block-producer",
  "miden-node-proto",
@@ -4349,7 +4338,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-stream",
  "tonic",
@@ -4363,7 +4352,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-store"
-version = "0.17.0-rc.2"
+version = "0.17.0-rc.3"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -4393,7 +4382,7 @@ dependencies = [
  "serde",
  "sha2 0.10.9",
  "tempfile",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "thread-priority",
  "tokio",
  "toml",
@@ -4401,7 +4390,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-stress-test"
-version = "0.17.0-rc.2"
+version = "0.17.0-rc.3"
 dependencies = [
  "clap",
  "fs-err",
@@ -4428,18 +4417,18 @@ dependencies = [
 
 [[package]]
 name = "miden-node-tracing"
-version = "0.17.0-rc.2"
+version = "0.17.0-rc.3"
 dependencies = [
  "anyhow",
  "bytes",
- "http 1.5.0",
+ "http",
  "http-body-util",
  "miden-node-tracing-macro",
  "miden-protocol",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "tonic",
  "tower-http",
@@ -4453,7 +4442,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-tracing-macro"
-version = "0.17.0-rc.2"
+version = "0.17.0-rc.3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4462,13 +4451,13 @@ dependencies = [
 
 [[package]]
 name = "miden-node-utils"
-version = "0.17.0-rc.2"
+version = "0.17.0-rc.3"
 dependencies = [
  "anyhow",
  "backon",
  "clap",
  "fs-err",
- "http 1.5.0",
+ "http",
  "humantime",
  "itertools 0.14.0",
  "lru",
@@ -4481,7 +4470,7 @@ dependencies = [
  "miden-tx",
  "reqwest",
  "tempfile",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-util",
  "tonic",
@@ -4493,7 +4482,7 @@ dependencies = [
 
 [[package]]
 name = "miden-note-transport"
-version = "0.17.0-rc.2"
+version = "0.17.0-rc.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -4508,7 +4497,7 @@ dependencies = [
  "reqwest",
  "rusqlite",
  "tempfile",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-stream",
  "tonic",
@@ -4523,7 +4512,7 @@ dependencies = [
 
 [[package]]
 name = "miden-ntx-builder"
-version = "0.17.0-rc.2"
+version = "0.17.0-rc.3"
 dependencies = [
  "anyhow",
  "backon",
@@ -4544,7 +4533,7 @@ dependencies = [
  "rand_chacha 0.10.0",
  "rstest",
  "tempfile",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-stream",
  "tonic",
@@ -4555,9 +4544,9 @@ dependencies = [
 
 [[package]]
 name = "miden-objects"
-version = "0.17.0-rc.6"
+version = "0.17.0-rc.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13cd010bedc5fd9ae53516354741e3275e9b48333d42e48dfb2bdaec2526372f"
+checksum = "67c800354b256e07a59dc64f000ecdd50f8035f59a07ec2c4afddba8122d4852"
 dependencies = [
  "miden-protobuf",
  "miden-protocol",
@@ -4565,7 +4554,7 @@ dependencies = [
  "prost-build",
  "protox",
  "quote",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4581,7 +4570,7 @@ dependencies = [
  "pubgrub",
  "serde",
  "smallvec",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4626,7 +4615,7 @@ dependencies = [
  "miden-precompiles-air",
  "serde",
  "serde-wincode",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tracing",
  "wincode",
 ]
@@ -4646,7 +4635,7 @@ dependencies = [
  "miden-serde-utils",
  "serde",
  "serde-wincode",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "wincode",
 ]
 
@@ -4667,7 +4656,7 @@ dependencies = [
  "miden-utils-indexing",
  "paste",
  "rayon",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tracing",
 ]
 
@@ -4685,15 +4674,15 @@ dependencies = [
  "proptest",
  "serde",
  "serde-untagged",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "toml",
 ]
 
 [[package]]
 name = "miden-protobuf"
-version = "0.17.0-rc.6"
+version = "0.17.0-rc.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f21d2e2a6f1a60b180dbbc34a35768780278205551fb749af9b4f42cc77cb03c"
+checksum = "900d1f684bcf4a4af64327ec4ed1df2285a11bb29905e1c098f24339ba239856"
 dependencies = [
  "miden-protobuf-derive",
  "proc-macro-crate",
@@ -4705,9 +4694,9 @@ dependencies = [
 
 [[package]]
 name = "miden-protobuf-derive"
-version = "0.17.0-rc.6"
+version = "0.17.0-rc.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f819dca311ca460a5a5d3b8e9409648ef114383261323dbe4c991da5a0cceb7"
+checksum = "d6481421ca9b4aeb8a2aa054c15e7c7a74cb7d86b640b78448c6d892948a3ce7"
 dependencies = [
  "heck",
  "proc-macro-crate",
@@ -4718,9 +4707,9 @@ dependencies = [
 
 [[package]]
 name = "miden-protocol"
-version = "0.17.0-rc.6"
+version = "0.17.0-rc.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2292e260de39f202d49f1e6c19fc7375d41f961e6bcde233c059953c3c08eec"
+checksum = "be9a84804a65d51f06440c81d9e1989425d53bf536c107eccf837660296743ba"
 dependencies = [
  "bech32",
  "fs-err",
@@ -4743,15 +4732,15 @@ dependencies = [
  "regex",
  "semver 1.0.28",
  "serde",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "toml",
 ]
 
 [[package]]
 name = "miden-protocol-build-utils"
-version = "0.17.0-rc.6"
+version = "0.17.0-rc.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7fd7b35b3a32e8ea2a96d60feebfe02aba6706d6a5fbfe31563ee8cabd3a0b35"
+checksum = "d7455154141882a12a0f495a3032f712d1276da7db101aa4daa7e6d95a43f3e0"
 dependencies = [
  "fs-err",
  "miden-assembly",
@@ -4776,13 +4765,13 @@ dependencies = [
  "miden-processor",
  "serde",
  "serde-wincode",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tracing",
 ]
 
 [[package]]
 name = "miden-remote-prover"
-version = "0.17.0-rc.2"
+version = "0.17.0-rc.3"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -4830,9 +4819,9 @@ dependencies = [
 
 [[package]]
 name = "miden-standards"
-version = "0.17.0-rc.6"
+version = "0.17.0-rc.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe0657d5dde94bb56eab6fbd0276c405127724f8d0f36e86463d97a86b6efb84"
+checksum = "6e634447ea3feb4cb3f5d184a9cfe85bd37b9daa4beb6520b159ba48f7ea4351"
 dependencies = [
  "bon",
  "miden-assembly",
@@ -4842,7 +4831,7 @@ dependencies = [
  "miden-protocol-build-utils",
  "primitive-types 0.14.0",
  "rand 0.10.3",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4854,7 +4843,7 @@ dependencies = [
  "p3-challenger",
  "p3-field",
  "serde",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4869,9 +4858,9 @@ dependencies = [
 
 [[package]]
 name = "miden-testing"
-version = "0.17.0-rc.6"
+version = "0.17.0-rc.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e86af09aa9b6e0ed88f4d8ed3bc9c4029c8c236492dfd995e32c6e4cd2476d6"
+checksum = "087370377c39c6be9ce6fa2bce65d7dc78a9d9d928d03a3032cf7062898e5082"
 dependencies = [
  "anyhow",
  "itertools 0.15.0",
@@ -4885,14 +4874,14 @@ dependencies = [
  "miden-tx-batch",
  "rand 0.10.3",
  "rand_chacha 0.10.0",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "miden-tx"
-version = "0.17.0-rc.6"
+version = "0.17.0-rc.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52bfd2ebbfdcbc004f12b27dc61a4a2f000a442acae8c17c40ade8b4bbed3231"
+checksum = "0f440c641e854a8f7c44fb4a05609ed704804b6d866ac5c179b4cb43d3b554c5"
 dependencies = [
  "bon",
  "miden-agglayer",
@@ -4900,20 +4889,20 @@ dependencies = [
  "miden-protocol",
  "miden-prover",
  "miden-standards",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "miden-tx-batch"
-version = "0.17.0-rc.6"
+version = "0.17.0-rc.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68057ec4ff03260ba9f95ddad0d11585a98cc01a1f96b49032fcf71e813ef4ed"
+checksum = "bd16a56dea68239bedf44a5dd979b5050a7e980af97ca67cbeba663aaf520ad1"
 dependencies = [
  "miden-processor",
  "miden-protocol",
  "miden-prover",
  "miden-verifier",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4946,7 +4935,7 @@ checksum = "a50071498356b0ac387c28f7265de512032e7d81b09625935fbaca96d65145ae"
 dependencies = [
  "miden-serde-utils",
  "proptest",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4963,7 +4952,7 @@ dependencies = [
 
 [[package]]
 name = "miden-validator"
-version = "0.17.0-rc.2"
+version = "0.17.0-rc.3"
 dependencies = [
  "anyhow",
  "aws-config",
@@ -4985,6 +4974,7 @@ dependencies = [
  "miden-node-store",
  "miden-node-tracing",
  "miden-node-utils",
+ "miden-objects",
  "miden-protocol",
  "miden-testing",
  "miden-tx",
@@ -4994,7 +4984,7 @@ dependencies = [
  "serde",
  "sha2 0.10.9",
  "tempfile",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-stream",
  "toml",
@@ -5019,7 +5009,7 @@ dependencies = [
  "miden-serde-utils",
  "serde",
  "serde-wincode",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5031,7 +5021,7 @@ dependencies = [
  "miden-formatting",
  "miden-serde-utils",
  "smallvec",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5084,27 +5074,6 @@ name = "multimap"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d87ecb2933e8aeadb3e3a02b828fed80a7528047e68b4f424523a0981a3a084"
-
-[[package]]
-name = "multiversion"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4ca4bea16ffc3f443cf7d866912118196bfef4c6a1556ca00f9f9b00bb43f7c"
-dependencies = [
- "multiversion-macros",
-]
-
-[[package]]
-name = "multiversion-macros"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d416831a7317ef4b08bee00b69cbbb9c8763da7959a7026244d6266869f9c83"
-dependencies = [
- "proc-macro2",
- "quote",
- "rustversion",
- "syn 3.0.6",
-]
 
 [[package]]
 name = "multiversion_no_op"
@@ -5280,7 +5249,7 @@ dependencies = [
  "futures-sink",
  "js-sys",
  "pin-project-lite",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tracing",
 ]
 
@@ -5290,12 +5259,12 @@ version = "0.31.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f69cd6acbb9af919df949cd1ec9e5e7fdc2ef15d234b6b795aaa525cc02f71f"
 dependencies = [
- "http 1.5.0",
+ "http",
  "opentelemetry",
  "opentelemetry-proto",
  "opentelemetry_sdk",
  "prost",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "tonic",
 ]
@@ -5325,7 +5294,7 @@ dependencies = [
  "opentelemetry",
  "percent-encoding",
  "rand 0.9.5",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-stream",
 ]
@@ -6031,7 +6000,7 @@ dependencies = [
  "prost-reflect",
  "prost-types",
  "protox-parse",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -6043,7 +6012,7 @@ dependencies = [
  "logos 0.15.1",
  "miette",
  "prost-types",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -6056,7 +6025,7 @@ dependencies = [
  "log",
  "priority-queue",
  "rustc-hash",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "version-ranges",
 ]
 
@@ -6109,7 +6078,7 @@ dependencies = [
  "rustc-hash",
  "rustls",
  "socket2",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
  "web-time",
@@ -6132,7 +6101,7 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "slab",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tinyvec",
  "tracing",
  "web-time",
@@ -6402,7 +6371,7 @@ dependencies = [
  "encoding_rs",
  "futures-core",
  "h2",
- "http 1.5.0",
+ "http",
  "http-body",
  "http-body-util",
  "hyper",
@@ -6483,7 +6452,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c51c9ae4df8a7fba42103df5c621fa3c37eccf3a3c650879e90fc48b11cc192c"
 dependencies = [
  "hashbrown 0.16.1",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -6868,7 +6837,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9aa9d3a86c66cf10ce79df36f555a5a4c8d72a82515d9ea8ca420e02c925c30f"
 dependencies = [
  "serde",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "wincode",
 ]
 
@@ -7381,11 +7350,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.20"
+version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec86235f5fcc2a73650310756d2ac5b138a5780bbbdfae3eeccec992c435ba4f"
+checksum = "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e"
 dependencies = [
- "thiserror-impl 2.0.20",
+ "thiserror-impl 2.0.21",
 ]
 
 [[package]]
@@ -7401,9 +7370,9 @@ dependencies = [
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.20"
+version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
+checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7626,7 +7595,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "h2",
- "http 1.5.0",
+ "http",
  "http-body",
  "http-body-util",
  "hyper",
@@ -7720,7 +7689,7 @@ checksum = "b5e6a1b6319ca4b61a4c0f0c94d439c8f3ed344cca56fe0df40e1fe4be11380b"
 dependencies = [
  "base64 0.22.1",
  "bytes",
- "http 1.5.0",
+ "http",
  "http-body",
  "pin-project",
  "tokio-stream",
@@ -7758,7 +7727,7 @@ dependencies = [
  "bitflags 2.13.2",
  "bytes",
  "futures-util",
- "http 1.5.0",
+ "http",
  "http-body",
  "http-body-util",
  "pin-project-lite",
@@ -7791,9 +7760,9 @@ dependencies = [
  "axum",
  "forwarded-header-value",
  "governor",
- "http 1.5.0",
+ "http",
  "pin-project",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tonic",
  "tower",
  "tracing",
@@ -7840,7 +7809,7 @@ checksum = "f09cb459317a3811f76644334473239d696cd8efc606963ae7d1c308cead3b74"
 dependencies = [
  "chrono",
  "smallvec",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tracing",
  "tracing-subscriber",
 ]
@@ -8296,7 +8265,7 @@ dependencies = [
  "pastey",
  "proc-macro2",
  "quote",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -8562,7 +8531,7 @@ checksum = "66fee0b777b0f5ac1c69bb06d361268faafa61cd4682ae064a171c16c433e9e4"
 
 [[package]]
 name = "xtask"
-version = "0.17.0-rc.2"
+version = "0.17.0-rc.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -8605,18 +8574,18 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.8.57"
+version = "0.8.58"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d35102a9f36d089ccae9e4c6802bc118be4487b80aaffc0ab4e0cf5ce92d2873"
+checksum = "c17e8fafad82b542ff3717217ecdc736231b59e387768c9630123b4ce4d2db44"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.57"
+version = "0.8.58"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "146c01f5ab44258da43cf276c74a2763db2ff3969c9c652c3f2de07041d0b2bc"
+checksum = "595f56e044df4f46a0c9a626f65c3d99eb8488f7e8a8baa12dd76326d9710bf2"
 dependencies = [
  "proc-macro2",
  "quote",

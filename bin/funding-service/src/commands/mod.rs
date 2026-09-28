@@ -6,6 +6,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::Parser;
 use miden_funding_service::{
+    DEFAULT_DEPOSIT_SCAN_INTERVAL,
     DEFAULT_HTTP_TIMEOUT,
     DEFAULT_MAX_AMOUNT,
     DEFAULT_MAX_NOTES_PER_TX,
@@ -32,6 +33,7 @@ const ENV_TX_PROVER_URL: &str = "MIDEN_FUNDING_TX_PROVER_URL";
 const ENV_TX_PROVER_TIMEOUT: &str = "MIDEN_FUNDING_TX_PROVER_TIMEOUT";
 const ENV_ACCOUNT_FILE: &str = "MIDEN_FUNDING_ACCOUNT_FILE";
 const ENV_MAX_AMOUNT: &str = "MIDEN_FUNDING_MAX_AMOUNT";
+const ENV_DEPOSIT_SCAN_INTERVAL: &str = "MIDEN_FUNDING_DEPOSIT_SCAN_INTERVAL";
 const ENV_MAX_NOTES_PER_TX: &str = "MIDEN_FUNDING_MAX_NOTES_PER_TX";
 const ENV_TX_EXPIRATION_DELTA: &str = "MIDEN_FUNDING_TX_EXPIRATION_DELTA";
 const ENV_POLL_INTERVAL: &str = "MIDEN_FUNDING_POLL_INTERVAL";
@@ -115,7 +117,7 @@ pub enum FundingServiceCommand {
         )]
         tx_expiration_delta: NonZeroU16,
 
-        /// Interval at which the service asks the node whether its notes are committed.
+        /// Interval for processing pending notes and checking submitted transactions.
         #[arg(
             long = "poll-interval",
             env = ENV_POLL_INTERVAL,
@@ -124,6 +126,16 @@ pub enum FundingServiceCommand {
             value_name = "DURATION"
         )]
         poll_interval: Duration,
+
+        /// Interval at which the service scans for the pay-to-ID notes sent to the funding account.
+        #[arg(
+            long = "deposit-scan-interval",
+            env = ENV_DEPOSIT_SCAN_INTERVAL,
+            default_value = duration_to_human_readable_string(DEFAULT_DEPOSIT_SCAN_INTERVAL),
+            value_parser = humantime::parse_duration,
+            value_name = "DURATION"
+        )]
+        deposit_scan_interval: Duration,
 
         /// Hex-encoded validator signing public key trusted to attest the transaction encryption
         /// key.
@@ -153,6 +165,7 @@ impl FundingServiceCommand {
             max_notes_per_tx,
             tx_expiration_delta,
             poll_interval,
+            deposit_scan_interval,
             validator_signing_public_keys,
         } = self;
 
@@ -171,7 +184,9 @@ impl FundingServiceCommand {
             funding_service.max_amount = max_amount,
             funding_service.max_notes_per_tx = max_notes_per_tx.get(),
             funding_service.tx_expiration_delta = tx_expiration_delta.get(),
-            funding_service.poll_interval = humantime::Duration::from(poll_interval).to_string()
+            funding_service.poll_interval = humantime::Duration::from(poll_interval).to_string(),
+            funding_service.deposit_scan_interval =
+                humantime::Duration::from(deposit_scan_interval).to_string()
         );
 
         let listener = TcpListener::bind(listen)
@@ -187,6 +202,7 @@ impl FundingServiceCommand {
             .with_max_notes_per_tx(max_notes_per_tx)
             .with_tx_expiration_delta(tx_expiration_delta)
             .with_poll_interval(poll_interval)
+            .with_deposit_scan_interval(deposit_scan_interval)
             .build()
             .await
             .context("failed to initialize the funding service")?

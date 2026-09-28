@@ -151,10 +151,6 @@ struct RequestFundsRequest {
 struct RequestFundsResponse {
     /// The serialized note, in hexadecimal.
     note: String,
-    /// The serialized proof that the note is in a block, in hexadecimal.
-    inclusion_proof: String,
-    /// The transaction which created the note, in hexadecimal.
-    transaction_id: String,
 }
 
 /// Requests the chain's fee asset from the funding service over its JSON HTTP API.
@@ -174,9 +170,10 @@ impl FundingClient {
         Self { service_url, client }
     }
 
-    /// Requests `amount` base units for `account_id` and returns the committed note.
+    /// Requests `amount` base units for `account_id` and returns the note the service creates.
     ///
-    /// The service answers only once the note is committed, so the caller needs no lookup.
+    /// The service answers before it submits the transaction which creates the note, so the note is
+    /// not on chain yet. The caller consumes it as an unauthenticated input note.
     async fn request_funds(&self, account_id: AccountId, amount: u64) -> Result<Note> {
         let url = self
             .service_url
@@ -219,7 +216,7 @@ impl FeeFunder {
         Self { client, fee_faucet_id }
     }
 
-    /// Requests `amount` base units for `account_id` and returns the committed P2ID note.
+    /// Requests `amount` base units for `account_id` and returns the P2ID note the service creates.
     pub async fn fund(&mut self, account_id: AccountId, amount: u64) -> Result<Note> {
         let note = self.client.request_funds(account_id, amount).await?;
 

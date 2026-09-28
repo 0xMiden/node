@@ -1,88 +1,59 @@
 //! The funding worker.
 //!
-//! One task owns the funding account and turns queued requests into transactions. The account's
-//! nonce serialises its transactions, so the worker keeps a single transaction in flight and
-//! coalesces every request which arrives while one is in progress into the next transaction.
+//! One task owns the funding account and submits one transaction at a time.
+//! It holds at most one batch of requests. Other requests stay in the bounded channel.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::num::{NonZeroU16, NonZeroUsize};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use miden_node_tracing::{ErrorReport, error, info, warn};
-use miden_node_utils::retry::{self, Retryable};
+use miden_node_tracing::{info, warn};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountId};
 use miden_protocol::asset::AssetId;
-use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::rand::RandomCoin;
-use miden_protocol::note::{Note, NoteId, NoteInclusionProof};
+use miden_protocol::note::{Note, Nullifier};
 use miden_protocol::protocol_config::ProtocolConfig;
-use miden_protocol::transaction::{PartialBlockchain, ProvenTransaction, TransactionId};
+use miden_protocol::transaction::{PartialBlockchain, TransactionId};
 use miden_protocol::utils::serde::Serializable;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
+use tokio::time::{Instant, MissedTickBehavior};
 
+use crate::LOG_TARGET;
 use crate::account::FunderKey;
-use crate::error::RequestFundsError;
-use crate::inclusion::{Inclusion, await_inclusion};
-use crate::node::{RpcNodeClient, is_transient_error};
+use crate::deposit::{DepositScanner, native_amount};
+use crate::node::{RpcNodeClient, SubmissionOutcome, TransactionStatus};
 use crate::prover::Prover;
 use crate::status::StatusSnapshot;
 use crate::tx::{self, ExecutionInputs};
-use crate::{COMPONENT, LOG_TARGET};
+
+#[cfg(test)]
+mod recovery_tests;
 
 // CONSTANTS
 // ================================================================================================
 
-/// How long the worker waits for more requests after the first one arrives.
-const BATCH_LINGER: Duration = Duration::from_millis(250);
-
-/// Bounds on the retries of a node request inside one batch.
-const NODE_RETRY_MIN_DELAY: Duration = Duration::from_millis(100);
-const NODE_RETRY_MAX_DELAY: Duration = Duration::from_secs(5);
-const NODE_RETRY_MAX_TIMES: usize = 5;
-
 /// Upper bound on the fee formula's cycle multiplier: the kernel charges `verification_base_fee *
 /// (ilog2(total_cycles) + 1)` with cycles capped at `2^29`.
-const MAX_FEE_VERIFICATION_CYCLES: u64 = 30;
-
-// REQUEST AND RESPONSE
-// ================================================================================================
-
-/// One queued funding request.
-pub struct FundingRequest {
-    /// The account which the note targets.
-    pub target: AccountId,
-    /// The amount of the native asset, in base units.
-    pub amount: u64,
-    /// Where the outcome is sent.
-    pub reply: oneshot::Sender<Result<FundedNote, RequestFundsError>>,
-}
-
-/// A committed funding note.
-#[derive(Debug, Clone)]
-pub struct FundedNote {
-    pub note: Note,
-    /// Proof that the note is in a block.
-    pub inclusion_proof: NoteInclusionProof,
-    /// The transaction which created the note.
-    pub transaction_id: TransactionId,
-}
+pub const MAX_FEE_VERIFICATION_CYCLES: u64 = 30;
 
 // CONFIGURATION
 // ================================================================================================
 
-/// The limits the worker applies to every batch.
+/// The limits the worker applies to every transaction.
 #[derive(Debug, Clone, Copy)]
 pub struct WorkerConfig {
     /// The largest number of notes one transaction creates.
     pub max_notes_per_tx: NonZeroUsize,
     /// How many blocks after its reference block a funding transaction expires.
     pub expiration_delta: NonZeroU16,
-    /// How often the worker asks the node whether the notes are committed.
-    pub poll_interval: Duration,
+    /// How often the worker processes pending notes or checks a submitted transaction.
+    pub tick_interval: Duration,
+    /// How long the worker waits between two scans for deposits.
+    pub deposit_scan_interval: Duration,
 }
 
 // FUNDER
@@ -92,42 +63,36 @@ pub struct WorkerConfig {
 pub struct FunderSetup {
     /// The funding account's ID and signing key.
     pub key: FunderKey,
-    /// The faucet which issues the native asset.
-    pub fee_faucet_id: AccountId,
+    /// The native asset, which pays the fee.
+    pub fee_asset_id: AssetId,
     /// The chain's verification base fee. Zero on a chain which does not charge fees.
     pub verification_base_fee: u32,
     /// The protocol configuration of the chain, which names the fee asset.
     pub protocol_config: ProtocolConfig,
-    /// The limits applied to every batch.
+    /// The limits applied to every transaction.
     pub config: WorkerConfig,
     /// Where the worker publishes the funding account's balance.
     pub status: StatusSnapshot,
 }
 
-/// The chain state one batch is built against, read at one reference block.
-struct BatchInputs {
+/// The funding account and chain state at one reference block.
+struct ChainState {
     reference_header: BlockHeader,
     blockchain: PartialBlockchain,
     funder: Account,
-    fee_faucet: (Account, AccountWitness),
 }
 
-/// One batch's transaction, proven and ready to submit.
-struct PreparedBatch {
-    proven_tx: ProvenTransaction,
-    /// The encoded transaction inputs, which the submission seals.
-    transaction_inputs: Vec<u8>,
-    /// The notes the transaction creates, in the order of the requests they answer.
-    notes: Vec<Note>,
-}
-
-/// Turns funding requests into transactions.
+/// Combines at most one deposit with queued funding requests.
 pub struct Funder {
     node: RpcNodeClient,
     prover: Prover,
     setup: FunderSetup,
     rng: RandomCoin,
     account_checked: bool,
+    /// The active batch contains at most `max_notes_per_tx` requests.
+    queued: VecDeque<Note>,
+    /// The deposit pool contains one note per nullifier.
+    deposits: HashMap<Nullifier, Note>,
 }
 
 impl Funder {
@@ -139,278 +104,138 @@ impl Funder {
             setup,
             rng: RandomCoin::new(Word::from(rand::random::<[u32; 4]>())),
             account_checked: false,
+            queued: VecDeque::new(),
+            deposits: HashMap::new(),
         }
     }
 
     /// Runs the worker until the request channel closes or the service shuts down.
     pub async fn run(
-        mut self,
-        mut requests: mpsc::Receiver<FundingRequest>,
+        self,
+        requests: mpsc::Receiver<Note>,
         shutdown: CancellationToken,
     ) -> Result<()> {
+        shutdown.run_until_cancelled(self.run_loop(requests)).await.unwrap_or(Ok(()))
+    }
+
+    /// Discovers deposits and completes one transaction at a time.
+    async fn run_loop(mut self, mut requests: mpsc::Receiver<Note>) -> Result<()> {
+        let tip = self
+            .node
+            .committed_tip()
+            .await
+            .context("failed to read the startup chain tip")?;
+        let mut scanner = DepositScanner::new(self.account_id(), self.setup.fee_asset_id);
+        while let Err(err) = self.sync_initial_deposits(&mut scanner, tip).await {
+            warn!(&err, target: LOG_TARGET, "Failed to discover historical deposits; retrying");
+            tokio::time::sleep(self.setup.config.tick_interval).await;
+        }
+        let mut next_scan = Instant::now();
+        let mut tick = tokio::time::interval(self.setup.config.tick_interval);
+        tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
         loop {
-            let first = tokio::select! {
-                () = shutdown.cancelled() => break,
-                request = requests.recv() => match request {
-                    Some(request) => request,
-                    None => break,
-                },
-            };
+            tick.tick().await;
 
-            // Collect the requests which arrive while this one waits, so they share a transaction.
-            tokio::select! {
-                () = tokio::time::sleep(BATCH_LINGER) => {},
-                () = shutdown.cancelled() => {},
+            if Instant::now() >= next_scan {
+                let scan = async {
+                    let tip = self.node.committed_tip().await?;
+                    self.discover_deposits(&mut scanner, tip).await
+                }
+                .await;
+                if let Err(err) = scan {
+                    warn!(&err, target: LOG_TARGET, "Failed to scan for deposits");
+                }
+                next_scan = Instant::now() + self.setup.config.deposit_scan_interval;
             }
 
-            let mut batch = vec![first];
-            while batch.len() < self.setup.config.max_notes_per_tx.get() {
+            while self.queued.len() < self.setup.config.max_notes_per_tx.get() {
                 match requests.try_recv() {
-                    Ok(request) => batch.push(request),
-                    Err(_) => break,
+                    Ok(note) => self.queued.push_back(note),
+                    Err(mpsc::error::TryRecvError::Empty) => break,
+                    Err(mpsc::error::TryRecvError::Disconnected) => {
+                        if self.queued.is_empty() {
+                            return Ok(());
+                        }
+                        break;
+                    },
                 }
             }
 
-            // A requester which gave up must not be funded. The transaction would spend the funding
-            // balance and pay a fee for a note which no requester waits for.
-            batch.retain(|request| !request.reply.is_closed());
-            if batch.is_empty() {
-                continue;
+            // Transaction execution requires a large future.
+            if let Err(err) = Box::pin(self.process_pending_notes()).await {
+                warn!(&err, target: LOG_TARGET, "Failed to process pending notes");
             }
-
-            if shutdown.is_cancelled() {
-                fail_all(batch, || RequestFundsError::NotReady("the service is shutting down"));
-                break;
-            }
-
-            self.process_batch(batch, &shutdown).await;
         }
+    }
 
-        // Nothing else will read the queue, so waiting requesters are told to retry elsewhere.
-        requests.close();
-        while let Ok(request) = requests.try_recv() {
-            let _ = request
-                .reply
-                .send(Err(RequestFundsError::NotReady("the service is shutting down")));
+    /// Recovers unspent deposits through the startup chain tip.
+    async fn sync_initial_deposits(
+        &mut self,
+        scanner: &mut DepositScanner,
+        tip: BlockNumber,
+    ) -> Result<()> {
+        self.discover_deposits(scanner, tip).await?;
+        let nullifiers: Vec<_> = self.deposits.keys().copied().collect();
+        for nullifier in self.node.spent_nullifiers(&nullifiers, tip).await? {
+            self.deposits.remove(&nullifier);
         }
-
         Ok(())
     }
 
-    /// Reads the funding account at the chain tip and publishes its balance.
-    async fn refresh_status(&mut self) -> Result<()> {
-        let (reference_header, _blockchain) = self.node.tip_chain_state().await?;
-        let block_num = reference_header.block_num();
-        let (funder, _witness) = self.node.public_account(self.account_id(), block_num).await?;
-        self.check_account_code(&funder)?;
-        self.setup.status.update(
-            self.fee_balance(&funder),
-            block_num,
-            reference_header.fee_parameters().verification_base_fee(),
-        );
+    /// Adds every page of deposits through a fixed chain tip.
+    async fn discover_deposits(
+        &mut self,
+        scanner: &mut DepositScanner,
+        tip: BlockNumber,
+    ) -> Result<()> {
+        while !scanner.is_caught_up(tip) {
+            let found = scanner.scan(&self.node, tip).await?;
+            self.deposits.extend(found.into_iter().map(|note| (note.nullifier(), note)));
+        }
         Ok(())
     }
 
-    /// Runs one batch and replies to every requester in it.
-    async fn process_batch(
-        &mut self,
-        mut batch: Vec<FundingRequest>,
-        shutdown: &CancellationToken,
-    ) {
-        match self.run_batch(&mut batch, shutdown, true).await {
-            Ok(()) => {
-                if let Err(err) = self.refresh_status().await {
-                    warn!(
-                        &err,
-                        target: LOG_TARGET,
-                        "Failed to read the funding account after a funding transaction"
-                    );
-                }
-            },
-            Err(failure) => fail_all(batch, || failure.to_error()),
-        }
-    }
-
-    /// Creates, submits and awaits one funding transaction.
-    async fn run_batch(
-        &mut self,
-        batch: &mut Vec<FundingRequest>,
-        shutdown: &CancellationToken,
-        allow_retry: bool,
-    ) -> Result<(), BatchFailure> {
-        let BatchInputs {
-            reference_header,
-            blockchain,
-            funder,
-            fee_faucet,
-        } = self.read_batch_inputs().await.map_err(|err| {
-            error!(&err, target: LOG_TARGET, "Failed to read the chain state for a batch");
-            BatchFailure::from_node_error(&err)
-        })?;
-        let reference_block = reference_header.block_num();
-
-        self.check_account_code(&funder).map_err(|err| {
-            error!(&err, target: LOG_TARGET, "The funding account does not match its account file");
-            BatchFailure::Internal(err.as_report())
-        })?;
-
-        let balance = self.fee_balance(&funder);
-        self.setup.status.update(
-            balance,
-            reference_block,
-            reference_header.fee_parameters().verification_base_fee(),
-        );
-
-        self.reject_unaffordable(batch, balance);
-        if batch.is_empty() {
+    /// Prepares one transaction and waits for commitment or expiration.
+    async fn process_pending_notes(&mut self) -> Result<()> {
+        if self.queued.is_empty() && self.deposits.is_empty() {
             return Ok(());
         }
 
-        let targets: Vec<(AccountId, u64)> =
-            batch.iter().map(|request| (request.target, request.amount)).collect();
+        let inputs = self.read_chain_state().await?;
+        let reference_block = inputs.reference_header.block_num();
+        self.check_account_code(&inputs.funder)?;
 
-        // The future is boxed because it holds the transaction execution, which the `large_futures`
-        // lint rejects on the enclosing future's stack.
-        let PreparedBatch { proven_tx, transaction_inputs, notes } = Box::pin(self.prepare_batch(
-            reference_header,
-            blockchain,
-            funder,
-            fee_faucet,
-            &targets,
-        ))
-        .await
-        .map_err(|err| {
-            error!(&err, target: LOG_TARGET, "Failed to prepare the funding transaction");
-            BatchFailure::Internal(err.as_report())
-        })?;
-        let transaction_id = proven_tx.id();
-        let expiration_block = proven_tx.expiration_block_num();
-
-        if let Err(err) = self.node.submit(&proven_tx, &transaction_inputs).await {
-            if !is_transient_error(&err) && allow_retry {
-                warn!(
-                    &err,
-                    target: LOG_TARGET,
-                    "The node rejected the funding transaction; retrying from a fresh block",
-                    transaction.id = transaction_id
-                );
-                return Box::pin(self.run_batch(batch, shutdown, false)).await;
-            }
-
-            error!(
-                &err,
-                target: LOG_TARGET,
-                "Failed to submit the funding transaction",
-                transaction.id = transaction_id
-            );
-            return Err(BatchFailure::from_submit_error(&err));
-        }
-
-        info!(
-            target: LOG_TARGET,
-            "Submitted a funding transaction",
-            transaction.id = transaction_id,
-            transaction.expires_at = expiration_block,
-            block.number = reference_block,
-            note.count = notes.len()
+        let balance = self.fee_balance(&inputs.funder);
+        self.setup.status.update(
+            balance,
+            reference_block,
+            inputs.reference_header.fee_parameters().verification_base_fee(),
         );
 
-        let note_ids: Vec<_> = notes.iter().map(Note::id).collect();
-        let proofs = match await_inclusion(
-            &self.node,
-            &note_ids,
-            expiration_block,
-            self.setup.config.poll_interval,
-            shutdown,
-        )
-        .await
-        {
-            Inclusion::Committed(proofs) => proofs,
-            Inclusion::Expired => {
-                warn!(
-                    target: LOG_TARGET,
-                    "The funding transaction expired before it committed",
-                    transaction.id = transaction_id,
-                    transaction.expires_at = expiration_block,
-                    note.count = note_ids.len()
-                );
-                return Err(BatchFailure::Expired(expiration_block));
-            },
-            Inclusion::ShuttingDown => return Err(BatchFailure::ShuttingDown),
+        let reserve = self.fee_reserve();
+        let Some(selection) = Selection::choose(
+            &self.deposits,
+            &self.queued,
+            balance,
+            self.setup.fee_asset_id,
+            reserve,
+        ) else {
+            return Ok(());
         };
 
-        reply_with_notes(std::mem::take(batch), notes, proofs, transaction_id);
-
-        Ok(())
+        Box::pin(self.submit(inputs, selection)).await
     }
 
-    /// Replies to the requests which `balance` cannot cover and removes them from `batch`.
-    fn reject_unaffordable(&self, batch: &mut Vec<FundingRequest>, balance: u64) {
-        let reserve = u64::from(self.setup.verification_base_fee) * MAX_FEE_VERIFICATION_CYCLES;
-        let amounts: Vec<u64> = batch.iter().map(|request| request.amount).collect();
-        let admitted_count = admit(&amounts, balance, reserve);
-
-        for request in batch.drain(admitted_count..) {
-            let _ = request.reply.send(Err(RequestFundsError::InsufficientFunds {
-                requested: request.amount,
-                balance,
-                reserve,
-            }));
-        }
-
-        if batch.is_empty() {
-            warn!(
-                target: LOG_TARGET,
-                "The funding account cannot cover any queued request",
-                account.id = self.account_id(),
-                asset.balance = balance,
-                asset.reserve = reserve
-            );
-        }
-    }
-
-    /// Reads the chain state one batch needs, at a fresh reference block.
-    async fn read_batch_inputs(&self) -> Result<BatchInputs> {
-        let (reference_header, blockchain) = self
-            .retry_node_call(|| self.node.tip_chain_state())
-            .await
-            .context("failed to read the chain state")?;
+    /// Submits one transaction and resolves its outcome.
+    async fn submit(&mut self, inputs: ChainState, selection: Selection) -> Result<()> {
+        let ChainState { reference_header, blockchain, funder } = inputs;
         let reference_block = reference_header.block_num();
-
-        let (funder, _funder_witness) = self
-            .retry_node_call(|| self.node.public_account(self.account_id(), reference_block))
-            .await
-            .context("failed to read the funding account")?;
         let fee_faucet = self
-            .retry_node_call(|| self.node.public_account(self.setup.fee_faucet_id, reference_block))
+            .node
+            .public_account(self.setup.fee_asset_id.faucet_id(), reference_header.block_num())
             .await
             .context("failed to read the fee faucet account")?;
-
-        Ok(BatchInputs {
-            reference_header,
-            blockchain,
-            funder,
-            fee_faucet,
-        })
-    }
-
-    /// Builds the notes for `targets`, then executes and proves the transaction which creates them.
-    async fn prepare_batch(
-        &mut self,
-        reference_header: BlockHeader,
-        blockchain: PartialBlockchain,
-        funder: Account,
-        fee_faucet: (Account, AccountWitness),
-        targets: &[(AccountId, u64)],
-    ) -> Result<PreparedBatch> {
-        let notes = tx::build_funding_notes(
-            self.account_id(),
-            self.setup.fee_faucet_id,
-            targets,
-            &mut self.rng,
-        )
-        .context("failed to build the funding notes")?;
-
         let inputs = ExecutionInputs {
             funder,
             secret_key: self.setup.key.secret_key().clone(),
@@ -420,42 +245,132 @@ impl Funder {
             blockchain,
             expiration_delta: self.setup.config.expiration_delta,
         };
-        let executed_tx = tx::execute(inputs, notes.clone(), &mut self.rng)
-            .await
-            .context("failed to execute the funding transaction")?;
-        let transaction_inputs = executed_tx.tx_inputs().to_bytes();
 
-        let proven_tx = self
+        let deposits = selection.deposit.iter().cloned().collect();
+        let executed_tx =
+            Box::pin(tx::execute(inputs, deposits, selection.notes.clone(), &mut self.rng))
+                .await
+                .context("failed to execute the funding transaction")?;
+        let transaction_inputs = executed_tx.tx_inputs().to_bytes();
+        let transaction = self
             .prover
             .prove(executed_tx)
             .await
             .context("failed to prove the funding transaction")?;
 
-        Ok(PreparedBatch { proven_tx, transaction_inputs, notes })
+        let transaction_id = transaction.id();
+        let expiration_block = transaction.expiration_block_num();
+        let outcome = self.node.submit(&transaction, &transaction_inputs).await?;
+        self.resolve_submission(
+            outcome,
+            transaction_id,
+            reference_block,
+            expiration_block,
+            selection,
+        )
+        .await
     }
 
-    /// Retries a node request while it fails for a transient reason.
-    async fn retry_node_call<T, F, Fut>(&self, call: F) -> Result<T>
-    where
-        F: Fn() -> Fut,
-        Fut: Future<Output = Result<T>>,
-    {
-        (|| call())
-            .retry(retry::exponential_bounded(
-                NODE_RETRY_MIN_DELAY,
-                NODE_RETRY_MAX_DELAY,
-                NODE_RETRY_MAX_TIMES,
-            ))
-            .when(is_transient_error)
-            .notify(|err: &anyhow::Error, delay: Duration| {
-                warn!(
-                    err,
-                    target: COMPONENT,
-                    "A node request failed; retrying after backoff",
-                    retry.delay_ms = delay.as_millis() as u64
+    /// Handles rejections immediately. Resolves accepted and uncertain submissions on chain.
+    async fn resolve_submission(
+        &mut self,
+        outcome: SubmissionOutcome,
+        transaction_id: TransactionId,
+        reference_block: BlockNumber,
+        expiration_block: BlockNumber,
+        selection: Selection,
+    ) -> Result<()> {
+        match outcome {
+            SubmissionOutcome::Accepted => {
+                info!(
+                    target: LOG_TARGET,
+                    "Submitted a funding transaction",
+                    transaction.id = transaction_id,
+                    transaction.expires_at = expiration_block
                 );
-            })
+            },
+            SubmissionOutcome::Rejected(status) => {
+                // With one writer and controlled outputs, a state conflict identifies the single
+                // selected deposit as invalid. Keep the payouts for the next attempt.
+                if status.code() == tonic::Code::InvalidArgument
+                    && status.details() == [2]
+                    && let Some(note) = &selection.deposit
+                {
+                    self.deposits.remove(&note.nullifier());
+                    warn!(
+                        &status,
+                        target: LOG_TARGET,
+                        "Discarded a deposit rejected by the node",
+                        note.id = note.id()
+                    );
+                    return Ok(());
+                }
+                return Err(status).context("the node rejected the funding transaction");
+            },
+            SubmissionOutcome::Unknown(err) => {
+                warn!(
+                    &err,
+                    target: LOG_TARGET,
+                    "The submission outcome is unknown; waiting for commitment or expiration",
+                    transaction.id = transaction_id,
+                    transaction.expires_at = expiration_block
+                );
+            },
+        }
+
+        loop {
+            match self
+                .node
+                .transaction_status(
+                    self.account_id(),
+                    transaction_id,
+                    reference_block,
+                    expiration_block,
+                )
+                .await
+            {
+                Ok(TransactionStatus::Committed) => {
+                    info!(target: LOG_TARGET, "A funding transaction committed", transaction.id = transaction_id);
+                    if let Some(note) = selection.deposit {
+                        self.deposits.remove(&note.nullifier());
+                    }
+                    let _ = self.queued.drain(..selection.notes.len());
+                    return Ok(());
+                },
+                Ok(TransactionStatus::Expired) => {
+                    warn!(
+                        target: LOG_TARGET,
+                        "A funding transaction expired; its notes remain queued",
+                        transaction.id = transaction_id,
+                        transaction.expires_at = expiration_block
+                    );
+                    return Ok(());
+                },
+                Ok(TransactionStatus::Pending) => {},
+                Err(err) => warn!(
+                    &err,
+                    target: LOG_TARGET,
+                    "Failed to resolve the funding transaction; retrying",
+                    transaction.id = transaction_id
+                ),
+            }
+            tokio::time::sleep(self.setup.config.tick_interval).await;
+        }
+    }
+
+    /// Reads the funding account and chain state at the current reference block.
+    async fn read_chain_state(&self) -> Result<ChainState> {
+        let (reference_header, blockchain) =
+            self.node.tip_chain_state().await.context("failed to read the chain state")?;
+        let reference_block = reference_header.block_num();
+
+        let (funder, _funder_witness) = self
+            .node
+            .public_account(self.account_id(), reference_block)
             .await
+            .context("failed to read the funding account")?;
+
+        Ok(ChainState { reference_header, blockchain, funder })
     }
 
     /// Checks the account on chain against the account file, once.
@@ -475,16 +390,58 @@ impl Funder {
         Ok(())
     }
 
+    /// The fee one transaction may cost at worst.
+    fn fee_reserve(&self) -> u64 {
+        u64::from(self.setup.verification_base_fee) * MAX_FEE_VERIFICATION_CYCLES
+    }
+
     /// The funding account's balance of the native asset.
     fn fee_balance(&self, funder: &Account) -> u64 {
         funder
             .vault()
-            .get_balance(AssetId::new_fungible(self.setup.fee_faucet_id))
+            .get_balance(self.setup.fee_asset_id)
             .map_or(0, |amount| amount.as_u64())
     }
 
     fn account_id(&self) -> AccountId {
         self.setup.key.account_id()
+    }
+}
+
+// SELECTION
+// ================================================================================================
+
+/// At most one deposit and the funding notes of one transaction.
+#[derive(Debug, PartialEq)]
+struct Selection {
+    deposit: Option<Note>,
+    notes: Vec<Note>,
+}
+
+impl Selection {
+    /// Selects the largest deposit and the queued notes it can fund with the account balance.
+    fn choose(
+        deposits: &HashMap<Nullifier, Note>,
+        queued: &VecDeque<Note>,
+        balance: u64,
+        fee_asset_id: AssetId,
+        reserve: u64,
+    ) -> Option<Self> {
+        let deposit = deposits.values().max_by_key(|note| native_amount(note, fee_asset_id));
+        let collected = deposit.map_or(0, |note| native_amount(note, fee_asset_id));
+        let note_count = admit(
+            queued.iter().map(|note| native_amount(note, fee_asset_id)),
+            balance.saturating_add(collected),
+            reserve,
+        );
+        if note_count == 0 && collected <= reserve {
+            return None;
+        }
+
+        Some(Self {
+            deposit: deposit.cloned(),
+            notes: queued.iter().take(note_count).cloned().collect(),
+        })
     }
 }
 
@@ -494,101 +451,142 @@ impl Funder {
 /// Returns how many of `amounts` the funding account can pay for, in order.
 ///
 /// The transaction pays its own fee out of the same vault, so `reserve` is held back. Admission
-/// stops at the first request which does not fit: a later, smaller request is not admitted ahead of
-/// it, which keeps the queue first-come-first-served and stops a stream of small requests from
-/// starving a large one.
-fn admit(amounts: &[u64], balance: u64, reserve: u64) -> usize {
+/// stops at the first note which does not fit: a later, smaller note is not admitted ahead of it,
+/// which keeps the queue first-come-first-served and stops a stream of small notes from starving a
+/// large one.
+fn admit(amounts: impl IntoIterator<Item = u64>, balance: u64, reserve: u64) -> usize {
     let mut spendable = balance.saturating_sub(reserve);
+    let mut admitted = 0;
 
-    for (index, &amount) in amounts.iter().enumerate() {
-        // A zero amount is rejected before a request is queued, so every amount here is positive
-        // and the balance strictly decreases.
+    for amount in amounts {
+        // A zero amount is rejected before a note is built, so every amount here is positive and
+        // the balance strictly decreases.
         match spendable.checked_sub(amount) {
             Some(remaining) => spendable = remaining,
-            None => return index,
+            None => break,
         }
+        admitted += 1;
     }
 
-    amounts.len()
+    admitted
 }
 
-// BATCH FAILURE
-// ================================================================================================
+#[cfg(test)]
+mod tests {
+    use miden_protocol::Word;
+    use miden_protocol::asset::FungibleAsset;
+    use miden_protocol::note::NoteType;
+    use miden_standards::note::P2idNote;
 
-/// Why a batch failed.
-#[derive(Debug, Clone)]
-enum BatchFailure {
-    /// The service failed for a reason the requester cannot act on.
-    Internal(String),
-    /// The node could not be reached. The cause is logged where the failure is detected.
-    NodeUnreachable,
-    /// The node rejected the transaction.
-    Rejected(String),
-    /// The transaction expired without committing.
-    Expired(BlockNumber),
-    /// The service is shutting down.
-    ShuttingDown,
-}
+    use super::*;
 
-impl BatchFailure {
-    /// Classifies an error from a node request.
-    fn from_node_error(err: &anyhow::Error) -> Self {
-        if is_transient_error(err) {
-            Self::NodeUnreachable
-        } else {
-            Self::Internal(err.as_report())
+    const RESERVE: u64 = 15_000;
+
+    /// The faucet which issues the native asset in these tests.
+    fn fee_faucet_id() -> AccountId {
+        FungibleAsset::mock_issuer()
+    }
+
+    /// The native asset in these tests.
+    fn fee_asset_id() -> AssetId {
+        AssetId::new_fungible(fee_faucet_id())
+    }
+
+    /// Builds a public P2ID note which holds `amount` of the native asset.
+    fn note(amount: u64, serial: u32) -> Note {
+        let faucet = fee_faucet_id();
+
+        P2idNote::builder()
+            .sender(faucet)
+            .target(faucet)
+            .asset(FungibleAsset::new(faucet, amount).expect("valid asset"))
+            .note_type(NoteType::Public)
+            .serial_number(Word::from([serial; 4]))
+            .build()
+            .expect("the note should build")
+            .into()
+    }
+
+    fn deposit_pool(notes: impl IntoIterator<Item = Note>) -> HashMap<Nullifier, Note> {
+        notes.into_iter().map(|note| (note.nullifier(), note)).collect()
+    }
+
+    #[test]
+    fn a_deposit_without_payouts_must_be_worth_more_than_its_fee() {
+        let deposits = deposit_pool([note(RESERVE, 1), note(RESERVE, 2)]);
+        assert!(
+            Selection::choose(&deposits, &VecDeque::new(), 0, fee_asset_id(), RESERVE).is_none()
+        );
+        assert_eq!(deposits.len(), 2);
+    }
+
+    #[test]
+    fn combined_transaction_selects_only_the_largest_deposit() {
+        let largest = note(RESERVE + 2_000, 1);
+        let deposits = deposit_pool([note(RESERVE + 1_000, 2), largest.clone()]);
+        let queued = VecDeque::from([note(1_000, 3)]);
+
+        assert_eq!(
+            Selection::choose(&deposits, &queued, 0, fee_asset_id(), RESERVE),
+            Some(Selection {
+                deposit: Some(largest),
+                notes: queued.iter().cloned().collect()
+            })
+        );
+        assert_eq!(deposits.len(), 2);
+        assert_eq!(queued.len(), 1);
+    }
+
+    #[test]
+    fn payouts_can_proceed_without_deposits() {
+        let payout = note(1_000, 2);
+        let queued = VecDeque::from([payout.clone(), note(1, 3)]);
+        assert_eq!(
+            Selection::choose(&HashMap::new(), &queued, RESERVE + 1_000, fee_asset_id(), RESERVE),
+            Some(Selection { deposit: None, notes: vec![payout] })
+        );
+        assert_eq!(queued.len(), 2);
+    }
+
+    #[test]
+    fn a_small_deposit_can_fund_payouts_in_the_same_transaction() {
+        let deposit = note(1_000, 1);
+        let payout = note(1_000, 2);
+        let deposits = deposit_pool([deposit.clone()]);
+        let queued = VecDeque::from([payout.clone()]);
+        assert_eq!(
+            Selection::choose(&deposits, &queued, RESERVE, fee_asset_id(), RESERVE),
+            Some(Selection {
+                deposit: Some(deposit),
+                notes: vec![payout]
+            })
+        );
+    }
+
+    #[test]
+    fn selection_keeps_notes_available_for_retry() {
+        let deposit = note(RESERVE + 1_000, 1);
+        let payout = note(1_000, 2);
+        let deposits = deposit_pool([deposit.clone()]);
+        let queued = VecDeque::from([payout.clone()]);
+        for _ in 0..2 {
+            assert_eq!(
+                Selection::choose(&deposits, &queued, 0, fee_asset_id(), RESERVE),
+                Some(Selection {
+                    deposit: Some(deposit.clone()),
+                    notes: vec![payout.clone()]
+                })
+            );
         }
+        assert_eq!(deposits, deposit_pool([deposit]));
+        assert_eq!(queued, VecDeque::from([payout]));
     }
 
-    /// Classifies an error from the transaction submission.
-    fn from_submit_error(err: &anyhow::Error) -> Self {
-        if is_transient_error(err) {
-            Self::NodeUnreachable
-        } else {
-            Self::Rejected(err.as_report())
-        }
-    }
-
-    /// The error reported to a requester.
-    fn to_error(&self) -> RequestFundsError {
-        match self {
-            Self::Internal(report) => RequestFundsError::Internal(anyhow::anyhow!(report.clone())),
-            Self::NodeUnreachable => RequestFundsError::NotReady("the node is unreachable"),
-            Self::Rejected(report) => {
-                RequestFundsError::TransactionRejected(anyhow::anyhow!(report.clone()))
-            },
-            Self::Expired(expiration_block) => {
-                RequestFundsError::TransactionExpired { expiration_block: *expiration_block }
-            },
-            Self::ShuttingDown => RequestFundsError::NotReady("the service is shutting down"),
-        }
-    }
-}
-
-/// Answers every request with the note built for it.
-fn reply_with_notes(
-    batch: Vec<FundingRequest>,
-    notes: Vec<Note>,
-    mut proofs: HashMap<NoteId, NoteInclusionProof>,
-    transaction_id: TransactionId,
-) {
-    for (request, note) in batch.into_iter().zip(notes) {
-        // `Inclusion::Committed` holds a proof for every note of the transaction, so a missing
-        // proof is a broken invariant and not an expired transaction.
-        let response = match proofs.remove(&note.id()) {
-            Some(inclusion_proof) => Ok(FundedNote { note, inclusion_proof, transaction_id }),
-            None => Err(RequestFundsError::Internal(anyhow::anyhow!(
-                "no inclusion proof for note {} of committed transaction {transaction_id}",
-                note.id(),
-            ))),
-        };
-        let _ = request.reply.send(response);
-    }
-}
-
-/// Answers every request with the same failure.
-fn fail_all(batch: Vec<FundingRequest>, error: impl Fn() -> RequestFundsError) {
-    for request in batch {
-        let _ = request.reply.send(Err(error()));
+    #[test]
+    fn admission_holds_back_the_fee_and_preserves_request_order() {
+        assert_eq!(admit([100], 100 + RESERVE, RESERVE), 1);
+        assert_eq!(admit([100], 99 + RESERVE, RESERVE), 0);
+        assert_eq!(admit([100, 100], 100 + RESERVE, RESERVE), 1);
+        assert_eq!(admit([500, 5_000, 100], RESERVE + 1_000, RESERVE), 1);
     }
 }

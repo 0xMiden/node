@@ -278,11 +278,11 @@ async fn bootstrap_ntx(
     config: &MonitorConfig,
 ) -> Result<(IncrementService, CounterTrackingService)> {
     let prover = LocalTransactionProver::default();
-    let trusted_validator_signing_key = config.trusted_validator_signing_key()?;
+    let trusted_validator_signing_keys = config.trusted_validator_signing_keys()?;
     let submission_client = TransactionSubmissionClient::connect(
         &config.rpc_url,
         config.request_timeout,
-        trusted_validator_signing_key,
+        trusted_validator_signing_keys,
     )
     .await?;
     // The funding service pays fees; whether it is needed is decided during deployment.

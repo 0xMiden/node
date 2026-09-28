@@ -1,8 +1,8 @@
-//! Node access. The RPC handling is copied from the network monitor.
+//! Node access.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::error::Error as _;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -18,14 +18,23 @@ use miden_node_proto::generated::rpc::account_request::AccountDetailRequest;
 use miden_node_proto::generated::rpc::{
     AccountRequest as ProtoAccountRequest,
     BlockHeaderByNumberRequest,
+    BlockRange,
     FinalityLevel,
     NotesByIdRequest,
     SyncChainMmrRequest,
+    SyncNotesRequest,
+    SyncNullifiersRequest,
+    SyncTransactionsRequest,
 };
 use miden_node_proto::generated::submission::ProvenTransactionSubmission;
 use miden_node_proto::{DecodeMessageExt, VerifyWith};
 use miden_node_tracing::warn;
-use miden_node_utils::retry::{self, Retryable};
+use miden_node_utils::limiter::{
+    QueryParamLimiter,
+    QueryParamNoteIdLimit,
+    QueryParamNullifierPrefixLimit,
+};
+use miden_node_utils::retry::Retryable;
 use miden_protocol::Word;
 use miden_protocol::account::{
     Account,
@@ -35,18 +44,22 @@ use miden_protocol::account::{
     StorageSlot,
     StorageSlotType,
 };
-use miden_protocol::asset::AssetVault;
+use miden_protocol::asset::{AssetId, AssetVault};
 use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::block::{BlockHeader, BlockNumber, FeeParameters};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta, MmrPeaks, PartialMmr};
-use miden_protocol::note::{NoteId, NoteInclusionProof};
+use miden_protocol::note::{Note, NoteId, NoteTag, Nullifier};
 use miden_protocol::protocol_config::ProtocolConfig;
-use miden_protocol::transaction::{PartialBlockchain, ProvenTransaction};
+use miden_protocol::transaction::{PartialBlockchain, ProvenTransaction, TransactionId};
 use tokio::sync::Mutex;
 use url::Url;
 
 use crate::COMPONENT;
+use crate::deposit::is_deposit;
+
+#[cfg(test)]
+pub(crate) mod tests;
 
 // RPC NODE CLIENT
 // ================================================================================================
@@ -166,6 +179,211 @@ impl RpcNodeClient {
         fetch_public_account(&mut self.rpc_client.clone(), account_id, block_num).await
     }
 
+    /// Returns one page of deposits and the last block checked in the given range.
+    pub async fn sync_deposits(
+        &self,
+        funder: AccountId,
+        fee_asset_id: AssetId,
+        from_block: BlockNumber,
+        to_block: BlockNumber,
+    ) -> Result<SyncedDeposits> {
+        let response = self
+            .rpc_client
+            .clone()
+            .sync_notes(SyncNotesRequest {
+                block_range: Some(BlockRange {
+                    block_from: from_block.as_u32(),
+                    block_to: to_block.as_u32(),
+                }),
+                note_tags: vec![NoteTag::with_account_target(funder).as_u32()],
+            })
+            .await
+            .context("failed to synchronize notes")?
+            .into_inner();
+
+        let last_checked_block: BlockNumber = response
+            .pagination_info
+            .context("the sync_notes response did not include pagination information")?
+            .block_num
+            .into();
+        anyhow::ensure!(
+            (from_block..=to_block).contains(&last_checked_block),
+            "the node answered a note scan from {from_block} to {to_block} with block {last_checked_block}",
+        );
+
+        let mut note_ids = Vec::new();
+        for block in response.blocks {
+            for record in block.notes {
+                let proof = record
+                    .inclusion_proof
+                    .context("a note sync record did not include an inclusion proof")?;
+                let note_id = proof
+                    .note_id
+                    .context("a note inclusion proof did not include a note ID")?
+                    .decode_and_verify()
+                    .context("failed to verify a synced note ID")?;
+                note_ids.push(note_id);
+            }
+        }
+
+        let deposits = self
+            .get_public_notes_by_id(&note_ids)
+            .await?
+            .into_iter()
+            .filter(|note| is_deposit(note, funder, fee_asset_id))
+            .collect();
+
+        Ok(SyncedDeposits { deposits, last_checked_block })
+    }
+
+    /// The notes among `note_ids` whose details the node stores.
+    async fn get_public_notes_by_id(&self, note_ids: &[NoteId]) -> Result<Vec<Note>> {
+        let mut notes = Vec::new();
+
+        // The node rejects a request which asks for more note IDs than it accepts, so the IDs are
+        // requested in chunks of the limit it enforces.
+        for chunk in note_ids.chunks(QueryParamNoteIdLimit::LIMIT) {
+            let note_ids = chunk.iter().map(|note_id| note_id.as_word().into()).collect();
+
+            let response = self
+                .rpc_client
+                .clone()
+                .get_notes_by_id(NotesByIdRequest { note_ids })
+                .await
+                .context("failed to fetch notes from RPC")?
+                .into_inner();
+
+            for committed in response.notes {
+                let Some(note) = committed.note else {
+                    continue;
+                };
+                if note.note_details.is_none() {
+                    continue;
+                }
+
+                let note = note.decode_and_verify().context("failed to verify a committed note")?;
+                notes.push(note);
+            }
+        }
+
+        Ok(notes)
+    }
+
+    /// Returns the requested nullifiers spent from genesis through `tip`.
+    pub async fn spent_nullifiers(
+        &self,
+        nullifiers: &[Nullifier],
+        tip: BlockNumber,
+    ) -> Result<HashSet<Nullifier>> {
+        let requested: HashSet<_> = nullifiers.iter().copied().collect();
+        let mut prefixes: Vec<_> = nullifiers.iter().map(|n| u32::from(n.prefix())).collect();
+        prefixes.sort_unstable();
+        prefixes.dedup();
+        let mut spent = HashSet::new();
+
+        for chunk in prefixes.chunks(QueryParamNullifierPrefixLimit::LIMIT) {
+            let mut start = BlockNumber::GENESIS;
+            loop {
+                let response = self
+                    .rpc_client
+                    .clone()
+                    .sync_nullifiers(SyncNullifiersRequest {
+                        block_range: Some(BlockRange {
+                            block_from: start.as_u32(),
+                            block_to: tip.as_u32(),
+                        }),
+                        prefix_len: 16,
+                        nullifiers: chunk.to_vec(),
+                    })
+                    .await
+                    .context("failed to synchronize nullifiers")?
+                    .into_inner()
+                    .decode_and_verify()
+                    .context("failed to convert the nullifier sync response")?;
+
+                let last_checked = response.pagination_info.block_num;
+                anyhow::ensure!(
+                    (start..=tip).contains(&last_checked),
+                    "the node answered a nullifier scan from {start} to {tip} with block {last_checked}",
+                );
+                for nullifier in response.nullifiers.into_keys() {
+                    // Prefix matches can include nullifiers that were not requested.
+                    if requested.contains(&nullifier) {
+                        spent.insert(nullifier);
+                    }
+                }
+                if last_checked == tip {
+                    break;
+                }
+                start = last_checked + 1;
+            }
+        }
+
+        Ok(spent)
+    }
+
+    /// Checks for commitment before reporting expiration. Reads every page in the block range.
+    pub async fn transaction_status(
+        &self,
+        account_id: AccountId,
+        transaction_id: TransactionId,
+        reference_block: BlockNumber,
+        expiration_block: BlockNumber,
+    ) -> Result<TransactionStatus> {
+        let tip = self.committed_tip().await?;
+        let end = tip.min(expiration_block);
+        let mut start = reference_block + 1;
+
+        while start <= end {
+            let response = self
+                .rpc_client
+                .clone()
+                .sync_transactions(SyncTransactionsRequest {
+                    block_range: Some(BlockRange {
+                        block_from: start.as_u32(),
+                        block_to: end.as_u32(),
+                    }),
+                    account_ids: vec![account_id.into()],
+                })
+                .await
+                .context("failed to synchronize transactions")?
+                .into_inner();
+
+            for record in response.transactions {
+                let id = record
+                    .header
+                    .context("a transaction record did not include a header")?
+                    .transaction_id
+                    .context("a transaction header did not include an ID")?
+                    .decode_and_verify()
+                    .context("failed to convert a transaction ID")?;
+                if id == transaction_id {
+                    return Ok(TransactionStatus::Committed);
+                }
+            }
+
+            let last_checked: BlockNumber = response
+                .pagination_info
+                .context("the sync_transactions response did not include pagination information")?
+                .block_num
+                .into();
+            anyhow::ensure!(
+                (start..=end).contains(&last_checked),
+                "the node answered a transaction scan from {start} to {end} with block {last_checked}",
+            );
+            if last_checked == end {
+                break;
+            }
+            start = last_checked + 1;
+        }
+
+        Ok(if tip >= expiration_block {
+            TransactionStatus::Expired
+        } else {
+            TransactionStatus::Pending
+        })
+    }
+
     /// The chain tip of the node's local store.
     pub async fn committed_tip(&self) -> Result<BlockNumber> {
         let status = self
@@ -179,83 +397,32 @@ impl RpcNodeClient {
         Ok(status.chain_tip.into())
     }
 
-    /// The inclusion proofs of the notes which are committed, keyed by note ID.
-    pub async fn committed_notes(
-        &self,
-        note_ids: &[NoteId],
-    ) -> Result<HashMap<NoteId, NoteInclusionProof>> {
-        let note_ids = note_ids.iter().map(|note_id| note_id.as_word().into()).collect();
-
-        let response = self
-            .rpc_client
-            .clone()
-            .get_notes_by_id(NotesByIdRequest { note_ids })
-            .await
-            .context("failed to fetch the funding notes from RPC")?
-            .into_inner();
-
-        response
-            .notes
-            .into_iter()
-            .map(|committed| {
-                let proof = committed
-                    .inclusion_proof
-                    .context("committed note response is missing the inclusion proof")?;
-                proof.decode_and_verify().context("failed to verify the note inclusion proof")
-            })
-            .collect()
-    }
-
-    /// Seals and submits one proven transaction, and returns the block it was accepted at.
+    /// Seals and submits one proven transaction. Errors occur before submission starts.
     pub async fn submit(
         &self,
         proven_tx: &ProvenTransaction,
         transaction_inputs: &[u8],
-    ) -> Result<BlockNumber> {
-        let transaction: miden_node_proto::generated::transaction::ProvenTransaction =
-            proven_tx.into();
-        let tx_id = proven_tx.id();
-        let stale_key = AtomicBool::new(false);
+    ) -> Result<SubmissionOutcome> {
+        let sealed = self
+            .sealer()
+            .await?
+            .seal(proven_tx.id(), transaction_inputs)
+            .context("failed to seal the transaction inputs")?;
+        let request = ProvenTransactionSubmission {
+            transaction: Some(proven_tx.into()),
+            sealed_transaction_inputs: Some(sealed),
+        };
+        let result = self.rpc_client.clone().submit_proven_tx(request).await;
 
-        let result = (|| {
-            let transaction = transaction.clone();
-            async {
-                if stale_key.swap(false, Ordering::Relaxed) {
-                    *self.sealer.lock().await = None;
-                }
+        if result.is_err() {
+            // The encryption key can be stale. Fetch it again for the next submission.
+            *self.sealer.lock().await = None;
+        }
 
-                let sealed = self
-                    .sealer()
-                    .await?
-                    .seal(tx_id, transaction_inputs)
-                    .context("failed to seal the transaction inputs")?;
-                self.rpc_client
-                    .clone()
-                    .submit_proven_tx(ProvenTransactionSubmission {
-                        transaction: Some(transaction),
-                        sealed_transaction_inputs: Some(sealed),
-                    })
-                    .await
-                    .context("failed to submit the proven transaction to RPC")
-            }
+        Ok(match result {
+            Ok(_) => SubmissionOutcome::Accepted,
+            Err(status) => SubmissionOutcome::from_status(status),
         })
-        .retry(retry::constant(Duration::ZERO, Some(1)))
-        .when(|err: &anyhow::Error| {
-            err.downcast_ref::<tonic::Status>()
-                .is_some_and(|status| status.code() == tonic::Code::FailedPrecondition)
-        })
-        .notify(|status: &anyhow::Error, _| {
-            stale_key.store(true, Ordering::Relaxed);
-            warn!(
-                status,
-                target: COMPONENT,
-                "Transaction inputs rejected as stale, refreshing the encryption key and retrying",
-                transaction.id = tx_id
-            );
-        })
-        .await;
-
-        Ok(result?.into_inner().block_num.into())
     }
 
     /// The cached verified sealer. The attested key is fetched and checked on first use.
@@ -288,30 +455,51 @@ impl RpcNodeClient {
     }
 }
 
-// TRANSIENT ERRORS
-// ================================================================================================
-
-/// Returns `true` for gRPC status codes that indicate a transient transport- or server-side problem
-/// worth retrying. Content-rejection codes (`InvalidArgument`, `FailedPrecondition`, ...) reflect
-/// the request itself and are not retried.
-pub fn is_transient_status(status: &tonic::Status) -> bool {
-    matches!(
-        status.code(),
-        tonic::Code::Unavailable
-            | tonic::Code::DeadlineExceeded
-            | tonic::Code::Cancelled
-            | tonic::Code::Aborted
-            | tonic::Code::Unknown
-            | tonic::Code::Internal
-            | tonic::Code::ResourceExhausted,
-    )
+/// Whether the node accepted, rejected, or might have received the submission.
+#[derive(Debug)]
+pub enum SubmissionOutcome {
+    Accepted,
+    Rejected(tonic::Status),
+    Unknown(tonic::Status),
 }
 
-/// Returns `true` when the error chain holds a transient gRPC status.
-pub fn is_transient_error(err: &anyhow::Error) -> bool {
-    err.chain()
-        .filter_map(|cause| cause.downcast_ref::<tonic::Status>())
-        .any(is_transient_status)
+impl SubmissionOutcome {
+    fn from_status(status: tonic::Status) -> Self {
+        // The error byte identifies a node rejection. Without it, these codes can also report
+        // transport or response-decoding failures after the node accepted the transaction.
+        let unknown = status.source().is_some()
+            || (status.details().len() != 1
+                && matches!(
+                    status.code(),
+                    tonic::Code::Cancelled
+                        | tonic::Code::Unknown
+                        | tonic::Code::DeadlineExceeded
+                        | tonic::Code::Internal
+                        | tonic::Code::Unavailable
+                        | tonic::Code::DataLoss
+                ));
+        if unknown {
+            Self::Unknown(status)
+        } else {
+            Self::Rejected(status)
+        }
+    }
+}
+
+/// The outcome of a transaction at the committed chain tip.
+#[derive(Debug, PartialEq, Eq)]
+pub enum TransactionStatus {
+    Pending,
+    Committed,
+    Expired,
+}
+
+/// The result of one deposit synchronization.
+pub struct SyncedDeposits {
+    /// The matching deposits. These notes can already be spent.
+    pub deposits: Vec<Note>,
+    /// The last block the node checked. The next scan starts after it.
+    pub last_checked_block: BlockNumber,
 }
 
 // RPC HELPERS

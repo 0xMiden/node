@@ -1,4 +1,5 @@
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
+use miden_node_store::DatabaseError;
 use miden_node_tracing::{debug, miden_instrument, miden_span_record};
 use miden_node_utils::limiter::QueryParamNullifierPrefixLimit;
 
@@ -76,7 +77,12 @@ impl proto::server::rpc_api::SyncNullifiers for RpcService {
                 view.sync_nullifiers(request.prefix_len, nullifiers, block_range)
                     .await
                     .map(|nullifiers| (view.tip(), nullifiers))
-                    .map_err(|err| database_error_to_status(&err))
+                    .map_err(|err| match err {
+                        DatabaseError::RangeBeyondTip(_) => {
+                            SyncNullifiersErrorCode::FutureBlock.invalid_argument(err)
+                        },
+                        err => database_error_to_status(&err),
+                    })
             })
             .await?;
         let nullifiers = nullifiers
