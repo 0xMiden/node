@@ -126,9 +126,7 @@ impl ProtobufValue for AccountCode {
 
     fn to_proto(&self) -> Self::Message {
         generated::AccountCode {
-            mast: Some(generated::MastForest {
-                encoded: self.mast().to_bytes(),
-            }),
+            mast: Some(generated::MastForest { encoded: self.mast().to_bytes() }),
             procedure_roots: self.procedure_roots().map(Into::into).collect(),
         }
     }
