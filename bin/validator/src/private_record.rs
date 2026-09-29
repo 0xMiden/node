@@ -3,7 +3,8 @@ use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use golden_ehtdh1::wire::{from_wire_bytes, to_wire_bytes};
 use golden_ehtdh1::{Ciphertext, Combiner, DecryptionShare, SealingKey};
 use golden_halo2curves::golden_group::Secp256k1GoldenGroup;
-use miden_node_persistence::generated::PrivateRecordFile;
+use miden_node_persistence::generated::private_record_file::Record;
+use miden_node_persistence::generated::{PrivateRecordFile, PrivateRecordFileV1};
 use miden_node_persistence::miden_protobuf::{ConversionError, DecodeMessageExt};
 use miden_node_persistence::{PersistenceError, ProtobufValue};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
@@ -515,16 +516,17 @@ impl ProtobufValue for StoredPrivateRecord {
 
     fn to_proto(&self) -> Self::Message {
         PrivateRecordFile {
-            version: 1,
-            record_format_version: self.context.format_version().as_u32(),
-            chain_id: self.context.chain_id().as_bytes().to_vec(),
-            key_epoch: self.context.key_epoch().as_bytes().to_vec(),
-            transaction_id: Some(self.context.transaction_id().into()),
-            validator_id: self.record_id.validator_id().to_vec(),
-            setup_context_id: self.setup_context_id.to_vec(),
-            nonce: self.nonce.to_vec(),
-            encrypted_record: self.encrypted_record.clone(),
-            encrypted_record_key: self.encrypted_record_key.clone(),
+            record: Some(Record::V1(PrivateRecordFileV1 {
+                record_format_version: self.context.format_version().as_u32(),
+                chain_id: self.context.chain_id().as_bytes().to_vec(),
+                key_epoch: self.context.key_epoch().as_bytes().to_vec(),
+                transaction_id: Some(self.context.transaction_id().into()),
+                validator_id: self.record_id.validator_id().to_vec(),
+                setup_context_id: self.setup_context_id.to_vec(),
+                nonce: self.nonce.to_vec(),
+                encrypted_record: self.encrypted_record.clone(),
+                encrypted_record_key: self.encrypted_record_key.clone(),
+            })),
         }
     }
 
@@ -541,12 +543,10 @@ impl ProtobufValue for StoredPrivateRecord {
             })
         }
 
-        if message.version != 1 {
-            return Err(PersistenceError::UnsupportedVersion {
-                format: "private record container",
-                version: message.version,
-            });
-        }
+        let Some(Record::V1(message)) = message.record else {
+            return Err(ConversionError::message("private record file payload is missing").into());
+        };
+
         let format_version = PrivateRecordFormatVersion::try_from(message.record_format_version)
             .map_err(ConversionError::new)?;
         let transaction_id = message
@@ -800,6 +800,18 @@ mod tests {
     }
 
     #[test]
+    fn private_record_file_round_trips_with_versioned_payload() {
+        let mut rng = ChaCha20Rng::from_seed([12; 32]);
+        let record = sealer()
+            .seal(&mut rng, record_id(transaction_id()), context(), b"record")
+            .unwrap();
+
+        let bytes = miden_node_persistence::encode(&record);
+        assert_eq!(bytes.first().copied(), Some(0x0a));
+        assert_eq!(miden_node_persistence::decode::<StoredPrivateRecord>(&bytes).unwrap(), record);
+    }
+
+    #[test]
     fn private_record_bundle_rejects_invalid_fields() {
         use miden_node_persistence::ProtobufValue;
         use miden_node_persistence::prost::Message;
@@ -809,8 +821,10 @@ mod tests {
             .unwrap();
         assert!(miden_node_persistence::decode::<StoredPrivateRecord>(&[]).is_err());
         assert!(miden_node_persistence::decode::<StoredPrivateRecord>(&[0xff]).is_err());
-        let valid = record.to_proto();
-        let mutations: &[fn(&mut miden_node_persistence::generated::PrivateRecordFile)] = &[
+        let Some(Record::V1(valid)) = record.to_proto().record else {
+            unreachable!("the codec writes a v1 private record file")
+        };
+        let mutations: &[fn(&mut PrivateRecordFileV1)] = &[
             |message| message.chain_id.pop().map(drop).unwrap(),
             |message| message.key_epoch.clear(),
             |message| message.transaction_id = None,
@@ -834,6 +848,7 @@ mod tests {
         for mutate in mutations {
             let mut message = valid.clone();
             mutate(&mut message);
+            let message = PrivateRecordFile { record: Some(Record::V1(message)) };
             assert!(
                 miden_node_persistence::decode::<StoredPrivateRecord>(&message.encode_to_vec())
                     .is_err()
@@ -842,22 +857,21 @@ mod tests {
     }
 
     #[test]
-    fn private_record_bundle_rejects_unsupported_versions_independently() {
+    fn private_record_file_rejects_missing_payload_and_unsupported_record_format() {
         use miden_node_persistence::ProtobufValue;
         use miden_node_persistence::prost::Message;
         let mut rng = ChaCha20Rng::from_seed([13; 32]);
         let record = sealer()
             .seal(&mut rng, record_id(transaction_id()), context(), b"record")
             .unwrap();
+        assert!(miden_node_persistence::decode::<StoredPrivateRecord>(&[]).is_err());
+        assert!(miden_node_persistence::decode::<StoredPrivateRecord>(&[0x12, 0]).is_err());
         for version in [0, 2, u32::MAX] {
             let mut message = record.to_proto();
-            message.version = version;
-            assert!(
-                miden_node_persistence::decode::<StoredPrivateRecord>(&message.encode_to_vec())
-                    .is_err()
-            );
-            message.version = 1;
-            message.record_format_version = version;
+            let Some(Record::V1(payload)) = message.record.as_mut() else {
+                unreachable!("the codec writes a v1 private record file")
+            };
+            payload.record_format_version = version;
             assert!(
                 miden_node_persistence::decode::<StoredPrivateRecord>(&message.encode_to_vec())
                     .is_err()
@@ -1064,7 +1078,10 @@ mod tests {
         ));
 
         let mut damaged_message = miden_node_persistence::ProtobufValue::to_proto(&record);
-        damaged_message.encrypted_record[0] ^= 1;
+        let Some(Record::V1(payload)) = damaged_message.record.as_mut() else {
+            unreachable!("the codec writes a v1 private record file")
+        };
+        payload.encrypted_record[0] ^= 1;
         let damaged = <StoredPrivateRecord as miden_node_persistence::ProtobufValue>::from_proto(
             damaged_message,
         )

@@ -57,14 +57,20 @@ message BenchmarkTransactionInputs {
 // The file contains encrypted transaction effects, the encrypted content key, and
 // the context that binds the record to its transaction and validator.
 message PrivateRecordFile {
-  uint32 version = 1;
-  uint32 record_format_version = 2;
-  bytes chain_id = 3;
-  bytes key_epoch = 4;
-  transaction.TransactionId transaction_id = 5;
-  bytes validator_id = 6;
-  bytes setup_context_id = 7;
-  bytes nonce = 8;
-  bytes encrypted_record = 9;
-  bytes encrypted_record_key = 10;
+  oneof record {
+    PrivateRecordFileV1 v1 = 1;
+  }
+}
+
+// Stores the first private record file format in the validator's exported record file.
+message PrivateRecordFileV1 {
+  uint32 record_format_version = 1;
+  bytes chain_id = 2;
+  bytes key_epoch = 3;
+  transaction.TransactionId transaction_id = 4;
+  bytes validator_id = 5;
+  bytes setup_context_id = 6;
+  bytes nonce = 7;
+  bytes encrypted_record = 8;
+  bytes encrypted_record_key = 9;
 }
