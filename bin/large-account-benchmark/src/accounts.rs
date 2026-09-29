@@ -110,19 +110,17 @@ pub fn wallet_counter_component_code() -> Result<AccountComponentCode> {
 // FEE FAUCET
 // ================================================================================================
 
-/// Token symbol of the seeded fee faucet. Matches the genesis default so a run reads the same as a
-/// stock local network.
+/// Token symbol of the seeded fee faucet.
 const FEE_FAUCET_SYMBOL: &str = "MIDEN";
-/// Decimals of the seeded fee faucet, matching the genesis default.
+/// Decimals of the seeded fee faucet.
 const FEE_FAUCET_DECIMALS: u8 = 6;
-/// Max supply of the seeded fee faucet, matching the genesis default.
+/// Maximum supply of the seeded fee faucet.
 const FEE_FAUCET_MAX_SUPPLY: u64 = 100_000_000_000_000_000;
 
 /// Creates the fungible faucet that fees are denominated in. Returns the account and its signing
 /// key.
 ///
-/// The account is left at nonce zero, as a freshly generated account. Genesis bumps it to one when
-/// it commits it, exactly as it does for a faucet it generated itself.
+/// The seed command sets a nonzero nonce before it writes the account file.
 pub fn create_fee_faucet_account() -> Result<(Account, SecretKey)> {
     let mut rng = ChaCha20Rng::from_seed(rand::random());
     let secret_key = SecretKey::with_rng(&mut rng);
@@ -402,12 +400,7 @@ mod tests {
     fn fee_faucet_is_a_fungible_faucet_awaiting_deployment() {
         let (faucet, _secret_key) = create_fee_faucet_account().expect("faucet should build");
 
-        assert_eq!(
-            faucet.nonce(),
-            Felt::ZERO,
-            "genesis bumps the nonce when it commits the faucet"
-        );
-        // The exact check `NativeFaucetConfig::build_account` runs on a file-loaded faucet.
+        assert_eq!(faucet.nonce(), Felt::ZERO, "the seed command commits the faucet before export");
         FungibleFaucet::try_from(&faucet)
             .expect("the seeded faucet must satisfy the genesis native-faucet check");
     }

@@ -12,8 +12,8 @@ import Tabs from "@theme/Tabs"; import TabItem from "@theme/TabItem";
 The genesis block is the trust anchor for every service that joins a network. It is not signed: it simply commits to the
 full validator set in its header, and that set must sign every block after genesis. Because nothing signs the genesis
 block, it must always be obtained from a trusted source. One of the network's operators is responsible for building it
-from the genesis configuration. On official networks, the validators are operated by separate entities from the network
-operator.
+from the required account files and network parameters. On official networks, the validators are operated by separate
+entities from the network operator.
 
 The genesis block is subsequently made available for official networks at
 
@@ -42,31 +42,29 @@ miden-validator pubkey --signing-key.kms-id <validator-N-kms-key-id>
 The full validator set is passed on the command line, as one `--validator.key` flag per validator. There is no default
 set: the flag is required.
 
-**One** operator then runs `genesis` with the genesis configuration and the collected keys. Building the genesis block
-requires no signing key:
+**One** operator then runs `genesis` with the required accounts and collected keys. Building the genesis block requires
+no signing key:
 
 ```bash
 miden-validator genesis \
   --genesis-block-directory genesis-data \
   --accounts-directory accounts \
-  --config genesis.toml \
+  --native-faucet usdcx-faucet.mac \
+  --funding-account distributor.genesis.mac \
+  --verification-base-fee 7 \
+  --timestamp <unix-seconds> \
   --validator.key <validator-1-public-key-hex> \
   --validator.key <validator-2-public-key-hex> \
   --validator.key <validator-3-public-key-hex>
 ```
 
-Unless the configuration sets `native_faucet` to a pre-built account file, the native faucet is generated as a network
-account and holds no key of its own; minting from it is restricted to the faucet operator account generated alongside
-it. The operator starts with 1,000 MIDEN tokens so it can pay fees for the first mint requests. Both accounts are
-written to the accounts directory as `native_faucet.mac` and `faucet_operator.mac`, and the faucet account id is
-printed. The operator file carries the only signing key permitted to mint, so treat it as a secret.
+The native faucet and public funding account must be prepared before genesis. Both account files must have nonzero
+nonces. Genesis does not require their signing keys. The funding service uses the funding account file with its signing
+key. The verification base fee must match the fee configured in the native faucet.
 
-To run a faucet against the network, pass `faucet_operator.mac` to the faucet's `init --import`, and the faucet account
-id to `--faucet-account-id`.
-
-Every `[[wallet]]` entry needs a `name`, which is written to the accounts directory as `<name>.mac`. The name must be a
-plain file name, and no two generated accounts may share a name. The name keeps the path of a wallet stable, which a
-service that loads its account from a fixed path needs; see the [funding service](./funding-service.md).
+Use `--accounts-config accounts.toml` to add faucets, generated wallets, or imported accounts. Each `[[wallet]]` entry
+requires a unique `name`; genesis writes its account file as `<name>.mac` in the accounts directory. Account file paths
+in this TOML are relative to the TOML file. Paths passed on the CLI are relative to the working directory.
 
 Upload `genesis-data/genesis.dat` so it is served at:
 
@@ -117,7 +115,10 @@ operator.
 miden-validator genesis \
   --genesis-block-directory genesis-data \
   --accounts-directory accounts \
-  --config genesis.toml \
+  --native-faucet usdcx-faucet.mac \
+  --funding-account distributor.genesis.mac \
+  --verification-base-fee 7 \
+  --timestamp <unix-seconds> \
   --validator.key <validator-1-public-key-hex> \
   --validator.key <validator-2-public-key-hex> \
   --validator.key <validator-3-public-key-hex>

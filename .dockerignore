@@ -32,6 +32,7 @@
 /CLAUDE.md
 ./target
 /target
+/vendor/miden-usdcx/target
 LICENSE
 **/README.md
 accounts

@@ -155,7 +155,7 @@ fn seed(args: &SeedArgs) -> Result<()> {
 
 /// The accounts a seed run writes.
 struct Seeded {
-    /// The faucet fees are denominated in, at nonce zero for genesis to adopt as its native faucet.
+    /// The native faucet in committed form.
     faucet: Account,
     faucet_secret_key: SecretKey,
     /// The owner wallet, in committed form.
@@ -167,12 +167,11 @@ struct Seeded {
 
 /// Builds the faucet + wallet + counter set.
 ///
-/// The wallet and the counter are committed here by bumping their nonce, since genesis takes them
-/// as `[[account]]` entries and writes them into the block as-is. The faucet is left at nonce zero
-/// because genesis commits that one itself.
+/// All three accounts have nonzero nonces for inclusion in genesis.
 fn build_seeded_accounts(counter_map_entries: u32) -> Result<Seeded> {
-    let (faucet, faucet_secret_key) =
+    let (mut faucet, faucet_secret_key) =
         create_fee_faucet_account().context("failed to create the fee faucet")?;
+    faucet.set_nonce(ONE).context("failed to bump faucet nonce")?;
 
     let (mut wallet, wallet_secret_key) =
         create_wallet_account().context("failed to create wallet")?;
