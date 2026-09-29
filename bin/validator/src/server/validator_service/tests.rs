@@ -1721,9 +1721,12 @@ async fn single_signature_backup_reopens_and_streams_with_multiple_validators() 
         ),
         protocol_config: Some(config),
     };
-    validator_api::SignBlock::full(&service, tonic::Request::new(request.into()))
-        .await
-        .unwrap();
+    miden_validator_v1_validator_service::SignBlock::full(
+        &service,
+        tonic::Request::new(request.into()),
+    )
+    .await
+    .unwrap();
     drop(service);
     let db = crate::db::load(dir.path().join("validator.sqlite3")).await.unwrap();
     let store = BlockStore::load(store_path).unwrap();
@@ -1744,9 +1747,11 @@ async fn single_signature_backup_reopens_and_streams_with_multiple_validators() 
     )
     .await
     .unwrap();
-    let mut stream = validator_api::BlockSubscription::full(
+    let mut stream = miden_validator_v1_validator_service::BlockSubscription::full(
         &service,
-        tonic::Request::new(proto::validator::BlockSubscriptionRequest { block_from: 1 }),
+        tonic::Request::new(proto::miden::validator::v1::BlockSubscriptionRequest {
+            block_from: 1,
+        }),
     )
     .await
     .unwrap();
