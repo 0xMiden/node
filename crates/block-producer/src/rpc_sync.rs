@@ -207,8 +207,13 @@ impl BlockSync {
         let (parent, _) = self.state.view().get_block_header(Some(local_tip), false).await?;
         let mut parent = parent.context("local chain tip header not found")?;
         let mut client = self.source_rpc.clone();
-        let upstream_tip =
-            BlockNumber::from(client.status(tonic::Request::new(())).await?.into_inner().chain_tip);
+        let upstream_tip = BlockNumber::from(
+            client
+                .status(tonic::Request::new(miden_node_proto::generated::rpc::StatusRequest {}))
+                .await?
+                .into_inner()
+                .chain_tip,
+        );
         self.readiness.update(upstream_tip, local_tip).await;
 
         let block_from = local_tip.child().as_u32();

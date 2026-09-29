@@ -17,5 +17,20 @@ service Api {
     // many failed attempts.
     //
     // Returns `NOT_FOUND` if the note ID is not tracked by the network transaction builder.
-    rpc GetNetworkNoteStatus(note.NoteId) returns (rpc.GetNetworkNoteStatusResponse) {}
+    rpc GetNetworkNoteStatus(GetNetworkNoteStatusRequest) returns (GetNetworkNoteStatusResponse) {}
+}
+
+message GetNetworkNoteStatusRequest {
+    note.NoteId note_id = 1;
+}
+
+message GetNetworkNoteStatusResponse {
+    // Current lifecycle status of the note.
+    rpc.NetworkNoteStatus status = 1;
+    // The latest error message from execution, if any.
+    optional string last_error = 2;
+    // Number of failed execution attempts.
+    uint32 attempt_count = 3;
+    // Block number of the last failed attempt, if any.
+    optional fixed32 last_attempt_block_num = 4;
 }

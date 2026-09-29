@@ -14,10 +14,13 @@ async fn malformed_read_requests_return_method_specific_codes() {
     let (mut client, _, _store, _server) = start_rpc().await;
 
     let errors = [
-        (client.get_account(proto::rpc::AccountRequest::default()).await.unwrap_err(), 1),
+        (
+            client.get_account(proto::rpc::GetAccountRequest::default()).await.unwrap_err(),
+            1,
+        ),
         (
             client
-                .get_notes_by_id(proto::rpc::NotesByIdRequest {
+                .get_notes_by_id(proto::rpc::GetNotesByIdRequest {
                     note_ids: vec![proto::note::NoteId::default()],
                 })
                 .await
@@ -26,7 +29,7 @@ async fn malformed_read_requests_return_method_specific_codes() {
         ),
         (
             client
-                .get_note_script_by_root(proto::rpc::NoteScriptByRootRequest::default())
+                .get_note_script_by_root(proto::rpc::GetNoteScriptByRootRequest::default())
                 .await
                 .unwrap_err(),
             1,
@@ -163,10 +166,10 @@ async fn account_lookup_returns_distinct_error_codes() {
         (public_id, Some(BlockNumber::from(1).into()), 4),
     ] {
         let error = client
-            .get_account(proto::rpc::AccountRequest {
+            .get_account(proto::rpc::GetAccountRequest {
                 account_id: Some(account_id.into()),
                 block_num,
-                details: Some(proto::rpc::account_request::AccountDetailRequest::default()),
+                details: Some(proto::rpc::get_account_request::AccountDetailRequest::default()),
             })
             .await
             .unwrap_err();

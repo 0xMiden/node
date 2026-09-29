@@ -16,8 +16,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use miden_node_proto::clients::{Builder, RemoteProverClient};
 use miden_node_proto::errors::ConversionError;
-use miden_node_proto::generated::remote_prover::proof_request::Request;
-use miden_node_proto::generated::remote_prover::{DecodedProof, ProofRequest};
+use miden_node_proto::generated::remote_prover::prove_request::Request;
+use miden_node_proto::generated::remote_prover::{DecodedProveResponse, ProveRequest};
 use miden_node_proto::{BuildUnchecked, DecodeMessage};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_protocol::transaction::{ExecutedTransaction, ProvenTransaction, TransactionInputs};
@@ -200,7 +200,7 @@ impl RemoteTransactionProver {
         &self,
         tx_inputs: &TransactionInputs,
     ) -> Result<ProvenTransaction, TransactionProverError> {
-        let request = tonic::Request::new(ProofRequest {
+        let request = tonic::Request::new(ProveRequest {
             request: Some(Request::Transaction(tx_inputs.into())),
         });
 
@@ -211,7 +211,7 @@ impl RemoteTransactionProver {
         response
             .into_inner()
             .decode_fields()
-            .and_then(DecodedProof::into_transaction)
+            .and_then(DecodedProveResponse::into_transaction)
             // SAFETY: This benchmark trusts the configured prover to return a valid proof for the
             // requested transaction.
             .and_then(|transaction| transaction.build_unchecked().map_err(ConversionError::new))

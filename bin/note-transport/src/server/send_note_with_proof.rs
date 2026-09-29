@@ -1,5 +1,8 @@
 use miden_node_proto::errors::ConversionError;
-use miden_node_proto::generated::note_transport::{SendNoteResponse, SendNoteWithProofRequest};
+use miden_node_proto::generated::note_transport::{
+    SendNoteWithProofRequest,
+    SendNoteWithProofResponse,
+};
 use miden_node_proto::server::note_transport_api::SendNoteWithProof;
 use miden_node_proto::{DecodeMessage, Verify};
 use miden_node_tracing::{miden_instrument, miden_span_record};
@@ -35,8 +38,8 @@ impl SendNoteWithProof for Server {
         Ok((note, proof))
     }
 
-    fn encode(_: ()) -> tonic::Result<SendNoteResponse> {
-        Ok(SendNoteResponse {})
+    fn encode(_: ()) -> tonic::Result<SendNoteWithProofResponse> {
+        Ok(SendNoteWithProofResponse {})
     }
 
     #[miden_instrument(target = COMPONENT, err)]

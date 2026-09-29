@@ -14,13 +14,13 @@ use miden_node_proto::domain::encryption::{
     TrustedTransactionEncryptionState,
 };
 use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
-use miden_node_proto::generated::rpc::account_request::AccountDetailRequest;
+use miden_node_proto::generated::rpc::get_account_request::AccountDetailRequest;
 use miden_node_proto::generated::rpc::{
-    AccountRequest as ProtoAccountRequest,
-    BlockHeaderByNumberRequest,
     BlockRange,
     FinalityLevel,
-    NotesByIdRequest,
+    GetAccountRequest as ProtoAccountRequest,
+    GetBlockHeaderByNumberRequest,
+    GetNotesByIdRequest,
     SyncChainMmrRequest,
     SyncNotesRequest,
     SyncNullifiersRequest,
@@ -248,7 +248,7 @@ impl RpcNodeClient {
             let response = self
                 .rpc_client
                 .clone()
-                .get_notes_by_id(NotesByIdRequest { note_ids })
+                .get_notes_by_id(GetNotesByIdRequest { note_ids })
                 .await
                 .context("failed to fetch notes from RPC")?
                 .into_inner();
@@ -389,7 +389,7 @@ impl RpcNodeClient {
         let status = self
             .rpc_client
             .clone()
-            .status(())
+            .status(miden_node_proto::generated::rpc::StatusRequest {})
             .await
             .context("failed to fetch the node status")?
             .into_inner();
@@ -412,7 +412,13 @@ impl RpcNodeClient {
             transaction: Some(proven_tx.into()),
             sealed_transaction_inputs: Some(sealed),
         };
-        let result = self.rpc_client.clone().submit_proven_tx(request).await;
+        let result = self
+            .rpc_client
+            .clone()
+            .submit_proven_tx(miden_node_proto::generated::rpc::SubmitProvenTxRequest {
+                submission: Some(request),
+            })
+            .await;
 
         if result.is_err() {
             // The encryption key can be stale. Fetch it again for the next submission.
@@ -434,10 +440,14 @@ impl RpcNodeClient {
         let key = self
             .rpc_client
             .clone()
-            .get_transaction_encryption_key(())
+            .get_transaction_encryption_key(
+                miden_node_proto::generated::rpc::GetTransactionEncryptionKeyRequest {},
+            )
             .await
             .context("failed to fetch the transaction encryption key")?
-            .into_inner();
+            .into_inner()
+            .key
+            .ok_or_else(|| tonic::Status::internal("missing transaction encryption key"))?;
         let verified = key
             .verify_with(TrustedTransactionEncryptionState::new(
                 self.genesis_commitment,
@@ -577,7 +587,7 @@ async fn fetch_block_header(
     rpc_client: &mut RpcClient,
     block_num: Option<BlockNumber>,
 ) -> Result<BlockHeader> {
-    let request = BlockHeaderByNumberRequest {
+    let request = GetBlockHeaderByNumberRequest {
         block_num: block_num.map(|block_num| block_num.as_u32()),
         include_mmr_proof: None,
         include_protocol_config: None,
@@ -606,7 +616,7 @@ async fn fetch_genesis_header_and_config(
     rpc_client: &mut RpcClient,
 ) -> Result<(BlockHeader, ProtocolConfig)> {
     let response = rpc_client
-        .get_block_header_by_number(BlockHeaderByNumberRequest {
+        .get_block_header_by_number(GetBlockHeaderByNumberRequest {
             block_num: Some(BlockNumber::GENESIS.as_u32()),
             include_mmr_proof: None,
             include_protocol_config: Some(true),
@@ -688,8 +698,8 @@ async fn fetch_public_account(
     account_id: AccountId,
     block_num: BlockNumber,
 ) -> Result<(Account, AccountWitness)> {
-    use miden_node_proto::generated::rpc::account_request::AccountDetailRequest;
-    use miden_node_proto::generated::rpc::account_request::account_detail_request::StorageRequest;
+    use miden_node_proto::generated::rpc::get_account_request::AccountDetailRequest;
+    use miden_node_proto::generated::rpc::get_account_request::account_detail_request::StorageRequest;
 
     // Dummy commitments force the server to include code and vault data in the response.
     let dummy: miden_node_proto::generated::primitives::Word = Word::default().into();

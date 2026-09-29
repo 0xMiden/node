@@ -1041,7 +1041,7 @@ async fn fetch_slot_value(
 fn build_account_request(
     account_id: AccountId,
     include_code_and_vault: bool,
-) -> miden_node_proto::generated::rpc::AccountRequest {
+) -> miden_node_proto::generated::rpc::GetAccountRequest {
     let account_id_proto: miden_node_proto::generated::account::AccountId = account_id.into();
 
     let (code_commitment, asset_vault_commitment) = if include_code_and_vault {
@@ -1051,14 +1051,16 @@ fn build_account_request(
         (None, None)
     };
 
-    miden_node_proto::generated::rpc::AccountRequest {
+    miden_node_proto::generated::rpc::GetAccountRequest {
         account_id: Some(account_id_proto),
         block_num: None,
-        details: Some(miden_node_proto::generated::rpc::account_request::AccountDetailRequest {
-            code_commitment,
-            asset_vault_commitment,
-            storage_request: None,
-        }),
+        details: Some(
+            miden_node_proto::generated::rpc::get_account_request::AccountDetailRequest {
+                code_commitment,
+                asset_vault_commitment,
+                storage_request: None,
+            },
+        ),
     }
 }
 
@@ -1206,7 +1208,10 @@ fn create_network_note(
 
 /// Fetch the current chain tip height from RPC status.
 async fn fetch_chain_tip(rpc_client: &mut RpcClient) -> Result<u32> {
-    let status = rpc_client.status(()).await?.into_inner();
+    let status = rpc_client
+        .status(miden_node_proto::generated::rpc::StatusRequest {})
+        .await?
+        .into_inner();
 
     if let Some(block_producer_status) = status.block_producer {
         Ok(block_producer_status.chain_tip)

@@ -149,7 +149,7 @@ async fn recover_from_validators(
     for (url, validator) in &mut validators {
         let tip = BlockNumber::from(
             validator
-                .status(())
+                .status(miden_node_proto::generated::validator::StatusRequest {})
                 .await
                 .with_context(|| format!("failed to query status of validator {url}"))?
                 .into_inner()

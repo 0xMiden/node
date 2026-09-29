@@ -102,8 +102,11 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
     }
 
     fn decode(
-        request: grpc::submission::ProvenTransactionSubmission,
+        request: grpc::validator::SubmitProvenTransactionRequest,
     ) -> tonic::Result<Self::Input> {
+        let request = request
+            .submission
+            .ok_or_else(|| Status::invalid_argument("missing submission"))?;
         let submission = request
             // SAFETY: New transaction IDs pass proof verification and re-execution before storage.
             // Previously validated IDs use the handler's duplicate-submission shortcut.
@@ -121,8 +124,8 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
         Ok(Self::Input { tx, sealed })
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<()> {
-        Ok(output)
+    fn encode((): Self::Output) -> tonic::Result<grpc::validator::SubmitProvenTransactionResponse> {
+        Ok(grpc::validator::SubmitProvenTransactionResponse {})
     }
 }
 

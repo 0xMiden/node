@@ -120,13 +120,13 @@ async fn get_account(
     account_id: AccountId,
     storage_map_slot: String,
 ) -> GetAccountRun {
-    use proto::rpc::account_storage_details::account_storage_map_details::Result;
+    use miden_node_proto::generated::rpc::account_storage_details::account_storage_map_details::Result;
 
     let request = get_account_request(account_id, storage_map_slot);
 
     let start = Instant::now();
     let request = request.decode_and_verify().expect("request should be valid");
-    let response: proto::rpc::AccountResponse =
+    let response: proto::rpc::GetAccountResponse =
         state.view().get_account(request).await.unwrap().into();
     let duration = start.elapsed();
 
@@ -163,16 +163,16 @@ async fn get_account(
 fn get_account_request(
     account_id: AccountId,
     storage_map_slot: String,
-) -> proto::rpc::AccountRequest {
-    use proto::rpc::account_request::AccountDetailRequest;
-    use proto::rpc::account_request::account_detail_request::storage_map_detail_request::SlotData;
-    use proto::rpc::account_request::account_detail_request::{
+) -> proto::rpc::GetAccountRequest {
+    use miden_node_proto::generated::rpc::get_account_request::AccountDetailRequest;
+    use miden_node_proto::generated::rpc::get_account_request::account_detail_request::storage_map_detail_request::SlotData;
+    use miden_node_proto::generated::rpc::get_account_request::account_detail_request::{
         StorageMapDetailRequest,
         StorageMapDetailRequests,
         StorageRequest,
     };
 
-    proto::rpc::AccountRequest {
+    proto::rpc::GetAccountRequest {
         account_id: Some(account_id.into()),
         block_num: None,
         details: Some(AccountDetailRequest {

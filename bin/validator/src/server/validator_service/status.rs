@@ -11,8 +11,8 @@ impl grpc::server::validator_api::Status for ValidatorService {
 
     async fn full(
         &self,
-        _request: tonic::Request<()>,
-    ) -> tonic::Result<grpc::validator::ValidatorStatus> {
+        _request: tonic::Request<grpc::validator::StatusRequest>,
+    ) -> tonic::Result<grpc::validator::StatusResponse> {
         // Unlike the other RPCs, status stays available during a backup so operators can observe
         // the validator. A failed read means a backup subscription holds the exclusive lock.
         let status = match self.serve_lock.try_read() {
@@ -20,7 +20,7 @@ impl grpc::server::validator_api::Status for ValidatorService {
             Err(_) => "BACKUP",
         };
 
-        Ok(grpc::validator::ValidatorStatus {
+        Ok(grpc::validator::StatusResponse {
             version: env!("CARGO_PKG_VERSION").to_string(),
             status: status.to_string(),
             chain_tip: self.committed_tip.borrow().as_u32(),
@@ -38,11 +38,11 @@ impl grpc::server::validator_api::Status for ValidatorService {
         unimplemented!()
     }
 
-    fn decode(_request: ()) -> tonic::Result<Self::Input> {
+    fn decode(_request: grpc::validator::StatusRequest) -> tonic::Result<Self::Input> {
         unimplemented!()
     }
 
-    fn encode(_output: Self::Output) -> tonic::Result<grpc::validator::ValidatorStatus> {
+    fn encode(_output: Self::Output) -> tonic::Result<grpc::validator::StatusResponse> {
         unimplemented!()
     }
 }
