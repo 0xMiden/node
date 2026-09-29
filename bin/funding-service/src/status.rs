@@ -10,9 +10,41 @@ use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::account::AccountId;
 use miden_protocol::asset::AssetId;
 use miden_protocol::block::BlockNumber;
+use miden_standards::account::faucets::FungibleFaucet;
+use serde::{Deserialize, Serialize};
 
 use crate::LOG_TARGET;
 use crate::node::RpcNodeClient;
+
+// NATIVE ASSET
+// ================================================================================================
+
+/// The metadata of the native asset, as the native faucet records it.
+///
+/// The native faucet cannot change these values, so the service reads them once at startup.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct NativeAsset {
+    /// The asset ID, in hexadecimal.
+    asset_id: String,
+    /// The token symbol.
+    symbol: String,
+    /// The number of decimal places of one token. It converts base units to tokens.
+    decimals: u8,
+    /// The token name.
+    name: String,
+}
+
+impl NativeAsset {
+    /// Reads the metadata of the asset with the given ID from the faucet which issues it.
+    pub fn new(asset_id: AssetId, faucet: &FungibleFaucet) -> Self {
+        Self {
+            asset_id: asset_id.to_string(),
+            symbol: faucet.symbol().to_string(),
+            decimals: faucet.decimals(),
+            name: faucet.token_name().as_str().to_owned(),
+        }
+    }
+}
 
 // STATUS SNAPSHOT
 // ================================================================================================
@@ -25,6 +57,7 @@ use crate::node::RpcNodeClient;
 #[derive(Clone)]
 pub struct StatusSnapshot {
     account_id: AccountId,
+    native_asset: NativeAsset,
     max_amount: u64,
     balance: Arc<AtomicU64>,
     chain_tip: Arc<AtomicU32>,
@@ -33,9 +66,10 @@ pub struct StatusSnapshot {
 
 impl StatusSnapshot {
     /// Creates a snapshot for the given funding account.
-    pub fn new(account_id: AccountId, max_amount: u64) -> Self {
+    pub fn new(account_id: AccountId, native_asset: NativeAsset, max_amount: u64) -> Self {
         Self {
             account_id,
+            native_asset,
             max_amount,
             balance: Arc::new(AtomicU64::new(0)),
             chain_tip: Arc::new(AtomicU32::new(0)),
@@ -52,6 +86,10 @@ impl StatusSnapshot {
 
     pub fn account_id(&self) -> AccountId {
         self.account_id
+    }
+
+    pub fn native_asset(&self) -> &NativeAsset {
+        &self.native_asset
     }
 
     pub fn max_amount(&self) -> u64 {

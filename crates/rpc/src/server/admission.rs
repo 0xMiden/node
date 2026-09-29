@@ -31,6 +31,10 @@ impl AccountAdmission {
         Self { allowlist, funding: None, disabled: true }
     }
 
+    pub(crate) fn is_disabled(&self) -> bool {
+        self.disabled
+    }
+
     #[must_use]
     pub fn with_funding_client(mut self, client: Option<FundingClient>) -> Self {
         self.funding = client;

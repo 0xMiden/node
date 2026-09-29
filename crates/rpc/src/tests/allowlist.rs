@@ -7,12 +7,117 @@ use miden_standards::account::fees::{BasicConstantFeePolicy, FeePolicyManager};
 use super::*;
 
 #[tokio::test]
-async fn registration_requests_funding_once_after_commit() {
+async fn disabled_allowlist_registers_accounts_without_changing_invitations() {
+    let (source_rpc, _, store, _server) = start_rpc_with_allowlist(true).await;
+    let allowlist = AccountAllowlist::load(
+        DataDirectory::load(store.data_directory.clone())
+            .unwrap()
+            .allowlist_database_path(),
+    )
+    .unwrap();
+    let account = |byte| {
+        AccountId::dummy(
+            [byte; 15],
+            AccountIdVersion::Version1,
+            AccountType::Private,
+            AssetCallbackFlag::Disabled,
+        )
+    };
+    for (code, account_id) in [("unused", None), ("used", Some(account(255)))] {
+        allowlist
+            .import_invitation(InvitationEntry {
+                invitation_code: InvitationCode::new(code).unwrap(),
+                account_id,
+            })
+            .await
+            .unwrap();
+    }
+    let rpc = RpcService::new(
+        Arc::clone(&store.state),
+        RpcBackend::full_node(source_rpc, None),
+        None,
+        NonZeroUsize::new(1).unwrap(),
+        None,
+    );
+    let request = |code: &str, account_id| {
+        let mut request = Request::new(proto::rpc::RegisterAccountRequest {
+            invitation_code: code.to_owned(),
+            account_id,
+        });
+        request.metadata_mut().insert(
+            ACCEPT.as_str(),
+            format!("application/vnd.miden; genesis={}", store.genesis_commitment())
+                .parse()
+                .unwrap(),
+        );
+        request
+    };
+
+    for account_id in [None, Some(proto::account::AccountId::default())] {
+        assert_eq!(
+            rpc.register_account(request("", account_id)).await.unwrap_err().code(),
+            tonic::Code::InvalidArgument
+        );
+    }
+    for (index, code) in ["", " unknown-\u{e9}\n", "unused", "used"].into_iter().enumerate() {
+        let invitation = InvitationCode::new(code).ok();
+        let before = if let Some(invitation) = &invitation {
+            allowlist.invitation_info(invitation.clone()).await.unwrap()
+        } else {
+            None
+        };
+        for offset in [0, 4] {
+            let account_id = account(u8::try_from(index + offset).unwrap());
+            assert!(!allowlist.contains_account(account_id).await.unwrap());
+            rpc.register_account(request(code, Some(account_id.into()))).await.unwrap();
+            assert!(allowlist.contains_account(account_id).await.unwrap());
+            let registered_at = allowlist.allowlisted_at(account_id).await.unwrap();
+            assert!(registered_at.is_some());
+            rpc.register_account(request("", Some(account_id.into()))).await.unwrap();
+            assert_eq!(allowlist.allowlisted_at(account_id).await.unwrap(), registered_at);
+        }
+        if let Some(invitation) = invitation {
+            assert_eq!(allowlist.invitation_info(invitation).await.unwrap(), before);
+        }
+    }
+    rpc.register_account(request("unused", Some(account(255).into())))
+        .await
+        .unwrap();
+    assert_eq!(
+        allowlist
+            .invitation_info(InvitationCode::new("unused").unwrap())
+            .await
+            .unwrap()
+            .unwrap()
+            .account_id,
+        None
+    );
+    assert_eq!(
+        allowlist
+            .invitation_info(InvitationCode::new("used").unwrap())
+            .await
+            .unwrap()
+            .unwrap()
+            .account_id,
+        Some(account(255))
+    );
+}
+
+#[rstest::rstest]
+#[case::enabled(false)]
+#[case::disabled(true)]
+#[tokio::test]
+async fn registration_requests_funding_once_after_commit(#[case] disabled: bool) {
     use axum::{Json, Router};
     use serde_json::{Value, json};
 
     let store = TestStore::start().await;
     let allowlist = store.bootstrap_allowlist();
+    let account_admission = if disabled {
+        AccountAdmission::disabled(Arc::clone(&allowlist))
+    } else {
+        AccountAdmission::enabled(Arc::clone(&allowlist))
+    };
     let accounts = [0, 1].map(|byte| {
         AccountId::dummy(
             [byte; 15],
@@ -22,6 +127,7 @@ async fn registration_requests_funding_once_after_commit() {
         )
     });
     let (requests, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let funding_allowlist = allowlist.reader();
     let funding_api = Router::new().route(
         "/request-funds",
         axum::routing::post(move |Json(body): Json<Value>| {
@@ -30,8 +136,14 @@ async fn registration_requests_funding_once_after_commit() {
             } else {
                 http::StatusCode::OK
             };
-            requests.send(body).unwrap();
-            async move { status }
+            let allowlist = funding_allowlist.clone();
+            let requests = requests.clone();
+            async move {
+                let account_id = AccountId::from_hex(body["account_id"].as_str().unwrap()).unwrap();
+                assert!(allowlist.contains_account(account_id).await.unwrap());
+                requests.send(body).unwrap();
+                status
+            }
         }),
     );
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -55,29 +167,35 @@ async fn registration_requests_funding_once_after_commit() {
                 guard.0.clone(),
             ),
             ValidatorClients::new(vec![dummy_client::<ValidatorClient>()]).unwrap(),
-            AccountAdmission::disabled(Arc::clone(&allowlist)).with_funding_client(Some(funding)),
+            account_admission.with_funding_client(Some(funding)),
         ),
         None,
         NonZeroUsize::new(1).unwrap(),
         None,
     );
     for (index, account) in accounts.into_iter().enumerate() {
-        let code = format!("funding-{index}");
+        let code = if disabled && index == 1 {
+            String::new()
+        } else {
+            format!("funding-{index}")
+        };
         let request = proto::rpc::RegisterAccountRequest {
             invitation_code: code.clone(),
             account_id: Some(account.into()),
         };
-        assert_eq!(
-            rpc.register_account(Request::new(request.clone())).await.unwrap_err().code(),
-            tonic::Code::NotFound
-        );
-        allowlist
-            .import_invitation(InvitationEntry {
-                invitation_code: InvitationCode::new(&code).unwrap(),
-                account_id: None,
-            })
-            .await
-            .unwrap();
+        if !disabled {
+            assert_eq!(
+                rpc.register_account(Request::new(request.clone())).await.unwrap_err().code(),
+                tonic::Code::NotFound
+            );
+            allowlist
+                .import_invitation(InvitationEntry {
+                    invitation_code: InvitationCode::new(&code).unwrap(),
+                    account_id: None,
+                })
+                .await
+                .unwrap();
+        }
         let response = rpc.register_account(Request::new(request.clone())).await;
         if index == 0 {
             response.unwrap();
@@ -87,7 +205,15 @@ async fn registration_requests_funding_once_after_commit() {
             assert!(error.message().contains("503 Service Unavailable"));
         }
         assert!(allowlist.contains_account(account).await.unwrap());
-        rpc.register_account(Request::new(request)).await.unwrap();
+        rpc.register_account(Request::new(request.clone())).await.unwrap();
+        if disabled {
+            rpc.register_account(Request::new(proto::rpc::RegisterAccountRequest {
+                invitation_code: "another code".to_owned(),
+                ..request
+            }))
+            .await
+            .unwrap();
+        }
         assert_eq!(
             received.try_recv().unwrap(),
             json!({"account_id": account.to_hex(), "amount": 42})

@@ -157,6 +157,7 @@ fn render_details(service: &ServiceStatus, rpc_chain_tip: Option<u32>) -> Markup
         ServiceDetails::ExplorerStatus(d) => cards::render_explorer(d, rpc_chain_tip, healthy),
         ServiceDetails::NoteTransportStatus(d) => cards::render_note_transport(d, healthy),
         ServiceDetails::ValidatorStatus(d) => cards::render_validator(d, healthy),
+        ServiceDetails::AgglayerStatus(d) => cards::render_agglayer(d),
         ServiceDetails::Error => html! {},
     }
 }
@@ -226,6 +227,8 @@ mod tests {
     use crate::faucet::{FaucetTestDetails, GetMetadataResponse};
     use crate::remote_prover::{ProofType, ProverTestDetails};
     use crate::status::{
+        AgglayerDirectionDetails,
+        AgglayerStatusDetails,
         BlockProducerStatusDetails,
         CounterTrackingDetails,
         ExplorerStatusDetails,
@@ -491,6 +494,42 @@ mod tests {
         let html = render(vec![healthy("validator", ServiceDetails::ValidatorStatus(details))]);
         assert!(html.contains("Validator:"));
         assert!(html.contains("Signed Blocks"));
+    }
+
+    #[test]
+    fn renders_agglayer_card() {
+        let details = AgglayerStatusDetails {
+            url: "https://agglayer-monitor.example".to_string(),
+            reason_code: None,
+            runner_status: "running".to_string(),
+            heartbeat_at: 1_609_459_200,
+            inbound: AgglayerDirectionDetails {
+                status: Status::Healthy,
+                last_success_at: Some(1_609_459_200),
+                last_success_duration_ms: Some(1_190_000),
+                success_count: 1,
+                ..Default::default()
+            },
+            outbound: AgglayerDirectionDetails {
+                status: Status::Unhealthy,
+                reason_code: Some("deadline_exceeded".to_string()),
+                last_failure_at: Some(1_609_459_200),
+                last_failure_code: Some("deadline_exceeded".to_string()),
+                current_phase: Some("waiting_claimable".to_string()),
+                failure_count: 1,
+                ..Default::default()
+            },
+        };
+        let html =
+            render(vec![healthy("Agglayer Bridge", ServiceDetails::AgglayerStatus(details))]);
+        assert!(html.contains("Agglayer Bridge"));
+        assert!(html.contains("L1 → Miden:"));
+        assert!(html.contains("Miden → L1:"));
+        assert!(html.contains("2021-01-01 00:00:00 UTC"));
+        assert!(html.contains("deadline_exceeded"));
+        assert!(html.contains("waiting_claimable"));
+        // Only the unhealthy outbound direction has a reason.
+        assert_eq!(html.matches("Reason:").count(), 1);
     }
 
     #[test]

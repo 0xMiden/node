@@ -33,10 +33,6 @@ profiles independent of additional `-f` arguments. Local includes cannot be publ
 `.github/actions/publish-compose` action first renders the complete, all-profile model without interpolating its
 variables or normalizing project resource names. It then either dry-runs or publishes that flattened model.
 
-The bundled three-validator development genesis is an inline Compose config named `genesis`. Consumers replace that
-resource with a file through a Compose override when they need a custom genesis configuration. The same override works
-with the repository model and the published OCI application.
-
 The workflow uses a broad `v*` trigger because GitHub Actions does not use the same pattern language as repository
 rulesets. Its preflight step verifies that this trigger still matches the target of the `Release tags` ruleset, while
 the ruleset itself enforces the release-tag format.

@@ -7,7 +7,7 @@ use anyhow::Result;
 use miden_objects::account_file::AccountFile;
 use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
 use miden_protocol::account::{Account, AccountId, AccountType};
-use miden_protocol::asset::{AssetAmount, FungibleAsset, TokenSymbol};
+use miden_protocol::asset::{AssetAmount, AssetId, FungibleAsset, TokenSymbol};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
 use miden_protocol::{Felt, ONE};
 use miden_standards::account::access::AccessControl;
@@ -32,6 +32,7 @@ use rand_chacha::ChaCha20Rng;
 use tokio::sync::Mutex;
 
 use crate::account::FunderKey;
+use crate::status::NativeAsset;
 
 /// The base fee used by the tests which exercise the fee path.
 pub const TEST_BASE_FEE: u32 = 500;
@@ -60,6 +61,19 @@ pub fn genesis_style_wallet(
     wallet.set_nonce(ONE)?;
 
     Ok((wallet, secret_key))
+}
+
+/// Builds the native asset metadata of the mock issuer, with a name and a symbol which differ.
+pub fn test_native_asset() -> NativeAsset {
+    let faucet = FungibleFaucetComponent::builder()
+        .name(TokenName::new("Miden").expect("valid token name"))
+        .symbol(TokenSymbol::new("MIDEN").expect("valid token symbol"))
+        .decimals(6)
+        .max_supply(AssetAmount::new(100_000_000_000_000_000).expect("valid supply"))
+        .build()
+        .expect("valid faucet");
+
+    NativeAsset::new(AssetId::new_fungible(FungibleAsset::mock_issuer()), &faucet)
 }
 
 /// Builds a network fungible faucet shaped like the genesis native faucet.

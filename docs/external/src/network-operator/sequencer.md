@@ -62,8 +62,9 @@ The sequencer checks new, non-network accounts against the allowlist on both pub
 Existing-account transactions and network-account creation do not require registration.
 
 For development networks, use `--disable-account-allowlist` or set `MIDEN_NODE_DISABLE_ACCOUNT_ALLOWLIST=true` to allow
-unrestricted account creation. Enforcement is enabled by default. The flag does not disable registration or the
-administration API.
+unrestricted account creation. Enforcement is enabled by default. When enforcement is disabled, `RegisterAccount`
+accepts any invitation code, including an empty code. It adds the account directly to the registry without storing or
+consuming the code. New registrations still request funding if configured. The administration API remains available.
 
 The sequencer can serve a private JSON administration API. The listener is disabled by default. Configure its address to
 enable it:
@@ -103,9 +104,9 @@ it. Starting the sequencer creates an empty registry if none exists, including w
 Existing registries are loaded without replacing their entries. Startup does not apply migrations.
 `miden-node migrate --data-directory node-data` applies allowlist migrations only if the registry exists.
 
-The public `RegisterAccount` RPC uses this registry even when the administration listener is disabled. It binds an
-unused invitation to an account. See [Account Registration](../rpc/public-api.md#account-registration) for the request
-and retry behavior.
+The public `RegisterAccount` RPC uses this registry even when the administration listener is disabled. When allowlist
+enforcement is enabled, it binds an unused invitation to an account. See
+[Account Registration](../rpc/public-api.md#account-registration) for the request and retry behavior.
 
 Back up the registry separately. It is not replicated with blocks. Restore it before starting a replacement sequencer to
 preserve invitations and registrations. Without a restored registry, the replacement starts with an empty allowlist.

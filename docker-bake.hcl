@@ -3,11 +3,13 @@ group "validate" {
     "build-report",
     "node",
     "validator",
+    "note-transport",
     "ntx-builder",
     "remote-prover",
     "network-monitor",
     "funding-service",
     "node-tps-benchmark",
+    "usdcx-genesis",
   ]
 }
 
@@ -37,6 +39,15 @@ target "validator" {
   args = {
     BIN  = "miden-validator"
     PORT = "50101"
+  }
+}
+
+target "note-transport" {
+  inherits = ["common"]
+  target   = "runtime"
+  args = {
+    BIN  = "miden-note-transport"
+    PORT = "57292"
   }
 }
 
@@ -81,5 +92,13 @@ target "node-tps-benchmark" {
   target   = "runtime-tool"
   args = {
     BIN = "miden-benchmark"
+  }
+}
+
+target "usdcx-genesis" {
+  inherits = ["common"]
+  target   = "runtime-tool"
+  args = {
+    BIN = "xusdc-genesis"
   }
 }
