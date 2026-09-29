@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use miden_node_proto::generated as proto;
 use miden_node_proto::generated::rpc::{BlockProducerStatus, RpcStatus};
 use miden_node_tracing::warn;
+use miden_protocol::Word;
 use serde::{Deserialize, Serialize};
 
 use crate::LOG_TARGET;
@@ -420,10 +421,19 @@ impl RemoteProverStatusDetails {
 impl RpcStatusDetails {
     /// Creates `RpcStatusDetails` from a gRPC `RpcStatus` response and the configured URL.
     pub fn from_rpc_status(status: RpcStatus, url: String) -> Self {
+        let genesis_commitment = status.genesis_commitment.as_ref().and_then(|genesis| {
+            Word::try_from(genesis)
+                .inspect_err(|err| {
+                    warn!(err, target: LOG_TARGET, "Invalid genesis commitment in RPC status");
+                })
+                .ok()
+                .map(|genesis| genesis.to_hex())
+        });
+
         Self {
             url,
             version: status.version,
-            genesis_commitment: status.genesis_commitment.as_ref().map(|gc| format!("{gc:?}")),
+            genesis_commitment,
             chain_tip: status.chain_tip,
             block_producer_status: status.block_producer.map(BlockProducerStatusDetails::from),
         }
@@ -492,5 +502,30 @@ mod tests {
         assert!(matches!(details.supported_proof_type, ProofType::Unknown));
         assert_eq!(details.workers.len(), 1);
         assert_eq!(details.workers[0].status, Status::Healthy);
+    }
+
+    #[test]
+    fn rpc_status_genesis_commitment_is_hex_encoded() {
+        let genesis = Word::from([1, 2, 3, 4u32]);
+        let proto_status = RpcStatus {
+            version: "1.0".to_string(),
+            genesis_commitment: Some(genesis.into()),
+            chain_tip: 7,
+            block_producer: None,
+        };
+        let details = RpcStatusDetails::from_rpc_status(proto_status, "url".to_string());
+        assert_eq!(details.genesis_commitment, Some(genesis.to_hex()));
+    }
+
+    #[test]
+    fn rpc_status_with_malformed_genesis_commitment_omits_it() {
+        let proto_status = RpcStatus {
+            version: "1.0".to_string(),
+            genesis_commitment: Some(proto::primitives::Word { encoded: vec![1, 2, 3] }),
+            chain_tip: 7,
+            block_producer: None,
+        };
+        let details = RpcStatusDetails::from_rpc_status(proto_status, "url".to_string());
+        assert!(details.genesis_commitment.is_none());
     }
 }

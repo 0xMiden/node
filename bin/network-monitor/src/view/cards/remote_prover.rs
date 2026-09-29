@@ -5,6 +5,7 @@ use maud::{Markup, html};
 
 use super::super::helpers::{
     copy_button,
+    copyable_value,
     format_success_rate,
     metric_row,
     probe_section_placeholder,
@@ -23,8 +24,7 @@ pub(in crate::view) fn render_remote_prover(details: &RemoteProverDetails) -> Ma
         {
             div class="detail-item" {
                 strong { "URL: " }
-                (proxy.url)
-                (copy_button(&proxy.url, "URL"))
+                (copyable_value(&proxy.url, "URL"))
             }
             div class="detail-item" {
                 strong { "Version: " }

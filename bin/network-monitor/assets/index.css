@@ -192,9 +192,13 @@ body {
     padding: 12px 16px;
     border-radius: 6px;
     margin-top: 16px;
-    display: none;
-    font-size: 14px;
+    font-size: 12px;
     white-space: pre-wrap;
+    /* Errors can contain full response bodies without spaces. Wrap them inside the card and limit
+       the height so that the card stays readable. */
+    overflow-wrap: anywhere;
+    max-height: 160px;
+    overflow-y: auto;
     z-index: 2;
     grid-column: 1 / -1; /* Span the full width of the grid when in grid context */
 }
@@ -208,6 +212,9 @@ body {
     transition: all 0.2s;
     display: flex;
     flex-direction: column;
+    /* Without this, a grid column with an `auto` minimum grows to the width of the longest
+       single-line value, and the card overflows narrow screens. */
+    min-width: 0;
 }
 
 .service-card:hover {
@@ -422,24 +429,34 @@ body {
 .metric-label {
     color: var(--color-text-primary);
     font-weight: 500;
+    white-space: nowrap;
 }
 
 .metric-value {
     font-weight: 500;
 }
 
-/* When the value carries an inline action (currently only the copy button), keep them on the
-   same line. Without this `.metric-value` is inline, and the whitespace between the value text
-   and the button is a wrap opportunity, so long values (URLs in particular) push the button
-   onto its own row below. `min-width: 0` plus `overflow-wrap: anywhere` let values with no
-   natural break points (e.g. URLs without hyphens) wrap inside the card instead of overflowing
-   it and dragging the button outside the box. */
-.metric-value:has(.copy-button) {
+/* A long value is a flex row, so the value and its copy button stay on the same line.
+   `min-width: 0` and `max-width: 100%` let the row shrink to the width of the card. The
+   `.value-text` inside it then cuts the value with an ellipsis. The left margin keeps the shrunk
+   value apart from its label. */
+.metric-value:has(.value-text) {
     display: inline-flex;
     align-items: center;
     gap: 4px;
     min-width: 0;
-    overflow-wrap: anywhere;
+    max-width: 100%;
+    margin-left: 8px;
+}
+
+/* A long value (URL, commitment, ID) stays on one line. When there is not sufficient width, the
+   value ends with an ellipsis. The tooltip and the copy button give the full value. */
+.value-text {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .metric-value.warning-delta,
@@ -613,6 +630,10 @@ body {
         flex-direction: column;
         align-items: flex-start;
         gap: 2px;
+    }
+
+    .metric-value:has(.value-text) {
+        margin-left: 0;
     }
 
     #status-container {
