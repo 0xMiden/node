@@ -20,6 +20,17 @@ message GenesisFile {
   protocol_config.ProtocolConfig protocol_config = 3;
 }
 
+// Stores an account's code in the store database's account_codes.code column.
+// The store reads this message to restore a public account.
+message AccountCode {
+  MastForest mast = 1;
+  repeated primitives.Word procedure_roots = 2;
+}
+
+// Stores a MAST forest with its node hashes for trusted restoration.
+// AccountCode uses this message in the store database's account_codes.code column.
+message MastForest { bytes encoded = 1; }
+
 // Stores a block's signatures in the store database's block_headers.signature column.
 message BlockSignatures { repeated primitives.Signature signatures = 1; }
 

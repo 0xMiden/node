@@ -18,6 +18,55 @@ fn invalid_account_is_rejected() {
 }
 
 #[test]
+fn account_code_storage_rejects_hashless_mast() {
+    use miden_protocol::account::AccountCode;
+
+    let code = AccountCode::mock();
+    let mut message =
+        crate::generated::AccountCode::decode(crate::encode(&code).as_slice()).unwrap();
+    let mut hashless = Vec::new();
+    code.mast().write_hashless(&mut hashless);
+    message.mast.as_mut().unwrap().encoded = hashless;
+
+    assert!(crate::decode::<AccountCode>(&message.encode_to_vec()).is_err());
+}
+
+#[test]
+fn account_code_storage_preserves_trusted_mast() {
+    use miden_protocol::MastForest;
+    use miden_protocol::account::AccountCode;
+    use miden_protocol::utils::serde::Deserializable;
+
+    let code = AccountCode::mock();
+    let bytes = crate::encode(&code);
+    let message = crate::generated::AccountCode::decode(bytes.as_slice()).unwrap();
+    let stored_mast = message.mast.unwrap();
+
+    assert_eq!(MastForest::read_from_bytes(&stored_mast.encoded).unwrap(), *code.mast());
+    assert_eq!(crate::decode::<AccountCode>(&bytes).unwrap(), code);
+}
+
+#[test]
+fn account_code_storage_rejects_invalid_fields() {
+    use miden_protocol::account::AccountCode;
+
+    let code = AccountCode::mock();
+    let message = crate::generated::AccountCode::decode(crate::encode(&code).as_slice()).unwrap();
+
+    let mut missing_mast = message.clone();
+    missing_mast.mast = None;
+    assert!(crate::decode::<AccountCode>(&missing_mast.encode_to_vec()).is_err());
+
+    let mut malformed_mast = message.clone();
+    malformed_mast.mast.as_mut().unwrap().encoded = vec![0xff];
+    assert!(crate::decode::<AccountCode>(&malformed_mast.encode_to_vec()).is_err());
+
+    let mut invalid_roots = message;
+    invalid_roots.procedure_roots.clear();
+    assert!(crate::decode::<AccountCode>(&invalid_roots.encode_to_vec()).is_err());
+}
+
+#[test]
 fn full_accounts_preserve_state() {
     use miden_protocol::account::Account;
     use miden_protocol::testing::add_component::AddComponent;
