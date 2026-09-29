@@ -1,4 +1,4 @@
-use miden_node_proto::generated::rpc::CommittedNote;
+use miden_node_proto::generated::miden::node::v1::CommittedNote;
 use miden_node_proto::{DecodeMessage, generated as proto};
 use miden_node_store::NoteRecord;
 use miden_node_tracing::{debug, miden_instrument, miden_span_record};
@@ -10,19 +10,19 @@ use super::{RpcService, check, database_error_to_status};
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::GetNotesById for RpcService {
-    type Input = proto::rpc::DecodedGetNotesByIdRequest;
+impl proto::server::miden_node_v1_node_service::GetNotesById for RpcService {
+    type Input = proto::miden::node::v1::DecodedGetNotesByIdRequest;
     type Output = Vec<CommittedNote>;
 
-    fn decode(request: proto::rpc::GetNotesByIdRequest) -> tonic::Result<Self::Input> {
+    fn decode(request: proto::miden::node::v1::GetNotesByIdRequest) -> tonic::Result<Self::Input> {
         check::<QueryParamNoteIdLimit>(request.note_ids.len())?;
         request
             .decode_fields()
             .map_err(|err| GetNotesByIdErrorCode::DeserializationFailed.invalid_argument(err))
     }
 
-    fn encode(notes: Self::Output) -> tonic::Result<proto::rpc::GetNotesByIdResponse> {
-        Ok(proto::rpc::GetNotesByIdResponse { notes })
+    fn encode(notes: Self::Output) -> tonic::Result<proto::miden::node::v1::GetNotesByIdResponse> {
+        Ok(proto::miden::node::v1::GetNotesByIdResponse { notes })
     }
 
     #[miden_instrument(
@@ -65,7 +65,7 @@ impl proto::server::rpc_api::GetNotesById for RpcService {
 // HELPERS
 // ================================================================================================
 
-fn note_record_to_proto(note: NoteRecord) -> proto::rpc::CommittedNote {
+fn note_record_to_proto(note: NoteRecord) -> proto::miden::node::v1::CommittedNote {
     let inclusion_proof = Some(proto::note::NoteInclusionProof {
         note_id: Some(note.note_id.into()),
         block_num: Some(note.block_num.into()),
@@ -77,5 +77,5 @@ fn note_record_to_proto(note: NoteRecord) -> proto::rpc::CommittedNote {
         note_details: note.details.map(Into::into),
         note_attachments: Some(note.attachments.into()),
     });
-    proto::rpc::CommittedNote { inclusion_proof, note }
+    proto::miden::node::v1::CommittedNote { inclusion_proof, note }
 }

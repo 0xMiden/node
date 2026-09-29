@@ -13,7 +13,7 @@ use miden_node_proto::domain::encryption::{
     TransactionInputsSealer,
     TrustedTransactionEncryptionState,
 };
-use miden_node_proto::generated::rpc::GetBlockHeaderByNumberRequest;
+use miden_node_proto::generated::miden::node::v1::GetBlockHeaderByNumberRequest;
 use miden_node_proto::{DecodeMessageExt, VerifyWith};
 use miden_protocol::Word;
 use miden_protocol::block::{BlockHeader, BlockNumber};
@@ -223,7 +223,7 @@ pub(crate) async fn create_genesis_aware_rpc_client_pool(
     let key = pool[0]
         .clone()
         .get_transaction_encryption_key(
-            miden_node_proto::generated::rpc::GetTransactionEncryptionKeyRequest {},
+            miden_node_proto::generated::miden::node::v1::GetTransactionEncryptionKeyRequest {},
         )
         .await
         .context("Failed to fetch the transaction encryption key")?

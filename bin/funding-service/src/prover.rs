@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use miden_node_proto::clients::{Builder, RemoteProverClient};
-use miden_node_proto::generated::remote_prover::prove_request::Request as ProofRequestVariant;
-use miden_node_proto::generated::remote_prover::{DecodedProveResponse, ProveRequest};
+use miden_node_proto::generated::miden::remote_prover::v1::prove_request::Request as ProofRequestVariant;
+use miden_node_proto::generated::miden::remote_prover::v1::{DecodedProveResponse, ProveRequest};
 use miden_node_proto::{BuildUnchecked, DecodeMessage};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorReport, warn};

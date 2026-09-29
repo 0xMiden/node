@@ -1,6 +1,6 @@
 // Internal gRPC API for the network transaction builder component.
 syntax = "proto3";
-package ntx_builder;
+package miden.ntx_builder.v1;
 
 import "rpc.proto";
 import "note.proto";
@@ -9,7 +9,7 @@ import "note.proto";
 // ================================================================================================
 
 // API for querying network transaction builder state.
-service Api {
+service NetworkTransactionBuilderService {
     // Returns the current status of a network note.
     //
     // The status indicates where the note is in its lifecycle: pending execution,
@@ -26,7 +26,7 @@ message GetNetworkNoteStatusRequest {
 
 message GetNetworkNoteStatusResponse {
     // Current lifecycle status of the note.
-    rpc.NetworkNoteStatus status = 1;
+    miden.node.v1.NetworkNoteStatus status = 1;
     // The latest error message from execution, if any.
     optional string last_error = 2;
     // Number of failed execution attempts.

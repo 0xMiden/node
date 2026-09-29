@@ -1,7 +1,10 @@
 use std::num::NonZeroUsize;
 
 use anyhow::Context;
-use miden_node_proto::server::{remote_prover_api, remote_prover_worker_status_api};
+use miden_node_proto::server::{
+    miden_remote_prover_v1_prover_service,
+    miden_remote_prover_v1_worker_status_service,
+};
 use miden_node_tracing::grpc::grpc_trace_fn;
 use miden_node_tracing::panic::catch_panic_layer_fn;
 use miden_node_tracing::{OpenTelemetry, info};
@@ -81,10 +84,11 @@ impl Server {
             prover.port = port
         );
 
-        let status_service =
-            remote_prover_worker_status_api::service(status::StatusService::new(self.kind));
+        let status_service = miden_remote_prover_v1_worker_status_service::service(
+            status::StatusService::new(self.kind),
+        );
         let prover_service = ProverService::with_capacity(self.kind, self.capacity);
-        let prover_service = remote_prover_api::service(prover_service);
+        let prover_service = miden_remote_prover_v1_prover_service::service(prover_service);
 
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_file_descriptor_set(miden_node_proto_build::remote_prover_api_descriptor())
@@ -98,7 +102,7 @@ impl Server {
         // Mark the service as serving
         health_reporter
             .set_service_status(
-                remote_prover_api::service_name(),
+                miden_remote_prover_v1_prover_service::service_name(),
                 tonic_health::ServingStatus::Serving,
             )
             .await;

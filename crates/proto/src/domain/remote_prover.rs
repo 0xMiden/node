@@ -4,7 +4,7 @@ use miden_protocol::vm::ExecutionProof;
 
 use crate::generated as proto;
 
-impl proto::remote_prover::DecodedProveResponse {
+impl proto::miden::remote_prover::v1::DecodedProveResponse {
     /// Extract the transaction fields without verifying the transaction.
     pub fn into_transaction(
         self,
@@ -23,7 +23,7 @@ impl proto::remote_prover::DecodedProveResponse {
     }
 }
 
-impl VerifyWith<&ProposedBatch> for proto::remote_prover::DecodedProveResponse {
+impl VerifyWith<&ProposedBatch> for proto::miden::remote_prover::v1::DecodedProveResponse {
     type Verified = ProvenBatch;
     type Error = ConversionError;
 
@@ -41,9 +41,9 @@ mod tests {
 
     use super::*;
 
-    fn block_response() -> proto::remote_prover::ProveResponse {
-        proto::remote_prover::ProveResponse {
-            proof: Some(proto::remote_prover::prove_response::Proof::Block(
+    fn block_response() -> proto::miden::remote_prover::v1::ProveResponse {
+        proto::miden::remote_prover::v1::ProveResponse {
+            proof: Some(proto::miden::remote_prover::v1::prove_response::Proof::Block(
                 dummy_execution_proof().into(),
             )),
         }
@@ -51,8 +51,9 @@ mod tests {
 
     #[test]
     fn missing_proof_is_rejected() {
-        let error =
-            proto::remote_prover::ProveResponse { proof: None }.decode_fields().unwrap_err();
+        let error = proto::miden::remote_prover::v1::ProveResponse { proof: None }
+            .decode_fields()
+            .unwrap_err();
         assert!(error.to_string().contains("proof"));
     }
 
@@ -74,8 +75,8 @@ mod tests {
 
     #[test]
     fn malformed_proof_retains_field_context() {
-        let response = proto::remote_prover::ProveResponse {
-            proof: Some(proto::remote_prover::prove_response::Proof::Transaction(
+        let response = proto::miden::remote_prover::v1::ProveResponse {
+            proof: Some(proto::miden::remote_prover::v1::prove_response::Proof::Transaction(
                 proto::transaction::ProvenTransaction::default(),
             )),
         };

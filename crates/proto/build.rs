@@ -1,4 +1,5 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+use std::fmt::Write;
 use std::path::Path;
 use std::process::Command;
 
@@ -88,7 +89,7 @@ fn generate_bindings(file_descriptors: &FileDescriptorSet, dst_dir: &Path) -> mi
     // Protobuf does not support the optional keyword on a oneof. Use a suffix match so the
     // attribute does not apply to the variants.
     prost_config.field_attribute(
-        "rpc.GetAccountRequest.AccountDetailRequest.storage_request",
+        "miden.node.v1.GetAccountRequest.AccountDetailRequest.storage_request",
         "#[proto_decode(optional)]",
     );
 
@@ -111,7 +112,7 @@ fn collect_message_names(parent: &str, descriptors: &[DescriptorProto], names: &
     for descriptor in descriptors {
         let name = format!("{parent}.{}", descriptor.name());
         // The derive adds Debug without field redaction. Keep invitation codes out of Debug output.
-        if name == "rpc.RegisterAccountRequest" {
+        if name == "miden.node.v1.RegisterAccountRequest" {
             continue;
         }
         collect_message_names(&name, &descriptor.nested_type, names);
@@ -154,26 +155,62 @@ fn collect_rs_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> miette::Re
 
 /// Generate `mod.rs` which includes all files in the folder as submodules.
 fn generate_mod_rs(dst_dir: impl AsRef<Path>) -> std::io::Result<()> {
-    // The codegen API has no function for a `mod <module>;` declaration. Generate it directly.
-    let mut modules = Vec::new();
+    let mut modules = ModuleTree::default();
+    let is_server_dir = dst_dir.as_ref().file_name().is_some_and(|name| name == "server");
 
     for entry in fs::read_dir(dst_dir.as_ref())? {
         let entry = entry?;
         let path = entry.path();
 
-        let module = if path.is_file() {
-            path.file_stem().and_then(|f| f.to_str()).expect("Could not get file name")
+        if path.is_file() {
+            let stem = path.file_stem().and_then(|f| f.to_str()).expect("Could not get file name");
+            let file = path.file_name().and_then(|f| f.to_str()).expect("Could not get file name");
+            let prefix = if is_server_dir { "server/" } else { "" };
+            modules.insert(stem.split('.'), format!("{prefix}{file}"));
         } else if path.is_dir() {
-            path.file_name().and_then(|f| f.to_str()).expect("Could not get directory name")
-        } else {
-            continue;
-        };
-
-        modules.push(format!("pub mod {module};"));
+            let module =
+                path.file_name().and_then(|f| f.to_str()).expect("Could not get directory name");
+            modules.directories.push(module.to_string());
+        }
     }
 
-    modules.sort();
-    fs::write(dst_dir.as_ref().join("mod.rs"), modules.join("\n"))
+    fs::write(dst_dir.as_ref().join("mod.rs"), modules.render())
+}
+
+#[derive(Default)]
+struct ModuleTree {
+    files: BTreeMap<String, ModuleTree>,
+    directories: Vec<String>,
+    path: Option<String>,
+}
+
+impl ModuleTree {
+    fn insert<'a>(&mut self, mut segments: impl Iterator<Item = &'a str>, path: String) {
+        if let Some(segment) = segments.next() {
+            self.files.entry(segment.to_string()).or_default().insert(segments, path);
+        } else {
+            self.path = Some(path);
+        }
+    }
+
+    fn render(&self) -> String {
+        let mut output = String::new();
+        for directory in &self.directories {
+            let _ = writeln!(output, "pub mod {directory};");
+        }
+        for (name, module) in &self.files {
+            let _ = writeln!(output, "pub mod {name} {{");
+            if let Some(path) = &module.path {
+                let _ = writeln!(
+                    output,
+                    "include!(concat!(env!(\"OUT_DIR\"), \"/generated/{path}\"));"
+                );
+            }
+            output.push_str(&module.render());
+            output.push_str("}\n");
+        }
+        output
+    }
 }
 
 /// Generate server facade modules (one per service) from the provided descriptor sets.
@@ -186,20 +223,19 @@ fn generate_server_modules(
     for fds in descriptor_sets {
         for file in &fds.file {
             let package = file.package.as_deref().unwrap_or_default();
-            let package = package.replace('.', "_");
 
             for service in &file.service {
                 let service_name = service.name.as_deref().unwrap_or("Service");
-                let key = (package.clone(), service_name.to_string());
+                let key = (package.to_string(), service_name.to_string());
                 if !generated.insert(key) {
                     continue;
                 }
 
                 let service_name = to_snake_case(service_name);
-                let module_name = format!("{package}_{service_name}");
+                let module_name = format!("{}_{}", package.replace('.', "_"), service_name);
 
                 let contents =
-                    Service::from_descriptor(service, &package)?.generate().scope().to_string();
+                    Service::from_descriptor(service, package)?.generate().scope().to_string();
 
                 let path = dst_dir.join(format!("{module_name}.rs"));
                 fs::write(path, contents).into_diagnostic().wrap_err("writing server module")?;
@@ -244,7 +280,7 @@ impl Service {
             .filter(|method| method.server_streaming())
             .map(ServerStream::from_descriptor)
             .collect();
-        let package = package.to_string();
+        let package = package.replace('.', "::");
 
         // We don't have any client streams, so no need to support them.
         miette::ensure!(

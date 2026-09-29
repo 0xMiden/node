@@ -124,7 +124,11 @@ impl Service for RpcService {
         level = "info",
     )]
     async fn check(&mut self) -> ServiceStatus {
-        match self.rpc.status(miden_node_proto::generated::rpc::StatusRequest {}).await {
+        match self
+            .rpc
+            .status(miden_node_proto::generated::miden::node::v1::StatusRequest {})
+            .await
+        {
             Ok(response) => {
                 let rpc_details =
                     RpcStatusDetails::from_rpc_status(response.into_inner(), self.url.clone());

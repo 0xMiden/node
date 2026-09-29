@@ -4,7 +4,10 @@ use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_proto::clients::RpcClient;
-use miden_node_proto::generated::rpc::{BlockSubscriptionRequest, ProofSubscriptionRequest};
+use miden_node_proto::generated::miden::node::v1::{
+    BlockSubscriptionRequest,
+    ProofSubscriptionRequest,
+};
 use miden_node_proto::{DecodeMessage, DecodeMessageExt};
 use miden_node_store::state::{BlockWriter, ProofWriter, State};
 use miden_node_tracing::{Instrument, debug, info, info_span, miden_instrument, warn};
@@ -43,7 +46,7 @@ enum ReadinessTransition {
 }
 
 impl RpcReadiness {
-    const SERVICE_NAME: &'static str = "rpc.Api";
+    const SERVICE_NAME: &'static str = "miden.node.v1.NodeService";
     const UNKNOWN: u8 = 0;
     const NOT_READY: u8 = 1;
     const READY: u8 = 2;
@@ -209,7 +212,9 @@ impl BlockSync {
         let mut client = self.source_rpc.clone();
         let upstream_tip = BlockNumber::from(
             client
-                .status(tonic::Request::new(miden_node_proto::generated::rpc::StatusRequest {}))
+                .status(tonic::Request::new(
+                    miden_node_proto::generated::miden::node::v1::StatusRequest {},
+                ))
                 .await?
                 .into_inner()
                 .chain_tip,

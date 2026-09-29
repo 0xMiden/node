@@ -47,7 +47,7 @@ impl Service for ValidatorService {
     async fn check(&mut self) -> ServiceStatus {
         match self
             .client
-            .status(miden_node_proto::generated::validator::StatusRequest {})
+            .status(miden_node_proto::generated::miden::validator::v1::StatusRequest {})
             .await
         {
             Ok(response) => {

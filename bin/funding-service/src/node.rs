@@ -14,8 +14,8 @@ use miden_node_proto::domain::encryption::{
     TrustedTransactionEncryptionState,
 };
 use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
-use miden_node_proto::generated::rpc::get_account_request::AccountDetailRequest;
-use miden_node_proto::generated::rpc::{
+use miden_node_proto::generated::miden::node::v1::get_account_request::AccountDetailRequest;
+use miden_node_proto::generated::miden::node::v1::{
     BlockRange,
     FinalityLevel,
     GetAccountRequest as ProtoAccountRequest,
@@ -389,7 +389,7 @@ impl RpcNodeClient {
         let status = self
             .rpc_client
             .clone()
-            .status(miden_node_proto::generated::rpc::StatusRequest {})
+            .status(miden_node_proto::generated::miden::node::v1::StatusRequest {})
             .await
             .context("failed to fetch the node status")?
             .into_inner();
@@ -415,7 +415,7 @@ impl RpcNodeClient {
         let result = self
             .rpc_client
             .clone()
-            .submit_proven_tx(miden_node_proto::generated::rpc::SubmitProvenTxRequest {
+            .submit_proven_tx(miden_node_proto::generated::miden::node::v1::SubmitProvenTxRequest {
                 submission: Some(request),
             })
             .await;
@@ -441,7 +441,7 @@ impl RpcNodeClient {
             .rpc_client
             .clone()
             .get_transaction_encryption_key(
-                miden_node_proto::generated::rpc::GetTransactionEncryptionKeyRequest {},
+                miden_node_proto::generated::miden::node::v1::GetTransactionEncryptionKeyRequest {},
             )
             .await
             .context("failed to fetch the transaction encryption key")?
@@ -698,8 +698,8 @@ async fn fetch_public_account(
     account_id: AccountId,
     block_num: BlockNumber,
 ) -> Result<(Account, AccountWitness)> {
-    use miden_node_proto::generated::rpc::get_account_request::AccountDetailRequest;
-    use miden_node_proto::generated::rpc::get_account_request::account_detail_request::StorageRequest;
+    use miden_node_proto::generated::miden::node::v1::get_account_request::AccountDetailRequest;
+    use miden_node_proto::generated::miden::node::v1::get_account_request::account_detail_request::StorageRequest;
 
     // Dummy commitments force the server to include code and vault data in the response.
     let dummy: miden_node_proto::generated::primitives::Word = Word::default().into();

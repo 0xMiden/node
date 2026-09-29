@@ -11,8 +11,8 @@ use miden_node_proto::domain::encryption::{
 };
 use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
 use miden_node_proto::generated::account::account_storage_header::storage_slot::Content as SlotContent;
-use miden_node_proto::generated::rpc::get_account_request::AccountDetailRequest;
-use miden_node_proto::generated::rpc::{
+use miden_node_proto::generated::miden::node::v1::get_account_request::AccountDetailRequest;
+use miden_node_proto::generated::miden::node::v1::{
     GetAccountRequest,
     GetBlockHeaderByNumberRequest,
     GetBlockHeaderByNumberResponse,
@@ -136,7 +136,7 @@ impl SubmissionClient {
         let status = self
             .rpc
             .clone()
-            .status(miden_node_proto::generated::rpc::StatusRequest {})
+            .status(miden_node_proto::generated::miden::node::v1::StatusRequest {})
             .await
             .context("failed to read node status")?
             .into_inner();
@@ -253,7 +253,7 @@ impl SubmissionClient {
             .rpc
             .clone()
             .get_transaction_encryption_key(
-                miden_node_proto::generated::rpc::GetTransactionEncryptionKeyRequest {},
+                miden_node_proto::generated::miden::node::v1::GetTransactionEncryptionKeyRequest {},
             )
             .await
             .context("failed to fetch the transaction encryption key")?
@@ -310,7 +310,7 @@ impl SubmissionClient {
         let response = self
             .rpc
             .clone()
-            .submit_proven_tx(miden_node_proto::generated::rpc::SubmitProvenTxRequest {
+            .submit_proven_tx(miden_node_proto::generated::miden::node::v1::SubmitProvenTxRequest {
                 submission: Some(ProtoProvenTransaction {
                     transaction: Some(proven_tx.into()),
                     sealed_transaction_inputs: Some(sealed),
@@ -370,7 +370,7 @@ fn is_stale_key(err: &anyhow::Error) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use miden_node_proto::generated::rpc::GetBlockHeaderByNumberResponse;
+    use miden_node_proto::generated::miden::node::v1::GetBlockHeaderByNumberResponse;
     use miden_protocol::account::AccountId;
     use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1;
     use miden_testing::MockChain;

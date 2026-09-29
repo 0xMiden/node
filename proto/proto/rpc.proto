@@ -1,6 +1,6 @@
 // Specification of the user facing gRPC API.
 syntax = "proto3";
-package rpc;
+package miden.node.v1;
 
 import "account.proto";
 import "asset.proto";
@@ -17,7 +17,7 @@ import "types/submission.proto";
 // ================================================================================================
 
 // RPC API for the RPC component
-service Api {
+service NodeService {
     // Returns the status info of the node.
     rpc Status(StatusRequest) returns (StatusResponse) {}
 

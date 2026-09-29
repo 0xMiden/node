@@ -6,7 +6,10 @@ use anyhow::Context;
 use miden_node_proto::DecodeMessageExt;
 use miden_node_proto::clients::{Builder, ValidatorClient};
 use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
-use miden_node_proto::generated::validator::{BlockSubscriptionRequest, BlockSubscriptionResponse};
+use miden_node_proto::generated::miden::validator::v1::{
+    BlockSubscriptionRequest,
+    BlockSubscriptionResponse,
+};
 use miden_node_store::{BlockWriter, State, WriterTask};
 use miden_node_tracing::info;
 use miden_node_utils::shutdown::CancellationToken;
@@ -149,7 +152,7 @@ async fn recover_from_validators(
     for (url, validator) in &mut validators {
         let tip = BlockNumber::from(
             validator
-                .status(miden_node_proto::generated::validator::StatusRequest {})
+                .status(miden_node_proto::generated::miden::validator::v1::StatusRequest {})
                 .await
                 .with_context(|| format!("failed to query status of validator {url}"))?
                 .into_inner()

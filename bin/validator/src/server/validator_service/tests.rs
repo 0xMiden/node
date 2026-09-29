@@ -7,7 +7,7 @@ use miden_node_proto::domain::encryption::{
 };
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto::prost::Message;
-use miden_node_proto::server::validator_api;
+use miden_node_proto::server::miden_validator_v1_validator_service;
 use miden_node_proto::{
     BuildUnchecked,
     DecodeMessage,
@@ -147,9 +147,9 @@ impl TestValidator {
             transaction: Some(tx.into()),
             sealed_transaction_inputs: Some(sealed),
         });
-        validator_api::SubmitProvenTransaction::full(
+        miden_validator_v1_validator_service::SubmitProvenTransaction::full(
             &self.server,
-            request.map(|submission| proto::validator::SubmitProvenTransactionRequest {
+            request.map(|submission| proto::miden::validator::v1::SubmitProvenTransactionRequest {
                 submission: Some(submission),
             }),
         )
@@ -186,7 +186,7 @@ impl TestValidator {
     async fn call_sign_block(
         &self,
         proposed_block: &ProposedBlock,
-    ) -> Result<proto::validator::SignBlockResponse, tonic::Status> {
+    ) -> Result<proto::miden::validator::v1::SignBlockResponse, tonic::Status> {
         self.call_sign_block_with_protocol_config(proposed_block, Some(&self.protocol_config))
             .await
     }
@@ -196,7 +196,7 @@ impl TestValidator {
         &self,
         proposed_block: &ProposedBlock,
         protocol_config: Option<&ProtocolConfig>,
-    ) -> Result<proto::validator::SignBlockResponse, tonic::Status> {
+    ) -> Result<proto::miden::validator::v1::SignBlockResponse, tonic::Status> {
         let block_inputs = BlockInputs::new(
             proposed_block.prev_block_header().clone(),
             proposed_block.partial_blockchain().clone(),
@@ -205,7 +205,7 @@ impl TestValidator {
             BTreeMap::new(),
         );
         let (block_header, _) = proposed_block.clone().into_header_and_body().unwrap();
-        let request: proto::validator::SignBlockRequest = SignBlockRequest {
+        let request: proto::miden::validator::v1::SignBlockRequest = SignBlockRequest {
             tx_batches: OrderedBatches::new(proposed_block.batches().as_slice().to_vec()),
             block_header,
             block_inputs,
@@ -213,14 +213,14 @@ impl TestValidator {
         }
         .into();
         let request = tonic::Request::new(request);
-        validator_api::SignBlock::full(&self.server, request).await
+        miden_validator_v1_validator_service::SignBlock::full(&self.server, request).await
     }
 
     /// Opens a block subscription starting from `block_from`.
     async fn call_block_subscription(
         &self,
         block_from: u32,
-    ) -> <ValidatorService as proto::server::validator_api::BlockSubscription>::ItemStream {
+    ) -> <ValidatorService as proto::server::miden_validator_v1_validator_service::BlockSubscription>::ItemStream{
         self.try_call_block_subscription(block_from)
             .await
             .expect("subscription should open")
@@ -232,19 +232,20 @@ impl TestValidator {
         &self,
         block_from: u32,
     ) -> Result<
-        <ValidatorService as proto::server::validator_api::BlockSubscription>::ItemStream,
+        <ValidatorService as proto::server::miden_validator_v1_validator_service::BlockSubscription>::ItemStream,
         tonic::Status,
-    > {
-        let request =
-            tonic::Request::new(proto::validator::BlockSubscriptionRequest { block_from });
-        validator_api::BlockSubscription::full(&self.server, request).await
+    >{
+        let request = tonic::Request::new(proto::miden::validator::v1::BlockSubscriptionRequest {
+            block_from,
+        });
+        miden_validator_v1_validator_service::BlockSubscription::full(&self.server, request).await
     }
 
     /// Calls the `status` endpoint on the validator server.
-    async fn call_status(&self) -> proto::validator::StatusResponse {
-        validator_api::Status::full(
+    async fn call_status(&self) -> proto::miden::validator::v1::StatusResponse {
+        miden_validator_v1_validator_service::Status::full(
             &self.server,
-            tonic::Request::new(proto::validator::StatusRequest {}),
+            tonic::Request::new(proto::miden::validator::v1::StatusRequest {}),
         )
         .await
         .expect("status should always be available")
@@ -274,9 +275,9 @@ impl TestValidator {
     async fn call_get_transaction_encryption_key(
         &self,
     ) -> proto::submission::TransactionEncryptionKey {
-        validator_api::GetTransactionEncryptionKey::full(
+        miden_validator_v1_validator_service::GetTransactionEncryptionKey::full(
             &self.server,
-            tonic::Request::new(proto::validator::GetTransactionEncryptionKeyRequest {}),
+            tonic::Request::new(proto::miden::validator::v1::GetTransactionEncryptionKeyRequest {}),
         )
         .await
         .expect("encryption key should always be available")
@@ -1377,10 +1378,13 @@ async fn encryption_key_available_during_backup() {
 async fn submit_rejects_missing_submission() {
     let tv = TestValidator::new().await;
     let request =
-        tonic::Request::new(proto::validator::SubmitProvenTransactionRequest { submission: None });
-    let status = validator_api::SubmitProvenTransaction::full(&tv.server, request)
-        .await
-        .unwrap_err();
+        tonic::Request::new(proto::miden::validator::v1::SubmitProvenTransactionRequest {
+            submission: None,
+        });
+    let status =
+        miden_validator_v1_validator_service::SubmitProvenTransaction::full(&tv.server, request)
+            .await
+            .unwrap_err();
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
     assert_eq!(tv.validated_transaction_count().await, 0);
 }
@@ -1395,9 +1399,9 @@ async fn submit_rejects_missing_encrypted_inputs() {
         sealed_transaction_inputs: None,
     });
 
-    let status = validator_api::SubmitProvenTransaction::full(
+    let status = miden_validator_v1_validator_service::SubmitProvenTransaction::full(
         &tv.server,
-        request.map(|submission| proto::validator::SubmitProvenTransactionRequest {
+        request.map(|submission| proto::miden::validator::v1::SubmitProvenTransactionRequest {
             submission: Some(submission),
         }),
     )

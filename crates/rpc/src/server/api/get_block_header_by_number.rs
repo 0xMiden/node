@@ -6,15 +6,19 @@ use super::{COMPONENT, RpcService};
 use crate::LOG_TARGET;
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::GetBlockHeaderByNumber for RpcService {
-    type Input = proto::rpc::GetBlockHeaderByNumberRequest;
-    type Output = proto::rpc::GetBlockHeaderByNumberResponse;
+impl proto::server::miden_node_v1_node_service::GetBlockHeaderByNumber for RpcService {
+    type Input = proto::miden::node::v1::GetBlockHeaderByNumberRequest;
+    type Output = proto::miden::node::v1::GetBlockHeaderByNumberResponse;
 
-    fn decode(request: proto::rpc::GetBlockHeaderByNumberRequest) -> tonic::Result<Self::Input> {
+    fn decode(
+        request: proto::miden::node::v1::GetBlockHeaderByNumberRequest,
+    ) -> tonic::Result<Self::Input> {
         Ok(request)
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::GetBlockHeaderByNumberResponse> {
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<proto::miden::node::v1::GetBlockHeaderByNumberResponse> {
         Ok(output)
     }
 
@@ -54,7 +58,7 @@ impl proto::server::rpc_api::GetBlockHeaderByNumber for RpcService {
             _ => None,
         };
 
-        Ok(proto::rpc::GetBlockHeaderByNumberResponse {
+        Ok(proto::miden::node::v1::GetBlockHeaderByNumberResponse {
             protocol_config,
             block_header: block_header.map(Into::into),
             chain_length: mmr_proof.as_ref().map(|p| p.forest().num_leaves() as u32),

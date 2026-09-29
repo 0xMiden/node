@@ -12,15 +12,15 @@ use super::ValidatorService;
 use crate::COMPONENT;
 
 #[tonic::async_trait]
-impl grpc::server::validator_api::SignBlock for ValidatorService {
-    type Input = grpc::validator::SignBlockRequest;
+impl grpc::server::miden_validator_v1_validator_service::SignBlock for ValidatorService {
+    type Input = grpc::miden::validator::v1::SignBlockRequest;
     type Output = (Signature, Word, PublicKey);
 
     #[miden_instrument(
         target = COMPONENT,
         err,
     )]
-    fn decode(request: grpc::validator::SignBlockRequest) -> tonic::Result<Self::Input> {
+    fn decode(request: grpc::miden::validator::v1::SignBlockRequest) -> tonic::Result<Self::Input> {
         Ok(request)
     }
 
@@ -28,9 +28,11 @@ impl grpc::server::validator_api::SignBlock for ValidatorService {
         target = COMPONENT,
         err,
     )]
-    fn encode(output: Self::Output) -> tonic::Result<grpc::validator::SignBlockResponse> {
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<grpc::miden::validator::v1::SignBlockResponse> {
         let (signature, block_commitment, public_key) = output;
-        Ok(grpc::validator::SignBlockResponse {
+        Ok(grpc::miden::validator::v1::SignBlockResponse {
             signature: Some(signature.into()),
             block_commitment: Some(block_commitment.into()),
             public_key: Some((&public_key).into()),

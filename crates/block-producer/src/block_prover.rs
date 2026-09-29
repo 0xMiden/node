@@ -4,8 +4,8 @@ use miden_block_prover::{
     LocalBlockProver,
 };
 use miden_node_proto::clients::{Builder, RemoteProverClient};
-use miden_node_proto::generated::remote_prover::prove_request::Request;
-use miden_node_proto::generated::remote_prover::{DecodedProveResponse, ProveRequest};
+use miden_node_proto::generated::miden::remote_prover::v1::prove_request::Request;
+use miden_node_proto::generated::miden::remote_prover::v1::{DecodedProveResponse, ProveRequest};
 use miden_node_proto::{BlockProofRequest, DecodeMessage};
 use miden_node_tracing::miden_instrument;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;

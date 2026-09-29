@@ -5,12 +5,12 @@ sidebar_position: 1
 
 # Public RPC
 
-This page summarizes the public gRPC `rpc.Api` service.
+This page summarizes the public gRPC `miden.node.v1.NodeService` service.
 
 As a reminder, you can inspect the exact schema on any deployed network using gRPC reflection:
 
 ```bash
-grpcurl rpc.testnet.miden.io:443 describe rpc.Api
+grpcurl rpc.testnet.miden.io:443 describe miden.node.v1.NodeService
 ```
 
 ## Status and Limits

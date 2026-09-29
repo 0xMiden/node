@@ -1,6 +1,6 @@
 // Specification of the user facing gRPC API.
 syntax = "proto3";
-package validator;
+package miden.validator.v1;
 
 import "block.proto";
 import "batch.proto";
@@ -13,7 +13,7 @@ import "types/submission.proto";
 // ================================================================================================
 
 // Validator API for the Validator component.
-service Api {
+service ValidatorService {
    // Returns the status info of the validator.
    rpc Status(StatusRequest) returns (StatusResponse) {}
 

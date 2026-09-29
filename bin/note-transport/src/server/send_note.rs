@@ -1,6 +1,6 @@
 use miden_node_proto::errors::ConversionError;
-use miden_node_proto::generated::note_transport::{SendNoteRequest, SendNoteResponse};
-use miden_node_proto::server::note_transport_api::SendNote;
+use miden_node_proto::generated::miden::note_transport::v1::{SendNoteRequest, SendNoteResponse};
+use miden_node_proto::server::miden_note_transport_v1_note_transport_service::SendNote;
 use miden_node_proto::{DecodeMessage, Verify};
 use miden_node_tracing::{miden_instrument, miden_span_record};
 use tonic::codegen::http::Extensions;

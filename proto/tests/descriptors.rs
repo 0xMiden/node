@@ -60,7 +60,10 @@ fn public_descriptors_exclude_internal_services() {
         for file in &descriptor.file {
             if !file.service.is_empty() {
                 assert!(
-                    matches!(file.package(), "rpc" | "remote_prover" | "note_transport"),
+                    matches!(
+                        file.package(),
+                        "miden.node.v1" | "miden.remote_prover.v1" | "miden.note_transport.v1"
+                    ),
                     "public reflection exposes {}",
                     file.package(),
                 );

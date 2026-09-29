@@ -9,7 +9,7 @@ use super::protocol_config::verify_protocol_config_commitment;
 use crate::errors::ConversionError;
 use crate::generated as proto;
 
-impl BuildUnchecked for proto::rpc::DecodedBlockSubscriptionResponse {
+impl BuildUnchecked for proto::miden::node::v1::DecodedBlockSubscriptionResponse {
     type Output = (SignedBlock, BlockNumber, Option<ProtocolConfig>);
     type Error = ConversionError;
 
@@ -30,7 +30,7 @@ impl BuildUnchecked for proto::rpc::DecodedBlockSubscriptionResponse {
     }
 }
 
-impl VerifyWith<&BlockHeader> for proto::rpc::DecodedBlockSubscriptionResponse {
+impl VerifyWith<&BlockHeader> for proto::miden::node::v1::DecodedBlockSubscriptionResponse {
     type Verified = (SignedBlock, BlockNumber, Option<ProtocolConfig>);
     type Error = ConversionError;
 
@@ -55,7 +55,7 @@ pub enum InvalidBlockRange {
     StartGreaterThanEnd { start: BlockNumber, end: BlockNumber },
 }
 
-impl Verify for proto::rpc::DecodedBlockRange {
+impl Verify for proto::miden::node::v1::DecodedBlockRange {
     type Verified = RangeInclusive<BlockNumber>;
     type Error = InvalidBlockRange;
 
@@ -78,7 +78,7 @@ impl Verify for proto::rpc::DecodedBlockRange {
     }
 }
 
-impl From<RangeInclusive<BlockNumber>> for proto::rpc::BlockRange {
+impl From<RangeInclusive<BlockNumber>> for proto::miden::node::v1::BlockRange {
     fn from(range: RangeInclusive<BlockNumber>) -> Self {
         Self {
             block_from: range.start().as_u32(),
@@ -92,9 +92,9 @@ mod tests {
 
     use super::*;
 
-    fn range(from: u32, to: u32) -> proto::rpc::DecodedBlockRange {
+    fn range(from: u32, to: u32) -> proto::miden::node::v1::DecodedBlockRange {
         use crate::DecodeMessage;
-        proto::rpc::BlockRange { block_from: from, block_to: to }
+        proto::miden::node::v1::BlockRange { block_from: from, block_to: to }
             .decode_fields()
             .unwrap()
     }

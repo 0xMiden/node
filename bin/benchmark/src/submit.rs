@@ -225,7 +225,9 @@ async fn submit_all(
             };
             let t0 = Instant::now();
             let outcome = match client
-                .submit_proven_tx(proto::rpc::SubmitProvenTxRequest { submission: Some(request) })
+                .submit_proven_tx(proto::miden::node::v1::SubmitProvenTxRequest {
+                    submission: Some(request),
+                })
                 .await
             {
                 Ok(_) => SubmitOutcome {
@@ -289,7 +291,9 @@ async fn submit_sequential(
 
         let t0 = Instant::now();
         let outcome = match client
-            .submit_proven_tx(proto::rpc::SubmitProvenTxRequest { submission: Some(request) })
+            .submit_proven_tx(proto::miden::node::v1::SubmitProvenTxRequest {
+                submission: Some(request),
+            })
             .await
         {
             Ok(_) => SubmitOutcome {

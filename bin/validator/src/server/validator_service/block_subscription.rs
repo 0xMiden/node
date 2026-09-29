@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use miden_node_proto::generated as grpc;
-use miden_node_proto::generated::validator::BlockSubscriptionResponse;
+use miden_node_proto::generated::miden::validator::v1::BlockSubscriptionResponse;
 use miden_node_tracing::{ErrorReport, error, info, miden_instrument, miden_span_record};
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use tokio::sync::OwnedRwLockWriteGuard;
@@ -31,12 +31,14 @@ impl Stream for BackupBlockStream {
 }
 
 #[tonic::async_trait]
-impl grpc::server::validator_api::BlockSubscription for ValidatorService {
-    type Input = grpc::validator::BlockSubscriptionRequest;
+impl grpc::server::miden_validator_v1_validator_service::BlockSubscription for ValidatorService {
+    type Input = grpc::miden::validator::v1::BlockSubscriptionRequest;
     type Item = BlockSubscriptionResponse;
     type ItemStream = BlockStream;
 
-    fn decode(request: grpc::validator::BlockSubscriptionRequest) -> tonic::Result<Self::Input> {
+    fn decode(
+        request: grpc::miden::validator::v1::BlockSubscriptionRequest,
+    ) -> tonic::Result<Self::Input> {
         Ok(request)
     }
 

@@ -20,9 +20,9 @@ use miden_node_proto::domain::encryption::{
 };
 use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
 use miden_node_proto::errors::ConversionError;
-use miden_node_proto::generated::rpc::get_account_request::account_detail_request::{StorageMapDetailRequest, StorageMapDetailRequests, StorageRequest, storage_map_detail_request};
-use miden_node_proto::generated::rpc::get_account_request::account_detail_request::storage_map_detail_request::MapKeys;
-use miden_node_proto::generated::rpc::{
+use miden_node_proto::generated::miden::node::v1::get_account_request::account_detail_request::{StorageMapDetailRequest, StorageMapDetailRequests, StorageRequest, storage_map_detail_request};
+use miden_node_proto::generated::miden::node::v1::get_account_request::account_detail_request::storage_map_detail_request::MapKeys;
+use miden_node_proto::generated::miden::node::v1::{
     GetBlockHeaderByNumberRequest,
     GetBlockHeaderByNumberResponse,
     BlockSubscriptionRequest,
@@ -214,7 +214,9 @@ impl RpcClient {
         let key = self
             .inner
             .clone()
-            .get_transaction_encryption_key(proto::rpc::GetTransactionEncryptionKeyRequest {})
+            .get_transaction_encryption_key(
+                proto::miden::node::v1::GetTransactionEncryptionKeyRequest {},
+            )
             .await?
             .into_inner()
             .key
@@ -270,7 +272,7 @@ impl RpcClient {
     /// Opens a committed-block subscription starting at `block_from`, retrying indefinitely with
     /// the client's configured exponential backoff while the initial connection attempt fails.
     ///
-    /// Returns a stream that decodes each [`proto::rpc::BlockSubscriptionResponse`] into a block, the committed
+    /// Returns a stream that decodes each [`proto::miden::node::v1::BlockSubscriptionResponse`] into a block, the committed
     /// chain tip, and an optional protocol configuration. The configuration is present for the
     /// first response and for each transition. The committed chain tip is the latest block the node
     /// believes is committed when it emits the response.
@@ -464,7 +466,7 @@ impl RpcClient {
                     )
                 })?;
                 client
-                    .submit_proven_tx(proto::rpc::SubmitProvenTxRequest {
+                    .submit_proven_tx(proto::miden::node::v1::SubmitProvenTxRequest {
                         submission: Some(proto::submission::ProvenTransactionSubmission {
                             transaction: Some(transaction),
                             sealed_transaction_inputs: Some(sealed),
@@ -532,11 +534,11 @@ impl RpcClient {
         block_num: BlockNumber,
     ) -> Result<AccountInputs, RpcError> {
         // Only request account code
-        let request = proto::rpc::GetAccountRequest {
+        let request = proto::miden::node::v1::GetAccountRequest {
             account_id: Some(account_id.into()),
             block_num: Some(block_num.into()),
             // TODO: should these commitments be cached on the NTX builder?
-            details: Some(proto::rpc::get_account_request::AccountDetailRequest {
+            details: Some(proto::miden::node::v1::get_account_request::AccountDetailRequest {
                 code_commitment: Some(Word::default().into()),
                 asset_vault_commitment: None, //
                 storage_request: None,
@@ -563,10 +565,10 @@ impl RpcClient {
             return Ok(Vec::new());
         }
 
-        let request = proto::rpc::GetAccountRequest {
+        let request = proto::miden::node::v1::GetAccountRequest {
             account_id: Some(account_id.into()),
             block_num: block_num.map(Into::into),
-            details: Some(proto::rpc::get_account_request::AccountDetailRequest {
+            details: Some(proto::miden::node::v1::get_account_request::AccountDetailRequest {
                 code_commitment: None,
                 asset_vault_commitment: Some(Word::default().into()),
                 storage_request: None,
@@ -601,10 +603,10 @@ impl RpcClient {
         map_key: StorageMapKey,
         block_num: Option<BlockNumber>,
     ) -> Result<StorageMapWitness, RpcError> {
-        let request = proto::rpc::GetAccountRequest {
+        let request = proto::miden::node::v1::GetAccountRequest {
             account_id: Some(account_id.into()),
             block_num: block_num.map(Into::into),
-            details: Some(proto::rpc::get_account_request::AccountDetailRequest {
+            details: Some(proto::miden::node::v1::get_account_request::AccountDetailRequest {
                 code_commitment: None,
                 asset_vault_commitment: None,
                 storage_request: Some(StorageRequest::StorageMaps(StorageMapDetailRequests {
@@ -666,7 +668,8 @@ impl RpcClient {
         &self,
         script_root: Word,
     ) -> Result<Option<NoteScript>, RpcError> {
-        let request = proto::rpc::GetNoteScriptByRootRequest { root: Some(script_root.into()) };
+        let request =
+            proto::miden::node::v1::GetNoteScriptByRootRequest { root: Some(script_root.into()) };
 
         self.inner
             .clone()
@@ -682,7 +685,7 @@ impl RpcClient {
     /// [`GetAccountResponse`].
     async fn get_account(
         &self,
-        request: proto::rpc::GetAccountRequest,
+        request: proto::miden::node::v1::GetAccountRequest,
     ) -> Result<GetAccountResponse, RpcError> {
         let response = self
             .inner
@@ -734,11 +737,11 @@ pub enum RpcError {
 
 #[cfg(test)]
 mod protocol_config_tests {
-    use miden_node_proto::generated::protocol_config::ProtocolConfig as ProtoProtocolConfig;
-    use miden_node_proto::generated::rpc::{
+    use miden_node_proto::generated::miden::node::v1::{
         BlockSubscriptionResponse,
         GetBlockHeaderByNumberResponse,
     };
+    use miden_node_proto::generated::protocol_config::ProtocolConfig as ProtoProtocolConfig;
     use miden_node_proto::{BuildUnchecked, DecodeMessage};
     use miden_node_store::genesis::GenesisState;
     use miden_node_utils::fee::{test_fee_params, test_protocol_config};

@@ -3,12 +3,12 @@ use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use miden_node_proto::generated::note_transport::SendNoteWithProofRequest;
-use miden_node_proto::generated::rpc::{
+use miden_node_proto::generated::miden::node::v1::{
     GetBlockHeaderByNumberRequest,
     GetBlockHeaderByNumberResponse,
 };
-use miden_node_proto::server::note_transport_api::SendNoteWithProof;
+use miden_node_proto::generated::miden::note_transport::v1::SendNoteWithProofRequest;
+use miden_node_proto::server::miden_note_transport_v1_note_transport_service::SendNoteWithProof;
 use miden_protocol::block::{BlockHeader, BlockNoteIndex, BlockNoteTree};
 use miden_protocol::note::NoteInclusionProof;
 use tonic::codegen::{BoxFuture, http};
@@ -26,7 +26,7 @@ struct NodeRpc {
 }
 
 impl tonic::server::NamedService for NodeRpc {
-    const NAME: &'static str = "rpc.Api";
+    const NAME: &'static str = "miden.node.v1.NodeService";
 }
 
 impl tonic::server::UnaryService<GetBlockHeaderByNumberRequest> for NodeRpc {
@@ -74,7 +74,7 @@ impl tower::Service<http::Request<tonic::body::Body>> for NodeRpc {
     fn call(&mut self, request: http::Request<tonic::body::Body>) -> Self::Future {
         let this = self.clone();
         Box::pin(async move {
-            if request.uri().path() != "/rpc.Api/GetBlockHeaderByNumber" {
+            if request.uri().path() != "/miden.node.v1.NodeService/GetBlockHeaderByNumber" {
                 return Ok(tonic::Status::unimplemented("unknown method").into_http());
             }
             let codec = tonic_prost::ProstCodec::default();
@@ -368,7 +368,7 @@ async fn proof_submission_roundtrips_over_grpc_and_web() {
     let address = listener.local_addr().unwrap();
     let shutdown = CancellationToken::new();
     let task = tokio::spawn(server.serve_on(listener, shutdown.clone()));
-    let mut client = miden_node_proto::generated::note_transport::api_client::ApiClient::connect(
+    let mut client = miden_node_proto::generated::miden::note_transport::v1::note_transport_service_client::NoteTransportServiceClient::connect(
         format!("http://{address}"),
     )
     .await
@@ -404,7 +404,7 @@ async fn lookup_timeout_returns_deadline_exceeded_over_grpc() {
     let address = listener.local_addr().unwrap();
     let shutdown = CancellationToken::new();
     let task = tokio::spawn(server.serve_on(listener, shutdown.clone()));
-    let mut client = miden_node_proto::generated::note_transport::api_client::ApiClient::connect(
+    let mut client = miden_node_proto::generated::miden::note_transport::v1::note_transport_service_client::NoteTransportServiceClient::connect(
         format!("http://{address}"),
     )
     .await

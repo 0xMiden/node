@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use miden_node_proto::errors::ConversionResultExt;
-use miden_node_proto::generated::rpc::{
+use miden_node_proto::generated::miden::node::v1::{
     GetBlockHeaderByNumberRequest,
     GetBlockHeaderByNumberResponse,
 };

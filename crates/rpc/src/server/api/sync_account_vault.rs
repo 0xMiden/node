@@ -9,17 +9,21 @@ use super::{RpcService, database_error_to_status, invalid_block_range_to_status}
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::SyncAccountVault for RpcService {
-    type Input = proto::rpc::DecodedSyncAccountVaultRequest;
-    type Output = proto::rpc::SyncAccountVaultResponse;
+impl proto::server::miden_node_v1_node_service::SyncAccountVault for RpcService {
+    type Input = proto::miden::node::v1::DecodedSyncAccountVaultRequest;
+    type Output = proto::miden::node::v1::SyncAccountVaultResponse;
 
-    fn decode(request: proto::rpc::SyncAccountVaultRequest) -> tonic::Result<Self::Input> {
+    fn decode(
+        request: proto::miden::node::v1::SyncAccountVaultRequest,
+    ) -> tonic::Result<Self::Input> {
         request
             .decode_fields()
             .map_err(|err| SyncAccountVaultErrorCode::DeserializationFailed.invalid_argument(err))
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::SyncAccountVaultResponse> {
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<proto::miden::node::v1::SyncAccountVaultResponse> {
         Ok(output)
     }
 
@@ -76,7 +80,7 @@ impl proto::server::rpc_api::SyncAccountVault for RpcService {
             .into_iter()
             .map(|update| {
                 let vault_key: Word = update.vault_key.into();
-                proto::rpc::AccountVaultUpdate {
+                proto::miden::node::v1::AccountVaultUpdate {
                     vault_key: Some(vault_key.into()),
                     asset: update.asset.map(Into::into),
                     block_num: update.block_num.as_u32(),
@@ -84,8 +88,8 @@ impl proto::server::rpc_api::SyncAccountVault for RpcService {
             })
             .collect();
 
-        Ok(proto::rpc::SyncAccountVaultResponse {
-            pagination_info: Some(proto::rpc::PaginationInfo {
+        Ok(proto::miden::node::v1::SyncAccountVaultResponse {
+            pagination_info: Some(proto::miden::node::v1::PaginationInfo {
                 chain_tip: chain_tip.as_u32(),
                 block_num: last_included_block.as_u32(),
             }),
