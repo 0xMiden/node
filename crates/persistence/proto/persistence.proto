@@ -10,7 +10,7 @@ import "transaction_inputs.proto";
 
 // Identifies the block store format in blocks/format.pb.
 // The store checks this marker before it opens an existing block directory.
-message StorageFormat { uint32 version = 1; }
+message BlockStoreFormat { uint32 version = 1; }
 
 // Stores the genesis block and its protocol configuration in genesis.dat.
 // Node components read this file to bootstrap their state.

@@ -11,7 +11,7 @@ use std::io::ErrorKind;
 use std::ops::Not;
 use std::path::{Path, PathBuf};
 
-use miden_node_persistence::generated::StorageFormat;
+use miden_node_persistence::generated::BlockStoreFormat;
 use miden_node_persistence::prost::Message;
 use miden_node_tracing::miden_instrument;
 use miden_protocol::block::BlockNumber;
@@ -48,7 +48,7 @@ impl BlockStore {
         let block_store = Self { store_dir };
         fs_err::write(
             block_store.store_dir.join("format.pb"),
-            StorageFormat { version: 1 }.encode_to_vec(),
+            BlockStoreFormat { version: 1 }.encode_to_vec(),
         )?;
         block_store.save_block_blocking(
             BlockNumber::GENESIS,
@@ -91,7 +91,7 @@ impl BlockStore {
                 ),
             )
         })?;
-        let marker = StorageFormat::decode(bytes.as_slice())
+        let marker = BlockStoreFormat::decode(bytes.as_slice())
             .map_err(|error| std::io::Error::new(ErrorKind::InvalidData, error))?;
         if marker.version != 1 {
             let error = miden_node_persistence::PersistenceError::UnsupportedVersion {
@@ -315,8 +315,8 @@ mod tests {
         assert!(!legacy.join("format.pb").exists());
         for bytes in [
             vec![0xff],
-            StorageFormat { version: 0 }.encode_to_vec(),
-            StorageFormat { version: 2 }.encode_to_vec(),
+            BlockStoreFormat { version: 0 }.encode_to_vec(),
+            BlockStoreFormat { version: 2 }.encode_to_vec(),
         ] {
             fs_err::write(legacy.join("format.pb"), &bytes).unwrap();
             assert!(BlockStore::load(legacy.clone()).is_err());
