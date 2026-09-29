@@ -24,29 +24,30 @@ testing        = ["miden-protocol/testing"]
 testing-prover = ["dep:miden-processor", "dep:miden-standards", "dep:miden-testing", "dep:miden-tx", "testing"]
 
 [dependencies]
-anyhow             = { workspace = true }
-backon             = { workspace = true }
-clap               = { workspace = true }
-fs-err             = { workspace = true }
-http               = { workspace = true }
-humantime          = { workspace = true }
-itertools          = { workspace = true }
-lru                = { workspace = true }
-miden-node-tracing = { workspace = true }
-miden-processor    = { optional = true, workspace = true }
-miden-protocol     = { workspace = true }
-miden-standards    = { optional = true, workspace = true }
-miden-testing      = { optional = true, workspace = true }
-miden-tx           = { optional = true, workspace = true }
-reqwest            = { workspace = true }
-thiserror          = { workspace = true }
-tokio              = { features = ["macros", "rt", "signal", "time"], workspace = true }
-tokio-util         = { workspace = true }
-tonic              = { default-features = true, workspace = true }
-tower              = { workspace = true }
-tower-http         = { workspace = true }
-tower_governor     = { workspace = true }
-url                = { workspace = true }
+anyhow                 = { workspace = true }
+backon                 = { workspace = true }
+clap                   = { workspace = true }
+fs-err                 = { workspace = true }
+http                   = { workspace = true }
+humantime              = { workspace = true }
+itertools              = { workspace = true }
+lru                    = { workspace = true }
+miden-node-persistence = { workspace = true }
+miden-node-tracing     = { workspace = true }
+miden-processor        = { optional = true, workspace = true }
+miden-protocol         = { workspace = true }
+miden-standards        = { optional = true, workspace = true }
+miden-testing          = { optional = true, workspace = true }
+miden-tx               = { optional = true, workspace = true }
+reqwest                = { workspace = true }
+thiserror              = { workspace = true }
+tokio                  = { features = ["macros", "rt", "signal", "time"], workspace = true }
+tokio-util             = { workspace = true }
+tonic                  = { default-features = true, workspace = true }
+tower                  = { workspace = true }
+tower-http             = { workspace = true }
+tower_governor         = { workspace = true }
+url                    = { workspace = true }
 
 # RocksDbConfig is needed due to orphan rules
 miden-crypto = { optional = true, workspace = true }

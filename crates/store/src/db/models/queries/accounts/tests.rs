@@ -86,7 +86,7 @@ fn reconstruct_account_storage_at_block(
         return Ok(AccountStorage::new(Vec::new())?);
     };
 
-    let header = AccountStorageHeader::read_from_bytes(&blob)?;
+    let header = miden_node_persistence::decode::<AccountStorageHeader>(&blob)?;
 
     // Query all map values for this account up to and including this block.
     let map_values: Vec<(i64, String, Vec<u8>, Vec<u8>)> =
@@ -191,13 +191,16 @@ fn insert_block_header(conn: &mut SqliteConnection, block_num: BlockNumber) {
         None,
         0,
     );
-    let signature = secret_key.sign(block_header.commitment());
+    let signature = miden_protocol::block::BlockSignatures::new(vec![
+        secret_key.sign(block_header.commitment()),
+    ])
+    .unwrap();
 
     diesel::insert_into(block_headers::table)
         .values((
             block_headers::block_num.eq(i64::from(block_num.as_u32())),
-            block_headers::block_header.eq(block_header.to_bytes()),
-            block_headers::signature.eq(signature.to_bytes()),
+            block_headers::block_header.eq(miden_node_persistence::encode(&block_header)),
+            block_headers::signature.eq(miden_node_persistence::encode(&signature)),
             block_headers::commitment.eq(block_header.commitment().to_bytes()),
         ))
         .execute(conn)

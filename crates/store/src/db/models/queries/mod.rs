@@ -16,8 +16,8 @@
 //! The database `*Raw` and `*Joined` types use database primitives. In order to convert to correct
 //! in-memory representations it's preferable to have new-types which implement [`SqlTypeConvert`].
 //! If that is inconvenient, provide two wrapper methods for the conversion each way. There must be
-//! relevant constraints in the table. For convenience, any types that have more complex
-//! serialization may use [`Serializable`] and [`Deserializable`] for convenience.
+//! relevant constraints in the table. Structured payloads use the protobuf codecs in
+//! `miden_node_persistence`. Keys and indexed values use fixed-width encodings.
 //!
 //! ## Assumptions
 //!

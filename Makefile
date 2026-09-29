@@ -93,7 +93,7 @@ toml-check: ## Runs Format for all TOML files but only in check mode
 
 .PHONY: typos-check
 typos-check: ## Runs spellchecker
-	typos
+	typos --exclude vendor/
 
 .PHONY: workspace-check
 workspace-check: ## Runs a check that all packages have `lints.workspace = true`
