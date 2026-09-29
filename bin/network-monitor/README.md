@@ -14,6 +14,7 @@ monitor:
 - an explorer endpoint;
 - a note transport service;
 - the validator service;
+- the Agglayer bridge, through the status endpoint of an agglayer-monitor instance;
 - an end-to-end network transaction flow using temporary in-memory accounts.
 
 The monitor serves a web dashboard and can emit OpenTelemetry traces when standard OTLP environment variables are
@@ -36,6 +37,11 @@ such chains. `MIDEN_MONITOR_FAUCET_URL` is only used for the faucet checks.
 
 The note transport check uses the standard gRPC health service for `note_transport.Api`. Only a `SERVING` response marks
 the service as healthy. Its dashboard card shows the service URL.
+
+The Agglayer bridge check reads `GET /v1/status` from the agglayer-monitor API at `MIDEN_MONITOR_AGGLAYER_MONITOR_URL`.
+The agglayer-monitor runs the E2E bridge tests between L1 and Miden. The monitor does not send bridge transactions. The
+card status is the overall status that the agglayer-monitor reports. That status is unknown until both directions have a
+result. The card is unhealthy when the endpoint is unreachable, returns an error, or uses an unsupported schema version.
 
 Use the binary help output for the current command and configuration surface. The help output is the source of truth for
 flags and environment variables.

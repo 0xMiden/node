@@ -2,8 +2,7 @@ services:
   funding-service:
     image: ${MIDEN_FUNDING_SERVICE_IMAGE:-miden-funding-service}
     pull_policy: missing
-    # The service only reads the account file and the trusted validator set, which the genesis
-    # step writes.
+    # The service reads the distributor account file and the trusted validator set.
     volumes:
       - node-data:/data:ro
     depends_on:
@@ -22,7 +21,7 @@ services:
           --listen=0.0.0.0:50401 \
           --rpc.url=http://sequencer:57291 \
           --tx-prover.url=${MIDEN_REMOTE_PROVER_URL:-http://tx-prover:50051} \
-          --account-file=/data/accounts/funding_service.mac \
+          --account-file=/data/usdcx/distributor.genesis.mac \
           --validator-signing-public-key="$$(cat /data/genesis/validator-signing-public-keys)"
     environment:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317

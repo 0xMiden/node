@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::COMPONENT;
 use crate::server::FundingState;
+use crate::status::NativeAsset;
 
 // STATUS RESPONSE
 // ================================================================================================
@@ -15,6 +16,8 @@ pub(super) struct StatusResponse {
     version: String,
     /// The account which sends the notes, in hexadecimal.
     account_id: String,
+    /// The asset ID, the symbol, the decimals and the name of the native asset.
+    native_asset: NativeAsset,
     /// The balance of the native asset in the funding account, in base units, at `chain_tip`.
     balance: u64,
     /// The block number which the service is synchronized to.
@@ -39,6 +42,7 @@ pub(super) async fn status(State(state): State<FundingState>) -> Json<StatusResp
     Json(StatusResponse {
         version: env!("CARGO_PKG_VERSION").to_string(),
         account_id: status.account_id().to_string(),
+        native_asset: status.native_asset().clone(),
         balance: status.balance(),
         chain_tip: status.chain_tip().as_u32(),
         max_amount: status.max_amount(),
@@ -48,8 +52,9 @@ pub(super) async fn status(State(state): State<FundingState>) -> Json<StatusResp
 
 #[cfg(test)]
 mod tests {
+    use miden_protocol::Word;
     use miden_protocol::account::AccountId;
-    use miden_protocol::asset::FungibleAsset;
+    use miden_protocol::asset::{AssetId, FungibleAsset};
 
     use super::*;
     use crate::server::tests::test_state;
@@ -65,6 +70,19 @@ mod tests {
             AccountId::from_hex(&response.account_id).unwrap(),
             FungibleAsset::mock_issuer()
         );
+
+        let mut native_asset = serde_json::to_value(&response.native_asset).unwrap();
+        let asset_id = native_asset.as_object_mut().unwrap().remove("asset_id").unwrap();
+        let asset_id = Word::try_from(asset_id.as_str().unwrap()).unwrap();
+        assert_eq!(
+            AssetId::try_from(asset_id).unwrap(),
+            AssetId::new_fungible(FungibleAsset::mock_issuer())
+        );
+        assert_eq!(
+            native_asset,
+            serde_json::json!({ "symbol": "MIDEN", "decimals": 6, "name": "Miden" })
+        );
+
         assert_eq!(response.balance, 1_234);
         assert_eq!(response.chain_tip, 42);
         assert_eq!(response.max_amount, 500);
