@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use futures::{Stream, TryStreamExt};
 use miden_node_proto::generated as proto;
-use miden_node_tracing::{debug, miden_instrument};
+use miden_node_tracing::{debug, error, miden_instrument};
 use miden_node_utils::grpc::ClientIp;
 use miden_protocol::block::{BlockNumber, SignedBlock};
 
@@ -53,7 +53,16 @@ impl proto::server::rpc_api::BlockSubscription for RpcService {
                 };
                 let block =
                     miden_node_persistence::decode::<SignedBlock>(&event.data).map_err(|err| {
-                        tonic::Status::internal(format!("invalid stored block: {err}"))
+                        error!(
+                            err,
+                            target: LOG_TARGET,
+                            "Failed to decode stored block",
+                            block.number = event.block
+                        );
+                        tonic::Status::internal(format!(
+                            "Failed to decode stored block {}.",
+                            event.block
+                        ))
                     })?;
                 let commitment = block.header().protocol_config_commitment();
                 let protocol_config = if previous == Some(commitment) {
