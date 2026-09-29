@@ -10,6 +10,7 @@ use anyhow::Result;
 use clap::Parser;
 
 // Module declarations
+pub mod agglayer;
 mod cli;
 pub mod commands;
 pub mod config;
