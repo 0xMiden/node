@@ -8,15 +8,19 @@ use super::{RpcService, database_error_to_status};
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::GetBlockByNumber for RpcService {
-    type Input = proto::rpc::GetBlockByNumberRequest;
-    type Output = proto::rpc::GetBlockByNumberResponse;
+impl proto::server::miden_node_v1_node_service::GetBlockByNumber for RpcService {
+    type Input = proto::miden::node::v1::GetBlockByNumberRequest;
+    type Output = proto::miden::node::v1::GetBlockByNumberResponse;
 
-    fn decode(request: proto::rpc::GetBlockByNumberRequest) -> tonic::Result<Self::Input> {
+    fn decode(
+        request: proto::miden::node::v1::GetBlockByNumberRequest,
+    ) -> tonic::Result<Self::Input> {
         Ok(request)
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::GetBlockByNumberResponse> {
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<proto::miden::node::v1::GetBlockByNumberResponse> {
         Ok(output)
     }
 
@@ -77,6 +81,6 @@ impl proto::server::rpc_api::GetBlockByNumber for RpcService {
             None
         };
 
-        Ok(proto::rpc::GetBlockByNumberResponse { block, proof })
+        Ok(proto::miden::node::v1::GetBlockByNumberResponse { block, proof })
     }
 }

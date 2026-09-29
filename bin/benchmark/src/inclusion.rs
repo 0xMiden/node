@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use miden_node_proto::clients::RpcClient;
-use miden_node_proto::generated::rpc::GetBlockHeaderByNumberRequest;
+use miden_node_proto::generated::miden::node::v1::GetBlockHeaderByNumberRequest;
 use miden_node_proto::{DecodeMessageExt, generated as proto};
 use miden_protocol::block::BlockHeader;
 use miden_protocol::transaction::TransactionId;
@@ -110,7 +110,7 @@ pub(crate) async fn scan_with_drain(
         // Scan every unwatched block, capped at the max-bound target.
         let scan_to = tip.min(max_target);
         while next_block <= scan_to {
-            let request = proto::rpc::GetBlockByNumberRequest {
+            let request = proto::miden::node::v1::GetBlockByNumberRequest {
                 block_num: next_block,
                 include_proof: None,
             };

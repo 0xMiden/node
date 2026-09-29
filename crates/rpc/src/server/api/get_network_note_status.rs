@@ -7,11 +7,13 @@ use super::{RpcBackend, RpcService};
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::GetNetworkNoteStatus for RpcService {
+impl proto::server::miden_node_v1_node_service::GetNetworkNoteStatus for RpcService {
     type Input = miden_protocol::note::NoteId;
-    type Output = proto::rpc::GetNetworkNoteStatusResponse;
+    type Output = proto::miden::node::v1::GetNetworkNoteStatusResponse;
 
-    fn decode(request: proto::rpc::GetNetworkNoteStatusRequest) -> tonic::Result<Self::Input> {
+    fn decode(
+        request: proto::miden::node::v1::GetNetworkNoteStatusRequest,
+    ) -> tonic::Result<Self::Input> {
         let note_id_digest: Word = request
             .note_id
             .as_ref()
@@ -24,7 +26,9 @@ impl proto::server::rpc_api::GetNetworkNoteStatus for RpcService {
         Ok(miden_protocol::note::NoteId::from_raw(note_id_digest))
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::GetNetworkNoteStatusResponse> {
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<proto::miden::node::v1::GetNetworkNoteStatusResponse> {
         Ok(output)
     }
 
@@ -66,11 +70,13 @@ impl proto::server::rpc_api::GetNetworkNoteStatus for RpcService {
                 let response = ntx_builder
                     .clone()
                     .get_network_note_status(forwarded_request.map(|note_id| {
-                        proto::ntx_builder::GetNetworkNoteStatusRequest { note_id: Some(note_id) }
+                        proto::miden::ntx_builder::v1::GetNetworkNoteStatusRequest {
+                            note_id: Some(note_id),
+                        }
                     }))
                     .await?
                     .into_inner();
-                proto::rpc::GetNetworkNoteStatusResponse {
+                proto::miden::node::v1::GetNetworkNoteStatusResponse {
                     status: response.status,
                     last_error: response.last_error,
                     attempt_count: response.attempt_count,
@@ -81,7 +87,7 @@ impl proto::server::rpc_api::GetNetworkNoteStatus for RpcService {
                 .as_ref()
                 .clone()
                 .get_network_note_status(forwarded_request.map(|note_id| {
-                    proto::rpc::GetNetworkNoteStatusRequest { note_id: Some(note_id) }
+                    proto::miden::node::v1::GetNetworkNoteStatusRequest { note_id: Some(note_id) }
                 }))
                 .await?
                 .into_inner(),

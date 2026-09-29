@@ -5,15 +5,15 @@ use super::{RPC_LIMITS, RpcService};
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::GetLimits for RpcService {
+impl proto::server::miden_node_v1_node_service::GetLimits for RpcService {
     type Input = ();
-    type Output = proto::rpc::GetLimitsResponse;
+    type Output = proto::miden::node::v1::GetLimitsResponse;
 
-    fn decode(_request: proto::rpc::GetLimitsRequest) -> tonic::Result<Self::Input> {
+    fn decode(_request: proto::miden::node::v1::GetLimitsRequest) -> tonic::Result<Self::Input> {
         Ok(())
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::GetLimitsResponse> {
+    fn encode(output: Self::Output) -> tonic::Result<proto::miden::node::v1::GetLimitsResponse> {
         Ok(output)
     }
 

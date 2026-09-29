@@ -5,20 +5,22 @@ use super::ValidatorService;
 use crate::COMPONENT;
 
 #[tonic::async_trait]
-impl grpc::server::validator_api::GetTransactionEncryptionKey for ValidatorService {
+impl grpc::server::miden_validator_v1_validator_service::GetTransactionEncryptionKey
+    for ValidatorService
+{
     type Input = ();
     type Output = grpc::submission::TransactionEncryptionKey;
 
     fn decode(
-        _request: grpc::validator::GetTransactionEncryptionKeyRequest,
+        _request: grpc::miden::validator::v1::GetTransactionEncryptionKeyRequest,
     ) -> tonic::Result<Self::Input> {
         Ok(())
     }
 
     fn encode(
         output: Self::Output,
-    ) -> tonic::Result<grpc::validator::GetTransactionEncryptionKeyResponse> {
-        Ok(grpc::validator::GetTransactionEncryptionKeyResponse { key: Some(output) })
+    ) -> tonic::Result<grpc::miden::validator::v1::GetTransactionEncryptionKeyResponse> {
+        Ok(grpc::miden::validator::v1::GetTransactionEncryptionKeyResponse { key: Some(output) })
     }
 
     #[miden_instrument(

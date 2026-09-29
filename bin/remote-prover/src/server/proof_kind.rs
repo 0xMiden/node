@@ -1,4 +1,4 @@
-use miden_node_proto::generated::remote_prover as proto;
+use miden_node_proto::generated::miden::remote_prover::v1 as proto;
 use miden_node_tracing::RecordAttribute;
 
 /// Specifies the type of proof supported by the remote prover.

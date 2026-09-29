@@ -1,6 +1,6 @@
 use miden_node_proto::DecodeMessage;
 use miden_node_proto::generated::blockchain::BlockNumber;
-use miden_node_proto::generated::note_transport::{
+use miden_node_proto::generated::miden::note_transport::v1::{
     FetchNotesCursor,
     FetchNotesRequest,
     FetchNotesResponse,
@@ -9,7 +9,10 @@ use miden_node_proto::generated::note_transport::{
     SendNoteResponse,
     TransportNote,
 };
-use miden_node_proto::server::note_transport_api::{FetchNotes, SendNote};
+use miden_node_proto::server::miden_note_transport_v1_note_transport_service::{
+    FetchNotes,
+    SendNote,
+};
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::note::{
@@ -298,7 +301,9 @@ async fn grpc_web_request(
     frame.extend_from_slice(&u32::try_from(request.len()).unwrap().to_be_bytes());
     frame.extend_from_slice(&request);
     reqwest::Client::new()
-        .post(format!("http://{address}/note_transport.Api/{method}"))
+        .post(format!(
+            "http://{address}/miden.note_transport.v1.NoteTransportService/{method}"
+        ))
         .header("content-type", "application/grpc-web+proto")
         .header("x-grpc-web", "1")
         .header("origin", "https://wallet.example")
@@ -310,7 +315,7 @@ async fn grpc_web_request(
 
 #[tokio::test]
 async fn grpc_health_reflection_web_and_shutdown() {
-    use miden_node_proto::generated::note_transport::api_client::ApiClient;
+    use miden_node_proto::generated::miden::note_transport::v1::note_transport_service_client::NoteTransportServiceClient;
     use tonic_health::pb::HealthCheckRequest;
     use tonic_health::pb::health_check_response::ServingStatus;
     use tonic_health::pb::health_client::HealthClient;
@@ -332,14 +337,14 @@ async fn grpc_health_reflection_web_and_shutdown() {
     let mut health = HealthClient::new(channel.clone());
     let health_response = health
         .check(HealthCheckRequest {
-            service: miden_node_proto::server::note_transport_api::service_name().into(),
+            service: miden_node_proto::server::miden_note_transport_v1_note_transport_service::service_name().into(),
         })
         .await
         .unwrap()
         .into_inner();
     assert_eq!(health_response.status, ServingStatus::Serving as i32);
 
-    let mut client = ApiClient::new(channel.clone());
+    let mut client = NoteTransportServiceClient::new(channel.clone());
     let envelope = note(1, 123);
     let hint = Some(BlockNumber { block_num: 0 });
     client
@@ -371,12 +376,32 @@ async fn grpc_health_reflection_web_and_shutdown() {
     let Some(MessageResponse::ListServicesResponse(services)) = reflected.message_response else {
         panic!("expected reflected services");
     };
-    assert!(services.service.iter().any(|service| service.name == "note_transport.Api"));
+    assert!(
+        services
+            .service
+            .iter()
+            .any(|service| service.name == "miden.note_transport.v1.NoteTransportService")
+    );
     drop(stream);
     drop(reflection);
     drop(client);
     drop(health);
 
+    check_grpc_web(address, envelope, response).await;
+
+    shutdown.cancel();
+    tokio::time::timeout(std::time::Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}
+
+async fn check_grpc_web(
+    address: std::net::SocketAddr,
+    envelope: TransportNote,
+    response: FetchNotesResponse,
+) {
     let web = grpc_web_request(
         address,
         "SendNote",
@@ -406,13 +431,6 @@ async fn grpc_health_reflection_web_and_shutdown() {
     let page = FetchNotesResponse::decode(&frame[5..5 + length]).unwrap();
     assert_eq!(page.notes.len(), 1);
     assert_eq!(page, response);
-
-    shutdown.cancel();
-    tokio::time::timeout(std::time::Duration::from_secs(5), task)
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
 }
 
 #[tokio::test]
@@ -447,7 +465,7 @@ async fn large_pages_fit_default_grpc_client_and_resume_without_gaps() {
     let address = listener.local_addr().unwrap();
     let shutdown = CancellationToken::new();
     let task = tokio::spawn(server.serve_on(listener, shutdown.clone()));
-    let mut client = miden_node_proto::generated::note_transport::api_client::ApiClient::connect(
+    let mut client = miden_node_proto::generated::miden::note_transport::v1::note_transport_service_client::NoteTransportServiceClient::connect(
         format!("http://{address}"),
     )
     .await

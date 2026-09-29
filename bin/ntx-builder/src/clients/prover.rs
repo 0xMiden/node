@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use miden_node_proto::clients::{Builder, RemoteProverClient};
 use miden_node_proto::errors::ConversionError;
-use miden_node_proto::generated::remote_prover::prove_request::Request;
-use miden_node_proto::generated::remote_prover::{DecodedProveResponse, ProveRequest};
+use miden_node_proto::generated::miden::remote_prover::v1::prove_request::Request;
+use miden_node_proto::generated::miden::remote_prover::v1::{DecodedProveResponse, ProveRequest};
 use miden_node_proto::{BuildUnchecked, DecodeMessage};
 use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
 use miden_tx::TransactionProverError;

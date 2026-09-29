@@ -15,7 +15,9 @@ use crate::tx_validation::validate_transaction;
 use crate::{COMPONENT, PrivateRecordContext, PrivateRecordId};
 
 #[tonic::async_trait]
-impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
+impl grpc::server::miden_validator_v1_validator_service::SubmitProvenTransaction
+    for ValidatorService
+{
     type Input = Input;
     type Output = ();
 
@@ -102,7 +104,7 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
     }
 
     fn decode(
-        request: grpc::validator::SubmitProvenTransactionRequest,
+        request: grpc::miden::validator::v1::SubmitProvenTransactionRequest,
     ) -> tonic::Result<Self::Input> {
         let request = request
             .submission
@@ -124,8 +126,10 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
         Ok(Self::Input { tx, sealed })
     }
 
-    fn encode((): Self::Output) -> tonic::Result<grpc::validator::SubmitProvenTransactionResponse> {
-        Ok(grpc::validator::SubmitProvenTransactionResponse {})
+    fn encode(
+        (): Self::Output,
+    ) -> tonic::Result<grpc::miden::validator::v1::SubmitProvenTransactionResponse> {
+        Ok(grpc::miden::validator::v1::SubmitProvenTransactionResponse {})
     }
 }
 

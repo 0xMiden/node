@@ -2,7 +2,7 @@
 //
 // This service is served by the sequencer on a private, network-isolated listener.
 syntax = "proto3";
-package sequencer;
+package miden.sequencer.v1;
 
 import "account.proto";
 import "primitives.proto";
@@ -12,7 +12,7 @@ import "batch.proto";
 // INTERNAL SEQUENCER API
 // ================================================================================================
 
-service Api {
+service SequencerService {
     // Submits an already-authenticated transaction directly to the mempool. Returns the node's
     // current block height.
     rpc SubmitAuthenticatedTx(SubmitAuthenticatedTxRequest) returns (SubmitAuthenticatedTxResponse) {}

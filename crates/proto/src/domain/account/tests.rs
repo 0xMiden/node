@@ -14,7 +14,7 @@ fn registration_request_debug_hides_invitation_code() {
         AccountType::Public,
         AssetCallbackFlag::Disabled,
     );
-    let request = proto::rpc::RegisterAccountRequest {
+    let request = proto::miden::node::v1::RegisterAccountRequest {
         invitation_code: code.to_owned(),
         account_id: Some(account_id.into()),
     };
@@ -37,7 +37,7 @@ fn test_slot_name() -> StorageSlotName {
     StorageSlotName::new("miden::test::storage::slot").unwrap()
 }
 
-fn account_response() -> proto::rpc::GetAccountResponse {
+fn account_response() -> proto::miden::node::v1::GetAccountResponse {
     let id = AccountId::dummy(
         [7; 15],
         AccountIdVersion::Version1,
@@ -87,7 +87,7 @@ fn account_response_accepts_matching_details_and_omitted_optional_data() {
         assert_eq!(details.account_header.to_commitment(), decoded.witness.state_commitment());
     }
 
-    let message = proto::rpc::GetAccountResponse { details: None, ..response };
+    let message = proto::miden::node::v1::GetAccountResponse { details: None, ..response };
     assert!(message.decode_fields().and_then(Verify::verify).unwrap().details.is_none());
 }
 
@@ -193,7 +193,7 @@ fn account_storage_map_details_partial_map_round_trip() {
         proofs,
     )
     .unwrap();
-    let encoded: crate::generated::rpc::account_storage_details::AccountStorageMapDetails =
+    let encoded: crate::generated::miden::node::v1::account_storage_details::AccountStorageMapDetails =
         details.clone().into();
     let decoded = encoded.decode_fields().and_then(Verify::verify).unwrap();
 
@@ -228,10 +228,11 @@ fn account_storage_map_details_rejects_duplicate_partial_map_keys() {
 
 #[test]
 fn account_storage_map_details_rejects_missing_result() {
-    let encoded = crate::generated::rpc::account_storage_details::AccountStorageMapDetails {
-        slot_name: test_slot_name().to_string(),
-        result: None,
-    };
+    let encoded =
+        crate::generated::miden::node::v1::account_storage_details::AccountStorageMapDetails {
+            slot_name: test_slot_name().to_string(),
+            result: None,
+        };
 
     let err = encoded.decode_fields().and_then(Verify::verify).unwrap_err();
     assert!(err.to_string().contains("result"));
@@ -239,12 +240,13 @@ fn account_storage_map_details_rejects_missing_result() {
 
 #[test]
 fn account_storage_map_details_rejects_false_limit_marker() {
-    use crate::generated::rpc::account_storage_details::account_storage_map_details::Result;
+    use crate::generated::miden::node::v1::account_storage_details::account_storage_map_details::Result;
 
-    let encoded = crate::generated::rpc::account_storage_details::AccountStorageMapDetails {
-        slot_name: test_slot_name().to_string(),
-        result: Some(Result::TooManyEntries(false)),
-    };
+    let encoded =
+        crate::generated::miden::node::v1::account_storage_details::AccountStorageMapDetails {
+            slot_name: test_slot_name().to_string(),
+            result: Some(Result::TooManyEntries(false)),
+        };
 
     let err = encoded.decode_fields().and_then(Verify::verify).unwrap_err();
     assert!(err.to_string().contains("must be true"));
@@ -268,7 +270,7 @@ fn account_storage_details_rejects_partial_map_root_mismatch() {
         Word::empty(),
     )])
     .unwrap();
-    let encoded: crate::generated::rpc::AccountStorageDetails =
+    let encoded: crate::generated::miden::node::v1::AccountStorageDetails =
         AccountStorageDetails { header, map_details: vec![map_details] }.into();
 
     let err = encoded.decode_fields().and_then(Verify::verify).unwrap_err();
@@ -277,9 +279,9 @@ fn account_storage_details_rejects_partial_map_root_mismatch() {
 
 #[test]
 fn account_detail_request_converts_all_storage_maps() {
-    use crate::generated::rpc::get_account_request::account_detail_request::StorageRequest;
+    use crate::generated::miden::node::v1::get_account_request::account_detail_request::StorageRequest;
 
-    let request = crate::generated::rpc::get_account_request::AccountDetailRequest {
+    let request = crate::generated::miden::node::v1::get_account_request::AccountDetailRequest {
         code_commitment: None,
         asset_vault_commitment: None,
         storage_request: Some(StorageRequest::AllStorageMaps(true)),
@@ -292,9 +294,9 @@ fn account_detail_request_converts_all_storage_maps() {
 
 #[test]
 fn account_detail_request_rejects_false_all_storage_maps() {
-    use crate::generated::rpc::get_account_request::account_detail_request::StorageRequest;
+    use crate::generated::miden::node::v1::get_account_request::account_detail_request::StorageRequest;
 
-    let request = crate::generated::rpc::get_account_request::AccountDetailRequest {
+    let request = crate::generated::miden::node::v1::get_account_request::AccountDetailRequest {
         code_commitment: None,
         asset_vault_commitment: None,
         storage_request: Some(StorageRequest::AllStorageMaps(false)),
@@ -307,14 +309,14 @@ fn account_detail_request_rejects_false_all_storage_maps() {
 
 #[test]
 fn account_detail_request_converts_explicit_storage_maps() {
-    use crate::generated::rpc::get_account_request::account_detail_request::{
+    use crate::generated::miden::node::v1::get_account_request::account_detail_request::{
         StorageMapDetailRequest,
         StorageMapDetailRequests,
         StorageRequest,
         storage_map_detail_request,
     };
 
-    let request = crate::generated::rpc::get_account_request::AccountDetailRequest {
+    let request = crate::generated::miden::node::v1::get_account_request::AccountDetailRequest {
         code_commitment: None,
         asset_vault_commitment: None,
         storage_request: Some(StorageRequest::StorageMaps(StorageMapDetailRequests {
@@ -335,16 +337,16 @@ fn account_detail_request_converts_explicit_storage_maps() {
 
 #[test]
 fn account_detail_request_rejects_duplicate_storage_map_keys() {
-    use crate::generated::rpc::get_account_request::account_detail_request::{
+    use crate::generated::miden::node::v1::get_account_request::account_detail_request::{
         StorageMapDetailRequest,
         StorageMapDetailRequests,
         StorageRequest,
         storage_map_detail_request,
     };
-    use crate::generated::rpc::get_account_request::account_detail_request::storage_map_detail_request::MapKeys;
+    use crate::generated::miden::node::v1::get_account_request::account_detail_request::storage_map_detail_request::MapKeys;
 
     let map_key: crate::generated::primitives::Word = Word::from([1, 2, 3, 4u32]).into();
-    let request = crate::generated::rpc::get_account_request::AccountDetailRequest {
+    let request = crate::generated::miden::node::v1::get_account_request::AccountDetailRequest {
         code_commitment: None,
         asset_vault_commitment: None,
         storage_request: Some(StorageRequest::StorageMaps(StorageMapDetailRequests {
@@ -364,7 +366,7 @@ fn account_detail_request_rejects_duplicate_storage_map_keys() {
 
 #[test]
 fn account_detail_request_allows_no_storage_slot_data() {
-    let request = crate::generated::rpc::get_account_request::AccountDetailRequest {
+    let request = crate::generated::miden::node::v1::get_account_request::AccountDetailRequest {
         code_commitment: None,
         asset_vault_commitment: None,
         storage_request: None,

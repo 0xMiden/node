@@ -8,7 +8,7 @@ use miden_node_proto::domain::encryption::{
     TransactionEncryptionScheme,
     transaction_inputs_associated_data,
 };
-use miden_node_proto::generated::server::validator_api;
+use miden_node_proto::generated::server::miden_validator_v1_validator_service;
 use miden_node_proto::{BuildUnchecked, DecodeMessage, generated as proto};
 use miden_node_store::GenesisState;
 use miden_node_store::state::State;
@@ -162,7 +162,7 @@ impl Validator {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             tonic::transport::Server::builder()
-                .add_service(validator_api::service(self))
+                .add_service(miden_validator_v1_validator_service::service(self))
                 .serve_with_incoming_shutdown(
                     TcpListenerStream::new(listener),
                     shutdown.cancelled_owned(),
@@ -175,20 +175,20 @@ impl Validator {
 }
 
 #[tonic::async_trait]
-impl validator_api::GetTransactionEncryptionKey for Validator {
+impl miden_validator_v1_validator_service::GetTransactionEncryptionKey for Validator {
     type Input = ();
     type Output = proto::submission::TransactionEncryptionKey;
 
     fn decode(
-        _request: proto::validator::GetTransactionEncryptionKeyRequest,
+        _request: proto::miden::validator::v1::GetTransactionEncryptionKeyRequest,
     ) -> tonic::Result<Self::Input> {
         Ok(())
     }
 
     fn encode(
         output: Self::Output,
-    ) -> tonic::Result<proto::validator::GetTransactionEncryptionKeyResponse> {
-        Ok(proto::validator::GetTransactionEncryptionKeyResponse { key: Some(output) })
+    ) -> tonic::Result<proto::miden::validator::v1::GetTransactionEncryptionKeyResponse> {
+        Ok(proto::miden::validator::v1::GetTransactionEncryptionKeyResponse { key: Some(output) })
     }
 
     async fn handle(
@@ -219,12 +219,12 @@ impl validator_api::GetTransactionEncryptionKey for Validator {
 }
 
 #[tonic::async_trait]
-impl validator_api::SubmitProvenTransaction for Validator {
+impl miden_validator_v1_validator_service::SubmitProvenTransaction for Validator {
     type Input = proto::submission::ProvenTransactionSubmission;
     type Output = ();
 
     fn decode(
-        request: proto::validator::SubmitProvenTransactionRequest,
+        request: proto::miden::validator::v1::SubmitProvenTransactionRequest,
     ) -> tonic::Result<Self::Input> {
         request
             .submission
@@ -233,8 +233,8 @@ impl validator_api::SubmitProvenTransaction for Validator {
 
     fn encode(
         (): Self::Output,
-    ) -> tonic::Result<proto::validator::SubmitProvenTransactionResponse> {
-        Ok(proto::validator::SubmitProvenTransactionResponse {})
+    ) -> tonic::Result<proto::miden::validator::v1::SubmitProvenTransactionResponse> {
+        Ok(proto::miden::validator::v1::SubmitProvenTransactionResponse {})
     }
 
     async fn handle(
@@ -275,9 +275,9 @@ impl validator_api::SubmitProvenTransaction for Validator {
 }
 
 #[tonic::async_trait]
-impl validator_api::SignBlock for Validator {
-    type Input = proto::validator::SignBlockRequest;
-    type Output = proto::validator::SignBlockResponse;
+impl miden_validator_v1_validator_service::SignBlock for Validator {
+    type Input = proto::miden::validator::v1::SignBlockRequest;
+    type Output = proto::miden::validator::v1::SignBlockResponse;
 
     fn decode(input: Self::Input) -> tonic::Result<Self::Input> {
         Ok(input)
@@ -304,7 +304,7 @@ impl validator_api::SignBlock for Validator {
             assert!(transactions.contains(&tx.id()), "block contains an unvalidated transaction");
         }
         let commitment = proposal.block_header.commitment();
-        Ok(proto::validator::SignBlockResponse {
+        Ok(proto::miden::validator::v1::SignBlockResponse {
             signature: Some(self.signer.sign(commitment).into()),
             block_commitment: Some(commitment.into()),
             public_key: Some(self.signer.public_key().into()),
@@ -313,11 +313,11 @@ impl validator_api::SignBlock for Validator {
 }
 
 #[tonic::async_trait]
-impl validator_api::Status for Validator {
+impl miden_validator_v1_validator_service::Status for Validator {
     type Input = ();
-    type Output = proto::validator::StatusResponse;
+    type Output = proto::miden::validator::v1::StatusResponse;
 
-    fn decode(_request: proto::validator::StatusRequest) -> tonic::Result<Self::Input> {
+    fn decode(_request: proto::miden::validator::v1::StatusRequest) -> tonic::Result<Self::Input> {
         Ok(())
     }
 
@@ -336,9 +336,9 @@ impl validator_api::Status for Validator {
 }
 
 #[tonic::async_trait]
-impl validator_api::BlockSubscription for Validator {
-    type Input = proto::validator::BlockSubscriptionRequest;
-    type Item = proto::validator::BlockSubscriptionResponse;
+impl miden_validator_v1_validator_service::BlockSubscription for Validator {
+    type Input = proto::miden::validator::v1::BlockSubscriptionRequest;
+    type Item = proto::miden::validator::v1::BlockSubscriptionResponse;
     type ItemStream = tokio_stream::Empty<tonic::Result<Self::Item>>;
 
     fn decode(input: Self::Input) -> tonic::Result<Self::Input> {

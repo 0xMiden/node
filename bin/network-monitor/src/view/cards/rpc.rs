@@ -1,5 +1,5 @@
 //! Renders the RPC service card. Embeds `data-grpc-url` so `probes.js` can issue a browser-side
-//! probe to `/rpc.Api/Status`.
+//! probe to `/miden.node.v1.NodeService/Status`.
 
 use maud::{Markup, html};
 
@@ -8,7 +8,7 @@ use crate::status::RpcStatusDetails;
 
 pub(in crate::view) fn render_rpc_status(details: &RpcStatusDetails) -> Markup {
     html! {
-        div class="service-details" data-grpc-url=(details.url) data-grpc-path="/rpc.Api/Status" {
+        div class="service-details" data-grpc-url=(details.url) data-grpc-path="/miden.node.v1.NodeService/Status" {
             div class="detail-item" {
                 strong { "URL: " }
                 (details.url)

@@ -8,18 +8,22 @@ use super::{RpcService, check, database_error_to_status, invalid_block_range_to_
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::SyncTransactions for RpcService {
-    type Input = proto::rpc::DecodedSyncTransactionsRequest;
-    type Output = proto::rpc::SyncTransactionsResponse;
+impl proto::server::miden_node_v1_node_service::SyncTransactions for RpcService {
+    type Input = proto::miden::node::v1::DecodedSyncTransactionsRequest;
+    type Output = proto::miden::node::v1::SyncTransactionsResponse;
 
-    fn decode(request: proto::rpc::SyncTransactionsRequest) -> tonic::Result<Self::Input> {
+    fn decode(
+        request: proto::miden::node::v1::SyncTransactionsRequest,
+    ) -> tonic::Result<Self::Input> {
         check::<QueryParamAccountIdLimit>(request.account_ids.as_slice().len())?;
         request
             .decode_fields()
             .map_err(|err| SyncTransactionsErrorCode::DeserializationFailed.invalid_argument(err))
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::SyncTransactionsResponse> {
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<proto::miden::node::v1::SyncTransactionsResponse> {
         Ok(output)
     }
 
@@ -75,8 +79,8 @@ impl proto::server::rpc_api::SyncTransactions for RpcService {
         let transactions =
             transaction_records_db.into_iter().map(transaction_record_to_proto).collect();
 
-        Ok(proto::rpc::SyncTransactionsResponse {
-            pagination_info: Some(proto::rpc::PaginationInfo {
+        Ok(proto::miden::node::v1::SyncTransactionsResponse {
+            pagination_info: Some(proto::miden::node::v1::PaginationInfo {
                 chain_tip: chain_tip.as_u32(),
                 block_num: last_block_included.as_u32(),
             }),
@@ -88,7 +92,9 @@ impl proto::server::rpc_api::SyncTransactions for RpcService {
 // HELPERS
 // ================================================================================================
 
-fn transaction_record_to_proto(record: TransactionRecord) -> proto::rpc::TransactionRecord {
+fn transaction_record_to_proto(
+    record: TransactionRecord,
+) -> proto::miden::node::v1::TransactionRecord {
     let output_note_proofs = record
         .output_note_proofs
         .into_iter()
@@ -98,13 +104,13 @@ fn transaction_record_to_proto(record: TransactionRecord) -> proto::rpc::Transac
     let consumed_note_refs = record
         .consumed_note_refs
         .into_iter()
-        .map(|(nullifier, note_id)| proto::rpc::ConsumedNoteRef {
+        .map(|(nullifier, note_id)| proto::miden::node::v1::ConsumedNoteRef {
             nullifier: Some(nullifier.as_word().into()),
             note_id: Some((&note_id).into()),
         })
         .collect();
 
-    proto::rpc::TransactionRecord {
+    proto::miden::node::v1::TransactionRecord {
         header: Some(proto::transaction::TransactionHeader {
             transaction_id: Some(record.header.id().into()),
             account_id: Some(record.header.account_id().into()),

@@ -8,15 +8,15 @@ use super::error_codes::{SyncChainMmrErrorCode, internal_error};
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::SyncChainMmr for RpcService {
-    type Input = proto::rpc::SyncChainMmrRequest;
-    type Output = proto::rpc::SyncChainMmrResponse;
+impl proto::server::miden_node_v1_node_service::SyncChainMmr for RpcService {
+    type Input = proto::miden::node::v1::SyncChainMmrRequest;
+    type Output = proto::miden::node::v1::SyncChainMmrResponse;
 
-    fn decode(request: proto::rpc::SyncChainMmrRequest) -> tonic::Result<Self::Input> {
+    fn decode(request: proto::miden::node::v1::SyncChainMmrRequest) -> tonic::Result<Self::Input> {
         Ok(request)
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::SyncChainMmrResponse> {
+    fn encode(output: Self::Output) -> tonic::Result<proto::miden::node::v1::SyncChainMmrResponse> {
         Ok(output)
     }
 
@@ -43,10 +43,9 @@ impl proto::server::rpc_api::SyncChainMmr for RpcService {
         // is published after its snapshot, so the view below is guaranteed to be able to serve
         // `sync_target`.
         let sync_target = match request.finality_level() {
-            proto::rpc::FinalityLevel::Committed | proto::rpc::FinalityLevel::Unspecified => {
-                self.state.committed_tip()
-            },
-            proto::rpc::FinalityLevel::Proven => self.state.proven_tip(),
+            proto::miden::node::v1::FinalityLevel::Committed
+            | proto::miden::node::v1::FinalityLevel::Unspecified => self.state.committed_tip(),
+            proto::miden::node::v1::FinalityLevel::Proven => self.state.proven_tip(),
         };
 
         if current_client_block_height > sync_target {
@@ -86,9 +85,9 @@ impl proto::server::rpc_api::SyncChainMmr for RpcService {
             None
         };
 
-        Ok(proto::rpc::SyncChainMmrResponse {
+        Ok(proto::miden::node::v1::SyncChainMmrResponse {
             protocol_config,
-            block_range: Some(proto::rpc::BlockRange {
+            block_range: Some(proto::miden::node::v1::BlockRange {
                 block_from: block_range.start().as_u32(),
                 block_to: block_range.end().as_u32(),
             }),

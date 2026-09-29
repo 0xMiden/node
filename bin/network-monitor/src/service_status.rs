@@ -7,7 +7,7 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use miden_node_proto::generated as proto;
-use miden_node_proto::generated::rpc::{BlockProducerStatus, StatusResponse};
+use miden_node_proto::generated::miden::node::v1::{BlockProducerStatus, StatusResponse};
 use miden_node_tracing::warn;
 use serde::{Deserialize, Serialize};
 
@@ -36,12 +36,12 @@ impl From<String> for Status {
     }
 }
 
-impl From<proto::remote_prover::WorkerHealthStatus> for Status {
-    fn from(value: proto::remote_prover::WorkerHealthStatus) -> Self {
+impl From<proto::miden::remote_prover::v1::WorkerHealthStatus> for Status {
+    fn from(value: proto::miden::remote_prover::v1::WorkerHealthStatus) -> Self {
         match value {
-            proto::remote_prover::WorkerHealthStatus::Unknown => Status::Unknown,
-            proto::remote_prover::WorkerHealthStatus::Healthy => Status::Healthy,
-            proto::remote_prover::WorkerHealthStatus::Unhealthy => Status::Unhealthy,
+            proto::miden::remote_prover::v1::WorkerHealthStatus::Unknown => Status::Unknown,
+            proto::miden::remote_prover::v1::WorkerHealthStatus::Healthy => Status::Healthy,
+            proto::miden::remote_prover::v1::WorkerHealthStatus::Unhealthy => Status::Unhealthy,
         }
     }
 }
@@ -363,22 +363,23 @@ impl From<BlockProducerStatus> for BlockProducerStatusDetails {
     }
 }
 
-impl From<proto::remote_prover::ProxyWorkerStatus> for WorkerStatusDetails {
-    fn from(value: proto::remote_prover::ProxyWorkerStatus) -> Self {
+impl From<proto::miden::remote_prover::v1::ProxyWorkerStatus> for WorkerStatusDetails {
+    fn from(value: proto::miden::remote_prover::v1::ProxyWorkerStatus) -> Self {
         // An out-of-range discriminant (e.g. from a newer prover version) degrades to Unknown
         // instead of panicking the checker task.
-        let status = proto::remote_prover::WorkerHealthStatus::try_from(value.status).map_or_else(
-            |_| {
-                warn!(
-                    target: LOG_TARGET,
-                    "Unknown worker health status discriminant",
-                    worker.status.raw = value.status,
-                    worker.name = value.name.as_str()
-                );
-                Status::Unknown
-            },
-            Status::from,
-        );
+        let status = proto::miden::remote_prover::v1::WorkerHealthStatus::try_from(value.status)
+            .map_or_else(
+                |_| {
+                    warn!(
+                        target: LOG_TARGET,
+                        "Unknown worker health status discriminant",
+                        worker.status.raw = value.status,
+                        worker.name = value.name.as_str()
+                    );
+                    Status::Unknown
+                },
+                Status::from,
+            );
 
         Self {
             name: value.name,
@@ -390,23 +391,24 @@ impl From<proto::remote_prover::ProxyWorkerStatus> for WorkerStatusDetails {
 
 impl RemoteProverStatusDetails {
     pub fn from_proxy_status(
-        status: proto::remote_prover::ProxyStatusResponse,
+        status: proto::miden::remote_prover::v1::ProxyStatusResponse,
         url: String,
     ) -> Self {
         // An out-of-range discriminant (e.g. from a newer prover version) degrades to Unknown
         // instead of panicking the checker task.
-        let proof_type = proto::remote_prover::ProofType::try_from(status.supported_proof_type)
-            .map_or_else(
-                |_| {
-                    warn!(
-                        target: LOG_TARGET,
-                        "Unknown supported proof type discriminant",
-                        prover.proof_type.raw = status.supported_proof_type
-                    );
-                    ProofType::Unknown
-                },
-                ProofType::from,
-            );
+        let proof_type =
+            proto::miden::remote_prover::v1::ProofType::try_from(status.supported_proof_type)
+                .map_or_else(
+                    |_| {
+                        warn!(
+                            target: LOG_TARGET,
+                            "Unknown supported proof type discriminant",
+                            prover.proof_type.raw = status.supported_proof_type
+                        );
+                        ProofType::Unknown
+                    },
+                    ProofType::from,
+                );
 
         let workers: Vec<WorkerStatusDetails> =
             status.workers.into_iter().map(WorkerStatusDetails::from).collect();
@@ -470,7 +472,7 @@ mod tests {
 
     #[test]
     fn worker_status_with_unknown_discriminant_degrades_to_unknown() {
-        let proto_status = proto::remote_prover::ProxyWorkerStatus {
+        let proto_status = proto::miden::remote_prover::v1::ProxyWorkerStatus {
             name: "worker-1".to_string(),
             version: "1.0".to_string(),
             status: 99,
@@ -482,13 +484,13 @@ mod tests {
 
     #[test]
     fn proxy_status_with_unknown_proof_type_degrades_to_unknown() {
-        let proto_status = proto::remote_prover::ProxyStatusResponse {
+        let proto_status = proto::miden::remote_prover::v1::ProxyStatusResponse {
             version: "1.0".to_string(),
             supported_proof_type: 99,
-            workers: vec![proto::remote_prover::ProxyWorkerStatus {
+            workers: vec![proto::miden::remote_prover::v1::ProxyWorkerStatus {
                 name: "worker-1".to_string(),
                 version: "1.0".to_string(),
-                status: proto::remote_prover::WorkerHealthStatus::Healthy.into(),
+                status: proto::miden::remote_prover::v1::WorkerHealthStatus::Healthy.into(),
             }],
         };
         let details = RemoteProverStatusDetails::from_proxy_status(proto_status, "url".to_string());

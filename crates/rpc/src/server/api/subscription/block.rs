@@ -12,16 +12,20 @@ use super::stream::SubscriptionStream;
 use crate::LOG_TARGET;
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::BlockSubscription for RpcService {
+impl proto::server::miden_node_v1_node_service::BlockSubscription for RpcService {
     type Input = BlockNumber;
-    type Item = proto::rpc::BlockSubscriptionResponse;
+    type Item = proto::miden::node::v1::BlockSubscriptionResponse;
     type ItemStream = Pin<Box<dyn Stream<Item = tonic::Result<Self::Item>> + Send>>;
 
-    fn decode(request: proto::rpc::BlockSubscriptionRequest) -> tonic::Result<Self::Input> {
+    fn decode(
+        request: proto::miden::node::v1::BlockSubscriptionRequest,
+    ) -> tonic::Result<Self::Input> {
         Ok(BlockNumber::from(request.block_from))
     }
 
-    fn encode(event: Self::Item) -> tonic::Result<proto::rpc::BlockSubscriptionResponse> {
+    fn encode(
+        event: Self::Item,
+    ) -> tonic::Result<proto::miden::node::v1::BlockSubscriptionResponse> {
         Ok(event)
     }
 
@@ -74,7 +78,7 @@ impl proto::server::rpc_api::BlockSubscription for RpcService {
                             .into(),
                     )
                 };
-                let response = proto::rpc::BlockSubscriptionResponse {
+                let response = proto::miden::node::v1::BlockSubscriptionResponse {
                     block: Some(block.into()),
                     committed_chain_tip: event.tip.as_u32(),
                     protocol_config,

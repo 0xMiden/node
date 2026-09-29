@@ -5,20 +5,20 @@ use super::{Request, RpcBackend, RpcService};
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::GetTransactionEncryptionKey for RpcService {
+impl proto::server::miden_node_v1_node_service::GetTransactionEncryptionKey for RpcService {
     type Input = ();
     type Output = proto::submission::TransactionEncryptionKey;
 
     fn decode(
-        _request: proto::rpc::GetTransactionEncryptionKeyRequest,
+        _request: proto::miden::node::v1::GetTransactionEncryptionKeyRequest,
     ) -> tonic::Result<Self::Input> {
         Ok(())
     }
 
     fn encode(
         output: Self::Output,
-    ) -> tonic::Result<proto::rpc::GetTransactionEncryptionKeyResponse> {
-        Ok(proto::rpc::GetTransactionEncryptionKeyResponse { key: Some(output) })
+    ) -> tonic::Result<proto::miden::node::v1::GetTransactionEncryptionKeyResponse> {
+        Ok(proto::miden::node::v1::GetTransactionEncryptionKeyResponse { key: Some(output) })
     }
 
     #[miden_instrument(
@@ -51,8 +51,9 @@ impl proto::server::rpc_api::GetTransactionEncryptionKey for RpcService {
                     .as_ref()
                     .clone()
                     .get_transaction_encryption_key(
-                        forwarded_request
-                            .map(|()| proto::rpc::GetTransactionEncryptionKeyRequest {}),
+                        forwarded_request.map(|()| {
+                            proto::miden::node::v1::GetTransactionEncryptionKeyRequest {}
+                        }),
                     )
                     .await
                     .and_then(|response| {
@@ -65,7 +66,8 @@ impl proto::server::rpc_api::GetTransactionEncryptionKey for RpcService {
         validator
             .clone()
             .get_transaction_encryption_key(
-                forwarded_request.map(|()| proto::validator::GetTransactionEncryptionKeyRequest {}),
+                forwarded_request
+                    .map(|()| proto::miden::validator::v1::GetTransactionEncryptionKeyRequest {}),
             )
             .await
             .and_then(|response| {

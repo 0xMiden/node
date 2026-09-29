@@ -178,15 +178,30 @@ mod tests {
 // ================================================================================================
 
 type InterceptedChannel = InterceptedService<Channel, Interceptor>;
-type GeneratedRpcClient = generated::rpc::api_client::ApiClient<InterceptedChannel>;
+type GeneratedRpcClient =
+    generated::miden::node::v1::node_service_client::NodeServiceClient<InterceptedChannel>;
 type GeneratedNoteTransportClient =
-    generated::note_transport::api_client::ApiClient<InterceptedChannel>;
+    generated::miden::note_transport::v1::note_transport_service_client::NoteTransportServiceClient<
+        InterceptedChannel,
+    >;
 type GeneratedProxyStatusClient =
-    generated::remote_prover::proxy_status_api_client::ProxyStatusApiClient<InterceptedChannel>;
-type GeneratedProverClient = generated::remote_prover::api_client::ApiClient<InterceptedChannel>;
-type GeneratedValidatorClient = generated::validator::api_client::ApiClient<InterceptedChannel>;
-type GeneratedNtxBuilderClient = generated::ntx_builder::api_client::ApiClient<InterceptedChannel>;
-type GeneratedSequencerClient = generated::sequencer::api_client::ApiClient<InterceptedChannel>;
+    generated::miden::remote_prover::v1::proxy_status_service_client::ProxyStatusServiceClient<
+        InterceptedChannel,
+    >;
+type GeneratedProverClient =
+    generated::miden::remote_prover::v1::prover_service_client::ProverServiceClient<
+        InterceptedChannel,
+    >;
+type GeneratedValidatorClient =
+    generated::miden::validator::v1::validator_service_client::ValidatorServiceClient<
+        InterceptedChannel,
+    >;
+type GeneratedNtxBuilderClient =
+    generated::miden::ntx_builder::v1::network_transaction_builder_service_client::NetworkTransactionBuilderServiceClient<InterceptedChannel>;
+type GeneratedSequencerClient =
+    generated::miden::sequencer::v1::sequencer_service_client::SequencerServiceClient<
+        InterceptedChannel,
+    >;
 type GeneratedProvenTransaction = generated::submission::ProvenTransactionSubmission;
 type SealedTransactionInputs = generated::submission::SealedTransactionInputs;
 
@@ -680,7 +695,7 @@ impl ValidatorClient {
                 sealed_transaction_inputs: Some(inputs.clone()),
             };
             self.submit_proven_transaction(
-                crate::generated::validator::SubmitProvenTransactionRequest {
+                crate::generated::miden::validator::v1::SubmitProvenTransactionRequest {
                     submission: Some(proven_tx),
                 },
             )

@@ -69,7 +69,7 @@ container so Docker can route the mapped port.
 Check the local RPC endpoint from another terminal:
 
 ```bash
-grpcurl -plaintext localhost:57291 rpc.Api/Status
+grpcurl -plaintext localhost:57291 miden.node.v1.NodeService/Status
 ```
 
 The `-plaintext` flag is required for the local full node RPC listener because it does not use TLS.

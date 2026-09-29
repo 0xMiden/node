@@ -12,18 +12,22 @@ use super::{RpcBackend, RpcService, submit_batch_to_validators};
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
+impl proto::server::miden_node_v1_node_service::SubmitProvenTxBatch for RpcService {
     type Input = proto::submission::TransactionBatch;
     type Output = proto::blockchain::BlockNumber;
 
-    fn decode(request: proto::rpc::SubmitProvenTxBatchRequest) -> tonic::Result<Self::Input> {
+    fn decode(
+        request: proto::miden::node::v1::SubmitProvenTxBatchRequest,
+    ) -> tonic::Result<Self::Input> {
         request
             .submission
             .ok_or_else(|| tonic::Status::invalid_argument("missing submission"))
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::SubmitProvenTxBatchResponse> {
-        Ok(proto::rpc::SubmitProvenTxBatchResponse { block_num: output.block_num })
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<proto::miden::node::v1::SubmitProvenTxBatchResponse> {
+        Ok(proto::miden::node::v1::SubmitProvenTxBatchResponse { block_num: output.block_num })
     }
 
     #[miden_instrument(
@@ -141,7 +145,9 @@ impl proto::server::rpc_api::SubmitProvenTxBatch for RpcService {
                     .as_ref()
                     .clone()
                     .submit_proven_tx_batch(forwarded_request.map(|payload| {
-                        proto::rpc::SubmitProvenTxBatchRequest { submission: Some(payload) }
+                        proto::miden::node::v1::SubmitProvenTxBatchRequest {
+                            submission: Some(payload),
+                        }
                     }))
                     .await
                     .map(|response| proto::blockchain::BlockNumber {
@@ -176,15 +182,17 @@ impl RpcService {
             auth_inputs.push(inputs.into());
         }
 
-        let authenticated_batch = proto::sequencer::AuthenticatedTransactionBatch {
+        let authenticated_batch = proto::miden::sequencer::v1::AuthenticatedTransactionBatch {
             proposed_batch: Some((&proposed_batch).into()),
             auth_inputs,
             batch_proof: Some((&proven_batch).into()),
         };
         sequencer
-            .submit_authenticated_tx_batch(proto::sequencer::SubmitAuthenticatedTxBatchRequest {
-                batch: Some(authenticated_batch),
-            })
+            .submit_authenticated_tx_batch(
+                proto::miden::sequencer::v1::SubmitAuthenticatedTxBatchRequest {
+                    batch: Some(authenticated_batch),
+                },
+            )
             .await
             .map(|response| proto::blockchain::BlockNumber {
                 block_num: response.into_inner().block_num,

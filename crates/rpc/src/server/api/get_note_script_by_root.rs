@@ -8,11 +8,13 @@ use super::{RpcService, database_error_to_status};
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::GetNoteScriptByRoot for RpcService {
+impl proto::server::miden_node_v1_node_service::GetNoteScriptByRoot for RpcService {
     type Input = Word;
     type Output = Option<NoteScript>;
 
-    fn decode(request: proto::rpc::GetNoteScriptByRootRequest) -> tonic::Result<Self::Input> {
+    fn decode(
+        request: proto::miden::node::v1::GetNoteScriptByRootRequest,
+    ) -> tonic::Result<Self::Input> {
         Ok(request
             .decode_fields()
             .map_err(|err| {
@@ -21,8 +23,10 @@ impl proto::server::rpc_api::GetNoteScriptByRoot for RpcService {
             .root)
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::GetNoteScriptByRootResponse> {
-        Ok(proto::rpc::GetNoteScriptByRootResponse { script: output.map(Into::into) })
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<proto::miden::node::v1::GetNoteScriptByRootResponse> {
+        Ok(proto::miden::node::v1::GetNoteScriptByRootResponse { script: output.map(Into::into) })
     }
 
     #[miden_instrument(

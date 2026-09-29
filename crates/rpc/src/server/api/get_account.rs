@@ -17,17 +17,17 @@ use super::{RpcService, check};
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::GetAccount for RpcService {
+impl proto::server::miden_node_v1_node_service::GetAccount for RpcService {
     type Input = GetAccountRequest;
     type Output = GetAccountResponse;
 
-    fn decode(request: proto::rpc::GetAccountRequest) -> tonic::Result<Self::Input> {
+    fn decode(request: proto::miden::node::v1::GetAccountRequest) -> tonic::Result<Self::Input> {
         request
             .decode_and_verify()
             .map_err(|err| GetAccountErrorCode::DeserializationFailed.invalid_argument(err))
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::GetAccountResponse> {
+    fn encode(output: Self::Output) -> tonic::Result<proto::miden::node::v1::GetAccountResponse> {
         Ok(output.into())
     }
 

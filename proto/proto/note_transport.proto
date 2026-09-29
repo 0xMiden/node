@@ -1,11 +1,11 @@
 syntax = "proto3";
-package note_transport;
+package miden.note_transport.v1;
 
 import "note.proto";
 import "block_number.proto";
 
 // Delivers private notes to recipients that poll by tag.
-service Api {
+service NoteTransportService {
     // Stores a private note. A retry with the same note ID keeps the first envelope.
     // Rejects non-private notes with INVALID_ARGUMENT.
     rpc SendNote(SendNoteRequest) returns (SendNoteResponse) {}

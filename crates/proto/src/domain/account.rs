@@ -48,7 +48,7 @@ pub struct AccountInfo {
 // REGISTER ACCOUNT REQUEST
 // ================================================================================================
 
-impl Debug for proto::rpc::RegisterAccountRequest {
+impl Debug for proto::miden::node::v1::RegisterAccountRequest {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RegisterAccountRequest")
             .field("account_id", &self.account_id)
@@ -71,20 +71,24 @@ impl Debug for DecodedRegisterAccountRequest {
     }
 }
 
-impl DecodeMessage for proto::rpc::RegisterAccountRequest {
+impl DecodeMessage for proto::miden::node::v1::RegisterAccountRequest {
     type Decoded = DecodedRegisterAccountRequest;
 }
 
-impl TryFrom<proto::rpc::RegisterAccountRequest> for DecodedRegisterAccountRequest {
+impl TryFrom<proto::miden::node::v1::RegisterAccountRequest> for DecodedRegisterAccountRequest {
     type Error = ConversionError;
 
-    fn try_from(request: proto::rpc::RegisterAccountRequest) -> Result<Self, Self::Error> {
+    fn try_from(
+        request: proto::miden::node::v1::RegisterAccountRequest,
+    ) -> Result<Self, Self::Error> {
         Ok(Self {
             invitation_code: request.invitation_code,
-            account_id: decode(RequiredField::<proto::rpc::RegisterAccountRequest, _>::new(
-                "account_id",
-                request.account_id,
-            ))?,
+            account_id: decode(
+                RequiredField::<proto::miden::node::v1::RegisterAccountRequest, _>::new(
+                    "account_id",
+                    request.account_id,
+                ),
+            )?,
         })
     }
 }
@@ -115,7 +119,7 @@ impl Verify for DecodedRegisterAccountRequest {
     }
 }
 
-impl Verify for proto::rpc::DecodedIsAccountAllowedRequest {
+impl Verify for proto::miden::node::v1::DecodedIsAccountAllowedRequest {
     type Verified = AccountId;
     type Error = ConversionError;
 
@@ -136,7 +140,7 @@ pub struct GetAccountRequest {
     pub details: Option<AccountDetailRequest>,
 }
 
-impl Verify for proto::rpc::DecodedGetAccountRequest {
+impl Verify for proto::miden::node::v1::DecodedGetAccountRequest {
     type Verified = GetAccountRequest;
     type Error = ConversionError;
 
@@ -167,12 +171,12 @@ pub enum AccountStorageRequest {
     Explicit(Vec<StorageMapRequest>),
 }
 
-impl Verify for proto::rpc::get_account_request::DecodedAccountDetailRequest {
+impl Verify for proto::miden::node::v1::get_account_request::DecodedAccountDetailRequest {
     type Verified = AccountDetailRequest;
     type Error = ConversionError;
 
     fn verify(self) -> Result<Self::Verified, Self::Error> {
-        use proto::rpc::get_account_request::account_detail_request::DecodedStorageRequest as ProtoStorageRequest;
+        use proto::miden::node::v1::get_account_request::account_detail_request::DecodedStorageRequest as ProtoStorageRequest;
 
         let Self {
             code_commitment,
@@ -210,7 +214,7 @@ pub struct StorageMapRequest {
 }
 
 impl Verify
-    for proto::rpc::get_account_request::account_detail_request::DecodedStorageMapDetailRequest
+    for proto::miden::node::v1::get_account_request::account_detail_request::DecodedStorageMapDetailRequest
 {
     type Verified = StorageMapRequest;
     type Error = ConversionError;
@@ -232,12 +236,12 @@ pub enum SlotData {
     MapKeys(Vec<StorageMapKey>),
 }
 
-impl Verify for proto::rpc::get_account_request::account_detail_request::storage_map_detail_request::DecodedSlotData {
+impl Verify for proto::miden::node::v1::get_account_request::account_detail_request::storage_map_detail_request::DecodedSlotData {
     type Verified = SlotData;
     type Error = ConversionError;
 
     fn verify(self) -> Result<Self::Verified, Self::Error> {
-        use proto::rpc::get_account_request::account_detail_request::storage_map_detail_request::DecodedSlotData as ProtoSlotData;
+        use proto::miden::node::v1::get_account_request::account_detail_request::storage_map_detail_request::DecodedSlotData as ProtoSlotData;
 
         Ok(match self {
             ProtoSlotData::AllEntries(true) => SlotData::All,
@@ -302,7 +306,7 @@ impl AccountVaultDetails {
     }
 }
 
-impl Verify for proto::rpc::DecodedAccountVaultDetails {
+impl Verify for proto::miden::node::v1::DecodedAccountVaultDetails {
     type Verified = AccountVaultDetails;
     type Error = ConversionError;
 
@@ -318,7 +322,7 @@ impl Verify for proto::rpc::DecodedAccountVaultDetails {
     }
 }
 
-impl From<AccountVaultDetails> for proto::rpc::AccountVaultDetails {
+impl From<AccountVaultDetails> for proto::miden::node::v1::AccountVaultDetails {
     fn from(value: AccountVaultDetails) -> Self {
         match value {
             AccountVaultDetails::LimitExceeded => Self {
@@ -481,12 +485,12 @@ impl AccountStorageMapDetails {
     }
 }
 
-impl Verify for proto::rpc::account_storage_details::DecodedAccountStorageMapDetails {
+impl Verify for proto::miden::node::v1::account_storage_details::DecodedAccountStorageMapDetails {
     type Verified = AccountStorageMapDetails;
     type Error = ConversionError;
 
     fn verify(self) -> Result<Self::Verified, Self::Error> {
-        use proto::rpc::account_storage_details::account_storage_map_details::{
+        use proto::miden::node::v1::account_storage_details::account_storage_map_details::{
             DecodedAllMapEntries,
             DecodedPartialStorageMap,
             DecodedResult as ProtoResult,
@@ -533,10 +537,10 @@ impl Verify for proto::rpc::account_storage_details::DecodedAccountStorageMapDet
 }
 
 impl From<AccountStorageMapDetails>
-    for proto::rpc::account_storage_details::AccountStorageMapDetails
+    for proto::miden::node::v1::account_storage_details::AccountStorageMapDetails
 {
     fn from(value: AccountStorageMapDetails) -> Self {
-        use proto::rpc::account_storage_details::account_storage_map_details::{
+        use proto::miden::node::v1::account_storage_details::account_storage_map_details::{
             AllMapEntries,
             PartialStorageMap,
             Result as ProtoResult,
@@ -549,7 +553,7 @@ impl From<AccountStorageMapDetails>
             StorageMapEntries::AllEntries(entries) => {
                 let all = AllMapEntries {
                     entries: entries.into_iter().map(|(key, value)| {
-                        proto::rpc::account_storage_details::account_storage_map_details::all_map_entries::StorageMapEntry {
+                        proto::miden::node::v1::account_storage_details::account_storage_map_details::all_map_entries::StorageMapEntry {
                             key: Some(Word::from(key).into()),
                             value: Some(value.into()),
                         }
@@ -597,7 +601,7 @@ impl AccountStorageDetails {
     }
 }
 
-impl Verify for proto::rpc::DecodedAccountStorageDetails {
+impl Verify for proto::miden::node::v1::DecodedAccountStorageDetails {
     type Verified = AccountStorageDetails;
     type Error = ConversionError;
 
@@ -637,7 +641,7 @@ impl Verify for proto::rpc::DecodedAccountStorageDetails {
     }
 }
 
-impl From<AccountStorageDetails> for proto::rpc::AccountStorageDetails {
+impl From<AccountStorageDetails> for proto::miden::node::v1::AccountStorageDetails {
     fn from(value: AccountStorageDetails) -> Self {
         let AccountStorageDetails { header, map_details } = value;
 
@@ -658,7 +662,7 @@ pub struct GetAccountResponse {
     pub details: Option<AccountDetails>,
 }
 
-impl Verify for proto::rpc::DecodedGetAccountResponse {
+impl Verify for proto::miden::node::v1::DecodedGetAccountResponse {
     type Verified = GetAccountResponse;
     type Error = ConversionError;
 
@@ -688,7 +692,7 @@ impl Verify for proto::rpc::DecodedGetAccountResponse {
     }
 }
 
-impl From<GetAccountResponse> for proto::rpc::GetAccountResponse {
+impl From<GetAccountResponse> for proto::miden::node::v1::GetAccountResponse {
     fn from(value: GetAccountResponse) -> Self {
         let GetAccountResponse { block_num, witness, details } = value;
 
@@ -729,7 +733,7 @@ impl AccountDetails {
     }
 }
 
-impl Verify for proto::rpc::get_account_response::DecodedAccountDetails {
+impl Verify for proto::miden::node::v1::get_account_response::DecodedAccountDetails {
     type Verified = AccountDetails;
     type Error = ConversionError;
 
@@ -771,7 +775,7 @@ impl Verify for proto::rpc::get_account_response::DecodedAccountDetails {
     }
 }
 
-impl From<AccountDetails> for proto::rpc::get_account_response::AccountDetails {
+impl From<AccountDetails> for proto::miden::node::v1::get_account_response::AccountDetails {
     fn from(value: AccountDetails) -> Self {
         let AccountDetails {
             account_header,

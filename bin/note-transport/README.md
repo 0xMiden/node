@@ -5,9 +5,9 @@ node workspace and uses the workspace license.
 
 ## API
 
-The public `note_transport.Api` service is defined in the workspace protobuf crate. It supports `SendNote`,
-`SendNoteWithProof`, and `FetchNotes` over gRPC and gRPC-Web. Standard gRPC health and reflection are available on the
-same listener. There are no note subscriptions or statistics RPCs.
+The public `miden.note_transport.v1.NoteTransportService` service is defined in the workspace protobuf crate. It
+supports `SendNote`, `SendNoteWithProof`, and `FetchNotes` over gRPC and gRPC-Web. Standard gRPC health and reflection
+are available on the same listener. There are no note subscriptions or statistics RPCs.
 
 ### Sending notes
 

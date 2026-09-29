@@ -4,10 +4,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use assert_matches::assert_matches;
-use miden_node_proto::generated::remote_prover::api_client::ApiClient;
-use miden_node_proto::generated::remote_prover::prove_request::Request;
-use miden_node_proto::generated::remote_prover::prove_response::Proof as ProofVariant;
-use miden_node_proto::generated::remote_prover::{ProveRequest, ProveResponse};
+use miden_node_proto::generated::miden::remote_prover::v1::prove_request::Request;
+use miden_node_proto::generated::miden::remote_prover::v1::prove_response::Proof as ProofVariant;
+use miden_node_proto::generated::miden::remote_prover::v1::prover_service_client::ProverServiceClient;
+use miden_node_proto::generated::miden::remote_prover::v1::{ProveRequest, ProveResponse};
 use miden_node_proto::{BlockProofRequest, BuildUnchecked, DecodeMessage, VerifyWith};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
@@ -30,12 +30,12 @@ use crate::server::proof_kind::ProofKind;
 /// A gRPC client with which to interact with the server.
 #[derive(Clone)]
 struct Client {
-    inner: ApiClient<tonic::transport::Channel>,
+    inner: ProverServiceClient<tonic::transport::Channel>,
 }
 
 impl Client {
     async fn connect(port: u16) -> Self {
-        let inner = ApiClient::connect(format!("http://127.0.0.1:{port}"))
+        let inner = ProverServiceClient::connect(format!("http://127.0.0.1:{port}"))
             .await
             .expect("client should connect");
 

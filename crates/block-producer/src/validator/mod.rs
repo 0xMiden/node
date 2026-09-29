@@ -87,7 +87,7 @@ impl BlockProducerValidatorClient {
             client
                 .clone()
                 .get_transaction_encryption_key(
-                    proto::validator::GetTransactionEncryptionKeyRequest {},
+                    proto::miden::validator::v1::GetTransactionEncryptionKeyRequest {},
                 )
                 .await
         })
@@ -115,7 +115,7 @@ impl BlockProducerValidatorClient {
                     client
                         .clone()
                         .submit_proven_transaction(
-                            proto::validator::SubmitProvenTransactionRequest {
+                            proto::miden::validator::v1::SubmitProvenTransactionRequest {
                                 submission: Some(request.clone()),
                             },
                         )
@@ -152,7 +152,7 @@ impl BlockProducerValidatorClient {
         block_inputs: &BlockInputs,
         protocol_config: &ProtocolConfig,
     ) -> Result<Vec<SignBlockResponse>, ValidatorError> {
-        let message = proto::validator::SignBlockRequest {
+        let message = proto::miden::validator::v1::SignBlockRequest {
             protocol_config: Some(protocol_config.into()),
             batches: proposed_block.batches().as_slice().iter().map(Into::into).collect(),
             block_inputs: Some(block_inputs.into()),

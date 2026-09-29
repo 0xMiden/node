@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::Context;
-use miden_node_proto::server::ntx_builder_api;
+use miden_node_proto::server::miden_ntx_builder_v1_network_transaction_builder_service;
 use miden_node_proto_build::ntx_builder_api_descriptor;
 use miden_node_tracing::grpc::grpc_trace_fn;
 use miden_node_tracing::info;
@@ -46,7 +46,7 @@ impl NtxBuilderRpcServer {
         shutdown: CancellationToken,
     ) -> anyhow::Result<()> {
         let request_timeout = self.request_timeout;
-        let api_service = ntx_builder_api::service(self);
+        let api_service = miden_ntx_builder_v1_network_transaction_builder_service::service(self);
         let reflection_service = server::Builder::configure()
             .register_file_descriptor_set(ntx_builder_api_descriptor())
             .build_v1()

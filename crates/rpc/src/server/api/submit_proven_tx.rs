@@ -19,11 +19,13 @@ use super::{COMPONENT, RpcBackend, RpcService, load_protocol_config, submit_tx_t
 use crate::LOG_TARGET;
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::SubmitProvenTx for RpcService {
+impl proto::server::miden_node_v1_node_service::SubmitProvenTx for RpcService {
     type Input = miden_node_proto::ProvenTransactionSubmission;
     type Output = proto::blockchain::BlockNumber;
 
-    fn decode(request: proto::rpc::SubmitProvenTxRequest) -> tonic::Result<Self::Input> {
+    fn decode(
+        request: proto::miden::node::v1::SubmitProvenTxRequest,
+    ) -> tonic::Result<Self::Input> {
         let request = request
             .submission
             .ok_or_else(|| tonic::Status::invalid_argument("missing submission"))?;
@@ -38,8 +40,10 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
             .map_err(miden_node_proto::errors::ConversionError::into_status)
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::SubmitProvenTxResponse> {
-        Ok(proto::rpc::SubmitProvenTxResponse { block_num: output.block_num })
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<proto::miden::node::v1::SubmitProvenTxResponse> {
+        Ok(proto::miden::node::v1::SubmitProvenTxResponse { block_num: output.block_num })
     }
 
     #[miden_instrument(
@@ -171,7 +175,7 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
                     .as_ref()
                     .clone()
                     .submit_proven_tx(forwarded_request.map(|payload| {
-                        proto::rpc::SubmitProvenTxRequest { submission: Some(payload) }
+                        proto::miden::node::v1::SubmitProvenTxRequest { submission: Some(payload) }
                     }))
                     .await
                     .map(|response| proto::blockchain::BlockNumber {
@@ -209,8 +213,8 @@ impl RpcService {
         // Submit to sequencer.
         let mut sequencer = sequencer;
         sequencer
-            .submit_authenticated_tx(proto::sequencer::SubmitAuthenticatedTxRequest {
-                transaction: Some(proto::sequencer::AuthenticatedTransaction::from(
+            .submit_authenticated_tx(proto::miden::sequencer::v1::SubmitAuthenticatedTxRequest {
+                transaction: Some(proto::miden::sequencer::v1::AuthenticatedTransaction::from(
                     authenticated_tx,
                 )),
             })
