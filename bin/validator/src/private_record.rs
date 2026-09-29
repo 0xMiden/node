@@ -5,7 +5,7 @@ use golden_ehtdh1::{Ciphertext, Combiner, DecryptionShare, SealingKey};
 use golden_halo2curves::golden_group::Secp256k1GoldenGroup;
 use miden_node_persistence::generated::PrivateRecordFile;
 use miden_node_persistence::miden_protobuf::{ConversionError, DecodeMessageExt};
-use miden_node_persistence::{PersistenceError, ProtobufValue, check_version};
+use miden_node_persistence::{PersistenceError, ProtobufValue};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_protocol::transaction::TransactionId;
 use miden_protocol::utils::serde::{Deserializable, DeserializationError, Serializable};
@@ -541,7 +541,12 @@ impl ProtobufValue for StoredPrivateRecord {
             })
         }
 
-        check_version("private record container", message.version)?;
+        if message.version != 1 {
+            return Err(PersistenceError::UnsupportedVersion {
+                format: "private record container",
+                version: message.version,
+            });
+        }
         let format_version = PrivateRecordFormatVersion::try_from(message.record_format_version)
             .map_err(ConversionError::new)?;
         let transaction_id = message

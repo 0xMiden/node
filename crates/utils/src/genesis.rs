@@ -3,7 +3,7 @@ use std::path::Path;
 
 use anyhow::Context;
 use miden_node_persistence::miden_protobuf::ConversionError;
-use miden_node_persistence::{PersistenceError, ProtobufValue, check_version};
+use miden_node_persistence::{PersistenceError, ProtobufValue};
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use miden_protocol::protocol_config::ProtocolConfig;
 
@@ -73,7 +73,12 @@ impl ProtobufValue for GenesisBlock {
     }
 
     fn from_proto(message: Self::Message) -> Result<Self, PersistenceError> {
-        check_version("genesis file", message.version)?;
+        if message.version != 1 {
+            return Err(PersistenceError::UnsupportedVersion {
+                format: "genesis file",
+                version: message.version,
+            });
+        }
         let block =
             message.block.ok_or_else(|| ConversionError::message("missing genesis block"))?;
         let config = message

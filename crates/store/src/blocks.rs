@@ -93,8 +93,13 @@ impl BlockStore {
         })?;
         let marker = StorageFormat::decode(bytes.as_slice())
             .map_err(|error| std::io::Error::new(ErrorKind::InvalidData, error))?;
-        miden_node_persistence::check_version("block store", marker.version)
-            .map_err(|error| std::io::Error::new(ErrorKind::InvalidData, error))?;
+        if marker.version != 1 {
+            let error = miden_node_persistence::PersistenceError::UnsupportedVersion {
+                format: "block store",
+                version: marker.version,
+            };
+            return Err(std::io::Error::new(ErrorKind::InvalidData, error));
+        }
         Ok(Self { store_dir })
     }
 

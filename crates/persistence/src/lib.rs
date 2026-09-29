@@ -30,13 +30,5 @@ pub fn decode<T: ProtobufValue>(bytes: &[u8]) -> Result<T, PersistenceError> {
     T::from_proto(message)
 }
 
-/// Rejects an unsupported file format version.
-pub fn check_version(format: &'static str, version: u32) -> Result<(), PersistenceError> {
-    if version != 1 {
-        return Err(PersistenceError::UnsupportedVersion { format, version });
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests;
