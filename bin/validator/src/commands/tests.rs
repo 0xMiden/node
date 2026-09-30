@@ -80,12 +80,9 @@ fn test_operator_keys(epoch: u8, setup_marker: u8) -> Vec<GoldenOperatorKey> {
         );
         SecretShare { participant, decryption, context }
     });
-    let public_key_set = PublicKeySet::new(
-        2,
-        TestStorageGroup::mul_generator(&decryption_secret),
-        public_shares,
-    )
-    .unwrap();
+    let public_key_set =
+        PublicKeySet::new(2, TestStorageGroup::mul_generator(&decryption_secret), public_shares)
+            .unwrap();
     let decryption_session_id = SessionId([2; 32]);
     let setup_context = SetupContext {
         backend_id: TestStorageGroup::BACKEND_ID.to_owned(),
@@ -183,9 +180,7 @@ const BASE_GENESIS_ARGS: [&str; 14] = [
 ];
 
 fn parse_genesis(extra: &[&str]) -> Result<ValidatorCommand, clap::Error> {
-    ValidatorCommand::try_parse_from(
-        BASE_GENESIS_ARGS.iter().copied().chain(extra.iter().copied()),
-    )
+    ValidatorCommand::try_parse_from(BASE_GENESIS_ARGS.iter().copied().chain(extra.iter().copied()))
 }
 
 #[test]
@@ -220,9 +215,7 @@ fn genesis_requires_an_explicit_validator_set() {
 fn genesis_requires_explicit_accounts_fee_and_timestamp() {
     let key = SigningKey::new();
     let key_hex = hex::encode(key.public_key().to_bytes());
-    for flag in
-        ["--native-faucet", "--funding-account", "--verification-base-fee", "--timestamp"]
-    {
+    for flag in ["--native-faucet", "--funding-account", "--verification-base-fee", "--timestamp"] {
         let position = BASE_GENESIS_ARGS.iter().position(|value| *value == flag).unwrap();
         let args = BASE_GENESIS_ARGS
             .iter()
@@ -313,9 +306,9 @@ fn encryption_key_hex_and_kms_ciphertext_conflict() {
 
 #[test]
 fn storage_key_is_required() {
-    let Err(error) = ValidatorCommand::try_parse_from(
-        BASE_START_ARGS.into_iter().chain(ENCRYPTION_KEY_ARGS),
-    ) else {
+    let Err(error) =
+        ValidatorCommand::try_parse_from(BASE_START_ARGS.into_iter().chain(ENCRYPTION_KEY_ARGS))
+    else {
         panic!("start without a storage key must fail");
     };
     assert_eq!(error.kind(), clap::error::ErrorKind::MissingRequiredArgument);
@@ -362,9 +355,7 @@ fn private_record_share_command_parses() {
     .expect("the local share command must parse");
 
     let ValidatorCommand::IssuePrivateRecordShare(PrivateRecordShareOptions {
-        record,
-        output,
-        ..
+        record, output, ..
     }) = command
     else {
         panic!("expected the private record share command");
@@ -444,8 +435,7 @@ async fn two_validators_issue_shares_for_third_validator_record() {
     let inputs = transaction_inputs();
     let mut records = Vec::new();
     for (index, signer) in validator_signers.iter().enumerate() {
-        let record_id =
-            miden_validator::PrivateRecordId::new(transaction_id, &signer.public_key());
+        let record_id = miden_validator::PrivateRecordId::new(transaction_id, &signer.public_key());
         let context = miden_validator::PrivateRecordContext::new(
             miden_validator::PrivateRecordChainId::new([5; 32]),
             operator_keys[index].key_epoch(),
