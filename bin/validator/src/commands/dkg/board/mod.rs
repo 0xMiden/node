@@ -19,6 +19,17 @@ mod tests;
 
 pub(super) use core::ArtifactSlot;
 
+#[derive(Debug)]
+pub(super) struct JoinCancelled;
+
+impl fmt::Display for JoinCancelled {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("DKG board join cancelled")
+    }
+}
+
+impl std::error::Error for JoinCancelled {}
+
 /// An opaque board address and one participant's publish permission.
 #[derive(Clone)]
 pub(super) struct BoardTicket {

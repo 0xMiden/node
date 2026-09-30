@@ -1189,6 +1189,15 @@ async fn active_runner_stops_and_reopens_an_incomplete_board() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn join_cleanup_failure_is_not_treated_as_cancellation() {
+    let error = runner::resolve_join(Err(anyhow::anyhow!("failed to flush board")))
+        .err()
+        .expect("cleanup failure must propagate");
+    assert_eq!(error.to_string(), "failed to flush board");
+    assert!(runner::resolve_join(Err(board::JoinCancelled.into())).unwrap().is_none());
+}
+
 #[tokio::test]
 async fn coordinator_stops_before_and_after_common_artifacts() -> TestResult {
     let root = tempfile::tempdir()?;

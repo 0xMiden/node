@@ -14,6 +14,7 @@ use super::board::{
     BoardTicket,
     CommonArtifact,
     CoordinatorBoard,
+    JoinCancelled,
     ParticipantArtifact,
     ParticipantBoard,
 };
@@ -315,14 +316,12 @@ where
         participant.get(),
     );
     let board_directory = work_directory.join(BOARD_DIRECTORY);
-    let board =
-        match ParticipantBoard::join(&board_directory, ticket, participant_count, shutdown.clone())
-            .await
-        {
-            Ok(board) => board,
-            Err(_) if shutdown.is_cancelled() => return Ok(()),
-            Err(error) => return Err(error),
-        };
+    let Some(board) = resolve_join(
+        ParticipantBoard::join(&board_directory, ticket, participant_count, shutdown.clone()).await,
+    )?
+    else {
+        return Ok(());
+    };
     let result = tokio::select! {
         _ = shutdown.cancelled() => Ok(()),
         result = run_validator_on_board::<B>(
@@ -339,6 +338,16 @@ where
     };
     let shutdown = board.shutdown().await;
     result.and(shutdown)
+}
+
+pub(super) fn resolve_join(
+    result: anyhow::Result<ParticipantBoard>,
+) -> anyhow::Result<Option<ParticipantBoard>> {
+    match result {
+        Ok(board) => Ok(Some(board)),
+        Err(error) if error.is::<JoinCancelled>() => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 #[expect(

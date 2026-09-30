@@ -57,6 +57,7 @@ use super::super::{
     sync_directory,
     sync_directory_tree,
 };
+use super::JoinCancelled;
 use super::core::{
     ArtifactSlot,
     BoardCore,
@@ -377,7 +378,7 @@ impl BoardNode {
             .context("failed to start DKG board synchronization")?;
         let admission = tokio::select! {
             result = board.wait_for_peer() => result,
-            _ = shutdown.cancelled() => Err(anyhow::anyhow!("DKG board join cancelled")),
+            _ = shutdown.cancelled() => Err(JoinCancelled.into()),
         };
         match admission {
             Ok(()) => Ok(board),
