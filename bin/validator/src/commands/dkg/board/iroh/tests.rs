@@ -481,11 +481,13 @@ async fn local_fetch_error_is_reported() -> anyhow::Result<()> {
     .await
     .unwrap_err();
     let message = format!("{error:#}");
-    assert!(
-        message
-            .contains(&format!("failed to download DKG board blob {hash} for {}", slot.prefix()))
+    assert_eq!(
+        message,
+        format!(
+            "failed to download DKG board blob {hash} for {}: local failure: inner error: Error::Io: Error::Io: unexpected end of stream",
+            slot.prefix()
+        )
     );
-    assert!(message.contains("local failure"), "{message}");
 
     provider.shutdown().await?;
     host.shutdown().await?;
