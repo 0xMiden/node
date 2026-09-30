@@ -376,22 +376,21 @@ mod tests {
             test_duration_ms: 12,
             success_count: 1,
             failure_count: 0,
-            last_tx_id: Some("deadbeef".to_string()),
+            last_note_id: Some("deadbeef".to_string()),
             faucet_metadata: Some(GetMetadataResponse {
                 version: "1.0".to_string(),
                 id: "tokenid".to_string(),
-                max_supply: 1_000_000,
                 decimals: 8,
                 explorer_url: Some("https://explorer.example".to_string()),
                 pow_load_difficulty: 4,
                 base_amount: 100,
-                note_transport_url: Some("https://note-transport.example".to_string()),
+                balance: Some(1_000_000),
             }),
         };
         let html = render(vec![healthy("faucet", ServiceDetails::FaucetTest(details))]);
         assert!(html.contains("Faucet:"));
         assert!(html.contains("Faucet Token Info"));
-        assert!(html.contains("Last TX ID"));
+        assert!(html.contains("Last Note ID"));
     }
 
     /// Metadata is fetched independently of the mint test, so an unhealthy faucet (minting failing)
@@ -403,16 +402,15 @@ mod tests {
             test_duration_ms: 12,
             success_count: 0,
             failure_count: 3,
-            last_tx_id: None,
+            last_note_id: None,
             faucet_metadata: Some(GetMetadataResponse {
                 version: "0.15.0".to_string(),
                 id: "tokenid".to_string(),
-                max_supply: 1_000_000,
                 decimals: 8,
                 explorer_url: None,
                 pow_load_difficulty: 4,
                 base_amount: 100,
-                note_transport_url: None,
+                balance: None,
             }),
         };
         let status = ServiceStatus {
