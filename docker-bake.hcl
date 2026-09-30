@@ -99,6 +99,6 @@ target "usdcx-genesis" {
   inherits = ["common"]
   target   = "runtime-tool"
   args = {
-    BIN = "xusdc-genesis"
+    BIN = "miden-usdcx-genesis"
   }
 }

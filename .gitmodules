@@ -1,3 +1,0 @@
-[submodule "vendor/miden-usdcx"]
-	path = vendor/miden-usdcx
-	url = https://github.com/0xMiden/miden-usdcx.git
