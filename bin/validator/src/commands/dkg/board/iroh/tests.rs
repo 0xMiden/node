@@ -456,28 +456,35 @@ async fn upload_header_capacity_is_bounded() -> anyhow::Result<()> {
         Publisher::Remote { endpoint, target, .. } => (endpoint, target),
         Publisher::Local(_) => unreachable!(),
     };
-    let mut stalled = Vec::new();
-    for _ in 0..16 {
-        let connection = endpoint.connect(target.clone(), UPLOAD_ALPN).await?;
-        stalled.push(connection);
-    }
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let excess = endpoint.connect(target.clone(), UPLOAD_ALPN).await?;
-    let reason = tokio::time::timeout(Duration::from_secs(2), excess.closed()).await?;
-    assert_upload_close_reason(reason, b"too many DKG board upload headers");
-
-    tokio::time::timeout(Duration::from_secs(5), async {
-        for connection in &stalled {
-            assert_upload_close_reason(
-                connection.closed().await,
-                b"DKG board upload header timed out",
-            );
+    for incomplete_header in [false, true] {
+        let mut stalled = Vec::new();
+        for _ in 0..16 {
+            let connection = endpoint.connect(target.clone(), UPLOAD_ALPN).await?;
+            let send = if incomplete_header {
+                let (mut send, _recv) = connection.open_bi().await?;
+                send.write_all(&[0]).await?;
+                Some(send)
+            } else {
+                None
+            };
+            stalled.push((connection, send));
         }
-    })
-    .await?;
-    client.publish(&ArtifactSlot::Registration(1), b"signed registration").await?;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let excess = endpoint.connect(target.clone(), UPLOAD_ALPN).await?;
+        let reason = tokio::time::timeout(Duration::from_secs(2), excess.closed()).await?;
+        assert_upload_close_reason(reason, b"too many DKG board upload headers");
 
-    drop(stalled);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            for (connection, _) in &stalled {
+                assert_upload_close_reason(
+                    connection.closed().await,
+                    b"DKG board upload header timed out",
+                );
+            }
+        })
+        .await?;
+        client.publish(&ArtifactSlot::Registration(1), b"signed registration").await?;
+    }
     client.shutdown().await?;
     host.shutdown().await?;
     Ok(())
