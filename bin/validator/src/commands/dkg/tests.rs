@@ -1284,7 +1284,7 @@ async fn coordinator_stops_before_and_after_common_artifacts() -> TestResult {
 }
 
 #[tokio::test]
-/// Proves a validator can resume from its saved identity after its ceremony process stops.
+/// Proves a validator can resume after it publishes a dealing or acceptance.
 #[expect(
     clippy::too_many_lines,
     reason = "the test runs every ceremony phase for three validators"
@@ -1296,33 +1296,8 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
     let (board, tickets) =
         board::CoordinatorBoard::create_with_network(&board_directory, 3, false).await?;
     let timeout = Duration::from_mins(2);
-    let restart_checkpoint_timeout = Duration::from_secs(10);
+    let restart_checkpoint_timeout = Duration::from_secs(30);
     let epoch = "66".repeat(32);
-    let first_work = root.path().join("work-1");
-    fs_err::create_dir(&first_work)?;
-    let first_signer = ValidatorSigner::new_local(genesis.signing_keys[0].clone());
-
-    let interrupted = tokio::spawn({
-        let genesis_path = genesis.path.clone();
-        let first_work = first_work.clone();
-        let epoch = epoch.clone();
-        async move {
-            runner::prepare_local_identity(&genesis_path, &epoch, &first_signer, &first_work)
-                .await?;
-            std::future::pending::<anyhow::Result<()>>().await
-        }
-    });
-    let registration = first_work.join("identity").join(REGISTRATION_FILE);
-    tokio::time::timeout(restart_checkpoint_timeout, async {
-        while !registration.exists() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await?;
-    interrupted.abort();
-    assert!(interrupted.await.unwrap_err().is_cancelled());
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
     let signers = genesis
         .signing_keys
         .iter()
@@ -1349,21 +1324,29 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
         .collect::<Vec<_>>();
     let mut participant_indices = Vec::new();
     let mut participant_boards = Vec::new();
-    for ((signer, ticket), work_directory) in signers.iter().zip(&tickets).zip(&work_directories) {
+    for (position, ((signer, ticket), work_directory)) in
+        signers.iter().zip(&tickets).zip(&work_directories).enumerate()
+    {
         fs_err::create_dir_all(work_directory)?;
         participant_indices.push(
             runner::prepare_local_identity(&genesis.path, &epoch, signer, work_directory).await?,
         );
-        participant_boards.push(
-            board::ParticipantBoard::join_with_network(
+        if position > 0 {
+            let participant_board = board::ParticipantBoard::join_with_network(
                 &work_directory.join("board"),
                 ticket.clone(),
                 3,
                 false,
                 miden_node_utils::shutdown::CancellationToken::new(),
             )
-            .await?,
-        );
+            .await?;
+            let registration =
+                fs_err::read(work_directory.join("identity").join(REGISTRATION_FILE))?;
+            participant_board
+                .publish(board::ParticipantArtifact::Registration, &registration)
+                .await?;
+            participant_boards.push(participant_board);
+        }
     }
     let coordinate = runner::coordinate_common_files(
         &board,
@@ -1373,19 +1356,48 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
         &epoch,
         timeout,
     );
-    let first = runner::run_validator_on_board::<ShareOpeningBackend>(
-        &participant_boards[0],
-        &genesis.path,
-        &signers[0],
-        participant_indices[0],
-        2,
-        &epoch,
-        &work_directories[0],
-        &bundle_directories[0],
-        timeout,
-    );
+    let interrupt_after = |slot: board::ArtifactSlot| {
+        let board = &board;
+        let ticket = &tickets[0];
+        let signer = &signers[0];
+        let genesis_path = &genesis.path;
+        let work_directory = &work_directories[0];
+        let bundle_directory = &bundle_directories[0];
+        let epoch = &epoch;
+        async move {
+            let shutdown = miden_node_utils::shutdown::CancellationToken::new();
+            let run = runner::run_validator_with_ticket::<ShareOpeningBackend>(
+                ticket.clone(),
+                genesis_path,
+                signer,
+                2,
+                epoch,
+                work_directory,
+                bundle_directory,
+                timeout,
+                shutdown.clone(),
+            );
+            tokio::pin!(run);
+            let published = tokio::select! {
+                biased;
+                result = board.reader().wait_unique(&slot, restart_checkpoint_timeout) => result?,
+                result = &mut run => {
+                    result?;
+                    anyhow::bail!("validator completed before the {slot:?} checkpoint");
+                }
+            };
+            shutdown.cancel();
+            tokio::time::timeout(restart_checkpoint_timeout, run).await??;
+            assert_eq!(board.reader().read_unique(&slot).await?, Some(published.clone()));
+            Ok::<_, anyhow::Error>(published)
+        }
+    };
+    let ((), dealing) = tokio::try_join!(
+        coordinate,
+        interrupt_after(board::ArtifactSlot::ContextDealing(participant_indices[0].get()))
+    )?;
     let second = runner::run_validator_on_board::<ShareOpeningBackend>(
-        &participant_boards[1],
+        &participant_boards[0],
         &genesis.path,
         &signers[1],
         participant_indices[1],
@@ -1396,7 +1408,7 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
         timeout,
     );
     let third = runner::run_validator_on_board::<ShareOpeningBackend>(
-        &participant_boards[2],
+        &participant_boards[1],
         &genesis.path,
         &signers[2],
         participant_indices[2],
@@ -1406,7 +1418,58 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
         &bundle_directories[2],
         timeout,
     );
-    tokio::try_join!(coordinate, first, second, third)?;
+    let (acceptance, (), ()) = tokio::try_join!(
+        interrupt_after(board::ArtifactSlot::TranscriptAcceptance(participant_indices[0].get())),
+        second,
+        third
+    )?;
+    runner::run_validator_with_ticket::<ShareOpeningBackend>(
+        tickets[0].clone(),
+        &genesis.path,
+        &signers[0],
+        2,
+        &epoch,
+        &work_directories[0],
+        &bundle_directories[0],
+        timeout,
+        miden_node_utils::shutdown::CancellationToken::new(),
+    )
+    .await?;
+    assert_eq!(
+        board
+            .reader()
+            .read_unique(&board::ArtifactSlot::ContextDealing(participant_indices[0].get()))
+            .await?,
+        Some(dealing)
+    );
+    assert_eq!(
+        board
+            .reader()
+            .read_unique(&board::ArtifactSlot::TranscriptAcceptance(participant_indices[0].get()))
+            .await?,
+        Some(acceptance)
+    );
+
+    let bundle_files = [SETUP_CONTEXT_FILE, PUBLIC_KEY_SET_FILE, SECRET_SHARE_FILE];
+    let completed_bundle = bundle_files
+        .iter()
+        .map(|name| fs_err::read(bundle_directories[0].join(name)))
+        .collect::<Result<Vec<_>, _>>()?;
+    runner::run_validator_with_ticket::<ShareOpeningBackend>(
+        tickets[0].clone(),
+        &genesis.path,
+        &signers[0],
+        2,
+        &epoch,
+        &work_directories[0],
+        &bundle_directories[0],
+        timeout,
+        miden_node_utils::shutdown::CancellationToken::new(),
+    )
+    .await?;
+    for (name, expected) in bundle_files.into_iter().zip(completed_bundle) {
+        assert_eq!(fs_err::read(bundle_directories[0].join(name))?, expected);
+    }
 
     assert_completed_bundles(&bundle_directories)?;
     let common_files = [MANIFEST_FILE, DECRYPTION_CONFIG_FILE, CONTEXT_CONFIG_FILE];
