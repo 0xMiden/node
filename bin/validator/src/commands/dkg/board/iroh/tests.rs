@@ -347,3 +347,36 @@ async fn invalid_download_metadata_is_rejected() -> anyhow::Result<()> {
     host.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn blob_store_failure_is_reported() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (host, _) = BoardNode::create_for_test(root.path()).await?;
+    let slot = ArtifactSlot::Manifest;
+    host.publish(&slot, b"manifest").await?;
+    host.event_task.abort();
+    host.blobs.shutdown().await?;
+
+    let error = host.read_unique(&slot).await.unwrap_err();
+    assert!(error.to_string().contains("failed to check DKG board blob"));
+    let error = host.wait_unique(&slot, Duration::from_secs(1)).await.unwrap_err();
+    assert!(error.to_string().contains("failed to check DKG board blob"));
+
+    host.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn unavailable_blob_remains_retryable() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (host, _) = BoardNode::create_for_test(root.path()).await?;
+    let slot = ArtifactSlot::Manifest;
+    let missing = b"unavailable";
+    host.publish_hash_for_test(&slot, Hash::new(missing), u64::try_from(missing.len())?)
+        .await?;
+
+    assert!(host.read_unique(&slot).await?.is_none());
+
+    host.shutdown().await?;
+    Ok(())
+}
