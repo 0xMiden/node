@@ -81,7 +81,7 @@ impl LatestAccountStateRow {
             })?;
 
         let storage_header = match self.storage_header.as_deref() {
-            Some(bytes) => AccountStorageHeader::read_from_bytes(bytes)?,
+            Some(bytes) => miden_node_persistence::decode::<AccountStorageHeader>(bytes)?,
             None => AccountStorageHeader::new(Vec::new())?,
         };
 

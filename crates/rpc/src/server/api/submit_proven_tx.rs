@@ -19,13 +19,16 @@ use super::{COMPONENT, RpcBackend, RpcService, load_protocol_config, submit_tx_t
 use crate::LOG_TARGET;
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::SubmitProvenTx for RpcService {
+impl proto::server::miden_node_v1_node_service::SubmitProvenTx for RpcService {
     type Input = miden_node_proto::ProvenTransactionSubmission;
     type Output = proto::blockchain::BlockNumber;
 
     fn decode(
-        request: proto::submission::ProvenTransactionSubmission,
+        request: proto::miden::node::v1::SubmitProvenTxRequest,
     ) -> tonic::Result<Self::Input> {
+        let request = request
+            .submission
+            .ok_or_else(|| tonic::Status::invalid_argument("missing submission"))?;
         request
             // SAFETY: The handler checks the reference block and proof before forwarding. Decoding
             // does not authenticate the transaction against current chain state.
@@ -37,8 +40,10 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
             .map_err(miden_node_proto::errors::ConversionError::into_status)
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::blockchain::BlockNumber> {
-        Ok(output)
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<proto::miden::node::v1::SubmitProvenTxResponse> {
+        Ok(proto::miden::node::v1::SubmitProvenTxResponse { block_num: output.block_num })
     }
 
     #[miden_instrument(
@@ -169,9 +174,13 @@ impl proto::server::rpc_api::SubmitProvenTx for RpcService {
                 source_rpc
                     .as_ref()
                     .clone()
-                    .submit_proven_tx(forwarded_request)
+                    .submit_proven_tx(forwarded_request.map(|payload| {
+                        proto::miden::node::v1::SubmitProvenTxRequest { submission: Some(payload) }
+                    }))
                     .await
-                    .map(tonic::Response::into_inner)
+                    .map(|response| proto::blockchain::BlockNumber {
+                        block_num: response.into_inner().block_num,
+                    })
             },
         }
     }
@@ -204,11 +213,15 @@ impl RpcService {
         // Submit to sequencer.
         let mut sequencer = sequencer;
         sequencer
-            .submit_authenticated_tx(proto::sequencer::AuthenticatedTransaction::from(
-                authenticated_tx,
-            ))
+            .submit_authenticated_tx(proto::miden::sequencer::v1::SubmitAuthenticatedTxRequest {
+                transaction: Some(proto::miden::sequencer::v1::AuthenticatedTransaction::from(
+                    authenticated_tx,
+                )),
+            })
             .await
-            .map(tonic::Response::into_inner)
+            .map(|response| proto::blockchain::BlockNumber {
+                block_num: response.into_inner().block_num,
+            })
     }
 }
 

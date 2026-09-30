@@ -18,22 +18,23 @@ workspace = true
 doctest = false
 
 [dependencies]
-anyhow             = { workspace = true }
-arc-swap           = { workspace = true }
-deadpool           = { features = ["managed", "rt_tokio_1"], workspace = true }
-deadpool-diesel    = { features = ["sqlite"], workspace = true }
-diesel             = { features = ["numeric", "sqlite"], workspace = true }
-fs-err             = { workspace = true }
-hex                = { workspace = true }
-indexmap           = { workspace = true }
-libsqlite3-sys     = { workspace = true }
-miden-crypto       = { features = ["concurrent"], workspace = true }
-miden-node-db      = { workspace = true }
-miden-node-proto   = { workspace = true }
-miden-node-tracing = { workspace = true }
-miden-node-utils   = { workspace = true }
-miden-objects      = { workspace = true }
-miden-standards    = { workspace = true }
+anyhow                 = { workspace = true }
+arc-swap               = { workspace = true }
+deadpool               = { features = ["managed", "rt_tokio_1"], workspace = true }
+deadpool-diesel        = { features = ["sqlite"], workspace = true }
+diesel                 = { features = ["numeric", "sqlite"], workspace = true }
+fs-err                 = { workspace = true }
+hex                    = { workspace = true }
+indexmap               = { workspace = true }
+libsqlite3-sys         = { workspace = true }
+miden-crypto           = { features = ["concurrent"], workspace = true }
+miden-node-db          = { workspace = true }
+miden-node-persistence = { workspace = true }
+miden-node-proto       = { workspace = true }
+miden-node-tracing     = { workspace = true }
+miden-node-utils       = { workspace = true }
+miden-objects          = { workspace = true }
+miden-standards        = { workspace = true }
 # `BlockProof::new_dummy` requires the `testing` feature.
 miden-protocol    = { features = ["std", "testing"], workspace = true }
 pretty_assertions = { workspace = true }

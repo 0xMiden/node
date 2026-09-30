@@ -100,7 +100,7 @@ async fn retained_note_roundtrips_after_reopening() {
 async fn retry_at_capacity_preserves_first_write() {
     let (_dir, writer, reader) = database();
     let original = note(1, 42);
-    let limit = (original.header.to_bytes().len() + original.details.to_bytes().len()) as u64;
+    let limit = encoded_note_payload_len(&original.header, &original.details).unwrap() as u64;
     assert_eq!(
         store_note(&writer, original.clone(), limit).await.unwrap(),
         StoreResult::Inserted
@@ -195,7 +195,7 @@ async fn failed_insert_rolls_back_capacity_and_cursor() {
         Ok::<_, miden_node_db::DatabaseError>(())
     }).await.unwrap();
     let item = note(1, 42);
-    let limit = (item.header.to_bytes().len() + item.details.to_bytes().len()) as u64;
+    let limit = encoded_note_payload_len(&item.header, &item.details).unwrap() as u64;
     assert!(store_note(&writer, item.clone(), limit).await.is_err());
     writer
         .write("allow insertion", |tx| {
@@ -212,7 +212,7 @@ async fn failed_insert_rolls_back_capacity_and_cursor() {
 async fn concurrent_writes_share_capacity() {
     let (_dir, writer, reader) = database();
     let item = note(1, 42);
-    let limit = (item.header.to_bytes().len() + item.details.to_bytes().len()) as u64;
+    let limit = encoded_note_payload_len(&item.header, &item.details).unwrap() as u64;
     let (first, second) =
         tokio::join!(store_note(&writer, item, limit), store_note(&writer, note(2, 42), limit),);
     assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
@@ -276,7 +276,7 @@ async fn insertion_deletes_at_most_ten_oldest_notes_with_cursor_ties() {
 async fn insertion_uses_cleanup_capacity_and_preserves_cursor_after_reopen() {
     let (dir, writer, reader) = database();
     let item = note(1, 42);
-    let size = (item.header.to_bytes().len() + item.details.to_bytes().len()) as u64;
+    let size = encoded_note_payload_len(&item.header, &item.details).unwrap() as u64;
     for seed in 1..=2 {
         seed_expired(&writer, seed, 0, size * 2).await;
     }
@@ -296,7 +296,7 @@ async fn insertion_uses_cleanup_capacity_and_preserves_cursor_after_reopen() {
 async fn insufficient_reclaimed_capacity_rolls_back_deletions_and_cursor() {
     let (_dir, writer, reader) = database();
     let item = note(1, 42);
-    let size = item.header.to_bytes().len() + item.details.to_bytes().len();
+    let size = encoded_note_payload_len(&item.header, &item.details).unwrap();
     let limit = (size * 12) as u64;
     for seed in 1..=12 {
         seed_expired(&writer, seed, 0, limit).await;
@@ -406,4 +406,43 @@ async fn cursor_survives_cleanup_of_all_notes() {
     assert_eq!(next.notes.len(), 1);
     assert_eq!(next.cursor.sequence, 2);
     assert_eq!(next.cursor.nonce, first.cursor.nonce);
+}
+
+#[tokio::test]
+async fn protobuf_size_matches_retained_bytes_and_sql_blobs() {
+    let (_dir, writer, reader) = database();
+    let original = note(71, 42);
+    let size = miden_node_persistence::encode(&original.header).len()
+        + miden_node_persistence::encode(&original.details).len();
+    store_note(&writer, original.clone(), size as u64).await.unwrap();
+    assert_eq!(
+        store_note(&writer, original, size as u64).await.unwrap(),
+        StoreResult::AlreadyPresent
+    );
+    let (retained, stored) = reader
+        .read("sizes", |tx| {
+            let retained = queries::select_retained_bytes(tx)?;
+            let stored =
+                tx.query("SELECT LENGTH(header) + LENGTH(details) FROM notes", &[], |row| {
+                    row.get::<i64>(0)
+                })?;
+            Ok::<_, StorageError>((retained, stored[0]))
+        })
+        .await
+        .unwrap();
+    assert_eq!(retained, i64::try_from(size).unwrap());
+    assert_eq!(stored, retained);
+}
+
+#[tokio::test]
+async fn protobuf_quota_rejects_one_byte_below_payload() {
+    let (_dir, writer, reader) = database();
+    let original = note(72, 42);
+    let size = encoded_note_payload_len(&original.header, &original.details).unwrap() as u64;
+    assert!(matches!(
+        store_note(&writer, original.clone(), size - 1).await,
+        Err(StorageError::Capacity(_))
+    ));
+    assert!(fetch_notes(&reader, vec![42], None).await.unwrap().notes.is_empty());
+    assert_eq!(store_note(&writer, original, size).await.unwrap(), StoreResult::Inserted);
 }

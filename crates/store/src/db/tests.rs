@@ -1968,7 +1968,7 @@ fn test_select_account_code_by_commitment() {
 
     // Get the code commitment and bytes before inserting
     let code_commitment = account.code().commitment();
-    let expected_code = account.code().to_bytes();
+    let expected_code = miden_node_persistence::encode(account.code());
 
     // Insert the account at block 1
     queries::upsert_accounts(
@@ -2018,7 +2018,7 @@ fn test_select_account_code_by_commitment_multiple_codes() {
     ";
     let account_v1 = create_account_with_code(code_v1_str, [1u8; 32]);
     let code_v1_commitment = account_v1.code().commitment();
-    let code_v1 = account_v1.code().to_bytes();
+    let code_v1 = miden_node_persistence::encode(account_v1.code());
 
     // Insert the account at block 1
     queries::upsert_accounts(
@@ -2043,7 +2043,7 @@ fn test_select_account_code_by_commitment_multiple_codes() {
     ";
     let account_v2 = create_account_with_code(code_v2_str, [1u8; 32]); // Same seed to keep same account_id
     let code_v2_commitment = account_v2.code().commitment();
-    let code_v2 = account_v2.code().to_bytes();
+    let code_v2 = miden_node_persistence::encode(account_v2.code());
 
     // Verify that the codes are actually different
     assert_ne!(
@@ -2476,8 +2476,8 @@ fn serialization_symmetry_block_header() {
         11,
     );
 
-    let bytes = block_header.to_bytes();
-    let restored = BlockHeader::read_from_bytes(&bytes).unwrap();
+    let bytes = miden_node_persistence::encode(&block_header);
+    let restored: BlockHeader = miden_node_persistence::decode(&bytes).unwrap();
     assert_eq!(block_header, restored, "BlockHeader serialization must be symmetric");
 }
 
@@ -2488,8 +2488,8 @@ fn serialization_symmetry_assets() {
     // FungibleAsset
     let fungible = FungibleAsset::new(faucet_id, 1000).unwrap();
     let asset: Asset = fungible.into();
-    let bytes = asset.to_bytes();
-    let restored = Asset::read_from_bytes(&bytes).unwrap();
+    let bytes = miden_node_persistence::encode(&asset);
+    let restored: Asset = miden_node_persistence::decode(&bytes).unwrap();
     assert_eq!(asset, restored, "Asset (fungible) serialization must be symmetric");
 }
 
@@ -2498,16 +2498,16 @@ fn serialization_symmetry_account_code() {
     let account = mock_account_code_and_storage(AccountType::Public, [], None);
 
     let code = account.code();
-    let bytes = code.to_bytes();
-    let restored = AccountCode::read_from_bytes(&bytes).unwrap();
+    let bytes = miden_node_persistence::encode(code);
+    let restored: AccountCode = miden_node_persistence::decode(&bytes).unwrap();
     assert_eq!(*code, restored, "AccountCode serialization must be symmetric");
 }
 
 #[test]
 fn serialization_symmetry_sparse_merkle_path() {
     let path = SparseMerklePath::default();
-    let bytes = path.to_bytes();
-    let restored = SparseMerklePath::read_from_bytes(&bytes).unwrap();
+    let bytes = miden_node_persistence::encode(&path);
+    let restored: SparseMerklePath = miden_node_persistence::decode(&bytes).unwrap();
     assert_eq!(path, restored, "SparseMerklePath serialization must be symmetric");
 }
 

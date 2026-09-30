@@ -149,7 +149,7 @@ impl AccountVaultValue {
         Ok(Self {
             block_num: BlockNumber::from_raw_sql(block_num)?,
             vault_key: AssetId::try_from(vault_key)?,
-            asset: asset.map(|b| Asset::read_from_bytes(&b)).transpose()?,
+            asset: asset.map(|b| miden_node_persistence::decode::<Asset>(&b)).transpose()?,
         })
     }
 }
@@ -528,7 +528,9 @@ impl Db {
     ) -> Result<Option<miden_protocol::account::AccountCode>> {
         self.transact("Get account code by commitment", move |conn| {
             queries::select_account_code_by_commitment(conn, code_commitment)?
-                .map(|bytes| miden_protocol::account::AccountCode::read_from_bytes(&bytes))
+                .map(|bytes| {
+                    miden_node_persistence::decode::<miden_protocol::account::AccountCode>(&bytes)
+                })
                 .transpose()
                 .map_err(DatabaseError::from)
         })

@@ -1,7 +1,6 @@
 use miden_node_proto::generated as proto;
-use miden_node_tracing::{debug, miden_instrument};
+use miden_node_tracing::{debug, error, miden_instrument};
 use miden_protocol::block::{BlockNumber, SignedBlock};
-use miden_protocol::utils::serde::Deserializable;
 use miden_protocol::vm::ExecutionProof;
 
 use super::error_codes::internal_error;
@@ -9,15 +8,19 @@ use super::{RpcService, database_error_to_status};
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::GetBlockByNumber for RpcService {
-    type Input = proto::rpc::BlockRequest;
-    type Output = proto::rpc::MaybeBlock;
+impl proto::server::miden_node_v1_node_service::GetBlockByNumber for RpcService {
+    type Input = proto::miden::node::v1::GetBlockByNumberRequest;
+    type Output = proto::miden::node::v1::GetBlockByNumberResponse;
 
-    fn decode(request: proto::rpc::BlockRequest) -> tonic::Result<Self::Input> {
+    fn decode(
+        request: proto::miden::node::v1::GetBlockByNumberRequest,
+    ) -> tonic::Result<Self::Input> {
         Ok(request)
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::MaybeBlock> {
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<proto::miden::node::v1::GetBlockByNumberResponse> {
         Ok(output)
     }
 
@@ -50,9 +53,17 @@ impl proto::server::rpc_api::GetBlockByNumber for RpcService {
             .await
             .map_err(|err| database_error_to_status(&err))?
             .map(|bytes| {
-                SignedBlock::read_from_bytes(&bytes)
-                    .map(Into::into)
-                    .map_err(|err| internal_error(format!("invalid stored block: {err}")))
+                miden_node_persistence::decode::<SignedBlock>(&bytes).map(Into::into).map_err(
+                    |err| {
+                        error!(
+                            err,
+                            target: LOG_TARGET,
+                            "Failed to decode stored block",
+                            block.number = block_num
+                        );
+                        internal_error(format!("Failed to decode stored block {block_num}."))
+                    },
+                )
             })
             .transpose()?;
         let proof = if request.include_proof.unwrap_or_default() {
@@ -70,6 +81,6 @@ impl proto::server::rpc_api::GetBlockByNumber for RpcService {
             None
         };
 
-        Ok(proto::rpc::MaybeBlock { block, proof })
+        Ok(proto::miden::node::v1::GetBlockByNumberResponse { block, proof })
     }
 }

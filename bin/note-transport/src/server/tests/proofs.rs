@@ -3,16 +3,20 @@ use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use miden_node_proto::generated::note_transport::SendNoteWithProofRequest;
-use miden_node_proto::generated::rpc::{BlockHeaderByNumberRequest, BlockHeaderByNumberResponse};
-use miden_node_proto::server::note_transport_api::SendNoteWithProof;
+use miden_node_proto::generated::miden::node::v1::{
+    GetBlockHeaderByNumberRequest,
+    GetBlockHeaderByNumberResponse,
+};
+use miden_node_proto::generated::miden::note_transport::v1::SendNoteWithProofRequest;
+use miden_node_proto::server::miden_note_transport_v1_note_transport_service::SendNoteWithProof;
 use miden_protocol::block::{BlockHeader, BlockNoteIndex, BlockNoteTree};
 use miden_protocol::note::NoteInclusionProof;
 use tonic::codegen::{BoxFuture, http};
 
 use super::*;
 
-type HeaderResponses = BTreeMap<u32, VecDeque<Result<BlockHeaderByNumberResponse, tonic::Status>>>;
+type HeaderResponses =
+    BTreeMap<u32, VecDeque<Result<GetBlockHeaderByNumberResponse, tonic::Status>>>;
 
 #[derive(Clone)]
 struct NodeRpc {
@@ -22,14 +26,14 @@ struct NodeRpc {
 }
 
 impl tonic::server::NamedService for NodeRpc {
-    const NAME: &'static str = "rpc.Api";
+    const NAME: &'static str = "miden.node.v1.NodeService";
 }
 
-impl tonic::server::UnaryService<BlockHeaderByNumberRequest> for NodeRpc {
-    type Response = BlockHeaderByNumberResponse;
+impl tonic::server::UnaryService<GetBlockHeaderByNumberRequest> for NodeRpc {
+    type Response = GetBlockHeaderByNumberResponse;
     type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
 
-    fn call(&mut self, request: Request<BlockHeaderByNumberRequest>) -> Self::Future {
+    fn call(&mut self, request: Request<GetBlockHeaderByNumberRequest>) -> Self::Future {
         let this = self.clone();
         Box::pin(async move {
             // Return no header if the client asks for a different block or extra data.
@@ -37,7 +41,7 @@ impl tonic::server::UnaryService<BlockHeaderByNumberRequest> for NodeRpc {
             if request.include_mmr_proof.unwrap_or(false)
                 || request.include_protocol_config.unwrap_or(false)
             {
-                return Ok(tonic::Response::new(BlockHeaderByNumberResponse::default()));
+                return Ok(tonic::Response::new(GetBlockHeaderByNumberResponse::default()));
             }
             let block_num = request.block_num.unwrap();
             this.requests.lock().unwrap().push(block_num);
@@ -46,7 +50,7 @@ impl tonic::server::UnaryService<BlockHeaderByNumberRequest> for NodeRpc {
                 match responses.get_mut(&block_num) {
                     Some(responses) if responses.len() > 1 => responses.pop_front().unwrap(),
                     Some(responses) => responses.front().unwrap().clone(),
-                    None => Ok(BlockHeaderByNumberResponse::default()),
+                    None => Ok(GetBlockHeaderByNumberResponse::default()),
                 }
             };
             tokio::time::sleep(this.delay).await;
@@ -70,7 +74,7 @@ impl tower::Service<http::Request<tonic::body::Body>> for NodeRpc {
     fn call(&mut self, request: http::Request<tonic::body::Body>) -> Self::Future {
         let this = self.clone();
         Box::pin(async move {
-            if request.uri().path() != "/rpc.Api/GetBlockHeaderByNumber" {
+            if request.uri().path() != "/miden.node.v1.NodeService/GetBlockHeaderByNumber" {
                 return Ok(tonic::Status::unimplemented("unknown method").into_http());
             }
             let codec = tonic_prost::ProstCodec::default();
@@ -80,14 +84,14 @@ impl tower::Service<http::Request<tonic::body::Body>> for NodeRpc {
 }
 
 async fn node_rpc(
-    response: Result<BlockHeaderByNumberResponse, tonic::Status>,
+    response: Result<GetBlockHeaderByNumberResponse, tonic::Status>,
     delay: Duration,
 ) -> (url::Url, tokio::task::JoinHandle<()>) {
     node_rpc_at_block(response, delay, 42).await
 }
 
 async fn node_rpc_at_block(
-    response: Result<BlockHeaderByNumberResponse, tonic::Status>,
+    response: Result<GetBlockHeaderByNumberResponse, tonic::Status>,
     delay: Duration,
     block_num: u32,
 ) -> (url::Url, tokio::task::JoinHandle<()>) {
@@ -96,7 +100,7 @@ async fn node_rpc_at_block(
 }
 
 async fn node_rpc_responses(
-    responses: BTreeMap<u32, Result<BlockHeaderByNumberResponse, tonic::Status>>,
+    responses: BTreeMap<u32, Result<GetBlockHeaderByNumberResponse, tonic::Status>>,
     delay: Duration,
 ) -> (url::Url, tokio::task::JoinHandle<()>, Arc<Mutex<Vec<u32>>>) {
     let responses = responses
@@ -128,18 +132,18 @@ async fn node_rpc_script(
     (url, task, requests)
 }
 
-fn fixture() -> (SendNoteWithProofRequest, BlockHeaderByNumberResponse) {
+fn fixture() -> (SendNoteWithProofRequest, GetBlockHeaderByNumberResponse) {
     fixture_at_block(42)
 }
 
-fn fixture_at_block(block_num: u32) -> (SendNoteWithProofRequest, BlockHeaderByNumberResponse) {
+fn fixture_at_block(block_num: u32) -> (SendNoteWithProofRequest, GetBlockHeaderByNumberResponse) {
     fixture_for_note(block_num, note(1, 7))
 }
 
 fn fixture_for_note(
     block_num: u32,
     note: TransportNote,
-) -> (SendNoteWithProofRequest, BlockHeaderByNumberResponse) {
+) -> (SendNoteWithProofRequest, GetBlockHeaderByNumberResponse) {
     let header = note.header.clone().unwrap().decode_fields().unwrap().verify().unwrap();
     let index = BlockNoteIndex::new(3, 5).unwrap();
     let tree = BlockNoteTree::with_entries([(index, &header)]).unwrap();
@@ -152,7 +156,7 @@ fn fixture_for_note(
             note: Some(note),
             inclusion_proof: Some((&header.id(), &proof).into()),
         },
-        BlockHeaderByNumberResponse {
+        GetBlockHeaderByNumberResponse {
             block_header: Some(block.into()),
             ..Default::default()
         },
@@ -314,7 +318,7 @@ async fn lookup_failures_never_store_notes() {
     wrong_block.block_header = Some(BlockHeader::mock(43, None, None, &[]).into());
     let cases = [
         (
-            Ok(BlockHeaderByNumberResponse::default()),
+            Ok(GetBlockHeaderByNumberResponse::default()),
             Duration::ZERO,
             tonic::Code::FailedPrecondition,
         ),
@@ -364,7 +368,7 @@ async fn proof_submission_roundtrips_over_grpc_and_web() {
     let address = listener.local_addr().unwrap();
     let shutdown = CancellationToken::new();
     let task = tokio::spawn(server.serve_on(listener, shutdown.clone()));
-    let mut client = miden_node_proto::generated::note_transport::api_client::ApiClient::connect(
+    let mut client = miden_node_proto::generated::miden::note_transport::v1::note_transport_service_client::NoteTransportServiceClient::connect(
         format!("http://{address}"),
     )
     .await
@@ -400,7 +404,7 @@ async fn lookup_timeout_returns_deadline_exceeded_over_grpc() {
     let address = listener.local_addr().unwrap();
     let shutdown = CancellationToken::new();
     let task = tokio::spawn(server.serve_on(listener, shutdown.clone()));
-    let mut client = miden_node_proto::generated::note_transport::api_client::ApiClient::connect(
+    let mut client = miden_node_proto::generated::miden::note_transport::v1::note_transport_service_client::NoteTransportServiceClient::connect(
         format!("http://{address}"),
     )
     .await
@@ -466,7 +470,7 @@ async fn note_root_cache_evicts_the_least_recently_used_block() {
             let header = BlockHeader::mock(block_num, None, Some(root), &[]);
             (
                 block_num,
-                Ok(BlockHeaderByNumberResponse {
+                Ok(GetBlockHeaderByNumberResponse {
                     block_header: Some(header.into()),
                     ..Default::default()
                 }),
@@ -487,19 +491,19 @@ async fn note_root_cache_evicts_the_least_recently_used_block() {
 #[tokio::test]
 async fn note_root_cache_does_not_cache_failed_or_invalid_headers() {
     let cases = [
-        (Ok(BlockHeaderByNumberResponse::default()), tonic::Code::FailedPrecondition),
+        (Ok(GetBlockHeaderByNumberResponse::default()), tonic::Code::FailedPrecondition),
         (Err(tonic::Status::not_found("missing")), tonic::Code::FailedPrecondition),
         (Err(tonic::Status::internal("upstream error")), tonic::Code::Unavailable),
         (Err(tonic::Status::deadline_exceeded("timeout")), tonic::Code::DeadlineExceeded),
         (
-            Ok(BlockHeaderByNumberResponse {
+            Ok(GetBlockHeaderByNumberResponse {
                 block_header: Some(miden_node_proto::generated::blockchain::BlockHeader::default()),
                 ..Default::default()
             }),
             tonic::Code::Unavailable,
         ),
         (
-            Ok(BlockHeaderByNumberResponse {
+            Ok(GetBlockHeaderByNumberResponse {
                 block_header: Some(BlockHeader::mock(43, None, None, &[]).into()),
                 ..Default::default()
             }),

@@ -45,7 +45,11 @@ impl Service for ValidatorService {
         name = "check-status.validator",
     )]
     async fn check(&mut self) -> ServiceStatus {
-        match self.client.status(()).await {
+        match self
+            .client
+            .status(miden_node_proto::generated::miden::validator::v1::StatusRequest {})
+            .await
+        {
             Ok(response) => {
                 let status = response.into_inner();
                 ServiceStatus::healthy(

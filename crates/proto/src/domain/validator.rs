@@ -12,7 +12,7 @@ pub struct SignBlockResponse {
     pub public_key: PublicKey,
 }
 
-impl BuildUnchecked for proto::validator::DecodedSignBlockResponse {
+impl BuildUnchecked for proto::miden::validator::v1::DecodedSignBlockResponse {
     type Output = SignBlockResponse;
     type Error = ConversionError;
 

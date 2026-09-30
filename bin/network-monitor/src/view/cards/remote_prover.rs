@@ -1,5 +1,5 @@
 //! Renders the remote-prover card: proxy info, worker list, and last proof-generation test outcome.
-//! Embeds `data-grpc-url` for `/remote_prover.ProxyStatusApi/Status` browser probes.
+//! Embeds `data-grpc-url` for `/miden.remote_prover.v1.ProxyStatusService/Status` browser probes.
 
 use maud::{Markup, html};
 
@@ -20,7 +20,7 @@ pub(in crate::view) fn render_remote_prover(details: &RemoteProverDetails) -> Ma
     html! {
         div class="service-details"
             data-grpc-url=(proxy.url)
-            data-grpc-path="/remote_prover.ProxyStatusApi/Status"
+            data-grpc-path="/miden.remote_prover.v1.ProxyStatusService/Status"
         {
             div class="detail-item" {
                 strong { "URL: " }

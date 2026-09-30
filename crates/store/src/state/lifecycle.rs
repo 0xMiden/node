@@ -425,7 +425,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let commitment = bootstrap_store(temp_dir.path());
         let mut conn = database_connection(temp_dir.path());
-        let mut bytes = test_protocol_config().to_bytes();
+        let mut bytes = miden_node_persistence::encode(&test_protocol_config());
         bytes.push(0xff);
         diesel::update(
             protocol_configs::table.filter(protocol_configs::commitment.eq(commitment.to_bytes())),
@@ -440,7 +440,7 @@ mod tests {
             .expect("state load should fail");
         assert!(matches!(
             error,
-            StateInitializationError::DatabaseError(DatabaseError::DataCorrupted(_))
+            StateInitializationError::DatabaseError(DatabaseError::Persistence(_))
         ));
     }
 

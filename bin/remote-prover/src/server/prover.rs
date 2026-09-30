@@ -1,7 +1,8 @@
 use miden_block_prover::{BlockExecutor, LocalBlockProver};
-use miden_node_proto::generated::remote_prover::proof::Proof as ProofVariant;
-use miden_node_proto::generated::remote_prover::proof_request::DecodedRequest as Request;
-use miden_node_proto::generated::{block_proving, remote_prover as proto, transaction};
+use miden_node_proto::generated::miden::remote_prover::v1 as proto;
+use miden_node_proto::generated::miden::remote_prover::v1::prove_request::DecodedRequest as Request;
+use miden_node_proto::generated::miden::remote_prover::v1::prove_response::Proof as ProofVariant;
+use miden_node_proto::generated::{block_proving, transaction};
 use miden_node_proto::{BlockProofRequest, BuildUnchecked, DecodeMessage, Decoded, VerifyWith};
 use miden_node_tracing::{ErrorReport, miden_instrument};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
@@ -36,7 +37,10 @@ impl Prover {
         name="prove",
         err,
     )]
-    pub fn prove(&self, request: proto::ProofRequest) -> Result<proto::Proof, tonic::Status> {
+    pub fn prove(
+        &self,
+        request: proto::ProveRequest,
+    ) -> Result<proto::ProveResponse, tonic::Status> {
         let request = request
             .decode_fields()
             .map_err(miden_node_proto::errors::ConversionError::into_status)?
@@ -51,7 +55,7 @@ impl Prover {
             _ => return Err(tonic::Status::invalid_argument("unsupported proof type")),
         };
 
-        Ok(proto::Proof { proof: Some(proof) })
+        Ok(proto::ProveResponse { proof: Some(proof) })
     }
 
     /// Returns the context attached to failures of the blocking task running this prover.

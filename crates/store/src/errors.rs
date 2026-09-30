@@ -55,6 +55,8 @@ pub enum AccountStateForestUpdateError {
 
 #[derive(Debug, Error)]
 pub enum DatabaseError {
+    #[error("invalid persisted protobuf value")]
+    Persistence(#[from] miden_node_persistence::PersistenceError),
     // ERRORS WITH AUTOMATIC CONVERSIONS FROM NESTED ERROR TYPES
     // ---------------------------------------------------------------------------------------------
     #[error("account error")]

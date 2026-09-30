@@ -28,6 +28,7 @@ doctest = false
 anyhow                 = { workspace = true }
 clap                   = { features = ["env", "string"], workspace = true }
 miden-node-db          = { workspace = true }
+miden-node-persistence = { workspace = true }
 miden-node-proto       = { workspace = true }
 miden-node-proto-build = { workspace = true }
 miden-node-tracing     = { workspace = true }

@@ -8,6 +8,9 @@ sidebar_position: 0
 Miden nodes expose a public gRPC API for querying chain state, synchronizing local state, submitting proven
 transactions, and subscribing to committed blocks and block proofs.
 
+The service name is `miden.node.v1.NodeService`. Clients use this name in each gRPC method path. The existing `ACCEPT`
+header version check remains in effect, and write methods still require the network genesis commitment.
+
 The API uses standard gRPC status codes. Some methods also include additional Miden-specific error codes in status
 details for stable client-side handling.
 
@@ -18,13 +21,13 @@ See [Official Network URLs](/official-network-urls) for public RPC endpoints on 
 The safest way to inspect the schema for a deployed network is through gRPC reflection:
 
 ```bash
-grpcurl rpc.testnet.miden.io:443 describe rpc.Api
+grpcurl rpc.testnet.miden.io:443 describe miden.node.v1.NodeService
 ```
 
 For a local development network without TLS, use `-plaintext`:
 
 ```bash
-grpcurl -plaintext localhost:57291 describe rpc.Api
+grpcurl -plaintext localhost:57291 describe miden.node.v1.NodeService
 ```
 
 For Rust developers, we also ship a Rust crate

@@ -1,18 +1,18 @@
 syntax = "proto3";
-package note_transport;
+package miden.note_transport.v1;
 
 import "note.proto";
 import "block_number.proto";
 
 // Delivers private notes to recipients that poll by tag.
-service Api {
+service NoteTransportService {
     // Stores a private note. A retry with the same note ID keeps the first envelope.
     // Rejects non-private notes with INVALID_ARGUMENT.
     rpc SendNote(SendNoteRequest) returns (SendNoteResponse) {}
     // Verifies inclusion against the trusted node before storage, including on retries.
     // Accepts only private notes. Rejects non-private notes with INVALID_ARGUMENT.
     // A retry with the same note ID keeps the first envelope.
-    rpc SendNoteWithProof(SendNoteWithProofRequest) returns (SendNoteResponse) {}
+    rpc SendNoteWithProof(SendNoteWithProofRequest) returns (SendNoteWithProofResponse) {}
     // Returns notes after the cursor, ordered by their storage cursor.
     rpc FetchNotes(FetchNotesRequest) returns (FetchNotesResponse) {}
 }
@@ -31,6 +31,8 @@ message SendNoteWithProofRequest {
     // Required. The service verifies this proof but does not store it.
     note.NoteInclusionProof inclusion_proof = 2;
 }
+
+message SendNoteWithProofResponse {}
 
 message TransportNote {
     note.NoteHeader header = 1;

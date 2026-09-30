@@ -8,17 +8,21 @@ use super::{RpcService, database_error_to_status, invalid_block_range_to_status}
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::SyncAccountStorageMaps for RpcService {
-    type Input = proto::rpc::DecodedSyncAccountStorageMapsRequest;
-    type Output = proto::rpc::SyncAccountStorageMapsResponse;
+impl proto::server::miden_node_v1_node_service::SyncAccountStorageMaps for RpcService {
+    type Input = proto::miden::node::v1::DecodedSyncAccountStorageMapsRequest;
+    type Output = proto::miden::node::v1::SyncAccountStorageMapsResponse;
 
-    fn decode(request: proto::rpc::SyncAccountStorageMapsRequest) -> tonic::Result<Self::Input> {
+    fn decode(
+        request: proto::miden::node::v1::SyncAccountStorageMapsRequest,
+    ) -> tonic::Result<Self::Input> {
         request.decode_fields().map_err(|err| {
             SyncAccountStorageMapsErrorCode::DeserializationFailed.invalid_argument(err)
         })
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::SyncAccountStorageMapsResponse> {
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<proto::miden::node::v1::SyncAccountStorageMapsResponse> {
         Ok(output)
     }
 
@@ -74,7 +78,7 @@ impl proto::server::rpc_api::SyncAccountStorageMaps for RpcService {
         let updates = storage_maps_page
             .values
             .into_iter()
-            .map(|map_value| proto::rpc::StorageMapUpdate {
+            .map(|map_value| proto::miden::node::v1::StorageMapUpdate {
                 slot_name: map_value.slot_name.to_string(),
                 key: Some(map_value.key.as_word().into()),
                 value: Some(map_value.value.into()),
@@ -82,8 +86,8 @@ impl proto::server::rpc_api::SyncAccountStorageMaps for RpcService {
             })
             .collect();
 
-        Ok(proto::rpc::SyncAccountStorageMapsResponse {
-            pagination_info: Some(proto::rpc::PaginationInfo {
+        Ok(proto::miden::node::v1::SyncAccountStorageMapsResponse {
+            pagination_info: Some(proto::miden::node::v1::PaginationInfo {
                 chain_tip: chain_tip.as_u32(),
                 block_num: storage_maps_page.last_block_included.as_u32(),
             }),

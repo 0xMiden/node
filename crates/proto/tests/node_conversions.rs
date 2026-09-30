@@ -209,13 +209,9 @@ fn nonempty_block_request() -> BlockProofRequest {
 #[test]
 fn nonempty_block_proof_roundtrip_preserves_header_order_and_witnesses() {
     let request = nonempty_block_request();
-    let message = generated::block_proving::BlockProofRequest::from(&request);
-    let wire = message.encode_to_vec();
-    let decoded = generated::block_proving::BlockProofRequest::decode(wire.as_slice())
-        .unwrap()
-        .decode_fields()
-        .and_then(BuildUnchecked::build_unchecked)
-        .unwrap();
+    let mut wire = miden_node_persistence::encode(&request);
+    wire.extend_from_slice(&[0xa0, 0x06, 0x01]);
+    let decoded: BlockProofRequest = miden_node_persistence::decode(&wire).unwrap();
 
     assert_eq!(decoded.block_header, request.block_header);
     assert_eq!(decoded.block_header.commitment(), request.block_header.commitment());
@@ -420,8 +416,10 @@ fn batch_submission_rejects_proof_that_does_not_match_proposal() {
 #[test]
 fn batch_proof_response_preserves_batch_and_rejects_other_requested_kinds() {
     let batch = nonempty_block_request().tx_batches.as_slice()[0].clone();
-    let response = generated::remote_prover::Proof {
-        proof: Some(generated::remote_prover::proof::Proof::Batch((&batch).into())),
+    let response = generated::miden::remote_prover::v1::ProveResponse {
+        proof: Some(generated::miden::remote_prover::v1::prove_response::Proof::Batch(
+            (&batch).into(),
+        )),
     };
     assert!(response.clone().decode_fields().unwrap().into_transaction().is_err());
     assert!(response.clone().decode_fields().unwrap().into_block().is_err());
@@ -456,13 +454,14 @@ fn signing_request() -> miden_node_proto::SignBlockRequest {
 #[test]
 fn signing_roundtrip_preserves_proposal_and_matches_proving() {
     let request = signing_request();
-    let message = generated::validator::SignBlockRequest::from(&request);
-    let decoded =
-        generated::validator::SignBlockRequest::decode(message.encode_to_vec().as_slice())
-            .unwrap()
-            .decode_fields()
-            .and_then(BuildUnchecked::build_unchecked)
-            .unwrap();
+    let message = generated::miden::validator::v1::SignBlockRequest::from(&request);
+    let decoded = generated::miden::validator::v1::SignBlockRequest::decode(
+        message.encode_to_vec().as_slice(),
+    )
+    .unwrap()
+    .decode_fields()
+    .and_then(BuildUnchecked::build_unchecked)
+    .unwrap();
     assert_eq!(decoded.block_header, request.block_header);
     assert_eq!(decoded.tx_batches.as_slice(), request.tx_batches.as_slice());
     assert_eq!(
@@ -483,7 +482,7 @@ fn signing_roundtrip_preserves_proposal_and_matches_proving() {
 
 #[test]
 fn signing_rejects_missing_fields_and_malformed_batches() {
-    let message = generated::validator::SignBlockRequest::from(&signing_request());
+    let message = generated::miden::validator::v1::SignBlockRequest::from(&signing_request());
     for field in ["block_inputs", "next_validator_config"] {
         let mut invalid = message.clone();
         if field == "block_inputs" {
@@ -509,7 +508,7 @@ fn signing_rejects_missing_fields_and_malformed_batches() {
 
 #[test]
 fn signing_rejects_duplicate_witnesses_and_preserves_absent_next_config() {
-    let mut message = generated::validator::SignBlockRequest::from(&signing_request());
+    let mut message = generated::miden::validator::v1::SignBlockRequest::from(&signing_request());
     message.next_protocol_config = None;
     let decoded = message
         .clone()
@@ -534,7 +533,7 @@ fn signing_roundtrip_validates_supplied_active_configuration() {
     ))
     .unwrap();
     let proof = block_request_message();
-    let mut message = generated::validator::SignBlockRequest {
+    let mut message = generated::miden::validator::v1::SignBlockRequest {
         batches: proof.batches,
         block_inputs: proof.block_inputs,
         timestamp: proof.timestamp,
@@ -563,18 +562,18 @@ fn signing_roundtrip_validates_supplied_active_configuration() {
         .and_then(BuildUnchecked::build_unchecked)
         .unwrap();
     assert_eq!(decoded.protocol_config, Some(config));
-    let encoded = generated::validator::SignBlockRequest::from(decoded);
+    let encoded = generated::miden::validator::v1::SignBlockRequest::from(decoded);
     assert_eq!(encoded, message);
 }
 
 #[test]
 fn authentication_inputs_reject_duplicate_nullifiers_in_any_spent_state() {
     for block_numbers in [[0, 0], [10, 0], [0, 10], [10, 10]] {
-        let message = generated::sequencer::AuthInputs {
+        let message = generated::miden::sequencer::v1::AuthInputs {
             account_id: Some(private_account_id(7).into()),
             nullifiers: block_numbers
                 .into_iter()
-                .map(|block_num| generated::sequencer::NullifierRecord {
+                .map(|block_num| generated::miden::sequencer::v1::NullifierRecord {
                     nullifier: Some(Word::from([1u32, 2, 3, 4]).into()),
                     block_num,
                 })
@@ -593,14 +592,14 @@ fn authentication_inputs_reject_duplicate_nullifiers_in_any_spent_state() {
 fn authentication_inputs_preserve_distinct_spent_and_unspent_nullifiers() {
     let unspent = Nullifier::from_raw(Word::from([1u32, 2, 3, 4]));
     let spent = Nullifier::from_raw(Word::from([5u32, 6, 7, 8]));
-    let message = generated::sequencer::AuthInputs {
+    let message = generated::miden::sequencer::v1::AuthInputs {
         account_id: Some(private_account_id(7).into()),
         nullifiers: vec![
-            generated::sequencer::NullifierRecord {
+            generated::miden::sequencer::v1::NullifierRecord {
                 nullifier: Some(unspent.as_word().into()),
                 block_num: 0,
             },
-            generated::sequencer::NullifierRecord {
+            generated::miden::sequencer::v1::NullifierRecord {
                 nullifier: Some(spent.as_word().into()),
                 block_num: 10,
             },
