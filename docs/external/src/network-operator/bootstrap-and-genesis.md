@@ -166,9 +166,10 @@ and transcript checkpoints. Each validator keeps its identity, private DKG state
 manual file commands remain available for recovery. The DKG and database bootstrap may run in either order, but both
 must finish before the validator starts.
 
-All listed validators must contribute to the ceremony even when the recovery threshold is lower. If any participant
-drops out or any transcript differs, discard the incomplete ceremony and start a new one with fresh identities and
-sessions. See [storage key setup](./validator.md#storage-key-setup) for the commands and file rules.
+All listed validators must contribute to the ceremony even when the recovery threshold is lower. After a process
+interruption, the board and validators can resume with their existing state. If a validator loses its private state,
+cannot rejoin, or finds a different transcript, discard the ceremony and start again with fresh identities and sessions.
+See [storage key setup](./validator.md#storage-key-setup) for the commands and file rules.
 
 Bootstrap takes no transaction encryption key: that key is configured separately when the validator is started, and
 nothing cross-checks it against the genesis block. Every validator must be started with the same encryption key; the
