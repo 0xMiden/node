@@ -345,6 +345,12 @@ async fn unknown_participants_and_artifact_kinds_are_rejected_before_body_alloca
     Ok(())
 }
 
+#[test]
+fn oversized_artifacts_are_rejected_before_allocation() {
+    let oversized = usize::try_from(MAX_ARTIFACT_BYTES).unwrap() + 1;
+    assert!(validate_artifact_length(oversized).is_err());
+}
+
 #[tokio::test]
 async fn oversized_upload_is_rejected_before_body_allocation() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
