@@ -34,10 +34,9 @@ pub fn fetch_notes(
                     header: row.get(1)?,
                     details: row.get(2)?,
                     created_at: row.get(3)?,
-                    after_block_num: row.get(4)?,
-                    committed_in_block: row.get(5)?,
+                    committed_in_block: row.get(4)?,
                 },
-                row.get::<i64>(6)?,
+                row.get::<i64>(5)?,
             ))
         },
     )?;
