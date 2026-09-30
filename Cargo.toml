@@ -159,18 +159,6 @@ ignored = ["libsqlite3-sys"]
 # The normal and dev entries enable different SDK features in the tracing crate.
 ignore = [{ dependency = "opentelemetry_sdk", member = "crates/tracing" }]
 
-# TODO: Remove once https://github.com/0xMiden/protocol/pull/3972 is released.
-[patch.crates-io]
-miden-block-prover = { branch = "pgackst-add-usdcx", git = "https://github.com/0xMiden/protocol" }
-miden-objects      = { branch = "pgackst-add-usdcx", git = "https://github.com/0xMiden/protocol" }
-miden-protobuf     = { branch = "pgackst-add-usdcx", git = "https://github.com/0xMiden/protocol" }
-miden-protocol     = { branch = "pgackst-add-usdcx", git = "https://github.com/0xMiden/protocol" }
-miden-standards    = { branch = "pgackst-add-usdcx", git = "https://github.com/0xMiden/protocol" }
-miden-testing      = { branch = "pgackst-add-usdcx", git = "https://github.com/0xMiden/protocol" }
-miden-tx           = { branch = "pgackst-add-usdcx", git = "https://github.com/0xMiden/protocol" }
-miden-tx-batch     = { branch = "pgackst-add-usdcx", git = "https://github.com/0xMiden/protocol" }
-miden-usdcx        = { branch = "pgackst-add-usdcx", git = "https://github.com/0xMiden/protocol" }
-
 # Lints are set to warn for development, which are promoted to errors in CI.
 [workspace.lints.clippy]
 # Pedantic lints are set to a lower priority which allows lints in the group to be selectively enabled.
