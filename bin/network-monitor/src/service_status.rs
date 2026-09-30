@@ -424,8 +424,8 @@ impl RemoteProverStatusDetails {
 }
 
 impl RpcStatusDetails {
-    /// Creates `RpcStatusDetails` from a gRPC `RpcStatus` response and the configured URL.
-    pub fn from_rpc_status(status: RpcStatus, url: String) -> Self {
+    /// Creates `RpcStatusDetails` from a gRPC `StatusResponse` and the configured URL.
+    pub fn from_rpc_status(status: StatusResponse, url: String) -> Self {
         let genesis_commitment = status.genesis_commitment.as_ref().and_then(|genesis| {
             Word::try_from(genesis)
                 .inspect_err(|err| {
@@ -512,7 +512,7 @@ mod tests {
     #[test]
     fn rpc_status_genesis_commitment_is_hex_encoded() {
         let genesis = Word::from([1, 2, 3, 4u32]);
-        let proto_status = RpcStatus {
+        let proto_status = StatusResponse {
             version: "1.0".to_string(),
             genesis_commitment: Some(genesis.into()),
             chain_tip: 7,
@@ -524,7 +524,7 @@ mod tests {
 
     #[test]
     fn rpc_status_with_malformed_genesis_commitment_omits_it() {
-        let proto_status = RpcStatus {
+        let proto_status = StatusResponse {
             version: "1.0".to_string(),
             genesis_commitment: Some(proto::primitives::Word { encoded: vec![1, 2, 3] }),
             chain_tip: 7,
