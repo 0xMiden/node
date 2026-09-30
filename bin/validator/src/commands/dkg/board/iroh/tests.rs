@@ -378,6 +378,36 @@ async fn invalid_upload_secret_is_rejected_before_storage() -> anyhow::Result<()
 }
 
 #[tokio::test]
+async fn stalled_headers_do_not_block_authorized_uploads() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (host, tickets) = BoardNode::create_for_test(&root.path().join("host")).await?;
+    let client =
+        BoardNode::join_for_test(&root.path().join("client"), ticket_for(&tickets, 1)).await?;
+    let (endpoint, target) = match &client.publisher {
+        Publisher::Remote { endpoint, target, .. } => (endpoint, target),
+        Publisher::Local(_) => unreachable!(),
+    };
+    let mut stalled = Vec::new();
+    for _ in 0..3 {
+        let connection = endpoint.connect(target.clone(), UPLOAD_ALPN).await?;
+        let (mut send, _recv) = connection.open_bi().await?;
+        send.write_all(&[0]).await?;
+        stalled.push((connection, send));
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let slot = ArtifactSlot::Registration(1);
+    let value = b"signed registration";
+    tokio::time::timeout(Duration::from_secs(10), client.publish(&slot, value)).await??;
+    assert_eq!(host.read_unique(&slot).await?, Some(value.to_vec()));
+
+    drop(stalled);
+    client.shutdown().await?;
+    host.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn participant_ticket_cannot_publish_another_participants_slot() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     let (host, tickets) = BoardNode::create_for_test(&root.path().join("host")).await?;

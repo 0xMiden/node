@@ -14,11 +14,14 @@ pub(super) const UPLOAD_ALPN: &[u8] = b"/miden/storage-key-dkg-board-upload/3";
 const UPLOAD_HEADER_BYTES: usize = 32 + 1 + 4 + 8;
 const UPLOAD_RESPONSE_BYTES: usize = 1 + 32;
 const MAX_CONCURRENT_UPLOADS: usize = 3;
+const MAX_PENDING_HEADERS: usize = 16;
 const MAX_UPLOAD_ERROR_BYTES: usize = 1024;
 const UPLOAD_TIMEOUT: Duration = Duration::from_secs(30);
+const AUTH_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Debug)]
 pub(super) struct UploadProtocol {
+    headers: Arc<tokio::sync::Semaphore>,
     permits: Arc<tokio::sync::Semaphore>,
     upload_secrets: Arc<Vec<[u8; 32]>>,
     writer: BoardWriter,
@@ -27,13 +30,17 @@ pub(super) struct UploadProtocol {
 impl UploadProtocol {
     pub(super) fn new(upload_secrets: Vec<[u8; 32]>, writer: BoardWriter) -> Self {
         Self {
+            headers: Arc::new(tokio::sync::Semaphore::new(MAX_PENDING_HEADERS)),
             permits: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_UPLOADS)),
             upload_secrets: Arc::new(upload_secrets),
             writer,
         }
     }
 
-    async fn receive(&self, recv: &mut iroh::endpoint::RecvStream) -> anyhow::Result<Hash> {
+    async fn authorize(
+        &self,
+        recv: &mut iroh::endpoint::RecvStream,
+    ) -> anyhow::Result<(ArtifactSlot, usize)> {
         let mut header = [0u8; UPLOAD_HEADER_BYTES];
         recv.read_exact(&mut header)
             .await
@@ -60,31 +67,68 @@ impl UploadProtocol {
         let slot = ArtifactSlot::from_upload_fields(kind, participant)?;
         self.writer.validate_slot(&slot)?;
         let length = usize::try_from(length).context("DKG board artifact length is too large")?;
+        Ok((slot, length))
+    }
+
+    async fn receive_body(
+        &self,
+        recv: &mut iroh::endpoint::RecvStream,
+        slot: &ArtifactSlot,
+        length: usize,
+    ) -> anyhow::Result<Hash> {
         let mut value = vec![0u8; length];
         recv.read_exact(&mut value)
             .await
             .context("failed to read DKG board upload body")?;
         recv.read_to_end(0).await.context("DKG board upload has trailing bytes")?;
-        self.writer.store(&slot, &value).await
+        self.writer.store(slot, &value).await
     }
 
     async fn serve_connection(&self, connection: &Connection) -> Result<(), AcceptError> {
-        let _permit = self.permits.acquire().await.map_err(AcceptError::from_err)?;
-        let (mut send, mut recv) = connection.accept_bi().await?;
-        let response = match self.receive(&mut recv).await {
-            Ok(hash) => {
-                let mut response = Vec::with_capacity(UPLOAD_RESPONSE_BYTES);
-                response.push(0);
-                response.extend_from_slice(hash.as_bytes());
-                response
-            },
-            Err(error) => upload_error_response(&error),
+        let Ok(header_permit) = self.headers.try_acquire() else {
+            connection.close(1u32.into(), b"too many DKG board upload headers");
+            return Ok(());
         };
-        send.write_all(&response).await.map_err(AcceptError::from_err)?;
-        send.finish()?;
-        connection.closed().await;
+        let Ok(streams) = tokio::time::timeout(AUTH_TIMEOUT, connection.accept_bi()).await else {
+            connection.close(1u32.into(), b"DKG board upload header timed out");
+            return Ok(());
+        };
+        let (mut send, mut recv) = streams?;
+        let authorization = tokio::time::timeout(AUTH_TIMEOUT, self.authorize(&mut recv)).await;
+        drop(header_permit);
+        match authorization {
+            Ok(Ok((slot, length))) => {
+                let _permit = self.permits.acquire().await.map_err(AcceptError::from_err)?;
+                send_upload_response(&mut send, self.receive_body(&mut recv, &slot, length).await)
+                    .await?;
+            },
+            Ok(Err(error)) => send_upload_response(&mut send, Err(error)).await?,
+            Err(_) => {
+                connection.close(1u32.into(), b"DKG board upload header timed out");
+                return Ok(());
+            },
+        }
+        let _ = send.stopped().await;
         Ok(())
     }
+}
+
+async fn send_upload_response(
+    send: &mut iroh::endpoint::SendStream,
+    result: anyhow::Result<Hash>,
+) -> Result<(), AcceptError> {
+    let response = match result {
+        Ok(hash) => {
+            let mut response = Vec::with_capacity(UPLOAD_RESPONSE_BYTES);
+            response.push(0);
+            response.extend_from_slice(hash.as_bytes());
+            response
+        },
+        Err(error) => upload_error_response(&error),
+    };
+    send.write_all(&response).await.map_err(AcceptError::from_err)?;
+    send.finish()?;
+    Ok(())
 }
 
 impl ProtocolHandler for UploadProtocol {
