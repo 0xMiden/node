@@ -62,7 +62,7 @@ fn ticket_for(tickets: &[BoardTicket], participant: u32) -> BoardTicket {
         .clone()
 }
 
-async fn connect_blob_provider(host: &BoardNode, provider: &BoardNode) -> anyhow::Result<()> {
+fn blob_provider_address(provider: &BoardNode) -> anyhow::Result<EndpointAddr> {
     let mut socket = provider
         .router
         .endpoint()
@@ -71,11 +71,17 @@ async fn connect_blob_provider(host: &BoardNode, provider: &BoardNode) -> anyhow
         .find(std::net::SocketAddr::is_ipv4)
         .context("Iroh test endpoint has no IPv4 socket")?;
     socket.set_ip(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
-    let address = EndpointAddr::from_parts(
+    Ok(EndpointAddr::from_parts(
         provider.router.endpoint().id(),
         [iroh::TransportAddr::Ip(socket)],
-    );
-    host.router.endpoint().connect(address, iroh_blobs::ALPN).await?;
+    ))
+}
+
+async fn connect_blob_provider(host: &BoardNode, provider: &BoardNode) -> anyhow::Result<()> {
+    host.router
+        .endpoint()
+        .connect(blob_provider_address(provider)?, iroh_blobs::ALPN)
+        .await?;
     Ok(())
 }
 
@@ -418,6 +424,17 @@ async fn disconnected_blob_provider_fails_over() -> anyhow::Result<()> {
         BoardNode::join_for_test(&root.path().join("second"), ticket_for(&tickets, 2)).await?;
     connect_blob_provider(&host, &first).await?;
     connect_blob_provider(&host, &second).await?;
+    let closed_connection = host
+        .router
+        .endpoint()
+        .connect(blob_provider_address(&first)?, iroh_blobs::ALPN)
+        .await?;
+    closed_connection.close(1u32.into(), b"test disconnect");
+    assert!(
+        !host
+            .fetch_blob(closed_connection, Hash::new(b"missing"), &ArtifactSlot::Manifest)
+            .await?
+    );
     let first_id = first.router.endpoint().id();
     first.shutdown().await?;
 
@@ -433,6 +450,38 @@ async fn disconnected_blob_provider_fails_over() -> anyhow::Result<()> {
 
     assert_eq!(host.wait_unique(&slot, Duration::from_secs(10)).await?, value);
     second.shutdown().await?;
+    host.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_fetch_error_is_reported() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (host, tickets) = BoardNode::create_for_test(&root.path().join("host")).await?;
+    let provider =
+        BoardNode::join_for_test(&root.path().join("provider"), ticket_for(&tickets, 1)).await?;
+    let connection = host
+        .router
+        .endpoint()
+        .connect(blob_provider_address(&provider)?, iroh_blobs::ALPN)
+        .await?;
+    let (send, recv) = connection.open_bi().await?;
+    let streams = StreamPair::new(connection.stable_id() as u64, recv, send);
+    let failed_store_directory = root.path().join("failed-store");
+    fs_err::create_dir(&failed_store_directory)?;
+    let failed_store = FsStore::load(failed_store_directory).await?;
+    failed_store.shutdown().await?;
+    let hash = Hash::new(b"missing");
+    let error = BoardNode::read_fetch_progress(
+        failed_store.remote().fetch(streams, hash).stream(),
+        hash,
+        &ArtifactSlot::Manifest,
+    )
+    .await
+    .unwrap_err();
+    assert!(format!("{error:#}").contains("failed to download DKG board blob"));
+
+    provider.shutdown().await?;
     host.shutdown().await?;
     Ok(())
 }

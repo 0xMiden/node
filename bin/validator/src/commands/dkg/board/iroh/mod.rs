@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use anyhow::{Context, ensure};
 use futures::StreamExt;
-use iroh::endpoint::presets;
+use iroh::endpoint::{Connection, presets};
 use iroh::protocol::Router;
 use iroh::{Endpoint, EndpointAddr, EndpointId, SecretKey};
 use iroh_blobs::api::remote::GetProgressItem;
@@ -474,38 +474,54 @@ impl BoardNode {
             else {
                 continue;
             };
-            let Ok(Ok((send, recv))) =
-                tokio::time::timeout(PROVIDER_CONNECT_TIMEOUT, connection.open_bi()).await
-            else {
-                continue;
-            };
-            let streams = StreamPair::new(connection.stable_id() as u64, recv, send);
-            let mut stream = self.blobs.remote().fetch(streams, hash).stream();
-            let mut finished = false;
-            while let Some(item) = stream.next().await {
-                match item {
-                    GetProgressItem::Progress(size) => ensure!(
-                        size <= MAX_ARTIFACT_BYTES,
-                        "DKG board artifact exceeds {MAX_ARTIFACT_BYTES} bytes",
-                    ),
-                    GetProgressItem::Done(_) => return Ok(true),
-                    GetProgressItem::Error(
-                        error @ (GetError::LocalFailure { .. }
-                        | GetError::IrpcSend { .. }
-                        | GetError::BadRequest { .. }),
-                    ) => anyhow::bail!(
-                        "failed to download DKG board blob {hash} for {}: {error:#}",
-                        slot.prefix()
-                    ),
-                    GetProgressItem::Error(_) => {
-                        finished = true;
-                        break;
-                    },
-                }
+            if self.fetch_blob(connection, hash, slot).await? {
+                return Ok(true);
             }
-            ensure!(finished, "DKG board blob download ended without a result");
         }
         Ok(false)
+    }
+
+    async fn fetch_blob(
+        &self,
+        connection: Connection,
+        hash: Hash,
+        slot: &ArtifactSlot,
+    ) -> anyhow::Result<bool> {
+        let Ok(Ok((send, recv))) =
+            tokio::time::timeout(PROVIDER_CONNECT_TIMEOUT, connection.open_bi()).await
+        else {
+            return Ok(false);
+        };
+        let streams = StreamPair::new(connection.stable_id() as u64, recv, send);
+        Self::read_fetch_progress(self.blobs.remote().fetch(streams, hash).stream(), hash, slot)
+            .await
+    }
+
+    async fn read_fetch_progress(
+        stream: impl futures::Stream<Item = GetProgressItem>,
+        hash: Hash,
+        slot: &ArtifactSlot,
+    ) -> anyhow::Result<bool> {
+        futures::pin_mut!(stream);
+        while let Some(item) = stream.next().await {
+            match item {
+                GetProgressItem::Progress(size) => ensure!(
+                    size <= MAX_ARTIFACT_BYTES,
+                    "DKG board artifact exceeds {MAX_ARTIFACT_BYTES} bytes",
+                ),
+                GetProgressItem::Done(_) => return Ok(true),
+                GetProgressItem::Error(
+                    error @ (GetError::LocalFailure { .. }
+                    | GetError::IrpcSend { .. }
+                    | GetError::BadRequest { .. }),
+                ) => anyhow::bail!(
+                    "failed to download DKG board blob {hash} for {}: {error:#}",
+                    slot.prefix()
+                ),
+                GetProgressItem::Error(_) => return Ok(false),
+            }
+        }
+        anyhow::bail!("DKG board blob download ended without a result")
     }
 
     async fn validate_document_metadata(&self) -> anyhow::Result<()> {
