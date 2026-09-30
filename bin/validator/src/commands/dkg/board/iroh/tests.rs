@@ -372,10 +372,44 @@ async fn unavailable_blob_remains_retryable() -> anyhow::Result<()> {
     let (host, _) = BoardNode::create_for_test(root.path()).await?;
     let slot = ArtifactSlot::Manifest;
     let missing = b"unavailable";
-    host.publish_hash_for_test(&slot, Hash::new(missing), u64::try_from(missing.len())?)
-        .await?;
+    let hash = Hash::new(missing);
+    host.publish_hash_for_test(&slot, hash, u64::try_from(missing.len())?).await?;
+    host.remote_providers
+        .write()
+        .await
+        .insert(hash, vec![host.router.endpoint().id()]);
 
     assert!(host.read_unique(&slot).await?.is_none());
+    let _tag = host.blobs.blobs().add_slice(missing).await?;
+    assert_eq!(host.read_unique(&slot).await?, Some(missing.to_vec()));
+
+    host.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn downloader_failure_is_reported() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (mut host, _) = BoardNode::create_for_test(&root.path().join("host")).await?;
+    let slot = ArtifactSlot::Manifest;
+    let missing = b"unavailable";
+    let hash = Hash::new(missing);
+    host.publish_hash_for_test(&slot, hash, u64::try_from(missing.len())?).await?;
+    host.remote_providers
+        .write()
+        .await
+        .insert(hash, vec![host.router.endpoint().id()]);
+
+    let failed_store_directory = root.path().join("failed-store");
+    fs_err::create_dir(&failed_store_directory)?;
+    let failed_store = FsStore::load(failed_store_directory).await?;
+    host.downloader = failed_store.downloader(host.router.endpoint());
+    failed_store.shutdown().await?;
+
+    let error = host.read_unique(&slot).await.unwrap_err();
+    assert!(format!("{error:#}").contains("failed to download DKG board blob"));
+    let error = host.wait_unique(&slot, Duration::from_secs(1)).await.unwrap_err();
+    assert!(format!("{error:#}").contains("failed to download DKG board blob"));
 
     host.shutdown().await?;
     Ok(())

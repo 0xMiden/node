@@ -445,6 +445,7 @@ impl BoardNode {
                 if providers.is_empty() {
                     return Ok(None);
                 }
+                let provider_count = providers.len();
                 let mut progress =
                     self.downloader.download(hash, providers).stream().await.with_context(
                         || {
@@ -454,19 +455,24 @@ impl BoardNode {
                             )
                         },
                     )?;
+                let mut failed_providers = 0;
                 while let Some(item) = progress.next().await {
                     match item {
                         DownloadProgressItem::Progress(downloaded) => ensure!(
                             downloaded <= MAX_ARTIFACT_BYTES,
                             "DKG board artifact exceeds {MAX_ARTIFACT_BYTES} bytes",
                         ),
+                        // Iroh emits an error after every provider has failed.
+                        DownloadProgressItem::Error(_) if failed_providers == provider_count => {
+                            return Ok(None);
+                        },
                         DownloadProgressItem::Error(error) => anyhow::bail!(
                             "failed to download DKG board blob {hash} for {}: {error:#}",
                             slot.prefix()
                         ),
                         DownloadProgressItem::DownloadError => return Ok(None),
+                        DownloadProgressItem::ProviderFailed { .. } => failed_providers += 1,
                         DownloadProgressItem::TryProvider { .. }
-                        | DownloadProgressItem::ProviderFailed { .. }
                         | DownloadProgressItem::PartComplete { .. } => {},
                     }
                 }
