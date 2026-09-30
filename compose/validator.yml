@@ -30,7 +30,7 @@ x-dkg-runner: &dkg-runner
         --board-file "/data/storage-key-dkg-check/board-tickets/participant-$${PARTICIPANT}.ticket" \
         --genesis /data/genesis/genesis.dat \
         --threshold 2 \
-        --epoch ${MIDEN_VALIDATOR_STORAGE_KEY_EPOCH:-0909090909090909090909090909090909090909090909090909090909090909} \
+        --epoch "$${MIDEN_VALIDATOR_STORAGE_KEY_EPOCH}" \
         --signing-key.hex "$${SIGNING_KEY}" \
         --work-directory "/data/storage-key-dkg-check/validator-$${PARTICIPANT}/work" \
         --output-directory "/data/storage-key-dkg-check/validator-$${PARTICIPANT}/bundle"
@@ -43,6 +43,8 @@ services:
     pull_policy: missing
     volumes:
       - node-data:/data
+    environment:
+      MIDEN_VALIDATOR_STORAGE_KEY_EPOCH: ${MIDEN_VALIDATOR_STORAGE_KEY_EPOCH:-0909090909090909090909090909090909090909090909090909090909090909}
     depends_on:
       bootstrap-validator:
         condition: service_completed_successfully
@@ -56,7 +58,7 @@ services:
           --data-directory "$${ROOT}/board" \
           --genesis /data/genesis/genesis.dat \
           --threshold 2 \
-          --epoch ${MIDEN_VALIDATOR_STORAGE_KEY_EPOCH:-0909090909090909090909090909090909090909090909090909090909090909} \
+          --epoch "$${MIDEN_VALIDATOR_STORAGE_KEY_EPOCH}" \
           --ticket-directory "$${ROOT}/board-tickets"
     healthcheck:
       test: ["CMD-SHELL", "test -s /data/storage-key-dkg-check/board-tickets/participant-3.ticket"]
@@ -68,20 +70,23 @@ services:
   storage-key-dkg-runner-1:
     <<: *dkg-runner
     environment:
+      MIDEN_VALIDATOR_STORAGE_KEY_EPOCH: ${MIDEN_VALIDATOR_STORAGE_KEY_EPOCH:-0909090909090909090909090909090909090909090909090909090909090909}
       PARTICIPANT: "1"
       SIGNING_KEY: ${MIDEN_VALIDATOR_1_SIGNING_KEY:-0101010101010101010101010101010101010101010101010101010101010101}
 
   storage-key-dkg-runner-2:
     <<: *dkg-runner
     environment:
+      MIDEN_VALIDATOR_STORAGE_KEY_EPOCH: ${MIDEN_VALIDATOR_STORAGE_KEY_EPOCH:-0909090909090909090909090909090909090909090909090909090909090909}
       PARTICIPANT: "2"
       SIGNING_KEY: ${MIDEN_VALIDATOR_2_SIGNING_KEY:-0303030303030303030303030303030303030303030303030303030303030303}
 
   storage-key-dkg-runner-3:
     <<: *dkg-runner
     environment:
+      MIDEN_VALIDATOR_STORAGE_KEY_EPOCH: ${MIDEN_VALIDATOR_STORAGE_KEY_EPOCH:-0909090909090909090909090909090909090909090909090909090909090909}
       PARTICIPANT: "3"
-      SIGNING_KEY: ${MIDEN_VALIDATOR_3_SIGNING_KEY:-0404040404040404040404040404040404040404040404040404040404}
+      SIGNING_KEY: ${MIDEN_VALIDATOR_3_SIGNING_KEY:-0404040404040404040404040404040404040404040404040404040404040404}
 
   storage-key-dkg-check:
     profiles: ["storage-key-dkg"]
