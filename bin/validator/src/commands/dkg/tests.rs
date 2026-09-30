@@ -983,6 +983,7 @@ async fn runner_rejects_another_participants_ticket_before_publishing() -> TestR
         &work_directory,
         &root.path().join("bundle"),
         Duration::from_secs(1),
+        miden_node_utils::shutdown::CancellationToken::new(),
     )
     .await
     .unwrap_err();
@@ -1098,6 +1099,88 @@ async fn memory_board_runs_complete_ceremony() -> TestResult {
     for participant_board in participant_boards {
         participant_board.shutdown().await?;
     }
+    board.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn active_runner_stops_and_reopens_an_incomplete_board() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let genesis = write_genesis(root.path())?;
+    let board_directory = root.path().join("board");
+    let (board, tickets) =
+        board::CoordinatorBoard::create_with_network(&board_directory, 3, false).await?;
+    let work_directory = root.path().join("work");
+    let output_directory = root.path().join("bundle");
+    let epoch = "66".repeat(32);
+    let signer = ValidatorSigner::new_local(genesis.signing_keys[0].clone());
+    let participant =
+        runner::prepare_local_identity(&genesis.path, &epoch, &signer, &work_directory).await?;
+    let ticket = tickets
+        .iter()
+        .find(|ticket| ticket.participant() == participant.get())
+        .context("missing participant ticket")?
+        .clone();
+    let slot = board::ArtifactSlot::Registration(participant.get());
+    let shutdown = miden_node_utils::shutdown::CancellationToken::new();
+    let task = tokio::spawn({
+        let genesis_path = genesis.path.clone();
+        let work_directory = work_directory.clone();
+        let output_directory = output_directory.clone();
+        let epoch = epoch.clone();
+        let ticket = ticket.clone();
+        let shutdown = shutdown.clone();
+        async move {
+            runner::run_validator_with_ticket::<ShareOpeningBackend>(
+                ticket,
+                &genesis_path,
+                &signer,
+                2,
+                &epoch,
+                &work_directory,
+                &output_directory,
+                Duration::from_secs(30),
+                shutdown,
+            )
+            .await
+        }
+    });
+    let registration = board
+        .reader()
+        .wait_unique(&slot, Duration::from_secs(10))
+        .await
+        .context("active runner did not publish registration")?;
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(10), task)
+        .await
+        .context("active runner did not stop after cancellation")???;
+    let endpoint_secret = fs_err::read(work_directory.join("board/endpoint-secret.hex"))?;
+    board.shutdown().await?;
+
+    let (board, new_tickets) =
+        board::CoordinatorBoard::create_with_network(&board_directory, 3, false).await?;
+    let new_ticket = new_tickets
+        .into_iter()
+        .find(|ticket| ticket.participant() == participant.get())
+        .context("restarted board has no participant ticket")?;
+    assert_eq!(board.reader().read_unique(&slot).await?, Some(registration.clone()));
+    let signer = ValidatorSigner::new_local(genesis.signing_keys[0].clone());
+    let error = runner::run_validator_with_ticket::<ShareOpeningBackend>(
+        new_ticket,
+        &genesis.path,
+        &signer,
+        2,
+        &epoch,
+        &work_directory,
+        &output_directory,
+        Duration::from_secs(1),
+        miden_node_utils::shutdown::CancellationToken::new(),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("timed out"));
+    assert_eq!(board.reader().read_unique(&slot).await?, Some(registration));
+    assert_eq!(fs_err::read(work_directory.join("board/endpoint-secret.hex"))?, endpoint_secret);
     board.shutdown().await?;
     Ok(())
 }

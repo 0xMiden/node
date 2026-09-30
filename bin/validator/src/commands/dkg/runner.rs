@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Context, ensure};
 use golden_core::{EvrfProofBackend, ParticipantIndex};
+use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_validator::ValidatorSigner;
 
@@ -118,7 +119,10 @@ pub(super) struct DkgRunOptions {
 }
 
 /// Runs one validator through every DKG phase.
-pub(super) async fn run_validator(options: DkgRunOptions) -> anyhow::Result<()> {
+pub(super) async fn run_validator(
+    options: DkgRunOptions,
+    shutdown: CancellationToken,
+) -> anyhow::Result<()> {
     let board = fs_err::read_to_string(&options.board_file)
         .with_context(|| {
             format!("failed to read storage key DKG board ticket {}", options.board_file.display())
@@ -137,11 +141,15 @@ pub(super) async fn run_validator(options: DkgRunOptions) -> anyhow::Result<()> 
         &options.work_directory,
         &options.output_directory,
         CEREMONY_WAIT_TIMEOUT,
+        shutdown,
     )
     .await
 }
 
-pub(super) async fn serve_board(options: DkgBoardServeOptions) -> anyhow::Result<()> {
+pub(super) async fn serve_board(
+    options: DkgBoardServeOptions,
+    shutdown: CancellationToken,
+) -> anyhow::Result<()> {
     let genesis = read_trusted_genesis(&options.genesis)?;
     let participant_count = genesis.inner().header().validator_config().keys().len();
     let (board, tickets) =
@@ -161,20 +169,21 @@ pub(super) async fn serve_board(options: DkgBoardServeOptions) -> anyhow::Result
         options.ticket_directory.display()
     );
 
-    let result = async {
-        coordinate_common_files(
+    let result = tokio::select! {
+        _ = shutdown.cancelled() => Ok(()),
+        result = coordinate_common_files(
             &board,
             &options.data_directory,
             &options.genesis,
             options.threshold.get(),
             &options.epoch,
             CEREMONY_WAIT_TIMEOUT,
-        )
-        .await?;
+        ) => result,
+    };
+    if result.is_ok() && !shutdown.is_cancelled() {
         println!("storage key DKG board is ready. Press Ctrl-C to stop it.");
-        tokio::signal::ctrl_c().await.context("failed to wait for Ctrl-C")
+        shutdown.cancelled().await;
     }
-    .await;
     let shutdown = board.shutdown().await;
     result.and(shutdown)
 }
@@ -270,6 +279,7 @@ pub(super) async fn run_validator_with_ticket<B>(
     work_directory: &Path,
     output_directory: &Path,
     timeout: Duration,
+    shutdown: CancellationToken,
 ) -> anyhow::Result<()>
 where
     B: EvrfProofBackend<StorageGroup>,
@@ -294,7 +304,9 @@ where
     );
     let board_directory = work_directory.join(BOARD_DIRECTORY);
     let board = ParticipantBoard::join(&board_directory, ticket, participant_count).await?;
-    let result = run_validator_on_board::<B>(
+    let result = tokio::select! {
+        _ = shutdown.cancelled() => Ok(()),
+        result = run_validator_on_board::<B>(
         &board,
         genesis_path,
         signer,
@@ -304,8 +316,8 @@ where
         work_directory,
         output_directory,
         timeout,
-    )
-    .await;
+    ) => result,
+    };
     let shutdown = board.shutdown().await;
     result.and(shutdown)
 }

@@ -35,6 +35,7 @@ use golden_evrf::paper::secp_secq::SecpSecqBackend;
 use golden_halo2curves::golden_group::Secp256k1GoldenGroup;
 use miden_node_store::genesis::GenesisBlock;
 use miden_node_utils::genesis::read_genesis_block;
+use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::Word;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
 use miden_protocol::crypto::hash::rpo::Rpo256;
@@ -345,10 +346,10 @@ struct DealingSet {
 }
 
 /// Runs one DKG ceremony command.
-pub async fn run(options: DkgOptions) -> anyhow::Result<()> {
+pub async fn run(options: DkgOptions, shutdown: CancellationToken) -> anyhow::Result<()> {
     match options.command {
-        DkgCommand::Board(options) => runner::serve_board(options).await,
-        DkgCommand::Run(options) => runner::run_validator(options).await,
+        DkgCommand::Board(options) => runner::serve_board(options, shutdown).await,
+        DkgCommand::Run(options) => runner::run_validator(options, shutdown).await,
         DkgCommand::Identity {
             genesis,
             epoch,
