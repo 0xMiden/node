@@ -50,7 +50,12 @@ use persistence::{
 use upload::upload_artifact_request;
 use upload::{UPLOAD_ALPN, UploadProtocol, upload_artifact};
 
-use super::super::{decode_fixed_hex, durably_create_directory_all};
+use super::super::{
+    decode_fixed_hex,
+    durably_create_directory_all,
+    sync_directory,
+    sync_directory_tree,
+};
 use super::core::{
     ArtifactSlot,
     BoardCore,
@@ -265,6 +270,7 @@ impl BoardNode {
                 "unsupported DKG board format; start a new ceremony in a new data directory"
             );
             let document = runtime.docs.create().await.context("failed to create Iroh document")?;
+            persist_new_document(&document, data_directory).await?;
             let upload_secrets = (0..participant_count)
                 .map(|_| SecretKey::generate().to_bytes())
                 .collect::<Vec<_>>();
@@ -586,6 +592,17 @@ impl BoardNode {
         self.router.shutdown().await.context("failed to stop Iroh board node")?;
         Ok(())
     }
+}
+
+async fn persist_new_document(document: &Doc, data_directory: &Path) -> anyhow::Result<()> {
+    let entries = document
+        .get_many(Query::all())
+        .await
+        .context("failed to commit new Iroh document")?;
+    futures::pin_mut!(entries);
+    entries.next().await.transpose().context("failed to commit new Iroh document")?;
+    sync_directory_tree(&data_directory.join("docs"))?;
+    sync_directory(data_directory)
 }
 
 impl BoardWriter {

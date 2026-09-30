@@ -144,6 +144,26 @@ async fn board_reopens_the_same_document_after_restart() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn board_metadata_points_to_a_committed_document() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let data_directory = root.path().join("host");
+    let runtime = BoardRuntime::start(&data_directory, false).await?;
+    let document = runtime.docs.create().await?;
+    persist_new_document(&document, &data_directory).await?;
+    let metadata_directory = data_directory.join(BOARD_METADATA_DIRECTORY);
+    assert!(!metadata_directory.exists());
+    publish_board_metadata(&metadata_directory, &document, &[[1; 32]; 3])?;
+
+    let snapshot_path = root.path().join("snapshot.redb");
+    fs_err::copy(data_directory.join("docs/docs.redb"), &snapshot_path)?;
+    let mut snapshot = iroh_docs::store::fs::Store::persistent(&snapshot_path)?;
+    snapshot.open_replica(&document.id())?;
+
+    drop(runtime);
+    Ok(())
+}
+
+#[tokio::test]
 async fn board_metadata_is_published_as_one_directory() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     let data_directory = root.path().join("host");
