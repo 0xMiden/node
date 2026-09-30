@@ -37,12 +37,9 @@ use miden_protocol::note::{
 };
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::TransactionHeader;
-use miden_protocol::utils::serde::Deserializable;
 
 use crate::db::migrations::{migrate_database, verify_latest_schema};
-use crate::db::models::conv::SqlTypeConvert;
 use crate::db::models::queries as diesel_queries;
-use crate::db::models::queries::StorageMapValuesPage;
 pub use crate::db::queries::{
     AccountCommitmentsPage,
     HISTORICAL_BLOCK_RETENTION,
@@ -51,6 +48,7 @@ pub use crate::db::queries::{
     PrecomputedPublicAccountStates,
     PublicAccountIdsPage,
     PublicAccountStateRootsPage,
+    StorageMapValuesPage,
 };
 use crate::errors::{DatabaseError, NoteSyncError};
 use crate::genesis::GenesisBlock;
@@ -183,18 +181,6 @@ pub struct AccountVaultValue {
     pub vault_key: AssetId,
     /// None if the asset was removed
     pub asset: Option<Asset>,
-}
-
-impl AccountVaultValue {
-    pub fn from_raw_row(row: (i64, Vec<u8>, Option<Vec<u8>>)) -> Result<Self, DatabaseError> {
-        let (block_num, vault_key, asset) = row;
-        let vault_key = Word::read_from_bytes(&vault_key)?;
-        Ok(Self {
-            block_num: BlockNumber::from_raw_sql(block_num)?,
-            vault_key: AssetId::try_from(vault_key)?,
-            asset: asset.map(|b| miden_node_persistence::decode::<Asset>(&b)).transpose()?,
-        })
-    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -554,7 +540,8 @@ impl Db {
         err,
     )]
     pub async fn select_account(&self, id: AccountId) -> Result<AccountInfo> {
-        self.transact("Get account details", move |conn| diesel_queries::select_account(conn, id))
+        self.reader
+            .read("Get account details", move |tx| queries::select_account(tx, id))
             .await
     }
 
@@ -585,15 +572,18 @@ impl Db {
         &self,
         code_commitment: Word,
     ) -> Result<Option<miden_protocol::account::AccountCode>> {
-        self.transact("Get account code by commitment", move |conn| {
-            diesel_queries::select_account_code_by_commitment(conn, code_commitment)?
-                .map(|bytes| {
-                    miden_node_persistence::decode::<miden_protocol::account::AccountCode>(&bytes)
-                })
-                .transpose()
-                .map_err(DatabaseError::from)
-        })
-        .await
+        self.reader
+            .read("Get account code by commitment", move |tx| {
+                queries::select_account_code_by_commitment(tx, code_commitment)?
+                    .map(|bytes| {
+                        miden_node_persistence::decode::<miden_protocol::account::AccountCode>(
+                            &bytes,
+                        )
+                    })
+                    .transpose()
+                    .map_err(DatabaseError::from)
+            })
+            .await
     }
 
     /// Queries the account header and storage header for a specific account at a block.
@@ -793,15 +783,16 @@ impl Db {
         let block_range = block_range.into_inner();
         let entries_limit = entries_limit.unwrap_or_else(default_storage_map_entries_limit);
 
-        self.transact("select storage map sync values", move |conn| {
-            diesel_queries::select_account_storage_map_values_paged(
-                conn,
-                account_id,
-                block_range,
-                entries_limit,
-            )
-        })
-        .await
+        self.reader
+            .read("select storage map sync values", move |tx| {
+                queries::select_account_storage_map_values_paged(
+                    tx,
+                    account_id,
+                    block_range,
+                    entries_limit,
+                )
+            })
+            .await
     }
 
     /// Reconstructs storage map details from the database for a specific slot at a block.
@@ -924,10 +915,11 @@ impl Db {
         block_range: ScopedBlockRange,
     ) -> Result<(BlockNumber, Vec<AccountVaultValue>)> {
         let block_range = block_range.into_inner();
-        self.transact("account vault sync", move |conn| {
-            diesel_queries::select_account_vault_assets(conn, account_id, block_range)
-        })
-        .await
+        self.reader
+            .read("account vault sync", move |tx| {
+                queries::select_account_vault_assets(tx, account_id, block_range)
+            })
+            .await
     }
 
     /// Returns the script for a note by its root.

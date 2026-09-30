@@ -7,7 +7,7 @@ use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta, MmrProof};
 
 use super::StateView;
 use crate::COMPONENT;
-use crate::db::models::queries::StorageMapValuesPage;
+use crate::db::queries::StorageMapValuesPage;
 use crate::db::{AccountVaultValue, NoteSyncUpdate, NullifierInfo};
 use crate::errors::{DatabaseError, NoteSyncError, StateSyncError};
 

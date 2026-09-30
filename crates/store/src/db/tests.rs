@@ -94,13 +94,14 @@ use crate::account_state_forest::{
     TestAccountStateForestExt,
 };
 use crate::db::models::queries as diesel_queries;
-use crate::db::models::queries::{
-    NOTE_SYNC_BLOCK_OVERHEAD_BYTES,
-    NOTE_SYNC_RECORD_BYTES,
+use crate::db::models::queries::{NOTE_SYNC_BLOCK_OVERHEAD_BYTES, NOTE_SYNC_RECORD_BYTES};
+use crate::db::queries::{
+    self,
+    PrecomputedPublicAccountState,
+    PrecomputedPublicAccountStates,
     StorageMapValue,
     StorageMapValuesPage,
 };
-use crate::db::queries::{self, PrecomputedPublicAccountState, PrecomputedPublicAccountStates};
 use crate::db::{AccountVaultValue, BlockHeaderCommitment, NoteSyncUpdate, Result, TestDb, utils};
 use crate::errors::{DatabaseError, NoteSyncError};
 
@@ -276,18 +277,18 @@ fn select_all_block_header_commitments(db: &TestDb) -> Result<Vec<BlockHeaderCom
 }
 
 fn select_account(db: &TestDb, account_id: AccountId) -> Result<AccountInfo> {
-    diesel_queries::select_account(&mut db.diesel_conn(), account_id)
+    db.read(move |tx| queries::select_account(tx, account_id))
 }
 
 fn select_all_accounts(db: &TestDb) -> Result<Vec<AccountInfo>> {
-    diesel_queries::select_all_accounts(&mut db.diesel_conn())
+    db.read(queries::select_all_accounts)
 }
 
 fn select_account_code_by_commitment(
     db: &TestDb,
     code_commitment: Word,
 ) -> Result<Option<Vec<u8>>> {
-    diesel_queries::select_account_code_by_commitment(&mut db.diesel_conn(), code_commitment)
+    db.read(move |tx| queries::select_account_code_by_commitment(tx, code_commitment))
 }
 
 fn select_latest_storage(db: &TestDb, account_id: AccountId) -> Result<AccountStorage> {
@@ -300,12 +301,9 @@ fn select_account_storage_map_values_paged(
     block_range: RangeInclusive<BlockNumber>,
     limit: usize,
 ) -> Result<StorageMapValuesPage> {
-    diesel_queries::select_account_storage_map_values_paged(
-        &mut db.diesel_conn(),
-        account_id,
-        block_range,
-        limit,
-    )
+    db.read(move |tx| {
+        queries::select_account_storage_map_values_paged(tx, account_id, block_range, limit)
+    })
 }
 
 fn select_account_vault_assets(
@@ -313,7 +311,7 @@ fn select_account_vault_assets(
     account_id: AccountId,
     block_range: RangeInclusive<BlockNumber>,
 ) -> Result<(BlockNumber, Vec<AccountVaultValue>)> {
-    diesel_queries::select_account_vault_assets(&mut db.diesel_conn(), account_id, block_range)
+    db.read(move |tx| queries::select_account_vault_assets(tx, account_id, block_range))
 }
 
 fn select_vault_at_block(

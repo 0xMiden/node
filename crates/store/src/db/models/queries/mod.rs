@@ -31,7 +31,5 @@ mod transactions;
 pub use transactions::*;
 mod block_headers;
 pub(crate) use block_headers::*;
-mod accounts;
-pub use accounts::*;
 mod notes;
 pub(crate) use notes::*;

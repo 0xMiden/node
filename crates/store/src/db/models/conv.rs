@@ -40,7 +40,6 @@ use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::note::NoteTag;
 
 use crate::db::BlockHeaderCommitment;
-use crate::db::models::queries::NetworkAccountType;
 
 #[derive(Debug, thiserror::Error)]
 #[error("failed to convert from database type {from_type} into {into_type}")]
@@ -93,29 +92,6 @@ impl SqlTypeConvert for BlockHeader {
 
     fn to_raw_sql(self) -> Self::Raw {
         miden_node_persistence::encode(&self)
-    }
-}
-
-impl SqlTypeConvert for NetworkAccountType {
-    type Raw = i32;
-
-    fn to_raw_sql(self) -> Self::Raw {
-        match self {
-            NetworkAccountType::None => 0,
-            NetworkAccountType::Network => 1,
-        }
-    }
-
-    fn from_raw_sql(raw: Self::Raw) -> Result<Self, DatabaseTypeConversionError> {
-        #[derive(Debug, thiserror::Error)]
-        #[error("invalid network account type value {0}")]
-        struct ValueError(i32);
-
-        match raw {
-            0 => Ok(Self::None),
-            1 => Ok(Self::Network),
-            other => Err(Self::map_err(ValueError(other))),
-        }
     }
 }
 
