@@ -472,14 +472,20 @@ async fn local_fetch_error_is_reported() -> anyhow::Result<()> {
     let failed_store = FsStore::load(failed_store_directory).await?;
     failed_store.shutdown().await?;
     let hash = Hash::new(b"missing");
+    let slot = ArtifactSlot::Manifest;
     let error = BoardNode::read_fetch_progress(
         failed_store.remote().fetch(streams, hash).stream(),
         hash,
-        &ArtifactSlot::Manifest,
+        &slot,
     )
     .await
     .unwrap_err();
-    assert!(format!("{error:#}").contains("failed to download DKG board blob"));
+    let message = format!("{error:#}");
+    assert!(
+        message
+            .contains(&format!("failed to download DKG board blob {hash} for {}", slot.prefix()))
+    );
+    assert!(message.contains("local failure"), "{message}");
 
     provider.shutdown().await?;
     host.shutdown().await?;
