@@ -77,6 +77,15 @@ fn blob_provider_address(provider: &BoardNode) -> anyhow::Result<EndpointAddr> {
     ))
 }
 
+fn assert_upload_close_reason(error: iroh::endpoint::ConnectionError, expected: &[u8]) {
+    match error {
+        iroh::endpoint::ConnectionError::ApplicationClosed(close) => {
+            assert_eq!(close.reason.as_ref(), expected);
+        },
+        other => panic!("unexpected upload close reason: {other}"),
+    }
+}
+
 async fn connect_blob_provider(host: &BoardNode, provider: &BoardNode) -> anyhow::Result<()> {
     host.router
         .endpoint()
@@ -398,8 +407,77 @@ async fn stalled_headers_do_not_block_authorized_uploads() -> anyhow::Result<()>
 
     let slot = ArtifactSlot::Registration(1);
     let value = b"signed registration";
-    tokio::time::timeout(Duration::from_secs(10), client.publish(&slot, value)).await??;
+    tokio::time::timeout(Duration::from_millis(2500), client.publish(&slot, value)).await??;
+    assert!(stalled.iter().all(|(connection, _)| connection.close_reason().is_none()));
     assert_eq!(host.read_unique(&slot).await?, Some(value.to_vec()));
+
+    drop(stalled);
+    client.shutdown().await?;
+    host.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn upload_header_timeouts_release_admission() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (host, tickets) = BoardNode::create_for_test(&root.path().join("host")).await?;
+    let client =
+        BoardNode::join_for_test(&root.path().join("client"), ticket_for(&tickets, 1)).await?;
+    let (endpoint, target) = match &client.publisher {
+        Publisher::Remote { endpoint, target, .. } => (endpoint, target),
+        Publisher::Local(_) => unreachable!(),
+    };
+    let no_stream = endpoint.connect(target.clone(), UPLOAD_ALPN).await?;
+    let incomplete = endpoint.connect(target.clone(), UPLOAD_ALPN).await?;
+    let (mut send, _recv) = incomplete.open_bi().await?;
+    send.write_all(&[0]).await?;
+
+    let (no_stream_reason, incomplete_reason) =
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(no_stream.closed(), incomplete.closed())
+        })
+        .await?;
+    assert_upload_close_reason(no_stream_reason, b"DKG board upload header timed out");
+    assert_upload_close_reason(incomplete_reason, b"DKG board upload header timed out");
+    client.publish(&ArtifactSlot::Registration(1), b"signed registration").await?;
+
+    client.shutdown().await?;
+    host.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn upload_header_capacity_is_bounded() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (host, tickets) = BoardNode::create_for_test(&root.path().join("host")).await?;
+    let client =
+        BoardNode::join_for_test(&root.path().join("client"), ticket_for(&tickets, 1)).await?;
+    let (endpoint, target) = match &client.publisher {
+        Publisher::Remote { endpoint, target, .. } => (endpoint, target),
+        Publisher::Local(_) => unreachable!(),
+    };
+    let mut stalled = Vec::new();
+    for _ in 0..16 {
+        let connection = endpoint.connect(target.clone(), UPLOAD_ALPN).await?;
+        let (mut send, _recv) = connection.open_bi().await?;
+        send.write_all(&[0]).await?;
+        stalled.push((connection, send));
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let excess = endpoint.connect(target.clone(), UPLOAD_ALPN).await?;
+    let reason = tokio::time::timeout(Duration::from_secs(2), excess.closed()).await?;
+    assert_upload_close_reason(reason, b"too many DKG board upload headers");
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        for (connection, _) in &stalled {
+            assert_upload_close_reason(
+                connection.closed().await,
+                b"DKG board upload header timed out",
+            );
+        }
+    })
+    .await?;
+    client.publish(&ArtifactSlot::Registration(1), b"signed registration").await?;
 
     drop(stalled);
     client.shutdown().await?;
