@@ -1,0 +1,39 @@
+[package]
+authors.workspace      = true
+description            = "Builds the genesis USDCx faucet"
+edition.workspace      = true
+homepage.workspace     = true
+keywords               = ["genesis", "miden", "usdcx"]
+license.workspace      = true
+name                   = "miden-usdcx-genesis"
+publish                = false
+readme                 = "README.md"
+repository.workspace   = true
+rust-version.workspace = true
+version.workspace      = true
+
+[lints]
+workspace = true
+
+[lib]
+doctest = false
+test    = false
+
+[dependencies]
+anyhow          = { workspace = true }
+clap            = { workspace = true }
+fs-err          = { workspace = true }
+hex             = { workspace = true }
+miden-objects   = { workspace = true }
+miden-protocol  = { workspace = true }
+miden-standards = { workspace = true }
+rand            = { workspace = true }
+serde           = { workspace = true }
+serde_json      = { workspace = true }
+thiserror       = { workspace = true }
+xusdc-encoding  = { workspace = true }
+
+[dev-dependencies]
+assert_matches = { workspace = true }
+rstest         = { workspace = true }
+tempfile       = { workspace = true }
