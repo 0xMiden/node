@@ -45,12 +45,12 @@ use crate::db::models::queries as diesel_queries;
 use crate::db::models::queries::StorageMapValuesPage;
 pub use crate::db::models::queries::{
     AccountCommitmentsPage,
-    NullifiersPage,
     PublicAccountIdsPage,
     PublicAccountStateRootsPage,
 };
 pub use crate::db::queries::{
     HISTORICAL_BLOCK_RETENTION,
+    NullifiersPage,
     PrecomputedPublicAccountState,
     PrecomputedPublicAccountStates,
 };
@@ -377,10 +377,11 @@ impl Db {
         page_size: std::num::NonZeroUsize,
         after_nullifier: Option<Nullifier>,
     ) -> Result<NullifiersPage> {
-        self.transact("read nullifiers paged", move |conn| {
-            diesel_queries::select_nullifiers_paged(conn, page_size, after_nullifier)
-        })
-        .await
+        self.reader
+            .read("read nullifiers paged", move |tx| {
+                queries::select_nullifiers_paged(tx, page_size, after_nullifier)
+            })
+            .await
     }
 
     /// Loads the nullifiers that match the prefixes from the DB.
@@ -402,17 +403,18 @@ impl Db {
         let block_range = block_range.into_inner();
         assert_eq!(prefix_len, 16, "Only 16-bit prefixes are supported");
 
-        self.transact("nullifieres by prefix", move |conn| {
-            let nullifier_prefixes =
-                nullifier_prefixes.into_iter().map(|prefix| prefix as u16).collect::<Vec<_>>();
-            diesel_queries::select_nullifiers_by_prefix(
-                conn,
-                prefix_len as u8,
-                &nullifier_prefixes[..],
-                block_range,
-            )
-        })
-        .await
+        self.reader
+            .read("nullifieres by prefix", move |tx| {
+                let nullifier_prefixes =
+                    nullifier_prefixes.into_iter().map(|prefix| prefix as u16).collect::<Vec<_>>();
+                queries::select_nullifiers_by_prefix(
+                    tx,
+                    prefix_len as u8,
+                    &nullifier_prefixes[..],
+                    block_range,
+                )
+            })
+            .await
     }
 
     /// Search for a [`BlockHeader`] from the database by its `block_num`.

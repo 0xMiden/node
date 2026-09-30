@@ -200,7 +200,7 @@ fn prune_history(db: &TestDb, chain_tip: BlockNumber) -> Result<(usize, usize, u
 // opens a fresh diesel connection over the same database file.
 
 fn select_all_nullifiers(db: &TestDb) -> Result<Vec<NullifierInfo>> {
-    diesel_queries::select_all_nullifiers(&mut db.diesel_conn())
+    db.read(queries::select_all_nullifiers)
 }
 
 fn select_nullifiers_by_prefix(
@@ -209,12 +209,10 @@ fn select_nullifiers_by_prefix(
     nullifier_prefixes: &[u16],
     block_range: RangeInclusive<BlockNumber>,
 ) -> Result<(Vec<NullifierInfo>, BlockNumber)> {
-    diesel_queries::select_nullifiers_by_prefix(
-        &mut db.diesel_conn(),
-        prefix_len,
-        nullifier_prefixes,
-        block_range,
-    )
+    let nullifier_prefixes = nullifier_prefixes.to_vec();
+    db.read(move |tx| {
+        queries::select_nullifiers_by_prefix(tx, prefix_len, &nullifier_prefixes, block_range)
+    })
 }
 
 fn select_notes_since_block_by_tag(
