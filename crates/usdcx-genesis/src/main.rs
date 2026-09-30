@@ -1,15 +1,15 @@
-//! `xusdc-genesis` — builds the genesis xUSDC faucet and its distributor offline and writes
+//! `miden-usdcx-genesis` — builds the genesis xUSDC faucet and its distributor offline and writes
 //! their `.mac` account files. Every command reads and writes the current directory under the
 //! well-known file names (each input can be pointed elsewhere). The four commands, in launch
 //! order:
 //!
 //! ```text
-//! cargo run -p xusdc-genesis -- new-distributor [--auth-scheme <scheme>]      # writes distributor.mac
-//! cargo run -p xusdc-genesis -- faucet [--config config.json]                 # writes usdcx-faucet.mac
-//! cargo run -p xusdc-genesis -- prefund [--faucet usdcx-faucet.mac] [--distributor distributor.mac]
-//!                                                                             # writes distributor.genesis.mac
-//! cargo run -p xusdc-genesis -- record-nonces [--faucet usdcx-faucet.mac] [--nonces nonces.json]
-//!                                                                             # writes usdcx-faucet.genesis.mac
+//! cargo run -p miden-usdcx-genesis -- new-distributor [--auth-scheme <scheme>]      # writes distributor.mac
+//! cargo run -p miden-usdcx-genesis -- faucet [--config config.json]                 # writes usdcx-faucet.mac
+//! cargo run -p miden-usdcx-genesis -- prefund [--faucet usdcx-faucet.mac] [--distributor distributor.mac]
+//!                                                                                   # writes distributor.genesis.mac
+//! cargo run -p miden-usdcx-genesis -- record-nonces [--faucet usdcx-faucet.mac] [--nonces nonces.json]
+//!                                                                                   # writes usdcx-faucet.genesis.mac
 //! ```
 //!
 //! Exit 0 = the account file written. The id listing goes to stdout. No command overwrites an
@@ -21,9 +21,14 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use miden_objects::account_file::AccountFile;
 use miden_protocol::account::auth::AuthScheme;
-use xusdc_genesis::accounts::{build_faucet, new_distributor, prefund_distributor, record_nonces};
-use xusdc_genesis::config::{GenesisToolConfig, UsedNoncesFile};
-use xusdc_genesis::output::{
+use miden_usdcx_genesis::accounts::{
+    build_faucet,
+    new_distributor,
+    prefund_distributor,
+    record_nonces,
+};
+use miden_usdcx_genesis::config::{GenesisToolConfig, UsedNoncesFile};
+use miden_usdcx_genesis::output::{
     CONFIG_FILE,
     DISTRIBUTOR_MAC_FILE,
     FAUCET_MAC_FILE,

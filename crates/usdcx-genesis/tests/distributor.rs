@@ -6,8 +6,8 @@ use miden_objects::account_file::AccountFile;
 use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
 use miden_protocol::{Word, ZERO};
 use miden_standards::account::auth::AuthSingleSig;
+use miden_usdcx_genesis::accounts::{new_distributor, new_distributor_with};
 use rstest::rstest;
-use xusdc_genesis::accounts::{new_distributor, new_distributor_with};
 
 use crate::common::DISTRIBUTOR_SEED;
 

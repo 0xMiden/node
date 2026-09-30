@@ -1,4 +1,4 @@
-# xusdc-genesis
+# miden-usdcx-genesis
 
 Builds the genesis xUSDC faucet and its distributor **offline** — before any network exists — and writes their `.mac`
 account files. The faucet id hashes the account seed plus the code and storage commitments (no chain state), so the id
@@ -13,10 +13,10 @@ the network runs.
 ## Install
 
 ```sh
-cargo install --path crates/xusdc-genesis --locked    # add --force to reinstall after pulling
+cargo install --path crates/usdcx-genesis --locked    # add --force to reinstall after pulling
 ```
 
-`xusdc-genesis` is then on `PATH`; `cargo run -p xusdc-genesis --` from the repo works the same.
+`miden-usdcx-genesis` is then on `PATH`; `cargo run -p miden-usdcx-genesis --` from the repo works the same.
 
 ## Usage
 
@@ -25,12 +25,12 @@ point elsewhere) and writes one new file. No command overwrites an existing file
 away first. Start from copies of the crate's two templates, then run the four commands in launch order:
 
 ```sh
-cp <repo>/crates/xusdc-genesis/config.template.json config.json    # then replace every <...> value
-cp <repo>/crates/xusdc-genesis/nonces.template.json nonces.json    # then list the deposit nonces
-xusdc-genesis new-distributor [--auth-scheme ecdsa-k256-keccak|falcon512-poseidon2]
-xusdc-genesis faucet [--config config.json]
-xusdc-genesis prefund [--faucet usdcx-faucet.mac] [--distributor distributor.mac]
-xusdc-genesis record-nonces [--faucet usdcx-faucet.mac] [--nonces nonces.json]
+cp <repo>/crates/usdcx-genesis/config.template.json config.json    # then replace every <...> value
+cp <repo>/crates/usdcx-genesis/nonces.template.json nonces.json    # then list the deposit nonces
+miden-usdcx-genesis new-distributor [--auth-scheme ecdsa-k256-keccak|falcon512-poseidon2]
+miden-usdcx-genesis faucet [--config config.json]
+miden-usdcx-genesis prefund [--faucet usdcx-faucet.mac] [--distributor distributor.mac]
+miden-usdcx-genesis record-nonces [--faucet usdcx-faucet.mac] [--nonces nonces.json]
 ```
 
 1. `new-distributor` generates a fresh public basic wallet with a new signing key (ECDSA secp256k1/keccak by default,

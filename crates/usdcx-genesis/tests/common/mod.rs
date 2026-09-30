@@ -9,8 +9,8 @@ use miden_protocol::account::Account;
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_protocol::utils::serde::Deserializable;
-use xusdc_genesis::accounts::{build_faucet, new_distributor_with};
-use xusdc_genesis::config::{ConfigError, GenesisToolConfig, Role, UsedNoncesFile};
+use miden_usdcx_genesis::accounts::{build_faucet, new_distributor_with};
+use miden_usdcx_genesis::config::{ConfigError, GenesisToolConfig, Role, UsedNoncesFile};
 
 /// The dev faucet seed (`0x07` repeated).
 pub const FAUCET_SEED: [u8; 32] = [7; 32];

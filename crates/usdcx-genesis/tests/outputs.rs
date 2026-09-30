@@ -3,7 +3,7 @@
 mod common;
 
 use miden_objects::account_file::AccountFile;
-use xusdc_genesis::output::{
+use miden_usdcx_genesis::output::{
     DISTRIBUTOR_MAC_FILE,
     FAUCET_MAC_FILE,
     read_account_file,

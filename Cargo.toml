@@ -20,8 +20,8 @@ members = [
   "crates/test-macro",
   "crates/tracing",
   "crates/tracing-macro",
+  "crates/usdcx-genesis",
   "crates/utils",
-  "crates/xusdc-genesis",
   "proto",
   "xtask",
 ]
