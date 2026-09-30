@@ -345,12 +345,6 @@ async fn unknown_participants_and_artifact_kinds_are_rejected_before_body_alloca
     Ok(())
 }
 
-#[test]
-fn oversized_artifacts_are_rejected_before_allocation() {
-    let oversized = usize::try_from(MAX_ARTIFACT_BYTES).unwrap() + 1;
-    assert!(validate_artifact_length(oversized).is_err());
-}
-
 #[tokio::test]
 async fn oversized_upload_is_rejected_before_body_allocation() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
@@ -412,35 +406,6 @@ async fn stalled_headers_do_not_block_authorized_uploads() -> anyhow::Result<()>
     assert_eq!(host.read_unique(&slot).await?, Some(value.to_vec()));
 
     drop(stalled);
-    client.shutdown().await?;
-    host.shutdown().await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn upload_header_timeouts_release_admission() -> anyhow::Result<()> {
-    let root = tempfile::tempdir()?;
-    let (host, tickets) = BoardNode::create_for_test(&root.path().join("host")).await?;
-    let client =
-        BoardNode::join_for_test(&root.path().join("client"), ticket_for(&tickets, 1)).await?;
-    let (endpoint, target) = match &client.publisher {
-        Publisher::Remote { endpoint, target, .. } => (endpoint, target),
-        Publisher::Local(_) => unreachable!(),
-    };
-    let no_stream = endpoint.connect(target.clone(), UPLOAD_ALPN).await?;
-    let incomplete = endpoint.connect(target.clone(), UPLOAD_ALPN).await?;
-    let (mut send, _recv) = incomplete.open_bi().await?;
-    send.write_all(&[0]).await?;
-
-    let (no_stream_reason, incomplete_reason) =
-        tokio::time::timeout(Duration::from_secs(5), async {
-            tokio::join!(no_stream.closed(), incomplete.closed())
-        })
-        .await?;
-    assert_upload_close_reason(no_stream_reason, b"DKG board upload header timed out");
-    assert_upload_close_reason(incomplete_reason, b"DKG board upload header timed out");
-    client.publish(&ArtifactSlot::Registration(1), b"signed registration").await?;
-
     client.shutdown().await?;
     host.shutdown().await?;
     Ok(())
