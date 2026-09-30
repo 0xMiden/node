@@ -459,9 +459,7 @@ async fn upload_header_capacity_is_bounded() -> anyhow::Result<()> {
     let mut stalled = Vec::new();
     for _ in 0..16 {
         let connection = endpoint.connect(target.clone(), UPLOAD_ALPN).await?;
-        let (mut send, _recv) = connection.open_bi().await?;
-        send.write_all(&[0]).await?;
-        stalled.push((connection, send));
+        stalled.push(connection);
     }
     tokio::time::sleep(Duration::from_millis(100)).await;
     let excess = endpoint.connect(target.clone(), UPLOAD_ALPN).await?;
@@ -469,7 +467,7 @@ async fn upload_header_capacity_is_bounded() -> anyhow::Result<()> {
     assert_upload_close_reason(reason, b"too many DKG board upload headers");
 
     tokio::time::timeout(Duration::from_secs(5), async {
-        for (connection, _) in &stalled {
+        for connection in &stalled {
             assert_upload_close_reason(
                 connection.closed().await,
                 b"DKG board upload header timed out",
