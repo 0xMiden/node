@@ -210,11 +210,11 @@ fixture flag skips the separate bootstrap ceremony, so the command runs only the
 
 ```bash
 make docker-build-validator
-MIDEN_VALIDATOR_USE_STORAGE_KEY_FIXTURE=true \
-docker compose --profile storage-key-dkg run --rm storage-key-dkg-check
+make local-network-check-storage-key-dkg
 ```
 
-This runs the production proof backend and can take several minutes.
+The check uses the fixture for bootstrap, runs the production proof backend, and removes its Compose containers when it
+finishes. It can take several minutes.
 
 ## Check the RPC API
 
