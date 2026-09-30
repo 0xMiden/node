@@ -43,8 +43,8 @@ impl NetworkAccountEffect {
         match update {
             AccountUpdateDetails::Private => None,
             AccountUpdateDetails::Public(patch) => {
-                // Updates carry no storage we can inspect here. Forward them as updates and let the
-                // coordinator's actor registry filter to known network accounts.
+                // Updates carry no storage we can inspect here. Forward them as updates;
+                // `apply_committed_block` drops the ones whose account is not tracked locally.
                 Some(Self::Updated(patch.clone()))
             },
         }

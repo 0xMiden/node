@@ -124,9 +124,7 @@ prover, runs `create-proofs` then `run-benchmark`, and tears everything down on 
 `$PATH`:
 
 ```sh
-make install-node install-validator install-ntx-builder install-remote-prover install-benchmark
-git submodule update --init --recursive
-cargo install --locked --path vendor/miden-usdcx/crates/xusdc-genesis
+make install-node install-validator install-ntx-builder install-remote-prover install-benchmark install-usdcx-genesis
 
 scripts/bench-local.sh                       # 5 tx pairs, local prover
 N_TXS=20 scripts/bench-local.sh              # 20 tx pairs

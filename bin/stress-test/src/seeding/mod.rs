@@ -234,7 +234,9 @@ pub async fn seed_store_with_readers(
     );
     let genesis_block = genesis_state.into_block().expect("genesis block should be created");
     let genesis_header = genesis_block.inner().header().clone();
-    State::bootstrap(genesis_block, &data_directory).expect("store should bootstrap");
+    State::bootstrap(genesis_block, &data_directory)
+        .await
+        .expect("store should bootstrap");
 
     let (state, mut block_writer, writer_task) = load_state(data_directory.clone()).await;
 

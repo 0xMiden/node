@@ -140,7 +140,7 @@ fn fixture_at_block(block_num: u32) -> (SendNoteWithProofRequest, GetBlockHeader
     fixture_for_note(block_num, note(1, 7))
 }
 
-fn fixture_for_note(
+pub(super) fn fixture_for_note(
     block_num: u32,
     note: TransportNote,
 ) -> (SendNoteWithProofRequest, GetBlockHeaderByNumberResponse) {
@@ -192,20 +192,9 @@ async fn verified_submission_stores_inclusion_block_and_preserves_duplicates() {
     let (_dir, server) = server(Config::new(url));
     SendNoteWithProof::full(&server, Request::new(request.clone())).await.unwrap();
     let first = fetched(&server).await;
-    assert_eq!(first.notes[0].after_block_num, None);
-    let mut expected = fetched_note(request.note.clone().unwrap(), None);
-    expected.committed_in_block = Some(BlockNumber { block_num: 42 });
+    let expected = fetched_note(request.note.clone().unwrap(), 42);
     assert_eq!(first.notes, vec![expected]);
     SendNoteWithProof::full(&server, Request::new(request.clone())).await.unwrap();
-    SendNote::full(
-        &server,
-        Request::new(SendNoteRequest {
-            note: request.note.clone(),
-            after_block_num: Some(BlockNumber { block_num: 10 }),
-        }),
-    )
-    .await
-    .unwrap();
     let mut invalid = request;
     invalid.inclusion_proof.as_mut().unwrap().note_index_in_block ^= 1;
     assert_eq!(
@@ -215,28 +204,6 @@ async fn verified_submission_stores_inclusion_block_and_preserves_duplicates() {
             .code(),
         tonic::Code::InvalidArgument
     );
-    assert_eq!(fetched(&server).await, first);
-    upstream.abort();
-}
-
-#[tokio::test]
-async fn verified_retry_preserves_unverified_envelope() {
-    let (request, response) = fixture();
-    let (url, upstream) = node_rpc(Ok(response), Duration::ZERO).await;
-    let (_dir, server) = server(Config::new(url));
-    SendNote::full(
-        &server,
-        Request::new(SendNoteRequest {
-            note: request.note.clone(),
-            after_block_num: Some(BlockNumber { block_num: 10 }),
-        }),
-    )
-    .await
-    .unwrap();
-    let first = fetched(&server).await;
-    assert_eq!(first.notes[0].after_block_num, Some(BlockNumber { block_num: 10 }));
-    assert_eq!(first.notes[0].committed_in_block, None);
-    SendNoteWithProof::full(&server, Request::new(request)).await.unwrap();
     assert_eq!(fetched(&server).await, first);
     upstream.abort();
 }
@@ -378,14 +345,16 @@ async fn proof_submission_roundtrips_over_grpc_and_web() {
     let frame = response.bytes().await.unwrap();
     assert_eq!(frame[0], 0);
     let length = u32::from_be_bytes(frame[1..5].try_into().unwrap()) as usize;
-    assert_eq!(SendNoteResponse::decode(&frame[5..5 + length]).unwrap(), SendNoteResponse {});
+    assert_eq!(
+        SendNoteWithProofResponse::decode(&frame[5..5 + length]).unwrap(),
+        SendNoteWithProofResponse {}
+    );
     let page = client
         .fetch_notes(FetchNotesRequest { tags: vec![7], cursor: None })
         .await
         .unwrap()
         .into_inner();
     assert_eq!(page.notes.len(), 1);
-    assert_eq!(page.notes[0].after_block_num, None);
     assert_eq!(page.notes[0].committed_in_block, Some(BlockNumber { block_num: 42 }));
     drop(client);
     shutdown.cancel();
