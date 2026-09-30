@@ -17,16 +17,23 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use miden_objects::account_file::AccountFile;
 use miden_protocol::account::auth::AuthScheme;
 use xusdc_genesis::accounts::{build_faucet, new_distributor, prefund_distributor, record_nonces};
 use xusdc_genesis::config::{GenesisToolConfig, UsedNoncesFile};
 use xusdc_genesis::output::{
-    read_account_file, render_ids, render_listing, write_account_file, CONFIG_FILE,
-    DISTRIBUTOR_MAC_FILE, FAUCET_MAC_FILE, GENESIS_DISTRIBUTOR_MAC_FILE, GENESIS_FAUCET_MAC_FILE,
+    CONFIG_FILE,
+    DISTRIBUTOR_MAC_FILE,
+    FAUCET_MAC_FILE,
+    GENESIS_DISTRIBUTOR_MAC_FILE,
+    GENESIS_FAUCET_MAC_FILE,
     NONCES_FILE,
+    read_account_file,
+    render_ids,
+    render_listing,
+    write_account_file,
 };
 
 /// Builds the genesis xUSDC faucet and its distributor offline, writes their .mac account files
@@ -39,8 +46,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Generates a fresh public basic wallet with a new signing key and writes it, key included,
-    /// as distributor.mac (undeployed: nonce zero, empty vault).
+    /// Generates a fresh public basic wallet with a new signing key and writes it, key included, as
+    /// distributor.mac (undeployed: nonce zero, empty vault).
     NewDistributor {
         /// The signing scheme of the generated key.
         #[arg(long, value_enum, default_value_t = AuthSchemeArg::EcdsaK256Keccak)]
@@ -53,8 +60,8 @@ enum Command {
         #[arg(long, default_value = CONFIG_FILE)]
         config: PathBuf,
     },
-    /// Gives the distributor the faucet's whole recorded token supply and writes it, key
-    /// included, as the genesis-ready distributor.genesis.mac (nonce one, no seed).
+    /// Gives the distributor the faucet's whole recorded token supply and writes it, key included,
+    /// as the genesis-ready distributor.genesis.mac (nonce one, no seed).
     Prefund {
         /// The faucet file written by `faucet`.
         #[arg(long, default_value = FAUCET_MAC_FILE)]
@@ -63,8 +70,8 @@ enum Command {
         #[arg(long, default_value = DISTRIBUTOR_MAC_FILE)]
         distributor: PathBuf,
     },
-    /// Records the Circle deposit nonces in the JSON file as consumed and writes the result as
-    /// the genesis-ready usdcx-faucet.genesis.mac.
+    /// Records the Circle deposit nonces in the JSON file as consumed and writes the result as the
+    /// genesis-ready usdcx-faucet.genesis.mac.
     RecordNonces {
         /// The faucet file written by `faucet`.
         #[arg(long, default_value = FAUCET_MAC_FILE)]
@@ -95,10 +102,7 @@ fn main() -> Result<()> {
     match Cli::parse().command {
         Command::NewDistributor { auth_scheme } => run_new_distributor(auth_scheme.into()),
         Command::Faucet { config } => run_faucet(&config),
-        Command::Prefund {
-            faucet,
-            distributor,
-        } => run_prefund(&faucet, &distributor),
+        Command::Prefund { faucet, distributor } => run_prefund(&faucet, &distributor),
         Command::RecordNonces { faucet, nonces } => run_record_nonces(&faucet, &nonces),
     }
 }
@@ -121,10 +125,7 @@ fn run_faucet(config_path: &Path) -> Result<()> {
     let config = GenesisToolConfig::load(config_path)
         .with_context(|| format!("loading the config from {}", config_path.display()))?;
     let faucet = build_faucet(&config).context("building the genesis faucet")?;
-    write_account_file(
-        &AccountFile::new(faucet.clone(), Vec::new()),
-        Path::new(FAUCET_MAC_FILE),
-    )?;
+    write_account_file(&AccountFile::new(faucet.clone(), Vec::new()), Path::new(FAUCET_MAC_FILE))?;
     print!("{}", render_listing(&faucet, &config));
     println!("written to {FAUCET_MAC_FILE}");
     Ok(())
@@ -174,10 +175,7 @@ fn run_record_nonces(faucet_path: &Path, nonces_path: &Path) -> Result<()> {
     print!(
         "{}",
         render_ids(
-            &format!(
-                "usdcx-faucet ({GENESIS_FAUCET_MAC_FILE}, {} nonces recorded)",
-                nonces.len()
-            ),
+            &format!("usdcx-faucet ({GENESIS_FAUCET_MAC_FILE}, {} nonces recorded)", nonces.len()),
             recorded.id(),
         )
     );

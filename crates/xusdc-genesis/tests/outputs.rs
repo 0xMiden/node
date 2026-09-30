@@ -4,7 +4,10 @@ mod common;
 
 use miden_objects::account_file::AccountFile;
 use xusdc_genesis::output::{
-    read_account_file, write_account_file, DISTRIBUTOR_MAC_FILE, FAUCET_MAC_FILE,
+    DISTRIBUTOR_MAC_FILE,
+    FAUCET_MAC_FILE,
+    read_account_file,
+    write_account_file,
 };
 
 use crate::common::{fresh_distributor, genesis_faucet};
@@ -20,10 +23,7 @@ fn the_faucet_file_round_trips_without_keys() {
 
     let file = read_account_file(&path).expect("the faucet file must load");
     assert_eq!(file.account(), &faucet);
-    assert!(
-        file.auth_secret_keys().is_empty(),
-        "the faucet file carries no keys"
-    );
+    assert!(file.auth_secret_keys().is_empty(), "the faucet file carries no keys");
 }
 
 /// The distributor file keeps its key and is readable by its owner only.
@@ -44,10 +44,7 @@ fn the_distributor_file_keeps_the_key_and_is_private() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-        let mode = std::fs::metadata(&path)
-            .expect("the file has metadata")
-            .permissions()
-            .mode();
+        let mode = std::fs::metadata(&path).expect("the file has metadata").permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "a key-bearing file is owner-only");
     }
 }

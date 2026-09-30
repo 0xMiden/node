@@ -7,8 +7,8 @@ use miden_protocol::account::AccountId;
 use miden_protocol::asset::AssetAmount;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_protocol::utils::serde::Deserializable;
-use serde::de::{DeserializeOwned, Deserializer, Error as _};
 use serde::Deserialize;
+use serde::de::{DeserializeOwned, Deserializer, Error as _};
 use xusdc_encoding::xreserve::encoding::{CircleDomain, DepositNonce};
 
 // ROLES
@@ -60,9 +60,9 @@ pub struct GenesisToolConfig {
     pub faucet: FaucetConfig,
 }
 
-/// The role holders' account ids, each id given as `0x`-prefixed hex or as bech32. `owner` is
-/// the single `ADMIN` holder; the four operational roles take a list of zero or more holders
-/// (absent means empty — the role is populated later through the standard role-action note).
+/// The role holders' account ids, each id given as `0x`-prefixed hex or as bech32. `owner` is the
+/// single `ADMIN` holder; the four operational roles take a list of zero or more holders (absent
+/// means empty — the role is populated later through the standard role-action note).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoleAccounts {
@@ -91,16 +91,16 @@ impl RoleAccounts {
     }
 }
 
-/// The faucet's account seed and the `XReserveStablecoinBuilder` inputs that are not role
-/// account ids; amounts are base units.
+/// The faucet's account seed and the `XReserveStablecoinBuilder` inputs that are not role account
+/// ids; amounts are base units.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FaucetConfig {
     /// The faucet's 32-byte account seed, as a hex string.
     #[serde(deserialize_with = "seed")]
     pub seed: [u8; 32],
-    /// The initial supply, validated as an [`AssetAmount`] at parse time so it cannot exceed
-    /// the hardcoded supply cap.
+    /// The initial supply, validated as an [`AssetAmount`] at parse time so it cannot exceed the
+    /// hardcoded supply cap.
     #[serde(deserialize_with = "asset_amount")]
     pub token_supply: AssetAmount,
     /// The Circle domain id.
@@ -153,10 +153,8 @@ impl UsedNoncesFile {
 
 /// Reads and parses the JSON file at `path`.
 fn load_json<T: DeserializeOwned>(path: &Path) -> Result<T, ConfigError> {
-    let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    let text = std::fs::read_to_string(path)
+        .map_err(|source| ConfigError::Io { path: path.to_path_buf(), source })?;
     serde_json::from_str(&text).map_err(ConfigError::Parse)
 }
 
@@ -168,20 +166,14 @@ fn asset_amount<'de, D: Deserializer<'de>>(deserializer: D) -> Result<AssetAmoun
 /// Deserializes an account id from its hex or bech32 string.
 fn account_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<AccountId, D::Error> {
     let text = String::deserialize(deserializer)?;
-    AccountId::parse(&text)
-        .map(|(id, _network)| id)
-        .map_err(D::Error::custom)
+    AccountId::parse(&text).map(|(id, _network)| id).map_err(D::Error::custom)
 }
 
 /// Deserializes a list of account ids from their hex or bech32 strings.
 fn account_ids<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<AccountId>, D::Error> {
     Vec::<String>::deserialize(deserializer)?
         .iter()
-        .map(|text| {
-            AccountId::parse(text)
-                .map(|(id, _network)| id)
-                .map_err(D::Error::custom)
-        })
+        .map(|text| AccountId::parse(text).map(|(id, _network)| id).map_err(D::Error::custom))
         .collect()
 }
 
@@ -227,12 +219,9 @@ fn used_nonces<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<Deposit
 pub enum ConfigError {
     /// The file could not be read.
     #[error("reading the input file {}", .path.display())]
-    Io {
-        path: PathBuf,
-        source: std::io::Error,
-    },
-    /// The JSON does not match the schema: a malformed value (an account id, an attester key,
-    /// the seed, a nonce) or an unknown field.
+    Io { path: PathBuf, source: std::io::Error },
+    /// The JSON does not match the schema: a malformed value (an account id, an attester key, the
+    /// seed, a nonce) or an unknown field.
     #[error("the JSON does not match the schema")]
     Parse(#[source] serde_json::Error),
 }

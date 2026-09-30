@@ -1,6 +1,6 @@
-//! The `.mac` file boundary — reading account files and writing them without ever overwriting —
-//! the well-known file names every command works with in the current directory, and the stdout
-//! id listings.
+//! The `.mac` file boundary — reading account files and writing them without ever overwriting — the
+//! well-known file names every command works with in the current directory, and the stdout id
+//! listings.
 
 use std::fmt::Write as _;
 use std::fs::OpenOptions;
@@ -27,16 +27,16 @@ pub const DISTRIBUTOR_MAC_FILE: &str = "distributor.mac";
 /// The faucet `faucet` writes and `prefund` / `record-nonces` read.
 pub const FAUCET_MAC_FILE: &str = "usdcx-faucet.mac";
 
-/// The prefunded distributor `prefund` writes: the `path` of its `[[account]]` entry in the
-/// network operator's genesis config, and the funding service's account file.
+/// The prefunded distributor `prefund` writes: the `path` of its `[[account]]` entry in the network
+/// operator's genesis config, and the funding service's account file.
 pub const GENESIS_DISTRIBUTOR_MAC_FILE: &str = "distributor.genesis.mac";
 
 /// The faucet with the deposit nonces recorded that `record-nonces` writes: the value of the
 /// `native_faucet` key in the network operator's genesis config.
 pub const GENESIS_FAUCET_MAC_FILE: &str = "usdcx-faucet.genesis.mac";
 
-/// Writes `file` to `path`, refusing to overwrite an existing file. A file carrying secret keys
-/// is created readable by its owner only.
+/// Writes `file` to `path`, refusing to overwrite an existing file. A file carrying secret keys is
+/// created readable by its owner only.
 pub fn write_account_file(file: &AccountFile, path: &Path) -> Result<()> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
@@ -48,10 +48,7 @@ pub fn write_account_file(file: &AccountFile, path: &Path) -> Result<()> {
     options
         .open(path)
         .with_context(|| {
-            format!(
-                "creating {} (an existing file is never overwritten)",
-                path.display()
-            )
+            format!("creating {} (an existing file is never overwritten)", path.display())
         })?
         .write_all(&file.to_bytes())
         .with_context(|| format!("writing {}", path.display()))
@@ -64,8 +61,8 @@ pub fn read_account_file(path: &Path) -> Result<AccountFile> {
         .with_context(|| format!("{} is not an account file", path.display()))
 }
 
-/// Renders an account id under `label`: hex, its bech32 form on each network, and its bytes32
-/// form (the id as an xReserve wire field, e.g. the deposit's `remoteRecipient`).
+/// Renders an account id under `label`: hex, its bech32 form on each network, and its bytes32 form
+/// (the id as an xReserve wire field, e.g. the deposit's `remoteRecipient`).
 pub fn render_ids(label: &str, id: AccountId) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "{label}");
@@ -86,12 +83,7 @@ pub fn render_listing(faucet: &Account, config: &GenesisToolConfig) -> String {
     let mut out = render_ids(&format!("usdcx-faucet ({FAUCET_MAC_FILE})"), faucet.id());
     let _ = writeln!(out, "role accounts:");
     for role in Role::ALL {
-        let members: Vec<String> = config
-            .accounts
-            .get(role)
-            .iter()
-            .map(|id| id.to_hex())
-            .collect();
+        let members: Vec<String> = config.accounts.get(role).iter().map(|id| id.to_hex()).collect();
         let _ = writeln!(out, "  {}: {}", role.as_str(), members.join(", "));
     }
     out

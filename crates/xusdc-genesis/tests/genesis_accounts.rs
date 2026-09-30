@@ -16,19 +16,14 @@ use xusdc_genesis::accounts::build_faucet;
 
 use crate::common::Fixture;
 
-/// The faucet is a genesis account (nonce one, no seed) whose fee-asset slot holds its OWN
-/// asset.
+/// The faucet is a genesis account (nonce one, no seed) whose fee-asset slot holds its OWN asset.
 #[test]
 fn the_faucet_is_a_native_fee_genesis_account() {
     let fixture = Fixture::new();
     let config = fixture.config();
     let faucet = build_faucet(&config).expect("the dev fixture must build");
 
-    assert_eq!(
-        faucet.nonce(),
-        Felt::ONE,
-        "a genesis faucet carries nonce one"
-    );
+    assert_eq!(faucet.nonce(), Felt::ONE, "a genesis faucet carries nonce one");
     assert!(faucet.seed().is_none(), "a genesis faucet carries no seed");
     assert_eq!(
         faucet
@@ -66,8 +61,8 @@ fn the_configured_attesters_are_allowlisted_in_storage() {
     }
 }
 
-/// The built faucet records the configured token supply as issued: `prefund` hands exactly
-/// that amount to the distributor.
+/// The built faucet records the configured token supply as issued: `prefund` hands exactly that
+/// amount to the distributor.
 #[test]
 fn the_faucet_records_the_configured_supply() {
     let fixture = Fixture::new();
@@ -93,10 +88,7 @@ fn a_multi_holder_role_builds_with_every_member_seeded() {
     let mut fixture = Fixture::new();
     let existing = fixture.json["accounts"]["pausers"][0].clone();
     fixture.json["accounts"]["pausers"] = serde_json::Value::from(vec![
-        existing
-            .as_str()
-            .expect("the fixture pauser is a string")
-            .to_string(),
+        existing.as_str().expect("the fixture pauser is a string").to_string(),
         extra_pauser.to_string(),
     ]);
     let config = fixture.config();
@@ -104,12 +96,8 @@ fn a_multi_holder_role_builds_with_every_member_seeded() {
 
     let role = RoleSymbol::new("DOM_PAUSER").expect("DOM_PAUSER is a valid role symbol");
     for pauser in &config.accounts.pausers {
-        let key = Word::from([
-            Felt::ZERO,
-            Felt::from(&role),
-            pauser.suffix(),
-            pauser.prefix().as_felt(),
-        ]);
+        let key =
+            Word::from([Felt::ZERO, Felt::from(&role), pauser.suffix(), pauser.prefix().as_felt()]);
         assert_eq!(
             faucet
                 .storage()

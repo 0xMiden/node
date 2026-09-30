@@ -9,8 +9,14 @@ use xusdc_encoding::xreserve::encoding::{CircleDomain, DepositNonce};
 use xusdc_genesis::config::{ConfigError, GenesisToolConfig, Role, UsedNoncesFile};
 
 use crate::common::{
-    attester_keys, role_id_hex, to_hex, Fixture, NoncesFixture, ATTESTER_KEY_BYTES, TOKEN_SUPPLY,
+    ATTESTER_KEY_BYTES,
+    Fixture,
+    NoncesFixture,
+    TOKEN_SUPPLY,
     USED_NONCE_BYTES,
+    attester_keys,
+    role_id_hex,
+    to_hex,
 };
 
 /// The dev fixture parses, and the typed config reflects it.
@@ -29,20 +35,12 @@ fn the_dev_fixture_round_trips() {
             .iter()
             .map(|key| key.to_commitment())
             .collect::<Vec<_>>(),
-        attester_keys()
-            .iter()
-            .map(|key| key.to_commitment())
-            .collect::<Vec<_>>(),
+        attester_keys().iter().map(|key| key.to_commitment()).collect::<Vec<_>>(),
         "the attester keys must decode from their configured SEC1 bytes",
     );
     for role in Role::ALL {
         let members = config.accounts.get(role);
-        assert_eq!(
-            members.len(),
-            1,
-            "the {} fixture seeds one holder",
-            role.as_str()
-        );
+        assert_eq!(members.len(), 1, "the {} fixture seeds one holder", role.as_str());
         assert_eq!(
             members[0].to_hex(),
             role_id_hex(role),
@@ -66,8 +64,8 @@ fn a_bech32_account_id_is_accepted() {
     );
 }
 
-/// Asserts a parse rejection whose message names the actual cause, so the test cannot pass on
-/// an unrelated schema violation.
+/// Asserts a parse rejection whose message names the actual cause, so the test cannot pass on an
+/// unrelated schema violation.
 fn assert_parse_error_contains(err: ConfigError, needle: &str) {
     assert_matches!(err, ConfigError::Parse(source) => {
         assert!(
@@ -83,16 +81,11 @@ fn assert_parse_error_contains(err: ConfigError, needle: &str) {
 fn a_malformed_account_id_is_rejected() {
     for (bad_id, cause) in [
         ("0xnothex", "failed to parse hex string into account ID"),
-        (
-            "definitely-not-bech32",
-            "failed to decode bech32 string into account ID",
-        ),
+        ("definitely-not-bech32", "failed to decode bech32 string into account ID"),
     ] {
         let mut fixture = Fixture::new();
         fixture.json["accounts"]["owner"] = serde_json::Value::from(bad_id);
-        let err = fixture
-            .parse()
-            .expect_err("a malformed account id must be rejected");
+        let err = fixture.parse().expect_err("a malformed account id must be rejected");
         assert_parse_error_contains(err, cause);
     }
 }
@@ -111,9 +104,8 @@ fn an_absent_attester_list_is_an_empty_allowlist() {
     );
 }
 
-/// An attester key that is not a valid 33-byte compressed secp256k1 point is rejected, with a
-/// wrong length named: a 20-byte value, a truncated key, and a key with an invalid SEC1 tag
-/// byte.
+/// An attester key that is not a valid 33-byte compressed secp256k1 point is rejected, with a wrong
+/// length named: a 20-byte value, a truncated key, and a key with an invalid SEC1 tag byte.
 #[test]
 fn a_malformed_attester_key_is_rejected() {
     for (bad_key, cause) in [
@@ -124,22 +116,18 @@ fn a_malformed_attester_key_is_rejected() {
     ] {
         let mut fixture = Fixture::new();
         fixture.json["faucet"]["attesters"][0] = serde_json::Value::from(bad_key);
-        let err = fixture
-            .parse()
-            .expect_err("a malformed attester key must be rejected");
+        let err = fixture.parse().expect_err("a malformed attester key must be rejected");
         assert_parse_error_contains(err, cause);
     }
 }
 
-/// A token supply that is not a valid asset amount is rejected at parse time — it could
-/// otherwise exceed the hardcoded supply cap.
+/// A token supply that is not a valid asset amount is rejected at parse time — it could otherwise
+/// exceed the hardcoded supply cap.
 #[test]
 fn an_out_of_range_token_supply_is_rejected() {
     let mut fixture = Fixture::new();
     fixture.json["faucet"]["token_supply"] = serde_json::Value::from(u64::MAX);
-    let err = fixture
-        .parse()
-        .expect_err("an out-of-range token supply must be rejected");
+    let err = fixture.parse().expect_err("an out-of-range token supply must be rejected");
     assert_parse_error_contains(err, "exceeds the max allowed amount");
 }
 
@@ -148,22 +136,18 @@ fn an_out_of_range_token_supply_is_rejected() {
 fn a_wrong_length_seed_is_rejected() {
     let mut fixture = Fixture::new();
     fixture.json["faucet"]["seed"] = serde_json::Value::from(to_hex(&[7u8; 4]));
-    let err = fixture
-        .parse()
-        .expect_err("a wrong-length seed must be rejected");
+    let err = fixture.parse().expect_err("a wrong-length seed must be rejected");
     assert_parse_error_contains(err, "expected 32 bytes, got 4");
 }
 
-/// An unknown field anywhere in the document is a schema violation (`deny_unknown_fields`);
-/// so is `used_nonces`, which lives in the nonces file, not the config.
+/// An unknown field anywhere in the document is a schema violation (`deny_unknown_fields`); so is
+/// `used_nonces`, which lives in the nonces file, not the config.
 #[test]
 fn an_unknown_field_is_rejected() {
     for field in ["surprise", "used_nonces"] {
         let mut fixture = Fixture::new();
         fixture.json["faucet"][field] = serde_json::Value::from(1u64);
-        let err = fixture
-            .parse()
-            .expect_err("an unknown field must be rejected");
+        let err = fixture.parse().expect_err("an unknown field must be rejected");
         assert_parse_error_contains(err, "unknown field");
     }
 }
@@ -179,24 +163,24 @@ fn assert_no_placeholders(value: &serde_json::Value, path: &str) {
                 !text.starts_with('<'),
                 "the placeholder at {path} must be filled by the test, got: {text}",
             );
-        }
+        },
         serde_json::Value::Array(items) => {
             for (index, item) in items.iter().enumerate() {
                 assert_no_placeholders(item, &format!("{path}[{index}]"));
             }
-        }
+        },
         serde_json::Value::Object(fields) => {
             for (name, field) in fields {
                 assert_no_placeholders(field, &format!("{path}.{name}"));
             }
-        }
-        _ => {}
+        },
+        _ => {},
     }
 }
 
-/// The checked-in template does not parse as it is (its placeholders force the operator to
-/// fill it), and parses once every placeholder is filled — so its placeholders sit exactly at
-/// the fields the schema has, with the pre-filled values intact.
+/// The checked-in template does not parse as it is (its placeholders force the operator to fill
+/// it), and parses once every placeholder is filled — so its placeholders sit exactly at the fields
+/// the schema has, with the pre-filled values intact.
 #[test]
 fn the_template_parses_once_its_placeholders_are_filled() {
     let text =
@@ -250,9 +234,7 @@ fn the_template_parses_once_its_placeholders_are_filled() {
 /// The nonces fixture parses to its typed nonces.
 #[test]
 fn the_nonces_fixture_parses() {
-    let nonces = NoncesFixture::new()
-        .parse()
-        .expect("the nonces fixture must parse");
+    let nonces = NoncesFixture::new().parse().expect("the nonces fixture must parse");
     assert_eq!(
         nonces.used_nonces,
         USED_NONCE_BYTES.map(DepositNonce::new),
@@ -286,9 +268,7 @@ fn the_nonces_template_parses_once_its_placeholder_is_filled() {
 fn a_wrong_length_nonce_is_rejected() {
     let mut fixture = NoncesFixture::new();
     fixture.json["used_nonces"][1] = serde_json::Value::from(to_hex(&[0x66u8; 4]));
-    let err = fixture
-        .parse()
-        .expect_err("a wrong-length nonce must be rejected");
+    let err = fixture.parse().expect_err("a wrong-length nonce must be rejected");
     assert_parse_error_contains(err, "expected 32 bytes, got 4");
 }
 
@@ -297,9 +277,7 @@ fn a_wrong_length_nonce_is_rejected() {
 fn a_missing_nonce_list_is_rejected() {
     let mut fixture = NoncesFixture::new();
     fixture.json = serde_json::json!({});
-    let err = fixture
-        .parse()
-        .expect_err("a missing nonce list must be rejected");
+    let err = fixture.parse().expect_err("a missing nonce list must be rejected");
     assert_parse_error_contains(err, "missing field `used_nonces`");
 }
 
@@ -308,8 +286,6 @@ fn a_missing_nonce_list_is_rejected() {
 fn an_unknown_nonces_field_is_rejected() {
     let mut fixture = NoncesFixture::new();
     fixture.json["surprise"] = serde_json::Value::from(1u64);
-    let err = fixture
-        .parse()
-        .expect_err("an unknown field must be rejected");
+    let err = fixture.parse().expect_err("an unknown field must be rejected");
     assert_parse_error_contains(err, "unknown field");
 }

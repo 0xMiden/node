@@ -15,28 +15,15 @@ use crate::common::DISTRIBUTOR_SEED;
 /// auth slot holds the commitment of the one key in the file.
 fn assert_fresh_wallet_controlled_by_its_key(distributor: &AccountFile, scheme: AuthScheme) {
     let account = distributor.account();
-    assert!(
-        account.id().is_public(),
-        "the distributor is a public account"
-    );
+    assert!(account.id().is_public(), "the distributor is a public account");
     assert_eq!(account.nonce(), ZERO, "a fresh distributor is undeployed");
-    assert!(
-        account.seed().is_some(),
-        "an undeployed account carries its seed"
-    );
-    assert!(
-        account.vault().is_empty(),
-        "a fresh distributor holds nothing"
-    );
+    assert!(account.seed().is_some(), "an undeployed account carries its seed");
+    assert!(account.vault().is_empty(), "a fresh distributor holds nothing");
 
     let [key] = distributor.auth_secret_keys() else {
         panic!("the file carries exactly one key");
     };
-    assert_eq!(
-        key.auth_scheme(),
-        scheme,
-        "the key is of the requested scheme"
-    );
+    assert_eq!(key.auth_scheme(), scheme, "the key is of the requested scheme");
     assert_eq!(
         account
             .storage()

@@ -1,12 +1,12 @@
-//! Shared test fixtures: the dev config JSON (mutable, so tests can inject malformed values),
-//! the nonces JSON, and the accounts the commands take as inputs.
+//! Shared test fixtures: the dev config JSON (mutable, so tests can inject malformed values), the
+//! nonces JSON, and the accounts the commands take as inputs.
 
 // Each test binary compiles its own copy of this module and exercises a different subset of it.
 #![allow(dead_code)]
 
 use miden_objects::account_file::AccountFile;
-use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::Account;
+use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_protocol::utils::serde::Deserializable;
 use xusdc_genesis::accounts::{build_faucet, new_distributor_with};
@@ -21,8 +21,8 @@ pub const DISTRIBUTOR_SEED: [u8; 32] = [0x0d; 32];
 /// The dev token supply, in base units.
 pub const TOKEN_SUPPLY: u64 = 250_000_000;
 
-/// Two known-valid attester keys in the 33-byte compressed SEC1 form: the secp256k1 generator
-/// point and its double.
+/// Two known-valid attester keys in the 33-byte compressed SEC1 form: the secp256k1 generator point
+/// and its double.
 pub const ATTESTER_KEY_BYTES: [[u8; 33]; 2] = [
     [
         0x02, 0x79, 0xBE, 0x66, 0x7E, 0xF9, 0xDC, 0xBB, 0xAC, 0x55, 0xA0, 0x62, 0x95, 0xCE, 0x87,

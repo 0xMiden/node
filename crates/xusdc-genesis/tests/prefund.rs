@@ -12,32 +12,21 @@ use miden_protocol::{Felt, ONE};
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::account::faucets::FungibleFaucet;
 use miden_standards::account::wallets::BasicWallet;
-use xusdc_genesis::accounts::{prefund_distributor, PrefundError};
+use xusdc_genesis::accounts::{PrefundError, prefund_distributor};
 
-use crate::common::{fresh_distributor, genesis_faucet, Fixture, DISTRIBUTOR_SEED, TOKEN_SUPPLY};
+use crate::common::{DISTRIBUTOR_SEED, Fixture, TOKEN_SUPPLY, fresh_distributor, genesis_faucet};
 
-/// The prefunded distributor keeps its id and keys, holds the faucet's whole recorded supply,
-/// and is in genesis form (nonce one, no seed).
+/// The prefunded distributor keeps its id and keys, holds the faucet's whole recorded supply, and
+/// is in genesis form (nonce one, no seed).
 #[test]
 fn prefund_gives_the_recorded_supply_and_promotes_to_genesis_form() {
     let faucet = genesis_faucet();
     let distributor = fresh_distributor();
     let prefunded = prefund_distributor(&faucet, &distributor).expect("the prefund must succeed");
 
-    assert_eq!(
-        prefunded.account().id(),
-        distributor.account().id(),
-        "the id is unchanged"
-    );
-    assert_eq!(
-        prefunded.account().nonce(),
-        ONE,
-        "a genesis account carries nonce one"
-    );
-    assert!(
-        prefunded.account().seed().is_none(),
-        "a genesis account carries no seed"
-    );
+    assert_eq!(prefunded.account().id(), distributor.account().id(), "the id is unchanged");
+    assert_eq!(prefunded.account().nonce(), ONE, "a genesis account carries nonce one");
+    assert!(prefunded.account().seed().is_none(), "a genesis account carries no seed");
     assert_eq!(
         prefunded.auth_secret_keys(),
         distributor.auth_secret_keys(),
@@ -46,11 +35,7 @@ fn prefund_gives_the_recorded_supply_and_promotes_to_genesis_form() {
     let recorded = FungibleFaucet::try_from(&faucet)
         .expect("the genesis faucet is a fungible faucet")
         .token_supply();
-    assert_eq!(
-        recorded.as_u64(),
-        TOKEN_SUPPLY,
-        "the fixture records the dev supply"
-    );
+    assert_eq!(recorded.as_u64(), TOKEN_SUPPLY, "the fixture records the dev supply");
     assert_eq!(
         prefunded
             .account()

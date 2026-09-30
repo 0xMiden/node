@@ -3,24 +3,21 @@
 mod common;
 
 use miden_protocol::asset::AssetId;
-use miden_protocol::{Word, EMPTY_WORD, ONE};
+use miden_protocol::{EMPTY_WORD, ONE, Word};
 use miden_standards::account::faucets::FungibleFaucet;
 use miden_standards::account::fees::FeePolicyManager;
 use xusdc_encoding::account::xreserve::XReserveFaucetExtension;
 use xusdc_encoding::xreserve::encoding::DepositNonce;
 use xusdc_genesis::accounts::record_nonces;
 
-use crate::common::{genesis_faucet, NoncesFixture, TOKEN_SUPPLY};
+use crate::common::{NoncesFixture, TOKEN_SUPPLY, genesis_faucet};
 
 /// Every listed nonce carries the consumed marker afterwards, and nothing else about the faucet
 /// changes: id, genesis form, recorded supply, and the fee-asset rebinding.
 #[test]
 fn record_nonces_marks_every_nonce_and_changes_nothing_else() {
     let faucet = genesis_faucet();
-    let nonces = NoncesFixture::new()
-        .parse()
-        .expect("the nonces fixture parses")
-        .used_nonces;
+    let nonces = NoncesFixture::new().parse().expect("the nonces fixture parses").used_nonces;
     assert_eq!(nonces.len(), 2, "the fixture exercises several nonces");
 
     let recorded = record_nonces(&faucet, &nonces).expect("recording must succeed");

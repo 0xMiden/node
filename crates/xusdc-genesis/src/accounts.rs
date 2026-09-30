@@ -4,7 +4,12 @@ use anyhow::{Context, Result};
 use miden_objects::account_file::AccountFile;
 use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
 use miden_protocol::account::{
-    Account, AccountBuilder, AccountId, AccountIdVersion, AccountType, AssetCallbackFlag,
+    Account,
+    AccountBuilder,
+    AccountId,
+    AccountIdVersion,
+    AccountType,
+    AssetCallbackFlag,
 };
 use miden_protocol::asset::{Asset, AssetAmount, AssetId, FungibleAsset};
 use miden_protocol::block::FeeParameters;
@@ -14,7 +19,8 @@ use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::account::faucets::{FungibleFaucet, FungibleFaucetError};
 use miden_standards::account::wallets::BasicWallet;
 use xusdc_encoding::account::xreserve::{
-    XReserveStablecoinBuilder, XReserveStablecoinBuilderError,
+    XReserveStablecoinBuilder,
+    XReserveStablecoinBuilderError,
 };
 use xusdc_encoding::xreserve::encoding::DepositNonce;
 
@@ -78,9 +84,9 @@ pub fn new_distributor(scheme: AuthScheme) -> Result<AccountFile, NewDistributor
     new_distributor_with(rand::random(), secret_key).map_err(NewDistributorError::Account)
 }
 
-/// Builds the distributor from `init_seed` and `secret_key`: a public basic wallet whose
-/// single-sig auth is `secret_key`'s scheme and public key, undeployed (nonce zero, empty
-/// vault). The returned file carries the key.
+/// Builds the distributor from `init_seed` and `secret_key`: a public basic wallet whose single-sig
+/// auth is `secret_key`'s scheme and public key, undeployed (nonce zero, empty vault). The returned
+/// file carries the key.
 pub fn new_distributor_with(
     init_seed: [u8; 32],
     secret_key: AuthSecretKey,
@@ -113,10 +119,7 @@ pub fn prefund_distributor(
         return Err(PrefundError::DistributorNotPublic(id));
     }
     if account.nonce() != ZERO {
-        return Err(PrefundError::DistributorNotFresh {
-            id,
-            nonce: account.nonce(),
-        });
+        return Err(PrefundError::DistributorNotFresh { id, nonce: account.nonce() });
     }
     if distributor.auth_secret_keys().is_empty() {
         return Err(PrefundError::DistributorHasNoSigningKey(id));
@@ -124,15 +127,10 @@ pub fn prefund_distributor(
 
     let asset = FungibleAsset::new(faucet.id(), supply.as_u64()).map_err(PrefundError::Asset)?;
     let (id, mut vault, storage, code, _nonce, _seed) = account.clone().into_parts();
-    vault
-        .add_asset(Asset::from(asset))
-        .map_err(PrefundError::Vault)?;
+    vault.add_asset(Asset::from(asset)).map_err(PrefundError::Vault)?;
     let prefunded =
         Account::new(id, vault, storage, code, Felt::ONE, None).map_err(PrefundError::Account)?;
-    Ok(AccountFile::new(
-        prefunded,
-        distributor.auth_secret_keys().to_vec(),
-    ))
+    Ok(AccountFile::new(prefunded, distributor.auth_secret_keys().to_vec()))
 }
 
 // ERRORS
