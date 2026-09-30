@@ -423,7 +423,9 @@ impl BoardNode {
                 "DKG board key does not match its content hash"
             );
             let hash = entry.content_hash();
-            if self.blobs.blobs().get_bytes(hash).await.is_err() {
+            if !self.blobs.blobs().has(hash).await.with_context(|| {
+                format!("failed to check DKG board blob {hash} for {}", slot.prefix())
+            })? {
                 let mut providers =
                     self.remote_providers.read().await.get(&hash).cloned().unwrap_or_default();
                 let sync_peers = self
@@ -443,31 +445,35 @@ impl BoardNode {
                 if providers.is_empty() {
                     return Ok(None);
                 }
-                let Ok(mut progress) = self.downloader.download(hash, providers).stream().await
-                else {
-                    return Ok(None);
-                };
+                let mut progress =
+                    self.downloader.download(hash, providers).stream().await.with_context(
+                        || {
+                            format!(
+                                "failed to start DKG board download of {hash} for {}",
+                                slot.prefix()
+                            )
+                        },
+                    )?;
                 while let Some(item) = progress.next().await {
                     match item {
                         DownloadProgressItem::Progress(downloaded) => ensure!(
                             downloaded <= MAX_ARTIFACT_BYTES,
                             "DKG board artifact exceeds {MAX_ARTIFACT_BYTES} bytes",
                         ),
-                        DownloadProgressItem::Error(_) | DownloadProgressItem::DownloadError => {
-                            return Ok(None);
-                        },
+                        DownloadProgressItem::Error(error) => anyhow::bail!(
+                            "failed to download DKG board blob {hash} for {}: {error:#}",
+                            slot.prefix()
+                        ),
+                        DownloadProgressItem::DownloadError => return Ok(None),
                         DownloadProgressItem::TryProvider { .. }
                         | DownloadProgressItem::ProviderFailed { .. }
                         | DownloadProgressItem::PartComplete { .. } => {},
                     }
                 }
             }
-            let bytes = self
-                .blobs
-                .blobs()
-                .get_bytes(hash)
-                .await
-                .context("downloaded DKG board artifact is missing")?;
+            let bytes = self.blobs.blobs().get_bytes(hash).await.with_context(|| {
+                format!("failed to read DKG board blob {hash} for {}", slot.prefix())
+            })?;
             ensure!(
                 u64::try_from(bytes.len()).context("artifact length does not fit u64")?
                     == entry.content_len(),
