@@ -1,24 +1,39 @@
 [package]
-name = "xusdc-genesis"
+authors.workspace      = true
+description            = "Builds the genesis USDCx faucet"
+edition.workspace      = true
+homepage.workspace     = true
+keywords               = ["genesis", "miden", "xusdc"]
+license.workspace      = true
+name                   = "xusdc-genesis"
+publish                = false
+readme                 = "README.md"
+repository.workspace   = true
+rust-version.workspace = true
 version.workspace      = true
-edition.workspace = true
-publish = false
-description = "Builds the genesis USDCx faucet"
+
+[lints]
+workspace = true
+
+[lib]
+doctest = false
+test    = false
 
 [dependencies]
-miden-protocol = { workspace = true, features = ["testing"] }
+anyhow          = { workspace = true }
+clap            = { workspace = true }
+fs-err          = { workspace = true }
+hex             = { workspace = true }
+miden-objects   = { workspace = true }
+miden-protocol  = { workspace = true }
 miden-standards = { workspace = true }
-miden-objects = { workspace = true }
-xusdc-encoding = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-anyhow = { workspace = true }
-thiserror = { workspace = true }
-clap = { workspace = true }
-hex = { workspace = true }
-rand = { workspace = true }
+rand            = { workspace = true }
+serde           = { workspace = true }
+serde_json      = { workspace = true }
+thiserror       = { workspace = true }
+xusdc-encoding  = { workspace = true }
 
 [dev-dependencies]
 assert_matches = { workspace = true }
-rstest = { workspace = true }
-tempfile = { workspace = true }
+rstest         = { workspace = true }
+tempfile       = { workspace = true }

@@ -41,8 +41,7 @@ pub const USED_NONCE_BYTES: [[u8; 32]; 2] = [[0x55; 32], [0x66; 32]];
 
 /// The `0x`-prefixed hex string of `bytes` — the config's byte encoding.
 pub fn to_hex(bytes: &[u8]) -> String {
-    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-    format!("0x{hex}")
+    format!("0x{}", hex::encode(bytes))
 }
 
 /// The fixture attester keys, decoded.

@@ -5,6 +5,7 @@ mod common;
 use assert_matches::assert_matches;
 use miden_protocol::account::AccountId;
 use miden_protocol::address::NetworkId;
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use xusdc_encoding::xreserve::encoding::{CircleDomain, DepositNonce};
 use xusdc_genesis::config::{ConfigError, GenesisToolConfig, Role, UsedNoncesFile};
 
@@ -29,13 +30,8 @@ fn the_dev_fixture_round_trips() {
     assert_eq!(config.faucet.verification_base_fee, 500);
     assert!(config.faucet.min_burn_amount.is_none());
     assert_eq!(
-        config
-            .faucet
-            .attesters
-            .iter()
-            .map(|key| key.to_commitment())
-            .collect::<Vec<_>>(),
-        attester_keys().iter().map(|key| key.to_commitment()).collect::<Vec<_>>(),
+        config.faucet.attesters.iter().map(PublicKey::to_commitment).collect::<Vec<_>>(),
+        attester_keys().iter().map(PublicKey::to_commitment).collect::<Vec<_>>(),
         "the attester keys must decode from their configured SEC1 bytes",
     );
     for role in Role::ALL {
@@ -90,7 +86,7 @@ fn a_malformed_account_id_is_rejected() {
     }
 }
 
-/// An absent attester list parses as an empty allowlist (seeded later via set_attester).
+/// An absent attester list parses as an empty allowlist (seeded later via `set_attester`).
 #[test]
 fn an_absent_attester_list_is_an_empty_allowlist() {
     let mut fixture = Fixture::new();
@@ -183,9 +179,8 @@ fn assert_no_placeholders(value: &serde_json::Value, path: &str) {
 /// the schema has, with the pre-filled values intact.
 #[test]
 fn the_template_parses_once_its_placeholders_are_filled() {
-    let text =
-        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/config.template.json"))
-            .expect("the template is readable");
+    let text = fs_err::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/config.template.json"))
+        .expect("the template is readable");
     assert!(
         GenesisToolConfig::from_json(&text).is_err(),
         "the unfilled template must not parse",
@@ -246,9 +241,8 @@ fn the_nonces_fixture_parses() {
 /// filled.
 #[test]
 fn the_nonces_template_parses_once_its_placeholder_is_filled() {
-    let text =
-        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/nonces.template.json"))
-            .expect("the template is readable");
+    let text = fs_err::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/nonces.template.json"))
+        .expect("the template is readable");
     assert!(
         UsedNoncesFile::from_json(&text).is_err(),
         "the unfilled template must not parse",

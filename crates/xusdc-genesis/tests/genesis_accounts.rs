@@ -1,7 +1,7 @@
 //! Structural invariants of the built genesis faucet: nonce-one genesis form and the native-fee
 //! rebinding.
 //!
-//! There is deliberately NO MockChain smoke test in this crate: a genesis account exists before
+//! There is deliberately NO `MockChain` smoke test in this crate: a genesis account exists before
 //! any chain does, the invariants below are pure account-state checks, and live-node coverage
 //! (a node actually booting from the `.mac` file) belongs to `crates/xusdc-validation`.
 
@@ -79,7 +79,7 @@ fn the_faucet_records_the_configured_supply() {
 }
 
 /// A role configured with several holders parses and builds: every listed pauser is seeded as a
-/// member of the built faucet's DOM_PAUSER role.
+/// member of the built faucet's `DOM_PAUSER` role.
 #[test]
 fn a_multi_holder_role_builds_with_every_member_seeded() {
     use miden_protocol::account::{AccountId, RoleSymbol};

@@ -44,7 +44,7 @@ fn the_distributor_file_keeps_the_key_and_is_private() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-        let mode = std::fs::metadata(&path).expect("the file has metadata").permissions().mode();
+        let mode = fs_err::metadata(&path).expect("the file has metadata").permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "a key-bearing file is owner-only");
     }
 }
@@ -56,7 +56,7 @@ fn write_account_file_refuses_to_overwrite() {
     let path = dir.path().join("account.mac");
     let first = AccountFile::new(genesis_faucet(), Vec::new());
     write_account_file(&first, &path).expect("the first write must succeed");
-    let before = std::fs::read(&path).expect("the file is readable");
+    let before = fs_err::read(&path).expect("the file is readable");
 
     let err = write_account_file(&fresh_distributor(), &path)
         .expect_err("writing over an existing file must be refused");
@@ -65,7 +65,7 @@ fn write_account_file_refuses_to_overwrite() {
         "the refusal must say why, got: {err:#}",
     );
     assert_eq!(
-        std::fs::read(&path).expect("the file is still readable"),
+        fs_err::read(&path).expect("the file is still readable"),
         before,
         "the refused write must not touch the existing file",
     );
@@ -76,7 +76,7 @@ fn write_account_file_refuses_to_overwrite() {
 fn read_account_file_names_the_path_on_garbage() {
     let dir = tempfile::tempdir().expect("a temp dir is available");
     let path = dir.path().join("garbage.mac");
-    std::fs::write(&path, b"not an account file").expect("the garbage is writable");
+    fs_err::write(&path, b"not an account file").expect("the garbage is writable");
 
     let err = read_account_file(&path).expect_err("garbage must be rejected");
     assert!(

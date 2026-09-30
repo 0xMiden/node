@@ -153,7 +153,7 @@ impl UsedNoncesFile {
 
 /// Reads and parses the JSON file at `path`.
 fn load_json<T: DeserializeOwned>(path: &Path) -> Result<T, ConfigError> {
-    let text = std::fs::read_to_string(path)
+    let text = fs_err::read_to_string(path)
         .map_err(|source| ConfigError::Io { path: path.to_path_buf(), source })?;
     serde_json::from_str(&text).map_err(ConfigError::Parse)
 }

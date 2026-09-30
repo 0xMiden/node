@@ -56,7 +56,7 @@ pub fn write_account_file(file: &AccountFile, path: &Path) -> Result<()> {
 
 /// Reads the account file at `path`.
 pub fn read_account_file(path: &Path) -> Result<AccountFile> {
-    let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let bytes = fs_err::read(path).with_context(|| format!("reading {}", path.display()))?;
     AccountFile::try_from_bytes(&bytes)
         .with_context(|| format!("{} is not an account file", path.display()))
 }

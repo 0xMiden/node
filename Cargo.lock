@@ -8730,6 +8730,7 @@ dependencies = [
  "anyhow",
  "assert_matches",
  "clap",
+ "fs-err",
  "hex",
  "miden-objects",
  "miden-protocol",
