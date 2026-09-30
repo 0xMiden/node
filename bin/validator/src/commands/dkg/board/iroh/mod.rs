@@ -17,7 +17,8 @@ use futures::StreamExt;
 use iroh::endpoint::presets;
 use iroh::protocol::Router;
 use iroh::{Endpoint, EndpointAddr, EndpointId, SecretKey};
-use iroh_blobs::api::downloader::{DownloadProgressItem, Downloader};
+use iroh_blobs::api::remote::GetProgressItem;
+use iroh_blobs::get::GetError;
 use iroh_blobs::store::fs::FsStore;
 use iroh_blobs::{BlobsProtocol, Hash};
 use iroh_docs::DocTicket;
@@ -200,7 +201,6 @@ pub(super) struct BoardNode {
     blobs: FsStore,
     core: Arc<BoardCore>,
     document: Doc,
-    downloader: Downloader,
     event_error: tokio::sync::watch::Receiver<Option<String>>,
     event_task: tokio::task::JoinHandle<()>,
     peer_ready: tokio::sync::watch::Receiver<bool>,
@@ -215,7 +215,6 @@ struct BoardRuntime {
     author: iroh_docs::AuthorId,
     blobs: FsStore,
     docs: Docs,
-    downloader: Downloader,
     endpoint: Endpoint,
     gossip: Gossip,
 }
@@ -445,36 +444,47 @@ impl BoardNode {
                 if providers.is_empty() {
                     return Ok(None);
                 }
-                let provider_count = providers.len();
-                let mut progress =
-                    self.downloader.download(hash, providers).stream().await.with_context(
-                        || {
-                            format!(
-                                "failed to start DKG board download of {hash} for {}",
+                let mut downloaded = false;
+                for provider in providers {
+                    let Ok(connection) =
+                        self.router.endpoint().connect(provider, iroh_blobs::ALPN).await
+                    else {
+                        continue;
+                    };
+                    let mut stream = self.blobs.remote().fetch(connection, hash).stream();
+                    let mut finished = false;
+                    while let Some(item) = stream.next().await {
+                        match item {
+                            GetProgressItem::Progress(size) => ensure!(
+                                size <= MAX_ARTIFACT_BYTES,
+                                "DKG board artifact exceeds {MAX_ARTIFACT_BYTES} bytes",
+                            ),
+                            GetProgressItem::Done(_) => {
+                                downloaded = true;
+                                finished = true;
+                                break;
+                            },
+                            GetProgressItem::Error(
+                                error @ (GetError::LocalFailure { .. }
+                                | GetError::IrpcSend { .. }
+                                | GetError::BadRequest { .. }),
+                            ) => anyhow::bail!(
+                                "failed to download DKG board blob {hash} for {}: {error:#}",
                                 slot.prefix()
-                            )
-                        },
-                    )?;
-                let mut failed_providers = 0;
-                while let Some(item) = progress.next().await {
-                    match item {
-                        DownloadProgressItem::Progress(downloaded) => ensure!(
-                            downloaded <= MAX_ARTIFACT_BYTES,
-                            "DKG board artifact exceeds {MAX_ARTIFACT_BYTES} bytes",
-                        ),
-                        // Iroh emits an error after every provider has failed.
-                        DownloadProgressItem::Error(_) if failed_providers == provider_count => {
-                            return Ok(None);
-                        },
-                        DownloadProgressItem::Error(error) => anyhow::bail!(
-                            "failed to download DKG board blob {hash} for {}: {error:#}",
-                            slot.prefix()
-                        ),
-                        DownloadProgressItem::DownloadError => return Ok(None),
-                        DownloadProgressItem::ProviderFailed { .. } => failed_providers += 1,
-                        DownloadProgressItem::TryProvider { .. }
-                        | DownloadProgressItem::PartComplete { .. } => {},
+                            ),
+                            GetProgressItem::Error(_) => {
+                                finished = true;
+                                break;
+                            },
+                        }
                     }
+                    ensure!(finished, "DKG board blob download ended without a result");
+                    if downloaded {
+                        break;
+                    }
+                }
+                if !downloaded {
+                    return Ok(None);
                 }
             }
             let bytes = self.blobs.blobs().get_bytes(hash).await.with_context(|| {
@@ -614,21 +624,13 @@ impl BoardRuntime {
             .context("failed to create Iroh document directory")?;
         let blobs =
             FsStore::load(blobs_directory).await.context("failed to load Iroh blob store")?;
-        let downloader = blobs.downloader(&endpoint);
         let gossip = Gossip::builder().spawn(endpoint.clone());
         let docs = Docs::persistent(docs_directory)
             .spawn(endpoint.clone(), blobs.as_ref().clone(), gossip.clone())
             .await
             .context("failed to load Iroh document store")?;
         let author = docs.author_default().await.context("failed to load Iroh author")?;
-        Ok(Self {
-            author,
-            blobs,
-            docs,
-            downloader,
-            endpoint,
-            gossip,
-        })
+        Ok(Self { author, blobs, docs, endpoint, gossip })
     }
 
     async fn attach(
@@ -678,7 +680,6 @@ impl BoardRuntime {
             blobs: self.blobs,
             core,
             document,
-            downloader: self.downloader,
             event_error: events.error,
             event_task: events.task,
             peer_ready: events.peer_ready,

@@ -62,6 +62,23 @@ fn ticket_for(tickets: &[BoardTicket], participant: u32) -> BoardTicket {
         .clone()
 }
 
+async fn connect_blob_provider(host: &BoardNode, provider: &BoardNode) -> anyhow::Result<()> {
+    let mut socket = provider
+        .router
+        .endpoint()
+        .bound_sockets()
+        .into_iter()
+        .find(std::net::SocketAddr::is_ipv4)
+        .context("Iroh test endpoint has no IPv4 socket")?;
+    socket.set_ip(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+    let address = EndpointAddr::from_parts(
+        provider.router.endpoint().id(),
+        [iroh::TransportAddr::Ip(socket)],
+    );
+    host.router.endpoint().connect(address, iroh_blobs::ALPN).await?;
+    Ok(())
+}
+
 #[test]
 fn endpoint_secret_is_persisted_privately() -> anyhow::Result<()> {
     let data_directory = tempfile::tempdir()?;
@@ -369,7 +386,10 @@ async fn blob_store_failure_is_reported() -> anyhow::Result<()> {
 #[tokio::test]
 async fn unavailable_blob_remains_retryable() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
-    let (host, _) = BoardNode::create_for_test(root.path()).await?;
+    let (host, tickets) = BoardNode::create_for_test(&root.path().join("host")).await?;
+    let provider =
+        BoardNode::join_for_test(&root.path().join("provider"), ticket_for(&tickets, 1)).await?;
+    connect_blob_provider(&host, &provider).await?;
     let slot = ArtifactSlot::Manifest;
     let missing = b"unavailable";
     let hash = Hash::new(missing);
@@ -377,40 +397,46 @@ async fn unavailable_blob_remains_retryable() -> anyhow::Result<()> {
     host.remote_providers
         .write()
         .await
-        .insert(hash, vec![host.router.endpoint().id()]);
+        .insert(hash, vec![provider.router.endpoint().id()]);
 
     assert!(host.read_unique(&slot).await?.is_none());
-    let _tag = host.blobs.blobs().add_slice(missing).await?;
-    assert_eq!(host.read_unique(&slot).await?, Some(missing.to_vec()));
+    let _tag = provider.blobs.blobs().add_slice(missing).await?;
+    assert_eq!(host.wait_unique(&slot, Duration::from_secs(10)).await?, missing);
 
+    provider.shutdown().await?;
     host.shutdown().await?;
     Ok(())
 }
 
 #[tokio::test]
-async fn downloader_failure_is_reported() -> anyhow::Result<()> {
+async fn local_download_import_failure_is_reported() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
-    let (mut host, _) = BoardNode::create_for_test(&root.path().join("host")).await?;
+    let (host, tickets) = BoardNode::create_for_test(&root.path().join("host")).await?;
+    let provider =
+        BoardNode::join_for_test(&root.path().join("provider"), ticket_for(&tickets, 1)).await?;
+    connect_blob_provider(&host, &provider).await?;
     let slot = ArtifactSlot::Manifest;
-    let missing = b"unavailable";
-    let hash = Hash::new(missing);
-    host.publish_hash_for_test(&slot, hash, u64::try_from(missing.len())?).await?;
+    let value = vec![7; 16 * 1024 + 1];
+    let hash = Hash::new(&value);
+    let _tag = provider.blobs.blobs().add_slice(&value).await?;
+    host.publish_hash_for_test(&slot, hash, u64::try_from(value.len())?).await?;
     host.remote_providers
         .write()
         .await
-        .insert(hash, vec![host.router.endpoint().id()]);
+        .insert(hash, vec![provider.router.endpoint().id()]);
 
-    let failed_store_directory = root.path().join("failed-store");
-    fs_err::create_dir(&failed_store_directory)?;
-    let failed_store = FsStore::load(failed_store_directory).await?;
-    host.downloader = failed_store.downloader(host.router.endpoint());
-    failed_store.shutdown().await?;
+    let data_directory = root.path().join("host/blobs/data");
+    fs_err::remove_dir(&data_directory)?;
+    fs_err::write(&data_directory, b"block blob imports")?;
 
     let error = host.read_unique(&slot).await.unwrap_err();
-    assert!(format!("{error:#}").contains("failed to download DKG board blob"));
+    assert!(format!("{error:#}").contains("failed to read DKG board blob"), "{error:#}");
     let error = host.wait_unique(&slot, Duration::from_secs(1)).await.unwrap_err();
-    assert!(format!("{error:#}").contains("failed to download DKG board blob"));
+    assert!(format!("{error:#}").contains("failed to read DKG board blob"));
 
+    fs_err::remove_file(&data_directory)?;
+    fs_err::create_dir(&data_directory)?;
+    provider.shutdown().await?;
     host.shutdown().await?;
     Ok(())
 }
