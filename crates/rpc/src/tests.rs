@@ -18,11 +18,16 @@ use miden_node_proto::clients::{
     ValidatorClient,
 };
 use miden_node_proto::domain::sequencer::{AuthenticatedTransaction, TransactionInputs};
-use miden_node_proto::generated::rpc::api_client::ApiClient as ProtoClient;
-use miden_node_proto::generated::rpc::api_server::Api;
-use miden_node_proto::generated::sequencer::api_server::Api as SequencerApi;
+use miden_node_proto::generated::miden::node::v1::node_service_client::NodeServiceClient as ProtoClient;
+use miden_node_proto::generated::miden::node::v1::node_service_server::NodeService as Api;
+use miden_node_proto::generated::miden::sequencer::v1::sequencer_service_server::SequencerService as SequencerApi;
 use miden_node_proto::generated::{self as proto};
-use miden_node_proto::server::{ntx_builder_api, rpc_api, sequencer_api, validator_api};
+use miden_node_proto::server::{
+    miden_node_v1_node_service,
+    miden_ntx_builder_v1_network_transaction_builder_service,
+    miden_sequencer_v1_sequencer_service,
+    miden_validator_v1_validator_service,
+};
 use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify};
 use miden_node_store::DataDirectory;
 use miden_node_store::allowlist::{AccountAllowlist, InvitationCode, InvitationEntry};
@@ -507,7 +512,7 @@ async fn rpc_server_accepts_requests_without_accept_header() {
     };
 
     // Send any request to the RPC.
-    let request = proto::rpc::BlockHeaderByNumberRequest {
+    let request = proto::miden::node::v1::GetBlockHeaderByNumberRequest {
         block_num: Some(0),
         include_mmr_proof: None,
         include_protocol_config: None,
@@ -590,7 +595,7 @@ async fn rpc_server_has_web_support() {
     message.extend_from_slice(&0u32.to_be_bytes());
 
     let response = client
-        .post(format!("http://{rpc_addr}/rpc.Api/Status"))
+        .post(format!("http://{rpc_addr}/miden.node.v1.NodeService/Status"))
         .headers(headers)
         .body(message)
         .send()
@@ -642,7 +647,11 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_commitment() {
         sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
     };
 
-    let response = rpc_client.submit_proven_tx(request).await;
+    let response = rpc_client
+        .submit_proven_tx(proto::miden::node::v1::SubmitProvenTxRequest {
+            submission: Some(request),
+        })
+        .await;
 
     // Assert that the server rejected our request.
     assert!(response.is_err());
@@ -687,7 +696,12 @@ async fn rpc_server_checks_transaction_fee_notes(
         None,
     );
 
-    let status = service.submit_proven_tx(Request::new(request)).await.unwrap_err();
+    let status = service
+        .submit_proven_tx(Request::new(proto::miden::node::v1::SubmitProvenTxRequest {
+            submission: Some(request),
+        }))
+        .await
+        .unwrap_err();
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
     assert_eq!(status.details(), expected_details);
     assert!(
@@ -735,7 +749,11 @@ async fn sequencer_authenticated_rpc_rejects_transactions_without_native_fees(
     };
 
     let status = service
-        .submit_authenticated_tx(Request::new(proto::sequencer::AuthenticatedTransaction::from(tx)))
+        .submit_authenticated_tx(Request::new(
+            proto::miden::sequencer::v1::SubmitAuthenticatedTxRequest {
+                transaction: Some(proto::miden::sequencer::v1::AuthenticatedTransaction::from(tx)),
+            },
+        ))
         .await
         .unwrap_err();
 
@@ -775,7 +793,11 @@ async fn sequencer_authenticated_rpc_accepts_transactions_without_notes_when_fee
     };
 
     service
-        .submit_authenticated_tx(Request::new(proto::sequencer::AuthenticatedTransaction::from(tx)))
+        .submit_authenticated_tx(Request::new(
+            proto::miden::sequencer::v1::SubmitAuthenticatedTxRequest {
+                transaction: Some(proto::miden::sequencer::v1::AuthenticatedTransaction::from(tx)),
+            },
+        ))
         .await
         .expect("zero-fee transactions do not require output notes");
 }
@@ -804,7 +826,12 @@ async fn rpc_server_rejects_invalid_deferred_transaction_proofs() {
         None,
     );
 
-    let status = service.submit_proven_tx(Request::new(request)).await.unwrap_err();
+    let status = service
+        .submit_proven_tx(Request::new(proto::miden::node::v1::SubmitProvenTxRequest {
+            submission: Some(request),
+        }))
+        .await
+        .unwrap_err();
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
     assert!(status.message().contains("Invalid proof for transaction"));
 }
@@ -846,7 +873,12 @@ async fn rpc_server_forwards_valid_deferred_proofs_and_rejects_missing_witnesses
         transaction: Some((&fixture.transaction).into()),
         sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
     };
-    let status = service.submit_proven_tx(Request::new(request)).await.unwrap_err();
+    let status = service
+        .submit_proven_tx(Request::new(proto::miden::node::v1::SubmitProvenTxRequest {
+            submission: Some(request),
+        }))
+        .await
+        .unwrap_err();
     // The stub rejects submissions after it records them.
     assert_eq!(status.code(), tonic::Code::Unimplemented, "{status}");
     {
@@ -876,7 +908,12 @@ async fn rpc_server_forwards_valid_deferred_proofs_and_rejects_missing_witnesses
         transaction: Some((&invalid_tx).into()),
         sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
     };
-    let status = service.submit_proven_tx(Request::new(request)).await.unwrap_err();
+    let status = service
+        .submit_proven_tx(Request::new(proto::miden::node::v1::SubmitProvenTxRequest {
+            submission: Some(request),
+        }))
+        .await
+        .unwrap_err();
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
     assert!(status.message().contains("Invalid proof for transaction"), "{status}");
     assert_eq!(submissions.lock().unwrap().len(), 1);
@@ -908,7 +945,11 @@ async fn rpc_server_rejects_proven_transactions_with_invalid_reference_block() {
         sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
     };
 
-    let response = rpc_client.submit_proven_tx(request).await;
+    let response = rpc_client
+        .submit_proven_tx(proto::miden::node::v1::SubmitProvenTxRequest {
+            submission: Some(request),
+        })
+        .await;
 
     // Assert that the server rejected our request.
     assert!(response.is_err());
@@ -961,7 +1002,11 @@ async fn rpc_rejects_post_deployment_network_account_tx() {
         None,
     );
 
-    let response = service.submit_proven_tx(Request::new(request)).await;
+    let response = service
+        .submit_proven_tx(Request::new(proto::miden::node::v1::SubmitProvenTxRequest {
+            submission: Some(request),
+        }))
+        .await;
     assert!(response.is_err());
     let err = response.as_ref().unwrap_err().message();
     assert!(
@@ -982,30 +1027,45 @@ fn source_rpc_client() -> RpcClient {
 
 #[derive(Clone)]
 struct FixedNtxBuilder {
-    response: proto::rpc::GetNetworkNoteStatusResponse,
+    expected_note_id: proto::note::NoteId,
+    response: proto::miden::node::v1::GetNetworkNoteStatusResponse,
     call_count: Arc<AtomicUsize>,
     last_accept: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 #[tonic::async_trait]
-impl ntx_builder_api::GetNetworkNoteStatus for FixedNtxBuilder {
+impl miden_ntx_builder_v1_network_transaction_builder_service::GetNetworkNoteStatus
+    for FixedNtxBuilder
+{
     type Input = proto::note::NoteId;
-    type Output = proto::rpc::GetNetworkNoteStatusResponse;
+    type Output = proto::miden::node::v1::GetNetworkNoteStatusResponse;
 
-    fn decode(request: proto::note::NoteId) -> tonic::Result<Self::Input> {
-        Ok(request)
+    fn decode(
+        request: proto::miden::ntx_builder::v1::GetNetworkNoteStatusRequest,
+    ) -> tonic::Result<Self::Input> {
+        request
+            .note_id
+            .ok_or_else(|| tonic::Status::invalid_argument("missing note ID"))
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::GetNetworkNoteStatusResponse> {
-        Ok(output)
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<proto::miden::ntx_builder::v1::GetNetworkNoteStatusResponse> {
+        Ok(proto::miden::ntx_builder::v1::GetNetworkNoteStatusResponse {
+            status: output.status,
+            last_error: output.last_error,
+            attempt_count: output.attempt_count,
+            last_attempt_block_num: output.last_attempt_block_num,
+        })
     }
 
     async fn handle(
         &self,
-        _input: Self::Input,
+        input: Self::Input,
         metadata: &MetadataMap,
         _extensions: &Extensions,
     ) -> tonic::Result<Self::Output> {
+        assert_eq!(input, self.expected_note_id);
         self.call_count.fetch_add(1, Ordering::SeqCst);
         let accept = metadata
             .get(ACCEPT.as_str())
@@ -1018,7 +1078,8 @@ impl ntx_builder_api::GetNetworkNoteStatus for FixedNtxBuilder {
 }
 
 async fn start_ntx_builder(
-    response: proto::rpc::GetNetworkNoteStatusResponse,
+    expected_note_id: proto::note::NoteId,
+    response: proto::miden::node::v1::GetNetworkNoteStatusResponse,
 ) -> (
     NtxBuilderClient,
     Arc<AtomicUsize>,
@@ -1030,6 +1091,7 @@ async fn start_ntx_builder(
     let call_count = Arc::new(AtomicUsize::new(0));
     let last_accept = Arc::new(std::sync::Mutex::new(None));
     let service = FixedNtxBuilder {
+        expected_note_id,
         response,
         call_count: Arc::clone(&call_count),
         last_accept: Arc::clone(&last_accept),
@@ -1040,7 +1102,9 @@ async fn start_ntx_builder(
         let shutdown = shutdown.clone();
         async move {
             tonic::transport::Server::builder()
-                .add_service(ntx_builder_api::service(service))
+                .add_service(miden_ntx_builder_v1_network_transaction_builder_service::service(
+                    service,
+                ))
                 .serve_with_incoming_shutdown(
                     TcpListenerStream::new(listener),
                     shutdown.cancelled_owned(),
@@ -1133,7 +1197,7 @@ async fn start_source_rpc_with_genesis(
             );
 
             tonic::transport::Server::builder()
-                .add_service(rpc_api::service(source_rpc))
+                .add_service(miden_node_v1_node_service::service(source_rpc))
                 .serve_with_incoming_shutdown(
                     TcpListenerStream::new(listener),
                     shutdown.cancelled_owned(),
@@ -1165,16 +1229,20 @@ struct FixedValidator {
 }
 
 #[tonic::async_trait]
-impl validator_api::GetTransactionEncryptionKey for FixedValidator {
+impl miden_validator_v1_validator_service::GetTransactionEncryptionKey for FixedValidator {
     type Input = ();
     type Output = proto::submission::TransactionEncryptionKey;
 
-    fn decode(request: ()) -> tonic::Result<Self::Input> {
-        Ok(request)
+    fn decode(
+        _request: proto::miden::validator::v1::GetTransactionEncryptionKeyRequest,
+    ) -> tonic::Result<Self::Input> {
+        Ok(())
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::submission::TransactionEncryptionKey> {
-        Ok(output)
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<proto::miden::validator::v1::GetTransactionEncryptionKeyResponse> {
+        Ok(proto::miden::validator::v1::GetTransactionEncryptionKeyResponse { key: Some(output) })
     }
 
     async fn handle(
@@ -1195,15 +1263,15 @@ impl validator_api::GetTransactionEncryptionKey for FixedValidator {
 }
 
 #[tonic::async_trait]
-impl validator_api::Status for FixedValidator {
+impl miden_validator_v1_validator_service::Status for FixedValidator {
     type Input = ();
-    type Output = proto::validator::ValidatorStatus;
+    type Output = proto::miden::validator::v1::StatusResponse;
 
-    fn decode(request: ()) -> tonic::Result<Self::Input> {
-        Ok(request)
+    fn decode(_request: proto::miden::validator::v1::StatusRequest) -> tonic::Result<Self::Input> {
+        Ok(())
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::validator::ValidatorStatus> {
+    fn encode(output: Self::Output) -> tonic::Result<proto::miden::validator::v1::StatusResponse> {
         Ok(output)
     }
 
@@ -1218,18 +1286,22 @@ impl validator_api::Status for FixedValidator {
 }
 
 #[tonic::async_trait]
-impl validator_api::SubmitProvenTransaction for FixedValidator {
+impl miden_validator_v1_validator_service::SubmitProvenTransaction for FixedValidator {
     type Input = proto::submission::ProvenTransactionSubmission;
     type Output = ();
 
     fn decode(
-        request: proto::submission::ProvenTransactionSubmission,
+        request: proto::miden::validator::v1::SubmitProvenTransactionRequest,
     ) -> tonic::Result<Self::Input> {
-        Ok(request)
+        request
+            .submission
+            .ok_or_else(|| tonic::Status::invalid_argument("missing submission"))
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<()> {
-        Ok(output)
+    fn encode(
+        (): Self::Output,
+    ) -> tonic::Result<proto::miden::validator::v1::SubmitProvenTransactionResponse> {
+        Ok(proto::miden::validator::v1::SubmitProvenTransactionResponse {})
     }
 
     async fn handle(
@@ -1247,15 +1319,19 @@ impl validator_api::SubmitProvenTransaction for FixedValidator {
 }
 
 #[tonic::async_trait]
-impl validator_api::SignBlock for FixedValidator {
+impl miden_validator_v1_validator_service::SignBlock for FixedValidator {
     type Input = ();
-    type Output = proto::validator::SignBlockResponse;
+    type Output = proto::miden::validator::v1::SignBlockResponse;
 
-    fn decode(_request: proto::validator::SignBlockRequest) -> tonic::Result<Self::Input> {
+    fn decode(
+        _request: proto::miden::validator::v1::SignBlockRequest,
+    ) -> tonic::Result<Self::Input> {
         Ok(())
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::validator::SignBlockResponse> {
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<proto::miden::validator::v1::SignBlockResponse> {
         Ok(output)
     }
 
@@ -1270,16 +1346,20 @@ impl validator_api::SignBlock for FixedValidator {
 }
 
 #[tonic::async_trait]
-impl validator_api::BlockSubscription for FixedValidator {
+impl miden_validator_v1_validator_service::BlockSubscription for FixedValidator {
     type Input = ();
-    type Item = proto::validator::BlockSubscriptionResponse;
+    type Item = proto::miden::validator::v1::BlockSubscriptionResponse;
     type ItemStream = tokio_stream::Empty<tonic::Result<Self::Item>>;
 
-    fn decode(_request: proto::validator::BlockSubscriptionRequest) -> tonic::Result<Self::Input> {
+    fn decode(
+        _request: proto::miden::validator::v1::BlockSubscriptionRequest,
+    ) -> tonic::Result<Self::Input> {
         Ok(())
     }
 
-    fn encode(item: Self::Item) -> tonic::Result<proto::validator::BlockSubscriptionResponse> {
+    fn encode(
+        item: Self::Item,
+    ) -> tonic::Result<proto::miden::validator::v1::BlockSubscriptionResponse> {
         Ok(item)
     }
 
@@ -1320,7 +1400,7 @@ async fn start_validator(
         let shutdown = shutdown.clone();
         async move {
             tonic::transport::Server::builder()
-                .add_service(validator_api::service(service))
+                .add_service(miden_validator_v1_validator_service::service(service))
                 .serve_with_incoming_shutdown(
                     TcpListenerStream::new(listener),
                     shutdown.cancelled_owned(),
@@ -1389,16 +1469,22 @@ async fn full_node_with_validator_forwards_get_transaction_encryption_key() {
     );
 
     let response = full_node
-        .get_transaction_encryption_key(Request::new(()))
+        .get_transaction_encryption_key(Request::new(
+            proto::miden::node::v1::GetTransactionEncryptionKeyRequest {},
+        ))
         .await
         .expect("full-node RPC should forward the encryption key request to its validator")
-        .into_inner();
+        .into_inner()
+        .key
+        .expect("transaction encryption key");
 
     assert_eq!(response, expected);
     assert_eq!(validator_call_count.load(Ordering::SeqCst), 1);
 
     full_node
-        .get_transaction_encryption_key(Request::new(()))
+        .get_transaction_encryption_key(Request::new(
+            proto::miden::node::v1::GetTransactionEncryptionKeyRequest {},
+        ))
         .await
         .expect("each encryption key request should reach the validator");
     assert_eq!(
@@ -1425,10 +1511,14 @@ async fn full_node_forwards_get_transaction_encryption_key_to_source_rpc() {
     );
 
     let response = full_node
-        .get_transaction_encryption_key(Request::new(()))
+        .get_transaction_encryption_key(Request::new(
+            proto::miden::node::v1::GetTransactionEncryptionKeyRequest {},
+        ))
         .await
         .expect("full-node RPC should forward the encryption key request to its source")
-        .into_inner();
+        .into_inner()
+        .key
+        .expect("transaction encryption key");
 
     assert_eq!(response, expected);
     assert_eq!(validator_call_count.load(Ordering::SeqCst), 1);
@@ -1455,14 +1545,16 @@ async fn full_node_preserves_original_accept_metadata_when_forwarding_encryption
         env!("CARGO_PKG_VERSION"),
         source_store.genesis_commitment().to_hex(),
     );
-    let mut request = Request::new(());
+    let mut request = Request::new(proto::miden::node::v1::GetTransactionEncryptionKeyRequest {});
     request.metadata_mut().insert(ACCEPT.as_str(), original_accept.parse().unwrap());
 
     let response = full_node
         .get_transaction_encryption_key(request)
         .await
         .expect("full-node RPC should forward the encryption key request")
-        .into_inner();
+        .into_inner()
+        .key
+        .expect("transaction encryption key");
 
     assert_eq!(response, expected);
     assert_eq!(
@@ -1473,14 +1565,15 @@ async fn full_node_preserves_original_accept_metadata_when_forwarding_encryption
 
 #[tokio::test]
 async fn full_node_forwards_get_network_note_status_to_source_rpc() {
-    let expected = proto::rpc::GetNetworkNoteStatusResponse {
-        status: proto::rpc::NetworkNoteStatus::Discarded.into(),
+    let note_id = Word::from([1u32, 2, 3, 4]);
+    let expected = proto::miden::node::v1::GetNetworkNoteStatusResponse {
+        status: proto::miden::node::v1::NetworkNoteStatus::Discarded.into(),
         last_error: Some("execution failed".to_string()),
         attempt_count: 7,
         last_attempt_block_num: Some(42),
     };
     let (ntx_builder, ntx_builder_call_count, _last_accept, _ntx_builder_server) =
-        start_ntx_builder(expected.clone()).await;
+        start_ntx_builder(note_id.into(), expected.clone()).await;
     let (source_rpc, _source_store, _source_server) =
         start_source_rpc(ntx_builder, dummy_client::<ValidatorClient>()).await;
     let local_store = TestStore::start().await;
@@ -1493,7 +1586,9 @@ async fn full_node_forwards_get_network_note_status_to_source_rpc() {
     );
 
     let response = full_node
-        .get_network_note_status(Request::new(Word::empty().into()))
+        .get_network_note_status(Request::new(
+            proto::miden::node::v1::GetNetworkNoteStatusRequest { note_id: Some(note_id.into()) },
+        ))
         .await
         .expect("full-node RPC should forward network note status request")
         .into_inner();
@@ -1504,14 +1599,15 @@ async fn full_node_forwards_get_network_note_status_to_source_rpc() {
 
 #[tokio::test]
 async fn full_node_preserves_original_accept_metadata_when_forwarding() {
-    let expected = proto::rpc::GetNetworkNoteStatusResponse {
-        status: proto::rpc::NetworkNoteStatus::Discarded.into(),
+    let note_id = Word::from([1u32, 2, 3, 4]);
+    let expected = proto::miden::node::v1::GetNetworkNoteStatusResponse {
+        status: proto::miden::node::v1::NetworkNoteStatus::Discarded.into(),
         last_error: Some("execution failed".to_string()),
         attempt_count: 7,
         last_attempt_block_num: Some(42),
     };
     let (ntx_builder, _ntx_builder_call_count, last_accept, _ntx_builder_server) =
-        start_ntx_builder(expected.clone()).await;
+        start_ntx_builder(note_id.into(), expected.clone()).await;
     let (source_rpc, source_store, _source_server) =
         start_source_rpc(ntx_builder, dummy_client::<ValidatorClient>()).await;
     let local_store = TestStore::start().await;
@@ -1528,7 +1624,9 @@ async fn full_node_preserves_original_accept_metadata_when_forwarding() {
         env!("CARGO_PKG_VERSION"),
         source_store.genesis_commitment().to_hex(),
     );
-    let mut request = Request::new(Word::empty().into());
+    let mut request = Request::new(proto::miden::node::v1::GetNetworkNoteStatusRequest {
+        note_id: Some(note_id.into()),
+    });
     request.metadata_mut().insert(ACCEPT.as_str(), original_accept.parse().unwrap());
 
     let response = full_node
@@ -1571,14 +1669,18 @@ async fn full_node_forwards_complete_transaction_batch_to_source_rpc(#[case] inc
     let mut malformed = fixture.request.clone();
     malformed.sealed_transaction_inputs.clear();
     let error = full_node
-        .submit_proven_tx_batch(Request::new(malformed))
+        .submit_proven_tx_batch(Request::new(proto::miden::node::v1::SubmitProvenTxBatchRequest {
+            submission: Some(malformed),
+        }))
         .await
         .expect_err("batch submission must require one sealed input per transaction");
     assert_eq!(error.code(), tonic::Code::InvalidArgument);
     assert!(error.message().contains("sealed transaction input count"), "{error}");
 
     let response = full_node
-        .submit_proven_tx_batch(Request::new(fixture.request))
+        .submit_proven_tx_batch(Request::new(proto::miden::node::v1::SubmitProvenTxBatchRequest {
+            submission: Some(fixture.request),
+        }))
         .await
         .expect("full-node RPC should forward both structured batch fields to its source")
         .into_inner();
@@ -1607,14 +1709,16 @@ async fn sequencer_authenticated_rpc_accepts_user_batch_without_fee_notes() {
     for tx in fixture.proposed_batch.transactions() {
         auth_inputs.push(get_tx_inputs(&store.state, tx).await.unwrap().into());
     }
-    let request = proto::sequencer::AuthenticatedTransactionBatch {
+    let request = proto::miden::sequencer::v1::AuthenticatedTransactionBatch {
         proposed_batch: fixture.request.proposed_batch,
         batch_proof: fixture.request.batch,
         auth_inputs,
     };
 
     let response = service
-        .submit_authenticated_tx_batch(Request::new(request))
+        .submit_authenticated_tx_batch(Request::new(
+            proto::miden::sequencer::v1::SubmitAuthenticatedTxBatchRequest { batch: Some(request) },
+        ))
         .await
         .expect("the sequencer should accept a user batch without fee output notes")
         .into_inner();
@@ -1624,16 +1728,15 @@ async fn sequencer_authenticated_rpc_accepts_user_batch_without_fee_notes() {
 
 #[tokio::test]
 async fn authenticated_batch_defers_validation_to_async_handler() {
-    let request = proto::sequencer::AuthenticatedTransactionBatch {
+    let request = proto::miden::sequencer::v1::AuthenticatedTransactionBatch {
         proposed_batch: Some(proto::transaction::ProposedBatch::default()),
         auth_inputs: Vec::new(),
         batch_proof: None,
     };
-    let input =
-        <SequencerInternalService as sequencer_api::SubmitAuthenticatedTxBatch>::decode(request)
-            .expect(
-                "wire decoding should defer proof-bearing batch conversion to the async handler",
-            );
+    let input = <SequencerInternalService as miden_sequencer_v1_sequencer_service::SubmitAuthenticatedTxBatch>::decode(
+        proto::miden::sequencer::v1::SubmitAuthenticatedTxBatchRequest { batch: Some(request) },
+    )
+    .expect("wire decoding should defer proof-bearing batch conversion to the async handler");
 
     let store = TestStore::start().await;
     let shutdown = CancellationToken::new();
@@ -1648,7 +1751,7 @@ async fn authenticated_batch_defers_validation_to_async_handler() {
         block_producer,
         account_admission: AccountAdmission::enabled(store.bootstrap_allowlist()),
     };
-    let error = <SequencerInternalService as sequencer_api::SubmitAuthenticatedTxBatch>::handle(
+    let error = <SequencerInternalService as miden_sequencer_v1_sequencer_service::SubmitAuthenticatedTxBatch>::handle(
         &service,
         input,
         &MetadataMap::new(),
@@ -1691,7 +1794,11 @@ async fn rpc_server_rejects_tx_submissions_without_genesis() {
         sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
     };
 
-    let response = rpc_client.submit_proven_tx(request).await;
+    let response = rpc_client
+        .submit_proven_tx(proto::miden::node::v1::SubmitProvenTxRequest {
+            submission: Some(request),
+        })
+        .await;
 
     // Assert that the server rejected our request.
     assert!(response.is_err());
@@ -1709,8 +1816,11 @@ async fn rpc_server_rejects_tx_submissions_without_genesis() {
 /// Sends an arbitrary / irrelevant request to the RPC.
 async fn send_request(
     rpc_client: &mut RpcClient,
-) -> std::result::Result<tonic::Response<proto::rpc::BlockHeaderByNumberResponse>, tonic::Status> {
-    let request = proto::rpc::BlockHeaderByNumberRequest {
+) -> std::result::Result<
+    tonic::Response<proto::miden::node::v1::GetBlockHeaderByNumberResponse>,
+    tonic::Status,
+> {
+    let request = proto::miden::node::v1::GetBlockHeaderByNumberRequest {
         block_num: Some(0),
         include_mmr_proof: None,
         include_protocol_config: None,
@@ -1813,11 +1923,12 @@ async fn register_account_validates_input_and_preserves_registrations() {
             AssetCallbackFlag::Disabled,
         )
     });
-    let request = proto::rpc::RegisterAccountRequest {
+    let request = proto::miden::node::v1::RegisterAccountRequest {
         invitation_code: "abc".to_owned(),
         account_id: Some(account.into()),
     };
-    let query = proto::rpc::IsAccountAllowedRequest { account_id: Some(account.into()) };
+    let query =
+        proto::miden::node::v1::IsAccountAllowedRequest { account_id: Some(account.into()) };
     assert!(!rpc.is_account_allowed(query).await.unwrap().into_inner().allowed);
     assert_eq!(
         rpc.register_account(request.clone()).await.unwrap_err().code(),
@@ -1831,12 +1942,12 @@ async fn register_account_validates_input_and_preserves_registrations() {
         .without_otel_context_injection()
         .connect_lazy::<RpcClient>();
     for invalid in [
-        proto::rpc::RegisterAccountRequest {
+        proto::miden::node::v1::RegisterAccountRequest {
             invitation_code: String::new(),
             ..request.clone()
         },
-        proto::rpc::RegisterAccountRequest { account_id: None, ..request.clone() },
-        proto::rpc::RegisterAccountRequest {
+        proto::miden::node::v1::RegisterAccountRequest { account_id: None, ..request.clone() },
+        proto::miden::node::v1::RegisterAccountRequest {
             account_id: Some(proto::account::AccountId::default()),
             ..request.clone()
         },
@@ -1865,7 +1976,7 @@ async fn register_account_validates_input_and_preserves_registrations() {
     rpc.register_account(request.clone()).await.unwrap();
     rpc.register_account(request.clone()).await.unwrap();
     assert!(rpc.is_account_allowed(query).await.unwrap().into_inner().allowed);
-    let conflict = proto::rpc::RegisterAccountRequest {
+    let conflict = proto::miden::node::v1::RegisterAccountRequest {
         account_id: Some(other.into()),
         ..request.clone()
     };
@@ -1887,7 +1998,7 @@ async fn register_account_validates_input_and_preserves_registrations() {
         .await
         .unwrap();
     assert_eq!(
-        rpc.register_account(proto::rpc::RegisterAccountRequest {
+        rpc.register_account(proto::miden::node::v1::RegisterAccountRequest {
             invitation_code: "unused".to_owned(),
             ..request
         })
@@ -1926,14 +2037,14 @@ async fn register_account_and_lookup_preserve_conversion_errors() {
         ),
     ] {
         let registration_error = rpc
-            .register_account(proto::rpc::RegisterAccountRequest {
+            .register_account(proto::miden::node::v1::RegisterAccountRequest {
                 account_id,
                 invitation_code: "abc".to_owned(),
             })
             .await
             .unwrap_err();
         let lookup_error = rpc
-            .is_account_allowed(proto::rpc::IsAccountAllowedRequest { account_id })
+            .is_account_allowed(proto::miden::node::v1::IsAccountAllowedRequest { account_id })
             .await
             .unwrap_err();
         for error in [registration_error, lookup_error] {
@@ -1962,7 +2073,7 @@ async fn allowlist_database_failures_include_the_cause(#[case] disabled: bool) {
         AccountType::Private,
         AssetCallbackFlag::Disabled,
     );
-    let mut request = Request::new(proto::rpc::RegisterAccountRequest {
+    let mut request = Request::new(proto::miden::node::v1::RegisterAccountRequest {
         invitation_code: "abc".to_owned(),
         account_id: Some(account.into()),
     });
@@ -1977,7 +2088,8 @@ async fn allowlist_database_failures_include_the_cause(#[case] disabled: bool) {
     assert_eq!(error.code(), tonic::Code::Internal);
     assert!(error.message().contains("unable to open database file"), "{error}");
 
-    let query = proto::rpc::IsAccountAllowedRequest { account_id: Some(account.into()) };
+    let query =
+        proto::miden::node::v1::IsAccountAllowedRequest { account_id: Some(account.into()) };
     if disabled {
         assert!(rpc.is_account_allowed(query).await.unwrap().into_inner().allowed);
     } else {
@@ -2019,7 +2131,7 @@ async fn full_nodes_forward_allowlist_requests_to_the_sequencer() {
             NonZeroUsize::new(1).unwrap(),
             None,
         );
-        let registration = proto::rpc::RegisterAccountRequest {
+        let registration = proto::miden::node::v1::RegisterAccountRequest {
             invitation_code: code,
             account_id: Some(account.into()),
         };
@@ -2034,7 +2146,7 @@ async fn full_nodes_forward_allowlist_requests_to_the_sequencer() {
             request
         };
         let query = || {
-            let mut query = Request::new(proto::rpc::IsAccountAllowedRequest {
+            let mut query = Request::new(proto::miden::node::v1::IsAccountAllowedRequest {
                 account_id: Some(account.into()),
             });
             *query.metadata_mut() = request().metadata().clone();
@@ -2083,7 +2195,10 @@ async fn get_limits_endpoint() {
     let (mut rpc_client, _rpc_addr, _store, _server) = start_rpc().await;
 
     // Call the get_limits endpoint
-    let response = rpc_client.get_limits(()).await.expect("get_limits should succeed");
+    let response = rpc_client
+        .get_limits(proto::miden::node::v1::GetLimitsRequest {})
+        .await
+        .expect("get_limits should succeed");
     let limits = response.into_inner();
 
     // Verify the response contains expected endpoints and limits
@@ -2168,16 +2283,16 @@ async fn sync_endpoints_preserve_account_verification_context() {
             suffix: Some(proto::primitives::Felt { value: 0 }),
         })),
     };
-    let block_range = Some(proto::rpc::BlockRange { block_from: 0, block_to: 0 });
+    let block_range = Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 });
     let storage_error = rpc_client
-        .sync_account_storage_maps(proto::rpc::SyncAccountStorageMapsRequest {
+        .sync_account_storage_maps(proto::miden::node::v1::SyncAccountStorageMapsRequest {
             account_id: Some(invalid_id),
             block_range,
         })
         .await
         .unwrap_err();
     let vault_error = rpc_client
-        .sync_account_vault(proto::rpc::SyncAccountVaultRequest {
+        .sync_account_vault(proto::miden::node::v1::SyncAccountVaultRequest {
             account_id: Some(invalid_id),
             block_range,
         })
@@ -2190,7 +2305,7 @@ async fn sync_endpoints_preserve_account_verification_context() {
         AssetCallbackFlag::Disabled,
     );
     let transactions_error = rpc_client
-        .sync_transactions(proto::rpc::SyncTransactionsRequest {
+        .sync_transactions(proto::miden::node::v1::SyncTransactionsRequest {
             account_ids: vec![valid_id.into(), invalid_id],
             block_range,
         })
@@ -2213,8 +2328,8 @@ async fn sync_endpoints_preserve_account_verification_context() {
 async fn sync_transactions_rejects_oversized_requests_before_decoding_fields() {
     let (mut rpc_client, _rpc_addr, _store, _server) = start_rpc().await;
     let error = rpc_client
-        .sync_transactions(proto::rpc::SyncTransactionsRequest {
-            block_range: Some(proto::rpc::BlockRange { block_from: 0, block_to: 0 }),
+        .sync_transactions(proto::miden::node::v1::SyncTransactionsRequest {
+            block_range: Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 }),
             account_ids: vec![
                 proto::account::AccountId::default();
                 QueryParamAccountIdLimit::LIMIT + 1
@@ -2232,9 +2347,9 @@ async fn sync_chain_mmr_returns_delta() {
     use miden_protocol::block::BlockHeader;
     let (mut rpc_client, _rpc_addr, _store, _server) = start_rpc().await;
 
-    let request = proto::rpc::SyncChainMmrRequest {
+    let request = proto::miden::node::v1::SyncChainMmrRequest {
         current_client_block_height: 0,
-        finality_level: proto::rpc::FinalityLevel::Committed.into(),
+        finality_level: proto::miden::node::v1::FinalityLevel::Committed.into(),
     };
     let response = rpc_client.sync_chain_mmr(request).await.expect("sync_chain_mmr should succeed");
     let response = response.into_inner();
@@ -2265,7 +2380,7 @@ async fn header_protocol_config_is_opt_in() {
     let (mut client, _, _store, _server) = start_rpc().await;
     for include in [None, Some(false), Some(true)] {
         let response = client
-            .get_block_header_by_number(proto::rpc::BlockHeaderByNumberRequest {
+            .get_block_header_by_number(proto::miden::node::v1::GetBlockHeaderByNumberRequest {
                 block_num: Some(0),
                 include_mmr_proof: Some(true),
                 include_protocol_config: include,
@@ -2288,7 +2403,7 @@ async fn header_protocol_config_is_opt_in() {
         }
     }
     let response = client
-        .get_block_header_by_number(proto::rpc::BlockHeaderByNumberRequest {
+        .get_block_header_by_number(proto::miden::node::v1::GetBlockHeaderByNumberRequest {
             block_num: Some(1),
             include_mmr_proof: None,
             include_protocol_config: Some(true),
@@ -2343,8 +2458,8 @@ async fn sync_nullifiers_rejects_prefix_above_u16() {
     let (mut rpc_client, _rpc_addr, _store, _server) = start_rpc().await;
 
     let status = rpc_client
-        .sync_nullifiers(proto::rpc::SyncNullifiersRequest {
-            block_range: Some(proto::rpc::BlockRange { block_from: 0, block_to: 0 }),
+        .sync_nullifiers(proto::miden::node::v1::SyncNullifiersRequest {
+            block_range: Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 }),
             prefix_len: 16,
             nullifiers: vec![u32::from(u16::MAX) + 1],
         })
@@ -2363,7 +2478,7 @@ async fn sync_nullifiers_rejects_prefix_above_u16() {
 async fn block_subscription_starts_with_matching_config() {
     let (mut client, _, _store, _server) = start_rpc().await;
     let mut stream = client
-        .block_subscription(proto::rpc::BlockSubscriptionRequest { block_from: 0 })
+        .block_subscription(proto::miden::node::v1::BlockSubscriptionRequest { block_from: 0 })
         .await
         .unwrap()
         .into_inner();
@@ -2449,9 +2564,9 @@ async fn protocol_config_transitions_follow_response_headers() {
 
     for (height, included) in [(0, true), (1, false), (2, true), (3, true), (4, false)] {
         let response = client
-            .sync_chain_mmr(proto::rpc::SyncChainMmrRequest {
+            .sync_chain_mmr(proto::miden::node::v1::SyncChainMmrRequest {
                 current_client_block_height: height,
-                finality_level: proto::rpc::FinalityLevel::Committed.into(),
+                finality_level: proto::miden::node::v1::FinalityLevel::Committed.into(),
             })
             .await
             .unwrap()
@@ -2478,9 +2593,9 @@ async fn protocol_config_transitions_follow_response_headers() {
     }
 
     let proven = client
-        .sync_chain_mmr(proto::rpc::SyncChainMmrRequest {
+        .sync_chain_mmr(proto::miden::node::v1::SyncChainMmrRequest {
             current_client_block_height: 0,
-            finality_level: proto::rpc::FinalityLevel::Proven.into(),
+            finality_level: proto::miden::node::v1::FinalityLevel::Proven.into(),
         })
         .await
         .unwrap()
@@ -2496,7 +2611,9 @@ async fn protocol_config_transitions_follow_response_headers() {
 
     for start in [1, 2] {
         let mut stream = client
-            .block_subscription(proto::rpc::BlockSubscriptionRequest { block_from: start })
+            .block_subscription(proto::miden::node::v1::BlockSubscriptionRequest {
+                block_from: start,
+            })
             .await
             .unwrap()
             .into_inner();
@@ -2579,7 +2696,7 @@ async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
     let (mut rpc_client, _rpc_addr, _store, _server) = start_rpc().await;
 
     // A range ending one block past the genesis tip; otherwise valid (non-empty, start <= end).
-    let block_range = || Some(proto::rpc::BlockRange { block_from: 0, block_to: 1 });
+    let block_range = || Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 1 });
     // Any public account id works: the chain-tip check happens before the account is queried.
     let account_id = || {
         Some(
@@ -2594,7 +2711,7 @@ async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
     };
 
     let status = rpc_client
-        .sync_nullifiers(proto::rpc::SyncNullifiersRequest {
+        .sync_nullifiers(proto::miden::node::v1::SyncNullifiersRequest {
             block_range: block_range(),
             prefix_len: 16,
             nullifiers: vec![],
@@ -2605,7 +2722,7 @@ async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
     assert_eq!(status.details(), &[4]);
 
     let status = rpc_client
-        .sync_notes(proto::rpc::SyncNotesRequest {
+        .sync_notes(proto::miden::node::v1::SyncNotesRequest {
             block_range: block_range(),
             note_tags: vec![],
         })
@@ -2615,7 +2732,7 @@ async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
     assert_eq!(status.details(), &[2]);
 
     let status = rpc_client
-        .sync_account_storage_maps(proto::rpc::SyncAccountStorageMapsRequest {
+        .sync_account_storage_maps(proto::miden::node::v1::SyncAccountStorageMapsRequest {
             block_range: block_range(),
             account_id: account_id(),
         })
@@ -2625,7 +2742,7 @@ async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
     assert_eq!(status.details(), &[5]);
 
     let status = rpc_client
-        .sync_account_vault(proto::rpc::SyncAccountVaultRequest {
+        .sync_account_vault(proto::miden::node::v1::SyncAccountVaultRequest {
             block_range: block_range(),
             account_id: account_id(),
         })
@@ -2635,7 +2752,7 @@ async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
     assert_eq!(status.details(), &[4]);
 
     let status = rpc_client
-        .sync_transactions(proto::rpc::SyncTransactionsRequest {
+        .sync_transactions(proto::miden::node::v1::SyncTransactionsRequest {
             block_range: block_range(),
             account_ids: vec![],
         })

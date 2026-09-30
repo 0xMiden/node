@@ -60,9 +60,10 @@ mod tests {
         let transaction =
             MockAuthenticatedTxBuilder::new(MockProvenTxBuilder::with_account_index(1).build())
                 .build();
-        let encoded = miden_node_proto::generated::sequencer::AuthenticatedTransaction::from(
-            transaction.clone(),
-        );
+        let encoded =
+            miden_node_proto::generated::miden::sequencer::v1::AuthenticatedTransaction::from(
+                transaction.clone(),
+            );
         let decoded = encoded.decode_fields().unwrap().build_unchecked().unwrap();
         assert_eq!(decoded, transaction);
     }

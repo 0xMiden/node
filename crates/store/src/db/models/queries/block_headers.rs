@@ -12,7 +12,6 @@ use diesel::{
 };
 use miden_node_utils::limiter::{QueryParamBlockLimit, QueryParamLimiter};
 use miden_protocol::block::{BlockHeader, BlockNumber, BlockSignatures};
-use miden_protocol::utils::serde::Deserializable;
 
 use super::DatabaseError;
 use crate::db::models::conv::SqlTypeConvert;
@@ -178,8 +177,8 @@ impl TryInto<BlockHeader> for BlockHeaderRawRow {
 impl TryInto<(BlockHeader, BlockSignatures)> for BlockHeaderRawRow {
     type Error = DatabaseError;
     fn try_into(self) -> Result<(BlockHeader, BlockSignatures), Self::Error> {
-        let block_header = BlockHeader::read_from_bytes(&self.block_header[..])?;
-        let signatures = BlockSignatures::read_from_bytes(&self.signature[..])?;
+        let block_header = miden_node_persistence::decode::<BlockHeader>(&self.block_header[..])?;
+        let signatures = miden_node_persistence::decode::<BlockSignatures>(&self.signature[..])?;
         Ok((block_header, signatures))
     }
 }

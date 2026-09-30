@@ -211,7 +211,7 @@ data and must never be used outside local development.
 The RPC server exposes gRPC reflection. With `grpcurl` installed, a basic status check looks like:
 
 ```bash
-grpcurl -plaintext localhost:57291 rpc.Api/Status
+grpcurl -plaintext localhost:57291 miden.node.v1.NodeService/Status
 ```
 
 Note the `-plaintext` flag, the local network does not use TLS.

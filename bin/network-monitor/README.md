@@ -35,8 +35,8 @@ On a chain with a non-zero verification base fee, network transaction checks add
 balance up automatically when it runs low. Without it the monitor refuses to start its network transaction checks on
 such chains. `MIDEN_MONITOR_FAUCET_URL` is only used for the faucet checks.
 
-The note transport check uses the standard gRPC health service for `note_transport.Api`. Only a `SERVING` response marks
-the service as healthy. Its dashboard card shows the service URL.
+The note transport check uses the standard gRPC health service for `miden.note_transport.v1.NoteTransportService`. Only
+a `SERVING` response marks the service as healthy. Its dashboard card shows the service URL.
 
 The Agglayer bridge check reads `GET /v1/status` from the agglayer-monitor API at `MIDEN_MONITOR_AGGLAYER_MONITOR_URL`.
 The agglayer-monitor runs the E2E bridge tests between L1 and Miden. The monitor does not send bridge transactions. The

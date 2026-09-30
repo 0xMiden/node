@@ -13,7 +13,7 @@ pub mod validator;
 
 use miden_node_tracing::{RecordAttribute, Value};
 
-impl RecordAttribute for crate::generated::rpc::FinalityLevel {
+impl RecordAttribute for crate::generated::miden::node::v1::FinalityLevel {
     const FIELD_NAMES: &'static [&'static str] = &["finality_level"];
 
     fn record_attribute(&self) -> impl Value + '_ {

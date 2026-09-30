@@ -1,4 +1,4 @@
-use miden_node_proto::generated::server::sequencer_api;
+use miden_node_proto::generated::server::miden_sequencer_v1_sequencer_service;
 use miden_node_proto::{DecodeMessageExt, generated as proto};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use tonic::Status;
@@ -6,18 +6,22 @@ use tonic::Status;
 use super::SequencerInternalService;
 
 #[tonic::async_trait]
-impl sequencer_api::SubmitAuthenticatedTxBatch for SequencerInternalService {
-    type Input = proto::sequencer::AuthenticatedTransactionBatch;
+impl miden_sequencer_v1_sequencer_service::SubmitAuthenticatedTxBatch for SequencerInternalService {
+    type Input = proto::miden::sequencer::v1::AuthenticatedTransactionBatch;
     type Output = proto::blockchain::BlockNumber;
 
     fn decode(
-        request: proto::sequencer::AuthenticatedTransactionBatch,
+        request: proto::miden::sequencer::v1::SubmitAuthenticatedTxBatchRequest,
     ) -> tonic::Result<Self::Input> {
-        Ok(request)
+        request.batch.ok_or_else(|| tonic::Status::invalid_argument("missing batch"))
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::blockchain::BlockNumber> {
-        Ok(output)
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<proto::miden::sequencer::v1::SubmitAuthenticatedTxBatchResponse> {
+        Ok(proto::miden::sequencer::v1::SubmitAuthenticatedTxBatchResponse {
+            block_num: output.block_num,
+        })
     }
 
     async fn handle(

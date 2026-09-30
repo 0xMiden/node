@@ -37,9 +37,8 @@ async function probeGrpcWeb(baseUrl, grpcPath) {
         "Content-Type": "application/grpc-web+proto",
         "X-Grpc-Web": "1",
     };
-    // The Miden RPC service requires its custom Accept header; the remote prover is fine with
-    // the standard gRPC-Web content type.
-    headers["Accept"] = grpcPath.startsWith("/rpc.")
+    // Use the Miden media type for node RPC requests.
+    headers["Accept"] = grpcPath.startsWith("/miden.node.")
         ? "application/vnd.miden"
         : "application/grpc-web+proto";
 

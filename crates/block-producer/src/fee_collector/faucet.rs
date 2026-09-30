@@ -1,8 +1,8 @@
 use anyhow::Context;
 use miden_node_proto::domain::account::{
     AccountDetailRequest,
-    AccountRequest,
     AccountStorageRequest,
+    GetAccountRequest,
     SlotData,
     StorageMapEntries,
     StorageMapRequest,
@@ -41,7 +41,7 @@ impl FeeFaucet {
             .context("protocol configuration is missing")?;
         let id = config.fee_asset_id().faucet_id();
         let response = view
-            .get_account(AccountRequest {
+            .get_account(GetAccountRequest {
                 account_id: id,
                 block_num: None,
                 details: Some(AccountDetailRequest {
@@ -62,7 +62,7 @@ impl FeeFaucet {
         block: BlockNumber,
     ) -> anyhow::Result<AccountInputs> {
         let response = view
-            .get_account(AccountRequest {
+            .get_account(GetAccountRequest {
                 account_id: self.id,
                 block_num: Some(block),
                 details: Some(AccountDetailRequest {
@@ -105,7 +105,7 @@ impl FeeFaucet {
             .name()
             .clone();
         let response = view
-            .get_account(AccountRequest {
+            .get_account(GetAccountRequest {
                 account_id: self.id,
                 block_num: Some(block),
                 details: Some(AccountDetailRequest {

@@ -4,7 +4,8 @@ use std::sync::Mutex as StdMutex;
 use std::task::{Context as TaskContext, Poll};
 
 use futures::future::BoxFuture;
-use miden_node_proto::generated::{note, rpc, transaction};
+use miden_node_proto::generated::miden::node::v1 as rpc;
+use miden_node_proto::generated::{note, transaction};
 use miden_node_proto::prost::Message;
 use miden_protocol::asset::{AssetId, FungibleAsset};
 use miden_protocol::note::NoteType;
@@ -106,8 +107,8 @@ impl TestChain {
         }
     }
 
-    fn notes_by_id(&self, request: &NotesByIdRequest) -> rpc::NotesByIdResponse {
-        rpc::NotesByIdResponse {
+    fn notes_by_id(&self, request: &GetNotesByIdRequest) -> rpc::GetNotesByIdResponse {
+        rpc::GetNotesByIdResponse {
             notes: request
                 .note_ids
                 .iter()
@@ -205,7 +206,7 @@ impl<Req, Resp> UnaryService<Req> for Reply<Req, Resp> {
 }
 
 impl NamedService for RpcFixture {
-    const NAME: &'static str = "rpc.Api";
+    const NAME: &'static str = "miden.node.v1.NodeService";
 }
 
 impl Service<http::Request<Body>> for RpcFixture {
@@ -223,10 +224,12 @@ impl Service<http::Request<Body>> for RpcFixture {
             return Box::pin(async { Ok(tonic::Status::unavailable("retry").into_http()) });
         }
         match method {
-            "Status" => self.respond(request, |chain, _: &()| rpc::RpcStatus {
-                chain_tip: chain.tip,
-                ..Default::default()
-            }),
+            "Status" => {
+                self.respond(request, |chain, _: &rpc::StatusRequest| rpc::StatusResponse {
+                    chain_tip: chain.tip,
+                    ..Default::default()
+                })
+            },
             "SyncTransactions" => self.respond(request, TestChain::sync_transactions),
             "SyncNotes" => self.respond(request, TestChain::sync_notes),
             "GetNotesById" => self.respond(request, TestChain::notes_by_id),

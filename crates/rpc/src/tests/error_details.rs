@@ -14,10 +14,16 @@ async fn malformed_read_requests_return_method_specific_codes() {
     let (mut client, _, _store, _server) = start_rpc().await;
 
     let errors = [
-        (client.get_account(proto::rpc::AccountRequest::default()).await.unwrap_err(), 1),
         (
             client
-                .get_notes_by_id(proto::rpc::NotesByIdRequest {
+                .get_account(proto::miden::node::v1::GetAccountRequest::default())
+                .await
+                .unwrap_err(),
+            1,
+        ),
+        (
+            client
+                .get_notes_by_id(proto::miden::node::v1::GetNotesByIdRequest {
                     note_ids: vec![proto::note::NoteId::default()],
                 })
                 .await
@@ -26,36 +32,46 @@ async fn malformed_read_requests_return_method_specific_codes() {
         ),
         (
             client
-                .get_note_script_by_root(proto::rpc::NoteScriptByRootRequest::default())
+                .get_note_script_by_root(
+                    proto::miden::node::v1::GetNoteScriptByRootRequest::default(),
+                )
                 .await
                 .unwrap_err(),
             1,
         ),
-        (client.sync_notes(proto::rpc::SyncNotesRequest::default()).await.unwrap_err(), 3),
         (
             client
-                .sync_nullifiers(proto::rpc::SyncNullifiersRequest::default())
+                .sync_notes(proto::miden::node::v1::SyncNotesRequest::default())
                 .await
                 .unwrap_err(),
             3,
         ),
         (
             client
-                .sync_account_vault(proto::rpc::SyncAccountVaultRequest::default())
+                .sync_nullifiers(proto::miden::node::v1::SyncNullifiersRequest::default())
+                .await
+                .unwrap_err(),
+            3,
+        ),
+        (
+            client
+                .sync_account_vault(proto::miden::node::v1::SyncAccountVaultRequest::default())
                 .await
                 .unwrap_err(),
             2,
         ),
         (
             client
-                .sync_account_storage_maps(proto::rpc::SyncAccountStorageMapsRequest::default())
+                .sync_account_storage_maps(
+                    proto::miden::node::v1::SyncAccountStorageMapsRequest::default(),
+                )
                 .await
                 .unwrap_err(),
             2,
         ),
         (
             client
-                .sync_transactions(proto::rpc::SyncTransactionsRequest::default())
+                .sync_transactions(proto::miden::node::v1::SyncTransactionsRequest::default())
                 .await
                 .unwrap_err(),
             2,
@@ -70,16 +86,16 @@ async fn malformed_read_requests_return_method_specific_codes() {
 #[tokio::test]
 async fn reversed_sync_ranges_return_invalid_range_code() {
     let (mut client, _, _store, _server) = start_rpc().await;
-    let block_range = Some(proto::rpc::BlockRange { block_from: 1, block_to: 0 });
+    let block_range = Some(proto::miden::node::v1::BlockRange { block_from: 1, block_to: 0 });
     let account_id = Some(AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap().into());
 
     let errors = [
         client
-            .sync_notes(proto::rpc::SyncNotesRequest { block_range, note_tags: vec![] })
+            .sync_notes(proto::miden::node::v1::SyncNotesRequest { block_range, note_tags: vec![] })
             .await
             .unwrap_err(),
         client
-            .sync_nullifiers(proto::rpc::SyncNullifiersRequest {
+            .sync_nullifiers(proto::miden::node::v1::SyncNullifiersRequest {
                 block_range,
                 prefix_len: 16,
                 nullifiers: vec![],
@@ -87,18 +103,21 @@ async fn reversed_sync_ranges_return_invalid_range_code() {
             .await
             .unwrap_err(),
         client
-            .sync_account_vault(proto::rpc::SyncAccountVaultRequest { block_range, account_id })
-            .await
-            .unwrap_err(),
-        client
-            .sync_account_storage_maps(proto::rpc::SyncAccountStorageMapsRequest {
+            .sync_account_vault(proto::miden::node::v1::SyncAccountVaultRequest {
                 block_range,
                 account_id,
             })
             .await
             .unwrap_err(),
         client
-            .sync_transactions(proto::rpc::SyncTransactionsRequest {
+            .sync_account_storage_maps(proto::miden::node::v1::SyncAccountStorageMapsRequest {
+                block_range,
+                account_id,
+            })
+            .await
+            .unwrap_err(),
+        client
+            .sync_transactions(proto::miden::node::v1::SyncTransactionsRequest {
                 block_range,
                 account_ids: vec![],
             })
@@ -114,7 +133,7 @@ async fn reversed_sync_ranges_return_invalid_range_code() {
 #[tokio::test]
 async fn private_account_sync_returns_method_specific_codes() {
     let (mut client, _, _store, _server) = start_rpc().await;
-    let block_range = Some(proto::rpc::BlockRange { block_from: 0, block_to: 0 });
+    let block_range = Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 });
     let account_id = Some(
         AccountId::dummy(
             [0; 15],
@@ -126,13 +145,16 @@ async fn private_account_sync_returns_method_specific_codes() {
     );
 
     let vault = client
-        .sync_account_vault(proto::rpc::SyncAccountVaultRequest { block_range, account_id })
+        .sync_account_vault(proto::miden::node::v1::SyncAccountVaultRequest {
+            block_range,
+            account_id,
+        })
         .await
         .unwrap_err();
     assert_client_error(&vault, 3);
 
     let storage = client
-        .sync_account_storage_maps(proto::rpc::SyncAccountStorageMapsRequest {
+        .sync_account_storage_maps(proto::miden::node::v1::SyncAccountStorageMapsRequest {
             block_range,
             account_id,
         })
@@ -163,10 +185,12 @@ async fn account_lookup_returns_distinct_error_codes() {
         (public_id, Some(BlockNumber::from(1).into()), 4),
     ] {
         let error = client
-            .get_account(proto::rpc::AccountRequest {
+            .get_account(proto::miden::node::v1::GetAccountRequest {
                 account_id: Some(account_id.into()),
                 block_num,
-                details: Some(proto::rpc::account_request::AccountDetailRequest::default()),
+                details: Some(
+                    proto::miden::node::v1::get_account_request::AccountDetailRequest::default(),
+                ),
             })
             .await
             .unwrap_err();
@@ -180,8 +204,11 @@ async fn nullifier_prefix_errors_return_distinct_codes() {
 
     for (prefix_len, nullifiers, detail) in [(15, vec![], 2), (16, vec![65536], 3)] {
         let error = client
-            .sync_nullifiers(proto::rpc::SyncNullifiersRequest {
-                block_range: Some(proto::rpc::BlockRange { block_from: 0, block_to: 0 }),
+            .sync_nullifiers(proto::miden::node::v1::SyncNullifiersRequest {
+                block_range: Some(proto::miden::node::v1::BlockRange {
+                    block_from: 0,
+                    block_to: 0,
+                }),
                 prefix_len,
                 nullifiers,
             })
@@ -195,7 +222,7 @@ async fn nullifier_prefix_errors_return_distinct_codes() {
 async fn chain_mmr_sync_returns_future_block_code() {
     let (mut client, _, _store, _server) = start_rpc().await;
     let error = client
-        .sync_chain_mmr(proto::rpc::SyncChainMmrRequest {
+        .sync_chain_mmr(proto::miden::node::v1::SyncChainMmrRequest {
             current_client_block_height: 1,
             ..Default::default()
         })

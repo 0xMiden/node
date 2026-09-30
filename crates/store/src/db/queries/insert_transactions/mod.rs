@@ -9,7 +9,6 @@ use miden_protocol::transaction::{
     OrderedTransactionHeaders,
     TransactionHeader,
 };
-use miden_protocol::utils::serde::Serializable;
 
 use crate::COMPONENT;
 use crate::errors::DatabaseError;
@@ -45,11 +44,11 @@ fn insert_transaction(
 ) -> Result<usize, DatabaseError> {
     // Serialize input notes as full InputNoteCommitments (nullifier + optional NoteHeader).
     let input_notes: Vec<InputNoteCommitment> = header.input_notes().iter().cloned().collect();
-    let input_notes = input_notes.to_bytes();
+    let input_notes = miden_node_persistence::encode(&input_notes);
 
     // Serialize output notes as full NoteHeaders (NoteId + NoteMetadata).
     let output_notes: Vec<NoteHeader> = header.output_notes().to_vec();
-    let output_notes = output_notes.to_bytes();
+    let output_notes = miden_node_persistence::encode(&output_notes);
 
     Ok(tx.execute(
         SQL,

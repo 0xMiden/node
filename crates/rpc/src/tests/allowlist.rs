@@ -40,7 +40,7 @@ async fn disabled_allowlist_registers_accounts_without_changing_invitations() {
         None,
     );
     let request = |code: &str, account_id| {
-        let mut request = Request::new(proto::rpc::RegisterAccountRequest {
+        let mut request = Request::new(proto::miden::node::v1::RegisterAccountRequest {
             invitation_code: code.to_owned(),
             account_id,
         });
@@ -179,7 +179,7 @@ async fn registration_requests_funding_once_after_commit(#[case] disabled: bool)
         } else {
             format!("funding-{index}")
         };
-        let request = proto::rpc::RegisterAccountRequest {
+        let request = proto::miden::node::v1::RegisterAccountRequest {
             invitation_code: code.clone(),
             account_id: Some(account.into()),
         };
@@ -207,7 +207,7 @@ async fn registration_requests_funding_once_after_commit(#[case] disabled: bool)
         assert!(allowlist.contains_account(account).await.unwrap());
         rpc.register_account(Request::new(request.clone())).await.unwrap();
         if disabled {
-            rpc.register_account(Request::new(proto::rpc::RegisterAccountRequest {
+            rpc.register_account(Request::new(proto::miden::node::v1::RegisterAccountRequest {
                 invitation_code: "another code".to_owned(),
                 ..request
             }))
@@ -380,14 +380,16 @@ async fn is_account_allowed_respects_enforcement() {
                 )),
             }),
         ] {
-            let invalid = proto::rpc::IsAccountAllowedRequest { account_id };
+            let invalid = proto::miden::node::v1::IsAccountAllowedRequest { account_id };
             assert_eq!(
                 rpc.is_account_allowed(Request::new(invalid)).await.unwrap_err().code(),
                 tonic::Code::InvalidArgument
             );
         }
         for (account, expected) in [(listed, true), (unlisted, unlisted_allowed)] {
-            let query = proto::rpc::IsAccountAllowedRequest { account_id: Some(account.into()) };
+            let query = proto::miden::node::v1::IsAccountAllowedRequest {
+                account_id: Some(account.into()),
+            };
             let response = rpc.is_account_allowed(Request::new(query)).await.unwrap();
             assert_eq!(response.into_inner().allowed, expected);
         }
@@ -472,15 +474,12 @@ async fn submission_endpoints_reject_unregistered_creation_without_partial_batch
 
     let proven_batch = spawn_blocking_in_current_span({
         let batch = batch.clone();
-        move || {
-            let executed = BatchExecutor::new().execute(batch)?;
-            LocalBatchProver::default().prove(executed)
-        }
+        move || LocalBatchProver::default().prove(BatchExecutor::new().execute(batch)?)
     })
     .await
     .unwrap()
     .unwrap();
-    let tx = proto::sequencer::AuthenticatedTransaction {
+    let tx = proto::miden::sequencer::v1::AuthenticatedTransaction {
         transaction: Some(transactions[1].as_ref().into()),
         ..Default::default()
     };
@@ -488,7 +487,7 @@ async fn submission_endpoints_reject_unregistered_creation_without_partial_batch
     for tx in transactions {
         auth_inputs.push(get_tx_inputs(&store.state, tx).await.unwrap().into());
     }
-    let authenticated_batch = proto::sequencer::AuthenticatedTransactionBatch {
+    let authenticated_batch = proto::miden::sequencer::v1::AuthenticatedTransactionBatch {
         proposed_batch: Some((&batch).into()),
         batch_proof: Some((&proven_batch).into()),
         auth_inputs,
@@ -496,22 +495,40 @@ async fn submission_endpoints_reject_unregistered_creation_without_partial_batch
 
     for result in [
         public
-            .submit_proven_tx(Request::new(proto::submission::ProvenTransactionSubmission {
-                transaction: Some(transactions[1].as_ref().into()),
-                sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
+            .submit_proven_tx(Request::new(proto::miden::node::v1::SubmitProvenTxRequest {
+                submission: Some(proto::submission::ProvenTransactionSubmission {
+                    transaction: Some(transactions[1].as_ref().into()),
+                    sealed_transaction_inputs: Some(test_sealed_transaction_inputs()),
+                }),
             }))
-            .await,
+            .await
+            .map(|_| ()),
         public
-            .submit_proven_tx_batch(Request::new(proto::submission::TransactionBatch {
-                batch: Some((&proven_batch).into()),
-                proposed_batch: Some((&batch).into()),
-                sealed_transaction_inputs: vec![test_sealed_transaction_inputs(); 2],
-            }))
-            .await,
-        internal.submit_authenticated_tx(Request::new(tx)).await,
+            .submit_proven_tx_batch(Request::new(
+                proto::miden::node::v1::SubmitProvenTxBatchRequest {
+                    submission: Some(proto::submission::TransactionBatch {
+                        batch: Some((&proven_batch).into()),
+                        proposed_batch: Some((&batch).into()),
+                        sealed_transaction_inputs: vec![test_sealed_transaction_inputs(); 2],
+                    }),
+                },
+            ))
+            .await
+            .map(|_| ()),
         internal
-            .submit_authenticated_tx_batch(Request::new(authenticated_batch.clone()))
-            .await,
+            .submit_authenticated_tx(Request::new(
+                proto::miden::sequencer::v1::SubmitAuthenticatedTxRequest { transaction: Some(tx) },
+            ))
+            .await
+            .map(|_| ()),
+        internal
+            .submit_authenticated_tx_batch(Request::new(
+                proto::miden::sequencer::v1::SubmitAuthenticatedTxBatchRequest {
+                    batch: Some(authenticated_batch.clone()),
+                },
+            ))
+            .await
+            .map(|_| ()),
     ] {
         let status = result.unwrap_err();
         assert_eq!(status.code(), tonic::Code::PermissionDenied, "{status}");
@@ -521,7 +538,11 @@ async fn submission_endpoints_reject_unregistered_creation_without_partial_batch
     // The retry must not conflict with a partially admitted transaction from the rejected batch.
     allowlist.add_account(transactions[1].account_id()).await.unwrap();
     internal
-        .submit_authenticated_tx_batch(Request::new(authenticated_batch))
+        .submit_authenticated_tx_batch(Request::new(
+            proto::miden::sequencer::v1::SubmitAuthenticatedTxBatchRequest {
+                batch: Some(authenticated_batch),
+            },
+        ))
         .await
         .unwrap();
 }

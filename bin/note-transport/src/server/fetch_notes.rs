@@ -1,10 +1,10 @@
-use miden_node_proto::generated::note_transport::{
+use miden_node_proto::generated::miden::note_transport::v1::{
     FetchNotesCursor,
     FetchNotesRequest,
     FetchNotesResponse,
     FetchedNote,
 };
-use miden_node_proto::server::note_transport_api::FetchNotes;
+use miden_node_proto::server::miden_note_transport_v1_note_transport_service::FetchNotes;
 use miden_node_tracing::{debug, error, miden_instrument, miden_span_record};
 use prost::Message;
 use tonic::codegen::http::Extensions;
@@ -84,8 +84,7 @@ impl FetchNotes for Server {
             let note = FetchedNote {
                 header: Some(note.header.into()),
                 details: Some(note.details.into()),
-                after_block_num: note.after_block_num.map(Into::into),
-                committed_in_block: note.committed_in_block.map(Into::into),
+                committed_in_block: Some(note.committed_in_block.into()),
             };
             let note_bytes = note.encoded_len();
             let field_bytes =

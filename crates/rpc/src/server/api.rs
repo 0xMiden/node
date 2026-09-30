@@ -5,7 +5,7 @@ use anyhow::Context as AnyhowContext;
 use miden_node_block_producer::BlockProducerApi;
 use miden_node_proto::clients::NtxBuilderClient;
 use miden_node_proto::domain::block::InvalidBlockRange;
-use miden_node_proto::generated::rpc::MempoolStats as ProtoMempoolStats;
+use miden_node_proto::generated::miden::node::v1::MempoolStats as ProtoMempoolStats;
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::state::State;
 use miden_node_store::{DatabaseError, GetBlockHeaderError};
@@ -47,7 +47,15 @@ pub(crate) async fn submit_tx_to_validators(
     futures::future::try_join_all(validators.iter().map(|validator| {
         let mut validator = validator.clone();
         let request = request.clone();
-        async move { validator.submit_proven_transaction(request).await }
+        async move {
+            validator
+                .submit_proven_transaction(
+                    proto::miden::validator::v1::SubmitProvenTransactionRequest {
+                        submission: Some(request),
+                    },
+                )
+                .await
+        }
     }))
     .await?;
     Ok(())
@@ -302,15 +310,16 @@ fn check<Q: QueryParamLimiter>(n: usize) -> Result<(), Status> {
     <Q as QueryParamLimiter>::check(n).map_err(out_of_range_error)
 }
 
-/// Helper to build an [`EndpointLimits`](proto::rpc::EndpointLimits) from (name, limit) pairs.
-fn endpoint_limits(params: &[(&str, usize)]) -> proto::rpc::EndpointLimits {
-    proto::rpc::EndpointLimits {
+/// Helper to build an [`EndpointLimits`](proto::miden::node::v1::EndpointLimits) from (name, limit)
+/// pairs.
+fn endpoint_limits(params: &[(&str, usize)]) -> proto::miden::node::v1::EndpointLimits {
+    proto::miden::node::v1::EndpointLimits {
         parameters: params.iter().map(|(k, v)| ((*k).to_string(), *v as u32)).collect(),
     }
 }
 
 /// Cached RPC query parameter limits.
-static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
+static RPC_LIMITS: LazyLock<proto::miden::node::v1::GetLimitsResponse> = LazyLock::new(|| {
     use QueryParamAccountIdLimit as AccountId;
     use QueryParamNoteIdLimit as NoteId;
     use QueryParamNoteTagLimit as NoteTag;
@@ -318,7 +327,7 @@ static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
     use QueryParamStorageMapKeyTotalLimit as StorageMapKeyTotal;
     use QueryParamStorageMapSlotLimit as StorageMapSlot;
 
-    proto::rpc::RpcLimits {
+    proto::miden::node::v1::GetLimitsResponse {
         endpoints: std::collections::HashMap::from([
             (
                 "SyncNullifiers".into(),
@@ -343,13 +352,44 @@ static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
 
 #[cfg(test)]
 mod tests {
-    use miden_node_proto::generated::server::rpc_api::GetLimits;
+    use miden_node_proto::generated::server::miden_node_v1_node_service::GetLimits;
 
     use super::*;
 
     #[test]
-    fn get_limits_decodes_unit_request() {
-        assert_eq!(RpcService::decode(()).unwrap(), ());
+    fn get_limits_decodes_empty_request() {
+        assert_eq!(RpcService::decode(proto::miden::node::v1::GetLimitsRequest {}).unwrap(), ());
+    }
+
+    #[test]
+    fn endpoint_requests_reject_missing_payloads() {
+        use proto::server::{miden_node_v1_node_service, miden_sequencer_v1_sequencer_service};
+
+        let errors = [
+            <RpcService as miden_node_v1_node_service::SubmitProvenTx>::decode(proto::miden::node::v1::SubmitProvenTxRequest {
+                submission: None,
+            })
+            .expect_err("submission is required"),
+            <RpcService as miden_node_v1_node_service::SubmitProvenTxBatch>::decode(
+                proto::miden::node::v1::SubmitProvenTxBatchRequest { submission: None },
+            )
+            .expect_err("submission is required"),
+            <SequencerInternalService as miden_sequencer_v1_sequencer_service::SubmitAuthenticatedTx>::decode(
+                proto::miden::sequencer::v1::SubmitAuthenticatedTxRequest { transaction: None },
+            )
+            .expect_err("transaction is required"),
+            <SequencerInternalService as miden_sequencer_v1_sequencer_service::SubmitAuthenticatedTxBatch>::decode(
+                proto::miden::sequencer::v1::SubmitAuthenticatedTxBatchRequest { batch: None },
+            )
+            .expect_err("batch is required"),
+            <RpcService as miden_node_v1_node_service::GetNetworkNoteStatus>::decode(
+                proto::miden::node::v1::GetNetworkNoteStatusRequest { note_id: None },
+            )
+            .expect_err("note ID is required"),
+        ];
+        for error in errors {
+            assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        }
     }
 
     #[test]

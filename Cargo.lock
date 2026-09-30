@@ -3809,6 +3809,7 @@ dependencies = [
  "clap",
  "fs-err",
  "hex",
+ "miden-node-persistence",
  "miden-node-proto",
  "miden-node-tracing",
  "miden-protocol",
@@ -3816,6 +3817,7 @@ dependencies = [
  "miden-tx",
  "rand 0.10.3",
  "rayon",
+ "tempfile",
  "tokio",
  "tonic",
  "url",
@@ -4214,6 +4216,7 @@ dependencies = [
  "futures",
  "itertools 0.14.0",
  "miden-block-prover",
+ "miden-node-persistence",
  "miden-node-proto",
  "miden-node-store",
  "miden-node-tracing",
@@ -4250,6 +4253,7 @@ dependencies = [
  "deadpool-sync",
  "diesel",
  "fs-err",
+ "miden-node-persistence",
  "miden-node-tracing",
  "miden-protocol",
  "rusqlite",
@@ -4268,6 +4272,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "miden-node-persistence"
+version = "0.17.0-rc.3"
+dependencies = [
+ "miden-objects",
+ "miden-protobuf",
+ "miden-protocol",
+ "prost",
+ "prost-build",
+ "protox",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "miden-node-proto"
 version = "0.17.0-rc.3"
 dependencies = [
@@ -4278,6 +4295,7 @@ dependencies = [
  "fs-err",
  "http",
  "miden-node-grpc-error-macro",
+ "miden-node-persistence",
  "miden-node-proto-build",
  "miden-node-tracing",
  "miden-node-utils",
@@ -4321,6 +4339,7 @@ dependencies = [
  "http",
  "mediatype",
  "miden-node-block-producer",
+ "miden-node-persistence",
  "miden-node-proto",
  "miden-node-proto-build",
  "miden-node-store",
@@ -4368,6 +4387,7 @@ dependencies = [
  "libsqlite3-sys",
  "miden-crypto",
  "miden-node-db",
+ "miden-node-persistence",
  "miden-node-proto",
  "miden-node-test-macro",
  "miden-node-tracing",
@@ -4462,6 +4482,7 @@ dependencies = [
  "itertools 0.14.0",
  "lru",
  "miden-crypto",
+ "miden-node-persistence",
  "miden-node-tracing",
  "miden-processor",
  "miden-protocol",
@@ -4487,12 +4508,14 @@ dependencies = [
  "anyhow",
  "clap",
  "miden-node-db",
+ "miden-node-persistence",
  "miden-node-proto",
  "miden-node-proto-build",
  "miden-node-tracing",
  "miden-node-utils",
  "miden-protocol",
  "prost",
+ "prost-types",
  "rand 0.10.3",
  "reqwest",
  "rusqlite",
@@ -4522,6 +4545,7 @@ dependencies = [
  "futures",
  "humantime",
  "miden-node-db",
+ "miden-node-persistence",
  "miden-node-proto",
  "miden-node-proto-build",
  "miden-node-store",
@@ -4969,6 +4993,7 @@ dependencies = [
  "golden-halo2curves",
  "hex",
  "miden-node-db",
+ "miden-node-persistence",
  "miden-node-proto",
  "miden-node-proto-build",
  "miden-node-store",

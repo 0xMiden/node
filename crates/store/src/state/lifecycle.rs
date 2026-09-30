@@ -369,7 +369,6 @@ mod tests {
     use miden_node_utils::fee::{test_fee_params, test_protocol_config};
     use miden_protocol::block::ValidatorConfig;
     use miden_protocol::testing::random_secret_key::random_secret_key;
-    use miden_protocol::utils::serde::Serializable;
 
     use super::State;
     use crate::DataDirectory;
@@ -425,7 +424,7 @@ mod tests {
     async fn load_rejects_corrupt_genesis_protocol_config() {
         let temp_dir = tempfile::tempdir().unwrap();
         let commitment = bootstrap_store(temp_dir.path()).await;
-        let mut bytes = test_protocol_config().to_bytes();
+        let mut bytes = miden_node_persistence::encode(&test_protocol_config());
         bytes.push(0xff);
         database_writer(temp_dir.path())
             .write::<_, DatabaseError, _>("corrupt genesis protocol config", move |tx| {
@@ -444,7 +443,7 @@ mod tests {
             .expect("state load should fail");
         assert!(matches!(
             error,
-            StateInitializationError::DatabaseError(DatabaseError::DataCorrupted(_))
+            StateInitializationError::DatabaseError(DatabaseError::Persistence(_))
         ));
     }
 

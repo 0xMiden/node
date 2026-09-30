@@ -169,7 +169,7 @@ pub(crate) fn select_full_account(
         DatabaseError::DataCorrupted(format!("No nonce found for account {account_id}"))
     })?);
 
-    let code = AccountCode::read_from_bytes(&code_bytes)?;
+    let code = miden_node_persistence::decode::<AccountCode>(&code_bytes)?;
 
     // Reconstruct storage using existing helper function
     let storage = select_latest_account_storage(conn, account_id)?;
@@ -186,7 +186,7 @@ pub(crate) fn select_full_account(
     let mut assets = Vec::new();
     for (_key_bytes, maybe_asset_bytes) in vault_entries {
         if let Some(asset_bytes) = maybe_asset_bytes {
-            let asset = Asset::read_from_bytes(&asset_bytes)?;
+            let asset = miden_node_persistence::decode::<Asset>(&asset_bytes)?;
             assets.push(asset);
         }
     }
@@ -429,7 +429,9 @@ pub(crate) fn select_public_account_state_roots_paged(
             Ok::<_, DatabaseError>(PublicAccountStateRoots {
                 account_id,
                 vault_root: Word::read_from_bytes(&vault_root_bytes)?,
-                storage_header: AccountStorageHeader::read_from_bytes(&storage_header_bytes)?,
+                storage_header: miden_node_persistence::decode::<AccountStorageHeader>(
+                    &storage_header_bytes,
+                )?,
             })
         })
         .collect::<Result<_, _>>()?;
@@ -752,7 +754,7 @@ pub(crate) fn select_latest_account_storage_components(
             .flatten();
 
     let header = match storage_blob {
-        Some(blob) => AccountStorageHeader::read_from_bytes(&blob)?,
+        Some(blob) => miden_node_persistence::decode::<AccountStorageHeader>(&blob)?,
         None => AccountStorageHeader::new(Vec::new())?,
     };
 
@@ -810,7 +812,10 @@ impl TryFrom<AccountVaultUpdateRaw> for AccountVaultValue {
 
     fn try_from(raw: AccountVaultUpdateRaw) -> Result<Self, Self::Error> {
         let vault_key = AssetId::try_from(Word::read_from_bytes(&raw.vault_key)?)?;
-        let asset = raw.asset.map(|bytes| Asset::read_from_bytes(&bytes)).transpose()?;
+        let asset = raw
+            .asset
+            .map(|bytes| miden_node_persistence::decode::<Asset>(&bytes))
+            .transpose()?;
         let block_num = BlockNumber::from_raw_sql(raw.block_num)?;
 
         Ok(AccountVaultValue { block_num, vault_key, asset })

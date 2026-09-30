@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use miden_node_proto::clients::Builder;
 use miden_node_proto::generated as proto;
-use miden_node_proto::generated::rpc::{BlockSubscriptionResponse, RpcStatus};
-use miden_node_proto::generated::server::rpc_api;
+use miden_node_proto::generated::miden::node::v1::{BlockSubscriptionResponse, StatusResponse};
+use miden_node_proto::generated::server::miden_node_v1_node_service;
 use miden_node_store::GenesisState;
 use miden_node_utils::clap::StorageOptions;
 use miden_node_utils::fee::{test_fee_params, test_protocol_config};
@@ -26,15 +26,15 @@ use super::*;
 struct Upstream(Vec<SignedBlock>);
 
 #[tonic::async_trait]
-impl rpc_api::Status for Upstream {
+impl miden_node_v1_node_service::Status for Upstream {
     type Input = ();
-    type Output = RpcStatus;
+    type Output = StatusResponse;
 
-    fn decode(request: ()) -> tonic::Result<Self::Input> {
-        Ok(request)
+    fn decode(_request: proto::miden::node::v1::StatusRequest) -> tonic::Result<Self::Input> {
+        Ok(())
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<RpcStatus> {
+    fn encode(output: Self::Output) -> tonic::Result<StatusResponse> {
         Ok(output)
     }
 
@@ -44,7 +44,7 @@ impl rpc_api::Status for Upstream {
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        Ok(RpcStatus {
+        Ok(StatusResponse {
             chain_tip: self.0.last().unwrap().header().block_num().as_u32(),
             ..Default::default()
         })
@@ -52,7 +52,7 @@ impl rpc_api::Status for Upstream {
 }
 
 #[tonic::async_trait]
-impl rpc_api::BlockSubscription for Upstream {
+impl miden_node_v1_node_service::BlockSubscription for Upstream {
     type Input = BlockSubscriptionRequest;
     type Item = BlockSubscriptionResponse;
     type ItemStream = tokio_stream::Iter<std::vec::IntoIter<tonic::Result<Self::Item>>>;
@@ -108,7 +108,7 @@ async fn sync_blocks(
     let server_shutdown = shutdown.clone();
     let server = tokio::spawn(async move {
         tonic::transport::Server::builder()
-            .add_service(rpc_api::service(Upstream(blocks)))
+            .add_service(miden_node_v1_node_service::service(Upstream(blocks)))
             .serve_with_incoming_shutdown(
                 TcpListenerStream::new(listener),
                 server_shutdown.cancelled_owned(),
@@ -213,7 +213,7 @@ async fn synced_blocks_follow_validator_rotation() {
 macro_rules! unused_rpc {
     ($method:ident, $request:ty, $response:ty) => {
         #[tonic::async_trait]
-        impl rpc_api::$method for Upstream {
+        impl miden_node_v1_node_service::$method for Upstream {
             type Input = ();
             type Output = $response;
 
@@ -237,76 +237,112 @@ macro_rules! unused_rpc {
     };
 }
 
-unused_rpc!(GetLimits, (), proto::rpc::RpcLimits);
-unused_rpc!(GetAccount, proto::rpc::AccountRequest, proto::rpc::AccountResponse);
-unused_rpc!(GetBlockByNumber, proto::rpc::BlockRequest, proto::rpc::MaybeBlock);
+unused_rpc!(
+    GetLimits,
+    proto::miden::node::v1::GetLimitsRequest,
+    proto::miden::node::v1::GetLimitsResponse
+);
+unused_rpc!(
+    GetAccount,
+    proto::miden::node::v1::GetAccountRequest,
+    proto::miden::node::v1::GetAccountResponse
+);
+unused_rpc!(
+    GetBlockByNumber,
+    proto::miden::node::v1::GetBlockByNumberRequest,
+    proto::miden::node::v1::GetBlockByNumberResponse
+);
 unused_rpc!(
     GetBlockHeaderByNumber,
-    proto::rpc::BlockHeaderByNumberRequest,
-    proto::rpc::BlockHeaderByNumberResponse
+    proto::miden::node::v1::GetBlockHeaderByNumberRequest,
+    proto::miden::node::v1::GetBlockHeaderByNumberResponse
 );
-unused_rpc!(GetNotesById, proto::rpc::NotesByIdRequest, proto::rpc::NotesByIdResponse);
+unused_rpc!(
+    GetNotesById,
+    proto::miden::node::v1::GetNotesByIdRequest,
+    proto::miden::node::v1::GetNotesByIdResponse
+);
 unused_rpc!(
     GetNoteScriptByRoot,
-    proto::rpc::NoteScriptByRootRequest,
-    proto::rpc::MaybeNoteScript
+    proto::miden::node::v1::GetNoteScriptByRootRequest,
+    proto::miden::node::v1::GetNoteScriptByRootResponse
 );
-unused_rpc!(GetTransactionEncryptionKey, (), proto::submission::TransactionEncryptionKey);
+unused_rpc!(
+    GetTransactionEncryptionKey,
+    proto::miden::node::v1::GetTransactionEncryptionKeyRequest,
+    proto::miden::node::v1::GetTransactionEncryptionKeyResponse
+);
 unused_rpc!(
     SubmitProvenTx,
-    proto::submission::ProvenTransactionSubmission,
-    proto::blockchain::BlockNumber
+    proto::miden::node::v1::SubmitProvenTxRequest,
+    proto::miden::node::v1::SubmitProvenTxResponse
 );
 unused_rpc!(
     SubmitProvenTxBatch,
-    proto::submission::TransactionBatch,
-    proto::blockchain::BlockNumber
+    proto::miden::node::v1::SubmitProvenTxBatchRequest,
+    proto::miden::node::v1::SubmitProvenTxBatchResponse
 );
 unused_rpc!(
     SyncTransactions,
-    proto::rpc::SyncTransactionsRequest,
-    proto::rpc::SyncTransactionsResponse
+    proto::miden::node::v1::SyncTransactionsRequest,
+    proto::miden::node::v1::SyncTransactionsResponse
 );
-unused_rpc!(SyncNotes, proto::rpc::SyncNotesRequest, proto::rpc::SyncNotesResponse);
+unused_rpc!(
+    SyncNotes,
+    proto::miden::node::v1::SyncNotesRequest,
+    proto::miden::node::v1::SyncNotesResponse
+);
 unused_rpc!(
     SyncNullifiers,
-    proto::rpc::SyncNullifiersRequest,
-    proto::rpc::SyncNullifiersResponse
+    proto::miden::node::v1::SyncNullifiersRequest,
+    proto::miden::node::v1::SyncNullifiersResponse
 );
 unused_rpc!(
     SyncAccountVault,
-    proto::rpc::SyncAccountVaultRequest,
-    proto::rpc::SyncAccountVaultResponse
+    proto::miden::node::v1::SyncAccountVaultRequest,
+    proto::miden::node::v1::SyncAccountVaultResponse
 );
 unused_rpc!(
     SyncAccountStorageMaps,
-    proto::rpc::SyncAccountStorageMapsRequest,
-    proto::rpc::SyncAccountStorageMapsResponse
+    proto::miden::node::v1::SyncAccountStorageMapsRequest,
+    proto::miden::node::v1::SyncAccountStorageMapsResponse
 );
-unused_rpc!(SyncChainMmr, proto::rpc::SyncChainMmrRequest, proto::rpc::SyncChainMmrResponse);
-unused_rpc!(RegisterAccount, proto::rpc::RegisterAccountRequest, ());
+unused_rpc!(
+    SyncChainMmr,
+    proto::miden::node::v1::SyncChainMmrRequest,
+    proto::miden::node::v1::SyncChainMmrResponse
+);
+unused_rpc!(
+    RegisterAccount,
+    proto::miden::node::v1::RegisterAccountRequest,
+    proto::miden::node::v1::RegisterAccountResponse
+);
 unused_rpc!(
     IsAccountAllowed,
-    proto::rpc::IsAccountAllowedRequest,
-    proto::rpc::IsAccountAllowedResponse
+    proto::miden::node::v1::IsAccountAllowedRequest,
+    proto::miden::node::v1::IsAccountAllowedResponse
 );
 unused_rpc!(
     GetNetworkNoteStatus,
-    proto::note::NoteId,
-    proto::rpc::GetNetworkNoteStatusResponse
+    proto::miden::node::v1::GetNetworkNoteStatusRequest,
+    proto::miden::node::v1::GetNetworkNoteStatusResponse
 );
 
 #[tonic::async_trait]
-impl rpc_api::ProofSubscription for Upstream {
+impl miden_node_v1_node_service::ProofSubscription for Upstream {
     type Input = ();
-    type Item = proto::rpc::ProofSubscriptionResponse;
+    type Item = proto::miden::node::v1::ProofSubscriptionResponse;
     type ItemStream = tokio_stream::Empty<tonic::Result<Self::Item>>;
 
-    fn decode(_request: proto::rpc::ProofSubscriptionRequest) -> tonic::Result<Self::Input> {
+    fn decode(
+        _request: proto::miden::node::v1::ProofSubscriptionRequest,
+    ) -> tonic::Result<Self::Input> {
         Err(tonic::Status::unimplemented("unused test endpoint"))
     }
 
-    fn encode(item: Self::Item) -> tonic::Result<proto::rpc::ProofSubscriptionResponse> {
+    fn encode(
+        item: Self::Item,
+    ) -> tonic::Result<proto::miden::node::v1::ProofSubscriptionResponse> {
         Ok(item)
     }
 

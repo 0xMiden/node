@@ -22,7 +22,6 @@ use miden_protocol::crypto::merkle::smt::LargeSmt;
 use miden_protocol::note::{NoteDetails, Nullifier};
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::OutputNote;
-use miden_protocol::utils::serde::Serializable;
 use rayon::ThreadPool;
 use thread_priority::{ThreadPriority, set_current_thread_priority};
 use tokio::sync::{mpsc, watch};
@@ -379,7 +378,7 @@ impl WriteWorker {
                 account_tree_update,
                 account_forest_update,
             };
-            Ok((prepared, signed_block.to_bytes()))
+            Ok((prepared, miden_node_persistence::encode(signed_block)))
         })
     }
 
@@ -642,7 +641,6 @@ mod tests {
     use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1;
     use miden_protocol::testing::random_secret_key::random_secret_key;
     use miden_protocol::transaction::OrderedTransactionHeaders;
-    use miden_protocol::utils::serde::Serializable;
     use tempfile::TempDir;
 
     use crate::db::schema::protocol_configs;
@@ -847,7 +845,7 @@ mod tests {
         let (_temp_dir, state, mut writer, writer_task, protocol_config) = start_store().await;
         let commitment = protocol_config.to_commitment();
         let block = empty_block(&state, &protocol_config).await;
-        let mut bytes = protocol_config.to_bytes();
+        let mut bytes = miden_node_persistence::encode(&protocol_config);
         bytes.push(0xff);
         state
             .db
@@ -864,7 +862,7 @@ mod tests {
 
         let error = writer.apply_block(block, Some(protocol_config)).await.unwrap_err();
 
-        assert_matches!(error, ApplyBlockError::DatabaseError(DatabaseError::DataCorrupted(_)));
+        assert_matches!(error, ApplyBlockError::DatabaseError(DatabaseError::Persistence(_)));
         assert_eq!(state.committed_tip(), 0.into());
         writer.stop(writer_task).await;
     }

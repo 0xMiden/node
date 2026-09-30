@@ -223,7 +223,7 @@ fn with_output_note_proofs(
     let mut tx_output_notes = Vec::with_capacity(raw_transactions.len());
     let mut all_note_ids: Vec<NoteId> = Vec::new();
     for raw in &raw_transactions {
-        let notes: Vec<NoteHeader> = Deserializable::read_from_bytes(&raw.output_notes)?;
+        let notes: Vec<NoteHeader> = miden_node_persistence::decode(&raw.output_notes)?;
         all_note_ids.extend(notes.iter().map(NoteHeader::id));
         tx_output_notes.push(notes);
     }
@@ -241,7 +241,7 @@ fn with_output_note_proofs(
     let mut authenticated_nullifiers: Vec<Nullifier> = Vec::new();
     for raw in &raw_transactions {
         let commitments: Vec<InputNoteCommitment> =
-            Deserializable::read_from_bytes(&raw.input_notes)?;
+            miden_node_persistence::decode(&raw.input_notes)?;
         for commitment in &commitments {
             if commitment.header().is_none() {
                 authenticated_nullifiers.push(commitment.nullifier());

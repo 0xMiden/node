@@ -29,7 +29,7 @@ https://<service>.<network>.miden.io
 The public RPC endpoints use TLS. Tools such as `grpcurl` use the host name and port `443`:
 
 ```bash
-grpcurl rpc.testnet.miden.io:443 rpc.Api/Status
+grpcurl rpc.testnet.miden.io:443 miden.node.v1.NodeService/Status
 ```
 
 See [gRPC API](/rpc) for schema discovery, endpoint groups, subscriptions, limits, and method-specific errors.

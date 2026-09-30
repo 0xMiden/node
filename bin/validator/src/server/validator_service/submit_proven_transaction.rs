@@ -15,7 +15,9 @@ use crate::tx_validation::validate_transaction;
 use crate::{COMPONENT, PrivateRecordContext, PrivateRecordId};
 
 #[tonic::async_trait]
-impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
+impl grpc::server::miden_validator_v1_validator_service::SubmitProvenTransaction
+    for ValidatorService
+{
     type Input = Input;
     type Output = ();
 
@@ -102,8 +104,11 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
     }
 
     fn decode(
-        request: grpc::submission::ProvenTransactionSubmission,
+        request: grpc::miden::validator::v1::SubmitProvenTransactionRequest,
     ) -> tonic::Result<Self::Input> {
+        let request = request
+            .submission
+            .ok_or_else(|| Status::invalid_argument("missing submission"))?;
         let submission = request
             // SAFETY: New transaction IDs pass proof verification and re-execution before storage.
             // Previously validated IDs use the handler's duplicate-submission shortcut.
@@ -121,8 +126,10 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
         Ok(Self::Input { tx, sealed })
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<()> {
-        Ok(output)
+    fn encode(
+        (): Self::Output,
+    ) -> tonic::Result<grpc::miden::validator::v1::SubmitProvenTransactionResponse> {
+        Ok(grpc::miden::validator::v1::SubmitProvenTransactionResponse {})
     }
 }
 

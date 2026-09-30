@@ -9,19 +9,23 @@ use super::stream::{StreamItem, SubscriptionStream};
 use crate::LOG_TARGET;
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::ProofSubscription for RpcService {
+impl proto::server::miden_node_v1_node_service::ProofSubscription for RpcService {
     type Input = BlockNumber;
     type Item = StreamItem;
     type ItemStream = SubscriptionStream;
 
-    fn decode(request: proto::rpc::ProofSubscriptionRequest) -> tonic::Result<Self::Input> {
+    fn decode(
+        request: proto::miden::node::v1::ProofSubscriptionRequest,
+    ) -> tonic::Result<Self::Input> {
         Ok(BlockNumber::from(request.block_from))
     }
 
-    fn encode(event: Self::Item) -> tonic::Result<proto::rpc::ProofSubscriptionResponse> {
+    fn encode(
+        event: Self::Item,
+    ) -> tonic::Result<proto::miden::node::v1::ProofSubscriptionResponse> {
         let proof = ExecutionProof::read_from_bytes(&event.data)
             .map_err(|err| tonic::Status::internal(format!("invalid stored proof: {err}")))?;
-        Ok(proto::rpc::ProofSubscriptionResponse {
+        Ok(proto::miden::node::v1::ProofSubscriptionResponse {
             block_num: event.block.as_u32(),
             proof: Some(proof.into()),
             proven_chain_tip: event.tip.as_u32(),
