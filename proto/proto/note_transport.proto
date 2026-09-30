@@ -6,9 +6,6 @@ import "block_number.proto";
 
 // Delivers private notes to recipients that poll by tag.
 service NoteTransportService {
-    // Stores a private note. A retry with the same note ID keeps the first envelope.
-    // Rejects non-private notes with INVALID_ARGUMENT.
-    rpc SendNote(SendNoteRequest) returns (SendNoteResponse) {}
     // Verifies inclusion against the trusted node before storage, including on retries.
     // Accepts only private notes. Rejects non-private notes with INVALID_ARGUMENT.
     // A retry with the same note ID keeps the first envelope.
@@ -16,14 +13,6 @@ service NoteTransportService {
     // Returns notes after the cursor, ordered by their storage cursor.
     rpc FetchNotes(FetchNotesRequest) returns (FetchNotesResponse) {}
 }
-
-message SendNoteRequest {
-    TransportNote note = 1;
-    // Unverified lower bound for the inclusion block. An absent value differs from block zero.
-    optional blockchain.BlockNumber after_block_num = 2;
-}
-
-message SendNoteResponse {}
 
 message SendNoteWithProofRequest {
     // Required. The inclusion proof supplies the exact inclusion block.
@@ -39,16 +28,12 @@ message TransportNote {
     note.NoteDetails details = 2;
 }
 
-// A stored note. At most one of the block fields is present.
+// A stored note with a verified inclusion block.
 message FetchedNote {
     note.NoteHeader header = 1;
     note.NoteDetails details = 2;
-    // Optional unverified lower bound supplied through SendNote.
-    // An absent value differs from block zero.
-    optional blockchain.BlockNumber after_block_num = 3;
-    // Exact inclusion block verified through SendNoteWithProof.
-    // This field is absent for notes stored through SendNote.
-    optional blockchain.BlockNumber committed_in_block = 4;
+    // Required. The service verifies the exact inclusion block before storage.
+    blockchain.BlockNumber committed_in_block = 4;
 }
 
 // Identifies a position in a stable sequence of stored notes.

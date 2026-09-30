@@ -4515,6 +4515,7 @@ dependencies = [
  "miden-node-utils",
  "miden-protocol",
  "prost",
+ "prost-types",
  "rand 0.10.3",
  "reqwest",
  "rusqlite",

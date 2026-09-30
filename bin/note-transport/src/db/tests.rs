@@ -36,8 +36,7 @@ fn note_with_advice(seed: u32, tag: u32, elements: usize) -> NewNote {
     NewNote {
         header: *note.header(),
         details: miden_protocol::note::NoteDetails::from(note),
-        after_block_num: Some(BlockNumber::from(10)),
-        committed_in_block: None,
+        committed_in_block: BlockNumber::from(10),
     }
 }
 
@@ -80,7 +79,7 @@ async fn retained_note_roundtrips_after_reopening() {
     let (dir, writer, reader) = database();
     let mut original = note(7, u32::MAX);
     let before = now_micros();
-    original.after_block_num = Some(BlockNumber::from(u32::MAX));
+    original.committed_in_block = BlockNumber::from(u32::MAX);
     store_note(&writer, original.clone(), u64::MAX).await.unwrap();
     drop((writer, reader));
 
@@ -90,10 +89,32 @@ async fn retained_note_roundtrips_after_reopening() {
     let retained = &page.notes[0];
     assert_eq!(retained.header, original.header);
     assert_eq!(retained.details, original.details);
-    assert_eq!(retained.after_block_num, original.after_block_num);
+    assert_eq!(retained.committed_in_block, original.committed_in_block);
     assert!((before..=now_micros()).contains(&retained.created_at));
     assert_eq!(retained.seq, 1);
     assert!(!page.has_more);
+}
+
+#[tokio::test]
+async fn inclusion_block_is_required_and_bounded() {
+    let (_dir, writer, reader) = database();
+    let original = note(1, 42);
+    store_note(&writer, original.clone(), u64::MAX).await.unwrap();
+    for block_num in [None, Some(-1_i64), Some(i64::from(u32::MAX) + 1)] {
+        let error = writer
+            .write("set invalid inclusion block", move |tx| {
+                tx.execute("UPDATE notes SET committed_in_block = ?1", &[&block_num])?;
+                Ok::<_, miden_node_db::DatabaseError>(())
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(error,
+            miden_node_db::DatabaseError::Rusqlite(rusqlite::Error::SqliteFailure(code, _))
+                if code.code == rusqlite::ErrorCode::ConstraintViolation
+        ));
+        let page = fetch_notes(&reader, vec![42], None).await.unwrap();
+        assert_eq!(page.notes[0].committed_in_block, original.committed_in_block);
+    }
 }
 
 #[tokio::test]
@@ -107,7 +128,7 @@ async fn retry_at_capacity_preserves_first_write() {
     );
     let mut retry = original.clone();
     let created_at = fetch_notes(&reader, vec![42], None).await.unwrap().notes[0].created_at;
-    retry.after_block_num = Some(BlockNumber::from(99));
+    retry.committed_in_block = BlockNumber::from(99);
     assert_eq!(store_note(&writer, retry, limit).await.unwrap(), StoreResult::AlreadyPresent);
     assert!(matches!(
         store_note(&writer, note(2, 42), limit).await,
@@ -115,8 +136,7 @@ async fn retry_at_capacity_preserves_first_write() {
     ));
     let page = fetch_notes(&reader, vec![42], None).await.unwrap();
     assert_eq!(page.notes.len(), 1);
-    assert_eq!(page.notes[0].after_block_num, original.after_block_num);
-    assert_eq!(page.notes[0].committed_in_block, None);
+    assert_eq!(page.notes[0].committed_in_block, original.committed_in_block);
     assert_eq!(page.notes[0].created_at, created_at);
     assert_eq!(page.notes[0].seq, 1);
     assert!(!page.has_more);
