@@ -25,12 +25,7 @@
 //! transaction, any nesting of further `transaction(conn, || {})` has no effect and should be
 //! considered unnecessary boilerplate by default.
 
-use diesel::SqliteConnection;
-use miden_protocol::block::SignedBlock;
-use miden_protocol::note::Nullifier;
-
 use super::DatabaseError;
-use crate::db::NoteRecord;
 
 mod transactions;
 pub use transactions::*;
@@ -45,34 +40,3 @@ mod notes;
 pub(crate) use notes::*;
 mod protocol_configs;
 pub(crate) use protocol_configs::*;
-
-/// Apply a new block to the state.
-///
-/// # Returns
-///
-/// Number of records inserted and/or updated.
-pub(crate) fn apply_block(
-    conn: &mut SqliteConnection,
-    block: &SignedBlock,
-    notes: &[(NoteRecord, Option<Nullifier>)],
-    precomputed_public_states: &PrecomputedPublicAccountStates,
-) -> Result<usize, DatabaseError> {
-    let mut count = 0;
-    // Note: ordering here is important as the relevant tables have FK dependencies.
-    count += insert_block_header(conn, block.header(), block.signatures())?;
-    count += upsert_accounts(
-        conn,
-        block.body().updated_accounts(),
-        block.header().block_num(),
-        precomputed_public_states,
-    )?;
-    count += insert_scripts(conn, notes.iter().map(|(note, _)| note))?;
-    count += insert_notes(conn, notes)?;
-    count += insert_transactions(conn, block.header().block_num(), block.body().transactions())?;
-    count += insert_nullifiers_for_block(
-        conn,
-        block.body().created_nullifiers(),
-        block.header().block_num(),
-    )?;
-    Ok(count)
-}

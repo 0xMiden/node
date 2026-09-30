@@ -39,7 +39,8 @@ use miden_protocol::account::{StorageSlotName, StorageSlotType};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::note::NoteTag;
 
-use crate::db::models::queries::{BlockHeaderCommitment, NetworkAccountType};
+use crate::db::BlockHeaderCommitment;
+use crate::db::models::queries::NetworkAccountType;
 
 #[derive(Debug, thiserror::Error)]
 #[error("failed to convert from database type {from_type} into {into_type}")]

@@ -1,20 +1,10 @@
-#![expect(
-    clippy::cast_possible_wrap,
-    reason = "We will not approach the item count where i64 and usize cause issues"
-)]
-
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ops::RangeInclusive;
 
-use diesel::prelude::{
-    ExpressionMethods,
-    Insertable,
-    QueryDsl,
-    Queryable,
-    QueryableByName,
-    Selectable,
-};
+use diesel::dsl::sql;
+use diesel::prelude::{ExpressionMethods, QueryDsl, Queryable, QueryableByName, Selectable};
 use diesel::query_dsl::methods::SelectDsl;
+use diesel::sql_types::BigInt;
 use diesel::sqlite::Sqlite;
 use diesel::{
     JoinOnDsl,
@@ -24,7 +14,6 @@ use diesel::{
     SelectableHelper,
     SqliteConnection,
 };
-use miden_node_tracing::miden_instrument;
 use miden_node_utils::limiter::{
     QueryParamLimiter,
     QueryParamNoteCommitmentLimit,
@@ -50,15 +39,8 @@ use miden_protocol::note::{
     PartialNoteMetadata,
 };
 use miden_protocol::utils::serde::{Deserializable, Serializable};
-use miden_standards::note::NetworkAccountTarget;
 
-use crate::COMPONENT;
-use crate::db::models::conv::{
-    SqlTypeConvert,
-    idx_to_raw_sql,
-    note_type_to_raw_sql,
-    raw_sql_to_idx,
-};
+use crate::db::models::conv::{SqlTypeConvert, raw_sql_to_idx};
 use crate::db::models::queries::select_block_header_by_block_num;
 use crate::db::models::{serialize_vec, vec_raw_try_into};
 use crate::db::{DatabaseError, NoteRecord, NoteSyncRecord, NoteSyncUpdate, schema};
@@ -75,25 +57,6 @@ pub(crate) const NOTE_SYNC_BLOCK_OVERHEAD_BYTES: usize = 1800;
 /// Includes a note ID, an index, compact metadata with four attachment entries, and a sparse
 /// Merkle path with 16 siblings.
 pub(crate) const NOTE_SYNC_RECORD_BYTES: usize = 900;
-
-// NETWORK NOTE TYPE
-// ================================================================================================
-
-/// Classifies network notes for database storage.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(i32)]
-pub(crate) enum NetworkNoteType {
-    /// Not a network note.
-    None = 0,
-    /// Single account target network note (has `NetworkAccountTarget` attachment).
-    SingleTarget = 1,
-}
-
-impl From<NetworkNoteType> for i32 {
-    fn from(value: NetworkNoteType) -> Self {
-        value as i32
-    }
-}
 
 /// Select notes matching the given tags within a block range.
 ///
@@ -146,13 +109,16 @@ pub(crate) fn select_notes_since_block_by_tag(
     block_range: RangeInclusive<BlockNumber>,
 ) -> Result<Vec<NoteSyncRecord>, DatabaseError> {
     QueryParamNoteTagLimit::check(note_tags.len())?;
-    let desired_note_tags: Vec<i32> = note_tags.iter().map(|tag| *tag as i32).collect();
+    let desired_note_tags: Vec<i64> = note_tags.iter().copied().map(i64::from).collect();
+    // The column stores tags as unsigned 32-bit values. The Diesel schema declares the column as a
+    // 32-bit `Integer`, which cannot bind tags at or above 2^31.
+    let tag_column = sql::<BigInt>("notes.tag");
     let start_block_num = block_range.start().to_raw_sql();
     let end_block_num = block_range.end().to_raw_sql();
 
     let Some(desired_block_num): Option<i64> =
         SelectDsl::select(schema::notes::table, schema::notes::committed_at)
-            .filter(schema::notes::tag.eq_any(&desired_note_tags))
+            .filter(tag_column.clone().eq_any(&desired_note_tags))
             .filter(schema::notes::committed_at.ge(start_block_num))
             .filter(schema::notes::committed_at.le(end_block_num))
             .order_by(schema::notes::committed_at.asc())
@@ -165,7 +131,7 @@ pub(crate) fn select_notes_since_block_by_tag(
 
     let notes = SelectDsl::select(schema::notes::table, NoteSyncRecordRawRow::as_select())
         .filter(schema::notes::committed_at.eq(desired_block_num))
-        .filter(schema::notes::tag.eq_any(&desired_note_tags))
+        .filter(tag_column.eq_any(&desired_note_tags))
         .order_by((
             schema::notes::committed_at.asc(),
             schema::notes::batch_index.asc(),
@@ -724,131 +690,5 @@ impl TryInto<BlockNoteIndex> for BlockNoteIndexRawRow {
             )
         })?;
         Ok(index)
-    }
-}
-
-/// Insert notes to the DB using the given [`SqliteConnection`]. Public notes should also have a
-/// nullifier.
-///
-/// # Returns
-///
-/// The number of affected rows.
-///
-/// # Note
-///
-/// The [`SqliteConnection`] object is not consumed. It's up to the caller to commit or rollback the
-/// transaction.
-#[miden_instrument(
-    target = COMPONENT,
-    err,
-)]
-pub(crate) fn insert_notes(
-    conn: &mut SqliteConnection,
-    notes: &[(NoteRecord, Option<Nullifier>)],
-) -> Result<usize, DatabaseError> {
-    let count = diesel::insert_into(schema::notes::table)
-        .values(
-            notes
-                .iter()
-                .map(|(note, nullifier)| NoteInsertRow::from((note.clone(), *nullifier)))
-                .collect::<Vec<_>>(),
-        )
-        .execute(conn)?;
-    Ok(count)
-}
-
-/// Insert scripts to the DB using the given [`SqliteConnection`]. It inserts the scripts held by
-/// the notes passed as parameter. If the script root already exists in the DB, it will be ignored.
-///
-/// # Returns
-///
-/// The number of affected rows.
-///
-/// # Note
-///
-/// The [`SqliteConnection`] object is not consumed. It's up to the caller to commit or rollback the
-/// transaction.
-#[miden_instrument(
-    target = COMPONENT,
-    err,
-)]
-pub(crate) fn insert_scripts<'a>(
-    conn: &mut SqliteConnection,
-    notes: impl IntoIterator<Item = &'a NoteRecord>,
-) -> Result<usize, DatabaseError> {
-    let values = notes
-        .into_iter()
-        .filter_map(|note| {
-            let note_details = note.details.as_ref()?;
-            Some((
-                schema::note_scripts::script_root.eq(note_details.script().root().to_bytes()),
-                schema::note_scripts::script
-                    .eq(miden_node_persistence::encode(note_details.script())),
-            ))
-        })
-        .collect::<Vec<_>>();
-    let count = diesel::insert_or_ignore_into(schema::note_scripts::table)
-        .values(values)
-        .execute(conn)?;
-
-    Ok(count)
-}
-
-#[derive(Debug, Clone, PartialEq, Insertable)]
-#[diesel(table_name = schema::notes)]
-pub struct NoteInsertRow {
-    pub committed_at: i64,
-
-    pub batch_index: i32,
-    pub note_index: i32, // index within batch
-
-    pub note_id: Vec<u8>,
-
-    pub note_type: i32,
-    pub sender: Vec<u8>, // AccountId
-    pub tag: i32,
-
-    pub network_note_type: i32,
-    pub target_account_id: Option<Vec<u8>>,
-    pub attachment: Vec<u8>,
-    pub inclusion_path: Vec<u8>,
-    pub consumed_at: Option<i64>,
-    pub nullifier: Option<Vec<u8>>,
-    pub assets: Option<Vec<u8>>,
-    pub storage: Option<Vec<u8>>,
-    pub script_root: Option<Vec<u8>>,
-    pub serial_num: Option<Vec<u8>>,
-}
-
-impl From<(NoteRecord, Option<Nullifier>)> for NoteInsertRow {
-    fn from((note, nullifier): (NoteRecord, Option<Nullifier>)) -> Self {
-        let target_account_id = NetworkAccountTarget::try_from(&note.attachments).ok();
-        let network_note_type = if target_account_id.is_some() && !note.metadata.is_private() {
-            NetworkNoteType::SingleTarget
-        } else {
-            NetworkNoteType::None
-        };
-
-        let attachment_bytes = miden_node_persistence::encode(&note.attachments);
-
-        Self {
-            committed_at: note.block_num.to_raw_sql(),
-            batch_index: idx_to_raw_sql(note.note_index.batch_idx()),
-            note_index: idx_to_raw_sql(note.note_index.note_idx_in_batch()),
-            note_id: note.note_id.to_bytes(),
-            note_type: note_type_to_raw_sql(note.metadata.note_type() as u8),
-            sender: note.metadata.sender().to_bytes(),
-            tag: note.metadata.tag().to_raw_sql(),
-            network_note_type: network_note_type.into(),
-            target_account_id: target_account_id.map(|t| t.target_id().to_bytes()),
-            attachment: attachment_bytes,
-            inclusion_path: miden_node_persistence::encode(&note.inclusion_path),
-            consumed_at: None::<i64>, // New notes are always unconsumed.
-            nullifier: nullifier.as_ref().map(Nullifier::to_bytes),
-            assets: note.details.as_ref().map(|d| miden_node_persistence::encode(d.assets())),
-            storage: note.details.as_ref().map(|d| miden_node_persistence::encode(d.storage())),
-            script_root: note.details.as_ref().map(|d| d.script().root().to_bytes()),
-            serial_num: note.details.as_ref().map(|d| d.serial_num().to_bytes()),
-        }
     }
 }
