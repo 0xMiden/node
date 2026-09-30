@@ -1,17 +1,15 @@
 [package]
 name = "xusdc-genesis"
-version = "0.0.0"
-edition = "2021"
+version.workspace      = true
+edition.workspace = true
 publish = false
-description = "xUSDC-on-Miden genesis tool: builds the genesis xUSDC faucet and its distributor offline and emits the node's genesis inputs for them"
+description = "Builds the genesis USDCx faucet"
 
 [dependencies]
-# `testing` provides `AccountId::dummy`, the placeholder fee faucet id the genesis grind runs
-# with (the encoding crate already enables the feature on this same dependency).
-miden-protocol = { version = "=0.17.0-rc.7", features = ["testing"] }
-miden-standards = { version = "=0.17.0-rc.7" }
-miden-objects = { version = "=0.17.0-rc.7" }
-xusdc-encoding = { path = "../xusdc-encoding" }
+miden-protocol = { workspace = true, features = ["testing"] }
+miden-standards = { workspace = true }
+miden-objects = { workspace = true }
+xusdc-encoding = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
