@@ -61,14 +61,34 @@ struct InvalidNetworkAccountType(i64);
 // BLOCK QUERIES
 // =================================================================================================
 
+mod block_header_row;
+
 mod insert_block_header;
 pub(crate) use insert_block_header::insert_block_header;
+
+mod select_all_block_header_commitments;
+pub(crate) use select_all_block_header_commitments::select_all_block_header_commitments;
+
+mod select_block_header_and_signatures_by_block_num;
+pub(crate) use select_block_header_and_signatures_by_block_num::select_block_header_and_signatures_by_block_num;
+
+mod select_block_header_by_block_num;
+pub(crate) use select_block_header_by_block_num::select_block_header_by_block_num;
+
+mod select_block_headers;
+pub(crate) use select_block_headers::select_block_headers;
 
 // PROTOCOL CONFIG QUERIES
 // =================================================================================================
 
 mod insert_protocol_config;
 pub(crate) use insert_protocol_config::insert_protocol_config;
+
+mod select_protocol_config_by_commitment;
+pub(crate) use select_protocol_config_by_commitment::select_protocol_config_by_commitment;
+
+mod select_protocol_config_commitment_at;
+pub(crate) use select_protocol_config_commitment_at::select_protocol_config_commitment_at;
 
 // NOTE QUERIES
 // =================================================================================================

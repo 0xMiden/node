@@ -338,10 +338,11 @@ impl Db {
         &self,
         commitment: Word,
     ) -> Result<Option<ProtocolConfig>> {
-        self.transact("protocol config by commitment", move |conn| {
-            diesel_queries::select_protocol_config_by_commitment(conn, commitment)
-        })
-        .await
+        self.reader
+            .read("protocol config by commitment", move |tx| {
+                queries::select_protocol_config_by_commitment(tx, commitment)
+            })
+            .await
     }
 
     /// Selects the configuration commitment active at the specified block.
@@ -349,10 +350,11 @@ impl Db {
         &self,
         block_number: ScopedBlockNum,
     ) -> Result<Option<Word>> {
-        self.transact("protocol config commitment at block", move |conn| {
-            diesel_queries::select_protocol_config_commitment_at(conn, *block_number)
-        })
-        .await
+        self.reader
+            .read("protocol config commitment at block", move |tx| {
+                queries::select_protocol_config_commitment_at(tx, *block_number)
+            })
+            .await
     }
 
     /// Applies all pending migrations to an existing DB.
@@ -425,22 +427,23 @@ impl Db {
         &self,
         maybe_block_number: Option<ScopedBlockNum>,
     ) -> Result<Option<BlockHeader>> {
-        self.transact("block headers by block number", move |conn| {
-            let val = diesel_queries::select_block_header_by_block_num(
-                conn,
-                maybe_block_number.map(|block_number| *block_number),
-            )?;
-            Ok(val)
-        })
-        .await
+        self.reader
+            .read("block headers by block number", move |tx| {
+                queries::select_block_header_by_block_num(
+                    tx,
+                    maybe_block_number.map(|block_number| *block_number),
+                )
+            })
+            .await
     }
 
     /// Selects the genesis block header for state initialization.
     pub(crate) async fn select_genesis_block_header(&self) -> Result<Option<BlockHeader>> {
-        self.transact("genesis block header", |conn| {
-            diesel_queries::select_block_header_by_block_num(conn, Some(BlockNumber::GENESIS))
-        })
-        .await
+        self.reader
+            .read("genesis block header", |tx| {
+                queries::select_block_header_by_block_num(tx, Some(BlockNumber::GENESIS))
+            })
+            .await
     }
 
     /// Search for a [`BlockHeader`] and its [`BlockSignatures`] from the database by its
@@ -454,14 +457,11 @@ impl Db {
         &self,
         block_number: ScopedBlockNum,
     ) -> Result<Option<(BlockHeader, BlockSignatures)>> {
-        self.transact("block headers and signatures by block number", move |conn| {
-            let val = diesel_queries::select_block_header_and_signatures_by_block_num(
-                conn,
-                *block_number,
-            )?;
-            Ok(val)
-        })
-        .await
+        self.reader
+            .read("block headers and signatures by block number", move |tx| {
+                queries::select_block_header_and_signatures_by_block_num(tx, *block_number)
+            })
+            .await
     }
 
     /// Loads multiple block headers from the DB.
@@ -474,11 +474,11 @@ impl Db {
         &self,
         blocks: impl Iterator<Item = ScopedBlockNum> + Send + 'static,
     ) -> Result<Vec<BlockHeader>> {
-        self.transact("block headers from given block numbers", move |conn| {
-            let raw = diesel_queries::select_block_headers(conn, blocks.map(|block| *block))?;
-            Ok(raw)
-        })
-        .await
+        self.reader
+            .read("block headers from given block numbers", move |tx| {
+                queries::select_block_headers(tx, blocks.map(|block| *block))
+            })
+            .await
     }
 
     /// Loads all the block headers from the DB.
@@ -488,11 +488,9 @@ impl Db {
         err,
     )]
     pub async fn select_all_block_header_commitments(&self) -> Result<Vec<BlockHeaderCommitment>> {
-        self.transact("all block headers", |conn| {
-            let raw = diesel_queries::select_all_block_header_commitments(conn)?;
-            Ok(raw)
-        })
-        .await
+        self.reader
+            .read("all block headers", queries::select_all_block_header_commitments)
+            .await
     }
 
     /// Returns a page of account commitments for tree rebuilding.
