@@ -1396,6 +1396,71 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
         coordinate,
         interrupt_after(board::ArtifactSlot::ContextDealing(participant_indices[0].get()))
     )?;
+    let third_dealing_slot = board::ArtifactSlot::ContextDealing(participant_indices[2].get());
+    {
+        let third = runner::run_validator_on_board::<ShareOpeningBackend>(
+            &participant_boards[1],
+            &genesis.path,
+            &signers[2],
+            participant_indices[2],
+            2,
+            &epoch,
+            &work_directories[2],
+            &bundle_directories[2],
+            timeout,
+        );
+        tokio::pin!(third);
+        tokio::select! {
+            biased;
+            result = board.reader().wait_unique(&third_dealing_slot, restart_checkpoint_timeout) => {
+                result?;
+            }
+            result = &mut third => {
+                result?;
+                panic!("third validator completed before publishing its dealing");
+            }
+        }
+    }
+    let acceptance = {
+        let second = runner::run_validator_on_board::<ShareOpeningBackend>(
+            &participant_boards[0],
+            &genesis.path,
+            &signers[1],
+            participant_indices[1],
+            2,
+            &epoch,
+            &work_directories[1],
+            &bundle_directories[1],
+            timeout,
+        );
+        tokio::pin!(second);
+        tokio::select! {
+            result = interrupt_after(board::ArtifactSlot::TranscriptAcceptance(participant_indices[0].get())) => result?,
+            result = &mut second => {
+                result?;
+                panic!("second validator completed before the first validator stopped");
+            }
+        }
+    };
+    assert!(!bundle_directories[0].exists());
+    assert!(
+        board
+            .reader()
+            .read_unique(&board::ArtifactSlot::TranscriptAcceptance(participant_indices[2].get()))
+            .await?
+            .is_none()
+    );
+    let first = runner::run_validator_with_ticket::<ShareOpeningBackend>(
+        tickets[0].clone(),
+        &genesis.path,
+        &signers[0],
+        2,
+        &epoch,
+        &work_directories[0],
+        &bundle_directories[0],
+        timeout,
+        miden_node_utils::shutdown::CancellationToken::new(),
+    );
     let second = runner::run_validator_on_board::<ShareOpeningBackend>(
         &participant_boards[0],
         &genesis.path,
@@ -1418,23 +1483,7 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
         &bundle_directories[2],
         timeout,
     );
-    let (acceptance, (), ()) = tokio::try_join!(
-        interrupt_after(board::ArtifactSlot::TranscriptAcceptance(participant_indices[0].get())),
-        second,
-        third
-    )?;
-    runner::run_validator_with_ticket::<ShareOpeningBackend>(
-        tickets[0].clone(),
-        &genesis.path,
-        &signers[0],
-        2,
-        &epoch,
-        &work_directories[0],
-        &bundle_directories[0],
-        timeout,
-        miden_node_utils::shutdown::CancellationToken::new(),
-    )
-    .await?;
+    tokio::try_join!(first, second, third)?;
     assert_eq!(
         board
             .reader()
