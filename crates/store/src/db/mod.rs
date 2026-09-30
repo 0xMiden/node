@@ -43,16 +43,14 @@ use crate::db::migrations::{migrate_database, verify_latest_schema};
 use crate::db::models::conv::SqlTypeConvert;
 use crate::db::models::queries as diesel_queries;
 use crate::db::models::queries::StorageMapValuesPage;
-pub use crate::db::models::queries::{
-    AccountCommitmentsPage,
-    PublicAccountIdsPage,
-    PublicAccountStateRootsPage,
-};
 pub use crate::db::queries::{
+    AccountCommitmentsPage,
     HISTORICAL_BLOCK_RETENTION,
     NullifiersPage,
     PrecomputedPublicAccountState,
     PrecomputedPublicAccountStates,
+    PublicAccountIdsPage,
+    PublicAccountStateRootsPage,
 };
 use crate::errors::{DatabaseError, NoteSyncError};
 use crate::genesis::GenesisBlock;
@@ -506,10 +504,11 @@ impl Db {
         page_size: std::num::NonZeroUsize,
         after_account_id: Option<AccountId>,
     ) -> Result<AccountCommitmentsPage> {
-        self.transact("read account commitments paged", move |conn| {
-            diesel_queries::select_account_commitments_paged(conn, page_size, after_account_id)
-        })
-        .await
+        self.reader
+            .read("read account commitments paged", move |tx| {
+                queries::select_account_commitments_paged(tx, page_size, after_account_id)
+            })
+            .await
     }
 
     /// Returns a page of public account IDs for forest rebuilding.
@@ -523,10 +522,11 @@ impl Db {
         page_size: std::num::NonZeroUsize,
         after_account_id: Option<AccountId>,
     ) -> Result<PublicAccountIdsPage> {
-        self.transact("read public account IDs paged", move |conn| {
-            diesel_queries::select_public_account_ids_paged(conn, page_size, after_account_id)
-        })
-        .await
+        self.reader
+            .read("read public account IDs paged", move |tx| {
+                queries::select_public_account_ids_paged(tx, page_size, after_account_id)
+            })
+            .await
     }
 
     /// Returns a page of public account state roots for forest consistency verification.
@@ -540,14 +540,11 @@ impl Db {
         page_size: std::num::NonZeroUsize,
         after_account_id: Option<AccountId>,
     ) -> Result<PublicAccountStateRootsPage> {
-        self.transact("read public account state roots paged", move |conn| {
-            diesel_queries::select_public_account_state_roots_paged(
-                conn,
-                page_size,
-                after_account_id,
-            )
-        })
-        .await
+        self.reader
+            .read("read public account state roots paged", move |tx| {
+                queries::select_public_account_state_roots_paged(tx, page_size, after_account_id)
+            })
+            .await
     }
 
     /// Loads public account details from the DB.
