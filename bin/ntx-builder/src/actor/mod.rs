@@ -1,54 +1,32 @@
-mod allowlist;
-pub mod candidate;
-mod execute;
-
-use std::collections::{HashMap, HashSet};
 use std::num::{NonZeroU16, NonZeroUsize};
 use std::sync::Arc;
 use std::time::Duration;
 
-use allowlist::{NoteScriptNotAllowlisted, partition_by_allowlist};
 use anyhow::Context;
-use candidate::{SponsoredFeatureNote, TransactionCandidate};
 use futures::FutureExt;
-use miden_node_tracing::{ErrorReport, debug, error, info, miden_instrument, warn};
-use miden_node_utils::formatting::format_opt;
+use miden_node_tracing::{debug, error, info, miden_instrument};
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountId, AccountPatch};
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::{Note, NoteId, NoteScript, Nullifier};
+use miden_protocol::note::{Note, NoteScript, Nullifier};
 use miden_protocol::transaction::{TransactionArgs, TransactionId};
-use miden_standards::account::fees::FeePolicyManager;
-use miden_standards::tx_script::ExpirationTransactionScript;
-use miden_tx::FailedNote;
 use tokio::sync::{Semaphore, mpsc, watch};
 
-use crate::chain_state::{ChainState, SharedChainState};
+use crate::candidate::TransactionCandidate;
+use crate::chain_state::SharedChainState;
 use crate::clients::{RemoteTransactionProver, RpcClient};
 use crate::coordinator::AccountView;
 use crate::db::NtxDbReader;
-use crate::{LOG_TARGET, NoteError};
-
-/// Builds the [`TransactionArgs`] shared by every network transaction.
-///
-/// Currently these attach the canonical [`ExpirationTransactionScript`] for `expiration_delta`
-/// blocks, with the script paired to the `TX_SCRIPT_ARGS` word it reads its delta from.
-///
-/// The script itself is account-independent and its MAST root is identical for every delta (the
-/// delta travels in the args word, not the code), so the builder derives these once at startup and
-/// shares them across all actors. The matching root
-/// ([`ExpirationTransactionScript::script_root`]) is what network accounts must allowlist for these
-/// transactions to be accepted on-chain.
-pub(crate) fn build_tx_args(expiration_delta: NonZeroU16) -> TransactionArgs {
-    let script = ExpirationTransactionScript::new(expiration_delta);
-    TransactionArgs::default().with_tx_script_and_args(script.into(), script.tx_script_args())
-}
-
-/// Maximum number of `FEE_SPONSORSHIP` notes attached to a single feature note. A feature note with
-/// more pending sponsorships than this keeps a subset of this size.
-const MAX_SPONSORSHIPS_PER_NOTE: usize = 3;
+use crate::selection::{
+    Selection,
+    attribute_failed_notes,
+    log_deferred_notes,
+    log_oversized_notes,
+    select_candidate,
+};
+use crate::{LOG_TARGET, NoteError, execute};
 
 // ACTOR REQUESTS
 // ================================================================================================
@@ -167,7 +145,7 @@ impl AccountActorContext {
             miden_protocol::protocol_config::ProtocolConfig::mock(),
         ));
         let (request_tx, _request_rx) = mpsc::channel(1);
-        let tx_args = build_tx_args(NonZeroU16::new(30).unwrap());
+        let tx_args = crate::selection::build_tx_args(NonZeroU16::new(30).unwrap());
 
         Self {
             clients: GrpcClients {
@@ -388,9 +366,21 @@ impl AccountActor {
                 permit = tx_permit_acquisition => {
                     let _permit = permit.context("semaphore closed")?;
                     let chain_state = self.state.chain.get_cloned();
-                    let (tx_candidate, retry) = self.select_candidate(&account, chain_state).await?;
+                    let block_num = chain_state.chain_tip_header.block_num();
+                    let Selection { candidate, rejected, next_retry_block: retry } =
+                        select_candidate(
+                            &self.state.db,
+                            &account,
+                            chain_state,
+                            self.config.max_notes_per_tx,
+                            self.config.max_note_attempts,
+                        )
+                        .await?;
+                    // Selection reports the notes the account's allowlist rejects; the actor owns
+                    // the write, as it does for every other note failure.
+                    self.mark_notes_failed(&rejected, block_num).await;
                     next_retry_block = retry;
-                    mode = match tx_candidate {
+                    mode = match candidate {
                         Some(candidate) => {
                             let next = self
                                 .execute_transactions(account_id, candidate, &mut account)
@@ -512,117 +502,6 @@ impl AccountActor {
             *notes_cursor = view.notes_seen;
         }
         Ok(next)
-    }
-
-    /// Selects a transaction candidate for the in-memory account by querying its available notes.
-    ///
-    /// Returns the candidate (if any) alongside the earliest block at which a currently-ineligible
-    /// note becomes eligible, so the caller can schedule a single re-check instead of polling every
-    /// block. `None` for that block means the account has no pending notes awaiting a window.
-    async fn select_candidate(
-        &self,
-        account: &Arc<Account>,
-        chain_state: ChainState,
-    ) -> anyhow::Result<(Option<TransactionCandidate>, Option<BlockNumber>)> {
-        let account_id = self.account_id;
-        let block_num = chain_state.chain_tip_header.block_num();
-        let max_notes = self.config.max_notes_per_tx.get();
-
-        let max_note_attempts = self.config.max_note_attempts;
-        let availability = self
-            .state
-            .db
-            .available_notes(account_id, block_num, max_note_attempts)
-            .await
-            .context("failed to query DB for available notes")?;
-        let next_retry_block = availability.next_retry_block;
-
-        let partitioned_notes = partition_by_allowlist(account.as_ref(), availability.eligible)
-            .context("failed to read network account note allowlist")?;
-
-        let rejected_any = !partitioned_notes.rejected.is_empty();
-        if rejected_any {
-            let failed_notes = partitioned_notes
-                .rejected
-                .into_iter()
-                .map(|(nullifier, script_root)| {
-                    let error: NoteError = Arc::new(NoteScriptNotAllowlisted::new(script_root));
-                    (nullifier, error)
-                })
-                .collect::<Vec<_>>();
-            info!(
-                target: LOG_TARGET,
-                "dropping network notes whose script roots are not allowlisted",
-                account.id = account_id,
-                note.rejected.count = failed_notes.len()
-            );
-            self.mark_notes_failed(&failed_notes, block_num).await;
-        }
-
-        // Attach each feature note's pending sponsorships: the bundle is the atomic selection unit,
-        // since a sponsorship may only be consumed alongside its feature note.
-        let mut sponsorships = if partitioned_notes.allowed.is_empty() {
-            HashMap::new()
-        } else {
-            self.state
-                .db
-                .sponsorships_for_pending_notes(account_id)
-                .await
-                .context("failed to query DB for pending sponsorships")?
-        };
-        // A bundle must leave room for its feature note within the per-tx note budget.
-        let max_sponsorships = MAX_SPONSORSHIPS_PER_NOTE.min(max_notes - 1);
-        let fee_asset_id = account
-            .storage()
-            .get_item(FeePolicyManager::fee_asset_id_slot())
-            .context("failed to read network account fee asset ID")?;
-
-        let mut selected: Vec<SponsoredFeatureNote> = Vec::new();
-        let mut selected_notes = 0_usize;
-        for feature in partitioned_notes.allowed {
-            let bundled_sponsorships =
-                sponsorships.remove(&feature.as_note().id()).unwrap_or_default();
-            let mut sponsored = SponsoredFeatureNote {
-                feature,
-                sponsorships: bundled_sponsorships,
-            };
-            // Filter before applying the cap so assets the account does not accept cannot occupy
-            // the limited sponsorship slots, then order by amount so the cap keeps the sponsorships
-            // most likely to cover the fee.
-            sponsored.retain_sponsorships_for_fee_asset(fee_asset_id);
-            sponsored.sort_sponsorships_by_amount();
-            sponsored.sponsorships.truncate(max_sponsorships);
-            // Bundle-atomic packing: a bundle that does not fit the remaining budget is skipped as
-            // a whole (never split) and re-selected in a later round.
-            if selected_notes + sponsored.num_notes() > max_notes {
-                continue;
-            }
-            selected_notes += sponsored.num_notes();
-            selected.push(sponsored);
-        }
-        if selected.is_empty() {
-            // Notes just marked failed re-enter eligibility via backoff; re-check on the next block
-            // so the actor does not deactivate while it still has notes aging through their budget.
-            let next_retry_block = if rejected_any {
-                Some(
-                    next_retry_block
-                        .map_or(block_num.child(), |block| block.min(block_num.child())),
-                )
-            } else {
-                next_retry_block
-            };
-            return Ok((None, next_retry_block));
-        }
-
-        Ok((
-            Some(TransactionCandidate {
-                // Cheap: bumps the `Arc` refcount instead of deep-copying the account/storage.
-                account: Arc::clone(account),
-                notes: selected,
-                chain_state,
-            }),
-            next_retry_block,
-        ))
     }
 
     /// Execute a transaction candidate and mark notes as failed as required.
@@ -878,168 +757,15 @@ impl AccountActor {
     }
 }
 
-/// Logs each note discarded for exceeding the per-tx cycle budget on its own and returns their
-/// nullifiers.
-///
-/// These notes were confirmed (by an isolation re-check in `filter_notes`) to need more than the
-/// entire per-tx cycle budget for themselves, so they can never be consumed and are marked
-/// permanently unconsumable rather than retried.
-fn log_oversized_notes(oversized: Vec<FailedNote>) -> Vec<Nullifier> {
-    oversized
-        .into_iter()
-        .map(|note| {
-            warn!(
-                target: LOG_TARGET,
-                "note discarded: exceeds the per-tx cycle budget on its own and can never be consumed",
-                note.id = note.note().id(),
-                note.nullifier = note.note().nullifier(),
-                note.execution_cycles = format_opt(note.num_cycles().as_ref())
-            );
-            note.note().nullifier()
-        })
-        .collect()
-}
-
-/// Logs each note deferred because the combined per-tx cycle budget was exhausted.
-///
-/// These notes are individually consumable and are intentionally *not* penalized (no
-/// `(nullifier, error)` pairs are returned), so they remain eligible for selection in a subsequent
-/// round with their `attempt_count` untouched.
-fn log_deferred_notes(deferred: Vec<FailedNote>) {
-    for note in deferred {
-        info!(
-            target: LOG_TARGET,
-            "note deferred: exceeded per-tx cycle budget, will retry next round",
-            note.id = note.note().id(),
-            note.nullifier = note.note().nullifier(),
-            note.execution_cycles = format_opt(note.num_cycles().as_ref())
-        );
-    }
-}
-
-/// Logs each failed note and returns `(nullifier, error)` pairs keyed by the nullifier the failure
-/// is recorded under: a feature note fails under its own nullifier, while a sponsorship's failure
-/// is charged to the feature note of its bundle (sponsorship notes have no row in the `notes`
-/// table). Multiple failures attributed to the same feature note collapse to a single entry, so a
-/// bundle never burns more than one attempt per round.
-fn attribute_failed_notes(
-    failed: Vec<FailedNote>,
-    sponsor_to_feature: &HashMap<NoteId, Nullifier>,
-) -> Vec<(Nullifier, NoteError)> {
-    let mut seen = HashSet::new();
-    let mut attributed = Vec::new();
-    for f in failed {
-        let Some(error) = f.error() else {
-            info!(
-                target: LOG_TARGET,
-                "note deferred after bundle rejection",
-                note.id = f.note().id(),
-                note.nullifier = f.note().nullifier()
-            );
-            continue;
-        };
-        let error_msg = error.as_report();
-        info!(
-            error,
-            target: LOG_TARGET,
-            "note failed: consumability check",
-            note.id = f.note().id(),
-            note.nullifier = f.note().nullifier()
-        );
-        let nullifier = sponsor_to_feature
-            .get(&f.note().id())
-            .copied()
-            .unwrap_or_else(|| f.note().nullifier());
-        if seen.insert(nullifier) {
-            let error: NoteError = Arc::new(std::io::Error::other(error_msg));
-            attributed.push((nullifier, error));
-        }
-    }
-    attributed
-}
-
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU16;
 
+    use miden_protocol::ONE;
     use miden_protocol::account::{Account, AccountPatch, AccountStoragePatch, AccountVaultPatch};
-    use miden_protocol::{Felt, ONE};
     use tokio::sync::watch;
 
     use super::*;
     use crate::test_utils::{mock_account, mock_network_account_id, mock_transaction_id};
-
-    #[test]
-    fn collateral_notes_receive_no_penalty() {
-        let account_id = mock_network_account_id();
-        let note = crate::test_utils::mock_single_target_note(account_id, 1).into_note();
-        let blamed_by = crate::test_utils::mock_single_target_note(account_id, 2).into_note().id();
-        let failed = vec![FailedNote::new(note, miden_tx::NoteFailure::Collateral { blamed_by })];
-
-        assert!(attribute_failed_notes(failed, &HashMap::new()).is_empty());
-    }
-
-    #[test]
-    fn blamed_note_retains_its_error() {
-        let note =
-            crate::test_utils::mock_single_target_note(mock_network_account_id(), 1).into_note();
-        let nullifier = note.nullifier();
-        let failed = vec![FailedNote::new(
-            note,
-            miden_tx::NoteFailure::Blamed {
-                error: miden_tx::TransactionExecutorError::AccountUpdateCommitment(
-                    "consumability failure",
-                ),
-                num_cycles: None,
-            },
-        )];
-
-        let attributed = attribute_failed_notes(failed, &HashMap::new());
-        assert_eq!(attributed.len(), 1);
-        assert_eq!(attributed[0].0, nullifier);
-        assert!(attributed[0].1.to_string().contains("consumability failure"));
-    }
-
-    #[test]
-    fn collateral_sponsorship_does_not_suppress_blamed_failure() {
-        let account_id = mock_network_account_id();
-        let feature = crate::test_utils::mock_single_target_note(account_id, 1).into_note();
-        let collateral = crate::test_utils::mock_sponsorship_note(account_id, feature.id(), 2);
-        let blamed = crate::test_utils::mock_sponsorship_note(account_id, feature.id(), 3);
-        let another_blamed = crate::test_utils::mock_sponsorship_note(account_id, feature.id(), 4);
-        let sponsors = HashMap::from([
-            (collateral.id(), feature.nullifier()),
-            (blamed.id(), feature.nullifier()),
-            (another_blamed.id(), feature.nullifier()),
-        ]);
-        let blamed_by = blamed.id();
-        let failed = vec![
-            FailedNote::new(collateral, miden_tx::NoteFailure::Collateral { blamed_by }),
-            FailedNote::new(
-                blamed,
-                miden_tx::NoteFailure::Blamed {
-                    error: miden_tx::TransactionExecutorError::AccountUpdateCommitment(
-                        "first failure",
-                    ),
-                    num_cycles: None,
-                },
-            ),
-            FailedNote::new(
-                another_blamed,
-                miden_tx::NoteFailure::Blamed {
-                    error: miden_tx::TransactionExecutorError::AccountUpdateCommitment(
-                        "second failure",
-                    ),
-                    num_cycles: None,
-                },
-            ),
-        ];
-
-        let attributed = attribute_failed_notes(failed, &sponsors);
-        assert_eq!(attributed.len(), 1);
-        assert_eq!(attributed[0].0, feature.nullifier());
-        assert!(attributed[0].1.to_string().contains("first failure"));
-    }
 
     /// Builds a valid nonce-only [`AccountPatch`] that advances `account` by a single nonce.
     fn nonce_bump_patch(account: &Account) -> AccountPatch {
@@ -1290,207 +1016,5 @@ mod tests {
         assert!(result.is_ok(), "idle deactivation is a clean shutdown");
 
         notifier.abort();
-    }
-
-    // SPONSORSHIP-AWARE SELECTION
-    // ---------------------------------------------------------------------------------------------
-
-    use crate::sponsorship::SponsorshipNote;
-    use crate::test_utils::{
-        mock_network_account_update,
-        mock_single_target_note,
-        mock_sponsorship,
-        mock_sponsorship_note_with_faucet_and_amount,
-        mock_sponsorship_with_amount,
-    };
-
-    /// Seeds a committed network account (with a populated allowlist) and returns its id together
-    /// with the account itself.
-    async fn seed_selection_account(db: &crate::db::NtxDbWriter) -> (AccountId, Account) {
-        let (account, _) = mock_network_account_update();
-        db.upsert_account_for_test(account.id(), account.clone(), mock_transaction_id(1))
-            .await
-            .unwrap();
-        (account.id(), account)
-    }
-
-    /// Each selected bundle carries exactly the pending sponsorships of its feature note.
-    #[tokio::test]
-    async fn select_candidate_attaches_sponsorships_for_pending_notes() {
-        let (db, _dir) = crate::db::test_setup().await;
-        let (account_id, account) = seed_selection_account(&db).await;
-
-        let feature_a = mock_single_target_note(account_id, 1);
-        let feature_b = mock_single_target_note(account_id, 2);
-        db.insert_network_notes(vec![feature_a.clone(), feature_b.clone()])
-            .await
-            .unwrap();
-        db.insert_sponsorship_notes(vec![
-            mock_sponsorship(account_id, feature_a.as_note().id(), 3),
-            mock_sponsorship(account_id, feature_a.as_note().id(), 4),
-        ])
-        .await
-        .unwrap();
-
-        let mut ctx = AccountActorContext::test(&db);
-        ctx.config.max_notes_per_tx = NonZeroUsize::new(20).unwrap();
-        let actor = AccountActor::new(account_id, &ctx);
-        let chain_state = actor.state.chain.get_cloned();
-
-        let (candidate, _) = actor.select_candidate(&Arc::new(account), chain_state).await.unwrap();
-        let candidate = candidate.expect("both bundles are viable");
-
-        assert_eq!(candidate.notes.len(), 2);
-        for sponsored in &candidate.notes {
-            if sponsored.feature.as_note().id() == feature_a.as_note().id() {
-                assert_eq!(sponsored.sponsorships.len(), 2, "feature A carries its sponsorships");
-            } else {
-                assert!(sponsored.sponsorships.is_empty(), "feature B has no sponsorships");
-            }
-        }
-    }
-
-    /// A feature note with more pending sponsorships than the cap gets exactly the cap, and the
-    /// slots go to the largest sponsorships.
-    #[tokio::test]
-    async fn select_candidate_caps_sponsorships_per_note() {
-        let (db, _dir) = crate::db::test_setup().await;
-        let (account_id, account) = seed_selection_account(&db).await;
-
-        let feature = mock_single_target_note(account_id, 1);
-        db.insert_network_notes(vec![feature.clone()]).await.unwrap();
-        db.insert_sponsorship_notes(
-            (0..5)
-                .map(|i| {
-                    mock_sponsorship_with_amount(
-                        account_id,
-                        feature.as_note().id(),
-                        10 + i,
-                        u64::from(i + 1) * 100,
-                    )
-                })
-                .collect(),
-        )
-        .await
-        .unwrap();
-
-        let mut ctx = AccountActorContext::test(&db);
-        ctx.config.max_notes_per_tx = NonZeroUsize::new(20).unwrap();
-        let actor = AccountActor::new(account_id, &ctx);
-        let chain_state = actor.state.chain.get_cloned();
-
-        let (candidate, _) = actor.select_candidate(&Arc::new(account), chain_state).await.unwrap();
-        let candidate = candidate.expect("the bundle is viable");
-
-        assert_eq!(candidate.notes.len(), 1);
-        assert_eq!(candidate.notes[0].sponsorships.len(), MAX_SPONSORSHIPS_PER_NOTE);
-        // The five pending sponsorships carry 100 through 500; the cap keeps the largest three.
-        let amounts = candidate.notes[0]
-            .sponsorships
-            .iter()
-            .map(|note| note.assets().as_slice()[0].unwrap_fungible().amount().as_u64())
-            .collect::<Vec<_>>();
-        assert_eq!(amounts, [500, 400, 300]);
-    }
-
-    /// Sponsorships carrying the wrong asset are removed before the cap is applied, so they cannot
-    /// occupy slots that could hold valid sponsorships.
-    #[tokio::test]
-    async fn select_candidate_filters_wrong_fee_asset_before_cap() {
-        use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1;
-
-        let (db, _dir) = crate::db::test_setup().await;
-        let (account_id, account) = seed_selection_account(&db).await;
-
-        let feature = mock_single_target_note(account_id, 1);
-        let feature_id = feature.as_note().id();
-        let valid = mock_sponsorship_with_amount(account_id, feature_id, 2, 100);
-        let wrong_faucet = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap();
-        let invalid = (3..=5)
-            .map(|seed| {
-                SponsorshipNote::try_from(mock_sponsorship_note_with_faucet_and_amount(
-                    account_id,
-                    feature_id,
-                    seed,
-                    wrong_faucet,
-                    u64::from(seed) * 10_000,
-                ))
-                .expect("wrong-asset sponsorship is structurally valid")
-            })
-            .collect::<Vec<_>>();
-
-        db.insert_network_notes(vec![feature]).await.unwrap();
-        db.insert_sponsorship_notes(std::iter::once(valid.clone()).chain(invalid).collect())
-            .await
-            .unwrap();
-
-        let mut ctx = AccountActorContext::test(&db);
-        ctx.config.max_notes_per_tx = NonZeroUsize::new(20).unwrap();
-        let actor = AccountActor::new(account_id, &ctx);
-        let chain_state = actor.state.chain.get_cloned();
-
-        let (candidate, _) = actor.select_candidate(&Arc::new(account), chain_state).await.unwrap();
-        let candidate = candidate.expect("the feature and its valid sponsorship are viable");
-
-        assert_eq!(candidate.notes.len(), 1);
-        assert_eq!(candidate.notes[0].sponsorships.len(), 1);
-        assert_eq!(candidate.notes[0].sponsorships[0].id(), valid.id());
-    }
-
-    /// Bundles are packed atomically against the per-tx note budget: a bundle that does not fit is
-    /// skipped as a whole, never split.
-    #[tokio::test]
-    async fn select_candidate_packs_bundles_atomically() {
-        let (db, _dir) = crate::db::test_setup().await;
-        let (account_id, account) = seed_selection_account(&db).await;
-
-        // Bundle A is three notes (feature + 2 sponsorships), bundle B is two: only one of them
-        // fits a three-note budget.
-        let feature_a = mock_single_target_note(account_id, 1);
-        let feature_b = mock_single_target_note(account_id, 2);
-        db.insert_network_notes(vec![feature_a.clone(), feature_b.clone()])
-            .await
-            .unwrap();
-        db.insert_sponsorship_notes(vec![
-            mock_sponsorship(account_id, feature_a.as_note().id(), 3),
-            mock_sponsorship(account_id, feature_a.as_note().id(), 4),
-            mock_sponsorship(account_id, feature_b.as_note().id(), 5),
-        ])
-        .await
-        .unwrap();
-
-        let mut ctx = AccountActorContext::test(&db);
-        ctx.config.max_notes_per_tx = NonZeroUsize::new(3).unwrap();
-        let actor = AccountActor::new(account_id, &ctx);
-        let chain_state = actor.state.chain.get_cloned();
-
-        let (candidate, _) = actor.select_candidate(&Arc::new(account), chain_state).await.unwrap();
-        let candidate = candidate.expect("at least one bundle fits the budget");
-
-        assert_eq!(candidate.notes.len(), 1, "only one whole bundle fits three note slots");
-        assert!(candidate.num_notes() <= 3, "a bundle must never be split to fit");
-        let sponsored = &candidate.notes[0];
-        assert!(!sponsored.sponsorships.is_empty(), "the selected bundle keeps its sponsorships");
-    }
-
-    /// The canonical expiration script carries its delta in `TX_SCRIPT_ARGS`, so every delta shares
-    /// a single script root (the one network accounts allowlist), while the args word encodes the
-    /// delta in its first element.
-    #[test]
-    fn expiration_script_shares_root_and_encodes_delta_in_args() {
-        let one = build_tx_args(NonZeroU16::new(1).unwrap());
-        let thirty = build_tx_args(NonZeroU16::new(30).unwrap());
-        let max = build_tx_args(NonZeroU16::MAX);
-
-        // All deltas resolve to the single allowlistable root.
-        let root = ExpirationTransactionScript::script_root();
-        assert_eq!(one.tx_script().unwrap().root(), root);
-        assert_eq!(thirty.tx_script().unwrap().root(), root);
-        assert_eq!(max.tx_script().unwrap().root(), root);
-
-        // The delta rides in the first element of the args word.
-        assert_eq!(one.tx_script_args()[0], Felt::from(1_u16));
-        assert_eq!(thirty.tx_script_args()[0], Felt::from(30_u16));
-        assert_eq!(max.tx_script_args()[0], Felt::from(u16::MAX));
     }
 }
