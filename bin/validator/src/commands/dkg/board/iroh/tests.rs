@@ -409,6 +409,35 @@ async fn unavailable_blob_remains_retryable() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn disconnected_blob_provider_fails_over() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (host, tickets) = BoardNode::create_for_test(&root.path().join("host")).await?;
+    let first =
+        BoardNode::join_for_test(&root.path().join("first"), ticket_for(&tickets, 1)).await?;
+    let second =
+        BoardNode::join_for_test(&root.path().join("second"), ticket_for(&tickets, 2)).await?;
+    connect_blob_provider(&host, &first).await?;
+    connect_blob_provider(&host, &second).await?;
+    let first_id = first.router.endpoint().id();
+    first.shutdown().await?;
+
+    let slot = ArtifactSlot::Manifest;
+    let value = b"available from second provider";
+    let hash = Hash::new(value);
+    let _tag = second.blobs.blobs().add_slice(value).await?;
+    host.publish_hash_for_test(&slot, hash, u64::try_from(value.len())?).await?;
+    host.remote_providers
+        .write()
+        .await
+        .insert(hash, vec![first_id, second.router.endpoint().id()]);
+
+    assert_eq!(host.wait_unique(&slot, Duration::from_secs(10)).await?, value);
+    second.shutdown().await?;
+    host.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn local_download_import_failure_is_reported() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     let (host, tickets) = BoardNode::create_for_test(&root.path().join("host")).await?;

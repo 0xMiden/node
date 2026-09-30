@@ -18,7 +18,7 @@ use iroh::endpoint::presets;
 use iroh::protocol::Router;
 use iroh::{Endpoint, EndpointAddr, EndpointId, SecretKey};
 use iroh_blobs::api::remote::GetProgressItem;
-use iroh_blobs::get::GetError;
+use iroh_blobs::get::{GetError, StreamPair};
 use iroh_blobs::store::fs::FsStore;
 use iroh_blobs::{BlobsProtocol, Hash};
 use iroh_docs::DocTicket;
@@ -61,6 +61,7 @@ use super::core::{
 };
 
 const PEER_READY_TIMEOUT: Duration = Duration::from_secs(30);
+const PROVIDER_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// This ticket gives its holder read access to the board and upload permission for one participant.
 ///
@@ -441,49 +442,7 @@ impl BoardNode {
                         providers.push(peer);
                     }
                 }
-                if providers.is_empty() {
-                    return Ok(None);
-                }
-                let mut downloaded = false;
-                for provider in providers {
-                    let Ok(connection) =
-                        self.router.endpoint().connect(provider, iroh_blobs::ALPN).await
-                    else {
-                        continue;
-                    };
-                    let mut stream = self.blobs.remote().fetch(connection, hash).stream();
-                    let mut finished = false;
-                    while let Some(item) = stream.next().await {
-                        match item {
-                            GetProgressItem::Progress(size) => ensure!(
-                                size <= MAX_ARTIFACT_BYTES,
-                                "DKG board artifact exceeds {MAX_ARTIFACT_BYTES} bytes",
-                            ),
-                            GetProgressItem::Done(_) => {
-                                downloaded = true;
-                                finished = true;
-                                break;
-                            },
-                            GetProgressItem::Error(
-                                error @ (GetError::LocalFailure { .. }
-                                | GetError::IrpcSend { .. }
-                                | GetError::BadRequest { .. }),
-                            ) => anyhow::bail!(
-                                "failed to download DKG board blob {hash} for {}: {error:#}",
-                                slot.prefix()
-                            ),
-                            GetProgressItem::Error(_) => {
-                                finished = true;
-                                break;
-                            },
-                        }
-                    }
-                    ensure!(finished, "DKG board blob download ended without a result");
-                    if downloaded {
-                        break;
-                    }
-                }
-                if !downloaded {
+                if !self.download_blob(hash, slot, providers).await? {
                     return Ok(None);
                 }
             }
@@ -498,6 +457,55 @@ impl BoardNode {
             values.entry(hash).or_insert_with(|| bytes.to_vec());
         }
         SlotValues::from_values(values.into_values()).into_unique(slot)
+    }
+
+    async fn download_blob(
+        &self,
+        hash: Hash,
+        slot: &ArtifactSlot,
+        providers: Vec<EndpointId>,
+    ) -> anyhow::Result<bool> {
+        for provider in providers {
+            let Ok(Ok(connection)) = tokio::time::timeout(
+                PROVIDER_CONNECT_TIMEOUT,
+                self.router.endpoint().connect(provider, iroh_blobs::ALPN),
+            )
+            .await
+            else {
+                continue;
+            };
+            let Ok(Ok((send, recv))) =
+                tokio::time::timeout(PROVIDER_CONNECT_TIMEOUT, connection.open_bi()).await
+            else {
+                continue;
+            };
+            let streams = StreamPair::new(connection.stable_id() as u64, recv, send);
+            let mut stream = self.blobs.remote().fetch(streams, hash).stream();
+            let mut finished = false;
+            while let Some(item) = stream.next().await {
+                match item {
+                    GetProgressItem::Progress(size) => ensure!(
+                        size <= MAX_ARTIFACT_BYTES,
+                        "DKG board artifact exceeds {MAX_ARTIFACT_BYTES} bytes",
+                    ),
+                    GetProgressItem::Done(_) => return Ok(true),
+                    GetProgressItem::Error(
+                        error @ (GetError::LocalFailure { .. }
+                        | GetError::IrpcSend { .. }
+                        | GetError::BadRequest { .. }),
+                    ) => anyhow::bail!(
+                        "failed to download DKG board blob {hash} for {}: {error:#}",
+                        slot.prefix()
+                    ),
+                    GetProgressItem::Error(_) => {
+                        finished = true;
+                        break;
+                    },
+                }
+            }
+            ensure!(finished, "DKG board blob download ended without a result");
+        }
+        Ok(false)
     }
 
     async fn validate_document_metadata(&self) -> anyhow::Result<()> {
