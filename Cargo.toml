@@ -70,11 +70,11 @@ miden-standards    = { version = "0.17.0-rc.8" }
 miden-testing      = { version = "0.17.0-rc.8" }
 miden-tx           = { default-features = false, version = "0.17.0-rc.8" }
 miden-tx-batch     = { version = "0.17.0-rc.8" }
+miden-usdcx        = { version = "0.17.0-rc.8" }
 
 # Other miden dependencies. These should align with those expected by miden-protocol.
 miden-crypto    = { version = "0.34.0" }
 miden-processor = { version = "0.34.0" }
-xusdc-encoding  = { branch = "pgackst-protocol-v17-rc.8", git = "https://github.com/0xMiden/miden-usdcx" }
 
 # External dependencies
 anyhow             = { version = "1.0" }
@@ -158,6 +158,18 @@ ignored = ["libsqlite3-sys"]
 [workspace.metadata.inheritance-check]
 # The normal and dev entries enable different SDK features in the tracing crate.
 ignore = [{ dependency = "opentelemetry_sdk", member = "crates/tracing" }]
+
+# TODO: Remove once https://github.com/0xMiden/protocol/pull/3972 is released.
+[patch.crates-io]
+miden-block-prover = { branch = "pgackst-add-usdcx", git = "https://github.com/0xMiden/protocol" }
+miden-objects      = { branch = "pgackst-add-usdcx", git = "https://github.com/0xMiden/protocol" }
+miden-protobuf     = { branch = "pgackst-add-usdcx", git = "https://github.com/0xMiden/protocol" }
+miden-protocol     = { branch = "pgackst-add-usdcx", git = "https://github.com/0xMiden/protocol" }
+miden-standards    = { branch = "pgackst-add-usdcx", git = "https://github.com/0xMiden/protocol" }
+miden-testing      = { branch = "pgackst-add-usdcx", git = "https://github.com/0xMiden/protocol" }
+miden-tx           = { branch = "pgackst-add-usdcx", git = "https://github.com/0xMiden/protocol" }
+miden-tx-batch     = { branch = "pgackst-add-usdcx", git = "https://github.com/0xMiden/protocol" }
+miden-usdcx        = { branch = "pgackst-add-usdcx", git = "https://github.com/0xMiden/protocol" }
 
 # Lints are set to warn for development, which are promoted to errors in CI.
 [workspace.lints.clippy]

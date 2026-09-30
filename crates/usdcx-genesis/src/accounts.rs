@@ -18,11 +18,8 @@ use miden_protocol::{Felt, ZERO};
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::account::faucets::{FungibleFaucet, FungibleFaucetError};
 use miden_standards::account::wallets::BasicWallet;
-use xusdc_encoding::account::xreserve::{
-    XReserveStablecoinBuilder,
-    XReserveStablecoinBuilderError,
-};
-use xusdc_encoding::xreserve::encoding::DepositNonce;
+use miden_usdcx::account::xreserve::{XReserveStablecoinBuilder, XReserveStablecoinBuilderError};
+use miden_usdcx::xreserve::encoding::DepositNonce;
 
 use crate::config::GenesisToolConfig;
 
@@ -71,7 +68,7 @@ pub fn record_nonces(
     faucet: &Account,
     nonces: &[DepositNonce],
 ) -> Result<Account, XReserveStablecoinBuilderError> {
-    xusdc_encoding::record_used_nonces(faucet.clone(), nonces)
+    miden_usdcx::record_used_nonces(faucet.clone(), nonces)
 }
 
 // DISTRIBUTOR

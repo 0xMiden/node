@@ -31,7 +31,7 @@ rand            = { workspace = true }
 serde           = { workspace = true }
 serde_json      = { workspace = true }
 thiserror       = { workspace = true }
-xusdc-encoding  = { workspace = true }
+miden-usdcx     = { workspace = true }
 
 [dev-dependencies]
 assert_matches = { workspace = true }
