@@ -12,6 +12,7 @@ use miden_node_utils::formatting::format_endpoint;
 use miden_node_utils::fs::ensure_empty_directory;
 use miden_node_utils::genesis::{OfficialNetwork, fetch_genesis_block, read_genesis_block};
 use miden_node_utils::shutdown::CancellationToken;
+use miden_protocol::account::AccountId;
 use tokio::net::TcpListener;
 use tonic::metadata::AsciiMetadataValue;
 use url::Url;
@@ -26,6 +27,7 @@ const ENV_TX_PROVER_URL: &str = "MIDEN_NODE_NTX_BUILDER_NTX_PROVER_URL";
 const ENV_TX_PROVER_TIMEOUT: &str = "MIDEN_NODE_NTX_BUILDER_NTX_PROVER_TIMEOUT";
 const ENV_SCRIPT_CACHE_SIZE: &str = "MIDEN_NODE_NTX_BUILDER_SCRIPT_CACHE_SIZE";
 const ENV_MAX_CONCURRENT_TXS: &str = "MIDEN_NODE_NTX_BUILDER_MAX_CONCURRENT_TXS";
+const ENV_PRIORITY_ACCOUNTS: &str = "MIDEN_NODE_NTX_BUILDER_PRIORITY_ACCOUNTS";
 const ENV_MAX_CYCLES: &str = "MIDEN_NODE_NTX_BUILDER_MAX_CYCLES";
 const ENV_TX_EXPIRATION_DELTA: &str = "MIDEN_NODE_NTX_BUILDER_TX_EXPIRATION_DELTA";
 const ENV_SQLITE_CONNECTION_POOL_SIZE: &str = "MIDEN_NODE_NTX_BUILDER_SQLITE_CONNECTION_POOL_SIZE";
@@ -113,6 +115,19 @@ pub enum NtxBuilderCommand {
             value_name = "NUM"
         )]
         max_concurrent_txs: usize,
+
+        /// Network account served before every other account, such as the native faucet.
+        ///
+        /// Repeat the flag to prioritize several accounts. Keep the list shorter than
+        /// `--max-concurrent-txs` so a slot always remains for the other accounts.
+        #[arg(
+            long = "priority-account",
+            env = ENV_PRIORITY_ACCOUNTS,
+            value_delimiter = ',',
+            value_parser = parse_account_id,
+            value_name = "ACCOUNT_ID"
+        )]
+        priority_accounts: Vec<AccountId>,
 
         /// Maximum number of VM execution cycles allowed for a single network transaction.
         ///
@@ -246,6 +261,7 @@ impl NtxBuilderCommand {
             tx_prover_timeout,
             script_cache_size,
             max_concurrent_txs,
+            priority_accounts,
             max_tx_cycles,
             tx_expiration_delta,
             sqlite_connection_pool_size,
@@ -269,6 +285,7 @@ impl NtxBuilderCommand {
             tx_prover.timeout = humantime::Duration::from(tx_prover_timeout).to_string(),
             rpc.authentication.configured = rpc_auth_header_value.is_some(),
             ntx_builder.max_concurrent_txs = max_concurrent_txs,
+            account.ids.count = priority_accounts.len(),
             ntx_builder.max_cycles = max_tx_cycles,
             ntx_builder.tx_expiration_delta = tx_expiration_delta.get(),
             db.sqlite.connection_pool_size = sqlite_connection_pool_size.get()
@@ -287,6 +304,7 @@ impl NtxBuilderCommand {
                 .with_tx_prover_timeout(tx_prover_timeout)
                 .with_script_cache_size(script_cache_size)
                 .with_max_concurrent_txs(max_concurrent_txs)
+                .with_priority_accounts(priority_accounts)
                 .with_max_cycles(max_tx_cycles)
                 .with_tx_expiration_delta(tx_expiration_delta)
                 .with_sqlite_connection_pool_size(sqlite_connection_pool_size);
@@ -323,4 +341,9 @@ async fn read_bootstrap_genesis_block(
         (None, Some(network)) => fetch_genesis_block(network).await,
         _ => unreachable!("clap requires exactly one genesis block source"),
     }
+}
+
+/// Parses a network account id from its hex representation.
+fn parse_account_id(value: &str) -> anyhow::Result<AccountId> {
+    AccountId::from_hex(value).map_err(Into::into)
 }
