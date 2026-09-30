@@ -108,6 +108,11 @@ impl Ticket for BoardTicket {
                 "DKG board document addressing info cannot be empty",
             ));
         }
+        if ticket.encode_bytes() != bytes {
+            return Err(ParseError::verification_failed(
+                "DKG board ticket must use canonical bytes",
+            ));
+        }
         Ok(ticket)
     }
 }
@@ -122,7 +127,13 @@ impl FromStr for BoardTicket {
     type Err = ParseError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Ticket::decode_string(value)
+        let ticket: Self = Ticket::decode_string(value)?;
+        if ticket.to_string() != value {
+            return Err(ParseError::verification_failed(
+                "DKG board ticket must use canonical text",
+            ));
+        }
+        Ok(ticket)
     }
 }
 

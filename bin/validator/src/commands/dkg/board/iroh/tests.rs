@@ -211,6 +211,16 @@ async fn board_ticket_round_trips_and_validates_fields() -> anyhow::Result<()> {
     let encoded = ticket.to_string();
     let decoded = BoardTicket::from_str(&encoded)?;
     assert_eq!(decoded.to_string(), encoded);
+    let mut trailing_bytes = ticket.encode_bytes();
+    trailing_bytes.push(0);
+    assert!(BoardTicket::decode_bytes(&trailing_bytes).is_err());
+    let alternate_case = format!(
+        "{}{}",
+        BoardTicket::KIND,
+        encoded[BoardTicket::KIND.len()..].to_ascii_uppercase(),
+    );
+    assert_ne!(alternate_case, encoded);
+    assert!(BoardTicket::from_str(&alternate_case).is_err());
 
     let mut invalid = ticket.clone();
     invalid.participant = 0;
