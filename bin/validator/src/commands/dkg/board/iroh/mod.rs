@@ -29,6 +29,7 @@ use iroh_docs::protocol::Docs;
 use iroh_docs::store::{DownloadPolicy, Query};
 use iroh_gossip::net::Gossip;
 use iroh_tickets::{ParseError, Ticket};
+use miden_node_utils::shutdown::CancellationToken;
 use serde::{Deserialize, Serialize};
 
 mod persistence;
@@ -171,10 +172,17 @@ pub(super) async fn join(
     encoded_ticket: &str,
     participant_count: usize,
     use_network_services: bool,
+    shutdown: CancellationToken,
 ) -> anyhow::Result<BoardNode> {
     let ticket = BoardTicket::from_str(encoded_ticket)?;
-    BoardNode::join_with_network(data_directory, ticket, participant_count, use_network_services)
-        .await
+    BoardNode::join_with_network(
+        data_directory,
+        ticket,
+        participant_count,
+        use_network_services,
+        shutdown,
+    )
+    .await
 }
 
 impl ArtifactSlot {
@@ -333,6 +341,7 @@ impl BoardNode {
         ticket: BoardTicket,
         participant_count: usize,
         use_network_services: bool,
+        shutdown: CancellationToken,
     ) -> anyhow::Result<Self> {
         let runtime = BoardRuntime::start(data_directory, use_network_services).await?;
         let BoardTicket { document, participant, upload_secret } = ticket;
@@ -366,8 +375,17 @@ impl BoardNode {
             .start_sync(nodes)
             .await
             .context("failed to start DKG board synchronization")?;
-        board.wait_for_peer().await?;
-        Ok(board)
+        let admission = tokio::select! {
+            result = board.wait_for_peer() => result,
+            _ = shutdown.cancelled() => Err(anyhow::anyhow!("DKG board join cancelled")),
+        };
+        match admission {
+            Ok(()) => Ok(board),
+            Err(error) => {
+                board.shutdown().await?;
+                Err(error)
+            },
+        }
     }
 
     /// Publishes one artifact without replacing another value in the same slot.

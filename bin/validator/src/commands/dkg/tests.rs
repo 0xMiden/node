@@ -1178,10 +1178,99 @@ async fn active_runner_stops_and_reopens_an_incomplete_board() -> TestResult {
     )
     .await
     .unwrap_err();
-    assert!(error.to_string().contains("timed out"));
+    let absent = if participant.get() == 1 { 2 } else { 1 };
+    assert_eq!(
+        error.to_string(),
+        format!("timed out waiting for DKG board slot registration/{absent}/")
+    );
     assert_eq!(board.reader().read_unique(&slot).await?, Some(registration));
     assert_eq!(fs_err::read(work_directory.join("board/endpoint-secret.hex"))?, endpoint_secret);
     board.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn coordinator_stops_before_and_after_common_artifacts() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let genesis = write_genesis(root.path())?;
+    let board_directory = root.path().join("board");
+    let epoch = "66".repeat(32);
+    let options = |ticket_directory: PathBuf| runner::DkgBoardServeOptions {
+        data_directory: board_directory.clone(),
+        genesis: genesis.path.clone(),
+        threshold: std::num::NonZeroUsize::new(2).unwrap(),
+        epoch: epoch.clone(),
+        ticket_directory,
+    };
+
+    let first_tickets = root.path().join("first-tickets");
+    let shutdown = miden_node_utils::shutdown::CancellationToken::new();
+    let first = tokio::spawn({
+        let shutdown = shutdown.clone();
+        let options = options(first_tickets.clone());
+        async move { runner::serve_board_with_network(options, shutdown, false).await }
+    });
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !first_tickets.join("participant-1.ticket").is_file() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(10), first).await???;
+
+    let second_tickets = root.path().join("second-tickets");
+    let shutdown = miden_node_utils::shutdown::CancellationToken::new();
+    let second = tokio::spawn({
+        let shutdown = shutdown.clone();
+        let options = options(second_tickets.clone());
+        async move { runner::serve_board_with_network(options, shutdown, false).await }
+    });
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !second_tickets.join("participant-1.ticket").is_file() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+
+    let mut participants = Vec::new();
+    for (position, signing_key) in genesis.signing_keys.iter().enumerate() {
+        let signer = ValidatorSigner::new_local(signing_key.clone());
+        let work_directory = root.path().join(format!("participant-{position}"));
+        let participant =
+            runner::prepare_local_identity(&genesis.path, &epoch, &signer, &work_directory).await?;
+        let ticket = fs_err::read_to_string(
+            second_tickets.join(format!("participant-{}.ticket", participant.get())),
+        )?
+        .parse::<board::BoardTicket>()?;
+        let board = board::ParticipantBoard::join_with_network(
+            &work_directory.join("board"),
+            ticket,
+            3,
+            false,
+            miden_node_utils::shutdown::CancellationToken::new(),
+        )
+        .await?;
+        let registration = fs_err::read(work_directory.join("identity").join(REGISTRATION_FILE))?;
+        board.publish(board::ParticipantArtifact::Registration, &registration).await?;
+        participants.push(board);
+    }
+    let context = participants[0]
+        .reader()
+        .wait_unique(&board::ArtifactSlot::ContextConfig, Duration::from_secs(10))
+        .await?;
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(10), second).await???;
+    for participant in participants {
+        participant.shutdown().await?;
+    }
+    let (reopened, _) =
+        board::CoordinatorBoard::create_with_network(&board_directory, 3, false).await?;
+    assert_eq!(
+        reopened.reader().read_unique(&board::ArtifactSlot::ContextConfig).await?,
+        Some(context)
+    );
+    reopened.shutdown().await?;
     Ok(())
 }
 
@@ -1262,6 +1351,7 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
                 ticket.clone(),
                 3,
                 false,
+                miden_node_utils::shutdown::CancellationToken::new(),
             )
             .await?,
         );

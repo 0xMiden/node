@@ -67,23 +67,23 @@ const CEREMONY_WAIT_TIMEOUT: Duration = Duration::from_hours(24);
 pub(super) struct DkgBoardServeOptions {
     /// This directory stores Iroh data and common ceremony files.
     #[arg(long, value_name = "DIR")]
-    data_directory: PathBuf,
+    pub(super) data_directory: PathBuf,
 
     /// Trusted genesis block for the network.
     #[arg(long, value_name = "FILE")]
-    genesis: PathBuf,
+    pub(super) genesis: PathBuf,
 
     /// Number of shares needed to decrypt a private record.
     #[arg(long, value_name = "NUM")]
-    threshold: NonZeroUsize,
+    pub(super) threshold: NonZeroUsize,
 
     /// Hex-encoded 32-byte storage-key epoch.
     #[arg(long, value_name = "HEX")]
-    epoch: String,
+    pub(super) epoch: String,
 
     /// New private directory that receives one board ticket per genesis validator.
     #[arg(long, value_name = "DIR")]
-    ticket_directory: PathBuf,
+    pub(super) ticket_directory: PathBuf,
 }
 
 /// Inputs for one validator's automatic storage key DKG ceremony runner.
@@ -150,10 +150,22 @@ pub(super) async fn serve_board(
     options: DkgBoardServeOptions,
     shutdown: CancellationToken,
 ) -> anyhow::Result<()> {
+    serve_board_with_network(options, shutdown, true).await
+}
+
+pub(super) async fn serve_board_with_network(
+    options: DkgBoardServeOptions,
+    shutdown: CancellationToken,
+    use_network_services: bool,
+) -> anyhow::Result<()> {
     let genesis = read_trusted_genesis(&options.genesis)?;
     let participant_count = genesis.inner().header().validator_config().keys().len();
-    let (board, tickets) =
-        CoordinatorBoard::create(&options.data_directory, participant_count).await?;
+    let (board, tickets) = CoordinatorBoard::create_with_network(
+        &options.data_directory,
+        participant_count,
+        use_network_services,
+    )
+    .await?;
     publish_directory(&options.ticket_directory, |temporary| {
         for ticket in &tickets {
             write_new_file(
@@ -303,7 +315,14 @@ where
         participant.get(),
     );
     let board_directory = work_directory.join(BOARD_DIRECTORY);
-    let board = ParticipantBoard::join(&board_directory, ticket, participant_count).await?;
+    let board =
+        match ParticipantBoard::join(&board_directory, ticket, participant_count, shutdown.clone())
+            .await
+        {
+            Ok(board) => board,
+            Err(_) if shutdown.is_cancelled() => return Ok(()),
+            Err(error) => return Err(error),
+        };
     let result = tokio::select! {
         _ = shutdown.cancelled() => Ok(()),
         result = run_validator_on_board::<B>(

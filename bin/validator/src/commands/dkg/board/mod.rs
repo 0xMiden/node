@@ -8,6 +8,8 @@ use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
 
+use miden_node_utils::shutdown::CancellationToken;
+
 mod core;
 mod iroh;
 #[cfg(test)]
@@ -150,14 +152,6 @@ pub(super) struct CoordinatorBoard {
 }
 
 impl CoordinatorBoard {
-    /// Creates or resumes a ceremony board and returns one scoped ticket per participant.
-    pub(super) async fn create(
-        data_directory: &Path,
-        participant_count: usize,
-    ) -> anyhow::Result<(Self, Vec<BoardTicket>)> {
-        Self::create_with_network(data_directory, participant_count, true).await
-    }
-
     pub(super) async fn create_with_network(
         data_directory: &Path,
         participant_count: usize,
@@ -230,8 +224,9 @@ impl ParticipantBoard {
         data_directory: &Path,
         ticket: BoardTicket,
         participant_count: usize,
+        shutdown: CancellationToken,
     ) -> anyhow::Result<Self> {
-        Self::join_with_network(data_directory, ticket, participant_count, true).await
+        Self::join_with_network(data_directory, ticket, participant_count, true, shutdown).await
     }
 
     pub(super) async fn join_with_network(
@@ -239,6 +234,7 @@ impl ParticipantBoard {
         ticket: BoardTicket,
         participant_count: usize,
         use_network_services: bool,
+        shutdown: CancellationToken,
     ) -> anyhow::Result<Self> {
         let participant = ticket.participant();
         let node = iroh::join(
@@ -246,6 +242,7 @@ impl ParticipantBoard {
             &ticket.into_encoded(),
             participant_count,
             use_network_services,
+            shutdown,
         )
         .await?;
         Ok(Self {

@@ -72,6 +72,7 @@ async fn iroh_adapter_obeys_board_contract() -> anyhow::Result<()> {
                 ticket,
                 2,
                 false,
+                miden_node_utils::shutdown::CancellationToken::new(),
             )
             .await?,
         );

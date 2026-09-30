@@ -6,7 +6,7 @@ impl BoardNode {
     }
 
     async fn join_for_test(data_directory: &Path, ticket: BoardTicket) -> anyhow::Result<Self> {
-        Self::join_with_network(data_directory, ticket, 3, false).await
+        Self::join_with_network(data_directory, ticket, 3, false, CancellationToken::new()).await
     }
 
     fn local_writer_for_test(&self) -> &BoardWriter {
@@ -160,6 +160,42 @@ async fn board_metadata_points_to_a_committed_document() -> anyhow::Result<()> {
     snapshot.open_replica(&document.id())?;
 
     drop(runtime);
+    Ok(())
+}
+
+#[tokio::test]
+async fn joining_an_unavailable_board_can_be_cancelled() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (host, tickets) = BoardNode::create_for_test(&root.path().join("host")).await?;
+    let ticket = ticket_for(&tickets, 1);
+    host.shutdown().await?;
+    let work_directory = root.path().join("participant");
+    let shutdown = CancellationToken::new();
+    let task = tokio::spawn({
+        let work_directory = work_directory.clone();
+        let shutdown = shutdown.clone();
+        async move {
+            match BoardNode::join_with_network(&work_directory, ticket, 3, false, shutdown).await {
+                Ok(board) => {
+                    board.shutdown().await?;
+                    anyhow::bail!("joined an unavailable board")
+                },
+                Err(error) => Ok(error),
+            }
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !work_directory.join("docs/docs.redb").is_file() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    assert!(!task.is_finished());
+    shutdown.cancel();
+    let error = tokio::time::timeout(Duration::from_secs(10), task).await???;
+    assert_eq!(error.to_string(), "DKG board join cancelled");
+    let store = FsStore::load(work_directory.join("blobs")).await?;
+    store.shutdown().await?;
     Ok(())
 }
 
