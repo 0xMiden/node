@@ -3,7 +3,7 @@
 
 use maud::{Markup, html};
 
-use super::super::helpers::{copy_button, metric_row, truncate};
+use super::super::helpers::{copy_button, copyable_value, metric_row};
 use crate::status::RpcStatusDetails;
 
 pub(in crate::view) fn render_rpc_status(details: &RpcStatusDetails) -> Markup {
@@ -11,8 +11,7 @@ pub(in crate::view) fn render_rpc_status(details: &RpcStatusDetails) -> Markup {
         div class="service-details" data-grpc-url=(details.url) data-grpc-path="/miden.node.v1.NodeService/Status" {
             div class="detail-item" {
                 strong { "URL: " }
-                (details.url)
-                (copy_button(&details.url, "URL"))
+                (copyable_value(&details.url, "URL"))
             }
             div class="detail-item" {
                 strong { "Version: " }
@@ -25,9 +24,7 @@ pub(in crate::view) fn render_rpc_status(details: &RpcStatusDetails) -> Markup {
             @if let Some(genesis) = &details.genesis_commitment {
                 div class="detail-item" {
                     strong { "Genesis: " }
-                    span class="genesis-value" {
-                        "0x" (truncate(genesis, 20)) "..."
-                    }
+                    span class="value-text genesis-value" title=(genesis) { (genesis) }
                     (copy_button(genesis, "genesis commitment"))
                 }
             }

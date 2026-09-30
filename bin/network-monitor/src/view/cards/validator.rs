@@ -2,7 +2,7 @@
 
 use maud::{Markup, html};
 
-use super::super::helpers::{copy_button, metric_row, num_or_dash};
+use super::super::helpers::{copyable_value, metric_row, num_or_dash};
 use crate::status::ValidatorStatusDetails;
 
 pub(in crate::view) fn render_validator(details: &ValidatorStatusDetails, healthy: bool) -> Markup {
@@ -19,7 +19,7 @@ pub(in crate::view) fn render_validator(details: &ValidatorStatusDetails, health
                     div class="metric-row" {
                         span class="metric-label" { "URL:" }
                         span class="metric-value" {
-                            (details.url) (copy_button(&details.url, "URL"))
+                            (copyable_value(&details.url, "URL"))
                         }
                     }
                     (metric_row("Version:", &details.version))
