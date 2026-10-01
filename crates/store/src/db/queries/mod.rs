@@ -5,10 +5,6 @@
 //! through [`DbReader::read`](miden_node_db::sqlite::DbReader::read) /
 //! [`DbWriter::write`](miden_node_db::sqlite::DbWriter::write). One module per query, holding the
 //! function and the `.sql` file it executes.
-//!
-//! The store is being migrated to the framework incrementally: every write goes through the
-//! modules here, while most reads still run on the diesel layer in [`crate::db::models`]. Read
-//! queries move here one batch at a time until the diesel layer is removed.
 
 use miden_node_db::DatabaseError;
 use miden_node_db::sqlite::{DbValue, DbValueRef, FromSqlValue, ToSqlValue};
@@ -115,6 +111,18 @@ pub(crate) use select_notes_by_id::select_notes_by_id;
 mod select_notes_since_block_by_tag;
 pub(crate) use select_notes_since_block_by_tag::select_notes_since_block_by_tag;
 
+mod select_existing_note_ids;
+pub(crate) use select_existing_note_ids::select_existing_note_ids;
+
+mod select_note_ids_by_nullifier;
+pub(crate) use select_note_ids_by_nullifier::select_note_ids_by_nullifier;
+
+mod select_note_inclusion_proofs;
+pub(crate) use select_note_inclusion_proofs::select_note_inclusion_proofs;
+
+mod select_note_sync_records;
+pub(crate) use select_note_sync_records::select_note_sync_records;
+
 // NULLIFIER QUERIES
 // =================================================================================================
 
@@ -138,6 +146,9 @@ pub(crate) use select_nullifiers_paged::select_nullifiers_paged;
 
 mod insert_transactions;
 pub(crate) use insert_transactions::insert_transactions;
+
+mod select_transactions_records;
+pub(crate) use select_transactions_records::select_transactions_records;
 
 // ACCOUNT QUERIES
 // =================================================================================================

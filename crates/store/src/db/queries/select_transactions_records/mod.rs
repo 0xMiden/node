@@ -1,23 +1,16 @@
+//! Returns full transaction records for a set of accounts within a block range.
+
+use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
 
-use diesel::prelude::Queryable;
-use diesel::query_dsl::methods::SelectDsl;
-use diesel::{
-    BoolExpressionMethods,
-    ExpressionMethods,
-    QueryDsl,
-    QueryableByName,
-    RunQueryDsl,
-    Selectable,
-    SelectableHelper,
-    SqliteConnection,
-};
+use miden_node_db::sqlite::{InList, ReadTx, Row};
 use miden_node_utils::limiter::{
     MAX_RESPONSE_PAYLOAD_BYTES,
     QueryParamAccountIdLimit,
     QueryParamLimiter,
     QueryParamNoteCommitmentLimit,
 };
+use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{NoteHeader, NoteId, Nullifier};
@@ -27,22 +20,21 @@ use miden_protocol::transaction::{
     TransactionHeader,
     TransactionId,
 };
-use miden_protocol::utils::serde::Deserializable;
 
-use super::{DatabaseError, select_note_ids_by_nullifier, select_note_sync_records};
-use crate::db::models::conv::SqlTypeConvert;
-use crate::db::models::serialize_vec;
-use crate::db::schema;
+use crate::db::TransactionRecord;
+use crate::db::queries::{select_note_ids_by_nullifier, select_note_sync_records};
+use crate::errors::DatabaseError;
 
-#[derive(Debug, Clone, PartialEq, Queryable, Selectable, QueryableByName)]
-#[diesel(table_name = schema::transactions)]
-#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
-pub struct TransactionRecordRaw {
-    account_id: Vec<u8>,
-    block_num: i64,
-    transaction_id: Vec<u8>,
-    initial_state_commitment: Vec<u8>,
-    final_state_commitment: Vec<u8>,
+const SQL_FIRST_CHUNK: &str = include_str!("select_transactions_records_chunk.sql");
+const SQL_AFTER_CURSOR: &str = include_str!("select_transactions_records_chunk_after.sql");
+
+/// A stored transaction row. The note columns stay encoded until the rows are complete.
+struct TransactionRow {
+    account_id: AccountId,
+    block_num: BlockNumber,
+    transaction_id: TransactionId,
+    initial_state_commitment: Word,
+    final_state_commitment: Word,
     input_notes: Vec<u8>,
     output_notes: Vec<u8>,
     size_in_bytes: i64,
@@ -66,32 +58,6 @@ pub struct TransactionRecordRaw {
 /// without loading full block data. We use a chunked loading strategy to prevent memory
 /// exhaustion attacks and ensure predictable resource usage.
 ///
-/// # Raw SQL
-/// ```sql
-/// SELECT
-///     account_id,
-///     block_num,
-///     transaction_id,
-///     initial_state_commitment,
-///     final_state_commitment,
-///     input_notes,
-///     output_notes,
-///     size_in_bytes
-/// FROM
-///     transactions
-/// WHERE
-///     block_num >= ?1
-///     AND block_num <= ?2
-///     AND account_id IN (?3)
-///     AND (
-///         block_num > ?4 OR (block_num = ?4 AND transaction_id > ?5)
-///     )
-/// ORDER BY
-///     block_num ASC,
-///     transaction_id ASC
-/// LIMIT
-///     ?6
-/// ```
 /// Notes:
 /// - Uses stable ordering (`block_num`, `transaction_id`) to ensure consistent results across
 ///   paginated queries.
@@ -100,11 +66,11 @@ pub struct TransactionRecordRaw {
 ///   stop as soon as the accumulated size approaches the 4MB limit.
 /// - Given the size of note records, 1000 records are guaranteed never to return more than about
 ///   60MB of data.
-pub fn select_transactions_records(
-    conn: &mut SqliteConnection,
+pub(crate) fn select_transactions_records(
+    tx: &ReadTx<'_>,
     account_ids: &[AccountId],
     block_range: RangeInclusive<BlockNumber>,
-) -> Result<(BlockNumber, Vec<crate::db::TransactionRecord>), DatabaseError> {
+) -> Result<(BlockNumber, Vec<TransactionRecord>), DatabaseError> {
     const NUM_TXS_PER_CHUNK: i64 = 1000; // Read 1000 transactions at a time
 
     QueryParamAccountIdLimit::check(account_ids.len())?;
@@ -119,60 +85,52 @@ pub fn select_transactions_records(
         });
     }
 
-    let desired_account_ids = serialize_vec(account_ids);
+    let desired_account_ids = InList::from_values(account_ids);
 
     // Read transactions in chunks to prevent loading excessive data and to stop as soon as we
     // approach the size limit
     let mut transactions = Vec::new();
     let mut total_size = 0i64;
-    let mut last_block_num: Option<i64> = None;
-    let mut last_transaction_id: Option<Vec<u8>> = None;
+    let mut cursor: Option<(BlockNumber, TransactionId)> = None;
     // Track the block number of the first transaction that did not fit within the payload cap. This
     // is the explicit "we truncated" signal; the accumulated byte total cannot be used as a proxy,
     // since a transaction can fail to fit while `total_size` is still below the cap.
-    let mut truncated_at_block: Option<i64> = None;
+    let mut truncated_at_block: Option<BlockNumber> = None;
 
     loop {
-        let mut query =
-            SelectDsl::select(schema::transactions::table, TransactionRecordRaw::as_select())
-                .filter(schema::transactions::block_num.ge(block_range.start().to_raw_sql()))
-                .filter(schema::transactions::block_num.le(block_range.end().to_raw_sql()))
-                .filter(schema::transactions::account_id.eq_any(&desired_account_ids))
-                .into_boxed();
-
         // Apply cursor-based pagination using the last seen (block_num, transaction_id)
-        if let (Some(last_block), Some(last_tx_id)) = (last_block_num, &last_transaction_id) {
-            query = query.filter(
-                schema::transactions::block_num
-                    .gt(last_block)
-                    .or(schema::transactions::block_num
-                        .eq(last_block)
-                        .and(schema::transactions::transaction_id.gt(last_tx_id))),
-            );
-        }
-
-        let chunk = query
-            .order((
-                schema::transactions::block_num.asc(),
-                schema::transactions::transaction_id.asc(),
-            ))
-            .limit(NUM_TXS_PER_CHUNK)
-            .load::<TransactionRecordRaw>(conn)
-            .map_err(DatabaseError::from)?;
+        let chunk = match &cursor {
+            Some((last_block, last_tx_id)) => tx.query(
+                SQL_AFTER_CURSOR,
+                &[
+                    block_range.start(),
+                    block_range.end(),
+                    &desired_account_ids,
+                    &NUM_TXS_PER_CHUNK,
+                    last_block,
+                    last_tx_id,
+                ],
+                transaction_row_from_row,
+            )?,
+            None => tx.query(
+                SQL_FIRST_CHUNK,
+                &[block_range.start(), block_range.end(), &desired_account_ids, &NUM_TXS_PER_CHUNK],
+                transaction_row_from_row,
+            )?,
+        };
 
         // Add transactions from this chunk one by one until we hit the limit
         let mut added_from_chunk = 0;
 
-        for tx in chunk {
-            if total_size + tx.size_in_bytes <= max_payload_bytes {
-                total_size += tx.size_in_bytes;
-                last_block_num = Some(tx.block_num);
-                last_transaction_id = Some(tx.transaction_id.clone());
-                transactions.push(tx);
+        for row in chunk {
+            if total_size + row.size_in_bytes <= max_payload_bytes {
+                total_size += row.size_in_bytes;
+                cursor = Some((row.block_num, row.transaction_id));
+                transactions.push(row);
                 added_from_chunk += 1;
             } else {
                 // This transaction does not fit, so the response is truncated at its block.
-                truncated_at_block = Some(tx.block_num);
+                truncated_at_block = Some(row.block_num);
                 break;
             }
         }
@@ -186,7 +144,7 @@ pub fn select_transactions_records(
 
     let Some(truncation_block) = truncated_at_block else {
         // Every matching transaction in the range fit within the payload cap.
-        return Ok((*block_range.end(), with_output_note_proofs(conn, transactions)?));
+        return Ok((*block_range.end(), with_output_note_proofs(tx, transactions)?));
     };
 
     // We stopped within `truncation_block`, so that block may be partial. Block-based pagination
@@ -203,22 +161,39 @@ pub fn select_transactions_records(
         // here would tell the client to resume from `truncation_block`, which can never fit, so
         // pagination would loop forever. Surface the condition instead of silently looping.
         return Err(DatabaseError::TransactionPageExceedsPayloadLimit {
-            block_num: BlockNumber::from_raw_sql(truncation_block)?,
+            block_num: truncation_block,
         });
     }
 
-    // SAFETY: block_num came from the database and was previously validated. Subtraction is safe
-    // under the assumption that genesis block (where it could fail) does not have any transactions.
-    let last_included_block = BlockNumber::from_raw_sql(truncation_block.saturating_sub(1))?;
-    Ok((last_included_block, with_output_note_proofs(conn, transactions)?))
+    // The remaining transactions are in blocks before `truncation_block`, so it is not the genesis
+    // block.
+    let last_included_block = truncation_block
+        .parent()
+        .expect("transactions exist in a block before the truncation block");
+    Ok((last_included_block, with_output_note_proofs(tx, transactions)?))
 }
 
-fn with_output_note_proofs(
-    conn: &mut SqliteConnection,
-    raw_transactions: Vec<TransactionRecordRaw>,
-) -> Result<Vec<crate::db::TransactionRecord>, DatabaseError> {
-    use miden_protocol::Word;
+/// Maps a `SELECT account_id, block_num, transaction_id, initial_state_commitment,
+/// final_state_commitment, input_notes, output_notes, size_in_bytes` row to a [`TransactionRow`].
+fn transaction_row_from_row(row: &Row<'_>) -> Result<TransactionRow, miden_node_db::DatabaseError> {
+    Ok(TransactionRow {
+        account_id: row.get::<AccountId>(0)?,
+        block_num: row.get::<BlockNumber>(1)?,
+        transaction_id: row.get::<TransactionId>(2)?,
+        initial_state_commitment: row.get::<Word>(3)?,
+        final_state_commitment: row.get::<Word>(4)?,
+        input_notes: row.get::<Vec<u8>>(5)?,
+        output_notes: row.get::<Vec<u8>>(6)?,
+        size_in_bytes: row.get::<i64>(7)?,
+    })
+}
 
+/// Builds the transaction records, with the committed output notes and the consumed note references
+/// of each transaction.
+fn with_output_note_proofs(
+    tx: &ReadTx<'_>,
+    raw_transactions: Vec<TransactionRow>,
+) -> Result<Vec<TransactionRecord>, DatabaseError> {
     // Pre-deserialize output notes to collect IDs for the batch lookup.
     let mut tx_output_notes = Vec::with_capacity(raw_transactions.len());
     let mut all_note_ids: Vec<NoteId> = Vec::new();
@@ -228,9 +203,9 @@ fn with_output_note_proofs(
         tx_output_notes.push(notes);
     }
 
-    let mut output_notes_by_id = std::collections::BTreeMap::new();
+    let mut output_notes_by_id = BTreeMap::new();
     for chunk in all_note_ids.chunks(QueryParamNoteCommitmentLimit::LIMIT) {
-        output_notes_by_id.extend(select_note_sync_records(conn, chunk)?);
+        output_notes_by_id.extend(select_note_sync_records(tx, chunk)?);
     }
 
     // Deserialize each transaction's input notes once and reuse them below. Authenticated inputs
@@ -250,26 +225,23 @@ fn with_output_note_proofs(
         tx_input_notes.push(commitments);
     }
 
-    let mut note_ids_by_nullifier = std::collections::BTreeMap::new();
+    let mut note_ids_by_nullifier = BTreeMap::new();
     for chunk in authenticated_nullifiers.chunks(QueryParamNoteCommitmentLimit::LIMIT) {
-        note_ids_by_nullifier.extend(select_note_ids_by_nullifier(conn, chunk)?);
+        note_ids_by_nullifier.extend(select_note_ids_by_nullifier(tx, chunk)?);
     }
 
-    // Deserialize remaining fields and assemble final records.
+    // Assemble the final records.
     raw_transactions
         .into_iter()
         .zip(tx_output_notes)
         .zip(tx_input_notes)
         .map(|((raw, output_notes), input_notes)| {
-            let transaction_id = TransactionId::read_from_bytes(&raw.transaction_id)?;
+            let transaction_id = raw.transaction_id;
             // Collect inclusion proofs for committed output notes. Notes not found in the `notes`
             // table were erased (created and consumed in the same batch).
             let output_note_proofs = output_notes
                 .iter()
-                .filter_map(|note| {
-                    let key = note.id();
-                    output_notes_by_id.get(&key).cloned()
-                })
+                .filter_map(|note| output_notes_by_id.get(&note.id()).cloned())
                 .collect();
 
             // Build the side-channel refs. The input note commitments are left untouched, so the
@@ -284,9 +256,9 @@ fn with_output_note_proofs(
                 .collect();
 
             let header = TransactionHeader::new(
-                AccountId::read_from_bytes(&raw.account_id)?,
-                Word::read_from_bytes(&raw.initial_state_commitment)?,
-                Word::read_from_bytes(&raw.final_state_commitment)?,
+                raw.account_id,
+                raw.initial_state_commitment,
+                raw.final_state_commitment,
                 InputNotes::new_unchecked(input_notes),
                 output_notes,
             )
@@ -303,8 +275,8 @@ fn with_output_note_proofs(
                 )));
             }
 
-            Ok(crate::db::TransactionRecord {
-                block_num: BlockNumber::from_raw_sql(raw.block_num)?,
+            Ok(TransactionRecord {
+                block_num: raw.block_num,
                 header,
                 output_note_proofs,
                 consumed_note_refs,

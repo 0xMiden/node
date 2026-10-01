@@ -93,7 +93,6 @@ use crate::account_state_forest::{
     HISTORICAL_BLOCK_RETENTION,
     TestAccountStateForestExt,
 };
-use crate::db::models::queries as diesel_queries;
 use crate::db::queries::{
     self,
     NOTE_SYNC_BLOCK_OVERHEAD_BYTES,
@@ -198,9 +197,6 @@ fn prune_history(db: &TestDb, chain_tip: BlockNumber) -> Result<(usize, usize, u
     db.write(move |tx| queries::prune_history(tx, chain_tip))
 }
 
-// Read drivers below run on the diesel layer until their queries migrate to the framework; each one
-// opens a fresh diesel connection over the same database file.
-
 fn select_all_nullifiers(db: &TestDb) -> Result<Vec<NullifierInfo>> {
     db.read(queries::select_all_nullifiers)
 }
@@ -236,7 +232,8 @@ fn select_existing_note_ids(
     note_ids: &[NoteId],
     up_to_block: BlockNumber,
 ) -> Result<HashSet<NoteId>> {
-    diesel_queries::select_existing_note_ids(&mut db.diesel_conn(), note_ids, up_to_block)
+    let note_ids = note_ids.to_vec();
+    db.read(move |tx| queries::select_existing_note_ids(tx, &note_ids, up_to_block))
 }
 
 fn select_note_script_by_root(db: &TestDb, root: Word) -> Result<Option<NoteScript>> {
@@ -328,7 +325,8 @@ fn select_transactions_records(
     account_ids: &[AccountId],
     block_range: RangeInclusive<BlockNumber>,
 ) -> Result<(BlockNumber, Vec<TransactionRecord>)> {
-    diesel_queries::select_transactions_records(&mut db.diesel_conn(), account_ids, block_range)
+    let account_ids = account_ids.to_vec();
+    db.read(move |tx| queries::select_transactions_records(tx, &account_ids, block_range))
 }
 
 // TEST HELPERS
