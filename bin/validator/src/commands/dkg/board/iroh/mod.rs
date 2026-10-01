@@ -687,6 +687,7 @@ impl BoardRuntime {
             document: document.clone(),
             lock: Arc::new(tokio::sync::Mutex::new(())),
         };
+        let board_peer = remote_upload.as_ref().map(|(target, ..)| target.id);
         let publisher = match remote_upload {
             Some((target, participant, upload_secret)) => Publisher::Remote {
                 endpoint: self.endpoint.clone(),
@@ -708,7 +709,7 @@ impl BoardRuntime {
             router = router.accept(UPLOAD_ALPN, UploadProtocol::new(upload_secrets, writer));
         }
         let router = router.spawn();
-        let events = BoardEvents::start(&document).await?;
+        let events = BoardEvents::start(&document, board_peer).await?;
         Ok(BoardNode {
             blobs: self.blobs,
             core,
@@ -726,7 +727,7 @@ impl BoardRuntime {
 }
 
 impl BoardEvents {
-    async fn start(document: &Doc) -> anyhow::Result<Self> {
+    async fn start(document: &Doc, board_peer: Option<EndpointId>) -> anyhow::Result<Self> {
         let mut events =
             document.subscribe().await.context("failed to start DKG board event monitor")?;
         let (event_tx, error) = tokio::sync::watch::channel(None);
@@ -736,8 +737,6 @@ impl BoardEvents {
             Arc::new(tokio::sync::RwLock::<BTreeMap<Hash, Vec<EndpointId>>>::default());
         let monitored_providers = remote_providers.clone();
         let task = tokio::spawn(async move {
-            let mut neighbor_ready = false;
-            let mut sync_ready = false;
             while let Some(event) = events.next().await {
                 let event = match event {
                     Ok(event) => event,
@@ -746,26 +745,11 @@ impl BoardEvents {
                         break;
                     },
                 };
-                match &event {
-                    LiveEvent::NeighborUp(_) => {
-                        neighbor_ready = true;
-                        if sync_ready {
-                            peer_ready_tx.send_replace(true);
-                        }
-                    },
-                    LiveEvent::NeighborDown(_) => {
-                        neighbor_ready = false;
-                        sync_ready = false;
-                        peer_ready_tx.send_replace(false);
-                    },
-                    LiveEvent::SyncFinished(sync) if sync.result.is_ok() => {
-                        sync_ready = true;
+                if let Some(ready) = board_peer_status(&event, board_peer) {
+                    peer_ready_tx.send_replace(ready);
+                    if ready {
                         sync_generation_tx.send_modify(|generation| *generation += 1);
-                        if neighbor_ready {
-                            peer_ready_tx.send_replace(true);
-                        }
-                    },
-                    _ => {},
+                    }
                 }
                 if let LiveEvent::InsertRemote { from, entry, .. } = &event {
                     let mut providers = monitored_providers.write().await;
@@ -783,6 +767,16 @@ impl BoardEvents {
             sync_generation,
             task,
         })
+    }
+}
+
+fn board_peer_status(event: &LiveEvent, board_peer: Option<EndpointId>) -> Option<bool> {
+    match event {
+        LiveEvent::NeighborDown(peer) if Some(*peer) == board_peer => Some(false),
+        LiveEvent::SyncFinished(sync) if sync.result.is_ok() && Some(sync.peer) == board_peer => {
+            Some(true)
+        },
+        _ => None,
     }
 }
 

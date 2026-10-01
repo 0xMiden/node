@@ -1,5 +1,16 @@
 use super::*;
 
+#[test]
+fn unrelated_neighbor_does_not_change_board_admission() {
+    let board_peer = SecretKey::from_bytes(&[1; 32]).public();
+    let other_peer = SecretKey::from_bytes(&[2; 32]).public();
+    assert_eq!(board_peer_status(&LiveEvent::NeighborDown(other_peer), Some(board_peer)), None);
+    assert_eq!(
+        board_peer_status(&LiveEvent::NeighborDown(board_peer), Some(board_peer)),
+        Some(false)
+    );
+}
+
 impl BoardNode {
     async fn create_for_test(data_directory: &Path) -> anyhow::Result<(Self, Vec<BoardTicket>)> {
         Self::create_with_network(data_directory, 3, false).await
