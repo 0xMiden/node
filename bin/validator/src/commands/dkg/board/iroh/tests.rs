@@ -124,6 +124,27 @@ fn endpoint_secret_is_persisted_privately() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn board_data_directory_is_private_under_public_parent() -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir()?;
+    fs_err::set_permissions(root.path(), std::fs::Permissions::from_mode(0o755))?;
+    let data_directory = root.path().join("board");
+    let runtime = BoardRuntime::start(&data_directory, false).await?;
+    assert_eq!(fs_err::metadata(&data_directory)?.permissions().mode() & 0o777, 0o700);
+    drop(runtime);
+
+    fs_err::set_permissions(&data_directory, std::fs::Permissions::from_mode(0o755))?;
+    let error = BoardRuntime::start(&data_directory, false)
+        .await
+        .err()
+        .context("public board data directory was accepted")?;
+    assert!(error.to_string().contains("Iroh data directory must be a private directory"));
+    Ok(())
+}
+
 #[tokio::test]
 async fn artifact_syncs_between_board_nodes() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
@@ -318,7 +339,14 @@ async fn incomplete_board_metadata_is_rejected() -> anyhow::Result<()> {
 #[tokio::test]
 async fn legacy_board_metadata_is_rejected() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
-    let data_directory = root.path().join("host");
+    let data_directory = tempfile::tempdir_in(root.path())?;
+    let data_directory = data_directory.path();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs_err::set_permissions(data_directory, std::fs::Permissions::from_mode(0o700))?;
+    }
     let upload_secrets_directory = data_directory.join(UPLOAD_SECRETS_DIRECTORY);
     fs_err::create_dir_all(&upload_secrets_directory)?;
     fs_err::write(data_directory.join(DOCUMENT_ID_FILE), hex::encode([0; 32]))?;
@@ -330,11 +358,11 @@ async fn legacy_board_metadata_is_rejected() -> anyhow::Result<()> {
         )?;
     }
 
-    let error = BoardNode::create_for_test(&data_directory)
+    let error = BoardNode::create_for_test(data_directory)
         .await
         .err()
         .context("legacy board metadata unexpectedly reopened")?;
-    assert!(error.to_string().contains("unsupported DKG board format"));
+    assert!(error.to_string().contains("unsupported DKG board format"), "{error:#}");
     assert!(!data_directory.join(BOARD_METADATA_DIRECTORY).exists());
     Ok(())
 }
@@ -367,7 +395,7 @@ fn legacy_board_ticket_is_rejected() {
 #[tokio::test]
 async fn board_ticket_round_trips_and_validates_fields() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
-    let (host, mut tickets) = BoardNode::create_for_test(root.path()).await?;
+    let (host, mut tickets) = BoardNode::create_for_test(&root.path().join("board")).await?;
     let ticket = tickets.remove(0);
     let encoded = ticket.to_string();
     let decoded = BoardTicket::from_str(&encoded)?;
@@ -591,7 +619,7 @@ async fn invalid_download_metadata_is_rejected() -> anyhow::Result<()> {
 #[tokio::test]
 async fn blob_store_failure_is_reported() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
-    let (host, _) = BoardNode::create_for_test(root.path()).await?;
+    let (host, _) = BoardNode::create_for_test(&root.path().join("board")).await?;
     let slot = ArtifactSlot::Manifest;
     host.publish(&slot, b"manifest").await?;
     host.event_task.abort();

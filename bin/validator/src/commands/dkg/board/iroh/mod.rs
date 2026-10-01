@@ -636,9 +636,33 @@ impl BoardWriter {
 
 impl BoardRuntime {
     async fn start(data_directory: &Path, use_network_services: bool) -> anyhow::Result<Self> {
-        durably_create_directory_all(data_directory).with_context(|| {
-            format!("failed to create Iroh data directory {}", data_directory.display())
-        })?;
+        let parent = data_directory
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        durably_create_directory_all(parent)
+            .with_context(|| format!("failed to create Iroh data parent {}", parent.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
+            match std::fs::DirBuilder::new().mode(0o700).create(data_directory) {
+                Ok(()) => sync_directory(parent)?,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {},
+                Err(error) => return Err(error).context("failed to create Iroh data directory"),
+            }
+            let metadata = fs_err::symlink_metadata(data_directory)
+                .context("failed to inspect Iroh data directory")?;
+            // Group and other users must not have access to the board store.
+            ensure!(
+                metadata.file_type().is_dir()
+                    && metadata.permissions().mode().trailing_zeros() >= 6,
+                "Iroh data directory must be a private directory"
+            );
+        }
+        #[cfg(not(unix))]
+        durably_create_directory_all(data_directory)
+            .context("failed to create Iroh data directory")?;
         let secret = load_or_create_endpoint_secret(data_directory)?;
         let builder = if use_network_services {
             Endpoint::builder(presets::N0)
