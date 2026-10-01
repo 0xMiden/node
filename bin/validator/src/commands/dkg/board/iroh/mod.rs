@@ -228,11 +228,12 @@ impl BoardNode {
         use_network_services: bool,
     ) -> anyhow::Result<(Self, Vec<BoardTicket>)> {
         let metadata_directory = data_directory.join(BOARD_METADATA_DIRECTORY);
-        if metadata_directory.exists() {
+        let reopen = metadata_directory.exists();
+        if reopen {
             require_current_board_format(&metadata_directory, policy)?;
         }
         let runtime = BoardRuntime::start(data_directory, use_network_services).await?;
-        let (document, upload_secrets) = if metadata_directory.exists() {
+        let (document, upload_secrets) = if reopen {
             let document_id_path = metadata_directory.join(DOCUMENT_ID_FILE);
             let id = fs_err::read_to_string(&document_id_path).with_context(|| {
                 format!("failed to read Iroh document ID {}", document_id_path.display())
