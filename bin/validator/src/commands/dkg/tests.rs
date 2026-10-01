@@ -1104,6 +1104,10 @@ async fn memory_board_runs_complete_ceremony() -> TestResult {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the test checks shutdown and both restart paths"
+)]
 async fn active_runner_stops_and_reopens_an_incomplete_board() -> TestResult {
     let root = tempfile::tempdir()?;
     let genesis = write_genesis(root.path())?;
@@ -1154,6 +1158,31 @@ async fn active_runner_stops_and_reopens_an_incomplete_board() -> TestResult {
     tokio::time::timeout(Duration::from_secs(10), task)
         .await
         .context("active runner did not stop after cancellation")???;
+    let (other_board, other_tickets) =
+        board::CoordinatorBoard::create_with_network(&root.path().join("other-board"), 3, false)
+            .await?;
+    let other_ticket = other_tickets
+        .into_iter()
+        .find(|ticket| ticket.participant() == participant.get())
+        .context("other board has no participant ticket")?;
+    let signer = ValidatorSigner::new_local(genesis.signing_keys[0].clone());
+    let error = runner::run_validator_with_ticket::<ShareOpeningBackend>(
+        other_ticket,
+        &genesis.path,
+        &signer,
+        2,
+        &epoch,
+        &work_directory,
+        &output_directory,
+        Duration::from_secs(1),
+        miden_node_utils::shutdown::CancellationToken::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.to_string(), "DKG work directory belongs to a different board");
+    assert!(other_board.reader().read_unique(&slot).await?.is_none());
+    other_board.shutdown().await?;
+
     let endpoint_secret = fs_err::read(work_directory.join("board/endpoint-secret.hex"))?;
     board.shutdown().await?;
 

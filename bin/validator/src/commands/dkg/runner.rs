@@ -331,6 +331,15 @@ where
         participant.get(),
     );
     let board_directory = work_directory.join(BOARD_DIRECTORY);
+    let binding_directory = work_directory.join("board-binding");
+    if !binding_directory.exists() {
+        ensure!(!board_directory.exists(), "DKG work directory has no board binding");
+    }
+    materialize_or_compare(
+        &binding_directory,
+        &[("document-id.hex".to_owned(), hex::encode(ticket.document_id()).into_bytes())],
+    )
+    .context("DKG work directory belongs to a different board")?;
     let Some(board) = resolve_join(
         ParticipantBoard::join(&board_directory, ticket, participant_count, shutdown.clone()).await,
     )?

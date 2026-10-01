@@ -85,6 +85,10 @@ impl BoardTicket {
     pub(in crate::commands::dkg) fn participant(&self) -> u32 {
         self.participant
     }
+
+    pub(in crate::commands::dkg) fn document_id(&self) -> [u8; 32] {
+        self.document.capability.id().to_bytes()
+    }
 }
 
 impl fmt::Debug for BoardTicket {
