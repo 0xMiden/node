@@ -220,6 +220,68 @@ async fn joining_an_unavailable_board_can_be_cancelled() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn only_the_ticket_endpoint_can_admit_a_participant() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let host_directory = root.path().join("host");
+    let (host, tickets) = BoardNode::create_for_test(&host_directory).await?;
+    let ticket = ticket_for(&tickets, 1);
+    let other =
+        BoardNode::join_for_test(&root.path().join("other"), ticket_for(&tickets, 2)).await?;
+    let other_addr = blob_provider_address(&other)?;
+    let other_id = other_addr.id;
+    let host_addr = ticket.document.nodes[0].clone();
+    host.shutdown().await?;
+
+    let runtime = BoardRuntime::start(&root.path().join("joining"), false).await?;
+    let document = runtime.docs.import_namespace(ticket.document.capability).await?;
+    document.set_download_policy(DownloadPolicy::NothingExcept(Vec::new())).await?;
+    let mut joining = runtime
+        .attach(
+            document,
+            3,
+            vec![other_addr.clone()],
+            None,
+            Some((host_addr.clone(), ticket.participant, ticket.upload_secret)),
+        )
+        .await?;
+    let mut events = joining.document.subscribe().await?;
+    joining.document.start_sync(vec![other_addr]).await?;
+    let mut neighbor_up = false;
+    let mut sync_finished = false;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !neighbor_up || !sync_finished {
+            let event = events.next().await.transpose()?.context("DKG board event stream ended")?;
+            match event {
+                LiveEvent::NeighborUp(peer) if peer == other_id => neighbor_up = true,
+                LiveEvent::SyncFinished(sync) if sync.peer == other_id && sync.result.is_ok() => {
+                    sync_finished = true;
+                },
+                _ => {},
+            }
+        }
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+    .context("unrelated peer did not synchronize")??;
+    let mut ready = joining.peer_ready.clone();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(250), ready.wait_for(|ready| *ready))
+            .await
+            .is_err()
+    );
+
+    let (host, _) = BoardNode::create_for_test(&host_directory).await?;
+    joining.document.start_sync(vec![blob_provider_address(&host)?]).await?;
+    tokio::time::timeout(Duration::from_secs(10), joining.peer_ready.wait_for(|ready| *ready))
+        .await
+        .context("ticket endpoint did not synchronize after restart")??;
+    joining.shutdown().await?;
+    other.shutdown().await?;
+    host.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn board_metadata_is_published_as_one_directory() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     let data_directory = root.path().join("host");
