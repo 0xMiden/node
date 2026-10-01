@@ -656,13 +656,20 @@ impl BoardRuntime {
             }
             let metadata = fs_err::symlink_metadata(data_directory)
                 .context("failed to inspect Iroh data directory")?;
+            let file_type = if metadata.file_type().is_dir() {
+                "directory"
+            } else if metadata.file_type().is_symlink() {
+                "symlink"
+            } else {
+                "other"
+            };
             // Group and other users must not have access to the board store.
             ensure!(
                 metadata.file_type().is_dir()
                     && metadata.permissions().mode().trailing_zeros() >= 6,
-                "Iroh data directory {} must be a private directory (type: {:?}, mode: {:o})",
+                "Iroh data directory {} must be a private directory (type: {}, mode: {:o})",
                 data_directory.display(),
-                metadata.file_type(),
+                file_type,
                 metadata.permissions().mode() & 0o777
             );
         }
