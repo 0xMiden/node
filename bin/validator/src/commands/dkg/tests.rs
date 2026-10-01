@@ -1198,6 +1198,19 @@ fn join_cleanup_failure_is_not_treated_as_cancellation() {
     assert!(runner::resolve_join(Err(board::JoinCancelled.into())).unwrap().is_none());
 }
 
+#[test]
+fn publication_failure_reports_shutdown_failure() {
+    let error = runner::report_publication_failure(
+        anyhow::anyhow!("ticket publication failed"),
+        Err(anyhow::anyhow!("store flush failed")),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "ticket publication failed; board shutdown failed: store flush failed"
+    );
+}
+
 #[tokio::test]
 async fn coordinator_stops_before_and_after_common_artifacts() -> TestResult {
     let root = tempfile::tempdir()?;

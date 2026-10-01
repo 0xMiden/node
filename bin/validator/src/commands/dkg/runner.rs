@@ -178,12 +178,7 @@ pub(super) async fn serve_board_with_network(
         Ok(())
     });
     if let Err(error) = tickets_result {
-        return match board.shutdown().await {
-            Ok(()) => Err(error),
-            Err(shutdown_error) => {
-                Err(anyhow::anyhow!("{error:#}; board shutdown failed: {shutdown_error:#}"))
-            },
-        };
+        return report_publication_failure(error, board.shutdown().await);
     }
     println!(
         "storage key DKG board tickets written to {}",
@@ -207,6 +202,18 @@ pub(super) async fn serve_board_with_network(
     }
     let shutdown = board.shutdown().await;
     result.and(shutdown)
+}
+
+pub(super) fn report_publication_failure(
+    error: anyhow::Error,
+    shutdown: anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    match shutdown {
+        Ok(()) => Err(error),
+        Err(shutdown_error) => {
+            Err(anyhow::anyhow!("{error:#}; board shutdown failed: {shutdown_error:#}"))
+        },
+    }
 }
 
 /// Waits for signed registrations, prepares the ceremony, and publishes its common files.
