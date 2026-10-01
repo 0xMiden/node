@@ -37,6 +37,7 @@ mod tests {
     fn shutdown_signal_exits_with_blocking_work() -> anyhow::Result<()> {
         const READY_PATH: &str = "MIDEN_VALIDATOR_TEST_READY_PATH";
         if let Some(ready_path) = std::env::var_os(READY_PATH) {
+            let ready_path = std::path::PathBuf::from(ready_path);
             return run_with_runtime(async {
                 miden_node_utils::shutdown::run_with_shutdown(
                     "test validator",
@@ -48,9 +49,10 @@ mod tests {
                         });
                         ready.await?;
                         tokio::time::sleep(Duration::from_millis(10)).await;
-                        fs_err::write(ready_path, b"ready")?;
+                        fs_err::write(&ready_path, b"ready")?;
                         shutdown.cancelled().await;
                         tokio::time::sleep(Duration::from_millis(500)).await;
+                        fs_err::write(ready_path.with_extension("done"), b"done")?;
                         Ok(())
                     },
                 )
@@ -60,6 +62,7 @@ mod tests {
 
         let root = tempfile::tempdir()?;
         let ready_path = root.path().join("ready");
+        let completed_path = ready_path.with_extension("done");
         let started = Instant::now();
         let mut child = Command::new(std::env::current_exe()?)
             .args(["--exact", "tests::shutdown_signal_exits_with_blocking_work"])
@@ -83,6 +86,7 @@ mod tests {
         loop {
             if let Some(status) = child.try_wait()? {
                 anyhow::ensure!(status.success(), "child process failed: {status}");
+                anyhow::ensure!(completed_path.exists(), "service cleanup did not finish");
                 break;
             }
             if started.elapsed() >= Duration::from_secs(5) {
