@@ -99,6 +99,22 @@ pub(crate) use insert_note_scripts::insert_note_scripts;
 mod insert_notes;
 pub(crate) use insert_notes::insert_notes;
 
+mod note_row;
+
+mod get_note_sync_multi;
+pub(crate) use get_note_sync_multi::get_note_sync_multi;
+#[cfg(test)]
+pub(crate) use get_note_sync_multi::{NOTE_SYNC_BLOCK_OVERHEAD_BYTES, NOTE_SYNC_RECORD_BYTES};
+
+mod select_note_script_by_root;
+pub(crate) use select_note_script_by_root::select_note_script_by_root;
+
+mod select_notes_by_id;
+pub(crate) use select_notes_by_id::select_notes_by_id;
+
+mod select_notes_since_block_by_tag;
+pub(crate) use select_notes_since_block_by_tag::select_notes_since_block_by_tag;
+
 // NULLIFIER QUERIES
 // =================================================================================================
 
