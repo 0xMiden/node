@@ -62,19 +62,19 @@ miden-node-tracing-macro    = { path = "crates/tracing-macro", version = "0.17.0
 miden-node-utils            = { path = "crates/utils", version = "0.17.0-rc.3" }
 
 # miden-protocol dependencies. These should be updated in sync.
-miden-block-prover = { version = "0.17.0-rc.8" }
-miden-objects      = { version = "0.17.0-rc.8" }
-miden-protobuf     = { version = "0.17.0-rc.8" }
-miden-protocol     = { default-features = false, version = "0.17.0-rc.8" }
-miden-standards    = { version = "0.17.0-rc.8" }
-miden-testing      = { version = "0.17.0-rc.8" }
-miden-tx           = { default-features = false, version = "0.17.0-rc.8" }
-miden-tx-batch     = { version = "0.17.0-rc.8" }
-miden-usdcx        = { version = "0.17.0-rc.8" }
+miden-block-prover = { version = "0.17.0-rc.9" }
+miden-objects      = { version = "0.17.0-rc.9" }
+miden-protobuf     = { version = "0.17.0-rc.9" }
+miden-protocol     = { default-features = false, version = "0.17.0-rc.9" }
+miden-standards    = { version = "0.17.0-rc.9" }
+miden-testing      = { version = "0.17.0-rc.9" }
+miden-tx           = { default-features = false, version = "0.17.0-rc.9" }
+miden-tx-batch     = { version = "0.17.0-rc.9" }
+miden-usdcx        = { version = "0.17.0-rc.9" }
 
 # Other miden dependencies. These should align with those expected by miden-protocol.
-miden-crypto    = { version = "0.34.0" }
-miden-processor = { version = "0.34.0" }
+miden-crypto    = { version = "0.35.0" }
+miden-processor = { version = "0.35.0" }
 
 # External dependencies
 anyhow             = { version = "1.0" }
