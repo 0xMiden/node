@@ -124,6 +124,19 @@ fn endpoint_secret_is_persisted_privately() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn upload_protocol_debug_hides_secrets() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (host, _) = BoardNode::create_for_test(&root.path().join("board")).await?;
+    let secret = [0xab; 32];
+    let protocol = UploadProtocol::new(vec![secret], host.local_writer_for_test().clone());
+    let debug = format!("{protocol:?}");
+    assert_eq!(debug, "UploadProtocol");
+    assert!(!debug.contains(&format!("{secret:?}")));
+    host.shutdown().await?;
+    Ok(())
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn board_data_directory_is_private_under_public_parent() -> anyhow::Result<()> {
