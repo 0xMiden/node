@@ -1183,6 +1183,25 @@ async fn active_runner_stops_and_reopens_an_incomplete_board() -> TestResult {
     assert!(other_board.reader().read_unique(&slot).await?.is_none());
     other_board.shutdown().await?;
 
+    let id_path = work_directory.join("board-binding/document-id.hex");
+    let document_id = fs_err::read(&id_path)?;
+    fs_err::remove_file(&id_path)?;
+    let error = runner::run_validator_with_ticket::<ShareOpeningBackend>(
+        ticket,
+        &genesis.path,
+        &signer,
+        2,
+        &epoch,
+        &work_directory,
+        &output_directory,
+        Duration::from_secs(1),
+        miden_node_utils::shutdown::CancellationToken::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.to_string(), format!("failed to read DKG board ID {}", id_path.display()));
+    write_new_file(&id_path, &document_id, false)?;
+
     let endpoint_secret = fs_err::read(work_directory.join("board/endpoint-secret.hex"))?;
     board.shutdown().await?;
 
