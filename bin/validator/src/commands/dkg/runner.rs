@@ -179,7 +179,7 @@ pub(super) async fn serve_board_with_network(
         Ok(())
     });
     if let Err(error) = tickets_result {
-        return report_publication_failure(error, board.shutdown().await);
+        return finish_board(Err(error), board.shutdown().await);
     }
     println!(
         "storage key DKG board tickets written to {}",
@@ -202,18 +202,19 @@ pub(super) async fn serve_board_with_network(
         shutdown.cancelled().await;
     }
     let shutdown = board.shutdown().await;
-    result.and(shutdown)
+    finish_board(result, shutdown)
 }
 
-pub(super) fn report_publication_failure(
-    error: anyhow::Error,
+pub(super) fn finish_board(
+    result: anyhow::Result<()>,
     shutdown: anyhow::Result<()>,
 ) -> anyhow::Result<()> {
-    match shutdown {
-        Ok(()) => Err(error),
-        Err(shutdown_error) => {
+    match (result, shutdown) {
+        (Err(error), Err(shutdown_error)) => {
             Err(anyhow::anyhow!("{error:#}; board shutdown failed: {shutdown_error:#}"))
         },
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), shutdown) => shutdown,
     }
 }
 
@@ -375,7 +376,7 @@ where
     ) => result,
     };
     let shutdown = board.shutdown().await;
-    result.and(shutdown)
+    finish_board(result, shutdown)
 }
 
 pub(super) fn resolve_join(

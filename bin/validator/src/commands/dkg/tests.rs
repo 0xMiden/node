@@ -1247,16 +1247,13 @@ fn join_cleanup_failure_is_not_treated_as_cancellation() {
 }
 
 #[test]
-fn publication_failure_reports_shutdown_failure() {
-    let error = runner::report_publication_failure(
-        anyhow::anyhow!("ticket publication failed"),
+fn ceremony_failure_reports_shutdown_failure() {
+    let error = runner::finish_board(
+        Err(anyhow::anyhow!("ceremony failed")),
         Err(anyhow::anyhow!("store flush failed")),
     )
     .unwrap_err();
-    assert_eq!(
-        error.to_string(),
-        "ticket publication failed; board shutdown failed: store flush failed"
-    );
+    assert_eq!(error.to_string(), "ceremony failed; board shutdown failed: store flush failed");
 }
 
 #[tokio::test]
