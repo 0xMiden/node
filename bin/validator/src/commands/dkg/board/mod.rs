@@ -124,8 +124,12 @@ impl CoordinatorBoard {
         participant_count: usize,
         use_network_services: bool,
     ) -> anyhow::Result<(Self, Vec<BoardTicket>)> {
-        let (node, tickets) =
-            iroh::create(data_directory, participant_count, use_network_services).await?;
+        let (node, tickets) = iroh::BoardNode::create_with_network(
+            data_directory,
+            participant_count,
+            use_network_services,
+        )
+        .await?;
         Ok((
             Self {
                 reader: BoardReader { node: Transport::Iroh(Box::new(node)) },
@@ -200,9 +204,14 @@ impl ParticipantBoard {
         shutdown: CancellationToken,
     ) -> anyhow::Result<Self> {
         let participant = ticket.participant();
-        let node =
-            iroh::join(data_directory, ticket, participant_count, use_network_services, shutdown)
-                .await?;
+        let node = iroh::BoardNode::join_with_network(
+            data_directory,
+            ticket,
+            participant_count,
+            use_network_services,
+            shutdown,
+        )
+        .await?;
         Ok(Self {
             participant,
             reader: BoardReader { node: Transport::Iroh(Box::new(node)) },

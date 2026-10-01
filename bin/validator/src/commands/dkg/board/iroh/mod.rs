@@ -159,31 +159,6 @@ impl FromStr for BoardTicket {
     }
 }
 
-pub(super) async fn create(
-    data_directory: &Path,
-    participant_count: usize,
-    use_network_services: bool,
-) -> anyhow::Result<(BoardNode, Vec<BoardTicket>)> {
-    BoardNode::create_with_network(data_directory, participant_count, use_network_services).await
-}
-
-pub(super) async fn join(
-    data_directory: &Path,
-    ticket: BoardTicket,
-    participant_count: usize,
-    use_network_services: bool,
-    shutdown: CancellationToken,
-) -> anyhow::Result<BoardNode> {
-    BoardNode::join_with_network(
-        data_directory,
-        ticket,
-        participant_count,
-        use_network_services,
-        shutdown,
-    )
-    .await
-}
-
 impl ArtifactSlot {
     fn key(&self, hash: Hash) -> String {
         format!("{}{}", self.prefix(), hash.to_hex())
