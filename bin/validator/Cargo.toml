@@ -28,6 +28,7 @@ axum                   = { workspace = true }
 base64                 = { version = "0.22" }
 chacha20poly1305       = { workspace = true }
 clap                   = { features = ["env", "string"], workspace = true }
+constant_time_eq       = { workspace = true }
 fs-err                 = { workspace = true }
 futures                = { workspace = true }
 golden-core            = { workspace = true }

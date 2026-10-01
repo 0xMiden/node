@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, ensure};
+use constant_time_eq::constant_time_eq_32;
 use iroh::endpoint::Connection;
 use iroh::protocol::{AcceptError, ProtocolHandler};
 use iroh::{Endpoint, EndpointAddr};
@@ -55,8 +56,9 @@ impl UploadProtocol {
             .upload_secrets
             .get(secret_position)
             .context("DKG board upload targets an unknown participant")?;
+        let candidate: &[u8; 32] = header[..32].try_into().expect("fixed slice");
         ensure!(
-            secrets_match(&header[..32], expected_secret),
+            constant_time_eq_32(candidate, expected_secret),
             "DKG board ticket does not authorize this participant"
         );
         let length = u64::from_be_bytes(header[37..45].try_into().expect("fixed slice"));
@@ -255,12 +257,4 @@ fn upload_error_response(error: &anyhow::Error) -> Vec<u8> {
     response.push(1);
     response.extend_from_slice(message.as_bytes());
     response
-}
-
-fn secrets_match(candidate: &[u8], expected: &[u8; 32]) -> bool {
-    candidate
-        .iter()
-        .zip(expected)
-        .fold(0u8, |difference, (left, right)| difference | (left ^ right))
-        == 0
 }
