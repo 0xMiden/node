@@ -5,29 +5,47 @@ use miden_standards::account::auth::NetworkAccount;
 // ================================================================================================
 
 /// Represents the effect of a transaction on a network account.
-#[derive(Clone)]
+///
+/// The caller must know from the block if the account is new and select the constructor that matches.
+#[derive(Debug, Clone)]
 pub enum NetworkAccountEffect {
     Created(Account),
     Updated(AccountPatch),
 }
 
 impl NetworkAccountEffect {
-    pub fn from_protocol(update: &AccountUpdateDetails) -> Option<Self> {
+    /// Returns the effect of an update that creates an account, or `None` if the new account is
+    /// private or is not a network account.
+    ///
+    /// # Panics
+    ///
+    /// **WARNING**: Panics if the patch cannot be converted into a new account. Only pass the
+    /// update of an account that a committed block creates. The update of an existing account,
+    /// including a code upgrade, can panic or produce an incorrect account.
+    pub fn from_account_creation(update: &AccountUpdateDetails) -> Option<Self> {
         match update {
             AccountUpdateDetails::Private => None,
-            AccountUpdateDetails::Public(update) if update.is_full_state() => {
-                // Only treat full-state creations as network if the storage carries the
-                // standardized `NetworkAccountNoteAllowlist` slot.
-                let account = Account::try_from(update)
-                    .expect("Account should be derivable by full state AccountPatch");
+            AccountUpdateDetails::Public(patch) => {
+                // Only treat creations as network if the storage carries the standardized
+                // `NetworkAccountNoteAllowlist` slot.
+                let account = patch
+                    .try_to_new_account()
+                    .expect("the patch of a committed account creation should build an account");
                 NetworkAccount::new(account)
                     .ok()
-                    .map(|na| NetworkAccountEffect::Created(na.into_account()))
+                    .map(|network_account| Self::Created(network_account.into_account()))
             },
-            AccountUpdateDetails::Public(update) => {
-                // Partial updates carry no storage we can inspect here. Forward them as updates;
+        }
+    }
+
+    /// Returns the effect of an update to an existing account, or `None` if the account is private.
+    pub fn from_account_update(update: &AccountUpdateDetails) -> Option<Self> {
+        match update {
+            AccountUpdateDetails::Private => None,
+            AccountUpdateDetails::Public(patch) => {
+                // Updates carry no storage we can inspect here. Forward them as updates;
                 // `apply_committed_block` drops the ones whose account is not tracked locally.
-                Some(NetworkAccountEffect::Updated(update.clone()))
+                Some(Self::Updated(patch.clone()))
             },
         }
     }

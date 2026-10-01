@@ -1,6 +1,6 @@
 //! Tests for the `accounts` module, specifically for account storage and historical queries.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use miden_node_proto::domain::account::AccountVaultDetails;
 use miden_node_utils::fee::{test_fee_params, test_protocol_config};
@@ -9,6 +9,7 @@ use miden_protocol::account::component::AccountComponentMetadata;
 use miden_protocol::account::{
     Account,
     AccountBuilder,
+    AccountCodePatch,
     AccountComponent,
     AccountId,
     AccountIdVersion,
@@ -59,11 +60,19 @@ fn upsert_accounts(
     accounts: &[BlockAccountUpdate],
     block_num: BlockNumber,
     precomputed_public_states: &PrecomputedPublicAccountStates,
+    new_account_ids: &BTreeSet<AccountId>,
 ) -> Result<usize> {
     let accounts = accounts.to_vec();
     let precomputed_public_states = precomputed_public_states.clone();
+    let new_account_ids = new_account_ids.clone();
     db.write(move |tx| {
-        queries::upsert_accounts(tx, &accounts, block_num, &precomputed_public_states)
+        queries::upsert_accounts(
+            tx,
+            &accounts,
+            block_num,
+            &precomputed_public_states,
+            &new_account_ids,
+        )
     })
 }
 
@@ -404,8 +413,14 @@ fn select_account_header_at_block_returns_correct_header() {
         AccountUpdateDetails::Public(patch),
     );
 
-    upsert_accounts(&db, &[account_update], block_num, &PrecomputedPublicAccountStates::new())
-        .expect("upsert_accounts failed");
+    upsert_accounts(
+        &db,
+        &[account_update],
+        block_num,
+        &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([account_id]),
+    )
+    .expect("upsert_accounts failed");
 
     // Query the account header
     let (header, _storage_header) =
@@ -442,8 +457,14 @@ fn select_account_header_at_block_historical_query() {
         AccountUpdateDetails::Public(patch_1),
     );
 
-    upsert_accounts(&db, &[account_update_1], block_num_1, &PrecomputedPublicAccountStates::new())
-        .expect("First upsert failed");
+    upsert_accounts(
+        &db,
+        &[account_update_1],
+        block_num_1,
+        &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([account_id]),
+    )
+    .expect("First upsert failed");
 
     // Query at block 1 - should return the account
     let (header_1, _) =
@@ -482,8 +503,14 @@ fn select_vault_at_block_empty() {
         AccountUpdateDetails::Public(patch),
     );
 
-    upsert_accounts(&db, &[account_update], block_num, &PrecomputedPublicAccountStates::new())
-        .expect("upsert_accounts failed");
+    upsert_accounts(
+        &db,
+        &[account_update],
+        block_num,
+        &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([account_id]),
+    )
+    .expect("upsert_accounts failed");
 
     // Query vault - should return empty (the test account has no assets)
     let assets = select_vault_at_block(&db, account_id, block_num).expect("Query should succeed");
@@ -509,14 +536,18 @@ fn upsert_accounts_inserts_storage_header() {
 
     // Create full state patch from the account
     let patch = AccountPatch::try_from(account).unwrap();
-    assert!(patch.is_full_state(), "Patch should be full state");
 
     let account_update =
         block_account_update(account_id, account_commitment, AccountUpdateDetails::Public(patch));
 
     // Upsert account
-    let result =
-        upsert_accounts(&db, &[account_update], block_num, &PrecomputedPublicAccountStates::new());
+    let result = upsert_accounts(
+        &db,
+        &[account_update],
+        block_num,
+        &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([account_id]),
+    );
     assert!(result.is_ok(), "upsert_accounts failed: {:?}", result.err());
     assert_eq!(result.unwrap(), 1, "Expected 1 account to be inserted");
 
@@ -570,8 +601,14 @@ fn upsert_accounts_closes_previous_validity_interval() {
         AccountUpdateDetails::Public(patch_1),
     );
 
-    upsert_accounts(&db, &[account_update_1], block_num_1, &precomputed_1)
-        .expect("First upsert failed");
+    upsert_accounts(
+        &db,
+        &[account_update_1],
+        block_num_1,
+        &precomputed_1,
+        &BTreeSet::from([account_id]),
+    )
+    .expect("First upsert failed");
 
     // Create modified account with different storage value
     let storage_value_modified = Word::from([
@@ -617,7 +654,7 @@ fn upsert_accounts_closes_previous_validity_interval() {
         AccountUpdateDetails::Public(patch_2),
     );
 
-    upsert_accounts(&db, &[account_update_2], block_num_2, &precomputed_2)
+    upsert_accounts(&db, &[account_update_2], block_num_2, &precomputed_2, &BTreeSet::new())
         .expect("Second upsert failed");
 
     // Both historical records must exist, but only one of them is open-ended (the latest).
@@ -699,8 +736,14 @@ fn upsert_accounts_with_multiple_storage_slots() {
     let account_update =
         block_account_update(account_id, account_commitment, AccountUpdateDetails::Public(patch));
 
-    upsert_accounts(&db, &[account_update], block_num, &PrecomputedPublicAccountStates::new())
-        .expect("Upsert with multiple storage slots failed");
+    upsert_accounts(
+        &db,
+        &[account_update],
+        block_num,
+        &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([account_id]),
+    )
+    .expect("Upsert with multiple storage slots failed");
 
     // Query back and verify
     let queried_storage = select_latest_storage(&db, account_id).expect("Failed to query storage");
@@ -766,8 +809,14 @@ fn upsert_accounts_with_empty_storage() {
     let account_update =
         block_account_update(account_id, account_commitment, AccountUpdateDetails::Public(patch));
 
-    upsert_accounts(&db, &[account_update], block_num, &PrecomputedPublicAccountStates::new())
-        .expect("Upsert with empty storage failed");
+    upsert_accounts(
+        &db,
+        &[account_update],
+        block_num,
+        &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([account_id]),
+    )
+    .expect("Upsert with empty storage failed");
 
     // Query back and verify
     let queried_storage = select_latest_storage(&db, account_id).expect("Failed to query storage");
@@ -829,8 +878,14 @@ fn select_latest_storage_ordering_semantics() {
     let account_update =
         block_account_update(account_id, account_commitment, AccountUpdateDetails::Public(patch));
 
-    upsert_accounts(&db, &[account_update], block_num, &PrecomputedPublicAccountStates::new())
-        .expect("upsert_accounts failed");
+    upsert_accounts(
+        &db,
+        &[account_update],
+        block_num,
+        &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([account_id]),
+    )
+    .expect("upsert_accounts failed");
 
     let storage = select_latest_storage(&db, account_id).expect("Failed to query storage");
 
@@ -888,8 +943,14 @@ fn select_latest_storage_multiple_slots() {
     let account_update =
         block_account_update(account_id, account_commitment, AccountUpdateDetails::Public(patch));
 
-    upsert_accounts(&db, &[account_update], block_num, &PrecomputedPublicAccountStates::new())
-        .expect("upsert_accounts failed");
+    upsert_accounts(
+        &db,
+        &[account_update],
+        block_num,
+        &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([account_id]),
+    )
+    .expect("upsert_accounts failed");
 
     let storage = select_latest_storage(&db, account_id).expect("Failed to query storage");
 
@@ -924,8 +985,14 @@ fn select_latest_storage_slot_updates() {
     let account_update =
         block_account_update(account_id, account_commitment, AccountUpdateDetails::Public(patch));
 
-    upsert_accounts(&db, &[account_update], block_1, &PrecomputedPublicAccountStates::new())
-        .expect("upsert_accounts failed");
+    upsert_accounts(
+        &db,
+        &[account_update],
+        block_1,
+        &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([account_id]),
+    )
+    .expect("upsert_accounts failed");
 
     let map_patch = StorageMapPatch::from_iters([], [(key_1, value_2), (key_2, value_3)]);
     let storage_patch = AccountStoragePatch::from_raw(
@@ -940,7 +1007,7 @@ fn select_latest_storage_slot_updates() {
         account_id,
         storage_patch,
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(final_nonce),
     )
     .unwrap();
@@ -956,7 +1023,7 @@ fn select_latest_storage_slot_updates() {
         AccountUpdateDetails::Public(partial_patch),
     );
 
-    upsert_accounts(&db, &[account_update], block_2, &precomputed_public_states)
+    upsert_accounts(&db, &[account_update], block_2, &precomputed_public_states, &BTreeSet::new())
         .expect("upsert_accounts failed");
 
     let storage = select_latest_storage(&db, account_id).expect("Failed to query storage");
@@ -1010,6 +1077,11 @@ fn select_vault_at_block_historical_with_updates() {
             std::slice::from_ref(&account_update),
             block,
             &precomputed_states_from_account(&account),
+            &if block == block_1 {
+                BTreeSet::from([account_id])
+            } else {
+                BTreeSet::new()
+            },
         )
         .expect("upsert_accounts failed");
     }
@@ -1097,6 +1169,7 @@ fn select_vault_at_block_bounds_read_to_limit() {
         std::slice::from_ref(&account_update),
         block_1,
         &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([account_id]),
     )
     .expect("upsert_accounts failed");
 
@@ -1151,6 +1224,11 @@ fn select_vault_at_block_exponential_updates() {
             std::slice::from_ref(&account_update),
             *block,
             &precomputed_states_from_account(&account),
+            &if *block == blocks[0] {
+                BTreeSet::from([account_id])
+            } else {
+                BTreeSet::new()
+            },
         )
         .expect("upsert_accounts failed");
     }
@@ -1210,6 +1288,11 @@ fn select_vault_at_block_with_deletion() {
             std::slice::from_ref(&account_update),
             block,
             &precomputed_states_from_account(&account),
+            &if block == block_1 {
+                BTreeSet::from([account_id])
+            } else {
+                BTreeSet::new()
+            },
         )
         .expect("upsert_accounts failed");
     }
@@ -1271,6 +1354,11 @@ fn select_vault_at_block_limit_ignores_removed_assets() {
             std::slice::from_ref(&account_update),
             block,
             &precomputed_states_from_account(&account),
+            &if block == block_1 {
+                BTreeSet::from([account_id])
+            } else {
+                BTreeSet::new()
+            },
         )
         .expect("upsert_accounts failed");
     }
@@ -1332,7 +1420,6 @@ fn account_code_exists(db: &TestDb, code_commitment: Word) -> bool {
 /// Creates a full-state [`BlockAccountUpdate`] for the given account.
 fn make_full_state_update(account: &Account) -> BlockAccountUpdate {
     let patch = AccountPatch::try_from(account.clone()).unwrap();
-    assert!(patch.is_full_state(), "expected full-state patch");
     block_account_update(account.id(), account.to_commitment(), AccountUpdateDetails::Public(patch))
 }
 
@@ -1418,6 +1505,7 @@ fn prune_account_code_retains_latest_after_code_change() {
         &[make_full_state_update(&account_a)],
         block_0,
         &precomputed_states_from_account(&account_a),
+        &BTreeSet::from([account_a.id()]),
     )
     .expect("initial upsert failed");
 
@@ -1427,6 +1515,7 @@ fn prune_account_code_retains_latest_after_code_change() {
         &[make_full_state_update(&account_b)],
         block_code_b,
         &precomputed_states_from_account(&account_b),
+        &BTreeSet::new(),
     )
     .expect("code-change upsert failed");
 
@@ -1496,6 +1585,7 @@ fn prune_account_code_retains_revisited_code() {
         &[make_full_state_update(&account_a)],
         block_0,
         &precomputed_states_from_account(&account_a),
+        &BTreeSet::from([account_a.id()]),
     )
     .expect("block 0 upsert failed");
     // Block RETENTION+1: code B.
@@ -1504,6 +1594,7 @@ fn prune_account_code_retains_revisited_code() {
         &[make_full_state_update(&account_b)],
         block_code_b,
         &precomputed_states_from_account(&account_b),
+        &BTreeSet::new(),
     )
     .expect("block code_b upsert failed");
     // Block RETENTION+2: back to code A.
@@ -1512,6 +1603,7 @@ fn prune_account_code_retains_revisited_code() {
         &[make_full_state_update(&account_a)],
         block_code_a_again,
         &precomputed_states_from_account(&account_a),
+        &BTreeSet::new(),
     )
     .expect("block code_a_again upsert failed");
 
@@ -1579,6 +1671,7 @@ fn prune_account_code_retains_baseline_code() {
         &[make_full_state_update(&account_a)],
         block_0,
         &precomputed_states_from_account(&account_a),
+        &BTreeSet::from([account_a.id()]),
     )
     .expect("block 0 upsert failed");
     // Block 2*RETENTION: code B.
@@ -1587,6 +1680,7 @@ fn prune_account_code_retains_baseline_code() {
         &[make_full_state_update(&account_b)],
         block_code_b,
         &precomputed_states_from_account(&account_b),
+        &BTreeSet::new(),
     )
     .expect("code-change upsert failed");
 
@@ -1666,6 +1760,7 @@ fn prune_account_code_incremental_cross_account_reference() {
             &[make_full_state_update(account)],
             block_0,
             &precomputed_states_from_account(account),
+            &BTreeSet::from([account.id()]),
         )
         .expect("block 0 upsert failed");
     }
@@ -1679,6 +1774,7 @@ fn prune_account_code_incremental_cross_account_reference() {
         &[make_full_state_update(&switcher_on_b)],
         block_switcher_to_b,
         &precomputed_states_from_account(&switcher_on_b),
+        &BTreeSet::new(),
     )
     .expect("switcher code-change upsert failed");
 
@@ -1695,6 +1791,7 @@ fn prune_account_code_incremental_cross_account_reference() {
         &[make_full_state_update(&holdout_on_b)],
         block_holdout_to_b,
         &precomputed_states_from_account(&holdout_on_b),
+        &BTreeSet::new(),
     )
     .expect("holdout code-change upsert failed");
 
@@ -1728,6 +1825,7 @@ fn prune_account_codes_marker_never_regresses() {
         &[make_full_state_update(&account_a)],
         block_0,
         &precomputed_states_from_account(&account_a),
+        &BTreeSet::from([account_a.id()]),
     )
     .expect("block 0 upsert failed");
     upsert_accounts(
@@ -1735,6 +1833,7 @@ fn prune_account_codes_marker_never_regresses() {
         &[make_full_state_update(&account_b)],
         block_code_b,
         &precomputed_states_from_account(&account_b),
+        &BTreeSet::new(),
     )
     .expect("code-change upsert failed");
 

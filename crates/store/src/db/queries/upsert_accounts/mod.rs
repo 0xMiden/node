@@ -6,7 +6,7 @@
 //! [`insert_vault_asset`](super::insert_vault_asset) and
 //! [`insert_storage_map_value`](super::insert_storage_map_value).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use miden_node_db::sqlite::WriteTx;
 use miden_node_tracing::miden_instrument;
@@ -75,7 +75,15 @@ type PendingAssetInserts = Vec<(AccountId, AssetId, Option<Asset>)>;
 
 /// Writes the state of every account a block updated.
 ///
+/// `new_account_ids` identifies the updates that create an account. A patch alone cannot tell a
+/// creation from a code upgrade, because both carry code.
+///
 /// Attention: Assumes the account details are NOT null! The schema explicitly allows this though!
+///
+/// # Errors
+///
+/// Returns an error if an account in `new_account_ids` already exists or another account does not
+/// exist yet.
 #[miden_instrument(
     target = COMPONENT,
     err,
@@ -85,10 +93,12 @@ pub(crate) fn upsert_accounts(
     accounts: &[BlockAccountUpdate],
     block_num: BlockNumber,
     precomputed_public_states: &PrecomputedPublicAccountStates,
+    new_account_ids: &BTreeSet<AccountId>,
 ) -> Result<usize, DatabaseError> {
     let mut count = 0;
     for update in accounts {
-        upsert_account(tx, update, block_num, precomputed_public_states)?;
+        let account_is_new = new_account_ids.contains(&update.account_id());
+        upsert_account(tx, update, block_num, precomputed_public_states, account_is_new)?;
         count += 1;
     }
 
@@ -101,13 +111,18 @@ fn upsert_account(
     update: &BlockAccountUpdate,
     block_num: BlockNumber,
     precomputed_public_states: &PrecomputedPublicAccountStates,
+    account_is_new: bool,
 ) -> Result<(), DatabaseError> {
     let account_id = update.account_id();
 
     // Pull the latest row once. Partial updates consume the state headers below, while every update
     // carries forward creation metadata.
     let existing = select_latest_account_state(tx, account_id)?;
-    let account_is_new = existing.is_none();
+    match (account_is_new, existing.is_some()) {
+        (true, true) => return Err(DatabaseError::AccountAlreadyExistsInDb(account_id)),
+        (false, false) => return Err(DatabaseError::AccountNotFoundInDb(account_id)),
+        _ => {},
+    }
 
     let created_at_block =
         existing.as_ref().map_or(block_num, LatestAccountStateRow::created_at_block);
@@ -115,8 +130,13 @@ fn upsert_account(
     // NOTE: we collect storage / asset inserts to apply them only after the account row is written.
     // The storage and vault tables have FKs pointing to accounts `(account_id, block_num)`, so
     // inserting them earlier would violate those constraints when inserting a brand-new account.
-    let (account_state, pending_storage_inserts, pending_asset_inserts) =
-        prepare_account_update(update, block_num, precomputed_public_states, existing.as_ref())?;
+    let (account_state, pending_storage_inserts, pending_asset_inserts) = prepare_account_update(
+        update,
+        block_num,
+        precomputed_public_states,
+        existing.as_ref(),
+        account_is_new,
+    )?;
 
     // Inherit the classification when the account already exists; otherwise classify it once at
     // creation based on the new state.
@@ -135,11 +155,11 @@ fn upsert_account(
         },
     };
 
-    // Insert account _code_ for full accounts (new account creation).
-    match &account_state {
-        AccountStateForInsert::FullAccount(account) => insert_account_code(tx, account.code())?,
-        AccountStateForInsert::PrecomputedFullState(state) => insert_account_code(tx, &state.code)?,
-        AccountStateForInsert::Private | AccountStateForInsert::PartialState(_) => {},
+    // The patch carries the code of a new or upgraded account.
+    if let AccountUpdateDetails::Public(patch) = update.details()
+        && let Some(code) = patch.code().as_code()
+    {
+        insert_account_code(tx, code)?;
     }
 
     // Close the previous row's validity interval and insert the NEW account row.
@@ -188,18 +208,16 @@ fn prepare_account_update(
     block_num: BlockNumber,
     precomputed_public_states: &PrecomputedPublicAccountStates,
     existing: Option<&LatestAccountStateRow>,
+    account_is_new: bool,
 ) -> Result<(AccountStateForInsert, PendingStorageInserts, PendingAssetInserts), DatabaseError> {
     let account_id = update.account_id();
 
     match update.details() {
         AccountUpdateDetails::Private => Ok((AccountStateForInsert::Private, vec![], vec![])),
 
-        // New account is always a full account, but also comes as an update
-        AccountUpdateDetails::Public(patch) if patch.is_full_state() => {
+        AccountUpdateDetails::Public(patch) if account_is_new => {
             if block_num == BlockNumber::GENESIS {
-                let account = Account::try_from(patch)
-                    .expect("Patch to full account always works for full state patches");
-                debug_assert_eq!(account_id, account.id());
+                let account = patch.try_to_new_account()?;
                 prepare_full_account_update(update, account)
             } else {
                 let precomputed = precomputed_state(precomputed_public_states, account_id)?;
@@ -207,7 +225,6 @@ fn prepare_account_update(
             }
         },
 
-        // Update of an existing account
         AccountUpdateDetails::Public(patch) => {
             let precomputed = precomputed_state(precomputed_public_states, account_id)?;
             let existing = existing.ok_or(DatabaseError::AccountNotFoundInDb(account_id))?;
@@ -276,23 +293,23 @@ fn prepare_full_account_update(
 ///
 /// # Errors
 ///
-/// Returns an error if the full-state patch is missing its code or nonce, a required precomputed
-/// storage root is absent, an asset is invalid, or the reconstructed account header does not match
-/// the update's final state commitment.
+/// Returns an error if the account-creating patch is missing its code or nonce, a required
+/// precomputed storage root is absent, an asset is invalid, or the reconstructed account header does
+/// not match the update's final state commitment.
 fn prepare_precomputed_full_account_update(
     update: &BlockAccountUpdate,
     patch: &AccountPatch,
     precomputed: &PrecomputedPublicAccountState,
 ) -> Result<(AccountStateForInsert, PendingStorageInserts, PendingAssetInserts), DatabaseError> {
     let account_id = patch.id();
-    let code = patch.code().cloned().ok_or_else(|| {
+    let code = patch.code().as_code().cloned().ok_or_else(|| {
         DatabaseError::DataCorrupted(format!(
-            "full-state patch for account {account_id} is missing account code"
+            "account-creating patch for account {account_id} is missing account code"
         ))
     })?;
     let nonce = patch.final_nonce().ok_or_else(|| {
         DatabaseError::DataCorrupted(format!(
-            "full-state patch for account {account_id} is missing final nonce"
+            "account-creating patch for account {account_id} is missing final nonce"
         ))
     })?;
 
@@ -337,9 +354,9 @@ fn prepare_precomputed_full_account_update(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    // The patch carries full state, so it can be turned back into an account and classified with
-    // the canonical check.
-    let is_network_account = NetworkAccount::new(Account::try_from(patch)?).is_ok();
+    // The patch creates the account, so it can be turned into an account and classified with the
+    // canonical check.
+    let is_network_account = NetworkAccount::new(patch.try_to_new_account()?).is_ok();
     let state = PrecomputedFullAccountState {
         nonce,
         code,
@@ -407,10 +424,16 @@ fn prepare_partial_account_update(
     // --- Compute updated account state for the accounts row. --- Use the absolute final nonce.
     let new_nonce = patch.final_nonce().unwrap_or(state_headers.nonce);
 
+    // A code upgrade replaces the code. The caller inserts the new code into `account_codes`.
+    let new_code_commitment = patch
+        .code()
+        .as_code()
+        .map_or(state_headers.code_commitment, AccountCode::commitment);
+
     // Create minimal account state data for the row insert.
     let account_state = PartialAccountState {
         nonce: new_nonce,
-        code_commitment: state_headers.code_commitment,
+        code_commitment: new_code_commitment,
         storage_header: new_storage_header,
         vault_root: new_vault_root,
     };

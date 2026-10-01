@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use miden_objects::account_file::AccountFile;
 use miden_protocol::account::{Account, AccountId};
 use miden_protocol::address::NetworkId;
-use xusdc_encoding::xreserve::encoding::EthEmbeddedAccountId;
+use miden_usdcx::xreserve::encoding::EthEmbeddedAccountId;
 
 use crate::config::{GenesisToolConfig, Role};
 

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::ops::RangeInclusive;
 use std::sync::{Arc, LazyLock, Mutex};
 
@@ -12,6 +12,7 @@ use miden_protocol::account::{
     Account,
     AccountBuilder,
     AccountCode,
+    AccountCodePatch,
     AccountComponent,
     AccountId,
     AccountIdVersion,
@@ -152,11 +153,19 @@ fn upsert_accounts(
     accounts: &[BlockAccountUpdate],
     block_num: BlockNumber,
     precomputed_public_states: &PrecomputedPublicAccountStates,
+    new_account_ids: &BTreeSet<AccountId>,
 ) -> Result<usize> {
     let accounts = accounts.to_vec();
     let precomputed_public_states = precomputed_public_states.clone();
+    let new_account_ids = new_account_ids.clone();
     db.write(move |tx| {
-        queries::upsert_accounts(tx, &accounts, block_num, &precomputed_public_states)
+        queries::upsert_accounts(
+            tx,
+            &accounts,
+            block_num,
+            &precomputed_public_states,
+            &new_account_ids,
+        )
     })
 }
 
@@ -552,6 +561,7 @@ fn sql_select_note_script_by_root() {
         &[mock_block_account_update(account_id, 0)],
         block_num,
         &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([account_id]),
     )
     .unwrap();
 
@@ -600,6 +610,7 @@ fn make_account_and_note(
         )],
         block_num,
         &precomputed_states_from_account(&account),
+        &BTreeSet::from([account_id]),
     )
     .unwrap();
 
@@ -644,6 +655,7 @@ fn sql_select_accounts() {
             )],
             block_num,
             &PrecomputedPublicAccountStates::new(),
+            &BTreeSet::from([account_id]),
         );
         assert_eq!(res.unwrap(), 1, "One element must have been inserted");
 
@@ -1003,6 +1015,7 @@ fn notes() {
         &[mock_block_account_update(sender, 0)],
         block_num_1,
         &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([sender]),
     )
     .unwrap();
 
@@ -1148,6 +1161,11 @@ fn note_sync_across_multiple_blocks() {
             &[mock_block_account_update(sender, block_num_raw.into())],
             block_num,
             &PrecomputedPublicAccountStates::new(),
+            &if block_num_raw == 1 {
+                BTreeSet::from([sender])
+            } else {
+                BTreeSet::new()
+            },
         )
         .unwrap();
 
@@ -1240,6 +1258,11 @@ fn note_sync_multi_respects_payload_limit() {
             &[mock_block_account_update(sender, block_num_raw.into())],
             block_num,
             &PrecomputedPublicAccountStates::new(),
+            &if block_num_raw == 1 {
+                BTreeSet::from([sender])
+            } else {
+                BTreeSet::new()
+            },
         )
         .unwrap();
 
@@ -1310,6 +1333,7 @@ fn note_sync_no_matching_tags() {
         &[mock_block_account_update(sender, 0)],
         block_num,
         &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([sender]),
     )
     .unwrap();
 
@@ -1400,7 +1424,7 @@ fn sql_account_storage_map_values_insertion() {
         account_id,
         storage1,
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(2)),
     )
     .unwrap();
@@ -1425,7 +1449,7 @@ fn sql_account_storage_map_values_insertion() {
         account_id,
         storage2,
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(3)),
     )
     .unwrap();
@@ -1904,17 +1928,32 @@ fn upsert_mock_account_in(
     num: u64,
     block_num: BlockNumber,
 ) -> Result<usize> {
+    const SELECT_ACCOUNT_EXISTS: &str =
+        "SELECT EXISTS(SELECT 1 FROM accounts WHERE account_id = ?1)";
+
+    // The helper upserts, so the update creates the account exactly when the database does not
+    // contain it yet.
+    let account_exists = tx
+        .query(SELECT_ACCOUNT_EXISTS, &[&account_id], |row| row.get::<bool>(0))?
+        .into_iter()
+        .next()
+        .unwrap_or(false);
+    let new_account_ids = if account_exists {
+        BTreeSet::new()
+    } else {
+        BTreeSet::from([account_id])
+    };
     let update = mock_block_account_update(account_id, num);
     let precomputed_states = match update.details() {
         AccountUpdateDetails::Private => PrecomputedPublicAccountStates::new(),
         AccountUpdateDetails::Public(patch) => {
             let account =
-                Account::try_from(patch).expect("mock update should contain full public state");
+                patch.try_to_new_account().expect("mock update should create a public account");
             precomputed_states_from_account(&account)
         },
     };
 
-    queries::upsert_accounts(tx, &[update], block_num, &precomputed_states)
+    queries::upsert_accounts(tx, &[update], block_num, &precomputed_states, &new_account_ids)
 }
 
 // Helper function to create account with specific code for tests
@@ -2023,8 +2062,14 @@ fn insert_mock_transactions(db: &TestDb) -> usize {
         mock_block_transaction(AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap(), 2);
     let ordered_tx_headers = OrderedTransactionHeaders::new_unchecked(vec![mock_tx1, mock_tx2]);
 
-    upsert_accounts(db, &account_updates, block_num, &PrecomputedPublicAccountStates::new())
-        .unwrap();
+    upsert_accounts(
+        db,
+        &account_updates,
+        block_num,
+        &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([account_id]),
+    )
+    .unwrap();
 
     insert_transactions(db, block_num, &ordered_tx_headers).unwrap()
 }
@@ -2102,6 +2147,7 @@ fn test_select_account_code_by_commitment() {
         )],
         block_num_1,
         &precomputed_states_from_account(&account),
+        &BTreeSet::from([account.id()]),
     )
     .unwrap();
 
@@ -2151,6 +2197,7 @@ fn test_select_account_code_by_commitment_multiple_codes() {
         )],
         block_num_1,
         &precomputed_states_from_account(&account_v1),
+        &BTreeSet::from([account_v1.id()]),
     )
     .unwrap();
 
@@ -2186,6 +2233,7 @@ fn test_select_account_code_by_commitment_multiple_codes() {
         )],
         block_num_2,
         &precomputed_states_from_account(&account_v2),
+        &BTreeSet::new(),
     )
     .unwrap();
 
@@ -2199,6 +2247,71 @@ fn test_select_account_code_by_commitment_multiple_codes() {
         .unwrap()
         .expect("v2 code should exist");
     assert_eq!(code_from_v2_commitment, code_v2, "v2 commitment should return v2 code");
+}
+
+/// A code upgrade stores the new code and replaces the code of the account. Only the account
+/// creation takes the creation path, even though both patches carry code.
+#[test]
+fn upsert_accounts_applies_account_creation_and_code_upgrade() -> anyhow::Result<()> {
+    let db = &TestDb::new();
+    let creation_block = BlockNumber::from(1);
+    let upgrade_block = BlockNumber::from(2);
+    create_block(db, creation_block);
+    create_block(db, upgrade_block);
+
+    let account = create_account_with_code(
+        "@account_procedure pub proc account_procedure_1 push.1.2 add end",
+        [3u8; 32],
+    );
+    let account_id = account.id();
+    upsert_accounts(
+        db,
+        &[block_account_update(
+            account_id,
+            account.to_commitment(),
+            AccountUpdateDetails::Public(AccountPatch::try_from(account.clone())?),
+        )],
+        creation_block,
+        &precomputed_states_from_account(&account),
+        &BTreeSet::from([account_id]),
+    )?;
+    assert_eq!(select_account(db, account_id)?.details, Some(account.clone()));
+
+    let upgraded_code = create_account_with_code(
+        "@account_procedure pub proc account_procedure_1 push.3.4 mul end",
+        [3u8; 32],
+    )
+    .code()
+    .clone();
+    let upgrade_patch = AccountPatch::new(
+        account_id,
+        AccountStoragePatch::default(),
+        AccountVaultPatch::default(),
+        AccountCodePatch::new(Some(upgraded_code.clone())),
+        Some(account.nonce() + Felt::ONE),
+    )?;
+    let mut upgraded_account = account.clone();
+    upgraded_account.apply_patch(&upgrade_patch)?;
+    upsert_accounts(
+        db,
+        &[block_account_update(
+            account_id,
+            upgraded_account.to_commitment(),
+            AccountUpdateDetails::Public(upgrade_patch),
+        )],
+        upgrade_block,
+        &precomputed_states_from_account(&upgraded_account),
+        &BTreeSet::new(),
+    )?;
+
+    assert_eq!(upgraded_account.code(), &upgraded_code);
+    assert_eq!(select_account(db, account_id)?.details, Some(upgraded_account));
+    assert_eq!(
+        select_account_code_by_commitment(db, upgraded_code.commitment())?,
+        Some(miden_node_persistence::encode(&upgraded_code)),
+    );
+
+    Ok(())
 }
 
 // GENESIS REGRESSION TESTS
@@ -2507,7 +2620,6 @@ fn regression_1461_full_state_delta_inserts_vault_assets() {
 
     // Convert to full state patch, same as genesis
     let account_patch = AccountPatch::try_from(account.clone()).unwrap();
-    assert!(account_patch.is_full_state());
 
     let block_update = block_account_update(
         account_id,
@@ -2515,8 +2627,14 @@ fn regression_1461_full_state_delta_inserts_vault_assets() {
         AccountUpdateDetails::Public(account_patch),
     );
 
-    upsert_accounts(db, &[block_update], block_num, &precomputed_states_from_account(&account))
-        .unwrap();
+    upsert_accounts(
+        db,
+        &[block_update],
+        block_num,
+        &precomputed_states_from_account(&account),
+        &BTreeSet::from([account_id]),
+    )
+    .unwrap();
 
     let (_, vault_assets) =
         select_account_vault_assets(db, account_id, BlockNumber::GENESIS..=block_num).unwrap();
@@ -2726,8 +2844,14 @@ fn db_roundtrip_account() {
         account_commitment,
         AccountUpdateDetails::Public(account_patch),
     );
-    upsert_accounts(db, &[block_update], block_num, &precomputed_states_from_account(&account))
-        .unwrap();
+    upsert_accounts(
+        db,
+        &[block_update],
+        block_num,
+        &precomputed_states_from_account(&account),
+        &BTreeSet::from([account_id]),
+    )
+    .unwrap();
 
     // Retrieve
     let retrieved = select_all_accounts(db).unwrap();
@@ -2758,6 +2882,7 @@ fn db_roundtrip_notes() {
         &[mock_block_account_update(sender, 0)],
         block_num,
         &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([sender]),
     )
     .unwrap();
 
@@ -2938,8 +3063,14 @@ fn db_roundtrip_account_storage_with_maps() {
         account.to_commitment(),
         AccountUpdateDetails::Public(account_patch),
     );
-    upsert_accounts(db, &[block_update], block_num, &precomputed_states_from_account(&account))
-        .unwrap();
+    upsert_accounts(
+        db,
+        &[block_update],
+        block_num,
+        &precomputed_states_from_account(&account),
+        &BTreeSet::from([account_id]),
+    )
+    .unwrap();
 
     // Retrieve the storage using select_latest_storage (reconstructs from header + map values)
     let retrieved_storage = select_latest_storage(db, account_id).unwrap();
@@ -3409,7 +3540,7 @@ fn account_state_forest_matches_db_storage_map_roots_across_updates() {
         account_id,
         storage_1.clone(),
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(2)),
     )
     .unwrap();
@@ -3444,7 +3575,7 @@ fn account_state_forest_matches_db_storage_map_roots_across_updates() {
         account_id,
         storage_2.clone(),
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(3)),
     )
     .unwrap();
@@ -3479,7 +3610,7 @@ fn account_state_forest_matches_db_storage_map_roots_across_updates() {
         account_id,
         storage_3.clone(),
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(4)),
     )
     .unwrap();
@@ -3556,7 +3687,7 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
         account1,
         storage.clone(),
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(2)),
     )
     .unwrap();
@@ -3567,7 +3698,7 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
         account2,
         storage.clone(),
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(2)),
     )
     .unwrap();
@@ -3578,7 +3709,7 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
         account3,
         storage.clone(),
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(2)),
     )
     .unwrap();
@@ -3606,7 +3737,7 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
         account2,
         storage_update.clone(),
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(3)),
     )
     .unwrap();
@@ -3616,7 +3747,7 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
         account3,
         storage_update.clone(),
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(3)),
     )
     .unwrap();
@@ -3634,7 +3765,7 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
         account1,
         storage_update,
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(3)),
     )
     .unwrap();
@@ -3689,7 +3820,7 @@ fn account_state_forest_retains_latest_after_100_blocks_and_pruning() {
         account_id,
         storage_patch,
         vault_patch,
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(2)),
     )
     .unwrap();
@@ -3744,7 +3875,7 @@ fn account_state_forest_retains_latest_after_100_blocks_and_pruning() {
         account_id,
         storage_patch_51,
         vault_patch_51,
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(51)),
     )
     .unwrap();
@@ -3787,7 +3918,7 @@ fn account_state_forest_preserves_most_recent_vault_only() {
         account_id,
         AccountStoragePatch::default(),
         vault_patch,
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(2)),
     )
     .unwrap();
@@ -3828,6 +3959,7 @@ fn db_roundtrip_transactions() {
         &[mock_block_account_update(bob, 0)],
         block_num,
         &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([bob]),
     )
     .unwrap();
 
@@ -3933,6 +4065,7 @@ fn db_roundtrip_transactions_filters_missing_output_note_sync_records() {
         &[mock_block_account_update(bob, 0)],
         block_num,
         &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([bob]),
     )
     .unwrap();
 
@@ -3974,6 +4107,7 @@ fn select_transactions_records_resolves_consumed_public_note_refs() {
         &[mock_block_account_update(bob, 0)],
         block_num,
         &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([bob]),
     )
     .unwrap();
 
@@ -4028,6 +4162,7 @@ fn select_transactions_records_reports_truncation_below_payload_cap() {
         &[mock_block_account_update(bob, 0)],
         block1,
         &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([bob]),
     )
     .unwrap();
     upsert_accounts(
@@ -4035,6 +4170,7 @@ fn select_transactions_records_reports_truncation_below_payload_cap() {
         &[mock_block_account_update(bob, 1)],
         block2,
         &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::new(),
     )
     .unwrap();
 
@@ -4074,6 +4210,7 @@ fn select_transactions_records_errors_when_single_block_exceeds_payload_cap() {
         &[mock_block_account_update(bob, 0)],
         block1,
         &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([bob]),
     )
     .unwrap();
 
@@ -4120,7 +4257,7 @@ fn account_state_forest_preserves_most_recent_storage_map_only() {
         account_id,
         storage_patch,
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(2)),
     )
     .unwrap();
@@ -4181,7 +4318,7 @@ fn account_state_forest_preserves_most_recent_storage_value_slot() {
         account_id,
         storage_patch,
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(2)),
     )
     .unwrap();
@@ -4259,7 +4396,7 @@ fn account_state_forest_preserves_mixed_slots_independently() {
         account_id,
         storage_patch,
         vault_patch,
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(2)),
     )
     .unwrap();
@@ -4285,7 +4422,7 @@ fn account_state_forest_preserves_mixed_slots_independently() {
         account_id,
         storage_patch_51,
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(51)),
     )
     .unwrap();
