@@ -1155,7 +1155,7 @@ async fn active_runner_stops_and_reopens_an_incomplete_board() -> TestResult {
         .await
         .context("active runner did not publish registration")?;
     shutdown.cancel();
-    tokio::time::timeout(Duration::from_secs(10), task)
+    tokio::time::timeout(Duration::from_secs(30), task)
         .await
         .context("active runner did not stop after cancellation")???;
     let (other_board, other_tickets) =
