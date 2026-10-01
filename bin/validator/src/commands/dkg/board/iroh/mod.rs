@@ -173,7 +173,6 @@ struct BoardWriter {
     lock: Arc<tokio::sync::Mutex<()>>,
 }
 
-#[derive(Debug)]
 enum Publisher {
     Local(BoardWriter),
     Remote {

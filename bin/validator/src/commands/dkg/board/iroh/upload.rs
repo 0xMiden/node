@@ -1,3 +1,4 @@
+use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,12 +21,18 @@ const MAX_UPLOAD_ERROR_BYTES: usize = 1024;
 const UPLOAD_TIMEOUT: Duration = Duration::from_secs(30);
 const AUTH_TIMEOUT: Duration = Duration::from_secs(3);
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(super) struct UploadProtocol {
     headers: Arc<tokio::sync::Semaphore>,
     permits: Arc<tokio::sync::Semaphore>,
     upload_secrets: Arc<Vec<[u8; 32]>>,
     writer: BoardWriter,
+}
+
+impl fmt::Debug for UploadProtocol {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("UploadProtocol")
+    }
 }
 
 impl UploadProtocol {
