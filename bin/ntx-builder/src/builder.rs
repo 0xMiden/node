@@ -271,6 +271,7 @@ mod protocol_config_tests {
     use super::persist_and_publish_chain_state;
     use crate::chain_state::ChainState;
     use crate::committed_block::CommittedBlockEffects;
+    use crate::db::queries::account_effect::NetworkAccountEffect;
     use crate::db::test_setup;
     use crate::test_utils::{mock_block_header, mock_network_account_update};
 
@@ -289,7 +290,11 @@ mod protocol_config_tests {
             network_notes: vec![],
             sponsorship_notes: vec![],
             nullifiers: vec![],
-            network_account_updates: vec![(account.id(), details)],
+            network_account_updates: vec![(
+                account.id(),
+                NetworkAccountEffect::from_account_creation(&details)
+                    .expect("the mock account should be a network account"),
+            )],
             account_transactions: vec![],
         };
 

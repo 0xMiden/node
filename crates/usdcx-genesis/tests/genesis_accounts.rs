@@ -11,8 +11,8 @@ use miden_protocol::account::StorageMapKey;
 use miden_protocol::asset::AssetId;
 use miden_protocol::{Felt, Word};
 use miden_standards::account::fees::FeePolicyManager;
+use miden_usdcx::account::xreserve::XReserveFaucetExtension;
 use miden_usdcx_genesis::accounts::build_faucet;
-use xusdc_encoding::account::xreserve::XReserveFaucetExtension;
 
 use crate::common::Fixture;
 

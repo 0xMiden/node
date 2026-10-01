@@ -315,10 +315,11 @@ impl Scheduler {
 mod tests {
     use std::sync::Arc;
 
-    use miden_protocol::account::AccountUpdateDetails;
+    use miden_protocol::account::AccountPatch;
 
     use super::*;
     use crate::NoteError;
+    use crate::db::queries::account_effect::NetworkAccountEffect;
     use crate::test_utils::{
         mock_block_header,
         mock_network_account_id,
@@ -563,7 +564,8 @@ mod tests {
         );
 
         let mut effects = empty_effects(2);
-        effects.network_account_updates = vec![(account_id, AccountUpdateDetails::Private)];
+        effects.network_account_updates =
+            vec![(account_id, NetworkAccountEffect::Updated(AccountPatch::empty(account_id)))];
         scheduler.handle_committed_block(&effects);
 
         assert!(scheduler.in_flight.contains_key(&account_id));

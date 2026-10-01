@@ -1,11 +1,12 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use miden_protocol::account::{AccountId, AccountUpdateDetails};
-use miden_protocol::block::{BlockHeader, SignedBlock};
+use miden_protocol::account::AccountId;
+use miden_protocol::block::{BlockHeader, BlockNumber, SignedBlock};
 use miden_protocol::note::Nullifier;
 use miden_protocol::transaction::{OutputNote, TransactionId};
 use miden_standards::note::AccountTargetNetworkNote;
 
+use crate::db::queries::account_effect::NetworkAccountEffect;
 use crate::sponsorship::SponsorshipNote;
 
 /// Network-relevant state extracted from a committed [`SignedBlock`].
@@ -20,7 +21,7 @@ pub struct CommittedBlockEffects {
     /// selection can include each sponsorship in the same transaction as its feature note.
     pub sponsorship_notes: Vec<SponsorshipNote>,
     pub nullifiers: Vec<Nullifier>,
-    pub network_account_updates: Vec<(AccountId, AccountUpdateDetails)>,
+    pub network_account_updates: Vec<(AccountId, NetworkAccountEffect)>,
     /// Transaction id paired with the account it updated, for every transaction in the block.
     /// `apply_committed_block` uses this to record the latest landed transaction per network
     /// account, and the scheduler uses it to confirm that its own submission landed.
@@ -58,9 +59,13 @@ impl CommittedBlockEffects {
 
         let nullifiers = body.created_nullifiers().to_vec();
 
-        // Public accounts are a superset of network accounts; `apply_committed_block` does the
-        // final network-only filtering via `NetworkAccountEffect::from_protocol` (full-state
-        // storage check) and a DB lookup for partial deltas.
+        // A transaction against an empty initial state commitment creates its account. The genesis
+        // block has no transactions, but it creates every account it contains.
+        let is_genesis = header.block_num() == BlockNumber::GENESIS;
+        let new_account_ids = body.transactions().created_account_ids().collect::<HashSet<_>>();
+
+        // Public accounts are a superset of network accounts. `NetworkAccountEffect` filters
+        // creations by their storage, and `apply_committed_block` filters updates by a DB lookup.
         let network_account_updates = body
             .updated_accounts()
             .iter()
@@ -69,7 +74,12 @@ impl CommittedBlockEffects {
                 if !account_id.is_public() {
                     return None;
                 }
-                Some((account_id, update.details().clone()))
+                let effect = if is_genesis || new_account_ids.contains(&account_id) {
+                    NetworkAccountEffect::from_account_creation(update.details())
+                } else {
+                    NetworkAccountEffect::from_account_update(update.details())
+                }?;
+                Some((account_id, effect))
             })
             .collect();
 
@@ -106,16 +116,82 @@ impl CommittedBlockEffects {
 
 #[cfg(test)]
 mod tests {
-    use miden_protocol::block::{BlockBody, BlockNumber, BlockSignatures, SignedBlock};
-    use miden_protocol::transaction::{OrderedTransactionHeaders, PublicOutputNote};
+    use anyhow::Context;
+    use miden_protocol::Word;
+    use miden_protocol::block::{
+        BlockAccountUpdate,
+        BlockBody,
+        BlockNumber,
+        BlockSignatures,
+        SignedBlock,
+    };
+    use miden_protocol::transaction::{
+        InputNotes,
+        OrderedTransactionHeaders,
+        PublicOutputNote,
+        TransactionHeader,
+    };
 
     use super::*;
     use crate::test_utils::{
         mock_block_header,
         mock_network_account_id,
+        mock_network_account_update,
         mock_single_target_note,
         mock_sponsorship_note,
     };
+
+    /// Returns the effect of a committed block with a single transaction against the mock network
+    /// account. The account patch carries code, so it has the shape of an account creation and of a
+    /// code upgrade.
+    fn committed_network_account_effect(
+        initial_state_commitment: Word,
+    ) -> anyhow::Result<Option<NetworkAccountEffect>> {
+        let (account, details) = mock_network_account_update();
+        let final_state_commitment = account.to_commitment();
+        let update = BlockAccountUpdate::new(account.id(), final_state_commitment, details)?;
+        let transaction = TransactionHeader::new(
+            account.id(),
+            initial_state_commitment,
+            final_state_commitment,
+            InputNotes::new_unchecked(Vec::new()),
+            Vec::new(),
+        )?;
+        let body = BlockBody::new_unchecked(
+            vec![update],
+            Vec::new(),
+            Vec::new(),
+            OrderedTransactionHeaders::new_unchecked(vec![transaction]),
+        );
+        let block = SignedBlock::new_unchecked(
+            mock_block_header(BlockNumber::from(1)),
+            body,
+            BlockSignatures::new(Vec::new())?,
+        );
+
+        let effects = CommittedBlockEffects::from_signed_block(&block);
+
+        let effect = effects
+            .network_account_updates
+            .into_iter()
+            .find_map(|(account_id, effect)| (account_id == account.id()).then_some(effect));
+        Ok(effect)
+    }
+
+    /// A transaction against an empty initial state creates the account. The same patch against an
+    /// existing account is a code upgrade and must not replace the account as a creation.
+    #[test]
+    fn from_signed_block_tells_account_creation_from_code_upgrade() -> anyhow::Result<()> {
+        let creation = committed_network_account_effect(Word::empty())?
+            .context("the creation of a network account should have an effect")?;
+        assert!(matches!(creation, NetworkAccountEffect::Created(_)));
+
+        let upgrade = committed_network_account_effect(Word::from([1u32, 0, 0, 0]))?
+            .context("the code upgrade of a public account should have an effect")?;
+        assert!(matches!(upgrade, NetworkAccountEffect::Updated(_)));
+
+        Ok(())
+    }
 
     /// `FEE_SPONSORSHIP` notes are extracted by script root, everything else keeps going through
     /// the attachment-based network-note classification.

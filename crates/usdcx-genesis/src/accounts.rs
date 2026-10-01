@@ -14,17 +14,14 @@ use miden_protocol::account::{
 use miden_protocol::asset::{Asset, AssetAmount, AssetId, FungibleAsset};
 use miden_protocol::block::FeeParameters;
 use miden_protocol::errors::{AccountError, AssetError, AssetVaultError, AuthSchemeError};
-use miden_protocol::{Felt, ZERO};
+use miden_protocol::{Felt, Word, ZERO};
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::account::faucets::{FungibleFaucet, FungibleFaucetError};
 use miden_standards::account::wallets::BasicWallet;
+use miden_usdcx::account::xreserve::{XReserveStablecoinBuilder, XReserveStablecoinBuilderError};
+use miden_usdcx::xreserve::encoding::DepositNonce;
 use rand::TryRng;
 use rand::rngs::SysRng;
-use xusdc_encoding::account::xreserve::{
-    XReserveStablecoinBuilder,
-    XReserveStablecoinBuilderError,
-};
-use xusdc_encoding::xreserve::encoding::DepositNonce;
 
 use crate::config::GenesisToolConfig;
 
@@ -33,12 +30,24 @@ use crate::config::GenesisToolConfig;
 
 /// The dummy fee faucet id the fee asset names while the faucet's own id is derived.
 fn placeholder_fee_faucet_id() -> AccountId {
-    AccountId::dummy(
-        [0; 15],
-        AccountIdVersion::Version1,
+    let init_seed = [1; 32];
+    let asset_callbacks = AssetCallbackFlag::Enabled;
+    let version = AccountIdVersion::Version1;
+    let code_commitment = Word::from([5, 6, 7, 8u32]);
+    let storage_commitment = Word::from([9, 10, 11, 12u32]);
+
+    let seed = AccountId::compute_account_seed(
+        init_seed,
         AccountType::Public,
-        AssetCallbackFlag::Disabled,
+        asset_callbacks,
+        version,
+        code_commitment,
+        storage_commitment,
     )
+    .expect("seed computation should succeed");
+
+    AccountId::new(seed, version, code_commitment, storage_commitment)
+        .expect("seed should be valid")
 }
 
 /// Builds the genesis faucet from the config, with the supply cap at [`AssetAmount::MAX`].
@@ -73,7 +82,7 @@ pub fn record_nonces(
     faucet: &Account,
     nonces: &[DepositNonce],
 ) -> Result<Account, XReserveStablecoinBuilderError> {
-    xusdc_encoding::record_used_nonces(faucet.clone(), nonces)
+    miden_usdcx::record_used_nonces(faucet.clone(), nonces)
 }
 
 // DISTRIBUTOR

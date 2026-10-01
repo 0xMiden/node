@@ -197,7 +197,7 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
 
     let coin_seed: [u64; 4] = rand::rng().random();
     let mut seed_rng = RandomCoin::new(coin_seed.map(Felt::new_unchecked).into());
-    let wallet_secret_key = SecretKey::with_rng(&mut seed_rng);
+    let wallet_secret_key = SecretKey::with_rng(&mut rand::rng());
     let wallet_public_key = wallet_secret_key.public_key();
 
     println!("Creating {num_transactions} wallets in parallel...");
@@ -290,15 +290,8 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
         let patch = executed_tx.account_patch().clone();
 
         // Evolve the faucet state for the next iteration before we hand the executed tx off for
-        // proving. The first mint tx creates the faucet on-chain and emits a full-state patch
-        // (which carries account code) that must be converted into the account directly, later txs
-        // emit partial-state delta patches that are applied onto the existing faucet.
-        if patch.is_full_state() {
-            faucet =
-                Account::try_from(&patch).expect("failed to build faucet from full-state patch");
-        } else {
-            faucet.apply_patch(&patch).expect("failed to apply faucet patch");
-        }
+        // proving. The first mint tx also creates the faucet on-chain.
+        faucet.apply_patch(&patch).expect("failed to apply faucet patch");
         data_store.add_account(faucet.clone());
 
         mint_proofs.submit(&prover, executed_tx).await;
@@ -392,9 +385,7 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
 
 /// Creates a new faucet account and returns it alongside its secret key.
 fn create_faucet() -> (Account, SecretKey) {
-    let coin_seed: [u64; 4] = rand::rng().random();
-    let mut rng = RandomCoin::new(coin_seed.map(Felt::new_unchecked).into());
-    let key_pair = SecretKey::with_rng(&mut rng);
+    let key_pair = SecretKey::with_rng(&mut rand::rng());
     let init_seed = [0_u8; 32];
 
     let fungible_faucet: AccountComponent = FungibleFaucet::builder()

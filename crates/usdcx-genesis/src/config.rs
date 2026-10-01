@@ -7,9 +7,9 @@ use miden_protocol::account::AccountId;
 use miden_protocol::asset::AssetAmount;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_protocol::utils::serde::Deserializable;
+use miden_usdcx::xreserve::encoding::{CircleDomain, DepositNonce};
 use serde::Deserialize;
 use serde::de::{DeserializeOwned, Deserializer, Error as _};
-use xusdc_encoding::xreserve::encoding::{CircleDomain, DepositNonce};
 
 // ROLES
 // ================================================================================================

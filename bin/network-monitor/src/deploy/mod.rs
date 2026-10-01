@@ -1073,8 +1073,10 @@ pub async fn deploy_counter_account(
 
     let transaction_inputs = executed_tx.tx_inputs().to_bytes();
 
-    let committed_counter = Account::try_from(executed_tx.account_patch())
-        .context("counter creation patch should convert to an account")?;
+    let mut committed_counter = counter_account.clone();
+    committed_counter
+        .apply_patch(executed_tx.account_patch())
+        .context("counter creation patch should apply to the counter account")?;
 
     let prover = prover.clone();
     let proven_tx = spawn_blocking_in_current_span(move || prover.prove(executed_tx))

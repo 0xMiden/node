@@ -33,10 +33,10 @@ use crate::db::models::conv::DatabaseTypeConversionError;
 /// failures from invalid update preparation.
 #[derive(Debug, Error)]
 pub enum AccountStateForestUpdateError {
-    /// A full-state patch attempted to create a vault lineage that is already present.
+    /// The patch of a new account attempted to create an existing vault lineage.
     #[error("account {account_id} vault lineage already exists")]
     VaultLineageAlreadyExists { account_id: AccountId },
-    /// A full-state patch attempted to create a storage-map lineage that is already present.
+    /// The patch of a new account attempted to create an existing storage-map lineage.
     #[error("account {account_id} storage map lineage for slot {slot_name} already exists")]
     StorageLineageAlreadyExists {
         account_id: AccountId,
@@ -98,6 +98,8 @@ pub enum DatabaseError {
     ProtocolConfigNotFound(Word),
     #[error("account {0} not found")]
     AccountNotFoundInDb(AccountId),
+    #[error("account {0} already exists")]
+    AccountAlreadyExistsInDb(AccountId),
     #[error("accounts {0:?} not found")]
     AccountsNotFoundInDb(Vec<AccountId>),
     #[error("account {0} is not on the chain")]

@@ -17,6 +17,7 @@ use miden_standards::note::NoteExecutionHint;
 use crate::NoteError;
 use crate::committed_block::CommittedBlockEffects;
 use crate::db::eligibility::{NEVER_ELIGIBLE, backoff_ready_block, hint_floor};
+use crate::db::queries::account_effect::NetworkAccountEffect;
 use crate::db::test_setup;
 use crate::sponsorship::SponsorshipNote;
 use crate::test_utils::*;
@@ -775,7 +776,11 @@ fn genesis_effects() -> CommittedBlockEffects {
         network_notes: vec![],
         sponsorship_notes: vec![],
         nullifiers: vec![],
-        network_account_updates: vec![(account.id(), details)],
+        network_account_updates: vec![(
+            account.id(),
+            NetworkAccountEffect::from_account_creation(&details)
+                .expect("the mock account should be a network account"),
+        )],
         account_transactions: vec![],
     }
 }

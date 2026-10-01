@@ -253,19 +253,12 @@ impl IncrementService {
     /// [`CounterTrackingService`]); the returned success count is used purely as a best-effort
     /// latency target — on a fresh wallet/counter pair both start at zero and advance together.
     fn handle_increment_success(&mut self, account_patch: &AccountPatch, tx_id: String) -> u64 {
-        if account_patch.is_full_state() {
-            // The wallet is created in-memory and never separately deployed, so its first increment
-            // doubles as the account-creation transaction. That transaction's patch carries the
-            // account code and fully describes the account, so it must be converted into the
-            // account rather than applied as a delta (`apply_patch` rejects full-state patches).
-            self.tx.wallet_account = Account::try_from(account_patch)
-                .expect("full-state patch should convert to a valid account");
-        } else {
-            self.tx
-                .wallet_account
-                .apply_patch(account_patch)
-                .expect("successful tx should apply patch correctly");
-        }
+        // The wallet is created in-memory and never separately deployed, so its first increment
+        // doubles as the account-creation transaction. `apply_patch` handles that patch as well.
+        self.tx
+            .wallet_account
+            .apply_patch(account_patch)
+            .expect("successful tx should apply patch correctly");
         // The transaction consumed the pending funding note; do not offer it again.
         self.pending_funding_note = None;
         self.details.success_count += 1;
@@ -1303,7 +1296,8 @@ mod tests {
             None,
         )
         .await?;
-        let committed_counter = Account::try_from(creation_tx.account_patch())?;
+        let mut committed_counter = counter.clone();
+        committed_counter.apply_patch(creation_tx.account_patch())?;
 
         let mut builder = MockChain::builder().fee_faucet_id(fee_faucet_id);
         builder.add_account(committed_counter.clone())?;
@@ -1361,7 +1355,8 @@ mod tests {
             1,
             "the increment transaction must emit exactly the network note"
         );
-        let updated_wallet = Account::try_from(executed_tx.account_patch())?;
+        let mut updated_wallet = wallet.clone();
+        updated_wallet.apply_patch(executed_tx.account_patch())?;
         let counter_slot = updated_wallet.storage().get_item(&WALLET_COUNTER_SLOT_NAME)?;
         assert_eq!(
             counter_slot.as_elements()[0].as_canonical_u64(),
@@ -1462,7 +1457,8 @@ mod tests {
             Some((committed_faucet, witness)),
         )
         .await?;
-        let committed_counter = Account::try_from(creation_tx.account_patch())?;
+        let mut committed_counter = counter.clone();
+        committed_counter.apply_patch(creation_tx.account_patch())?;
         let balance = committed_counter
             .vault()
             .get_balance(AssetId::new_fungible(fee_faucet_id))?
@@ -1501,7 +1497,8 @@ mod tests {
             None,
         )
         .await?;
-        let committed_counter = Account::try_from(creation_tx.account_patch())?;
+        let mut committed_counter = counter.clone();
+        committed_counter.apply_patch(creation_tx.account_patch())?;
         let counter_balance = committed_counter.vault().get_balance(fee_asset)?.as_u64();
         assert!(
             counter_balance > 0 && counter_balance < counter_funding_amount(BASE_FEE),
@@ -1560,7 +1557,8 @@ mod tests {
             "expected the increment, fee-sponsorship, and tx-fee notes"
         );
 
-        let updated_wallet = Account::try_from(executed_tx.account_patch())?;
+        let mut updated_wallet = wallet.clone();
+        updated_wallet.apply_patch(executed_tx.account_patch())?;
         let balance = updated_wallet.vault().get_balance(fee_asset)?.as_u64();
         let sponsorship = max_fee_per_transaction(BASE_FEE);
         assert!(
