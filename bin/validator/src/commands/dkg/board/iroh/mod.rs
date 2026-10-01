@@ -647,7 +647,7 @@ impl BoardRuntime {
             .with_context(|| format!("failed to create Iroh data parent {}", parent.display()))?;
         #[cfg(unix)]
         {
-            use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+            use std::os::unix::fs::{DirBuilderExt, FileTypeExt, PermissionsExt};
 
             match std::fs::DirBuilder::new().mode(0o700).create(data_directory) {
                 Ok(()) => sync_directory(parent)?,
@@ -656,13 +656,30 @@ impl BoardRuntime {
             }
             let metadata = fs_err::symlink_metadata(data_directory)
                 .context("failed to inspect Iroh data directory")?;
+            let file_type = metadata.file_type();
+            let kind = if file_type.is_dir() {
+                "directory"
+            } else if file_type.is_file() {
+                "file"
+            } else if file_type.is_symlink() {
+                "symlink"
+            } else if file_type.is_socket() {
+                "socket"
+            } else if file_type.is_fifo() {
+                "FIFO"
+            } else if file_type.is_char_device() {
+                "character device"
+            } else if file_type.is_block_device() {
+                "block device"
+            } else {
+                "unknown"
+            };
             // Group and other users must not have access to the board store.
             ensure!(
-                metadata.file_type().is_dir()
-                    && metadata.permissions().mode().trailing_zeros() >= 6,
-                "Iroh data directory {} must be a private directory (type: {:?}, mode: {:o})",
+                file_type.is_dir() && metadata.permissions().mode().trailing_zeros() >= 6,
+                "Iroh data directory {} must be a private directory (type: {}, mode: {:o})",
                 data_directory.display(),
-                metadata.file_type(),
+                kind,
                 metadata.permissions().mode() & 0o777
             );
         }

@@ -148,7 +148,13 @@ async fn board_data_directory_is_private_under_public_parent() -> anyhow::Result
     std::os::unix::fs::symlink(&data_directory, &link)?;
     let file = root.path().join("file");
     fs_err::write(&file, b"")?;
-    for (input, path) in [(root.path().join("link/"), link), (file.clone(), file)] {
+    let socket = root.path().join("socket");
+    let _listener = std::os::unix::net::UnixListener::bind(&socket)?;
+    for (input, path, kind) in [
+        (root.path().join("link/"), link, "symlink"),
+        (file.clone(), file, "file"),
+        (socket.clone(), socket, "socket"),
+    ] {
         let error = BoardRuntime::start(&input, false)
             .await
             .err()
@@ -157,9 +163,8 @@ async fn board_data_directory_is_private_under_public_parent() -> anyhow::Result
         assert_eq!(
             error.to_string(),
             format!(
-                "Iroh data directory {} must be a private directory (type: {:?}, mode: {:o})",
+                "Iroh data directory {} must be a private directory (type: {kind}, mode: {:o})",
                 path.display(),
-                metadata.file_type(),
                 metadata.permissions().mode() & 0o777
             )
         );
