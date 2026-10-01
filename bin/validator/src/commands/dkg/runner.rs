@@ -167,7 +167,7 @@ pub(super) async fn serve_board_with_network(
         use_network_services,
     )
     .await?;
-    publish_directory(&options.ticket_directory, |temporary| {
+    let tickets_result = publish_directory(&options.ticket_directory, |temporary| {
         for ticket in &tickets {
             write_new_file(
                 &temporary.join(format!("participant-{}.ticket", ticket.participant())),
@@ -176,7 +176,10 @@ pub(super) async fn serve_board_with_network(
             )?;
         }
         Ok(())
-    })?;
+    });
+    if tickets_result.is_err() {
+        return tickets_result.and(board.shutdown().await);
+    }
     println!(
         "storage key DKG board tickets written to {}",
         options.ticket_directory.display()
