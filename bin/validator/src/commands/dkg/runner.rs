@@ -163,6 +163,11 @@ pub(super) async fn serve_board_with_network(
 ) -> anyhow::Result<()> {
     let genesis = read_trusted_genesis(&options.genesis)?;
     let participant_count = genesis.inner().header().validator_config().keys().len();
+    ensure!(
+        options.threshold.get() <= participant_count,
+        "threshold must be between 1 and {participant_count}"
+    );
+    decode_fixed_hex::<32>(&options.epoch, "storage-key epoch")?;
     let (board, tickets) = CoordinatorBoard::create_with_network(
         &options.data_directory,
         participant_count,

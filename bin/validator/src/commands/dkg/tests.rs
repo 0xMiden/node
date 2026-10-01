@@ -1292,6 +1292,37 @@ async fn cancellation_is_polled_during_blocking_proof() -> TestResult {
 }
 
 #[tokio::test]
+async fn invalid_board_options_leave_no_board_or_tickets() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let genesis = write_genesis(root.path())?;
+    for (name, threshold, epoch, expected) in [
+        ("threshold", 4, "66".repeat(32), "threshold must be between 1 and 3"),
+        ("epoch", 2, "AA".repeat(32), "storage-key epoch must use lowercase hex"),
+    ] {
+        let data_directory = root.path().join(format!("{name}-board"));
+        let ticket_directory = root.path().join(format!("{name}-tickets"));
+        let options = runner::DkgBoardServeOptions {
+            data_directory: data_directory.clone(),
+            genesis: genesis.path.clone(),
+            threshold: std::num::NonZeroUsize::new(threshold).unwrap(),
+            epoch,
+            ticket_directory: ticket_directory.clone(),
+        };
+        let error = runner::serve_board_with_network(
+            options,
+            miden_node_utils::shutdown::CancellationToken::new(),
+            false,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.to_string(), expected);
+        assert!(!data_directory.exists());
+        assert!(!ticket_directory.exists());
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn coordinator_stops_before_and_after_common_artifacts() -> TestResult {
     let root = tempfile::tempdir()?;
     let genesis = write_genesis(root.path())?;
