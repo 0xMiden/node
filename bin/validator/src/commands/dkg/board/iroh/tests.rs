@@ -146,18 +146,24 @@ async fn board_data_directory_is_private_under_public_parent() -> anyhow::Result
     fs_err::set_permissions(&data_directory, std::fs::Permissions::from_mode(0o700))?;
     let link = root.path().join("link");
     std::os::unix::fs::symlink(&data_directory, &link)?;
-    let error = BoardRuntime::start(&root.path().join("link/"), false)
-        .await
-        .err()
-        .context("symlinked board data directory was accepted")?;
-    let mode = fs_err::symlink_metadata(&link)?.permissions().mode() & 0o777;
-    assert_eq!(
-        error.to_string(),
-        format!(
-            "Iroh data directory {} must be a private directory (type: symlink, mode: {mode:o})",
-            link.display()
-        )
-    );
+    let file = root.path().join("file");
+    fs_err::write(&file, b"")?;
+    for (input, path) in [(root.path().join("link/"), link), (file.clone(), file)] {
+        let error = BoardRuntime::start(&input, false)
+            .await
+            .err()
+            .context("non-directory board path was accepted")?;
+        let metadata = fs_err::symlink_metadata(&path)?;
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "Iroh data directory {} must be a private directory (type: {:?}, mode: {:o})",
+                path.display(),
+                metadata.file_type(),
+                metadata.permissions().mode() & 0o777
+            )
+        );
+    }
     Ok(())
 }
 
