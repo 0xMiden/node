@@ -125,14 +125,7 @@ pub(super) async fn run_validator(
     options: DkgRunOptions,
     shutdown: CancellationToken,
 ) -> anyhow::Result<()> {
-    let board = fs_err::read_to_string(&options.board_file)
-        .with_context(|| {
-            format!("failed to read storage key DKG board ticket {}", options.board_file.display())
-        })?
-        .trim()
-        .to_owned();
-    ensure!(!board.is_empty(), "storage key DKG board ticket must not be empty");
-    let board = board.parse::<BoardTicket>().context("invalid storage key DKG board ticket")?;
+    let board = read_board_ticket(&options.board_file)?;
     let signer = options.signing_key.into_signer().await?;
     run_validator_with_ticket::<SecpSecqBackend>(
         board,
@@ -146,6 +139,14 @@ pub(super) async fn run_validator(
         shutdown,
     )
     .await
+}
+
+pub(super) fn read_board_ticket(path: &Path) -> anyhow::Result<BoardTicket> {
+    let board = fs_err::read_to_string(path).with_context(|| {
+        format!("failed to read storage key DKG board ticket {}", path.display())
+    })?;
+    ensure!(!board.is_empty(), "storage key DKG board ticket must not be empty");
+    board.parse::<BoardTicket>().context("invalid storage key DKG board ticket")
 }
 
 pub(super) async fn serve_board(

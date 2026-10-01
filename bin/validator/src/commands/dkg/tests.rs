@@ -973,6 +973,15 @@ async fn runner_rejects_another_participants_ticket_before_publishing() -> TestR
         .find(|ticket| ticket.participant() != participant.get())
         .expect("a three-participant ceremony has another participant")
         .clone();
+    let ticket_path = root.path().join("ticket");
+    let ticket_text = ticket.to_string();
+    fs_err::write(&ticket_path, &ticket_text)?;
+    assert_eq!(runner::read_board_ticket(&ticket_path)?.to_string(), ticket_text);
+    fs_err::write(&ticket_path, format!("{ticket_text}\n"))?;
+    assert_eq!(
+        runner::read_board_ticket(&ticket_path).unwrap_err().to_string(),
+        "invalid storage key DKG board ticket"
+    );
     let ticket_participant = ticket.participant();
     let error = runner::run_validator_with_ticket::<ShareOpeningBackend>(
         ticket,
