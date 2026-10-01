@@ -27,12 +27,7 @@ mod scoped;
 pub use scoped::{ScopedBlockNum, ScopedBlockRange};
 
 mod snapshot;
-pub(in crate::state) use snapshot::{
-    PublishedGenerations,
-    SNAPSHOTS_LIVE_WARN_THRESHOLD,
-    SnapshotGuard,
-    StateSnapshot,
-};
+pub(in crate::state) use snapshot::{PublishedGenerations, StateSnapshot};
 
 mod account;
 mod block;
@@ -53,8 +48,7 @@ pub use transaction_inputs::TransactionInputs;
 ///
 /// Obtained from [`State::view`]; create one per request and drop it when the request completes.
 /// Holding a view pins a snapshot generation (and thereby the `RocksDB` snapshots backing the
-/// trees), so it must not be stored in long-lived structs; leaked or slow readers are reported by
-/// the store's snapshot-lifetime warnings.
+/// trees), so it must not be stored in long-lived structs.
 ///
 /// Reads that are technically not block-scoped (for example, immutable content-addressed data)
 /// also live here so that every read path flows through one type.
@@ -97,9 +91,7 @@ impl State {
     ///
     /// Work in the closure should be kept to low-complexity compute over the view, ideally with no
     /// I/O and no other `.await` points. Anything slower holds the pinned snapshot, and therefore
-    /// its underlying `RocksDB` snapshot, for as long as it runs. The snapshot's lifetime is logged
-    /// as a warning if held too long, but that is a backstop, not a substitute for keeping closures
-    /// short.
+    /// its underlying `RocksDB` snapshot, for as long as it runs.
     pub async fn with_view<R>(&self, f: impl AsyncFnOnce(&StateView) -> R) -> R {
         let view = self.view();
         f(&view).await
