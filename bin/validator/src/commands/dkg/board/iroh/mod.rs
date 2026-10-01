@@ -74,16 +74,25 @@ const PROVIDER_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 ///
 /// The ticket contains no private DKG material. Its holder can read public ceremony artifacts and
 /// upload only to the named participant's slots.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub(super) struct BoardTicket {
+#[derive(Clone, Deserialize, Serialize)]
+pub(in crate::commands::dkg) struct BoardTicket {
     document: DocTicket,
     participant: u32,
     upload_secret: [u8; 32],
 }
 
 impl BoardTicket {
-    pub(super) fn participant(&self) -> u32 {
+    pub(in crate::commands::dkg) fn participant(&self) -> u32 {
         self.participant
+    }
+}
+
+impl fmt::Debug for BoardTicket {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BoardTicket")
+            .field("participant", &self.participant)
+            .finish_non_exhaustive()
     }
 }
 
@@ -146,36 +155,21 @@ impl FromStr for BoardTicket {
     }
 }
 
-pub(super) fn validate_ticket(value: &str) -> anyhow::Result<u32> {
-    Ok(BoardTicket::from_str(value)?.participant())
-}
-
 pub(super) async fn create(
     data_directory: &Path,
     participant_count: usize,
     use_network_services: bool,
-) -> anyhow::Result<(BoardNode, Vec<(String, u32)>)> {
-    let (node, tickets) =
-        BoardNode::create_with_network(data_directory, participant_count, use_network_services)
-            .await?;
-    let tickets = tickets
-        .into_iter()
-        .map(|ticket| {
-            let participant = ticket.participant();
-            (ticket.to_string(), participant)
-        })
-        .collect();
-    Ok((node, tickets))
+) -> anyhow::Result<(BoardNode, Vec<BoardTicket>)> {
+    BoardNode::create_with_network(data_directory, participant_count, use_network_services).await
 }
 
 pub(super) async fn join(
     data_directory: &Path,
-    encoded_ticket: &str,
+    ticket: BoardTicket,
     participant_count: usize,
     use_network_services: bool,
     shutdown: CancellationToken,
 ) -> anyhow::Result<BoardNode> {
-    let ticket = BoardTicket::from_str(encoded_ticket)?;
     BoardNode::join_with_network(
         data_directory,
         ticket,

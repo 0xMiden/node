@@ -5,7 +5,6 @@
 
 use std::fmt;
 use std::path::Path;
-use std::str::FromStr;
 use std::time::Duration;
 
 use miden_node_utils::shutdown::CancellationToken;
@@ -19,6 +18,8 @@ mod tests;
 
 pub(super) use core::ArtifactSlot;
 
+pub(super) use iroh::BoardTicket;
+
 #[derive(Debug)]
 pub(super) struct JoinCancelled;
 
@@ -29,51 +30,6 @@ impl fmt::Display for JoinCancelled {
 }
 
 impl std::error::Error for JoinCancelled {}
-
-/// An opaque board address and one participant's publish permission.
-#[derive(Clone)]
-pub(super) struct BoardTicket {
-    encoded: String,
-    participant: u32,
-}
-
-impl BoardTicket {
-    fn new(encoded: String, participant: u32) -> Self {
-        Self { encoded, participant }
-    }
-
-    pub(super) fn participant(&self) -> u32 {
-        self.participant
-    }
-
-    fn into_encoded(self) -> String {
-        self.encoded
-    }
-}
-
-impl fmt::Debug for BoardTicket {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("BoardTicket")
-            .field("participant", &self.participant)
-            .finish_non_exhaustive()
-    }
-}
-
-impl fmt::Display for BoardTicket {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.encoded)
-    }
-}
-
-impl FromStr for BoardTicket {
-    type Err = anyhow::Error;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let participant = iroh::validate_ticket(value)?;
-        Ok(Self::new(value.to_owned(), participant))
-    }
-}
 
 /// An artifact published by the ceremony coordinator.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -170,10 +126,6 @@ impl CoordinatorBoard {
     ) -> anyhow::Result<(Self, Vec<BoardTicket>)> {
         let (node, tickets) =
             iroh::create(data_directory, participant_count, use_network_services).await?;
-        let tickets = tickets
-            .into_iter()
-            .map(|(encoded, participant)| BoardTicket::new(encoded, participant))
-            .collect();
         Ok((
             Self {
                 reader: BoardReader { node: Transport::Iroh(Box::new(node)) },
@@ -248,14 +200,9 @@ impl ParticipantBoard {
         shutdown: CancellationToken,
     ) -> anyhow::Result<Self> {
         let participant = ticket.participant();
-        let node = iroh::join(
-            data_directory,
-            &ticket.into_encoded(),
-            participant_count,
-            use_network_services,
-            shutdown,
-        )
-        .await?;
+        let node =
+            iroh::join(data_directory, ticket, participant_count, use_network_services, shutdown)
+                .await?;
         Ok(Self {
             participant,
             reader: BoardReader { node: Transport::Iroh(Box::new(node)) },
