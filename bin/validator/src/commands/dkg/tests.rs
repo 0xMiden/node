@@ -1331,7 +1331,7 @@ async fn coordinator_stops_before_and_after_common_artifacts() -> TestResult {
     let options = |ticket_directory: PathBuf| runner::DkgBoardServeOptions {
         data_directory: board_directory.clone(),
         genesis: genesis.path.clone(),
-        threshold: std::num::NonZeroUsize::new(2).unwrap(),
+        threshold: std::num::NonZeroUsize::new(3).unwrap(),
         epoch: epoch.clone(),
         ticket_directory,
     };
