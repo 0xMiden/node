@@ -141,7 +141,16 @@ async fn board_data_directory_is_private_under_public_parent() -> anyhow::Result
         .await
         .err()
         .context("public board data directory was accepted")?;
-    assert!(error.to_string().contains("Iroh data directory must be a private directory"));
+    assert!(error.to_string().contains("must be a private directory"));
+
+    fs_err::set_permissions(&data_directory, std::fs::Permissions::from_mode(0o700))?;
+    std::os::unix::fs::symlink(&data_directory, root.path().join("link"))?;
+    let error = BoardRuntime::start(&root.path().join("link/"), false)
+        .await
+        .err()
+        .context("symlinked board data directory was accepted")?;
+    assert!(error.to_string().contains("must be a private directory"));
+    assert!(error.to_string().contains("link"));
     Ok(())
 }
 

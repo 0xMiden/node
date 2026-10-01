@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -636,6 +636,9 @@ impl BoardWriter {
 
 impl BoardRuntime {
     async fn start(data_directory: &Path, use_network_services: bool) -> anyhow::Result<Self> {
+        ensure!(cfg!(unix), "Iroh board stores require Unix private directory permissions");
+        let data_directory = data_directory.components().collect::<PathBuf>();
+        let data_directory = data_directory.as_path();
         let parent = data_directory
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
@@ -657,7 +660,10 @@ impl BoardRuntime {
             ensure!(
                 metadata.file_type().is_dir()
                     && metadata.permissions().mode().trailing_zeros() >= 6,
-                "Iroh data directory must be a private directory"
+                "Iroh data directory {} must be a private directory (type: {:?}, mode: {:o})",
+                data_directory.display(),
+                metadata.file_type(),
+                metadata.permissions().mode() & 0o777
             );
         }
         #[cfg(not(unix))]
