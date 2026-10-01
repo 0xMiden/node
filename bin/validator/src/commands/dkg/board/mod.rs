@@ -20,6 +20,20 @@ pub(super) use core::ArtifactSlot;
 
 pub(super) use iroh::BoardTicket;
 
+#[derive(Clone, Copy)]
+pub(super) struct BoardPolicy {
+    pub(super) genesis_commitment: [u8; 32],
+    pub(super) threshold: usize,
+    pub(super) epoch: [u8; 32],
+}
+
+#[cfg(test)]
+pub(super) const TEST_POLICY: BoardPolicy = BoardPolicy {
+    genesis_commitment: [0; 32],
+    threshold: 1,
+    epoch: [0; 32],
+};
+
 #[derive(Debug)]
 pub(super) struct JoinCancelled;
 
@@ -122,11 +136,13 @@ impl CoordinatorBoard {
     pub(super) async fn create_with_network(
         data_directory: &Path,
         participant_count: usize,
+        policy: &BoardPolicy,
         use_network_services: bool,
     ) -> anyhow::Result<(Self, Vec<BoardTicket>)> {
         let (node, tickets) = iroh::BoardNode::create_with_network(
             data_directory,
             participant_count,
+            policy,
             use_network_services,
         )
         .await?;

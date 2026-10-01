@@ -7,12 +7,14 @@ use iroh::SecretKey;
 use iroh_docs::api::Doc;
 
 use super::super::super::{decode_fixed_hex, publish_directory, sync_directory, write_new_file};
+use super::super::BoardPolicy;
 
 pub(super) const ENDPOINT_SECRET_FILE: &str = "endpoint-secret.hex";
 pub(super) const BOARD_METADATA_DIRECTORY: &str = "board-meta";
 pub(super) const DOCUMENT_ID_FILE: &str = "document-id.hex";
 pub(super) const BOARD_FORMAT_FILE: &str = "board-format";
-const BOARD_FORMAT: &[u8] = b"participant-upload-v4\n";
+const BOARD_FORMAT: &[u8] = b"participant-upload-v5\n";
+const BOARD_POLICY_FILE: &str = "board-policy";
 pub(super) const UPLOAD_SECRETS_DIRECTORY: &str = "upload-secrets";
 
 pub(super) fn load_or_create_endpoint_secret(data_directory: &Path) -> anyhow::Result<SecretKey> {
@@ -47,6 +49,7 @@ pub(super) fn publish_board_metadata(
     path: &Path,
     document: &Doc,
     upload_secrets: &[[u8; 32]],
+    policy: &BoardPolicy,
 ) -> anyhow::Result<()> {
     publish_directory(path, |temporary| {
         write_new_file(
@@ -55,6 +58,7 @@ pub(super) fn publish_board_metadata(
             true,
         )?;
         write_new_file(&temporary.join(BOARD_FORMAT_FILE), BOARD_FORMAT, true)?;
+        write_new_file(&temporary.join(BOARD_POLICY_FILE), policy_bytes(policy).as_bytes(), true)?;
         let upload_secrets_directory = temporary.join(UPLOAD_SECRETS_DIRECTORY);
         fs_err::create_dir(&upload_secrets_directory).with_context(|| {
             format!(
@@ -97,7 +101,10 @@ pub(super) fn load_upload_secrets(
         .collect()
 }
 
-pub(super) fn require_current_board_format(metadata_directory: &Path) -> anyhow::Result<()> {
+pub(super) fn require_current_board_format(
+    metadata_directory: &Path,
+    policy: &BoardPolicy,
+) -> anyhow::Result<()> {
     let path = metadata_directory.join(BOARD_FORMAT_FILE);
     let format = fs_err::read(&path)
         .with_context(|| format!("failed to read DKG board format {}", path.display()))?;
@@ -105,5 +112,21 @@ pub(super) fn require_current_board_format(metadata_directory: &Path) -> anyhow:
         format == BOARD_FORMAT,
         "unsupported DKG board format; start a new ceremony in a new data directory"
     );
+    let policy_path = metadata_directory.join(BOARD_POLICY_FILE);
+    let stored = fs_err::read(&policy_path)
+        .with_context(|| format!("failed to read DKG board policy {}", policy_path.display()))?;
+    ensure!(
+        stored == policy_bytes(policy).as_bytes(),
+        "DKG board policy changed; start a new ceremony in a new data directory"
+    );
     Ok(())
+}
+
+fn policy_bytes(policy: &BoardPolicy) -> String {
+    format!(
+        "{}\n{}\n{}\n",
+        hex::encode(policy.genesis_commitment),
+        policy.threshold,
+        hex::encode(policy.epoch)
+    )
 }

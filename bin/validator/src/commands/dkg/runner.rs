@@ -10,6 +10,7 @@ use miden_validator::ValidatorSigner;
 
 use super::board::{
     ArtifactSlot,
+    BoardPolicy,
     BoardReader,
     BoardTicket,
     CommonArtifact,
@@ -167,10 +168,23 @@ pub(super) async fn serve_board_with_network(
         options.threshold.get() <= participant_count,
         "threshold must be between 1 and {participant_count}"
     );
-    decode_fixed_hex::<32>(&options.epoch, "storage-key epoch")?;
+    let epoch = decode_fixed_hex::<32>(&options.epoch, "storage-key epoch")?;
+    let genesis_commitment = genesis
+        .inner()
+        .header()
+        .commitment()
+        .to_bytes()
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("genesis commitment must be 32 bytes"))?;
+    let policy = BoardPolicy {
+        genesis_commitment,
+        threshold: options.threshold.get(),
+        epoch,
+    };
     let (board, tickets) = CoordinatorBoard::create_with_network(
         &options.data_directory,
         participant_count,
+        &policy,
         use_network_services,
     )
     .await?;

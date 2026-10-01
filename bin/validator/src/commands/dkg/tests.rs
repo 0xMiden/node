@@ -961,8 +961,13 @@ async fn runner_rejects_another_participants_ticket_before_publishing() -> TestR
     let root = tempfile::tempdir()?;
     let genesis = write_genesis(root.path())?;
     let board_directory = root.path().join("board");
-    let (board, tickets) =
-        board::CoordinatorBoard::create_with_network(&board_directory, 3, false).await?;
+    let (board, tickets) = board::CoordinatorBoard::create_with_network(
+        &board_directory,
+        3,
+        &board::TEST_POLICY,
+        false,
+    )
+    .await?;
     let signer = ValidatorSigner::new_local(genesis.signing_keys[0].clone());
     let epoch = "66".repeat(32);
     let work_directory = root.path().join("work");
@@ -1121,8 +1126,13 @@ async fn active_runner_stops_and_reopens_an_incomplete_board() -> TestResult {
     let root = tempfile::tempdir()?;
     let genesis = write_genesis(root.path())?;
     let board_directory = root.path().join("board");
-    let (board, tickets) =
-        board::CoordinatorBoard::create_with_network(&board_directory, 3, false).await?;
+    let (board, tickets) = board::CoordinatorBoard::create_with_network(
+        &board_directory,
+        3,
+        &board::TEST_POLICY,
+        false,
+    )
+    .await?;
     let work_directory = root.path().join("work");
     let output_directory = root.path().join("bundle");
     let epoch = "66".repeat(32);
@@ -1167,9 +1177,13 @@ async fn active_runner_stops_and_reopens_an_incomplete_board() -> TestResult {
     tokio::time::timeout(Duration::from_secs(30), task)
         .await
         .context("active runner did not stop after cancellation")???;
-    let (other_board, other_tickets) =
-        board::CoordinatorBoard::create_with_network(&root.path().join("other-board"), 3, false)
-            .await?;
+    let (other_board, other_tickets) = board::CoordinatorBoard::create_with_network(
+        &root.path().join("other-board"),
+        3,
+        &board::TEST_POLICY,
+        false,
+    )
+    .await?;
     let other_ticket = other_tickets
         .into_iter()
         .find(|ticket| ticket.participant() == participant.get())
@@ -1214,8 +1228,13 @@ async fn active_runner_stops_and_reopens_an_incomplete_board() -> TestResult {
     let endpoint_secret = fs_err::read(work_directory.join("board/endpoint-secret.hex"))?;
     board.shutdown().await?;
 
-    let (board, new_tickets) =
-        board::CoordinatorBoard::create_with_network(&board_directory, 3, false).await?;
+    let (board, new_tickets) = board::CoordinatorBoard::create_with_network(
+        &board_directory,
+        3,
+        &board::TEST_POLICY,
+        false,
+    )
+    .await?;
     let new_ticket = new_tickets
         .into_iter()
         .find(|ticket| ticket.participant() == participant.get())
@@ -1408,8 +1427,19 @@ async fn coordinator_stops_before_and_after_common_artifacts() -> TestResult {
     for participant in participants {
         participant.shutdown().await?;
     }
+    let policy = board::BoardPolicy {
+        genesis_commitment: read_trusted_genesis(&genesis.path)?
+            .inner()
+            .header()
+            .commitment()
+            .to_bytes()
+            .try_into()
+            .unwrap(),
+        threshold: 3,
+        epoch: decode_fixed_hex::<32>(&epoch, "storage-key epoch")?,
+    };
     let (reopened, _) =
-        board::CoordinatorBoard::create_with_network(&board_directory, 3, false).await?;
+        board::CoordinatorBoard::create_with_network(&board_directory, 3, &policy, false).await?;
     assert_eq!(
         reopened.reader().read_unique(&board::ArtifactSlot::ContextConfig).await?,
         Some(context)
@@ -1428,8 +1458,13 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
     let root = tempfile::tempdir()?;
     let genesis = write_genesis(root.path())?;
     let board_directory = root.path().join("board");
-    let (board, tickets) =
-        board::CoordinatorBoard::create_with_network(&board_directory, 3, false).await?;
+    let (board, tickets) = board::CoordinatorBoard::create_with_network(
+        &board_directory,
+        3,
+        &board::TEST_POLICY,
+        false,
+    )
+    .await?;
     let timeout = Duration::from_mins(3);
     let restart_checkpoint_timeout = Duration::from_secs(30);
     let epoch = "66".repeat(32);

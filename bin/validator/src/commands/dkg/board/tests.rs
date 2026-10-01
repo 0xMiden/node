@@ -62,8 +62,13 @@ async fn memory_adapter_obeys_board_contract() -> anyhow::Result<()> {
 #[tokio::test]
 async fn iroh_adapter_obeys_board_contract() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
-    let (coordinator, tickets) =
-        CoordinatorBoard::create_with_network(&root.path().join("coordinator"), 2, false).await?;
+    let (coordinator, tickets) = CoordinatorBoard::create_with_network(
+        &root.path().join("coordinator"),
+        2,
+        &TEST_POLICY,
+        false,
+    )
+    .await?;
     let mut participants = Vec::new();
     for (position, ticket) in tickets.into_iter().enumerate() {
         participants.push(

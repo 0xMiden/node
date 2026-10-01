@@ -57,7 +57,6 @@ use super::super::{
     sync_directory,
     sync_directory_tree,
 };
-use super::JoinCancelled;
 use super::core::{
     ArtifactSlot,
     BoardCore,
@@ -66,6 +65,7 @@ use super::core::{
     SlotValues,
     validate_artifact_length,
 };
+use super::{BoardPolicy, JoinCancelled};
 
 const PEER_READY_TIMEOUT: Duration = Duration::from_secs(30);
 const PROVIDER_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -224,12 +224,15 @@ impl BoardNode {
     pub(super) async fn create_with_network(
         data_directory: &Path,
         participant_count: usize,
+        policy: &BoardPolicy,
         use_network_services: bool,
     ) -> anyhow::Result<(Self, Vec<BoardTicket>)> {
-        let runtime = BoardRuntime::start(data_directory, use_network_services).await?;
         let metadata_directory = data_directory.join(BOARD_METADATA_DIRECTORY);
+        if metadata_directory.exists() {
+            require_current_board_format(&metadata_directory, policy)?;
+        }
+        let runtime = BoardRuntime::start(data_directory, use_network_services).await?;
         let (document, upload_secrets) = if metadata_directory.exists() {
-            require_current_board_format(&metadata_directory)?;
             let document_id_path = metadata_directory.join(DOCUMENT_ID_FILE);
             let id = fs_err::read_to_string(&document_id_path).with_context(|| {
                 format!("failed to read Iroh document ID {}", document_id_path.display())
@@ -255,7 +258,7 @@ impl BoardNode {
             let upload_secrets = (0..participant_count)
                 .map(|_| SecretKey::generate().to_bytes())
                 .collect::<Vec<_>>();
-            publish_board_metadata(&metadata_directory, &document, &upload_secrets)?;
+            publish_board_metadata(&metadata_directory, &document, &upload_secrets, policy)?;
             (document, upload_secrets)
         };
         document

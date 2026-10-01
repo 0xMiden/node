@@ -13,7 +13,7 @@ fn unrelated_neighbor_does_not_change_board_admission() {
 
 impl BoardNode {
     async fn create_for_test(data_directory: &Path) -> anyhow::Result<(Self, Vec<BoardTicket>)> {
-        Self::create_with_network(data_directory, 3, false).await
+        Self::create_with_network(data_directory, 3, &super::super::TEST_POLICY, false).await
     }
 
     async fn join_for_test(data_directory: &Path, ticket: BoardTicket) -> anyhow::Result<Self> {
@@ -211,6 +211,19 @@ async fn board_reopens_the_same_document_after_restart() -> anyhow::Result<()> {
     host.publish(&ArtifactSlot::Manifest, b"manifest").await?;
     host.shutdown().await?;
 
+    let policy = super::super::TEST_POLICY;
+    for changed in [
+        BoardPolicy { genesis_commitment: [1; 32], ..policy },
+        BoardPolicy { threshold: 2, ..policy },
+        BoardPolicy { epoch: [1; 32], ..policy },
+    ] {
+        let error = BoardNode::create_with_network(&data_directory, 3, &changed, false)
+            .await
+            .err()
+            .context("board reopened with a different ceremony policy")?;
+        assert!(error.to_string().contains("DKG board policy changed"));
+    }
+
     let (host, second_tickets) = BoardNode::create_for_test(&data_directory).await?;
     assert_eq!(first_tickets.len(), second_tickets.len());
     for (first, second) in first_tickets.iter().zip(&second_tickets) {
@@ -233,7 +246,12 @@ async fn board_metadata_points_to_a_committed_document() -> anyhow::Result<()> {
     persist_new_document(&document, &data_directory).await?;
     let metadata_directory = data_directory.join(BOARD_METADATA_DIRECTORY);
     assert!(!metadata_directory.exists());
-    publish_board_metadata(&metadata_directory, &document, &[[1; 32]; 3])?;
+    publish_board_metadata(
+        &metadata_directory,
+        &document,
+        &[[1; 32]; 3],
+        &super::super::TEST_POLICY,
+    )?;
 
     let snapshot_path = root.path().join("snapshot.redb");
     fs_err::copy(data_directory.join("docs/docs.redb"), &snapshot_path)?;
