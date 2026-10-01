@@ -50,6 +50,7 @@ use super::{
     read_registration,
     read_trusted_genesis,
     read_validated_registrations,
+    run_blocking,
     validate_bundle,
     write_new_file,
 };
@@ -243,7 +244,13 @@ pub(super) async fn coordinate_common_files(
             .iter()
             .map(|(name, _)| registration_directory.join(name))
             .collect::<Vec<_>>();
-        prepare(genesis_path, threshold, epoch, &paths, &ceremony_directory)?;
+        let prepare_genesis = genesis_path.to_owned();
+        let prepare_epoch = epoch.to_owned();
+        let prepare_directory = ceremony_directory.clone();
+        run_blocking(move || {
+            prepare(&prepare_genesis, threshold, &prepare_epoch, &paths, &prepare_directory)
+        })
+        .await?;
     }
 
     let ceremony = read_ceremony(genesis_path, &ceremony_directory)?;
@@ -310,7 +317,7 @@ pub(super) async fn run_validator_with_ticket<B>(
     shutdown: CancellationToken,
 ) -> anyhow::Result<()>
 where
-    B: EvrfProofBackend<StorageGroup>,
+    B: EvrfProofBackend<StorageGroup> + 'static,
 {
     durably_create_directory_all(work_directory).with_context(|| {
         format!("failed to create DKG work directory {}", work_directory.display())
@@ -398,7 +405,7 @@ pub(super) async fn run_validator_on_board<B>(
     timeout: Duration,
 ) -> anyhow::Result<()>
 where
-    B: EvrfProofBackend<StorageGroup>,
+    B: EvrfProofBackend<StorageGroup> + 'static,
 {
     let identity_directory = work_directory.join(IDENTITY_DIRECTORY);
     publish_participant_file(
@@ -423,7 +430,19 @@ where
         .collect::<Vec<_>>();
     let ceremony_directory = work_directory.join(CEREMONY_DIRECTORY);
     if !ceremony_directory.exists() {
-        prepare(genesis_path, threshold, epoch, &registration_paths, &ceremony_directory)?;
+        let prepare_genesis = genesis_path.to_owned();
+        let prepare_epoch = epoch.to_owned();
+        let prepare_directory = ceremony_directory.clone();
+        run_blocking(move || {
+            prepare(
+                &prepare_genesis,
+                threshold,
+                &prepare_epoch,
+                &registration_paths,
+                &prepare_directory,
+            )
+        })
+        .await?;
     }
     let common = vec![
         (
@@ -457,13 +476,14 @@ where
 
     let dealings_directory = work_directory.join(DEALINGS_DIRECTORY);
     if !dealings_directory.exists() {
-        deal::<B>(
-            genesis_path,
-            &ceremony_directory,
-            &identity_directory.join(IDENTITY_SECRET_FILE),
-            &dealings_directory,
-            &mut OsRng,
-        )?;
+        let deal_genesis = genesis_path.to_owned();
+        let deal_ceremony = ceremony_directory.clone();
+        let deal_secret = identity_directory.join(IDENTITY_SECRET_FILE);
+        let deal_directory = dealings_directory.clone();
+        run_blocking(move || {
+            deal::<B>(&deal_genesis, &deal_ceremony, &deal_secret, &deal_directory, &mut OsRng)
+        })
+        .await?;
     }
     publish_participant_file(
         board,
@@ -526,17 +546,25 @@ where
     )?;
 
     if !output_directory.exists() {
-        finalize::<B>(
-            genesis_path,
-            &ceremony_directory,
-            &identity_directory.join(IDENTITY_SECRET_FILE),
-            &dealings_directory.join(PRIVATE_STATE_FILE),
-            &decryption_dealings,
-            &context_dealings,
-            &transcript_path,
-            &transcript_acceptances,
-            output_directory,
-        )?;
+        let finalize_genesis = genesis_path.to_owned();
+        let finalize_ceremony = ceremony_directory.clone();
+        let finalize_secret = identity_directory.join(IDENTITY_SECRET_FILE);
+        let finalize_state = dealings_directory.join(PRIVATE_STATE_FILE);
+        let finalize_output = output_directory.to_owned();
+        run_blocking(move || {
+            finalize::<B>(
+                &finalize_genesis,
+                &finalize_ceremony,
+                &finalize_secret,
+                &finalize_state,
+                &decryption_dealings,
+                &context_dealings,
+                &transcript_path,
+                &transcript_acceptances,
+                &finalize_output,
+            )
+        })
+        .await?;
     }
     validate_bundle(
         genesis_path,

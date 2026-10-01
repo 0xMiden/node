@@ -34,6 +34,7 @@ use golden_ehtdh1::{
 use golden_evrf::paper::secp_secq::SecpSecqBackend;
 use golden_halo2curves::golden_group::Secp256k1GoldenGroup;
 use miden_node_store::genesis::GenesisBlock;
+use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::genesis::read_genesis_block;
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::Word;
@@ -57,6 +58,12 @@ type StorageGroup = Secp256k1GoldenGroup;
 type StorageScalar = <StorageGroup as GoldenGroup>::Scalar;
 type StorageElement = <StorageGroup as GoldenGroup>::Element;
 type PublicOutput = (StorageElement, BTreeMap<ParticipantIndex, StorageElement>);
+
+async fn run_blocking<T: Send + 'static>(
+    stage: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
+) -> anyhow::Result<T> {
+    spawn_blocking_in_current_span(stage).await.context("DKG proof task failed")?
+}
 
 const REGISTRATION_VERSION: &str = "miden-storage-key-dkg-registration-v2";
 const MANIFEST_VERSION: &str = "miden-storage-key-dkg-manifest-v2";
@@ -663,7 +670,7 @@ async fn accept_transcript<B>(
     output_directory: &Path,
 ) -> anyhow::Result<()>
 where
-    B: EvrfProofBackend<StorageGroup>,
+    B: EvrfProofBackend<StorageGroup> + 'static,
 {
     let ceremony = read_ceremony(genesis_path, ceremony_directory)?;
     let validator_public_key = signer.public_key();
@@ -676,14 +683,17 @@ where
                 == hex::encode(validator_public_key.to_bytes())),
         "validator signing key is not part of this ceremony",
     );
-    let (transcript, transcript_bytes) =
-        build_transcript::<B>(&ceremony, decryption_dealing_paths, context_dealing_paths)?;
+    let genesis_commitment = ceremony.genesis_commitment;
+    let manifest_sha256 = ceremony.manifest_sha256;
+    let decryption_dealing_paths = decryption_dealing_paths.to_vec();
+    let context_dealing_paths = context_dealing_paths.to_vec();
+    let (transcript, transcript_bytes) = run_blocking(move || {
+        build_transcript::<B>(&ceremony, &decryption_dealing_paths, &context_dealing_paths)
+    })
+    .await?;
     let transcript_sha256 = sha256(&transcript_bytes);
     let signature = signer
-        .sign_commitment(transcript_signature_commitment(
-            ceremony.genesis_commitment,
-            transcript_sha256,
-        ))
+        .sign_commitment(transcript_signature_commitment(genesis_commitment, transcript_sha256))
         .await
         .context("failed to sign DKG transcript")?;
     let acceptance = TranscriptAcceptance {
@@ -694,7 +704,7 @@ where
     };
     let acceptance =
         toml::to_string_pretty(&acceptance).context("failed to encode transcript acceptance")?;
-    debug_assert_eq!(transcript.manifest_sha256, hex::encode(ceremony.manifest_sha256));
+    debug_assert_eq!(transcript.manifest_sha256, hex::encode(manifest_sha256));
 
     publish_directory(output_directory, |directory| {
         write_new_file(&directory.join(TRANSCRIPT_FILE), &transcript_bytes, false)?;

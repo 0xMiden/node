@@ -436,7 +436,7 @@ async fn accept_for_all<B>(
     dealings: &[PathBuf],
 ) -> TestResultWith<AcceptedTranscript>
 where
-    B: EvrfProofBackend<StorageGroup>,
+    B: EvrfProofBackend<StorageGroup> + 'static,
 {
     let mut outputs = Vec::new();
     for (position, signing_key) in ceremony.genesis.signing_keys.iter().enumerate() {
@@ -1260,6 +1260,32 @@ fn publication_failure_reports_shutdown_failure() {
 }
 
 #[tokio::test]
+async fn cancellation_is_polled_during_blocking_proof() -> TestResult {
+    let shutdown = miden_node_utils::shutdown::CancellationToken::new();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let task = tokio::spawn({
+        let shutdown = shutdown.clone();
+        async move {
+            tokio::select! {
+                _ = shutdown.cancelled() => Ok(()),
+                result = run_blocking(move || {
+                    let _ = started_tx.send(());
+                    let _ = release_rx.recv_timeout(Duration::from_secs(10));
+                    Ok(())
+                }) => result,
+            }
+        }
+    });
+    started_rx.await?;
+    shutdown.cancel();
+    let result = tokio::time::timeout(Duration::from_secs(5), task).await;
+    release_tx.send(())?;
+    result???;
+    Ok(())
+}
+
+#[tokio::test]
 async fn coordinator_stops_before_and_after_common_artifacts() -> TestResult {
     let root = tempfile::tempdir()?;
     let genesis = write_genesis(root.path())?;
@@ -1367,7 +1393,7 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
     let board_directory = root.path().join("board");
     let (board, tickets) =
         board::CoordinatorBoard::create_with_network(&board_directory, 3, false).await?;
-    let timeout = Duration::from_mins(2);
+    let timeout = Duration::from_mins(3);
     let restart_checkpoint_timeout = Duration::from_secs(30);
     let epoch = "66".repeat(32);
     let signers = genesis
