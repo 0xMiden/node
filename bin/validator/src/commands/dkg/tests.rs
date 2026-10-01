@@ -1213,6 +1213,17 @@ async fn coordinator_stops_before_and_after_common_artifacts() -> TestResult {
     };
 
     let first_tickets = root.path().join("first-tickets");
+    fs_err::create_dir(&first_tickets)?;
+    let error = runner::serve_board_with_network(
+        options(first_tickets.clone()),
+        miden_node_utils::shutdown::CancellationToken::new(),
+        false,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.to_string(), "output directory already exists");
+    fs_err::remove_dir(&first_tickets)?;
+
     let shutdown = miden_node_utils::shutdown::CancellationToken::new();
     let first = tokio::spawn({
         let shutdown = shutdown.clone();
@@ -1227,15 +1238,6 @@ async fn coordinator_stops_before_and_after_common_artifacts() -> TestResult {
     .await?;
     shutdown.cancel();
     tokio::time::timeout(Duration::from_secs(10), first).await???;
-
-    let error = runner::serve_board_with_network(
-        options(first_tickets),
-        miden_node_utils::shutdown::CancellationToken::new(),
-        false,
-    )
-    .await
-    .unwrap_err();
-    assert_eq!(error.to_string(), "output directory already exists");
 
     let second_tickets = root.path().join("second-tickets");
     let shutdown = miden_node_utils::shutdown::CancellationToken::new();

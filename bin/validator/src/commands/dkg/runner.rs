@@ -177,8 +177,13 @@ pub(super) async fn serve_board_with_network(
         }
         Ok(())
     });
-    if tickets_result.is_err() {
-        return tickets_result.and(board.shutdown().await);
+    if let Err(error) = tickets_result {
+        return match board.shutdown().await {
+            Ok(()) => Err(error),
+            Err(shutdown_error) => {
+                Err(anyhow::anyhow!("{error:#}; board shutdown failed: {shutdown_error:#}"))
+            },
+        };
     }
     println!(
         "storage key DKG board tickets written to {}",
