@@ -332,14 +332,21 @@ where
     );
     let board_directory = work_directory.join(BOARD_DIRECTORY);
     let binding_directory = work_directory.join("board-binding");
-    if !binding_directory.exists() {
+    let expected_id = hex::encode(ticket.document_id());
+    if binding_directory.exists() {
+        let id_path = binding_directory.join("document-id.hex");
+        let stored_id = fs_err::read(&id_path)
+            .with_context(|| format!("failed to read DKG board ID {}", id_path.display()))?;
+        ensure!(
+            stored_id == expected_id.as_bytes(),
+            "DKG work directory belongs to a different board"
+        );
+    } else {
         ensure!(!board_directory.exists(), "DKG work directory has no board binding");
+        publish_directory(&binding_directory, |temporary| {
+            write_new_file(&temporary.join("document-id.hex"), expected_id.as_bytes(), false)
+        })?;
     }
-    materialize_or_compare(
-        &binding_directory,
-        &[("document-id.hex".to_owned(), hex::encode(ticket.document_id()).into_bytes())],
-    )
-    .context("DKG work directory belongs to a different board")?;
     let Some(board) = resolve_join(
         ParticipantBoard::join(&board_directory, ticket, participant_count, shutdown.clone()).await,
     )?
