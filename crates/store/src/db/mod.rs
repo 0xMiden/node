@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::mem::size_of;
 use std::num::NonZeroUsize;
-use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -78,14 +77,6 @@ pub(crate) mod queries;
 
 mod utils;
 
-pub(crate) mod models;
-
-/// [diesel](https://diesel.rs) generated schema
-///
-/// The ignored `diesel_schema_is_in_sync_with_migrations` test verifies that this file matches the
-/// schema produced by the current migrations.
-pub(crate) mod schema;
-
 pub type Result<T, E = DatabaseError> = std::result::Result<T, E>;
 
 /// Database options used by the store state.
@@ -105,12 +96,9 @@ impl Default for DatabaseOptions {
 
 /// The Store's database.
 ///
-/// Extends the underlying [`miden_node_db::Db`] type with functionality specific to the Store.
-///
 /// Every write serializes on the single framework writer connection. Every read runs on the
 /// framework reader pool.
 pub struct Db {
-    diesel: miden_node_db::Db,
     writer: DbWriter,
     reader: DbReader,
 }
@@ -134,20 +122,6 @@ fn insert_genesis(tx: &WriteTx<'_>, genesis: GenesisBlock) -> Result<()> {
         &new_account_ids,
     )?;
     Ok(())
-}
-
-impl Deref for Db {
-    type Target = miden_node_db::Db;
-
-    fn deref(&self) -> &Self::Target {
-        &self.diesel
-    }
-}
-
-impl DerefMut for Db {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.diesel
-    }
 }
 
 /// The commitment of a [`BlockHeader`], stored alongside the header it belongs to.
@@ -289,7 +263,6 @@ impl Db {
     ) -> Result<Self, DatabaseError> {
         verify_latest_schema(&database_filepath)?;
 
-        let db = miden_node_db::Db::new_with_pool_size(&database_filepath, connection_pool_size)?;
         let (writer, reader) =
             miden_node_db::sqlite::open_with_pool_size(&database_filepath, connection_pool_size)?;
         info!(
@@ -299,7 +272,7 @@ impl Db {
             db.sqlite.connection_pool_size = connection_pool_size.get()
         );
 
-        Ok(Self { diesel: db, writer, reader })
+        Ok(Self { writer, reader })
     }
 
     /// The write handle, for tests that need to seed or corrupt rows no production method writes.
