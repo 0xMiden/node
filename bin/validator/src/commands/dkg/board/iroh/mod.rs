@@ -618,19 +618,30 @@ impl BoardWriter {
         futures::pin_mut!(entries);
         let mut hashes = Vec::new();
         let key = slot.key(expected_hash);
+        let expected_len = u64::try_from(value.len())?;
         while let Some(entry) = entries.next().await {
             let entry = entry.context("failed to read DKG board artifact slot")?;
-            if entry.content_hash() == expected_hash {
+            let hash = entry.content_hash();
+            let actual_key =
+                std::str::from_utf8(entry.key()).context("DKG board key is not UTF-8")?;
+            let expected_key = slot.key(hash);
+            ensure!(
+                actual_key == expected_key,
+                "DKG board artifact key {actual_key} does not match expected {expected_key}"
+            );
+            ensure!(
+                (1..=MAX_ARTIFACT_BYTES).contains(&entry.content_len()),
+                "DKG board artifact length {} is outside 1..={MAX_ARTIFACT_BYTES}",
+                entry.content_len()
+            );
+            if hash == expected_hash {
                 ensure!(
-                    entry.key() == key.as_bytes(),
-                    "DKG board artifact key does not match its hash"
-                );
-                ensure!(
-                    entry.content_len() == u64::try_from(value.len())?,
-                    "DKG board artifact length does not match its entry"
+                    entry.content_len() == expected_len,
+                    "DKG board artifact length {} does not match expected {expected_len}",
+                    entry.content_len()
                 );
             }
-            hashes.push(entry.content_hash());
+            hashes.push(hash);
         }
         SlotValues::from_values(hashes).publish(&expected_hash)?;
 

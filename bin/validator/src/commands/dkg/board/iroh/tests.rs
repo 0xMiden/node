@@ -673,7 +673,7 @@ async fn invalid_download_metadata_is_rejected() -> anyhow::Result<()> {
 
     host.publish_hash_for_test(&slot, hash, 1).await?;
     let error = host.publish(&slot, value).await.unwrap_err();
-    assert_eq!(error.to_string(), "DKG board artifact length does not match its entry");
+    assert_eq!(error.to_string(), "DKG board artifact length 1 does not match expected 8");
     let error = host.read_unique(&slot).await.unwrap_err();
     assert!(error.to_string().contains("length does not match"));
 
@@ -687,17 +687,25 @@ async fn repeat_upload_rejects_a_mismatched_entry_key() -> anyhow::Result<()> {
     let (host, _) = BoardNode::create_for_test(&root.path().join("host")).await?;
     let slot = ArtifactSlot::Manifest;
     let value = b"manifest";
+    let actual_key = slot.key(Hash::new(b"other"));
+    let entry_hash = Hash::new(b"unrelated");
     host.document
         .set_hash(
             host.local_writer_for_test().author,
-            slot.key(Hash::new(b"other")),
-            Hash::new(value),
+            actual_key.clone(),
+            entry_hash,
             u64::try_from(value.len())?,
         )
         .await?;
 
     let error = host.publish(&slot, value).await.unwrap_err();
-    assert_eq!(error.to_string(), "DKG board artifact key does not match its hash");
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "DKG board artifact key {actual_key} does not match expected {}",
+            slot.key(entry_hash)
+        )
+    );
 
     host.shutdown().await?;
     Ok(())
