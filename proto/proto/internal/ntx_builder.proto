@@ -16,6 +16,8 @@ service NetworkTransactionBuilderService {
     // processed (consumed by a transaction in the mempool), or discarded after too
     // many failed attempts.
     //
+    // The response also lists the FEE_SPONSORSHIP notes that pay the fee for the note.
+    //
     // Returns `NOT_FOUND` if the note ID is not tracked by the network transaction builder.
     rpc GetNetworkNoteStatus(GetNetworkNoteStatusRequest) returns (GetNetworkNoteStatusResponse) {}
 }
@@ -33,4 +35,6 @@ message GetNetworkNoteStatusResponse {
     uint32 attempt_count = 3;
     // Block number of the last failed attempt, if any.
     optional fixed32 last_attempt_block_num = 4;
+    // FEE_SPONSORSHIP notes bound to this note.
+    repeated miden.node.v1.NetworkNoteSponsorship sponsorships = 5;
 }

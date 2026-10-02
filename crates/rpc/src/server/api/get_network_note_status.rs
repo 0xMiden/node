@@ -81,6 +81,7 @@ impl proto::server::miden_node_v1_node_service::GetNetworkNoteStatus for RpcServ
                     last_error: response.last_error,
                     attempt_count: response.attempt_count,
                     last_attempt_block_num: response.last_attempt_block_num,
+                    sponsorships: response.sponsorships,
                 }
             },
             RpcBackend::FullNode { source_rpc, .. } => source_rpc
