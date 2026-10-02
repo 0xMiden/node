@@ -161,14 +161,32 @@ pub(crate) use select_account_header_with_storage_header_at_block::select_accoun
 mod select_vault_at_block;
 pub(crate) use select_vault_at_block::select_vault_at_block;
 
+mod account_row;
+
+mod select_account;
+pub(crate) use select_account::select_account;
+
+mod select_account_code_by_commitment;
+pub(crate) use select_account_code_by_commitment::select_account_code_by_commitment;
+
+mod select_account_storage_map_values_paged;
 #[cfg(test)]
-mod select_full_account;
-#[cfg(test)]
-pub(crate) use select_full_account::select_full_account;
+pub(crate) use select_account_storage_map_values_paged::StorageMapValue;
+pub use select_account_storage_map_values_paged::StorageMapValuesPage;
+pub(crate) use select_account_storage_map_values_paged::select_account_storage_map_values_paged;
+
+mod select_account_vault_assets;
+pub(crate) use select_account_vault_assets::select_account_vault_assets;
 
 #[cfg(test)]
-mod select_latest_storage;
+mod select_all_accounts;
 #[cfg(test)]
+pub(crate) use select_all_accounts::select_all_accounts;
+
+mod select_full_account;
+pub(crate) use select_full_account::select_full_account;
+
+mod select_latest_storage;
 pub(crate) use select_latest_storage::select_latest_storage;
 
 // BLOCK APPLICATION

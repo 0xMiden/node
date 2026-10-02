@@ -7,7 +7,7 @@ use diesel::{Connection, ExpressionMethods, RunQueryDsl, SqliteConnection};
 use miden_node_db::migration::{SchemaHash, SchemaHashes};
 
 use super::*;
-use crate::db::models::queries::VALID_FOREVER;
+use crate::db::queries::VALID_FOREVER;
 use crate::db::schema;
 
 const EXPECTED_SCHEMA_HASHES: [SchemaHash; 7] = [
