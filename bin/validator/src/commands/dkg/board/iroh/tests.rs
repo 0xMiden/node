@@ -846,7 +846,7 @@ async fn disconnected_blob_provider_fails_over() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn stalled_blob_provider_fails_over() -> anyhow::Result<()> {
+async fn stalled_blob_provider_reports_timeout_and_fails_over() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     let (host, tickets) = BoardNode::create_for_test(&root.path().join("host")).await?;
     let endpoint = Endpoint::builder(presets::Minimal).bind().await?;
@@ -861,13 +861,28 @@ async fn stalled_blob_provider_fails_over() -> anyhow::Result<()> {
     let value = b"available from second provider";
     let hash = Hash::new(value);
     let _tag = second.blobs.blobs().add_slice(value).await?;
+    let slot = ArtifactSlot::Manifest;
+    let timeout = Duration::from_millis(200);
+
+    let error = host
+        .download_blob(hash, &slot, vec![stalled.endpoint().id()], timeout)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "timed out after 200 ms downloading DKG board blob {hash} for {} from provider {}",
+            slot.prefix(),
+            stalled.endpoint().id()
+        )
+    );
 
     assert!(
         host.download_blob(
             hash,
-            &ArtifactSlot::Manifest,
+            &slot,
             vec![stalled.endpoint().id(), second.router.endpoint().id()],
-            Duration::from_millis(200),
+            timeout,
         )
         .await?
     );

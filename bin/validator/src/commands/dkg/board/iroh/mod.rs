@@ -467,6 +467,7 @@ impl BoardNode {
         providers: Vec<EndpointId>,
         transfer_timeout: Duration,
     ) -> anyhow::Result<bool> {
+        let mut timed_out_provider = None;
         for provider in providers {
             let Ok(Ok(connection)) = tokio::time::timeout(
                 PROVIDER_CONNECT_TIMEOUT,
@@ -480,11 +481,19 @@ impl BoardNode {
                 tokio::time::timeout(transfer_timeout, self.fetch_blob(connection, hash, slot))
                     .await
             else {
+                timed_out_provider = Some(provider);
                 continue;
             };
             if fetched? {
                 return Ok(true);
             }
+        }
+        if let Some(provider) = timed_out_provider {
+            anyhow::bail!(
+                "timed out after {} ms downloading DKG board blob {hash} for {} from provider {provider}",
+                transfer_timeout.as_millis(),
+                slot.prefix()
+            );
         }
         Ok(false)
     }
