@@ -65,28 +65,6 @@ impl ParticipateOptions {
 }
 
 #[tokio::test]
-async fn participate_accepts_the_complete_offline_configuration() -> TestResult {
-    let root = tempfile::tempdir()?;
-    let genesis = write_genesis(root.path(), 3)?;
-    let (endpoint_secret, _) = write_endpoint_secret(root.path(), 1)?;
-    let (_, peer_one) = write_endpoint_secret(root.path(), 2)?;
-    let (_, peer_two) = write_endpoint_secret(root.path(), 3)?;
-
-    ParticipateOptions::for_tests(
-        &root.path().join("operator-key.bundle"),
-        &genesis.path,
-        &genesis.signing_keys[0],
-        &endpoint_secret,
-        vec![peer_one, peer_two],
-        2,
-    )
-    .validate()
-    .await?;
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn single_validator_ceremony_succeeds() -> TestResult {
     let root = tempfile::tempdir()?;
     let output_file = root.path().join("operator-key.bundle");

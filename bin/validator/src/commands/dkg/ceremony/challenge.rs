@@ -8,6 +8,9 @@ use rand_core_06::CryptoRngCore;
 
 use super::super::wire::WireCodec;
 
+#[cfg(test)]
+mod tests;
+
 /// Fresh random bytes used to request proof of a peer's validator signing key on one connection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Challenge([u8; 32]);

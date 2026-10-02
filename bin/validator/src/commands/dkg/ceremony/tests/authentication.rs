@@ -2,11 +2,12 @@ use std::net::Ipv4Addr;
 use std::time::Duration;
 
 use anyhow::Context;
+use iroh::endpoint::Side;
 use iroh_relay::server::{RelayConfig, Server, ServerConfig};
 use tokio::task::JoinSet;
 
 use super::*;
-use crate::commands::dkg::ceremony::challenge::ChallengeResponse;
+use crate::commands::dkg::ceremony::challenge::{Challenge, ChallengeResponse};
 use crate::commands::dkg::ceremony::peer::ConnectedPeer;
 
 #[tokio::test]
@@ -130,6 +131,14 @@ async fn authentication_waits_for_a_late_peer(#[case] local_is_dialer: bool) -> 
     .await??;
     assert_eq!(local_peers.authenticated_peers.len(), 1);
     assert_eq!(remote_peers.authenticated_peers.len(), 1);
+    assert_eq!(
+        local_peers.authenticated_peers[0].connection().side(),
+        if local_is_dialer { Side::Client } else { Side::Server },
+    );
+    assert_eq!(
+        remote_peers.authenticated_peers[0].connection().side(),
+        if local_is_dialer { Side::Server } else { Side::Client },
+    );
     assert_eq!(
         local_peers.authenticated_peers[0].validator_public_key(),
         &remote_signing_key.public_key(),
