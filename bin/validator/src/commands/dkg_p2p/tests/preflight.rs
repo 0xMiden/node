@@ -147,17 +147,20 @@ async fn ceremony_refuses_to_overwrite_bundle() -> TestResult {
     Ok(())
 }
 
+#[rstest::rstest]
+#[case::dialer(true)]
+#[case::acceptor(false)]
 #[tokio::test]
-async fn ceremony_times_out_waiting_for_a_peer() -> TestResult {
+async fn ceremony_times_out_waiting_for_a_peer(#[case] local_is_dialer: bool) -> TestResult {
     let root = tempfile::tempdir()?;
     let output_file = root.path().join("operator-key.bundle");
     let genesis = write_genesis(root.path(), 2)?;
     let (secret_a, endpoint_a) = write_endpoint_secret(root.path(), 1)?;
     let (secret_b, endpoint_b) = write_endpoint_secret(root.path(), 2)?;
-    // Select the endpoint that accepts connections and leave its peer offline.
+    // Leave the peer offline for each connection direction.
     //
-    // This exercises the ceremony timeout while the accept loop waits for a peer.
-    let (endpoint_secret, peer) = if endpoint_a > endpoint_b {
+    // The ceremony timeout must stop both dialing and accepting connections.
+    let (endpoint_secret, peer) = if (endpoint_a < endpoint_b) == local_is_dialer {
         (secret_a, endpoint_b)
     } else {
         (secret_b, endpoint_a)

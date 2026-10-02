@@ -1,12 +1,14 @@
 use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, ensure};
 use futures::future::try_join_all;
 use golden_core::{ParticipantIndex, ParticipantRegistry};
 use iroh::endpoint::presets;
 use iroh::{Endpoint, EndpointId, SecretKey as IrohSecretKey};
+use miden_node_tracing::info;
 use miden_node_utils::genesis::read_genesis_block;
 use miden_protocol::Word;
 use miden_protocol::block::ValidatorConfig;
@@ -14,6 +16,7 @@ use miden_protocol::utils::serde::Serializable;
 use miden_validator::{StorageKeyEpoch, ValidatorSigner};
 use rand_core_06::OsRng;
 use tokio::task::JoinSet;
+use tokio::time::MissedTickBehavior;
 use zeroize::Zeroizing;
 
 use self::ceremony_config::CeremonyConfig;
@@ -116,26 +119,46 @@ impl Ceremony {
             .copied()
             .filter(|peer| *peer < local_endpoint)
             .collect::<BTreeSet<_>>();
-        while !expected_incoming.is_empty() {
-            let connected_peer = ConnectedPeer::accept(endpoint).await?;
-            let peer_endpoint = connected_peer.endpoint_id();
-            if !self.peer_endpoints.contains(&peer_endpoint) {
-                connected_peer.close(b"endpoint is not a configured DKG peer");
-                continue;
-            }
-            ensure!(
-                expected_incoming.remove(&peer_endpoint),
-                "unexpected connection from peer endpoint {peer_endpoint}",
-            );
-            let validator_set = Arc::clone(&self.validator_set);
-            let signer = Arc::clone(&self.signer);
-            authentications
-                .spawn(async move { connected_peer.authenticate(&validator_set, &signer).await });
-        }
-
         let mut authenticated_peers = Vec::with_capacity(self.peer_endpoints.len());
-        while let Some(result) = authentications.join_next().await {
-            authenticated_peers.push(result.context("peer authentication task failed")??);
+        let mut progress = tokio::time::interval(Duration::from_secs(10));
+        progress.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        // Retain the accept future across progress logs and authentication results.
+        //
+        // Dropping this future can cancel an incoming connection during establishment.
+        let incoming = ConnectedPeer::accept(endpoint);
+        tokio::pin!(incoming);
+        while !expected_incoming.is_empty() || !authentications.is_empty() {
+            tokio::select! {
+                result = &mut incoming, if !expected_incoming.is_empty() => {
+                    let connected_peer = result?;
+                    incoming.set(ConnectedPeer::accept(endpoint));
+                    let peer_endpoint = connected_peer.endpoint_id();
+                    if !self.peer_endpoints.contains(&peer_endpoint) {
+                        connected_peer.close(b"endpoint is not a configured DKG peer");
+                        continue;
+                    }
+                    ensure!(
+                        expected_incoming.remove(&peer_endpoint),
+                        "unexpected connection from peer endpoint {peer_endpoint}",
+                    );
+                    let validator_set = Arc::clone(&self.validator_set);
+                    let signer = Arc::clone(&self.signer);
+                    authentications.spawn(async move {
+                        connected_peer.authenticate(&validator_set, &signer).await
+                    });
+                },
+                Some(result) = authentications.join_next(), if !authentications.is_empty() => {
+                    authenticated_peers.push(result.context("peer authentication task failed")??);
+                },
+                _ = progress.tick() => {
+                    info!(
+                        target: miden_validator::LOG_TARGET,
+                        "Waiting for DKG peers to connect and authenticate",
+                        dkg.peers.authenticated = authenticated_peers.len() #[nonstandard],
+                        dkg.peers.expected = self.peer_endpoints.len() #[nonstandard]
+                    );
+                },
+            }
         }
 
         let mut authenticated_validator_keys = authenticated_peers

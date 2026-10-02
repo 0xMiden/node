@@ -5,6 +5,110 @@ use tokio::task::JoinSet;
 use super::*;
 use crate::commands::dkg_p2p::ceremony::peer::ConnectedPeer;
 
+#[rstest::rstest]
+#[case::dialer(true)]
+#[case::acceptor(false)]
+#[tokio::test]
+async fn authentication_waits_for_a_late_peer(#[case] local_is_dialer: bool) -> TestResult {
+    let mut secrets = [IrohSecretKey::generate(), IrohSecretKey::generate()];
+    secrets.sort_by_key(IrohSecretKey::public);
+    if !local_is_dialer {
+        secrets.reverse();
+    }
+    let [local_secret, remote_secret] = secrets;
+    let (endpoint, lookup) = bind_test_endpoint(local_secret.clone()).await?;
+    let local_signing_key = SigningKey::new();
+    let remote_signing_key = SigningKey::new();
+    let validator_keys = vec![local_signing_key.public_key(), remote_signing_key.public_key()];
+    let ceremony = test_ceremony(
+        &local_signing_key,
+        validator_keys.clone(),
+        local_secret,
+        BTreeSet::from([remote_secret.public()]),
+    );
+
+    // Start without the peer or its address lookup entry.
+    //
+    // A dial attempt cannot resolve an address until the peer starts.
+    let authentication = ceremony.authenticate_peers(&endpoint);
+    tokio::pin!(authentication);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut authentication)
+            .await
+            .is_err(),
+        "authentication must wait while the peer is offline",
+    );
+
+    let (remote, remote_lookup) = bind_test_endpoint(remote_secret.clone()).await?;
+    lookup.add_endpoint_info(remote.addr());
+    remote_lookup.add_endpoint_info(endpoint.addr());
+    let remote_ceremony = test_ceremony(
+        &remote_signing_key,
+        validator_keys,
+        remote_secret,
+        BTreeSet::from([endpoint.id()]),
+    );
+    let (local_peers, remote_peers) = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::try_join!(authentication, remote_ceremony.authenticate_peers(&remote))
+    })
+    .await??;
+    assert_eq!(local_peers.authenticated_peers.len(), 1);
+    assert_eq!(remote_peers.authenticated_peers.len(), 1);
+    assert_eq!(
+        local_peers.authenticated_peers[0].validator_public_key(),
+        &remote_signing_key.public_key(),
+    );
+    assert_eq!(
+        remote_peers.authenticated_peers[0].validator_public_key(),
+        &local_signing_key.public_key(),
+    );
+
+    endpoint.close().await;
+    remote.close().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn authentication_failure_aborts_while_another_peer_is_offline() -> TestResult {
+    let mut secrets =
+        [IrohSecretKey::generate(), IrohSecretKey::generate(), IrohSecretKey::generate()];
+    secrets.sort_by_key(IrohSecretKey::public);
+    let [missing_secret, remote_secret, local_secret] = secrets;
+    let (endpoint, lookup) = bind_test_endpoint(local_secret.clone()).await?;
+    let (remote, remote_lookup) = bind_test_endpoint(remote_secret).await?;
+    lookup.add_endpoint_info(remote.addr());
+    remote_lookup.add_endpoint_info(endpoint.addr());
+    let local_signing_key = SigningKey::new();
+    let ceremony = test_ceremony(
+        &local_signing_key,
+        vec![
+            local_signing_key.public_key(),
+            SigningKey::new().public_key(),
+            SigningKey::new().public_key(),
+        ],
+        local_secret,
+        BTreeSet::from([remote.id(), missing_secret.public()]),
+    );
+    let untrusted_signer = ValidatorSigner::new_local(SigningKey::new());
+    let (result, _remote_peer) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(ceremony.authenticate_peers(&endpoint), async {
+            ConnectedPeer::connect(&remote, endpoint.id())
+                .await?
+                .authenticate(&ceremony.validator_set, &untrusted_signer)
+                .await
+        })
+    })
+    .await?;
+    let error = result
+        .err()
+        .expect("authentication failure must abort without the missing peer");
+    assert!(format!("{error:#}").contains("peer validator key is not committed by genesis"));
+
+    endpoint.close().await;
+    remote.close().await;
+    Ok(())
+}
+
 #[tokio::test]
 async fn authentication_rejects_two_endpoints_using_the_same_validator_key() -> TestResult {
     let secret = IrohSecretKey::generate();

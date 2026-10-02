@@ -1,6 +1,10 @@
+use std::time::Duration;
+
 use anyhow::{Context, ensure};
 use iroh::endpoint::{Connection, Side};
 use iroh::{Endpoint, EndpointId};
+use miden_node_tracing::warn;
+use miden_node_utils::retry::{self, Retryable};
 use miden_protocol::block::ValidatorConfig;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_validator::ValidatorSigner;
@@ -20,9 +24,24 @@ pub struct ConnectedPeer {
 }
 
 impl ConnectedPeer {
+    /// Retries connection attempts with backoff until the peer connects or the endpoint closes.
+    /// The caller must apply the ceremony timeout.
+    ///
+    /// Peers can start at different times. Authentication runs after this method returns and
+    /// must not be retried.
     pub async fn connect(endpoint: &Endpoint, peer_endpoint: EndpointId) -> anyhow::Result<Self> {
-        let connection = endpoint
-            .connect(peer_endpoint, Ceremony::ALPN)
+        let connection = (|| endpoint.connect(peer_endpoint, Ceremony::ALPN))
+            .retry(retry::exponential(Duration::from_secs(1), Duration::from_secs(10)))
+            .when(|_| !endpoint.is_closed())
+            .notify(|error, delay| {
+                warn!(
+                    error,
+                    target: miden_validator::LOG_TARGET,
+                    "Retrying DKG peer connection",
+                    dkg.peer.endpoint = peer_endpoint.to_string() #[nonstandard],
+                    retry.delay_ms = delay.as_millis() as u64
+                );
+            })
             .await
             .with_context(|| format!("failed to connect to peer endpoint {peer_endpoint}"))?;
         Ok(Self { connection })
