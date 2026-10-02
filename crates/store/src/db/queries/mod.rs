@@ -105,6 +105,18 @@ pub(crate) use insert_notes::insert_notes;
 mod insert_nullifiers_for_block;
 pub(crate) use insert_nullifiers_for_block::insert_nullifiers_for_block;
 
+#[cfg(test)]
+mod select_all_nullifiers;
+#[cfg(test)]
+pub(crate) use select_all_nullifiers::select_all_nullifiers;
+
+mod select_nullifiers_by_prefix;
+pub(crate) use select_nullifiers_by_prefix::select_nullifiers_by_prefix;
+
+mod select_nullifiers_paged;
+pub use select_nullifiers_paged::NullifiersPage;
+pub(crate) use select_nullifiers_paged::select_nullifiers_paged;
+
 // TRANSACTION QUERIES
 // =================================================================================================
 
