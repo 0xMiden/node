@@ -1,0 +1,11 @@
+services:
+  dkg-relay:
+    image: ${MIDEN_IROH_RELAY_IMAGE:-n0computer/iroh-relay:v1.3.0}
+    pull_policy: missing
+    command: ["--dev"]
+    networks:
+      - dkg
+
+networks:
+  dkg:
+    internal: true

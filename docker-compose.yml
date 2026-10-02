@@ -13,7 +13,7 @@
 # - MIDEN_NODE_IMAGE, MIDEN_VALIDATOR_IMAGE, MIDEN_NTX_BUILDER_IMAGE,
 #   MIDEN_REMOTE_PROVER_IMAGE, MIDEN_NETWORK_MONITOR_IMAGE,
 #   MIDEN_FUNDING_SERVICE_IMAGE, MIDEN_NOTE_TRANSPORT_IMAGE,
-#   and MIDEN_USDCX_GENESIS_IMAGE:
+#   MIDEN_USDCX_GENESIS_IMAGE, and MIDEN_IROH_RELAY_IMAGE:
 #   container images used by the local network. The core images default to the
 #   unqualified names built by the Makefile. External images default
 #   to their pinned versions in the corresponding Compose files.
@@ -25,6 +25,7 @@
 # `docker compose` commands and profiles do not require additional `-f` flags.
 include:
   - compose/bootstrap.yml
+  - compose/dkg-relay.yml
   - compose/validator.yml
   - compose/node.yml
   - compose/ntx-builder.yml

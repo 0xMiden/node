@@ -61,6 +61,8 @@ services:
   bootstrap-validator:
     image: ${MIDEN_VALIDATOR_IMAGE:-miden-validator}
     pull_policy: missing
+    networks:
+      - dkg
     configs:
       - source: validator-1-storage-key-bundle
         target: /fixtures/storage-key/validator-1.bundle
@@ -79,6 +81,8 @@ services:
     depends_on:
       bootstrap-usdcx:
         condition: service_completed_successfully
+      dkg-relay:
+        condition: service_started
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -91,6 +95,20 @@ services:
         fi
 
         mkdir /data/genesis /data/validators /data/accounts
+
+        echo "Generating persistent validator endpoint identities..."
+        ENDPOINTS=/data/validators/endpoints
+        mkdir "$${ENDPOINTS}"
+        for VALIDATOR in 1 2 3; do
+          ENDPOINT_OUTPUT="$$(miden-validator dkg-p2p generate-endpoint \
+            --output-file "$${ENDPOINTS}/$${VALIDATOR}.secret")"
+          ENDPOINT_ID="$$(printf '%s\n' "$${ENDPOINT_OUTPUT}" | sed -n 's/^Iroh endpoint ID: //p')"
+          if [ -z "$${ENDPOINT_ID}" ]; then
+            echo "Validator $${VALIDATOR} did not report its endpoint ID." >&2
+            exit 1
+          fi
+          printf '%s\n' "$${ENDPOINT_ID}" > "$${ENDPOINTS}/$${VALIDATOR}.id"
+        done
 
         echo "Building genesis block..."
         # The validator set consists of the public keys derived from the three
@@ -143,9 +161,13 @@ services:
               --expected-participant "$${VALIDATOR}"
           done
         else
-          echo "Running the storage key DKG ceremony..."
-          DKG=/data/storage-key-dkg
-          mkdir -p "$${DKG}/identity" "$${DKG}/dealings" "$${DKG}/acceptances"
+          echo "Running the peer-to-peer storage key DKG ceremony..."
+          DKG_PIDS=
+          trap '
+            kill $${DKG_PIDS} 2>/dev/null || true
+            wait || true
+          ' EXIT
+          trap 'exit 1' INT TERM
 
           for VALIDATOR in 1 2 3; do
             case "$${VALIDATOR}" in
@@ -153,84 +175,30 @@ services:
               2) SIGNING_KEY="$${MIDEN_VALIDATOR_2_SIGNING_KEY}" ;;
               3) SIGNING_KEY="$${MIDEN_VALIDATOR_3_SIGNING_KEY}" ;;
             esac
-            miden-validator dkg identity \
+            set --
+            for PEER in 1 2 3; do
+              if [ "$${PEER}" != "$${VALIDATOR}" ]; then
+                set -- "$$@" --peer.endpoint "$$(cat "$${ENDPOINTS}/$${PEER}.id")"
+              fi
+            done
+            miden-validator dkg-p2p participate \
               --genesis /data/genesis/genesis.dat \
+              --threshold 2 \
               --epoch "$${MIDEN_VALIDATOR_STORAGE_KEY_EPOCH}" \
               --signing-key.hex "$${SIGNING_KEY}" \
-              --output-directory "$${DKG}/identity/$${VALIDATOR}"
+              --endpoint-secret "$${ENDPOINTS}/$${VALIDATOR}.secret" \
+              --relay.url http://dkg-relay:3340 \
+              --timeout 5m \
+              --output-file "/data/validators/$${VALIDATOR}/storage-key.bundle" \
+              "$$@" &
+            DKG_PIDS="$${DKG_PIDS} $$!"
           done
 
-          miden-validator dkg prepare \
-            --genesis /data/genesis/genesis.dat \
-            --threshold 2 \
-            --epoch "$${MIDEN_VALIDATOR_STORAGE_KEY_EPOCH}" \
-            --registration "$${DKG}/identity/1/registration.toml" \
-            --registration "$${DKG}/identity/2/registration.toml" \
-            --registration "$${DKG}/identity/3/registration.toml" \
-            --output-directory "$${DKG}/ceremony"
-
-          for VALIDATOR in 1 2 3; do
-            miden-validator dkg deal \
-              --genesis /data/genesis/genesis.dat \
-              --ceremony-directory "$${DKG}/ceremony" \
-              --identity-secret "$${DKG}/identity/$${VALIDATOR}/identity-secret.wire" \
-              --output-directory "$${DKG}/dealings/$${VALIDATOR}"
+          # Require every participant to confirm completion before starting the network.
+          for DKG_PID in $${DKG_PIDS}; do
+            wait "$${DKG_PID}"
           done
-
-          for VALIDATOR in 1 2 3; do
-            case "$${VALIDATOR}" in
-              1) SIGNING_KEY="$${MIDEN_VALIDATOR_1_SIGNING_KEY}" ;;
-              2) SIGNING_KEY="$${MIDEN_VALIDATOR_2_SIGNING_KEY}" ;;
-              3) SIGNING_KEY="$${MIDEN_VALIDATOR_3_SIGNING_KEY}" ;;
-            esac
-            miden-validator dkg accept \
-              --genesis /data/genesis/genesis.dat \
-              --ceremony-directory "$${DKG}/ceremony" \
-              --signing-key.hex "$${SIGNING_KEY}" \
-              --decryption-dealing "$${DKG}/dealings/1/decryption-dealing.wire" \
-              --decryption-dealing "$${DKG}/dealings/2/decryption-dealing.wire" \
-              --decryption-dealing "$${DKG}/dealings/3/decryption-dealing.wire" \
-              --context-dealing "$${DKG}/dealings/1/context-dealing.wire" \
-              --context-dealing "$${DKG}/dealings/2/context-dealing.wire" \
-              --context-dealing "$${DKG}/dealings/3/context-dealing.wire" \
-              --output-directory "$${DKG}/acceptances/$${VALIDATOR}"
-          done
-
-          for VALIDATOR in 1 2 3; do
-            case "$${VALIDATOR}" in
-              1) SIGNING_KEY="$${MIDEN_VALIDATOR_1_SIGNING_KEY}" ;;
-              2) SIGNING_KEY="$${MIDEN_VALIDATOR_2_SIGNING_KEY}" ;;
-              3) SIGNING_KEY="$${MIDEN_VALIDATOR_3_SIGNING_KEY}" ;;
-            esac
-            STORAGE_KEY="/data/validators/$${VALIDATOR}/storage-key"
-            miden-validator dkg finalize \
-              --genesis /data/genesis/genesis.dat \
-              --ceremony-directory "$${DKG}/ceremony" \
-              --identity-secret "$${DKG}/identity/$${VALIDATOR}/identity-secret.wire" \
-              --private-state "$${DKG}/dealings/$${VALIDATOR}/private-state.wire" \
-              --decryption-dealing "$${DKG}/dealings/1/decryption-dealing.wire" \
-              --decryption-dealing "$${DKG}/dealings/2/decryption-dealing.wire" \
-              --decryption-dealing "$${DKG}/dealings/3/decryption-dealing.wire" \
-              --context-dealing "$${DKG}/dealings/1/context-dealing.wire" \
-              --context-dealing "$${DKG}/dealings/2/context-dealing.wire" \
-              --context-dealing "$${DKG}/dealings/3/context-dealing.wire" \
-              --transcript "$${DKG}/acceptances/1/transcript.toml" \
-              --transcript-acceptance "$${DKG}/acceptances/1/transcript-acceptance.toml" \
-              --transcript-acceptance "$${DKG}/acceptances/2/transcript-acceptance.toml" \
-              --transcript-acceptance "$${DKG}/acceptances/3/transcript-acceptance.toml" \
-              --output-directory "$${STORAGE_KEY}"
-
-            VALIDATOR_PUBLIC_KEY=$$(miden-validator pubkey --signing-key.hex "$${SIGNING_KEY}")
-            miden-validator dkg validate \
-              --genesis /data/genesis/genesis.dat \
-              --ceremony-directory "$${DKG}/ceremony" \
-              --validator-public-key "$${VALIDATOR_PUBLIC_KEY}" \
-              --bundle-directory "$${STORAGE_KEY}"
-            cp "$${STORAGE_KEY}/storage-key.bundle" "/data/validators/$${VALIDATOR}/storage-key.bundle"
-            chmod 600 "/data/validators/$${VALIDATOR}/storage-key.bundle"
-          done
-
-          rm -rf "$${DKG}"
+          trap - EXIT INT TERM
         fi
 
         touch /data/validators/.bootstrapped
