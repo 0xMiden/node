@@ -39,7 +39,6 @@ use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::TransactionHeader;
 
 use crate::db::migrations::{migrate_database, verify_latest_schema};
-use crate::db::models::queries as diesel_queries;
 pub use crate::db::queries::{
     AccountCommitmentsPage,
     HISTORICAL_BLOCK_RETENTION,
@@ -75,8 +74,6 @@ mod test_db;
 pub(crate) use test_db::TestDb;
 
 /// Query functions on the `miden-node-db` SQLite framework.
-///
-/// All writes run here; reads are migrated from [`models`] incrementally.
 pub(crate) mod queries;
 
 mod utils;
@@ -110,9 +107,8 @@ impl Default for DatabaseOptions {
 ///
 /// Extends the underlying [`miden_node_db::Db`] type with functionality specific to the Store.
 ///
-/// The store is mid-migration to the `miden-node-db` SQLite framework: every write serializes on
-/// the single framework writer connection, while most reads still run on the diesel pool. Reads
-/// move to the framework reader pool one batch at a time until the diesel pool is removed.
+/// Every write serializes on the single framework writer connection. Every read runs on the
+/// framework reader pool.
 pub struct Db {
     diesel: miden_node_db::Db,
     writer: DbWriter,
@@ -654,10 +650,11 @@ impl Db {
         note_ids: Vec<NoteId>,
         up_to_block: ScopedBlockNum,
     ) -> Result<HashSet<NoteId>> {
-        self.transact("existing note IDs", move |conn| {
-            diesel_queries::select_existing_note_ids(conn, note_ids.as_slice(), *up_to_block)
-        })
-        .await
+        self.reader
+            .read("existing note IDs", move |tx| {
+                queries::select_existing_note_ids(tx, note_ids.as_slice(), *up_to_block)
+            })
+            .await
     }
 
     /// Loads inclusion proofs for notes matching the given note commitments that were committed at
@@ -672,10 +669,11 @@ impl Db {
         note_commitments: BTreeSet<Word>,
         up_to_block: ScopedBlockNum,
     ) -> Result<BTreeMap<NoteId, NoteInclusionProof>> {
-        self.transact("block note inclusion proofs by commitment", move |conn| {
-            diesel_queries::select_note_inclusion_proofs(conn, &note_commitments, *up_to_block)
-        })
-        .await
+        self.reader
+            .read("block note inclusion proofs by commitment", move |tx| {
+                queries::select_note_inclusion_proofs(tx, &note_commitments, *up_to_block)
+            })
+            .await
     }
 
     /// Inserts the data of a new block into the DB.
@@ -748,8 +746,9 @@ impl Db {
             let chunk = chunk.to_vec();
             let count = chunk.len();
             let result = self
-                .transact("resolve consumed note ids", move |conn| {
-                    diesel_queries::select_note_ids_by_nullifier(conn, &chunk)
+                .reader
+                .read("resolve consumed note ids", move |tx| {
+                    queries::select_note_ids_by_nullifier(tx, &chunk)
                 })
                 .await;
 
@@ -941,9 +940,10 @@ impl Db {
         block_range: ScopedBlockRange,
     ) -> Result<(BlockNumber, Vec<TransactionRecord>)> {
         let block_range = block_range.into_inner();
-        self.transact("full transactions records", move |conn| {
-            diesel_queries::select_transactions_records(conn, &account_ids, block_range)
-        })
-        .await
+        self.reader
+            .read("full transactions records", move |tx| {
+                queries::select_transactions_records(tx, &account_ids, block_range)
+            })
+            .await
     }
 }

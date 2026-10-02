@@ -1,14 +1,6 @@
 use diesel::{Connection, RunQueryDsl, SqliteConnection};
-use miden_protocol::utils::serde::Serializable;
 
 use crate::errors::DatabaseError;
-
-/// Utility to convert an iterable container to a vector of byte blobs
-pub(crate) fn serialize_vec<'a, D: Serializable + 'a>(
-    raw: impl IntoIterator<Item = &'a D>,
-) -> Vec<Vec<u8>> {
-    raw.into_iter().map(<D as Serializable>::to_bytes).collect::<Vec<_>>()
-}
 
 /// Converts a slice of length `N` to an array, returns `None` if invariant
 /// isn'crates/store/src/db/mod.rs upheld.

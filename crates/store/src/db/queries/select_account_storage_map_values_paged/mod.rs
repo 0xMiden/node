@@ -20,7 +20,7 @@ pub struct StorageMapValue {
     pub value: Word,
 }
 
-/// Page of storage map values returned by [`select_account_storage_map_values_paged`].
+/// Page of storage map values returned by `select_account_storage_map_values_paged`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorageMapValuesPage {
     /// Highest block number included in `rows`. If the page is empty, this will be `block_from`.
