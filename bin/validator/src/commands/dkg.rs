@@ -4,6 +4,7 @@
 //! consistency without a coordinator, and completion follows local bundle persistence.
 
 use std::io::Write;
+use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -11,7 +12,7 @@ use std::time::Duration;
 use anyhow::{Context, ensure};
 use fs_err::PathExt;
 use golden_core::ParticipantIndex;
-use iroh::{EndpointId, RelayUrl, SecretKey as IrohSecretKey};
+use iroh::{EndpointAddr, EndpointId, SecretKey as IrohSecretKey};
 use miden_node_tracing::info;
 use zeroize::Zeroizing;
 
@@ -42,7 +43,7 @@ enum DkgCommand {
     },
 
     /// Runs a live peer-to-peer DKG ceremony and writes this validator's storage-key bundle.
-    Participate(ParticipateOptions),
+    Participate(Box<ParticipateOptions>),
 
     /// Checks a local-development fixture against its expected participant index.
     ///
@@ -76,19 +77,22 @@ struct ParticipateOptions {
     #[arg(long, value_name = "FILE")]
     endpoint_secret: PathBuf,
 
-    /// HTTP(S) URL of the Iroh relay shared by all ceremony participants.
+    /// Enables n0's public Iroh relays and address discovery.
     ///
-    /// The ceremony uses no public endpoint discovery or default relays. Direct connections
-    /// remain available, but the relay is sufficient when a direct connection is not possible.
-    #[arg(long = "relay.url", value_name = "URL")]
-    relay_url: RelayUrl,
+    /// Without this flag, peers connect directly using the supplied socket addresses.
+    #[arg(long)]
+    enable_public_relay: bool,
+
+    /// Local UDP listening address. Defaults to randomly assigned ports on all interfaces.
+    #[arg(long, value_name = "IP:PORT")]
+    bind_address: Option<SocketAddr>,
 
     /// Peer-to-peer endpoint of another validator. Repeat once per other genesis validator.
     ///
-    /// These endpoints supply connection destinations, not trusted validator identities. Each
-    /// peer must prove ownership of a genesis validator key during authentication.
-    #[arg(long = "peer.endpoint", value_name = "ENDPOINT_ID")]
-    peer_endpoints: Vec<EndpointId>,
+    /// Append @IP:PORT for direct connections. A socket address is required unless public relays
+    /// are enabled. Each peer must prove ownership of a genesis validator key during authentication.
+    #[arg(long = "peer.endpoint", value_name = "ENDPOINT_ID[@IP:PORT]", value_parser = ParticipateOptions::parse_peer_endpoint)]
+    peer_endpoints: Vec<EndpointAddr>,
 
     /// Maximum duration of peer authentication and all subsequent ceremony steps.
     #[arg(long, value_name = "DURATION", default_value = "30m", value_parser = humantime::parse_duration)]
@@ -151,6 +155,25 @@ impl DkgOptions {
 }
 
 impl ParticipateOptions {
+    /// Parses a peer identity and its optional direct UDP address.
+    fn parse_peer_endpoint(value: &str) -> anyhow::Result<EndpointAddr> {
+        let (id, socket) = match value.split_once('@') {
+            Some((id, socket)) => (id, Some(socket)),
+            None => (value, None),
+        };
+        let id: EndpointId = id.parse().context("invalid peer endpoint ID")?;
+        let mut endpoint = EndpointAddr::new(id);
+        if let Some(socket) = socket {
+            let socket: SocketAddr = socket.parse().context("invalid peer socket address")?;
+            ensure!(
+                socket.port() != 0 && !socket.ip().is_unspecified() && !socket.ip().is_multicast(),
+                "peer socket address must have a unicast IP and a nonzero port",
+            );
+            endpoint = endpoint.with_ip_addr(socket);
+        }
+        Ok(endpoint)
+    }
+
     /// Runs one ceremony attempt and closes the endpoint on success, error, or timeout.
     ///
     /// Attempt state is not saved for resumption. A single validator follows the same steps with

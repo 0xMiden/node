@@ -61,8 +61,7 @@ services:
   bootstrap-validator:
     image: ${MIDEN_VALIDATOR_IMAGE:-miden-validator}
     pull_policy: missing
-    networks:
-      - dkg
+    network_mode: none
     configs:
       - source: validator-1-storage-key-bundle
         target: /fixtures/storage-key/validator-1.bundle
@@ -81,8 +80,6 @@ services:
     depends_on:
       bootstrap-usdcx:
         condition: service_completed_successfully
-      dkg-relay:
-        condition: service_started
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -184,7 +181,7 @@ services:
             set --
             for PEER in 1 2 3; do
               if [ "$${PEER}" != "$${VALIDATOR}" ]; then
-                set -- "$$@" --peer.endpoint "$$(cat "$${ENDPOINTS}/$${PEER}.id")"
+                set -- "$$@" --peer.endpoint "$$(cat "$${ENDPOINTS}/$${PEER}.id")@127.0.0.1:900$${PEER}"
               fi
             done
             miden-validator dkg participate \
@@ -193,7 +190,7 @@ services:
               --epoch "$${MIDEN_VALIDATOR_STORAGE_KEY_EPOCH}" \
               --signing-key.hex "$${SIGNING_KEY}" \
               --endpoint-secret "$${ENDPOINTS}/$${VALIDATOR}.secret" \
-              --relay.url http://dkg-relay:3340 \
+              --bind-address "127.0.0.1:900$${VALIDATOR}" \
               --timeout 5m \
               --output-file "/data/validators/$${VALIDATOR}/storage-key.bundle" \
               "$$@" &

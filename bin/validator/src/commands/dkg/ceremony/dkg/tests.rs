@@ -8,7 +8,7 @@ use golden_core::verify_dealing_for_receiver;
 use golden_ehtdh1::{Combiner, Ehtdh1Material, UnsealingShare};
 use golden_evrf::paper::secp_secq::SecpSecqBackend;
 use iroh::endpoint::presets;
-use iroh::{Endpoint, RelayMode, RelayUrl, SecretKey as IrohSecretKey};
+use iroh::{Endpoint, EndpointAddr, RelayMode, RelayUrl, SecretKey as IrohSecretKey};
 use iroh_relay::server::{RelayConfig, Server, ServerConfig};
 use itertools::Itertools;
 use miden_protocol::block::ValidatorConfig;
@@ -76,8 +76,12 @@ impl TestCeremony {
                 genesis_commitment: Rpo256::hash(b"test genesis"),
                 validator_set: Arc::clone(&validator_set),
                 endpoint_secret,
-                relay_url: relay_url.clone(),
-                peer_endpoints,
+                enable_public_relay: false,
+                bind_address: None,
+                peer_endpoints: peer_endpoints
+                    .into_iter()
+                    .map(|id| (id, EndpointAddr::new(id).with_relay_url(relay_url.clone())))
+                    .collect(),
                 threshold: NonZeroUsize::new(threshold).unwrap(),
                 epoch: StorageKeyEpoch::new([9; 32]),
                 signer: Arc::new(ValidatorSigner::new_local(signing_key)),

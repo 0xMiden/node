@@ -23,14 +23,17 @@ It supports local development keys and KMS-backed signing for deployments that n
 
 ## Peer-to-peer DKG
 
-`miden-validator dkg participate` requires `--relay.url <URL>`. All ceremony participants must use the same dedicated
-Iroh relay. Use an HTTPS URL for a deployment, or an HTTP URL such as `http://127.0.0.1:3340` for a local
-`iroh-relay --dev` process. The validator does not use public Iroh endpoint discovery or default relays.
+`miden-validator dkg participate` connects directly to peers by default, without public relays or address discovery.
+Supply each peer as `--peer.endpoint <ENDPOINT_ID>@<IP:PORT>` and choose the local UDP listening address with
+`--bind-address <IP:PORT>`. Loopback addresses allow a local ceremony without internet access.
 
-Each participant also supplies its persistent identity with `--endpoint-secret <FILE>` and the other participants with
-repeated `--peer.endpoint <ENDPOINT_ID>` arguments. The shared relay routes connections to those endpoint IDs. Peers
-must still authenticate with their genesis validator keys. Direct UDP connections remain available, but the ceremony can
-use the relay for all traffic. Validators only need outbound access to the relay for connectivity.
+Use `--enable-public-relay` on each participant to opt into n0's public Iroh relays and address discovery. Peer socket
+addresses then become optional: `--peer.endpoint <ENDPOINT_ID>` is sufficient. Direct connections remain available, with
+encrypted relay transport as a fallback. The public relays are intended for development and testing, not guaranteed
+production availability.
+
+Each participant supplies its persistent identity with `--endpoint-secret <FILE>`. Regardless of the connection route,
+peers must authenticate with their genesis validator keys.
 
 ## License
 

@@ -1,10 +1,9 @@
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, UdpSocket};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use iroh::{EndpointId, SecretKey as IrohSecretKey};
-use iroh_relay::server::{RelayConfig, Server, ServerConfig};
+use iroh::{EndpointAddr, EndpointId, SecretKey as IrohSecretKey};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::utils::serde::Serializable;
 
@@ -51,8 +50,12 @@ impl ParticipateOptions {
             output_file: output_file.to_path_buf(),
             genesis: genesis.to_path_buf(),
             endpoint_secret: endpoint_secret.to_path_buf(),
-            relay_url: "http://127.0.0.1:9".parse().unwrap(),
-            peer_endpoints,
+            enable_public_relay: false,
+            bind_address: Some("127.0.0.1:0".parse().unwrap()),
+            peer_endpoints: peer_endpoints
+                .into_iter()
+                .map(|id| EndpointAddr::new(id).with_ip_addr("127.0.0.1:9".parse().unwrap()))
+                .collect(),
             timeout: Duration::from_secs(30),
             threshold: NonZeroUsize::new(threshold).expect("test threshold must be nonzero"),
             epoch: "09".repeat(32),
@@ -96,17 +99,17 @@ async fn single_validator_ceremony_succeeds() -> TestResult {
 }
 
 #[tokio::test]
-async fn ceremony_succeeds_with_a_local_relay() -> TestResult {
+async fn ceremony_succeeds_without_public_infrastructure() -> TestResult {
     let root = tempfile::tempdir()?;
     let genesis = write_genesis(root.path(), 2)?;
     let (secret_a, endpoint_a) = write_endpoint_secret(root.path(), 1)?;
     let (secret_b, endpoint_b) = write_endpoint_secret(root.path(), 2)?;
     let output_a = root.path().join("a.bundle");
     let output_b = root.path().join("b.bundle");
-    let mut relay_config = ServerConfig::default();
-    relay_config.relay = Some(RelayConfig::new((Ipv4Addr::LOCALHOST, 0)));
-    let relay = Server::spawn(relay_config).await?;
-    let relay_url = format!("http://{}", relay.http_addr().unwrap());
+    let socket_a = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
+    let socket_b = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
+    let address_a = socket_a.local_addr()?;
+    let address_b = socket_b.local_addr()?;
     let mut options_a = ParticipateOptions::for_tests(
         &output_a,
         &genesis.path,
@@ -123,8 +126,13 @@ async fn ceremony_succeeds_with_a_local_relay() -> TestResult {
         vec![endpoint_a],
         2,
     );
-    options_a.relay_url = relay_url.parse()?;
-    options_b.relay_url = relay_url.parse()?;
+    options_a.bind_address = Some(address_a);
+    options_b.bind_address = Some(address_b);
+    options_a.peer_endpoints =
+        vec![ParticipateOptions::parse_peer_endpoint(&format!("{endpoint_b}@{address_b}"))?];
+    options_b.peer_endpoints =
+        vec![ParticipateOptions::parse_peer_endpoint(&format!("{endpoint_a}@{address_a}"))?];
+    drop((socket_a, socket_b));
 
     tokio::try_join!(options_a.handle(), options_b.handle())?;
 
@@ -133,17 +141,18 @@ async fn ceremony_succeeds_with_a_local_relay() -> TestResult {
     assert_eq!(key_a.setup_context(), key_b.setup_context());
     assert_eq!(key_a.public_key_set(), key_b.public_key_set());
     assert_ne!(key_a.participant(), key_b.participant());
-    relay.shutdown().await?;
     Ok(())
 }
 
 #[rstest::rstest]
-#[case::file("file:///tmp/relay")]
-#[case::ftp("ftp://127.0.0.1")]
+#[case::direct_only(false)]
+#[case::public_relay(true)]
 #[tokio::test]
-async fn participate_rejects_unsupported_relay_schemes(#[case] relay_url: &str) -> TestResult {
+async fn peer_socket_is_required_without_public_relay(
+    #[case] enable_public_relay: bool,
+) -> TestResult {
     let root = tempfile::tempdir()?;
-    let genesis = write_genesis(root.path(), 1)?;
+    let genesis = write_genesis(root.path(), 2)?;
     let (endpoint_secret, _) = write_endpoint_secret(root.path(), 1)?;
     let mut options = ParticipateOptions::for_tests(
         &root.path().join("operator-key.bundle"),
@@ -153,11 +162,47 @@ async fn participate_rejects_unsupported_relay_schemes(#[case] relay_url: &str) 
         Vec::new(),
         1,
     );
-    options.relay_url = relay_url.parse()?;
+    options.enable_public_relay = enable_public_relay;
+    options.peer_endpoints = vec![IrohSecretKey::generate().public().into()];
 
-    let error = options.validate().await.err().expect("unsupported relay scheme must fail");
-    assert_eq!(error.to_string(), "relay URL must use HTTP or HTTPS and include a host");
+    let result = options.validate().await;
+    if enable_public_relay {
+        result?;
+    } else {
+        let error = result.err().expect("ID-only peers require public discovery");
+        assert!(
+            error
+                .to_string()
+                .contains("requires a socket address unless --enable-public-relay is set")
+        );
+    }
     Ok(())
+}
+
+#[rstest::rstest]
+#[case::id_only("")]
+#[case::ipv4("@127.0.0.1:9000")]
+#[case::ipv6("@[::1]:9000")]
+fn peer_endpoint_parses_optional_socket(#[case] suffix: &str) -> TestResult {
+    let id = IrohSecretKey::generate().public();
+    let peer = ParticipateOptions::parse_peer_endpoint(&format!("{id}{suffix}"))?;
+    assert_eq!(peer.id, id);
+    let expected = suffix.strip_prefix('@').map(str::parse).transpose()?;
+    assert_eq!(
+        peer.ip_addrs().copied().collect::<Vec<_>>(),
+        expected.into_iter().collect::<Vec<_>>()
+    );
+    Ok(())
+}
+
+#[rstest::rstest]
+#[case::empty("")]
+#[case::zero_port("127.0.0.1:0")]
+#[case::unspecified("0.0.0.0:9000")]
+#[case::multicast("224.0.0.1:9000")]
+fn peer_endpoint_rejects_unusable_socket(#[case] socket: &str) {
+    let id = IrohSecretKey::generate().public();
+    assert!(ParticipateOptions::parse_peer_endpoint(&format!("{id}@{socket}")).is_err());
 }
 
 #[tokio::test]
@@ -270,18 +315,20 @@ async fn participate_rejects_an_invalid_peer_endpoint_set() -> TestResult {
         (vec![peer_one, local_endpoint], "peer endpoints contain the local endpoint"),
     ];
     for (peer_endpoints, expected) in cases {
-        let error = ParticipateOptions::for_tests(
+        let mut options = ParticipateOptions::for_tests(
             &root.path().join("operator-key.bundle"),
             &genesis.path,
             &genesis.signing_keys[0],
             &endpoint_secret,
             peer_endpoints,
             2,
-        )
-        .validate()
-        .await
-        .err()
-        .expect("validation should fail");
+        );
+        // Distinct socket addresses must not make duplicate endpoint identities acceptable.
+        for (index, peer) in options.peer_endpoints.iter_mut().enumerate() {
+            *peer = EndpointAddr::new(peer.id)
+                .with_ip_addr((Ipv4Addr::LOCALHOST, 9000 + index as u16).into());
+        }
+        let error = options.validate().await.err().expect("validation should fail");
         let error = format!("{error:#}");
         assert!(error.contains(expected), "expected {expected:?} in {error:?}");
     }

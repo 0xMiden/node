@@ -1,9 +1,8 @@
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, UdpSocket};
 use std::time::Duration;
 
 use anyhow::Context;
 use iroh::endpoint::Side;
-use iroh_relay::server::{RelayConfig, Server, ServerConfig};
 use tokio::task::JoinSet;
 
 use super::*;
@@ -85,10 +84,8 @@ async fn authentication_rejects_mitm_relayed_responses() -> TestResult {
 #[case::acceptor(false)]
 #[tokio::test]
 async fn authentication_waits_for_a_late_peer(#[case] local_is_dialer: bool) -> TestResult {
-    let mut relay_config = ServerConfig::default();
-    relay_config.relay = Some(RelayConfig::new((Ipv4Addr::LOCALHOST, 0)));
-    let relay = Server::spawn(relay_config).await?;
-    let relay_url = format!("http://{}", relay.http_addr().unwrap());
+    let remote_socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
+    let remote_address = remote_socket.local_addr()?;
     let mut secrets = [IrohSecretKey::generate(), IrohSecretKey::generate()];
     secrets.sort_by_key(IrohSecretKey::public);
     if !local_is_dialer {
@@ -104,10 +101,13 @@ async fn authentication_waits_for_a_late_peer(#[case] local_is_dialer: bool) -> 
         local_secret,
         BTreeSet::from([remote_secret.public()]),
     );
-    ceremony.relay_url = relay_url.parse()?;
+    ceremony.peer_endpoints.insert(
+        remote_secret.public(),
+        iroh::EndpointAddr::new(remote_secret.public()).with_ip_addr(remote_address),
+    );
     let endpoint = ceremony.bind_endpoint().await?;
 
-    // Start authentication before the peer connects to the shared relay.
+    // Reserve the peer's UDP port until its endpoint starts.
     let authentication = ceremony.authenticate_peers(&endpoint);
     tokio::pin!(authentication);
     assert!(
@@ -123,7 +123,9 @@ async fn authentication_waits_for_a_late_peer(#[case] local_is_dialer: bool) -> 
         remote_secret,
         BTreeSet::from([endpoint.id()]),
     );
-    remote_ceremony.relay_url = relay_url.parse()?;
+    remote_ceremony.bind_address = Some(remote_address);
+    remote_ceremony.peer_endpoints.insert(endpoint.id(), endpoint.addr());
+    drop(remote_socket);
     let remote = remote_ceremony.bind_endpoint().await?;
     let (local_peers, remote_peers) = tokio::time::timeout(Duration::from_secs(10), async {
         tokio::try_join!(authentication, remote_ceremony.authenticate_peers(&remote))
@@ -150,7 +152,6 @@ async fn authentication_waits_for_a_late_peer(#[case] local_is_dialer: bool) -> 
 
     endpoint.close().await;
     remote.close().await;
-    relay.shutdown().await?;
     Ok(())
 }
 

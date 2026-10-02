@@ -1,4 +1,5 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
@@ -7,7 +8,7 @@ use anyhow::{Context, ensure};
 use futures::future::try_join_all;
 use golden_core::{ParticipantIndex, ParticipantRegistry};
 use iroh::endpoint::presets;
-use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey as IrohSecretKey};
+use iroh::{Endpoint, EndpointAddr, EndpointId, SecretKey as IrohSecretKey};
 use miden_node_tracing::{info, warn};
 use miden_node_utils::genesis::read_genesis_block;
 use miden_protocol::Word;
@@ -75,7 +76,8 @@ pub struct DkgParticipants {
 /// Validated inputs for one live DKG ceremony. The genesis commitment and validator set come from
 /// the same valid genesis block. The signer belongs to that set, and the nonzero threshold does
 /// not exceed its size. The persistent endpoint identity is valid, with one distinct, non-local
-/// peer endpoint per other genesis validator. The relay URL uses HTTP or HTTPS.
+/// peer endpoint per other genesis validator. Every peer has a direct socket address unless
+/// public relays and address discovery are enabled.
 ///
 /// These checks establish local configuration, not peer identities.
 /// [`Ceremony::authenticate_peers`] must bind endpoints to genesis validator keys before the
@@ -84,8 +86,9 @@ pub(super) struct Ceremony {
     genesis_commitment: Word,
     validator_set: Arc<ValidatorConfig>,
     endpoint_secret: IrohSecretKey,
-    relay_url: RelayUrl,
-    peer_endpoints: BTreeSet<EndpointId>,
+    enable_public_relay: bool,
+    bind_address: Option<SocketAddr>,
+    peer_endpoints: BTreeMap<EndpointId, EndpointAddr>,
     threshold: NonZeroUsize,
     epoch: StorageKeyEpoch,
     signer: Arc<ValidatorSigner>,
@@ -95,13 +98,19 @@ impl Ceremony {
     const ALPN: &'static [u8] = b"/miden/validator-dkg-p2p/1";
     const MAX_PENDING_CONNECTIONS: usize = 16;
 
-    /// Binds the persistent endpoint identity with only the configured relay and no public discovery.
+    /// Binds the persistent endpoint identity, opting into public infrastructure only when requested.
     ///
-    /// The relay supplies a transport fallback, not a ceremony role. Direct connections remain
-    /// available, and the command handler owns endpoint shutdown.
+    /// An explicit bind address replaces both default wildcard listeners so a loopback bind stays
+    /// local. The command handler owns endpoint shutdown.
     pub async fn bind_endpoint(&self) -> anyhow::Result<Endpoint> {
-        Endpoint::builder(presets::Minimal)
-            .relay_mode(RelayMode::Custom(self.relay_url.clone().into()))
+        let mut builder = Endpoint::builder(presets::Minimal);
+        if self.enable_public_relay {
+            builder = builder.preset(presets::N0);
+        }
+        if let Some(address) = self.bind_address {
+            builder = builder.clear_ip_transports().bind_addr(address)?;
+        }
+        builder
             .secret_key(self.endpoint_secret.clone())
             .alpns(vec![Self::ALPN.to_vec()])
             .bind()
@@ -119,10 +128,8 @@ impl Ceremony {
     ) -> anyhow::Result<AuthenticatedPeers> {
         let local_endpoint = endpoint.id();
         let mut authentications = JoinSet::new();
-        for peer_endpoint in
-            self.peer_endpoints.iter().copied().filter(|peer| local_endpoint < *peer)
-        {
-            let peer_addr = EndpointAddr::new(peer_endpoint).with_relay_url(self.relay_url.clone());
+        for peer_addr in self.peer_endpoints.values().filter(|peer| local_endpoint < peer.id) {
+            let peer_addr = peer_addr.clone();
             let endpoint = endpoint.clone();
             let validator_set = Arc::clone(&self.validator_set);
             let signer = Arc::clone(&self.signer);
@@ -136,7 +143,7 @@ impl Ceremony {
 
         let mut expected_incoming = self
             .peer_endpoints
-            .iter()
+            .keys()
             .copied()
             .filter(|peer| *peer < local_endpoint)
             .collect::<BTreeSet<_>>();
@@ -171,7 +178,7 @@ impl Ceremony {
                         },
                     };
                     let peer_endpoint = connected_peer.endpoint_id();
-                    if !self.peer_endpoints.contains(&peer_endpoint) {
+                    if !self.peer_endpoints.contains_key(&peer_endpoint) {
                         connected_peer.close(b"endpoint is not a configured DKG peer");
                         continue;
                     }
@@ -405,10 +412,6 @@ impl ParticipateOptions {
     /// Loads trusted genesis and local key material and checks participation inputs before any peer
     /// connections are opened.
     pub(super) async fn validate(self) -> anyhow::Result<Ceremony> {
-        ensure!(
-            matches!(self.relay_url.scheme(), "http" | "https") && self.relay_url.host().is_some(),
-            "relay URL must use HTTP or HTTPS and include a host",
-        );
         let genesis =
             read_genesis_block(&self.genesis).context("failed to validate genesis block")?;
         let genesis_commitment = genesis.inner().header().commitment();
@@ -437,15 +440,24 @@ impl ParticipateOptions {
             "expected {expected_peer_count} peer endpoints for {validator_count} genesis validators, got {}",
             self.peer_endpoints.len(),
         );
-        let peer_endpoints = self.peer_endpoints.iter().copied().collect::<BTreeSet<_>>();
+        let peer_count = self.peer_endpoints.len();
+        let peer_endpoints = self
+            .peer_endpoints
+            .into_iter()
+            .map(|peer| (peer.id, peer))
+            .collect::<BTreeMap<_, _>>();
+        ensure!(peer_endpoints.len() == peer_count, "peer endpoints contain duplicates");
         ensure!(
-            peer_endpoints.len() == self.peer_endpoints.len(),
-            "peer endpoints contain duplicates",
-        );
-        ensure!(
-            !peer_endpoints.contains(&endpoint_secret.public()),
+            !peer_endpoints.contains_key(&endpoint_secret.public()),
             "peer endpoints contain the local endpoint",
         );
+        for peer in peer_endpoints.values() {
+            ensure!(
+                self.enable_public_relay || peer.ip_addrs().next().is_some(),
+                "peer {} requires a socket address unless --enable-public-relay is set",
+                peer.id,
+            );
+        }
 
         let signer = Arc::new(self.signing_key.into_signer().await?);
         ensure!(
@@ -457,7 +469,8 @@ impl ParticipateOptions {
             genesis_commitment,
             validator_set: Arc::new(validator_set),
             endpoint_secret,
-            relay_url: self.relay_url,
+            enable_public_relay: self.enable_public_relay,
+            bind_address: self.bind_address,
             peer_endpoints,
             threshold: self.threshold,
             epoch,
