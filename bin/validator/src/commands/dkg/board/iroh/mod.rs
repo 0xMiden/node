@@ -695,6 +695,7 @@ impl BoardWriter {
             .await
             .context("failed to publish DKG board artifact")?;
         ensure!(stored_hash == expected_hash, "Iroh stored artifact under an unexpected hash");
+        flush_document(&self.document).await?;
         Ok(stored_hash)
     }
 }
