@@ -52,3 +52,15 @@ imposing the code-comment paragraph format or rigid sentence rules.
   they affect those tasks.
 - Explain each concept once. Link to the detailed procedure from overview
   pages rather than repeating it.
+
+## Pull Request Descriptions
+
+Start with a short paragraph explaining what changes. Follow with a paragraph
+explaining why the change is needed.
+
+Point out tricky or non-obvious parts that reviewers should pay attention to,
+such as design tradeoffs, compatibility implications, or important constraints.
+Do not narrate the diff.
+
+A separate validation or verification section is not needed. Follow the
+repository's pull request template, including required changelog metadata.
