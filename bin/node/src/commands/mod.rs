@@ -1,4 +1,6 @@
+mod admin;
 mod block_producer;
+mod fee_collector;
 mod lifecycle;
 mod modes;
 mod recover;
@@ -7,9 +9,11 @@ mod runtime;
 pub(crate) mod section;
 mod store;
 
+pub use admin::AdminCommand;
 use clap::Subcommand;
+pub use fee_collector::FeeCollectorCommand;
 pub use lifecycle::{BootstrapCommand, MigrateCommand};
-use miden_node_utils::logging::OpenTelemetry;
+use miden_node_tracing::OpenTelemetry;
 use miden_node_utils::shutdown::CancellationToken;
 pub use modes::{FullNodeCommand, SequencerCommand};
 pub use recover::RecoverCommand;
@@ -18,20 +22,23 @@ const ENV_DATA_DIRECTORY: &str = "MIDEN_NODE_DATA_DIRECTORY";
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
+    /// Manage account registrations through the sequencer's private admin API.
+    Admin(AdminCommand),
+
     /// Start the node in sequencer mode.
     ///
     /// Each network has exactly one sequencer, operated by that network's operator. All other
     /// nodes for the network must use `full` mode.
     ///
     /// Use `full` mode to run a non-sequencing node that syncs blocks from an upstream source.
-    Sequencer(SequencerCommand),
+    Sequencer(Box<SequencerCommand>),
 
     /// Start the node in full-node mode.
     ///
     /// In this mode, the node syncs blocks from an upstream source and serves a local RPC API.
     /// This is useful for avoiding rate limits on official networks, or for horizontally scaling
     /// RPC traffic.
-    Full(FullNodeCommand),
+    Full(Box<FullNodeCommand>),
 
     /// Initialize the node's storage from a trusted genesis block.
     ///
@@ -39,6 +46,13 @@ pub enum Command {
     /// genesis block. The data directory contains the node's local data storage and must be
     /// initialized before the node can be started.
     Bootstrap(BootstrapCommand),
+
+    /// Create or deploy the sequencer's fee collector account.
+    ///
+    /// The immutable collector combines transaction fees into P2ID notes for the batch builder's
+    /// wallet. Create and deploy a collector before starting the sequencer.
+    #[command(subcommand)]
+    FeeCollector(FeeCollectorCommand),
 
     /// Apply pending migrations to the node's storage.
     ///
@@ -78,15 +92,19 @@ impl Command {
             Command::Full(_) => OpenTelemetry::from_env()
                 .with_name("node")
                 .with_attribute("miden.node.role", "full"),
-            Command::Bootstrap(_) | Command::Migrate(_) | Command::Recover(_) => {
-                OpenTelemetry::Disabled
-            },
+            Command::Admin(_)
+            | Command::Bootstrap(_)
+            | Command::FeeCollector(_)
+            | Command::Migrate(_)
+            | Command::Recover(_) => OpenTelemetry::Disabled,
         }
     }
 
     pub(crate) async fn execute(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         match self {
+            Command::Admin(admin_command) => admin_command.handle().await,
             Command::Bootstrap(bootstrap_command) => bootstrap_command.handle().await,
+            Command::FeeCollector(command) => command.handle(shutdown).await,
             Command::Migrate(migrate_command) => migrate_command.handle(),
             Command::Sequencer(sequencer_command) => sequencer_command.handle(shutdown).await,
             Command::Full(full_node_command) => full_node_command.handle(shutdown).await,

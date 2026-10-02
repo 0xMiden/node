@@ -5,6 +5,7 @@
 //! A drift would not fail to compile: it would reject every submission at runtime with an opaque
 //! AEAD error, so the transcript is pinned by a golden vector in the tests below.
 
+use miden_protobuf::{DecodeMessageExt, VerifyWith};
 use miden_protocol::Word;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{
     PublicKey as ValidatorPublicKey,
@@ -249,97 +250,116 @@ pub enum TransactionInputSealError {
 // ATTESTATION
 // ================================================================================================
 
-/// Verifies a served transaction encryption key against trusted chain state.
-pub fn verify_transaction_encryption_key(
-    key: proto::transaction::TransactionEncryptionKey,
-    trusted: TrustedTransactionEncryptionState<'_>,
-) -> Result<VerifiedTransactionEncryptionKey, TransactionEncryptionKeyError> {
-    if trusted.validator_signing_keys.is_empty() {
-        return Err(TransactionEncryptionKeyError::NoTrustedValidatorKeys);
-    }
-    if key.attestations.is_empty() {
-        return Err(TransactionEncryptionKeyError::NoAttestations);
-    }
+impl<'a> VerifyWith<TrustedTransactionEncryptionState<'a>>
+    for proto::submission::TransactionEncryptionKey
+{
+    type Verified = VerifiedTransactionEncryptionKey;
+    type Error = TransactionEncryptionKeyError;
 
-    let (info, public_key) = decode_key_info(&key)?;
-    let commitment = info.attestation_commitment(trusted.genesis_commitment);
-    let mut found_trusted_signer = false;
-
-    for attestation in key.attestations {
-        let Ok(validator_public_key) =
-            ValidatorPublicKey::read_from_bytes(&attestation.validator_public_key)
-        else {
-            continue;
-        };
-
-        if !trusted.validator_signing_keys.contains(&validator_public_key) {
-            continue;
+    /// Verify the key against the supplied trusted network and validator keys. Decode attestations
+    /// separately so a malformed attestation cannot hide a valid one. Whole-message decoding would
+    /// reject the key before checking the remaining attestations.
+    fn verify_with(
+        self,
+        trusted: TrustedTransactionEncryptionState<'a>,
+    ) -> Result<Self::Verified, Self::Error> {
+        let key = self;
+        if trusted.validator_signing_keys.is_empty() {
+            return Err(TransactionEncryptionKeyError::NoTrustedValidatorKeys);
         }
-        found_trusted_signer = true;
-
-        let Ok(signature) = ValidatorSignature::read_from_bytes(&attestation.signature) else {
-            continue;
-        };
-        if signature.verify(commitment, &validator_public_key) {
-            return Ok(VerifiedTransactionEncryptionKey {
-                info,
-                public_key,
-                genesis_commitment: trusted.genesis_commitment,
-            });
+        if key.attestations.is_empty() {
+            return Err(TransactionEncryptionKeyError::NoAttestations);
         }
-    }
 
-    if found_trusted_signer {
-        Err(TransactionEncryptionKeyError::InvalidAttestation)
-    } else {
-        Err(TransactionEncryptionKeyError::NoTrustedAttestation)
+        let (info, public_key) = key.decode_key_info()?;
+        let commitment = info.attestation_commitment(trusted.genesis_commitment);
+        let mut found_trusted_signer = false;
+
+        for attestation in key.attestations {
+            let Some(validator_public_key) = attestation.validator_public_key else {
+                continue;
+            };
+            let Ok(validator_public_key) = validator_public_key.decode_and_verify() else {
+                continue;
+            };
+
+            if !trusted.validator_signing_keys.contains(&validator_public_key) {
+                continue;
+            }
+            found_trusted_signer = true;
+
+            let Some(signature) = attestation.signature else {
+                continue;
+            };
+            let Ok(signature): Result<ValidatorSignature, _> = signature.decode_and_verify() else {
+                continue;
+            };
+            if signature.verify(commitment, &validator_public_key) {
+                return Ok(VerifiedTransactionEncryptionKey {
+                    info,
+                    public_key,
+                    genesis_commitment: trusted.genesis_commitment,
+                });
+            }
+        }
+
+        if found_trusted_signer {
+            Err(TransactionEncryptionKeyError::InvalidAttestation)
+        } else {
+            Err(TransactionEncryptionKeyError::NoTrustedAttestation)
+        }
     }
 }
 
-/// Decodes all key fields which are covered by the validator attestation.
-fn decode_key_info(
-    key: &proto::transaction::TransactionEncryptionKey,
-) -> Result<(TransactionEncryptionKeyInfo, EncryptionPublicKey), TransactionEncryptionKeyError> {
-    let scheme = TransactionEncryptionScheme::try_from(key.scheme)?;
-    validate_key_id(&key.key_id, "encryption key id")?;
-    let public_key = EncryptionPublicKey::read_from_bytes(&key.public_key).map_err(|source| {
-        TransactionEncryptionKeyError::InvalidEncryptionPublicKey {
-            field: "encryption public key",
-            source,
-        }
-    })?;
-
-    let next_key = key
-        .next_key
-        .as_ref()
-        .map(|next| {
-            let scheme = TransactionEncryptionScheme::try_from(next.scheme)?;
-            validate_key_id(&next.key_id, "next encryption key id")?;
-            EncryptionPublicKey::read_from_bytes(&next.public_key).map_err(|source| {
+impl proto::submission::TransactionEncryptionKey {
+    /// Decodes the key fields covered by the validator attestation. This method does not verify the
+    /// attestation.
+    fn decode_key_info(
+        &self,
+    ) -> Result<(TransactionEncryptionKeyInfo, EncryptionPublicKey), TransactionEncryptionKeyError>
+    {
+        let scheme = TransactionEncryptionScheme::try_from(self.scheme)?;
+        validate_key_id(&self.key_id, "encryption key id")?;
+        let public_key =
+            EncryptionPublicKey::read_from_bytes(&self.public_key).map_err(|source| {
                 TransactionEncryptionKeyError::InvalidEncryptionPublicKey {
-                    field: "next encryption public key",
+                    field: "encryption public key",
                     source,
                 }
             })?;
 
-            Ok(NextEncryptionKeyInfo {
-                scheme,
-                key_id: next.key_id.clone(),
-                public_key: next.public_key.clone(),
-                rotation_block_num: next.rotation_block_num,
-            })
-        })
-        .transpose()?;
+        let next_key = self
+            .next_key
+            .as_ref()
+            .map(|next| {
+                let scheme = TransactionEncryptionScheme::try_from(next.scheme)?;
+                validate_key_id(&next.key_id, "next encryption key id")?;
+                EncryptionPublicKey::read_from_bytes(&next.public_key).map_err(|source| {
+                    TransactionEncryptionKeyError::InvalidEncryptionPublicKey {
+                        field: "next encryption public key",
+                        source,
+                    }
+                })?;
 
-    Ok((
-        TransactionEncryptionKeyInfo {
-            scheme,
-            key_id: key.key_id.clone(),
-            public_key: key.public_key.clone(),
-            next_key,
-        },
-        public_key,
-    ))
+                Ok(NextEncryptionKeyInfo {
+                    scheme,
+                    key_id: next.key_id.clone(),
+                    public_key: next.public_key.clone(),
+                    rotation_block_num: next.rotation_block_num,
+                })
+            })
+            .transpose()?;
+
+        Ok((
+            TransactionEncryptionKeyInfo {
+                scheme,
+                key_id: self.key_id.clone(),
+                public_key: self.public_key.clone(),
+                next_key,
+            },
+            public_key,
+        ))
+    }
 }
 
 /// Validates a key identifier before it is used in a transcript or allocation.
@@ -442,7 +462,7 @@ impl TransactionInputsSealer {
         &self,
         tx_id: TransactionId,
         transaction_inputs: &[u8],
-    ) -> Result<proto::transaction::SealedTransactionInputs, TransactionInputSealError> {
+    ) -> Result<proto::submission::SealedTransactionInputs, TransactionInputSealError> {
         let associated_data = transaction_inputs_associated_data(
             self.scheme.as_u32(),
             &self.key_id,
@@ -454,7 +474,7 @@ impl TransactionInputsSealer {
             .seal_bytes_with_associated_data(&mut rand::rng(), transaction_inputs, &associated_data)
             .map_err(TransactionInputSealError::Seal)?;
 
-        Ok(proto::transaction::SealedTransactionInputs {
+        Ok(proto::submission::SealedTransactionInputs {
             key_id: self.key_id.clone(),
             ciphertext: sealed.to_bytes(),
         })
@@ -491,8 +511,8 @@ mod tests {
         SigningKey::read_from_bytes(&[seed; 32]).expect("test signing key should decode")
     }
 
-    fn unsigned_encryption_key() -> proto::transaction::TransactionEncryptionKey {
-        proto::transaction::TransactionEncryptionKey {
+    fn unsigned_encryption_key() -> proto::submission::TransactionEncryptionKey {
+        proto::submission::TransactionEncryptionKey {
             scheme: TransactionEncryptionScheme::X25519XChaCha20Poly1305.as_i32(),
             key_id: TEST_KEY_ID.to_vec(),
             public_key: KeyExchangeKey::read_from_bytes(&[7u8; 32])
@@ -507,12 +527,12 @@ mod tests {
     fn signed_encryption_key(
         signer: &SigningKey,
         genesis_commitment: Word,
-    ) -> proto::transaction::TransactionEncryptionKey {
+    ) -> proto::submission::TransactionEncryptionKey {
         let mut key = unsigned_encryption_key();
-        let (info, _) = decode_key_info(&key).unwrap();
-        key.attestations = vec![proto::transaction::ValidatorKeyAttestation {
-            validator_public_key: signer.public_key().to_bytes(),
-            signature: signer.sign(info.attestation_commitment(genesis_commitment)).to_bytes(),
+        let (info, _) = key.decode_key_info().unwrap();
+        key.attestations = vec![proto::submission::ValidatorKeyAttestation {
+            validator_public_key: Some(signer.public_key().into()),
+            signature: Some(signer.sign(info.attestation_commitment(genesis_commitment)).into()),
         }];
         key
     }
@@ -524,11 +544,9 @@ mod tests {
         let trusted_keys = [signer.public_key()];
         let key = signed_encryption_key(&signer, genesis());
 
-        let verified = verify_transaction_encryption_key(
-            key,
-            TrustedTransactionEncryptionState::new(genesis(), &trusted_keys),
-        )
-        .unwrap();
+        let verified = key
+            .verify_with(TrustedTransactionEncryptionState::new(genesis(), &trusted_keys))
+            .unwrap();
 
         assert_eq!(verified.info().key_id, TEST_KEY_ID);
         assert_eq!(verified.info().scheme, TransactionEncryptionScheme::X25519XChaCha20Poly1305);
@@ -543,21 +561,25 @@ mod tests {
         let trusted = TrustedTransactionEncryptionState::new(genesis(), &trusted_keys);
 
         assert_matches!(
-            verify_transaction_encryption_key(unsigned_encryption_key(), trusted),
+            unsigned_encryption_key().verify_with(trusted),
             Err(TransactionEncryptionKeyError::NoAttestations)
         );
 
         let mut malformed_key = signed_encryption_key(&signer, genesis());
-        malformed_key.attestations[0].validator_public_key.clear();
+        malformed_key.attestations[0].validator_public_key = Some(proto::primitives::PublicKey {
+            key: Some(proto::primitives::public_key::Key::EcdsaK256Keccak(Vec::new())),
+        });
         assert_matches!(
-            verify_transaction_encryption_key(malformed_key, trusted),
+            malformed_key.verify_with(trusted),
             Err(TransactionEncryptionKeyError::NoTrustedAttestation)
         );
 
         let mut malformed_signature = signed_encryption_key(&signer, genesis());
-        malformed_signature.attestations[0].signature.clear();
+        malformed_signature.attestations[0].signature = Some(proto::primitives::Signature {
+            signature: Some(proto::primitives::signature::Signature::EcdsaK256Keccak(Vec::new())),
+        });
         assert_matches!(
-            verify_transaction_encryption_key(malformed_signature, trusted),
+            malformed_signature.verify_with(trusted),
             Err(TransactionEncryptionKeyError::InvalidAttestation)
         );
     }
@@ -570,17 +592,14 @@ mod tests {
         let mut key = signed_encryption_key(&signer, genesis());
         key.attestations.insert(
             0,
-            proto::transaction::ValidatorKeyAttestation {
-                validator_public_key: Vec::new(),
-                signature: Vec::new(),
+            proto::submission::ValidatorKeyAttestation {
+                validator_public_key: None,
+                signature: None,
             },
         );
 
-        verify_transaction_encryption_key(
-            key,
-            TrustedTransactionEncryptionState::new(genesis(), &trusted_keys),
-        )
-        .unwrap();
+        key.verify_with(TrustedTransactionEncryptionState::new(genesis(), &trusted_keys))
+            .unwrap();
     }
 
     /// A valid signature does not help when its signer is absent from trusted chain state.
@@ -591,10 +610,8 @@ mod tests {
         let trusted_keys = [trusted_signer.public_key()];
 
         assert_matches!(
-            verify_transaction_encryption_key(
-                signed_encryption_key(&untrusted_signer, genesis()),
-                TrustedTransactionEncryptionState::new(genesis(), &trusted_keys),
-            ),
+            signed_encryption_key(&untrusted_signer, genesis())
+                .verify_with(TrustedTransactionEncryptionState::new(genesis(), &trusted_keys)),
             Err(TransactionEncryptionKeyError::NoTrustedAttestation)
         );
     }
@@ -615,7 +632,7 @@ mod tests {
         changed_public_key.public_key =
             KeyExchangeKey::read_from_bytes(&[8u8; 32]).unwrap().public_key().to_bytes();
         let mut injected_next_key = key.clone();
-        injected_next_key.next_key = Some(proto::transaction::NextTransactionEncryptionKey {
+        injected_next_key.next_key = Some(proto::submission::NextTransactionEncryptionKey {
             scheme: key.scheme,
             key_id: vec![1, 2, 3, 4],
             public_key: KeyExchangeKey::read_from_bytes(&[9u8; 32])
@@ -626,14 +643,14 @@ mod tests {
         });
 
         for changed in [changed_scheme, changed_key_id, changed_public_key, injected_next_key] {
-            assert!(verify_transaction_encryption_key(changed, trusted).is_err());
+            assert!(changed.verify_with(trusted).is_err());
         }
 
         assert_matches!(
-            verify_transaction_encryption_key(
-                key,
-                TrustedTransactionEncryptionState::new(Word::from([9u32, 9, 9, 9]), &trusted_keys),
-            ),
+            key.verify_with(TrustedTransactionEncryptionState::new(
+                Word::from([9u32, 9, 9, 9]),
+                &trusted_keys
+            )),
             Err(TransactionEncryptionKeyError::InvalidAttestation)
         );
     }
@@ -648,21 +665,21 @@ mod tests {
         let mut empty_key_id = signed_encryption_key(&signer, genesis());
         empty_key_id.key_id.clear();
         assert_matches!(
-            verify_transaction_encryption_key(empty_key_id, trusted),
+            empty_key_id.verify_with(trusted),
             Err(TransactionEncryptionKeyError::EmptyKeyId { .. })
         );
 
         let mut oversized_key_id = signed_encryption_key(&signer, genesis());
         oversized_key_id.key_id = vec![0; MAX_KEY_ID_LEN + 1];
         assert_matches!(
-            verify_transaction_encryption_key(oversized_key_id, trusted),
+            oversized_key_id.verify_with(trusted),
             Err(TransactionEncryptionKeyError::KeyIdTooLong { .. })
         );
 
         let mut invalid_public_key = signed_encryption_key(&signer, genesis());
         invalid_public_key.public_key.clear();
         assert_matches!(
-            verify_transaction_encryption_key(invalid_public_key, trusted),
+            invalid_public_key.verify_with(trusted),
             Err(TransactionEncryptionKeyError::InvalidEncryptionPublicKey { .. })
         );
     }

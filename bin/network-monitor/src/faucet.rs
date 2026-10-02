@@ -7,15 +7,16 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use hex;
-use miden_node_utils::spawn::spawn_blocking_in_current_span;
-use miden_node_utils::tracing::miden_instrument;
+use miden_node_tracing::spawn::spawn_blocking_in_current_span;
+use miden_node_tracing::{debug, info, miden_instrument, trace, warn};
+use miden_protocol::note::NoteId;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::{debug, info, trace, warn};
 use url::Url;
 
 use crate::deploy::wallet::create_wallet_account;
+use crate::funding::FaucetClient;
 use crate::service::Service;
 use crate::status::{ServiceDetails, ServiceStatus};
 use crate::{COMPONENT, LOG_TARGET};
@@ -38,7 +39,7 @@ pub struct FaucetTestDetails {
     pub test_duration_ms: u64,
     pub success_count: u64,
     pub failure_count: u64,
-    pub last_tx_id: Option<String>,
+    pub last_note_id: Option<String>,
     pub faucet_metadata: Option<GetMetadataResponse>,
 }
 
@@ -52,17 +53,26 @@ pub struct FaucetTestDetails {
 struct PowChallengeResponse {
     challenge: String,
     target: u64,
-    #[expect(dead_code)] // Timestamp is part of API response but not used
+    #[expect(
+        dead_code,
+        reason = "Part of the API response, unused but required for `deny_unknown_fields`"
+    )]
     timestamp: u64,
 }
 
 /// Response from the faucet's `/get_tokens` endpoint.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct GetTokensResponse {
-    tx_id: String,
-    #[expect(dead_code)] // Note ID is part of API response but not used in monitoring
-    note_id: String,
+pub(crate) struct GetTokensResponse {
+    /// The ID of the note that holds the minted tokens.
+    #[serde(deserialize_with = "deserialize_note_id")]
+    pub(crate) note_id: NoteId,
+}
+
+/// Parses a hex-encoded note ID, so that a malformed ID fails the faucet check.
+fn deserialize_note_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<NoteId, D::Error> {
+    let hex = String::deserialize(deserializer)?;
+    NoteId::try_from_hex(&hex).map_err(serde::de::Error::custom)
 }
 
 /// Response from the faucet's `/get_metadata` endpoint.
@@ -75,49 +85,41 @@ struct GetTokensResponse {
 pub struct GetMetadataResponse {
     pub version: String,
     pub id: String,
-    pub max_supply: u64,
     pub decimals: u8,
     pub explorer_url: Option<String>,
     pub pow_load_difficulty: u64,
     pub base_amount: u64,
-    pub note_transport_url: Option<String>,
+    /// The remaining balance of the funding account in base units. It is `None` when the funding
+    /// service did not answer.
+    pub balance: Option<u64>,
 }
 
 // FAUCET TEST TASK
 // ================================================================================================
 
 pub struct FaucetService {
-    url: Url,
-    client: Client,
+    faucet: FaucetClient,
     interval: Duration,
-    /// Wall-clock cap on solving a single `PoW` challenge.
-    solve_timeout: Duration,
     /// A valid public account ID used as the recipient for faucet token requests. Generated once at
     /// construction from a throwaway wallet account; the minted tokens are never spent.
     account_id: String,
     success_count: u64,
     failure_count: u64,
-    last_tx_id: Option<String>,
+    last_note_id: Option<String>,
     faucet_metadata: Option<GetMetadataResponse>,
 }
 
 impl FaucetService {
     pub fn new(url: Url, interval: Duration, request_timeout: Duration) -> Self {
-        let client = Client::builder()
-            .timeout(request_timeout)
-            .build()
-            .expect("Failed to create HTTP client with timeout");
         let (wallet_account, _secret_key) =
             create_wallet_account().expect("failed to create faucet recipient account");
         Self {
-            url,
-            client,
+            faucet: FaucetClient::new(url, request_timeout),
             interval,
-            solve_timeout: request_timeout,
             account_id: wallet_account.id().to_string(),
             success_count: 0,
             failure_count: 0,
-            last_tx_id: None,
+            last_note_id: None,
             faucet_metadata: None,
         }
     }
@@ -136,11 +138,11 @@ impl Service for FaucetService {
         ServiceStatus::unknown(
             self.name(),
             ServiceDetails::FaucetTest(FaucetTestDetails {
-                url: self.url.to_string(),
+                url: self.faucet.url().to_string(),
                 test_duration_ms: 0,
                 success_count: 0,
                 failure_count: 0,
-                last_tx_id: None,
+                last_note_id: None,
                 faucet_metadata: None,
             }),
         )
@@ -153,42 +155,43 @@ impl Service for FaucetService {
         // is shown on the card even when minting is failing. We only overwrite the stored metadata
         // on a successful fetch, so a transient metadata errors doesn't wipe the last-known values
         // from the card.
-        match fetch_faucet_metadata(&self.client, &self.url).await {
+        match self.faucet.metadata().await {
             Ok(metadata) => self.faucet_metadata = Some(metadata),
             Err(e) => warn!(
+                &e,
                 target: LOG_TARGET,
-                error = %format!("{e:#}"),
                 "Failed to fetch faucet metadata"
             ),
         }
 
-        let last_error =
-            match perform_mint_test(&self.client, &self.url, &self.account_id, self.solve_timeout)
-                .await
-            {
-                Ok(minted_tokens) => {
-                    self.success_count += 1;
-                    self.last_tx_id = Some(minted_tokens.tx_id.clone());
-                    info!(
-                        target: LOG_TARGET,
-                        { transaction.id = %minted_tokens.tx_id },
-                        "Faucet test successful"
-                    );
-                    None
-                },
-                Err(e) => {
-                    self.failure_count += 1;
-                    warn!(target: LOG_TARGET, error = %e, "Faucet test failed");
-                    Some(format!("{e:#}"))
-                },
-            };
+        let last_error = match self.faucet.request_tokens(&self.account_id, MINT_AMOUNT).await {
+            Ok(minted_tokens) => {
+                self.success_count += 1;
+                self.last_note_id = Some(minted_tokens.note_id.to_hex());
+                info!(
+                    target: LOG_TARGET,
+                    "Faucet test successful",
+                    note.id = minted_tokens.note_id
+                );
+                None
+            },
+            Err(e) => {
+                self.failure_count += 1;
+                warn!(
+                    &e,
+                    target: LOG_TARGET,
+                    "Faucet test failed"
+                );
+                Some(format!("{e:#}"))
+            },
+        };
 
         let details = ServiceDetails::FaucetTest(FaucetTestDetails {
-            url: self.url.to_string(),
+            url: self.faucet.url().to_string(),
             test_duration_ms: start_time.elapsed().as_millis() as u64,
             success_count: self.success_count,
             failure_count: self.failure_count,
-            last_tx_id: self.last_tx_id.clone(),
+            last_note_id: self.last_note_id.clone(),
             faucet_metadata: self.faucet_metadata.clone(),
         });
 
@@ -205,10 +208,9 @@ impl Service for FaucetService {
     target = COMPONENT,
     name = "network_monitor.faucet.fetch_faucet_metadata",
     level = "info",
-    ret(level = "debug"),
     err,
 )]
-async fn fetch_faucet_metadata(
+pub(crate) async fn fetch_faucet_metadata(
     client: &Client,
     faucet_url: &Url,
 ) -> anyhow::Result<GetMetadataResponse> {
@@ -222,38 +224,28 @@ async fn fetch_faucet_metadata(
     parse_faucet_response(&response_text).context("unexpected response from /get_metadata")
 }
 
-/// Performs a complete faucet mint test by requesting a `PoW` challenge and submitting the
-/// solution.
-///
-/// # Arguments
-///
-/// * `client` - The HTTP client to use.
-/// * `faucet_url` - The URL of the faucet service.
-///
-/// # Returns
-///
-/// The response from the faucet if successful, or an error if the test fails.
+/// Requests `amount` base units from the faucet for `account_id`, solving the required
+/// proof-of-work challenge (`/pow`, solve, `/get_tokens`). The tokens arrive as a public P2ID note
+/// whose ID is returned. Used by the faucet health check and by [`crate::funding`].
 #[miden_instrument(
     parent = None,
     target = COMPONENT,
-    name = "network_monitor.faucet.perform_mint_test",
+    name = "network_monitor.faucet.request_tokens",
     level = "info",
-    ret(level = "debug"),
     err,
 )]
-async fn perform_mint_test(
+pub(crate) async fn request_tokens(
     client: &Client,
     faucet_url: &Url,
     account_id: &str,
+    amount: u64,
     solve_timeout: Duration,
 ) -> anyhow::Result<GetTokensResponse> {
     debug!(
         target: LOG_TARGET,
-        {
-            account.id = %account_id,
-            account.id.len = account_id.len(),
-        },
-        "Using recipient account ID"
+        "Using recipient account ID",
+        account.id = account_id,
+        account.id.length = account_id.len()
     );
 
     // Step 1: Request PoW challenge
@@ -261,21 +253,22 @@ async fn perform_mint_test(
     pow_url
         .query_pairs_mut()
         .append_pair("account_id", account_id)
-        .append_pair("amount", &MINT_AMOUNT.to_string());
+        .append_pair("amount", &amount.to_string());
 
     let response = client.get(pow_url).send().await?;
 
     let response_text = read_success_body(response).await.context("/pow request failed")?;
-    debug!(target: LOG_TARGET, response = %response_text, "Faucet PoW response");
+    debug!(target: LOG_TARGET, "Faucet PoW response received");
 
     let challenge_response: PowChallengeResponse =
         parse_faucet_response(&response_text).context("unexpected response from /pow")?;
 
     debug!(
         target: LOG_TARGET,
-        target = challenge_response.target,
-        challenge.prefix = %&challenge_response.challenge[..16.min(challenge_response.challenge.len())],
-        "Received PoW challenge"
+        "Received PoW challenge",
+        pow.target = challenge_response.target,
+        pow.challenge.prefix =
+            &challenge_response.challenge[..16.min(challenge_response.challenge.len())]
     );
 
     // Step 2: Solve the PoW challenge off the async runtime; hashing is CPU-bound and would
@@ -289,22 +282,21 @@ async fn perform_mint_test(
     .context("PoW solver task panicked")?
     .context("Failed to solve PoW challenge")?;
 
-    debug!(target: LOG_TARGET, nonce = nonce, "Solved PoW challenge");
+    debug!(target: LOG_TARGET, "Solved PoW challenge", pow.nonce = nonce);
 
     // Step 3: Request tokens with the solution
     let mut tokens_url = faucet_url.join("/get_tokens")?;
     tokens_url
         .query_pairs_mut()
         .append_pair("account_id", account_id)
-        .append_pair("is_private_note", "false")
-        .append_pair("asset_amount", &MINT_AMOUNT.to_string())
+        .append_pair("asset_amount", &amount.to_string())
         .append_pair("challenge", &challenge_response.challenge)
         .append_pair("nonce", &nonce.to_string());
 
     let response = client.get(tokens_url).send().await?;
 
     let response_text = read_success_body(response).await.context("/get_tokens request failed")?;
-    debug!(target: LOG_TARGET, response = %response_text, "Faucet /get_tokens response");
+    debug!(target: LOG_TARGET, "Faucet token response received");
 
     let tokens_response: GetTokensResponse =
         parse_faucet_response(&response_text).context("unexpected response from /get_tokens")?;
@@ -323,7 +315,7 @@ async fn read_success_body(response: reqwest::Response) -> anyhow::Result<String
 }
 
 /// Deserialize a faucet response using [`serde_path_to_error`] so that the failing JSON path (e.g.
-/// `max_supply`, `explorer_url`) is included in the error message. Combined with
+/// `balance`, `explorer_url`) is included in the error message. Combined with
 /// `#[serde(deny_unknown_fields)]` on each response type, this means renamed, removed, or newly
 /// added fields all surface a precise field name rather than a generic "unexpected response".
 fn parse_faucet_response<T>(body: &str) -> anyhow::Result<T>
@@ -354,7 +346,6 @@ where
     target = COMPONENT,
     name = "network_monitor.faucet.solve_pow_challenge",
     level = "info",
-    ret(level = "debug"),
     err,
 )]
 fn solve_pow_challenge(challenge: &str, target: u64, timeout: Duration) -> anyhow::Result<u64> {
@@ -374,11 +365,11 @@ fn solve_pow_challenge(challenge: &str, target: u64, timeout: Duration) -> anyho
         if hash_as_u64 < target {
             trace!(
                 target: LOG_TARGET,
-                nonce = nonce,
-                hash = hash_as_u64,
-                target = target,
-                target.leading_zero_bits = target.leading_zeros(),
-                "PoW solution found"
+                "PoW solution found",
+                pow.nonce = nonce,
+                pow.hash = hash_as_u64,
+                pow.target = target,
+                pow.target.leading_zero_bits = target.leading_zeros()
             );
             return Ok(nonce);
         }
@@ -394,11 +385,11 @@ fn solve_pow_challenge(challenge: &str, target: u64, timeout: Duration) -> anyho
             }
             trace!(
                 target: LOG_TARGET,
-                nonce = nonce,
-                current_hash = hash_as_u64,
-                target = target,
-                target.leading_zero_bits = target.leading_zeros(),
-                "PoW solve progress"
+                "PoW solve progress",
+                pow.nonce = nonce,
+                pow.hash = hash_as_u64,
+                pow.target = target,
+                pow.target.leading_zero_bits = target.leading_zeros()
             );
         }
     }

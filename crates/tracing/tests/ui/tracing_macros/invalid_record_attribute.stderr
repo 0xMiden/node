@@ -1,0 +1,27 @@
+error[E0277]: the trait bound `UnapprovedAttribute: RecordAttribute` is not satisfied
+ --> tests/ui/tracing_macros/invalid_record_attribute.rs:7:5
+  |
+7 |     miden_span_record!(transaction.id = UnapprovedAttribute);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `RecordAttribute` is not implemented for `UnapprovedAttribute`
+ --> tests/ui/tracing_macros/invalid_record_attribute.rs:3:1
+  |
+3 | struct UnapprovedAttribute;
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = help: the following other types implement trait `RecordAttribute`:
+            &T
+            Option<T>
+            Path
+            PathBuf
+            String
+            Vec<T>
+            [T; N]
+            [T]
+          and $N others
+note: required by a bound in `__miden_assert_field_name`
+ --> tests/ui/tracing_macros/invalid_record_attribute.rs:7:5
+  |
+7 |     miden_span_record!(transaction.id = UnapprovedAttribute);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `__miden_assert_field_name`
+  = note: this error originates in the macro `miden_span_record` (in Nightly builds, run with -Z macro-backtrace for more info)

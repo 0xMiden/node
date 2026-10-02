@@ -3,12 +3,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use miden_node_proto::domain::sequencer::{AuthenticatedTransaction, TransactionInputs};
 use miden_node_store::state::{BlockWriter, ProofWriter, State};
+use miden_node_tracing::{debug, error, info, miden_instrument};
 use miden_node_utils::formatting::{format_input_notes, format_output_notes};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
-use miden_node_utils::tracing::miden_instrument;
-use miden_protocol::batch::ProposedBatch;
+use miden_objects::account_file::AccountFile;
+use miden_protocol::account::AccountId;
+use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::ProvenTransaction;
 use tokio::sync::{Mutex, RwLock};
@@ -18,10 +21,10 @@ use url::Url;
 use crate::batch_builder::{BatchBuilder, BatchIntervals};
 use crate::block_builder::BlockBuilder;
 use crate::block_prover::BlockProver;
-use crate::domain::transaction::AuthenticatedTransaction;
-use crate::errors::MempoolSubmissionError;
+use crate::domain::batch::BatchParameters;
+use crate::errors::{MempoolSubmissionError, StateConflict};
 use crate::mempool::{BatchBudget, BlockBudget, Mempool, MempoolConfig, SharedMempool};
-use crate::store::{TransactionInputs, get_tx_inputs};
+use crate::store::get_tx_inputs;
 use crate::validator::BlockProducerValidatorClient;
 use crate::{CACHED_MEMPOOL_STATS_UPDATE_INTERVAL, COMPONENT, LOG_TARGET, proof_scheduler};
 
@@ -52,10 +55,8 @@ impl Default for BlockProducerApiConfig {
 impl BlockProducerApiConfig {
     fn mempool_config(self) -> MempoolConfig {
         MempoolConfig {
-            batch_budget: BatchBudget {
-                transactions: self.max_txs_per_batch.get(),
-                ..BatchBudget::default()
-            },
+            batch_budget: BatchBudget::new(self.max_txs_per_batch.get()),
+            max_txs_per_batch: self.max_txs_per_batch.get(),
             block_budget: BlockBudget {
                 batches: self.max_batches_per_block.get(),
             },
@@ -67,7 +68,7 @@ impl BlockProducerApiConfig {
 
 /// The sequencer runtime configuration.
 ///
-/// Specifies how to connect to the batch prover and block prover components.
+/// Specifies how to connect to the validator and block prover components.
 pub struct Sequencer {
     /// The read-only store state shared with the block producer.
     pub state: Arc<State>,
@@ -79,8 +80,6 @@ pub struct Sequencer {
     pub validator_urls: Vec<Url>,
     /// The request timeout for calls to the validator components.
     pub validator_timeout: Duration,
-    /// The address of the batch prover component.
-    pub batch_prover_url: Option<Url>,
     /// The address of the block prover component.
     pub block_prover_url: Option<Url>,
     /// Maximum interval between batch scheduler checks.
@@ -99,41 +98,49 @@ pub struct Sequencer {
 
     /// The number of concurrent batch-builder workers.
     pub batch_workers: NonZeroUsize,
+
+    /// The batch builder account that receives collected fees.
+    pub builder_account_id: AccountId,
+
+    /// The deployed fee collector account and its signing key.
+    pub fee_collector_account: AccountFile,
 }
 
 // BLOCK PRODUCER
 // ================================================================================================
 
 impl Sequencer {
-    /// Spawns the sequencer tasks and returns its in-process API.
-    pub fn spawn(self, shutdown: CancellationToken) -> Result<SequencerHandle> {
-        tracing::info!(target: LOG_TARGET, "Initializing sequencer");
+    /// Checks the deployed collector, then starts the sequencer tasks and returns its API.
+    pub async fn start(self, shutdown: CancellationToken) -> Result<SequencerHandle> {
+        info!(target: LOG_TARGET, "Initializing sequencer");
         let state = self.state;
+        let fee_collector_account =
+            crate::fee_collector::load_deployed_collector(&state, self.fee_collector_account)
+                .await?;
         let validator =
             BlockProducerValidatorClient::new(self.validator_urls.clone(), self.validator_timeout)?;
-        let chain_tip = state.committed_tip();
-
-        tracing::info!(target: LOG_TARGET, "Sequencer initialized");
-
         let block_builder = BlockBuilder::new(
             Arc::clone(&state),
             self.block_writer,
-            validator,
+            validator.clone(),
             self.block_interval,
         );
         let batch_intervals = BatchIntervals::derive_from(self.block_interval, self.batch_interval);
         let batch_builder = BatchBuilder::new(
             Arc::clone(&state),
             self.batch_workers,
-            self.batch_prover_url,
             batch_intervals,
-        )?;
+            self.builder_account_id,
+            fee_collector_account,
+            validator,
+        )
+        .await?;
         let api_config = BlockProducerApiConfig {
             max_txs_per_batch: self.max_txs_per_batch,
             max_batches_per_block: self.max_batches_per_block,
             mempool_tx_capacity: self.mempool_tx_capacity,
         };
-        let mempool = Mempool::shared(chain_tip, api_config.mempool_config());
+        let mempool = Mempool::shared(state.committed_tip(), api_config.mempool_config());
         let api = BlockProducerApi::from_shared_mempool(mempool.clone(), state, shutdown.clone());
         let block_prover = if let Some(url) = self.block_prover_url {
             Arc::new(BlockProver::remote(url)?)
@@ -141,6 +148,7 @@ impl Sequencer {
             Arc::new(BlockProver::local())
         };
         let chain_tip_rx = api.state.subscribe_committed_tip();
+        info!(target: LOG_TARGET, "Sequencer initialized");
 
         // Spawn batch builder, block builder, and proof scheduler. The builders communicate
         // indirectly via a shared mempool.
@@ -297,7 +305,8 @@ impl BlockProducerApi {
 
                 let stats = {
                     let Ok(mempool) = mempool.lock() else {
-                        tracing::error!(
+                        error!(
+                            anyhow::anyhow!("mempool lock poisoned"),
                             target: LOG_TARGET,
                             "Mempool lock poisoned, stopping mempool stats updater"
                         );
@@ -324,18 +333,18 @@ impl BlockProducerApi {
         &self,
         tx: ProvenTransaction,
     ) -> Result<BlockNumber, MempoolSubmissionError> {
-        tracing::debug!(
+        debug!(
             target: LOG_TARGET,
-            tx_id = %tx.id().to_hex(),
-            account_id = %tx.account_id().to_hex(),
-            initial_state_commitment = %tx.account_update().initial_state_commitment(),
-            final_state_commitment = %tx.account_update().final_state_commitment(),
-            input_notes = %format_input_notes(tx.input_notes()),
-            output_notes = %format_output_notes(tx.output_notes()),
-            ref_block_commitment = %tx.ref_block_commitment(),
-            "Submitting transaction"
+            "Submitting transaction",
+            transaction.id = tx.id(),
+            account.id = tx.account_id(),
+            account.initial_state.commitment = tx.account_update().initial_state_commitment(),
+            account.final_state.commitment = tx.account_update().final_state_commitment(),
+            transaction.input_notes = format_input_notes(tx.input_notes()),
+            transaction.output_notes = format_output_notes(tx.output_notes()),
+            transaction.reference_block.commitment = tx.ref_block_commitment()
         );
-        tracing::debug!(target: COMPONENT, proof = ?tx.proof());
+        debug!(target: COMPONENT, "Transaction proof received");
 
         // Authenticate against the local store, then add to the mempool.
         let inputs = get_tx_inputs(&self.state, &tx)
@@ -343,6 +352,7 @@ impl BlockProducerApi {
             .map_err(MempoolSubmissionError::StoreStateReadFailed)?;
         // SAFETY: we assume that the rpc component has verified the transaction proof already.
         let tx = AuthenticatedTransaction::new_unchecked(tx.into(), inputs)
+            .map_err(StateConflict::from)
             .map_err(MempoolSubmissionError::AuthenticationFailed)?;
         self.submit_authenticated_tx(tx).await
     }
@@ -374,6 +384,7 @@ impl BlockProducerApi {
     )]
     pub async fn submit_proven_tx_batch(
         &self,
+        proof: ProvenBatch,
         batch: ProposedBatch,
     ) -> Result<BlockNumber, MempoolSubmissionError> {
         // We assume that the rpc component has verified everything, including the transaction
@@ -389,7 +400,7 @@ impl BlockProducerApi {
             );
         }
 
-        self.submit_authenticated_tx_batch(batch, inputs).await
+        self.submit_authenticated_tx_batch(proof, batch, inputs).await
     }
 
     /// Adds a batch whose transactions have already been authenticated against the store to the
@@ -407,6 +418,7 @@ impl BlockProducerApi {
     #[expect(clippy::let_and_return)]
     pub async fn submit_authenticated_tx_batch(
         &self,
+        proof: ProvenBatch,
         batch: ProposedBatch,
         inputs: Vec<TransactionInputs>,
     ) -> Result<BlockNumber, MempoolSubmissionError> {
@@ -416,12 +428,16 @@ impl BlockProducerApi {
             "transaction inputs must match the batch's transactions"
         );
 
+        let parameters = BatchParameters {
+            reference_block: batch.reference_block_header().block_num(),
+        };
         let mut txs = Vec::with_capacity(batch.transactions().len());
         for (tx, inputs) in batch.transactions().iter().zip(inputs) {
             // SAFETY: We assume that the rpc component has verified the transaction proofs, as well
             // as the batch integrity itself.
             let tx = AuthenticatedTransaction::new_unchecked(Arc::clone(tx), inputs)
                 .map(Arc::new)
+                .map_err(StateConflict::from)
                 .map_err(MempoolSubmissionError::StateConflict)?;
             txs.push(tx);
         }
@@ -431,7 +447,7 @@ impl BlockProducerApi {
         let result = shared_mempool
             .lock()
             .map_err(MempoolSubmissionError::MempoolPoisoned)?
-            .add_user_batch(&txs);
+            .add_user_batch(&txs, parameters, Arc::new(proof));
         result
     }
 

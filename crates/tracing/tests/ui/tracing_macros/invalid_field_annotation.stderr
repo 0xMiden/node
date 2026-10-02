@@ -1,0 +1,5 @@
+error: only `#[nonstandard]` is supported after a tracing field value
+ --> tests/ui/tracing_macros/invalid_field_annotation.rs:5:45
+  |
+5 |     miden_span_record!(custom.attribute = 1 #[unchecked]);
+  |                                             ^^^^^^^^^^^^

@@ -6,11 +6,18 @@
 //!
 //! ```ignore
 //! use miden_node_utils::retry::{self, Retryable};
+//! use miden_node_tracing::warn;
 //!
 //! let value = (|| async { do_thing().await })
 //!     .retry(retry::exponential(min, max))
 //!     .when(|err| is_transient(err))
-//!     .notify(|err, dur| tracing::warn!(?dur, %err, "retrying"))
+//!     .notify(|err, dur| {
+//!         warn!(
+//!             err,
+//!             "retrying",
+//!             retry.delay_ms = dur.as_millis() as u64
+//!         );
+//!     })
 //!     .await?;
 //! ```
 

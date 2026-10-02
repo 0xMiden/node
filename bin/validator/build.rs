@@ -1,5 +1,5 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    miden_node_db::migration::Migrator::generate("src/db/migrations")?;
+    miden_node_db::migration::Migrator::generate("src/db/migrations", "db_migrator.rs")?;
 
     // If we do one re-write, the default rules are disabled,
     // hence we need to trigger explicitly on `Cargo.toml`.

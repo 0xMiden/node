@@ -1,8 +1,7 @@
 use miden_node_proto::domain::proof_request::BlockProofRequest;
-use miden_node_utils::tracing::miden_instrument;
+use miden_node_tracing::miden_instrument;
 use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{BlockInputs, BlockNumber, SignedBlock};
-use miden_protocol::utils::serde::Serializable;
 
 use crate::COMPONENT;
 use crate::errors::ApplyBlockWithProvingInputsError;
@@ -35,7 +34,7 @@ impl BlockWriter {
             .await
             .map_err(ApplyBlockWithProvingInputsError::SaveProvingInputs)?;
 
-        self.apply_block(signed_block)
+        self.apply_block(signed_block, None)
             .await
             .map_err(ApplyBlockWithProvingInputsError::ApplyBlock)
     }
@@ -47,7 +46,7 @@ impl BlockWriter {
         proving_inputs: &BlockProofRequest,
     ) -> std::io::Result<()> {
         self.block_store
-            .save_proving_inputs(block_num, &proving_inputs.to_bytes())
+            .save_proving_inputs(block_num, &miden_node_persistence::encode(proving_inputs))
             .await
     }
 }

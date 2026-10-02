@@ -31,6 +31,7 @@ use miden_protocol::note::{
     PartialNote,
     PartialNoteMetadata,
 };
+use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{
     AccountInputs,
     InputNotes,
@@ -39,8 +40,10 @@ use miden_protocol::transaction::{
     TransactionScript,
 };
 use miden_protocol::utils::serde::Serializable;
+use miden_protocol::vm::FutureMaybeSend;
 use miden_protocol::{Felt, Word};
 use miden_standards::account::auth::{FeeConversionInfo, commit_fee_conversion_info};
+use miden_standards::account::fees::FeePolicyManager;
 use miden_standards::code_builder::CodeBuilder;
 use miden_standards::note::{NetworkAccountTarget, NoteExecutionHint};
 use miden_tx::auth::BasicAuthenticator;
@@ -75,6 +78,7 @@ pub struct Driver {
     secret_key: SecretKey,
     increment_script: NoteScript,
     genesis_header: BlockHeader,
+    protocol_config: ProtocolConfig,
     prover: LocalTransactionProver,
     rng: ChaCha20Rng,
 }
@@ -100,6 +104,18 @@ impl Driver {
             counter.id(),
         );
 
+        let fee_asset_id = counter
+            .storage()
+            .get_item(FeePolicyManager::fee_asset_id_slot())
+            .context("counter account is missing its fee asset ID")?
+            .try_into()
+            .context("counter account carries an invalid fee asset ID")?;
+        let protocol_config = client.genesis_protocol_config().clone();
+        anyhow::ensure!(
+            protocol_config.fee_asset_id() == fee_asset_id,
+            "the counter's fee asset does not match the chain's protocol configuration",
+        );
+
         Ok(Self {
             wallet,
             counter,
@@ -108,6 +124,7 @@ impl Driver {
             increment_script: create_increment_script()
                 .context("failed to compile the increment note script")?,
             genesis_header,
+            protocol_config,
             prover: LocalTransactionProver::default(),
             rng,
         })
@@ -147,8 +164,11 @@ impl Driver {
         tx_args.extend_advice_map([(auth_args, conversion_info_preimage)]);
         tx_args.add_output_note_recipient(Box::new(recipient));
 
-        let mut data_store =
-            DriverDataStore::new(self.genesis_header.clone(), PartialBlockchain::default());
+        let mut data_store = DriverDataStore::new(
+            self.genesis_header.clone(),
+            self.protocol_config.clone(),
+            PartialBlockchain::default(),
+        );
         data_store.add_account(self.wallet.clone());
         // The counter is *foreign* to this transaction: creating a note targeted at it makes the
         // wallet's auth procedure price the note through the counter's `estimate_note_fee` via FPI.
@@ -191,7 +211,7 @@ impl Driver {
     /// Builds the auth args committing to paying the fee in the chain's native asset at rate 1/1,
     /// together with the advice-map preimage the auth procedure verifies against them in-VM.
     fn fee_conversion_auth_args(&mut self) -> (Word, Vec<Felt>) {
-        let fee_faucet_id = self.genesis_header.fee_parameters().fee_faucet_id();
+        let fee_faucet_id = self.protocol_config.fee_asset_id().faucet_id();
         // The salt keeps the auth args usable as a per-transaction unique value for replay
         // protection.
         let salt = Word::new([
@@ -334,16 +354,22 @@ struct DriverDataStore {
     accounts: HashMap<AccountId, Account>,
     account_witnesses: HashMap<AccountId, AccountWitness>,
     block_header: BlockHeader,
+    protocol_config: ProtocolConfig,
     partial_blockchain: PartialBlockchain,
     mast_store: TransactionMastStore,
 }
 
 impl DriverDataStore {
-    fn new(block_header: BlockHeader, partial_blockchain: PartialBlockchain) -> Self {
+    fn new(
+        block_header: BlockHeader,
+        protocol_config: ProtocolConfig,
+        partial_blockchain: PartialBlockchain,
+    ) -> Self {
         Self {
             accounts: HashMap::new(),
             account_witnesses: HashMap::new(),
             block_header,
+            protocol_config,
             partial_blockchain,
             mast_store: TransactionMastStore::new(),
         }
@@ -370,96 +396,112 @@ impl DriverDataStore {
 }
 
 impl DataStore for DriverDataStore {
-    async fn get_transaction_inputs(
+    fn get_transaction_inputs(
         &self,
         account_id: AccountId,
         _block_refs: BTreeSet<BlockNumber>,
-    ) -> Result<(PartialAccount, BlockHeader, PartialBlockchain), DataStoreError> {
-        let account = self.account(account_id)?;
+    ) -> impl FutureMaybeSend<
+        Result<(PartialAccount, BlockHeader, ProtocolConfig, PartialBlockchain), DataStoreError>,
+    > {
+        async move {
+            let account = self.account(account_id)?;
 
-        Ok((
-            PartialAccount::from(account),
-            self.block_header.clone(),
-            self.partial_blockchain.clone(),
-        ))
+            Ok((
+                PartialAccount::from(account),
+                self.block_header.clone(),
+                self.protocol_config.clone(),
+                self.partial_blockchain.clone(),
+            ))
+        }
     }
 
     /// Opens a map slot of the requested account by root.
     ///
     /// Reached through the counter's fee policy: `estimate_note_fee` looks the note's script root up
     /// in the `basic_constant_fee` schedule, which is a storage map.
-    async fn get_storage_map_witness(
+    fn get_storage_map_witness(
         &self,
         account_id: AccountId,
         map_root: Word,
         map_key: StorageMapKey,
-    ) -> Result<StorageMapWitness, DataStoreError> {
-        let account = self.account(account_id)?;
+    ) -> impl FutureMaybeSend<Result<StorageMapWitness, DataStoreError>> {
+        async move {
+            let account = self.account(account_id)?;
 
-        account
-            .storage()
-            .slots()
-            .iter()
-            .filter_map(|slot| match slot.content() {
-                StorageSlotContent::Map(map) => Some(map),
-                StorageSlotContent::Value(_) => None,
-            })
-            .find(|map| map.root() == map_root)
-            .map(|map| map.open(&map_key))
-            .ok_or_else(|| DataStoreError::Other {
-                error_msg: format!("no storage map with root {map_root} in account {account_id}")
-                    .into(),
-                source: None,
-            })
-    }
-
-    async fn get_foreign_account_inputs(
-        &self,
-        foreign_account_id: AccountId,
-        _ref_block: BlockNumber,
-    ) -> Result<AccountInputs, DataStoreError> {
-        let account = self.account(foreign_account_id)?;
-        let witness =
-            self.account_witnesses.get(&foreign_account_id).cloned().ok_or_else(|| {
-                DataStoreError::Other {
+            account
+                .storage()
+                .slots()
+                .iter()
+                .filter_map(|slot| match slot.content() {
+                    StorageSlotContent::Map(map) => Some(map),
+                    StorageSlotContent::Value(_) => None,
+                })
+                .find(|map| map.root() == map_root)
+                .map(|map| map.open(&map_key))
+                .ok_or_else(|| DataStoreError::Other {
                     error_msg: format!(
-                        "no account witness for foreign account {foreign_account_id}"
+                        "no storage map with root {map_root} in account {account_id}"
                     )
                     .into(),
                     source: None,
-                }
-            })?;
-
-        Ok(AccountInputs::new(PartialAccount::from(account), witness))
+                })
+        }
     }
 
-    async fn get_vault_asset_witnesses(
+    fn get_foreign_account_inputs(
+        &self,
+        foreign_account_id: AccountId,
+        _ref_block: BlockNumber,
+    ) -> impl FutureMaybeSend<Result<AccountInputs, DataStoreError>> {
+        async move {
+            let account = self.account(foreign_account_id)?;
+            let witness =
+                self.account_witnesses.get(&foreign_account_id).cloned().ok_or_else(|| {
+                    DataStoreError::Other {
+                        error_msg: format!(
+                            "no account witness for foreign account {foreign_account_id}"
+                        )
+                        .into(),
+                        source: None,
+                    }
+                })?;
+
+            Ok(AccountInputs::new(PartialAccount::from(account), witness))
+        }
+    }
+
+    fn get_vault_asset_witnesses(
         &self,
         account_id: AccountId,
         vault_root: Word,
         vault_keys: BTreeSet<AssetId>,
-    ) -> Result<Vec<AssetWitness>, DataStoreError> {
-        let account = self.account(account_id)?;
+    ) -> impl FutureMaybeSend<Result<Vec<AssetWitness>, DataStoreError>> {
+        async move {
+            let account = self.account(account_id)?;
 
-        if account.vault().root() != vault_root {
-            return Err(DataStoreError::other("vault root mismatch"));
+            if account.vault().root() != vault_root {
+                return Err(DataStoreError::other("vault root mismatch"));
+            }
+
+            vault_keys
+                .into_iter()
+                .map(|vault_key| {
+                    AssetWitness::new(account.vault().open(vault_key).into(), [vault_key]).map_err(
+                        |err| DataStoreError::Other {
+                            error_msg: "failed to open the vault asset tree".into(),
+                            source: Some(Box::new(err)),
+                        },
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()
         }
-
-        Result::<Vec<_>, _>::from_iter(vault_keys.into_iter().map(|vault_key| {
-            AssetWitness::new(account.vault().open(vault_key).into(), [vault_key]).map_err(|err| {
-                DataStoreError::Other {
-                    error_msg: "failed to open the vault asset tree".into(),
-                    source: Some(Box::new(err)),
-                }
-            })
-        }))
     }
 
-    async fn get_note_script(
+    fn get_note_script(
         &self,
         _script_root: NoteScriptRoot,
-    ) -> Result<Option<NoteScript>, DataStoreError> {
-        Ok(None)
+    ) -> impl FutureMaybeSend<Result<Option<NoteScript>, DataStoreError>> {
+        async move { Ok(None) }
     }
 }
 

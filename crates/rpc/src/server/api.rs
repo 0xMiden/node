@@ -1,16 +1,15 @@
 use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock};
-use std::time::Duration;
 
 use anyhow::Context as AnyhowContext;
 use miden_node_block_producer::BlockProducerApi;
 use miden_node_proto::clients::NtxBuilderClient;
 use miden_node_proto::domain::block::InvalidBlockRange;
-use miden_node_proto::generated::rpc::MempoolStats as ProtoMempoolStats;
-use miden_node_proto::generated::rpc::api_server::Api;
+use miden_node_proto::generated::miden::node::v1::MempoolStats as ProtoMempoolStats;
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::state::State;
 use miden_node_store::{DatabaseError, GetBlockHeaderError};
+use miden_node_tracing::miden_instrument;
 use miden_node_utils::limiter::{
     QueryParamAccountIdLimit,
     QueryParamLimiter,
@@ -21,18 +20,17 @@ use miden_node_utils::limiter::{
     QueryParamStorageMapSlotLimit,
 };
 use miden_node_utils::lru_cache::LruCache;
-use miden_node_utils::retry::{self, Retryable};
-use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use tokio::sync::Semaphore;
 use tonic::metadata::MetadataMap;
-use tonic::{IntoRequest, Request, Status};
+use tonic::{Request, Status};
 
+use self::error_codes::{SyncErrorCode, internal_error};
+use crate::COMPONENT;
 use crate::server::api::subscription::{IpBanList, MAX_REPLICA_SUBSCRIPTIONS};
-use crate::server::{NetworkTxAuth, RpcBackend};
-use crate::{COMPONENT, LOG_TARGET};
+use crate::server::{AccountAdmission, NetworkTxAuth, RpcBackend};
 
 // VALIDATOR FAN-OUT
 // ================================================================================================
@@ -44,12 +42,20 @@ use crate::{COMPONENT, LOG_TARGET};
 /// call.
 pub(crate) async fn submit_tx_to_validators(
     validators: &[miden_node_proto::clients::ValidatorClient],
-    request: &proto::transaction::ProvenTransaction,
+    request: &proto::submission::ProvenTransactionSubmission,
 ) -> tonic::Result<()> {
     futures::future::try_join_all(validators.iter().map(|validator| {
         let mut validator = validator.clone();
         let request = request.clone();
-        async move { validator.submit_proven_transaction(request).await }
+        async move {
+            validator
+                .submit_proven_transaction(
+                    proto::miden::validator::v1::SubmitProvenTransactionRequest {
+                        submission: Some(request),
+                    },
+                )
+                .await
+        }
     }))
     .await?;
     Ok(())
@@ -61,7 +67,7 @@ pub(crate) async fn submit_tx_to_validators(
 pub(crate) async fn submit_batch_to_validators(
     validators: &[miden_node_proto::clients::ValidatorClient],
     proposed_batch: &miden_protocol::batch::ProposedBatch,
-    sealed_transaction_inputs: &[proto::transaction::SealedTransactionInputs],
+    sealed_transaction_inputs: &[proto::submission::SealedTransactionInputs],
 ) -> tonic::Result<()> {
     futures::future::try_join_all(validators.iter().map(|validator| {
         let mut validator = validator.clone();
@@ -74,6 +80,7 @@ pub(crate) async fn submit_batch_to_validators(
 // API METHODS
 // ================================================================================================
 
+mod error_codes;
 mod get_account;
 mod get_block_by_number;
 mod get_block_header_by_number;
@@ -82,6 +89,8 @@ mod get_network_note_status;
 mod get_note_script_by_root;
 mod get_notes_by_id;
 mod get_transaction_encryption_key;
+mod is_account_allowed;
+mod register_account;
 mod status;
 mod submit_auth_tx;
 mod submit_auth_tx_batch;
@@ -99,14 +108,6 @@ mod sync_transactions;
 
 const NETWORK_TX_AUTH_HEADER_NAME: &str = "x-miden-network-tx-auth";
 
-struct RpcInvalidBlockRange(InvalidBlockRange);
-
-impl From<InvalidBlockRange> for RpcInvalidBlockRange {
-    fn from(value: InvalidBlockRange) -> Self {
-        Self(value)
-    }
-}
-
 // RPC SERVICE
 // ================================================================================================
 
@@ -116,7 +117,7 @@ pub struct RpcService {
     ntx_builder: Option<NtxBuilderClient>,
     network_tx_auth: Option<NetworkTxAuth>,
     genesis_commitment: Option<Word>,
-    block_commitment_cache: LruCache<BlockNumber, Word>,
+    block_header_cache: LruCache<BlockNumber, BlockHeader>,
     block_subscription_semaphore: Arc<Semaphore>,
     proof_subscription_semaphore: Arc<Semaphore>,
     subscription_ban: Arc<IpBanList>,
@@ -136,7 +137,7 @@ impl RpcService {
             ntx_builder,
             network_tx_auth,
             genesis_commitment: None,
-            block_commitment_cache: LruCache::new(commitment_cache_capacity),
+            block_header_cache: LruCache::new(commitment_cache_capacity),
             block_subscription_semaphore: Arc::new(Semaphore::new(MAX_REPLICA_SUBSCRIPTIONS)),
             proof_subscription_semaphore: Arc::new(Semaphore::new(MAX_REPLICA_SUBSCRIPTIONS)),
             subscription_ban: Arc::new(IpBanList::default()),
@@ -155,50 +156,30 @@ impl RpcService {
         Ok(())
     }
 
-    /// Fetches the genesis block header from the store.
-    ///
-    /// Automatically retries until the store connection becomes available.
-    pub async fn get_genesis_header_with_retry(&self) -> anyhow::Result<BlockHeader> {
-        // Retry with exponential backoff (base 500ms, max 30s) while the store is unavailable.
-        let header = (|| async {
-            self.get_block_header_by_number(
-                proto::rpc::BlockHeaderByNumberRequest {
-                    block_num: Some(BlockNumber::GENESIS.as_u32()),
-                    include_mmr_proof: None,
-                }
-                .into_request(),
-            )
+    /// Reads the genesis block header from the local store.
+    pub async fn get_genesis_header(&self) -> anyhow::Result<BlockHeader> {
+        let (header, _) = self
+            .state
+            .view()
+            .get_block_header(Some(BlockNumber::GENESIS), false)
             .await
-        })
-        .retry(retry::exponential(Duration::from_millis(500), Duration::from_secs(30)))
-        .when(|err| err.code() == tonic::Code::Unavailable)
-        .notify(|err, backoff| {
-            tracing::warn!(
-                target: LOG_TARGET,
-                ?backoff,
-                %err,
-                "connection failed while fetching genesis header, retrying"
-            );
-        })
-        .await?;
-
-        let header = header.into_inner().block_header.context("response is missing the header")?;
-        BlockHeader::try_from(header).context("failed to parse response")
+            .context("failed to read genesis block header")?;
+        header.context("genesis block header is missing")
     }
 
-    /// Returns the given block's onchain commitment.
+    /// Returns the given block's onchain header.
     ///
     /// This is retrieved from the local LRU cache, or otherwise from the store on cache miss.
     #[miden_instrument(
         target = COMPONENT,
-        name = "get_block_commitment",
+        name = "get_block_header",
         fields(
-            block.number = %block,
+            block.number = block,
         ),
     )]
-    async fn get_block_commitment(&self, block: BlockNumber) -> Result<Word, Status> {
-        if let Some(commitment) = self.block_commitment_cache.get(&block) {
-            return Ok(commitment);
+    async fn get_block_header(&self, block: BlockNumber) -> Result<BlockHeader, Status> {
+        if let Some(header) = self.block_header_cache.get(&block) {
+            return Ok(header);
         }
 
         let header = self
@@ -210,19 +191,19 @@ impl RpcService {
             .0
             .ok_or_else(|| Status::invalid_argument(format!("unknown block {block}")))?;
 
-        let commitment = header.commitment();
-        self.block_commitment_cache.put(block, commitment);
+        self.block_header_cache.put(block, header.clone());
 
-        Ok(commitment)
+        Ok(header)
     }
 
-    /// Returns an error if the provided block's commitment does not match the one on chain.
+    /// Returns the reference block header, or an error if its commitment is not on chain.
     async fn verify_reference_commitment(
         &self,
         block: BlockNumber,
         commitment: Word,
-    ) -> Result<(), Status> {
-        let onchain = self.get_block_commitment(block).await?;
+    ) -> Result<BlockHeader, Status> {
+        let header = self.get_block_header(block).await?;
+        let onchain = header.commitment();
 
         if onchain != commitment {
             return Err(Status::invalid_argument(format!(
@@ -230,7 +211,7 @@ impl RpcService {
             )));
         }
 
-        Ok(())
+        Ok(header)
     }
 
     /// Errors if any of `candidate_ids` is classified as a network account by the store. Callers
@@ -271,7 +252,9 @@ impl RpcService {
 // ================================================================================================
 
 pub(crate) struct SequencerInternalService {
+    pub(crate) state: Arc<State>,
     pub(crate) block_producer: BlockProducerApi,
+    pub(crate) account_admission: AccountAdmission,
 }
 
 // HELPERS
@@ -280,7 +263,7 @@ pub(crate) struct SequencerInternalService {
 fn get_block_header_error_to_status(err: GetBlockHeaderError) -> Status {
     match err {
         GetBlockHeaderError::DatabaseError(err) => database_error_to_status(&err),
-        GetBlockHeaderError::MmrError(err) => Status::internal(err.to_string()),
+        GetBlockHeaderError::MmrError(err) => internal_error(err.to_string()),
     }
 }
 
@@ -291,13 +274,27 @@ fn database_error_to_status(err: &DatabaseError) -> Status {
         | DatabaseError::AccountsNotFoundInDb(_)
         | DatabaseError::AccountNotPublic(_) => Status::not_found(message),
         DatabaseError::TransactionPageExceedsPayloadLimit { .. } => Status::out_of_range(message),
-        DatabaseError::RangeBeyondTip(_) => Status::invalid_argument(message),
-        _ => Status::internal(message),
+        DatabaseError::InvalidBlockRange { .. } => {
+            SyncErrorCode::InvalidBlockRange.invalid_argument(message)
+        },
+        _ => internal_error(message),
     }
 }
 
-fn invalid_block_range_to_status(RpcInvalidBlockRange(err): RpcInvalidBlockRange) -> Status {
-    Status::invalid_argument(err.to_string())
+fn invalid_block_range_to_status(err: InvalidBlockRange) -> Status {
+    SyncErrorCode::InvalidBlockRange.invalid_argument(err)
+}
+
+/// Loads the configuration committed to by a stored header.
+async fn load_protocol_config(
+    view: &miden_node_store::state::StateView,
+    header: &BlockHeader,
+) -> tonic::Result<miden_protocol::protocol_config::ProtocolConfig> {
+    let commitment = header.protocol_config_commitment();
+    view.get_protocol_config(commitment)
+        .await
+        .map_err(|err| internal_error(err.to_string()))?
+        .ok_or_else(|| internal_error(format!("protocol config {commitment} is missing")))
 }
 
 // LIMIT HELPERS
@@ -313,15 +310,16 @@ fn check<Q: QueryParamLimiter>(n: usize) -> Result<(), Status> {
     <Q as QueryParamLimiter>::check(n).map_err(out_of_range_error)
 }
 
-/// Helper to build an [`EndpointLimits`](proto::rpc::EndpointLimits) from (name, limit) pairs.
-fn endpoint_limits(params: &[(&str, usize)]) -> proto::rpc::EndpointLimits {
-    proto::rpc::EndpointLimits {
+/// Helper to build an [`EndpointLimits`](proto::miden::node::v1::EndpointLimits) from (name, limit)
+/// pairs.
+fn endpoint_limits(params: &[(&str, usize)]) -> proto::miden::node::v1::EndpointLimits {
+    proto::miden::node::v1::EndpointLimits {
         parameters: params.iter().map(|(k, v)| ((*k).to_string(), *v as u32)).collect(),
     }
 }
 
 /// Cached RPC query parameter limits.
-static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
+static RPC_LIMITS: LazyLock<proto::miden::node::v1::GetLimitsResponse> = LazyLock::new(|| {
     use QueryParamAccountIdLimit as AccountId;
     use QueryParamNoteIdLimit as NoteId;
     use QueryParamNoteTagLimit as NoteTag;
@@ -329,7 +327,7 @@ static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
     use QueryParamStorageMapKeyTotalLimit as StorageMapKeyTotal;
     use QueryParamStorageMapSlotLimit as StorageMapSlot;
 
-    proto::rpc::RpcLimits {
+    proto::miden::node::v1::GetLimitsResponse {
         endpoints: std::collections::HashMap::from([
             (
                 "SyncNullifiers".into(),
@@ -354,12 +352,55 @@ static RPC_LIMITS: LazyLock<proto::rpc::RpcLimits> = LazyLock::new(|| {
 
 #[cfg(test)]
 mod tests {
-    use miden_node_proto::generated::server::rpc_api::GetLimits;
+    use miden_node_proto::generated::server::miden_node_v1_node_service::GetLimits;
 
     use super::*;
 
     #[test]
-    fn get_limits_decodes_unit_request() {
-        assert_eq!(RpcService::decode(()).unwrap(), ());
+    fn get_limits_decodes_empty_request() {
+        assert_eq!(RpcService::decode(proto::miden::node::v1::GetLimitsRequest {}).unwrap(), ());
+    }
+
+    #[test]
+    fn endpoint_requests_reject_missing_payloads() {
+        use proto::server::{miden_node_v1_node_service, miden_sequencer_v1_sequencer_service};
+
+        let errors = [
+            <RpcService as miden_node_v1_node_service::SubmitProvenTx>::decode(proto::miden::node::v1::SubmitProvenTxRequest {
+                submission: None,
+            })
+            .expect_err("submission is required"),
+            <RpcService as miden_node_v1_node_service::SubmitProvenTxBatch>::decode(
+                proto::miden::node::v1::SubmitProvenTxBatchRequest { submission: None },
+            )
+            .expect_err("submission is required"),
+            <SequencerInternalService as miden_sequencer_v1_sequencer_service::SubmitAuthenticatedTx>::decode(
+                proto::miden::sequencer::v1::SubmitAuthenticatedTxRequest { transaction: None },
+            )
+            .expect_err("transaction is required"),
+            <SequencerInternalService as miden_sequencer_v1_sequencer_service::SubmitAuthenticatedTxBatch>::decode(
+                proto::miden::sequencer::v1::SubmitAuthenticatedTxBatchRequest { batch: None },
+            )
+            .expect_err("batch is required"),
+            <RpcService as miden_node_v1_node_service::GetNetworkNoteStatus>::decode(
+                proto::miden::node::v1::GetNetworkNoteStatusRequest { note_id: None },
+            )
+            .expect_err("note ID is required"),
+        ];
+        for error in errors {
+            assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        }
+    }
+
+    #[test]
+    fn internal_store_errors_include_error_code() {
+        let error = DatabaseError::DataCorrupted("invalid stored value".into());
+        let status = database_error_to_status(&error);
+        assert_eq!(status.code(), tonic::Code::Internal);
+        assert_eq!(status.details(), &[0]);
+
+        let status = get_block_header_error_to_status(GetBlockHeaderError::DatabaseError(error));
+        assert_eq!(status.code(), tonic::Code::Internal);
+        assert_eq!(status.details(), &[0]);
     }
 }

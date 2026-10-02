@@ -39,7 +39,8 @@ use miden_protocol::account::{StorageSlotName, StorageSlotType};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::note::NoteTag;
 
-use crate::db::models::queries::{BlockHeaderCommitment, NetworkAccountType};
+use crate::db::BlockHeaderCommitment;
+use crate::db::models::queries::NetworkAccountType;
 
 #[derive(Debug, thiserror::Error)]
 #[error("failed to convert from database type {from_type} into {into_type}")]
@@ -87,11 +88,11 @@ impl SqlTypeConvert for BlockHeader {
     type Raw = Vec<u8>;
 
     fn from_raw_sql(raw: Self::Raw) -> Result<Self, DatabaseTypeConversionError> {
-        <Self as Deserializable>::read_from_bytes(raw.as_slice()).map_err(Self::map_err)
+        miden_node_persistence::decode(raw.as_slice()).map_err(Self::map_err)
     }
 
     fn to_raw_sql(self) -> Self::Raw {
-        miden_crypto::utils::Serializable::to_bytes(&self)
+        miden_node_persistence::encode(&self)
     }
 }
 
@@ -184,8 +185,8 @@ impl SqlTypeConvert for StorageSlotName {
     }
 }
 
-// Raw type conversions - eventually introduce wrapper types
-// ===========================================================
+// Raw type conversions
+// ================================================================================================
 
 #[inline(always)]
 pub(crate) fn raw_sql_to_nullifier_prefix(raw: i32) -> u16 {

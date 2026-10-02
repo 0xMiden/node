@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use miden_node_db::DatabaseError;
-use miden_node_utils::tracing::miden_instrument;
+use miden_node_tracing::{info, miden_instrument};
 
 use crate::{COMPONENT, LOG_TARGET};
 
@@ -14,10 +14,10 @@ include!(concat!(env!("OUT_DIR"), "/db_migrator.rs"));
 )]
 pub fn bootstrap_database(database_filepath: &Path) -> std::result::Result<(), DatabaseError> {
     let migrator = migrator().map_err(DatabaseError::migration)?;
-    tracing::info!(
+    info!(
         target: LOG_TARGET,
-        migration_count = migrator.schema_hashes().len(),
-        "Bootstrapping database schema"
+        "Bootstrapping database schema",
+        migration.count = migrator.schema_hashes().len()
     );
 
     migrator.bootstrap(database_filepath).map_err(DatabaseError::migration)?;
@@ -31,10 +31,10 @@ pub fn bootstrap_database(database_filepath: &Path) -> std::result::Result<(), D
 )]
 pub fn migrate_database(database_filepath: &Path) -> std::result::Result<(), DatabaseError> {
     let migrator = migrator().map_err(DatabaseError::migration)?;
-    tracing::info!(
+    info!(
         target: LOG_TARGET,
-        migration_count = migrator.schema_hashes().len(),
-        "Applying database migrations"
+        "Applying database migrations",
+        migration.count = migrator.schema_hashes().len()
     );
 
     migrator.migrate(database_filepath).map_err(DatabaseError::migration)?;
@@ -48,10 +48,10 @@ pub fn migrate_database(database_filepath: &Path) -> std::result::Result<(), Dat
 )]
 pub fn verify_latest_schema(database_filepath: &Path) -> std::result::Result<(), DatabaseError> {
     let migrator = migrator().map_err(DatabaseError::migration)?;
-    tracing::info!(
+    info!(
         target: LOG_TARGET,
-        migration_count = migrator.schema_hashes().len(),
-        "Verifying database schema"
+        "Verifying database schema",
+        migration.count = migrator.schema_hashes().len()
     );
 
     migrator
@@ -67,9 +67,10 @@ mod tests {
 
     use super::*;
 
-    const EXPECTED_SCHEMA_HASHES: [SchemaHash; 1] = [SchemaHash::from_hex(
-        "f2f6af5e22d8d0273524a227417339279d1a694c3802a8f3f7cc4b31e21ee035",
-    )];
+    const EXPECTED_SCHEMA_HASHES: [SchemaHash; 2] = [
+        SchemaHash::from_hex("616c6ea4220985e67cda942f28f6e16b8b7d0f9eb25f772544c28ab8561f995c"),
+        SchemaHash::from_hex("b515225768eeb647a456a6e13f6d4f449b25218bf385ab5f30a4d9f43550e459"),
+    ];
 
     #[test]
     fn migration_schema_hashes_are_stable() -> Result<()> {

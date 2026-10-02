@@ -3,7 +3,7 @@
 
 use maud::{Markup, html};
 
-use super::super::helpers::{copy_button, format_success_rate, metric_row, truncate};
+use super::super::helpers::{copyable_value, format_success_rate, metric_row};
 use crate::faucet::{FaucetTestDetails, GetMetadataResponse};
 
 pub(in crate::view) fn render_faucet_test(details: &FaucetTestDetails, healthy: bool) -> Markup {
@@ -20,7 +20,7 @@ pub(in crate::view) fn render_faucet_test(details: &FaucetTestDetails, healthy: 
                     div class="metric-row" {
                         span class="metric-label" { "URL:" }
                         span class="metric-value" {
-                            (details.url) (copy_button(&details.url, "URL"))
+                            (copyable_value(&details.url, "URL"))
                         }
                     }
                     (metric_row(
@@ -28,12 +28,11 @@ pub(in crate::view) fn render_faucet_test(details: &FaucetTestDetails, healthy: 
                         &format_success_rate(details.success_count, details.failure_count),
                     ))
                     (metric_row("Last Response Time:", &format!("{}ms", details.test_duration_ms)))
-                    @if let Some(tx) = &details.last_tx_id {
+                    @if let Some(note_id) = &details.last_note_id {
                         div class="metric-row" {
-                            span class="metric-label" { "Last TX ID:" }
+                            span class="metric-label" { "Last Note ID:" }
                             span class="metric-value" {
-                                (truncate(tx, 16)) "..."
-                                (copy_button(tx, "TX ID"))
+                                (copyable_value(note_id, "note ID"))
                             }
                         }
                     }
@@ -59,15 +58,17 @@ fn render_faucet_metadata(metadata: &GetMetadataResponse, healthy: bool) -> Mark
                 div class="metric-row" {
                     span class="metric-label" { "Token ID:" }
                     span class="metric-value" {
-                        (truncate(&metadata.id, 16)) "..."
-                        (copy_button(&metadata.id, "token ID"))
+                        (copyable_value(&metadata.id, "token ID"))
                     }
                 }
                 (metric_row(
                     "Version:",
                     if metadata.version.is_empty() { "-" } else { metadata.version.as_str() },
                 ))
-                (metric_row("Max Supply:", &metadata.max_supply.to_string()))
+                (metric_row(
+                    "Balance:",
+                    &metadata.balance.map_or_else(|| "-".to_string(), |balance| balance.to_string()),
+                ))
                 (metric_row("Decimals:", &metadata.decimals.to_string()))
                 (metric_row("Base Amount:", &metadata.base_amount.to_string()))
                 (metric_row("PoW Difficulty:", &metadata.pow_load_difficulty.to_string()))
@@ -75,15 +76,12 @@ fn render_faucet_metadata(metadata: &GetMetadataResponse, healthy: bool) -> Mark
                     div class="metric-row" {
                         span class="metric-label" { "Explorer URL:" }
                         span class="metric-value" {
-                            a href=(url) target="_blank" rel="noopener noreferrer" { (url) }
-                        }
-                    }
-                }
-                @if let Some(url) = &metadata.note_transport_url {
-                    div class="metric-row" {
-                        span class="metric-label" { "Note Transport URL:" }
-                        span class="metric-value" {
-                            a href=(url) target="_blank" rel="noopener noreferrer" { (url) }
+                            a class="value-text"
+                                href=(url)
+                                title=(url)
+                                target="_blank"
+                                rel="noopener noreferrer"
+                            { (url) }
                         }
                     }
                 }

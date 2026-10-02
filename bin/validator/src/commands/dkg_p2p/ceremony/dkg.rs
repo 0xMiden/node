@@ -199,7 +199,7 @@ impl Ceremony {
         local: LocalDealings,
     ) -> anyhow::Result<UnconfirmedDkgDealings> {
         let local_messages = DealerMessages::from_local(&local);
-        let mut validator_keys = self.validator_set.as_keys().to_vec();
+        let mut validator_keys = self.validator_set.keys().to_vec();
         validator_keys.sort_by_key(Serializable::to_bytes);
 
         let mut exchanges = FuturesUnordered::new();

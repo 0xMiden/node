@@ -1,0 +1,39 @@
+name: "Check Rust versions"
+description: "Check that the Rust toolchain, workspace MSRV, crate MSRVs, and Docker version match"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Check Rust versions
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        toml_version() {
+          sed -nE "s/^${1}[[:space:]]*=[[:space:]]*\"([^\"]+)\"[[:space:]]*(#.*)?$/\1/p" "$2"
+        }
+
+        check_version() {
+          if [[ "$2" != "${msrv}" ]]; then
+            echo "::error file=$1::Rust version '$2' does not match workspace MSRV '${msrv}'"
+            exit 1
+          fi
+        }
+
+        msrv="$(toml_version rust-version Cargo.toml)"
+        if [[ ! "${msrv}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "::error file=Cargo.toml::Workspace rust-version must pin a major.minor.patch version"
+          exit 1
+        fi
+
+        check_version rust-toolchain.toml "$(toml_version channel rust-toolchain.toml)"
+        check_version Dockerfile "$(sed -nE 's/^ARG[[:space:]]+RUST_VERSION=([^[:space:]]+)[[:space:]]*$/\1/p' Dockerfile)"
+
+        while IFS= read -r -d '' manifest; do
+          if grep -Eq '^rust-version\.workspace[[:space:]]*=[[:space:]]*true[[:space:]]*(#.*)?$' "${manifest}"; then
+            continue
+          fi
+          check_version "${manifest}" "$(toml_version rust-version "${manifest}")"
+        done < <(git ls-files -z -- '**/Cargo.toml')
+
+        echo "Rust versions are in sync: ${msrv}"

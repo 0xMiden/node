@@ -3,6 +3,13 @@ use std::path::{Path, PathBuf};
 
 use fs_err as fs;
 use miette::{IntoDiagnostic, miette};
+use protox::Compiler;
+use protox::file::{
+    ChainFileResolver,
+    DescriptorSetFileResolver,
+    GoogleFileResolver,
+    IncludeFileResolver,
+};
 use protox::prost::Message;
 
 /// Compiles each gRPC service definitions into a
@@ -92,8 +99,17 @@ fn generate_file_descriptor(
         .and_then(OsStr::to_str)
         .ok_or_else(|| miette!("invalid file name for {grpc_service:?}"))?;
 
-    let file_descriptor = protox::compile([grpc_service], [includes])?;
-    let file_descriptor = file_descriptor.encode_to_vec();
+    let mut resolver = ChainFileResolver::new();
+    resolver.add(IncludeFileResolver::new(includes.to_owned()));
+    resolver.add(
+        DescriptorSetFileResolver::decode(miden_objects::FILE_DESCRIPTOR_SET).into_diagnostic()?,
+    );
+    resolver.add(GoogleFileResolver::new());
+
+    let mut compiler = Compiler::with_file_resolver(resolver);
+    compiler.include_imports(true);
+    compiler.open_file(grpc_service)?;
+    let file_descriptor = compiler.file_descriptor_set().encode_to_vec();
 
     let mut f = codegen::Function::new(format!("{file_name}_api_descriptor"));
     f.vis("pub")

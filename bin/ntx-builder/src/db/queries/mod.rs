@@ -17,22 +17,13 @@ use crate::db::queries::account_effect::NetworkAccountEffect;
 
 pub(crate) mod account_effect;
 
-mod account_exists;
-pub use account_exists::account_exists;
-
-mod account_has_pending_notes;
-pub use account_has_pending_notes::account_has_pending_notes;
-
-// The committed-transaction landing check reads `last_committed_tx` from the `AccountView` the
-// coordinator pushes, so this read accessor is only used by tests to verify that `upsert_account`
-// persists `accounts.last_tx_id` correctly.
+// The scheduler detects a landed transaction from the block's own transaction list, so this read
+// accessor is only used by tests to verify that `upsert_account` persists `accounts.last_tx_id`
+// correctly.
 #[cfg(test)]
 mod account_last_tx;
 #[cfg(test)]
 pub use account_last_tx::account_last_tx;
-
-mod accounts_with_pending_notes;
-pub use accounts_with_pending_notes::accounts_with_pending_notes;
 
 mod available_notes;
 pub use available_notes::{AvailableNotes, available_notes};
@@ -55,14 +46,26 @@ pub use insert_network_notes::insert_network_notes;
 mod insert_note_scripts;
 pub use insert_note_scripts::insert_note_script;
 
+mod insert_sponsorship_notes;
+pub use insert_sponsorship_notes::insert_sponsorship_notes;
+
 mod lookup_note_script;
 pub use lookup_note_script::lookup_note_script;
 
 mod mark_notes_consumed;
 pub use mark_notes_consumed::mark_notes_consumed;
 
+mod mark_sponsorships_consumed;
+pub use mark_sponsorships_consumed::mark_sponsorships_consumed;
+
 mod notes_failed;
 pub use notes_failed::notes_failed;
+
+mod ready_accounts;
+pub use ready_accounts::ready_accounts;
+
+mod reset_sponsored_notes;
+pub use reset_sponsored_notes::reset_sponsored_notes;
 
 mod select_chain_state;
 pub use select_chain_state::select_chain_state;
@@ -72,6 +75,12 @@ pub use select_genesis_commitment::select_genesis_commitment;
 
 mod select_genesis_validator_keys;
 pub use select_genesis_validator_keys::select_genesis_validator_keys;
+
+mod sponsorships_for_pending_notes;
+pub use sponsorships_for_pending_notes::select_sponsorships_for_pending_notes;
+
+mod update_note_eligibility;
+pub use update_note_eligibility::update_note_eligibility;
 
 mod update_chain_state_tip;
 pub use update_chain_state_tip::update_chain_state_tip;
@@ -87,41 +96,31 @@ mod tests;
 
 /// Applies a committed block's effects to the database in a single transaction:
 ///
-/// - Upserts each touched network account: new full-state path insert, partial patches apply to
-///   the existing committed row.
-/// - Inserts each network note (`INSERT OR IGNORE` to tolerate redeliveries).
-/// - Marks any of our pending notes whose nullifiers appear in this block as `committed_at =
-///   block_num`, preserving the row so the `GetNetworkNoteStatus` endpoint can report the full
-///   lifecycle.
+/// - Upserts each touched network account: creations insert the new account, updates apply to the
+///   existing committed row.
+/// - Inserts each network note and `FEE_SPONSORSHIP` note (`INSERT OR IGNORE` to tolerate
+///   redeliveries).
+/// - Marks any of our pending notes (feature and sponsorship alike) whose nullifiers appear in
+///   this block as `committed_at = block_num`, preserving the row so the `GetNetworkNoteStatus`
+///   endpoint can report the full lifecycle.
 /// - Updates the singleton `chain_state` row's tip with the new block header and the
 ///   post-application chain MMR.
 ///
-/// The account upserts apply each block's network-account effects to the local store so an actor's
-/// post-expiry reload sees the authoritative committed state. The recorded `accounts.last_tx_id` and
-/// the `last_committed_tx` the coordinator pushes to actors both derive from the block's
+/// The account upserts apply each block's network-account effects to the local store, so the next
+/// attempt for an account reads its authoritative committed state. The recorded
+/// `accounts.last_tx_id` and the scheduler's landing check both derive from the block's
 /// `account_transactions`, so they agree on which transaction last touched each account.
 pub fn apply_committed_block(
     tx: &WriteTx<'_>,
     effects: &CommittedBlockEffects,
     chain_mmr: &PartialMmr,
 ) -> Result<(), DatabaseError> {
-    // The latest transaction in this block per account, from the same source the coordinator uses
-    // for each `AccountView`'s `last_committed_tx`, so the persisted `accounts.last_tx_id` and the
-    // pushed landing state agree. For block-producer output every committed account update
-    // originates from a transaction in the same block, so each upserted account has an entry here.
-    // The genesis block is the sole exception: it commits account state directly with no
-    // transactions, so genesis accounts fall back to the zero sentinel below.
-    //
-    // `accounts.last_tx_id` is persisted but no longer read by landing detection, which now compares
-    // against the in-memory `AccountView`. The column is retained as the committed-state record and
-    // is exercised only by the `account_last_tx` test accessor (see `queries::accounts`).
+    // Each non-genesis account update has an originating transaction in the same block. Genesis
+    // account updates use the zero sentinel because genesis contains no transactions.
     let last_tx = effects.latest_tx_per_account();
     let is_genesis = effects.header.block_num() == BlockNumber::GENESIS;
 
-    for (account_id, details) in &effects.network_account_updates {
-        let Some(effect) = NetworkAccountEffect::from_protocol(details) else {
-            continue;
-        };
+    for (account_id, effect) in &effects.network_account_updates {
         // Genesis seeds account state with no originating transaction, so it stores a zero
         // `TransactionId` sentinel.
         let last_tx_id = last_tx.get(account_id).copied().unwrap_or_else(|| {
@@ -133,7 +132,7 @@ pub fn apply_committed_block(
         });
         match effect {
             NetworkAccountEffect::Created(account) => {
-                upsert_account(tx, *account_id, &account, last_tx_id)?;
+                upsert_account(tx, *account_id, account, last_tx_id)?;
             },
             NetworkAccountEffect::Updated(patch) => {
                 // If the account is not already tracked locally, skip it.
@@ -141,16 +140,24 @@ pub fn apply_committed_block(
                     continue;
                 };
                 current
-                    .apply_patch(&patch)
+                    .apply_patch(patch)
                     .expect("network account patch should apply since the block was committed");
                 upsert_account(tx, *account_id, &current, last_tx_id)?;
             },
         }
     }
 
-    insert_network_notes(tx, &effects.network_notes)?;
+    let block_num = effects.header.block_num();
 
-    mark_notes_consumed(tx, &effects.nullifiers, effects.header.block_num())?;
+    insert_network_notes(tx, &effects.network_notes, block_num)?;
+    insert_sponsorship_notes(tx, &effects.sponsorship_notes)?;
+
+    mark_notes_consumed(tx, &effects.nullifiers, block_num)?;
+    mark_sponsorships_consumed(tx, &effects.nullifiers, block_num)?;
+
+    // Applied after the consumption marks so a feature note consumed in this same block is not made
+    // eligible again.
+    reset_sponsored_notes(tx, &effects.sponsorship_notes, block_num)?;
 
     update_chain_state_tip(tx, effects.header.block_num(), &effects.header, chain_mmr)?;
 

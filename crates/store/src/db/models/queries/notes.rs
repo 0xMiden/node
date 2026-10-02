@@ -1,20 +1,10 @@
-#![expect(
-    clippy::cast_possible_wrap,
-    reason = "We will not approach the item count where i64 and usize cause issues"
-)]
-
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ops::RangeInclusive;
 
-use diesel::prelude::{
-    ExpressionMethods,
-    Insertable,
-    QueryDsl,
-    Queryable,
-    QueryableByName,
-    Selectable,
-};
+use diesel::dsl::sql;
+use diesel::prelude::{ExpressionMethods, QueryDsl, Queryable, QueryableByName, Selectable};
 use diesel::query_dsl::methods::SelectDsl;
+use diesel::sql_types::BigInt;
 use diesel::sqlite::Sqlite;
 use diesel::{
     JoinOnDsl,
@@ -29,7 +19,6 @@ use miden_node_utils::limiter::{
     QueryParamNoteCommitmentLimit,
     QueryParamNoteTagLimit,
 };
-use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockNoteIndex, BlockNumber};
@@ -50,15 +39,8 @@ use miden_protocol::note::{
     PartialNoteMetadata,
 };
 use miden_protocol::utils::serde::{Deserializable, Serializable};
-use miden_standards::note::NetworkAccountTarget;
 
-use crate::COMPONENT;
-use crate::db::models::conv::{
-    SqlTypeConvert,
-    idx_to_raw_sql,
-    note_type_to_raw_sql,
-    raw_sql_to_idx,
-};
+use crate::db::models::conv::{SqlTypeConvert, raw_sql_to_idx};
 use crate::db::models::queries::select_block_header_by_block_num;
 use crate::db::models::{serialize_vec, vec_raw_try_into};
 use crate::db::{DatabaseError, NoteRecord, NoteSyncRecord, NoteSyncUpdate, schema};
@@ -66,33 +48,15 @@ use crate::errors::NoteSyncError;
 
 /// Estimated byte size of a [`NoteSyncUpdate`] excluding its notes.
 ///
-/// `BlockHeader` (~341 bytes) + MMR proof with 32 siblings (~1216 bytes).
-pub(crate) const NOTE_SYNC_BLOCK_OVERHEAD_BYTES: usize = 1600;
+/// Includes a canonical header with validator keys, a scheduled protocol configuration, and an
+/// MMR proof with 32 siblings.
+pub(crate) const NOTE_SYNC_BLOCK_OVERHEAD_BYTES: usize = 1800;
 
 /// Estimated byte size of a single [`NoteSyncRecord`].
 ///
-/// Note ID (~38 bytes) + index + sync metadata with up to four attachment entries (~200 bytes) +
-/// sparse merkle path with 16 siblings (~608 bytes).
+/// Includes a note ID, an index, compact metadata with four attachment entries, and a sparse
+/// Merkle path with 16 siblings.
 pub(crate) const NOTE_SYNC_RECORD_BYTES: usize = 900;
-
-// NETWORK NOTE TYPE
-// ================================================================================================
-
-/// Classifies network notes for database storage.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(i32)]
-pub(crate) enum NetworkNoteType {
-    /// Not a network note.
-    None = 0,
-    /// Single account target network note (has `NetworkAccountTarget` attachment).
-    SingleTarget = 1,
-}
-
-impl From<NetworkNoteType> for i32 {
-    fn from(value: NetworkNoteType) -> Self {
-        value as i32
-    }
-}
 
 /// Select notes matching the given tags within a block range.
 ///
@@ -145,13 +109,16 @@ pub(crate) fn select_notes_since_block_by_tag(
     block_range: RangeInclusive<BlockNumber>,
 ) -> Result<Vec<NoteSyncRecord>, DatabaseError> {
     QueryParamNoteTagLimit::check(note_tags.len())?;
-    let desired_note_tags: Vec<i32> = note_tags.iter().map(|tag| *tag as i32).collect();
+    let desired_note_tags: Vec<i64> = note_tags.iter().copied().map(i64::from).collect();
+    // The column stores tags as unsigned 32-bit values. The Diesel schema declares the column as a
+    // 32-bit `Integer`, which cannot bind tags at or above 2^31.
+    let tag_column = sql::<BigInt>("notes.tag");
     let start_block_num = block_range.start().to_raw_sql();
     let end_block_num = block_range.end().to_raw_sql();
 
     let Some(desired_block_num): Option<i64> =
         SelectDsl::select(schema::notes::table, schema::notes::committed_at)
-            .filter(schema::notes::tag.eq_any(&desired_note_tags))
+            .filter(tag_column.clone().eq_any(&desired_note_tags))
             .filter(schema::notes::committed_at.ge(start_block_num))
             .filter(schema::notes::committed_at.le(end_block_num))
             .order_by(schema::notes::committed_at.asc())
@@ -164,7 +131,7 @@ pub(crate) fn select_notes_since_block_by_tag(
 
     let notes = SelectDsl::select(schema::notes::table, NoteSyncRecordRawRow::as_select())
         .filter(schema::notes::committed_at.eq(desired_block_num))
-        .filter(schema::notes::tag.eq_any(&desired_note_tags))
+        .filter(tag_column.eq_any(&desired_note_tags))
         .order_by((
             schema::notes::committed_at.asc(),
             schema::notes::batch_index.asc(),
@@ -221,37 +188,36 @@ pub(crate) fn select_notes_by_id(
     Ok(records)
 }
 
-/// Select the subset of note commitments that already exist in the notes table and were
-/// committed at or before `up_to_block`.
+/// Select the requested note IDs that the notes table contains at or before `up_to_block`.
 ///
 /// # Raw SQL
 ///
 /// ```sql
 /// SELECT
-///     notes.note_commitment
+///     notes.note_id
 /// FROM notes
-/// WHERE note_commitment IN (?1) AND committed_at <= ?2
+/// WHERE note_id IN (?1) AND committed_at <= ?2
 /// ```
-pub(crate) fn select_existing_note_commitments(
+pub(crate) fn select_existing_note_ids(
     conn: &mut SqliteConnection,
-    note_commitments: &[Word],
+    note_ids: &[NoteId],
     up_to_block: BlockNumber,
-) -> Result<HashSet<Word>, DatabaseError> {
-    QueryParamNoteCommitmentLimit::check(note_commitments.len())?;
+) -> Result<HashSet<NoteId>, DatabaseError> {
+    QueryParamNoteCommitmentLimit::check(note_ids.len())?;
 
-    let note_commitments = serialize_vec(note_commitments.iter());
+    let note_ids = serialize_vec(note_ids);
 
-    let raw_commitments = SelectDsl::select(schema::notes::table, schema::notes::note_id)
-        .filter(schema::notes::note_id.eq_any(&note_commitments))
+    let raw_note_ids = SelectDsl::select(schema::notes::table, schema::notes::note_id)
+        .filter(schema::notes::note_id.eq_any(&note_ids))
         .filter(schema::notes::committed_at.le(up_to_block.to_raw_sql()))
         .load::<Vec<u8>>(conn)?;
 
-    let commitments = raw_commitments
+    let note_ids = raw_note_ids
         .into_iter()
-        .map(|commitment| Word::read_from_bytes(&commitment[..]))
+        .map(|note_id| NoteId::read_from_bytes(&note_id))
         .collect::<Result<HashSet<_>, _>>()?;
 
-    Ok(commitments)
+    Ok(note_ids)
 }
 
 /// Select note inclusion proofs matching the note commitments, restricted to notes committed at
@@ -308,19 +274,20 @@ pub(crate) fn select_note_inclusion_proofs(
     .order_by(schema::notes::committed_at.asc())
     .load::<(i64, Vec<u8>, i32, i32, Vec<u8>)>(conn)?;
 
-    Result::<BTreeMap<_, _>, _>::from_iter(raw_notes.iter().map(
-        |(block_num, note_id, batch_index, note_index, merkle_path)| {
+    raw_notes
+        .iter()
+        .map(|(block_num, note_id, batch_index, note_index, merkle_path)| {
             let note_id = NoteId::read_from_bytes(&note_id[..])?;
             let block_num = BlockNumber::from_raw_sql(*block_num)?;
             let node_index_in_block =
                 BlockNoteIndex::new(raw_sql_to_idx(*batch_index), raw_sql_to_idx(*note_index))
                     .expect("batch and note index from DB should be valid")
                     .leaf_index_value();
-            let merkle_path = SparseMerklePath::read_from_bytes(&merkle_path[..])?;
+            let merkle_path = miden_node_persistence::decode::<SparseMerklePath>(&merkle_path[..])?;
             let proof = NoteInclusionProof::new(block_num, node_index_in_block, merkle_path)?;
             Ok((note_id, proof))
-        },
-    ))
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()
 }
 
 /// Select note sync records matching the given note commitments.
@@ -436,7 +403,7 @@ pub(crate) fn select_note_script_by_root(
         .optional()?;
 
     raw.as_ref()
-        .map(|bytes| NoteScript::from_bytes(bytes))
+        .map(|bytes| miden_node_persistence::decode::<NoteScript>(bytes))
         .transpose()
         .map_err(Into::into)
 }
@@ -498,7 +465,8 @@ impl TryInto<NoteSyncRecord> for NoteSyncRecordRawRow {
         let note_index = self.block_note_index.try_into()?;
 
         let note_id = NoteId::from_raw(Word::read_from_bytes(&self.note_id[..])?);
-        let inclusion_path = SparseMerklePath::read_from_bytes(&self.inclusion_path[..])?;
+        let inclusion_path =
+            miden_node_persistence::decode::<SparseMerklePath>(&self.inclusion_path[..])?;
         let (metadata, attachments) = self.metadata.try_into()?;
         Ok(NoteSyncRecord {
             block_num,
@@ -615,14 +583,16 @@ impl TryInto<NoteRecord> for NoteRecordWithScriptRawJoined {
         let (metadata, attachments) = metadata.try_into()?;
         let committed_at = BlockNumber::from_raw_sql(committed_at)?;
         let note_id = Word::read_from_bytes(&note_id[..])?;
-        let script = script.map(|script| NoteScript::read_from_bytes(&script[..])).transpose()?;
+        let script = script
+            .map(|script| miden_node_persistence::decode::<NoteScript>(&script[..]))
+            .transpose()?;
         let details = if let NoteDetailsRawRow {
             assets: Some(assets),
             storage: Some(storage),
             serial_num: Some(serial_num),
         } = details
         {
-            let storage = NoteStorage::read_from_bytes(&storage[..])?;
+            let storage = miden_node_persistence::decode::<NoteStorage>(&storage[..])?;
             let serial_num = Word::read_from_bytes(&serial_num[..])?;
             let script =
                 script.ok_or_else(|| {
@@ -633,12 +603,13 @@ impl TryInto<NoteRecord> for NoteRecordWithScriptRawJoined {
                     >(None)
                 })?;
             let recipient = NoteRecipient::new(serial_num, script, storage);
-            let assets = NoteAssets::read_from_bytes(&assets[..])?;
+            let assets = miden_node_persistence::decode::<NoteAssets>(&assets[..])?;
             Some(NoteDetails::new(assets, recipient))
         } else {
             None
         };
-        let inclusion_path = SparseMerklePath::read_from_bytes(&inclusion_path[..])?;
+        let inclusion_path =
+            miden_node_persistence::decode::<SparseMerklePath>(&inclusion_path[..])?;
         let note_index = index.try_into()?;
         Ok(NoteRecord {
             block_num: committed_at,
@@ -692,11 +663,7 @@ impl TryInto<(NoteMetadata, NoteAttachments)> for NoteMetadataRawRow {
         let note_type = NoteType::try_from(self.note_type as u8)
             .map_err(miden_node_db::DatabaseError::conversiont_from_sql::<NoteType, _, _>)?;
         let tag = NoteTag::new(self.tag as u32);
-        let attachments = if self.attachment.is_empty() {
-            NoteAttachments::empty()
-        } else {
-            NoteAttachments::read_from_bytes(&self.attachment)?
-        };
+        let attachments = miden_node_persistence::decode::<NoteAttachments>(&self.attachment)?;
         let partial = PartialNoteMetadata::new(sender, note_type).with_tag(tag);
         let metadata = NoteMetadata::new(partial, &attachments);
         Ok((metadata, attachments))
@@ -723,126 +690,5 @@ impl TryInto<BlockNoteIndex> for BlockNoteIndexRawRow {
             )
         })?;
         Ok(index)
-    }
-}
-
-/// Insert notes to the DB using the given [`SqliteConnection`]. Public notes should also have a
-/// nullifier.
-///
-/// # Returns
-///
-/// The number of affected rows.
-///
-/// # Note
-///
-/// The [`SqliteConnection`] object is not consumed. It's up to the caller to commit or rollback the
-/// transaction.
-#[miden_instrument(
-    target = COMPONENT,
-    err,
-)]
-pub(crate) fn insert_notes(
-    conn: &mut SqliteConnection,
-    notes: &[(NoteRecord, Option<Nullifier>)],
-) -> Result<usize, DatabaseError> {
-    let count = diesel::insert_into(schema::notes::table)
-        .values(Vec::from_iter(
-            notes
-                .iter()
-                .map(|(note, nullifier)| NoteInsertRow::from((note.clone(), *nullifier))),
-        ))
-        .execute(conn)?;
-    Ok(count)
-}
-
-/// Insert scripts to the DB using the given [`SqliteConnection`]. It inserts the scripts held by
-/// the notes passed as parameter. If the script root already exists in the DB, it will be ignored.
-///
-/// # Returns
-///
-/// The number of affected rows.
-///
-/// # Note
-///
-/// The [`SqliteConnection`] object is not consumed. It's up to the caller to commit or rollback the
-/// transaction.
-#[miden_instrument(
-    target = COMPONENT,
-    err,
-)]
-pub(crate) fn insert_scripts<'a>(
-    conn: &mut SqliteConnection,
-    notes: impl IntoIterator<Item = &'a NoteRecord>,
-) -> Result<usize, DatabaseError> {
-    let values = Vec::from_iter(notes.into_iter().filter_map(|note| {
-        let note_details = note.details.as_ref()?;
-        Some((
-            schema::note_scripts::script_root.eq(note_details.script().root().to_bytes()),
-            schema::note_scripts::script.eq(note_details.script().to_bytes()),
-        ))
-    }));
-    let count = diesel::insert_or_ignore_into(schema::note_scripts::table)
-        .values(values)
-        .execute(conn)?;
-
-    Ok(count)
-}
-
-#[derive(Debug, Clone, PartialEq, Insertable)]
-#[diesel(table_name = schema::notes)]
-pub struct NoteInsertRow {
-    pub committed_at: i64,
-
-    pub batch_index: i32,
-    pub note_index: i32, // index within batch
-
-    pub note_id: Vec<u8>,
-
-    pub note_type: i32,
-    pub sender: Vec<u8>, // AccountId
-    pub tag: i32,
-
-    pub network_note_type: i32,
-    pub target_account_id: Option<Vec<u8>>,
-    pub attachment: Vec<u8>,
-    pub inclusion_path: Vec<u8>,
-    pub consumed_at: Option<i64>,
-    pub nullifier: Option<Vec<u8>>,
-    pub assets: Option<Vec<u8>>,
-    pub storage: Option<Vec<u8>>,
-    pub script_root: Option<Vec<u8>>,
-    pub serial_num: Option<Vec<u8>>,
-}
-
-impl From<(NoteRecord, Option<Nullifier>)> for NoteInsertRow {
-    fn from((note, nullifier): (NoteRecord, Option<Nullifier>)) -> Self {
-        let target_account_id = NetworkAccountTarget::try_from(&note.attachments).ok();
-        let network_note_type = if target_account_id.is_some() && !note.metadata.is_private() {
-            NetworkNoteType::SingleTarget
-        } else {
-            NetworkNoteType::None
-        };
-
-        let attachment_bytes = note.attachments.to_bytes();
-
-        Self {
-            committed_at: note.block_num.to_raw_sql(),
-            batch_index: idx_to_raw_sql(note.note_index.batch_idx()),
-            note_index: idx_to_raw_sql(note.note_index.note_idx_in_batch()),
-            note_id: note.note_id.to_bytes(),
-            note_type: note_type_to_raw_sql(note.metadata.note_type() as u8),
-            sender: note.metadata.sender().to_bytes(),
-            tag: note.metadata.tag().to_raw_sql(),
-            network_note_type: network_note_type.into(),
-            target_account_id: target_account_id.map(|t| t.target_id().to_bytes()),
-            attachment: attachment_bytes,
-            inclusion_path: note.inclusion_path.to_bytes(),
-            consumed_at: None::<i64>, // New notes are always unconsumed.
-            nullifier: nullifier.as_ref().map(Nullifier::to_bytes),
-            assets: note.details.as_ref().map(|d| d.assets().to_bytes()),
-            storage: note.details.as_ref().map(|d| d.storage().to_bytes()),
-            script_root: note.details.as_ref().map(|d| d.script().root().to_bytes()),
-            serial_num: note.details.as_ref().map(|d| d.serial_num().to_bytes()),
-        }
     }
 }

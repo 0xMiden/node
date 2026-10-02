@@ -14,6 +14,7 @@ monitor:
 - an explorer endpoint;
 - a note transport service;
 - the validator service;
+- the Agglayer bridge, through the status endpoint of an agglayer-monitor instance;
 - an end-to-end network transaction flow using temporary in-memory accounts.
 
 The monitor serves a web dashboard and can emit OpenTelemetry traces when standard OTLP environment variables are
@@ -24,9 +25,23 @@ configured.
 The monitor is an observer and test client, not a node component required for block production. Its network transaction
 checks create fresh in-memory accounts on startup and do not persist account state to disk.
 
-Network transaction checks also require `MIDEN_MONITOR_VALIDATOR_SIGNING_PUBLIC_KEY`. It must contain the hex-encoded
-validator key that signs transaction encryption key attestations. The monitor will not submit a transaction unless it
-can verify the advertised encryption key.
+Network transaction checks require `MIDEN_MONITOR_VALIDATOR_SIGNING_PUBLIC_KEY`. The signing key must contain the
+hex-encoded validator key that signs transaction encryption key attestations. The monitor will not submit a transaction
+unless it can verify the advertised encryption key. The monitor obtains the active fee asset from the protocol
+configuration returned by RPC and verifies it against the transaction's reference block.
+
+On a chain with a non-zero verification base fee, network transaction checks additionally require
+`MIDEN_MONITOR_FUNDING_SERVICE_URL`: the monitor funds its in-memory accounts from the funding service and tops the
+balance up automatically when it runs low. Without it the monitor refuses to start its network transaction checks on
+such chains. `MIDEN_MONITOR_FAUCET_URL` is only used for the faucet checks.
+
+The note transport check uses the standard gRPC health service for `miden.note_transport.v1.NoteTransportService`. Only
+a `SERVING` response marks the service as healthy. Its dashboard card shows the service URL.
+
+The Agglayer bridge check reads `GET /v1/status` from the agglayer-monitor API at `MIDEN_MONITOR_AGGLAYER_MONITOR_URL`.
+The agglayer-monitor runs the E2E bridge tests between L1 and Miden. The monitor does not send bridge transactions. The
+card status is the overall status that the agglayer-monitor reports. That status is unknown until both directions have a
+result. The card is unhealthy when the endpoint is unreachable, returns an error, or uses an unsupported schema version.
 
 Use the binary help output for the current command and configuration surface. The help output is the source of truth for
 flags and environment variables.

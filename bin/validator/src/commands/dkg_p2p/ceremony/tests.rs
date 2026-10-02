@@ -5,7 +5,7 @@ use std::sync::Arc;
 use iroh::address_lookup::memory::MemoryLookup;
 use iroh::endpoint::{Side, presets};
 use iroh::{Endpoint, EndpointId, SecretKey as IrohSecretKey};
-use miden_protocol::block::ValidatorKeys;
+use miden_protocol::block::ValidatorConfig;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, SigningKey};
 use miden_protocol::crypto::hash::rpo::Rpo256;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
@@ -44,8 +44,9 @@ fn test_ceremony(
     endpoint_secret: IrohSecretKey,
     peer_endpoints: BTreeSet<EndpointId>,
 ) -> Ceremony {
+    let quorum = validator_keys.len().try_into().unwrap();
     let validator_set =
-        ValidatorKeys::new(validator_keys).expect("test validator set must be valid");
+        ValidatorConfig::new(validator_keys, quorum).expect("test validator set must be valid");
     Ceremony {
         genesis_commitment: Rpo256::hash(b"test genesis"),
         validator_set: Arc::new(validator_set),

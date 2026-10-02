@@ -13,6 +13,7 @@ ignorePaths:
   - node_modules
   - "**/package-lock.json"
 words:
+  - Agglayer
   - ciphertext
   - Devnet
   - grpcurl
@@ -20,3 +21,12 @@ words:
   - Miden
   - Midenscan
   - RocksDB
+  - USDCx
+  - Keccak
+  - bech32
+  - prefund
+  - prefunding
+  - prefunded
+  - unpauser
+  - blocklist
+  - undeployed

@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use miden_node_proto::DecodeMessageExt;
 use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
 use miden_protocol::account::{
     Account,
@@ -27,6 +28,7 @@ use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
 use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::note::{Note, NoteScript, NoteScriptRoot, PartialNote};
+use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{
     AccountInputs,
     ExecutedTransaction,
@@ -35,8 +37,9 @@ use miden_protocol::transaction::{
     PartialBlockchain,
     ProvenTransaction,
     TransactionArgs,
+    TransactionInputs,
 };
-use miden_protocol::utils::serde::Serializable;
+use miden_protocol::vm::FutureMaybeSend;
 use miden_protocol::{Felt, Word};
 use miden_standards::account::auth::{Approver, AuthSingleSig};
 use miden_standards::account::faucets::{FungibleFaucet, TokenName};
@@ -57,18 +60,11 @@ use rand::RngExt;
 use rayon::prelude::*;
 use url::Url;
 
+use crate::artifacts::{write_inputs, write_transactions};
 use crate::prover::BenchmarkProver;
-use crate::rpc_state::{fetch_chain_tip_header, fetch_partial_blockchain};
+use crate::rpc_state::fetch_chain_tip_state;
 use crate::summary::print_proving_summary;
-use crate::{
-    PROOFS_DIR,
-    create_genesis_aware_rpc_client,
-    get_genesis_header_request,
-    write_to_file,
-};
-
-/// Maximum attempts to observe a stable chain tip.
-const MAX_TIP_FETCH_ATTEMPTS: u32 = 10;
+use crate::{PROOFS_DIR, create_genesis_aware_rpc_client, get_genesis_header_request};
 
 // CONSTANTS
 // ================================================================================================
@@ -107,8 +103,10 @@ impl ProofCollector {
         }
     }
 
-    /// Submit one executed tx for proving. The remote path spawns a concurrent task and returns
-    /// immediately; the local path proves inline now, blocking until the proof is done.
+    /// Submits one executed transaction for proving.
+    ///
+    /// The remote prover uses a concurrent task and returns immediately. The local prover blocks
+    /// until it completes the proof.
     async fn submit(&mut self, prover: &Arc<BenchmarkProver>, executed_tx: ExecutedTransaction) {
         match self {
             Self::Concurrent(tasks) => {
@@ -185,32 +183,13 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
         .into_inner()
         .block_header
         .expect("RPC returned no block header");
-    let genesis_header: BlockHeader = genesis_header_proto.try_into().unwrap();
-
-    // The tip header and chain MMR come from separate RPC calls, so retry until they refer to the
-    // same chain tip.
-    let mut tip_state = None;
-    for _ in 0..MAX_TIP_FETCH_ATTEMPTS {
-        println!("Fetching chain tip header...");
-        let ref_block_header = fetch_chain_tip_header(&mut rpc_client).await;
-        let ref_block_num = ref_block_header.block_num();
-
-        println!("Fetching chain MMR up to ref block...");
-        let partial_blockchain =
-            fetch_partial_blockchain(&mut rpc_client, ref_block_num.as_u32(), &genesis_header)
-                .await;
-
-        if partial_blockchain.chain_length() == ref_block_num {
-            tip_state = Some((ref_block_header, partial_blockchain));
-            break;
-        }
-    }
-    let (ref_block_header, partial_blockchain) = tip_state.unwrap_or_else(|| {
-        panic!(
-            "failed to fetch a consistent tip header and chain MMR after \
-             {MAX_TIP_FETCH_ATTEMPTS} attempts",
-        )
-    });
+    // SAFETY: Genesis has no parent. This benchmark trusts the configured RPC for genesis.
+    let genesis_header: BlockHeader = genesis_header_proto.decode_and_build_unchecked().unwrap();
+    println!("Fetching chain tip state...");
+    let (ref_block_header, protocol_config, partial_blockchain) =
+        fetch_chain_tip_state(&mut rpc_client, &genesis_header)
+            .await
+            .expect("failed to fetch the chain tip transaction anchor");
     let ref_block_num = ref_block_header.block_num();
 
     println!("Creating faucet...");
@@ -218,7 +197,7 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
 
     let coin_seed: [u64; 4] = rand::rng().random();
     let mut seed_rng = RandomCoin::new(coin_seed.map(Felt::new_unchecked).into());
-    let wallet_secret_key = SecretKey::with_rng(&mut seed_rng);
+    let wallet_secret_key = SecretKey::with_rng(&mut rand::rng());
     let wallet_public_key = wallet_secret_key.public_key();
 
     println!("Creating {num_transactions} wallets in parallel...");
@@ -227,7 +206,8 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
         .map(|index| create_wallet(&wallet_public_key, index))
         .collect();
 
-    let mut data_store = BenchmarkDataStore::new(ref_block_header.clone(), partial_blockchain);
+    let mut data_store =
+        BenchmarkDataStore::new(ref_block_header.clone(), protocol_config, partial_blockchain);
     data_store.add_account(faucet.clone());
     for wallet in &wallets {
         data_store.add_account(wallet.clone());
@@ -259,7 +239,7 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
          notes each, {num_transactions} notes total)..."
     );
     let mut mint_proofs = ProofCollector::new(&prover, num_mint_txs);
-    let mut mint_tx_inputs: Vec<Vec<u8>> = Vec::with_capacity(num_mint_txs);
+    let mut mint_tx_inputs: Vec<TransactionInputs> = Vec::with_capacity(num_mint_txs);
     let mut mint_notes: Vec<Note> = Vec::with_capacity(num_transactions as usize);
     let mint_phase_start = Instant::now();
     let mut mint_exec_total = Duration::ZERO;
@@ -269,7 +249,7 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
         let notes: Vec<Note> = wallet_chunk
             .iter()
             .map(|wallet| {
-                let asset = Asset::Fungible(FungibleAsset::new(faucet_id, 10).unwrap());
+                let asset = Asset::from(FungibleAsset::new(faucet_id, 10).unwrap());
                 P2idNote::builder()
                     .sender(faucet_id)
                     .target(wallet.id())
@@ -306,23 +286,16 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
         .expect("failed to execute mint transaction");
         mint_exec_total += exec_t0.elapsed();
 
-        let tx_inputs_bytes = executed_tx.tx_inputs().to_bytes();
+        let tx_inputs = executed_tx.tx_inputs().clone();
         let patch = executed_tx.account_patch().clone();
 
         // Evolve the faucet state for the next iteration before we hand the executed tx off for
-        // proving. The first mint tx creates the faucet on-chain and emits a full-state patch
-        // (which carries account code) that must be converted into the account directly, later txs
-        // emit partial-state delta patches that are applied onto the existing faucet.
-        if patch.is_full_state() {
-            faucet =
-                Account::try_from(&patch).expect("failed to build faucet from full-state patch");
-        } else {
-            faucet.apply_patch(&patch).expect("failed to apply faucet patch");
-        }
+        // proving. The first mint tx also creates the faucet on-chain.
+        faucet.apply_patch(&patch).expect("failed to apply faucet patch");
         data_store.add_account(faucet.clone());
 
         mint_proofs.submit(&prover, executed_tx).await;
-        mint_tx_inputs.push(tx_inputs_bytes);
+        mint_tx_inputs.push(tx_inputs);
         mint_notes.extend(notes);
 
         println!(
@@ -347,7 +320,8 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
     // strategy.
     println!("Executing {num_transactions} consume transactions (sequential)...");
     let mut consume_proofs = ProofCollector::new(&prover, num_transactions as usize);
-    let mut consume_tx_inputs: Vec<Vec<u8>> = Vec::with_capacity(num_transactions as usize);
+    let mut consume_tx_inputs: Vec<TransactionInputs> =
+        Vec::with_capacity(num_transactions as usize);
     let consume_phase_start = Instant::now();
     let mut consume_exec_total = Duration::ZERO;
 
@@ -371,10 +345,10 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
         .expect("failed to execute consume transaction");
         consume_exec_total += exec_t0.elapsed();
 
-        let tx_inputs_bytes = executed_tx.tx_inputs().to_bytes();
+        let tx_inputs = executed_tx.tx_inputs().clone();
 
         consume_proofs.submit(&prover, executed_tx).await;
-        consume_tx_inputs.push(tx_inputs_bytes);
+        consume_tx_inputs.push(tx_inputs);
 
         if (index + 1) % 10 == 0 || index + 1 == num_transactions {
             println!("  executed {} / {num_transactions} consume txs", index + 1);
@@ -395,10 +369,14 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
     let out_dir = PathBuf::from(PROOFS_DIR);
     println!("Writing proofs to {}/", out_dir.display());
     fs_err::create_dir_all(&out_dir).unwrap();
-    write_to_file(&out_dir.join("mint_txs.bin"), &mint_txs);
-    write_to_file(&out_dir.join("mint_tx_inputs.bin"), &mint_tx_inputs);
-    write_to_file(&out_dir.join("consume_txs.bin"), &consume_txs);
-    write_to_file(&out_dir.join("consume_tx_inputs.bin"), &consume_tx_inputs);
+    write_transactions(&out_dir.join("mint_txs.bin"), &mint_txs)
+        .expect("failed to write mint transactions");
+    write_inputs(&out_dir.join("mint_tx_inputs.bin"), &mint_tx_inputs)
+        .expect("failed to write mint inputs");
+    write_transactions(&out_dir.join("consume_txs.bin"), &consume_txs)
+        .expect("failed to write consume transactions");
+    write_inputs(&out_dir.join("consume_tx_inputs.bin"), &consume_tx_inputs)
+        .expect("failed to write consume inputs");
     println!("Done.");
 }
 
@@ -407,9 +385,7 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
 
 /// Creates a new faucet account and returns it alongside its secret key.
 fn create_faucet() -> (Account, SecretKey) {
-    let coin_seed: [u64; 4] = rand::rng().random();
-    let mut rng = RandomCoin::new(coin_seed.map(Felt::new_unchecked).into());
-    let key_pair = SecretKey::with_rng(&mut rng);
+    let key_pair = SecretKey::with_rng(&mut rand::rng());
     let init_seed = [0_u8; 32];
 
     let fungible_faucet: AccountComponent = FungibleFaucet::builder()
@@ -465,15 +441,21 @@ fn create_wallet(
 struct BenchmarkDataStore {
     accounts: HashMap<AccountId, Account>,
     block_header: BlockHeader,
+    protocol_config: ProtocolConfig,
     partial_block_chain: PartialBlockchain,
     mast_store: TransactionMastStore,
 }
 
 impl BenchmarkDataStore {
-    fn new(block_header: BlockHeader, partial_block_chain: PartialBlockchain) -> Self {
+    fn new(
+        block_header: BlockHeader,
+        protocol_config: ProtocolConfig,
+        partial_block_chain: PartialBlockchain,
+    ) -> Self {
         Self {
             accounts: HashMap::new(),
             block_header,
+            protocol_config,
             partial_block_chain,
             mast_store: TransactionMastStore::new(),
         }
@@ -493,75 +475,94 @@ impl BenchmarkDataStore {
 }
 
 impl DataStore for BenchmarkDataStore {
-    async fn get_transaction_inputs(
+    fn get_transaction_inputs(
         &self,
         account_id: AccountId,
         _block_refs: BTreeSet<BlockNumber>,
-    ) -> Result<(PartialAccount, BlockHeader, PartialBlockchain), DataStoreError> {
-        let account = self.get_account(account_id)?;
-        let partial_account = PartialAccount::from(account);
-        Ok((partial_account, self.block_header.clone(), self.partial_block_chain.clone()))
+    ) -> impl FutureMaybeSend<
+        Result<(PartialAccount, BlockHeader, ProtocolConfig, PartialBlockchain), DataStoreError>,
+    > {
+        async move {
+            let account = self.get_account(account_id)?;
+            let partial_account = PartialAccount::from(account);
+            Ok((
+                partial_account,
+                self.block_header.clone(),
+                self.protocol_config.clone(),
+                self.partial_block_chain.clone(),
+            ))
+        }
     }
 
-    async fn get_storage_map_witness(
+    fn get_storage_map_witness(
         &self,
         account_id: AccountId,
         map_root: Word,
         map_key: StorageMapKey,
-    ) -> Result<miden_protocol::account::StorageMapWitness, DataStoreError> {
-        let account = self.get_account(account_id)?;
-        for slot in account.storage().slots() {
-            if let miden_protocol::account::StorageSlotContent::Map(map) = slot.content() {
-                if map.root() == map_root {
-                    return Ok(map.open(&map_key));
+    ) -> impl FutureMaybeSend<Result<miden_protocol::account::StorageMapWitness, DataStoreError>>
+    {
+        async move {
+            let account = self.get_account(account_id)?;
+            for slot in account.storage().slots() {
+                if let miden_protocol::account::StorageSlotContent::Map(map) = slot.content() {
+                    if map.root() == map_root {
+                        return Ok(map.open(&map_key));
+                    }
                 }
             }
-        }
-        Err(DataStoreError::Other {
-            error_msg: format!("no storage map with the requested root in account {account_id}")
+            Err(DataStoreError::Other {
+                error_msg: format!(
+                    "no storage map with the requested root in account {account_id}"
+                )
                 .into(),
-            source: None,
-        })
+                source: None,
+            })
+        }
     }
 
-    async fn get_foreign_account_inputs(
+    fn get_foreign_account_inputs(
         &self,
         _foreign_account_id: AccountId,
         _ref_block: BlockNumber,
-    ) -> Result<AccountInputs, DataStoreError> {
-        unimplemented!("foreign account inputs are not needed for the benchmark")
+    ) -> impl FutureMaybeSend<Result<AccountInputs, DataStoreError>> {
+        async move { unimplemented!("foreign account inputs are not needed for the benchmark") }
     }
 
-    async fn get_vault_asset_witnesses(
+    fn get_vault_asset_witnesses(
         &self,
         account_id: AccountId,
         vault_root: Word,
         vault_keys: BTreeSet<AssetId>,
-    ) -> Result<Vec<AssetWitness>, DataStoreError> {
-        let account = self.get_account(account_id)?;
+    ) -> impl FutureMaybeSend<Result<Vec<AssetWitness>, DataStoreError>> {
+        async move {
+            let account = self.get_account(account_id)?;
 
-        if account.vault().root() != vault_root {
-            return Err(DataStoreError::Other {
-                error_msg: "vault root mismatch".into(),
-                source: None,
-            });
+            if account.vault().root() != vault_root {
+                return Err(DataStoreError::Other {
+                    error_msg: "vault root mismatch".into(),
+                    source: None,
+                });
+            }
+
+            vault_keys
+                .into_iter()
+                .map(|vault_key| {
+                    AssetWitness::new(account.vault().open(vault_key).into(), [vault_key]).map_err(
+                        |err| DataStoreError::Other {
+                            error_msg: "failed to open vault asset tree".into(),
+                            source: Some(Box::new(err)),
+                        },
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()
         }
-
-        Result::<Vec<_>, _>::from_iter(vault_keys.into_iter().map(|vault_key| {
-            AssetWitness::new(account.vault().open(vault_key).into(), [vault_key]).map_err(|err| {
-                DataStoreError::Other {
-                    error_msg: "failed to open vault asset tree".into(),
-                    source: Some(Box::new(err)),
-                }
-            })
-        }))
     }
 
-    async fn get_note_script(
+    fn get_note_script(
         &self,
         _script_root: NoteScriptRoot,
-    ) -> Result<Option<NoteScript>, DataStoreError> {
-        Ok(None)
+    ) -> impl FutureMaybeSend<Result<Option<NoteScript>, DataStoreError>> {
+        async move { Ok(None) }
     }
 }
 

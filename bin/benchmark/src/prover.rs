@@ -15,10 +15,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use miden_node_proto::clients::{Builder, RemoteProverClient};
-use miden_node_proto::generated::remote_prover::{ProofRequest, ProofType};
-use miden_node_utils::spawn::spawn_blocking_in_current_span;
+use miden_node_proto::errors::ConversionError;
+use miden_node_proto::generated::miden::remote_prover::v1::prove_request::Request;
+use miden_node_proto::generated::miden::remote_prover::v1::{DecodedProveResponse, ProveRequest};
+use miden_node_proto::{BuildUnchecked, DecodeMessage};
+use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_protocol::transaction::{ExecutedTransaction, ProvenTransaction, TransactionInputs};
-use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_tx::{LocalTransactionProver, TransactionProverError};
 use tokio::sync::{Mutex, Semaphore};
 use url::Url;
@@ -198,20 +200,27 @@ impl RemoteTransactionProver {
         &self,
         tx_inputs: &TransactionInputs,
     ) -> Result<ProvenTransaction, TransactionProverError> {
-        let request = tonic::Request::new(ProofRequest {
-            proof_type: ProofType::Transaction.into(),
-            payload: tx_inputs.to_bytes(),
+        let request = tonic::Request::new(ProveRequest {
+            request: Some(Request::Transaction(tx_inputs.into())),
         });
 
         let response = self.client.clone().prove(request).await.map_err(|err| {
             TransactionProverError::other_with_source("failed to prove transaction", err)
         })?;
 
-        ProvenTransaction::read_from_bytes(&response.into_inner().payload).map_err(|_| {
-            TransactionProverError::other(
-                "failed to deserialize received response from remote transaction prover",
-            )
-        })
+        response
+            .into_inner()
+            .decode_fields()
+            .and_then(DecodedProveResponse::into_transaction)
+            // SAFETY: This benchmark trusts the configured prover to return a valid proof for the
+            // requested transaction.
+            .and_then(|transaction| transaction.build_unchecked().map_err(ConversionError::new))
+            .map_err(|error| {
+                TransactionProverError::other_with_source(
+                    "invalid remote transaction proof response",
+                    error,
+                )
+            })
     }
 }
 

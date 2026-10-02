@@ -51,6 +51,8 @@ A quick overview of the binaries:
   blocks.
 - [`network-monitor`](./bin/network-monitor/README.md): a tool which monitors a network's infrastructure, e.g. block
   production, RPC, validator, prover, faucet, explorer, and note transport.
+- [`funding-service`](./bin/funding-service/README.md): sends the chain's native asset to any account which asks for it,
+  so infrastructure can pay transaction fees.
 
 There are additional binaries but they're more supplementary; see their READMEs for more information.
 

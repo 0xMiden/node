@@ -1,19 +1,23 @@
 use miden_node_proto::generated as proto;
-use miden_node_utils::tracing::{miden_instrument, miden_span_record};
+use miden_node_tracing::{debug, miden_instrument, miden_span_record};
 use miden_protocol::Word;
 use tonic::Request;
-use tracing::debug;
 
 use super::{RpcBackend, RpcService};
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::GetNetworkNoteStatus for RpcService {
+impl proto::server::miden_node_v1_node_service::GetNetworkNoteStatus for RpcService {
     type Input = miden_protocol::note::NoteId;
-    type Output = proto::rpc::GetNetworkNoteStatusResponse;
+    type Output = proto::miden::node::v1::GetNetworkNoteStatusResponse;
 
-    fn decode(request: proto::note::NoteId) -> tonic::Result<Self::Input> {
+    fn decode(
+        request: proto::miden::node::v1::GetNetworkNoteStatusRequest,
+    ) -> tonic::Result<Self::Input> {
         let note_id_digest: Word = request
+            .note_id
+            .as_ref()
+            .ok_or_else(|| tonic::Status::invalid_argument("missing note ID"))?
             .id
             .as_ref()
             .ok_or_else(|| tonic::Status::invalid_argument("missing note ID digest"))?
@@ -22,7 +26,9 @@ impl proto::server::rpc_api::GetNetworkNoteStatus for RpcService {
         Ok(miden_protocol::note::NoteId::from_raw(note_id_digest))
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::GetNetworkNoteStatusResponse> {
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<proto::miden::node::v1::GetNetworkNoteStatusResponse> {
         Ok(output)
     }
 
@@ -39,16 +45,16 @@ impl proto::server::rpc_api::GetNetworkNoteStatus for RpcService {
     ) -> tonic::Result<Self::Output> {
         let original_accept_header = metadata.get(http::header::ACCEPT.as_str()).cloned();
 
-        tracing::trace!(target: LOG_TARGET, ?request);
-
         let note_id = request;
-        miden_span_record!(
-            note.id = %note_id,
+        miden_span_record!(note.id = note_id);
+
+        debug!(
+            target: LOG_TARGET,
+            "Getting network note status",
+            note.id = note_id
         );
 
-        debug!(target: LOG_TARGET, "Getting network note status");
-
-        let mut forwarded_request = Request::new(note_id.as_word().into());
+        let mut forwarded_request = Request::new(proto::note::NoteId::from(note_id.as_word()));
         if let Some(accept) = original_accept_header {
             forwarded_request.metadata_mut().insert(http::header::ACCEPT.as_str(), accept);
         }
@@ -61,16 +67,28 @@ impl proto::server::rpc_api::GetNetworkNoteStatus for RpcService {
                     ));
                 };
 
-                ntx_builder
+                let response = ntx_builder
                     .clone()
-                    .get_network_note_status(forwarded_request)
+                    .get_network_note_status(forwarded_request.map(|note_id| {
+                        proto::miden::ntx_builder::v1::GetNetworkNoteStatusRequest {
+                            note_id: Some(note_id),
+                        }
+                    }))
                     .await?
-                    .into_inner()
+                    .into_inner();
+                proto::miden::node::v1::GetNetworkNoteStatusResponse {
+                    status: response.status,
+                    last_error: response.last_error,
+                    attempt_count: response.attempt_count,
+                    last_attempt_block_num: response.last_attempt_block_num,
+                }
             },
             RpcBackend::FullNode { source_rpc, .. } => source_rpc
                 .as_ref()
                 .clone()
-                .get_network_note_status(forwarded_request)
+                .get_network_note_status(forwarded_request.map(|note_id| {
+                    proto::miden::node::v1::GetNetworkNoteStatusRequest { note_id: Some(note_id) }
+                }))
                 .await?
                 .into_inner(),
         };

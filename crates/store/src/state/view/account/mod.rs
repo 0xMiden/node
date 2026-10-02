@@ -3,17 +3,17 @@ use std::collections::HashSet;
 use miden_node_proto::domain::account::{
     AccountDetailRequest,
     AccountDetails,
-    AccountRequest,
-    AccountResponse,
     AccountStorageDetails,
     AccountStorageMapDetails,
     AccountStorageRequest,
     AccountVaultDetails,
+    GetAccountRequest,
+    GetAccountResponse,
     SlotData,
     StorageMapEntries,
     StorageMapRequest,
 };
-use miden_node_utils::tracing::miden_instrument;
+use miden_node_tracing::miden_instrument;
 use miden_protocol::account::{AccountId, AccountStorageHeader, StorageSlotName, StorageSlotType};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::block::account_tree::AccountWitness;
@@ -38,9 +38,9 @@ impl StateView {
     )]
     pub async fn get_account(
         &self,
-        account_request: AccountRequest,
-    ) -> Result<AccountResponse, GetAccountError> {
-        let AccountRequest { block_num, account_id, details } = account_request;
+        get_account_request: GetAccountRequest,
+    ) -> Result<GetAccountResponse, GetAccountError> {
+        let GetAccountRequest { block_num, account_id, details } = get_account_request;
 
         if details.is_some() && !account_id.is_public() {
             return Err(GetAccountError::AccountNotPublic(account_id));
@@ -57,7 +57,7 @@ impl StateView {
             None
         };
 
-        Ok(AccountResponse {
+        Ok(GetAccountResponse {
             block_num: *scoped_block,
             witness,
             details,
@@ -136,7 +136,7 @@ impl StateView {
         account_id: AccountId,
         block_num: ScopedBlockNum,
     ) -> Result<AccountVaultDetails, DatabaseError> {
-        let assets = self.db.select_account_vault_at_block(account_id, block_num).await?;
+        let assets = self.db.select_vault_at_block(account_id, block_num).await?;
 
         if assets.len() > AccountVaultDetails::MAX_RETURN_ENTRIES {
             return Ok(AccountVaultDetails::LimitExceeded);
@@ -407,6 +407,6 @@ impl StateView {
         &self,
         account_ids: &[AccountId],
     ) -> Result<HashSet<AccountId>, DatabaseError> {
-        self.db.select_network_accounts_subset(account_ids.to_vec()).await
+        self.db.filter_network_accounts(account_ids.to_vec()).await
     }
 }

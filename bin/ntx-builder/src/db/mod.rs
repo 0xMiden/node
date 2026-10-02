@@ -1,26 +1,32 @@
+use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use miden_node_db::DatabaseError;
+#[cfg(test)]
+use miden_node_db::SqlTypeConvert;
 use miden_node_db::sqlite::{DbReader, DbWriter};
-use miden_node_utils::tracing::miden_instrument;
+use miden_node_tracing::{info, miden_instrument};
 use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountId};
-use miden_protocol::block::{BlockHeader, BlockNumber, SignedBlock, ValidatorKeys};
+use miden_protocol::block::{BlockHeader, BlockNumber, SignedBlock, ValidatorConfig};
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
 use miden_protocol::crypto::merkle::mmr::PartialMmr;
-use miden_protocol::note::{NoteId, NoteScript, Nullifier};
+use miden_protocol::note::{Note, NoteId, NoteScript, Nullifier};
 #[cfg(test)]
 use miden_protocol::transaction::TransactionId;
 #[cfg(test)]
 use miden_standards::note::AccountTargetNetworkNote;
-use tracing::info;
 
 use crate::committed_block::CommittedBlockEffects;
 use crate::db::migrations::{bootstrap_database, migrate_database, verify_latest_schema};
 use crate::db::queries::NoteStatusRow;
+#[cfg(test)]
+use crate::sponsorship::SponsorshipNote;
 use crate::{COMPONENT, NoteError, db};
 
+pub(crate) mod eligibility;
 pub(crate) mod queries;
 
 mod migrations;
@@ -30,13 +36,50 @@ mod migrations;
 pub(crate) const OVERSIZED_NOTE_DISCARD_REASON: &str =
     "note consumption exceeds the per-transaction cycle budget; it can never be consumed";
 
+/// Ordered genesis validator keys stored as protobuf.
+///
+/// The transaction-encryption trust root uses the ordered validator keys.
+/// The protobuf payload omits the block-signing quorum.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GenesisValidatorKeys(Vec<ValidatorPublicKey>);
+
+impl GenesisValidatorKeys {
+    fn from_validator_config(config: &ValidatorConfig) -> Self {
+        Self(config.keys().to_vec())
+    }
+
+    pub(crate) fn keys(&self) -> &[ValidatorPublicKey] {
+        &self.0
+    }
+}
+
+impl miden_node_persistence::ProtobufValue for GenesisValidatorKeys {
+    type Message = miden_node_persistence::generated::ValidatorKeys;
+    fn to_proto(&self) -> Self::Message {
+        Self::Message {
+            keys: self.0.iter().map(Into::into).collect(),
+        }
+    }
+    fn from_proto(
+        message: Self::Message,
+    ) -> Result<Self, miden_node_persistence::PersistenceError> {
+        use miden_node_persistence::miden_protobuf::{ConversionError, DecodeMessage};
+        let keys = message.decode_fields()?.keys.verify_infallible();
+        let quorum = u16::try_from(keys.len()).map_err(ConversionError::new)?;
+        ValidatorConfig::new(keys.clone(), quorum).map_err(ConversionError::new)?;
+        Ok(Self(keys))
+    }
+}
+
+miden_node_db::impl_protobuf_codec!(GenesisValidatorKeys);
+
 // NTX BUILDER DATABASE
 // ================================================================================================
 
 /// Read-only handle to the ntx-builder database.
 ///
 /// Wraps the framework [`DbReader`] and exposes every read query as a method. Cloneable, and handed
-/// to read-only components (the gRPC server, the coordinator, and actors); it has no write methods,
+/// to read-only components (the gRPC server and the transaction attempts); it has no write methods,
 /// so those components cannot mutate the database.
 #[derive(Clone)]
 pub(crate) struct NtxDbReader {
@@ -53,7 +96,7 @@ impl NtxDbReader {
     /// Reads the validator signing keys persisted from the genesis header.
     pub(crate) async fn select_genesis_validator_keys(
         &self,
-    ) -> Result<Option<ValidatorKeys>, DatabaseError> {
+    ) -> Result<Option<GenesisValidatorKeys>, DatabaseError> {
         self.reader
             .read("select_genesis_validator_keys", db::queries::select_genesis_validator_keys)
             .await
@@ -68,17 +111,19 @@ impl NtxDbReader {
             .await
     }
 
-    /// Returns `true` if the account has any pending (unconsumed, within attempt budget) note. Used
-    /// by the coordinator to decide whether to respawn an actor that just idle-timed-out, without
-    /// loading or deserializing the notes themselves.
-    pub(crate) async fn account_has_pending_notes(
+    /// Returns up to `limit` accounts that are ready for a transaction attempt, longest-waiting
+    /// first.
+    pub(crate) async fn ready_accounts(
         &self,
-        account_id: AccountId,
-        max_attempts: usize,
-    ) -> Result<bool, DatabaseError> {
+        max_note_attempts: usize,
+        block_num: BlockNumber,
+        busy: Vec<AccountId>,
+        priority: Vec<AccountId>,
+        limit: usize,
+    ) -> Result<Vec<AccountId>, DatabaseError> {
         self.reader
-            .read("account_has_pending_notes", move |tx| {
-                queries::account_has_pending_notes(tx, account_id, max_attempts)
+            .read("ready_accounts", move |tx| {
+                queries::ready_accounts(tx, max_note_attempts, block_num, &busy, &priority, limit)
             })
             .await
     }
@@ -105,29 +150,9 @@ impl NtxDbReader {
         self.reader.read("select_chain_state", queries::select_chain_state).await
     }
 
-    pub(crate) async fn account_exists(
-        &self,
-        account_id: AccountId,
-    ) -> Result<bool, DatabaseError> {
-        self.reader
-            .read("account_exists", move |tx| db::queries::account_exists(tx, account_id))
-            .await
-    }
-
-    pub(crate) async fn accounts_with_pending_notes(
-        &self,
-        max_note_attempts: usize,
-    ) -> Result<Vec<AccountId>, DatabaseError> {
-        self.reader
-            .read("accounts_with_pending_notes", move |tx| {
-                queries::accounts_with_pending_notes(tx, max_note_attempts)
-            })
-            .await
-    }
-
-    /// The committed-transaction landing check reads `last_committed_tx` from the `AccountView` the
-    /// coordinator pushes, so this read accessor is only used by tests to verify that
-    /// `upsert_account` persists `accounts.last_tx_id` correctly.
+    /// The scheduler detects a landed transaction from the block's own transaction list, so this
+    /// read accessor is only used by tests to verify that `upsert_account` persists
+    /// `accounts.last_tx_id` correctly.
     #[cfg(test)]
     pub(crate) async fn account_last_tx(
         &self,
@@ -153,6 +178,20 @@ impl NtxDbReader {
     ) -> Result<Option<NoteStatusRow>, DatabaseError> {
         self.reader
             .read("get_note_status", move |tx| crate::db::queries::get_note_status(tx, note_id))
+            .await
+    }
+
+    /// Returns the unconsumed `FEE_SPONSORSHIP` notes bound to the account's unconsumed feature
+    /// notes, grouped by feature note id. Used by transaction selection to attach each feature
+    /// note's sponsorships to its group.
+    pub(crate) async fn sponsorships_for_pending_notes(
+        &self,
+        account_id: AccountId,
+    ) -> Result<HashMap<NoteId, Vec<Note>>, DatabaseError> {
+        self.reader
+            .read("sponsorships_for_pending_notes", move |tx| {
+                queries::select_sponsorships_for_pending_notes(tx, account_id)
+            })
             .await
     }
 }
@@ -194,6 +233,7 @@ impl NtxDbWriter {
             .await
     }
 
+    /// Applies a committed block's effects in a single write transaction.
     pub(crate) async fn apply_committed_block(
         &self,
         effects: CommittedBlockEffects,
@@ -235,6 +275,19 @@ impl NtxDbWriter {
             .await
     }
 
+    /// Stores the corrected eligibility block of notes whose exact hint and backoff check disagrees
+    /// with the stored one.
+    pub(crate) async fn update_note_eligibility(
+        &self,
+        eligibility: Vec<(Nullifier, BlockNumber)>,
+    ) -> Result<(), DatabaseError> {
+        self.writer
+            .write("update_note_eligibility", move |tx| {
+                queries::update_note_eligibility(tx, &eligibility)
+            })
+            .await
+    }
+
     pub(crate) async fn insert_note_scripts(
         &self,
         script_root: Word,
@@ -255,7 +308,7 @@ impl NtxDbWriter {
 #[miden_instrument(
     target = COMPONENT,
     name = "ntx_builder.database.load",
-    fields(path=%database_filepath.display()),
+    fields(path = database_filepath),
     err,
 )]
 pub async fn load(database_filepath: PathBuf) -> anyhow::Result<NtxDbWriter> {
@@ -267,7 +320,7 @@ pub async fn load(database_filepath: PathBuf) -> anyhow::Result<NtxDbWriter> {
 #[miden_instrument(
     target = COMPONENT,
     name = "ntx_builder.database.load",
-    fields(path=%database_filepath.display()),
+    fields(path = database_filepath),
     err,
 )]
 pub async fn load_with_pool_size(
@@ -296,9 +349,9 @@ fn open_with_pool_size(
 
     info!(
         target: COMPONENT,
-        sqlite = %database_filepath.display(),
-        connection_pool_size = %connection_pool_size,
-        "Connected to the database"
+        "Connected to the database",
+        path = database_filepath,
+        db.sqlite.connection_pool_size = connection_pool_size.get()
     );
 
     Ok(NtxDbWriter { writer, reader: NtxDbReader { reader } })
@@ -315,7 +368,7 @@ fn open_with_pool_size(
 #[miden_instrument(
     target = COMPONENT,
     name = "ntx_builder.database.bootstrap",
-    fields(path=%database_filepath.display()),
+    fields(path = database_filepath),
     err,
 )]
 pub async fn bootstrap(database_filepath: PathBuf, genesis: &SignedBlock) -> anyhow::Result<()> {
@@ -370,6 +423,21 @@ impl NtxDbReader {
             .unwrap()
     }
 
+    /// Reads the stored eligibility block of a note, so tests can assert that the write paths
+    /// materialize exactly what [`eligibility`] computes.
+    pub(crate) async fn note_eligibility(&self, note_id: NoteId) -> Option<BlockNumber> {
+        self.reader
+            .read("note_eligibility", move |tx| {
+                let sql = "SELECT next_eligible_block FROM notes WHERE note_id = ?1";
+                Ok::<Option<i64>, DatabaseError>(
+                    tx.query(sql, &[&note_id], |row| row.get::<i64>(0))?.into_iter().next(),
+                )
+            })
+            .await
+            .unwrap()
+            .map(|block| BlockNumber::from_raw_sql(block).unwrap())
+    }
+
     pub(crate) async fn count_notes(&self) -> i64 {
         self.count("SELECT COUNT(*) FROM notes").await
     }
@@ -381,6 +449,10 @@ impl NtxDbReader {
     pub(crate) async fn count_chain_state(&self) -> i64 {
         self.count("SELECT COUNT(*) FROM chain_state").await
     }
+
+    pub(crate) async fn count_sponsorship_notes(&self) -> i64 {
+        self.count("SELECT COUNT(*) FROM sponsorship_notes").await
+    }
 }
 
 /// Test-only write helpers.
@@ -390,8 +462,8 @@ impl NtxDbReader {
 /// still reach the database exclusively through the wrapper.
 #[cfg(test)]
 impl NtxDbWriter {
-    /// Seeds a committed account row (and its `last_tx_id`) for tests that exercise the actor's
-    /// landing detection without driving a full committed block.
+    /// Seeds a committed account row (and its `last_tx_id`) for tests that need a committed account
+    /// without driving a full committed block.
     pub(crate) async fn upsert_account_for_test(
         &self,
         account_id: AccountId,
@@ -405,12 +477,24 @@ impl NtxDbWriter {
             .await
     }
 
+    /// Inserts notes as if they were created in the genesis block, so their stored eligibility is
+    /// driven by their execution hint alone.
     pub(crate) async fn insert_network_notes(
         &self,
         notes: Vec<AccountTargetNetworkNote>,
     ) -> Result<(), DatabaseError> {
+        self.insert_network_notes_at(notes, BlockNumber::GENESIS).await
+    }
+
+    pub(crate) async fn insert_network_notes_at(
+        &self,
+        notes: Vec<AccountTargetNetworkNote>,
+        created_at: BlockNumber,
+    ) -> Result<(), DatabaseError> {
         self.writer
-            .write("insert_network_notes", move |tx| queries::insert_network_notes(tx, &notes))
+            .write("insert_network_notes", move |tx| {
+                queries::insert_network_notes(tx, &notes, created_at)
+            })
             .await
     }
 
@@ -422,6 +506,29 @@ impl NtxDbWriter {
         self.writer
             .write("mark_notes_consumed", move |tx| {
                 queries::mark_notes_consumed(tx, &nullifiers, block_num)
+            })
+            .await
+    }
+
+    pub(crate) async fn insert_sponsorship_notes(
+        &self,
+        notes: Vec<SponsorshipNote>,
+    ) -> Result<(), DatabaseError> {
+        self.writer
+            .write("insert_sponsorship_notes", move |tx| {
+                queries::insert_sponsorship_notes(tx, &notes)
+            })
+            .await
+    }
+
+    pub(crate) async fn mark_sponsorships_consumed(
+        &self,
+        nullifiers: Vec<Nullifier>,
+        block_num: BlockNumber,
+    ) -> Result<(), DatabaseError> {
+        self.writer
+            .write("mark_sponsorships_consumed", move |tx| {
+                queries::mark_sponsorships_consumed(tx, &nullifiers, block_num)
             })
             .await
     }
@@ -483,7 +590,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("failed to create temp directory");
         let db_path = dir.path().join("ntx-builder.sqlite3");
         let genesis = mock_genesis_block();
-        let expected_validator_keys = genesis.header().validator_keys().clone();
+        let expected_validator_keys =
+            GenesisValidatorKeys::from_validator_config(genesis.header().validator_config());
 
         bootstrap(db_path.clone(), &genesis)
             .await

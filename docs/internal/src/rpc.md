@@ -49,31 +49,11 @@ Additional internal-only limits in `miden_node_utils::limiter` (not surfaced by 
 
 ## Error Handling
 
-The RPC component uses domain-specific error enums for structured error reporting instead of proto-generated error types. This provides better control over error codes and makes error handling more maintainable.
+The RPC boundary maps errors to gRPC status codes and method-specific detail bytes. The first byte of `Status.details`
+identifies the application error. These values are part of the client API and must remain stable.
 
-### Error Architecture
+The read and sync handlers use explicit codes from `crates/rpc/src/server/api/error_codes.rs`. The mempool uses the
+`GrpcError` derive macro. This macro assigns codes in variant order and maps internal errors to code `0`. Add new
+client-error variants at the end of the mempool error enum to preserve existing codes.
 
-Error handling follows this pattern:
-
-1. **Domain Errors**: Business logic errors are defined in domain-specific enums
-2. **gRPC Conversion**: Domain errors are converted to gRPC `Status` objects with structured details
-3. **Error Details**: Specific error codes are embedded in `Status.details` as single bytes
-
-### SubmitProvenTx Errors
-
-Transaction submission errors are:
-
-```rust
-enum SubmitProvenTxGrpcError {
-    Internal = 0,
-    DeserializationFailed = 1,
-    InvalidTransactionProof = 2,
-    IncorrectAccountInitialCommitment = 3,
-    InputNotesAlreadyConsumed = 4,
-    UnauthenticatedNotesNotFound = 5,
-    OutputNotesAlreadyExist = 6,
-    TransactionExpired = 7,
-}
-```
-
-Error codes are embedded as single bytes in `Status.details`
+Clients must also accept statuses without details and unknown detail codes.

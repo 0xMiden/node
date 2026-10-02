@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::{StreamExt, stream};
-use miden_node_proto::domain::account::AccountRequest;
+use miden_node_proto::DecodeMessageExt;
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::state::State;
 use miden_node_utils::clap::StorageOptions;
@@ -11,7 +11,6 @@ use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::NoteTag;
-use miden_protocol::utils::serde::Serializable;
 use rand::RngExt;
 use rand::seq::SliceRandom;
 use tokio::fs;
@@ -121,13 +120,13 @@ async fn get_account(
     account_id: AccountId,
     storage_map_slot: String,
 ) -> GetAccountRun {
-    use proto::rpc::account_storage_details::account_storage_map_details::Result;
+    use miden_node_proto::generated::miden::node::v1::account_storage_details::account_storage_map_details::Result;
 
     let request = get_account_request(account_id, storage_map_slot);
 
     let start = Instant::now();
-    let request = AccountRequest::try_from(request).expect("request should be valid");
-    let response: proto::rpc::AccountResponse =
+    let request = request.decode_and_verify().expect("request should be valid");
+    let response: proto::miden::node::v1::GetAccountResponse =
         state.view().get_account(request).await.unwrap().into();
     let duration = start.elapsed();
 
@@ -164,21 +163,21 @@ async fn get_account(
 fn get_account_request(
     account_id: AccountId,
     storage_map_slot: String,
-) -> proto::rpc::AccountRequest {
-    use proto::rpc::account_request::AccountDetailRequest;
-    use proto::rpc::account_request::account_detail_request::storage_map_detail_request::SlotData;
-    use proto::rpc::account_request::account_detail_request::{
+) -> proto::miden::node::v1::GetAccountRequest {
+    use miden_node_proto::generated::miden::node::v1::get_account_request::AccountDetailRequest;
+    use miden_node_proto::generated::miden::node::v1::get_account_request::account_detail_request::storage_map_detail_request::SlotData;
+    use miden_node_proto::generated::miden::node::v1::get_account_request::account_detail_request::{
         StorageMapDetailRequest,
         StorageMapDetailRequests,
         StorageRequest,
     };
 
-    proto::rpc::AccountRequest {
-        account_id: Some(proto::account::AccountId { id: account_id.to_bytes() }),
+    proto::miden::node::v1::GetAccountRequest {
+        account_id: Some(account_id.into()),
         block_num: None,
         details: Some(AccountDetailRequest {
             code_commitment: None,
-            asset_vault_commitment: Some(proto::primitives::Digest::from(Word::empty())),
+            asset_vault_commitment: Some(proto::primitives::Word::from(Word::empty())),
             storage_request: Some(StorageRequest::StorageMaps(StorageMapDetailRequests {
                 storage_maps: vec![StorageMapDetailRequest {
                     slot_name: storage_map_slot,
@@ -470,7 +469,7 @@ pub async fn bench_sync_transactions(
         .await;
 
     let timers_accumulator: Vec<Duration> = results.iter().map(|r| r.duration).collect();
-    let responses: Vec<proto::rpc::SyncTransactionsResponse> =
+    let responses: Vec<proto::miden::node::v1::SyncTransactionsResponse> =
         results.iter().map(|r| r.response.clone()).collect();
 
     print_summary(&timers_accumulator);
@@ -515,7 +514,7 @@ pub async fn sync_transactions(
     account_ids: Vec<AccountId>,
     block_from: u32,
     block_to: u32,
-) -> (Duration, proto::rpc::SyncTransactionsResponse) {
+) -> (Duration, proto::miden::node::v1::SyncTransactionsResponse) {
     let start = Instant::now();
     let (chain_tip, (last_block_included, records)) = state
         .with_view(async |view| {
@@ -528,8 +527,8 @@ pub async fn sync_transactions(
             .unwrap()
         })
         .await;
-    let response = proto::rpc::SyncTransactionsResponse {
-        pagination_info: Some(proto::rpc::PaginationInfo {
+    let response = proto::miden::node::v1::SyncTransactionsResponse {
+        pagination_info: Some(proto::miden::node::v1::PaginationInfo {
             chain_tip: chain_tip.as_u32(),
             block_num: last_block_included.as_u32(),
         }),
@@ -541,7 +540,7 @@ pub async fn sync_transactions(
 #[derive(Clone)]
 struct SyncTransactionsRun {
     duration: Duration,
-    response: proto::rpc::SyncTransactionsResponse,
+    response: proto::miden::node::v1::SyncTransactionsResponse,
     pages: usize,
 }
 
@@ -568,7 +567,7 @@ async fn sync_transactions_paginated(
         total_duration += elapsed;
         pages += 1;
 
-        let info = response.pagination_info.unwrap_or(proto::rpc::PaginationInfo {
+        let info = response.pagination_info.unwrap_or(proto::miden::node::v1::PaginationInfo {
             chain_tip: target_block_to,
             block_num: target_block_to,
         });
@@ -577,7 +576,7 @@ async fn sync_transactions_paginated(
         let reached_block = info.block_num;
         let chain_tip = info.chain_tip;
         final_pagination_info =
-            Some(proto::rpc::PaginationInfo { chain_tip, block_num: reached_block });
+            Some(proto::miden::node::v1::PaginationInfo { chain_tip, block_num: reached_block });
 
         if reached_block >= chain_tip {
             break;
@@ -590,7 +589,7 @@ async fn sync_transactions_paginated(
 
     SyncTransactionsRun {
         duration: total_duration,
-        response: proto::rpc::SyncTransactionsResponse {
+        response: proto::miden::node::v1::SyncTransactionsResponse {
             pagination_info: final_pagination_info,
             transactions: aggregated_records,
         },
@@ -657,13 +656,13 @@ struct SyncChainMmrRun {
 
 fn transaction_record_to_proto(
     record: miden_node_store::TransactionRecord,
-) -> proto::rpc::TransactionRecord {
+) -> proto::miden::node::v1::TransactionRecord {
     let output_note_proofs = record
         .output_note_proofs
         .into_iter()
-        .map(|note| proto::note::NoteInclusionInBlockProof {
+        .map(|note| proto::note::NoteInclusionProof {
             note_id: Some((&note.note_id).into()),
-            block_num: note.block_num.as_u32(),
+            block_num: Some(note.block_num.into()),
             note_index_in_block: note.note_index.leaf_index_value().into(),
             inclusion_path: Some(note.inclusion_path.into()),
         })
@@ -672,13 +671,13 @@ fn transaction_record_to_proto(
     let consumed_note_refs = record
         .consumed_note_refs
         .into_iter()
-        .map(|(nullifier, note_id)| proto::rpc::ConsumedNoteRef {
-            nullifier: Some(nullifier.into()),
+        .map(|(nullifier, note_id)| proto::miden::node::v1::ConsumedNoteRef {
+            nullifier: Some(nullifier.as_word().into()),
             note_id: Some((&note_id).into()),
         })
         .collect();
 
-    proto::rpc::TransactionRecord {
+    proto::miden::node::v1::TransactionRecord {
         header: Some(proto::transaction::TransactionHeader {
             transaction_id: Some(record.header.id().into()),
             account_id: Some(record.header.account_id().into()),

@@ -7,9 +7,10 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use miden_node_proto::generated as proto;
-use miden_node_proto::generated::rpc::{BlockProducerStatus, RpcStatus};
+use miden_node_proto::generated::miden::node::v1::{BlockProducerStatus, StatusResponse};
+use miden_node_tracing::warn;
+use miden_protocol::Word;
 use serde::{Deserialize, Serialize};
-use tracing::warn;
 
 use crate::LOG_TARGET;
 use crate::faucet::FaucetTestDetails;
@@ -18,10 +19,11 @@ use crate::remote_prover::{ProofType, ProverTestDetails};
 // STATUS
 // ================================================================================================
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Status {
     Healthy,
     Unhealthy,
+    #[default]
     Unknown,
 }
 
@@ -35,12 +37,12 @@ impl From<String> for Status {
     }
 }
 
-impl From<proto::remote_prover::WorkerHealthStatus> for Status {
-    fn from(value: proto::remote_prover::WorkerHealthStatus) -> Self {
+impl From<proto::miden::remote_prover::v1::WorkerHealthStatus> for Status {
+    fn from(value: proto::miden::remote_prover::v1::WorkerHealthStatus) -> Self {
         match value {
-            proto::remote_prover::WorkerHealthStatus::Unknown => Status::Unknown,
-            proto::remote_prover::WorkerHealthStatus::Healthy => Status::Healthy,
-            proto::remote_prover::WorkerHealthStatus::Unhealthy => Status::Unhealthy,
+            proto::miden::remote_prover::v1::WorkerHealthStatus::Unknown => Status::Unknown,
+            proto::miden::remote_prover::v1::WorkerHealthStatus::Healthy => Status::Healthy,
+            proto::miden::remote_prover::v1::WorkerHealthStatus::Unhealthy => Status::Unhealthy,
         }
     }
 }
@@ -138,6 +140,7 @@ pub enum ServiceDetails {
     ExplorerStatus(ExplorerStatusDetails),
     NoteTransportStatus(NoteTransportStatusDetails),
     ValidatorStatus(ValidatorStatusDetails),
+    AgglayerStatus(AgglayerStatusDetails),
     Error,
 }
 
@@ -168,6 +171,11 @@ pub struct IncrementDetails {
     pub last_tx_id: Option<String>,
     /// Last measured latency in blocks from submission to state update.
     pub last_latency_blocks: Option<u32>,
+    /// The wallet's fee-asset balance in base units; `None` on zero-fee chains.
+    pub fee_balance: Option<u64>,
+    /// Error from the most recent faucet top-up attempt; `None` when it succeeded or none was
+    /// needed.
+    pub fee_topup_error: Option<String>,
 }
 
 /// Details about an in-flight latency measurement.
@@ -214,7 +222,6 @@ pub struct ExplorerStatusDetails {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NoteTransportStatusDetails {
     pub url: String,
-    pub serving_status: String,
 }
 
 /// Details of the validator service.
@@ -225,6 +232,35 @@ pub struct ValidatorStatusDetails {
     pub chain_tip: u32,
     pub validated_transactions_count: u64,
     pub signed_blocks_count: u64,
+}
+
+/// Details of the Agglayer bridge, as reported by the agglayer-monitor status endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgglayerStatusDetails {
+    pub url: String,
+    /// Reason for the overall status. The agglayer-monitor sets no reason when it is healthy.
+    pub reason_code: Option<String>,
+    pub runner_status: String,
+    pub heartbeat_at: u64,
+    /// Bridge-in route, from L1 to Miden.
+    pub inbound: AgglayerDirectionDetails,
+    /// Bridge-out route, from Miden to L1.
+    pub outbound: AgglayerDirectionDetails,
+}
+
+/// Latest E2E test results for one bridge direction.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgglayerDirectionDetails {
+    pub status: Status,
+    pub reason_code: Option<String>,
+    pub last_success_at: Option<u64>,
+    pub last_success_duration_ms: Option<u64>,
+    pub last_failure_at: Option<u64>,
+    pub last_failure_code: Option<String>,
+    /// Phase of the run that is in progress, if there is one.
+    pub current_phase: Option<String>,
+    pub success_count: u64,
+    pub failure_count: u64,
 }
 
 // RPC STATUS DETAILS
@@ -328,22 +364,23 @@ impl From<BlockProducerStatus> for BlockProducerStatusDetails {
     }
 }
 
-impl From<proto::remote_prover::ProxyWorkerStatus> for WorkerStatusDetails {
-    fn from(value: proto::remote_prover::ProxyWorkerStatus) -> Self {
+impl From<proto::miden::remote_prover::v1::ProxyWorkerStatus> for WorkerStatusDetails {
+    fn from(value: proto::miden::remote_prover::v1::ProxyWorkerStatus) -> Self {
         // An out-of-range discriminant (e.g. from a newer prover version) degrades to Unknown
         // instead of panicking the checker task.
-        let status = proto::remote_prover::WorkerHealthStatus::try_from(value.status).map_or_else(
-            |_| {
-                warn!(
-                    target: LOG_TARGET,
-                    raw = value.status,
-                    worker = %value.name,
-                    "Unknown worker health status discriminant"
-                );
-                Status::Unknown
-            },
-            Status::from,
-        );
+        let status = proto::miden::remote_prover::v1::WorkerHealthStatus::try_from(value.status)
+            .map_or_else(
+                |_| {
+                    warn!(
+                        target: LOG_TARGET,
+                        "Unknown worker health status discriminant",
+                        worker.status.raw = value.status,
+                        worker.name = value.name.as_str()
+                    );
+                    Status::Unknown
+                },
+                Status::from,
+            );
 
         Self {
             name: value.name,
@@ -354,21 +391,25 @@ impl From<proto::remote_prover::ProxyWorkerStatus> for WorkerStatusDetails {
 }
 
 impl RemoteProverStatusDetails {
-    pub fn from_proxy_status(status: proto::remote_prover::ProxyStatus, url: String) -> Self {
+    pub fn from_proxy_status(
+        status: proto::miden::remote_prover::v1::ProxyStatusResponse,
+        url: String,
+    ) -> Self {
         // An out-of-range discriminant (e.g. from a newer prover version) degrades to Unknown
         // instead of panicking the checker task.
-        let proof_type = proto::remote_prover::ProofType::try_from(status.supported_proof_type)
-            .map_or_else(
-                |_| {
-                    warn!(
-                        target: LOG_TARGET,
-                        raw = status.supported_proof_type,
-                        "Unknown supported proof type discriminant"
-                    );
-                    ProofType::Unknown
-                },
-                ProofType::from,
-            );
+        let proof_type =
+            proto::miden::remote_prover::v1::ProofType::try_from(status.supported_proof_type)
+                .map_or_else(
+                    |_| {
+                        warn!(
+                            target: LOG_TARGET,
+                            "Unknown supported proof type discriminant",
+                            prover.proof_type.raw = status.supported_proof_type
+                        );
+                        ProofType::Unknown
+                    },
+                    ProofType::from,
+                );
 
         let workers: Vec<WorkerStatusDetails> =
             status.workers.into_iter().map(WorkerStatusDetails::from).collect();
@@ -383,12 +424,21 @@ impl RemoteProverStatusDetails {
 }
 
 impl RpcStatusDetails {
-    /// Creates `RpcStatusDetails` from a gRPC `RpcStatus` response and the configured URL.
-    pub fn from_rpc_status(status: RpcStatus, url: String) -> Self {
+    /// Creates `RpcStatusDetails` from a gRPC `StatusResponse` and the configured URL.
+    pub fn from_rpc_status(status: StatusResponse, url: String) -> Self {
+        let genesis_commitment = status.genesis_commitment.as_ref().and_then(|genesis| {
+            Word::try_from(genesis)
+                .inspect_err(|err| {
+                    warn!(err, target: LOG_TARGET, "Invalid genesis commitment in RPC status");
+                })
+                .ok()
+                .map(|genesis| genesis.to_hex())
+        });
+
         Self {
             url,
             version: status.version,
-            genesis_commitment: status.genesis_commitment.as_ref().map(|gc| format!("{gc:?}")),
+            genesis_commitment,
             chain_tip: status.chain_tip,
             block_producer_status: status.block_producer.map(BlockProducerStatusDetails::from),
         }
@@ -432,7 +482,7 @@ mod tests {
 
     #[test]
     fn worker_status_with_unknown_discriminant_degrades_to_unknown() {
-        let proto_status = proto::remote_prover::ProxyWorkerStatus {
+        let proto_status = proto::miden::remote_prover::v1::ProxyWorkerStatus {
             name: "worker-1".to_string(),
             version: "1.0".to_string(),
             status: 99,
@@ -444,18 +494,43 @@ mod tests {
 
     #[test]
     fn proxy_status_with_unknown_proof_type_degrades_to_unknown() {
-        let proto_status = proto::remote_prover::ProxyStatus {
+        let proto_status = proto::miden::remote_prover::v1::ProxyStatusResponse {
             version: "1.0".to_string(),
             supported_proof_type: 99,
-            workers: vec![proto::remote_prover::ProxyWorkerStatus {
+            workers: vec![proto::miden::remote_prover::v1::ProxyWorkerStatus {
                 name: "worker-1".to_string(),
                 version: "1.0".to_string(),
-                status: proto::remote_prover::WorkerHealthStatus::Healthy.into(),
+                status: proto::miden::remote_prover::v1::WorkerHealthStatus::Healthy.into(),
             }],
         };
         let details = RemoteProverStatusDetails::from_proxy_status(proto_status, "url".to_string());
         assert!(matches!(details.supported_proof_type, ProofType::Unknown));
         assert_eq!(details.workers.len(), 1);
         assert_eq!(details.workers[0].status, Status::Healthy);
+    }
+
+    #[test]
+    fn rpc_status_genesis_commitment_is_hex_encoded() {
+        let genesis = Word::from([1, 2, 3, 4u32]);
+        let proto_status = StatusResponse {
+            version: "1.0".to_string(),
+            genesis_commitment: Some(genesis.into()),
+            chain_tip: 7,
+            block_producer: None,
+        };
+        let details = RpcStatusDetails::from_rpc_status(proto_status, "url".to_string());
+        assert_eq!(details.genesis_commitment, Some(genesis.to_hex()));
+    }
+
+    #[test]
+    fn rpc_status_with_malformed_genesis_commitment_omits_it() {
+        let proto_status = StatusResponse {
+            version: "1.0".to_string(),
+            genesis_commitment: Some(proto::primitives::Word { encoded: vec![1, 2, 3] }),
+            chain_tip: 7,
+            block_producer: None,
+        };
+        let details = RpcStatusDetails::from_rpc_status(proto_status, "url".to_string());
+        assert!(details.genesis_commitment.is_none());
     }
 }

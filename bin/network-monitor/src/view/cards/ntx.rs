@@ -3,13 +3,7 @@
 
 use maud::{Markup, html};
 
-use super::super::helpers::{
-    copy_button,
-    format_success_rate,
-    format_timestamp,
-    metric_row,
-    truncate,
-};
+use super::super::helpers::{copyable_value, format_success_rate, format_timestamp, metric_row};
 use crate::status::{CounterTrackingDetails, IncrementDetails};
 
 pub(in crate::view) fn render_ntx_increment(details: &IncrementDetails, healthy: bool) -> Markup {
@@ -30,12 +24,14 @@ pub(in crate::view) fn render_ntx_increment(details: &IncrementDetails, healthy:
                     @if let Some(blocks) = details.last_latency_blocks {
                         (metric_row("Latency:", &format!("{blocks} blocks")))
                     }
+                    @if let Some(balance) = details.fee_balance {
+                        (metric_row("Fee Balance:", &balance.to_string()))
+                    }
                     @if let Some(tx) = &details.last_tx_id {
                         div class="metric-row" {
                             span class="metric-label" { "Last TX ID:" }
                             span class="metric-value" {
-                                (truncate(tx, 16)) "..."
-                                (copy_button(tx, "TX ID"))
+                                (copyable_value(tx, "TX ID"))
                             }
                         }
                     }

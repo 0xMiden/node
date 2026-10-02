@@ -1,19 +1,23 @@
-use std::sync::{Arc, Mutex};
+use std::collections::{BTreeSet, HashSet};
+use std::ops::RangeInclusive;
+use std::sync::{Arc, LazyLock, Mutex};
 
 use assert_matches::assert_matches;
-use diesel::{Connection, SqliteConnection};
+use miden_node_db::sqlite::WriteTx;
 use miden_node_proto::domain::account::{AccountSummary, StorageMapEntries};
-use miden_node_utils::fee::test_fee_params;
+use miden_node_utils::fee::{test_fee_params, test_protocol_config};
 use miden_protocol::account::auth::{AuthScheme, PublicKeyCommitment};
 use miden_protocol::account::component::AccountComponentMetadata;
 use miden_protocol::account::{
     Account,
     AccountBuilder,
     AccountCode,
+    AccountCodePatch,
     AccountComponent,
     AccountId,
     AccountIdVersion,
     AccountPatch,
+    AccountStorage,
     AccountStoragePatch,
     AccountType,
     AccountUpdateDetails,
@@ -26,7 +30,7 @@ use miden_protocol::account::{
     StorageSlotName,
     StorageSlotPatch,
 };
-use miden_protocol::asset::{Asset, FungibleAsset};
+use miden_protocol::asset::{Asset, AssetId, FungibleAsset};
 use miden_protocol::block::{
     BlockAccountUpdate,
     BlockHeader,
@@ -34,7 +38,7 @@ use miden_protocol::block::{
     BlockNoteTree,
     BlockNumber,
     BlockSignatures,
-    ValidatorKeys,
+    ValidatorConfig,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::crypto::merkle::SparseMerklePath;
@@ -50,6 +54,7 @@ use miden_protocol::note::{
     NoteHeader,
     NoteId,
     NoteMetadata,
+    NoteScript,
     NoteTag,
     NoteType,
     Nullifier,
@@ -88,22 +93,291 @@ use crate::account_state_forest::{
     HISTORICAL_BLOCK_RETENTION,
     TestAccountStateForestExt,
 };
+use crate::db::models::queries as diesel_queries;
 use crate::db::models::queries::{
-    PrecomputedPublicAccountState,
-    PrecomputedPublicAccountStates,
+    NOTE_SYNC_BLOCK_OVERHEAD_BYTES,
+    NOTE_SYNC_RECORD_BYTES,
     StorageMapValue,
-    insert_account_storage_map_value,
+    StorageMapValuesPage,
 };
-use crate::db::models::{queries, utils};
-use crate::errors::DatabaseError;
+use crate::db::queries::{self, PrecomputedPublicAccountState, PrecomputedPublicAccountStates};
+use crate::db::{AccountVaultValue, BlockHeaderCommitment, NoteSyncUpdate, Result, TestDb, utils};
+use crate::errors::{DatabaseError, NoteSyncError};
 
-fn create_db() -> SqliteConnection {
-    crate::db::migrations::test_connection()
+// QUERY DRIVERS
+// ================================================================================================
+//
+// Each driver runs one query function on the test database, so a test body reads the same as the
+// production call site with the transaction handle replaced by the test handle.
+
+fn insert_block_header(
+    db: &TestDb,
+    header: &BlockHeader,
+    signatures: &BlockSignatures,
+) -> Result<usize> {
+    let header = header.clone();
+    let signatures = signatures.clone();
+    db.write(move |tx| queries::insert_block_header(tx, &header, &signatures))
 }
 
-fn create_block(conn: &mut SqliteConnection, block_num: BlockNumber) {
+fn insert_notes(db: &TestDb, notes: &[(NoteRecord, Option<Nullifier>)]) -> Result<usize> {
+    let notes = notes.to_vec();
+    db.write(move |tx| queries::insert_notes(tx, &notes))
+}
+
+fn insert_note_scripts(db: &TestDb, notes: &[NoteRecord]) -> Result<usize> {
+    let notes = notes.to_vec();
+    db.write(move |tx| queries::insert_note_scripts(tx, notes.iter()))
+}
+
+fn insert_nullifiers_for_block(
+    db: &TestDb,
+    nullifiers: &[Nullifier],
+    block_num: BlockNumber,
+) -> Result<usize> {
+    let nullifiers = nullifiers.to_vec();
+    db.write(move |tx| queries::insert_nullifiers_for_block(tx, &nullifiers, block_num))
+}
+
+fn insert_transactions(
+    db: &TestDb,
+    block_num: BlockNumber,
+    transactions: &OrderedTransactionHeaders,
+) -> Result<usize> {
+    let transactions = transactions.clone();
+    db.write(move |tx| queries::insert_transactions(tx, block_num, &transactions))
+}
+
+fn upsert_accounts(
+    db: &TestDb,
+    accounts: &[BlockAccountUpdate],
+    block_num: BlockNumber,
+    precomputed_public_states: &PrecomputedPublicAccountStates,
+    new_account_ids: &BTreeSet<AccountId>,
+) -> Result<usize> {
+    let accounts = accounts.to_vec();
+    let precomputed_public_states = precomputed_public_states.clone();
+    let new_account_ids = new_account_ids.clone();
+    db.write(move |tx| {
+        queries::upsert_accounts(
+            tx,
+            &accounts,
+            block_num,
+            &precomputed_public_states,
+            &new_account_ids,
+        )
+    })
+}
+
+fn insert_storage_map_value(
+    db: &TestDb,
+    account_id: AccountId,
+    block_num: BlockNumber,
+    slot_name: StorageSlotName,
+    key: StorageMapKey,
+    value: Word,
+) -> Result<usize> {
+    db.write(move |tx| {
+        queries::insert_storage_map_value(tx, account_id, block_num, &slot_name, key, value)
+    })
+}
+
+fn insert_vault_asset(
+    db: &TestDb,
+    account_id: AccountId,
+    block_num: BlockNumber,
+    vault_key: AssetId,
+    asset: Option<Asset>,
+) -> Result<usize> {
+    db.write(move |tx| queries::insert_vault_asset(tx, account_id, block_num, vault_key, asset))
+}
+
+fn prune_history(db: &TestDb, chain_tip: BlockNumber) -> Result<(usize, usize, usize)> {
+    db.write(move |tx| queries::prune_history(tx, chain_tip))
+}
+
+// Read drivers below run on the diesel layer until their queries migrate to the framework; each one
+// opens a fresh diesel connection over the same database file.
+
+fn select_all_nullifiers(db: &TestDb) -> Result<Vec<NullifierInfo>> {
+    diesel_queries::select_all_nullifiers(&mut db.diesel_conn())
+}
+
+fn select_nullifiers_by_prefix(
+    db: &TestDb,
+    prefix_len: u8,
+    nullifier_prefixes: &[u16],
+    block_range: RangeInclusive<BlockNumber>,
+) -> Result<(Vec<NullifierInfo>, BlockNumber)> {
+    diesel_queries::select_nullifiers_by_prefix(
+        &mut db.diesel_conn(),
+        prefix_len,
+        nullifier_prefixes,
+        block_range,
+    )
+}
+
+fn select_notes_since_block_by_tag(
+    db: &TestDb,
+    note_tags: &[u32],
+    block_range: RangeInclusive<BlockNumber>,
+) -> Result<Vec<NoteSyncRecord>> {
+    diesel_queries::select_notes_since_block_by_tag(&mut db.diesel_conn(), note_tags, block_range)
+}
+
+fn select_notes_by_id(db: &TestDb, note_ids: &[NoteId]) -> Result<Vec<NoteRecord>> {
+    diesel_queries::select_notes_by_id(&mut db.diesel_conn(), note_ids)
+}
+
+fn select_existing_note_ids(
+    db: &TestDb,
+    note_ids: &[NoteId],
+    up_to_block: BlockNumber,
+) -> Result<HashSet<NoteId>> {
+    diesel_queries::select_existing_note_ids(&mut db.diesel_conn(), note_ids, up_to_block)
+}
+
+fn select_note_script_by_root(db: &TestDb, root: Word) -> Result<Option<NoteScript>> {
+    diesel_queries::select_note_script_by_root(&mut db.diesel_conn(), root)
+}
+
+fn get_note_sync_multi(
+    db: &TestDb,
+    note_tags: &[u32],
+    block_range: RangeInclusive<BlockNumber>,
+    max_response_payload_bytes: usize,
+) -> std::result::Result<Vec<NoteSyncUpdate>, NoteSyncError> {
+    diesel_queries::get_note_sync_multi(
+        &mut db.diesel_conn(),
+        note_tags,
+        block_range,
+        max_response_payload_bytes,
+    )
+}
+
+fn select_block_header_by_block_num(
+    db: &TestDb,
+    maybe_block_num: Option<BlockNumber>,
+) -> Result<Option<BlockHeader>> {
+    diesel_queries::select_block_header_by_block_num(&mut db.diesel_conn(), maybe_block_num)
+}
+
+fn select_block_header_and_signatures_by_block_num(
+    db: &TestDb,
+    block_num: BlockNumber,
+) -> Result<Option<(BlockHeader, BlockSignatures)>> {
+    diesel_queries::select_block_header_and_signatures_by_block_num(
+        &mut db.diesel_conn(),
+        block_num,
+    )
+}
+
+fn select_block_headers(db: &TestDb, blocks: Vec<BlockNumber>) -> Result<Vec<BlockHeader>> {
+    diesel_queries::select_block_headers(&mut db.diesel_conn(), blocks.into_iter())
+}
+
+fn select_all_block_header_commitments(db: &TestDb) -> Result<Vec<BlockHeaderCommitment>> {
+    diesel_queries::select_all_block_header_commitments(&mut db.diesel_conn())
+}
+
+fn select_account(db: &TestDb, account_id: AccountId) -> Result<AccountInfo> {
+    diesel_queries::select_account(&mut db.diesel_conn(), account_id)
+}
+
+fn select_all_accounts(db: &TestDb) -> Result<Vec<AccountInfo>> {
+    diesel_queries::select_all_accounts(&mut db.diesel_conn())
+}
+
+fn select_account_code_by_commitment(
+    db: &TestDb,
+    code_commitment: Word,
+) -> Result<Option<Vec<u8>>> {
+    diesel_queries::select_account_code_by_commitment(&mut db.diesel_conn(), code_commitment)
+}
+
+fn select_latest_storage(db: &TestDb, account_id: AccountId) -> Result<AccountStorage> {
+    db.read(move |tx| queries::select_latest_storage(tx, account_id))
+}
+
+fn select_account_storage_map_values_paged(
+    db: &TestDb,
+    account_id: AccountId,
+    block_range: RangeInclusive<BlockNumber>,
+    limit: usize,
+) -> Result<StorageMapValuesPage> {
+    diesel_queries::select_account_storage_map_values_paged(
+        &mut db.diesel_conn(),
+        account_id,
+        block_range,
+        limit,
+    )
+}
+
+fn select_account_vault_assets(
+    db: &TestDb,
+    account_id: AccountId,
+    block_range: RangeInclusive<BlockNumber>,
+) -> Result<(BlockNumber, Vec<AccountVaultValue>)> {
+    diesel_queries::select_account_vault_assets(&mut db.diesel_conn(), account_id, block_range)
+}
+
+fn select_vault_at_block(
+    db: &TestDb,
+    account_id: AccountId,
+    block_num: BlockNumber,
+) -> Result<Vec<Asset>> {
+    db.read(move |tx| queries::select_vault_at_block(tx, account_id, block_num))
+}
+
+fn select_transactions_records(
+    db: &TestDb,
+    account_ids: &[AccountId],
+    block_range: RangeInclusive<BlockNumber>,
+) -> Result<(BlockNumber, Vec<TransactionRecord>)> {
+    diesel_queries::select_transactions_records(&mut db.diesel_conn(), account_ids, block_range)
+}
+
+// TEST HELPERS
+// ================================================================================================
+
+fn create_block(db: &TestDb, block_num: BlockNumber) {
+    let (block_header, signatures) = mock_block(block_num);
+    insert_block_header(db, &block_header, &signatures).unwrap();
+}
+
+/// [`create_block`] for tests that already hold a write transaction.
+fn create_block_in(tx: &WriteTx<'_>, block_num: BlockNumber) -> Result<()> {
+    let (block_header, signatures) = mock_block(block_num);
+    queries::insert_block_header(tx, &block_header, &signatures)?;
+    Ok(())
+}
+
+fn block_account_update(
+    account_id: AccountId,
+    final_state_commitment: Word,
+    details: AccountUpdateDetails,
+) -> BlockAccountUpdate {
+    BlockAccountUpdate::new(account_id, final_state_commitment, details)
+        .expect("test account update should be valid")
+}
+
+fn empty_genesis_block() -> crate::genesis::GenesisBlock {
+    use crate::genesis::GenesisState;
+
+    let signer = random_secret_key();
+    GenesisState::new(
+        Vec::new(),
+        test_fee_params(),
+        0,
+        ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
+        test_protocol_config(),
+    )
+    .into_block()
+    .unwrap()
+}
+
+fn mock_block(block_num: BlockNumber) -> (BlockHeader, BlockSignatures) {
     let block_header = BlockHeader::new(
-        1_u8.into(),
         num_to_word(2),
         block_num,
         num_to_word(4),
@@ -111,20 +385,17 @@ fn create_block(conn: &mut SqliteConnection, block_num: BlockNumber) {
         num_to_word(6),
         num_to_word(7),
         num_to_word(8),
-        num_to_word(9),
-        ValidatorKeys::new(vec![SigningKey::new().public_key()]).unwrap(),
+        ValidatorConfig::new(vec![SigningKey::new().public_key()], 1).unwrap(),
         test_fee_params(),
-        11_u8.into(),
+        test_protocol_config().to_commitment(),
+        None,
+        11,
     );
 
     let dummy_signature =
         BlockSignatures::new(vec![SigningKey::new().sign(block_header.commitment())]).unwrap();
 
-    conn.transaction(|conn| {
-        queries::insert_block_header(conn, &block_header, &dummy_signature)?;
-        Ok::<_, DatabaseError>(())
-    })
-    .unwrap();
+    (block_header, dummy_signature)
 }
 
 fn precomputed_states_from_account(account: &Account) -> PrecomputedPublicAccountStates {
@@ -141,38 +412,71 @@ fn precomputed_states_from_account(account: &Account) -> PrecomputedPublicAccoun
             .collect(),
     };
 
-    PrecomputedPublicAccountStates::from_iter([(account.id(), state)])
+    [(account.id(), state)].into_iter().collect::<PrecomputedPublicAccountStates>()
+}
+
+#[tokio::test]
+async fn bootstrap_stores_protocol_config_across_reopen() {
+    let temp_dir = tempdir().unwrap();
+    let db_path = temp_dir.path().join("store.sqlite");
+    let genesis = empty_genesis_block();
+    let commitment = genesis.protocol_config().to_commitment();
+    let expected = genesis.protocol_config().clone();
+
+    super::Db::bootstrap(db_path.clone(), genesis).await.unwrap();
+    let db = super::Db::load(db_path).await.unwrap();
+
+    assert_eq!(
+        db.select_protocol_config_by_commitment(commitment).await.unwrap(),
+        Some(expected)
+    );
+}
+
+#[test]
+fn bootstrap_rolls_back_protocol_config_when_genesis_insert_fails() {
+    const DELETE_PROTOCOL_CONFIG: &str = "DELETE FROM protocol_configs WHERE commitment = ?1";
+
+    let db = &TestDb::new();
+    let first = empty_genesis_block();
+    let commitment = first.protocol_config().to_commitment();
+    db.write(move |tx| super::insert_genesis(tx, first)).unwrap();
+    db.write(move |tx| -> Result<usize> {
+        Ok(tx.execute(DELETE_PROTOCOL_CONFIG, &[&commitment])?)
+    })
+    .unwrap();
+
+    assert!(db.write(move |tx| super::insert_genesis(tx, empty_genesis_block())).is_err());
+    assert_eq!(
+        diesel_queries::select_protocol_config_by_commitment(&mut db.diesel_conn(), commitment)
+            .unwrap(),
+        None
+    );
 }
 
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn sql_insert_nullifiers_for_block() {
-    let mut conn = create_db();
-    let conn = &mut conn;
+    let db = &TestDb::new();
     let nullifiers = [num_to_nullifier(1 << 48)];
 
     let block_num = 1.into();
-    create_block(conn, block_num);
+    create_block(db, block_num);
 
     // Insert a new nullifier succeeds
     {
-        conn.transaction(|conn| {
-            let res = queries::insert_nullifiers_for_block(conn, &nullifiers, block_num);
-            assert_eq!(res.unwrap(), nullifiers.len(), "There should be one entry");
-            Ok::<_, DatabaseError>(())
-        })
-        .unwrap();
+        let res = insert_nullifiers_for_block(db, &nullifiers, block_num);
+        assert_eq!(res.unwrap(), nullifiers.len(), "There should be one entry");
     }
 
     // Inserting the nullifier twice is an error
     {
-        let res = queries::insert_nullifiers_for_block(conn, &nullifiers, block_num);
+        let res = insert_nullifiers_for_block(db, &nullifiers, block_num);
         assert!(res.is_err(), "Inserting the same nullifier twice is an error");
     }
 
     // even if the block number is different
     {
-        let res = queries::insert_nullifiers_for_block(conn, &nullifiers, block_num + 1);
+        let res = insert_nullifiers_for_block(db, &nullifiers, block_num + 1);
 
         assert!(
             res.is_err(),
@@ -185,7 +489,7 @@ fn sql_insert_nullifiers_for_block() {
         let nullifiers: Vec<_> = (0..10).map(num_to_nullifier).collect();
         let block_num = 1.into();
 
-        let res = queries::insert_nullifiers_for_block(conn, &nullifiers, block_num);
+        let res = insert_nullifiers_for_block(db, &nullifiers, block_num);
 
         assert_eq!(res.unwrap(), nullifiers.len(), "There should be 10 entries");
     }
@@ -194,9 +498,8 @@ fn sql_insert_nullifiers_for_block() {
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn sql_insert_transactions() {
-    let mut conn = create_db();
-    let conn = &mut conn;
-    let count = insert_transactions(conn);
+    let db = &TestDb::new();
+    let count = insert_mock_transactions(db);
 
     assert_eq!(count, 2, "Two elements must have been inserted");
 }
@@ -204,13 +507,12 @@ fn sql_insert_transactions() {
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn sql_select_nullifiers() {
-    let mut conn = create_db();
-    let conn = &mut conn;
+    let db = &TestDb::new();
     let block_num = 1.into();
-    create_block(conn, block_num);
+    create_block(db, block_num);
 
     // test querying empty table
-    let nullifiers = queries::select_all_nullifiers(conn).unwrap();
+    let nullifiers = select_all_nullifiers(db).unwrap();
     assert!(nullifiers.is_empty());
 
     // test multiple entries
@@ -219,10 +521,10 @@ fn sql_select_nullifiers() {
         let nullifier = num_to_nullifier(i);
         state.push(NullifierInfo { nullifier, block_num });
 
-        let res = queries::insert_nullifiers_for_block(conn, &[nullifier], block_num);
+        let res = insert_nullifiers_for_block(db, &[nullifier], block_num);
         assert_eq!(res.unwrap(), 1, "One element must have been inserted");
 
-        let nullifiers = queries::select_all_nullifiers(conn).unwrap();
+        let nullifiers = select_all_nullifiers(db).unwrap();
         assert_eq!(nullifiers, state);
     }
 }
@@ -235,7 +537,7 @@ pub fn create_note(account_id: AccountId) -> Note {
     P2idNote::builder()
         .sender(account_id)
         .target(account_id)
-        .asset(Asset::Fungible(
+        .asset(Asset::from(
             FungibleAsset::new(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap(), 10).unwrap(),
         ))
         .note_type(NoteType::Public)
@@ -248,18 +550,18 @@ pub fn create_note(account_id: AccountId) -> Note {
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn sql_select_note_script_by_root() {
-    let mut conn = create_db();
-    let conn = &mut conn;
+    let db = &TestDb::new();
     let block_num = BlockNumber::from(1);
-    create_block(conn, block_num);
+    create_block(db, block_num);
 
     let account_id = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
 
-    queries::upsert_accounts(
-        conn,
+    upsert_accounts(
+        db,
         &[mock_block_account_update(account_id, 0)],
         block_num,
-        &queries::PrecomputedPublicAccountStates::new(),
+        &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([account_id]),
     )
     .unwrap();
 
@@ -278,57 +580,52 @@ fn sql_select_note_script_by_root() {
     };
     state.push(note.clone());
 
-    let res = queries::insert_scripts(conn, [&note]);
+    let res = insert_note_scripts(db, std::slice::from_ref(&note));
     assert_eq!(res.unwrap(), 1, "One element must have been inserted");
 
     // test querying the script by the root
-    let note_script =
-        queries::select_note_script_by_root(conn, Word::from(new_note.script().root())).unwrap();
+    let note_script = select_note_script_by_root(db, Word::from(new_note.script().root())).unwrap();
     assert_eq!(note_script, Some(new_note.script().clone()));
 
     // test querying the script by the root that is not in the database
-    let note_script = queries::select_note_script_by_root(conn, [0_u16; 4].into()).unwrap();
+    let note_script = select_note_script_by_root(db, [0_u16; 4].into()).unwrap();
     assert_eq!(note_script, None);
 }
 
 // Generates an account, inserts into the database, and creates a note for it.
 fn make_account_and_note(
-    conn: &mut SqliteConnection,
+    db: &TestDb,
     block_num: BlockNumber,
     init_seed: [u8; 32],
     account_type: AccountType,
 ) -> (AccountId, Note) {
-    conn.transaction(|conn| {
-        let account = mock_account_code_and_storage(account_type, [], Some(init_seed));
-        let account_id = account.id();
-        queries::upsert_accounts(
-            conn,
-            &[BlockAccountUpdate::new(
-                account_id,
-                account.to_commitment(),
-                AccountUpdateDetails::Public(AccountPatch::try_from(account.clone()).unwrap()),
-            )],
-            block_num,
-            &precomputed_states_from_account(&account),
-        )
-        .unwrap();
+    let account = mock_account_code_and_storage(account_type, [], Some(init_seed));
+    let account_id = account.id();
+    upsert_accounts(
+        db,
+        &[block_account_update(
+            account_id,
+            account.to_commitment(),
+            AccountUpdateDetails::Public(AccountPatch::try_from(account.clone()).unwrap()),
+        )],
+        block_num,
+        &precomputed_states_from_account(&account),
+        &BTreeSet::from([account_id]),
+    )
+    .unwrap();
 
-        let new_note = create_note(account_id);
-        Ok::<_, DatabaseError>((account_id, new_note))
-    })
-    .unwrap()
+    (account_id, create_note(account_id))
 }
 
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn sql_select_accounts() {
-    let mut conn = create_db();
-    let conn = &mut conn;
+    let db = &TestDb::new();
     let block_num = 1.into();
-    create_block(conn, block_num);
+    create_block(db, block_num);
 
     // test querying empty table
-    let accounts = queries::select_all_accounts(conn).unwrap();
+    let accounts = select_all_accounts(db).unwrap();
     assert!(accounts.is_empty());
     // test multiple entries
     let mut state = vec![];
@@ -349,19 +646,20 @@ fn sql_select_accounts() {
             details: None,
         });
 
-        let res = queries::upsert_accounts(
-            conn,
-            &[BlockAccountUpdate::new(
+        let res = upsert_accounts(
+            db,
+            &[block_account_update(
                 account_id,
                 account_commitment,
                 AccountUpdateDetails::Private,
             )],
             block_num,
-            &queries::PrecomputedPublicAccountStates::new(),
+            &PrecomputedPublicAccountStates::new(),
+            &BTreeSet::from([account_id]),
         );
         assert_eq!(res.unwrap(), 1, "One element must have been inserted");
 
-        let accounts = queries::select_all_accounts(conn).unwrap();
+        let accounts = select_all_accounts(db).unwrap();
         assert_eq!(accounts, state);
     }
 }
@@ -369,8 +667,7 @@ fn sql_select_accounts() {
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn sync_account_vault_basic_validation() {
-    let mut conn = create_db();
-    let conn = &mut conn;
+    let db = &TestDb::new();
 
     // Create a public account for vault testing
     let public_account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
@@ -380,50 +677,32 @@ fn sync_account_vault_basic_validation() {
     let invalid_block_from: BlockNumber = 10.into();
 
     // Create blocks
-    create_block(conn, block_from);
-    create_block(conn, block_mid);
-    create_block(conn, block_to);
+    create_block(db, block_from);
+    create_block(db, block_mid);
+    create_block(db, block_to);
 
     for block in [block_from, block_mid, block_to] {
-        queries::upsert_accounts(
-            conn,
-            &[mock_block_account_update(public_account_id, 0)],
-            block,
-            &queries::PrecomputedPublicAccountStates::new(),
-        )
-        .unwrap();
+        upsert_mock_account(db, public_account_id, 0, block).unwrap();
     }
 
     // Create test vault assets from two different faucets to get different vault keys.
     let faucet_id_2 = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap();
-    let fungible_asset_1 = Asset::Fungible(FungibleAsset::new(public_account_id, 1000).unwrap());
-    let fungible_asset_2 = Asset::Fungible(FungibleAsset::new(faucet_id_2, 2000).unwrap());
+    let fungible_asset_1 = Asset::from(FungibleAsset::new(public_account_id, 1000).unwrap());
+    let fungible_asset_2 = Asset::from(FungibleAsset::new(faucet_id_2, 2000).unwrap());
     let vault_key_1 = fungible_asset_1.id();
     let vault_key_2 = fungible_asset_2.id();
 
     // Insert vault assets for the public account at different blocks
-    queries::insert_account_vault_asset(
-        conn,
-        public_account_id,
-        block_from,
-        vault_key_1,
-        Some(fungible_asset_1),
-    )
-    .unwrap();
-    queries::insert_account_vault_asset(
-        conn,
-        public_account_id,
-        block_mid,
-        vault_key_2,
-        Some(fungible_asset_2),
-    )
-    .unwrap();
+    insert_vault_asset(db, public_account_id, block_from, vault_key_1, Some(fungible_asset_1))
+        .unwrap();
+    insert_vault_asset(db, public_account_id, block_mid, vault_key_2, Some(fungible_asset_2))
+        .unwrap();
 
     // Update an existing vault asset (sets previous as not latest)
     let updated_fungible_asset_1 =
-        Asset::Fungible(FungibleAsset::new(public_account_id, 1500).unwrap());
-    queries::insert_account_vault_asset(
-        conn,
+        Asset::from(FungibleAsset::new(public_account_id, 1500).unwrap());
+    insert_vault_asset(
+        db,
         public_account_id,
         block_to,
         vault_key_1,
@@ -432,11 +711,7 @@ fn sync_account_vault_basic_validation() {
     .unwrap();
 
     // Test invalid block range - should return error
-    let result = queries::select_account_vault_assets(
-        conn,
-        public_account_id,
-        invalid_block_from..=block_to,
-    );
+    let result = select_account_vault_assets(db, public_account_id, invalid_block_from..=block_to);
     assert!(result.is_err(), "expected error for invalid block range");
 
     let Err(crate::errors::DatabaseError::InvalidBlockRange { .. }) = result else {
@@ -445,8 +720,7 @@ fn sync_account_vault_basic_validation() {
 
     // Test with valid block range - should return vault assets
     let (last_block, values) =
-        queries::select_account_vault_assets(conn, public_account_id, block_from..=block_to)
-            .unwrap();
+        select_account_vault_assets(db, public_account_id, block_from..=block_to).unwrap();
 
     // Should return assets we inserted
     assert!(!values.is_empty(), "vault assets should have data");
@@ -463,25 +737,24 @@ fn sync_account_vault_basic_validation() {
 #[miden_node_test_macro::enable_logging]
 fn select_nullifiers_by_prefix_works() {
     const PREFIX_LEN: u8 = 16;
-    let mut conn = create_db();
-    let conn = &mut conn; // test empty table
+    let db = &TestDb::new();
+    // test empty table
     let block_number0 = 0.into();
     let block_number10 = 10.into();
     let (nullifiers, block_number_reached) =
-        queries::select_nullifiers_by_prefix(conn, PREFIX_LEN, &[], block_number0..=block_number10)
-            .unwrap();
+        select_nullifiers_by_prefix(db, PREFIX_LEN, &[], block_number0..=block_number10).unwrap();
     assert!(nullifiers.is_empty());
     assert_eq!(block_number_reached, block_number10);
 
     // test single item
     let nullifier1 = num_to_nullifier(1 << 48);
     let block_number1 = 1.into();
-    create_block(conn, block_number1);
+    create_block(db, block_number1);
 
-    queries::insert_nullifiers_for_block(conn, &[nullifier1], block_number1).unwrap();
+    insert_nullifiers_for_block(db, &[nullifier1], block_number1).unwrap();
 
-    let (nullifiers, block_number_reached) = queries::select_nullifiers_by_prefix(
-        conn,
+    let (nullifiers, block_number_reached) = select_nullifiers_by_prefix(
+        db,
         PREFIX_LEN,
         &[utils::get_nullifier_prefix(&nullifier1)],
         block_number0..=block_number10,
@@ -500,16 +773,16 @@ fn select_nullifiers_by_prefix_works() {
     // test two elements
     let nullifier2 = num_to_nullifier(2 << 48);
     let block_number2 = 2.into();
-    create_block(conn, block_number2);
+    create_block(db, block_number2);
 
-    queries::insert_nullifiers_for_block(conn, &[nullifier2], block_number2).unwrap();
+    insert_nullifiers_for_block(db, &[nullifier2], block_number2).unwrap();
 
-    let nullifiers = queries::select_all_nullifiers(conn).unwrap();
+    let nullifiers = select_all_nullifiers(db).unwrap();
     assert_eq!(nullifiers, vec![(nullifier1, block_number1), (nullifier2, block_number2)]);
 
     // only the nullifiers matching the prefix are included
-    let (nullifiers, _) = queries::select_nullifiers_by_prefix(
-        conn,
+    let (nullifiers, _) = select_nullifiers_by_prefix(
+        db,
         PREFIX_LEN,
         &[utils::get_nullifier_prefix(&nullifier1)],
         block_number0..=block_number10,
@@ -522,8 +795,8 @@ fn select_nullifiers_by_prefix_works() {
             block_num: block_number1
         }]
     );
-    let (nullifiers, _) = queries::select_nullifiers_by_prefix(
-        conn,
+    let (nullifiers, _) = select_nullifiers_by_prefix(
+        db,
         PREFIX_LEN,
         &[utils::get_nullifier_prefix(&nullifier2)],
         block_number0..=block_number10,
@@ -538,8 +811,8 @@ fn select_nullifiers_by_prefix_works() {
     );
 
     // All matching nullifiers are included
-    let (nullifiers, _) = queries::select_nullifiers_by_prefix(
-        conn,
+    let (nullifiers, _) = select_nullifiers_by_prefix(
+        db,
         PREFIX_LEN,
         &[
             utils::get_nullifier_prefix(&nullifier1),
@@ -563,8 +836,8 @@ fn select_nullifiers_by_prefix_works() {
     );
 
     // If a non-matching prefix is provided, no nullifiers are returned
-    let (nullifiers, _) = queries::select_nullifiers_by_prefix(
-        conn,
+    let (nullifiers, _) = select_nullifiers_by_prefix(
+        db,
         PREFIX_LEN,
         &[utils::get_nullifier_prefix(&num_to_nullifier(3 << 48))],
         block_number0..=block_number10,
@@ -574,8 +847,8 @@ fn select_nullifiers_by_prefix_works() {
 
     // If a block number is provided, only matching nullifiers created at or after that block are
     // returned
-    let (nullifiers, _) = queries::select_nullifiers_by_prefix(
-        conn,
+    let (nullifiers, _) = select_nullifiers_by_prefix(
+        db,
         PREFIX_LEN,
         &[
             utils::get_nullifier_prefix(&nullifier1),
@@ -595,12 +868,12 @@ fn select_nullifiers_by_prefix_works() {
     // Nullifiers are not returned if the block number is after the last nullifier
     let nullifier3 = num_to_nullifier(3 << 48);
     let block_number3 = 3.into();
-    create_block(conn, block_number3);
+    create_block(db, block_number3);
 
-    queries::insert_nullifiers_for_block(conn, &[nullifier3], block_number3).unwrap();
+    insert_nullifiers_for_block(db, &[nullifier3], block_number3).unwrap();
 
-    let (nullifiers, block_number_reached) = queries::select_nullifiers_by_prefix(
-        conn,
+    let (nullifiers, block_number_reached) = select_nullifiers_by_prefix(
+        db,
         PREFIX_LEN,
         &[
             utils::get_nullifier_prefix(&nullifier1),
@@ -629,17 +902,16 @@ fn select_nullifiers_by_prefix_works() {
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn db_block_header() {
-    let mut conn = create_db();
-    let conn = &mut conn; // test querying empty table
+    let db = &TestDb::new();
+    // test querying empty table
     let block_number = 1;
-    let res = queries::select_block_header_by_block_num(conn, Some(block_number.into())).unwrap();
+    let res = select_block_header_by_block_num(db, Some(block_number.into())).unwrap();
     assert!(res.is_none());
 
-    let res = queries::select_block_header_by_block_num(conn, None).unwrap();
+    let res = select_block_header_by_block_num(db, None).unwrap();
     assert!(res.is_none());
 
     let block_header = BlockHeader::new(
-        1_u8.into(),
         num_to_word(2),
         3.into(),
         num_to_word(4),
@@ -647,33 +919,33 @@ fn db_block_header() {
         num_to_word(6),
         num_to_word(7),
         num_to_word(8),
-        num_to_word(9),
-        ValidatorKeys::new(vec![SigningKey::new().public_key()]).unwrap(),
+        ValidatorConfig::new(vec![SigningKey::new().public_key()], 1).unwrap(),
         test_fee_params(),
-        11_u8.into(),
+        test_protocol_config().to_commitment(),
+        None,
+        11,
     );
     // test insertion
 
     let dummy_signature =
         BlockSignatures::new(vec![SigningKey::new().sign(block_header.commitment())]).unwrap();
-    queries::insert_block_header(conn, &block_header, &dummy_signature).unwrap();
+    insert_block_header(db, &block_header, &dummy_signature).unwrap();
+    let first_signature = dummy_signature;
 
     // test fetch unknown block header
     let block_number = 1;
-    let res = queries::select_block_header_by_block_num(conn, Some(block_number.into())).unwrap();
+    let res = select_block_header_by_block_num(db, Some(block_number.into())).unwrap();
     assert!(res.is_none());
 
     // test fetch block header by block number
-    let res =
-        queries::select_block_header_by_block_num(conn, Some(block_header.block_num())).unwrap();
+    let res = select_block_header_by_block_num(db, Some(block_header.block_num())).unwrap();
     assert_eq!(res.unwrap(), block_header);
 
     // test fetch latest block header
-    let res = queries::select_block_header_by_block_num(conn, None).unwrap();
+    let res = select_block_header_by_block_num(db, None).unwrap();
     assert_eq!(res.unwrap(), block_header);
 
     let block_header2 = BlockHeader::new(
-        11_u8.into(),
         num_to_word(12),
         13.into(),
         num_to_word(14),
@@ -681,54 +953,69 @@ fn db_block_header() {
         num_to_word(16),
         num_to_word(17),
         num_to_word(18),
-        num_to_word(19),
-        ValidatorKeys::new(vec![SigningKey::new().public_key()]).unwrap(),
+        ValidatorConfig::new(vec![SigningKey::new().public_key()], 1).unwrap(),
         test_fee_params(),
-        21_u8.into(),
+        test_protocol_config().to_commitment(),
+        None,
+        21,
     );
 
     let dummy_signature =
         BlockSignatures::new(vec![SigningKey::new().sign(block_header2.commitment())]).unwrap();
-    queries::insert_block_header(conn, &block_header2, &dummy_signature).unwrap();
+    insert_block_header(db, &block_header2, &dummy_signature).unwrap();
 
-    let res = queries::select_block_header_by_block_num(conn, None).unwrap();
+    let res = select_block_header_by_block_num(db, None).unwrap();
     assert_eq!(res.unwrap(), block_header2);
 
-    let res = queries::select_block_headers(
-        conn,
-        [block_header.block_num(), block_header2.block_num()].into_iter(),
-    )
-    .unwrap();
-    assert_eq!(res, [block_header, block_header2]);
+    let res = select_block_headers(db, vec![block_header.block_num(), block_header2.block_num()])
+        .unwrap();
+    assert_eq!(res, [block_header.clone(), block_header2.clone()]);
+
+    // commitments come back in block number order
+    let commitments = select_all_block_header_commitments(db).unwrap();
+    assert_eq!(
+        commitments,
+        [
+            BlockHeaderCommitment::new(&block_header),
+            BlockHeaderCommitment::new(&block_header2),
+        ]
+    );
+
+    // test fetch block header with its signatures
+    let stored =
+        select_block_header_and_signatures_by_block_num(db, block_header.block_num()).unwrap();
+    assert_eq!(stored, Some((block_header, first_signature)));
+
+    let missing = select_block_header_and_signatures_by_block_num(db, 1.into()).unwrap();
+    assert!(missing.is_none());
 }
 
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn notes() {
-    let mut conn = create_db();
-    let conn = &mut conn;
+    let db = &TestDb::new();
     let block_num_1 = 1.into();
-    create_block(conn, block_num_1);
+    create_block(db, block_num_1);
 
     let block_range = BlockNumber::GENESIS..=BlockNumber::from(1);
 
     // test empty table
-    let res = queries::select_notes_since_block_by_tag(conn, &[], block_range.clone()).unwrap();
+    let res = select_notes_since_block_by_tag(db, &[], block_range.clone()).unwrap();
     assert!(res.is_empty());
 
-    let res =
-        queries::select_notes_since_block_by_tag(conn, &[1, 2, 3], block_range.clone()).unwrap();
+    let res = select_notes_since_block_by_tag(db, &[1, 2, 3], block_range.clone()).unwrap();
     assert!(res.is_empty());
 
     let sender = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
 
     // test insertion
 
-    queries::upsert_accounts(
-        conn,
+    upsert_accounts(
+        db,
         &[mock_block_account_update(sender, 0)],
         block_num_1,
-        &queries::PrecomputedPublicAccountStates::new(),
+        &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([sender]),
     )
     .unwrap();
 
@@ -755,24 +1042,24 @@ fn notes() {
         inclusion_path: inclusion_path.clone(),
     };
 
-    queries::insert_scripts(conn, [&note]).unwrap();
-    queries::insert_notes(conn, &[(note.clone(), None)]).unwrap();
+    insert_note_scripts(db, std::slice::from_ref(&note)).unwrap();
+    insert_notes(db, &[(note.clone(), None)]).unwrap();
 
     // test empty tags
-    let res = queries::select_notes_since_block_by_tag(conn, &[], block_range.clone()).unwrap();
+    let res = select_notes_since_block_by_tag(db, &[], block_range.clone()).unwrap();
     assert!(res.is_empty());
 
     let block_range_1 = 2.into()..=2.into();
     // test no updates
-    let res = queries::select_notes_since_block_by_tag(conn, &[tag], block_range_1).unwrap();
+    let res = select_notes_since_block_by_tag(db, &[tag], block_range_1).unwrap();
     assert!(res.is_empty());
 
     // test match
-    let res = queries::select_notes_since_block_by_tag(conn, &[tag], block_range.clone()).unwrap();
+    let res = select_notes_since_block_by_tag(db, &[tag], block_range.clone()).unwrap();
     assert_eq!(res, vec![note.clone().into()]);
 
     let block_num_2 = note.block_num + 1;
-    create_block(conn, block_num_2);
+    create_block(db, block_num_2);
 
     // insertion second note with same tag, but on higher block
     let note2 = NoteRecord {
@@ -785,27 +1072,27 @@ fn notes() {
         inclusion_path: inclusion_path.clone(),
     };
 
-    queries::insert_notes(conn, &[(note2.clone(), None)]).unwrap();
+    insert_notes(db, &[(note2.clone(), None)]).unwrap();
 
     let block_range = 0.into()..=2.into();
 
     // only the first matching block is returned; `get_note_sync_multi` loops this inside a single
     // database transaction when multiple blocks are requested.
-    let res = queries::select_notes_since_block_by_tag(conn, &[tag], block_range).unwrap();
+    let res = select_notes_since_block_by_tag(db, &[tag], block_range).unwrap();
     assert_eq!(res, vec![note.clone().into()]);
 
     let block_range = 2.into()..=2.into();
 
     // only the second note is returned when range is restricted to block 2
-    let res = queries::select_notes_since_block_by_tag(conn, &[tag], block_range).unwrap();
+    let res = select_notes_since_block_by_tag(db, &[tag], block_range).unwrap();
     assert_eq!(res, vec![note2.clone().into()]);
 
     // test query notes by id
     let notes = vec![note.clone(), note2];
 
-    let note_ids = Vec::from_iter(notes.iter().map(|note| NoteId::from_raw(note.note_id)));
+    let note_ids = notes.iter().map(|note| NoteId::from_raw(note.note_id)).collect::<Vec<_>>();
 
-    let res = queries::select_notes_by_id(conn, &note_ids).unwrap();
+    let res = select_notes_by_id(db, &note_ids).unwrap();
     assert_eq!(res, notes);
 
     // test notes have correct details
@@ -815,13 +1102,50 @@ fn notes() {
     assert_eq!(note_1.details, None);
 }
 
+#[test]
+fn existing_note_ids_respect_requested_ids_and_block_limit() {
+    let db = &TestDb::new();
+    let notes = [
+        Note::mock_noop(Word::from([1u32, 0, 0, 0])),
+        Note::mock_noop(Word::from([2u32, 0, 0, 0])),
+        Note::mock_noop(Word::from([3u32, 0, 0, 0])),
+    ];
+    let note_ids = notes.each_ref().map(Note::id);
+
+    for (note, block_num) in notes.into_iter().zip([1u32, 2, 3]) {
+        let block_num = BlockNumber::from(block_num);
+        create_block(db, block_num);
+        let record = NoteRecord {
+            block_num,
+            note_index: BlockNoteIndex::new(0, 0).unwrap(),
+            note_id: note.id().as_word(),
+            metadata: *note.metadata(),
+            details: None,
+            attachments: note.attachments().clone(),
+            inclusion_path: SparseMerklePath::default(),
+        };
+        insert_notes(db, &[(record, None)]).unwrap();
+    }
+
+    let missing_id = NoteId::from_raw(Word::from([4u32, 0, 0, 0]));
+    let requested_ids = [note_ids[1], note_ids[2], missing_id, note_ids[1]];
+    for (block_num, expected) in [
+        (1u32, HashSet::new()),
+        (2, HashSet::from([note_ids[1]])),
+        (3, HashSet::from([note_ids[1], note_ids[2]])),
+    ] {
+        let found = select_existing_note_ids(db, &requested_ids, block_num.into()).unwrap();
+        assert_eq!(found, expected);
+    }
+    assert!(select_existing_note_ids(db, &[], 3.into()).unwrap().is_empty());
+}
+
 /// Creates notes across 3 blocks, then calls `get_note_sync_multi` once and verifies all 3 blocks'
 /// notes are returned in a single query, ordered by block number.
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn note_sync_across_multiple_blocks() {
-    let mut conn = create_db();
-    let conn = &mut conn;
+    let db = &TestDb::new();
 
     let sender = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
 
@@ -831,12 +1155,17 @@ fn note_sync_across_multiple_blocks() {
 
     for block_num_raw in 1..=3u32 {
         let block_num = BlockNumber::from(block_num_raw);
-        create_block(conn, block_num);
-        queries::upsert_accounts(
-            conn,
+        create_block(db, block_num);
+        upsert_accounts(
+            db,
             &[mock_block_account_update(sender, block_num_raw.into())],
             block_num,
-            &queries::PrecomputedPublicAccountStates::new(),
+            &PrecomputedPublicAccountStates::new(),
+            &if block_num_raw == 1 {
+                BTreeSet::from([sender])
+            } else {
+                BTreeSet::new()
+            },
         )
         .unwrap();
 
@@ -870,8 +1199,8 @@ fn note_sync_across_multiple_blocks() {
             attachments,
             inclusion_path,
         };
-        queries::insert_scripts(conn, [&note]).unwrap();
-        queries::insert_notes(conn, &[(note, None)]).unwrap();
+        insert_note_scripts(db, std::slice::from_ref(&note)).unwrap();
+        insert_notes(db, &[(note, None)]).unwrap();
     }
 
     // Build an MMR with enough leaves to cover all blocks (0..=3).
@@ -884,8 +1213,8 @@ fn note_sync_across_multiple_blocks() {
 
     // A single call to get_note_sync_multi should return all 3 blocks.
     let block_range = BlockNumber::GENESIS..=BlockNumber::from(3);
-    let updates = queries::get_note_sync_multi(
-        conn,
+    let updates = get_note_sync_multi(
+        db,
         &[tag],
         block_range,
         miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES,
@@ -915,8 +1244,7 @@ fn note_sync_across_multiple_blocks() {
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn note_sync_multi_respects_payload_limit() {
-    let mut conn = create_db();
-    let conn = &mut conn;
+    let db = &TestDb::new();
 
     let sender = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
     let tag = 43u32;
@@ -924,12 +1252,17 @@ fn note_sync_multi_respects_payload_limit() {
 
     for block_num_raw in 1..=3u32 {
         let block_num = BlockNumber::from(block_num_raw);
-        create_block(conn, block_num);
-        queries::upsert_accounts(
-            conn,
+        create_block(db, block_num);
+        upsert_accounts(
+            db,
             &[mock_block_account_update(sender, block_num_raw.into())],
             block_num,
-            &queries::PrecomputedPublicAccountStates::new(),
+            &PrecomputedPublicAccountStates::new(),
+            &if block_num_raw == 1 {
+                BTreeSet::from([sender])
+            } else {
+                BTreeSet::new()
+            },
         )
         .unwrap();
 
@@ -963,14 +1296,13 @@ fn note_sync_multi_respects_payload_limit() {
             attachments,
             inclusion_path,
         };
-        queries::insert_scripts(conn, [&note]).unwrap();
-        queries::insert_notes(conn, &[(note, None)]).unwrap();
+        insert_note_scripts(db, std::slice::from_ref(&note)).unwrap();
+        insert_notes(db, &[(note, None)]).unwrap();
     }
 
-    let one_block_budget =
-        queries::NOTE_SYNC_BLOCK_OVERHEAD_BYTES + queries::NOTE_SYNC_RECORD_BYTES;
-    let updates = queries::get_note_sync_multi(
-        conn,
+    let one_block_budget = NOTE_SYNC_BLOCK_OVERHEAD_BYTES + NOTE_SYNC_RECORD_BYTES;
+    let updates = get_note_sync_multi(
+        db,
         &[tag],
         BlockNumber::GENESIS..=BlockNumber::from(3),
         one_block_budget,
@@ -991,17 +1323,17 @@ fn note_sync_multi_respects_payload_limit() {
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn note_sync_no_matching_tags() {
-    let mut conn = create_db();
-    let conn = &mut conn;
+    let db = &TestDb::new();
 
     let sender = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
     let block_num = BlockNumber::from(1);
-    create_block(conn, block_num);
-    queries::upsert_accounts(
-        conn,
+    create_block(db, block_num);
+    upsert_accounts(
+        db,
         &[mock_block_account_update(sender, 0)],
         block_num,
-        &queries::PrecomputedPublicAccountStates::new(),
+        &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([sender]),
     )
     .unwrap();
 
@@ -1026,13 +1358,13 @@ fn note_sync_no_matching_tags() {
         attachments: NoteAttachments::default(),
         inclusion_path,
     };
-    queries::insert_scripts(conn, [&note]).unwrap();
-    queries::insert_notes(conn, &[(note, None)]).unwrap();
+    insert_note_scripts(db, std::slice::from_ref(&note)).unwrap();
+    insert_notes(db, &[(note, None)]).unwrap();
 
     // Query with a different tag should return empty vec.
     let range = BlockNumber::GENESIS..=BlockNumber::from(1);
-    let result = queries::get_note_sync_multi(
-        conn,
+    let result = get_note_sync_multi(
+        db,
         &[999],
         range,
         miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES,
@@ -1042,22 +1374,15 @@ fn note_sync_no_matching_tags() {
 }
 
 fn insert_account_patch(
-    conn: &mut SqliteConnection,
+    db: &TestDb,
     account_id: AccountId,
     block_number: BlockNumber,
     patch: &AccountPatch,
 ) {
     for (slot_name, slot_patch) in patch.storage().maps() {
         for (k, v) in slot_patch.entries().into_iter().flat_map(StorageMapPatchEntries::as_map) {
-            insert_account_storage_map_value(
-                conn,
-                account_id,
-                block_number,
-                slot_name.clone(),
-                *k,
-                *v,
-            )
-            .unwrap();
+            insert_storage_map_value(db, account_id, block_number, slot_name.clone(), *k, *v)
+                .unwrap();
         }
     }
 }
@@ -1069,31 +1394,18 @@ fn sql_account_storage_map_values_insertion() {
 
     use miden_protocol::account::StorageMapPatch;
 
-    let mut conn = create_db();
-    let conn = &mut conn;
+    let db = &TestDb::new();
 
     let block1: BlockNumber = 1.into();
     let block2: BlockNumber = 2.into();
-    create_block(conn, block1);
-    create_block(conn, block2);
+    create_block(db, block1);
+    create_block(db, block2);
 
     let account_id =
         AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2).unwrap();
 
-    queries::upsert_accounts(
-        conn,
-        &[mock_block_account_update(account_id, 0)],
-        block1,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
-    queries::upsert_accounts(
-        conn,
-        &[mock_block_account_update(account_id, 0)],
-        block2,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
+    upsert_mock_account(db, account_id, 0, block1).unwrap();
+    upsert_mock_account(db, account_id, 0, block2).unwrap();
 
     let slot_name = StorageSlotName::mock(3);
     let key1 = StorageMapKey::new(Word::from([1u32, 2, 3, 4]));
@@ -1104,20 +1416,22 @@ fn sql_account_storage_map_values_insertion() {
 
     // Insert at block 1
     let map1 = StorageMapPatch::from_iters([], [(key1, value1), (key2, value2)]);
-    let delta1 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map1))]);
+    let delta1 = [(slot_name.clone(), StorageSlotPatch::Map(map1))]
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
     let storage1 = AccountStoragePatch::from_raw(delta1).unwrap();
     let patch1 = AccountPatch::new(
         account_id,
         storage1,
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(2)),
     )
     .unwrap();
-    insert_account_patch(conn, account_id, block1, &patch1);
+    insert_account_patch(db, account_id, block1, &patch1);
 
-    let storage_map_page = queries::select_account_storage_map_values_paged(
-        conn,
+    let storage_map_page = select_account_storage_map_values_paged(
+        db,
         account_id,
         BlockNumber::GENESIS..=block1,
         1024,
@@ -1127,20 +1441,22 @@ fn sql_account_storage_map_values_insertion() {
 
     // Update key1 at block 2
     let map2 = StorageMapPatch::from_iters([], [(key1, value3)]);
-    let delta2 = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map2))]);
+    let delta2 = [(slot_name.clone(), StorageSlotPatch::Map(map2))]
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
     let storage2 = AccountStoragePatch::from_raw(delta2).unwrap();
     let patch2 = AccountPatch::new(
         account_id,
         storage2,
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(3)),
     )
     .unwrap();
-    insert_account_patch(conn, account_id, block2, &patch2);
+    insert_account_patch(db, account_id, block2, &patch2);
 
-    let storage_map_values = queries::select_account_storage_map_values_paged(
-        conn,
+    let storage_map_values = select_account_storage_map_values_paged(
+        db,
         account_id,
         BlockNumber::GENESIS..=block2,
         1024,
@@ -1167,7 +1483,7 @@ fn sql_account_storage_map_values_insertion() {
 
 #[test]
 fn select_storage_map_sync_values() {
-    let mut conn = create_db();
+    let db = &TestDb::new();
     let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
     let slot_name = StorageSlotName::mock(5);
 
@@ -1183,69 +1499,23 @@ fn select_storage_map_sync_values() {
     let block3 = BlockNumber::from(3);
 
     for block in [block1, block2, block3] {
-        queries::upsert_accounts(
-            &mut conn,
-            &[mock_block_account_update(account_id, 0)],
-            block,
-            &queries::PrecomputedPublicAccountStates::new(),
-        )
-        .unwrap();
+        upsert_mock_account(db, account_id, 0, block).unwrap();
     }
 
     // Insert data across multiple blocks using individual inserts Block 1: key1 -> value1, key2 ->
     // value2
-    queries::insert_account_storage_map_value(
-        &mut conn,
-        account_id,
-        block1,
-        slot_name.clone(),
-        key1,
-        value1,
-    )
-    .unwrap();
-    queries::insert_account_storage_map_value(
-        &mut conn,
-        account_id,
-        block1,
-        slot_name.clone(),
-        key2,
-        value2,
-    )
-    .unwrap();
+    insert_storage_map_value(db, account_id, block1, slot_name.clone(), key1, value1).unwrap();
+    insert_storage_map_value(db, account_id, block1, slot_name.clone(), key2, value2).unwrap();
 
     // Block 2: key2 -> value3 (update), key3 -> value3 (new)
-    queries::insert_account_storage_map_value(
-        &mut conn,
-        account_id,
-        block2,
-        slot_name.clone(),
-        key2,
-        value3,
-    )
-    .unwrap();
-    queries::insert_account_storage_map_value(
-        &mut conn,
-        account_id,
-        block2,
-        slot_name.clone(),
-        key3,
-        value3,
-    )
-    .unwrap();
+    insert_storage_map_value(db, account_id, block2, slot_name.clone(), key2, value3).unwrap();
+    insert_storage_map_value(db, account_id, block2, slot_name.clone(), key3, value3).unwrap();
 
     // Block 3: key1 -> value2 (update)
-    queries::insert_account_storage_map_value(
-        &mut conn,
-        account_id,
-        block3,
-        slot_name.clone(),
-        key1,
-        value2,
-    )
-    .unwrap();
+    insert_storage_map_value(db, account_id, block3, slot_name.clone(), key1, value2).unwrap();
 
-    let page = queries::select_account_storage_map_values_paged(
-        &mut conn,
+    let page = select_account_storage_map_values_paged(
+        db,
         account_id,
         BlockNumber::from(2)..=BlockNumber::from(3),
         1024,
@@ -1281,28 +1551,19 @@ fn select_storage_map_sync_values() {
 
 #[test]
 fn select_storage_map_sync_values_for_network_account() {
-    let mut conn = create_db();
+    let db = &TestDb::new();
     let block_num = BlockNumber::from(1);
-    create_block(&mut conn, block_num);
+    create_block(db, block_num);
 
-    let (account_id, _) =
-        make_account_and_note(&mut conn, block_num, [42u8; 32], AccountType::Public);
+    let (account_id, _) = make_account_and_note(db, block_num, [42u8; 32], AccountType::Public);
     let slot_name = StorageSlotName::mock(7);
     let key = StorageMapKey::from_index(1);
     let value = num_to_word(10);
 
-    queries::insert_account_storage_map_value(
-        &mut conn,
-        account_id,
-        block_num,
-        slot_name.clone(),
-        key,
-        value,
-    )
-    .unwrap();
+    insert_storage_map_value(db, account_id, block_num, slot_name.clone(), key, value).unwrap();
 
-    let page = queries::select_account_storage_map_values_paged(
-        &mut conn,
+    let page = select_account_storage_map_values_paged(
+        db,
         account_id,
         BlockNumber::GENESIS..=block_num,
         1024,
@@ -1318,7 +1579,7 @@ fn select_storage_map_sync_values_for_network_account() {
 
 #[test]
 fn select_storage_map_sync_values_paginates_until_last_block() {
-    let mut conn = create_db();
+    let db = &TestDb::new();
     let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
     let slot_name = StorageSlotName::mock(7);
 
@@ -1326,34 +1587,16 @@ fn select_storage_map_sync_values_paginates_until_last_block() {
     let block2 = BlockNumber::from(2);
     let block3 = BlockNumber::from(3);
 
-    create_block(&mut conn, block1);
-    create_block(&mut conn, block2);
-    create_block(&mut conn, block3);
+    create_block(db, block1);
+    create_block(db, block2);
+    create_block(db, block3);
 
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 0)],
-        block1,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 1)],
-        block2,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 2)],
-        block3,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
+    upsert_mock_account(db, account_id, 0, block1).unwrap();
+    upsert_mock_account(db, account_id, 1, block2).unwrap();
+    upsert_mock_account(db, account_id, 2, block3).unwrap();
 
-    queries::insert_account_storage_map_value(
-        &mut conn,
+    insert_storage_map_value(
+        db,
         account_id,
         block1,
         slot_name.clone(),
@@ -1361,8 +1604,8 @@ fn select_storage_map_sync_values_paginates_until_last_block() {
         num_to_word(11),
     )
     .unwrap();
-    queries::insert_account_storage_map_value(
-        &mut conn,
+    insert_storage_map_value(
+        db,
         account_id,
         block2,
         slot_name.clone(),
@@ -1370,8 +1613,8 @@ fn select_storage_map_sync_values_paginates_until_last_block() {
         num_to_word(22),
     )
     .unwrap();
-    queries::insert_account_storage_map_value(
-        &mut conn,
+    insert_storage_map_value(
+        db,
         account_id,
         block3,
         slot_name.clone(),
@@ -1380,13 +1623,9 @@ fn select_storage_map_sync_values_paginates_until_last_block() {
     )
     .unwrap();
 
-    let page = queries::select_account_storage_map_values_paged(
-        &mut conn,
-        account_id,
-        BlockNumber::GENESIS..=block3,
-        1,
-    )
-    .unwrap();
+    let page =
+        select_account_storage_map_values_paged(db, account_id, BlockNumber::GENESIS..=block3, 1)
+            .unwrap();
 
     assert_eq!(page.last_block_included, block1, "should truncate at block 1");
     assert_eq!(page.values.len(), 1, "should include block 1 only");
@@ -1397,25 +1636,19 @@ fn select_storage_map_sync_values_paginates_until_last_block() {
 /// `last_block_num.saturating_sub(1) = -1` which failed `BlockNumber::from_raw_sql`.
 #[test]
 fn select_storage_map_sync_values_all_entries_in_genesis_block() {
-    let mut conn = create_db();
+    let db = &TestDb::new();
     let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
     let slot_name = StorageSlotName::mock(8);
 
     let genesis = BlockNumber::GENESIS;
-    create_block(&mut conn, genesis);
+    create_block(db, genesis);
 
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 0)],
-        genesis,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
+    upsert_mock_account(db, account_id, 0, genesis).unwrap();
 
     // Insert 3 entries, all in genesis block
     for i in 0..3 {
-        queries::insert_account_storage_map_value(
-            &mut conn,
+        insert_storage_map_value(
+            db,
             account_id,
             genesis,
             slot_name.clone(),
@@ -1428,12 +1661,7 @@ fn select_storage_map_sync_values_all_entries_in_genesis_block() {
     // Query with limit=1 so that raw.len() (3) > limit (1), triggering the pagination branch. All
     // entries are in block 0, so take_while produces nothing and last_block_num.saturating_sub(1) =
     // -1.
-    let result = queries::select_account_storage_map_values_paged(
-        &mut conn,
-        account_id,
-        genesis..=genesis,
-        1,
-    );
+    let result = select_account_storage_map_values_paged(db, account_id, genesis..=genesis, 1);
 
     // Should not error - should return a valid page (possibly with empty values indicating no
     // progress, which the caller interprets as limit_exceeded)
@@ -1450,24 +1678,18 @@ fn select_storage_map_sync_values_all_entries_in_genesis_block() {
 /// data.
 #[test]
 fn select_storage_map_sync_values_all_entries_in_single_non_genesis_block() {
-    let mut conn = create_db();
+    let db = &TestDb::new();
     let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
     let slot_name = StorageSlotName::mock(10);
 
     let block5 = BlockNumber::from(5);
-    create_block(&mut conn, block5);
+    create_block(db, block5);
 
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 0)],
-        block5,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
+    upsert_mock_account(db, account_id, 0, block5).unwrap();
 
     for i in 0..3 {
-        queries::insert_account_storage_map_value(
-            &mut conn,
+        insert_storage_map_value(
+            db,
             account_id,
             block5,
             slot_name.clone(),
@@ -1478,9 +1700,7 @@ fn select_storage_map_sync_values_all_entries_in_single_non_genesis_block() {
     }
 
     // limit=1, so 3 rows > 1 triggers pagination. All in block 5.
-    let page =
-        queries::select_account_storage_map_values_paged(&mut conn, account_id, block5..=block5, 1)
-            .unwrap();
+    let page = select_account_storage_map_values_paged(db, account_id, block5..=block5, 1).unwrap();
 
     assert!(page.values.is_empty(), "should have no values when single block exceeds limit");
     assert_eq!(page.last_block_included, block5, "should signal no progress at block 5");
@@ -1490,7 +1710,7 @@ fn select_storage_map_sync_values_all_entries_in_single_non_genesis_block() {
 /// limit causing block 3 to be dropped.
 #[test]
 fn select_storage_map_sync_values_multi_block_pagination() {
-    let mut conn = create_db();
+    let db = &TestDb::new();
     let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
     let slot_name = StorageSlotName::mock(11);
 
@@ -1498,35 +1718,17 @@ fn select_storage_map_sync_values_multi_block_pagination() {
     let block2 = BlockNumber::from(2);
     let block3 = BlockNumber::from(3);
 
-    create_block(&mut conn, block1);
-    create_block(&mut conn, block2);
-    create_block(&mut conn, block3);
+    create_block(db, block1);
+    create_block(db, block2);
+    create_block(db, block3);
 
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 0)],
-        block1,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 1)],
-        block2,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 2)],
-        block3,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
+    upsert_mock_account(db, account_id, 0, block1).unwrap();
+    upsert_mock_account(db, account_id, 1, block2).unwrap();
+    upsert_mock_account(db, account_id, 2, block3).unwrap();
 
     // 1 entry in block 1, 1 in block 2, 1 in block 3
-    queries::insert_account_storage_map_value(
-        &mut conn,
+    insert_storage_map_value(
+        db,
         account_id,
         block1,
         slot_name.clone(),
@@ -1534,8 +1736,8 @@ fn select_storage_map_sync_values_multi_block_pagination() {
         num_to_word(11),
     )
     .unwrap();
-    queries::insert_account_storage_map_value(
-        &mut conn,
+    insert_storage_map_value(
+        db,
         account_id,
         block2,
         slot_name.clone(),
@@ -1543,8 +1745,8 @@ fn select_storage_map_sync_values_multi_block_pagination() {
         num_to_word(22),
     )
     .unwrap();
-    queries::insert_account_storage_map_value(
-        &mut conn,
+    insert_storage_map_value(
+        db,
         account_id,
         block3,
         slot_name.clone(),
@@ -1554,13 +1756,9 @@ fn select_storage_map_sync_values_multi_block_pagination() {
     .unwrap();
 
     // limit=2: query fetches 3 rows (limit+1), drops block 3, keeps blocks 1-2
-    let page = queries::select_account_storage_map_values_paged(
-        &mut conn,
-        account_id,
-        BlockNumber::GENESIS..=block3,
-        2,
-    )
-    .unwrap();
+    let page =
+        select_account_storage_map_values_paged(db, account_id, BlockNumber::GENESIS..=block3, 2)
+            .unwrap();
 
     assert_eq!(page.values.len(), 2, "should include entries from blocks 1 and 2");
     assert_eq!(page.last_block_included, block2, "last included block should be 2");
@@ -1582,60 +1780,28 @@ async fn reconstruct_storage_map_from_db_pages_until_latest() {
     crate::db::migrations::bootstrap_database(&db_path).unwrap();
     let db = crate::db::Db::load(db_path).await.unwrap();
     let slot_name_for_db = slot_name.clone();
-    db.query("insert paged values", move |db_conn| {
-        db_conn.transaction(|db_conn| {
-            create_block(db_conn, block1);
-            create_block(db_conn, block2);
-            create_block(db_conn, block3);
+    db.writer()
+        .write::<_, DatabaseError, _>("insert paged values", move |tx| {
+            for block in [block1, block2, block3] {
+                create_block_in(tx, block)?;
+            }
 
-            queries::upsert_accounts(
-                db_conn,
-                &[mock_block_account_update(account_id, 0)],
-                block1,
-                &queries::PrecomputedPublicAccountStates::new(),
-            )?;
-            queries::upsert_accounts(
-                db_conn,
-                &[mock_block_account_update(account_id, 1)],
-                block2,
-                &queries::PrecomputedPublicAccountStates::new(),
-            )?;
-            queries::upsert_accounts(
-                db_conn,
-                &[mock_block_account_update(account_id, 2)],
-                block3,
-                &queries::PrecomputedPublicAccountStates::new(),
-            )?;
-
-            queries::insert_account_storage_map_value(
-                db_conn,
-                account_id,
-                block1,
-                slot_name_for_db.clone(),
-                num_to_storage_map_key(1),
-                num_to_word(10),
-            )?;
-            queries::insert_account_storage_map_value(
-                db_conn,
-                account_id,
-                block2,
-                slot_name_for_db.clone(),
-                num_to_storage_map_key(2),
-                num_to_word(20),
-            )?;
-            queries::insert_account_storage_map_value(
-                db_conn,
-                account_id,
-                block3,
-                slot_name_for_db.clone(),
-                num_to_storage_map_key(3),
-                num_to_word(30),
-            )?;
-            Ok::<_, DatabaseError>(())
+            for (index, block) in [block1, block2, block3].into_iter().enumerate() {
+                upsert_mock_account_in(tx, account_id, index as u64, block)?;
+                let entry = (index + 1) as u64;
+                queries::insert_storage_map_value(
+                    tx,
+                    account_id,
+                    block,
+                    &slot_name_for_db,
+                    num_to_storage_map_key(entry),
+                    num_to_word(entry * 10),
+                )?;
+            }
+            Ok(())
         })
-    })
-    .await
-    .unwrap();
+        .await
+        .unwrap();
 
     let details = db
         .reconstruct_storage_map_from_db(
@@ -1670,33 +1836,27 @@ async fn reconstruct_storage_map_from_db_returns_limit_exceeded_for_single_block
     crate::db::migrations::bootstrap_database(&db_path).unwrap();
     let db = crate::db::Db::load(db_path).await.unwrap();
     let slot_name_for_db = slot_name.clone();
-    db.query("insert entries in single block", move |db_conn| {
-        db_conn.transaction(|db_conn| {
-            create_block(db_conn, block5);
+    db.writer()
+        .write::<_, DatabaseError, _>("insert entries in single block", move |tx| {
+            create_block_in(tx, block5)?;
 
-            queries::upsert_accounts(
-                db_conn,
-                &[mock_block_account_update(account_id, 0)],
-                block5,
-                &queries::PrecomputedPublicAccountStates::new(),
-            )?;
+            upsert_mock_account_in(tx, account_id, 0, block5)?;
 
             // Insert 3 entries, all in the same block
             for i in 1..=3 {
-                queries::insert_account_storage_map_value(
-                    db_conn,
+                queries::insert_storage_map_value(
+                    tx,
                     account_id,
                     block5,
-                    slot_name_for_db.clone(),
+                    &slot_name_for_db,
                     num_to_storage_map_key(i),
                     num_to_word(i * 10),
                 )?;
             }
-            Ok::<_, DatabaseError>(())
+            Ok(())
         })
-    })
-    .await
-    .unwrap();
+        .await
+        .unwrap();
 
     // Use limit=1 so that 3 entries in a single block exceed the limit. block_range_start is block5
     // (the first block with data), and the target is also block5.
@@ -1728,7 +1888,72 @@ fn num_to_nullifier(n: u64) -> Nullifier {
 }
 
 fn mock_block_account_update(account_id: AccountId, num: u64) -> BlockAccountUpdate {
-    BlockAccountUpdate::new(account_id, num_to_word(num), AccountUpdateDetails::Private)
+    if account_id.is_private() {
+        return block_account_update(account_id, num_to_word(num), AccountUpdateDetails::Private);
+    }
+
+    let template = &*MOCK_PUBLIC_ACCOUNT_TEMPLATE;
+    let account = Account::new(
+        account_id,
+        template.vault().clone(),
+        template.storage().clone(),
+        template.code().clone(),
+        Felt::new(num.checked_add(1).expect("mock account nonce should not overflow"))
+            .expect("mock account nonce should fit into a felt"),
+        None,
+    )
+    .expect("mock public account should be valid");
+    let final_state_commitment = account.to_commitment();
+    let patch = AccountPatch::try_from(account).expect("existing account should produce a patch");
+
+    block_account_update(account_id, final_state_commitment, AccountUpdateDetails::Public(patch))
+}
+
+static MOCK_PUBLIC_ACCOUNT_TEMPLATE: LazyLock<Account> =
+    LazyLock::new(|| mock_account_code_and_storage(AccountType::Public, [], Some([42; 32])));
+
+fn upsert_mock_account(
+    db: &TestDb,
+    account_id: AccountId,
+    num: u64,
+    block_num: BlockNumber,
+) -> Result<usize> {
+    db.write(move |tx| upsert_mock_account_in(tx, account_id, num, block_num))
+}
+
+/// [`upsert_mock_account`] for tests that already hold a write transaction.
+fn upsert_mock_account_in(
+    tx: &WriteTx<'_>,
+    account_id: AccountId,
+    num: u64,
+    block_num: BlockNumber,
+) -> Result<usize> {
+    const SELECT_ACCOUNT_EXISTS: &str =
+        "SELECT EXISTS(SELECT 1 FROM accounts WHERE account_id = ?1)";
+
+    // The helper upserts, so the update creates the account exactly when the database does not
+    // contain it yet.
+    let account_exists = tx
+        .query(SELECT_ACCOUNT_EXISTS, &[&account_id], |row| row.get::<bool>(0))?
+        .into_iter()
+        .next()
+        .unwrap_or(false);
+    let new_account_ids = if account_exists {
+        BTreeSet::new()
+    } else {
+        BTreeSet::from([account_id])
+    };
+    let update = mock_block_account_update(account_id, num);
+    let precomputed_states = match update.details() {
+        AccountUpdateDetails::Private => PrecomputedPublicAccountStates::new(),
+        AccountUpdateDetails::Public(patch) => {
+            let account =
+                patch.try_to_new_account().expect("mock update should create a public account");
+            precomputed_states_from_account(&account)
+        },
+    };
+
+    queries::upsert_accounts(tx, &[update], block_num, &precomputed_states, &new_account_ids)
 }
 
 // Helper function to create account with specific code for tests
@@ -1763,8 +1988,6 @@ fn create_account_with_code(code_str: &str, seed: [u8; 32]) -> Account {
 fn mock_block_transaction(account_id: AccountId, num: u64) -> TransactionHeader {
     let initial_state_commitment = Word::try_from([num, 0, 0, 0]).unwrap();
     let final_account_commitment = Word::try_from([0, num, 0, 0]).unwrap();
-    let input_notes_commitment = Word::try_from([0, 0, num, 0]).unwrap();
-    let output_notes_commitment = Word::try_from([0, 0, 0, num]).unwrap();
 
     let notes = vec![InputNoteCommitment::from(num_to_nullifier(num))];
     let input_notes = InputNotes::new_unchecked(notes);
@@ -1778,19 +2001,14 @@ fn mock_block_transaction(account_id: AccountId, num: u64) -> TransactionHeader 
         ),
     )];
 
-    TransactionHeader::new_unchecked(
-        TransactionId::new(
-            initial_state_commitment,
-            final_account_commitment,
-            input_notes_commitment,
-            output_notes_commitment,
-        ),
+    TransactionHeader::new(
         account_id,
         initial_state_commitment,
         final_account_commitment,
         input_notes,
         output_notes,
     )
+    .expect("test transaction header should be valid")
 }
 
 /// Like [`mock_block_transaction`], but emits `num_output_notes` output notes so the recorded
@@ -1802,8 +2020,6 @@ fn mock_block_transaction_with_output_notes(
 ) -> TransactionHeader {
     let initial_state_commitment = Word::try_from([num, 0, 0, 0]).unwrap();
     let final_account_commitment = Word::try_from([0, num, 0, 0]).unwrap();
-    let input_notes_commitment = Word::try_from([0, 0, num, 0]).unwrap();
-    let output_notes_commitment = Word::try_from([0, 0, 0, num]).unwrap();
 
     let notes = vec![InputNoteCommitment::from(num_to_nullifier(num))];
     let input_notes = InputNotes::new_unchecked(notes);
@@ -1821,48 +2037,41 @@ fn mock_block_transaction_with_output_notes(
         })
         .collect();
 
-    TransactionHeader::new_unchecked(
-        TransactionId::new(
-            initial_state_commitment,
-            final_account_commitment,
-            input_notes_commitment,
-            output_notes_commitment,
-        ),
+    TransactionHeader::new(
         account_id,
         initial_state_commitment,
         final_account_commitment,
         input_notes,
         output_notes,
     )
+    .expect("test transaction header should be valid")
 }
 
-fn insert_transactions(conn: &mut SqliteConnection) -> usize {
+/// Inserts an account and two transactions against it at block 1, returning the rows written.
+fn insert_mock_transactions(db: &TestDb) -> usize {
     let block_num = 1.into();
-    create_block(conn, block_num);
+    create_block(db, block_num);
 
-    conn.transaction(|conn| {
-        let account_id = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    let account_id = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
 
-        let account_updates = vec![mock_block_account_update(account_id, 1)];
+    let account_updates = vec![mock_block_account_update(account_id, 1)];
 
-        let mock_tx1 =
-            mock_block_transaction(AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap(), 1);
-        let mock_tx2 =
-            mock_block_transaction(AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap(), 2);
-        let ordered_tx_headers = OrderedTransactionHeaders::new_unchecked(vec![mock_tx1, mock_tx2]);
+    let mock_tx1 =
+        mock_block_transaction(AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap(), 1);
+    let mock_tx2 =
+        mock_block_transaction(AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap(), 2);
+    let ordered_tx_headers = OrderedTransactionHeaders::new_unchecked(vec![mock_tx1, mock_tx2]);
 
-        queries::upsert_accounts(
-            conn,
-            &account_updates,
-            block_num,
-            &queries::PrecomputedPublicAccountStates::new(),
-        )
-        .unwrap();
+    upsert_accounts(
+        db,
+        &account_updates,
+        block_num,
+        &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([account_id]),
+    )
+    .unwrap();
 
-        let count = queries::insert_transactions(conn, block_num, &ordered_tx_headers).unwrap();
-        Ok::<_, DatabaseError>(count)
-    })
-    .unwrap()
+    insert_transactions(db, block_num, &ordered_tx_headers).unwrap()
 }
 
 fn mock_account_code_and_storage(
@@ -1914,35 +2123,36 @@ fn mock_account_code_and_storage(
 
 #[test]
 fn test_select_account_code_by_commitment() {
-    let mut conn = create_db();
+    let db = &TestDb::new();
 
     let block_num_1 = BlockNumber::from(1);
 
     // Create block 1
-    create_block(&mut conn, block_num_1);
+    create_block(db, block_num_1);
 
     // Create an account with code at block 1 using the existing mock function
     let account = mock_account_code_and_storage(AccountType::Public, [], None);
 
     // Get the code commitment and bytes before inserting
     let code_commitment = account.code().commitment();
-    let expected_code = account.code().to_bytes();
+    let expected_code = miden_node_persistence::encode(account.code());
 
     // Insert the account at block 1
-    queries::upsert_accounts(
-        &mut conn,
-        &[BlockAccountUpdate::new(
+    upsert_accounts(
+        db,
+        &[block_account_update(
             account.id(),
             account.to_commitment(),
             AccountUpdateDetails::Public(AccountPatch::try_from(account.clone()).unwrap()),
         )],
         block_num_1,
         &precomputed_states_from_account(&account),
+        &BTreeSet::from([account.id()]),
     )
     .unwrap();
 
     // Query code by commitment - should return the code
-    let code = queries::select_account_code_by_commitment(&mut conn, code_commitment)
+    let code = select_account_code_by_commitment(db, code_commitment)
         .unwrap()
         .expect("Code should exist");
     assert_eq!(code, expected_code);
@@ -1950,21 +2160,20 @@ fn test_select_account_code_by_commitment() {
     // Query code for non-existent commitment - should return None
     let non_existent_commitment = [0u8; 32];
     let non_existent_commitment = Word::read_from_bytes(&non_existent_commitment).unwrap();
-    let code_other =
-        queries::select_account_code_by_commitment(&mut conn, non_existent_commitment).unwrap();
+    let code_other = select_account_code_by_commitment(db, non_existent_commitment).unwrap();
     assert!(code_other.is_none(), "Code should not exist for non-existent commitment");
 }
 
 #[test]
 fn test_select_account_code_by_commitment_multiple_codes() {
-    let mut conn = create_db();
+    let db = &TestDb::new();
 
     let block_num_1 = BlockNumber::from(1);
     let block_num_2 = BlockNumber::from(2);
 
     // Create blocks
-    create_block(&mut conn, block_num_1);
-    create_block(&mut conn, block_num_2);
+    create_block(db, block_num_1);
+    create_block(db, block_num_2);
 
     // Create account with code v1 at block 1
     let code_v1_str = "\
@@ -1976,18 +2185,19 @@ fn test_select_account_code_by_commitment_multiple_codes() {
     ";
     let account_v1 = create_account_with_code(code_v1_str, [1u8; 32]);
     let code_v1_commitment = account_v1.code().commitment();
-    let code_v1 = account_v1.code().to_bytes();
+    let code_v1 = miden_node_persistence::encode(account_v1.code());
 
     // Insert the account at block 1
-    queries::upsert_accounts(
-        &mut conn,
-        &[BlockAccountUpdate::new(
+    upsert_accounts(
+        db,
+        &[block_account_update(
             account_v1.id(),
             account_v1.to_commitment(),
             AccountUpdateDetails::Public(AccountPatch::try_from(account_v1.clone()).unwrap()),
         )],
         block_num_1,
         &precomputed_states_from_account(&account_v1),
+        &BTreeSet::from([account_v1.id()]),
     )
     .unwrap();
 
@@ -2001,7 +2211,7 @@ fn test_select_account_code_by_commitment_multiple_codes() {
     ";
     let account_v2 = create_account_with_code(code_v2_str, [1u8; 32]); // Same seed to keep same account_id
     let code_v2_commitment = account_v2.code().commitment();
-    let code_v2 = account_v2.code().to_bytes();
+    let code_v2 = miden_node_persistence::encode(account_v2.code());
 
     // Verify that the codes are actually different
     assert_ne!(
@@ -2014,30 +2224,94 @@ fn test_select_account_code_by_commitment_multiple_codes() {
     );
 
     // Insert the updated account at block 2
-    queries::upsert_accounts(
-        &mut conn,
-        &[BlockAccountUpdate::new(
+    upsert_accounts(
+        db,
+        &[block_account_update(
             account_v2.id(),
             account_v2.to_commitment(),
             AccountUpdateDetails::Public(AccountPatch::try_from(account_v2.clone()).unwrap()),
         )],
         block_num_2,
         &precomputed_states_from_account(&account_v2),
+        &BTreeSet::new(),
     )
     .unwrap();
 
     // Both codes should be retrievable by their respective commitments
-    let code_from_v1_commitment =
-        queries::select_account_code_by_commitment(&mut conn, code_v1_commitment)
-            .unwrap()
-            .expect("v1 code should exist");
+    let code_from_v1_commitment = select_account_code_by_commitment(db, code_v1_commitment)
+        .unwrap()
+        .expect("v1 code should exist");
     assert_eq!(code_from_v1_commitment, code_v1, "v1 commitment should return v1 code");
 
-    let code_from_v2_commitment =
-        queries::select_account_code_by_commitment(&mut conn, code_v2_commitment)
-            .unwrap()
-            .expect("v2 code should exist");
+    let code_from_v2_commitment = select_account_code_by_commitment(db, code_v2_commitment)
+        .unwrap()
+        .expect("v2 code should exist");
     assert_eq!(code_from_v2_commitment, code_v2, "v2 commitment should return v2 code");
+}
+
+/// A code upgrade stores the new code and replaces the code of the account. Only the account
+/// creation takes the creation path, even though both patches carry code.
+#[test]
+fn upsert_accounts_applies_account_creation_and_code_upgrade() -> anyhow::Result<()> {
+    let db = &TestDb::new();
+    let creation_block = BlockNumber::from(1);
+    let upgrade_block = BlockNumber::from(2);
+    create_block(db, creation_block);
+    create_block(db, upgrade_block);
+
+    let account = create_account_with_code(
+        "@account_procedure pub proc account_procedure_1 push.1.2 add end",
+        [3u8; 32],
+    );
+    let account_id = account.id();
+    upsert_accounts(
+        db,
+        &[block_account_update(
+            account_id,
+            account.to_commitment(),
+            AccountUpdateDetails::Public(AccountPatch::try_from(account.clone())?),
+        )],
+        creation_block,
+        &precomputed_states_from_account(&account),
+        &BTreeSet::from([account_id]),
+    )?;
+    assert_eq!(select_account(db, account_id)?.details, Some(account.clone()));
+
+    let upgraded_code = create_account_with_code(
+        "@account_procedure pub proc account_procedure_1 push.3.4 mul end",
+        [3u8; 32],
+    )
+    .code()
+    .clone();
+    let upgrade_patch = AccountPatch::new(
+        account_id,
+        AccountStoragePatch::default(),
+        AccountVaultPatch::default(),
+        AccountCodePatch::new(Some(upgraded_code.clone())),
+        Some(account.nonce() + Felt::ONE),
+    )?;
+    let mut upgraded_account = account.clone();
+    upgraded_account.apply_patch(&upgrade_patch)?;
+    upsert_accounts(
+        db,
+        &[block_account_update(
+            account_id,
+            upgraded_account.to_commitment(),
+            AccountUpdateDetails::Public(upgrade_patch),
+        )],
+        upgrade_block,
+        &precomputed_states_from_account(&upgraded_account),
+        &BTreeSet::new(),
+    )?;
+
+    assert_eq!(upgraded_account.code(), &upgraded_code);
+    assert_eq!(select_account(db, account_id)?.details, Some(upgraded_account));
+    assert_eq!(
+        select_account_code_by_commitment(db, upgraded_code.commitment())?,
+        Some(miden_node_persistence::encode(&upgraded_code)),
+    );
+
+    Ok(())
 }
 
 // GENESIS REGRESSION TESTS
@@ -2078,15 +2352,15 @@ async fn genesis_with_account_assets() {
     let genesis_state = GenesisState::new(
         vec![account],
         test_fee_params(),
-        1,
         0,
-        ValidatorKeys::new(vec![signer.public_key()]).unwrap(),
+        ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
+        test_protocol_config(),
     );
     let genesis_block = genesis_state.into_block().unwrap();
 
     let temp_dir = tempdir().unwrap();
     let db_path = temp_dir.path().join("store.sqlite");
-    crate::db::Db::bootstrap(db_path, genesis_block).unwrap();
+    crate::db::Db::bootstrap(db_path, genesis_block).await.unwrap();
 }
 
 /// Verifies genesis block with account containing storage maps can be inserted.
@@ -2150,15 +2424,15 @@ async fn genesis_with_account_storage_map() {
     let genesis_state = GenesisState::new(
         vec![account],
         test_fee_params(),
-        1,
         0,
-        ValidatorKeys::new(vec![signer.public_key()]).unwrap(),
+        ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
+        test_protocol_config(),
     );
     let genesis_block = genesis_state.into_block().unwrap();
 
     let temp_dir = tempdir().unwrap();
     let db_path = temp_dir.path().join("store.sqlite");
-    crate::db::Db::bootstrap(db_path, genesis_block).unwrap();
+    crate::db::Db::bootstrap(db_path, genesis_block).await.unwrap();
 }
 
 /// Verifies genesis block with account containing both vault assets and storage maps.
@@ -2215,15 +2489,15 @@ async fn genesis_with_account_assets_and_storage() {
     let genesis_state = GenesisState::new(
         vec![account],
         test_fee_params(),
-        1,
         0,
-        ValidatorKeys::new(vec![signer.public_key()]).unwrap(),
+        ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
+        test_protocol_config(),
     );
     let genesis_block = genesis_state.into_block().unwrap();
 
     let temp_dir = tempdir().unwrap();
     let db_path = temp_dir.path().join("store.sqlite");
-    crate::db::Db::bootstrap(db_path, genesis_block).unwrap();
+    crate::db::Db::bootstrap(db_path, genesis_block).await.unwrap();
 }
 
 /// Verifies genesis block with multiple accounts of different types. Tests realistic genesis
@@ -2316,23 +2590,23 @@ async fn genesis_with_multiple_accounts() {
     let genesis_state = GenesisState::new(
         vec![account1, account2, account3],
         test_fee_params(),
-        1,
         0,
-        ValidatorKeys::new(vec![signer.public_key()]).unwrap(),
+        ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
+        test_protocol_config(),
     );
     let genesis_block = genesis_state.into_block().unwrap();
 
     let temp_dir = tempdir().unwrap();
     let db_path = temp_dir.path().join("store.sqlite");
-    crate::db::Db::bootstrap(db_path, genesis_block).unwrap();
+    crate::db::Db::bootstrap(db_path, genesis_block).await.unwrap();
 }
 
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn regression_1461_full_state_delta_inserts_vault_assets() {
-    let mut conn = create_db();
+    let db = &TestDb::new();
     let block_num: BlockNumber = 1.into();
-    create_block(&mut conn, block_num);
+    create_block(db, block_num);
 
     let faucet_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
     let fungible_asset = FungibleAsset::new(faucet_id, 5000).unwrap();
@@ -2346,28 +2620,24 @@ fn regression_1461_full_state_delta_inserts_vault_assets() {
 
     // Convert to full state patch, same as genesis
     let account_patch = AccountPatch::try_from(account.clone()).unwrap();
-    assert!(account_patch.is_full_state());
 
-    let block_update = BlockAccountUpdate::new(
+    let block_update = block_account_update(
         account_id,
         account.to_commitment(),
         AccountUpdateDetails::Public(account_patch),
     );
 
-    queries::upsert_accounts(
-        &mut conn,
+    upsert_accounts(
+        db,
         &[block_update],
         block_num,
         &precomputed_states_from_account(&account),
+        &BTreeSet::from([account_id]),
     )
     .unwrap();
 
-    let (_, vault_assets) = queries::select_account_vault_assets(
-        &mut conn,
-        account_id,
-        BlockNumber::GENESIS..=block_num,
-    )
-    .unwrap();
+    let (_, vault_assets) =
+        select_account_vault_assets(db, account_id, BlockNumber::GENESIS..=block_num).unwrap();
 
     // Before the fix, vault_assets was empty
     let vault_asset = vault_assets.first().unwrap();
@@ -2420,7 +2690,6 @@ fn serialization_symmetry_core_types() {
 #[test]
 fn serialization_symmetry_block_header() {
     let block_header = BlockHeader::new(
-        1_u8.into(),
         num_to_word(2),
         3.into(),
         num_to_word(4),
@@ -2428,14 +2697,15 @@ fn serialization_symmetry_block_header() {
         num_to_word(6),
         num_to_word(7),
         num_to_word(8),
-        num_to_word(9),
-        ValidatorKeys::new(vec![SigningKey::new().public_key()]).unwrap(),
+        ValidatorConfig::new(vec![SigningKey::new().public_key()], 1).unwrap(),
         test_fee_params(),
-        11_u8.into(),
+        test_protocol_config().to_commitment(),
+        None,
+        11,
     );
 
-    let bytes = block_header.to_bytes();
-    let restored = BlockHeader::read_from_bytes(&bytes).unwrap();
+    let bytes = miden_node_persistence::encode(&block_header);
+    let restored: BlockHeader = miden_node_persistence::decode(&bytes).unwrap();
     assert_eq!(block_header, restored, "BlockHeader serialization must be symmetric");
 }
 
@@ -2446,8 +2716,8 @@ fn serialization_symmetry_assets() {
     // FungibleAsset
     let fungible = FungibleAsset::new(faucet_id, 1000).unwrap();
     let asset: Asset = fungible.into();
-    let bytes = asset.to_bytes();
-    let restored = Asset::read_from_bytes(&bytes).unwrap();
+    let bytes = miden_node_persistence::encode(&asset);
+    let restored: Asset = miden_node_persistence::decode(&bytes).unwrap();
     assert_eq!(asset, restored, "Asset (fungible) serialization must be symmetric");
 }
 
@@ -2456,16 +2726,16 @@ fn serialization_symmetry_account_code() {
     let account = mock_account_code_and_storage(AccountType::Public, [], None);
 
     let code = account.code();
-    let bytes = code.to_bytes();
-    let restored = AccountCode::read_from_bytes(&bytes).unwrap();
+    let bytes = miden_node_persistence::encode(code);
+    let restored: AccountCode = miden_node_persistence::decode(&bytes).unwrap();
     assert_eq!(*code, restored, "AccountCode serialization must be symmetric");
 }
 
 #[test]
 fn serialization_symmetry_sparse_merkle_path() {
     let path = SparseMerklePath::default();
-    let bytes = path.to_bytes();
-    let restored = SparseMerklePath::read_from_bytes(&bytes).unwrap();
+    let bytes = miden_node_persistence::encode(&path);
+    let restored: SparseMerklePath = miden_node_persistence::decode(&bytes).unwrap();
     assert_eq!(path, restored, "SparseMerklePath serialization must be symmetric");
 }
 
@@ -2504,10 +2774,9 @@ fn serialization_symmetry_note_id_vec() {
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn db_roundtrip_block_header() {
-    let mut conn = create_db();
+    let db = &TestDb::new();
 
     let block_header = BlockHeader::new(
-        1_u8.into(),
         num_to_word(2),
         BlockNumber::from(42),
         num_to_word(4),
@@ -2515,22 +2784,22 @@ fn db_roundtrip_block_header() {
         num_to_word(6),
         num_to_word(7),
         num_to_word(8),
-        num_to_word(9),
-        ValidatorKeys::new(vec![SigningKey::new().public_key()]).unwrap(),
+        ValidatorConfig::new(vec![SigningKey::new().public_key()], 1).unwrap(),
         test_fee_params(),
-        11_u8.into(),
+        test_protocol_config().to_commitment(),
+        None,
+        11,
     );
 
     // Insert
     let dummy_signature =
         BlockSignatures::new(vec![SigningKey::new().sign(block_header.commitment())]).unwrap();
-    queries::insert_block_header(&mut conn, &block_header, &dummy_signature).unwrap();
+    insert_block_header(db, &block_header, &dummy_signature).unwrap();
 
     // Retrieve
-    let retrieved =
-        queries::select_block_header_by_block_num(&mut conn, Some(block_header.block_num()))
-            .unwrap()
-            .expect("Block header should exist");
+    let retrieved = select_block_header_by_block_num(db, Some(block_header.block_num()))
+        .unwrap()
+        .expect("Block header should exist");
 
     assert_eq!(block_header, retrieved, "BlockHeader DB roundtrip must be symmetric");
 }
@@ -2538,17 +2807,17 @@ fn db_roundtrip_block_header() {
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn db_roundtrip_nullifiers() {
-    let mut conn = create_db();
+    let db = &TestDb::new();
     let block_num = BlockNumber::from(1);
-    create_block(&mut conn, block_num);
+    create_block(db, block_num);
 
     let nullifiers: Vec<Nullifier> = (0..5).map(|i| num_to_nullifier(i << 48)).collect();
 
     // Insert
-    queries::insert_nullifiers_for_block(&mut conn, &nullifiers, block_num).unwrap();
+    insert_nullifiers_for_block(db, &nullifiers, block_num).unwrap();
 
     // Retrieve
-    let retrieved = queries::select_all_nullifiers(&mut conn).unwrap();
+    let retrieved = select_all_nullifiers(db).unwrap();
 
     assert_eq!(nullifiers.len(), retrieved.len(), "Should retrieve same number of nullifiers");
     for (orig, info) in nullifiers.iter().zip(retrieved.iter()) {
@@ -2560,9 +2829,9 @@ fn db_roundtrip_nullifiers() {
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn db_roundtrip_account() {
-    let mut conn = create_db();
+    let db = &TestDb::new();
     let block_num = BlockNumber::from(1);
-    create_block(&mut conn, block_num);
+    create_block(db, block_num);
 
     let account = mock_account_code_and_storage(AccountType::Public, [], Some([99u8; 32]));
     let account_id = account.id();
@@ -2570,21 +2839,22 @@ fn db_roundtrip_account() {
 
     // Insert with full patch (like genesis)
     let account_patch = AccountPatch::try_from(account.clone()).unwrap();
-    let block_update = BlockAccountUpdate::new(
+    let block_update = block_account_update(
         account_id,
         account_commitment,
         AccountUpdateDetails::Public(account_patch),
     );
-    queries::upsert_accounts(
-        &mut conn,
+    upsert_accounts(
+        db,
         &[block_update],
         block_num,
         &precomputed_states_from_account(&account),
+        &BTreeSet::from([account_id]),
     )
     .unwrap();
 
     // Retrieve
-    let retrieved = queries::select_all_accounts(&mut conn).unwrap();
+    let retrieved = select_all_accounts(db).unwrap();
     assert_eq!(retrieved.len(), 1, "Should have one account");
 
     let retrieved_info = &retrieved[0];
@@ -2602,16 +2872,17 @@ fn db_roundtrip_account() {
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn db_roundtrip_notes() {
-    let mut conn = create_db();
+    let db = &TestDb::new();
     let block_num = BlockNumber::from(1);
-    create_block(&mut conn, block_num);
+    create_block(db, block_num);
 
     let sender = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
-    queries::upsert_accounts(
-        &mut conn,
+    upsert_accounts(
+        db,
         &[mock_block_account_update(sender, 0)],
         block_num,
-        &queries::PrecomputedPublicAccountStates::new(),
+        &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([sender]),
     )
     .unwrap();
 
@@ -2629,12 +2900,12 @@ fn db_roundtrip_notes() {
     };
 
     // Insert
-    queries::insert_scripts(&mut conn, [&note]).unwrap();
-    queries::insert_notes(&mut conn, &[(note.clone(), None)]).unwrap();
+    insert_note_scripts(db, std::slice::from_ref(&note)).unwrap();
+    insert_notes(db, &[(note.clone(), None)]).unwrap();
 
     // Retrieve
     let note_ids = vec![NoteId::from_raw(note.note_id)];
-    let retrieved = queries::select_notes_by_id(&mut conn, &note_ids).unwrap();
+    let retrieved = select_notes_by_id(db, &note_ids).unwrap();
 
     assert_eq!(retrieved.len(), 1, "Should have one note");
     let retrieved_note = &retrieved[0];
@@ -2657,37 +2928,26 @@ fn db_roundtrip_notes() {
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn db_roundtrip_vault_assets() {
-    let mut conn = create_db();
+    let db = &TestDb::new();
     let block_num = BlockNumber::from(1);
-    create_block(&mut conn, block_num);
+    create_block(db, block_num);
 
     let faucet_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
     let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
 
     // Create account first
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 0)],
-        block_num,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
+    upsert_mock_account(db, account_id, 0, block_num).unwrap();
 
     let fungible_asset = FungibleAsset::new(faucet_id, 5000).unwrap();
     let asset: Asset = fungible_asset.into();
     let vault_key = asset.id();
 
     // Insert vault asset
-    queries::insert_account_vault_asset(&mut conn, account_id, block_num, vault_key, Some(asset))
-        .unwrap();
+    insert_vault_asset(db, account_id, block_num, vault_key, Some(asset)).unwrap();
 
     // Retrieve
-    let (_, vault_assets) = queries::select_account_vault_assets(
-        &mut conn,
-        account_id,
-        BlockNumber::GENESIS..=block_num,
-    )
-    .unwrap();
+    let (_, vault_assets) =
+        select_account_vault_assets(db, account_id, BlockNumber::GENESIS..=block_num).unwrap();
 
     assert_eq!(vault_assets.len(), 1, "Should have one vault asset");
     let retrieved = &vault_assets[0];
@@ -2700,44 +2960,24 @@ fn db_roundtrip_vault_assets() {
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn db_roundtrip_storage_map_values() {
-    let mut conn = create_db();
+    let db = &TestDb::new();
     let block_num = BlockNumber::from(1);
-    create_block(&mut conn, block_num);
+    create_block(db, block_num);
 
     let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 0)],
-        block_num,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
+    upsert_mock_account(db, account_id, 0, block_num).unwrap();
     let slot_name = StorageSlotName::mock(5);
     let key = StorageMapKey::from_index(12345u32);
     let value = num_to_word(67890);
 
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 1)],
-        block_num,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
+    upsert_mock_account(db, account_id, 1, block_num).unwrap();
 
     // Insert
-    queries::insert_account_storage_map_value(
-        &mut conn,
-        account_id,
-        block_num,
-        slot_name.clone(),
-        key,
-        value,
-    )
-    .unwrap();
+    insert_storage_map_value(db, account_id, block_num, slot_name.clone(), key, value).unwrap();
 
     // Retrieve
-    let page = queries::select_account_storage_map_values_paged(
-        &mut conn,
+    let page = select_account_storage_map_values_paged(
+        db,
         account_id,
         BlockNumber::GENESIS..=block_num,
         1024,
@@ -2758,9 +2998,9 @@ fn db_roundtrip_storage_map_values() {
 fn db_roundtrip_account_storage_with_maps() {
     use miden_protocol::account::StorageMap;
 
-    let mut conn = create_db();
+    let db = &TestDb::new();
     let block_num = BlockNumber::from(1);
-    create_block(&mut conn, block_num);
+    create_block(db, block_num);
 
     // Create storage with both value slots and map slots
     let storage_map = StorageMap::with_entries(vec![
@@ -2818,22 +3058,22 @@ fn db_roundtrip_account_storage_with_maps() {
 
     // Insert the account (this should store header + map values separately)
     let account_patch = AccountPatch::try_from(account.clone()).unwrap();
-    let block_update = BlockAccountUpdate::new(
+    let block_update = block_account_update(
         account_id,
         account.to_commitment(),
         AccountUpdateDetails::Public(account_patch),
     );
-    queries::upsert_accounts(
-        &mut conn,
+    upsert_accounts(
+        db,
         &[block_update],
         block_num,
         &precomputed_states_from_account(&account),
+        &BTreeSet::from([account_id]),
     )
     .unwrap();
 
-    // Retrieve the storage using select_latest_account_storage (reconstructs from header + map
-    // values)
-    let retrieved_storage = queries::select_latest_account_storage(&mut conn, account_id).unwrap();
+    // Retrieve the storage using select_latest_storage (reconstructs from header + map values)
+    let retrieved_storage = select_latest_storage(db, account_id).unwrap();
     let retrieved_commitment = retrieved_storage.to_commitment();
 
     // Verify the commitment matches (this proves the reconstruction is correct)
@@ -2873,7 +3113,7 @@ fn db_roundtrip_account_storage_with_maps() {
     }
 
     // Also verify full account reconstruction via select_account (which calls select_full_account)
-    let account_info = queries::select_account(&mut conn, account_id).unwrap();
+    let account_info = select_account(db, account_id).unwrap();
     assert!(account_info.details.is_some(), "Public account should have details");
     let retrieved_account = account_info.details.unwrap();
     assert_eq!(
@@ -2886,12 +3126,11 @@ fn db_roundtrip_account_storage_with_maps() {
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn db_roundtrip_note_metadata_attachment() {
-    let mut conn = create_db();
+    let db = &TestDb::new();
     let block_num = BlockNumber::from(1);
-    create_block(&mut conn, block_num);
+    create_block(db, block_num);
 
-    let (account_id, _) =
-        make_account_and_note(&mut conn, block_num, [1u8; 32], AccountType::Public);
+    let (account_id, _) = make_account_and_note(db, block_num, [1u8; 32], AccountType::Public);
 
     let target = NetworkAccountTarget::new(account_id, NoteExecutionHint::Always)
         .expect("NetworkAccountTarget creation should succeed for network account");
@@ -2912,11 +3151,11 @@ fn db_roundtrip_note_metadata_attachment() {
         inclusion_path: SparseMerklePath::default(),
     };
 
-    queries::insert_scripts(&mut conn, [&note]).unwrap();
-    queries::insert_notes(&mut conn, &[(note.clone(), None)]).unwrap();
+    insert_note_scripts(db, std::slice::from_ref(&note)).unwrap();
+    insert_notes(db, &[(note.clone(), None)]).unwrap();
 
     // Fetch the note back and verify the attachment is preserved
-    let retrieved = queries::select_notes_by_id(&mut conn, &[NoteId::from_raw(note.note_id)])
+    let retrieved = select_notes_by_id(db, &[NoteId::from_raw(note.note_id)])
         .expect("select_notes_by_id should succeed");
 
     assert_eq!(retrieved.len(), 1, "Should retrieve exactly one note");
@@ -2937,8 +3176,8 @@ fn db_roundtrip_note_metadata_attachment() {
 
     // Note sync uses a narrower record than `select_notes_by_id`, but it must retain attachments so
     // the RPC layer can expose single-word values.
-    let synced = queries::select_notes_since_block_by_tag(
-        &mut conn,
+    let synced = select_notes_since_block_by_tag(
+        db,
         &[metadata.tag().as_u32()],
         BlockNumber::GENESIS..=block_num,
     )
@@ -2950,8 +3189,7 @@ fn db_roundtrip_note_metadata_attachment() {
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn test_prune_history() {
-    let mut conn = create_db();
-    let conn = &mut conn;
+    let db = &TestDb::new();
 
     let public_account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
 
@@ -2968,83 +3206,44 @@ fn test_prune_history() {
     let block_tip: BlockNumber = (HISTORICAL_BLOCK_RETENTION + CUTOFF_BLOCK_OFFSET).into();
 
     for block in [block_0, block_old, block_cutoff, block_update, block_tip] {
-        create_block(conn, block);
+        create_block(db, block);
     }
 
     // Create account
     for block in [block_0, block_old, block_cutoff, block_update, block_tip] {
-        queries::upsert_accounts(
-            conn,
-            &[mock_block_account_update(public_account_id, 0)],
-            block,
-            &queries::PrecomputedPublicAccountStates::new(),
-        )
-        .unwrap();
+        upsert_mock_account(db, public_account_id, 0, block).unwrap();
     }
 
     // Insert vault assets at different blocks - use different faucets for different vault keys.
     let faucet_2 = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap();
     let faucet_3 = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_2).unwrap();
-    let asset_1 = Asset::Fungible(FungibleAsset::new(public_account_id, 1000).unwrap());
-    let asset_2 = Asset::Fungible(FungibleAsset::new(faucet_2, 2000).unwrap());
-    let asset_3 = Asset::Fungible(FungibleAsset::new(faucet_3, 3000).unwrap());
+    let asset_1 = Asset::from(FungibleAsset::new(public_account_id, 1000).unwrap());
+    let asset_2 = Asset::from(FungibleAsset::new(faucet_2, 2000).unwrap());
+    let asset_3 = Asset::from(FungibleAsset::new(faucet_3, 3000).unwrap());
     let vault_key_old = asset_1.id();
     let vault_key_cutoff = asset_2.id();
     let vault_key_recent = asset_3.id();
 
     // Stale entry at block_0, superseded at block_old which is also below the cutoff — should be
     // deleted.
-    let stale_asset = Asset::Fungible(FungibleAsset::new(public_account_id, 500).unwrap());
-    queries::insert_account_vault_asset(
-        conn,
-        public_account_id,
-        block_0,
-        vault_key_old,
-        Some(stale_asset),
-    )
-    .unwrap();
+    let stale_asset = Asset::from(FungibleAsset::new(public_account_id, 500).unwrap());
+    insert_vault_asset(db, public_account_id, block_0, vault_key_old, Some(stale_asset)).unwrap();
 
     // Entry at block_old, superseded only at block_update which is above the cutoff — must be
     // retained as the key's baseline for reads at block_cutoff.
-    queries::insert_account_vault_asset(
-        conn,
-        public_account_id,
-        block_old,
-        vault_key_old,
-        Some(asset_1),
-    )
-    .unwrap();
+    insert_vault_asset(db, public_account_id, block_old, vault_key_old, Some(asset_1)).unwrap();
 
     // Entry exactly at cutoff (block_cutoff, should be retained)
-    queries::insert_account_vault_asset(
-        conn,
-        public_account_id,
-        block_cutoff,
-        vault_key_cutoff,
-        Some(asset_2),
-    )
-    .unwrap();
+    insert_vault_asset(db, public_account_id, block_cutoff, vault_key_cutoff, Some(asset_2))
+        .unwrap();
 
     // Recent entry (should always be retained)
-    queries::insert_account_vault_asset(
-        conn,
-        public_account_id,
-        block_tip,
-        vault_key_recent,
-        Some(asset_3),
-    )
-    .unwrap();
+    insert_vault_asset(db, public_account_id, block_tip, vault_key_recent, Some(asset_3)).unwrap();
 
     // Update an entry to create a non-latest version
-    let updated_asset = Asset::Fungible(FungibleAsset::new(public_account_id, 1500).unwrap());
-    queries::insert_account_vault_asset(
-        conn,
-        public_account_id,
-        block_update,
-        vault_key_old,
-        Some(updated_asset),
-    )
-    .unwrap();
+    let updated_asset = Asset::from(FungibleAsset::new(public_account_id, 1500).unwrap());
+    insert_vault_asset(db, public_account_id, block_update, vault_key_old, Some(updated_asset))
+        .unwrap();
 
     // Insert storage map values at different blocks
     let slot_name = StorageSlotName::mock(5);
@@ -3059,8 +3258,8 @@ fn test_prune_history() {
 
     // Stale entry at block_0, superseded at block_old which is also below the cutoff — should be
     // deleted.
-    insert_account_storage_map_value(
-        conn,
+    insert_storage_map_value(
+        db,
         public_account_id,
         block_0,
         slot_name.clone(),
@@ -3071,8 +3270,8 @@ fn test_prune_history() {
 
     // Entry at block_old, superseded only at block_update which is above the cutoff — must be
     // retained as the key's baseline for reads at block_cutoff.
-    insert_account_storage_map_value(
-        conn,
+    insert_storage_map_value(
+        db,
         public_account_id,
         block_old,
         slot_name.clone(),
@@ -3082,8 +3281,8 @@ fn test_prune_history() {
     .unwrap();
 
     // Storage map entry at cutoff boundary (block_cutoff)
-    insert_account_storage_map_value(
-        conn,
+    insert_storage_map_value(
+        db,
         public_account_id,
         block_cutoff,
         slot_name.clone(),
@@ -3093,8 +3292,8 @@ fn test_prune_history() {
     .unwrap();
 
     // Recent storage map entry
-    insert_account_storage_map_value(
-        conn,
+    insert_storage_map_value(
+        db,
         public_account_id,
         block_tip,
         slot_name.clone(),
@@ -3104,8 +3303,8 @@ fn test_prune_history() {
     .unwrap();
 
     // Update map_key_old to create a non-latest entry at block_update
-    insert_account_storage_map_value(
-        conn,
+    insert_storage_map_value(
+        db,
         public_account_id,
         block_update,
         slot_name.clone(),
@@ -3116,16 +3315,12 @@ fn test_prune_history() {
 
     // Verify initial state - should have 5 vault assets and 5 storage map values
     let (_, initial_vault_assets) =
-        queries::select_account_vault_assets(conn, public_account_id, block_0..=block_tip).unwrap();
+        select_account_vault_assets(db, public_account_id, block_0..=block_tip).unwrap();
     assert_eq!(initial_vault_assets.len(), 5, "should have 5 vault assets before cleanup");
 
-    let initial_storage_values = queries::select_account_storage_map_values_paged(
-        conn,
-        public_account_id,
-        block_0..=block_tip,
-        1024,
-    )
-    .unwrap();
+    let initial_storage_values =
+        select_account_storage_map_values_paged(db, public_account_id, block_0..=block_tip, 1024)
+            .unwrap();
     assert_eq!(
         initial_storage_values.values.len(),
         5,
@@ -3134,8 +3329,7 @@ fn test_prune_history() {
 
     // Run cleanup with chain_tip = block_tip, cutoff will be block_tip - HISTORICAL_BLOCK_RETENTION
     // = block_cutoff
-    let (vault_deleted, storage_deleted, _codes_deleted) =
-        queries::prune_history(conn, block_tip).unwrap();
+    let (vault_deleted, storage_deleted, _codes_deleted) = prune_history(db, block_tip).unwrap();
 
     // Only the block_0 rows are deletable: they are superseded at block_old, which is also below
     // the cutoff. The block_old rows are superseded only above the cutoff, so they remain the
@@ -3145,7 +3339,7 @@ fn test_prune_history() {
 
     // Verify remaining vault assets - should have 4 (baseline at block_old, cutoff, update, tip)
     let (_, remaining_vault_assets) =
-        queries::select_account_vault_assets(conn, public_account_id, block_0..=block_tip).unwrap();
+        select_account_vault_assets(db, public_account_id, block_0..=block_tip).unwrap();
     assert_eq!(remaining_vault_assets.len(), 4, "should have 4 vault assets after cleanup");
 
     // Verify no vault asset at block_0 remains
@@ -3174,13 +3368,9 @@ fn test_prune_history() {
 
     // Verify remaining storage map values - should have 4 (baseline at block_old, cutoff, update,
     // tip)
-    let remaining_storage_values = queries::select_account_storage_map_values_paged(
-        conn,
-        public_account_id,
-        block_0..=block_tip,
-        1024,
-    )
-    .unwrap();
+    let remaining_storage_values =
+        select_account_storage_map_values_paged(db, public_account_id, block_0..=block_tip, 1024)
+            .unwrap();
     assert_eq!(
         remaining_storage_values.values.len(),
         4,
@@ -3213,8 +3403,7 @@ fn test_prune_history() {
 
     // Regression check for baseline loss: reconstructing the vault at the cutoff block must still
     // see block_old's value, even though that row is older than the cutoff.
-    let assets_at_cutoff =
-        queries::select_account_vault_at_block(conn, public_account_id, block_cutoff).unwrap();
+    let assets_at_cutoff = select_vault_at_block(db, public_account_id, block_cutoff).unwrap();
     assert!(
         assets_at_cutoff.contains(&asset_1),
         "vault reconstruction at the cutoff must include the baseline written at block_old"
@@ -3223,26 +3412,20 @@ fn test_prune_history() {
     // Test that open-ended (current) entries are never deleted, even if old: insert an entry at
     // block 0 that is never superseded.
     let faucet_4 = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_3).unwrap();
-    let asset_old = Asset::Fungible(FungibleAsset::new(faucet_4, 9999).unwrap());
+    let asset_old = Asset::from(FungibleAsset::new(faucet_4, 9999).unwrap());
     let vault_key_old_latest = asset_old.id();
-    queries::insert_account_vault_asset(
-        conn,
-        public_account_id,
-        block_0,
-        vault_key_old_latest,
-        Some(asset_old),
-    )
-    .unwrap();
+    insert_vault_asset(db, public_account_id, block_0, vault_key_old_latest, Some(asset_old))
+        .unwrap();
 
     // This entry at block 0 keeps an open validity interval. Run cleanup again
-    let (vault_deleted_2, ..) = queries::prune_history(conn, block_tip).unwrap();
+    let (vault_deleted_2, ..) = prune_history(db, block_tip).unwrap();
 
     // The old open-ended entry should not be deleted (vault_deleted_2 should be 0)
     assert_eq!(vault_deleted_2, 0, "should not delete any open-ended entries");
 
     // Verify the old open-ended entry still exists
     let (_, vault_assets_with_latest) =
-        queries::select_account_vault_assets(conn, public_account_id, block_0..=block_tip).unwrap();
+        select_account_vault_assets(db, public_account_id, block_0..=block_tip).unwrap();
     assert!(
         vault_assets_with_latest
             .iter()
@@ -3263,13 +3446,13 @@ fn account_state_forest_matches_db_storage_map_roots_across_updates() {
 
     /// Reconstructs storage map root from DB entries at a specific block.
     fn reconstruct_storage_map_root_from_db(
-        conn: &mut SqliteConnection,
+        db: &TestDb,
         account_id: AccountId,
         slot_name: &StorageSlotName,
         block_num: BlockNumber,
     ) -> Option<Word> {
-        let storage_values = queries::select_account_storage_map_values_paged(
-            conn,
+        let storage_values = select_account_storage_map_values_paged(
+            db,
             account_id,
             BlockNumber::GENESIS..=block_num,
             1024,
@@ -3315,7 +3498,7 @@ fn account_state_forest_matches_db_storage_map_roots_across_updates() {
         Some(smt.root())
     }
 
-    let mut conn = create_db();
+    let db = &TestDb::new();
     let mut forest = AccountStateForest::new();
     let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE).unwrap();
 
@@ -3323,31 +3506,13 @@ fn account_state_forest_matches_db_storage_map_roots_across_updates() {
     let block2 = BlockNumber::from(2);
     let block3 = BlockNumber::from(3);
 
-    create_block(&mut conn, block1);
-    create_block(&mut conn, block2);
-    create_block(&mut conn, block3);
+    create_block(db, block1);
+    create_block(db, block2);
+    create_block(db, block3);
 
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 0)],
-        block1,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 1)],
-        block2,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
-    queries::upsert_accounts(
-        &mut conn,
-        &[mock_block_account_update(account_id, 2)],
-        block3,
-        &queries::PrecomputedPublicAccountStates::new(),
-    )
-    .unwrap();
+    upsert_mock_account(db, account_id, 0, block1).unwrap();
+    upsert_mock_account(db, account_id, 1, block2).unwrap();
+    upsert_mock_account(db, account_id, 2, block3).unwrap();
 
     let slot_map = StorageSlotName::mock(1);
     let slot_value = StorageSlotName::mock(2);
@@ -3361,29 +3526,31 @@ fn account_state_forest_matches_db_storage_map_roots_across_updates() {
     // Block 1: Add storage map entries and a storage value
     let map_patch_1 = StorageMapPatch::from_iters([], [(key1, value1), (key2, value2)]);
 
-    let raw_1 = BTreeMap::from_iter([
+    let raw_1 = [
         (slot_map.clone(), StorageSlotPatch::Map(map_patch_1)),
         (
             slot_value.clone(),
             StorageSlotPatch::Value(StorageValuePatch::Update { value: value1 }),
         ),
-    ]);
+    ]
+    .into_iter()
+    .collect::<BTreeMap<_, _>>();
     let storage_1 = AccountStoragePatch::from_raw(raw_1).unwrap();
     let patch_1 = AccountPatch::new(
         account_id,
         storage_1.clone(),
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(2)),
     )
     .unwrap();
 
-    insert_account_patch(&mut conn, account_id, block1, &patch_1);
+    insert_account_patch(db, account_id, block1, &patch_1);
     forest.update_account(block1, &patch_1);
 
     // Verify forest matches DB for block 1
     let forest_root_1 = forest.get_storage_map_root(account_id, &slot_map, block1).unwrap();
-    let db_root_1 = reconstruct_storage_map_root_from_db(&mut conn, account_id, &slot_map, block1)
+    let db_root_1 = reconstruct_storage_map_root_from_db(db, account_id, &slot_map, block1)
         .expect("DB should have storage map root");
 
     assert_eq!(
@@ -3394,29 +3561,31 @@ fn account_state_forest_matches_db_storage_map_roots_across_updates() {
     // Block 2: Delete storage map entry (set to EMPTY_WORD) and delete storage value
     let map_patch_2 = StorageMapPatch::from_iters([], [(key1, EMPTY_WORD)]);
 
-    let raw_2 = BTreeMap::from_iter([
+    let raw_2 = [
         (slot_map.clone(), StorageSlotPatch::Map(map_patch_2)),
         (
             slot_value.clone(),
             StorageSlotPatch::Value(StorageValuePatch::Update { value: EMPTY_WORD }),
         ),
-    ]);
+    ]
+    .into_iter()
+    .collect::<BTreeMap<_, _>>();
     let storage_2 = AccountStoragePatch::from_raw(raw_2).unwrap();
     let patch_2 = AccountPatch::new(
         account_id,
         storage_2.clone(),
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(3)),
     )
     .unwrap();
 
-    insert_account_patch(&mut conn, account_id, block2, &patch_2);
+    insert_account_patch(db, account_id, block2, &patch_2);
     forest.update_account(block2, &patch_2);
 
     // Verify forest matches DB for block 2
     let forest_root_2 = forest.get_storage_map_root(account_id, &slot_map, block2).unwrap();
-    let db_root_2 = reconstruct_storage_map_root_from_db(&mut conn, account_id, &slot_map, block2)
+    let db_root_2 = reconstruct_storage_map_root_from_db(db, account_id, &slot_map, block2)
         .expect("DB should have storage map root");
 
     assert_eq!(
@@ -3427,29 +3596,31 @@ fn account_state_forest_matches_db_storage_map_roots_across_updates() {
     // Block 3: Re-add same value as block 1 and add different map entry
     let map_patch_3 = StorageMapPatch::from_iters([], [(key2, value3)]); // Update existing key
 
-    let raw_3 = BTreeMap::from_iter([
+    let raw_3 = [
         (slot_map.clone(), StorageSlotPatch::Map(map_patch_3)),
         (
             slot_value.clone(),
             StorageSlotPatch::Value(StorageValuePatch::Update { value: value1 }),
         ), // Same as block 1
-    ]);
+    ]
+    .into_iter()
+    .collect::<BTreeMap<_, _>>();
     let storage_3 = AccountStoragePatch::from_raw(raw_3).unwrap();
     let patch_3 = AccountPatch::new(
         account_id,
         storage_3.clone(),
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(4)),
     )
     .unwrap();
 
-    insert_account_patch(&mut conn, account_id, block3, &patch_3);
+    insert_account_patch(db, account_id, block3, &patch_3);
     forest.update_account(block3, &patch_3);
 
     // Verify forest matches DB for block 3
     let forest_root_3 = forest.get_storage_map_root(account_id, &slot_map, block3).unwrap();
-    let db_root_3 = reconstruct_storage_map_root_from_db(&mut conn, account_id, &slot_map, block3)
+    let db_root_3 = reconstruct_storage_map_root_from_db(db, account_id, &slot_map, block3)
         .expect("DB should have storage map root");
 
     assert_eq!(
@@ -3459,9 +3630,8 @@ fn account_state_forest_matches_db_storage_map_roots_across_updates() {
 
     // Verify we can query historical roots
     let forest_root_1_check = forest.get_storage_map_root(account_id, &slot_map, block1).unwrap();
-    let db_root_1_check =
-        reconstruct_storage_map_root_from_db(&mut conn, account_id, &slot_map, block1)
-            .expect("DB should have storage map root");
+    let db_root_1_check = reconstruct_storage_map_root_from_db(db, account_id, &slot_map, block1)
+        .expect("DB should have storage map root");
     assert_eq!(
         forest_root_1_check, db_root_1_check,
         "Historical query for block 1 should match"
@@ -3507,7 +3677,9 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
     let map_patch = StorageMapPatch::from_iters([], [(key1, value1), (key2, value2)]);
 
     // Setups a single slot with a map and two key-value-pairs
-    let raw = BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_patch.clone()))]);
+    let raw = [(slot_name.clone(), StorageSlotPatch::Map(map_patch.clone()))]
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
     let storage = AccountStoragePatch::from_raw(raw).unwrap();
 
     // Account 1
@@ -3515,7 +3687,7 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
         account1,
         storage.clone(),
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(2)),
     )
     .unwrap();
@@ -3526,7 +3698,7 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
         account2,
         storage.clone(),
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(2)),
     )
     .unwrap();
@@ -3537,7 +3709,7 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
         account3,
         storage.clone(),
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(2)),
     )
     .unwrap();
@@ -3557,14 +3729,15 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
 
     // Update accounts 1,2,3
     let map_patch_update = StorageMapPatch::from_iters([], [(key1, num_to_word(1001))]); // Slight change
-    let raw_update =
-        BTreeMap::from_iter([(slot_name.clone(), StorageSlotPatch::Map(map_patch_update))]);
+    let raw_update = [(slot_name.clone(), StorageSlotPatch::Map(map_patch_update))]
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
     let storage_update = AccountStoragePatch::from_raw(raw_update).unwrap();
     let patch2_update = AccountPatch::new(
         account2,
         storage_update.clone(),
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(3)),
     )
     .unwrap();
@@ -3574,7 +3747,7 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
         account3,
         storage_update.clone(),
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(3)),
     )
     .unwrap();
@@ -3592,7 +3765,7 @@ fn account_state_forest_shared_roots_not_deleted_prematurely() {
         account1,
         storage_update,
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(3)),
     )
     .unwrap();
@@ -3634,7 +3807,9 @@ fn account_state_forest_retains_latest_after_100_blocks_and_pruning() {
     // Create storage map with two entries
     let map_patch = StorageMapPatch::from_iters([], [(key1, value1), (key2, value2)]);
 
-    let raw = BTreeMap::from_iter([(slot_map.clone(), StorageSlotPatch::Map(map_patch))]);
+    let raw = [(slot_map.clone(), StorageSlotPatch::Map(map_patch))]
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
     let storage_patch = AccountStoragePatch::from_raw(raw).unwrap();
 
     // Create vault with one asset
@@ -3645,7 +3820,7 @@ fn account_state_forest_retains_latest_after_100_blocks_and_pruning() {
         account_id,
         storage_patch,
         vault_patch,
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(2)),
     )
     .unwrap();
@@ -3688,7 +3863,9 @@ fn account_state_forest_retains_latest_after_100_blocks_and_pruning() {
     let value1_new = num_to_word(3000);
     let map_patch_51 = StorageMapPatch::from_iters([], [(key1, value1_new)]);
 
-    let raw_51 = BTreeMap::from_iter([(slot_map.clone(), StorageSlotPatch::Map(map_patch_51))]);
+    let raw_51 = [(slot_map.clone(), StorageSlotPatch::Map(map_patch_51))]
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
     let storage_patch_51 = AccountStoragePatch::from_raw(raw_51).unwrap();
 
     let asset_51 = FungibleAsset::new(faucet_id, 200).unwrap();
@@ -3698,7 +3875,7 @@ fn account_state_forest_retains_latest_after_100_blocks_and_pruning() {
         account_id,
         storage_patch_51,
         vault_patch_51,
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(51)),
     )
     .unwrap();
@@ -3741,7 +3918,7 @@ fn account_state_forest_preserves_most_recent_vault_only() {
         account_id,
         AccountStoragePatch::default(),
         vault_patch,
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(2)),
     )
     .unwrap();
@@ -3772,16 +3949,17 @@ fn account_state_forest_preserves_most_recent_vault_only() {
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn db_roundtrip_transactions() {
-    let mut conn = create_db();
+    let db = &TestDb::new();
     let block_num = BlockNumber::from(1);
-    create_block(&mut conn, block_num);
+    create_block(db, block_num);
 
     let bob = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
-    queries::upsert_accounts(
-        &mut conn,
+    upsert_accounts(
+        db,
         &[mock_block_account_update(bob, 0)],
         block_num,
-        &queries::PrecomputedPublicAccountStates::new(),
+        &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([bob]),
     )
     .unwrap();
 
@@ -3806,12 +3984,11 @@ fn db_roundtrip_transactions() {
             )
         })
         .collect();
-    queries::insert_notes(&mut conn, &output_notes).unwrap();
-    queries::insert_transactions(&mut conn, block_num, &ordered).unwrap();
+    insert_notes(db, &output_notes).unwrap();
+    insert_transactions(db, block_num, &ordered).unwrap();
 
     let retrieved =
-        queries::select_transactions_records(&mut conn, &[bob], BlockNumber::GENESIS..=block_num)
-            .unwrap();
+        select_transactions_records(db, &[bob], BlockNumber::GENESIS..=block_num).unwrap();
     let record = retrieved.1.first().expect("entry should exist");
 
     let expected_sync_records: Vec<_> = tx
@@ -3841,18 +4018,54 @@ fn db_roundtrip_transactions() {
 }
 
 #[test]
-#[miden_node_test_macro::enable_logging]
-fn db_roundtrip_transactions_filters_missing_output_note_sync_records() {
-    let mut conn = create_db();
+fn select_transactions_records_rejects_a_corrupted_transaction_id() {
+    const CORRUPT_TRANSACTION_ID: &str = "UPDATE transactions SET transaction_id = ?1";
+
+    let db = &TestDb::new();
     let block_num = BlockNumber::from(1);
-    create_block(&mut conn, block_num);
+    create_block(db, block_num);
 
     let bob = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
-    queries::upsert_accounts(
-        &mut conn,
+    upsert_mock_account(db, bob, 0, block_num).unwrap();
+
+    let transaction = mock_block_transaction(bob, 1);
+    insert_transactions(
+        db,
+        block_num,
+        &OrderedTransactionHeaders::new_unchecked(vec![transaction]),
+    )
+    .unwrap();
+
+    let corrupted_id = num_to_word(999);
+    db.write(move |tx| -> Result<usize> {
+        Ok(tx.execute(CORRUPT_TRANSACTION_ID, &[&corrupted_id])?)
+    })
+    .unwrap();
+
+    let err = select_transactions_records(db, &[bob], BlockNumber::GENESIS..=block_num)
+        .expect_err("a stored transaction ID that does not match its header must be rejected");
+
+    assert_matches!(
+        err,
+        DatabaseError::DataCorrupted(message)
+            if message.contains("transaction ID") && message.contains("does not match")
+    );
+}
+
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn db_roundtrip_transactions_filters_missing_output_note_sync_records() {
+    let db = &TestDb::new();
+    let block_num = BlockNumber::from(1);
+    create_block(db, block_num);
+
+    let bob = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    upsert_accounts(
+        db,
         &[mock_block_account_update(bob, 0)],
         block_num,
-        &queries::PrecomputedPublicAccountStates::new(),
+        &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([bob]),
     )
     .unwrap();
 
@@ -3861,11 +4074,10 @@ fn db_roundtrip_transactions_filters_missing_output_note_sync_records() {
 
     // Notes erased within the same block are not inserted into the `notes` table, so transaction
     // sync should classify them as erased instead of failing the whole request.
-    queries::insert_transactions(&mut conn, block_num, &ordered).unwrap();
+    insert_transactions(db, block_num, &ordered).unwrap();
 
     let retrieved =
-        queries::select_transactions_records(&mut conn, &[bob], BlockNumber::GENESIS..=block_num)
-            .unwrap();
+        select_transactions_records(db, &[bob], BlockNumber::GENESIS..=block_num).unwrap();
     let record = retrieved.1.first().expect("entry should exist");
 
     let expected = TransactionRecord {
@@ -3885,16 +4097,17 @@ fn db_roundtrip_transactions_filters_missing_output_note_sync_records() {
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn select_transactions_records_resolves_consumed_public_note_refs() {
-    let mut conn = create_db();
+    let db = &TestDb::new();
     let block_num = BlockNumber::from(1);
-    create_block(&mut conn, block_num);
+    create_block(db, block_num);
 
     let bob = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
-    queries::upsert_accounts(
-        &mut conn,
+    upsert_accounts(
+        db,
         &[mock_block_account_update(bob, 0)],
         block_num,
-        &queries::PrecomputedPublicAccountStates::new(),
+        &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([bob]),
     )
     .unwrap();
 
@@ -3917,12 +4130,11 @@ fn select_transactions_records_resolves_consumed_public_note_refs() {
         attachments: NoteAttachments::default(),
         inclusion_path: SparseMerklePath::default(),
     };
-    queries::insert_notes(&mut conn, &[(note_record, Some(nullifier))]).unwrap();
-    queries::insert_transactions(&mut conn, block_num, &ordered).unwrap();
+    insert_notes(db, &[(note_record, Some(nullifier))]).unwrap();
+    insert_transactions(db, block_num, &ordered).unwrap();
 
     let retrieved =
-        queries::select_transactions_records(&mut conn, &[bob], BlockNumber::GENESIS..=block_num)
-            .unwrap();
+        select_transactions_records(db, &[bob], BlockNumber::GENESIS..=block_num).unwrap();
     let record = retrieved.1.first().expect("entry should exist");
 
     assert_eq!(record.consumed_note_refs, vec![(nullifier, note_id)]);
@@ -3938,25 +4150,27 @@ const OUTPUT_NOTE_SIZE_BYTES: usize = 700;
 /// every transaction after the one that did not fit.
 #[test]
 fn select_transactions_records_reports_truncation_below_payload_cap() {
-    let mut conn = create_db();
+    let db = &TestDb::new();
     let bob = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
 
     let block1 = BlockNumber::from(1);
     let block2 = BlockNumber::from(2);
-    create_block(&mut conn, block1);
-    create_block(&mut conn, block2);
-    queries::upsert_accounts(
-        &mut conn,
+    create_block(db, block1);
+    create_block(db, block2);
+    upsert_accounts(
+        db,
         &[mock_block_account_update(bob, 0)],
         block1,
-        &queries::PrecomputedPublicAccountStates::new(),
+        &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([bob]),
     )
     .unwrap();
-    queries::upsert_accounts(
-        &mut conn,
+    upsert_accounts(
+        db,
         &[mock_block_account_update(bob, 1)],
         block2,
-        &queries::PrecomputedPublicAccountStates::new(),
+        &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::new(),
     )
     .unwrap();
 
@@ -3969,22 +4183,12 @@ fn select_transactions_records_reports_truncation_below_payload_cap() {
 
     let tx1 = mock_block_transaction_with_output_notes(bob, 1, block1_notes);
     let tx2 = mock_block_transaction_with_output_notes(bob, 2, block2_notes);
-    queries::insert_transactions(
-        &mut conn,
-        block1,
-        &OrderedTransactionHeaders::new_unchecked(vec![tx1.clone()]),
-    )
-    .unwrap();
-    queries::insert_transactions(
-        &mut conn,
-        block2,
-        &OrderedTransactionHeaders::new_unchecked(vec![tx2]),
-    )
-    .unwrap();
+    insert_transactions(db, block1, &OrderedTransactionHeaders::new_unchecked(vec![tx1.clone()]))
+        .unwrap();
+    insert_transactions(db, block2, &OrderedTransactionHeaders::new_unchecked(vec![tx2])).unwrap();
 
     let (last_block_included, records) =
-        queries::select_transactions_records(&mut conn, &[bob], BlockNumber::GENESIS..=block2)
-            .unwrap();
+        select_transactions_records(db, &[bob], BlockNumber::GENESIS..=block2).unwrap();
 
     assert_eq!(last_block_included, block1, "cursor must point at the last complete block");
     assert_eq!(records.len(), 1, "only the complete block's transaction should be returned");
@@ -3996,31 +4200,26 @@ fn select_transactions_records_reports_truncation_below_payload_cap() {
 /// the query must surface an explicit error instead.
 #[test]
 fn select_transactions_records_errors_when_single_block_exceeds_payload_cap() {
-    let mut conn = create_db();
+    let db = &TestDb::new();
     let bob = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
 
     let block1 = BlockNumber::from(1);
-    create_block(&mut conn, block1);
-    queries::upsert_accounts(
-        &mut conn,
+    create_block(db, block1);
+    upsert_accounts(
+        db,
         &[mock_block_account_update(bob, 0)],
         block1,
-        &queries::PrecomputedPublicAccountStates::new(),
+        &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([bob]),
     )
     .unwrap();
 
     let cap = miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
     let oversized_notes = cap / OUTPUT_NOTE_SIZE_BYTES + 100;
     let tx = mock_block_transaction_with_output_notes(bob, 1, oversized_notes);
-    queries::insert_transactions(
-        &mut conn,
-        block1,
-        &OrderedTransactionHeaders::new_unchecked(vec![tx]),
-    )
-    .unwrap();
+    insert_transactions(db, block1, &OrderedTransactionHeaders::new_unchecked(vec![tx])).unwrap();
 
-    let result =
-        queries::select_transactions_records(&mut conn, &[bob], BlockNumber::GENESIS..=block1);
+    let result = select_transactions_records(db, &[bob], BlockNumber::GENESIS..=block1);
 
     assert_matches!(
         result,
@@ -4049,14 +4248,16 @@ fn account_state_forest_preserves_most_recent_storage_map_only() {
     let block_1 = BlockNumber::from(1);
     let map_patch = StorageMapPatch::from_iters([], [(key1, value1)]);
 
-    let raw = BTreeMap::from_iter([(slot_map.clone(), StorageSlotPatch::Map(map_patch))]);
+    let raw = [(slot_map.clone(), StorageSlotPatch::Map(map_patch))]
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
     let storage_patch = AccountStoragePatch::from_raw(raw).unwrap();
 
     let delta_1 = AccountPatch::new(
         account_id,
         storage_patch,
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(2)),
     )
     .unwrap();
@@ -4105,17 +4306,19 @@ fn account_state_forest_preserves_most_recent_storage_value_slot() {
     // Block 1: Create storage value slot
     let block_1 = BlockNumber::from(1);
 
-    let raw = BTreeMap::from_iter([(
+    let raw = [(
         slot_value.clone(),
         StorageSlotPatch::Value(StorageValuePatch::Update { value: value1 }),
-    )]);
+    )]
+    .into_iter()
+    .collect::<BTreeMap<_, _>>();
     let storage_patch = AccountStoragePatch::from_raw(raw).unwrap();
 
     let delta_1 = AccountPatch::new(
         account_id,
         storage_patch,
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(2)),
     )
     .unwrap();
@@ -4177,21 +4380,23 @@ fn account_state_forest_preserves_mixed_slots_independently() {
 
     let map_patch_b = StorageMapPatch::from_iters([], [(key1, value1)]);
 
-    let raw = BTreeMap::from_iter([
+    let raw = [
         (slot_map_a.clone(), StorageSlotPatch::Map(map_patch_a)),
         (slot_map_b.clone(), StorageSlotPatch::Map(map_patch_b)),
         (
             slot_value.clone(),
             StorageSlotPatch::Value(StorageValuePatch::Update { value: value_slot_data }),
         ),
-    ]);
+    ]
+    .into_iter()
+    .collect::<BTreeMap<_, _>>();
     let storage_patch = AccountStoragePatch::from_raw(raw).unwrap();
 
     let delta_1 = AccountPatch::new(
         account_id,
         storage_patch,
         vault_patch,
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(2)),
     )
     .unwrap();
@@ -4208,15 +4413,16 @@ fn account_state_forest_preserves_mixed_slots_independently() {
 
     let map_patch_a_update = StorageMapPatch::from_iters([], [(key1, value2)]);
 
-    let raw_51 =
-        BTreeMap::from_iter([(slot_map_a.clone(), StorageSlotPatch::Map(map_patch_a_update))]);
+    let raw_51 = [(slot_map_a.clone(), StorageSlotPatch::Map(map_patch_a_update))]
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
     let storage_patch_51 = AccountStoragePatch::from_raw(raw_51).unwrap();
 
     let delta_51 = AccountPatch::new(
         account_id,
         storage_patch_51,
         AccountVaultPatch::default(),
-        None,
+        AccountCodePatch::default(),
         Some(Felt::new_unchecked(51)),
     )
     .unwrap();

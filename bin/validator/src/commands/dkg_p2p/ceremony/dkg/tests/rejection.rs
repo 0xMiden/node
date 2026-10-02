@@ -51,7 +51,7 @@ async fn dealing_exchange_rejects_invalid_dealing(
                 &sender_ceremony.config()?,
                 sender_ceremony
                     .validator_set
-                    .as_keys()
+                    .keys()
                     .iter()
                     .cloned()
                     .map(|key| (key, CeremonyNonce::random(&mut OsRng)))

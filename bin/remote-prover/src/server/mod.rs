@@ -1,12 +1,15 @@
 use std::num::NonZeroUsize;
 
 use anyhow::Context;
-use miden_node_proto::server::{remote_prover_api, remote_prover_worker_status_api};
+use miden_node_proto::server::{
+    miden_remote_prover_v1_prover_service,
+    miden_remote_prover_v1_worker_status_service,
+};
+use miden_node_tracing::grpc::grpc_trace_fn;
+use miden_node_tracing::panic::catch_panic_layer_fn;
+use miden_node_tracing::{OpenTelemetry, info};
 use miden_node_utils::cors::cors_for_grpc_web_layer;
-use miden_node_utils::logging::OpenTelemetry;
-use miden_node_utils::panic::catch_panic_layer_fn;
 use miden_node_utils::shutdown::CancellationToken;
-use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use proof_kind::ProofKind;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
@@ -70,23 +73,22 @@ impl Server {
             .expect("local address should exist for a tcp listener")
             .port();
 
-        tracing::info!(
+        info!(
             target: LOG_TARGET,
-            {
-                service.name = "miden-remote-prover",
-                service.version = env!("CARGO_PKG_VERSION"),
-                prover.timeout = %humantime::Duration::from(self.timeout),
-                prover.capacity = self.capacity.get(),
-                prover.kind = %self.kind,
-                prover.port = port,
-            },
             "Remote prover ready",
+            service.name = "miden-remote-prover",
+            service.version = env!("CARGO_PKG_VERSION"),
+            prover.timeout = humantime::Duration::from(self.timeout).to_string(),
+            prover.capacity = self.capacity.get(),
+            prover.kind = self.kind,
+            prover.port = port
         );
 
-        let status_service =
-            remote_prover_worker_status_api::service(status::StatusService::new(self.kind));
+        let status_service = miden_remote_prover_v1_worker_status_service::service(
+            status::StatusService::new(self.kind),
+        );
         let prover_service = ProverService::with_capacity(self.kind, self.capacity);
-        let prover_service = remote_prover_api::service(prover_service);
+        let prover_service = miden_remote_prover_v1_prover_service::service(prover_service);
 
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_file_descriptor_set(miden_node_proto_build::remote_prover_api_descriptor())
@@ -100,7 +102,7 @@ impl Server {
         // Mark the service as serving
         health_reporter
             .set_service_status(
-                remote_prover_api::service_name(),
+                miden_remote_prover_v1_prover_service::service_name(),
                 tonic_health::ServingStatus::Serving,
             )
             .await;

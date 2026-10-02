@@ -1,7 +1,7 @@
 use anyhow::{Context, ensure};
 use iroh::endpoint::{Connection, Side};
 use iroh::{Endpoint, EndpointId};
-use miden_protocol::block::ValidatorKeys;
+use miden_protocol::block::ValidatorConfig;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_validator::ValidatorSigner;
 use rand_core_06::OsRng;
@@ -61,7 +61,7 @@ impl ConnectedPeer {
 
     pub async fn authenticate(
         self,
-        validator_set: &ValidatorKeys,
+        validator_set: &ValidatorConfig,
         signer: &ValidatorSigner,
     ) -> anyhow::Result<AuthenticatedPeer> {
         let (mut send, mut receive) =
@@ -86,7 +86,7 @@ impl ConnectedPeer {
             .context("failed to read challenge response")?;
         let validator_public_key = response.verify_against(&challenge)?;
         ensure!(
-            validator_set.as_keys().contains(&validator_public_key),
+            validator_set.keys().contains(&validator_public_key),
             "peer validator key is not committed by genesis",
         );
         Ok(AuthenticatedPeer {

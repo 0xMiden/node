@@ -2,7 +2,7 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use miden_node_utils::logging::OpenTelemetry;
+use miden_node_tracing::OpenTelemetry;
 use seeding::seed_store;
 use store::{
     bench_get_account,
@@ -167,7 +167,7 @@ async fn main() {
     let cli = Cli::parse();
 
     // Configure tracing with optional OpenTelemetry exporting support.
-    miden_node_utils::logging::setup_tracing(OpenTelemetry::Disabled).unwrap();
+    miden_node_tracing::setup_tracing(OpenTelemetry::Disabled).unwrap();
 
     match cli.command {
         Command::SeedStore {

@@ -36,7 +36,7 @@ struct BlockMetric {
 pub struct SeedingMetrics {
     blocks: Vec<BlockMetric>,
     pending_get_block_inputs_time: Option<Duration>,
-    get_batch_inputs_time_per_block: Vec<Duration>,
+    get_note_inclusion_proofs_time_per_block: Vec<Duration>,
     store_file_sizes: Vec<(usize, u64)>,
     initial_store_size: u64,
     store_file: PathBuf,
@@ -49,7 +49,7 @@ impl SeedingMetrics {
         Self {
             blocks: Vec::new(),
             pending_get_block_inputs_time: None,
-            get_batch_inputs_time_per_block: Vec::new(),
+            get_note_inclusion_proofs_time_per_block: Vec::new(),
             store_file_sizes: Vec::new(),
             initial_store_size,
             store_file,
@@ -90,9 +90,9 @@ impl SeedingMetrics {
         );
     }
 
-    /// Tracks the time it takes to query the batch inputs.
-    pub fn add_get_batch_inputs(&mut self, query_time: Duration) {
-        self.get_batch_inputs_time_per_block.push(query_time);
+    /// Tracks the time it takes to query the note inclusion proofs.
+    pub fn add_get_note_inclusion_proofs(&mut self, query_time: Duration) {
+        self.get_note_inclusion_proofs_time_per_block.push(query_time);
     }
 
     /// Prints the block metrics table.
@@ -137,14 +137,14 @@ impl SeedingMetrics {
             )?;
         }
 
-        if !self.get_batch_inputs_time_per_block.is_empty() {
+        if !self.get_note_inclusion_proofs_time_per_block.is_empty() {
             let average = self
-                .get_batch_inputs_time_per_block
+                .get_note_inclusion_proofs_time_per_block
                 .iter()
                 .map(Duration::as_micros)
                 .sum::<u128>()
-                / self.get_batch_inputs_time_per_block.len() as u128;
-            writeln!(f, "Average get-batch-inputs time: {average} us")?;
+                / self.get_note_inclusion_proofs_time_per_block.len() as u128;
+            writeln!(f, "Average get-note-inclusion-proofs time: {average} us")?;
         }
         Ok(())
     }

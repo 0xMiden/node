@@ -1,5 +1,4 @@
 use diesel::{Connection, RunQueryDsl, SqliteConnection};
-use miden_protocol::note::Nullifier;
 use miden_protocol::utils::serde::Serializable;
 
 use crate::errors::DatabaseError;
@@ -9,21 +8,16 @@ use crate::errors::DatabaseError;
 pub(crate) fn vec_raw_try_into<D, R: TryInto<D>>(
     raw: impl IntoIterator<Item = R>,
 ) -> std::result::Result<Vec<D>, <R as TryInto<D>>::Error> {
-    std::result::Result::<Vec<D>, <R as TryInto<D>>::Error>::from_iter(
-        raw.into_iter().map(<R as std::convert::TryInto<D>>::try_into),
-    )
+    raw.into_iter()
+        .map(<R as std::convert::TryInto<D>>::try_into)
+        .collect::<std::result::Result<Vec<D>, <R as TryInto<D>>::Error>>()
 }
 
 /// Utility to convert an iterable container to a vector of byte blobs
 pub(crate) fn serialize_vec<'a, D: Serializable + 'a>(
     raw: impl IntoIterator<Item = &'a D>,
 ) -> Vec<Vec<u8>> {
-    Vec::<_>::from_iter(raw.into_iter().map(<D as Serializable>::to_bytes))
-}
-
-/// Returns the high 16 bits of the provided nullifier.
-pub fn get_nullifier_prefix(nullifier: &Nullifier) -> u16 {
-    (nullifier.most_significant_felt().as_canonical_u64() >> 48) as u16
+    raw.into_iter().map(<D as Serializable>::to_bytes).collect::<Vec<_>>()
 }
 
 /// Converts a slice of length `N` to an array, returns `None` if invariant

@@ -157,6 +157,7 @@ fn render_details(service: &ServiceStatus, rpc_chain_tip: Option<u32>) -> Markup
         ServiceDetails::ExplorerStatus(d) => cards::render_explorer(d, rpc_chain_tip, healthy),
         ServiceDetails::NoteTransportStatus(d) => cards::render_note_transport(d, healthy),
         ServiceDetails::ValidatorStatus(d) => cards::render_validator(d, healthy),
+        ServiceDetails::AgglayerStatus(d) => cards::render_agglayer(d),
         ServiceDetails::Error => html! {},
     }
 }
@@ -226,6 +227,8 @@ mod tests {
     use crate::faucet::{FaucetTestDetails, GetMetadataResponse};
     use crate::remote_prover::{ProofType, ProverTestDetails};
     use crate::status::{
+        AgglayerDirectionDetails,
+        AgglayerStatusDetails,
         BlockProducerStatusDetails,
         CounterTrackingDetails,
         ExplorerStatusDetails,
@@ -373,22 +376,21 @@ mod tests {
             test_duration_ms: 12,
             success_count: 1,
             failure_count: 0,
-            last_tx_id: Some("deadbeef".to_string()),
+            last_note_id: Some("deadbeef".to_string()),
             faucet_metadata: Some(GetMetadataResponse {
                 version: "1.0".to_string(),
                 id: "tokenid".to_string(),
-                max_supply: 1_000_000,
                 decimals: 8,
                 explorer_url: Some("https://explorer.example".to_string()),
                 pow_load_difficulty: 4,
                 base_amount: 100,
-                note_transport_url: Some("https://note-transport.example".to_string()),
+                balance: Some(1_000_000),
             }),
         };
         let html = render(vec![healthy("faucet", ServiceDetails::FaucetTest(details))]);
         assert!(html.contains("Faucet:"));
         assert!(html.contains("Faucet Token Info"));
-        assert!(html.contains("Last TX ID"));
+        assert!(html.contains("Last Note ID"));
     }
 
     /// Metadata is fetched independently of the mint test, so an unhealthy faucet (minting failing)
@@ -400,16 +402,15 @@ mod tests {
             test_duration_ms: 12,
             success_count: 0,
             failure_count: 3,
-            last_tx_id: None,
+            last_note_id: None,
             faucet_metadata: Some(GetMetadataResponse {
                 version: "0.15.0".to_string(),
                 id: "tokenid".to_string(),
-                max_supply: 1_000_000,
                 decimals: 8,
                 explorer_url: None,
                 pow_load_difficulty: 4,
                 base_amount: 100,
-                note_transport_url: None,
+                balance: None,
             }),
         };
         let status = ServiceStatus {
@@ -432,6 +433,8 @@ mod tests {
             failure_count: 0,
             last_tx_id: Some("abc123".to_string()),
             last_latency_blocks: Some(2),
+            fee_balance: None,
+            fee_topup_error: None,
         };
         let html = render(vec![healthy("ntx-inc", ServiceDetails::NtxIncrement(details))]);
         assert!(html.contains("Local Transactions"));
@@ -471,14 +474,10 @@ mod tests {
 
     #[test]
     fn renders_note_transport_card() {
-        let details = NoteTransportStatusDetails {
-            url: "https://nt.example".to_string(),
-            serving_status: "SERVING".to_string(),
-        };
+        let details = NoteTransportStatusDetails { url: "https://nt.example".to_string() };
         let html =
             render(vec![healthy("note-transport", ServiceDetails::NoteTransportStatus(details))]);
         assert!(html.contains("Note Transport"));
-        assert!(html.contains("SERVING"));
     }
 
     #[test]
@@ -493,6 +492,42 @@ mod tests {
         let html = render(vec![healthy("validator", ServiceDetails::ValidatorStatus(details))]);
         assert!(html.contains("Validator:"));
         assert!(html.contains("Signed Blocks"));
+    }
+
+    #[test]
+    fn renders_agglayer_card() {
+        let details = AgglayerStatusDetails {
+            url: "https://agglayer-monitor.example".to_string(),
+            reason_code: None,
+            runner_status: "running".to_string(),
+            heartbeat_at: 1_609_459_200,
+            inbound: AgglayerDirectionDetails {
+                status: Status::Healthy,
+                last_success_at: Some(1_609_459_200),
+                last_success_duration_ms: Some(1_190_000),
+                success_count: 1,
+                ..Default::default()
+            },
+            outbound: AgglayerDirectionDetails {
+                status: Status::Unhealthy,
+                reason_code: Some("deadline_exceeded".to_string()),
+                last_failure_at: Some(1_609_459_200),
+                last_failure_code: Some("deadline_exceeded".to_string()),
+                current_phase: Some("waiting_claimable".to_string()),
+                failure_count: 1,
+                ..Default::default()
+            },
+        };
+        let html =
+            render(vec![healthy("Agglayer Bridge", ServiceDetails::AgglayerStatus(details))]);
+        assert!(html.contains("Agglayer Bridge"));
+        assert!(html.contains("L1 → Miden:"));
+        assert!(html.contains("Miden → L1:"));
+        assert!(html.contains("2021-01-01 00:00:00 UTC"));
+        assert!(html.contains("deadline_exceeded"));
+        assert!(html.contains("waiting_claimable"));
+        // Only the unhealthy outbound direction has a reason.
+        assert_eq!(html.matches("Reason:").count(), 1);
     }
 
     #[test]

@@ -23,6 +23,7 @@ fs-err           = { workspace = true }
 hex              = { workspace = true }
 humantime        = { workspace = true }
 miden-node-proto = { workspace = true }
+miden-objects    = { workspace = true }
 miden-protocol   = { features = ["std"], workspace = true }
 miden-standards  = { workspace = true }
 miden-tx         = { workspace = true }
@@ -31,3 +32,6 @@ rand_chacha      = { workspace = true }
 tokio            = { features = ["macros", "rt-multi-thread", "time"], workspace = true }
 tonic            = { workspace = true }
 url              = { workspace = true }
+
+[dev-dependencies]
+miden-testing = { workspace = true }

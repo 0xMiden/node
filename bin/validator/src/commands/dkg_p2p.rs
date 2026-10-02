@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, ensure};
 use fs_err::PathExt;
 use iroh::{EndpointId, SecretKey as IrohSecretKey};
+use miden_node_tracing::info;
 use zeroize::Zeroizing;
 
 use super::ValidatorSigningKey;
@@ -115,59 +116,51 @@ impl ParticipateOptions {
             let peers = ceremony.exchange_configs(peers).await?;
             let session = ceremony.exchange_nonces(peers).await?;
             let session = ceremony.confirm_session(session).await?;
-            tracing::info!(
+            info!(
                 target: miden_validator::LOG_TARGET,
-                { dkg.session_id = %session.id() },
                 "DKG peer session established",
+                dkg.session_id = session.id().to_string() #[nonstandard]
             );
             let participants = ceremony.exchange_dkg_public_keys(session).await?;
             let mut participants = ceremony.confirm_dkg_registry(participants).await?;
-            tracing::info!(
+            info!(
                 target: miden_validator::LOG_TARGET,
-                {
-                    dkg.local_index = participants.local_index().get(),
-                    dkg.registry_root = %hex::encode(participants.registry_root()),
-                },
                 "DKG participant registry established",
+                dkg.local_index = participants.local_index().get() #[nonstandard],
+                dkg.registry_root = hex::encode(participants.registry_root()) #[nonstandard]
             );
 
             let dealings = ceremony.create_dealings(&participants)?;
-            tracing::info!(
+            info!(
                 target: miden_validator::LOG_TARGET,
-                {
-                    dkg.decryption_dealing_root = %hex::encode(dealings.decryption_dealing_root()),
-                    dkg.context_dealing_root = %hex::encode(dealings.context_dealing_root()),
-                },
                 "Local DKG dealings created",
+                dkg.decryption_dealing_root = hex::encode(dealings.decryption_dealing_root()) #[nonstandard],
+                dkg.context_dealing_root = hex::encode(dealings.context_dealing_root()) #[nonstandard]
             );
 
             let dealings = ceremony.exchange_dealings(&mut participants, dealings).await?;
             let dealings = ceremony.confirm_dealings(&mut participants, dealings).await?;
-            tracing::info!(
+            info!(
                 target: miden_validator::LOG_TARGET,
-                {
-                    dkg.decryption_dealings = dealings.decryption_dealing_count(),
-                    dkg.context_dealings = dealings.context_dealing_count(),
-                    dkg.dealings_commitment = %dealings.commitment(),
-                },
                 "DKG dealings verified and confirmed with every peer",
+                dkg.decryption_dealings = dealings.decryption_dealing_count() #[nonstandard],
+                dkg.context_dealings = dealings.context_dealing_count() #[nonstandard],
+                dkg.dealings_commitment = dealings.commitment().to_string() #[nonstandard]
             );
 
             let output = ceremony.complete_dkg(&participants, dealings)?;
-            tracing::info!(
+            info!(
                 target: miden_validator::LOG_TARGET,
-                {
-                    dkg.local_index = output.secret_share.participant.get(),
-                    dkg.setup_context_root = %hex::encode(output.setup_context.root()),
-                },
                 "Local DKG key material derived",
+                dkg.local_index = output.secret_share.participant.get() #[nonstandard],
+                dkg.setup_context_root = hex::encode(output.setup_context.root()) #[nonstandard]
             );
             ceremony.persist(&output_file, output)?;
             participants.finish_streams()?;
-            tracing::info!(
+            info!(
                 target: miden_validator::LOG_TARGET,
-                { dkg.storage_key_file = %output_file.display() },
                 "Local storage key bundle written",
+                dkg.storage_key_file = output_file #[nonstandard]
             );
             Ok::<_, anyhow::Error>(())
         })

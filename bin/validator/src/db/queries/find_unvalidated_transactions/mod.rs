@@ -5,7 +5,6 @@ use std::collections::BTreeSet;
 use miden_node_db::DatabaseError;
 use miden_node_db::sqlite::{InList, ReadTx};
 use miden_protocol::transaction::TransactionId;
-use miden_protocol::utils::serde::Serializable;
 
 const SQL: &str = include_str!("find_unvalidated_transactions.sql");
 
@@ -16,9 +15,7 @@ pub fn find_unvalidated_transactions(
     tx: &ReadTx<'_>,
     tx_ids: &[TransactionId],
 ) -> Result<Vec<TransactionId>, DatabaseError> {
-    // The bound blobs must outlive the query, so they are materialized before building the list.
-    let serialized: Vec<Vec<u8>> = tx_ids.iter().map(Serializable::to_bytes).collect();
-    let ids = InList::from_blobs(serialized.iter().map(Vec::as_slice));
+    let ids = InList::from_values(tx_ids);
 
     let validated = tx
         .query(SQL, &[&ids], |row| row.get::<TransactionId>(0))?

@@ -19,15 +19,14 @@ use std::time::Duration;
 use anyhow::Context;
 use miden_node_proto::BlockProofRequest;
 use miden_node_store::state::{ProofWriter, State};
+use miden_node_tracing::{Instrument, debug, info, miden_instrument};
 use miden_node_utils::retry::{self, Retryable};
 use miden_node_utils::shutdown::CancellationToken;
-use miden_node_utils::tracing::miden_instrument;
-use miden_protocol::block::{BlockNumber, BlockProof};
-use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::block::BlockNumber;
+use miden_protocol::vm::ExecutionProof;
 use thiserror::Error;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
-use tracing::{Instrument, debug, info};
 
 use crate::block_prover::{BlockProver, ProverError};
 use crate::errors::ProofSchedulerError;
@@ -171,7 +170,7 @@ pub(crate) async fn run(
     target = COMPONENT,
     name = "prove_block",
     fields(
-        block.number=block_num.as_u32(),
+        block.number = block_num
     ),
     err,
 )]
@@ -188,12 +187,12 @@ async fn prove_block(
         // is retried like any other transient failure.
         let result = (|| {
             attempt += 1;
-            let attempt_span = tracing::info_span!(
+            let attempt_span = miden_node_tracing::info_span!(
                 target: COMPONENT,
                 "prove_attempt",
                 attempt,
-                error = tracing::field::Empty,
-                timed_out = tracing::field::Empty,
+                error = miden_node_tracing::field::Empty,
+                timed_out = miden_node_tracing::field::Empty,
             );
 
             async move {
@@ -207,11 +206,13 @@ async fn prove_block(
                     Ok(Ok(proof)) => Ok((block_num, proof.to_bytes())),
                     Ok(Err(err @ ProveBlockError::Fatal(_))) => Err(err),
                     Ok(Err(ProveBlockError::Transient(err))) => {
-                        tracing::Span::current().record("error", tracing::field::display(&err));
+                        miden_node_tracing::Span::current()
+                            .record("error", miden_node_tracing::field::display(&err));
                         Err(ProveBlockError::Transient(err))
                     },
                     Err(elapsed) => {
-                        tracing::Span::current().record("timed_out", elapsed.to_string());
+                        miden_node_tracing::Span::current()
+                            .record("timed_out", elapsed.to_string());
                         Err(ProveBlockError::Transient(Box::new(elapsed)))
                     },
                 }
@@ -241,7 +242,7 @@ async fn prove_block(
     target = COMPONENT,
     name = "prove_block.generate",
     fields(
-        block.number=block_num.as_u32(),
+        block.number = block_num
     ),
     err,
 )]
@@ -249,7 +250,7 @@ async fn generate_block_proof(
     state: &State,
     block_prover: &BlockProver,
     block_num: BlockNumber,
-) -> Result<BlockProof, ProveBlockError> {
+) -> Result<ExecutionProof, ProveBlockError> {
     let bytes = state
         .load_proving_inputs(block_num)
         .await
@@ -258,7 +259,7 @@ async fn generate_block_proof(
             ProveBlockError::Fatal(ProofSchedulerError::MissingProvingInputs(block_num))
         })?;
 
-    let request = BlockProofRequest::read_from_bytes(&bytes)
+    let request = miden_node_persistence::decode::<BlockProofRequest>(&bytes)
         .map_err(|e| ProveBlockError::Fatal(ProofSchedulerError::DeserializationFailed(e)))?;
 
     let proof = block_prover
@@ -311,5 +312,53 @@ mod tests {
             .expect("join set should contain the aborted proof task");
 
         assert!(result.is_err_and(|err| err.is_cancelled()));
+    }
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use std::collections::BTreeMap;
+
+    use miden_protocol::batch::OrderedBatches;
+    use miden_protocol::block::{BlockInputs, ProposedBlock, ValidatorConfig};
+    use miden_protocol::transaction::PartialBlockchain;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn persisted_request_runs_through_local_prover() {
+        let key = miden_protocol::testing::random_secret_key::random_secret_key();
+        let genesis = miden_node_store::GenesisState::new(
+            vec![],
+            miden_node_utils::fee::test_fee_params(),
+            0,
+            ValidatorConfig::new(vec![key.public_key()], 1).unwrap(),
+            miden_node_utils::fee::test_protocol_config(),
+        )
+        .into_block()
+        .unwrap();
+        let inputs = BlockInputs::new(
+            genesis.inner().header().clone(),
+            PartialBlockchain::default(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+        );
+        let (header, _) = ProposedBlock::new_at(inputs.clone(), vec![], 1)
+            .unwrap()
+            .into_header_and_body()
+            .unwrap();
+        let request = BlockProofRequest {
+            tx_batches: OrderedBatches::new(vec![]),
+            block_header: header.clone(),
+            block_inputs: inputs,
+        };
+        let decoded: BlockProofRequest =
+            miden_node_persistence::decode(&miden_node_persistence::encode(&request)).unwrap();
+        assert_eq!(decoded.block_header, header);
+        BlockProver::local()
+            .prove(decoded.tx_batches, decoded.block_inputs, &decoded.block_header)
+            .await
+            .unwrap();
     }
 }

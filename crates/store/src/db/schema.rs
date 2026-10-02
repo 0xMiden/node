@@ -90,6 +90,14 @@ diesel::table! {
 }
 
 diesel::table! {
+    protocol_configs (commitment, block_number) {
+        commitment -> Binary,
+        block_number -> BigInt,
+        protocol_config -> Binary,
+    }
+}
+
+diesel::table! {
     prune_progress (id) {
         id -> Integer,
         codes_cutoff -> BigInt,
@@ -118,6 +126,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     note_scripts,
     notes,
     nullifiers,
+    protocol_configs,
     prune_progress,
     transactions,
 );

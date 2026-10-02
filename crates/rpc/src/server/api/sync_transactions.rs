@@ -1,31 +1,29 @@
-use miden_node_proto::decode::{read_account_ids, read_block_range};
-use miden_node_proto::generated as proto;
-use miden_node_store::{NoteSyncRecord, TransactionRecord};
-use miden_node_utils::formatting::format_array;
+use miden_node_proto::{DecodeMessage, Verify, generated as proto};
+use miden_node_store::{DatabaseError, NoteSyncRecord, TransactionRecord};
+use miden_node_tracing::{debug, miden_instrument, miden_span_record};
 use miden_node_utils::limiter::QueryParamAccountIdLimit;
-use miden_node_utils::tracing::{miden_instrument, miden_span_record};
-use tonic::Status;
-use tracing::debug;
 
-use super::{
-    RpcInvalidBlockRange,
-    RpcService,
-    check,
-    database_error_to_status,
-    invalid_block_range_to_status,
-};
+use super::error_codes::SyncTransactionsErrorCode;
+use super::{RpcService, check, database_error_to_status, invalid_block_range_to_status};
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::SyncTransactions for RpcService {
-    type Input = proto::rpc::SyncTransactionsRequest;
-    type Output = proto::rpc::SyncTransactionsResponse;
+impl proto::server::miden_node_v1_node_service::SyncTransactions for RpcService {
+    type Input = proto::miden::node::v1::DecodedSyncTransactionsRequest;
+    type Output = proto::miden::node::v1::SyncTransactionsResponse;
 
-    fn decode(request: proto::rpc::SyncTransactionsRequest) -> tonic::Result<Self::Input> {
-        Ok(request)
+    fn decode(
+        request: proto::miden::node::v1::SyncTransactionsRequest,
+    ) -> tonic::Result<Self::Input> {
+        check::<QueryParamAccountIdLimit>(request.account_ids.as_slice().len())?;
+        request
+            .decode_fields()
+            .map_err(|err| SyncTransactionsErrorCode::DeserializationFailed.invalid_argument(err))
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::SyncTransactionsResponse> {
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<proto::miden::node::v1::SyncTransactionsResponse> {
         Ok(output)
     }
 
@@ -40,42 +38,49 @@ impl proto::server::rpc_api::SyncTransactions for RpcService {
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        tracing::trace!(target: LOG_TARGET, ?request);
-
-        let range = read_block_range::<Status>(request.block_range, "SyncTransactionsRequest")?;
-        let n_accounts = request.account_ids.len();
-        let account_ids =
-            read_account_ids::<Status, _>(request.account_ids.iter().take(10).cloned())?;
+        let range = request.block_range;
+        let n_accounts = request.account_ids.as_slice().len();
+        let account_ids = request.account_ids.verify().map_err(|err| {
+            SyncTransactionsErrorCode::DeserializationFailed.invalid_argument(err)
+        })?;
+        let logged_account_ids = &account_ids[..account_ids.len().min(10)];
 
         miden_span_record!(
             block_range.from = range.block_from,
             block_range.to = range.block_to,
-            account.ids = %format_array(&account_ids),
-            account.ids.count = n_accounts,
+            account.ids = logged_account_ids,
+            account.count = n_accounts
         );
 
-        debug!(target: LOG_TARGET, "Syncing transactions");
+        debug!(
+            target: LOG_TARGET,
+            "Syncing transactions",
+            block_range.from = range.block_from,
+            block_range.to = range.block_to,
+            account.ids = logged_account_ids,
+            account.ids.count = n_accounts
+        );
 
-        check::<QueryParamAccountIdLimit>(request.account_ids.len())?;
-
-        let block_range = range
-            .into_inclusive_range::<RpcInvalidBlockRange>()
-            .map_err(invalid_block_range_to_status)?;
-        let account_ids = read_account_ids::<Status, _>(request.account_ids)?;
+        let block_range = range.verify().map_err(invalid_block_range_to_status)?;
         let (chain_tip, (last_block_included, transaction_records_db)) = self
             .state
             .with_view(async |view| {
                 view.sync_transactions(account_ids, block_range)
                     .await
                     .map(|records| (view.tip(), records))
-                    .map_err(|err| database_error_to_status(&err))
+                    .map_err(|err| match err {
+                        DatabaseError::RangeBeyondTip(_) => {
+                            SyncTransactionsErrorCode::FutureBlock.invalid_argument(err)
+                        },
+                        err => database_error_to_status(&err),
+                    })
             })
             .await?;
         let transactions =
             transaction_records_db.into_iter().map(transaction_record_to_proto).collect();
 
-        Ok(proto::rpc::SyncTransactionsResponse {
-            pagination_info: Some(proto::rpc::PaginationInfo {
+        Ok(proto::miden::node::v1::SyncTransactionsResponse {
+            pagination_info: Some(proto::miden::node::v1::PaginationInfo {
                 chain_tip: chain_tip.as_u32(),
                 block_num: last_block_included.as_u32(),
             }),
@@ -87,7 +92,9 @@ impl proto::server::rpc_api::SyncTransactions for RpcService {
 // HELPERS
 // ================================================================================================
 
-fn transaction_record_to_proto(record: TransactionRecord) -> proto::rpc::TransactionRecord {
+fn transaction_record_to_proto(
+    record: TransactionRecord,
+) -> proto::miden::node::v1::TransactionRecord {
     let output_note_proofs = record
         .output_note_proofs
         .into_iter()
@@ -97,13 +104,13 @@ fn transaction_record_to_proto(record: TransactionRecord) -> proto::rpc::Transac
     let consumed_note_refs = record
         .consumed_note_refs
         .into_iter()
-        .map(|(nullifier, note_id)| proto::rpc::ConsumedNoteRef {
-            nullifier: Some(nullifier.into()),
+        .map(|(nullifier, note_id)| proto::miden::node::v1::ConsumedNoteRef {
+            nullifier: Some(nullifier.as_word().into()),
             note_id: Some((&note_id).into()),
         })
         .collect();
 
-    proto::rpc::TransactionRecord {
+    proto::miden::node::v1::TransactionRecord {
         header: Some(proto::transaction::TransactionHeader {
             transaction_id: Some(record.header.id().into()),
             account_id: Some(record.header.account_id().into()),
@@ -118,10 +125,10 @@ fn transaction_record_to_proto(record: TransactionRecord) -> proto::rpc::Transac
     }
 }
 
-fn note_sync_record_to_proof_proto(note: NoteSyncRecord) -> proto::note::NoteInclusionInBlockProof {
-    proto::note::NoteInclusionInBlockProof {
+fn note_sync_record_to_proof_proto(note: NoteSyncRecord) -> proto::note::NoteInclusionProof {
+    proto::note::NoteInclusionProof {
         note_id: Some((&note.note_id).into()),
-        block_num: note.block_num.as_u32(),
+        block_num: Some(note.block_num.into()),
         note_index_in_block: note.note_index.leaf_index_value().into(),
         inclusion_path: Some(note.inclusion_path.into()),
     }

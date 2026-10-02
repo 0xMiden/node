@@ -1,0 +1,97 @@
+syntax = "proto3";
+package submission;
+
+import "primitives.proto";
+import "transaction.proto";
+import "batch.proto";
+
+// A proven transaction together with the sealed private inputs validators require for
+// re-execution. Relays can inspect the canonical transaction but cannot read its private inputs.
+message ProvenTransactionSubmission {
+  // Canonical proven-transaction representation from miden-objects.
+  transaction.ProvenTransaction transaction = 1;
+
+  // Private inputs sealed for the same transaction ID.
+  SealedTransactionInputs sealed_transaction_inputs = 2;
+}
+
+// Transaction inputs sealed against the validator set's shared encryption key.
+// Obtain and verify that key with GetTransactionEncryptionKey before submitting.
+message SealedTransactionInputs {
+  // Opaque identifier copied from TransactionEncryptionKey.key_id.
+  bytes key_id = 1;
+
+  // miden_protocol::crypto::ies::SealedMessage serialized with its Serializable implementation.
+  // The authenticated-data transcript binds the scheme, key ID, network genesis commitment, and
+  // transaction ID; its canonical construction lives in miden_node_proto::domain::encryption.
+  bytes ciphertext = 2;
+}
+
+// A proven transaction batch, the proposal it proves, and each transaction's sealed private
+// inputs. Validators require all three while transaction re-execution remains part of validation.
+message TransactionBatch {
+  // Canonical proven-batch representation from miden-objects.
+  transaction.ProvenBatch batch = 1;
+
+  // Canonical proposal whose transaction ordering and contents match batch.
+  transaction.ProposedBatch proposed_batch = 2;
+
+  // One independently sealed entry per proposed transaction, in proposed_batch transaction order.
+  // Each entry is authenticated against its own transaction ID.
+  repeated SealedTransactionInputs sealed_transaction_inputs = 3;
+}
+
+// IES scheme used for transaction input encryption. Non-zero values match the corresponding
+// miden_protocol::crypto::ies::IesScheme discriminants.
+enum IesScheme {
+  IES_SCHEME_UNSPECIFIED = 0;
+  IES_SCHEME_X25519_XCHACHA20_POLY1305 = 1;
+}
+
+// A validator's attestation of the shared transaction encryption key.
+message ValidatorKeyAttestation {
+  // Canonical signing public key; it must be committed by a trusted chain header.
+  primitives.PublicKey validator_public_key = 1;
+
+  // Signature over the attestation commitment described on TransactionEncryptionKey.
+  primitives.Signature signature = 2;
+}
+
+// A transaction encryption key scheduled to replace the current key.
+message NextTransactionEncryptionKey {
+  // IES scheme used by the scheduled key.
+  IesScheme scheme = 1;
+
+  // Opaque identifier of the scheduled key.
+  bytes key_id = 2;
+
+  // Raw public-key encoding expected by the selected IES scheme.
+  bytes public_key = 3;
+
+  // Block number at which this key replaces the current key.
+  fixed32 rotation_block_num = 4;
+}
+
+// The validator-set encryption key used to seal transaction inputs.
+//
+// Each attestation signs the Poseidon2 byte-mode hash of
+// `domain_tag || scheme || len(key_id) || key_id || genesis_commitment || len(public_key) ||
+// public_key || next_key_transcript`. Integer fields and length prefixes are little-endian u32s;
+// the domain tag is `MIDEN_TX_ENCRYPTION_KEY_ATTESTATION_V1`. When next_key is present, its
+// transcript contains its scheme, length-prefixed key ID and public key, and rotation block.
+message TransactionEncryptionKey {
+  // IES scheme used by the current key.
+  IesScheme scheme = 1;
+
+  // Opaque current-key identifier. This changes when the key rotates.
+  bytes key_id = 2;
+
+  // Raw public-key encoding expected by the selected IES scheme.
+  bytes public_key = 3;
+
+  // Validator signatures binding this key, network genesis, and any scheduled rotation.
+  repeated ValidatorKeyAttestation attestations = 4;
+
+  // Scheduled replacement, when a rotation has been announced.
+  optional NextTransactionEncryptionKey next_key = 5;
+}

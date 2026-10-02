@@ -16,8 +16,8 @@
 //! The database `*Raw` and `*Joined` types use database primitives. In order to convert to correct
 //! in-memory representations it's preferable to have new-types which implement [`SqlTypeConvert`].
 //! If that is inconvenient, provide two wrapper methods for the conversion each way. There must be
-//! relevant constraints in the table. For convenience, any types that have more complex
-//! serialization may use [`Serializable`] and [`Deserializable`] for convenience.
+//! relevant constraints in the table. Structured payloads use the protobuf codecs in
+//! `miden_node_persistence`. Keys and indexed values use fixed-width encodings.
 //!
 //! ## Assumptions
 //!
@@ -25,12 +25,7 @@
 //! transaction, any nesting of further `transaction(conn, || {})` has no effect and should be
 //! considered unnecessary boilerplate by default.
 
-use diesel::SqliteConnection;
-use miden_protocol::block::SignedBlock;
-use miden_protocol::note::Nullifier;
-
 use super::DatabaseError;
-use crate::db::NoteRecord;
 
 mod transactions;
 pub use transactions::*;
@@ -43,34 +38,5 @@ pub use nullifiers::NullifiersPage;
 pub(crate) use nullifiers::*;
 mod notes;
 pub(crate) use notes::*;
-
-/// Apply a new block to the state.
-///
-/// # Returns
-///
-/// Number of records inserted and/or updated.
-pub(crate) fn apply_block(
-    conn: &mut SqliteConnection,
-    block: &SignedBlock,
-    notes: &[(NoteRecord, Option<Nullifier>)],
-    precomputed_public_states: &PrecomputedPublicAccountStates,
-) -> Result<usize, DatabaseError> {
-    let mut count = 0;
-    // Note: ordering here is important as the relevant tables have FK dependencies.
-    count += insert_block_header(conn, block.header(), block.signatures())?;
-    count += upsert_accounts(
-        conn,
-        block.body().updated_accounts(),
-        block.header().block_num(),
-        precomputed_public_states,
-    )?;
-    count += insert_scripts(conn, notes.iter().map(|(note, _)| note))?;
-    count += insert_notes(conn, notes)?;
-    count += insert_transactions(conn, block.header().block_num(), block.body().transactions())?;
-    count += insert_nullifiers_for_block(
-        conn,
-        block.body().created_nullifiers(),
-        block.header().block_num(),
-    )?;
-    Ok(count)
-}
+mod protocol_configs;
+pub(crate) use protocol_configs::*;

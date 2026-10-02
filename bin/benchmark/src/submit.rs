@@ -17,18 +17,20 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
+use anyhow::{Result, ensure};
 use miden_node_proto::clients::RpcClient;
 use miden_node_proto::domain::encryption::TransactionInputsSealer;
 use miden_node_proto::generated as proto;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
-use miden_protocol::transaction::{ProvenTransaction, TransactionId};
+use miden_protocol::transaction::{ProvenTransaction, TransactionId, TransactionInputs};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use tokio::sync::Semaphore;
 use url::Url;
 
+use crate::artifacts::{read_inputs, read_transactions};
 use crate::inclusion::{current_block_height, scan_with_drain};
 use crate::summary::{print_phase_progress, print_summary};
-use crate::{PROOFS_DIR, create_genesis_aware_rpc_client_pool, read_from_file};
+use crate::{PROOFS_DIR, create_genesis_aware_rpc_client_pool};
 
 // ORCHESTRATOR
 // ================================================================================================
@@ -39,18 +41,23 @@ pub(crate) async fn run(
     connections: usize,
     wait_blocks: u32,
     validator_signing_public_key: String,
-) {
+    fail_on_error: bool,
+) -> Result<()> {
     let in_dir = PathBuf::from(PROOFS_DIR);
 
     println!("Loading mint txs from {}", in_dir.join("mint_txs.bin").display());
-    let mint_txs: Vec<ProvenTransaction> = read_from_file(&in_dir.join("mint_txs.bin"));
-    let mint_tx_inputs: Vec<Vec<u8>> = read_from_file(&in_dir.join("mint_tx_inputs.bin"));
-    assert_eq!(mint_txs.len(), mint_tx_inputs.len(), "mint tx/inputs length mismatch");
+    let mint_txs: Vec<ProvenTransaction> = read_transactions(&in_dir.join("mint_txs.bin"))?;
+    let mint_tx_inputs: Vec<TransactionInputs> = read_inputs(&in_dir.join("mint_tx_inputs.bin"))?;
+    ensure!(mint_txs.len() == mint_tx_inputs.len(), "mint tx/inputs length mismatch");
 
     println!("Loading consume txs from {}", in_dir.join("consume_txs.bin").display());
-    let consume_txs: Vec<ProvenTransaction> = read_from_file(&in_dir.join("consume_txs.bin"));
-    let consume_tx_inputs: Vec<Vec<u8>> = read_from_file(&in_dir.join("consume_tx_inputs.bin"));
-    assert_eq!(consume_txs.len(), consume_tx_inputs.len(), "consume tx/inputs length mismatch");
+    let consume_txs: Vec<ProvenTransaction> = read_transactions(&in_dir.join("consume_txs.bin"))?;
+    let consume_tx_inputs: Vec<TransactionInputs> =
+        read_inputs(&in_dir.join("consume_tx_inputs.bin"))?;
+    ensure!(
+        consume_txs.len() == consume_tx_inputs.len(),
+        "consume tx/inputs length mismatch"
+    );
 
     // Compute the consume tx-id master list up front so we can match it against on-chain block
     // contents later, without having to interrogate the node. (Mints are not tracked on-chain.)
@@ -102,6 +109,30 @@ pub(crate) async fn run(
         scan_with_drain(pool[0].clone(), h_start, wait_blocks, ack_by_id).await;
 
     print_summary(h_start, h_final, &mint_stats, &consume_stats, concurrency, &inclusion);
+
+    if fail_on_error {
+        ensure!(
+            !mint_stats.outcomes.is_empty() && !consume_stats.outcomes.is_empty(),
+            "benchmark requires mint and consume transactions"
+        );
+        ensure!(
+            mint_stats.err_count() == 0,
+            "{} mint submissions failed",
+            mint_stats.err_count()
+        );
+        ensure!(
+            consume_stats.err_count() == 0,
+            "{} consume submissions failed",
+            consume_stats.err_count()
+        );
+        ensure!(
+            inclusion.included_count == consume_ids.len() as u64,
+            "only {} of {} consume transactions were included",
+            inclusion.included_count,
+            consume_ids.len()
+        );
+    }
+    Ok(())
 }
 
 // SUBMISSION STATS
@@ -160,7 +191,7 @@ impl PhaseStats {
 async fn submit_all(
     pool: Arc<Vec<RpcClient>>,
     txs: Vec<ProvenTransaction>,
-    tx_inputs: Vec<Vec<u8>>,
+    tx_inputs: Vec<TransactionInputs>,
     concurrency: usize,
     sealer: &Arc<TransactionInputsSealer>,
 ) -> PhaseStats {
@@ -185,14 +216,20 @@ async fn submit_all(
         let printed = printed.clone();
         let sealer = sealer.clone();
         set.spawn(async move {
-            let sealed_inputs =
-                sealer.seal(tx.id(), &inputs).expect("failed to seal transaction inputs");
-            let request = proto::transaction::ProvenTransaction {
-                transaction: tx.to_bytes(),
+            let sealed_inputs = sealer
+                .seal(tx.id(), &inputs.to_bytes())
+                .expect("failed to seal transaction inputs");
+            let request = proto::submission::ProvenTransactionSubmission {
+                transaction: Some((&tx).into()),
                 sealed_transaction_inputs: Some(sealed_inputs),
             };
             let t0 = Instant::now();
-            let outcome = match client.submit_proven_tx(request).await {
+            let outcome = match client
+                .submit_proven_tx(proto::miden::node::v1::SubmitProvenTxRequest {
+                    submission: Some(request),
+                })
+                .await
+            {
                 Ok(_) => SubmitOutcome {
                     index: i,
                     result: Ok(t0.elapsed()),
@@ -236,7 +273,7 @@ async fn submit_all(
 async fn submit_sequential(
     mut client: RpcClient,
     txs: Vec<ProvenTransaction>,
-    tx_inputs: Vec<Vec<u8>>,
+    tx_inputs: Vec<TransactionInputs>,
     sealer: &Arc<TransactionInputsSealer>,
 ) -> PhaseStats {
     let start = Instant::now();
@@ -244,15 +281,21 @@ async fn submit_sequential(
     let mut outcomes = Vec::with_capacity(total);
 
     for (i, (tx, inputs)) in txs.into_iter().zip(tx_inputs).enumerate() {
-        let sealed_inputs =
-            sealer.seal(tx.id(), &inputs).expect("failed to seal transaction inputs");
-        let request = proto::transaction::ProvenTransaction {
-            transaction: tx.to_bytes(),
+        let sealed_inputs = sealer
+            .seal(tx.id(), &inputs.to_bytes())
+            .expect("failed to seal transaction inputs");
+        let request = proto::submission::ProvenTransactionSubmission {
+            transaction: Some((&tx).into()),
             sealed_transaction_inputs: Some(sealed_inputs),
         };
 
         let t0 = Instant::now();
-        let outcome = match client.submit_proven_tx(request).await {
+        let outcome = match client
+            .submit_proven_tx(proto::miden::node::v1::SubmitProvenTxRequest {
+                submission: Some(request),
+            })
+            .await
+        {
             Ok(_) => SubmitOutcome {
                 index: i,
                 result: Ok(t0.elapsed()),

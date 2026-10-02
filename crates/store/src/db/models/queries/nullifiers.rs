@@ -17,15 +17,13 @@ use miden_node_utils::limiter::{
     QueryParamLimiter,
     QueryParamNullifierPrefixLimit,
 };
-use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 
 use super::DatabaseError;
-use crate::COMPONENT;
 use crate::db::models::conv::{SqlTypeConvert, nullifier_prefix_to_raw_sql};
-use crate::db::models::utils::{get_nullifier_prefix, vec_raw_try_into};
+use crate::db::models::utils::vec_raw_try_into;
 use crate::db::{NullifierInfo, schema};
 
 /// Returns nullifiers filtered by prefix within a block number range.
@@ -208,65 +206,6 @@ pub(crate) fn select_nullifiers_paged(
     };
 
     Ok(NullifiersPage { nullifiers, next_cursor })
-}
-
-/// Insert nullifiers for a block into the database.
-///
-/// # Parameters
-/// * `nullifiers`: List of nullifiers to insert
-///     - Limit: 0 <= count <= 1000
-/// * `block_num`: Block number to associate with the nullifiers
-///
-/// # Returns
-///
-/// The number of affected rows.
-///
-/// # Note
-///
-/// The [`SqliteConnection`] object is not consumed. It's up to the caller to commit or rollback the
-/// transaction.
-///
-/// # Raw SQL
-///
-/// ```sql
-/// UPDATE notes
-/// SET consumed_at = ?1
-/// WHERE nullifier IN (?2);
-///
-/// INSERT INTO nullifiers (nullifier, nullifier_prefix, block_num)
-/// VALUES (?1, ?2, ?3)
-/// ```
-#[miden_instrument(
-    target = COMPONENT,
-    err,
-)]
-pub(crate) fn insert_nullifiers_for_block(
-    conn: &mut SqliteConnection,
-    nullifiers: &[Nullifier],
-    block_num: BlockNumber,
-) -> Result<usize, DatabaseError> {
-    let serialized_nullifiers =
-        Vec::<Vec<u8>>::from_iter(nullifiers.iter().map(Nullifier::to_bytes));
-
-    let mut count = diesel::update(schema::notes::table)
-        .filter(schema::notes::nullifier.eq_any(&serialized_nullifiers))
-        .set(schema::notes::consumed_at.eq(Some(block_num.to_raw_sql())))
-        .execute(conn)?;
-
-    count += diesel::insert_into(schema::nullifiers::table)
-        .values(Vec::from_iter(nullifiers.iter().zip(serialized_nullifiers.iter()).map(
-            |(nullifier, bytes)| {
-                (
-                    schema::nullifiers::nullifier.eq(bytes),
-                    schema::nullifiers::nullifier_prefix
-                        .eq(nullifier_prefix_to_raw_sql(get_nullifier_prefix(nullifier))),
-                    schema::nullifiers::block_num.eq(block_num.to_raw_sql()),
-                )
-            },
-        )))
-        .execute(conn)?;
-
-    Ok(count)
 }
 
 #[derive(Debug, Clone, Queryable, QueryableByName, Selectable)]

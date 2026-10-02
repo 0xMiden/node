@@ -10,7 +10,7 @@ use iroh::address_lookup::memory::MemoryLookup;
 use iroh::endpoint::presets;
 use iroh::{Endpoint, SecretKey as IrohSecretKey};
 use itertools::Itertools;
-use miden_protocol::block::ValidatorKeys;
+use miden_protocol::block::ValidatorConfig;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::crypto::hash::rpo::Rpo256;
 use miden_validator::{StorageKeyEpoch, ValidatorSigner};
@@ -29,8 +29,9 @@ struct TestCeremony {
 impl TestCeremony {
     async fn create_dealings(threshold: usize, validator_count: usize) -> anyhow::Result<Self> {
         let signing_keys = (0..validator_count).map(|_| SigningKey::new()).collect::<Vec<_>>();
-        let validator_set = Arc::new(ValidatorKeys::new(
+        let validator_set = Arc::new(ValidatorConfig::new(
             signing_keys.iter().map(SigningKey::public_key).collect(),
+            validator_count.try_into()?,
         )?);
         let mut endpoints = Vec::new();
         let mut endpoint_secrets = Vec::new();
@@ -97,10 +98,8 @@ impl TestCeremony {
 
 #[rstest::rstest]
 #[case::one_of_one(1, 1)]
-#[ignore = "Golden rejects threshold-one zero sharing: https://github.com/0xMiden/golden-dkg/issues/64"]
 #[case::one_of_two(1, 2)]
 #[case::two_of_two(2, 2)]
-#[ignore = "Golden rejects threshold-one zero sharing: https://github.com/0xMiden/golden-dkg/issues/64"]
 #[case::one_of_three(1, 3)]
 #[case::two_of_three(2, 3)]
 #[case::three_of_three(3, 3)]

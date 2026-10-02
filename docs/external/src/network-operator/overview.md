@@ -88,3 +88,10 @@ proofs.
 The network monitor runs `miden-network-monitor`. It is an observer and test client for network health. It is not
 required for block production, but it gives operators a single place to check whether RPC, validator, prover, faucet,
 explorer, note transport, and network-transaction flows are behaving as expected.
+
+### Funding Service
+
+The funding service runs `miden-funding-service`. It sends the chain's native asset to any account which asks for it,
+which lets infrastructure pay transaction fees on a network without a public faucet. It is not required for block
+production. The service owns one wallet account, pre-funded at genesis, and gives operators a single account to keep
+funded.

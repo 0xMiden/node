@@ -20,21 +20,8 @@ struct TestGenesis {
 fn write_genesis(root: &Path, validator_count: usize) -> TestResultWith<TestGenesis> {
     let signing_keys = (0..validator_count).map(|_| SigningKey::new()).collect::<Vec<_>>();
     let validator_keys = signing_keys.iter().map(SigningKey::public_key).collect();
-    let config = concat!(
-        "version = 1\n",
-        "timestamp = 1717344256\n",
-        "\n[fee_parameters]\n",
-        "verification_base_fee = 0\n",
-    );
-    let config_path = root.join("genesis.toml");
-    fs_err::write(&config_path, config)?;
     let genesis_directory = root.join("genesis");
-    super::super::super::genesis::generate(
-        &genesis_directory,
-        &root.join("accounts"),
-        Some(&config_path),
-        validator_keys,
-    )?;
+    super::super::super::genesis::tests::command(root, validator_keys)?.execute()?;
 
     Ok(TestGenesis {
         path: genesis_directory.join("genesis.dat"),

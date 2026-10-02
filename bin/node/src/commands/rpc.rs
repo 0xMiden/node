@@ -12,7 +12,7 @@ use url::Url;
 #[derive(clap::Args, Clone, Debug)]
 pub struct RpcOptions {
     /// Socket address at which to serve the public RPC API.
-    #[arg(long = "rpc.listen", env = "MIDEN_NODE_RPC_LISTEN", value_name = "LISTEN")]
+    #[arg(long = "rpc.listen", env = "MIDEN_NODE_RPC_LISTEN", value_name = "IP:PORT")]
     pub listen: SocketAddr,
 
     /// Optional metadata header value for internal network-transaction RPC authentication.

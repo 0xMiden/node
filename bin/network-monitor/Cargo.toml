@@ -24,6 +24,7 @@ hex                 = { workspace = true }
 humantime           = { workspace = true }
 maud                = { features = ["axum"], version = "0.27" }
 miden-node-proto    = { workspace = true }
+miden-node-tracing  = { workspace = true }
 miden-node-utils    = { workspace = true }
 miden-protocol      = { features = ["std"], workspace = true }
 miden-standards     = { workspace = true }
@@ -32,14 +33,13 @@ rand                = { workspace = true }
 rand_chacha         = { workspace = true }
 reqwest             = { features = ["json", "query"], workspace = true }
 serde               = { workspace = true }
-serde_json          = { version = "1.0" }
+serde_json          = { workspace = true }
 serde_path_to_error = { version = "0.1" }
 sha2                = { workspace = true }
 time                = { features = ["formatting", "macros"], version = "0.3" }
 tokio               = { features = ["full"], workspace = true }
 tonic               = { features = ["codegen", "tls-native-roots", "transport"], workspace = true }
 tonic-health        = { workspace = true }
-tracing             = { workspace = true }
 url                 = { features = ["serde"], workspace = true }
 
 [dev-dependencies]

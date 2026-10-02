@@ -7,10 +7,9 @@ use futures::future::try_join_all;
 use golden_core::{ParticipantIndex, ParticipantRegistry};
 use iroh::endpoint::presets;
 use iroh::{Endpoint, EndpointId, SecretKey as IrohSecretKey};
-use miden_node_store::genesis::GenesisBlock;
 use miden_node_utils::genesis::read_genesis_block;
 use miden_protocol::Word;
-use miden_protocol::block::ValidatorKeys;
+use miden_protocol::block::ValidatorConfig;
 use miden_protocol::utils::serde::Serializable;
 use miden_validator::{StorageKeyEpoch, ValidatorSigner};
 use rand_core_06::OsRng;
@@ -74,7 +73,7 @@ pub struct DkgParticipants {
 /// [`Ceremony::authenticate_peers`] performs that authentication.
 pub(super) struct Ceremony {
     genesis_commitment: Word,
-    validator_set: Arc<ValidatorKeys>,
+    validator_set: Arc<ValidatorConfig>,
     endpoint_secret: IrohSecretKey,
     peer_endpoints: BTreeSet<EndpointId>,
     threshold: NonZeroUsize,
@@ -147,8 +146,9 @@ impl Ceremony {
             .map(|peer| peer.validator_public_key().clone())
             .collect::<Vec<_>>();
         authenticated_validator_keys.push(self.signer.public_key());
-        let authenticated_validator_set = ValidatorKeys::new(authenticated_validator_keys)
-            .context("authenticated validator keys do not form a valid validator set")?;
+        let authenticated_validator_set =
+            ValidatorConfig::new(authenticated_validator_keys, self.validator_set.quorum())
+                .context("authenticated validator keys do not form a valid validator set")?;
         ensure!(
             authenticated_validator_set == *self.validator_set,
             "authenticated validator set does not match genesis",
@@ -331,10 +331,10 @@ impl DkgParticipants {
 
 impl ParticipateOptions {
     pub(super) async fn validate(self) -> anyhow::Result<Ceremony> {
-        let genesis = GenesisBlock::try_from(read_genesis_block(&self.genesis)?)
-            .context("failed to validate genesis block")?;
+        let genesis =
+            read_genesis_block(&self.genesis).context("failed to validate genesis block")?;
         let genesis_commitment = genesis.inner().header().commitment();
-        let validator_set = genesis.inner().header().validator_keys().clone();
+        let validator_set = genesis.inner().header().validator_config().clone();
         let validator_count = validator_set.len();
 
         ensure!(
@@ -371,7 +371,7 @@ impl ParticipateOptions {
 
         let signer = Arc::new(self.signing_key.into_signer().await?);
         ensure!(
-            validator_set.as_keys().contains(&signer.public_key()),
+            validator_set.keys().contains(&signer.public_key()),
             "validator signing key is not committed by genesis",
         );
 

@@ -1,27 +1,33 @@
 use miden_node_proto::generated as proto;
+use miden_node_tracing::{debug, miden_instrument};
 use miden_node_utils::grpc::ClientIp;
-use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::block::BlockNumber;
-use tracing::debug;
+use miden_protocol::vm::ExecutionProof;
 
 use super::super::{COMPONENT, RpcService};
 use super::stream::{StreamItem, SubscriptionStream};
 use crate::LOG_TARGET;
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::ProofSubscription for RpcService {
+impl proto::server::miden_node_v1_node_service::ProofSubscription for RpcService {
     type Input = BlockNumber;
     type Item = StreamItem;
     type ItemStream = SubscriptionStream;
 
-    fn decode(request: proto::rpc::ProofSubscriptionRequest) -> tonic::Result<Self::Input> {
+    fn decode(
+        request: proto::miden::node::v1::ProofSubscriptionRequest,
+    ) -> tonic::Result<Self::Input> {
         Ok(BlockNumber::from(request.block_from))
     }
 
-    fn encode(event: Self::Item) -> tonic::Result<proto::rpc::ProofSubscriptionResponse> {
-        Ok(proto::rpc::ProofSubscriptionResponse {
+    fn encode(
+        event: Self::Item,
+    ) -> tonic::Result<proto::miden::node::v1::ProofSubscriptionResponse> {
+        let proof = ExecutionProof::read_from_bytes(&event.data)
+            .map_err(|err| tonic::Status::internal(format!("invalid stored proof: {err}")))?;
+        Ok(proto::miden::node::v1::ProofSubscriptionResponse {
             block_num: event.block.as_u32(),
-            proof: event.data,
+            proof: Some(proof.into()),
             proven_chain_tip: event.tip.as_u32(),
         })
     }
@@ -30,7 +36,7 @@ impl proto::server::rpc_api::ProofSubscription for RpcService {
         target = COMPONENT,
         name = "proof_subscription",
         fields(
-            block.from = %input,
+            block.from = input,
         ),
         err,
     )]

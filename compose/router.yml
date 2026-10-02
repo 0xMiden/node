@@ -9,7 +9,7 @@ services:
         target: /etc/caddy/Caddyfile
       - source: caddy-routes-default
         target: /etc/caddy/routes/default.caddy
-    # The faucet uses the public browser URL from inside the Compose network.
+    # Services can use the public RPC hostname inside the Compose network.
     networks:
       default:
         aliases:
@@ -38,14 +38,8 @@ configs:
         reverse_proxy h2c://note-transport:57292
       }
 
-      http://faucet.localhost {
-        handle_path /api/* {
-          reverse_proxy faucet:8000
-        }
-
-        handle {
-          reverse_proxy faucet:8080
-        }
+      http://funding.localhost {
+        reverse_proxy funding-service:50401
       }
 
       http://explorer.localhost {

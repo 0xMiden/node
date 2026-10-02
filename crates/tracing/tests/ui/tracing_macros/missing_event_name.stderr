@@ -1,0 +1,5 @@
+error: expected a static event name string literal
+ --> tests/ui/tracing_macros/missing_event_name.rs:4:11
+  |
+4 |     info!(block.number = 1);
+  |           ^^^^^^^^^^^^^^^^

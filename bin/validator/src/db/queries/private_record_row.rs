@@ -9,6 +9,7 @@ use miden_node_db::sqlite::Row;
 use crate::{
     PrivateRecordChainId,
     PrivateRecordContext,
+    PrivateRecordFormatVersion,
     PrivateRecordId,
     PrivateRecordStorageFields,
     StorageKeyEpoch,
@@ -23,6 +24,10 @@ pub fn private_record_from_row(row: &Row<'_>) -> Result<StoredPrivateRecord, Dat
     let validator_id = fixed_33(row.get(3)?, "private record validator id")?;
     let setup_context_id = fixed_32(row.get(4)?, "private record setup context id")?;
     let format_version = checked_u32(row.get(5)?, "private record format version")?;
+    let format_version =
+        PrivateRecordFormatVersion::try_from(format_version).map_err(|source| {
+            DatabaseError::deserialization("private record format version", source)
+        })?;
     let nonce = row.get(6)?;
     let encrypted_record = row.get(7)?;
     let encrypted_record_key = row.get(8)?;
@@ -31,12 +36,12 @@ pub fn private_record_from_row(row: &Row<'_>) -> Result<StoredPrivateRecord, Dat
 
     StoredPrivateRecord::from_storage_fields(PrivateRecordStorageFields {
         record_id,
-        context: PrivateRecordContext::new(
+        context: PrivateRecordContext::with_format_version(
             PrivateRecordChainId::new(chain_id),
             StorageKeyEpoch::new(key_epoch),
             transaction_id,
+            format_version,
         ),
-        format_version,
         setup_context_id,
         nonce,
         encrypted_record,
