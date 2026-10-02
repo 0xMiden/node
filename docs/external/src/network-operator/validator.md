@@ -30,30 +30,26 @@ current block.
 
 ## Storage Key Setup
 
-The live peer-to-peer DKG creates the storage key used to re-encrypt validated private inputs. Every validator committed
-in genesis must participate. Each validator authenticates its peers with their genesis signing keys, exchanges its own
-DKG messages with every other participant, and confirms matching transcript and public output commitments.
+The distributed key generation (DKG) ceremony creates the key material used to protect stored private inputs. Every
+validator in genesis must participate, and each produces its own private bundle for starting the validator service.
 
-The threshold is network policy. A threshold of `t` lets any `t` validators decrypt a stored record; fewer validators
-cannot. All participants must use the same trusted genesis block, threshold, and storage-key epoch. Participant indexes
-follow the sorted validator signing public keys.
+The threshold determines how many validators must cooperate to decrypt stored data, not how many must join the ceremony.
+A threshold of `t` lets any `t` validators decrypt a stored record; fewer validators cannot.
 
-This flow supports initial storage-key bootstrap only. The validator loads one storage-key epoch. Rotation, creating new
-shares, and validator-set changes are not yet supported. Keep each operator bundle available for as long as records from
-its epoch may need to be decrypted.
+This procedure supports initial storage-key setup only. Storage-key rotation and validator-set changes are not yet
+supported. Keep each validator's bundle for as long as stored records may need to be decrypted.
 
-Generate a persistent Iroh endpoint identity for each validator before the ceremony. Endpoint provisioning does not
-depend on genesis:
+Before starting, all operators must agree on the threshold and storage-key epoch, use the same trusted genesis block,
+and select a shared dedicated Iroh (peer-to-peer) relay.
+
+Generate a persistent Iroh endpoint identity for each validator:
 
 ```bash
 miden-validator dkg generate-endpoint --output-file endpoint.secret
 ```
 
-Keep the secret file private and share the printed public endpoint ID with the other operators. Endpoint IDs identify
-connection destinations, not trusted validator identities. Authentication checks ownership of a validator signing key
-committed in genesis. Reuse the endpoint secret across ceremonies.
-
-All participants must use the same dedicated Iroh relay.
+Keep the endpoint secret private and share the printed public endpoint ID with the other operators. Reuse the endpoint
+secret across ceremonies.
 
 Run the following command for each validator using its own signing key. Repeat `--peer.endpoint` once per other genesis
 validator.
@@ -74,25 +70,17 @@ miden-validator dkg participate \
 Validators can start at different times; the ceremony waits for all participants to join. The entire ceremony must
 finish within `--timeout`, which defaults to `30m`. For a single validator, omit `--peer.endpoint` and use `--threshold 1`.
 
-Every validator writes its own bundle before confirming completion to its peers. The command reports success only after
-every participant confirms persistence with matching session, transcript, and public output commitments. Treat both the
-endpoint secret and the bundle as private files, with permissions of `0600`.
+The command reports success only after every validator confirms it has saved its bundle. Only then is the bundle safe
+to use. Each bundle belongs to one validator and must remain private.
 
-A failed or timed-out ceremony cannot resume. Do not activate any bundle left by that attempt. Start a new ceremony with
-every participant and a new output path, preserving the endpoint secrets. Ephemeral DKG secrets and nonces are generated
-again; operators do not need to select a session ID.
+A failed or timed-out ceremony cannot resume. Do not use any bundles from that attempt. Restart the ceremony with all
+participants and new output paths, reusing the endpoint secrets.
 
 ## Start
 
-Pass this validator's completed bundle using `--storage-key.file <FILE>` or `MIDEN_VALIDATOR_STORAGE_KEY_FILE`. The
-bundle can live outside the data directory; keep its permissions at `0600`. This versioned binary file contains the
-epoch, public setup, public key set, and private share. The ceremony takes `--output-file <FILE>` and needs only an
-existing output parent directory, not a bootstrapped validator data directory. Treat the entire file as secret. To store
-it in a text-only secret store, base64-encode it for upload and decode it back to the original bytes before loading it.
-
-The DKG command reports success only after every validator announces a persisted bundle with matching session, dealing
-transcript, and public output commitments. A failed or timed-out exchange can leave a local bundle on disk. Do not
-activate that bundle as the output of a successful ceremony.
+Pass the bundle produced for this validator using `--storage-key.file <FILE>` or `MIDEN_VALIDATOR_STORAGE_KEY_FILE`.
+The validator will not start without a valid bundle. To use a text-only secret store, base64-encode the bundle for upload
+and decode it back to the original bytes before loading it.
 
 ```bash
 miden-validator start \
@@ -121,9 +109,7 @@ is the supported provisioning path.
 Each validator must run inside its trusted execution environment. If transaction proving uses a remote prover, that
 prover also receives the plaintext inputs and must run inside the same trusted boundary.
 
-The bundle contains canonical wire bytes. Every validator uses the same setup context and public key set, but uses its
-own secret share. The validator will not start if the bundle file is missing or the key material is invalid. After
-validation, it stores only the transaction ID and the threshold-encrypted record. It does not store the client
-ciphertext.
+After validation, the validator stores only the transaction ID and the threshold-encrypted record. It does not store
+the client ciphertext.
 
 Use `miden-validator start --help` for the complete current option list.
