@@ -765,13 +765,15 @@ async fn blob_store_failure_is_reported() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn shutdown_reports_document_flush_failure() -> anyhow::Result<()> {
+async fn shutdown_reports_both_store_flush_failures() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     let (host, _) = BoardNode::create_for_test(&root.path().join("board")).await?;
     host.document.close().await?;
+    host.blobs.shutdown().await?;
 
     let error = host.shutdown().await.unwrap_err();
     assert!(format!("{error:#}").contains("failed to flush Iroh document store"));
+    assert!(format!("{error:#}").contains("failed to flush Iroh blob store"));
     Ok(())
 }
 

@@ -601,14 +601,22 @@ impl BoardNode {
     /// Stops the board node and flushes its persistent stores.
     pub(super) async fn shutdown(self) -> anyhow::Result<()> {
         self.event_task.abort();
-        let flush = async {
-            self.blobs.sync_db().await.context("failed to flush Iroh blob store")?;
-            flush_document(&self.document).await
+        let _writer_guard = match &self.publisher {
+            Publisher::Local(writer) => Some(writer.lock.lock().await),
+            Publisher::Remote { .. } => None,
+        };
+        let mut failures = Vec::new();
+        if let Err(error) = self.blobs.sync_db().await.context("failed to flush Iroh blob store") {
+            failures.push(format!("{error:#}"));
         }
-        .await;
-        let shutdown = self.router.shutdown().await.context("failed to stop Iroh board node");
-        flush?;
-        shutdown
+        if let Err(error) = flush_document(&self.document).await {
+            failures.push(format!("{error:#}"));
+        }
+        if let Err(error) = self.router.shutdown().await.context("failed to stop Iroh board node") {
+            failures.push(format!("{error:#}"));
+        }
+        ensure!(failures.is_empty(), "DKG board shutdown failed: {}", failures.join("; "));
+        Ok(())
     }
 }
 
