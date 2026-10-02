@@ -52,6 +52,7 @@ fn test_ceremony(
         genesis_commitment: Rpo256::hash(b"test genesis"),
         validator_set: Arc::new(validator_set),
         endpoint_secret,
+        relay_url: "http://127.0.0.1:9".parse().unwrap(),
         peer_endpoints,
         threshold: NonZeroUsize::new(2).unwrap(),
         epoch: StorageKeyEpoch::new([9; 32]),

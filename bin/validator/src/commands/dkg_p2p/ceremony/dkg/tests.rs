@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::net::Ipv4Addr;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
@@ -6,9 +7,9 @@ use std::time::Duration;
 use golden_core::verify_dealing_for_receiver;
 use golden_ehtdh1::{Combiner, Ehtdh1Material, UnsealingShare};
 use golden_evrf::paper::secp_secq::SecpSecqBackend;
-use iroh::address_lookup::memory::MemoryLookup;
 use iroh::endpoint::presets;
-use iroh::{Endpoint, SecretKey as IrohSecretKey};
+use iroh::{Endpoint, RelayMode, RelayUrl, SecretKey as IrohSecretKey};
+use iroh_relay::server::{RelayConfig, Server, ServerConfig};
 use itertools::Itertools;
 use miden_protocol::block::ValidatorConfig;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
@@ -24,6 +25,7 @@ mod completion;
 mod rejection;
 
 struct TestCeremony {
+    _relay: Server,
     endpoints: Vec<Endpoint>,
     validators: Vec<(Ceremony, DkgParticipants, LocalDealings)>,
 }
@@ -38,6 +40,10 @@ struct CompletedValidator {
 
 impl TestCeremony {
     async fn create_dealings(threshold: usize, validator_count: usize) -> anyhow::Result<Self> {
+        let mut relay_config = ServerConfig::default();
+        relay_config.relay = Some(RelayConfig::new((Ipv4Addr::LOCALHOST, 0)));
+        let relay = Server::spawn(relay_config).await?;
+        let relay_url: RelayUrl = format!("http://{}", relay.http_addr().unwrap()).parse()?;
         let signing_keys = (0..validator_count).map(|_| SigningKey::new()).collect::<Vec<_>>();
         let validator_set = Arc::new(ValidatorConfig::new(
             signing_keys.iter().map(SigningKey::public_key).collect(),
@@ -45,26 +51,18 @@ impl TestCeremony {
         )?);
         let mut endpoints = Vec::new();
         let mut endpoint_secrets = Vec::new();
-        let mut lookups = Vec::new();
         for _ in 0..validator_count {
             let secret = IrohSecretKey::generate();
-            let lookup = MemoryLookup::new();
+            // Disable direct UDP paths so the full ceremony must work through the local relay.
             let endpoint = Endpoint::builder(presets::Minimal)
                 .secret_key(secret.clone())
                 .alpns(vec![Ceremony::ALPN.to_vec()])
-                .address_lookup(lookup.clone())
+                .relay_mode(RelayMode::Custom(relay_url.clone().into()))
                 .clear_ip_transports()
-                .bind_addr("127.0.0.1:0")?
                 .bind()
                 .await?;
             endpoints.push(endpoint);
             endpoint_secrets.push(secret);
-            lookups.push(lookup);
-        }
-        for lookup in &lookups {
-            for endpoint in &endpoints {
-                lookup.add_endpoint_info(endpoint.addr());
-            }
         }
 
         let endpoint_ids = endpoints.iter().map(Endpoint::id).collect::<BTreeSet<_>>();
@@ -78,6 +76,7 @@ impl TestCeremony {
                 genesis_commitment: Rpo256::hash(b"test genesis"),
                 validator_set: Arc::clone(&validator_set),
                 endpoint_secret,
+                relay_url: relay_url.clone(),
                 peer_endpoints,
                 threshold: NonZeroUsize::new(threshold).unwrap(),
                 epoch: StorageKeyEpoch::new([9; 32]),
@@ -102,7 +101,7 @@ impl TestCeremony {
             Ok::<_, anyhow::Error>(())
         })
         .await??;
-        Ok(Self { endpoints, validators })
+        Ok(Self { _relay: relay, endpoints, validators })
     }
 
     async fn complete_dkg(&mut self) -> anyhow::Result<Vec<CompletedValidator>> {
@@ -241,7 +240,8 @@ async fn ceremony_succeeds(
 #[tokio::test]
 async fn dealing_confirmation_rejects_different_valid_dealings() -> anyhow::Result<()> {
     for round in ["decryption", "context"] {
-        let TestCeremony { endpoints, validators } = TestCeremony::create_dealings(2, 3).await?;
+        let TestCeremony { _relay, endpoints, validators } =
+            TestCeremony::create_dealings(2, 3).await?;
         let mut exchanges = JoinSet::new();
         for (ceremony, mut participants, dealings) in validators {
             exchanges.spawn(async move {

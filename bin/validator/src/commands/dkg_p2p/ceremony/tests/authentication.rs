@@ -1,5 +1,7 @@
+use std::net::Ipv4Addr;
 use std::time::Duration;
 
+use iroh_relay::server::{RelayConfig, Server, ServerConfig};
 use tokio::task::JoinSet;
 
 use super::*;
@@ -10,26 +12,29 @@ use crate::commands::dkg_p2p::ceremony::peer::ConnectedPeer;
 #[case::acceptor(false)]
 #[tokio::test]
 async fn authentication_waits_for_a_late_peer(#[case] local_is_dialer: bool) -> TestResult {
+    let mut relay_config = ServerConfig::default();
+    relay_config.relay = Some(RelayConfig::new((Ipv4Addr::LOCALHOST, 0)));
+    let relay = Server::spawn(relay_config).await?;
+    let relay_url = format!("http://{}", relay.http_addr().unwrap());
     let mut secrets = [IrohSecretKey::generate(), IrohSecretKey::generate()];
     secrets.sort_by_key(IrohSecretKey::public);
     if !local_is_dialer {
         secrets.reverse();
     }
     let [local_secret, remote_secret] = secrets;
-    let (endpoint, lookup) = bind_test_endpoint(local_secret.clone()).await?;
     let local_signing_key = SigningKey::new();
     let remote_signing_key = SigningKey::new();
     let validator_keys = vec![local_signing_key.public_key(), remote_signing_key.public_key()];
-    let ceremony = test_ceremony(
+    let mut ceremony = test_ceremony(
         &local_signing_key,
         validator_keys.clone(),
         local_secret,
         BTreeSet::from([remote_secret.public()]),
     );
+    ceremony.relay_url = relay_url.parse()?;
+    let endpoint = ceremony.bind_endpoint().await?;
 
-    // Start without the peer or its address lookup entry.
-    //
-    // A dial attempt cannot resolve an address until the peer starts.
+    // Start authentication before the peer connects to the shared relay.
     let authentication = ceremony.authenticate_peers(&endpoint);
     tokio::pin!(authentication);
     assert!(
@@ -39,15 +44,14 @@ async fn authentication_waits_for_a_late_peer(#[case] local_is_dialer: bool) -> 
         "authentication must wait while the peer is offline",
     );
 
-    let (remote, remote_lookup) = bind_test_endpoint(remote_secret.clone()).await?;
-    lookup.add_endpoint_info(remote.addr());
-    remote_lookup.add_endpoint_info(endpoint.addr());
-    let remote_ceremony = test_ceremony(
+    let mut remote_ceremony = test_ceremony(
         &remote_signing_key,
         validator_keys,
         remote_secret,
         BTreeSet::from([endpoint.id()]),
     );
+    remote_ceremony.relay_url = relay_url.parse()?;
+    let remote = remote_ceremony.bind_endpoint().await?;
     let (local_peers, remote_peers) = tokio::time::timeout(Duration::from_secs(10), async {
         tokio::try_join!(authentication, remote_ceremony.authenticate_peers(&remote))
     })
@@ -65,6 +69,7 @@ async fn authentication_waits_for_a_late_peer(#[case] local_is_dialer: bool) -> 
 
     endpoint.close().await;
     remote.close().await;
+    relay.shutdown().await?;
     Ok(())
 }
 
@@ -92,7 +97,7 @@ async fn authentication_failure_aborts_while_another_peer_is_offline() -> TestRe
     let untrusted_signer = ValidatorSigner::new_local(SigningKey::new());
     let (result, _remote_peer) = tokio::time::timeout(Duration::from_secs(5), async {
         tokio::join!(ceremony.authenticate_peers(&endpoint), async {
-            ConnectedPeer::connect(&remote, endpoint.id())
+            ConnectedPeer::connect(&remote, endpoint.id().into())
                 .await?
                 .authenticate(&ceremony.validator_set, &untrusted_signer)
                 .await
@@ -144,7 +149,7 @@ async fn authentication_rejects_two_endpoints_using_the_same_validator_key() -> 
         let signer = ValidatorSigner::new_local(signing_key_b.clone());
         authentications.spawn(async move {
             let connection = if remote.id() < local_id {
-                ConnectedPeer::connect(&remote, local_id).await?
+                ConnectedPeer::connect(&remote, local_id.into()).await?
             } else {
                 let incoming = remote.accept().await.expect("test endpoint must stay open");
                 ConnectedPeer::accept(incoming).await?

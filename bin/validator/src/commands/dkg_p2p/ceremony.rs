@@ -7,7 +7,7 @@ use anyhow::{Context, ensure};
 use futures::future::try_join_all;
 use golden_core::{ParticipantIndex, ParticipantRegistry};
 use iroh::endpoint::presets;
-use iroh::{Endpoint, EndpointId, SecretKey as IrohSecretKey};
+use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey as IrohSecretKey};
 use miden_node_tracing::{info, warn};
 use miden_node_utils::genesis::read_genesis_block;
 use miden_protocol::Word;
@@ -66,7 +66,7 @@ pub struct DkgParticipants {
 /// Validated inputs for one live DKG ceremony. The genesis commitment and validator set come from
 /// the same valid genesis block. The signer belongs to that set, and the nonzero threshold does
 /// not exceed its size. The persistent endpoint identity is valid, with one distinct, non-local
-/// peer endpoint per other genesis validator.
+/// peer endpoint per other genesis validator. The relay URL uses HTTP or HTTPS.
 ///
 /// These checks establish local configuration, not peer identities.
 /// [`Ceremony::authenticate_peers`] must bind endpoints to genesis validator keys before the
@@ -75,6 +75,7 @@ pub(super) struct Ceremony {
     genesis_commitment: Word,
     validator_set: Arc<ValidatorConfig>,
     endpoint_secret: IrohSecretKey,
+    relay_url: RelayUrl,
     peer_endpoints: BTreeSet<EndpointId>,
     threshold: NonZeroUsize,
     epoch: StorageKeyEpoch,
@@ -86,7 +87,8 @@ impl Ceremony {
     const MAX_PENDING_CONNECTIONS: usize = 16;
 
     pub async fn bind_endpoint(&self) -> anyhow::Result<Endpoint> {
-        Endpoint::builder(presets::N0)
+        Endpoint::builder(presets::Minimal)
+            .relay_mode(RelayMode::Custom(self.relay_url.clone().into()))
             .secret_key(self.endpoint_secret.clone())
             .alpns(vec![Self::ALPN.to_vec()])
             .bind()
@@ -103,11 +105,12 @@ impl Ceremony {
         for peer_endpoint in
             self.peer_endpoints.iter().copied().filter(|peer| local_endpoint < *peer)
         {
+            let peer_addr = EndpointAddr::new(peer_endpoint).with_relay_url(self.relay_url.clone());
             let endpoint = endpoint.clone();
             let validator_set = Arc::clone(&self.validator_set);
             let signer = Arc::clone(&self.signer);
             authentications.spawn(async move {
-                ConnectedPeer::connect(&endpoint, peer_endpoint)
+                ConnectedPeer::connect(&endpoint, peer_addr)
                     .await?
                     .authenticate(&validator_set, &signer)
                     .await
@@ -362,6 +365,10 @@ impl DkgParticipants {
 
 impl ParticipateOptions {
     pub(super) async fn validate(self) -> anyhow::Result<Ceremony> {
+        ensure!(
+            matches!(self.relay_url.scheme(), "http" | "https") && self.relay_url.host().is_some(),
+            "relay URL must use HTTP or HTTPS and include a host",
+        );
         let genesis =
             read_genesis_block(&self.genesis).context("failed to validate genesis block")?;
         let genesis_commitment = genesis.inner().header().commitment();
@@ -410,6 +417,7 @@ impl ParticipateOptions {
             genesis_commitment,
             validator_set: Arc::new(validator_set),
             endpoint_secret,
+            relay_url: self.relay_url,
             peer_endpoints,
             threshold: self.threshold,
             epoch,

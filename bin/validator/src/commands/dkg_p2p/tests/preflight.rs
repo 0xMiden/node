@@ -1,8 +1,10 @@
+use std::net::Ipv4Addr;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use iroh::{EndpointId, SecretKey as IrohSecretKey};
+use iroh_relay::server::{RelayConfig, Server, ServerConfig};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::utils::serde::Serializable;
 
@@ -49,6 +51,7 @@ impl ParticipateOptions {
             output_file: output_file.to_path_buf(),
             genesis: genesis.to_path_buf(),
             endpoint_secret: endpoint_secret.to_path_buf(),
+            relay_url: "http://127.0.0.1:9".parse().unwrap(),
             peer_endpoints,
             timeout: Duration::from_secs(30),
             threshold: NonZeroUsize::new(threshold).expect("test threshold must be nonzero"),
@@ -111,6 +114,71 @@ async fn single_validator_ceremony_succeeds() -> TestResult {
         assert_eq!(fs_err::metadata(output_file)?.permissions().mode() & 0o777, 0o600,);
     }
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn ceremony_succeeds_with_a_local_relay() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let genesis = write_genesis(root.path(), 2)?;
+    let (secret_a, endpoint_a) = write_endpoint_secret(root.path(), 1)?;
+    let (secret_b, endpoint_b) = write_endpoint_secret(root.path(), 2)?;
+    let output_a = root.path().join("a.bundle");
+    let output_b = root.path().join("b.bundle");
+    let mut relay_config = ServerConfig::default();
+    relay_config.relay = Some(RelayConfig::new((Ipv4Addr::LOCALHOST, 0)));
+    let relay = Server::spawn(relay_config).await?;
+    let relay_url = format!("http://{}", relay.http_addr().unwrap());
+    let mut options_a = ParticipateOptions::for_tests(
+        &output_a,
+        &genesis.path,
+        &genesis.signing_keys[0],
+        &secret_a,
+        vec![endpoint_b],
+        2,
+    );
+    let mut options_b = ParticipateOptions::for_tests(
+        &output_b,
+        &genesis.path,
+        &genesis.signing_keys[1],
+        &secret_b,
+        vec![endpoint_a],
+        2,
+    );
+    options_a.relay_url = relay_url.parse()?;
+    options_b.relay_url = relay_url.parse()?;
+
+    tokio::try_join!(options_a.handle(), options_b.handle())?;
+
+    let key_a = ValidatorStorageKey { file: output_a }.load()?;
+    let key_b = ValidatorStorageKey { file: output_b }.load()?;
+    assert_eq!(key_a.setup_context(), key_b.setup_context());
+    assert_eq!(key_a.public_key_set(), key_b.public_key_set());
+    assert_ne!(key_a.participant(), key_b.participant());
+    relay.shutdown().await?;
+    Ok(())
+}
+
+#[rstest::rstest]
+#[case::file("file:///tmp/relay")]
+#[case::ftp("ftp://127.0.0.1")]
+#[tokio::test]
+async fn participate_rejects_unsupported_relay_schemes(#[case] relay_url: &str) -> TestResult {
+    let root = tempfile::tempdir()?;
+    let genesis = write_genesis(root.path(), 1)?;
+    let (endpoint_secret, _) = write_endpoint_secret(root.path(), 1)?;
+    let mut options = ParticipateOptions::for_tests(
+        &root.path().join("operator-key.bundle"),
+        &genesis.path,
+        &genesis.signing_keys[0],
+        &endpoint_secret,
+        Vec::new(),
+        1,
+    );
+    options.relay_url = relay_url.parse()?;
+
+    let error = options.validate().await.err().expect("unsupported relay scheme must fail");
+    assert_eq!(error.to_string(), "relay URL must use HTTP or HTTPS and include a host");
     Ok(())
 }
 

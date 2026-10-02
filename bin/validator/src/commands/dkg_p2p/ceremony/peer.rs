@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, ensure};
 use iroh::endpoint::{Connection, Incoming, Side};
-use iroh::{Endpoint, EndpointId};
+use iroh::{Endpoint, EndpointAddr, EndpointId};
 use miden_node_tracing::warn;
 use miden_node_utils::retry::{self, Retryable};
 use miden_protocol::block::ValidatorConfig;
@@ -30,8 +30,9 @@ impl ConnectedPeer {
     ///
     /// Peers can start at different times. Authentication runs after this method returns and
     /// must not be retried.
-    pub async fn connect(endpoint: &Endpoint, peer_endpoint: EndpointId) -> anyhow::Result<Self> {
-        let connection = (|| endpoint.connect(peer_endpoint, Ceremony::ALPN))
+    pub async fn connect(endpoint: &Endpoint, peer_addr: EndpointAddr) -> anyhow::Result<Self> {
+        let peer_endpoint = peer_addr.id;
+        let connection = (|| endpoint.connect(peer_addr.clone(), Ceremony::ALPN))
             .retry(retry::exponential(Duration::from_secs(1), Duration::from_secs(10)))
             .when(|_| !endpoint.is_closed())
             .notify(|error, delay| {

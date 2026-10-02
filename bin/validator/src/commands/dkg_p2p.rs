@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::{Context, ensure};
 use fs_err::PathExt;
-use iroh::{EndpointId, SecretKey as IrohSecretKey};
+use iroh::{EndpointId, RelayUrl, SecretKey as IrohSecretKey};
 use miden_node_tracing::info;
 use zeroize::Zeroizing;
 
@@ -56,6 +56,13 @@ struct ParticipateOptions {
     /// Reusing this secret keeps the advertised endpoint ID stable across ceremonies.
     #[arg(long, value_name = "FILE")]
     endpoint_secret: PathBuf,
+
+    /// HTTP(S) URL of the Iroh relay shared by all ceremony participants.
+    ///
+    /// The ceremony uses no public endpoint discovery or default relays. Direct connections
+    /// remain available, but the relay is sufficient when a direct connection is not possible.
+    #[arg(long = "relay.url", value_name = "URL")]
+    relay_url: RelayUrl,
 
     /// Peer-to-peer endpoint of another validator. Repeat once per other genesis validator.
     ///

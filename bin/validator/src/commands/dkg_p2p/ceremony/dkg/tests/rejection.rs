@@ -29,7 +29,8 @@ async fn dealing_exchange_rejects_invalid_dealing(
     #[case] round: Round,
     #[case] invalid: InvalidDealing,
 ) -> anyhow::Result<()> {
-    let TestCeremony { endpoints, mut validators } = TestCeremony::create_dealings(2, 2).await?;
+    let TestCeremony { _relay, endpoints, mut validators } =
+        TestCeremony::create_dealings(2, 2).await?;
     let (receiver_ceremony, mut receiver, receiver_dealings) = validators.pop().unwrap();
     let (sender_ceremony, mut sender, sender_dealings) = validators.pop().unwrap();
     let mut messages = DealerMessages::from_local(&sender_dealings);
@@ -115,7 +116,8 @@ async fn dealing_exchange_rejects_invalid_dealing(
 async fn dealing_exchange_rejects_interrupted_message(
     #[case] disconnect: bool,
 ) -> anyhow::Result<()> {
-    let TestCeremony { endpoints, mut validators } = TestCeremony::create_dealings(2, 2).await?;
+    let TestCeremony { _relay, endpoints, mut validators } =
+        TestCeremony::create_dealings(2, 2).await?;
     let (receiver_ceremony, mut receiver, receiver_dealings) = validators.pop().unwrap();
     let (_, mut sender, sender_dealings) = validators.pop().unwrap();
     let (connection, mut send, mut receive) =

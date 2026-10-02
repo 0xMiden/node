@@ -39,7 +39,7 @@ async fn unrelated_connection_does_not_abort_authentication(#[case] alpn: &[u8])
                 assert!(connection.is_err(), "the unsupported protocol must fail establishment");
             }
 
-            ConnectedPeer::connect(&peer, endpoint.id())
+            ConnectedPeer::connect(&peer, endpoint.id().into())
                 .await?
                 .authenticate(&ceremony.validator_set, &signer)
                 .await
@@ -125,7 +125,7 @@ async fn stalled_connections_do_not_prevent_peer_authentication(
             }
 
             let authenticated = tokio::time::timeout(Duration::from_secs(5), async {
-                ConnectedPeer::connect(&peer, endpoint.id())
+                ConnectedPeer::connect(&peer, endpoint.id().into())
                     .await?
                     .authenticate(&ceremony.validator_set, &signer)
                     .await
@@ -185,7 +185,7 @@ async fn extra_connection_does_not_replace_an_authenticated_peer(
     let (peers, remote_peers) = tokio::time::timeout(Duration::from_secs(5), async {
         tokio::try_join!(ceremony.authenticate_peers(&endpoint), async {
             let connection = if remote_is_dialer {
-                ConnectedPeer::connect(&peer, endpoint.id()).await?
+                ConnectedPeer::connect(&peer, endpoint.id().into()).await?
             } else {
                 let incoming = peer.accept().await.expect("test endpoint must stay open");
                 ConnectedPeer::accept(incoming).await?
@@ -199,7 +199,7 @@ async fn extra_connection_does_not_replace_an_authenticated_peer(
             if let Ok(extra) = peer.connect(endpoint.addr(), Ceremony::ALPN).await {
                 extra.closed().await;
             }
-            let last = ConnectedPeer::connect(&missing, endpoint.id())
+            let last = ConnectedPeer::connect(&missing, endpoint.id().into())
                 .await?
                 .authenticate(&ceremony.validator_set, &missing_signer)
                 .await?;
