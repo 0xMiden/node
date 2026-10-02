@@ -168,6 +168,7 @@ impl ArtifactSlot {
 #[derive(Clone, Debug)]
 struct BoardWriter {
     author: iroh_docs::AuthorId,
+    blobs: iroh_blobs::api::Store,
     core: Arc<BoardCore>,
     document: Doc,
     lock: Arc<tokio::sync::Mutex<()>>,
@@ -600,18 +601,33 @@ impl BoardNode {
     /// Stops the board node and flushes its persistent stores.
     pub(super) async fn shutdown(self) -> anyhow::Result<()> {
         self.event_task.abort();
-        self.router.shutdown().await.context("failed to stop Iroh board node")?;
-        Ok(())
+        let flush = async {
+            self.blobs.sync_db().await.context("failed to flush Iroh blob store")?;
+            flush_document(&self.document).await
+        }
+        .await;
+        let shutdown = self.router.shutdown().await.context("failed to stop Iroh board node");
+        flush?;
+        shutdown
     }
 }
 
-async fn persist_new_document(document: &Doc, data_directory: &Path) -> anyhow::Result<()> {
+async fn flush_document(document: &Doc) -> anyhow::Result<()> {
     let entries = document
         .get_many(Query::all())
         .await
-        .context("failed to commit new Iroh document")?;
+        .context("failed to flush Iroh document store")?;
     futures::pin_mut!(entries);
-    entries.next().await.transpose().context("failed to commit new Iroh document")?;
+    entries
+        .next()
+        .await
+        .transpose()
+        .context("failed to flush Iroh document store")?;
+    Ok(())
+}
+
+async fn persist_new_document(document: &Doc, data_directory: &Path) -> anyhow::Result<()> {
+    flush_document(document).await.context("failed to commit new Iroh document")?;
     sync_directory_tree(&data_directory.join("docs"))?;
     sync_directory(data_directory)
 }
@@ -668,6 +684,8 @@ impl BoardWriter {
             .await
             .context("failed to publish DKG board artifact")?;
         ensure!(stored_hash == expected_hash, "Iroh stored artifact under an unexpected hash");
+        self.blobs.sync_db().await.context("failed to flush Iroh blob store")?;
+        flush_document(&self.document).await?;
         Ok(stored_hash)
     }
 }
@@ -768,6 +786,7 @@ impl BoardRuntime {
             .await?;
         let writer = BoardWriter {
             author: self.author,
+            blobs: self.blobs.as_ref().clone(),
             core: core.clone(),
             document: document.clone(),
             lock: Arc::new(tokio::sync::Mutex::new(())),

@@ -759,7 +759,19 @@ async fn blob_store_failure_is_reported() -> anyhow::Result<()> {
     let error = host.wait_unique(&slot, Duration::from_secs(1)).await.unwrap_err();
     assert!(error.to_string().contains("failed to check DKG board blob"));
 
-    host.shutdown().await?;
+    let error = host.shutdown().await.unwrap_err();
+    assert!(format!("{error:#}").contains("failed to flush Iroh blob store"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn shutdown_reports_document_flush_failure() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (host, _) = BoardNode::create_for_test(&root.path().join("board")).await?;
+    host.document.close().await?;
+
+    let error = host.shutdown().await.unwrap_err();
+    assert!(format!("{error:#}").contains("failed to flush Iroh document store"));
     Ok(())
 }
 
