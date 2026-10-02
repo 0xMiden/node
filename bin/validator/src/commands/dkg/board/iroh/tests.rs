@@ -712,6 +712,31 @@ async fn repeat_upload_rejects_a_mismatched_entry_key() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn upload_rejects_an_invalid_length_for_another_hash() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (host, _) = BoardNode::create_for_test(&root.path().join("host")).await?;
+    let slot = ArtifactSlot::Manifest;
+    let existing_hash = Hash::new(b"other");
+    host.publish_hash_for_test(&slot, existing_hash, MAX_ARTIFACT_BYTES + 1).await?;
+
+    let error = host.publish(&slot, b"manifest").await.unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "DKG board artifact length {} is outside 1..={MAX_ARTIFACT_BYTES}",
+            MAX_ARTIFACT_BYTES + 1
+        )
+    );
+    let entries = host.document.get_many(Query::key_prefix(slot.prefix().as_bytes())).await?;
+    futures::pin_mut!(entries);
+    assert_eq!(entries.next().await.transpose()?.unwrap().content_hash(), existing_hash);
+    assert!(entries.next().await.is_none());
+
+    host.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn blob_store_failure_is_reported() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     let (host, _) = BoardNode::create_for_test(&root.path().join("board")).await?;
