@@ -20,20 +20,35 @@ structure of the source code.
 
 ## Code Comment Style
 
-Write code comments and documentation comments in the style of ASD-STE100
-Simplified Technical English.
+Use this format for code comments and documentation comments:
 
-- Write short and clear sentences.
-- Use the active voice.
-- Give only one instruction or describe only one topic in each sentence.
-- Use the same word for the same meaning.
-- Use simple verb tenses.
-- Do not use idioms, slang, contractions, or decorative language.
-- Explain intent, constraints, hazards, and behavior that is not obvious.
-- Do not describe code that is already clear.
-- Write comments that are true for the current code without task context.
-- Do not refer to the prompt, the conversation, or the requested change.
-- Do not describe the previous code or compare it with the current code.
-- Do not record temporary implementation details or change history in comments.
-- Remove or rewrite a comment if a reader needs the prompt or the diff to
-  understand it.
+- A short lead-in paragraph explaining what the code does or what the item
+  represents.
+- An optional second paragraph explaining why, including non-obvious design
+  choices, constraints, or hazards.
+
+Write concise, natural prose and use consistent terminology. Do not narrate
+obvious implementation steps. Describe the current code without referring to
+the prompt, conversation, diff, or change history.
+
+## Documentation Style
+
+Write user and operator documentation for someone using, deploying, or
+operating the system, not implementing it. Use natural, concise prose without
+imposing the code-comment paragraph format or rigid sentence rules.
+
+- Start with a short overview of what the operation achieves and why it is
+  needed. Give enough context to make the procedure understandable.
+- Explain prerequisites, configuration choices, and coordination with other
+  operators.
+- Present the procedure in operational order, with concrete commands.
+- Explain how to recognize success, what it guarantees, when outputs are ready
+  to use, and what to do after failure.
+- Distinguish actions the operator must perform from checks and safeguards the
+  software provides automatically.
+- Include technical details only when they help the reader understand the
+  operation, make a decision, take an action, or recover safely. Keep protocol
+  mechanics and internal representations in developer documentation unless
+  they affect those tasks.
+- Explain each concept once. Link to the detailed procedure from overview
+  pages rather than repeating it.
