@@ -68,6 +68,7 @@ use super::{BoardPolicy, JoinCancelled};
 
 const PEER_READY_TIMEOUT: Duration = Duration::from_secs(30);
 const PROVIDER_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const PROVIDER_TRANSFER_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// This ticket gives its holder read access to the board and upload permission for one participant.
 ///
@@ -442,7 +443,7 @@ impl BoardNode {
                         providers.push(peer);
                     }
                 }
-                if !self.download_blob(hash, slot, providers).await? {
+                if !self.download_blob(hash, slot, providers, PROVIDER_TRANSFER_TIMEOUT).await? {
                     return Ok(None);
                 }
             }
@@ -464,6 +465,7 @@ impl BoardNode {
         hash: Hash,
         slot: &ArtifactSlot,
         providers: Vec<EndpointId>,
+        transfer_timeout: Duration,
     ) -> anyhow::Result<bool> {
         for provider in providers {
             let Ok(Ok(connection)) = tokio::time::timeout(
@@ -474,7 +476,13 @@ impl BoardNode {
             else {
                 continue;
             };
-            if self.fetch_blob(connection, hash, slot).await? {
+            let Ok(fetched) =
+                tokio::time::timeout(transfer_timeout, self.fetch_blob(connection, hash, slot))
+                    .await
+            else {
+                continue;
+            };
+            if fetched? {
                 return Ok(true);
             }
         }

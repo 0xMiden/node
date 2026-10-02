@@ -73,19 +73,28 @@ fn ticket_for(tickets: &[BoardTicket], participant: u32) -> BoardTicket {
         .clone()
 }
 
-fn blob_provider_address(provider: &BoardNode) -> anyhow::Result<EndpointAddr> {
-    let mut socket = provider
-        .router
-        .endpoint()
+fn endpoint_address(endpoint: &Endpoint) -> anyhow::Result<EndpointAddr> {
+    let mut socket = endpoint
         .bound_sockets()
         .into_iter()
         .find(std::net::SocketAddr::is_ipv4)
         .context("Iroh test endpoint has no IPv4 socket")?;
     socket.set_ip(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
-    Ok(EndpointAddr::from_parts(
-        provider.router.endpoint().id(),
-        [iroh::TransportAddr::Ip(socket)],
-    ))
+    Ok(EndpointAddr::from_parts(endpoint.id(), [iroh::TransportAddr::Ip(socket)]))
+}
+
+fn blob_provider_address(provider: &BoardNode) -> anyhow::Result<EndpointAddr> {
+    endpoint_address(provider.router.endpoint())
+}
+
+#[derive(Debug)]
+struct StalledBlobProvider;
+
+impl iroh::protocol::ProtocolHandler for StalledBlobProvider {
+    async fn accept(&self, connection: Connection) -> Result<(), iroh::protocol::AcceptError> {
+        let _connection = connection;
+        std::future::pending().await
+    }
 }
 
 fn assert_upload_close_reason(error: iroh::endpoint::ConnectionError, expected: &[u8]) {
@@ -831,6 +840,40 @@ async fn disconnected_blob_provider_fails_over() -> anyhow::Result<()> {
         .insert(hash, vec![first_id, second.router.endpoint().id()]);
 
     assert_eq!(host.wait_unique(&slot, Duration::from_secs(10)).await?, value);
+    second.shutdown().await?;
+    host.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stalled_blob_provider_fails_over() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (host, tickets) = BoardNode::create_for_test(&root.path().join("host")).await?;
+    let endpoint = Endpoint::builder(presets::Minimal).bind().await?;
+    let stalled = Router::builder(endpoint).accept(iroh_blobs::ALPN, StalledBlobProvider).spawn();
+    let second =
+        BoardNode::join_for_test(&root.path().join("second"), ticket_for(&tickets, 2)).await?;
+    host.router
+        .endpoint()
+        .connect(endpoint_address(stalled.endpoint())?, iroh_blobs::ALPN)
+        .await?;
+    connect_blob_provider(&host, &second).await?;
+    let value = b"available from second provider";
+    let hash = Hash::new(value);
+    let _tag = second.blobs.blobs().add_slice(value).await?;
+
+    assert!(
+        host.download_blob(
+            hash,
+            &ArtifactSlot::Manifest,
+            vec![stalled.endpoint().id(), second.router.endpoint().id()],
+            Duration::from_millis(200),
+        )
+        .await?
+    );
+    assert_eq!(host.blobs.blobs().get_bytes(hash).await?.as_ref(), value);
+
+    stalled.shutdown().await?;
     second.shutdown().await?;
     host.shutdown().await?;
     Ok(())
