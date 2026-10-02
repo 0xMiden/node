@@ -143,6 +143,18 @@ pub use upsert_accounts::{PrecomputedPublicAccountState, PrecomputedPublicAccoun
 mod filter_network_accounts;
 pub(crate) use filter_network_accounts::filter_network_accounts;
 
+mod select_account_commitments_paged;
+pub use select_account_commitments_paged::AccountCommitmentsPage;
+pub(crate) use select_account_commitments_paged::select_account_commitments_paged;
+
+mod select_public_account_ids_paged;
+pub use select_public_account_ids_paged::PublicAccountIdsPage;
+pub(crate) use select_public_account_ids_paged::select_public_account_ids_paged;
+
+mod select_public_account_state_roots_paged;
+pub use select_public_account_state_roots_paged::PublicAccountStateRootsPage;
+pub(crate) use select_public_account_state_roots_paged::select_public_account_state_roots_paged;
+
 mod select_account_header_with_storage_header_at_block;
 pub(crate) use select_account_header_with_storage_header_at_block::select_account_header_with_storage_header_at_block;
 
