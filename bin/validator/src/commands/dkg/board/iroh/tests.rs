@@ -723,6 +723,23 @@ async fn unavailable_blob_remains_retryable() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn repeated_upload_restores_missing_blob() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (host, _) = BoardNode::create_for_test(&root.path().join("host")).await?;
+    let slot = ArtifactSlot::Manifest;
+    let value = b"manifest";
+    let hash = Hash::new(value);
+    host.publish_hash_for_test(&slot, hash, u64::try_from(value.len())?).await?;
+    assert!(host.read_unique(&slot).await?.is_none());
+
+    assert_eq!(host.publish(&slot, value).await?, hash);
+    assert_eq!(host.read_unique(&slot).await?, Some(value.to_vec()));
+
+    host.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn disconnected_blob_provider_fails_over() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     let (host, tickets) = BoardNode::create_for_test(&root.path().join("host")).await?;

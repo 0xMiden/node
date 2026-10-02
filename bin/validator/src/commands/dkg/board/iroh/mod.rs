@@ -61,7 +61,6 @@ use super::core::{
     ArtifactSlot,
     BoardCore,
     MAX_ARTIFACT_BYTES,
-    PublishAction,
     SlotValues,
     validate_artifact_length,
 };
@@ -622,10 +621,7 @@ impl BoardWriter {
             let entry = entry.context("failed to read DKG board artifact slot")?;
             hashes.push(entry.content_hash());
         }
-        match SlotValues::from_values(hashes).publish(&expected_hash)? {
-            PublishAction::AlreadyPresent => return Ok(expected_hash),
-            PublishAction::Insert => {},
-        }
+        SlotValues::from_values(hashes).publish(&expected_hash)?;
 
         let stored_hash = self
             .document
