@@ -10,12 +10,10 @@ use diesel::{
     SelectableHelper,
     SqliteConnection,
 };
-use miden_node_utils::limiter::{QueryParamBlockLimit, QueryParamLimiter};
-use miden_protocol::block::{BlockHeader, BlockNumber, BlockSignatures};
+use miden_protocol::block::{BlockHeader, BlockNumber};
 
 use super::DatabaseError;
 use crate::db::models::conv::SqlTypeConvert;
-use crate::db::models::vec_raw_try_into;
 use crate::db::{BlockHeaderCommitment, schema};
 
 /// Select a [`BlockHeader`] from the DB by its `block_num` using the given [`SqliteConnection`].
@@ -57,98 +55,6 @@ pub(crate) fn select_block_header_by_block_num(
     row.map(std::convert::TryInto::try_into).transpose()
 }
 
-/// Select a [`BlockHeader`] and its [`BlockSignatures`] from the DB by its `block_num` using the
-/// given [`SqliteConnection`].
-///
-/// # Returns
-///
-/// The block header with the given block height and its validator signatures is returned.
-///
-/// ```sql
-/// SELECT block_num, block_header, signature
-/// FROM block_headers
-/// WHERE block_num = ?1
-/// ```
-pub(crate) fn select_block_header_and_signatures_by_block_num(
-    conn: &mut SqliteConnection,
-    block_number: BlockNumber,
-) -> Result<Option<(BlockHeader, BlockSignatures)>, DatabaseError> {
-    let sel = SelectDsl::select(schema::block_headers::table, BlockHeaderRawRow::as_select());
-    let row = sel
-        .filter(schema::block_headers::block_num.eq(block_number.to_raw_sql()))
-        .get_result::<BlockHeaderRawRow>(conn)
-        .optional()?;
-    row.map(std::convert::TryInto::try_into).transpose()
-}
-
-/// Select block headers for the given block numbers.
-///
-/// # Parameters
-/// * `blocks`: Iterator of block numbers to retrieve
-///     - Limit: 0 <= count <= 1000
-///
-/// # Note
-///
-/// Only returns the block headers that are actually present.
-///
-/// # Returns
-///
-/// A vector of [`BlockHeader`] or an error.
-///
-/// # Raw SQL
-///
-/// ```sql
-/// SELECT block_num, block_header
-/// FROM block_headers
-/// WHERE block_num IN (?1)
-/// ```
-pub fn select_block_headers(
-    conn: &mut SqliteConnection,
-    blocks: impl Iterator<Item = BlockNumber> + Send,
-) -> Result<Vec<BlockHeader>, DatabaseError> {
-    // The iterators are all deterministic, so is the conjunction.
-    // All calling sites do it equivalently, hence the below holds.
-    // <https://doc.rust-lang.org/src/core/slice/iter/macros.rs.html#195>
-    // <https://doc.rust-lang.org/src/core/option.rs.html#2273>
-    // And the conjunction is truthful:
-    // <https://doc.rust-lang.org/src/core/iter/adapters/chain.rs.html#184>
-    QueryParamBlockLimit::check(blocks.size_hint().0)?;
-
-    let blocks = blocks.map(SqlTypeConvert::to_raw_sql).collect::<Vec<_>>();
-    let raw_block_headers =
-        QueryDsl::select(schema::block_headers::table, BlockHeaderRawRow::as_select())
-            .filter(schema::block_headers::block_num.eq_any(blocks))
-            .load::<BlockHeaderRawRow>(conn)?;
-    vec_raw_try_into(raw_block_headers)
-}
-
-/// Select all block headers from the DB using the given [`SqliteConnection`].
-///
-/// # Returns
-///
-/// A vector of [`BlockHeader`] or an error.
-///
-/// # Raw SQL
-///
-/// ```sql
-/// SELECT commitment
-/// FROM block_headers
-/// ORDER BY block_num ASC
-/// ```
-pub fn select_all_block_header_commitments(
-    conn: &mut SqliteConnection,
-) -> Result<Vec<BlockHeaderCommitment>, DatabaseError> {
-    let raw_commitments =
-        QueryDsl::select(schema::block_headers::table, schema::block_headers::commitment)
-            .order(schema::block_headers::block_num.asc())
-            .load::<Vec<u8>>(conn)?;
-    let commitments = raw_commitments
-        .into_iter()
-        .map(BlockHeaderCommitment::from_raw_sql)
-        .collect::<Result<_, _>>()?;
-    Ok(commitments)
-}
-
 #[derive(Debug, Clone, Queryable, QueryableByName, Selectable)]
 #[diesel(table_name = schema::block_headers)]
 #[diesel(check_for_backend(diesel::sqlite::Sqlite))]
@@ -156,7 +62,6 @@ pub struct BlockHeaderRawRow {
     #[expect(dead_code)]
     pub block_num: i64,
     pub block_header: Vec<u8>,
-    pub signature: Vec<u8>,
     pub commitment: Vec<u8>,
 }
 
@@ -171,14 +76,5 @@ impl TryInto<BlockHeader> for BlockHeaderRawRow {
                 .expect("Database always contains valid format commitments")
         );
         Ok(block_header)
-    }
-}
-
-impl TryInto<(BlockHeader, BlockSignatures)> for BlockHeaderRawRow {
-    type Error = DatabaseError;
-    fn try_into(self) -> Result<(BlockHeader, BlockSignatures), Self::Error> {
-        let block_header = miden_node_persistence::decode::<BlockHeader>(&self.block_header[..])?;
-        let signatures = miden_node_persistence::decode::<BlockSignatures>(&self.signature[..])?;
-        Ok((block_header, signatures))
     }
 }

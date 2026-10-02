@@ -259,25 +259,22 @@ fn select_block_header_by_block_num(
     db: &TestDb,
     maybe_block_num: Option<BlockNumber>,
 ) -> Result<Option<BlockHeader>> {
-    diesel_queries::select_block_header_by_block_num(&mut db.diesel_conn(), maybe_block_num)
+    db.read(move |tx| queries::select_block_header_by_block_num(tx, maybe_block_num))
 }
 
 fn select_block_header_and_signatures_by_block_num(
     db: &TestDb,
     block_num: BlockNumber,
 ) -> Result<Option<(BlockHeader, BlockSignatures)>> {
-    diesel_queries::select_block_header_and_signatures_by_block_num(
-        &mut db.diesel_conn(),
-        block_num,
-    )
+    db.read(move |tx| queries::select_block_header_and_signatures_by_block_num(tx, block_num))
 }
 
 fn select_block_headers(db: &TestDb, blocks: Vec<BlockNumber>) -> Result<Vec<BlockHeader>> {
-    diesel_queries::select_block_headers(&mut db.diesel_conn(), blocks.into_iter())
+    db.read(move |tx| queries::select_block_headers(tx, blocks.into_iter()))
 }
 
 fn select_all_block_header_commitments(db: &TestDb) -> Result<Vec<BlockHeaderCommitment>> {
-    diesel_queries::select_all_block_header_commitments(&mut db.diesel_conn())
+    db.read(queries::select_all_block_header_commitments)
 }
 
 fn select_account(db: &TestDb, account_id: AccountId) -> Result<AccountInfo> {
@@ -447,7 +444,7 @@ fn bootstrap_rolls_back_protocol_config_when_genesis_insert_fails() {
 
     assert!(db.write(move |tx| super::insert_genesis(tx, empty_genesis_block())).is_err());
     assert_eq!(
-        diesel_queries::select_protocol_config_by_commitment(&mut db.diesel_conn(), commitment)
+        db.read(move |tx| queries::select_protocol_config_by_commitment(tx, commitment))
             .unwrap(),
         None
     );
