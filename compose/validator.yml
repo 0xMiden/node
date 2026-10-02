@@ -14,7 +14,109 @@ x-validator: &validator
     - --listen=0.0.0.0:50101
     - --admin.listen=0.0.0.0:50102
 
+x-dkg-runner: &dkg-runner
+  profiles: ["storage-key-dkg"]
+  image: ${MIDEN_VALIDATOR_IMAGE:-miden-validator}
+  pull_policy: missing
+  volumes:
+    - node-data:/data
+  depends_on:
+    storage-key-dkg-board:
+      condition: service_healthy
+  entrypoint: ["/bin/sh", "-ec"]
+  command:
+    - |
+      exec miden-validator dkg run \
+        --board-file "/data/storage-key-dkg-check/board-tickets/participant-$${PARTICIPANT}.ticket" \
+        --genesis /data/genesis/genesis.dat \
+        --threshold 2 \
+        --epoch "$${MIDEN_VALIDATOR_STORAGE_KEY_EPOCH}" \
+        --signing-key.hex "$${SIGNING_KEY}" \
+        --work-directory "/data/storage-key-dkg-check/validator-$${PARTICIPANT}/work" \
+        --output-directory "/data/storage-key-dkg-check/validator-$${PARTICIPANT}/bundle"
+
 services:
+  # This profile checks the full DKG exchange over Iroh. node.yml defines validator bootstrap.
+  storage-key-dkg-board:
+    profiles: ["storage-key-dkg"]
+    image: ${MIDEN_VALIDATOR_IMAGE:-miden-validator}
+    pull_policy: missing
+    volumes:
+      - node-data:/data
+    environment:
+      MIDEN_VALIDATOR_STORAGE_KEY_EPOCH: ${MIDEN_VALIDATOR_STORAGE_KEY_EPOCH:-0909090909090909090909090909090909090909090909090909090909090909}
+    depends_on:
+      bootstrap-validator:
+        condition: service_completed_successfully
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        ROOT=/data/storage-key-dkg-check
+        rm -rf "$${ROOT}"
+        mkdir -p "$${ROOT}"
+        exec miden-validator dkg board \
+          --data-directory "$${ROOT}/board" \
+          --genesis /data/genesis/genesis.dat \
+          --threshold 2 \
+          --epoch "$${MIDEN_VALIDATOR_STORAGE_KEY_EPOCH}" \
+          --ticket-directory "$${ROOT}/board-tickets"
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /data/storage-key-dkg-check/board-tickets/participant-3.ticket"]
+      interval: 1s
+      timeout: 1s
+      retries: 60
+    stop_grace_period: 1m
+
+  storage-key-dkg-runner-1:
+    <<: *dkg-runner
+    environment:
+      MIDEN_VALIDATOR_STORAGE_KEY_EPOCH: ${MIDEN_VALIDATOR_STORAGE_KEY_EPOCH:-0909090909090909090909090909090909090909090909090909090909090909}
+      PARTICIPANT: "1"
+      SIGNING_KEY: ${MIDEN_VALIDATOR_1_SIGNING_KEY:-0101010101010101010101010101010101010101010101010101010101010101}
+
+  storage-key-dkg-runner-2:
+    <<: *dkg-runner
+    environment:
+      MIDEN_VALIDATOR_STORAGE_KEY_EPOCH: ${MIDEN_VALIDATOR_STORAGE_KEY_EPOCH:-0909090909090909090909090909090909090909090909090909090909090909}
+      PARTICIPANT: "2"
+      SIGNING_KEY: ${MIDEN_VALIDATOR_2_SIGNING_KEY:-0303030303030303030303030303030303030303030303030303030303030303}
+
+  storage-key-dkg-runner-3:
+    <<: *dkg-runner
+    environment:
+      MIDEN_VALIDATOR_STORAGE_KEY_EPOCH: ${MIDEN_VALIDATOR_STORAGE_KEY_EPOCH:-0909090909090909090909090909090909090909090909090909090909090909}
+      PARTICIPANT: "3"
+      SIGNING_KEY: ${MIDEN_VALIDATOR_3_SIGNING_KEY:-0404040404040404040404040404040404040404040404040404040404040404}
+
+  storage-key-dkg-check:
+    profiles: ["storage-key-dkg"]
+    image: ${MIDEN_VALIDATOR_IMAGE:-miden-validator}
+    pull_policy: missing
+    volumes:
+      - node-data:/data
+    depends_on:
+      storage-key-dkg-runner-1:
+        condition: service_completed_successfully
+      storage-key-dkg-runner-2:
+        condition: service_completed_successfully
+      storage-key-dkg-runner-3:
+        condition: service_completed_successfully
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        ROOT=/data/storage-key-dkg-check
+        for PARTICIPANT in 2 3; do
+          cmp "$${ROOT}/validator-1/bundle/epoch.hex" \
+            "$${ROOT}/validator-$${PARTICIPANT}/bundle/epoch.hex"
+          cmp "$${ROOT}/validator-1/bundle/setup-context.wire" \
+            "$${ROOT}/validator-$${PARTICIPANT}/bundle/setup-context.wire"
+          cmp "$${ROOT}/validator-1/bundle/public-key-set.wire" \
+            "$${ROOT}/validator-$${PARTICIPANT}/bundle/public-key-set.wire"
+          ! cmp -s "$${ROOT}/validator-1/bundle/secret-share.wire" \
+            "$${ROOT}/validator-$${PARTICIPANT}/bundle/secret-share.wire"
+        done
+        echo "storage key DKG completed over the Iroh document."
+
   validator-1:
     <<: *validator
     environment:

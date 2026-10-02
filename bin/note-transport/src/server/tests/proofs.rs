@@ -367,7 +367,7 @@ async fn lookup_timeout_returns_deadline_exceeded_over_grpc() {
     let (request, response) = fixture();
     let (url, upstream) = node_rpc(Ok(response), Duration::from_secs(30)).await;
     let mut config = Config::new(url);
-    config.grpc.request_timeout = Duration::from_millis(100);
+    config.grpc.request_timeout = Duration::from_secs(2);
     let (_dir, server) = server(config);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();

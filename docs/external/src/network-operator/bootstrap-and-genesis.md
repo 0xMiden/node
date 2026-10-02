@@ -156,17 +156,20 @@ The key each validator operator starts their validator with must match the publi
 
 ## Storage Key Ceremony
 
-After genesis is built, every listed validator must join one offline DKG ceremony. The ceremony creates the shared
-public storage key and one distinct secret share per validator. No coordinator can derive those shares.
+After genesis is built, every listed validator must join one DKG ceremony before validator startup. The ceremony creates
+the shared public storage key and one distinct secret share per validator. No coordinator can derive those shares.
 
-Each operator first registers a fresh DKG identity with the validator signing key committed in genesis. One coordinator
-uses every signed registration to prepare the common ceremony. Every operator then creates two public dealings, checks
-and signs the same full transcript, and completes both rounds locally. The DKG and database bootstrap may run in either
-order, but both must finish before the validator starts.
+For the normal flow, one operator starts the durable Iroh board and sends its private ticket to each validator through
+an authenticated and confidential bootstrap channel. Each validator runs the full ceremony with the signing key
+committed in genesis. The board carries only public ceremony artifacts. Validator signatures authenticate registrations
+and transcript checkpoints. Each validator keeps its identity, private DKG state, and final secret share local. The
+manual file commands remain available for recovery. The DKG and database bootstrap may run in either order, but both
+must finish before the validator starts.
 
-All listed validators must contribute to the ceremony even when the recovery threshold is lower. If any participant
-drops out or any transcript differs, discard the incomplete ceremony and start a new one with fresh identities and
-sessions. See [storage key setup](./validator.md#storage-key-setup) for the commands and file rules.
+All listed validators must contribute to the ceremony even when the recovery threshold is lower. After a process
+interruption, the board and validators can resume with their existing state. If a validator loses its private state,
+cannot rejoin, or finds a different transcript, discard the ceremony and start again with fresh identities and sessions.
+See [storage key setup](./validator.md#storage-key-setup) for the commands and file rules.
 
 Bootstrap takes no transaction encryption key: that key is configured separately when the validator is started, and
 nothing cross-checks it against the genesis block. Every validator must be started with the same encryption key; the

@@ -12,6 +12,7 @@ COMPOSE_PROFILE_ARGS = --profile telemetry --profile monitor
 COMPOSE_OVERRIDE_FILE ?=
 COMPOSE_OVERRIDE_ARGS = $(if $(COMPOSE_OVERRIDE_FILE),-f docker-compose.yml -f $(COMPOSE_OVERRIDE_FILE),)
 DOCKER_COMMAND ?= docker
+STORAGE_KEY_DKG_SERVICES = storage-key-dkg-board storage-key-dkg-runner-1 storage-key-dkg-runner-2 storage-key-dkg-runner-3 storage-key-dkg-check
 DOCKER_PLATFORM ?=
 DOCKER_PLATFORM_ARG = $(if $(DOCKER_PLATFORM),--platform $(DOCKER_PLATFORM),)
 DOCKER_PULL_ARG ?= --pull
@@ -216,6 +217,16 @@ local-network-delete: ## Stops the local development network and deletes volumes
 .PHONY: local-network-logs
 local-network-logs: ## Follows logs for the local development network
 	$(DOCKER_COMMAND) compose $(COMPOSE_OVERRIDE_ARGS) $(COMPOSE_PROFILE_ARGS) logs -f
+
+.PHONY: local-network-check-storage-key-dkg
+local-network-check-storage-key-dkg: ## Checks the storage key ceremony over Iroh
+	@set -e; \
+	export MIDEN_VALIDATOR_USE_STORAGE_KEY_FIXTURE=true; \
+	cleanup() { $(DOCKER_COMMAND) compose $(COMPOSE_OVERRIDE_ARGS) --profile storage-key-dkg rm -sf $(STORAGE_KEY_DKG_SERVICES); }; \
+	trap 'status=$$?; trap - EXIT; cleanup || status=$$?; exit $$status' EXIT; \
+	trap 'exit 130' INT; trap 'exit 143' TERM; \
+	cleanup; \
+	$(DOCKER_COMMAND) compose $(COMPOSE_OVERRIDE_ARGS) --profile storage-key-dkg run --rm storage-key-dkg-check
 
 .PHONY: docker-build
 docker-build: ## Builds all Docker images

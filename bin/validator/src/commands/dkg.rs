@@ -34,7 +34,9 @@ use golden_ehtdh1::{
 use golden_evrf::paper::secp_secq::SecpSecqBackend;
 use golden_halo2curves::golden_group::Secp256k1GoldenGroup;
 use miden_node_store::genesis::GenesisBlock;
+use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::genesis::read_genesis_block;
+use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::Word;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
 use miden_protocol::crypto::hash::rpo::Rpo256;
@@ -47,6 +49,8 @@ use zeroize::Zeroizing;
 
 use super::ValidatorSigningKey;
 
+mod board;
+mod runner;
 #[cfg(test)]
 mod tests;
 
@@ -54,6 +58,12 @@ type StorageGroup = Secp256k1GoldenGroup;
 type StorageScalar = <StorageGroup as GoldenGroup>::Scalar;
 type StorageElement = <StorageGroup as GoldenGroup>::Element;
 type PublicOutput = (StorageElement, BTreeMap<ParticipantIndex, StorageElement>);
+
+async fn run_blocking<T: Send + 'static>(
+    stage: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
+) -> anyhow::Result<T> {
+    spawn_blocking_in_current_span(stage).await.context("DKG proof task failed")?
+}
 
 const REGISTRATION_VERSION: &str = "miden-storage-key-dkg-registration-v2";
 const MANIFEST_VERSION: &str = "miden-storage-key-dkg-manifest-v2";
@@ -92,6 +102,12 @@ pub struct DkgOptions {
 /// DKG ceremony commands.
 #[derive(clap::Subcommand)]
 enum DkgCommand {
+    /// Runs the shared Iroh bulletin board for a ceremony.
+    Board(runner::DkgBoardServeOptions),
+
+    /// Runs every ceremony stage for one validator through an Iroh board.
+    Run(runner::DkgRunOptions),
+
     /// Generates this validator's DKG identity and public registration.
     Identity {
         /// Trusted genesis block for the network.
@@ -337,8 +353,10 @@ struct DealingSet {
 }
 
 /// Runs one DKG ceremony command.
-pub async fn run(options: DkgOptions) -> anyhow::Result<()> {
+pub async fn run(options: DkgOptions, shutdown: CancellationToken) -> anyhow::Result<()> {
     match options.command {
+        DkgCommand::Board(options) => runner::serve_board(options, shutdown).await,
+        DkgCommand::Run(options) => runner::run_validator(options, shutdown).await,
         DkgCommand::Identity {
             genesis,
             epoch,
@@ -652,7 +670,7 @@ async fn accept_transcript<B>(
     output_directory: &Path,
 ) -> anyhow::Result<()>
 where
-    B: EvrfProofBackend<StorageGroup>,
+    B: EvrfProofBackend<StorageGroup> + 'static,
 {
     let ceremony = read_ceremony(genesis_path, ceremony_directory)?;
     let validator_public_key = signer.public_key();
@@ -665,14 +683,17 @@ where
                 == hex::encode(validator_public_key.to_bytes())),
         "validator signing key is not part of this ceremony",
     );
-    let (transcript, transcript_bytes) =
-        build_transcript::<B>(&ceremony, decryption_dealing_paths, context_dealing_paths)?;
+    let genesis_commitment = ceremony.genesis_commitment;
+    let manifest_sha256 = ceremony.manifest_sha256;
+    let decryption_dealing_paths = decryption_dealing_paths.to_vec();
+    let context_dealing_paths = context_dealing_paths.to_vec();
+    let (transcript, transcript_bytes) = run_blocking(move || {
+        build_transcript::<B>(&ceremony, &decryption_dealing_paths, &context_dealing_paths)
+    })
+    .await?;
     let transcript_sha256 = sha256(&transcript_bytes);
     let signature = signer
-        .sign_commitment(transcript_signature_commitment(
-            ceremony.genesis_commitment,
-            transcript_sha256,
-        ))
+        .sign_commitment(transcript_signature_commitment(genesis_commitment, transcript_sha256))
         .await
         .context("failed to sign DKG transcript")?;
     let acceptance = TranscriptAcceptance {
@@ -683,7 +704,7 @@ where
     };
     let acceptance =
         toml::to_string_pretty(&acceptance).context("failed to encode transcript acceptance")?;
-    debug_assert_eq!(transcript.manifest_sha256, hex::encode(ceremony.manifest_sha256));
+    debug_assert_eq!(transcript.manifest_sha256, hex::encode(manifest_sha256));
 
     publish_directory(output_directory, |directory| {
         write_new_file(&directory.join(TRANSCRIPT_FILE), &transcript_bytes, false)?;
@@ -1749,14 +1770,76 @@ fn publish_directory(
 ) -> anyhow::Result<()> {
     ensure!(!output_directory.exists(), "output directory already exists");
     let parent = output_directory.parent().unwrap_or_else(|| Path::new("."));
-    fs_err::create_dir_all(parent).context("failed to create output parent directory")?;
+    durably_create_directory_all(parent).context("failed to create output parent directory")?;
     let temporary = tempfile::Builder::new()
         .prefix(".storage-key-dkg-")
         .tempdir_in(parent)
         .context("failed to create temporary output directory")?;
     write(temporary.path())?;
+    sync_directory_tree(temporary.path())?;
     fs_err::rename(temporary.path(), output_directory)
         .context("failed to publish output directory")?;
+    sync_directory(parent)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_directory(directory: &Path) -> anyhow::Result<()> {
+    std::fs::File::open(directory)
+        .with_context(|| format!("failed to open directory {}", directory.display()))?
+        .sync_all()
+        .with_context(|| format!("failed to sync directory {}", directory.display()))
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_directory: &Path) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn durably_create_directory_all(directory: &Path) -> anyhow::Result<()> {
+    let absolute_directory = if directory.is_absolute() {
+        directory.to_owned()
+    } else {
+        std::env::current_dir()
+            .context("failed to determine current directory")?
+            .join(directory)
+    };
+    let existing_ancestor = absolute_directory
+        .ancestors()
+        .find(|ancestor| ancestor.exists())
+        .context("directory has no existing ancestor")?
+        .to_owned();
+    fs_err::create_dir_all(directory)?;
+
+    let mut current = absolute_directory.as_path();
+    while current != existing_ancestor {
+        current = current.parent().context("directory escaped its existing ancestor")?;
+        sync_directory(current)?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_directory_tree(directory: &Path) -> anyhow::Result<()> {
+    for entry in fs_err::read_dir(directory)
+        .with_context(|| format!("failed to read directory {}", directory.display()))?
+    {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            sync_directory_tree(&entry.path())?;
+        } else if file_type.is_file() {
+            std::fs::File::open(entry.path())
+                .with_context(|| format!("failed to open file {}", entry.path().display()))?
+                .sync_all()
+                .with_context(|| format!("failed to sync file {}", entry.path().display()))?;
+        }
+    }
+    sync_directory(directory)
+}
+
+#[cfg(not(unix))]
+fn sync_directory_tree(_directory: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 

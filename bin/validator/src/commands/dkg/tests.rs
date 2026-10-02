@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use golden_core::wire::from_wire_bytes;
 use golden_ehtdh1::wire::from_wire_bytes as from_ehtdh1_wire_bytes;
 use golden_ehtdh1::{
@@ -434,7 +436,7 @@ async fn accept_for_all<B>(
     dealings: &[PathBuf],
 ) -> TestResultWith<AcceptedTranscript>
 where
-    B: EvrfProofBackend<StorageGroup>,
+    B: EvrfProofBackend<StorageGroup> + 'static,
 {
     let mut outputs = Vec::new();
     for (position, signing_key) in ceremony.genesis.signing_keys.iter().enumerate() {
@@ -951,5 +953,755 @@ async fn deal_rejects_unknown_identity_and_existing_output() -> TestResult {
         )
         .is_err()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn runner_rejects_another_participants_ticket_before_publishing() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let genesis = write_genesis(root.path())?;
+    let board_directory = root.path().join("board");
+    let (board, tickets) = board::CoordinatorBoard::create_with_network(
+        &board_directory,
+        3,
+        &board::TEST_POLICY,
+        false,
+    )
+    .await?;
+    let signer = ValidatorSigner::new_local(genesis.signing_keys[0].clone());
+    let epoch = "66".repeat(32);
+    let work_directory = root.path().join("work");
+    let participant =
+        runner::prepare_local_identity(&genesis.path, &epoch, &signer, &work_directory).await?;
+    let ticket = tickets
+        .iter()
+        .find(|ticket| ticket.participant() != participant.get())
+        .expect("a three-participant ceremony has another participant")
+        .clone();
+    let ticket_path = root.path().join("ticket");
+    let ticket_text = ticket.to_string();
+    fs_err::write(&ticket_path, &ticket_text)?;
+    assert_eq!(runner::read_board_ticket(&ticket_path)?.to_string(), ticket_text);
+    fs_err::write(&ticket_path, format!("{ticket_text}\n"))?;
+    assert_eq!(
+        runner::read_board_ticket(&ticket_path).unwrap_err().to_string(),
+        "invalid storage key DKG board ticket"
+    );
+    let ticket_participant = ticket.participant();
+    let error = runner::run_validator_with_ticket::<ShareOpeningBackend>(
+        ticket,
+        &genesis.path,
+        &signer,
+        2,
+        &epoch,
+        &work_directory,
+        &root.path().join("bundle"),
+        Duration::from_secs(1),
+        miden_node_utils::shutdown::CancellationToken::new(),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains(&format!("ticket belongs to participant {ticket_participant}")),
+        "unexpected error: {error:#}"
+    );
+    assert!(
+        board
+            .reader()
+            .read_unique(&board::ArtifactSlot::Registration(ticket_participant))
+            .await?
+            .is_none()
+    );
+    board.shutdown().await?;
+    Ok(())
+}
+
+fn assert_completed_bundles(bundle_directories: &[PathBuf]) -> TestResult {
+    let shared_setup = fs_err::read(bundle_directories[0].join(SETUP_CONTEXT_FILE))?;
+    let shared_public_keys = fs_err::read(bundle_directories[0].join(PUBLIC_KEY_SET_FILE))?;
+    let secret_shares = bundle_directories
+        .iter()
+        .map(|bundle| fs_err::read(bundle.join(SECRET_SHARE_FILE)))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert!(bundle_directories.iter().all(|bundle| {
+        fs_err::read(bundle.join(SETUP_CONTEXT_FILE)).unwrap() == shared_setup
+            && fs_err::read(bundle.join(PUBLIC_KEY_SET_FILE)).unwrap() == shared_public_keys
+    }));
+    assert_ne!(secret_shares[0], secret_shares[1]);
+    assert_ne!(secret_shares[1], secret_shares[2]);
+    assert_ne!(secret_shares[0], secret_shares[2]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn memory_board_runs_complete_ceremony() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let genesis = write_genesis(root.path())?;
+    let board_directory = root.path().join("board");
+    fs_err::create_dir(&board_directory)?;
+    let (board, participant_boards) = board::CoordinatorBoard::create_memory(3)?;
+    let timeout = Duration::from_mins(2);
+    let epoch = "66".repeat(32);
+    let signers = genesis
+        .signing_keys
+        .iter()
+        .cloned()
+        .map(ValidatorSigner::new_local)
+        .collect::<Vec<_>>();
+    let work_directories = (1..=3)
+        .map(|participant| root.path().join(format!("work-{participant}")))
+        .collect::<Vec<_>>();
+    let bundle_directories = (1..=3)
+        .map(|participant| root.path().join(format!("bundle-{participant}")))
+        .collect::<Vec<_>>();
+    let mut participants = Vec::new();
+    for (signer, work_directory) in signers.iter().zip(&work_directories) {
+        fs_err::create_dir(work_directory)?;
+        let participant =
+            runner::prepare_local_identity(&genesis.path, &epoch, signer, work_directory).await?;
+        let position = usize::try_from(participant.get() - 1)?;
+        participants.push((participant, position));
+    }
+
+    let coordinate = runner::coordinate_common_files(
+        &board,
+        &board_directory,
+        &genesis.path,
+        2,
+        &epoch,
+        timeout,
+    );
+    let first = runner::run_validator_on_board::<ShareOpeningBackend>(
+        &participant_boards[participants[0].1],
+        &genesis.path,
+        &signers[0],
+        participants[0].0,
+        2,
+        &epoch,
+        &work_directories[0],
+        &bundle_directories[0],
+        timeout,
+    );
+    let second = runner::run_validator_on_board::<ShareOpeningBackend>(
+        &participant_boards[participants[1].1],
+        &genesis.path,
+        &signers[1],
+        participants[1].0,
+        2,
+        &epoch,
+        &work_directories[1],
+        &bundle_directories[1],
+        timeout,
+    );
+    let third = runner::run_validator_on_board::<ShareOpeningBackend>(
+        &participant_boards[participants[2].1],
+        &genesis.path,
+        &signers[2],
+        participants[2].0,
+        2,
+        &epoch,
+        &work_directories[2],
+        &bundle_directories[2],
+        timeout,
+    );
+    tokio::try_join!(coordinate, first, second, third)?;
+    assert_completed_bundles(&bundle_directories)?;
+
+    for participant_board in participant_boards {
+        participant_board.shutdown().await?;
+    }
+    board.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the test checks shutdown and both restart paths"
+)]
+async fn active_runner_stops_and_reopens_an_incomplete_board() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let genesis = write_genesis(root.path())?;
+    let board_directory = root.path().join("board");
+    let (board, tickets) = board::CoordinatorBoard::create_with_network(
+        &board_directory,
+        3,
+        &board::TEST_POLICY,
+        false,
+    )
+    .await?;
+    let work_directory = root.path().join("work");
+    let output_directory = root.path().join("bundle");
+    let epoch = "66".repeat(32);
+    let signer = ValidatorSigner::new_local(genesis.signing_keys[0].clone());
+    let participant =
+        runner::prepare_local_identity(&genesis.path, &epoch, &signer, &work_directory).await?;
+    let ticket = tickets
+        .iter()
+        .find(|ticket| ticket.participant() == participant.get())
+        .context("missing participant ticket")?
+        .clone();
+    let slot = board::ArtifactSlot::Registration(participant.get());
+    let shutdown = miden_node_utils::shutdown::CancellationToken::new();
+    let task = tokio::spawn({
+        let genesis_path = genesis.path.clone();
+        let work_directory = work_directory.clone();
+        let output_directory = output_directory.clone();
+        let epoch = epoch.clone();
+        let ticket = ticket.clone();
+        let shutdown = shutdown.clone();
+        async move {
+            runner::run_validator_with_ticket::<ShareOpeningBackend>(
+                ticket,
+                &genesis_path,
+                &signer,
+                2,
+                &epoch,
+                &work_directory,
+                &output_directory,
+                Duration::from_secs(30),
+                shutdown,
+            )
+            .await
+        }
+    });
+    let registration = board
+        .reader()
+        .wait_unique(&slot, Duration::from_secs(10))
+        .await
+        .context("active runner did not publish registration")?;
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(30), task)
+        .await
+        .context("active runner did not stop after cancellation")???;
+    let (other_board, other_tickets) = board::CoordinatorBoard::create_with_network(
+        &root.path().join("other-board"),
+        3,
+        &board::TEST_POLICY,
+        false,
+    )
+    .await?;
+    let other_ticket = other_tickets
+        .into_iter()
+        .find(|ticket| ticket.participant() == participant.get())
+        .context("other board has no participant ticket")?;
+    let signer = ValidatorSigner::new_local(genesis.signing_keys[0].clone());
+    let error = runner::run_validator_with_ticket::<ShareOpeningBackend>(
+        other_ticket,
+        &genesis.path,
+        &signer,
+        2,
+        &epoch,
+        &work_directory,
+        &output_directory,
+        Duration::from_secs(1),
+        miden_node_utils::shutdown::CancellationToken::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.to_string(), "DKG work directory belongs to a different board");
+    assert!(other_board.reader().read_unique(&slot).await?.is_none());
+    other_board.shutdown().await?;
+
+    let id_path = work_directory.join("board-binding/document-id.hex");
+    let document_id = fs_err::read(&id_path)?;
+    fs_err::remove_file(&id_path)?;
+    let error = runner::run_validator_with_ticket::<ShareOpeningBackend>(
+        ticket,
+        &genesis.path,
+        &signer,
+        2,
+        &epoch,
+        &work_directory,
+        &output_directory,
+        Duration::from_secs(1),
+        miden_node_utils::shutdown::CancellationToken::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.to_string(), format!("failed to read DKG board ID {}", id_path.display()));
+    write_new_file(&id_path, &document_id, false)?;
+
+    let endpoint_secret = fs_err::read(work_directory.join("board/endpoint-secret.hex"))?;
+    board.shutdown().await?;
+
+    let (board, new_tickets) = board::CoordinatorBoard::create_with_network(
+        &board_directory,
+        3,
+        &board::TEST_POLICY,
+        false,
+    )
+    .await?;
+    let new_ticket = new_tickets
+        .into_iter()
+        .find(|ticket| ticket.participant() == participant.get())
+        .context("restarted board has no participant ticket")?;
+    assert_eq!(board.reader().read_unique(&slot).await?, Some(registration.clone()));
+    let signer = ValidatorSigner::new_local(genesis.signing_keys[0].clone());
+    let error = runner::run_validator_with_ticket::<ShareOpeningBackend>(
+        new_ticket,
+        &genesis.path,
+        &signer,
+        2,
+        &epoch,
+        &work_directory,
+        &output_directory,
+        Duration::from_secs(1),
+        miden_node_utils::shutdown::CancellationToken::new(),
+    )
+    .await
+    .unwrap_err();
+    let absent = if participant.get() == 1 { 2 } else { 1 };
+    assert_eq!(
+        error.to_string(),
+        format!("timed out waiting for DKG board slot registration/{absent}/")
+    );
+    assert_eq!(board.reader().read_unique(&slot).await?, Some(registration));
+    assert_eq!(fs_err::read(work_directory.join("board/endpoint-secret.hex"))?, endpoint_secret);
+    board.shutdown().await?;
+    Ok(())
+}
+
+#[test]
+fn join_cleanup_failure_is_not_treated_as_cancellation() {
+    let error = runner::resolve_join(Err(anyhow::anyhow!("failed to flush board")))
+        .err()
+        .expect("cleanup failure must propagate");
+    assert_eq!(error.to_string(), "failed to flush board");
+    assert!(runner::resolve_join(Err(board::JoinCancelled.into())).unwrap().is_none());
+}
+
+#[test]
+fn ceremony_failure_reports_shutdown_failure() {
+    let error = runner::finish_board(
+        Err(anyhow::anyhow!("ceremony failed")),
+        Err(anyhow::anyhow!("store flush failed")),
+    )
+    .unwrap_err();
+    assert_eq!(error.to_string(), "ceremony failed; board shutdown failed: store flush failed");
+}
+
+#[tokio::test]
+async fn cancellation_is_polled_during_blocking_proof() -> TestResult {
+    let shutdown = miden_node_utils::shutdown::CancellationToken::new();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let task = tokio::spawn({
+        let shutdown = shutdown.clone();
+        async move {
+            tokio::select! {
+                _ = shutdown.cancelled() => Ok(()),
+                result = run_blocking(move || {
+                    let _ = started_tx.send(());
+                    let _ = release_rx.recv_timeout(Duration::from_secs(10));
+                    Ok(())
+                }) => result,
+            }
+        }
+    });
+    started_rx.await?;
+    shutdown.cancel();
+    let result = tokio::time::timeout(Duration::from_secs(5), task).await;
+    release_tx.send(())?;
+    result???;
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_board_options_leave_no_board_or_tickets() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let genesis = write_genesis(root.path())?;
+    for (name, threshold, epoch, expected) in [
+        ("threshold", 4, "66".repeat(32), "threshold must be between 1 and 3"),
+        ("epoch", 2, "AA".repeat(32), "storage-key epoch must use lowercase hex"),
+    ] {
+        let data_directory = root.path().join(format!("{name}-board"));
+        let ticket_directory = root.path().join(format!("{name}-tickets"));
+        let options = runner::DkgBoardServeOptions {
+            data_directory: data_directory.clone(),
+            genesis: genesis.path.clone(),
+            threshold: std::num::NonZeroUsize::new(threshold).unwrap(),
+            epoch,
+            ticket_directory: ticket_directory.clone(),
+        };
+        let error = runner::serve_board_with_network(
+            options,
+            miden_node_utils::shutdown::CancellationToken::new(),
+            false,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.to_string(), expected);
+        assert!(!data_directory.exists());
+        assert!(!ticket_directory.exists());
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn coordinator_stops_before_and_after_common_artifacts() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let genesis = write_genesis(root.path())?;
+    let board_directory = root.path().join("board");
+    let epoch = "66".repeat(32);
+    let options = |ticket_directory: PathBuf| runner::DkgBoardServeOptions {
+        data_directory: board_directory.clone(),
+        genesis: genesis.path.clone(),
+        threshold: std::num::NonZeroUsize::new(3).unwrap(),
+        epoch: epoch.clone(),
+        ticket_directory,
+    };
+
+    let first_tickets = root.path().join("first-tickets");
+    fs_err::create_dir(&first_tickets)?;
+    let error = runner::serve_board_with_network(
+        options(first_tickets.clone()),
+        miden_node_utils::shutdown::CancellationToken::new(),
+        false,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.to_string(), "output directory already exists");
+    fs_err::remove_dir(&first_tickets)?;
+
+    let shutdown = miden_node_utils::shutdown::CancellationToken::new();
+    let first = tokio::spawn({
+        let shutdown = shutdown.clone();
+        let options = options(first_tickets.clone());
+        async move { runner::serve_board_with_network(options, shutdown, false).await }
+    });
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !first_tickets.join("participant-1.ticket").is_file() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(10), first).await???;
+
+    let second_tickets = root.path().join("second-tickets");
+    let shutdown = miden_node_utils::shutdown::CancellationToken::new();
+    let second = tokio::spawn({
+        let shutdown = shutdown.clone();
+        let options = options(second_tickets.clone());
+        async move { runner::serve_board_with_network(options, shutdown, false).await }
+    });
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !second_tickets.join("participant-1.ticket").is_file() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+
+    let mut participants = Vec::new();
+    for (position, signing_key) in genesis.signing_keys.iter().enumerate() {
+        let signer = ValidatorSigner::new_local(signing_key.clone());
+        let work_directory = root.path().join(format!("participant-{position}"));
+        let participant =
+            runner::prepare_local_identity(&genesis.path, &epoch, &signer, &work_directory).await?;
+        let ticket = fs_err::read_to_string(
+            second_tickets.join(format!("participant-{}.ticket", participant.get())),
+        )?
+        .parse::<board::BoardTicket>()?;
+        let board = board::ParticipantBoard::join_with_network(
+            &work_directory.join("board"),
+            ticket,
+            3,
+            false,
+            miden_node_utils::shutdown::CancellationToken::new(),
+        )
+        .await?;
+        let registration = fs_err::read(work_directory.join("identity").join(REGISTRATION_FILE))?;
+        board.publish(board::ParticipantArtifact::Registration, &registration).await?;
+        participants.push(board);
+    }
+    let context = participants[0]
+        .reader()
+        .wait_unique(&board::ArtifactSlot::ContextConfig, Duration::from_secs(10))
+        .await?;
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(10), second).await???;
+    for participant in participants {
+        participant.shutdown().await?;
+    }
+    let policy = board::BoardPolicy {
+        genesis_commitment: read_trusted_genesis(&genesis.path)?
+            .inner()
+            .header()
+            .commitment()
+            .to_bytes()
+            .try_into()
+            .unwrap(),
+        threshold: 3,
+        epoch: decode_fixed_hex::<32>(&epoch, "storage-key epoch")?,
+    };
+    let (reopened, _) =
+        board::CoordinatorBoard::create_with_network(&board_directory, 3, &policy, false).await?;
+    assert_eq!(
+        reopened.reader().read_unique(&board::ArtifactSlot::ContextConfig).await?,
+        Some(context)
+    );
+    reopened.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+/// Proves a validator can resume after it publishes a dealing or acceptance.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the test runs every ceremony phase for three validators"
+)]
+async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let genesis = write_genesis(root.path())?;
+    let board_directory = root.path().join("board");
+    let (board, tickets) = board::CoordinatorBoard::create_with_network(
+        &board_directory,
+        3,
+        &board::TEST_POLICY,
+        false,
+    )
+    .await?;
+    let timeout = Duration::from_mins(3);
+    let restart_checkpoint_timeout = Duration::from_secs(30);
+    let epoch = "66".repeat(32);
+    let signers = genesis
+        .signing_keys
+        .iter()
+        .cloned()
+        .map(ValidatorSigner::new_local)
+        .collect::<Vec<_>>();
+    let trusted_genesis = read_trusted_genesis(&genesis.path)?;
+    let validator_keys = trusted_genesis.inner().header().validator_config().keys();
+    let tickets = signers
+        .iter()
+        .map(|signer| {
+            let position = validator_keys
+                .iter()
+                .position(|key| *key == signer.public_key())
+                .context("test signer is missing from genesis")?;
+            Ok(tickets[position].clone())
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let work_directories = (1..=3)
+        .map(|participant| root.path().join(format!("work-{participant}")))
+        .collect::<Vec<_>>();
+    let bundle_directories = (1..=3)
+        .map(|participant| root.path().join(format!("bundle-{participant}")))
+        .collect::<Vec<_>>();
+    let mut participant_indices = Vec::new();
+    let mut participant_boards = Vec::new();
+    for (position, ((signer, ticket), work_directory)) in
+        signers.iter().zip(&tickets).zip(&work_directories).enumerate()
+    {
+        fs_err::create_dir_all(work_directory)?;
+        participant_indices.push(
+            runner::prepare_local_identity(&genesis.path, &epoch, signer, work_directory).await?,
+        );
+        if position > 0 {
+            let participant_board = board::ParticipantBoard::join_with_network(
+                &work_directory.join("board"),
+                ticket.clone(),
+                3,
+                false,
+                miden_node_utils::shutdown::CancellationToken::new(),
+            )
+            .await?;
+            let registration =
+                fs_err::read(work_directory.join("identity").join(REGISTRATION_FILE))?;
+            participant_board
+                .publish(board::ParticipantArtifact::Registration, &registration)
+                .await?;
+            participant_boards.push(participant_board);
+        }
+    }
+    let coordinate = runner::coordinate_common_files(
+        &board,
+        &board_directory,
+        &genesis.path,
+        2,
+        &epoch,
+        timeout,
+    );
+    let interrupt_after = |slot: board::ArtifactSlot| {
+        let board = &board;
+        let ticket = &tickets[0];
+        let signer = &signers[0];
+        let genesis_path = &genesis.path;
+        let work_directory = &work_directories[0];
+        let bundle_directory = &bundle_directories[0];
+        let epoch = &epoch;
+        async move {
+            let shutdown = miden_node_utils::shutdown::CancellationToken::new();
+            let run = runner::run_validator_with_ticket::<ShareOpeningBackend>(
+                ticket.clone(),
+                genesis_path,
+                signer,
+                2,
+                epoch,
+                work_directory,
+                bundle_directory,
+                timeout,
+                shutdown.clone(),
+            );
+            tokio::pin!(run);
+            let published = tokio::select! {
+                biased;
+                result = board.reader().wait_unique(&slot, restart_checkpoint_timeout) => result?,
+                result = &mut run => {
+                    result?;
+                    anyhow::bail!("validator completed before the {slot:?} checkpoint");
+                }
+            };
+            shutdown.cancel();
+            tokio::time::timeout(restart_checkpoint_timeout, run).await??;
+            assert_eq!(board.reader().read_unique(&slot).await?, Some(published.clone()));
+            Ok::<_, anyhow::Error>(published)
+        }
+    };
+    let ((), dealing) = tokio::try_join!(
+        coordinate,
+        interrupt_after(board::ArtifactSlot::ContextDealing(participant_indices[0].get()))
+    )?;
+    let third_dealing_slot = board::ArtifactSlot::ContextDealing(participant_indices[2].get());
+    {
+        let third = runner::run_validator_on_board::<ShareOpeningBackend>(
+            &participant_boards[1],
+            &genesis.path,
+            &signers[2],
+            participant_indices[2],
+            2,
+            &epoch,
+            &work_directories[2],
+            &bundle_directories[2],
+            timeout,
+        );
+        tokio::pin!(third);
+        tokio::select! {
+            biased;
+            result = board.reader().wait_unique(&third_dealing_slot, restart_checkpoint_timeout) => {
+                result?;
+            }
+            result = &mut third => {
+                result?;
+                panic!("third validator completed before publishing its dealing");
+            }
+        }
+    }
+    let acceptance = {
+        let second = runner::run_validator_on_board::<ShareOpeningBackend>(
+            &participant_boards[0],
+            &genesis.path,
+            &signers[1],
+            participant_indices[1],
+            2,
+            &epoch,
+            &work_directories[1],
+            &bundle_directories[1],
+            timeout,
+        );
+        tokio::pin!(second);
+        tokio::select! {
+            result = interrupt_after(board::ArtifactSlot::TranscriptAcceptance(participant_indices[0].get())) => result?,
+            result = &mut second => {
+                result?;
+                panic!("second validator completed before the first validator stopped");
+            }
+        }
+    };
+    assert!(!bundle_directories[0].exists());
+    assert!(
+        board
+            .reader()
+            .read_unique(&board::ArtifactSlot::TranscriptAcceptance(participant_indices[2].get()))
+            .await?
+            .is_none()
+    );
+    let first = runner::run_validator_with_ticket::<ShareOpeningBackend>(
+        tickets[0].clone(),
+        &genesis.path,
+        &signers[0],
+        2,
+        &epoch,
+        &work_directories[0],
+        &bundle_directories[0],
+        timeout,
+        miden_node_utils::shutdown::CancellationToken::new(),
+    );
+    let second = runner::run_validator_on_board::<ShareOpeningBackend>(
+        &participant_boards[0],
+        &genesis.path,
+        &signers[1],
+        participant_indices[1],
+        2,
+        &epoch,
+        &work_directories[1],
+        &bundle_directories[1],
+        timeout,
+    );
+    let third = runner::run_validator_on_board::<ShareOpeningBackend>(
+        &participant_boards[1],
+        &genesis.path,
+        &signers[2],
+        participant_indices[2],
+        2,
+        &epoch,
+        &work_directories[2],
+        &bundle_directories[2],
+        timeout,
+    );
+    tokio::try_join!(first, second, third)?;
+    assert_eq!(
+        board
+            .reader()
+            .read_unique(&board::ArtifactSlot::ContextDealing(participant_indices[0].get()))
+            .await?,
+        Some(dealing)
+    );
+    assert_eq!(
+        board
+            .reader()
+            .read_unique(&board::ArtifactSlot::TranscriptAcceptance(participant_indices[0].get()))
+            .await?,
+        Some(acceptance)
+    );
+
+    let bundle_files = [SETUP_CONTEXT_FILE, PUBLIC_KEY_SET_FILE, SECRET_SHARE_FILE];
+    let completed_bundle = bundle_files
+        .iter()
+        .map(|name| fs_err::read(bundle_directories[0].join(name)))
+        .collect::<Result<Vec<_>, _>>()?;
+    runner::run_validator_with_ticket::<ShareOpeningBackend>(
+        tickets[0].clone(),
+        &genesis.path,
+        &signers[0],
+        2,
+        &epoch,
+        &work_directories[0],
+        &bundle_directories[0],
+        timeout,
+        miden_node_utils::shutdown::CancellationToken::new(),
+    )
+    .await?;
+    for (name, expected) in bundle_files.into_iter().zip(completed_bundle) {
+        assert_eq!(fs_err::read(bundle_directories[0].join(name))?, expected);
+    }
+
+    assert_completed_bundles(&bundle_directories)?;
+    let common_files = [MANIFEST_FILE, DECRYPTION_CONFIG_FILE, CONTEXT_CONFIG_FILE];
+    assert!(common_files.iter().all(|name| {
+        let expected = fs_err::read(board_directory.join("ceremony").join(name)).unwrap();
+        work_directories
+            .iter()
+            .all(|work| fs_err::read(work.join("ceremony").join(name)).unwrap() == expected)
+    }));
+
+    for participant_board in participant_boards {
+        participant_board.shutdown().await?;
+    }
+    board.shutdown().await?;
     Ok(())
 }
