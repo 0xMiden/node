@@ -13,11 +13,11 @@ use crate::commands::dkg::ceremony::peer::ConnectedPeer;
 async fn authentication_rejects_mitm_relayed_responses() -> TestResult {
     let mut secrets = std::array::from_fn::<_, 4, _>(|_| IrohSecretKey::generate());
     secrets.sort_by_key(IrohSecretKey::public);
-    let [a_secret, b_secret, proxy_a_secret, proxy_b_secret] = secrets;
+    let [a_secret, b_secret, proxy_secret_a, proxy_secret_b] = secrets;
     let (a, a_lookup) = bind_test_endpoint(a_secret.clone()).await?;
     let (b, b_lookup) = bind_test_endpoint(b_secret.clone()).await?;
-    let (proxy_a, _) = bind_test_endpoint(proxy_a_secret).await?;
-    let (proxy_b, _) = bind_test_endpoint(proxy_b_secret).await?;
+    let (proxy_a, _) = bind_test_endpoint(proxy_secret_a).await?;
+    let (proxy_b, _) = bind_test_endpoint(proxy_secret_b).await?;
     a_lookup.add_endpoint_info(proxy_a.addr());
     b_lookup.add_endpoint_info(proxy_b.addr());
 

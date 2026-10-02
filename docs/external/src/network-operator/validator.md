@@ -68,18 +68,19 @@ miden-validator dkg participate \
 ```
 
 Validators can start at different times; the ceremony waits for all participants to join. The entire ceremony must
-finish within `--timeout`, which defaults to `30m`. For a single validator, omit `--peer.endpoint` and use `--threshold 1`.
+finish within `--timeout`, which defaults to `30m`. For a single validator, omit `--peer.endpoint` and use
+`--threshold 1`.
 
-The command reports success only after every validator confirms it has saved its bundle. Only then is the bundle safe
-to use. Each bundle belongs to one validator and must remain private.
+The command reports success only after every validator confirms it has saved its bundle. Only then is the bundle safe to
+use. Each bundle belongs to one validator and must remain private.
 
 A failed or timed-out ceremony cannot resume. Do not use any bundles from that attempt. Restart the ceremony with all
 participants and new output paths, reusing the endpoint secrets.
 
 ## Start
 
-Pass the bundle produced for this validator using `--storage-key.file <FILE>` or `MIDEN_VALIDATOR_STORAGE_KEY_FILE`.
-The validator will not start without a valid bundle. To use a text-only secret store, base64-encode the bundle for upload
+Pass the bundle produced for this validator using `--storage-key.file <FILE>` or `MIDEN_VALIDATOR_STORAGE_KEY_FILE`. The
+validator will not start without a valid bundle. To use a text-only secret store, base64-encode the bundle for upload
 and decode it back to the original bytes before loading it.
 
 ```bash
@@ -109,7 +110,7 @@ is the supported provisioning path.
 Each validator must run inside its trusted execution environment. If transaction proving uses a remote prover, that
 prover also receives the plaintext inputs and must run inside the same trusted boundary.
 
-After validation, the validator stores only the transaction ID and the threshold-encrypted record. It does not store
-the client ciphertext.
+After validation, the validator stores only the transaction ID and the threshold-encrypted record. It does not store the
+client ciphertext.
 
 Use `miden-validator start --help` for the complete current option list.

@@ -63,7 +63,7 @@ build-rs      = { workspace = true }
 miden-node-db = { workspace = true }
 
 [dev-dependencies]
-iroh-relay       = { version = "=1.3.0", features = ["server"] }
+iroh-relay       = { features = ["server"], version = "=1.3.0" }
 itertools        = { workspace = true }
 miden-node-store = { workspace = true }
 miden-node-utils = { features = ["testing-prover"], workspace = true }
