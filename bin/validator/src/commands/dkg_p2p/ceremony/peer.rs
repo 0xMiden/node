@@ -1,7 +1,8 @@
+use std::future::IntoFuture;
 use std::time::Duration;
 
 use anyhow::{Context, ensure};
-use iroh::endpoint::{Connection, Side};
+use iroh::endpoint::{Connection, Incoming, Side};
 use iroh::{Endpoint, EndpointId};
 use miden_node_tracing::warn;
 use miden_node_utils::retry::{self, Retryable};
@@ -47,12 +48,13 @@ impl ConnectedPeer {
         Ok(Self { connection })
     }
 
-    pub async fn accept(endpoint: &Endpoint) -> anyhow::Result<Self> {
-        let connection = endpoint
-            .accept()
+    /// Establishes one incoming connection within ten seconds.
+    ///
+    /// The timeout releases capacity when a remote endpoint does not complete establishment.
+    pub async fn accept(incoming: Incoming) -> anyhow::Result<Self> {
+        let connection = tokio::time::timeout(Duration::from_secs(10), incoming.into_future())
             .await
-            .context("Iroh endpoint closed while waiting for a peer")?
-            .await
+            .context("incoming peer connection timed out")?
             .context("failed to establish incoming peer connection")?;
         Ok(Self { connection })
     }

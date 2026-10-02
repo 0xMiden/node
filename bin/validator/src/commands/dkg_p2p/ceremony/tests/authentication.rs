@@ -146,7 +146,8 @@ async fn authentication_rejects_two_endpoints_using_the_same_validator_key() -> 
             let connection = if remote.id() < local_id {
                 ConnectedPeer::connect(&remote, local_id).await?
             } else {
-                ConnectedPeer::accept(&remote).await?
+                let incoming = remote.accept().await.expect("test endpoint must stay open");
+                ConnectedPeer::accept(incoming).await?
             };
             connection.authenticate(&validator_set, &signer).await
         });

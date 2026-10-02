@@ -8,7 +8,7 @@ use futures::future::try_join_all;
 use golden_core::{ParticipantIndex, ParticipantRegistry};
 use iroh::endpoint::presets;
 use iroh::{Endpoint, EndpointId, SecretKey as IrohSecretKey};
-use miden_node_tracing::info;
+use miden_node_tracing::{info, warn};
 use miden_node_utils::genesis::read_genesis_block;
 use miden_protocol::Word;
 use miden_protocol::block::ValidatorConfig;
@@ -83,6 +83,7 @@ pub(super) struct Ceremony {
 
 impl Ceremony {
     const ALPN: &'static [u8] = b"/miden/validator-dkg-p2p/1";
+    const MAX_PENDING_CONNECTIONS: usize = 16;
 
     pub async fn bind_endpoint(&self) -> anyhow::Result<Endpoint> {
         Endpoint::builder(presets::N0)
@@ -122,25 +123,42 @@ impl Ceremony {
         let mut authenticated_peers = Vec::with_capacity(self.peer_endpoints.len());
         let mut progress = tokio::time::interval(Duration::from_secs(10));
         progress.set_missed_tick_behavior(MissedTickBehavior::Skip);
-        // Retain the accept future across progress logs and authentication results.
+        // Establish incoming connections separately from validator authentication.
         //
-        // Dropping this future can cancel an incoming connection during establishment.
-        let incoming = ConnectedPeer::accept(endpoint);
-        tokio::pin!(incoming);
+        // These connections have no verified endpoint identity yet. Their failures must not
+        // abort the ceremony, and slow connections must not block the accept loop.
+        let mut incoming_connections = JoinSet::new();
         while !expected_incoming.is_empty() || !authentications.is_empty() {
             tokio::select! {
-                result = &mut incoming, if !expected_incoming.is_empty() => {
-                    let connected_peer = result?;
-                    incoming.set(ConnectedPeer::accept(endpoint));
+                incoming = endpoint.accept(), if !expected_incoming.is_empty() => {
+                    let incoming = incoming.context("Iroh endpoint closed while waiting for a peer")?;
+                    if incoming_connections.len() >= Self::MAX_PENDING_CONNECTIONS {
+                        incoming.refuse();
+                        continue;
+                    }
+                    incoming_connections.spawn(ConnectedPeer::accept(incoming));
+                },
+                Some(result) = incoming_connections.join_next() => {
+                    let connected_peer = match result.context("incoming connection task failed")? {
+                        Ok(peer) => peer,
+                        Err(error) => {
+                            warn!(
+                                &error,
+                                target: miden_validator::LOG_TARGET,
+                                "Ignoring failed incoming DKG connection"
+                            );
+                            continue;
+                        },
+                    };
                     let peer_endpoint = connected_peer.endpoint_id();
                     if !self.peer_endpoints.contains(&peer_endpoint) {
                         connected_peer.close(b"endpoint is not a configured DKG peer");
                         continue;
                     }
-                    ensure!(
-                        expected_incoming.remove(&peer_endpoint),
-                        "unexpected connection from peer endpoint {peer_endpoint}",
-                    );
+                    if !expected_incoming.remove(&peer_endpoint) {
+                        connected_peer.close(b"duplicate or wrong-direction DKG connection");
+                        continue;
+                    }
                     let validator_set = Arc::clone(&self.validator_set);
                     let signer = Arc::clone(&self.signer);
                     authentications.spawn(async move {

@@ -20,6 +20,7 @@ use super::{Ceremony, ParticipantRegistry};
 
 mod authentication;
 mod configuration;
+mod connections;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 type TestResultWith<T> = Result<T, Box<dyn std::error::Error>>;
