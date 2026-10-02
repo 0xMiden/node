@@ -20,6 +20,7 @@ use miden_standards::account::faucets::{FungibleFaucet, TokenName};
 use miden_standards::account::policies::{BurnPolicy, MintPolicy, TokenPolicyManager};
 use miden_standards::account::wallets::create_basic_wallet;
 use rand::distr::weighted::Weight;
+use rand::rngs::SysRng;
 use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use serde::{Deserialize, Serialize};
@@ -203,7 +204,7 @@ impl GenesisConfig {
                 .transpose()?
                 .unwrap_or(AuthScheme::Falcon512Poseidon2);
 
-            let mut rng = ChaCha20Rng::from_seed(rand::random());
+            let mut rng = genesis_rng()?;
             let secret_key = AuthSecretKey::with_scheme_and_rng(auth_scheme, &mut rng)?;
             let auth = Approver::from(&secret_key.public_key());
             let init_seed: [u8; 32] = rng.random();
@@ -340,7 +341,7 @@ impl FungibleFaucetConfig {
             max_supply,
             account_type,
         } = self;
-        let mut rng = ChaCha20Rng::from_seed(rand::random());
+        let mut rng = genesis_rng()?;
         let secret_key = RpoSecretKey::with_rng(&mut rng);
         let auth = AuthSingleSig::new(Approver::new(
             secret_key.public_key().into(),
@@ -464,6 +465,14 @@ impl GenesisAccountMetadata {
             Ok(AccountFileWithName { name, account_file })
         })
     }
+}
+
+/// Creates a [`ChaCha20Rng`] seeded from the operating system's entropy source.
+///
+/// Unlike `rand::random()`, this returns an error instead of panicking when the entropy source
+/// fails, so genesis can abort before writing any account files.
+fn genesis_rng() -> Result<ChaCha20Rng, GenesisConfigError> {
+    ChaCha20Rng::try_from_rng(&mut SysRng).map_err(GenesisConfigError::Entropy)
 }
 
 // HELPERS

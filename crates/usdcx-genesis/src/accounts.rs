@@ -20,6 +20,8 @@ use miden_standards::account::faucets::{FungibleFaucet, FungibleFaucetError};
 use miden_standards::account::wallets::BasicWallet;
 use miden_usdcx::account::xreserve::{XReserveStablecoinBuilder, XReserveStablecoinBuilderError};
 use miden_usdcx::xreserve::encoding::DepositNonce;
+use rand::TryRng;
+use rand::rngs::SysRng;
 
 use crate::config::GenesisToolConfig;
 
@@ -90,7 +92,9 @@ pub fn record_nonces(
 /// controlled by a newly generated `scheme` key. The returned file carries that key.
 pub fn new_distributor(scheme: AuthScheme) -> Result<AccountFile, NewDistributorError> {
     let secret_key = AuthSecretKey::with_scheme(scheme).map_err(NewDistributorError::Scheme)?;
-    new_distributor_with(rand::random(), secret_key).map_err(NewDistributorError::Account)
+    let mut init_seed = [0u8; 32];
+    SysRng.try_fill_bytes(&mut init_seed).map_err(NewDistributorError::Entropy)?;
+    new_distributor_with(init_seed, secret_key).map_err(NewDistributorError::Account)
 }
 
 /// Builds the distributor from `init_seed` and `secret_key`: a public basic wallet whose single-sig
@@ -154,6 +158,9 @@ pub enum NewDistributorError {
     /// The wallet did not compose.
     #[error("composing the distributor wallet")]
     Account(#[source] AccountError),
+    /// The operating system's entropy source failed.
+    #[error("obtaining entropy for the distributor seed")]
+    Entropy(#[source] rand::rngs::SysError),
 }
 
 /// Errors [`prefund_distributor`] returns.
