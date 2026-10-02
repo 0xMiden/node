@@ -69,8 +69,9 @@ impl UploadProtocol {
             "DKG board ticket does not authorize this participant"
         );
         let length = u64::from_be_bytes(header[37..45].try_into().expect("fixed slice"));
+        ensure!(length > 0, "DKG board artifact must not be empty");
         ensure!(
-            length > 0 && length <= MAX_ARTIFACT_BYTES,
+            length <= MAX_ARTIFACT_BYTES,
             "DKG board artifact exceeds {MAX_ARTIFACT_BYTES} bytes"
         );
         let slot = ArtifactSlot::from_upload_fields(kind, participant)?;
