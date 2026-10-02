@@ -1,4 +1,4 @@
-use anyhow::Context;
+use anyhow::{Context, ensure};
 use iroh::endpoint::{RecvStream as IrohRecvStream, SendStream as IrohSendStream};
 
 pub trait WireCodec: Sized {
@@ -21,6 +21,15 @@ impl SendStream {
 
     pub fn finish(&mut self) -> anyhow::Result<()> {
         self.inner.finish().context("failed to finish wire stream")
+    }
+
+    /// Waits for the peer to acknowledge all data after the send stream is finished.
+    ///
+    /// Closing the connection before delivery can discard buffered messages.
+    pub async fn wait_for_delivery(&self) -> anyhow::Result<()> {
+        let stopped = self.inner.stopped().await.context("failed to deliver wire stream")?;
+        ensure!(stopped.is_none(), "peer stopped the wire stream before delivery: {stopped:?}");
+        Ok(())
     }
 
     #[cfg(test)]

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use golden_core::verify_dealing_for_receiver;
-use golden_ehtdh1::{Combiner, UnsealingShare};
+use golden_ehtdh1::{Combiner, Ehtdh1Material, UnsealingShare};
 use golden_evrf::paper::secp_secq::SecpSecqBackend;
 use iroh::address_lookup::memory::MemoryLookup;
 use iroh::endpoint::presets;
@@ -16,14 +16,24 @@ use miden_protocol::crypto::hash::rpo::Rpo256;
 use miden_validator::{StorageKeyEpoch, ValidatorSigner};
 use tokio::task::JoinSet;
 
+use super::super::completion::Completion;
 use super::super::peer::AuthenticatedPeer;
 use super::*;
 
+mod completion;
 mod rejection;
 
 struct TestCeremony {
     endpoints: Vec<Endpoint>,
     validators: Vec<(Ceremony, DkgParticipants, LocalDealings)>,
+}
+
+struct CompletedValidator {
+    ceremony: Ceremony,
+    participants: DkgParticipants,
+    output: Ehtdh1Material<StorageGroup>,
+    dealings_commitment: DkgDealingsCommitment,
+    completion: Completion,
 }
 
 impl TestCeremony {
@@ -94,6 +104,37 @@ impl TestCeremony {
         .await??;
         Ok(Self { endpoints, validators })
     }
+
+    async fn complete_dkg(&mut self) -> anyhow::Result<Vec<CompletedValidator>> {
+        let validator_count = self.validators.len();
+        let mut completions = JoinSet::new();
+        for (ceremony, mut participants, dealings) in std::mem::take(&mut self.validators) {
+            completions.spawn(async move {
+                let dealings = ceremony.exchange_dealings(&mut participants, dealings).await?;
+                let dealings = ceremony.confirm_dealings(&mut participants, dealings).await?;
+                assert_eq!(dealings.decryption_dealing_count(), validator_count);
+                assert_eq!(dealings.context_dealing_count(), validator_count);
+                let dealings_commitment = dealings.commitment();
+                let output = ceremony.complete_dkg(&participants, dealings)?;
+                let completion = Completion::new(&participants, dealings_commitment, &output);
+                Ok::<_, anyhow::Error>(CompletedValidator {
+                    ceremony,
+                    participants,
+                    output,
+                    dealings_commitment,
+                    completion,
+                })
+            });
+        }
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let mut validators = Vec::new();
+            while let Some(result) = completions.join_next().await {
+                validators.push(result??);
+            }
+            Ok(validators)
+        })
+        .await?
+    }
 }
 
 #[rstest::rstest]
@@ -108,47 +149,53 @@ async fn ceremony_succeeds(
     #[case] threshold: usize,
     #[case] validator_count: usize,
 ) -> anyhow::Result<()> {
-    let TestCeremony { endpoints, validators } =
-        TestCeremony::create_dealings(threshold, validator_count).await?;
-    let mut confirmations = JoinSet::new();
-    for (ceremony, mut participants, dealings) in validators {
-        confirmations.spawn(async move {
-            let dealings = ceremony.exchange_dealings(&mut participants, dealings).await?;
-            let dealings = ceremony.confirm_dealings(&mut participants, dealings).await?;
-            // Return the participants to keep their connections alive.
-            //
-            // Other validators can still be reading confirmations after this task finishes.
-            Ok::<_, anyhow::Error>((ceremony, participants, dealings))
-        });
-    }
-    let confirmed = tokio::time::timeout(Duration::from_secs(10), async {
-        let mut confirmed = Vec::new();
-        while let Some(result) = confirmations.join_next().await {
-            confirmed.push(result??);
-        }
-        Ok::<_, anyhow::Error>(confirmed)
-    })
-    .await??;
-    let expected = confirmed[0].2.commitment();
-    let mut outputs = Vec::new();
-    let mut streams = Vec::new();
-    for (ceremony, mut participants, dealings) in confirmed {
-        assert_eq!(dealings.commitment(), expected);
-        assert_eq!(dealings.decryption_dealing_count(), validator_count);
-        assert_eq!(dealings.context_dealing_count(), validator_count);
-        let output = ceremony.complete_dkg(&participants, dealings)?;
+    let root = tempfile::tempdir()?;
+    let mut network = TestCeremony::create_dealings(threshold, validator_count).await?;
+    let validators = network.complete_dkg().await?;
+    let expected = validators[0].completion;
+    let mut completions = JoinSet::new();
+    for CompletedValidator {
+        ceremony,
+        mut participants,
+        output,
+        completion,
+        ..
+    } in validators
+    {
+        assert_eq!(completion, expected);
         assert_eq!(output.secret_share.participant, participants.local_index);
         assert_eq!(output.setup_context.epoch, *ceremony.epoch.as_bytes());
-        outputs.push(output);
-        participants.finish_streams()?;
-        streams.extend(
-            participants
+        let output_file = root.path().join(format!("{}.bundle", participants.local_index.get()));
+        let endpoint = network
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.id() == ceremony.endpoint_secret.public())
+            .unwrap()
+            .clone();
+        completions.spawn(async move {
+            ceremony.persist(&output_file, output.clone())?;
+            ceremony.confirm_completion(&mut participants, completion).await?;
+            endpoint.close().await;
+            let streams = participants
                 .session
                 .authenticated_peers
                 .into_iter()
-                .map(AuthenticatedPeer::into_streams),
-        );
+                .map(AuthenticatedPeer::into_streams)
+                .collect::<Vec<_>>();
+            Ok::<_, anyhow::Error>((output, streams))
+        });
     }
+    let (outputs, mut streams) = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut outputs = Vec::new();
+        let mut streams = Vec::new();
+        while let Some(result) = completions.join_next().await {
+            let (output, peer_streams) = result??;
+            outputs.push(output);
+            streams.extend(peer_streams);
+        }
+        Ok::<_, anyhow::Error>((outputs, streams))
+    })
+    .await??;
 
     tokio::time::timeout(Duration::from_secs(10), async {
         for (_, send, receive) in &mut streams {
@@ -185,7 +232,7 @@ async fn ceremony_succeeds(
     for selected in shares.into_iter().combinations(threshold) {
         assert_eq!(combiner.combine_exact(&ciphertext, decryption_context, &selected)?, plaintext,);
     }
-    for endpoint in endpoints {
+    for endpoint in network.endpoints {
         endpoint.close().await;
     }
     Ok(())

@@ -10,6 +10,7 @@ use super::super::wire::{RecvStream, SendStream};
 use super::Ceremony;
 use super::ceremony_config::CeremonyConfig;
 use super::challenge::{Challenge, ChallengeResponse};
+use super::completion::Completion;
 use super::dkg::confirmation::DkgDealingsCommitment;
 use super::dkg::{DealerMessages, DkgPublicKey, DkgRegistryRoot};
 use super::session::{CeremonyNonce, SessionId};
@@ -197,10 +198,18 @@ impl AuthenticatedPeer {
         Ok(peer_commitment)
     }
 
-    pub fn finish_stream(&mut self) -> anyhow::Result<()> {
-        self.send.finish().with_context(|| {
-            format!("failed to finish ceremony stream to {}", self.connection.endpoint_id())
-        })
+    pub async fn exchange_completion(&mut self, local: &Completion) -> anyhow::Result<Completion> {
+        self.send.write(local).await.context("failed to send ceremony completion")?;
+        self.send.finish()?;
+        let peer_completion = self
+            .receive
+            .read_exact::<Completion>(Completion::BYTES)
+            .await
+            .context("failed to read peer ceremony completion")?;
+        self.send.wait_for_delivery().await.with_context(|| {
+            format!("failed to deliver ceremony completion to {}", self.connection.endpoint_id())
+        })?;
+        Ok(peer_completion)
     }
 
     pub fn validator_public_key(&self) -> &PublicKey {

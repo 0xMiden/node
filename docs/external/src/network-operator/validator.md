@@ -146,6 +146,10 @@ existing output parent directory, not a bootstrapped validator data directory. O
 bundle inside its output directory. Treat the entire file as secret. To store it in a text-only secret store,
 base64-encode it for upload and decode it back to the original bytes before loading it.
 
+The P2P command reports success only after every validator announces a persisted bundle with matching session, dealing
+transcript, and public output commitments. A failed or timed-out exchange can leave a local bundle on disk. Do not
+activate that bundle as the output of a successful ceremony.
+
 ```bash
 miden-validator start \
   --listen 0.0.0.0:50101 \

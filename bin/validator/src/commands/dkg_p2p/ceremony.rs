@@ -24,6 +24,7 @@ use super::ParticipateOptions;
 
 mod ceremony_config;
 mod challenge;
+pub mod completion;
 mod dkg;
 mod peer;
 mod persistence;
@@ -309,13 +310,6 @@ impl Session {
 }
 
 impl DkgParticipants {
-    pub fn finish_streams(&mut self) -> anyhow::Result<()> {
-        for peer in &mut self.session.authenticated_peers {
-            peer.finish_stream()?;
-        }
-        Ok(())
-    }
-
     pub fn local_index(&self) -> ParticipantIndex {
         self.local_index
     }

@@ -8,6 +8,7 @@ use iroh::{EndpointId, SecretKey as IrohSecretKey};
 use miden_node_tracing::info;
 use zeroize::Zeroizing;
 
+use self::ceremony::completion::Completion;
 use super::ValidatorSigningKey;
 
 mod ceremony;
@@ -154,6 +155,7 @@ impl ParticipateOptions {
                 dkg.dealings_commitment = dealings.commitment().to_string() #[nonstandard]
             );
 
+            let dealings_commitment = dealings.commitment();
             let output = ceremony.complete_dkg(&participants, dealings)?;
             info!(
                 target: miden_validator::LOG_TARGET,
@@ -161,12 +163,20 @@ impl ParticipateOptions {
                 dkg.local_index = output.secret_share.participant.get() #[nonstandard],
                 dkg.setup_context_root = hex::encode(output.setup_context.root()) #[nonstandard]
             );
+            let completion = Completion::new(&participants, dealings_commitment, &output);
             ceremony.persist(&output_file, output)?;
-            participants.finish_streams()?;
             info!(
                 target: miden_validator::LOG_TARGET,
                 "Local storage key bundle written",
                 dkg.storage_key_file = output_file #[nonstandard]
+            );
+            ceremony
+                .confirm_completion(&mut participants, completion)
+                .await
+                .context("local bundle was written, but peer completion was not confirmed")?;
+            info!(
+                target: miden_validator::LOG_TARGET,
+                "Every validator confirmed storage key bundle persistence"
             );
             Ok::<_, anyhow::Error>(())
         })
