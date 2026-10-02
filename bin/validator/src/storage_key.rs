@@ -1,4 +1,5 @@
 use std::fmt;
+use std::io::Cursor;
 
 use golden_core::{GoldenGroup, ParticipantIndex};
 use golden_ehtdh1::wire::{from_wire_bytes, to_wire_bytes};
@@ -12,6 +13,13 @@ use golden_ehtdh1::{
     derive_context_session_id,
 };
 use golden_halo2curves::golden_group::Secp256k1GoldenGroup;
+use miden_protocol::utils::serde::{
+    ByteReader,
+    ByteWriter,
+    Deserializable,
+    DeserializationError,
+    Serializable,
+};
 use rand_core_06::{CryptoRng, RngCore};
 use zeroize::Zeroizing;
 
@@ -31,13 +39,35 @@ impl StorageKeyEpoch {
         Self(bytes)
     }
 
+    /// Parses exactly 32 epoch bytes from hexadecimal text.
+    pub fn from_hex(encoded: impl AsRef<[u8]>) -> Result<Self, hex::FromHexError> {
+        let mut bytes = [0; 32];
+        hex::decode_to_slice(encoded, &mut bytes)?;
+        Ok(Self(bytes))
+    }
+
     /// Returns the canonical epoch bytes.
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
 
-/// Canonical Golden values needed to restore one validator operator key.
+impl Serializable for StorageKeyEpoch {
+    fn write_into<W: ByteWriter>(&self, target: &mut W) {
+        target.write_bytes(&self.0);
+    }
+}
+
+impl Deserializable for StorageKeyEpoch {
+    fn read_from<R: ByteReader>(source: &mut R) -> Result<Self, DeserializationError> {
+        Ok(Self(source.read_array()?))
+    }
+}
+
+/// Encoded epoch, public setup, public key set, and private share for one validator.
+///
+/// Encoded values can contain inconsistent key material. [`Self::decode`] checks their consistency
+/// before constructing an operator key.
 pub struct EncodedGoldenOperatorKey {
     key_epoch: StorageKeyEpoch,
     setup_context: Vec<u8>,
@@ -58,7 +88,53 @@ impl fmt::Debug for EncodedGoldenOperatorKey {
 }
 
 impl EncodedGoldenOperatorKey {
-    /// Creates a restart bundle from canonical Golden wire values.
+    const BUNDLE_HEADER: &[u8] = b"miden-validator-storage-key\x01";
+
+    /// Encodes the version header and epoch, followed by the setup context, public key set, and
+    /// secret share. Each Golden wire value has a little-endian `u32` byte-length prefix.
+    ///
+    /// The output contains the private share, so its buffer is cleared on drop.
+    pub fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
+        let mut bytes = Zeroizing::new(Vec::new());
+        bytes.extend_from_slice(Self::BUNDLE_HEADER);
+        bytes.extend_from_slice(self.key_epoch.as_bytes());
+        for value in [&self.setup_context, &self.public_key_set, &*self.secret_share] {
+            let length = u32::try_from(value.len()).expect("storage key field must fit in u32");
+            bytes.write_u32(length);
+            bytes.extend_from_slice(value);
+        }
+        bytes
+    }
+
+    /// Parses one complete versioned bundle and rejects unknown formats, truncated values, and
+    /// trailing bytes.
+    ///
+    /// Valid framing does not guarantee consistent key material. Call [`Self::decode`] before
+    /// using the bundle as an operator key.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, DeserializationError> {
+        let mut source = Cursor::new(bytes);
+        if source.read_slice(Self::BUNDLE_HEADER.len())? != Self::BUNDLE_HEADER {
+            return Err(DeserializationError::InvalidValue(
+                "unsupported storage key bundle format".into(),
+            ));
+        }
+        let key_epoch = StorageKeyEpoch::read_from(&mut source)?;
+        let mut values = [Vec::new(), Vec::new(), Vec::new()];
+        for value in &mut values {
+            let length = source.read_u32()? as usize;
+            *value = source.read_slice(length)?.to_vec();
+        }
+        let [setup_context, public_key_set, secret_share] = values;
+        let bundle = Self::new(key_epoch, setup_context, public_key_set, secret_share);
+        if source.has_more_bytes() {
+            return Err(DeserializationError::InvalidValue(
+                "storage key bundle contains trailing bytes".into(),
+            ));
+        }
+        Ok(bundle)
+    }
+
+    /// Collects the epoch and encoded Golden values into a storage-key bundle.
     pub fn new(
         key_epoch: StorageKeyEpoch,
         setup_context: Vec<u8>,
@@ -397,22 +473,12 @@ pub(crate) mod tests {
         operator_keys().remove(0)
     }
 
-    /// Regenerates the committed insecure storage-key fixture under
-    /// `scripts/testdata/insecure-storage-key/`.
+    /// Writes the deterministic, insecure two-of-three fixture to
+    /// `scripts/testdata/insecure-storage-key/`. The output includes shared public files, each
+    /// participant's secret share, and a complete bundle per participant.
     ///
-    /// The fixture holds a full two-of-three setup: one shared
-    /// `setup-context.wire` and `public-key-set.wire`, plus a *distinct*
-    /// `validator-<n>/secret-share.wire` for each participant. This lets the
-    /// docker-compose network give every validator its own share, which is
-    /// required for a real threshold recovery — mounting the same share into
-    /// all three validators makes any 2-of-3 combine collapse to a single
-    /// participant and fail.
-    ///
-    /// Ignored by default so it never runs in CI; regenerate the fixture with:
-    ///
-    /// ```text
-    /// cargo test -p miden-validator --lib storage_key::tests::write_insecure_storage_key_fixture -- --ignored
-    /// ```
+    /// Threshold recovery requires distinct participant shares. This test stays ignored to avoid
+    /// rewriting committed files during normal test runs.
     #[test]
     #[ignore = "writes fixture files; run explicitly to regenerate"]
     fn write_insecure_storage_key_fixture() {
@@ -432,13 +498,26 @@ pub(crate) mod tests {
             fs_err::create_dir_all(&validator_dir).unwrap();
             fs_err::write(validator_dir.join("secret-share.wire"), to_wire_bytes(&secret_share))
                 .unwrap();
+            let operator_key = GoldenOperatorKey::new(
+                EPOCH,
+                setup_context.clone(),
+                public_key_set.clone(),
+                secret_share,
+            )
+            .unwrap();
+            fs_err::write(
+                validator_dir.join("storage-key.bundle"),
+                operator_key.encode().to_bytes(),
+            )
+            .unwrap();
         }
     }
 
     #[test]
     fn restart_bundle_round_trips() {
         let expected = operator_key();
-        let decoded = expected.encode().decode().unwrap();
+        let bytes = expected.encode().to_bytes();
+        let decoded = EncodedGoldenOperatorKey::from_bytes(&bytes).unwrap().decode().unwrap();
 
         assert_eq!(decoded.key_epoch(), EPOCH);
         assert_eq!(decoded.setup_context(), expected.setup_context());
@@ -446,6 +525,38 @@ pub(crate) mod tests {
         assert_eq!(decoded.participant(), expected.participant());
         assert_eq!(decoded.sealing_key(), expected.sealing_key());
         assert_eq!(decoded.setup_context_id(), expected.setup_context_id());
+        assert_eq!(*decoded.encode().to_bytes(), *bytes);
+    }
+
+    #[test]
+    fn bundle_rejects_unknown_format() {
+        let mut bytes = operator_key().encode().to_bytes();
+        bytes[EncodedGoldenOperatorKey::BUNDLE_HEADER.len() - 1] = 2;
+        assert!(matches!(
+            EncodedGoldenOperatorKey::from_bytes(&bytes),
+            Err(DeserializationError::InvalidValue(_)),
+        ));
+    }
+
+    #[test]
+    fn bundle_rejects_truncation_and_trailing_bytes() {
+        let mut bytes = operator_key().encode().to_bytes();
+        for length in 0..bytes.len() {
+            assert!(EncodedGoldenOperatorKey::from_bytes(&bytes[..length]).is_err());
+        }
+        bytes.push(0);
+        assert!(EncodedGoldenOperatorKey::from_bytes(&bytes).is_err());
+    }
+
+    #[test]
+    fn bundle_rejects_field_length_exceeding_input() {
+        let mut bytes = operator_key().encode().to_bytes();
+        let offset = EncodedGoldenOperatorKey::BUNDLE_HEADER.len() + 32;
+        bytes[offset..offset + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(matches!(
+            EncodedGoldenOperatorKey::from_bytes(&bytes),
+            Err(DeserializationError::UnexpectedEOF),
+        ));
     }
 
     #[test]
