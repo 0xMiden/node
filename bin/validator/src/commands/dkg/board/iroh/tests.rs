@@ -778,6 +778,32 @@ async fn shutdown_reports_both_store_flush_failures() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn shutdown_waits_for_an_in_flight_upload() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let data_directory = root.path().join("board");
+    let (host, _) = BoardNode::create_for_test(&data_directory).await?;
+    let writer = host.local_writer_for_test().clone();
+    let guard = writer.lock.lock().await;
+    let slot = ArtifactSlot::Manifest;
+    let value = b"manifest";
+    let upload = writer.store(&slot, value);
+    futures::pin_mut!(upload);
+    assert!(futures::poll!(upload.as_mut()).is_pending());
+    let shutdown = host.shutdown();
+    futures::pin_mut!(shutdown);
+    assert!(futures::poll!(shutdown.as_mut()).is_pending());
+
+    drop(guard);
+    let (upload, shutdown) = tokio::join!(upload, shutdown);
+    assert_eq!(upload?, Hash::new(value));
+    shutdown?;
+    let (reopened, _) = BoardNode::create_for_test(&data_directory).await?;
+    assert_eq!(reopened.read_unique(&slot).await?, Some(value.to_vec()));
+    reopened.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn unavailable_blob_remains_retryable() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     let (host, tickets) = BoardNode::create_for_test(&root.path().join("host")).await?;
