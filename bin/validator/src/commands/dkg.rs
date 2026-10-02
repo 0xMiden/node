@@ -1,3 +1,8 @@
+//! Runs live storage-key ceremonies over a direct mesh of authenticated validator connections.
+//!
+//! Each validator sends its own messages to every peer. Transcript comparisons establish
+//! consistency without a coordinator, and completion follows local bundle persistence.
+
 use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -146,6 +151,10 @@ impl DkgOptions {
 }
 
 impl ParticipateOptions {
+    /// Runs one ceremony attempt and closes the endpoint on success, error, or timeout.
+    ///
+    /// Attempt state is not saved for resumption. A single validator follows the same steps with
+    /// no peer exchanges, so it still generates and persists a one-of-one storage key.
     async fn handle(self) -> anyhow::Result<()> {
         let timeout = self.timeout;
         let output_file = self.output_file.clone();
@@ -211,6 +220,10 @@ impl ParticipateOptions {
                 dkg.setup_context_root = hex::encode(output.setup_context.root()) #[nonstandard]
             );
             let completion = Completion::new(&participants, dealings_commitment, &output);
+            // Save the local bundle before announcing completion to peers.
+            //
+            // A file on disk is not proof of ceremony success. If peer confirmation fails, the
+            // bundle remains on disk but must not be used.
             ceremony.persist(&output_file, output)?;
             info!(
                 target: miden_validator::LOG_TARGET,

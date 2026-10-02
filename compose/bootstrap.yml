@@ -163,12 +163,18 @@ services:
         else
           echo "Running the peer-to-peer storage key DKG ceremony..."
           DKG_PIDS=
+          # Stop the remaining participants if bootstrap exits before every ceremony command succeeds.
+          #
+          # Each command waits for its peers, so a failed participant must not leave the others running.
           trap '
             kill $${DKG_PIDS} 2>/dev/null || true
             wait || true
           ' EXIT
           trap 'exit 1' INT TERM
 
+          # Start all participants before waiting for completion.
+          #
+          # The live ceremony requires peers to exchange messages concurrently.
           for VALIDATOR in 1 2 3; do
             case "$${VALIDATOR}" in
               1) SIGNING_KEY="$${MIDEN_VALIDATOR_1_SIGNING_KEY}" ;;

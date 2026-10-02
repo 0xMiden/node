@@ -1,6 +1,10 @@
 use anyhow::{Context, ensure};
 use iroh::endpoint::{RecvStream as IrohRecvStream, SendStream as IrohSendStream};
 
+/// Encodes and decodes one ceremony message without adding transport framing.
+///
+/// The protocol step supplies the expected byte count. Decoders must reject incomplete values
+/// and trailing bytes so adjacent messages remain separate on the shared stream.
 pub trait WireCodec: Sized {
     fn encode(&self) -> Vec<u8>;
 
@@ -54,6 +58,10 @@ impl RecvStream {
         self.inner
     }
 
+    /// Reads and decodes exactly the byte count selected by the current protocol step.
+    ///
+    /// The count must come from local configuration or a fixed message size, not an unchecked
+    /// peer-supplied length, because it determines the receive allocation.
     pub async fn read_exact<T: WireCodec>(&mut self, bytes: usize) -> anyhow::Result<T> {
         let mut bytes = vec![0; bytes];
         self.inner.read_exact(&mut bytes).await.context("failed to read wire message")?;

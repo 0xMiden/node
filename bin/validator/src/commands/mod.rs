@@ -366,6 +366,10 @@ pub struct ValidatorStorageKey {
 }
 
 impl ValidatorStorageKey {
+    /// Loads the bundle and checks that its epoch, public setup, and local secret share are consistent.
+    ///
+    /// The file contains private key material, so the read buffer is cleared on drop. These checks
+    /// do not establish whether the ceremony completed successfully; provisioning must ensure that.
     fn load(self) -> anyhow::Result<GoldenOperatorKey> {
         let bytes = Zeroizing::new(fs_err::read(&self.file).with_context(|| {
             format!("failed to read storage key bundle from {}", self.file.display())

@@ -20,6 +20,7 @@ use super::dkg::confirmation::DkgDealingsCommitment;
 use super::dkg::{DealerMessages, DkgPublicKey, DkgRegistryRoot};
 use super::session::{CeremonyNonce, SessionId};
 
+/// An established Iroh connection with a verified endpoint identity but no validator identity.
 pub struct ConnectedPeer {
     connection: Connection,
 }
@@ -82,6 +83,10 @@ impl ConnectedPeer {
         self.connection.close(0u8.into(), reason);
     }
 
+    /// Exchanges signed challenges and binds this connection to a genesis validator key.
+    ///
+    /// Both sides send before reading at each exchange. The returned peer retains the same stream
+    /// for subsequent ceremony messages, but no ceremony configuration has been exchanged yet.
     pub async fn authenticate(
         self,
         validator_set: &ValidatorConfig,
@@ -128,6 +133,10 @@ impl ConnectedPeer {
     }
 }
 
+/// A connection authenticated as a genesis validator, with one ordered stream for the ceremony.
+///
+/// Both ends must call the exchange methods in protocol order. Buffered stream data allows one
+/// peer to reach the next step while the other is still waiting for its remaining peers.
 pub struct AuthenticatedPeer {
     validator_public_key: PublicKey,
     connection: ConnectedPeer,
@@ -200,6 +209,10 @@ impl AuthenticatedPeer {
         Ok(peer_registry_root)
     }
 
+    /// Exchanges both dealer messages using the local encoding length as the receive bound.
+    ///
+    /// The agreed registry and threshold give every dealer the same encoded message size. The
+    /// peer's internal length prefixes therefore cannot request an unbounded receive allocation.
     pub async fn exchange_dealer_messages(
         &mut self,
         local: &DealerMessages,
@@ -227,6 +240,10 @@ impl AuthenticatedPeer {
         Ok(peer_commitment)
     }
 
+    /// Exchanges the final completion message and waits for transport acknowledgement of our send.
+    ///
+    /// Finishing and draining the send stream keeps endpoint shutdown from discarding the local
+    /// completion message. The ceremony separately checks that the received completion matches.
     pub async fn exchange_completion(&mut self, local: &Completion) -> anyhow::Result<Completion> {
         self.send.write(local).await.context("failed to send ceremony completion")?;
         self.send.finish()?;

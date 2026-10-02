@@ -57,6 +57,8 @@ impl fmt::Display for DkgDealingsCommitment {
 }
 
 impl Ceremony {
+    /// Requires matching commitments to both rounds of dealings from every authenticated peer. Only
+    /// confirmed dealings can be passed to DKG completion.
     pub async fn confirm_dealings(
         &self,
         participants: &mut DkgParticipants,

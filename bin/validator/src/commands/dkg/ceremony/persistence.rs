@@ -11,6 +11,9 @@ use super::dkg::StorageGroup;
 
 impl Ceremony {
     /// Writes a validated storage-key bundle to a new file without replacing an existing file.
+    ///
+    /// Success here only confirms local persistence. The command must still receive matching peer
+    /// completion messages before reporting that the bundle is safe to use.
     pub fn persist(
         &self,
         output_file: &Path,

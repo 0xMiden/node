@@ -8,6 +8,9 @@ use super::{Ceremony, DkgDealings, DkgParticipants, StorageGroup};
 impl Ceremony {
     /// Derives the storage-key setup, shared public key set, and this validator's secret share from
     /// the confirmed decryption and context dealings.
+    ///
+    /// Completion combines contributions for the local participant, not all validators' secret
+    /// shares. Golden then checks that both rounds form one valid storage-encryption setup.
     pub fn complete_dkg(
         &self,
         participants: &DkgParticipants,

@@ -38,6 +38,9 @@ pub type StorageGroup = Secp256k1GoldenGroup;
 type StorageScalar = <StorageGroup as GoldenGroup>::Scalar;
 type StorageElement = <StorageGroup as GoldenGroup>::Element;
 
+/// This validator's decryption and context dealings, including their private polynomial state.
+///
+/// Only the dealer messages are sent to peers. The private state remains local until completion.
 pub struct LocalDealings {
     decryption_config: DkgConfig<StorageGroup>,
     decryption_dealing: DkgDealing<StorageGroup>,
@@ -45,6 +48,10 @@ pub struct LocalDealings {
     context_dealing: DkgDealing<StorageGroup>,
 }
 
+/// Local dealings and every peer's dealings after proof and local-share verification.
+///
+/// These checks do not prove that other validators received the same dealings. Transcript
+/// confirmation must establish that agreement before key material is derived.
 pub struct UnconfirmedDkgDealings {
     local: LocalDealings,
     peer_decryption_dealings: BTreeMap<ParticipantIndex, DealerMessage<StorageGroup>>,
@@ -63,6 +70,10 @@ pub struct DkgDealings {
     commitment: DkgDealingsCommitment,
 }
 
+/// The public messages for one dealer's decryption and context contributions.
+///
+/// Each message contains polynomial commitments, encrypted shares for the other participants,
+/// and proofs. The dealer sends the same pair to every peer, not its plaintext polynomial.
 #[derive(Clone)]
 pub struct DealerMessages {
     decryption: DealerMessage<StorageGroup>,
@@ -151,8 +162,14 @@ impl fmt::Display for DkgRegistryRoot {
 }
 
 impl Ceremony {
+    /// Domain for Golden's public proof parameter `beta`, derived identically by every validator.
+    /// This parameter is not a secret contribution to the storage key.
     const DKG_BETA_DOMAIN: &'static [u8] = b"miden-storage-key-dkg-beta-v1";
 
+    /// Creates one decryption contribution and one zero-constant context contribution.
+    ///
+    /// Golden requires two DKG rounds for storage encryption. The decryption round shares a
+    /// random secret; the context round shares zero. Distinct session IDs keep the rounds separate.
     pub fn create_dealings(&self, participants: &DkgParticipants) -> anyhow::Result<LocalDealings> {
         let session_id = participants.session.id.encode();
         let session_id: [u8; 32] = session_id.try_into().map_err(|session_id: Vec<u8>| {
@@ -197,6 +214,8 @@ impl Ceremony {
         })
     }
 
+    /// Sends the local dealer messages to every peer and verifies each received pair for the local
+    /// participant before retaining it for transcript confirmation.
     pub async fn exchange_dealings(
         &self,
         participants: &mut DkgParticipants,
@@ -226,6 +245,9 @@ impl Ceremony {
         let mut peer_context_dealings = BTreeMap::new();
         while let Some(result) = exchanges.next().await {
             let (dealer, messages) = result?;
+            // Bind the claimed dealer index to the validator authenticated on this connection.
+            //
+            // A valid proof alone must not let a peer submit another participant's contribution.
             ensure!(
                 messages.decryption.dealer == dealer,
                 "authenticated participant {} sent a decryption dealing for participant {}",
@@ -304,6 +326,10 @@ impl DkgDealings {
     }
 }
 
+/// A nonzero, attempt-specific key used to protect and recover shares in dealer messages.
+///
+/// This is separate from the persistent Iroh identity and genesis signing key. It is also not
+/// the resulting storage-key share, which is derived from all dealers' contributions.
 pub struct DkgSecretKey(StorageScalar);
 
 impl DkgSecretKey {
@@ -321,6 +347,7 @@ impl DkgSecretKey {
     }
 }
 
+/// The non-identity public key registered for a participant's attempt-specific DKG secret.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DkgPublicKey(StorageElement);
 

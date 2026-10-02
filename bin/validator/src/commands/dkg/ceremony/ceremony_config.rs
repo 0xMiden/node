@@ -5,6 +5,10 @@ use miden_validator::StorageKeyEpoch;
 
 use super::super::wire::WireCodec;
 
+/// Shared ceremony parameters exchanged after peer authentication.
+///
+/// Decoding only checks the wire representation. The peer exchange requires equality with the
+/// validated local configuration before the ceremony proceeds.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CeremonyConfig {
     genesis_commitment: Word,

@@ -10,6 +10,7 @@ use rand_core_06::CryptoRngCore;
 use super::super::wire::WireCodec;
 use super::ceremony_config::CeremonyConfig;
 
+/// One validator's fresh contribution to the session ID, shared with every peer in this attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CeremonyNonce([u8; 32]);
 
@@ -34,6 +35,10 @@ impl WireCodec for CeremonyNonce {
     }
 }
 
+/// Commitment to the ceremony configuration and each validator's nonce, ordered by validator key.
+///
+/// The order makes the result independent of connection and message arrival order. The caller
+/// must supply one contribution per authenticated validator, including the local validator.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SessionId(Word);
 

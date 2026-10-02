@@ -35,20 +35,27 @@ mod session;
 #[cfg(test)]
 mod tests;
 
+/// Peers whose distinct validator keys, together with the local key, match the genesis validator
+/// set. Authentication alone does not establish agreement on ceremony configuration.
 pub struct AuthenticatedPeers {
     authenticated_peers: Vec<AuthenticatedPeer>,
 }
 
+/// A session ID derived from the local configuration and every validator's nonce, before peers
+/// confirm that they derived the same ID.
 pub struct UnconfirmedSession {
     id: SessionId,
     authenticated_peers: Vec<AuthenticatedPeer>,
 }
 
+/// A session whose ID matches the ID reported by every authenticated peer.
 pub struct Session {
     id: SessionId,
     authenticated_peers: Vec<AuthenticatedPeer>,
 }
 
+/// The local DKG secret and a registry built from authenticated validators' DKG public keys. Peer
+/// agreement on the registry has not yet been checked.
 pub struct UnconfirmedDkgParticipants {
     session: Session,
     local_index: ParticipantIndex,
@@ -56,6 +63,8 @@ pub struct UnconfirmedDkgParticipants {
     registry: ParticipantRegistry<StorageGroup>,
 }
 
+/// DKG participants whose registry root matches the root reported by every peer in the session. The
+/// local secret corresponds to the public key registered at `local_index`.
 pub struct DkgParticipants {
     session: Session,
     local_index: ParticipantIndex,
@@ -86,6 +95,10 @@ impl Ceremony {
     const ALPN: &'static [u8] = b"/miden/validator-dkg-p2p/1";
     const MAX_PENDING_CONNECTIONS: usize = 16;
 
+    /// Binds the persistent endpoint identity with only the configured relay and no public discovery.
+    ///
+    /// The relay supplies a transport fallback, not a ceremony role. Direct connections remain
+    /// available, and the command handler owns endpoint shutdown.
     pub async fn bind_endpoint(&self) -> anyhow::Result<Endpoint> {
         Endpoint::builder(presets::Minimal)
             .relay_mode(RelayMode::Custom(self.relay_url.clone().into()))
@@ -96,6 +109,10 @@ impl Ceremony {
             .context("failed to bind Iroh endpoint")
     }
 
+    /// Connects to every configured endpoint and requires exactly the genesis validator set.
+    ///
+    /// The smaller endpoint ID dials to avoid duplicate connections. Each connection authenticates
+    /// independently, so a late peer does not block authentication of peers that are already online.
     pub async fn authenticate_peers(
         &self,
         endpoint: &Endpoint,
@@ -182,6 +199,10 @@ impl Ceremony {
             }
         }
 
+        // Check the complete validator set after individual proofs of key ownership.
+        //
+        // Membership checks alone would allow multiple endpoints to authenticate with one
+        // validator's key while another genesis validator is absent.
         let mut authenticated_validator_keys = authenticated_peers
             .iter()
             .map(|peer| peer.validator_public_key().clone())
@@ -198,6 +219,8 @@ impl Ceremony {
         Ok(AuthenticatedPeers { authenticated_peers })
     }
 
+    /// Requires each authenticated peer to use the same genesis commitment, threshold, and epoch
+    /// before exchanging attempt-specific values.
     pub async fn exchange_configs(
         &self,
         mut peers: AuthenticatedPeers,
@@ -214,6 +237,10 @@ impl Ceremony {
         Ok(peers)
     }
 
+    /// Sends one fresh local nonce to every peer and derives the session ID from all contributions.
+    ///
+    /// Fresh nonces distinguish attempts even when the epoch, configuration, and persistent
+    /// endpoint identities stay unchanged.
     pub async fn exchange_nonces(
         &self,
         mut peers: AuthenticatedPeers,
@@ -240,6 +267,9 @@ impl Ceremony {
         })
     }
 
+    /// Requires every peer to report the locally derived session ID before DKG key exchange.
+    ///
+    /// Comparing IDs detects a participant that sends different nonces to different validators.
     pub async fn confirm_session(
         &self,
         mut session: UnconfirmedSession,
@@ -262,6 +292,10 @@ impl Ceremony {
         })
     }
 
+    /// Generates the local DKG key and builds a registry from each validator's DKG public key.
+    ///
+    /// Indices start at one and follow validator signing-key byte order. Connection arrival order
+    /// and endpoint IDs must not change which participant owns a share.
     pub async fn exchange_dkg_public_keys(
         &self,
         mut session: Session,
@@ -310,6 +344,10 @@ impl Ceremony {
         })
     }
 
+    /// Requires every peer to report the same participant indices and DKG public keys.
+    ///
+    /// A valid public key can still differ between recipients. Registry agreement is required
+    /// before dealers encrypt contributions for those keys.
     pub async fn confirm_dkg_registry(
         &self,
         mut participants: UnconfirmedDkgParticipants,
@@ -364,6 +402,8 @@ impl DkgParticipants {
 }
 
 impl ParticipateOptions {
+    /// Loads trusted genesis and local key material and checks participation inputs before any peer
+    /// connections are opened.
     pub(super) async fn validate(self) -> anyhow::Result<Ceremony> {
         ensure!(
             matches!(self.relay_url.scheme(), "http" | "https") && self.relay_url.host().is_some(),

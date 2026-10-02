@@ -8,6 +8,7 @@ use rand_core_06::CryptoRngCore;
 
 use super::super::wire::WireCodec;
 
+/// Fresh random bytes used to request proof of a peer's validator signing key on one connection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Challenge([u8; 32]);
 
@@ -57,6 +58,8 @@ impl WireCodec for Challenge {
     }
 }
 
+/// A claimed validator key and its signature over a challenge and connection binding. Decoding this
+/// message does not authenticate the key or establish genesis membership.
 #[derive(Debug)]
 pub struct ChallengeResponse {
     validator_public_key: PublicKey,
@@ -66,6 +69,10 @@ pub struct ChallengeResponse {
 impl ChallengeResponse {
     pub const BYTES: usize = 33 + 65;
 
+    /// Verifies proof of key ownership for the local challenge and connection binding.
+    ///
+    /// The returned key still requires a separate genesis membership check before it can identify
+    /// an authenticated ceremony peer.
     pub fn verify_against(
         self,
         challenge: &Challenge,
