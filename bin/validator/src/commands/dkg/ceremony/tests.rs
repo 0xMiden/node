@@ -324,7 +324,12 @@ async fn authentication_rejects_signature_from_different_domain() -> TestResult 
         let peer_challenge = Challenge::random(&mut OsRng);
         send.write_all(&peer_challenge.encode()).await?;
 
+        let mut channel_binding = [0; 32];
+        connection
+            .export_keying_material(&mut channel_binding, b"EXPORTER-Channel-Binding", b"")
+            .expect("test connection must export its channel binding");
         let mut commitment = b"different-protocol-domain".to_vec();
+        commitment.extend_from_slice(&channel_binding);
         commitment.extend_from_slice(&challenge.encode());
         let signature = peer_signing_key.sign(Rpo256::hash(&commitment));
         send.write_all(&peer_signing_key.public_key().to_bytes()).await?;
@@ -348,6 +353,7 @@ async fn authentication_rejects_signature_from_different_domain() -> TestResult 
 fn authentication_signature_commits_to_challenge() {
     let first = Challenge::random(&mut OsRng);
     let second = Challenge::random(&mut OsRng);
+    let channel_binding = [42; 32];
 
-    assert_ne!(first.commitment(), second.commitment());
+    assert_ne!(first.commitment(&channel_binding), second.commitment(&channel_binding));
 }

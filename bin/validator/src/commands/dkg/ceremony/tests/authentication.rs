@@ -1,11 +1,83 @@
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
+use anyhow::Context;
 use iroh_relay::server::{RelayConfig, Server, ServerConfig};
 use tokio::task::JoinSet;
 
 use super::*;
+use crate::commands::dkg::ceremony::challenge::ChallengeResponse;
 use crate::commands::dkg::ceremony::peer::ConnectedPeer;
+
+#[tokio::test]
+async fn authentication_rejects_mitm_relayed_responses() -> TestResult {
+    let mut secrets = std::array::from_fn::<_, 4, _>(|_| IrohSecretKey::generate());
+    secrets.sort_by_key(IrohSecretKey::public);
+    let [a_secret, b_secret, proxy_a_secret, proxy_b_secret] = secrets;
+    let (a, a_lookup) = bind_test_endpoint(a_secret.clone()).await?;
+    let (b, b_lookup) = bind_test_endpoint(b_secret.clone()).await?;
+    let (proxy_a, _) = bind_test_endpoint(proxy_a_secret).await?;
+    let (proxy_b, _) = bind_test_endpoint(proxy_b_secret).await?;
+    a_lookup.add_endpoint_info(proxy_a.addr());
+    b_lookup.add_endpoint_info(proxy_b.addr());
+
+    let a_key = SigningKey::new();
+    let b_key = SigningKey::new();
+    let validator_keys = vec![a_key.public_key(), b_key.public_key()];
+    let a_ceremony =
+        test_ceremony(&a_key, validator_keys.clone(), a_secret, BTreeSet::from([proxy_a.id()]));
+    let b_ceremony =
+        test_ceremony(&b_key, validator_keys, b_secret, BTreeSet::from([proxy_b.id()]));
+
+    // Forward challenges and responses between two attacker-owned connections.
+    //
+    // The proxy has neither validator's signing key. Valid signatures from one connection
+    // must not authenticate the proxy on the other connection.
+    let relay_challenges = async {
+        let (a_connection, b_connection) = tokio::try_join!(
+            async {
+                Ok::<_, anyhow::Error>(proxy_a.accept().await.context("A did not dial")?.await?)
+            },
+            async {
+                Ok::<_, anyhow::Error>(proxy_b.accept().await.context("B did not dial")?.await?)
+            },
+        )?;
+        let ((mut a_send, mut a_recv), (mut b_send, mut b_recv)) =
+            tokio::try_join!(a_connection.accept_bi(), b_connection.accept_bi())?;
+        let mut a_challenge = [0; Challenge::BYTES];
+        let mut b_challenge = [0; Challenge::BYTES];
+        tokio::try_join!(a_recv.read_exact(&mut a_challenge), b_recv.read_exact(&mut b_challenge))?;
+        tokio::try_join!(a_send.write_all(&b_challenge), b_send.write_all(&a_challenge))?;
+        let mut a_response = [0; ChallengeResponse::BYTES];
+        let mut b_response = [0; ChallengeResponse::BYTES];
+        tokio::try_join!(a_recv.read_exact(&mut a_response), b_recv.read_exact(&mut b_response))?;
+        tokio::try_join!(a_send.write_all(&b_response), b_send.write_all(&a_response))?;
+        Ok::<_, anyhow::Error>((a_connection, b_connection, a_send, a_recv, b_send, b_recv))
+    };
+
+    let (a_result, b_result, proxy_connections) =
+        tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::join!(
+                a_ceremony.authenticate_peers(&a),
+                b_ceremony.authenticate_peers(&b),
+                relay_challenges,
+            )
+        })
+        .await?;
+    let _proxy_connections = proxy_connections?;
+    for result in [a_result, b_result] {
+        let error = result.err().expect("MITM-relayed responses must not authenticate a peer");
+        assert!(
+            format!("{error:#}").contains("peer challenge response signature is invalid"),
+            "{error:#}",
+        );
+    }
+
+    for endpoint in [a, b, proxy_a, proxy_b] {
+        endpoint.close().await;
+    }
+    Ok(())
+}
 
 #[rstest::rstest]
 #[case::dialer(true)]

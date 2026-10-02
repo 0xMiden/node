@@ -87,6 +87,13 @@ impl ConnectedPeer {
         validator_set: &ValidatorConfig,
         signer: &ValidatorSigner,
     ) -> anyhow::Result<AuthenticatedPeer> {
+        // Derive the tls-exporter channel binding defined in RFC 9266, section 2.
+        let mut channel_binding = [0; 32];
+        self.connection
+            .export_keying_material(&mut channel_binding, b"EXPORTER-Channel-Binding", b"")
+            .map_err(|error| {
+                anyhow::anyhow!("failed to derive authentication channel binding: {error:?}")
+            })?;
         let (mut send, mut receive) =
             self.bi_stream().await.context("failed to establish authentication stream")?;
         let challenge = Challenge::random(&mut OsRng);
@@ -100,14 +107,14 @@ impl ConnectedPeer {
             .await
             .context("failed to read authentication challenge")?;
 
-        let response = peer_challenge.sign(signer).await?;
+        let response = peer_challenge.sign(signer, &channel_binding).await?;
         send.write(&response).await.context("failed to send authentication response")?;
 
         let response = receive
             .read_exact::<ChallengeResponse>(ChallengeResponse::BYTES)
             .await
             .context("failed to read challenge response")?;
-        let validator_public_key = response.verify_against(&challenge)?;
+        let validator_public_key = response.verify_against(&challenge, &channel_binding)?;
         ensure!(
             validator_set.keys().contains(&validator_public_key),
             "peer validator key is not committed by genesis",

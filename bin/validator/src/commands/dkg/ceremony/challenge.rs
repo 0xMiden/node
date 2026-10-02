@@ -22,17 +22,26 @@ impl Challenge {
         Self(bytes)
     }
 
-    pub fn commitment(&self) -> Word {
+    /// Commits to the challenge and the TLS channel binding of the current Iroh connection.
+    ///
+    /// This prevents man-in-the-middle attacks that forward challenges and signed responses
+    /// between separate connections. The binding must come from the local connection, not the peer.
+    pub fn commitment(&self, channel_binding: &[u8; 32]) -> Word {
         let mut transcript = Vec::new();
         transcript.extend_from_slice(Self::SIGNATURE_DOMAIN);
+        transcript.extend_from_slice(channel_binding);
         transcript.extend_from_slice(&self.encode());
         Rpo256::hash(&transcript)
     }
 
-    pub async fn sign(&self, signer: &ValidatorSigner) -> anyhow::Result<ChallengeResponse> {
+    pub async fn sign(
+        &self,
+        signer: &ValidatorSigner,
+        channel_binding: &[u8; 32],
+    ) -> anyhow::Result<ChallengeResponse> {
         Ok(ChallengeResponse {
             validator_public_key: signer.public_key(),
-            signature: signer.sign_commitment(self.commitment()).await?,
+            signature: signer.sign_commitment(self.commitment(channel_binding)).await?,
         })
     }
 }
@@ -57,9 +66,14 @@ pub struct ChallengeResponse {
 impl ChallengeResponse {
     pub const BYTES: usize = 33 + 65;
 
-    pub fn verify_against(self, challenge: &Challenge) -> anyhow::Result<PublicKey> {
+    pub fn verify_against(
+        self,
+        challenge: &Challenge,
+        channel_binding: &[u8; 32],
+    ) -> anyhow::Result<PublicKey> {
         ensure!(
-            self.validator_public_key.verify(challenge.commitment(), &self.signature),
+            self.validator_public_key
+                .verify(challenge.commitment(channel_binding), &self.signature),
             "peer challenge response signature is invalid",
         );
         Ok(self.validator_public_key)
