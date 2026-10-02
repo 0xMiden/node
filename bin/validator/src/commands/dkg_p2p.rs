@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -29,7 +30,7 @@ pub struct DkgP2pOptions {
 enum DkgP2pCommand {
     /// Generates this validator's persistent peer-to-peer endpoint identity.
     GenerateEndpoint {
-        /// Output file for the peer-to-peer endpoint secret.
+        /// Output file for the peer-to-peer endpoint secret. The file must not already exist.
         #[arg(long, value_name = "FILE")]
         output_file: PathBuf,
     },
@@ -87,7 +88,17 @@ impl DkgP2pOptions {
             DkgP2pCommand::GenerateEndpoint { output_file } => {
                 let secret_key = IrohSecretKey::generate();
                 let secret_key_bytes = Zeroizing::new(secret_key.to_bytes());
-                fs_err::write(&output_file, secret_key_bytes.as_slice()).with_context(|| {
+                let mut options = fs_err::OpenOptions::new();
+                options.write(true).create_new(true);
+                #[cfg(unix)]
+                {
+                    use fs_err::os::unix::fs::OpenOptionsExt;
+                    options.mode(0o600);
+                }
+                let mut file = options.open(&output_file).with_context(|| {
+                    format!("failed to create Iroh endpoint secret {}", output_file.display())
+                })?;
+                file.write_all(secret_key_bytes.as_slice()).with_context(|| {
                     format!("failed to write Iroh endpoint secret {}", output_file.display())
                 })?;
                 println!("Iroh endpoint ID: {}", secret_key.public());
