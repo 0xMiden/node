@@ -1,5 +1,6 @@
 //! The write worker: single-task owner of the store's mutable trees.
 
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Once};
 
@@ -14,7 +15,7 @@ use miden_node_tracing::{
 };
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::Word;
-use miden_protocol::account::AccountUpdateDetails;
+use miden_protocol::account::{AccountId, AccountUpdateDetails};
 use miden_protocol::block::account_tree::AccountMutationSet;
 use miden_protocol::block::nullifier_tree::{NullifierMutationSet, NullifierTree};
 use miden_protocol::block::{BlockBody, BlockHeader, BlockNumber, Blockchain, SignedBlock};
@@ -22,7 +23,6 @@ use miden_protocol::crypto::merkle::smt::LargeSmt;
 use miden_protocol::note::{NoteDetails, Nullifier};
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::OutputNote;
-use miden_protocol::utils::serde::Serializable;
 use rayon::ThreadPool;
 use thread_priority::{ThreadPriority, set_current_thread_priority};
 use tokio::sync::{mpsc, watch};
@@ -92,6 +92,9 @@ struct PreparedBlockUpdate {
     nullifier_tree_update: NullifierMutationSet,
     account_tree_update: AccountMutationSet,
     account_forest_update: PreparedAccountStateForestBlockUpdate<AccountStateForestBackend>,
+    /// The accounts that the block creates. The forest and the database both use this set, so they
+    /// cannot make different decisions for the same account.
+    new_account_ids: BTreeSet<AccountId>,
 }
 
 impl WriteWorker {
@@ -247,6 +250,7 @@ impl WriteWorker {
             nullifier_tree_update,
             account_tree_update,
             account_forest_update,
+            new_account_ids,
         } = prepared;
         let precomputed_public_states = account_forest_update.account_states.clone();
 
@@ -270,6 +274,7 @@ impl WriteWorker {
                 activated_protocol_config,
                 notes,
                 precomputed_public_states,
+                new_account_ids,
                 unresolved_note_nullifiers,
                 prune_tip,
             )
@@ -368,9 +373,14 @@ impl WriteWorker {
                     AccountUpdateDetails::Public(patch) => Some(patch.clone()),
                     AccountUpdateDetails::Private => None,
                 });
+            let new_account_ids = body.transactions().created_account_ids().collect();
             let account_forest_update = self
                 .forest
-                .compute_block_update_mutations(header.block_num(), account_patches)
+                .compute_block_update_mutations(
+                    header.block_num(),
+                    account_patches,
+                    &new_account_ids,
+                )
                 .map_err(ApplyBlockError::AccountStateForestPreparation)?;
 
             let prepared = PreparedBlockUpdate {
@@ -378,8 +388,9 @@ impl WriteWorker {
                 nullifier_tree_update,
                 account_tree_update,
                 account_forest_update,
+                new_account_ids,
             };
-            Ok((prepared, signed_block.to_bytes()))
+            Ok((prepared, miden_node_persistence::encode(signed_block)))
         })
     }
 
@@ -642,7 +653,6 @@ mod tests {
     use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1;
     use miden_protocol::testing::random_secret_key::random_secret_key;
     use miden_protocol::transaction::OrderedTransactionHeaders;
-    use miden_protocol::utils::serde::Serializable;
     use tempfile::TempDir;
 
     use crate::db::schema::protocol_configs;
@@ -663,7 +673,9 @@ mod tests {
         )
         .into_block()
         .expect("genesis block should be created");
-        State::bootstrap(genesis, temp_dir.path()).expect("store should bootstrap");
+        State::bootstrap(genesis, temp_dir.path())
+            .await
+            .expect("store should bootstrap");
 
         let (state, block_writer, _proof_writer, writer_task) =
             State::load(temp_dir.path(), StorageOptions::default())
@@ -845,25 +857,24 @@ mod tests {
         let (_temp_dir, state, mut writer, writer_task, protocol_config) = start_store().await;
         let commitment = protocol_config.to_commitment();
         let block = empty_block(&state, &protocol_config).await;
-        let mut bytes = protocol_config.to_bytes();
+        let mut bytes = miden_node_persistence::encode(&protocol_config);
         bytes.push(0xff);
         state
             .db
-            .query("corrupt protocol config", move |conn| {
-                diesel::update(
-                    protocol_configs::table
-                        .filter(protocol_configs::commitment.eq(commitment.to_bytes())),
-                )
-                .set(protocol_configs::protocol_config.eq(bytes))
-                .execute(conn)?;
-                Ok::<_, DatabaseError>(())
+            .writer()
+            .write::<_, DatabaseError, _>("corrupt protocol config", move |tx| {
+                tx.execute(
+                    "UPDATE protocol_configs SET protocol_config = ?1 WHERE commitment = ?2",
+                    &[&bytes, &commitment],
+                )?;
+                Ok(())
             })
             .await
             .unwrap();
 
         let error = writer.apply_block(block, Some(protocol_config)).await.unwrap_err();
 
-        assert_matches!(error, ApplyBlockError::DatabaseError(DatabaseError::DataCorrupted(_)));
+        assert_matches!(error, ApplyBlockError::DatabaseError(DatabaseError::Persistence(_)));
         assert_eq!(state.committed_tip(), 0.into());
         writer.stop(writer_task).await;
     }
@@ -876,13 +887,14 @@ mod tests {
         let block = empty_block(&state, &protocol_config).await;
         state
             .db
-            .query("reject block inserts", |conn| {
-                diesel::sql_query(
+            .writer()
+            .write::<_, DatabaseError, _>("reject block inserts", |tx| {
+                tx.execute(
                     "CREATE TRIGGER reject_block_insert BEFORE INSERT ON block_headers \
                      BEGIN SELECT RAISE(ABORT, 'test block rejection'); END",
-                )
-                .execute(conn)?;
-                Ok::<_, DatabaseError>(())
+                    &[],
+                )?;
+                Ok(())
             })
             .await
             .unwrap();

@@ -533,7 +533,7 @@ mod tests {
             )?,
             chain.protocol_config().clone(),
         )?;
-        State::bootstrap(genesis, directory.path())?;
+        State::bootstrap(genesis, directory.path()).await?;
         let (state, ..) = State::for_tests(directory.path()).await;
         let inputs = get_tx_inputs(&state, &transaction).await?;
         let transaction =

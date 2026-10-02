@@ -37,8 +37,8 @@ use miden_protocol::transaction::{
     PartialBlockchain,
     ProvenTransaction,
     TransactionArgs,
+    TransactionInputs,
 };
-use miden_protocol::utils::serde::Serializable;
 use miden_protocol::vm::FutureMaybeSend;
 use miden_protocol::{Felt, Word};
 use miden_standards::account::auth::{Approver, AuthSingleSig};
@@ -60,15 +60,11 @@ use rand::RngExt;
 use rayon::prelude::*;
 use url::Url;
 
+use crate::artifacts::{write_inputs, write_transactions};
 use crate::prover::BenchmarkProver;
 use crate::rpc_state::fetch_chain_tip_state;
 use crate::summary::print_proving_summary;
-use crate::{
-    PROOFS_DIR,
-    create_genesis_aware_rpc_client,
-    get_genesis_header_request,
-    write_to_file,
-};
+use crate::{PROOFS_DIR, create_genesis_aware_rpc_client, get_genesis_header_request};
 
 // CONSTANTS
 // ================================================================================================
@@ -201,7 +197,7 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
 
     let coin_seed: [u64; 4] = rand::rng().random();
     let mut seed_rng = RandomCoin::new(coin_seed.map(Felt::new_unchecked).into());
-    let wallet_secret_key = SecretKey::with_rng(&mut seed_rng);
+    let wallet_secret_key = SecretKey::with_rng(&mut rand::rng());
     let wallet_public_key = wallet_secret_key.public_key();
 
     println!("Creating {num_transactions} wallets in parallel...");
@@ -243,7 +239,7 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
          notes each, {num_transactions} notes total)..."
     );
     let mut mint_proofs = ProofCollector::new(&prover, num_mint_txs);
-    let mut mint_tx_inputs: Vec<Vec<u8>> = Vec::with_capacity(num_mint_txs);
+    let mut mint_tx_inputs: Vec<TransactionInputs> = Vec::with_capacity(num_mint_txs);
     let mut mint_notes: Vec<Note> = Vec::with_capacity(num_transactions as usize);
     let mint_phase_start = Instant::now();
     let mut mint_exec_total = Duration::ZERO;
@@ -290,23 +286,16 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
         .expect("failed to execute mint transaction");
         mint_exec_total += exec_t0.elapsed();
 
-        let tx_inputs_bytes = executed_tx.tx_inputs().to_bytes();
+        let tx_inputs = executed_tx.tx_inputs().clone();
         let patch = executed_tx.account_patch().clone();
 
         // Evolve the faucet state for the next iteration before we hand the executed tx off for
-        // proving. The first mint tx creates the faucet on-chain and emits a full-state patch
-        // (which carries account code) that must be converted into the account directly, later txs
-        // emit partial-state delta patches that are applied onto the existing faucet.
-        if patch.is_full_state() {
-            faucet =
-                Account::try_from(&patch).expect("failed to build faucet from full-state patch");
-        } else {
-            faucet.apply_patch(&patch).expect("failed to apply faucet patch");
-        }
+        // proving. The first mint tx also creates the faucet on-chain.
+        faucet.apply_patch(&patch).expect("failed to apply faucet patch");
         data_store.add_account(faucet.clone());
 
         mint_proofs.submit(&prover, executed_tx).await;
-        mint_tx_inputs.push(tx_inputs_bytes);
+        mint_tx_inputs.push(tx_inputs);
         mint_notes.extend(notes);
 
         println!(
@@ -331,7 +320,8 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
     // strategy.
     println!("Executing {num_transactions} consume transactions (sequential)...");
     let mut consume_proofs = ProofCollector::new(&prover, num_transactions as usize);
-    let mut consume_tx_inputs: Vec<Vec<u8>> = Vec::with_capacity(num_transactions as usize);
+    let mut consume_tx_inputs: Vec<TransactionInputs> =
+        Vec::with_capacity(num_transactions as usize);
     let consume_phase_start = Instant::now();
     let mut consume_exec_total = Duration::ZERO;
 
@@ -355,10 +345,10 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
         .expect("failed to execute consume transaction");
         consume_exec_total += exec_t0.elapsed();
 
-        let tx_inputs_bytes = executed_tx.tx_inputs().to_bytes();
+        let tx_inputs = executed_tx.tx_inputs().clone();
 
         consume_proofs.submit(&prover, executed_tx).await;
-        consume_tx_inputs.push(tx_inputs_bytes);
+        consume_tx_inputs.push(tx_inputs);
 
         if (index + 1) % 10 == 0 || index + 1 == num_transactions {
             println!("  executed {} / {num_transactions} consume txs", index + 1);
@@ -379,10 +369,14 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
     let out_dir = PathBuf::from(PROOFS_DIR);
     println!("Writing proofs to {}/", out_dir.display());
     fs_err::create_dir_all(&out_dir).unwrap();
-    write_to_file(&out_dir.join("mint_txs.bin"), &mint_txs);
-    write_to_file(&out_dir.join("mint_tx_inputs.bin"), &mint_tx_inputs);
-    write_to_file(&out_dir.join("consume_txs.bin"), &consume_txs);
-    write_to_file(&out_dir.join("consume_tx_inputs.bin"), &consume_tx_inputs);
+    write_transactions(&out_dir.join("mint_txs.bin"), &mint_txs)
+        .expect("failed to write mint transactions");
+    write_inputs(&out_dir.join("mint_tx_inputs.bin"), &mint_tx_inputs)
+        .expect("failed to write mint inputs");
+    write_transactions(&out_dir.join("consume_txs.bin"), &consume_txs)
+        .expect("failed to write consume transactions");
+    write_inputs(&out_dir.join("consume_tx_inputs.bin"), &consume_tx_inputs)
+        .expect("failed to write consume inputs");
     println!("Done.");
 }
 
@@ -391,9 +385,7 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
 
 /// Creates a new faucet account and returns it alongside its secret key.
 fn create_faucet() -> (Account, SecretKey) {
-    let coin_seed: [u64; 4] = rand::rng().random();
-    let mut rng = RandomCoin::new(coin_seed.map(Felt::new_unchecked).into());
-    let key_pair = SecretKey::with_rng(&mut rng);
+    let key_pair = SecretKey::with_rng(&mut rand::rng());
     let init_seed = [0_u8; 32];
 
     let fungible_faucet: AccountComponent = FungibleFaucet::builder()

@@ -1,6 +1,6 @@
 use miden_node_block_producer::ensure_transaction_has_fee;
 use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
-use miden_node_proto::generated::server::sequencer_api;
+use miden_node_proto::generated::server::miden_sequencer_v1_sequencer_service;
 use miden_node_proto::{DecodeMessageExt, generated as proto};
 use miden_node_tracing::ErrorReport;
 use tonic::Status;
@@ -8,11 +8,16 @@ use tonic::Status;
 use super::{SequencerInternalService, get_block_header_error_to_status, load_protocol_config};
 
 #[tonic::async_trait]
-impl sequencer_api::SubmitAuthenticatedTx for SequencerInternalService {
+impl miden_sequencer_v1_sequencer_service::SubmitAuthenticatedTx for SequencerInternalService {
     type Input = AuthenticatedTransaction;
     type Output = proto::blockchain::BlockNumber;
 
-    fn decode(request: proto::sequencer::AuthenticatedTransaction) -> tonic::Result<Self::Input> {
+    fn decode(
+        request: proto::miden::sequencer::v1::SubmitAuthenticatedTxRequest,
+    ) -> tonic::Result<Self::Input> {
+        let request = request
+            .transaction
+            .ok_or_else(|| tonic::Status::invalid_argument("missing transaction"))?;
         request
             // SAFETY: Network isolation must restrict this endpoint to trusted full nodes. The
             // sender supplies proof and store validation. The handler checks the reference block
@@ -23,8 +28,12 @@ impl sequencer_api::SubmitAuthenticatedTx for SequencerInternalService {
             })
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::blockchain::BlockNumber> {
-        Ok(output)
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<proto::miden::sequencer::v1::SubmitAuthenticatedTxResponse> {
+        Ok(proto::miden::sequencer::v1::SubmitAuthenticatedTxResponse {
+            block_num: output.block_num,
+        })
     }
 
     async fn handle(

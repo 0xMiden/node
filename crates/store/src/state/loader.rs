@@ -39,8 +39,7 @@ use crate::COMPONENT;
 #[cfg(feature = "rocksdb")]
 use crate::LOG_TARGET;
 use crate::account_state_forest::AccountStateForest;
-use crate::db::Db;
-use crate::db::models::queries::BlockHeaderCommitment;
+use crate::db::{BlockHeaderCommitment, Db};
 use crate::errors::{DatabaseError, StateInitializationError};
 
 // CONSTANTS
@@ -734,7 +733,6 @@ fn verify_account_state_forest_record(
 
 #[cfg(test)]
 mod tests {
-    use diesel::{ExpressionMethods, RunQueryDsl};
     use miden_protocol::account::{
         AccountId,
         AccountStorageHeader,
@@ -746,7 +744,6 @@ mod tests {
     use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
     use miden_protocol::crypto::merkle::mmr::Mmr;
     use miden_protocol::testing::account_id::ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE;
-    use miden_protocol::utils::serde::Serializable;
 
     use super::*;
 
@@ -810,27 +807,27 @@ mod tests {
         let signing_key = SigningKey::new();
         let db = crate::db::Db::load(db_path).await.expect("test database should load");
 
-        db.query("insert corrupted block headers", move |conn| {
-            for header in &headers {
-                let signatures = miden_protocol::block::BlockSignatures::new(vec![
-                    signing_key.sign(header.commitment()),
-                ])
-                .expect("one signature is within bounds");
-                crate::db::models::queries::insert_block_header(conn, header, &signatures)?;
-            }
+        db.writer()
+            .write::<_, DatabaseError, _>("insert corrupted block headers", move |tx| {
+                for header in &headers {
+                    let signatures = miden_protocol::block::BlockSignatures::new(vec![
+                        signing_key.sign(header.commitment()),
+                    ])
+                    .expect("one signature is within bounds");
+                    crate::db::queries::insert_block_header(tx, header, &signatures)?;
+                }
 
-            diesel::update(crate::db::schema::block_headers::table)
-                .filter(crate::db::schema::block_headers::block_num.eq(2_i64))
-                .set(
-                    crate::db::schema::block_headers::commitment
-                        .eq(Word::from([42, 0, 0, 0u32]).to_bytes()),
-                )
-                .execute(conn)?;
+                // Corrupt the stored commitment of one header so it disagrees with the header it
+                // was stored alongside.
+                tx.execute(
+                    "UPDATE block_headers SET commitment = ?1 WHERE block_num = ?2",
+                    &[&Word::from([42, 0, 0, 0u32]), &BlockNumber::from(2)],
+                )?;
 
-            Ok::<_, DatabaseError>(())
-        })
-        .await
-        .expect("test block headers should be inserted");
+                Ok(())
+            })
+            .await
+            .expect("test block headers should be inserted");
 
         let error = load_mmr(&db)
             .await

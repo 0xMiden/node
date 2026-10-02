@@ -22,26 +22,27 @@ testing        = []
 tracing-forest = ["miden-node-tracing/tracing-forest"]
 
 [dependencies]
-anyhow             = { workspace = true }
-futures            = { workspace = true }
-itertools          = { workspace = true }
-miden-block-prover = { workspace = true }
-miden-node-proto   = { workspace = true }
-miden-node-store   = { workspace = true }
-miden-node-tracing = { workspace = true }
-miden-node-utils   = { features = ["testing"], workspace = true }
-miden-objects      = { workspace = true }
-miden-protocol     = { default-features = true, workspace = true }
-miden-standards    = { workspace = true }
-miden-tx           = { workspace = true }
-miden-tx-batch     = { workspace = true }
-rand               = { workspace = true }
-thiserror          = { workspace = true }
-tokio              = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
-tokio-stream       = { workspace = true }
-tonic              = { default-features = true, features = ["transport"], workspace = true }
-tonic-health       = { workspace = true }
-url                = { workspace = true }
+anyhow                 = { workspace = true }
+futures                = { workspace = true }
+itertools              = { workspace = true }
+miden-block-prover     = { workspace = true }
+miden-node-persistence = { workspace = true }
+miden-node-proto       = { workspace = true }
+miden-node-store       = { workspace = true }
+miden-node-tracing     = { workspace = true }
+miden-node-utils       = { features = ["testing"], workspace = true }
+miden-objects          = { workspace = true }
+miden-protocol         = { default-features = true, workspace = true }
+miden-standards        = { workspace = true }
+miden-tx               = { workspace = true }
+miden-tx-batch         = { workspace = true }
+rand                   = { workspace = true }
+thiserror              = { workspace = true }
+tokio                  = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
+tokio-stream           = { workspace = true }
+tonic                  = { default-features = true, features = ["transport"], workspace = true }
+tonic-health           = { workspace = true }
+url                    = { workspace = true }
 
 [dev-dependencies]
 assert_matches     = { workspace = true }

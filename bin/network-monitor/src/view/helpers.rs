@@ -30,6 +30,14 @@ pub(super) fn copy_button(value: &str, label: &str) -> Markup {
     }
 }
 
+/// Full value followed by a copy button.
+pub(super) fn copyable_value(value: &str, label: &str) -> Markup {
+    html! {
+        span class="value-text" title=(value) { (value) }
+        (copy_button(value, label))
+    }
+}
+
 /// Placeholder div that `probes.js` populates with the live gRPC-Web probe result. Using a
 /// placeholder keeps the maud templates free of JS-rendered content while preserving the visual
 /// slot in the card.
@@ -64,12 +72,10 @@ pub(super) fn num_or_dash(value: u64, healthy: bool) -> String {
     if healthy { value.to_string() } else { "-".to_string() }
 }
 
-/// Renders a truncated commitment with copy button when healthy and non-empty, `-` otherwise.
+/// Renders a commitment with copy button when healthy and non-empty, `-` otherwise.
 pub(super) fn commitment_or_dash(value: &str, label: &str, healthy: bool) -> Markup {
     if healthy && !value.is_empty() {
-        html! {
-            (truncate(value, 20)) "..." (copy_button(value, label))
-        }
+        copyable_value(value, label)
     } else {
         html! { "-" }
     }

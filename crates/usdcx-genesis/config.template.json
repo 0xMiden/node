@@ -1,0 +1,17 @@
+{
+  "accounts": {
+    "owner": "<the distributor id printed by new-distributor, hex or bech32>",
+    "attest_admins": [],
+    "pausers": [],
+    "unpausers": [],
+    "blocklist_managers": []
+  },
+  "faucet": {
+    "seed": "0x55534443582d4641554345540000000000000000000000000000000000000000",
+    "token_supply": 100000000,
+    "domain": 10007,
+    "min_burn_amount": 1,
+    "verification_base_fee": 7,
+    "attesters": ["<33 bytes of hex: the Circle attester's compressed SEC1 public key>"]
+  }
+}

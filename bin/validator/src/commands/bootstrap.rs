@@ -103,11 +103,11 @@ mod tests {
             validator_db.load_protocol_config(commitment).await.unwrap(),
             Some(config.clone())
         );
-        let block_bytes = genesis.inner().to_bytes();
+        let block_bytes = miden_node_persistence::encode(genesis.inner());
         assert_eq!(config.to_commitment(), commitment);
         let node_directory = root.path().join("node");
         fs_err::create_dir(&node_directory).unwrap();
-        miden_node_store::State::bootstrap(genesis, &node_directory).unwrap();
+        miden_node_store::State::bootstrap(genesis, &node_directory).await.unwrap();
         let directories = miden_node_store::DataDirectory::load(node_directory).unwrap();
         let block_store = BlockStore::load(directories.block_store_dir()).unwrap();
         assert_eq!(block_store.load_block(BlockNumber::GENESIS).await.unwrap(), Some(block_bytes));

@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use anyhow::Context;
-use miden_node_proto::server::validator_api;
+use miden_node_proto::server::miden_validator_v1_validator_service;
 use miden_node_proto_build::validator_api_descriptor;
 use miden_node_store::BlockStore;
 use miden_node_tracing::grpc::grpc_trace_fn;
@@ -152,7 +152,7 @@ impl ValidatorServer {
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .timeout(self.grpc_options.request_timeout)
-            .add_service(validator_api::service(service))
+            .add_service(miden_validator_v1_validator_service::service(service))
             .add_service(reflection_service)
             .serve_with_incoming_shutdown(
                 TcpListenerStream::new(listener),

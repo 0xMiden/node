@@ -9,8 +9,9 @@ use anyhow::Context;
 use hex;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{debug, info, miden_instrument, trace, warn};
+use miden_protocol::note::NoteId;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use url::Url;
 
@@ -38,7 +39,7 @@ pub struct FaucetTestDetails {
     pub test_duration_ms: u64,
     pub success_count: u64,
     pub failure_count: u64,
-    pub last_tx_id: Option<String>,
+    pub last_note_id: Option<String>,
     pub faucet_metadata: Option<GetMetadataResponse>,
 }
 
@@ -63,12 +64,15 @@ struct PowChallengeResponse {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GetTokensResponse {
-    pub(crate) tx_id: String,
-    #[expect(
-        dead_code,
-        reason = "Part of the API response, unused but required for `deny_unknown_fields`"
-    )]
-    pub(crate) note_id: String,
+    /// The ID of the note that holds the minted tokens.
+    #[serde(deserialize_with = "deserialize_note_id")]
+    pub(crate) note_id: NoteId,
+}
+
+/// Parses a hex-encoded note ID, so that a malformed ID fails the faucet check.
+fn deserialize_note_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<NoteId, D::Error> {
+    let hex = String::deserialize(deserializer)?;
+    NoteId::try_from_hex(&hex).map_err(serde::de::Error::custom)
 }
 
 /// Response from the faucet's `/get_metadata` endpoint.
@@ -81,12 +85,13 @@ pub(crate) struct GetTokensResponse {
 pub struct GetMetadataResponse {
     pub version: String,
     pub id: String,
-    pub max_supply: u64,
     pub decimals: u8,
     pub explorer_url: Option<String>,
     pub pow_load_difficulty: u64,
     pub base_amount: u64,
-    pub note_transport_url: Option<String>,
+    /// The remaining balance of the funding account in base units. It is `None` when the funding
+    /// service did not answer.
+    pub balance: Option<u64>,
 }
 
 // FAUCET TEST TASK
@@ -100,7 +105,7 @@ pub struct FaucetService {
     account_id: String,
     success_count: u64,
     failure_count: u64,
-    last_tx_id: Option<String>,
+    last_note_id: Option<String>,
     faucet_metadata: Option<GetMetadataResponse>,
 }
 
@@ -114,7 +119,7 @@ impl FaucetService {
             account_id: wallet_account.id().to_string(),
             success_count: 0,
             failure_count: 0,
-            last_tx_id: None,
+            last_note_id: None,
             faucet_metadata: None,
         }
     }
@@ -137,7 +142,7 @@ impl Service for FaucetService {
                 test_duration_ms: 0,
                 success_count: 0,
                 failure_count: 0,
-                last_tx_id: None,
+                last_note_id: None,
                 faucet_metadata: None,
             }),
         )
@@ -162,11 +167,11 @@ impl Service for FaucetService {
         let last_error = match self.faucet.request_tokens(&self.account_id, MINT_AMOUNT).await {
             Ok(minted_tokens) => {
                 self.success_count += 1;
-                self.last_tx_id = Some(minted_tokens.tx_id.clone());
+                self.last_note_id = Some(minted_tokens.note_id.to_hex());
                 info!(
                     target: LOG_TARGET,
                     "Faucet test successful",
-                    transaction.id = minted_tokens.tx_id.as_str()
+                    note.id = minted_tokens.note_id
                 );
                 None
             },
@@ -186,7 +191,7 @@ impl Service for FaucetService {
             test_duration_ms: start_time.elapsed().as_millis() as u64,
             success_count: self.success_count,
             failure_count: self.failure_count,
-            last_tx_id: self.last_tx_id.clone(),
+            last_note_id: self.last_note_id.clone(),
             faucet_metadata: self.faucet_metadata.clone(),
         });
 
@@ -284,7 +289,6 @@ pub(crate) async fn request_tokens(
     tokens_url
         .query_pairs_mut()
         .append_pair("account_id", account_id)
-        .append_pair("is_private_note", "false")
         .append_pair("asset_amount", &amount.to_string())
         .append_pair("challenge", &challenge_response.challenge)
         .append_pair("nonce", &nonce.to_string());
@@ -311,7 +315,7 @@ async fn read_success_body(response: reqwest::Response) -> anyhow::Result<String
 }
 
 /// Deserialize a faucet response using [`serde_path_to_error`] so that the failing JSON path (e.g.
-/// `max_supply`, `explorer_url`) is included in the error message. Combined with
+/// `balance`, `explorer_url`) is included in the error message. Combined with
 /// `#[serde(deny_unknown_fields)]` on each response type, this means renamed, removed, or newly
 /// added fields all surface a precise field name rather than a generic "unexpected response".
 fn parse_faucet_response<T>(body: &str) -> anyhow::Result<T>

@@ -4,7 +4,7 @@ use miden_node_db::sqlite::{DbReader, DbWriter};
 use miden_node_proto::Verify;
 use miden_node_proto::clients::{Builder, RpcClient};
 use miden_node_proto::errors::ConversionError;
-use miden_node_proto::generated::note_transport::DecodedTransportNote;
+use miden_node_proto::generated::miden::note_transport::v1::DecodedTransportNote;
 use miden_node_tracing::grpc::grpc_trace_fn;
 use miden_node_tracing::panic::catch_panic_layer_fn;
 use miden_node_tracing::{debug, error, info};
@@ -14,7 +14,7 @@ use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::Word;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::utils::serde::Serializable;
+use miden_protocol::note::{NoteDetails, NoteHeader};
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 use tower::limit::GlobalConcurrencyLimitLayer;
@@ -28,7 +28,6 @@ use crate::{COMPONENT, LOG_TARGET, db};
 
 mod fetch_notes;
 mod note_root;
-mod send_note;
 mod send_note_with_proof;
 
 const NOTE_ROOT_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(1024).unwrap();
@@ -99,12 +98,12 @@ impl Server {
         shutdown: CancellationToken,
     ) -> anyhow::Result<()> {
         use anyhow::Context;
-        use miden_node_proto::server::note_transport_api;
+        use miden_node_proto::server::miden_note_transport_v1_note_transport_service;
         db::record_retained_bytes(&self.reader).await?;
         let (health, health_service) = tonic_health::server::health_reporter();
         health
             .set_service_status(
-                note_transport_api::service_name(),
+                miden_note_transport_v1_note_transport_service::service_name(),
                 tonic_health::ServingStatus::Serving,
             )
             .await;
@@ -144,12 +143,12 @@ impl Server {
             .timeout(self.config.grpc.request_timeout)
             .add_service(health_service)
             .add_service(reflection)
-            .add_service(note_transport_api::service(self))
+            .add_service(miden_note_transport_v1_note_transport_service::service(self))
             .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
                 shutdown.cancelled().await;
                 health
                     .set_service_status(
-                        note_transport_api::service_name(),
+                        miden_note_transport_v1_note_transport_service::service_name(),
                         tonic_health::ServingStatus::NotServing,
                     )
                     .await;
@@ -160,8 +159,9 @@ impl Server {
 }
 
 impl Server {
-    fn check_note_size(&self, note: &db::NewNote) -> tonic::Result<usize> {
-        let size = note.header.to_bytes().len() + note.details.to_bytes().len();
+    fn check_note_size(&self, header: &NoteHeader, details: &NoteDetails) -> tonic::Result<usize> {
+        let size = db::encoded_note_payload_len(header, details)
+            .ok_or_else(|| tonic::Status::resource_exhausted("note size overflow"))?;
         if size > self.config.max_note_size.get() {
             return Err(tonic::Status::resource_exhausted("note exceeds max-note-size"));
         }
@@ -169,7 +169,7 @@ impl Server {
     }
 
     async fn store_note(&self, note: db::NewNote) -> tonic::Result<()> {
-        let size = self.check_note_size(&note)?;
+        let size = self.check_note_size(&note.header, &note.details)?;
         let id = note.header.id();
         let result = db::store_note(
             &self.writer,
@@ -196,7 +196,7 @@ pub fn parse_rpc_url(value: &str) -> Result<Url, String> {
     Ok(url)
 }
 
-fn decode_note(request: DecodedTransportNote) -> tonic::Result<db::NewNote> {
+fn decode_note(request: DecodedTransportNote) -> tonic::Result<(NoteHeader, NoteDetails)> {
     use miden_node_proto::errors::ConversionResultExt;
 
     let header = request
@@ -215,12 +215,7 @@ fn decode_note(request: DecodedTransportNote) -> tonic::Result<db::NewNote> {
     if details.commitment() != header.details_commitment() {
         return Err(tonic::Status::invalid_argument("note details do not match the header"));
     }
-    Ok(db::NewNote {
-        header,
-        details,
-        after_block_num: None,
-        committed_in_block: None,
-    })
+    Ok((header, details))
 }
 
 fn storage_status(error: db::StorageError) -> tonic::Status {

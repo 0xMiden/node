@@ -186,6 +186,10 @@ install-network-monitor: ## Installs network monitor binary
 install-benchmark: ## Installs the benchmark binary
 	cargo install --path bin/benchmark --locked
 
+.PHONY: install-usdcx-genesis
+install-usdcx-genesis: ## Installs the USDCx genesis tool
+	cargo install --path crates/usdcx-genesis --locked
+
 .PHONY: install-large-account-benchmark
 install-large-account-benchmark: ## Installs the large account benchmark binary
 	cargo install --path bin/large-account-benchmark --locked
@@ -339,7 +343,7 @@ docker-build-usdcx-genesis: ## Builds the USDCx genesis image using Docker
                  --build-arg CREATED="$$CREATED" \
                  --build-arg VERSION="$$VERSION" \
                  --build-arg COMMIT="$$COMMIT" \
-                 --build-arg BIN=xusdc-genesis \
+                 --build-arg BIN=miden-usdcx-genesis \
                  --target runtime-tool \
                  -t miden-usdcx-genesis .
 

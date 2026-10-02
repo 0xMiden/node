@@ -25,7 +25,7 @@ services:
         cd /data/usdcx
 
         echo "Creating the bootstrap admin and funding account..."
-        DISTRIBUTOR_OUTPUT="$$(xusdc-genesis new-distributor)"
+        DISTRIBUTOR_OUTPUT="$$(miden-usdcx-genesis new-distributor)"
         printf '%s\n' "$${DISTRIBUTOR_OUTPUT}"
         DISTRIBUTOR_ID="$$(printf '%s\n' "$${DISTRIBUTOR_OUTPUT}" | sed -n 's/^  hex: *//p')"
         if [ -z "$${DISTRIBUTOR_ID}" ]; then
@@ -54,8 +54,8 @@ services:
         EOF
 
         echo "Creating the native USDCx faucet and prefunding the distributor..."
-        xusdc-genesis faucet
-        xusdc-genesis prefund
+        miden-usdcx-genesis faucet
+        miden-usdcx-genesis prefund
         touch /data/usdcx/.bootstrapped
 
   bootstrap-validator:

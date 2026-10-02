@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 
 use miden_crypto::hash::rpo::Rpo256;
@@ -42,8 +42,8 @@ use miden_protocol::{EMPTY_WORD, Word};
 use thiserror::Error;
 
 use crate::COMPONENT;
-pub use crate::db::models::queries::HISTORICAL_BLOCK_RETENTION;
-use crate::db::models::queries::{PrecomputedPublicAccountState, PrecomputedPublicAccountStates};
+pub use crate::db::HISTORICAL_BLOCK_RETENTION;
+use crate::db::{PrecomputedPublicAccountState, PrecomputedPublicAccountStates};
 use crate::errors::AccountStateForestUpdateError;
 
 #[cfg(test)]
@@ -248,26 +248,27 @@ impl<B: BackendReader> AccountStateForest<B> {
 
     /// Adds the vault operations from `patch` to a prepared forest update batch.
     ///
-    /// Full-state patches always create a vault lineage, including for an empty vault. Partial
-    /// patches with no vault changes are skipped. Updated lineages are recorded so their computed
-    /// roots can later be associated with the account.
+    /// Patches of new accounts always create a vault lineage, including for an empty vault. Patches
+    /// of existing accounts with no vault changes are skipped. Updated lineages are recorded so
+    /// their computed roots can later be associated with the account.
     ///
     /// # Errors
     ///
-    /// Returns an error if a full-state patch targets an existing vault lineage.
+    /// Returns an error if the patch of a new account targets an existing vault lineage.
     fn add_vault_updates(
         &self,
         batch: &mut SmtForestUpdateBatch,
         lineages: &mut AccountUpdateForestLineages,
         patch: &AccountPatch,
+        is_new_account: bool,
     ) -> Result<(), AccountStateForestUpdateError> {
         let account_id = patch.id();
-        if !patch.is_full_state() && patch.vault().is_empty() {
+        if !is_new_account && patch.vault().is_empty() {
             return Ok(());
         }
 
         let lineage = Self::vault_lineage_id(account_id);
-        if patch.is_full_state() && self.forest.latest_version(lineage).is_some() {
+        if is_new_account && self.forest.latest_version(lineage).is_some() {
             return Err(AccountStateForestUpdateError::VaultLineageAlreadyExists { account_id });
         }
 
@@ -280,7 +281,7 @@ impl<B: BackendReader> AccountStateForest<B> {
         Ok(())
     }
 
-    /// Adds storage-map lineage creation operations for a full-state account patch.
+    /// Adds storage-map lineage creation operations for the patch of a new account.
     ///
     /// Empty-word entries are omitted from the new map state. Every map lineage is recorded,
     /// including empty maps, so its computed root can be passed to SQLite.
@@ -397,19 +398,21 @@ impl<B: BackendReader> AccountStateForest<B> {
     ///
     /// # Errors
     ///
-    /// Returns an error if a full-state patch targets an existing lineage or a partial storage-map
-    /// replacement cannot be prepared.
+    /// Returns an error if the patch of a new account targets an existing lineage or a partial
+    /// storage-map replacement cannot be prepared.
     fn prepare_block_update_batch(
         &self,
         account_patches: &[AccountPatch],
+        new_account_ids: &BTreeSet<AccountId>,
     ) -> Result<(SmtForestUpdateBatch, AccountUpdateForestLineages), AccountStateForestUpdateError>
     {
         let mut batch = SmtForestUpdateBatch::empty();
         let mut lineages = AccountUpdateForestLineages::default();
 
         for patch in account_patches {
-            self.add_vault_updates(&mut batch, &mut lineages, patch)?;
-            if patch.is_full_state() {
+            let is_new_account = new_account_ids.contains(&patch.id());
+            self.add_vault_updates(&mut batch, &mut lineages, patch, is_new_account)?;
+            if is_new_account {
                 self.add_full_state_storage_updates(&mut batch, &mut lineages, patch)?;
             } else {
                 self.add_partial_storage_updates(&mut batch, &mut lineages, patch)?;
@@ -771,6 +774,9 @@ impl<B: Backend> AccountStateForest<B> {
 
     /// Prepares an account-state forest update without mutating the forest.
     ///
+    /// `new_account_ids` identifies the patches that create an account. The forest cannot derive
+    /// this from a patch, because the patch of a code upgrade also carries code.
+    ///
     /// The returned update is tied to `block_num` and the forest's current lineage versions and
     /// roots. It must be passed exactly once to [`Self::apply_precomputed_block_update`] with the
     /// same `block_num`, before any intervening forest mutation. Its precomputed account roots must
@@ -778,15 +784,17 @@ impl<B: Backend> AccountStateForest<B> {
     ///
     /// # Errors
     ///
-    /// Returns an error when a full-state patch targets an existing lineage, a computed lineage
-    /// root is missing, or the forest backend cannot prepare the mutation set.
+    /// Returns an error when the patch of a new account targets an existing lineage, a computed
+    /// lineage root is missing, or the forest backend cannot prepare the mutation set.
     pub(crate) fn compute_block_update_mutations(
         &self,
         block_num: BlockNumber,
         account_updates: impl IntoIterator<Item = AccountPatch>,
+        new_account_ids: &BTreeSet<AccountId>,
     ) -> Result<PreparedAccountStateForestBlockUpdate<B>, AccountStateForestUpdateError> {
         let account_patches = account_updates.into_iter().collect::<Vec<_>>();
-        let (batch, lineages) = self.prepare_block_update_batch(&account_patches)?;
+        let (batch, lineages) =
+            self.prepare_block_update_batch(&account_patches, new_account_ids)?;
         let mutations = self.forest.compute_forest_mutations(block_num.as_u64(), batch)?;
         let account_states = self.precomputed_account_states_from_mutations(
             &account_patches,
@@ -829,8 +837,7 @@ impl<B: Backend> AccountStateForest<B> {
                 target: crate::LOG_TARGET,
                 "Updated forest with account patch",
                 account.id = patch.id(),
-                block.number = block_num,
-                account.updated = patch.is_full_state()
+                block.number = block_num
             );
         }
 
@@ -867,13 +874,15 @@ impl<B: Backend> AccountStateForest<B> {
         &mut self,
         block_num: BlockNumber,
         account_updates: impl IntoIterator<Item = AccountPatch>,
+        new_account_ids: &BTreeSet<AccountId>,
     ) -> Result<(), AccountStateForestUpdateError> {
-        let update = self.compute_block_update_mutations(block_num, account_updates)?;
+        let update =
+            self.compute_block_update_mutations(block_num, account_updates, new_account_ids)?;
         self.apply_precomputed_update(block_num, update)?;
         Ok(())
     }
 
-    /// Rebuilds fresh account lineages from full-state account patches.
+    /// Rebuilds fresh account lineages from account-creating patches.
     ///
     /// Callers must ensure that every patch belongs to an account that is not already present in the
     /// forest. Rebuild pages may share a version because their account lineages are disjoint.
@@ -885,7 +894,9 @@ impl<B: Backend> AccountStateForest<B> {
         block_num: BlockNumber,
         account_updates: impl IntoIterator<Item = AccountPatch>,
     ) -> Result<(), AccountStateForestUpdateError> {
-        self.apply_account_updates_without_pruning(block_num, account_updates)
+        let account_patches = account_updates.into_iter().collect::<Vec<_>>();
+        let new_account_ids = account_patches.iter().map(AccountPatch::id).collect();
+        self.apply_account_updates_without_pruning(block_num, account_patches, &new_account_ids)
     }
 
     // PRUNING
@@ -911,13 +922,23 @@ impl<B: Backend> AccountStateForest<B> {
 
 #[cfg(test)]
 pub(crate) trait TestAccountStateForestExt {
+    fn create_account(&mut self, block_num: BlockNumber, patch: &AccountPatch);
     fn update_account(&mut self, block_num: BlockNumber, patch: &AccountPatch);
 }
 
 #[cfg(test)]
 impl<B: Backend> TestAccountStateForestExt for AccountStateForest<B> {
+    fn create_account(&mut self, block_num: BlockNumber, patch: &AccountPatch) {
+        self.apply_account_updates_without_pruning(
+            block_num,
+            [patch.clone()],
+            &BTreeSet::from([patch.id()]),
+        )
+        .expect("test account forest creation should succeed");
+    }
+
     fn update_account(&mut self, block_num: BlockNumber, patch: &AccountPatch) {
-        self.apply_account_updates_without_pruning(block_num, [patch.clone()])
+        self.apply_account_updates_without_pruning(block_num, [patch.clone()], &BTreeSet::new())
             .expect("test account forest update should succeed");
     }
 }

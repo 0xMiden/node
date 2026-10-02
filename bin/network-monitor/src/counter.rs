@@ -253,19 +253,12 @@ impl IncrementService {
     /// [`CounterTrackingService`]); the returned success count is used purely as a best-effort
     /// latency target — on a fresh wallet/counter pair both start at zero and advance together.
     fn handle_increment_success(&mut self, account_patch: &AccountPatch, tx_id: String) -> u64 {
-        if account_patch.is_full_state() {
-            // The wallet is created in-memory and never separately deployed, so its first increment
-            // doubles as the account-creation transaction. That transaction's patch carries the
-            // account code and fully describes the account, so it must be converted into the
-            // account rather than applied as a delta (`apply_patch` rejects full-state patches).
-            self.tx.wallet_account = Account::try_from(account_patch)
-                .expect("full-state patch should convert to a valid account");
-        } else {
-            self.tx
-                .wallet_account
-                .apply_patch(account_patch)
-                .expect("successful tx should apply patch correctly");
-        }
+        // The wallet is created in-memory and never separately deployed, so its first increment
+        // doubles as the account-creation transaction. `apply_patch` handles that patch as well.
+        self.tx
+            .wallet_account
+            .apply_patch(account_patch)
+            .expect("successful tx should apply patch correctly");
         // The transaction consumed the pending funding note; do not offer it again.
         self.pending_funding_note = None;
         self.details.success_count += 1;
@@ -1041,7 +1034,7 @@ async fn fetch_slot_value(
 fn build_account_request(
     account_id: AccountId,
     include_code_and_vault: bool,
-) -> miden_node_proto::generated::rpc::AccountRequest {
+) -> miden_node_proto::generated::miden::node::v1::GetAccountRequest {
     let account_id_proto: miden_node_proto::generated::account::AccountId = account_id.into();
 
     let (code_commitment, asset_vault_commitment) = if include_code_and_vault {
@@ -1051,14 +1044,16 @@ fn build_account_request(
         (None, None)
     };
 
-    miden_node_proto::generated::rpc::AccountRequest {
+    miden_node_proto::generated::miden::node::v1::GetAccountRequest {
         account_id: Some(account_id_proto),
         block_num: None,
-        details: Some(miden_node_proto::generated::rpc::account_request::AccountDetailRequest {
-            code_commitment,
-            asset_vault_commitment,
-            storage_request: None,
-        }),
+        details: Some(
+            miden_node_proto::generated::miden::node::v1::get_account_request::AccountDetailRequest {
+                code_commitment,
+                asset_vault_commitment,
+                storage_request: None,
+            },
+        ),
     }
 }
 
@@ -1206,7 +1201,10 @@ fn create_network_note(
 
 /// Fetch the current chain tip height from RPC status.
 async fn fetch_chain_tip(rpc_client: &mut RpcClient) -> Result<u32> {
-    let status = rpc_client.status(()).await?.into_inner();
+    let status = rpc_client
+        .status(miden_node_proto::generated::miden::node::v1::StatusRequest {})
+        .await?
+        .into_inner();
 
     if let Some(block_producer_status) = status.block_producer {
         Ok(block_producer_status.chain_tip)
@@ -1298,7 +1296,8 @@ mod tests {
             None,
         )
         .await?;
-        let committed_counter = Account::try_from(creation_tx.account_patch())?;
+        let mut committed_counter = counter.clone();
+        committed_counter.apply_patch(creation_tx.account_patch())?;
 
         let mut builder = MockChain::builder().fee_faucet_id(fee_faucet_id);
         builder.add_account(committed_counter.clone())?;
@@ -1356,7 +1355,8 @@ mod tests {
             1,
             "the increment transaction must emit exactly the network note"
         );
-        let updated_wallet = Account::try_from(executed_tx.account_patch())?;
+        let mut updated_wallet = wallet.clone();
+        updated_wallet.apply_patch(executed_tx.account_patch())?;
         let counter_slot = updated_wallet.storage().get_item(&WALLET_COUNTER_SLOT_NAME)?;
         assert_eq!(
             counter_slot.as_elements()[0].as_canonical_u64(),
@@ -1457,7 +1457,8 @@ mod tests {
             Some((committed_faucet, witness)),
         )
         .await?;
-        let committed_counter = Account::try_from(creation_tx.account_patch())?;
+        let mut committed_counter = counter.clone();
+        committed_counter.apply_patch(creation_tx.account_patch())?;
         let balance = committed_counter
             .vault()
             .get_balance(AssetId::new_fungible(fee_faucet_id))?
@@ -1496,7 +1497,8 @@ mod tests {
             None,
         )
         .await?;
-        let committed_counter = Account::try_from(creation_tx.account_patch())?;
+        let mut committed_counter = counter.clone();
+        committed_counter.apply_patch(creation_tx.account_patch())?;
         let counter_balance = committed_counter.vault().get_balance(fee_asset)?.as_u64();
         assert!(
             counter_balance > 0 && counter_balance < counter_funding_amount(BASE_FEE),
@@ -1555,7 +1557,8 @@ mod tests {
             "expected the increment, fee-sponsorship, and tx-fee notes"
         );
 
-        let updated_wallet = Account::try_from(executed_tx.account_patch())?;
+        let mut updated_wallet = wallet.clone();
+        updated_wallet.apply_patch(executed_tx.account_patch())?;
         let balance = updated_wallet.vault().get_balance(fee_asset)?.as_u64();
         let sponsorship = max_fee_per_transaction(BASE_FEE);
         assert!(
