@@ -115,7 +115,9 @@ async fn ceremony_succeeds(
         confirmations.spawn(async move {
             let dealings = ceremony.exchange_dealings(&mut participants, dealings).await?;
             let dealings = ceremony.confirm_dealings(&mut participants, dealings).await?;
-            // Keep connections alive until every validator finishes confirmation.
+            // Return the participants to keep their connections alive.
+            //
+            // Other validators can still be reading confirmations after this task finishes.
             Ok::<_, anyhow::Error>((ceremony, participants, dealings))
         });
     }
@@ -150,8 +152,7 @@ async fn ceremony_succeeds(
 
     tokio::time::timeout(Duration::from_secs(10), async {
         for (_, send, receive) in &mut streams {
-            // All ceremony messages used the first stream, which is now finished in both
-            // directions.
+            // Check that the ceremony uses one bidirectional stream and leaves no unread bytes.
             assert_eq!(send.id().index(), 0);
             assert_eq!(receive.id(), send.id());
             assert_eq!(receive.read(&mut [0]).await?, None);
@@ -226,7 +227,9 @@ async fn dealing_confirmation_rejects_different_valid_dealings() -> anyhow::Resu
             ),
             _ => unreachable!(),
         };
-        // Model the dealer sending a different, valid contribution to just one receiver.
+        // Give one receiver a different, valid contribution from the same dealer.
+        //
+        // This tests transcript agreement after the contribution passes individual verification.
         verify_dealing_for_receiver::<StorageGroup, SecpSecqBackend>(
             receiver.local_index,
             &receiver.secret_key.0,
@@ -249,7 +252,9 @@ async fn dealing_confirmation_rejects_different_valid_dealings() -> anyhow::Resu
             Ok::<_, anyhow::Error>(errors)
         })
         .await??;
-        // Aborting on a mismatch can disconnect other peers before their comparison finishes.
+        // Require at least one validator to report a transcript mismatch.
+        //
+        // Its abort can disconnect other peers before they compare commitments.
         assert!(
             errors.iter().any(|error| error.contains("received different DKG dealings")),
             "expected a {round} dealing mismatch: {errors:?}",

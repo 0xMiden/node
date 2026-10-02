@@ -39,7 +39,9 @@ async fn dealing_exchange_rejects_invalid_dealing(
     };
     match invalid {
         InvalidDealing::WrongDealer => {
-            // Forward a genuine contribution, but not the authenticated sender's own.
+            // Send the receiver's valid contribution under the sender's authenticated identity.
+            //
+            // A valid contribution must still belong to the validator that sends it.
             *message = match round {
                 Round::Decryption => receiver_dealings.decryption_dealing.message.clone(),
                 Round::Context => receiver_dealings.context_dealing.message.clone(),
@@ -58,7 +60,9 @@ async fn dealing_exchange_rejects_invalid_dealing(
                     .collect(),
             );
             assert_ne!(sender.session.id, current_session);
-            // Keep the registry and DKG secret unchanged to isolate session binding.
+            // Create the contribution with a different session but the same registry and secret.
+            //
+            // Only the session binding should cause verification to fail.
             let previous = sender_ceremony.create_dealings(&sender)?;
             sender.session.id = current_session;
             *message = match round {
@@ -120,7 +124,9 @@ async fn dealing_exchange_rejects_interrupted_message(
     let (received, sent) = tokio::time::timeout(Duration::from_secs(10), async {
         tokio::join!(receiver_ceremony.exchange_dealings(&mut receiver, receiver_dealings), async {
             send.write_all(&message[..message.len() - 1]).await?;
-            // Wait for the other side to enter the exchange before interrupting it.
+            // Read the receiver's message before interrupting the stream.
+            //
+            // This ensures the receiver has entered the dealing exchange before the interruption.
             receive.read_exact(&mut vec![0; message.len()]).await?;
             if disconnect {
                 connection.close(0u8.into(), b"interrupted dealing exchange");

@@ -33,14 +33,15 @@ enum DkgP2pCommand {
         output_file: PathBuf,
     },
 
-    /// Participates in a live peer-to-peer DKG ceremony.
+    /// Runs a live peer-to-peer DKG ceremony and writes this validator's storage-key bundle.
     Participate(ParticipateOptions),
 }
 
 /// Inputs for participating in a live peer-to-peer DKG ceremony.
 #[derive(clap::Args)]
 struct ParticipateOptions {
-    /// Output file for the storage-key bundle. The parent directory must already exist.
+    /// File that receives this validator's storage-key bundle. The parent directory must exist, and
+    /// the file must not already exist.
     #[arg(long, value_name = "FILE")]
     output_file: PathBuf,
 
@@ -49,14 +50,19 @@ struct ParticipateOptions {
     genesis: PathBuf,
 
     /// File containing this validator's persistent peer-to-peer endpoint secret.
+    ///
+    /// Reusing this secret keeps the advertised endpoint ID stable across ceremonies.
     #[arg(long, value_name = "FILE")]
     endpoint_secret: PathBuf,
 
     /// Peer-to-peer endpoint of another validator. Repeat once per other genesis validator.
+    ///
+    /// These endpoints supply connection destinations, not trusted validator identities. Each
+    /// peer must prove ownership of a genesis validator key during authentication.
     #[arg(long = "peer.endpoint", value_name = "ENDPOINT_ID")]
     peer_endpoints: Vec<EndpointId>,
 
-    /// Maximum ceremony duration, including waiting for peers to authenticate.
+    /// Maximum duration of peer authentication and all subsequent ceremony steps.
     #[arg(long, value_name = "DURATION", default_value = "30m", value_parser = humantime::parse_duration)]
     timeout: Duration,
 

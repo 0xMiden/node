@@ -10,7 +10,7 @@ use super::Ceremony;
 use super::dkg::StorageGroup;
 
 impl Ceremony {
-    /// Writes the validator startup bundle without replacing an existing storage key.
+    /// Writes a validated storage-key bundle to a new file without replacing an existing file.
     pub fn persist(
         &self,
         output_file: &Path,
@@ -30,7 +30,10 @@ impl Ceremony {
         .context("generated invalid storage key material")?;
         let bytes = operator_key.encode().to_bytes();
 
-        // Stage the complete bundle on the same filesystem before making it available to startup.
+        // Write and sync a temporary bundle in the destination directory.
+        //
+        // The final path must not expose a partial bundle. Keeping both files on the same
+        // filesystem allows atomic publication of the complete bundle.
         let parent = output_file
             .parent()
             .filter(|path| !path.as_os_str().is_empty())

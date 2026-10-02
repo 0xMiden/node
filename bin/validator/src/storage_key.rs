@@ -39,7 +39,7 @@ impl StorageKeyEpoch {
         Self(bytes)
     }
 
-    /// Parses a storage key epoch from its hex encoding.
+    /// Parses exactly 32 epoch bytes from hexadecimal text.
     pub fn from_hex(encoded: impl AsRef<[u8]>) -> Result<Self, hex::FromHexError> {
         let mut bytes = [0; 32];
         hex::decode_to_slice(encoded, &mut bytes)?;
@@ -64,7 +64,10 @@ impl Deserializable for StorageKeyEpoch {
     }
 }
 
-/// Canonical Golden values needed to restore one validator operator key.
+/// Encoded epoch, public setup, public key set, and private share for one validator.
+///
+/// Encoded values can contain inconsistent key material. [`Self::decode`] checks their consistency
+/// before constructing an operator key.
 pub struct EncodedGoldenOperatorKey {
     key_epoch: StorageKeyEpoch,
     setup_context: Vec<u8>,
@@ -87,9 +90,10 @@ impl fmt::Debug for EncodedGoldenOperatorKey {
 impl EncodedGoldenOperatorKey {
     const BUNDLE_HEADER: &[u8] = b"miden-validator-storage-key\x01";
 
-    /// Encodes one versioned bundle: epoch followed by three Golden wire values prefixed with
-    /// little-endian u32 lengths, in setup context, public key set, secret share order. The
-    /// returned buffer contains the private share and is cleared when dropped.
+    /// Encodes the version header and epoch, followed by the setup context, public key set, and
+    /// secret share. Each Golden wire value has a little-endian `u32` byte-length prefix.
+    ///
+    /// The output contains the private share, so its buffer is cleared on drop.
     pub fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
         let mut bytes = Zeroizing::new(Vec::new());
         bytes.extend_from_slice(Self::BUNDLE_HEADER);
@@ -102,8 +106,11 @@ impl EncodedGoldenOperatorKey {
         bytes
     }
 
-    /// Decodes one complete bundle, rejecting unknown formats, truncation and trailing bytes. Use
-    /// `decode` afterwards to check that its public and private key material is consistent.
+    /// Parses one complete versioned bundle and rejects unknown formats, truncated values, and
+    /// trailing bytes.
+    ///
+    /// Valid framing does not guarantee consistent key material. Call [`Self::decode`] before
+    /// using the bundle as an operator key.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, DeserializationError> {
         let mut source = Cursor::new(bytes);
         if source.read_slice(Self::BUNDLE_HEADER.len())? != Self::BUNDLE_HEADER {
@@ -127,7 +134,7 @@ impl EncodedGoldenOperatorKey {
         Ok(bundle)
     }
 
-    /// Creates a restart bundle from canonical Golden wire values.
+    /// Collects the epoch and encoded Golden values into a storage-key bundle.
     pub fn new(
         key_epoch: StorageKeyEpoch,
         setup_context: Vec<u8>,
@@ -466,22 +473,12 @@ pub(crate) mod tests {
         operator_keys().remove(0)
     }
 
-    /// Regenerates the committed insecure storage-key fixture under
-    /// `scripts/testdata/insecure-storage-key/`.
+    /// Writes the deterministic, insecure two-of-three fixture to
+    /// `scripts/testdata/insecure-storage-key/`. The output includes shared public files, each
+    /// participant's secret share, and a complete bundle per participant.
     ///
-    /// The fixture holds a full two-of-three setup: one shared
-    /// `setup-context.wire` and `public-key-set.wire`, plus a *distinct*
-    /// `validator-<n>/secret-share.wire` and complete `storage-key.bundle` for each participant. This lets the
-    /// docker-compose network give every validator its own share, which is
-    /// required for a real threshold recovery — mounting the same share into
-    /// all three validators makes any 2-of-3 combine collapse to a single
-    /// participant and fail.
-    ///
-    /// Ignored by default so it never runs in CI; regenerate the fixture with:
-    ///
-    /// ```text
-    /// cargo test -p miden-validator --lib storage_key::tests::write_insecure_storage_key_fixture -- --ignored
-    /// ```
+    /// Threshold recovery requires distinct participant shares. This test stays ignored to avoid
+    /// rewriting committed files during normal test runs.
     #[test]
     #[ignore = "writes fixture files; run explicitly to regenerate"]
     fn write_insecure_storage_key_fixture() {

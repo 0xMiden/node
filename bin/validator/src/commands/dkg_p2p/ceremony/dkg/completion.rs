@@ -6,7 +6,8 @@ use golden_evrf::paper::secp_secq::SecpSecqBackend;
 use super::{Ceremony, DkgDealings, DkgParticipants, StorageGroup};
 
 impl Ceremony {
-    /// Derives this validator's key material from the confirmed decryption and context dealings.
+    /// Derives the storage-key setup, shared public key set, and this validator's secret share from
+    /// the confirmed decryption and context dealings.
     pub fn complete_dkg(
         &self,
         participants: &DkgParticipants,

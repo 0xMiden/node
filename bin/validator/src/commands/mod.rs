@@ -360,7 +360,10 @@ impl ValidatorEncryptionKey {
     }
 }
 
-/// Bundle file needed to restore one validator storage key share.
+/// Path to the storage-key bundle for one validator.
+///
+/// The path is independent of the validator data directory so deployments can supply the bundle
+/// from a secrets mount.
 #[derive(clap::Args)]
 pub struct ValidatorStorageKey {
     /// File containing this validator's epoch, public setup and private share.

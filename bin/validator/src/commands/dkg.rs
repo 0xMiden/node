@@ -930,7 +930,10 @@ fn validate_bundle(
     Ok(())
 }
 
-/// Validates the bundle used by local development fixtures.
+/// Checks a local development bundle's key material and expected participant index.
+///
+/// This check does not bind the key to genesis or a ceremony transcript. It cannot replace the
+/// ownership and transcript checks required for a production ceremony.
 fn validate_fixture_bundle(bundle_file: &Path, expected_participant: u32) -> anyhow::Result<()> {
     let expected_participant = ParticipantIndex::new(expected_participant)?;
     let bytes = Zeroizing::new(fs_err::read(bundle_file)?);

@@ -54,7 +54,9 @@ async fn config_exchange_rejects_mismatch(
         let error = result.err().expect("different ceremony configs must stop the exchange");
         format!("{error:#}")
     });
-    // One validator's abort may disconnect the other before it compares configurations.
+    // Require at least one validator to report both mismatched configurations.
+    //
+    // Its abort can disconnect the other validator before that validator compares configurations.
     assert!(
         errors.iter().any(|error| {
             error.contains("peer ceremony config does not match")

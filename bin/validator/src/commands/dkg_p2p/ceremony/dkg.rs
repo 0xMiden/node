@@ -51,7 +51,11 @@ pub struct UnconfirmedDkgDealings {
     peer_context_dealings: BTreeMap<ParticipantIndex, DealerMessage<StorageGroup>>,
 }
 
-/// Verified dealings whose commitment matched every authenticated peer's commitment.
+/// Verified decryption and context dealings with a transcript commitment that matches every
+/// authenticated peer's commitment.
+///
+/// Matching commitments prevent completion when a dealer sends different valid dealings to
+/// different validators.
 pub struct DkgDealings {
     local: LocalDealings,
     peer_decryption_dealings: BTreeMap<ParticipantIndex, DealerMessage<StorageGroup>>,

@@ -34,7 +34,9 @@ async fn authentication_rejects_two_endpoints_using_the_same_validator_key() -> 
     for remote in [endpoint_b.clone(), endpoint_c.clone()] {
         let local_id = endpoint.id();
         let validator_set = Arc::clone(&ceremony.validator_set);
-        // Both endpoints can prove ownership of B's key, but neither supplies C's identity.
+        // Authenticate both remote endpoints with B's key.
+        //
+        // Each endpoint can prove key ownership, but the pair cannot represent both B and C.
         let signer = ValidatorSigner::new_local(signing_key_b.clone());
         authentications.spawn(async move {
             let connection = if remote.id() < local_id {
@@ -49,10 +51,14 @@ async fn authentication_rejects_two_endpoints_using_the_same_validator_key() -> 
         tokio::join!(ceremony.authenticate_peers(&endpoint), async {
             let mut peers = Vec::new();
             while let Some(result) = authentications.join_next().await {
-                // Rejection may disconnect a peer before it reads the validator's response.
+                // Retain peer results without requiring authentication to succeed.
+                //
+                // The validator can reject duplicate identities before a peer reads its response.
                 peers.push(result?);
             }
-            // Retain the connections while the ceremony checks the complete validator set.
+            // Return the peers to keep their connections alive.
+            //
+            // The ceremony must check the complete validator set before the test drops the peers.
             Ok::<_, anyhow::Error>(peers)
         })
     })

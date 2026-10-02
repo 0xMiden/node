@@ -154,7 +154,9 @@ async fn ceremony_times_out_waiting_for_a_peer() -> TestResult {
     let genesis = write_genesis(root.path(), 2)?;
     let (secret_a, endpoint_a) = write_endpoint_secret(root.path(), 1)?;
     let (secret_b, endpoint_b) = write_endpoint_secret(root.path(), 2)?;
-    // The higher endpoint ID waits for an incoming connection; the peer never starts.
+    // Select the endpoint that accepts connections and leave its peer offline.
+    //
+    // This exercises the ceremony timeout while the accept loop waits for a peer.
     let (endpoint_secret, peer) = if endpoint_a > endpoint_b {
         (secret_a, endpoint_b)
     } else {

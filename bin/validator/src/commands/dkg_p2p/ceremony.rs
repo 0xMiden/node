@@ -59,18 +59,14 @@ pub struct DkgParticipants {
     registry: ParticipantRegistry<StorageGroup>,
 }
 
-/// Validated inputs for one peer-to-peer DKG ceremony.
+/// Validated inputs for one live DKG ceremony. The genesis commitment and validator set come from
+/// the same valid genesis block. The signer belongs to that set, and the nonzero threshold does
+/// not exceed its size. The persistent endpoint identity is valid, with one distinct, non-local
+/// peer endpoint per other genesis validator.
 ///
-/// # Invariants
-///
-/// - `genesis_commitment` and `validator_set` come from the same valid genesis block.
-/// - `signer` is one of the validators committed by `validator_set`.
-/// - `threshold` does not exceed the number of genesis validators.
-/// - `endpoint_secret` is a valid persistent Iroh endpoint identity.
-/// - `peer_endpoints` contains one distinct, non-local endpoint per other genesis validator.
-///
-/// Peer endpoints are not yet bound to individual validator keys.
-/// [`Ceremony::authenticate_peers`] performs that authentication.
+/// These checks establish local configuration, not peer identities.
+/// [`Ceremony::authenticate_peers`] must bind endpoints to genesis validator keys before the
+/// ceremony exchanges configuration or DKG messages.
 pub(super) struct Ceremony {
     genesis_commitment: Word,
     validator_set: Arc<ValidatorConfig>,

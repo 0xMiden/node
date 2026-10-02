@@ -7,7 +7,10 @@ use miden_protocol::crypto::hash::rpo::Rpo256;
 use super::{Ceremony, DkgDealings, DkgParticipants, UnconfirmedDkgDealings};
 use crate::commands::dkg_p2p::wire::WireCodec;
 
-/// Commits to the session, registry, then decryption and context roots in participant order.
+/// Commitment to the session, participant registry, and both sets of dealing roots. Roots appear
+/// in participant order, with decryption before context.
+///
+/// A fixed order lets validators compare the same transcript regardless of message arrival order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DkgDealingsCommitment([u8; 32]);
 
