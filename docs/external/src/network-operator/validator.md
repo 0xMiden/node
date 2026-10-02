@@ -124,13 +124,14 @@ miden-validator dkg validate \
 
 The files have these handling rules:
 
-| Files                                                                  | Handling                                                     |
-| ---------------------------------------------------------------------- | ------------------------------------------------------------ |
-| `registration.toml`, `manifest.toml`, and both DKG configuration files | Public; send through an authenticated channel.               |
-| Both dealing files, `transcript.toml`, and transcript acceptances      | Public; send through an authenticated channel.               |
-| `identity-secret.wire` and `private-state.wire`                        | Private to one operator; never send.                         |
-| `epoch.hex`, `setup-context.wire`, and `public-key-set.wire`           | Public final output; all operators must get identical bytes. |
-| `secret-share.wire`                                                    | Private final output; each operator gets a different share.  |
+| Files                                                                  | Handling                                                          |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `registration.toml`, `manifest.toml`, and both DKG configuration files | Public; send through an authenticated channel.                    |
+| Both dealing files, `transcript.toml`, and transcript acceptances      | Public; send through an authenticated channel.                    |
+| `identity-secret.wire` and `private-state.wire`                        | Private to one operator; never send.                              |
+| `epoch.hex`, `setup-context.wire`, and `public-key-set.wire`           | Public final output; all operators must get identical bytes.      |
+| `secret-share.wire`                                                    | Private final output; each operator gets a different share.       |
+| `storage-key.bundle`                                                   | Complete startup bundle, including this operator's private share. |
 
 Every operator must confirm matching public output hashes before activation. Once the final bundle is secured,
 `identity-secret.wire` and `private-state.wire` are no longer needed. A failed ceremony cannot resume with a partial or
@@ -138,16 +139,20 @@ changed participant set; start a new ceremony instead.
 
 ## Start
 
+Pass this validator's completed bundle using `--storage-key.file <FILE>` or `MIDEN_VALIDATOR_STORAGE_KEY_FILE`. The
+bundle can live outside the data directory; keep its permissions at `0600`. This versioned binary file contains the
+epoch, public setup, public key set, and private share. The P2P ceremony takes `--output-file <FILE>` and needs only an
+existing output parent directory, not a bootstrapped validator data directory. Offline `dkg finalize` also exports the
+bundle inside its output directory. Treat the entire file as secret. To store it in a text-only secret store,
+base64-encode it for upload and decode it back to the original bytes before loading it.
+
 ```bash
 miden-validator start \
   --listen 0.0.0.0:50101 \
   --data-directory validator-data \
+  --storage-key.file storage-key.bundle \
   --signing-key.kms-id <validator-kms-key-id> \
-  --encryption-key.kms-ciphertext <encryption-key-ciphertext-base64> \
-  --storage-key.epoch <32-byte-hex-epoch> \
-  --storage-key.setup-context <setup-context-file> \
-  --storage-key.public-key-set <public-key-set-file> \
-  --storage-key.secret-share <secret-share-file>
+  --encryption-key.kms-ciphertext <encryption-key-ciphertext-base64>
 ```
 
 A signing key is required — the validator has no default key. Pass either a hex-encoded secret (`--signing-key.hex`) or
@@ -168,8 +173,8 @@ is the supported provisioning path.
 Each validator must run inside its trusted execution environment. If transaction proving uses a remote prover, that
 prover also receives the plaintext inputs and must run inside the same trusted boundary.
 
-The files contain canonical wire bytes. Every validator uses the same setup context and public key set, but uses its own
-secret share. The validator will not start if any storage key option is missing or the key material is invalid. After
+The bundle contains canonical wire bytes. Every validator uses the same setup context and public key set, but uses its
+own secret share. The validator will not start if the bundle file is missing or the key material is invalid. After
 validation, it stores only the transaction ID and the threshold-encrypted record. It does not store the client
 ciphertext.
 

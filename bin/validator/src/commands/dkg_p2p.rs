@@ -1,14 +1,13 @@
 use std::num::NonZeroUsize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, ensure};
 use fs_err::PathExt;
 use iroh::{EndpointId, SecretKey as IrohSecretKey};
-use miden_validator::DataDirectory;
 use zeroize::Zeroizing;
 
-use super::{ENV_DATA_DIRECTORY, ValidatorSigningKey};
+use super::ValidatorSigningKey;
 
 mod ceremony;
 mod wire;
@@ -40,9 +39,9 @@ enum DkgP2pCommand {
 /// Inputs for participating in a live peer-to-peer DKG ceremony.
 #[derive(clap::Args)]
 struct ParticipateOptions {
-    /// Existing validator data directory in which to write the storage-key bundle.
-    #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
-    data_directory: PathBuf,
+    /// Output file for the storage-key bundle. The parent directory must already exist.
+    #[arg(long, value_name = "FILE")]
+    output_file: PathBuf,
 
     /// Trusted genesis block for the network.
     #[arg(long, value_name = "FILE")]
@@ -94,13 +93,20 @@ impl DkgP2pOptions {
 impl ParticipateOptions {
     async fn handle(self) -> anyhow::Result<()> {
         let timeout = self.timeout;
-        let data_directory = DataDirectory::load(self.data_directory.clone())
-            .context("failed to load validator data directory")?;
-        let storage_key_directory = data_directory.storage_key_dir();
+        let output_file = self.output_file.clone();
+        let parent = output_file
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
         ensure!(
-            !storage_key_directory.fs_err_try_exists()?,
-            "storage key directory already exists: {}",
-            storage_key_directory.display(),
+            fs_err::metadata(parent)?.is_dir(),
+            "storage key output parent is not a directory: {}",
+            parent.display(),
+        );
+        ensure!(
+            !output_file.fs_err_try_exists()?,
+            "storage key bundle already exists: {}",
+            output_file.display(),
         );
         let ceremony = self.validate().await?;
         let endpoint = ceremony.bind_endpoint().await?;
@@ -156,11 +162,11 @@ impl ParticipateOptions {
                 },
                 "Local DKG key material derived",
             );
-            ceremony.persist(&data_directory, output)?;
+            ceremony.persist(&output_file, output)?;
             participants.finish_streams()?;
             tracing::info!(
                 target: miden_validator::LOG_TARGET,
-                { dkg.storage_key_directory = %storage_key_directory.display() },
+                { dkg.storage_key_file = %output_file.display() },
                 "Local storage key bundle written",
             );
             Ok::<_, anyhow::Error>(())

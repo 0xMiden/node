@@ -34,12 +34,7 @@ VALIDATOR_2_KEY_HEX="02020202020202020202020202020202020202020202020202020202020
 ENCRYPTION_KEY_HEX="0303030303030303030303030303030303030303030303030303030303030303"
 
 # Insecure, hard-coded local dev storage encryption setup.
-VALIDATOR_STORAGE_KEY_EPOCH="0909090909090909090909090909090909090909090909090909090909090909"
 VALIDATOR_INSECURE_STORAGE_KEY_DIRECTORY="scripts/testdata/insecure-storage-key"
-VALIDATOR_INSECURE_STORAGE_KEY_SETUP_CONTEXT="${VALIDATOR_INSECURE_STORAGE_KEY_DIRECTORY}/setup-context.wire"
-VALIDATOR_INSECURE_STORAGE_KEY_PUBLIC_KEY_SET="${VALIDATOR_INSECURE_STORAGE_KEY_DIRECTORY}/public-key-set.wire"
-VALIDATOR_1_INSECURE_STORAGE_KEY_SECRET_SHARE="${VALIDATOR_INSECURE_STORAGE_KEY_DIRECTORY}/validator-1/secret-share.wire"
-VALIDATOR_2_INSECURE_STORAGE_KEY_SECRET_SHARE="${VALIDATOR_INSECURE_STORAGE_KEY_DIRECTORY}/validator-2/secret-share.wire"
 
 GENESIS_CONFIG="${GENESIS_CONFIG:-crates/store/src/genesis/config/samples/01-simple.toml}"
 NODE_DIR="/tmp/node"
@@ -208,11 +203,8 @@ fi
 echo "Starting validator 1..."
 "$VALIDATOR_BINARY" start --listen "0.0.0.0:$VALIDATOR_1_PORT" \
     --data-directory "$VALIDATOR_1_DIR" \
+    --storage-key.file "$VALIDATOR_INSECURE_STORAGE_KEY_DIRECTORY/validator-1/storage-key.bundle" \
     --encryption-key.hex "$ENCRYPTION_KEY_HEX" \
-    --storage-key.epoch "$VALIDATOR_STORAGE_KEY_EPOCH" \
-    --storage-key.setup-context "$VALIDATOR_INSECURE_STORAGE_KEY_SETUP_CONTEXT" \
-    --storage-key.public-key-set "$VALIDATOR_INSECURE_STORAGE_KEY_PUBLIC_KEY_SET" \
-    --storage-key.secret-share "$VALIDATOR_1_INSECURE_STORAGE_KEY_SECRET_SHARE" \
     $EXTRA_ARGS \
     "${KMS_START_ARGS_1[@]}" &
 PIDS+=($!)
@@ -220,11 +212,8 @@ PIDS+=($!)
 echo "Starting validator 2..."
 "$VALIDATOR_BINARY" start --listen "0.0.0.0:$VALIDATOR_2_PORT" \
     --data-directory "$VALIDATOR_2_DIR" \
+    --storage-key.file "$VALIDATOR_INSECURE_STORAGE_KEY_DIRECTORY/validator-2/storage-key.bundle" \
     --encryption-key.hex "$ENCRYPTION_KEY_HEX" \
-    --storage-key.epoch "$VALIDATOR_STORAGE_KEY_EPOCH" \
-    --storage-key.setup-context "$VALIDATOR_INSECURE_STORAGE_KEY_SETUP_CONTEXT" \
-    --storage-key.public-key-set "$VALIDATOR_INSECURE_STORAGE_KEY_PUBLIC_KEY_SET" \
-    --storage-key.secret-share "$VALIDATOR_2_INSECURE_STORAGE_KEY_SECRET_SHARE" \
     $EXTRA_ARGS \
     "${KMS_START_ARGS_2[@]}" &
 PIDS+=($!)

@@ -240,9 +240,9 @@ enum DkgCommand {
 
     /// Checks a committed local-development fixture against one participant index.
     ValidateFixture {
-        /// Directory containing the four storage-key fixture files.
-        #[arg(long, value_name = "DIR")]
-        bundle_directory: PathBuf,
+        /// File containing the storage-key fixture bundle.
+        #[arg(long, value_name = "FILE")]
+        bundle_file: PathBuf,
 
         /// DKG participant index that must own the secret share.
         #[arg(long, value_name = "NUM")]
@@ -415,8 +415,8 @@ pub async fn run(options: DkgOptions) -> anyhow::Result<()> {
         } => {
             validate_bundle(&genesis, &ceremony_directory, &validator_public_key, &bundle_directory)
         },
-        DkgCommand::ValidateFixture { bundle_directory, expected_participant } => {
-            validate_fixture_bundle(&bundle_directory, expected_participant)
+        DkgCommand::ValidateFixture { bundle_file, expected_participant } => {
+            validate_fixture_bundle(&bundle_file, expected_participant)
         },
     }
 }
@@ -828,7 +828,7 @@ fn publish_operator_bundle(
         "generated public key set does not match accepted transcript",
     );
     let secret_share = Zeroizing::new(to_ehtdh1_wire_bytes(&material.secret_share));
-    EncodedGoldenOperatorKey::new(
+    let operator_key = EncodedGoldenOperatorKey::new(
         StorageKeyEpoch::new(epoch),
         setup_context.clone(),
         public_key_set.clone(),
@@ -838,6 +838,11 @@ fn publish_operator_bundle(
     .context("generated invalid storage key")?;
 
     publish_directory(output_directory, |directory| {
+        write_new_file(
+            &directory.join("storage-key.bundle"),
+            &operator_key.encode().to_bytes(),
+            true,
+        )?;
         write_new_file(&directory.join(EPOCH_FILE), ceremony.manifest.epoch.as_bytes(), false)?;
         write_new_file(&directory.join(SETUP_CONTEXT_FILE), &setup_context, false)?;
         write_new_file(&directory.join(PUBLIC_KEY_SET_FILE), &public_key_set, false)?;
@@ -896,6 +901,11 @@ fn validate_bundle(
     )
     .decode()
     .context("invalid storage key bundle")?;
+    let bundle = Zeroizing::new(fs_err::read(bundle_directory.join("storage-key.bundle"))?);
+    ensure!(
+        bundle == operator_key.encode().to_bytes(),
+        "storage key bundle does not match the validated ceremony files",
+    );
     ensure!(
         operator_key.participant() == expected_participant,
         "bundle belongs to participant {}, expected {}",
@@ -920,23 +930,14 @@ fn validate_bundle(
     Ok(())
 }
 
-/// Validates the four-file bundle used by local development fixtures.
-fn validate_fixture_bundle(
-    bundle_directory: &Path,
-    expected_participant: u32,
-) -> anyhow::Result<()> {
+/// Validates the bundle used by local development fixtures.
+fn validate_fixture_bundle(bundle_file: &Path, expected_participant: u32) -> anyhow::Result<()> {
     let expected_participant = ParticipantIndex::new(expected_participant)?;
-    let epoch = fs_err::read_to_string(bundle_directory.join(EPOCH_FILE))
-        .context("failed to read storage-key epoch file")?;
-    let epoch = decode_fixed_hex::<32>(&epoch, "storage-key epoch")?;
-    let operator_key = EncodedGoldenOperatorKey::new(
-        StorageKeyEpoch::new(epoch),
-        fs_err::read(bundle_directory.join(SETUP_CONTEXT_FILE))?,
-        fs_err::read(bundle_directory.join(PUBLIC_KEY_SET_FILE))?,
-        fs_err::read(bundle_directory.join(SECRET_SHARE_FILE))?,
-    )
-    .decode()
-    .context("invalid storage key fixture")?;
+    let bytes = Zeroizing::new(fs_err::read(bundle_file)?);
+    let operator_key = EncodedGoldenOperatorKey::from_bytes(&bytes)
+        .context("failed to decode storage key fixture")?
+        .decode()
+        .context("invalid storage key fixture")?;
     ensure!(
         operator_key.participant() == expected_participant,
         "fixture belongs to participant {}, expected {}",

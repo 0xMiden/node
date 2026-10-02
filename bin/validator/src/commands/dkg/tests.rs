@@ -33,21 +33,14 @@ fn write_genesis(root: &Path) -> TestResultWith<TestGenesis> {
 fn committed_fixture_has_one_valid_share_per_participant() -> TestResult {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/testdata/insecure-storage-key");
-    let root = tempfile::tempdir()?;
     let mut shares = Vec::new();
 
     for participant in 1..=3 {
-        let bundle = root.path().join(format!("validator-{participant}"));
-        fs_err::create_dir(&bundle)?;
-        fs_err::write(bundle.join(EPOCH_FILE), "09".repeat(32))?;
-        fs_err::copy(fixture.join(SETUP_CONTEXT_FILE), bundle.join(SETUP_CONTEXT_FILE))?;
-        fs_err::copy(fixture.join(PUBLIC_KEY_SET_FILE), bundle.join(PUBLIC_KEY_SET_FILE))?;
-        fs_err::copy(
-            fixture.join(format!("validator-{participant}/{SECRET_SHARE_FILE}")),
-            bundle.join(SECRET_SHARE_FILE),
-        )?;
+        let bundle = fixture.join(format!("validator-{participant}/storage-key.bundle"));
         validate_fixture_bundle(&bundle, participant)?;
-        shares.push(fs_err::read(bundle.join(SECRET_SHARE_FILE))?);
+        let bytes = Zeroizing::new(fs_err::read(bundle)?);
+        let encoded = EncodedGoldenOperatorKey::from_bytes(&bytes)?;
+        shares.push(encoded.into_parts().3);
     }
 
     assert_ne!(shares[0], shares[1]);

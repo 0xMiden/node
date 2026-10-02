@@ -5,16 +5,12 @@ services:
     configs:
       - source: genesis
         target: /genesis.toml
-      - source: validator-storage-key-setup-context
-        target: /fixtures/storage-key/setup-context.wire
-      - source: validator-storage-key-public-set
-        target: /fixtures/storage-key/public-key-set.wire
-      - source: validator-1-storage-key-secret-share
-        target: /fixtures/storage-key/validator-1/secret-share.wire
-      - source: validator-2-storage-key-secret-share
-        target: /fixtures/storage-key/validator-2/secret-share.wire
-      - source: validator-3-storage-key-secret-share
-        target: /fixtures/storage-key/validator-3/secret-share.wire
+      - source: validator-1-storage-key-bundle
+        target: /fixtures/storage-key/validator-1.bundle
+      - source: validator-2-storage-key-bundle
+        target: /fixtures/storage-key/validator-2.bundle
+      - source: validator-3-storage-key-bundle
+        target: /fixtures/storage-key/validator-3.bundle
     environment:
       MIDEN_VALIDATOR_STORAGE_KEY_EPOCH: ${MIDEN_VALIDATOR_STORAGE_KEY_EPOCH:-0909090909090909090909090909090909090909090909090909090909090909}
       MIDEN_VALIDATOR_USE_STORAGE_KEY_FIXTURE: ${MIDEN_VALIDATOR_USE_STORAGE_KEY_FIXTURE:-false}
@@ -63,16 +59,11 @@ services:
         if [ "$${MIDEN_VALIDATOR_USE_STORAGE_KEY_FIXTURE}" = "true" ]; then
           echo "Staging the insecure storage key fixture..."
           for VALIDATOR in 1 2 3; do
-            STORAGE_KEY="/data/validators/$${VALIDATOR}/storage-key"
-            mkdir -p "$${STORAGE_KEY}"
-            printf '%s' "$${MIDEN_VALIDATOR_STORAGE_KEY_EPOCH}" > "$${STORAGE_KEY}/epoch.hex"
-            cp /fixtures/storage-key/setup-context.wire "$${STORAGE_KEY}/setup-context.wire"
-            cp /fixtures/storage-key/public-key-set.wire "$${STORAGE_KEY}/public-key-set.wire"
-            cp "/fixtures/storage-key/validator-$${VALIDATOR}/secret-share.wire" \
-              "$${STORAGE_KEY}/secret-share.wire"
-            chmod 600 "$${STORAGE_KEY}/secret-share.wire"
+            STORAGE_KEY="/data/validators/$${VALIDATOR}/storage-key.bundle"
+            cp "/fixtures/storage-key/validator-$${VALIDATOR}.bundle" "$${STORAGE_KEY}"
+            chmod 600 "$${STORAGE_KEY}"
             miden-validator dkg validate-fixture \
-              --bundle-directory "$${STORAGE_KEY}" \
+              --bundle-file "$${STORAGE_KEY}" \
               --expected-participant "$${VALIDATOR}"
           done
         else
@@ -159,6 +150,8 @@ services:
               --ceremony-directory "$${DKG}/ceremony" \
               --validator-public-key "$${VALIDATOR_PUBLIC_KEY}" \
               --bundle-directory "$${STORAGE_KEY}"
+            cp "$${STORAGE_KEY}/storage-key.bundle" "/data/validators/$${VALIDATOR}/storage-key.bundle"
+            chmod 600 "/data/validators/$${VALIDATOR}/storage-key.bundle"
           done
 
           rm -rf "$${DKG}"
