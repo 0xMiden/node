@@ -4817,7 +4817,6 @@ dependencies = [
  "miden-tx-batch",
  "serial_test",
  "tokio",
- "tokio-stream",
  "tonic",
  "tonic-health",
  "tonic-reflection",
