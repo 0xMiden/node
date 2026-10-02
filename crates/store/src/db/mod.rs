@@ -618,15 +618,16 @@ impl Db {
         note_tags: Arc<[u32]>,
     ) -> Result<Vec<NoteSyncUpdate>, NoteSyncError> {
         let block_range = block_range.into_inner();
-        self.transact("notes sync task", move |conn| {
-            diesel_queries::get_note_sync_multi(
-                conn,
-                &note_tags,
-                block_range,
-                MAX_RESPONSE_PAYLOAD_BYTES,
-            )
-        })
-        .await
+        self.reader
+            .read("notes sync task", move |tx| {
+                queries::get_note_sync_multi(
+                    tx,
+                    &note_tags,
+                    block_range,
+                    MAX_RESPONSE_PAYLOAD_BYTES,
+                )
+            })
+            .await
     }
 
     /// Loads all the [`miden_protocol::note::Note`]s matching a certain [`NoteId`] from the
@@ -637,10 +638,9 @@ impl Db {
         err,
     )]
     pub async fn select_notes_by_id(&self, note_ids: Vec<NoteId>) -> Result<Vec<NoteRecord>> {
-        self.transact("note by id", move |conn| {
-            diesel_queries::select_notes_by_id(conn, note_ids.as_slice())
-        })
-        .await
+        self.reader
+            .read("note by id", move |tx| queries::select_notes_by_id(tx, note_ids.as_slice()))
+            .await
     }
 
     /// Returns the requested note IDs that the database contains at or before `up_to_block`.
@@ -924,10 +924,9 @@ impl Db {
 
     /// Returns the script for a note by its root.
     pub async fn select_note_script_by_root(&self, root: Word) -> Result<Option<NoteScript>> {
-        self.transact("note script by root", move |conn| {
-            diesel_queries::select_note_script_by_root(conn, root)
-        })
-        .await
+        self.reader
+            .read("note script by root", move |tx| queries::select_note_script_by_root(tx, root))
+            .await
     }
 
     /// Returns the complete transaction records for the specified accounts within the specified

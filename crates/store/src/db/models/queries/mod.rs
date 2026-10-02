@@ -29,7 +29,5 @@ use super::DatabaseError;
 
 mod transactions;
 pub use transactions::*;
-mod block_headers;
-pub(crate) use block_headers::*;
 mod notes;
 pub(crate) use notes::*;

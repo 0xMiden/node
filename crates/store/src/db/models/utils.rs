@@ -3,16 +3,6 @@ use miden_protocol::utils::serde::Serializable;
 
 use crate::errors::DatabaseError;
 
-/// Utility to convert an iterable container of containing `R`-typed values to a `Vec<D>` and bail
-/// at the first failing conversion
-pub(crate) fn vec_raw_try_into<D, R: TryInto<D>>(
-    raw: impl IntoIterator<Item = R>,
-) -> std::result::Result<Vec<D>, <R as TryInto<D>>::Error> {
-    raw.into_iter()
-        .map(<R as std::convert::TryInto<D>>::try_into)
-        .collect::<std::result::Result<Vec<D>, <R as TryInto<D>>::Error>>()
-}
-
 /// Utility to convert an iterable container to a vector of byte blobs
 pub(crate) fn serialize_vec<'a, D: Serializable + 'a>(
     raw: impl IntoIterator<Item = &'a D>,

@@ -94,9 +94,10 @@ use crate::account_state_forest::{
     TestAccountStateForestExt,
 };
 use crate::db::models::queries as diesel_queries;
-use crate::db::models::queries::{NOTE_SYNC_BLOCK_OVERHEAD_BYTES, NOTE_SYNC_RECORD_BYTES};
 use crate::db::queries::{
     self,
+    NOTE_SYNC_BLOCK_OVERHEAD_BYTES,
+    NOTE_SYNC_RECORD_BYTES,
     PrecomputedPublicAccountState,
     PrecomputedPublicAccountStates,
     StorageMapValue,
@@ -221,11 +222,13 @@ fn select_notes_since_block_by_tag(
     note_tags: &[u32],
     block_range: RangeInclusive<BlockNumber>,
 ) -> Result<Vec<NoteSyncRecord>> {
-    diesel_queries::select_notes_since_block_by_tag(&mut db.diesel_conn(), note_tags, block_range)
+    let note_tags = note_tags.to_vec();
+    db.read(move |tx| queries::select_notes_since_block_by_tag(tx, &note_tags, block_range))
 }
 
 fn select_notes_by_id(db: &TestDb, note_ids: &[NoteId]) -> Result<Vec<NoteRecord>> {
-    diesel_queries::select_notes_by_id(&mut db.diesel_conn(), note_ids)
+    let note_ids = note_ids.to_vec();
+    db.read(move |tx| queries::select_notes_by_id(tx, &note_ids))
 }
 
 fn select_existing_note_ids(
@@ -237,7 +240,7 @@ fn select_existing_note_ids(
 }
 
 fn select_note_script_by_root(db: &TestDb, root: Word) -> Result<Option<NoteScript>> {
-    diesel_queries::select_note_script_by_root(&mut db.diesel_conn(), root)
+    db.read(move |tx| queries::select_note_script_by_root(tx, root))
 }
 
 fn get_note_sync_multi(
@@ -246,12 +249,10 @@ fn get_note_sync_multi(
     block_range: RangeInclusive<BlockNumber>,
     max_response_payload_bytes: usize,
 ) -> std::result::Result<Vec<NoteSyncUpdate>, NoteSyncError> {
-    diesel_queries::get_note_sync_multi(
-        &mut db.diesel_conn(),
-        note_tags,
-        block_range,
-        max_response_payload_bytes,
-    )
+    let note_tags = note_tags.to_vec();
+    db.read(move |tx| {
+        queries::get_note_sync_multi(tx, &note_tags, block_range, max_response_payload_bytes)
+    })
 }
 
 fn select_block_header_by_block_num(
